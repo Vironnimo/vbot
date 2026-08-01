@@ -210,6 +210,7 @@ from core.tools import (
 )
 from core.utils.errors import ConfigError, ProviderError, VBotError
 from core.utils.logging import get_logger
+from core.utils.tokens import estimate_request_input_tokens
 
 if TYPE_CHECKING:
     from core.chat.block_resolver import ContentBlockResolver
@@ -464,13 +465,15 @@ class _RunExecutionContext:
 
 @dataclass(frozen=True)
 class _CompactionPromptRefresh:
-    """Fresh prompt-only inputs prepared after one persisted Compaction checkpoint."""
+    """Fresh prompt-only inputs prepared for one Compaction checkpoint commit."""
 
     agent_body: str
     project_prompt_context: ProjectPromptContext | None
     working_project_context: str | None
     skill_registry: SkillRegistry
     skill_catalog: PinnedSkillCatalog
+    prompt_read_paths: tuple[Path, ...]
+    available_skill_names: tuple[str, ...] | None
 
 
 # Skill names the session has already surfaced to the model: the pinned catalog at
@@ -1086,37 +1089,44 @@ class ChatLoop:
                     skill_project_id,
                     identity_agent_id,
                 )
+                replay_policy = _resolve_reasoning_replay_policy(adapter, model_id)
+                reasoning_scope_model = _resolved_model_reference(
+                    self._dependencies,
+                    provider_id,
+                    connection_id,
+                    model_id,
+                )
+                input_modalities = _model_input_modalities_for_target(
+                    self._dependencies,
+                    provider_id,
+                    model_id,
+                )
+                wire_media_types = _resolve_wire_media_support(adapter, model_id)
+                agent_body = runtime_agent_body(agent)
+                skill_catalog = self._pinned_skill_catalog(
+                    run.agent_id,
+                    run.session_id,
+                    agent,
+                    skill_registry,
+                    run.project_id,
+                )
                 request_state = await self._build_request_state(
                     agent,
                     session,
-                    replay_policy=_resolve_reasoning_replay_policy(adapter, model_id),
-                    reasoning_scope_model=_resolved_model_reference(
-                        self._dependencies,
-                        provider_id,
-                        connection_id,
-                        model_id,
-                    ),
-                    input_modalities=_model_input_modalities_for_target(
-                        self._dependencies,
-                        provider_id,
-                        model_id,
-                    ),
-                    wire_media_types=_resolve_wire_media_support(adapter, model_id),
-                    agent_body=runtime_agent_body(agent),
+                    replay_policy=replay_policy,
+                    reasoning_scope_model=reasoning_scope_model,
+                    input_modalities=input_modalities,
+                    wire_media_types=wire_media_types,
+                    agent_body=agent_body,
                     project_context=prompt_context,
                     working_project_context=working_project_context,
                     agent_project_id=run.project_id,
                     skill_registry=skill_registry,
-                    skill_catalog=self._pinned_skill_catalog(
-                        run.agent_id,
-                        run.session_id,
-                        agent,
-                        skill_registry,
-                        run.project_id,
-                    ),
+                    skill_catalog=skill_catalog,
                 )
-                estimated_context_tokens_before = compaction_service.estimate_messages_tokens(
-                    request_state.messages
+                estimated_context_tokens_before, _ = estimate_request_input_tokens(
+                    request_state.messages,
+                    request_state.tools,
                 )
                 if context_usage is None:
                     context_usage = {
@@ -1137,8 +1147,6 @@ class ChatLoop:
                     active_adapter=adapter,
                     active_model_id=model_id,
                     active_tools=request_state.tools,
-                    context_tokens_before=context_tokens_before,
-                    estimated_context_tokens_before=estimated_context_tokens_before,
                 )
             finally:
                 if adapter is not None:
@@ -1151,14 +1159,9 @@ class ChatLoop:
                 + 1
             )
             checkpoint = finalize_checkpoint_history_guidance(checkpoint, ordinal=ordinal)
-            session.append(checkpoint)
-            self._dependencies.sessions.rotate_prompt_cache_affinity_id(
-                run.agent_id,
-                run.session_id,
-                run.project_id,
-            )
+            prompt_refresh: _CompactionPromptRefresh | None = None
             try:
-                self._refresh_prompt_context_after_compaction(
+                prompt_refresh = self._prepare_prompt_context_after_compaction(
                     agent_id=run.agent_id,
                     session_id=run.session_id,
                     agent=agent,
@@ -1174,6 +1177,64 @@ class ChatLoop:
                     run.session_id,
                     exc_info=True,
                 )
+            next_agent_body = (
+                prompt_refresh.agent_body if prompt_refresh is not None else agent_body
+            )
+            next_prompt_context = (
+                prompt_refresh.project_prompt_context
+                if prompt_refresh is not None
+                else prompt_context
+            )
+            next_working_project_context = (
+                prompt_refresh.working_project_context
+                if prompt_refresh is not None
+                else working_project_context
+            )
+            next_skill_registry = (
+                prompt_refresh.skill_registry if prompt_refresh is not None else skill_registry
+            )
+            next_skill_catalog = (
+                prompt_refresh.skill_catalog if prompt_refresh is not None else skill_catalog
+            )
+            checkpoint, _ = await self._project_post_compaction_request(
+                agent=agent,
+                session=session,
+                session_messages=messages,
+                checkpoint=checkpoint,
+                context_tokens_before=context_tokens_before,
+                replay_policy=replay_policy,
+                reasoning_scope_model=reasoning_scope_model,
+                input_modalities=input_modalities,
+                wire_media_types=wire_media_types,
+                agent_body=next_agent_body,
+                project_context=next_prompt_context,
+                working_project_context=next_working_project_context,
+                agent_project_id=run.project_id,
+                skill_registry=next_skill_registry,
+                skill_catalog=next_skill_catalog,
+            )
+            session.append(checkpoint)
+            self._dependencies.sessions.rotate_prompt_cache_affinity_id(
+                run.agent_id,
+                run.session_id,
+                run.project_id,
+            )
+            if prompt_refresh is not None:
+                try:
+                    self._commit_prompt_context_after_compaction(
+                        agent_id=run.agent_id,
+                        session_id=run.session_id,
+                        project_id=run.project_id,
+                        refresh=prompt_refresh,
+                    )
+                except Exception:
+                    _LOGGER.warning(
+                        "Prompt context persistence failed after manual Compaction "
+                        "(agent=%s session=%s)",
+                        run.agent_id,
+                        run.session_id,
+                        exc_info=True,
+                    )
             self._emit_compaction_completed(run, session, checkpoint)
             run.terminal_payload_extras["session_usage"] = aggregate_session_usage(session.load())
             return checkpoint
@@ -1851,7 +1912,7 @@ class ChatLoop:
         self._dependencies.sessions.set_metadata(agent_id, session_id, metadata, project_id)
         return snapshot
 
-    def _refresh_prompt_context_after_compaction(
+    def _prepare_prompt_context_after_compaction(
         self,
         *,
         agent_id: str,
@@ -1862,7 +1923,7 @@ class ChatLoop:
         project_cwd: Path | None,
         activation_skill_project_id: str | None,
     ) -> _CompactionPromptRefresh:
-        """Prepare and persist the next prompt epoch after a checkpoint.
+        """Prepare the next prompt epoch without committing Session metadata.
 
         Only prompt inputs are refreshed. The admitted Run keeps its resolved Agent,
         Model target, Tool policy, Project identity, and cwd; a freshly resolved
@@ -1911,24 +1972,42 @@ class ChatLoop:
             )
 
         refreshed_agent = self._dependencies.agent_resolver.resolve_agent(project_id, agent_id)
-        metadata = self._dependencies.sessions.get_metadata(agent_id, session_id, project_id)
-        metadata[PINNED_SKILL_CATALOG_META_KEY] = {"catalog_text": skill_catalog.catalog_text}
         available_skill_names = self._available_skill_names(agent, prompt_skill_registry)
-        if available_skill_names is not None:
-            metadata[SEEN_SKILLS_META_KEY] = available_skill_names
-        if working_project_context is None:
-            metadata.pop(PINNED_WORKING_PROJECT_CONTEXT_META_KEY, None)
-        else:
-            metadata[PINNED_WORKING_PROJECT_CONTEXT_META_KEY] = {"text": working_project_context}
-        self._stamp_prompt_files_read(session_id, read_paths)
-        self._dependencies.sessions.set_metadata(agent_id, session_id, metadata, project_id)
         return _CompactionPromptRefresh(
             agent_body=runtime_agent_body(refreshed_agent),
             project_prompt_context=project_prompt_context,
             working_project_context=working_project_context,
             skill_registry=activation_skill_registry,
             skill_catalog=skill_catalog,
+            prompt_read_paths=tuple(read_paths),
+            available_skill_names=(
+                tuple(available_skill_names) if available_skill_names is not None else None
+            ),
         )
+
+    def _commit_prompt_context_after_compaction(
+        self,
+        *,
+        agent_id: str,
+        session_id: str,
+        project_id: str | None,
+        refresh: _CompactionPromptRefresh,
+    ) -> None:
+        """Persist one prepared prompt epoch after its checkpoint commit."""
+        metadata = self._dependencies.sessions.get_metadata(agent_id, session_id, project_id)
+        metadata[PINNED_SKILL_CATALOG_META_KEY] = {
+            "catalog_text": refresh.skill_catalog.catalog_text
+        }
+        if refresh.available_skill_names is not None:
+            metadata[SEEN_SKILLS_META_KEY] = list(refresh.available_skill_names)
+        if refresh.working_project_context is None:
+            metadata.pop(PINNED_WORKING_PROJECT_CONTEXT_META_KEY, None)
+        else:
+            metadata[PINNED_WORKING_PROJECT_CONTEXT_META_KEY] = {
+                "text": refresh.working_project_context
+            }
+        self._stamp_prompt_files_read(session_id, list(refresh.prompt_read_paths))
+        self._dependencies.sessions.set_metadata(agent_id, session_id, metadata, project_id)
 
     @staticmethod
     def _available_skill_names(agent: Any, skill_registry: SkillRegistry) -> list[str] | None:
@@ -2053,6 +2132,7 @@ class ChatLoop:
         agent_project_id: str | None = None,
         skill_registry: SkillRegistry | None = None,
         skill_catalog: PinnedSkillCatalog | None = None,
+        session_messages_override: list[ChatMessage] | None = None,
     ) -> _RequestState:
         # For a project-born session the Working Project context lands in the system
         # prompt; for an unrooted identity session it is empty. The
@@ -2060,7 +2140,9 @@ class ChatLoop:
         # ``skill_registry`` scopes the skills block to the project pool (``None`` =
         # the global registry); ``skill_catalog`` is the current prompt-epoch snapshot
         # the skills block renders from, so only Compaction replaces it.
-        session_messages = session.load()
+        session_messages = (
+            session.load() if session_messages_override is None else list(session_messages_override)
+        )
         system_prompts = self._dependencies.get_system_prompts()
         base_tools = system_prompts.provider_tool_definitions(agent)
         base_tool_names = {
@@ -2181,6 +2263,73 @@ class ChatLoop:
             allowed_tool_names,
             session_tool_grants,
             tool_contracts,
+        )
+
+    async def _project_post_compaction_request(
+        self,
+        *,
+        agent: Any,
+        session: ChatSession,
+        session_messages: list[ChatMessage],
+        checkpoint: ChatMessage,
+        context_tokens_before: int,
+        replay_policy: ReasoningReplayPolicy,
+        reasoning_scope_model: str | None,
+        input_modalities: frozenset[str] | None,
+        wire_media_types: frozenset[str],
+        agent_body: str,
+        project_context: ProjectPromptContext | None,
+        working_project_context: str | None,
+        agent_project_id: str | None,
+        skill_registry: SkillRegistry,
+        skill_catalog: PinnedSkillCatalog,
+        live_request_messages: list[JsonObject] | None = None,
+        continuation_reminder: str | None = None,
+    ) -> tuple[ChatMessage, _RequestState]:
+        """Build and count the exact request projection committed by Compaction."""
+        projected_state = await self._build_request_state(
+            agent,
+            session,
+            replay_policy=replay_policy,
+            reasoning_scope_model=reasoning_scope_model,
+            input_modalities=input_modalities,
+            wire_media_types=wire_media_types,
+            agent_body=agent_body,
+            project_context=project_context,
+            working_project_context=working_project_context,
+            agent_project_id=agent_project_id,
+            skill_registry=skill_registry,
+            skill_catalog=skill_catalog,
+            session_messages_override=[*session_messages, checkpoint],
+        )
+        projected_messages = projected_state.messages
+        if continuation_reminder is not None:
+            projected_messages = inject_continuation_reminder(
+                projected_messages,
+                continuation_reminder,
+            )
+        if live_request_messages is not None:
+            projected_messages = _restore_in_run_tool_result_content(
+                _restore_in_run_assistant_reasoning(
+                    projected_messages,
+                    live_request_messages,
+                ),
+                live_request_messages,
+            )
+        context_tokens_after, _ = estimate_request_input_tokens(
+            projected_messages,
+            projected_state.tools,
+        )
+        stamped_checkpoint = checkpoint.with_compaction_context_tokens(
+            context_tokens_before=context_tokens_before,
+            context_tokens_after=context_tokens_after,
+        )
+        return stamped_checkpoint, _RequestState(
+            projected_messages,
+            projected_state.tools,
+            projected_state.allowed_tool_names,
+            projected_state.session_tool_grants,
+            projected_state.tool_contracts,
         )
 
     def _route_tool_definitions(
@@ -2377,6 +2526,7 @@ class ChatLoop:
                             ],
                             context_usage=assistant_context_usage,
                             allow_continuation=True,
+                            continue_same_run=False,
                         )
                     return assistant_message
 
@@ -2566,6 +2716,7 @@ class ChatLoop:
         continuation_request_messages: list[JsonObject] | None = None,
         context_usage: JsonObject | None = None,
         allow_continuation: bool = False,
+        continue_same_run: bool = True,
     ) -> _RequestState:
         """Auto-compact when configured token thresholds are exceeded."""
         if context.request_state is None:
@@ -2656,9 +2807,6 @@ class ChatLoop:
             },
         )
         try:
-            estimated_context_tokens_before = self._compaction_service.estimate_messages_tokens(
-                current_request_messages
-            )
             checkpoint = await self._compaction_service.compact(
                 session_messages,
                 agent=agent,
@@ -2671,8 +2819,6 @@ class ChatLoop:
                 active_model_id=target.model_id,
                 active_tools=tools,
                 minimum_reclaim_tokens=MIN_AUTO_COMPACTION_RECLAIM_TOKENS,
-                context_tokens_before=input_tokens,
-                estimated_context_tokens_before=estimated_context_tokens_before,
             )
         except CompactionInsufficientReclaimError as exc:
             run.emit(
@@ -2706,6 +2852,91 @@ class ChatLoop:
             + 1
         )
         checkpoint = finalize_checkpoint_history_guidance(checkpoint, ordinal=ordinal)
+        prompt_refresh: _CompactionPromptRefresh | None = None
+        try:
+            try:
+                prompt_refresh = self._prepare_prompt_context_after_compaction(
+                    agent_id=run.agent_id,
+                    session_id=run.session_id,
+                    agent=agent,
+                    project_id=run.project_id,
+                    working_project_id=run.working_project_id,
+                    project_cwd=context.project_cwd,
+                    activation_skill_project_id=context.skill_project_id,
+                )
+            except Exception:
+                _LOGGER.warning(
+                    "Prompt context refresh failed after automatic Compaction "
+                    "(run=%s agent=%s session=%s)",
+                    run.id,
+                    run.agent_id,
+                    run.session_id,
+                    exc_info=True,
+                )
+
+            next_agent_body = (
+                prompt_refresh.agent_body if prompt_refresh is not None else context.agent_body
+            )
+            next_project_context = (
+                prompt_refresh.project_prompt_context
+                if prompt_refresh is not None
+                else context.project_prompt_context
+            )
+            next_working_project_context = (
+                prompt_refresh.working_project_context
+                if prompt_refresh is not None
+                else context.working_project_context
+            )
+            next_skill_registry = (
+                prompt_refresh.skill_registry
+                if prompt_refresh is not None
+                else context.skill_registry
+            )
+            next_skill_catalog = (
+                prompt_refresh.skill_catalog
+                if prompt_refresh is not None
+                else context.skill_catalog
+            )
+            if (
+                continue_same_run
+                and context.continuation_reminder is not None
+                and context.continuation_tracker is not None
+            ):
+                active_continuation = fold_continuation_records(session.load_continuation_records())
+                if active_continuation is not None:
+                    context.continuation_reminder = render_continuation_reminder(
+                        active_continuation,
+                        context_window=self._resolve_context_window(agent),
+                    )
+            checkpoint, rebuilt_state = await self._project_post_compaction_request(
+                agent=agent,
+                session=session,
+                session_messages=session_messages,
+                checkpoint=checkpoint,
+                context_tokens_before=input_tokens,
+                replay_policy=target.replay_policy,
+                reasoning_scope_model=target.model_reference,
+                input_modalities=target.input_modalities,
+                wire_media_types=target.wire_media_types,
+                agent_body=next_agent_body,
+                project_context=next_project_context,
+                working_project_context=next_working_project_context,
+                agent_project_id=context.project_id,
+                skill_registry=next_skill_registry,
+                skill_catalog=next_skill_catalog,
+                live_request_messages=messages if continue_same_run else None,
+                continuation_reminder=(
+                    context.continuation_reminder if continue_same_run else None
+                ),
+            )
+        except Exception:
+            run.emit(COMPACTION_ABORTED_EVENT, {"reason": "failed"})
+            _LOGGER.warning(
+                "Post-compaction request projection failed; continuing without Compaction",
+                exc_info=True,
+            )
+            return current_state
+
         session.append(checkpoint)
         context.prompt_cache_affinity_id = (
             self._dependencies.sessions.rotate_prompt_cache_affinity_id(
@@ -2714,75 +2945,37 @@ class ChatLoop:
                 run.project_id,
             )
         )
-        try:
-            prompt_refresh = self._refresh_prompt_context_after_compaction(
-                agent_id=run.agent_id,
-                session_id=run.session_id,
-                agent=agent,
-                project_id=run.project_id,
-                working_project_id=run.working_project_id,
-                project_cwd=context.project_cwd,
-                activation_skill_project_id=context.skill_project_id,
-            )
-        except Exception:
-            _LOGGER.warning(
-                "Prompt context refresh failed after automatic Compaction "
-                "(run=%s agent=%s session=%s)",
-                run.id,
-                run.agent_id,
-                run.session_id,
-                exc_info=True,
-            )
-        else:
+        if prompt_refresh is not None:
+            try:
+                self._commit_prompt_context_after_compaction(
+                    agent_id=run.agent_id,
+                    session_id=run.session_id,
+                    project_id=run.project_id,
+                    refresh=prompt_refresh,
+                )
+            except Exception:
+                _LOGGER.warning(
+                    "Prompt context persistence failed after automatic Compaction "
+                    "(run=%s agent=%s session=%s)",
+                    run.id,
+                    run.agent_id,
+                    run.session_id,
+                    exc_info=True,
+                )
             context.agent_body = prompt_refresh.agent_body
             context.project_prompt_context = prompt_refresh.project_prompt_context
             context.working_project_context = prompt_refresh.working_project_context
             context.skill_registry = prompt_refresh.skill_registry
             context.skill_catalog = prompt_refresh.skill_catalog
         self._emit_compaction_completed(run, session, checkpoint)
-        rebuilt_state = await self._build_request_state(
-            agent,
-            session,
-            replay_policy=target.replay_policy,
-            reasoning_scope_model=target.model_reference,
-            input_modalities=target.input_modalities,
-            wire_media_types=target.wire_media_types,
-            agent_body=context.agent_body,
-            project_context=context.project_prompt_context,
-            working_project_context=context.working_project_context,
-            agent_project_id=context.project_id,
-            skill_registry=context.skill_registry,
-            skill_catalog=context.skill_catalog,
-        )
-        rebuilt_messages = rebuilt_state.messages
-        if context.continuation_reminder is not None:
-            if context.continuation_tracker is not None:
-                active_continuation = fold_continuation_records(session.load_continuation_records())
-                if active_continuation is not None:
-                    context.continuation_reminder = render_continuation_reminder(
-                        active_continuation,
-                        context_window=self._resolve_context_window(agent),
-                    )
-            rebuilt_messages = inject_continuation_reminder(
-                rebuilt_messages,
-                context.continuation_reminder,
-            )
+        checkpoint_usage = checkpoint.usage or {}
         _LOGGER.info(
             "Auto-compaction completed (run=%s session=%s estimated_tokens_after=%d)",
             run.id,
             run.session_id,
-            self._compaction_service.estimate_messages_tokens(rebuilt_messages),
+            checkpoint_usage.get("context_tokens_after", 0),
         )
-        return _RequestState(
-            _restore_in_run_tool_result_content(
-                _restore_in_run_assistant_reasoning(rebuilt_messages, messages),
-                messages,
-            ),
-            rebuilt_state.tools,
-            rebuilt_state.allowed_tool_names,
-            rebuilt_state.session_tool_grants,
-            rebuilt_state.tool_contracts,
-        )
+        return rebuilt_state
 
     @staticmethod
     def _emit_compaction_completed(

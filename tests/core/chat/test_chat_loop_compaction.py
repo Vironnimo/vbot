@@ -43,6 +43,7 @@ from core.tools import (
     HISTORY_TOOL_NAME,
     register_history_tool,
 )
+from core.utils.tokens import estimate_request_input_tokens
 from tests.core.chat.chat_loop_support import (
     ClosingStubAdapter,
     StubAdapter,
@@ -475,7 +476,6 @@ async def test_compaction_maybe_auto_compact_appends_checkpoint_and_rebuilds_mes
     compaction_service = StubCompactionService(
         should_auto=True,
         checkpoint=checkpoint,
-        context_tokens_after=30,
     )
     loop = build_chat_loop(runtime, compaction_service=cast(Any, compaction_service))
     messages = await loop._build_request_messages(agent, session)
@@ -526,6 +526,14 @@ async def test_compaction_maybe_auto_compact_appends_checkpoint_and_rebuilds_mes
     )
     assert rebuilt[2]["content"] == "Tail user"
     assert rebuilt[3]["content"] == "Tail assistant"
+    post_compaction_tools = runtime.system_prompts.provider_tool_definitions(
+        agent,
+        session_tool_grants=(HISTORY_TOOL_NAME,),
+    )
+    expected_context_tokens_after, _ = estimate_request_input_tokens(
+        rebuilt,
+        post_compaction_tools,
+    )
     compaction_events = [
         event
         for event in run.events
@@ -551,15 +559,15 @@ async def test_compaction_maybe_auto_compact_appends_checkpoint_and_rebuilds_mes
     assert compaction_event.payload["checkpoint_id"] == checkpoint.id
     assert compaction_event.payload["history_available"] is True
     assert compaction_event.payload["context_tokens_before"] == 90
-    assert compaction_event.payload["context_tokens_after"] == 30
+    assert compaction_event.payload["context_tokens_after"] == expected_context_tokens_after
     assert compaction_event.payload["context_usage"] == {
-        "tokens": 30,
+        "tokens": expected_context_tokens_after,
         "estimated": True,
     }
     assert session.load()[-1].usage == {
         "compacted_token_count": 42,
         "context_tokens_before": 90,
-        "context_tokens_after": 30,
+        "context_tokens_after": expected_context_tokens_after,
     }
 
 
@@ -679,7 +687,12 @@ async def test_final_assistant_compaction_activates_history_on_next_run(tmp_path
     agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=[])
     adapter = StubAdapter(
         [
-            {"content": "First answer", "tool_calls": None},
+            {
+                "content": "First answer",
+                "reasoning": "Provider-owned final-turn reasoning",
+                "reasoning_meta": {"encrypted_content": "opaque-final-turn"},
+                "tool_calls": None,
+            },
             {"content": "Second answer", "tool_calls": None},
         ]
     )
@@ -696,6 +709,21 @@ async def test_final_assistant_compaction_activates_history_on_next_run(tmp_path
     loop = build_chat_loop(runtime, compaction_service=cast(Any, CompactOnce()))
 
     await loop.send("coder", "First", session_id="session-one")
+    session = runtime.chat_sessions.get("coder", "session-one")
+    checkpoint = next(
+        message for message in session.load() if message.role == "compaction_checkpoint"
+    )
+    post_compaction_state = await loop._build_request_state(agent, session)
+    expected_context_tokens_after, _ = estimate_request_input_tokens(
+        post_compaction_state.messages,
+        post_compaction_state.tools,
+    )
+
+    assert checkpoint.usage is not None
+    assert checkpoint.usage["context_tokens_after"] == expected_context_tokens_after
+    messages_only_tokens, _ = estimate_request_input_tokens(post_compaction_state.messages)
+    assert expected_context_tokens_after > messages_only_tokens
+
     await loop.send("coder", "Second", session_id="session-one")
 
     first_names = [tool["name"] for tool in adapter.requests[0]["kwargs"]["tools"]]
@@ -1133,6 +1161,69 @@ async def test_compaction_maybe_auto_compact_logs_warning_when_compaction_fails(
         COMPACTION_ABORTED_EVENT,
     ]
     assert run.events[-1].payload == {"reason": "failed"}
+
+
+@pytest.mark.asyncio
+async def test_compaction_projection_failure_does_not_persist_checkpoint(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
+    adapter = StubAdapter([])
+    runtime: Any = StubRuntime(
+        data_dir=tmp_path,
+        agent=agent,
+        adapter=adapter,
+        storage=StubStorage(
+            {"auto": True, "threshold": 0.8, "tail_tokens": 15_000, "summary_model": None}
+        ),
+        models=StubModels({("openai", "gpt-5.2"): 100}),
+    )
+    session = runtime.chat_sessions.create("coder", session_id="session-one")
+    session.append(ChatMessage.user("Hi"))
+    session.append(ChatMessage.assistant(model=agent.model, content="Hello"))
+    checkpoint = ChatMessage.compaction_checkpoint(
+        summary="Compacted context.",
+        projection=session.load(),
+        compacted_token_count=42,
+    )
+    loop = build_chat_loop(
+        runtime,
+        compaction_service=cast(
+            Any,
+            StubCompactionService(should_auto=True, checkpoint=checkpoint),
+        ),
+    )
+    messages = await loop._build_request_messages(agent, session)
+    run = Run(run_id="run-1", agent_id=agent.id, session_id=session.id)
+
+    async def fail_projected_request(*_args: Any, **_kwargs: Any) -> _RequestState:
+        raise RuntimeError("projected request broke")
+
+    monkeypatch.setattr(loop, "_build_request_state", fail_projected_request)
+
+    with caplog.at_level("WARNING"):
+        result = await _maybe_auto_compact(
+            loop,
+            agent,
+            adapter,
+            "gpt-5.2",
+            session,
+            messages,
+            usage={"input_tokens": 90},
+            run=run,
+        )
+
+    assert result == messages
+    assert persisted_roles(session.load()) == ["user", "assistant"]
+    assert [event.type for event in run.events] == [
+        COMPACTION_STARTED_EVENT,
+        COMPACTION_ABORTED_EVENT,
+    ]
+    assert any(
+        "Post-compaction request projection failed" in record.message for record in caplog.records
+    )
 
 
 @pytest.mark.asyncio

@@ -607,7 +607,10 @@ async def test_chat_stream_returns_manual_compaction_run_with_checkpoint_events(
     ]
     completed = run.events[-2]
     assert completed.payload["message"]["content"] == "Compacted context"
-    assert completed.payload["context_tokens_before"] == 12_345
+    assert checkpoint.usage is not None
+    assert completed.payload["context_tokens_before"] == checkpoint.usage["context_tokens_before"]
+    assert completed.payload["context_tokens_after"] == checkpoint.usage["context_tokens_after"]
+    assert completed.payload["context_tokens_after"] > 0
     assert completed.payload["checkpoint_id"] == checkpoint.id
 
 
