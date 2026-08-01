@@ -157,6 +157,7 @@ export { describe, expect, it, vi };
 export function createChatRpcMock({
   usage,
   sessionUsage,
+  contextUsage,
   contextWindow = 262144,
   sessionMessages,
   activeRuns,
@@ -213,6 +214,17 @@ export function createChatRpcMock({
         };
         if (sessionUsage) {
           response.session_usage = sessionUsage;
+        }
+        const resolvedContextUsage =
+          contextUsage ??
+          (usage
+            ? {
+                tokens: (usage.input_tokens ?? 0) + (usage.output_tokens ?? 0),
+                estimated: usage.estimated === true,
+              }
+            : null);
+        if (resolvedContextUsage) {
+          response.context_usage = resolvedContextUsage;
         }
         if (activeRuns?.[params.session_id]) {
           response.active_run = activeRuns[params.session_id];

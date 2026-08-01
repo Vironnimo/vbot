@@ -602,6 +602,51 @@ async def test_compaction_checkpoint_records_context_tokens_before_and_after() -
 
 
 @pytest.mark.asyncio
+async def test_compaction_after_projection_uses_matching_full_request_estimate() -> None:
+    service = CompactionService()
+    messages = [
+        user("u1", "old context " * 2_000),
+        assistant("a1", "old answer " * 2_000),
+        user("u2", "tail"),
+        assistant("a2", "tail answer"),
+    ]
+    agent = object()
+    storage = StubStorage()
+    settings = CompactionSettings(tail_tokens=1)
+    request_messages = provider_request(messages)
+
+    estimated_basis = await service.compact(
+        messages,
+        agent=agent,
+        summary_adapter=StubAdapter("Short retained summary."),
+        summary_model_id="openai/summary",
+        storage=storage,
+        settings=settings,
+        request_messages=request_messages,
+        context_tokens_before=25_000,
+    )
+    provider_anchored = await service.compact(
+        messages,
+        agent=agent,
+        summary_adapter=StubAdapter("Short retained summary."),
+        summary_model_id="openai/summary",
+        storage=storage,
+        settings=settings,
+        request_messages=request_messages,
+        context_tokens_before=15_000,
+        estimated_context_tokens_before=25_000,
+    )
+
+    assert provider_anchored.usage is not None
+    assert estimated_basis.usage is not None
+    assert provider_anchored.usage["context_tokens_before"] == 15_000
+    assert (
+        provider_anchored.usage["context_tokens_after"]
+        == estimated_basis.usage["context_tokens_after"]
+    )
+
+
+@pytest.mark.asyncio
 async def test_continuation_preserves_request_prefix_and_active_tools() -> None:
     active = StubAdapter("ACTIVE SUMMARY")
     summary = StubAdapter("must not be used")

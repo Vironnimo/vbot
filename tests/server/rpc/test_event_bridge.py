@@ -139,18 +139,24 @@ def test_server_event_forwards_session_usage_on_terminal_events() -> None:
     refresh their session-level token/cache display without re-fetching
     history."""
     session_usage = {"measured_turns": 3, "input_tokens": 1200, "cache_read_tokens": 900}
+    context_usage = {"tokens": 1245, "estimated": False}
     event = RunEvent(
         sequence=9,
         run_id="run-1",
         agent_id="builder",
         session_id="sess-uuid",
         type="run_completed",
-        payload={"status": "completed", "session_usage": session_usage},
+        payload={
+            "status": "completed",
+            "session_usage": session_usage,
+            "context_usage": context_usage,
+        },
     )
 
     summary = _server_event_from_run_event(event)
 
     assert summary["payload"]["session_usage"] == session_usage
+    assert summary["payload"]["context_usage"] == context_usage
 
 
 def test_server_event_omits_session_usage_when_absent() -> None:

@@ -107,6 +107,12 @@ async def test_chat_history_includes_whole_session_usage_totals(tmp_path: Path) 
         "reasoning_turns": 2,
         "reasoning_tokens": 60,
     }
+    assert response["result"]["context_usage"] == {
+        "tokens": 2100,
+        "estimated": False,
+        "provider_input_tokens": 2000,
+        "provider_output_tokens": 100,
+    }
 
 
 @pytest.mark.asyncio

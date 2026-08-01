@@ -1083,6 +1083,7 @@ describe('subscribeRunEvents()', () => {
         payload: {
           usage: { input_tokens: 12, output_tokens: 3 },
           session_usage: { measured_turns: 1, input_tokens: 12 },
+          context_usage: { tokens: 15, estimated: false },
         },
       }),
     });
@@ -1093,6 +1094,7 @@ describe('subscribeRunEvents()', () => {
         payload: {
           usage: { input_tokens: 12, output_tokens: 3 },
           session_usage: { measured_turns: 1, input_tokens: 12 },
+          context_usage: { tokens: 15, estimated: false },
         },
       },
       rawEvent: expect.any(Object),

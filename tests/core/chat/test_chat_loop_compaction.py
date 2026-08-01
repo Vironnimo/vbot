@@ -313,7 +313,7 @@ async def test_compaction_maybe_auto_compact_skips_when_threshold_not_reached(
 
 
 @pytest.mark.asyncio
-async def test_compaction_uses_larger_request_estimate_than_stale_provider_usage(
+async def test_compaction_uses_provider_anchor_instead_of_larger_full_request_estimate(
     tmp_path: Path,
 ) -> None:
     agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
@@ -347,7 +347,8 @@ async def test_compaction_uses_larger_request_estimate_than_stale_provider_usage
         run=run,
     )
 
-    assert compaction_service.should_auto_calls == [(95, 100, 0.8)]
+    assert compaction_service.should_auto_calls == [(20, 100, 0.8)]
+    assert compaction_service.estimate_calls == []
 
 
 @pytest.mark.asyncio
@@ -534,7 +535,15 @@ async def test_compaction_maybe_auto_compact_appends_checkpoint_and_rebuilds_mes
         COMPACTION_STARTED_EVENT,
         COMPACTION_COMPLETED_EVENT,
     ]
-    assert compaction_events[0].payload == {"context_tokens_before": 90}
+    assert compaction_events[0].payload == {
+        "context_tokens_before": 90,
+        "context_usage": {
+            "tokens": 90,
+            "estimated": False,
+            "provider_input_tokens": 90,
+            "provider_output_tokens": 0,
+        },
+    }
     compaction_event = next(
         event for event in run.events if event.type == COMPACTION_COMPLETED_EVENT
     )
@@ -543,6 +552,10 @@ async def test_compaction_maybe_auto_compact_appends_checkpoint_and_rebuilds_mes
     assert compaction_event.payload["history_available"] is True
     assert compaction_event.payload["context_tokens_before"] == 90
     assert compaction_event.payload["context_tokens_after"] == 30
+    assert compaction_event.payload["context_usage"] == {
+        "tokens": 30,
+        "estimated": True,
+    }
     assert session.load()[-1].usage == {
         "compacted_token_count": 42,
         "context_tokens_before": 90,

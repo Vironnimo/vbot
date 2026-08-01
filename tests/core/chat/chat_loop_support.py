@@ -897,6 +897,7 @@ class StubCompactionService:
                 "instruction": instruction,
                 "minimum_reclaim_tokens": minimum_reclaim_tokens,
                 "context_tokens_before": kwargs.get("context_tokens_before"),
+                "estimated_context_tokens_before": kwargs.get("estimated_context_tokens_before"),
                 "request_messages": [
                     dict(message) for message in kwargs.get("request_messages") or []
                 ],
@@ -910,10 +911,17 @@ class StubCompactionService:
         context_tokens_before = kwargs.get("context_tokens_before")
         if not isinstance(context_tokens_before, int) or isinstance(context_tokens_before, bool):
             return self._checkpoint
+        estimated_context_tokens_before = kwargs.get("estimated_context_tokens_before")
+        context_tokens_basis = (
+            estimated_context_tokens_before
+            if isinstance(estimated_context_tokens_before, int)
+            and not isinstance(estimated_context_tokens_before, bool)
+            else context_tokens_before
+        )
         context_tokens_after = (
             self._context_tokens_after
             if self._context_tokens_after is not None
-            else max(0, context_tokens_before - 1)
+            else max(0, context_tokens_basis - 1)
         )
         return replace(
             self._checkpoint,

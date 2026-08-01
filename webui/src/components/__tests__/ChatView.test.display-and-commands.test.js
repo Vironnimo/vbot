@@ -466,7 +466,7 @@ describe('ChatView', () => {
     await Promise.resolve();
   });
 
-  it('shows the combined input and output usage in the token badge', async () => {
+  it('shows the server-owned Context Usage in the token badge', async () => {
     rpcMock.mockImplementation(
       createChatRpcMock({
         usage: { input_tokens: 3886, output_tokens: 92 },
@@ -491,7 +491,7 @@ describe('ChatView', () => {
     ).toBe(expectedBadge);
   });
 
-  it('refreshes the unchanged token badge after a model step while the run continues', async () => {
+  it('refreshes Context Usage after a model step while the run continues', async () => {
     rpcMock.mockImplementation(
       createChatRpcMock({
         usage: { input_tokens: 1000, output_tokens: 50 },
@@ -531,13 +531,20 @@ describe('ChatView', () => {
             input_tokens: 4886,
             output_tokens: 142,
           },
+          context_usage: {
+            tokens: 4050,
+            estimated: true,
+            provider_input_tokens: 3886,
+            provider_output_tokens: 92,
+            estimated_delta_tokens: 72,
+          },
         },
       },
     });
     flushSync();
 
     const numberFormat = new Intl.NumberFormat('en');
-    const expectedBadge = `${numberFormat.format(3978)} / ${numberFormat.format(262144)} tok`;
+    const expectedBadge = `~${numberFormat.format(4050)} / ${numberFormat.format(262144)} tok`;
     await waitForCondition(
       () =>
         document.body.querySelector('.token-badge')?.textContent?.trim() ===
@@ -553,7 +560,7 @@ describe('ChatView', () => {
     );
   });
 
-  it('keeps the estimated marker when combined usage is estimated', async () => {
+  it('keeps the estimated marker when Context Usage is estimated', async () => {
     rpcMock.mockImplementation(
       createChatRpcMock({
         usage: { input_tokens: 3886, output_tokens: 92, estimated: true },
@@ -635,6 +642,8 @@ describe('ChatView', () => {
     flushSync();
 
     const expectedTooltip = [
+      'Current context: 3,978 tok',
+      '',
       'Last turn',
       'Input: 3,886 tok',
       '  · read from cache: 3,000 (77%)',
@@ -665,6 +674,8 @@ describe('ChatView', () => {
     flushSync();
 
     const expectedTooltip = [
+      'Current context: 3,978 tok',
+      '',
       'Last turn',
       'Input: 3,886 tok',
       'Output: 92 tok',

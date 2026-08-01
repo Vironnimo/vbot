@@ -145,7 +145,13 @@ from core.chat.tool_dispatch import (
     _fail_tool_calls_without_dispatch,
     _read_media_outputs,
 )
-from core.chat.usage import add_session_turn_usage, aggregate_session_usage
+from core.chat.usage import (
+    add_session_turn_usage,
+    aggregate_session_usage,
+    build_model_step_context_usage,
+    checkpoint_context_usage,
+    latest_session_context_usage,
+)
 from core.debug import DebugContext
 from core.extensions import HookContext
 from core.model_tasks import TASK_IMAGE_UNDERSTANDING
@@ -1024,11 +1030,17 @@ class ChatLoop:
             run.run_kind,
             run.project_id,
         )
-        run.emit(COMPACTION_STARTED_EVENT, {})
         adapter: Any | None = None
         summary_adapter: Any | None = None
         try:
             messages = session.load()
+            context_usage = latest_session_context_usage(messages)
+            if context_usage is not None:
+                run.terminal_payload_extras["context_usage"] = context_usage
+            run.emit(
+                COMPACTION_STARTED_EVENT,
+                {"context_usage": context_usage} if context_usage is not None else {},
+            )
             settings = self._load_compaction_settings(
                 agent,
                 agent_id=run.agent_id,
@@ -1103,9 +1115,16 @@ class ChatLoop:
                         run.project_id,
                     ),
                 )
-                context_tokens_before = compaction_service.estimate_messages_tokens(
+                estimated_context_tokens_before = compaction_service.estimate_messages_tokens(
                     request_state.messages
                 )
+                if context_usage is None:
+                    context_usage = {
+                        "tokens": estimated_context_tokens_before,
+                        "estimated": True,
+                    }
+                    run.terminal_payload_extras["context_usage"] = context_usage
+                context_tokens_before = int(context_usage["tokens"])
                 checkpoint = await compaction_service.compact(
                     messages,
                     agent=agent,
@@ -1119,6 +1138,7 @@ class ChatLoop:
                     active_model_id=model_id,
                     active_tools=request_state.tools,
                     context_tokens_before=context_tokens_before,
+                    estimated_context_tokens_before=estimated_context_tokens_before,
                 )
             finally:
                 if adapter is not None:
@@ -1697,12 +1717,16 @@ class ChatLoop:
             # keep their session-level token/cache display current without
             # re-fetching history. Diagnostics only — never mask the outcome.
             try:
+                terminal_messages = session.load()
                 run.terminal_payload_extras["session_usage"] = aggregate_session_usage(
-                    session.load()
+                    terminal_messages
                 )
+                terminal_context_usage = latest_session_context_usage(terminal_messages)
+                if terminal_context_usage is not None:
+                    run.terminal_payload_extras["context_usage"] = terminal_context_usage
             except Exception:
                 _LOGGER.warning(
-                    "Failed to aggregate session usage for run %s", run.id, exc_info=True
+                    "Failed to aggregate Session Usage for run %s", run.id, exc_info=True
                 )
 
             extension_registry = self._dependencies.get_extension_registry()
@@ -2293,6 +2317,15 @@ class ChatLoop:
             ):
                 session.append(assistant_message)
                 assert isinstance(assistant_message.usage, dict)
+                assistant_request_message = _assistant_continuation_dict(
+                    assistant_message,
+                    replay_policy=replay_policy,
+                )
+                assistant_context_usage = build_model_step_context_usage(
+                    assistant_message.usage,
+                    [*messages_for_request, assistant_request_message],
+                )
+                run.terminal_payload_extras["context_usage"] = assistant_context_usage
                 session_usage = add_session_turn_usage(session_usage, assistant_message.usage)
                 run.terminal_payload_extras["session_usage"] = session_usage
                 run.emit(
@@ -2300,6 +2333,7 @@ class ChatLoop:
                     {
                         "usage": dict(assistant_message.usage),
                         "session_usage": dict(session_usage),
+                        "context_usage": dict(assistant_context_usage),
                     },
                     allow_after_cancel=preserve_cancelled_partial,
                 )
@@ -2317,9 +2351,7 @@ class ChatLoop:
                     )
                 if not self._streaming:
                     _emit_assistant_events(run, assistant_message)
-                messages.append(
-                    _assistant_continuation_dict(assistant_message, replay_policy=replay_policy)
-                )
+                messages.append(assistant_request_message)
 
                 if not assistant_message.tool_calls:
                     terminal_error = _terminal_outcome_error(
@@ -2341,10 +2373,9 @@ class ChatLoop:
                             usage=assistant_message.usage,
                             continuation_request_messages=[
                                 *messages_for_request,
-                                _assistant_continuation_dict(
-                                    assistant_message, replay_policy=replay_policy
-                                ),
+                                assistant_request_message,
                             ],
+                            context_usage=assistant_context_usage,
                             allow_continuation=True,
                         )
                     return assistant_message
@@ -2434,6 +2465,18 @@ class ChatLoop:
                 finally:
                     session.flush_deferred_notes()
 
+            continuation_request_messages = [
+                *messages_for_request,
+                assistant_request_message,
+                *tool_request_messages,
+            ]
+            tool_context_usage = build_model_step_context_usage(
+                assistant_message.usage,
+                continuation_request_messages,
+                estimated_delta_messages=tool_request_messages,
+            )
+            run.terminal_payload_extras["context_usage"] = tool_context_usage
+
             if repeated_failed_tool is not None:
                 raise ToolIterationLimitError(
                     f"Tool '{repeated_failed_tool}' repeated the same failed call "
@@ -2446,14 +2489,8 @@ class ChatLoop:
                     context,
                     target,
                     usage=assistant_message.usage,
-                    continuation_request_messages=[
-                        *messages_for_request,
-                        _assistant_continuation_dict(
-                            assistant_message,
-                            replay_policy=replay_policy,
-                        ),
-                        *tool_request_messages,
-                    ],
+                    continuation_request_messages=continuation_request_messages,
+                    context_usage=tool_context_usage,
                 )
                 context.request_state = compacted_state
                 state = compacted_state
@@ -2527,6 +2564,7 @@ class ChatLoop:
         usage: JsonObject | None,
         *,
         continuation_request_messages: list[JsonObject] | None = None,
+        context_usage: JsonObject | None = None,
         allow_continuation: bool = False,
     ) -> _RequestState:
         """Auto-compact when configured token thresholds are exceeded."""
@@ -2561,17 +2599,16 @@ class ChatLoop:
         if context_window is None:
             return current_state
 
-        estimated_input_tokens = self._compaction_service.estimate_messages_tokens(messages)
-        if isinstance(usage, dict):
-            input_tokens_raw = usage.get("input_tokens")
-            measured_input_tokens = (
-                input_tokens_raw
-                if isinstance(input_tokens_raw, int) and not isinstance(input_tokens_raw, bool)
-                else 0
-            )
-            input_tokens = max(measured_input_tokens, estimated_input_tokens)
-        else:
-            input_tokens = estimated_input_tokens
+        current_request_messages = continuation_request_messages or messages
+        resolved_context_usage = context_usage or build_model_step_context_usage(
+            usage,
+            current_request_messages,
+        )
+        context_tokens = resolved_context_usage.get("tokens")
+        if isinstance(context_tokens, bool) or not isinstance(context_tokens, int):
+            raise AssertionError("Context Usage must carry an integer token count")
+        input_tokens = context_tokens
+        run.terminal_payload_extras["context_usage"] = dict(resolved_context_usage)
 
         if settings.trigger == "context_ratio":
             should_compact = self._compaction_service.should_auto_compact(
@@ -2613,9 +2650,15 @@ class ChatLoop:
         close_summary_adapter = summary_adapter is not target.adapter
         run.emit(
             COMPACTION_STARTED_EVENT,
-            {"context_tokens_before": input_tokens},
+            {
+                "context_tokens_before": input_tokens,
+                "context_usage": dict(resolved_context_usage),
+            },
         )
         try:
+            estimated_context_tokens_before = self._compaction_service.estimate_messages_tokens(
+                current_request_messages
+            )
             checkpoint = await self._compaction_service.compact(
                 session_messages,
                 agent=agent,
@@ -2629,6 +2672,7 @@ class ChatLoop:
                 active_tools=tools,
                 minimum_reclaim_tokens=MIN_AUTO_COMPACTION_RECLAIM_TOKENS,
                 context_tokens_before=input_tokens,
+                estimated_context_tokens_before=estimated_context_tokens_before,
             )
         except CompactionInsufficientReclaimError as exc:
             run.emit(
@@ -2748,16 +2792,22 @@ class ChatLoop:
     ) -> None:
         """Publish the one completed-checkpoint payload used by every trigger."""
         checkpoint_usage = checkpoint.usage or {}
+        context_usage = checkpoint_context_usage(checkpoint)
+        if context_usage is not None:
+            run.terminal_payload_extras["context_usage"] = context_usage
+        payload: JsonObject = {
+            "message": checkpoint.to_dict(),
+            "checkpoint": checkpoint_ordinal(session.load(), checkpoint.id),
+            "checkpoint_id": checkpoint.id,
+            "history_available": True,
+            "context_tokens_before": checkpoint_usage.get("context_tokens_before"),
+            "context_tokens_after": checkpoint_usage.get("context_tokens_after"),
+        }
+        if context_usage is not None:
+            payload["context_usage"] = context_usage
         run.emit(
             COMPACTION_COMPLETED_EVENT,
-            {
-                "message": checkpoint.to_dict(),
-                "checkpoint": checkpoint_ordinal(session.load(), checkpoint.id),
-                "checkpoint_id": checkpoint.id,
-                "history_available": True,
-                "context_tokens_before": checkpoint_usage.get("context_tokens_before"),
-                "context_tokens_after": checkpoint_usage.get("context_tokens_after"),
-            },
+            payload,
         )
 
     def _load_compaction_settings(

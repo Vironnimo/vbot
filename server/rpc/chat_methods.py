@@ -12,6 +12,7 @@ from core.chat import (
     PreparedCommand,
     ReplySurface,
     aggregate_session_usage,
+    latest_session_context_usage,
 )
 from core.chat.content_blocks import ContentBlock
 from core.chat.file_mentions import expand_file_mentions, resolve_mention_root
@@ -118,6 +119,15 @@ def _chat_history(state: Any, params: JsonObject) -> JsonObject:
         # be a slice, but these always cover the full transcript.
         "session_usage": aggregate_session_usage(loaded_messages),
     }
+    context_usage = (
+        active_run_object.terminal_payload_extras.get("context_usage")
+        if active_run_object is not None
+        else None
+    )
+    if not isinstance(context_usage, dict):
+        context_usage = latest_session_context_usage(loaded_messages)
+    if context_usage is not None:
+        response["context_usage"] = context_usage
     if active_run is not None:
         response["active_run"] = active_run
     return response

@@ -305,6 +305,12 @@ async def test_send_dispatches_tool_and_resends_context_until_final(tmp_path: Pa
     assert [event.payload["usage"] for event in usage_events] == [
         message["usage"] for message in assistant_turns
     ]
+    assert usage_events[0].payload["context_usage"] == {
+        "tokens": 18,
+        "estimated": False,
+        "provider_input_tokens": 11,
+        "provider_output_tokens": 7,
+    }
     assert usage_events[0].payload["session_usage"] == {
         "measured_turns": 1,
         "estimated_turns": 0,
@@ -315,6 +321,8 @@ async def test_send_dispatches_tool_and_resends_context_until_final(tmp_path: Pa
         "cache_write_tokens": 0,
     }
     assert usage_events[1].payload["usage"]["estimated"] is True
+    assert usage_events[1].payload["context_usage"]["estimated"] is True
+    assert usage_events[1].payload["context_usage"]["tokens"] > 18
     assert usage_events[1].payload["session_usage"] == {
         "measured_turns": 1,
         "estimated_turns": 1,

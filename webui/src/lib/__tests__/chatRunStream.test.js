@@ -396,9 +396,23 @@ describe('createChatRunStream().applyConnectionSnapshot()', () => {
         run_event_type: 'run_completed',
         run_event_sequence: 2,
         status: 'completed',
+        context_usage: {
+          tokens: 155489,
+          estimated: true,
+          provider_input_tokens: 154731,
+          provider_output_tokens: 243,
+          estimated_delta_tokens: 515,
+        },
       },
     });
 
+    expect(sessionState.contextUsage).toEqual({
+      tokens: 155489,
+      estimated: true,
+      provider_input_tokens: 154731,
+      provider_output_tokens: 243,
+      estimated_delta_tokens: 515,
+    });
     expect(sessionState.hasUnreadCompletion).toBe(false);
     expect(agentActivityStatus(chatState, DISPLAYED_AGENT_ID)).toBe('idle');
     expect(harness.subAgentRunStatuses).toEqual({});
