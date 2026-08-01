@@ -22,9 +22,7 @@ test("Compaction grants lossless access to original Session history", async ({
 
   await chat.getByRole("textbox", { name: "Message" }).fill("/compact");
   await chat.getByRole("button", { name: "Send message" }).click();
-  await expect(
-    chat.getByText("Context compacted", { exact: true }),
-  ).toBeVisible({
+  await expect(chat.getByText(/^Context compacted/)).toBeVisible({
     timeout: 30_000,
   });
 

@@ -14,6 +14,7 @@ const MODEL_NAME = "E2E Live Model";
 const UPDATED_MODEL_NAME = "E2E Live Model Updated";
 const MODEL_TARGET = `${PROVIDER_ID}/${MODEL_ID}::default`;
 const API_KEY = "e2e-secret-key-9412";
+const CLEANUP_RECONCILIATION_ATTEMPTS = 2;
 
 async function rpc(request, method, params = {}) {
   const response = await request.post("/api/rpc", {
@@ -24,6 +25,45 @@ async function rpc(request, method, params = {}) {
     throw new Error(`RPC ${method} failed: ${JSON.stringify(payload)}`);
   }
   return payload.result;
+}
+
+async function reconcileProviderCleanup() {
+  for (
+    let attempt = 1;
+    attempt <= CLEANUP_RECONCILIATION_ATTEMPTS;
+    attempt += 1
+  ) {
+    const cleanupRequest = await playwrightRequest.newContext({
+      baseURL: `http://${environment.host}:${environment.port}`,
+    });
+    try {
+      await rpc(cleanupRequest, "agent.update", { id: "main", model: "" });
+      const remainingProviders = await rpc(
+        cleanupRequest,
+        "provider.custom_list",
+      );
+      if (
+        remainingProviders.providers.some(
+          (provider) => provider.id === PROVIDER_ID,
+        )
+      ) {
+        await rpc(cleanupRequest, "provider.custom_delete", {
+          provider_id: PROVIDER_ID,
+        });
+      }
+      return;
+    } catch (error) {
+      const canRetry =
+        error instanceof Error &&
+        error.message.includes("ECONNRESET") &&
+        attempt < CLEANUP_RECONCILIATION_ATTEMPTS;
+      if (!canRetry) {
+        throw error;
+      }
+    } finally {
+      await cleanupRequest.dispose();
+    }
+  }
 }
 
 async function openProviders(page) {
@@ -89,9 +129,6 @@ test("a Custom Provider and manual Model work live and keep their key secret", a
   page,
   request,
 }) => {
-  const cleanupRequest = await playwrightRequest.newContext({
-    baseURL: `http://${environment.host}:${environment.port}`,
-  });
   try {
     let providers = await openProviders(page);
     await providers.getByRole("button", { name: "Add custom" }).click();
@@ -275,23 +312,6 @@ test("a Custom Provider and manual Model work live and keep their key secret", a
     );
     expect(environmentAfterDelete).not.toContain(API_KEY);
   } finally {
-    try {
-      await rpc(cleanupRequest, "agent.update", { id: "main", model: "" });
-      const remainingProviders = await rpc(
-        cleanupRequest,
-        "provider.custom_list",
-      );
-      if (
-        remainingProviders.providers.some(
-          (provider) => provider.id === PROVIDER_ID,
-        )
-      ) {
-        await rpc(cleanupRequest, "provider.custom_delete", {
-          provider_id: PROVIDER_ID,
-        });
-      }
-    } finally {
-      await cleanupRequest.dispose();
-    }
+    await reconcileProviderCleanup();
   }
 });
