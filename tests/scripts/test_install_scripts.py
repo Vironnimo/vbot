@@ -555,6 +555,17 @@ def test_windows_installer_forwards_setup_options_through_powershell() -> None:
     assert "& $setup @setupArgList" not in script
 
 
+def test_windows_installer_shim_does_not_lock_the_pip_package_launcher() -> None:
+    script = (PROJECT_ROOT / "scripts" / "install.ps1").read_text(encoding="utf-8")
+    shim_start = script.index("function Add-VbotShim")
+    shim_end = script.index("function Write-ManagedRootMarker", shim_start)
+    shim = script[shim_start:shim_end]
+
+    assert 'Scripts\\python.exe"' in shim
+    assert '" -m cli.main %*' in shim
+    assert "Scripts\\vbot.exe" not in shim
+
+
 def test_windows_installer_refuses_accidental_elevation_before_install_mutation() -> None:
     script = (PROJECT_ROOT / "scripts" / "install.ps1").read_text(encoding="utf-8")
 

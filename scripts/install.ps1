@@ -190,10 +190,14 @@ function Add-VbotShim {
     param([string]$InstallDir, [string]$VenvDir)
     $binDir = Join-Path $InstallDir "bin"
     New-Item -ItemType Directory -Path $binDir -Force | Out-Null
-    $vbotExe = Join-Path $VenvDir "Scripts\vbot.exe"
+    $pythonExe = Join-Path $VenvDir "Scripts\python.exe"
     $shim = Join-Path $binDir "vbot.cmd"
+    # Run the module through Python instead of pip's generated vbot.exe. During
+    # `vbot update`, pip may replace that package launcher; keeping it out of the
+    # live process tree prevents Windows from locking the file against itself.
     # Expose only vbot, so the venv's python/pip do not shadow the user's.
-    $content = "@echo off`r`n`"$vbotExe`" %*`r`n"
+    $escapedPythonExe = $pythonExe.Replace("%", "%%")
+    $content = "@echo off`r`n`"$escapedPythonExe`" -m cli.main %*`r`n"
     [System.IO.File]::WriteAllText($shim, $content, (New-Object System.Text.UTF8Encoding($false)))
     Write-Step "Exposing 'vbot' via $shim"
     Add-ToUserPath -PathToAdd $binDir
