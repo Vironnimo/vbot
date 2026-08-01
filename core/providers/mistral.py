@@ -35,9 +35,9 @@ MISTRAL_REASONING_EFFORTS = {"none", "high"}
 # Provider-scoped metadata blob + field carrying the magistral reasoning-mode
 # wire fact (Phase 5). The decision "this model engages reasoning via
 # ``prompt_mode: reasoning`` instead of ``reasoning_effort``" is a published
-# per-model FACT, so it lives in data (``metadata.mistral.prompt_mode ==
-# "reasoning"`` in ``mistral.overrides.json``), not in a name-prefix guess. The
-# adapter still owns the MECHANICS — building the wire request from that fact.
+# per-model FACT, so it lives in model data as
+# ``metadata.mistral.prompt_mode == "reasoning"``, not in a name-prefix guess.
+# The adapter still owns the MECHANICS — building the wire request from that fact.
 MISTRAL_METADATA_KEY = "mistral"
 PROMPT_MODE_METADATA_KEY = "prompt_mode"
 PROMPT_MODE_REASONING = "reasoning"

@@ -7332,7 +7332,7 @@
       "context_window": 1048576,
       "family": "ling",
       "last_updated": "2026-07-15",
-      "max_output_tokens": null,
+      "max_output_tokens": 1048576,
       "name": "Inkling",
       "release_date": "2026-07-15",
       "temperature": true
