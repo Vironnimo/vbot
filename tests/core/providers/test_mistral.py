@@ -52,9 +52,9 @@ def mistral_adapter(mistral_config: ProviderConfig) -> MistralAdapter:
 def _prompt_mode_metadata(model_id: str) -> dict[str, object]:
     """Return ``metadata.mistral.prompt_mode`` data for magistral-medium models.
 
-    Mirrors what ``mistral.overrides.json`` carries: the (deprecated)
-    magistral-medium reasoning models engage reasoning via ``prompt_mode``,
-    which is now a per-model wire FACT in data, not a name-prefix guess.
+    Reproduces the wire fact formerly carried for deprecated magistral-medium
+    models: reasoning engages via ``prompt_mode`` when model data says so, not
+    through a name-prefix guess.
     """
 
     if model_id.startswith("magistral-medium"):
