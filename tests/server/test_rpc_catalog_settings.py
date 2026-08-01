@@ -246,7 +246,7 @@ async def test_settings_update_persists_reflection_settings_and_returns_full_pay
     assert response["result"]["reflection"] == {
         "enabled": True,
         "memory_turn_interval": 5,
-        "skill_tool_call_interval": 25,
+        "skill_model_step_interval": 10,
     }
 
 

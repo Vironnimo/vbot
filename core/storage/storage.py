@@ -755,7 +755,7 @@ class StorageManager:
             raise StorageError("Reflection settings must be a mapping")
 
         unsupported_fields = sorted(
-            set(reflection) - {"enabled", "memory_turn_interval", "skill_tool_call_interval"}
+            set(reflection) - {"enabled", "memory_turn_interval", "skill_model_step_interval"}
         )
         if unsupported_fields:
             raise StorageError(f"Unsupported reflection settings: {', '.join(unsupported_fields)}")

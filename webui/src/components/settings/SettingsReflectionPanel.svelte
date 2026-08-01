@@ -15,9 +15,9 @@
   const noop = () => {};
 
   const REFLECTION_SETTING_DEFAULTS = Object.freeze({
-    enabled: false,
+    enabled: true,
     memory_turn_interval: 10,
-    skill_tool_call_interval: 25,
+    skill_model_step_interval: 10,
   });
 
   function positiveIntegerOr(value, fallback) {
@@ -37,9 +37,9 @@
         reflection.memory_turn_interval,
         REFLECTION_SETTING_DEFAULTS.memory_turn_interval,
       ),
-      skill_tool_call_interval: positiveIntegerOr(
-        reflection.skill_tool_call_interval,
-        REFLECTION_SETTING_DEFAULTS.skill_tool_call_interval,
+      skill_model_step_interval: positiveIntegerOr(
+        reflection.skill_model_step_interval,
+        REFLECTION_SETTING_DEFAULTS.skill_model_step_interval,
       ),
     };
   }
@@ -115,8 +115,8 @@
       normalizedLeft.enabled === normalizedRight.enabled &&
       normalizedLeft.memory_turn_interval ===
         normalizedRight.memory_turn_interval &&
-      normalizedLeft.skill_tool_call_interval ===
-        normalizedRight.skill_tool_call_interval
+      normalizedLeft.skill_model_step_interval ===
+        normalizedRight.skill_model_step_interval
     );
   }
 
@@ -248,13 +248,13 @@
     <div class="s-row-label">
       {t(
         'settings.reflection.skillInterval',
-        'Skill review interval (tool calls)',
+        'Skill review interval (Model steps)',
       )}
     </div>
     <div class="s-row-desc">
       {t(
         'settings.reflection.skillIntervalDescription',
-        'A skill review becomes due after this many tool calls in a conversation.',
+        'A skill review becomes due after this many Agentic Loop iterations in a conversation.',
       )}
     </div>
   </div>
@@ -264,12 +264,12 @@
       type="number"
       min="1"
       step="1"
-      value={reflectionSettings.skill_tool_call_interval}
+      value={reflectionSettings.skill_model_step_interval}
       ariaLabel={t(
         'settings.reflection.skillInterval',
-        'Skill review interval (tool calls)',
+        'Skill review interval (Model steps)',
       )}
-      onInput={(next) => handleIntervalInput('skill_tool_call_interval', next)}
+      onInput={(next) => handleIntervalInput('skill_model_step_interval', next)}
     />
   </div>
 </div>

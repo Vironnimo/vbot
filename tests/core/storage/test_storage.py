@@ -30,7 +30,9 @@ def create_prompt_resources(resources_dir: Path, *, include_compaction: bool = T
         "channels.md",
         "skills.md",
         "skill_maintenance.md",
-        # Backend-only fragment, always bundled (like compaction/handoff/learn).
+        # Backend-only fragments, always bundled (like compaction/handoff/learn).
+        "reflect-memory.md",
+        "reflect-skill.md",
         "reflect.md",
     ]
     if include_compaction:
@@ -1067,12 +1069,15 @@ def test_read_prompt_fragment_skill_maintenance_resolves_bundled_resource(tmp_pa
     assert storage.read_prompt_fragment("skill_maintenance.md") == "skill_maintenance.md bundled"
 
 
-def test_read_prompt_fragment_reflect_resolves_bundled_resource(tmp_path: Path) -> None:
+@pytest.mark.parametrize("fragment_name", ["reflect-memory.md", "reflect-skill.md", "reflect.md"])
+def test_read_prompt_fragment_reflect_resolves_bundled_resource(
+    tmp_path: Path, fragment_name: str
+) -> None:
     resources_dir = tmp_path / "resources"
     create_prompt_resources(resources_dir)
     storage = StorageManager(tmp_path / "data", resources_dir=resources_dir)
 
-    assert storage.read_prompt_fragment("reflect.md") == "reflect.md bundled"
+    assert storage.read_prompt_fragment(fragment_name) == f"{fragment_name} bundled"
 
 
 def test_read_prompt_fragment_compaction_name_passes_allowlist_check(tmp_path: Path) -> None:

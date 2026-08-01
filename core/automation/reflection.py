@@ -9,8 +9,8 @@ The reflection service owns two halves of one capability:
    dispatchable, and return the fork id plus the run's closing summary. The
    source session is never touched.
 2. The cadence policy behind the background trigger: per-session counters in
-   the session metadata sidecar (user turns since the last memory review, tool
-   calls since the last skill review), incremented at the end of every
+   the session metadata sidecar (user turns since the last memory review,
+   Model steps since the last skill review), incremented at the end of every
    successful visible run of an identity agent. When a threshold is reached,
    one review run fires in the background. A successful review consumes the
    due counts it covered; a failed review leaves them due for the next run.
@@ -25,12 +25,13 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 from core.chat.content_blocks import ContentBlock, TextBlock
 from core.runs import RunKind
 from core.sessions import SESSION_FORK_ALWAYS_STRIP_META_KEYS
 from core.subagents.subagents import SUBAGENT_SESSION_METADATA_FLAG
+from core.tools.availability import MEMORY_TOOL_NAME, memory_tool_enabled
 from core.tools.skill import SKILL_LIST_TOOL_NAME
 from core.utils.logging import get_logger
 
@@ -39,16 +40,29 @@ if TYPE_CHECKING:
     from core.runs import Run
     from core.runtime.interfaces import RuntimeServices
 
-REFLECT_FRAGMENT_NAME = "reflect.md"
+ReflectionScope = Literal["memory", "skill", "combined"]
+
+REFLECT_FRAGMENT_NAMES: dict[ReflectionScope, str] = {
+    "memory": "reflect-memory.md",
+    "skill": "reflect-skill.md",
+    "combined": "reflect.md",
+}
 # The restriction is the Reflection Run's dispatch boundary. ``skill_list`` is
 # already part of every Session whose Agent can use ``skill``, so Reflection
 # never changes the provider-visible Tool set at the fork boundary.
 REFLECTION_TOOL_RESTRICTION = ("memory", "skill", SKILL_LIST_TOOL_NAME, "skill_manage")
+MEMORY_REFLECTION_TOOL_RESTRICTION = (MEMORY_TOOL_NAME,)
+SKILL_REFLECTION_TOOL_RESTRICTION = ("skill", SKILL_LIST_TOOL_NAME, "skill_manage")
+REFLECTION_TOOL_RESTRICTIONS: dict[ReflectionScope, tuple[str, ...]] = {
+    "memory": MEMORY_REFLECTION_TOOL_RESTRICTION,
+    "skill": SKILL_REFLECTION_TOOL_RESTRICTION,
+    "combined": REFLECTION_TOOL_RESTRICTION,
+}
 # Session-sidecar key holding the cadence counters. Kept out of forks via the
 # always-strip policy in ``core/sessions`` so a fork restarts at zero.
 REFLECTION_COUNTERS_META_KEY = "reflection_counters"
 TURNS_SINCE_MEMORY_REVIEW_KEY = "turns_since_memory_review"
-TOOL_CALLS_SINCE_SKILL_REVIEW_KEY = "tool_calls_since_skill_review"
+MODEL_STEPS_SINCE_SKILL_REVIEW_KEY = "model_steps_since_skill_review"
 # A manual reset advances this generation so a concurrent background review
 # cannot consume activity recorded after that reset.
 COUNTER_GENERATION_KEY = "generation"
@@ -66,6 +80,10 @@ class ReflectionResult:
 
     session_id: str
     summary: str
+
+
+class ReflectionUnavailableError(RuntimeError):
+    """Raised when a review is requested for an Agent without active Memory."""
 
 
 class ReflectionService:
@@ -87,14 +105,20 @@ class ReflectionService:
         sessions are gated in the task once session metadata is loaded. The
         review runs in a fork, so the session this run belongs to stays free.
         """
-        if internal or outcome != "success" or not agent.workspace:
+        if internal or not agent.workspace or not memory_tool_enabled(agent.memory_prompt_mode):
+            return
+        memory_tool_called = MEMORY_TOOL_NAME in run.tool_call_names
+        count_run = outcome == "success"
+        if not count_run and not memory_tool_called:
             return
         task = asyncio.create_task(
             self._account_run_end(
                 agent_id=run.agent_id,
                 session_id=run.session_id,
                 project_id=run.project_id,
-                tool_call_count=run.tool_call_count,
+                model_step_count=run.model_step_count,
+                memory_tool_called=memory_tool_called,
+                count_run=count_run,
             )
         )
         self._background_tasks.add(task)
@@ -114,10 +138,12 @@ class ReflectionService:
         agent_id: str,
         session_id: str,
         project_id: str | None,
-        tool_call_count: int,
+        model_step_count: int,
+        memory_tool_called: bool,
+        count_run: bool,
     ) -> None:
         settings = self._runtime.storage.load_reflection_settings()
-        if not settings["enabled"]:
+        if not settings["enabled"] and not memory_tool_called:
             return
         sessions = self._runtime.chat_sessions
         metadata = sessions.get_metadata(agent_id, session_id, project_id)
@@ -126,23 +152,28 @@ class ReflectionService:
 
         raw_counters = metadata.get(REFLECTION_COUNTERS_META_KEY)
         counters = raw_counters if isinstance(raw_counters, dict) else {}
-        turns = _non_negative_int(counters.get(TURNS_SINCE_MEMORY_REVIEW_KEY)) + 1
-        tool_calls = _non_negative_int(counters.get(TOOL_CALLS_SINCE_SKILL_REVIEW_KEY)) + max(
-            tool_call_count, 0
+        turns = (
+            0
+            if memory_tool_called
+            else _non_negative_int(counters.get(TURNS_SINCE_MEMORY_REVIEW_KEY))
+            + (1 if count_run else 0)
+        )
+        model_steps = _non_negative_int(counters.get(MODEL_STEPS_SINCE_SKILL_REVIEW_KEY)) + (
+            max(model_step_count, 0) if count_run else 0
         )
         counter_generation = _non_negative_int(counters.get(COUNTER_GENERATION_KEY))
         memory_due = turns >= settings["memory_turn_interval"]
-        skill_due = tool_calls >= settings["skill_tool_call_interval"]
+        skill_due = model_steps >= settings["skill_model_step_interval"]
         # One review at a time per agent: a due session while a review is already
         # running keeps its counters and re-checks on its next run end.
         should_review = (memory_due or skill_due) and agent_id not in self._agents_in_review
         metadata[REFLECTION_COUNTERS_META_KEY] = {
             TURNS_SINCE_MEMORY_REVIEW_KEY: turns,
-            TOOL_CALLS_SINCE_SKILL_REVIEW_KEY: tool_calls,
+            MODEL_STEPS_SINCE_SKILL_REVIEW_KEY: model_steps,
             COUNTER_GENERATION_KEY: counter_generation,
         }
         sessions.set_metadata(agent_id, session_id, metadata, project_id)
-        if not should_review:
+        if not settings["enabled"] or not count_run or not should_review:
             return
 
         due = "+".join(
@@ -160,7 +191,7 @@ class ReflectionService:
                 agent_id,
                 session_id,
                 project_id=project_id,
-                extra_instruction=_cadence_instruction(memory_due, skill_due),
+                review_scope=_review_scope(memory_due, skill_due),
             )
             self._consume_reviewed_counters(
                 agent_id,
@@ -168,7 +199,7 @@ class ReflectionService:
                 project_id=project_id,
                 counter_generation=counter_generation,
                 reviewed_turns=turns if memory_due else 0,
-                reviewed_tool_calls=tool_calls if skill_due else 0,
+                reviewed_model_steps=model_steps if skill_due else 0,
             )
             _LOGGER.info(
                 "Reflection review completed (agent=%s fork=%s): %s",
@@ -194,7 +225,7 @@ class ReflectionService:
         project_id: str | None,
         counter_generation: int,
         reviewed_turns: int,
-        reviewed_tool_calls: int,
+        reviewed_model_steps: int,
     ) -> None:
         """Consume only counts covered by a successful background review."""
         sessions = self._runtime.chat_sessions
@@ -205,10 +236,10 @@ class ReflectionService:
         if current_generation != counter_generation:
             return
         current_turns = _non_negative_int(counters.get(TURNS_SINCE_MEMORY_REVIEW_KEY))
-        current_tool_calls = _non_negative_int(counters.get(TOOL_CALLS_SINCE_SKILL_REVIEW_KEY))
+        current_model_steps = _non_negative_int(counters.get(MODEL_STEPS_SINCE_SKILL_REVIEW_KEY))
         metadata[REFLECTION_COUNTERS_META_KEY] = {
             TURNS_SINCE_MEMORY_REVIEW_KEY: max(current_turns - reviewed_turns, 0),
-            TOOL_CALLS_SINCE_SKILL_REVIEW_KEY: max(current_tool_calls - reviewed_tool_calls, 0),
+            MODEL_STEPS_SINCE_SKILL_REVIEW_KEY: max(current_model_steps - reviewed_model_steps, 0),
             COUNTER_GENERATION_KEY: current_generation,
         }
         sessions.set_metadata(agent_id, session_id, metadata, project_id)
@@ -221,6 +252,7 @@ class ReflectionService:
         session_id: str,
         *,
         project_id: str | None = None,
+        review_scope: ReflectionScope = "combined",
         extra_instruction: str | None = None,
         on_fork_created: Callable[[str], None] | None = None,
         reply_surface: ReplySurface | None = None,
@@ -229,11 +261,16 @@ class ReflectionService:
 
         The fork stays on the same agent (prompt-cache-warm, pinned catalog
         kept) and is titled so it is recognizable in the session list.
-        ``extra_instruction`` is appended to the ``reflect.md`` brief (the
-        manual ``/reflect`` focus or the background cadence note);
+        ``review_scope`` selects the memory-only, skill-only, or combined brief
+        and dispatch boundary. ``extra_instruction`` is appended to that brief;
         ``on_fork_created`` fires with the fork id before the review run
         starts, so an accessor can surface the fork while the review runs.
         """
+        agent = self._runtime.agent_resolver.resolve_agent(project_id, agent_id)
+        if not agent.workspace or not memory_tool_enabled(agent.memory_prompt_mode):
+            raise ReflectionUnavailableError(
+                "Reflection requires an identity Agent with the memory Tool active"
+            )
         sessions = self._runtime.chat_sessions
         source_title = str(
             sessions.get_metadata(agent_id, session_id, project_id).get("title") or ""
@@ -256,12 +293,12 @@ class ReflectionService:
         # Streaming loop so an accessor watching the fork sees the live timeline.
         review_run = await self._runtime.streaming_chat_loop.start_run(
             agent_id,
-            self._build_instruction(extra_instruction),
+            self._build_instruction(review_scope, extra_instruction),
             session_id=fork.id,
             internal=True,
             reply_surface=reply_surface,
             project_id=project_id,
-            tool_restriction=REFLECTION_TOOL_RESTRICTION,
+            tool_restriction=REFLECTION_TOOL_RESTRICTIONS[review_scope],
             run_kind=RunKind.REFLECTION,
             contributes_to_agent_activity=False,
         )
@@ -276,34 +313,30 @@ class ReflectionService:
         counters = raw_counters if isinstance(raw_counters, dict) else {}
         metadata[REFLECTION_COUNTERS_META_KEY] = {
             TURNS_SINCE_MEMORY_REVIEW_KEY: 0,
-            TOOL_CALLS_SINCE_SKILL_REVIEW_KEY: 0,
+            MODEL_STEPS_SINCE_SKILL_REVIEW_KEY: 0,
             COUNTER_GENERATION_KEY: _non_negative_int(counters.get(COUNTER_GENERATION_KEY)) + 1,
         }
         sessions.set_metadata(agent_id, session_id, metadata, project_id)
 
-    def _build_instruction(self, extra_instruction: str | None) -> str:
-        base = self._runtime.storage.read_prompt_fragment(REFLECT_FRAGMENT_NAME).strip()
+    def _build_instruction(
+        self, review_scope: ReflectionScope, extra_instruction: str | None
+    ) -> str:
+        base = self._runtime.storage.read_prompt_fragment(
+            REFLECT_FRAGMENT_NAMES[review_scope]
+        ).strip()
         extra = (extra_instruction or "").strip()
         if not extra:
             return base
         return f"{base}\n\n{extra}"
 
 
-def _cadence_instruction(memory_due: bool, skill_due: bool) -> str | None:
-    """Scope note naming the due dimension; both due means the full brief."""
+def _review_scope(memory_due: bool, skill_due: bool) -> ReflectionScope:
+    """Select the complete work brief for the dimensions due now."""
     if memory_due and skill_due:
-        return None
+        return "combined"
     if memory_due:
-        return (
-            "This review was triggered automatically on the memory cadence. "
-            "Prioritize the memory dimension; save skill updates only when a "
-            "clear signal stands out."
-        )
-    return (
-        "This review was triggered automatically on the skill cadence. "
-        "Prioritize the skill dimension; save memory updates only when a "
-        "clear signal stands out."
-    )
+        return "memory"
+    return "skill"
 
 
 def _final_text(content: str | list[ContentBlock] | None) -> str:

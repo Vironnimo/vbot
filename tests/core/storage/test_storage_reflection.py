@@ -9,7 +9,7 @@ import pytest
 
 from core.storage import StorageError, StorageManager
 
-DEFAULTS = {"enabled": False, "memory_turn_interval": 10, "skill_tool_call_interval": 25}
+DEFAULTS = {"enabled": True, "memory_turn_interval": 10, "skill_model_step_interval": 10}
 
 
 class TestLoadReflectionSettings:
@@ -27,7 +27,7 @@ class TestLoadReflectionSettings:
                 "reflection": {
                     "enabled": True,
                     "memory_turn_interval": 5,
-                    "skill_tool_call_interval": 40,
+                    "skill_model_step_interval": 40,
                 }
             }
         )
@@ -37,7 +37,7 @@ class TestLoadReflectionSettings:
         assert result == {
             "enabled": True,
             "memory_turn_interval": 5,
-            "skill_tool_call_interval": 40,
+            "skill_model_step_interval": 40,
         }
 
     def test_defaults_fill_missing_fields(self, tmp_path: Path) -> None:
@@ -64,7 +64,7 @@ class TestLoadReflectionSettings:
 
         assert storage.load_reflection_settings() == DEFAULTS
 
-    @pytest.mark.parametrize("field", ["memory_turn_interval", "skill_tool_call_interval"])
+    @pytest.mark.parametrize("field", ["memory_turn_interval", "skill_model_step_interval"])
     @pytest.mark.parametrize("value", ["five", 0, -1, True])
     def test_defaults_invalid_intervals(self, tmp_path: Path, field: str, value: object) -> None:
         storage = StorageManager(tmp_path)
@@ -86,7 +86,7 @@ class TestUpdateReflectionSettings:
                 "reflection": {
                     "enabled": True,
                     "memory_turn_interval": 5,
-                    "skill_tool_call_interval": 40,
+                    "skill_model_step_interval": 40,
                 }
             }
         )
@@ -94,13 +94,13 @@ class TestUpdateReflectionSettings:
         assert updated["reflection"] == {
             "enabled": True,
             "memory_turn_interval": 5,
-            "skill_tool_call_interval": 40,
+            "skill_model_step_interval": 40,
         }
         assert storage.load_settings() == {
             "reflection": {
                 "enabled": True,
                 "memory_turn_interval": 5,
-                "skill_tool_call_interval": 40,
+                "skill_model_step_interval": 40,
             },
             "server_port": 8500,
         }
@@ -112,7 +112,7 @@ class TestUpdateReflectionSettings:
                 "reflection": {
                     "enabled": True,
                     "memory_turn_interval": 7,
-                    "skill_tool_call_interval": 33,
+                    "skill_model_step_interval": 33,
                 }
             }
         )
@@ -122,12 +122,12 @@ class TestUpdateReflectionSettings:
         assert updated["reflection"] == {
             "enabled": True,
             "memory_turn_interval": 12,
-            "skill_tool_call_interval": 33,
+            "skill_model_step_interval": 33,
         }
         assert storage.load_reflection_settings() == {
             "enabled": True,
             "memory_turn_interval": 12,
-            "skill_tool_call_interval": 33,
+            "skill_model_step_interval": 33,
         }
 
     def test_rejects_unsupported_fields(self, tmp_path: Path) -> None:
@@ -153,4 +153,4 @@ class TestUpdateReflectionSettings:
         assert storage.load_reflection_settings()["enabled"] is True
 
         storage.update_settings_sections({"reflection": {"enabled": False}})
-        assert storage.load_reflection_settings() == DEFAULTS
+        assert storage.load_reflection_settings() == {**DEFAULTS, "enabled": False}

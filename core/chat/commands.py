@@ -36,6 +36,7 @@ from core.runs import (
 )
 from core.sessions import SESSION_MOVE_STRIP_META_KEYS
 from core.skills.skill_validator import SKILL_NAME_TRIGGER_PATTERN
+from core.tools.availability import memory_tool_enabled
 from core.utils.logging import get_logger
 
 if TYPE_CHECKING:
@@ -1010,6 +1011,10 @@ class CommandDispatcher:
         if not getattr(agent, "workspace", ""):
             return self._notice(
                 "reflect", "Reflection needs an identity agent with its own memory and skill home."
+            )
+        if not memory_tool_enabled(agent.memory_prompt_mode):
+            return self._notice(
+                "reflect", "Reflection needs the memory Tool to be active for this Agent."
             )
         focus = (argument or "").strip()
         extra_instruction = (

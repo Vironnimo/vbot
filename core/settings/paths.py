@@ -407,10 +407,10 @@ _DEFINITIONS: tuple[SettingDefinition, ...] = (
         minimum=1,
     ),
     _static(
-        "reflection.skill_tool_call_interval",
+        "reflection.skill_model_step_interval",
         "integer",
-        "Tool calls between automatic Skill reflections.",
-        default=REFLECTION_SETTING_DEFAULTS["skill_tool_call_interval"],
+        "Model steps between automatic Skill reflections.",
+        default=REFLECTION_SETTING_DEFAULTS["skill_model_step_interval"],
         minimum=1,
     ),
     _static(

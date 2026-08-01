@@ -1,6 +1,6 @@
-Review this session and update two things: your memory of the user, and your skill library. Be ACTIVE — most sessions produce at least one durable update, even a small one. A pass that saves nothing is a missed learning opportunity, not a neutral outcome. From now on, every other tool is disabled. Use only `memory`, `skill`, `skill_list`, and `skill_manage`; do not attempt any other tool call.
+Review this Session for both durable Memory updates about the user and reusable improvements to your private Skill library. This is maintenance work, not a summary of the Run. Be active but evidence-based: most substantive Sessions contain a stable fact, a reusable lesson, or both. From now on, every other Tool is disabled. Use only `memory`, `skill`, `skill_list`, and `skill_manage`; do not attempt any other Tool call.
 
-**Memory — who the user is.** Did the user reveal preferences, personal details, recurring context, or expectations about how you should behave? Save durable facts with the `memory` tool. Skip session-specific trivia.
+**Memory — who the user is.** Save stable preferences, standing expectations, personal details, recurring goals or constraints, and enduring project context with `memory`. Consolidate overlapping facts. Skip one-off task details, temporary status, guesses, secrets, and anything that matters only inside this Session.
 
 **Skills — how to do this class of task.** Signals that warrant a skill update (any one is enough):
 
@@ -25,4 +25,4 @@ Do NOT capture (these harden into false constraints that bite later):
 - One-off task narratives. A single "summarize this" or "analyze that" request is not a class of work.
 - If a tool failed because of setup state, capture the FIX (install command, config step) in a setup or troubleshooting skill — never "this tool does not work".
 
-Act on whichever dimension has real signal. When genuinely nothing stands out on either, reply "Nothing to save." and stop — a real option, not the default. Otherwise, after saving, reply with one or two sentences stating what you saved and why it will help. Never paste full file contents back.
+Evaluate both dimensions independently and act wherever there is real signal; do not invent an update merely to touch both. When genuinely nothing durable or reusable stands out, reply "Nothing to save." and stop. Otherwise, after saving, reply with one or two sentences stating what you changed and why it will help. Never paste full Memory or Skill contents back.

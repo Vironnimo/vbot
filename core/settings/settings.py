@@ -89,7 +89,7 @@ OPENROUTER_ROUTING_MODES = frozenset({"automatic", "allowed", "ordered"})
 OPENROUTER_PROVIDER_SLUG_PATTERN = re.compile(r"^[a-z0-9][a-z0-9._-]*(?:/[a-z0-9][a-z0-9._-]*)*$")
 OPENROUTER_PROVIDER_SLUG_MAX_LENGTH = 128
 OPENROUTER_MODEL_ID_MAX_LENGTH = 256
-REFLECTION_INTERVAL_FIELDS = ("memory_turn_interval", "skill_tool_call_interval")
+REFLECTION_INTERVAL_FIELDS = ("memory_turn_interval", "skill_model_step_interval")
 SUBAGENT_SETTING_FIELDS = (
     "max_subagent_depth",
     "max_subagents_per_turn",

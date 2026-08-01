@@ -751,7 +751,13 @@ def _write_prompt_resources(resources: Path) -> None:
     (prompts_dir / "skills.md").write_text("Skills\n{generated:skill_list}", encoding="utf-8")
     (prompts_dir / "skill_maintenance.md").write_text("Skill maintenance", encoding="utf-8")
     (prompts_dir / "compaction.md").write_text("Summarize the conversation.", encoding="utf-8")
-    # Backend-only fragment (like compaction), read by the /reflect run.
+    # Backend-only fragments (like compaction), read by Reflection Runs.
+    (prompts_dir / "reflect-memory.md").write_text(
+        "Review this session for memory updates.", encoding="utf-8"
+    )
+    (prompts_dir / "reflect-skill.md").write_text(
+        "Review this session for skill updates.", encoding="utf-8"
+    )
     (prompts_dir / "reflect.md").write_text("Review this session.", encoding="utf-8")
 
 
