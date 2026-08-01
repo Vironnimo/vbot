@@ -10,12 +10,14 @@ import time
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
 import pytest_asyncio
 
 from core.storage import TemporaryFileManager
+from core.tools import process_manager as process_manager_module
 from core.tools.process_manager import (
     PROCESS_BUFFER_CAP_BYTES,
     ProcessManager,
@@ -675,13 +677,15 @@ def test_unix_process_tree_kill_uses_sigkill(monkeypatch: pytest.MonkeyPatch) ->
         def kill(self) -> None:
             raise AssertionError("proc.kill should not be used when killpg succeeds")
 
-    monkeypatch.setattr("core.tools.process_manager.os.name", "posix")
     monkeypatch.setattr(
-        "core.tools.process_manager.os.killpg",
-        lambda process_group_id, signal_number: sent_signals.append(
-            (process_group_id, signal_number)
+        process_manager_module,
+        "os",
+        SimpleNamespace(
+            name="posix",
+            killpg=lambda process_group_id, signal_number: sent_signals.append(
+                (process_group_id, signal_number)
+            ),
         ),
-        raising=False,
     )
 
     ProcessManager._kill_process_tree(FakeProcess())  # type: ignore[arg-type]
@@ -704,7 +708,7 @@ def test_windows_process_tree_kill_falls_back_when_taskkill_times_out(
     def raise_timeout(*_args: Any, **_kwargs: Any) -> subprocess.CompletedProcess[bytes]:
         raise subprocess.TimeoutExpired(cmd="taskkill", timeout=5)
 
-    monkeypatch.setattr("core.tools.process_manager.os.name", "nt")
+    monkeypatch.setattr(process_manager_module, "os", SimpleNamespace(name="nt"))
     monkeypatch.setattr(subprocess, "CREATE_NO_WINDOW", 0x08000000, raising=False)
     monkeypatch.setattr("core.tools.process_manager.subprocess.run", raise_timeout)
 
@@ -733,13 +737,18 @@ def test_windows_process_tree_kill_runs_taskkill_windowless(
         run_kwargs.update(kwargs)
         return subprocess.CompletedProcess(args, 0)
 
-    monkeypatch.setattr("core.tools.process_manager.os.name", "nt")
-    monkeypatch.setattr(subprocess, "CREATE_NO_WINDOW", 0x08000000, raising=False)
+    expected_creation_flags = 0x08000000
+    monkeypatch.setattr(process_manager_module, "os", SimpleNamespace(name="nt"))
+    monkeypatch.setattr(
+        process_manager_module,
+        "subprocess_creation_flags",
+        lambda: expected_creation_flags,
+    )
     monkeypatch.setattr("core.tools.process_manager.subprocess.run", successful_taskkill)
 
     ProcessManager._kill_process_tree(FakeProcess())  # type: ignore[arg-type]
 
-    assert run_kwargs["creationflags"] == 0x08000000
+    assert run_kwargs["creationflags"] == expected_creation_flags
     assert fallback_kills == 0
 
 

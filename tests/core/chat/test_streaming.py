@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
+from core.chat import streaming as streaming_module
 from core.chat.streaming import (
     StreamingAccumulator,
     StreamingAssistantFields,
@@ -581,21 +583,29 @@ async def test_iter_with_chunk_timeout_fails_on_stalled_delta() -> None:
     assert closed is True
 
 
-async def test_iter_with_chunk_timeout_heartbeats_keep_transport_alive_only() -> None:
+async def test_iter_with_chunk_timeout_heartbeats_keep_transport_alive_only(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     closed = False
+    clock = 0.0
 
     async def source() -> AsyncIteratorForTest:
-        nonlocal closed
+        nonlocal clock, closed
         try:
             while True:
-                await asyncio.sleep(0.01)
+                clock += 0.03
                 yield {"type": "heartbeat"}
         finally:
             closed = True
 
+    monkeypatch.setattr(
+        streaming_module,
+        "time",
+        SimpleNamespace(monotonic=lambda: clock),
+    )
     iterator = iter_with_chunk_timeout(
         source(),
-        timeout_seconds=0.2,
+        timeout_seconds=1.0,
         progress_timeout_seconds=0.08,
     )
 
