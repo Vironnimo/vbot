@@ -1,6 +1,6 @@
 ---
 name: vbot-cli
-description: Configure, inspect, and operate vBot through the vbot CLI, including locating the vBot root and runtime data. Use when asked to start, stop, restart, update, or uninstall vBot, set up provider credentials (API key or OAuth), find vBot files or diagnose stored state, or list/add/edit/remove agents, projects, sessions, channels (Telegram, Discord), cron jobs, task-model bindings, prompts, skills, extensions, or settings — or to inspect models, tools, logs, debug traces, Provider subscription usage, and Session usage statistics (tokens, runs, errors, tool and skill usage).
+description: Configure, inspect, and operate vBot through the vbot CLI, including locating the vBot root and runtime data. Use when asked to start, stop, restart, update, or uninstall vBot, set up provider credentials (API key or OAuth), find vBot files or diagnose stored state, list/add/edit/remove agents, projects, sessions, channels (Telegram, Discord), cron jobs, prompts, skills, extensions, or settings, inspect complete Model data, or configure specialized Task Models such as TTS/STT including model-specific voices and options — as well as to inspect tools, logs, debug traces, Provider subscription usage, and Session usage statistics (tokens, runs, errors, tool and skill usage).
 ---
 
 # vBot CLI
@@ -29,6 +29,7 @@ Read `references/system-layout.md` before searching runtime files, diagnosing mi
 - Prefer CLI commands over direct file edits — settings, agents, channels, cron jobs, prompt blocks, and provider keys all have commands. If a manual JSON edit was unavoidable, validate with `vbot doctor config`.
 - Never echo secrets in output. API keys go through `provider set-key`, extension secrets through `extensions <name> set <field> --stdin`, and managed channel tokens through `channel add ... --token-stdin` or `channel set-token ... --stdin`. Channel tokens never belong in shell arguments; use `--token-env` only when an external deployment environment already owns the variable.
 - Inspect before changing; verify after with the matching list/show/status command. For Settings, discover paths with `vbot config list [prefix]`, inspect type/default/lifecycle with `vbot config describe <path>`, then verify the effective result with `vbot config get <path> --details`.
+- Treat `vbot model show` and `vbot task-model options` as authoritative for Model capabilities, voices, and accepted Task Model values. Never infer one Model's options from another Model or from generic provider documentation.
 - Mutation output is a verification result, not merely an acknowledgement: Agent, Project, Channel, and Cron create/update commands print the saved resource; Project removal prints affected rooted Agents and file-copy/backup effects. Read it before issuing a separate verification call, then use `show`/`list` when the requested outcome depends on live discovery or runtime health.
 - Keep Identity Agent, Project Agent, Workspace, and Project cwd separate. A generic request to create an Agent means an Identity Agent; root it in a Project when its file/shell work should run there. A Project Agent is a repo-discovered Config Agent with no Workspace, SOUL, or Memory and is created only when the user explicitly asks for a Project Team profile. See `references/agents-projects.md`.
 - Follow CLI error hints (`did you mean`, candidate lists) before retrying. If another process occupies the port, report it — don't kill it.
@@ -55,8 +56,8 @@ Read the reference file before using an area's write commands — it has the exa
 | `home` | show resolved application and data directories | `references/server.md` |
 | `doctor` | `settings` `config` — validate config files locally | `references/server.md` |
 | `provider` | `list` `status` `usage` `enable` `disable` `set-key` `unset-key` `connect` `connect-status` `disconnect` | `references/providers.md` |
-| `model` | `list` `refresh [<provider>]` | `references/providers.md` |
-| `task-model` | `list` `targets` `options` `set` `clear` | `references/providers.md` |
+| `model` | `list` `show` `refresh [<provider>]` | `references/providers.md` |
+| `task-model` | `list` `targets` `options` `set` `set-option` `unset-option` `clear` | `references/providers.md` |
 | `agent` | `list` `show` `create` `update` `rename` `delete` | `references/agents-projects.md` |
 | `project` | `add` `list` `show` `set` `set-override` `clear-override` `rm` | `references/agents-projects.md` |
 | `session` | `list` `create` `fork` `rename` `set-compaction-policy` `delete` `link-channel` | `references/agents-projects.md` |
@@ -80,6 +81,8 @@ The most common single commands:
 ```bash
 vbot provider set-key <provider-id> <api-key> --refresh-models  # activate a provider with a user-supplied key
 vbot model list --task chat                                    # exact runnable Model ids for an Agent
+vbot model show <provider>/<model-id>                           # complete Model capabilities and metadata
+vbot task-model options text_to_speech                          # current TTS target, valid voices, saved/effective options
 vbot agent update <agent-id> --model <provider>/<model-id>      # switch an agent's model
 vbot config set <path> <value>                                  # change one cataloged Settings path
 vbot channel status <channel-id>                                # channel health + denied inbound chats

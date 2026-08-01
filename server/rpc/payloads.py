@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any, cast
 
 from core.chat import ChatMessage, parse_bare_model
@@ -204,6 +205,41 @@ def _model_response(
         "max_output_tokens": model.max_output_tokens,
         "connections": list(model.connections),
     }
+
+
+def _model_detail_response(
+    provider_id: str,
+    model: Any,
+    *,
+    provider_config: Any = None,
+    local_context_windows: Any = None,
+) -> JsonObject:
+    """Return the complete public projection of one loaded Model."""
+
+    response = _model_response(
+        provider_id,
+        model,
+        provider_config=provider_config,
+        local_context_windows=local_context_windows,
+    )
+    capabilities = response["capabilities"]
+    reasoning = capabilities["reasoning"]
+    reasoning["budget_max"] = model.capabilities.reasoning.budget_max
+    capabilities["supported_voices"] = list(model.capabilities.supported_voices)
+    capabilities["task_options"] = _json_compatible(model.capabilities.task_options)
+    response["family"] = model.family
+    response["metadata"] = _json_compatible(model.metadata)
+    return response
+
+
+def _json_compatible(value: Any) -> Any:
+    """Convert frozen Model mappings and sequences into JSON-native values."""
+
+    if isinstance(value, Mapping):
+        return {str(key): _json_compatible(item) for key, item in value.items()}
+    if isinstance(value, tuple | list):
+        return [_json_compatible(item) for item in value]
+    return value
 
 
 def _effective_context_window_field(

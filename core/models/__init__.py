@@ -1,6 +1,7 @@
 """Model data classes and registry."""
 
 from core.models.models import (
+    MODEL_TASK_ORDER,
     Capabilities,
     Model,
     ModelRegistry,
@@ -14,6 +15,7 @@ __all__ = [
     "Model",
     "ModelQuery",
     "ModelRegistry",
+    "MODEL_TASK_ORDER",
     "ReasoningCapabilities",
     "derive_model_task_types",
 ]

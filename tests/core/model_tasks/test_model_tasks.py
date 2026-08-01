@@ -106,6 +106,146 @@ def test_update_rejects_reserved_embedding_extra_options() -> None:
         )
 
 
+def test_patch_options_preserves_siblings_and_validates_tts_voice() -> None:
+    target = "openrouter/microsoft/mai-voice-2::api-key"
+    storage = _Storage(
+        {
+            TASK_TEXT_TO_SPEECH: {
+                "target": target,
+                "options": {"voice": "de-de-klaus:mai-voice-2", "speed": 1.25},
+            }
+        }
+    )
+    service = TaskModelService(
+        _Providers(),
+        _Models(
+            [
+                _model(
+                    "microsoft/mai-voice-2",
+                    (TASK_TEXT_TO_SPEECH,),
+                    supported_voices=(
+                        "de-de-klaus:mai-voice-2",
+                        "en-us-harper:mai-voice-2",
+                        "es-mx-valeria:mai-voice-2",
+                        "fr-fr-soleil:mai-voice-2",
+                    ),
+                )
+            ]
+        ),
+        _Credentials(),
+        storage,
+    )
+
+    saved = service.patch_options(
+        TASK_TEXT_TO_SPEECH,
+        set_values={"voice": "en-us-harper:mai-voice-2"},
+    )
+
+    assert saved[TASK_TEXT_TO_SPEECH]["options"] == {
+        "voice": "en-us-harper:mai-voice-2",
+        "speed": 1.25,
+    }
+
+
+def test_patch_options_rejects_unsupported_tts_voice_before_persistence() -> None:
+    target = "openrouter/microsoft/mai-voice-2::api-key"
+    storage = _Storage(
+        {
+            TASK_TEXT_TO_SPEECH: {
+                "target": target,
+                "options": {"voice": "de-de-klaus:mai-voice-2"},
+            }
+        }
+    )
+    service = TaskModelService(
+        _Providers(),
+        _Models(
+            [
+                _model(
+                    "microsoft/mai-voice-2",
+                    (TASK_TEXT_TO_SPEECH,),
+                    supported_voices=(
+                        "de-de-klaus:mai-voice-2",
+                        "en-us-harper:mai-voice-2",
+                        "es-mx-valeria:mai-voice-2",
+                        "fr-fr-soleil:mai-voice-2",
+                    ),
+                )
+            ]
+        ),
+        _Credentials(),
+        storage,
+    )
+
+    with pytest.raises(TaskModelValidationError, match="en-us-harper:mai-voice-2"):
+        service.patch_options(TASK_TEXT_TO_SPEECH, set_values={"voice": "Mia"})
+
+    persisted = storage.load_model_task_settings()[TASK_TEXT_TO_SPEECH]
+    assert isinstance(persisted, Mapping)
+    assert persisted["options"] == {"voice": "de-de-klaus:mai-voice-2"}
+
+
+def test_patch_options_can_remove_a_stale_option_no_longer_in_schema() -> None:
+    target = "openrouter/microsoft/mai-voice-2::api-key"
+    storage = _Storage(
+        {
+            TASK_TEXT_TO_SPEECH: {
+                "target": target,
+                "options": {
+                    "voice": "de-de-klaus:mai-voice-2",
+                    "retired_option": True,
+                },
+            }
+        }
+    )
+    service = TaskModelService(
+        _Providers(),
+        _Models(
+            [
+                _model(
+                    "microsoft/mai-voice-2",
+                    (TASK_TEXT_TO_SPEECH,),
+                    supported_voices=("de-de-klaus:mai-voice-2",),
+                )
+            ]
+        ),
+        _Credentials(),
+        storage,
+    )
+
+    saved = service.patch_options(TASK_TEXT_TO_SPEECH, unset_names=("retired_option",))
+
+    assert saved[TASK_TEXT_TO_SPEECH]["options"] == {"voice": "de-de-klaus:mai-voice-2"}
+
+
+def test_update_rejects_unknown_option_name() -> None:
+    target = "openrouter/microsoft/mai-voice-2::api-key"
+    service = TaskModelService(
+        _Providers(),
+        _Models(
+            [
+                _model(
+                    "microsoft/mai-voice-2",
+                    (TASK_TEXT_TO_SPEECH,),
+                    supported_voices=("de-de-klaus:mai-voice-2",),
+                )
+            ]
+        ),
+        _Credentials(),
+        _Storage(),
+    )
+
+    with pytest.raises(TaskModelValidationError, match="not supported: fake"):
+        service.update(
+            {
+                TASK_TEXT_TO_SPEECH: {
+                    "target": target,
+                    "options": {"voice": "de-de-klaus:mai-voice-2", "fake": True},
+                }
+            }
+        )
+
+
 def test_list_targets_filters_by_task_type_and_credentials() -> None:
     providers = _Providers()
     models = _Models(
@@ -1236,4 +1376,10 @@ class _Storage:
         return dict(self._settings)
 
     def update_model_task_settings(self, model_tasks: object) -> object:
-        return model_tasks
+        assert isinstance(model_tasks, Mapping)
+        for task_type, binding in model_tasks.items():
+            if isinstance(binding, Mapping) and binding.get("target"):
+                self._settings[task_type] = dict(binding)
+            else:
+                self._settings.pop(task_type, None)
+        return dict(self._settings)

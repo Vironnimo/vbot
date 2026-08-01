@@ -17,6 +17,8 @@ import pytest
 
 from core.extensions.extensions import ExtensionDeclarations, ExtensionRecord
 from core.extensions.settings_schema import parse_settings_fields
+from core.model_tasks import TASK_TEXT_TO_SPEECH, TaskModelService
+from core.models import Capabilities, Model, ReasoningCapabilities
 from server.rpc import settings_methods
 from server.rpc.methods import dispatch_rpc
 from server.rpc.settings_methods import _trace_count
@@ -123,6 +125,92 @@ async def test_appearance_only_update_does_not_log(
 
     assert result["ok"] is True
     assert not [record for record in caplog.records if record.name == "vbot.server.rpc.settings"]
+
+
+def _add_tts_model(state: SimpleNamespace) -> None:
+    state.runtime.models._models["openai"].append(
+        Model(
+            model_id="gpt-4o-mini-tts",
+            name="GPT-4o mini TTS",
+            capabilities=Capabilities(
+                vision=False,
+                tools=False,
+                json_mode=False,
+                reasoning=ReasoningCapabilities(supported=False),
+                input_modalities=("text",),
+                output_modalities=("speech",),
+                supported_voices=("alloy", "echo"),
+            ),
+            context_window=None,
+            max_output_tokens=None,
+        )
+    )
+    state.runtime.model_tasks = TaskModelService(
+        state.runtime.providers,
+        state.runtime.models,
+        state.runtime.provider_credentials,
+        state.runtime.storage,
+    )
+
+
+@pytest.mark.asyncio
+async def test_settings_update_rejects_invalid_task_model_option_before_persistence(
+    tmp_path: Path,
+) -> None:
+    state = make_state(tmp_path, StubAdapter())
+    _add_tts_model(state)
+
+    result = await dispatch_rpc(
+        state,
+        {
+            "method": "settings.update",
+            "params": {
+                "model_tasks": {
+                    TASK_TEXT_TO_SPEECH: {
+                        "target": "openai/gpt-4o-mini-tts::api-key",
+                        "options": {"voice": "Mia"},
+                    }
+                }
+            },
+        },
+    )
+
+    assert result["ok"] is False
+    assert result["error"]["code"] == "invalid_request"
+    assert "must be one of: alloy, echo" in result["error"]["message"]
+    assert state.runtime.storage.load_model_task_settings() == {}
+
+
+@pytest.mark.asyncio
+async def test_settings_patch_rejects_invalid_task_model_option_before_persistence(
+    tmp_path: Path,
+) -> None:
+    state = make_state(tmp_path, StubAdapter())
+    _add_tts_model(state)
+
+    result = await dispatch_rpc(
+        state,
+        {
+            "method": "settings.patch",
+            "params": {
+                "operations": [
+                    {
+                        "op": "set",
+                        "path": 'model_tasks["text_to_speech"]',
+                        "value": {
+                            "target": "openai/gpt-4o-mini-tts::api-key",
+                            "options": {"voice": "Mia"},
+                        },
+                    }
+                ]
+            },
+        },
+    )
+
+    assert result["ok"] is False
+    assert result["error"]["code"] == "invalid_request"
+    assert "must be one of: alloy, echo" in result["error"]["message"]
+    assert state.runtime.storage.load_model_task_settings() == {}
 
 
 # --- Extensions section: schema validation + restart-required split ----------

@@ -195,6 +195,11 @@ async def _update_settings(state: Any, params: JsonObject) -> JsonObject:
         _validate_recall_backend_known(state.runtime, settings_update["recall"]["backend"])
 
     _validate_model_connections(state.runtime.models, settings_update)
+    if "model_tasks" in settings_update:
+        try:
+            state.runtime.model_tasks.validate_update(settings_update["model_tasks"])
+        except Exception as exc:
+            raise _map_expected_error(exc) from exc
 
     newly_enabled: set[str] = set()
     newly_disabled: set[str] = set()
@@ -299,6 +304,16 @@ def _validate_public_settings_candidate(
         operation.resolved.path.values[:2] == ("extensions", "config") for operation in operations
     ):
         _validate_extension_configs(runtime, {"config": effective["extensions"]["config"]})
+    changed_tasks = {
+        operation.resolved.path.values[1]
+        for operation in operations
+        if operation.resolved.path.values[:1] == ("model_tasks",)
+        and len(operation.resolved.path.values) > 1
+    }
+    for task_type in changed_tasks:
+        binding = effective["model_tasks"].get(task_type)
+        if isinstance(binding, dict) and binding.get("target"):
+            runtime.model_tasks.validate_binding(task_type, binding)
     _validate_changed_provider_connections(runtime, operations)
 
 
@@ -704,12 +719,68 @@ def _task_model_status(state: Any, params: JsonObject) -> JsonObject:
 def _task_model_options(state: Any, params: JsonObject) -> JsonObject:
     _reject_unsupported(params, {"task_type", "target"}, "task_model.options")
     task_type = _required_string(params, "task_type")
-    target = _required_string(params, "target")
+    target = params.get("target")
+    if target is not None and (not isinstance(target, str) or not target.strip()):
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, "params.target must be a non-empty string")
     try:
+        binding = None
+        if target is None:
+            binding = state.runtime.model_tasks.binding_for(task_type)
+            target = binding.target
+        else:
+            target = target.strip()
         schema = state.runtime.model_tasks.options(task_type, target)
+        if binding is None:
+            with suppress(TaskModelError):
+                configured = state.runtime.model_tasks.binding_for(task_type)
+                if configured.target == target:
+                    binding = configured
+        configured_options = dict(binding.options) if binding is not None else {}
+        effective_options = schema.default_options()
+        effective_options.update(configured_options)
     except Exception as exc:
         raise _map_expected_error(exc) from exc
-    return {"schema": schema.to_dict()}
+    payload = schema.to_dict()
+    payload["configured_options"] = configured_options
+    payload["effective_options"] = effective_options
+    return {"schema": payload}
+
+
+def _task_model_patch_options(state: Any, params: JsonObject) -> JsonObject:
+    _reject_unsupported(params, {"task_type", "set", "unset"}, "task_model.patch_options")
+    task_type = _required_string(params, "task_type")
+    set_values = params.get("set", {})
+    unset_names = params.get("unset", [])
+    if not isinstance(set_values, dict):
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, "params.set must be an object")
+    if not isinstance(unset_names, list) or not all(
+        isinstance(name, str) and name.strip() for name in unset_names
+    ):
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST,
+            "params.unset must be an array of non-empty strings",
+        )
+    normalized_unsets = tuple(name.strip() for name in unset_names)
+    overlap = sorted(set(set_values) & set(normalized_unsets))
+    if overlap:
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST,
+            f"options cannot be set and unset together: {', '.join(overlap)}",
+        )
+    if not set_values and not normalized_unsets:
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, "at least one option must be set or unset")
+    try:
+        previous = state.runtime.model_tasks.settings()
+        model_tasks = state.runtime.model_tasks.patch_options(
+            task_type,
+            set_values=set_values,
+            unset_names=normalized_unsets,
+        )
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
+    if previous.get(task_type) != model_tasks.get(task_type):
+        _LOGGER.info("Task Model options updated (task=%s)", task_type)
+    return {"model_tasks": model_tasks}
 
 
 def _settings_response(state: Any) -> JsonObject:
@@ -851,4 +922,5 @@ def method_handlers() -> dict[str, RpcMethodHandler]:
         "task_model.list_targets": _task_model_list_targets,
         "task_model.status": _task_model_status,
         "task_model.options": _task_model_options,
+        "task_model.patch_options": _task_model_patch_options,
     }

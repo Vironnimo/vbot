@@ -5,7 +5,7 @@ from __future__ import annotations
 from core.agents import AgentError, AgentOrderConflictError, InvalidAgentOrderError
 from core.channels import ChannelConfigError, ChannelNotFoundError
 from core.chat import ChatError, ChatSessionError
-from core.model_tasks import TaskModelError
+from core.model_tasks import TaskModelError, TaskModelValidationError
 from core.projects import (
     AgentResolutionError,
     ModelConfigurationError,
@@ -52,6 +52,8 @@ def _map_expected_error(error: Exception) -> RpcError:
     if isinstance(error, ProjectAlreadyExistsError):
         return RpcError(RPC_ERROR_PROJECT_ALREADY_EXISTS, str(error))
     if isinstance(error, ModelConfigurationError):
+        return RpcError(RPC_ERROR_INVALID_REQUEST, str(error))
+    if isinstance(error, TaskModelValidationError):
         return RpcError(RPC_ERROR_INVALID_REQUEST, str(error))
     if isinstance(error, AgentOrderConflictError):
         return RpcError(RPC_ERROR_AGENT_ORDER_CONFLICT, str(error))

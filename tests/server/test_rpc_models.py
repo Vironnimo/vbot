@@ -162,6 +162,67 @@ async def test_model_list_returns_all_models_across_providers_with_full_ids(
 
 
 @pytest.mark.asyncio
+async def test_model_get_returns_complete_model_data(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "openai-key")
+    state = make_state(tmp_path, StubAdapter())
+    state.runtime.models._models["openai"].append(
+        Model(
+            model_id="gpt-4o-mini-tts",
+            name="GPT-4o mini TTS",
+            capabilities=Capabilities(
+                vision=False,
+                tools=False,
+                json_mode=False,
+                reasoning=ReasoningCapabilities(supported=False),
+                input_modalities=("text",),
+                output_modalities=("speech",),
+                supported_parameters=("voice", "speed"),
+                supported_voices=("en-us-harper:mai-voice-2", "de-de-klaus:mai-voice-2"),
+                task_options={"text_to_speech": {"codec": "mp3"}},
+            ),
+            context_window=None,
+            max_output_tokens=None,
+            family="gpt-4o",
+            metadata={"source": "test"},
+        )
+    )
+
+    response = await dispatch_rpc(
+        state,
+        {"method": "model.get", "params": {"model": "openai/gpt-4o-mini-tts"}},
+    )
+
+    assert response["ok"] is True
+    model = response["result"]["model"]
+    assert model["id"] == "openai/gpt-4o-mini-tts"
+    assert model["family"] == "gpt-4o"
+    assert model["metadata"] == {"source": "test"}
+    assert model["capabilities"]["supported_voices"] == [
+        "de-de-klaus:mai-voice-2",
+        "en-us-harper:mai-voice-2",
+    ]
+    assert model["capabilities"]["task_options"] == {"text_to_speech": {"codec": "mp3"}}
+    assert model["usable_connections"] == ["api-key"]
+
+
+@pytest.mark.asyncio
+async def test_model_get_unknown_model_returns_suggestions(tmp_path: Path) -> None:
+    state = make_state(tmp_path, StubAdapter())
+
+    response = await dispatch_rpc(
+        state,
+        {"method": "model.get", "params": {"model": "openai/gpt-4.1-mni"}},
+    )
+
+    assert response["ok"] is False
+    assert response["error"]["code"] == "invalid_request"
+    assert "did you mean: openai/gpt-4.1-mini" in response["error"]["message"]
+
+
+@pytest.mark.asyncio
 async def test_model_list_filters_by_connection_usability(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

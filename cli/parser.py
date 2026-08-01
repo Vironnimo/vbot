@@ -17,6 +17,7 @@ from core.channels import (
 )
 from core.memory import MEMORY_PROMPT_MODES
 from core.model_tasks import SUPPORTED_TASK_TYPES
+from core.models import MODEL_TASK_ORDER
 from core.providers.reasoning import THINKING_EFFORT_ORDER
 from core.settings import PROJECT_SOURCE_FORMATS
 from core.utils.config import DEFAULT_HOST
@@ -39,6 +40,7 @@ STATISTICS_SECTIONS = (
     "skills",
 )
 TASK_TYPES = tuple(sorted(SUPPORTED_TASK_TYPES))
+MODEL_TASK_TYPES = tuple(MODEL_TASK_ORDER)
 AREA_HELP = {
     "server": "Start, stop, restart, and inspect the local server",
     "desktop": "Open the desktop window pointed at a local or remote server",
@@ -141,13 +143,16 @@ PROVIDER_HELP = {
 }
 MODEL_HELP = {
     "list": "List available models",
+    "show": "Show complete data for one Model",
     "refresh": "Refresh model catalogs",
 }
 TASK_MODEL_HELP = {
     "list": "List configured task-model bindings",
     "targets": "List available targets for one task type",
-    "options": "Show the option schema for one task-type target",
-    "set": "Bind one task type to a target",
+    "options": "Show supported, configured, and effective options for one task target",
+    "set": "Bind one task type to a target and optionally set options",
+    "set-option": "Set one option on the currently bound task target",
+    "unset-option": "Remove one option from the currently bound task target",
     "clear": "Remove one task-type binding",
 }
 CRON_HELP = {
@@ -1368,6 +1373,7 @@ def _add_model_parsers(subparsers: argparse._SubParsersAction[argparse.ArgumentP
     list_parser.add_argument(
         "--task",
         action="append",
+        choices=MODEL_TASK_TYPES,
         help="Require a task type; repeat for multiple requirements",
     )
     list_parser.add_argument(
@@ -1385,6 +1391,17 @@ def _add_model_parsers(subparsers: argparse._SubParsersAction[argparse.ArgumentP
         type=int,
         metavar="<tokens>",
         help="Require at least this many context tokens",
+    )
+    show_parser = _add_command_parser(
+        model_subparsers,
+        "show",
+        MODEL_HELP["show"],
+        example="model show openrouter/microsoft/mai-voice-2",
+    )
+    show_parser.add_argument(
+        "model",
+        metavar="<provider>/<model-id>",
+        help="Exact Model id from model list",
     )
     refresh_parser = _add_command_parser(
         model_subparsers, "refresh", MODEL_HELP["refresh"], example="model refresh openrouter"
@@ -1428,8 +1445,9 @@ def _add_task_model_parsers(
     options_parser.add_argument("task_type", metavar="<task-type>", choices=TASK_TYPES)
     options_parser.add_argument(
         "target",
+        nargs="?",
         metavar="<target-id>",
-        help="Target id as <provider>/<model>::<connection> or local/<id>",
+        help="Target id; omitted uses the currently configured binding",
     )
 
     set_parser = _add_command_parser(
@@ -1444,12 +1462,51 @@ def _add_task_model_parsers(
         metavar="<target-id>",
         help="Target id as <provider>/<model>::<connection> or local/<id>",
     )
-    set_parser.add_argument(
+    option_group = set_parser.add_mutually_exclusive_group()
+    option_group.add_argument(
         "--options",
         dest="options_json",
         metavar="<json>",
         help='Task options as a JSON object, for example \'{"voice": "alloy"}\'',
     )
+    option_group.add_argument(
+        "--option",
+        dest="option_pairs",
+        nargs=2,
+        action="append",
+        default=[],
+        metavar=("<name>", "<value>"),
+        help="Set one option without JSON quoting; repeat for multiple options",
+    )
+    option_group.add_argument(
+        "--options-stdin",
+        action="store_true",
+        help="Read the complete UTF-8 JSON option object from stdin",
+    )
+
+    set_option_parser = _add_command_parser(
+        task_model_subparsers,
+        "set-option",
+        TASK_MODEL_HELP["set-option"],
+        example=("task-model set-option text_to_speech voice en-us-harper:mai-voice-2"),
+    )
+    set_option_parser.add_argument("task_type", metavar="<task-type>", choices=TASK_TYPES)
+    set_option_parser.add_argument("name", metavar="<name>")
+    set_option_parser.add_argument("value", nargs="?", metavar="<value>")
+    set_option_parser.add_argument(
+        "--stdin",
+        action="store_true",
+        help="Read the UTF-8 option value from stdin (useful for JSON objects)",
+    )
+
+    unset_option_parser = _add_command_parser(
+        task_model_subparsers,
+        "unset-option",
+        TASK_MODEL_HELP["unset-option"],
+        example="task-model unset-option text_to_speech speed",
+    )
+    unset_option_parser.add_argument("task_type", metavar="<task-type>", choices=TASK_TYPES)
+    unset_option_parser.add_argument("name", metavar="<name>")
 
     clear_parser = _add_command_parser(
         task_model_subparsers,

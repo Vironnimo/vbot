@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
 
@@ -35,6 +36,14 @@ def test_parse_args_supports_model_list() -> None:
     assert args.host == "localhost"
     assert args.port == 8700
     assert args.data_dir == "dev"
+
+
+def test_parse_args_supports_model_show() -> None:
+    args = cli_main.parse_args(["model", "show", "openrouter/microsoft/mai-voice-2"])
+
+    assert args.area == "model"
+    assert args.command == "show"
+    assert args.model == "openrouter/microsoft/mai-voice-2"
 
 
 def test_parse_args_supports_model_list_filters() -> None:
@@ -227,6 +236,37 @@ def test_model_list_returns_empty_message(tmp_path: Path, monkeypatch: pytest.Mo
     result = model_management.model_list(instance)
 
     assert result == CommandResult(ok=True, message="no models available", instance=instance)
+
+
+def test_model_show_posts_model_get_and_dumps_complete_data(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    instance = make_instance(tmp_path)
+    model = {
+        "id": "openrouter/microsoft/mai-voice-2",
+        "capabilities": {
+            "supported_voices": ["Harper", "Klaus", "Soleil", "Valeria"],
+            "task_types": ["text_to_speech"],
+        },
+        "metadata": {"source": "openrouter"},
+    }
+
+    def fake_post(
+        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
+    ) -> httpx.Response:
+        assert json == {
+            "method": "model.get",
+            "params": {"model": "openrouter/microsoft/mai-voice-2"},
+        }
+        return httpx.Response(200, json={"ok": True, "result": {"model": model}})
+
+    monkeypatch.setattr(model_management.httpx, "post", fake_post)
+
+    result = model_management.model_show(instance, "openrouter/microsoft/mai-voice-2")
+
+    assert result.ok is True
+    assert json.loads(result.message) == model
 
 
 def test_model_refresh_posts_refresh_db_without_provider(

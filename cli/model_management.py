@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
@@ -25,6 +26,26 @@ def model_list(
     if not isinstance(models, list):
         return CommandResult(ok=False, message="RPC result missing models list", instance=instance)
     return CommandResult(ok=True, message=_format_model_rows(models), instance=instance)
+
+
+def model_show(instance: ServerInstance, model: str) -> CommandResult:
+    """Show the complete public Model projection from `model.get`."""
+
+    payload = _rpc_call(instance, "model.get", {"model": model})
+    if not payload.ok:
+        return payload.to_command_result()
+    model_data = payload.data.get("model")
+    if not isinstance(model_data, dict):
+        return CommandResult(
+            ok=False,
+            message=f"RPC result missing Model data: {model}",
+            instance=instance,
+        )
+    return CommandResult(
+        ok=True,
+        message=json.dumps(model_data, indent=2, ensure_ascii=False, sort_keys=True),
+        instance=instance,
+    )
 
 
 def model_refresh(

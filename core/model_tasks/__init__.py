@@ -58,6 +58,7 @@ from core.model_tasks.options import (
     TaskModelOptionField,
     TaskModelOptionSchema,
     option_schema_for,
+    validate_task_model_options,
 )
 from core.model_tasks.speech import (
     SpeechArtifact,
@@ -131,5 +132,6 @@ __all__ = [
     "option_schema_for",
     "parse_task_model_target_id",
     "public_provider_target_id",
+    "validate_task_model_options",
     "validate_task_type",
 ]

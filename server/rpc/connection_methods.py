@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from difflib import get_close_matches
 from pathlib import Path
 from typing import Any
 
@@ -46,7 +47,7 @@ from server.rpc.event_bridge import (
     _publish_provider_auth_completed_event,
     publish_resource_changed,
 )
-from server.rpc.payloads import _model_response
+from server.rpc.payloads import _model_detail_response, _model_response
 from server.rpc.provider_access import (
     _api_key_connection,
     _connection_reachability,
@@ -142,6 +143,64 @@ async def _list_models(state: Any, params: JsonObject) -> JsonObject:
     except Exception as exc:
         raise _map_expected_error(exc) from exc
     return {"models": models}
+
+
+async def _get_model(state: Any, params: JsonObject) -> JsonObject:
+    """Return the complete public data for one exact Provider Model."""
+
+    _reject_unsupported(params, {"model"}, "model.get")
+    model_reference = _required_string(params, "model")
+    bare_reference = (
+        model_reference.rpartition("::")[0] if "::" in model_reference else model_reference
+    )
+    provider_id, separator, model_id = bare_reference.partition("/")
+    if separator != "/" or not provider_id or not model_id:
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST,
+            "params.model must be '<provider>/<model-id>'",
+        )
+
+    await _await_local_catalog_refresh(state.runtime)
+    runtime = state.runtime
+    try:
+        model = runtime.models.get(provider_id, model_id)
+    except KeyError as exc:
+        candidates = [
+            f"{candidate_provider}/{candidate_model.model_id}"
+            for candidate_provider, candidate_model in runtime.models.query(ModelQuery())
+        ]
+        suggestions = get_close_matches(bare_reference, candidates, n=3, cutoff=0.35)
+        suffix = f"; did you mean: {', '.join(suggestions)}" if suggestions else ""
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST,
+            f"unknown Model {bare_reference!r}{suffix}",
+        ) from exc
+
+    local_context_windows = runtime.storage.load_local_models_settings()["context_windows"]
+    response = _model_detail_response(
+        provider_id,
+        model,
+        provider_config=_provider_config_or_none(runtime, provider_id),
+        local_context_windows=local_context_windows,
+    )
+    provider = _provider_config_or_none(runtime, provider_id)
+    allowed_connections = [
+        connection
+        for connection in getattr(provider, "connections", ())
+        if model.allows_connection(connection.id)
+    ]
+    response["usable_connections"] = [
+        connection.id
+        for connection in allowed_connections
+        if runtime.provider_credentials.is_usable(
+            provider_id,
+            f"{provider_id}:{connection.id}",
+        )
+    ]
+    reachable = _model_reachability(runtime, provider_id, allowed_connections)
+    if reachable is not None:
+        response["reachable"] = reachable
+    return {"model": response}
 
 
 async def _routing_provider_options(state: Any, params: JsonObject) -> JsonObject:
@@ -1069,6 +1128,7 @@ def method_handlers() -> dict[str, RpcMethodHandler]:
     return {
         "connection.list": _list_connections,
         "connection.set_enabled": _set_connection_enabled,
+        "model.get": _get_model,
         "model.list": _list_models,
         "model.refresh_db": _refresh_model_db,
         "provider.routing_options": _routing_provider_options,
