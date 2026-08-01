@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from typing import Any
 
 import pytest
 
+from core.automation import TriggerService
 from core.chat import (
     INPUT_ORIGIN_SPEECH_TRANSCRIPTION,
     ChatMessage,
@@ -568,6 +570,64 @@ async def test_note_added_between_tool_iterations_is_sent_on_next_request(
     assert all(
         message["role"] != "note" for request in adapter.requests for message in request["messages"]
     )
+
+
+@pytest.mark.asyncio
+async def test_background_completion_joins_next_request_in_same_run(tmp_path: Path) -> None:
+    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["start_work"])
+    adapter = StubAdapter(
+        [
+            {
+                "content": None,
+                "tool_calls": [{"id": "call_1", "name": "start_work", "arguments": {}}],
+            },
+            {"content": "Used the completed work", "tool_calls": None},
+        ]
+    )
+    deliveries: list[asyncio.Future[None]] = []
+    tools = ToolRegistry()
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter, tools=tools)
+    chat_loop = build_chat_loop(runtime)
+    trigger_service = TriggerService(
+        chat_loop,
+        runtime.chat_run_manager,
+        runtime,
+        trigger_chat_loop=chat_loop,
+        sessions=runtime.chat_sessions,
+    )
+    runtime.deliver_background_completions = trigger_service.deliver_background_completions
+
+    def start_work(context: ToolContext, _arguments: ToolJsonObject) -> ToolJsonObject:
+        deliveries.append(
+            trigger_service.submit_completion(
+                "coder",
+                "session-one",
+                notice_id="bash:completed",
+                origin_run_id=context.run_id,
+                body="### Bash process — completed\nBuild finished successfully.",
+            )
+        )
+        return tool_success({"status": "running"})
+
+    tools.register("start_work", "Start background work.", {"type": "object"}, start_work)
+
+    await chat_loop.send("coder", "Start it", session_id="session-one")
+    await asyncio.wait_for(deliveries[0], timeout=1)
+    await asyncio.sleep(0)
+
+    assert len(adapter.requests) == 2
+    second_request_messages = adapter.requests[1]["messages"]
+    assert [message["role"] for message in second_request_messages] == [
+        "system",
+        "user",
+        "assistant",
+        "tool",
+        "user",
+    ]
+    assert second_request_messages[-1]["content"].startswith(
+        "<system-reminder>\nAutomatic completion delivery — this is not a new user request."
+    )
+    assert "Build finished successfully." in second_request_messages[-1]["content"]
 
 
 @pytest.mark.asyncio

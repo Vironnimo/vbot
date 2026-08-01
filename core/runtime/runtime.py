@@ -668,6 +668,11 @@ class Runtime:
             refresh_skills=self.refresh_skills_for,
             get_local_context_windows=self.local_context_windows,
             task_model_available=self._model_tasks.binding_is_usable,
+            deliver_background_completions=lambda run, session: (
+                self._trigger_service.deliver_background_completions(run, session)
+                if self._trigger_service is not None
+                else False
+            ),
         )
         self._chat_loop = ChatLoop(
             chat_dependencies,

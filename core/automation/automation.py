@@ -22,7 +22,7 @@ from core.utils.logging import get_logger
 
 if TYPE_CHECKING:
     from core.runtime.runtime import Runtime
-    from core.sessions import ChatSessionManager
+    from core.sessions import ChatSession, ChatSessionManager
 
 
 _LOGGER = get_logger("automation")
@@ -129,6 +129,30 @@ class _CompletionDeliveryCoordinator:
             return False
         if not notice.delivered.done():
             notice.delivered.cancel()
+        return True
+
+    def deliver_to_request(self, run: Run, session: ChatSession) -> bool:
+        """Persist ready results for the next request of their active boundary Run."""
+        key = (run.project_id, run.agent_id, run.session_id)
+        bucket = self._buckets.get(key)
+        if bucket is None or self._active_run(key) is not run:
+            return False
+
+        self._move_idle_notices_to_run(bucket, run)
+        pending = [
+            notice
+            for notice in bucket.notices.values()
+            if notice.boundary_run is run and not notice.suppress_run
+        ]
+        if not pending:
+            return False
+
+        try:
+            session.add_note(_completion_message(pending))
+        except Exception as error:
+            self._fail(bucket, pending, error)
+            return False
+        self._acknowledge(key, bucket, pending)
         return True
 
     async def _deliver(
@@ -428,6 +452,10 @@ class TriggerService:
             project_id=project_id,
             notice_id=notice_id,
         )
+
+    def deliver_background_completions(self, run: Run, session: ChatSession) -> bool:
+        """Inject ready completion results into an active Run's next Model request."""
+        return self._completion_delivery.deliver_to_request(run, session)
 
     async def trigger_run(
         self,
