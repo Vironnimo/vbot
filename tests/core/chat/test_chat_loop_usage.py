@@ -103,6 +103,12 @@ async def test_run_completed_payload_carries_whole_session_usage_totals(
         "reasoning_turns": 1,
         "reasoning_tokens": 25,
     }
+    assert completed[0].payload["context_usage"] == {
+        "tokens": 1040,
+        "estimated": False,
+        "provider_input_tokens": 1000,
+        "provider_output_tokens": 40,
+    }
 
 
 @pytest.mark.asyncio

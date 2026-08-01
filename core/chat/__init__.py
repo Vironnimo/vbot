@@ -40,6 +40,7 @@ if TYPE_CHECKING:
     from core.chat.errors import CompactionUnavailableError as CompactionUnavailableError
     from core.chat.errors import ToolIterationLimitError as ToolIterationLimitError
     from core.chat.usage import aggregate_session_usage as aggregate_session_usage
+    from core.chat.usage import latest_session_context_usage as latest_session_context_usage
     from core.sessions import ChatSession as ChatSession
     from core.sessions import ChatSessionManager as ChatSessionManager
 
@@ -78,6 +79,7 @@ _EXPORT_MODULES = {
     "ToolCall": "core.chat.chat",
     "ToolIterationLimitError": "core.chat.errors",
     "aggregate_session_usage": "core.chat.usage",
+    "latest_session_context_usage": "core.chat.usage",
 }
 
 __all__ = list(_EXPORT_MODULES)

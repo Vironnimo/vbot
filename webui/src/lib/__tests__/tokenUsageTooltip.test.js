@@ -9,12 +9,38 @@ describe('formatTokenUsageTooltip', () => {
   });
 
   it('returns undefined without any usage data', () => {
-    expect(formatTokenUsageTooltip(null, null)).toBeUndefined();
-    expect(formatTokenUsageTooltip(undefined, undefined)).toBeUndefined();
+    expect(formatTokenUsageTooltip(null, null, null)).toBeUndefined();
+    expect(
+      formatTokenUsageTooltip(undefined, undefined, undefined),
+    ).toBeUndefined();
+  });
+
+  it('renders the shared current Context projection and its provenance', () => {
+    const tooltip = formatTokenUsageTooltip(
+      {
+        tokens: 155489,
+        estimated: true,
+        provider_input_tokens: 154731,
+        provider_output_tokens: 243,
+        estimated_delta_tokens: 515,
+      },
+      null,
+      null,
+    );
+
+    expect(tooltip).toBe(
+      [
+        'Current context: ~155,489 tok',
+        '  · provider input: 154,731',
+        '  · provider output: 243',
+        '  · estimated newer messages: 515',
+      ].join('\n'),
+    );
   });
 
   it('renders the last turn with cache shares, uncached remainder and percent', () => {
     const tooltip = formatTokenUsageTooltip(
+      null,
       {
         input_tokens: 36704,
         output_tokens: 2190,
@@ -40,6 +66,7 @@ describe('formatTokenUsageTooltip', () => {
 
   it('omits cache lines when the provider reported none', () => {
     const tooltip = formatTokenUsageTooltip(
+      null,
       { input_tokens: 500, output_tokens: 20 },
       null,
     );
@@ -51,6 +78,7 @@ describe('formatTokenUsageTooltip', () => {
 
   it('keeps the read-only cache split when no write was reported', () => {
     const tooltip = formatTokenUsageTooltip(
+      null,
       { input_tokens: 1000, output_tokens: 10, cache_read_tokens: 900 },
       null,
     );
@@ -62,6 +90,7 @@ describe('formatTokenUsageTooltip', () => {
 
   it('appends the estimation note for estimated usage', () => {
     const tooltip = formatTokenUsageTooltip(
+      null,
       { input_tokens: 100, output_tokens: 10, estimated: true },
       null,
     );
@@ -71,6 +100,7 @@ describe('formatTokenUsageTooltip', () => {
 
   it('renders the session block with hit rate, per-turn average and estimated note', () => {
     const tooltip = formatTokenUsageTooltip(
+      null,
       { input_tokens: 36704, output_tokens: 2190, cache_read_tokens: 6656 },
       {
         measured_turns: 42,
@@ -101,7 +131,7 @@ describe('formatTokenUsageTooltip', () => {
   });
 
   it('hides the session cache lines when no turn reported cache fields', () => {
-    const tooltip = formatTokenUsageTooltip(null, {
+    const tooltip = formatTokenUsageTooltip(null, null, {
       measured_turns: 4,
       estimated_turns: 0,
       cache_turns: 0,
@@ -122,6 +152,7 @@ describe('formatTokenUsageTooltip', () => {
 
   it('keeps missing Reasoning detail absent instead of rendering zero', () => {
     const tooltip = formatTokenUsageTooltip(
+      null,
       { input_tokens: 500, output_tokens: 20 },
       {
         measured_turns: 1,
@@ -135,6 +166,7 @@ describe('formatTokenUsageTooltip', () => {
 
   it('skips the session block entirely without measured turns', () => {
     const tooltip = formatTokenUsageTooltip(
+      null,
       { input_tokens: 100, output_tokens: 5 },
       { measured_turns: 0, estimated_turns: 2, input_tokens: 0 },
     );

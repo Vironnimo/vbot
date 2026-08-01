@@ -178,6 +178,7 @@ export function createChatController({
       loadHistory(sessionState, history?.messages ?? [], {
         hasMore: history?.has_more === true,
         sessionUsage: history?.session_usage,
+        contextUsage: history?.context_usage,
       });
       sessionState.markReadFailedRunId = '';
       if (
@@ -232,6 +233,7 @@ export function createChatController({
       loadHistory(sessionState, history?.messages ?? [], {
         hasMore: history?.has_more === true,
         sessionUsage: history?.session_usage,
+        contextUsage: history?.context_usage,
       });
       sessionState.markReadFailedRunId = '';
       if (history?.active_run) {
@@ -705,6 +707,7 @@ export function ensureSessionState(state, agentId, sessionId) {
       streamStatus: CHAT_STATUS_IDLE,
       usage: null,
       sessionUsage: null,
+      contextUsage: null,
       hasOlderHistory: false,
       loadingOlderHistory: false,
       hasUnreadCompletion: false,
@@ -923,6 +926,9 @@ export function loadHistory(sessionState, messages, options = {}) {
   if (options.sessionUsage) {
     sessionState.sessionUsage = options.sessionUsage;
   }
+  if (Object.hasOwn(options, 'contextUsage')) {
+    sessionState.contextUsage = options.contextUsage ?? null;
+  }
   return sessionState;
 }
 
@@ -1000,6 +1006,9 @@ export function appendRunEvent(sessionState, event) {
   }
 
   sessionState.runEvents = [...sessionState.runEvents, normalizedEvent];
+  if (normalizedEvent.payload?.context_usage) {
+    sessionState.contextUsage = normalizedEvent.payload.context_usage;
+  }
   if (normalizedEvent.type === RUN_EVENT_STREAM_ATTEMPT_RESTARTED) {
     discardStreamingAttempt(sessionState, normalizedEvent.run_id);
   }

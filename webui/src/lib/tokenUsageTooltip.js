@@ -9,19 +9,58 @@
 // shares of the input ("davon"), never additions on top.
 import { activeLocaleTag, t } from './i18n.js';
 
-export function formatTokenUsageTooltip(usage, sessionUsage) {
+export function formatTokenUsageTooltip(contextUsage, usage, sessionUsage) {
   const numberFormat = new Intl.NumberFormat(activeLocaleTag());
   const format = (value) => numberFormat.format(value);
 
-  const lines = usage ? lastTurnLines(usage, format) : [];
-  const sessionLines = sessionUsageLines(sessionUsage, format);
-  if (sessionLines.length > 0) {
-    if (lines.length > 0) {
-      lines.push('');
-    }
-    lines.push(...sessionLines);
+  const sections = [
+    contextUsageLines(contextUsage, format),
+    usage ? lastTurnLines(usage, format) : [],
+    sessionUsageLines(sessionUsage, format),
+  ].filter((section) => section.length > 0);
+  return sections.length > 0
+    ? sections.map((section) => section.join('\n')).join('\n\n')
+    : undefined;
+}
+
+function contextUsageLines(contextUsage, format) {
+  const tokens = finiteOrNull(contextUsage?.tokens);
+  if (tokens === null) {
+    return [];
   }
-  return lines.length > 0 ? lines.join('\n') : undefined;
+  const tokenText = `${contextUsage.estimated === true ? '~' : ''}${format(tokens)}`;
+  const lines = [
+    t('chat.tokenTooltipContext', 'Current context: {tokens} tok', {
+      tokens: tokenText,
+    }),
+  ];
+  const providerInput = finiteOrNull(contextUsage.provider_input_tokens);
+  const providerOutput = finiteOrNull(contextUsage.provider_output_tokens);
+  const estimatedDelta = finiteOrNull(contextUsage.estimated_delta_tokens);
+  if (providerInput !== null) {
+    lines.push(
+      t('chat.tokenTooltipContextInput', '  · provider input: {tokens}', {
+        tokens: format(providerInput),
+      }),
+    );
+  }
+  if (providerOutput !== null) {
+    lines.push(
+      t('chat.tokenTooltipContextOutput', '  · provider output: {tokens}', {
+        tokens: format(providerOutput),
+      }),
+    );
+  }
+  if (estimatedDelta !== null) {
+    lines.push(
+      t(
+        'chat.tokenTooltipContextDelta',
+        '  · estimated newer messages: {tokens}',
+        { tokens: format(estimatedDelta) },
+      ),
+    );
+  }
+  return lines;
 }
 
 function lastTurnLines(usage, format) {

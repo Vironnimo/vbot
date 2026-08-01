@@ -30,10 +30,14 @@
   } = $props();
 
   let tokenBadgeText = $derived.by(() =>
-    formatTokenBadge(activeSessionState?.usage, activeAgent?.context_window),
+    formatTokenBadge(
+      activeSessionState?.contextUsage,
+      activeAgent?.context_window,
+    ),
   );
   let tokenBadgeTooltip = $derived.by(() =>
     formatTokenUsageTooltip(
+      activeSessionState?.contextUsage,
       activeSessionState?.usage,
       activeSessionState?.sessionUsage,
     ),
@@ -59,18 +63,12 @@
     })),
   ]);
 
-  function formatTokenBadge(usage, contextWindow) {
+  function formatTokenBadge(contextUsage, contextWindow) {
     const numberFormat = new Intl.NumberFormat(activeLocaleTag());
 
-    if (usage) {
-      const inputTokens = Number.isFinite(usage.input_tokens)
-        ? usage.input_tokens
-        : 0;
-      const outputTokens = Number.isFinite(usage.output_tokens)
-        ? usage.output_tokens
-        : 0;
-      const tokensFormatted = numberFormat.format(inputTokens + outputTokens);
-      const estimated = usage.estimated === true;
+    if (Number.isFinite(contextUsage?.tokens)) {
+      const tokensFormatted = numberFormat.format(contextUsage.tokens);
+      const estimated = contextUsage.estimated === true;
 
       if (contextWindow != null) {
         const contextFormatted = numberFormat.format(contextWindow);

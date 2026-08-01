@@ -24,7 +24,7 @@ import {
 } from '../chatState.js';
 
 describe('chat state helpers', () => {
-  it('initializes usage as null in new session state', () => {
+  it('initializes turn, Session, and Context Usage as null', () => {
     const sessionState = ensureSessionState(
       createChatState(),
       'alpha',
@@ -32,6 +32,8 @@ describe('chat state helpers', () => {
     );
 
     expect(sessionState.usage).toBeNull();
+    expect(sessionState.sessionUsage).toBeNull();
+    expect(sessionState.contextUsage).toBeNull();
   });
 
   it('sets usage via updateSessionUsage', () => {
@@ -317,6 +319,13 @@ describe('chat state helpers', () => {
       input_tokens: 20000,
       output_tokens: 900,
     };
+    const contextUsage = {
+      tokens: 9459,
+      estimated: true,
+      provider_input_tokens: 8432,
+      provider_output_tokens: 512,
+      estimated_delta_tokens: 515,
+    };
 
     appendRunEvent(sessionState, {
       type: 'model_step_usage',
@@ -325,6 +334,7 @@ describe('chat state helpers', () => {
       payload: {
         usage: { input_tokens: 8432, output_tokens: 512 },
         session_usage: sessionUsage,
+        context_usage: contextUsage,
       },
     });
 
@@ -333,6 +343,7 @@ describe('chat state helpers', () => {
       output_tokens: 512,
     });
     expect(sessionState.sessionUsage).toEqual(sessionUsage);
+    expect(sessionState.contextUsage).toEqual(contextUsage);
     expect(sessionState.status).toBe(CHAT_STATUS_RUNNING);
     expect(sessionState.currentRun.status).toBe(CHAT_STATUS_RUNNING);
     expect(visibleTimelineItemsForRender(sessionState)).toEqual([]);
@@ -434,6 +445,21 @@ describe('chat state helpers', () => {
     expect(sessionState.sessionUsage).toEqual(sessionUsage);
   });
 
+  it('fills Context Usage from authoritative History and clears it when absent', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-one',
+    );
+    const contextUsage = { tokens: 155489, estimated: true };
+
+    loadHistory(sessionState, [], { contextUsage });
+    expect(sessionState.contextUsage).toEqual(contextUsage);
+
+    loadHistory(sessionState, [], { contextUsage: undefined });
+    expect(sessionState.contextUsage).toBeNull();
+  });
+
   it('keeps previous sessionUsage when a history load has none', () => {
     const sessionState = ensureSessionState(
       createChatState(),
@@ -469,6 +495,7 @@ describe('chat state helpers', () => {
       cache_read_tokens: 7200,
       cache_write_tokens: 400,
     };
+    const contextUsage = { tokens: 10200, estimated: false };
     appendRunEvent(sessionState, {
       type: 'run_failed',
       run_id: 'run-one',
@@ -477,10 +504,12 @@ describe('chat state helpers', () => {
         status: CHAT_STATUS_FAILED,
         error: 'boom',
         session_usage: sessionUsage,
+        context_usage: contextUsage,
       },
     });
 
     expect(sessionState.sessionUsage).toEqual(sessionUsage);
+    expect(sessionState.contextUsage).toEqual(contextUsage);
     expect(sessionState.usage).toBeNull();
   });
 

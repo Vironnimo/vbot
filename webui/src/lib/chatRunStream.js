@@ -597,6 +597,9 @@ export function createChatRunStream({
     if (payload.session_usage) {
       runPayload.session_usage = payload.session_usage;
     }
+    if (payload.context_usage) {
+      runPayload.context_usage = payload.context_usage;
+    }
     if (payload.timing) {
       runPayload.timing = payload.timing;
     }
