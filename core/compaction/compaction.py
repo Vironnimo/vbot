@@ -315,25 +315,11 @@ class CompactionService:
         active_model_id: str | None = None,
         active_tools: list[JsonObject] | None = None,
         minimum_reclaim_tokens: int = 0,
-        context_tokens_before: int | None = None,
-        estimated_context_tokens_before: int | None = None,
     ) -> ChatMessage:
         """Execute at most one Model request and persist its assembled projection."""
         del agent
         if minimum_reclaim_tokens < 0:
             raise CompactionError("minimum_reclaim_tokens cannot be negative")
-        if context_tokens_before is not None and (
-            isinstance(context_tokens_before, bool)
-            or not isinstance(context_tokens_before, int)
-            or context_tokens_before < 0
-        ):
-            raise CompactionError("context_tokens_before must be a non-negative integer")
-        if estimated_context_tokens_before is not None and (
-            isinstance(estimated_context_tokens_before, bool)
-            or not isinstance(estimated_context_tokens_before, int)
-            or estimated_context_tokens_before < 0
-        ):
-            raise CompactionError("estimated_context_tokens_before must be a non-negative integer")
         strategy = self._strategies.get(settings.strategy)
         if strategy is None:
             raise CompactionError(f"Unknown compaction strategy: {settings.strategy}")
@@ -390,23 +376,10 @@ class CompactionService:
             raise
         except Exception as exc:
             raise CompactionError(f"Compaction failed: {exc}") from exc
-        context_tokens_after = None
-        if context_tokens_before is not None:
-            # Reclaim is produced by the structured estimator. Apply it to the
-            # matching estimated basis, not to a Provider-anchored trigger value;
-            # mixing those evidence bases can collapse a valid projection to zero.
-            context_estimate_basis = (
-                estimated_context_tokens_before
-                if estimated_context_tokens_before is not None
-                else context_tokens_before
-            )
-            context_tokens_after = max(0, context_estimate_basis - reclaimed_tokens)
         return ChatMessage.compaction_checkpoint(
             summary=summary,
             projection=projection,
             compacted_token_count=plan.compacted_token_count,
-            context_tokens_before=context_tokens_before,
-            context_tokens_after=context_tokens_after,
             policy=settings.strategy,
             strategy=strategy.id,
         )

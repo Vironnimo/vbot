@@ -514,6 +514,34 @@ class ChatMessage:
             compaction_strategy=strategy,
         )
 
+    def with_compaction_context_tokens(
+        self,
+        *,
+        context_tokens_before: int,
+        context_tokens_after: int,
+    ) -> ChatMessage:
+        """Stamp Chat-owned Context Usage onto a completed checkpoint."""
+        if self.role != "compaction_checkpoint":
+            raise ChatMessageValidationError(
+                "context token counts can only be stamped onto compaction checkpoints"
+            )
+        for field_name, value in (
+            ("context_tokens_before", context_tokens_before),
+            ("context_tokens_after", context_tokens_after),
+        ):
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise ChatMessageValidationError(f"{field_name} must be a non-negative integer")
+        stamped = replace(
+            self,
+            usage={
+                **(self.usage or {}),
+                "context_tokens_before": context_tokens_before,
+                "context_tokens_after": context_tokens_after,
+            },
+        )
+        stamped.validate()
+        return stamped
+
     @classmethod
     def agent_takeover(
         cls,

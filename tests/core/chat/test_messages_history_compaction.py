@@ -49,6 +49,25 @@ class TestHistoryCompactionPrimitives:
         assert finalized_again.to_dict() == finalized.to_dict()
         assert checkpoint.projection != finalized.projection
 
+    def test_chat_stamps_final_context_projection_onto_checkpoint(self) -> None:
+        checkpoint = ChatMessage.compaction_checkpoint(
+            summary="Earlier decisions.",
+            projection=[],
+            compacted_token_count=123,
+        )
+
+        stamped = checkpoint.with_compaction_context_tokens(
+            context_tokens_before=155_499,
+            context_tokens_after=34_691,
+        )
+
+        assert stamped.usage == {
+            "compacted_token_count": 123,
+            "context_tokens_before": 155_499,
+            "context_tokens_after": 34_691,
+        }
+        assert checkpoint.usage == {"compacted_token_count": 123}
+
     def test_textual_checkpoint_ends_provider_reasoning_state_but_keeps_phase(self) -> None:
         assistant = ChatMessage.assistant(
             model="openai/gpt-5.6-sol",
