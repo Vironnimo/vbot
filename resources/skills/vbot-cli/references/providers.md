@@ -71,10 +71,12 @@ vbot provider disconnect <provider-id> --connection <provider:connection-id> [--
 
 ```bash
 vbot model list [--provider <provider-id>] [--capability <name>]... [--task <task-type>]... [--input-modality <name>]... [--output-modality <name>]... [--min-context-window <tokens>]
+vbot model show <provider>/<model-id>
 vbot model refresh [<provider-id>]
 ```
 
 - `model list` returns only Models served by at least one enabled, credentialed Connection. Rows include the exact id accepted by `agent create --model` / `agent update --model`, effective context window, useful capabilities/task types, and `reachable: no` when a local service is currently down. For an Agent's primary Model, use `vbot model list --task chat`; repeat filter flags to require every listed value.
+- `model show` returns the complete public Model record, including modalities, task types, supported parameters and voices, typed task options, reasoning controls, context/output limits, connection restrictions, usable Connections, family, and metadata. Use it instead of web search when the question is about the Model data currently loaded by vBot.
 - `refresh` fetches provider model catalogs from the network (needs a credential for provider catalogs); omitting the provider id refreshes all refreshable Providers. It publishes a complete Model DB, including its Override files, under the target data directory and never writes the installed checkout.
 
 ## Task models
@@ -84,16 +86,28 @@ Bind a specialized task to a model target. Task types: `image_generation`, `imag
 ```bash
 vbot task-model list
 vbot task-model targets <task-type>
-vbot task-model options <task-type> <target-id>
-vbot task-model set <task-type> <target-id> [--options '<json-object>']
+vbot task-model options <task-type> [<target-id>]
+vbot task-model set <task-type> <target-id> [--option <name> <value>]...
+vbot task-model set <task-type> <target-id> [--options '<json-object>' | --options-stdin]
+vbot task-model set-option <task-type> <name> [<value> | --stdin]
+vbot task-model unset-option <task-type> <name>
 vbot task-model clear <task-type>
 ```
 
 - Read target ids from `targets` (`<provider>/<model>::<connection>` or `local/<id>`) instead of constructing them by hand. `targets` lists connection-level ids — append a trailing `:<account-id>` yourself to pin a credential account.
-- Check `options` for the valid keys before passing `--options`; it must be one JSON object as a single shell argument.
-- `set` changes only the given task type; other bindings stay untouched.
+- Run `options <task-type> <target-id>` before the first binding. After a binding exists, omit the target to inspect its `fields`, `configured_options`, and default-merged `effective_options`.
+- Prefer repeated `--option <name> <value>` over `--options` for ordinary setup; scalar values are parsed as JSON types when possible. Use `--options` only when replacing the complete option object is intentional. On shells that alter JSON quoting, pipe the object to `--options-stdin` instead.
+- Use `set-option` and `unset-option` for later changes. They preserve every sibling option and reject unknown names, invalid select values, wrong types, and out-of-range numbers before persistence. For object-valued options such as `extra_options`, pipe JSON to `set-option ... --stdin` so shell quoting cannot corrupt it.
+- A Model's `supported_voices` and the `voice` choices returned by `task-model options` are exact ids. Never shorten them, invent a friendly name, or reuse a voice from a different Model.
+- `set` changes only the given task type; other bindings stay untouched. Changing its target without options starts from the new target's defaults and never carries options from the old Model.
 
 ```bash
-vbot task-model set text_to_speech openai/gpt-4o-mini-tts::api-key --options '{"voice": "alloy"}'
+vbot model show openrouter/microsoft/mai-voice-2
+vbot task-model targets text_to_speech
+vbot task-model options text_to_speech openrouter/microsoft/mai-voice-2::api-key
+vbot task-model set text_to_speech openrouter/microsoft/mai-voice-2::api-key --option voice en-us-harper:mai-voice-2
+vbot task-model set-option text_to_speech speed 1.1
+vbot task-model options text_to_speech
 vbot task-model set text_embedding openai/text-embedding-3-small::api-key
+# PowerShell: '{"some_provider_field":true}' | vbot task-model set-option text_to_speech extra_options --stdin
 ```

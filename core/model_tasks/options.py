@@ -17,6 +17,7 @@ surface is usable without a code change.
 
 from __future__ import annotations
 
+import math
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
@@ -326,6 +327,74 @@ class TaskModelOptionSchema:
             "target": self.target,
             "fields": [field.to_dict() for field in self.fields],
         }
+
+
+def validate_task_model_options(
+    schema: TaskModelOptionSchema,
+    options: Mapping[str, Any],
+) -> None:
+    """Validate persisted options against one target's public option schema."""
+
+    if not isinstance(options, Mapping):
+        raise TaskModelOptionValidationError(f"{schema.task_type} options must be an object")
+    fields = {field.name: field for field in schema.fields}
+    unknown = sorted(set(options) - set(fields))
+    if unknown:
+        available = ", ".join(sorted(fields)) or "none"
+        raise TaskModelOptionValidationError(
+            f"{schema.task_type} options are not supported: {', '.join(unknown)}; "
+            f"available: {available}"
+        )
+
+    for field in schema.fields:
+        value = options.get(field.name, field.default)
+        if value is None or value == "":
+            if field.required:
+                raise TaskModelOptionValidationError(
+                    f"{schema.task_type} option {field.name!r} is required"
+                )
+            continue
+        _validate_task_model_option_value(schema.task_type, field, value)
+
+
+def _validate_task_model_option_value(
+    task_type: str,
+    field: TaskModelOptionField,
+    value: Any,
+) -> None:
+    label = f"{task_type} option {field.name!r}"
+    if field.type in {"text", "textarea", "select"}:
+        if not isinstance(value, str):
+            raise TaskModelOptionValidationError(f"{label} must be a string")
+        if field.type == "select" and field.options:
+            choices = tuple(option.value for option in field.options)
+            if value not in choices:
+                raise TaskModelOptionValidationError(
+                    f"{label} must be one of: {', '.join(choices)}"
+                )
+        return
+    if field.type == "number":
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, int | float)
+            or not math.isfinite(value)
+        ):
+            raise TaskModelOptionValidationError(f"{label} must be a finite number")
+        if field.min_value is not None and value < field.min_value:
+            raise TaskModelOptionValidationError(f"{label} must be at least {field.min_value}")
+        if field.max_value is not None and value > field.max_value:
+            raise TaskModelOptionValidationError(f"{label} must be at most {field.max_value}")
+        return
+    if field.type == "boolean":
+        if not isinstance(value, bool):
+            raise TaskModelOptionValidationError(f"{label} must be a boolean")
+        return
+    if (
+        field.type == "json"
+        and field.name in {"extra_options", "provider_options"}
+        and not isinstance(value, Mapping)
+    ):
+        raise TaskModelOptionValidationError(f"{label} must be an object")
 
 
 # ---------------------------------------------------------------------------

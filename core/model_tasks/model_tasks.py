@@ -19,6 +19,7 @@ from core.model_tasks.options import (
     TaskModelOptionSchema,
     TaskModelOptionValidationError,
     option_schema_for,
+    validate_task_model_options,
     validate_text_embedding_options,
 )
 from core.models import ModelQuery
@@ -214,27 +215,152 @@ class TaskModelService:
     def update(self, model_tasks: Mapping[str, Any]) -> JsonObject:
         """Persist task-model settings and return the normalized section."""
 
-        if not isinstance(model_tasks, Mapping):
-            raise TaskModelValidationError("Task model settings must be an object")
-        self._validate_embedding_update(model_tasks)
-        return cast(JsonObject, self._storage.update_model_task_settings(model_tasks))
+        prepared = self._prepare_update(model_tasks)
+        return cast(JsonObject, self._storage.update_model_task_settings(prepared))
 
-    @staticmethod
-    def _validate_embedding_update(model_tasks: Mapping[str, Any]) -> None:
-        raw_binding = model_tasks.get(TASK_TEXT_EMBEDDING)
-        if raw_binding is None:
-            return
+    def validate_update(self, model_tasks: Mapping[str, Any]) -> None:
+        """Validate a sparse binding update without persisting it."""
+
+        self._prepare_update(model_tasks)
+
+    def patch_options(
+        self,
+        task_type: str,
+        *,
+        set_values: Mapping[str, Any] | None = None,
+        unset_names: tuple[str, ...] = (),
+    ) -> JsonObject:
+        """Set or remove option fields while preserving every untouched sibling."""
+
+        normalized_task_type = validate_task_type(task_type)
+        binding = self.binding_for(normalized_task_type)
+        schema = self.options(normalized_task_type, binding.target)
+        available = {field.name for field in schema.fields}
+        options = dict(binding.options)
+        unknown_unsets = sorted(set(unset_names) - available - set(options))
+        if unknown_unsets:
+            choices = ", ".join(sorted(available)) or "none"
+            raise TaskModelValidationError(
+                f"Unsupported {normalized_task_type} options: {', '.join(unknown_unsets)}; "
+                f"available: {choices}"
+            )
+
+        options.update(dict(set_values or {}))
+        for name in unset_names:
+            options.pop(name, None)
+        self.validate_binding(
+            normalized_task_type,
+            {"target": binding.target, "options": options},
+        )
+        return cast(
+            JsonObject,
+            self._storage.update_model_task_settings(
+                {normalized_task_type: {"target": binding.target, "options": options}}
+            ),
+        )
+
+    def validate_binding(self, task_type: str, raw_binding: Mapping[str, Any]) -> None:
+        """Validate one complete binding against its concrete Model schema."""
+
+        normalized_task_type = validate_task_type(task_type)
         if not isinstance(raw_binding, Mapping):
-            raise TaskModelValidationError("text_embedding binding must be an object")
-        raw_options = raw_binding.get("options")
-        if raw_options is None:
-            return
-        if not isinstance(raw_options, Mapping):
-            raise TaskModelValidationError("text_embedding options must be an object")
+            raise TaskModelValidationError(f"{normalized_task_type} binding must be an object")
+        target = raw_binding.get("target")
+        options = raw_binding.get("options", {})
+        if not isinstance(target, str) or not target.strip():
+            raise TaskModelValidationError(
+                f"{normalized_task_type} target must be a non-empty string"
+            )
+        if not isinstance(options, Mapping):
+            raise TaskModelValidationError(f"{normalized_task_type} options must be an object")
+        if normalized_task_type == TASK_TEXT_EMBEDDING:
+            try:
+                validate_text_embedding_options(options)
+            except TaskModelOptionValidationError as error:
+                raise TaskModelValidationError(str(error)) from error
+
+        normalized_target = target.strip()
+        self._validate_target(normalized_task_type, normalized_target)
         try:
-            validate_text_embedding_options(raw_options)
+            validate_task_model_options(
+                self.options(normalized_task_type, normalized_target),
+                options,
+            )
         except TaskModelOptionValidationError as error:
             raise TaskModelValidationError(str(error)) from error
+
+    def _prepare_update(self, model_tasks: Mapping[str, Any]) -> JsonObject:
+        if not isinstance(model_tasks, Mapping):
+            raise TaskModelValidationError("Task model settings must be an object")
+
+        current = self.settings()
+        prepared: JsonObject = {}
+        for raw_task_type, raw_binding in model_tasks.items():
+            task_type = validate_task_type(raw_task_type)
+            if not isinstance(raw_binding, Mapping):
+                raise TaskModelValidationError(f"{task_type} binding must be an object")
+            unsupported = sorted(set(raw_binding) - {"target", "options"})
+            if unsupported:
+                raise TaskModelValidationError(
+                    f"Unsupported {task_type} binding fields: {', '.join(unsupported)}"
+                )
+
+            previous = current.get(task_type, {})
+            previous_target = previous.get("target", "") if isinstance(previous, Mapping) else ""
+            target = raw_binding.get("target", previous_target)
+            if not isinstance(target, str):
+                raise TaskModelValidationError(f"{task_type} target must be a string")
+            target = target.strip()
+            if not target:
+                prepared[task_type] = {"target": ""}
+                continue
+
+            target_changed = target != previous_target
+            if "options" in raw_binding:
+                raw_options = raw_binding["options"]
+            elif target_changed:
+                raw_options = {}
+            else:
+                raw_options = previous.get("options", {}) if isinstance(previous, Mapping) else {}
+            if not isinstance(raw_options, Mapping):
+                raise TaskModelValidationError(f"{task_type} options must be an object")
+            binding = {"target": target, "options": dict(raw_options)}
+            self.validate_binding(task_type, binding)
+            prepared[task_type] = binding
+        return prepared
+
+    def _validate_target(self, task_type: str, target: str) -> None:
+        target_ref = parse_task_model_target_id(target)
+        if target_ref.kind == "local":
+            descriptor = self._local_targets.get(target_ref.local_id)
+            if task_type not in descriptor.task_types:
+                raise TaskModelValidationError(
+                    f"Local target {target!r} does not support {task_type}"
+                )
+            return
+
+        model = self._resolve_model(target_ref.provider_id, target_ref.model_id)
+        if model is None:
+            raise TaskModelValidationError(f"Unknown Model target {target!r}")
+        if not model_supports_task(model, task_type):
+            raise TaskModelValidationError(f"Model target {target!r} does not support {task_type}")
+        if not model.allows_connection(target_ref.local_connection_id):
+            raise TaskModelValidationError(
+                f"Model target {target!r} does not allow Connection "
+                f"{target_ref.local_connection_id!r}"
+            )
+        try:
+            provider = self._providers.get(target_ref.provider_id)
+        except KeyError as error:
+            raise TaskModelValidationError(
+                f"Unknown Provider {target_ref.provider_id!r} in target {target!r}"
+            ) from error
+        if not any(
+            connection.id == target_ref.local_connection_id for connection in provider.connections
+        ):
+            raise TaskModelValidationError(
+                f"Unknown Connection {target_ref.local_connection_id!r} in target {target!r}"
+            )
 
     def binding_for(self, task_type: str) -> TaskModelBinding:
         """Return the configured binding for *task_type*."""
