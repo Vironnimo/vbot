@@ -256,6 +256,7 @@ class Run:
         # about magnitude; the statistics domain owns real-vs-estimated rigor).
         self.model_step_count = 0
         self.tool_call_count = 0
+        self.tool_call_names: set[str] = set()
         self.input_token_total = 0
         self.output_token_total = 0
 

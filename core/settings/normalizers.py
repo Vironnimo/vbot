@@ -63,9 +63,9 @@ COMPACTION_SETTING_DEFAULTS: dict[str, Any] = {
     "strategy": {"type": "summary_tail", "tail_tokens": 15_000, "summary_model": None},
 }
 REFLECTION_SETTING_DEFAULTS: dict[str, Any] = {
-    "enabled": False,
+    "enabled": True,
     "memory_turn_interval": 10,
-    "skill_tool_call_interval": 25,
+    "skill_model_step_interval": 10,
 }
 CUSTOM_PROVIDER_ADAPTERS = frozenset({"openai_compatible"})
 CUSTOM_PROVIDER_AUTH_TYPES = frozenset({"api_key", "none"})
@@ -957,8 +957,8 @@ def normalize_reflection_settings(reflection: Any) -> dict[str, Any]:
         "memory_turn_interval": _normalize_reflection_interval(
             "memory_turn_interval", section.get("memory_turn_interval")
         ),
-        "skill_tool_call_interval": _normalize_reflection_interval(
-            "skill_tool_call_interval", section.get("skill_tool_call_interval")
+        "skill_model_step_interval": _normalize_reflection_interval(
+            "skill_model_step_interval", section.get("skill_model_step_interval")
         ),
     }
 

@@ -475,6 +475,7 @@ def _make_reflect_state(
     forked: list[dict[str, Any]],
     *,
     workspace: str = "/home/agent",
+    memory_prompt_mode: str = "agent_user",
     active: bool = False,
     titles: list[tuple[str, str]] | None = None,
     metadata_writes: list[tuple[str, dict[str, Any]]] | None = None,
@@ -511,7 +512,9 @@ def _make_reflect_state(
     runtime = SimpleNamespace(
         agent_resolver=SimpleNamespace(
             resolve_agent=lambda project_id, agent_id: SimpleNamespace(
-                id=agent_id, workspace=workspace
+                id=agent_id,
+                workspace=workspace,
+                memory_prompt_mode=memory_prompt_mode,
             )
         ),
         chat_sessions=chat_sessions,
@@ -575,7 +578,7 @@ async def test_reflect_forks_and_runs_restricted_review(monkeypatch: pytest.Monk
             {
                 REFLECTION_COUNTERS_META_KEY: {
                     "turns_since_memory_review": 0,
-                    "tool_calls_since_skill_review": 0,
+                    "model_steps_since_skill_review": 0,
                     COUNTER_GENERATION_KEY: 1,
                 }
             },
@@ -636,6 +639,24 @@ async def test_reflect_refused_for_config_agent_without_forking(
 
     assert "identity agent" in response["reply"]
     # An empty-workspace agent never forks and never runs.
+    assert forked == []
+    assert captured == []
+
+
+@pytest.mark.asyncio
+async def test_reflect_refused_when_memory_tool_is_inactive(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: list[dict[str, Any]] = []
+    forked: list[dict[str, Any]] = []
+    state = _make_reflect_state(captured, forked, memory_prompt_mode="off")
+    monkeypatch.setattr("server.rpc.chat_methods._bridge_run_to_event_bus", lambda *a, **k: None)
+
+    response = await _send_chat(
+        state, {"agent_id": "builder", "session_id": "s1", "content": "/reflect"}
+    )
+
+    assert "memory Tool" in response["reply"]
     assert forked == []
     assert captured == []
 

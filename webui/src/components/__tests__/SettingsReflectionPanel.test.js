@@ -21,7 +21,7 @@ const SETTINGS = Object.freeze({
   reflection: {
     enabled: false,
     memory_turn_interval: 10,
-    skill_tool_call_interval: 25,
+    skill_model_step_interval: 10,
   },
 });
 
@@ -36,7 +36,7 @@ describe('SettingsReflectionPanel', () => {
       reflection: {
         enabled: true,
         memory_turn_interval: 10,
-        skill_tool_call_interval: 25,
+        skill_model_step_interval: 10,
       },
     });
     mountedComponent = null;
@@ -64,7 +64,7 @@ describe('SettingsReflectionPanel', () => {
     ).toBe('10');
     expect(
       document.getElementById('settings-reflection-skill-interval').value,
-    ).toBe('25');
+    ).toBe('10');
   });
 
   it('saves the toggled section and commits the server response', async () => {
@@ -88,7 +88,7 @@ describe('SettingsReflectionPanel', () => {
       reflection: {
         enabled: true,
         memory_turn_interval: 10,
-        skill_tool_call_interval: 25,
+        skill_model_step_interval: 10,
       },
     });
     expect(commits[0].reflection.enabled).toBe(true);
@@ -115,7 +115,7 @@ describe('SettingsReflectionPanel', () => {
       reflection: {
         enabled: false,
         memory_turn_interval: 5,
-        skill_tool_call_interval: 25,
+        skill_model_step_interval: 10,
       },
     });
   });

@@ -38,7 +38,7 @@ class TestParseReflectionUpdate:
                 "reflection": {
                     "enabled": True,
                     "memory_turn_interval": 5,
-                    "skill_tool_call_interval": 40,
+                    "skill_model_step_interval": 40,
                 }
             }
         )
@@ -46,7 +46,7 @@ class TestParseReflectionUpdate:
             "reflection": {
                 "enabled": True,
                 "memory_turn_interval": 5,
-                "skill_tool_call_interval": 40,
+                "skill_model_step_interval": 40,
             }
         }
 
@@ -73,7 +73,7 @@ class TestParseReflectionUpdate:
         ):
             parse_settings_update({"reflection": {"enabled": value}})
 
-    @pytest.mark.parametrize("field", ["memory_turn_interval", "skill_tool_call_interval"])
+    @pytest.mark.parametrize("field", ["memory_turn_interval", "skill_model_step_interval"])
     @pytest.mark.parametrize("value", ["five", 1.5, True, None, 0, -1])
     def test_interval_must_be_positive_integer(self, field: str, value: object) -> None:
         with pytest.raises(SettingsValidationError, match=f"params.reflection.{field}"):
@@ -84,15 +84,15 @@ class TestNormalizeReflectionSettings:
     def test_none_section_returns_defaults(self) -> None:
         assert normalize_reflection_settings(None) == REFLECTION_SETTING_DEFAULTS
 
-    def test_defaults_are_disabled(self) -> None:
-        assert REFLECTION_SETTING_DEFAULTS["enabled"] is False
+    def test_defaults_are_enabled(self) -> None:
+        assert REFLECTION_SETTING_DEFAULTS["enabled"] is True
 
     def test_partial_section_fills_defaults(self) -> None:
         normalized = normalize_reflection_settings({"enabled": True})
         assert normalized == {**REFLECTION_SETTING_DEFAULTS, "enabled": True}
 
     def test_full_section_round_trips(self) -> None:
-        section = {"enabled": True, "memory_turn_interval": 3, "skill_tool_call_interval": 7}
+        section = {"enabled": True, "memory_turn_interval": 3, "skill_model_step_interval": 7}
         assert normalize_reflection_settings(section) == section
 
     def test_non_object_section_raises(self) -> None:
@@ -103,7 +103,7 @@ class TestNormalizeReflectionSettings:
         with pytest.raises(StorageError, match="enabled must be a boolean"):
             normalize_reflection_settings({"enabled": "yes"})
 
-    @pytest.mark.parametrize("field", ["memory_turn_interval", "skill_tool_call_interval"])
+    @pytest.mark.parametrize("field", ["memory_turn_interval", "skill_model_step_interval"])
     @pytest.mark.parametrize("value", ["five", 1.5, True, 0, -2])
     def test_invalid_interval_raises(self, field: str, value: object) -> None:
         with pytest.raises(StorageError, match=field):
@@ -119,7 +119,7 @@ class TestValidateReflection:
                     "reflection": {
                         "enabled": True,
                         "memory_turn_interval": 10,
-                        "skill_tool_call_interval": 25,
+                        "skill_model_step_interval": 25,
                     }
                 }
             ),
@@ -161,7 +161,7 @@ class TestValidateReflection:
             ("error", "$.reflection.enabled", "must be a boolean"),
         ]
 
-    @pytest.mark.parametrize("field", ["memory_turn_interval", "skill_tool_call_interval"])
+    @pytest.mark.parametrize("field", ["memory_turn_interval", "skill_model_step_interval"])
     def test_non_integer_interval(self, tmp_path: Path, field: str) -> None:
         settings_path = tmp_path / "settings.json"
         settings_path.write_text(json.dumps({"reflection": {field: "five"}}), encoding="utf-8")
@@ -173,7 +173,7 @@ class TestValidateReflection:
             ("error", f"$.reflection.{field}", "must be a positive integer"),
         ]
 
-    @pytest.mark.parametrize("field", ["memory_turn_interval", "skill_tool_call_interval"])
+    @pytest.mark.parametrize("field", ["memory_turn_interval", "skill_model_step_interval"])
     def test_zero_interval(self, tmp_path: Path, field: str) -> None:
         settings_path = tmp_path / "settings.json"
         settings_path.write_text(json.dumps({"reflection": {field: 0}}), encoding="utf-8")

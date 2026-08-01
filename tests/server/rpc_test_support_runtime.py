@@ -194,7 +194,7 @@ class StubStorage:
         defaults: JsonObject = {
             "enabled": False,
             "memory_turn_interval": 10,
-            "skill_tool_call_interval": 25,
+            "skill_model_step_interval": 10,
         }
         stored = self._settings.get("reflection")
         if isinstance(stored, dict):

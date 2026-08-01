@@ -176,7 +176,7 @@ async def test_settings_get_returns_normalized_settings_payload_without_secrets(
         "reflection": {
             "enabled": False,
             "memory_turn_interval": 10,
-            "skill_tool_call_interval": 25,
+            "skill_model_step_interval": 10,
         },
         "speech": {
             "transcription_audio": {

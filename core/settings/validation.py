@@ -105,11 +105,11 @@ SESSION_TITLE_FIELDS = frozenset({"enabled", "model"})
 SPEECH_FIELDS = frozenset({"transcription_audio"})
 TRANSCRIPTION_AUDIO_FIELDS = frozenset({"profile", "format", "sample_rate_hz"})
 MAX_TRACE_LIMIT = 500
-REFLECTION_FIELDS = frozenset({"enabled", "memory_turn_interval", "skill_tool_call_interval"})
+REFLECTION_FIELDS = frozenset({"enabled", "memory_turn_interval", "skill_model_step_interval"})
 LOCAL_MODELS_FIELDS = frozenset({"context_windows"})
 PROVIDERS_FIELDS = frozenset({"connections", "custom", "openrouter"})
 OPENROUTER_PROVIDER_FIELDS = frozenset({"routing"})
-REFLECTION_INTERVAL_FIELDS = ("memory_turn_interval", "skill_tool_call_interval")
+REFLECTION_INTERVAL_FIELDS = ("memory_turn_interval", "skill_model_step_interval")
 
 SettingsDiagnostic = JsonDiagnostic
 SettingsValidationReport = JsonValidationReport

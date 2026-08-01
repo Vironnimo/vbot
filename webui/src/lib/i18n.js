@@ -927,9 +927,9 @@ export const englishCatalog = Object.freeze({
   'settings.reflection.memoryInterval': 'Memory review interval (turns)',
   'settings.reflection.memoryIntervalDescription':
     'A memory review becomes due after this many of your messages in a conversation.',
-  'settings.reflection.skillInterval': 'Skill review interval (tool calls)',
+  'settings.reflection.skillInterval': 'Skill review interval (Model steps)',
   'settings.reflection.skillIntervalDescription':
-    'A skill review becomes due after this many tool calls in a conversation.',
+    'A skill review becomes due after this many Agentic Loop iterations in a conversation.',
   'settings.reflection.saveSuccess': 'Reflection settings updated.',
   'settings.compaction.title': 'Compaction',
   'settings.compaction.subtitle':

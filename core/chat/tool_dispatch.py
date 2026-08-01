@@ -157,6 +157,7 @@ class _EmittingToolRegistry(ToolRegistry):
     ) -> JsonObject:
         self._run.raise_if_cancelled()
         self._run.tool_call_count += 1
+        self._run.tool_call_names.add(context.tool_name)
         started_at = datetime.now(UTC)
         started_perf = time.perf_counter()
         try:

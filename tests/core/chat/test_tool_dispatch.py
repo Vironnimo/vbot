@@ -1087,6 +1087,7 @@ class TestDispatchToolRestriction:
         assert results["call-mem"] == tool_success({"tool": "memory"})
         assert results["call-read"]["ok"] is False
         assert results["call-read"]["error"]["code"] == "tool_not_allowed"
+        assert run.tool_call_names == {"memory", "read_file"}
 
     @pytest.mark.asyncio
     async def test_restriction_is_intersection_not_union(self, tmp_path: Path) -> None:
