@@ -112,16 +112,13 @@ _BASH_TIMEOUT_PARAMETER: JsonObject = {
 }
 _BASH_ENV_KEYS_PARAMETER: JsonObject = {
     "type": "array",
-    "items": {
-        "type": "string",
-        "pattern": r"^[A-Za-z_][A-Za-z0-9_]*$",
-    },
-    "uniqueItems": True,
     "description": (
-        "Environment credential names to inject into this process. Every name must be "
-        "granted by the Agent configuration or an active Skill; values are resolved by vBot "
-        "and must never be included in the command."
+        "Exact names of granted environment credentials to make available to the command. "
+        "Omit when no credential is needed."
     ),
+    "items": {"type": "string", "minLength": 1},
+    "minItems": 1,
+    "uniqueItems": True,
 }
 
 

@@ -1501,7 +1501,16 @@ def test_register_bash_tool() -> None:
         "auto",
         "background",
     ]
-    assert tool.parameters["properties"]["env_keys"]["uniqueItems"] is True
+    assert tool.parameters["properties"]["env_keys"] == {
+        "type": "array",
+        "description": (
+            "Exact names of granted environment credentials to make available to the command. "
+            "Omit when no credential is needed."
+        ),
+        "items": {"type": "string", "minLength": 1},
+        "minItems": 1,
+        "uniqueItems": True,
+    }
     assert tool.parameters["properties"]["yield_after"]["default"] == 30
     assert "does not extend yield_after" in tool.parameters["properties"]["timeout"]["description"]
     assert "complete combined stdout/stderr stream through exit" in tool.description
