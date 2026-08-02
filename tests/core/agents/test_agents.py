@@ -184,21 +184,30 @@ def test_create_with_custom_values_persists_schema(store: AgentStore, tmp_path: 
         memory_prompt_mode="agent",
         allowed_tools=[],
         allowed_skills=["memory"],
-        tools={"subagent": {"allowed_agents": ["researcher", "builder@vbot"]}},
+        tools={
+            "bash": {"allowed_env": ["OPENAI_API_KEY", "OPENAI_API_KEY"]},
+            "subagent": {"allowed_agents": ["researcher", "builder@vbot"]},
+        },
         custom_system_prompt_enabled=True,
     )
 
     assert agent.workspace == str(custom_workspace.resolve())
     assert agent.allowed_tools == []
     assert agent.allowed_skills == ["memory"]
-    assert agent.tools == {"subagent": {"allowed_agents": ["researcher", "builder@vbot"]}}
+    assert agent.tools == {
+        "bash": {"allowed_env": ["OPENAI_API_KEY"]},
+        "subagent": {"allowed_agents": ["researcher", "builder@vbot"]},
+    }
     assert agent.memory_prompt_mode == "agent"
     assert agent.custom_system_prompt_enabled is True
     assert (custom_workspace / "SOUL.md").exists()
     agent_path = store.data_dir / "agents" / "researcher_1" / "agent.json"
     data = json.loads(agent_path.read_text(encoding="utf-8"))
     assert data["workspace"] == str(custom_workspace.resolve())
-    assert data["tools"] == {"subagent": {"allowed_agents": ["researcher", "builder@vbot"]}}
+    assert data["tools"] == {
+        "bash": {"allowed_env": ["OPENAI_API_KEY"]},
+        "subagent": {"allowed_agents": ["researcher", "builder@vbot"]},
+    }
 
 
 def test_disabling_subagent_tools_preserves_their_settings(store: AgentStore) -> None:
@@ -728,6 +737,11 @@ def test_retarget_allowed_agent_references_is_exact_and_reversible(store: AgentS
             "tools",
             {"subagent": {"allowed_agents": ["worker", False]}},
             "tools.subagent.allowed_agents must be a list of strings",
+        ),
+        (
+            "tools",
+            {"bash": {"allowed_env": ["OPENAI_API_KEY", "bad-key"]}},
+            "invalid environment key name",
         ),
         (
             "custom_system_prompt_enabled",

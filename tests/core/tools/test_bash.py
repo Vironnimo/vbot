@@ -65,6 +65,8 @@ def make_context(
     cancel_check_hook: Any = None,
     nesting_depth: int = 0,
     project_id: str | None = None,
+    tool_settings: dict[str, object] | None = None,
+    skill_env_keys: tuple[str, ...] = (),
 ) -> ToolContext:
     return ToolContext(
         agent_id=AGENT_ID,
@@ -83,6 +85,8 @@ def make_context(
         cancel_check_hook=cancel_check_hook,
         nesting_depth=nesting_depth,
         project_id=project_id,
+        tool_settings=tool_settings,
+        skill_env_keys=skill_env_keys,
     )
 
 
@@ -141,6 +145,67 @@ async def test_short_command_completes_and_streams_stdout(
         )
     ]
     assert events[0][1]["data"].replace("\r\n", "\n") == "hello\n"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("grant_source", ["agent", "skill"])
+async def test_granted_env_key_is_resolved_into_only_the_spawned_process(
+    manager: ProcessManager,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    grant_source: str,
+) -> None:
+    monkeypatch.setattr(bash_module, "_shell_argv", python_command)
+    context = make_context(
+        tmp_path,
+        tool_settings=(
+            {"bash": {"allowed_env": ["TEST_API_TOKEN"]}} if grant_source == "agent" else None
+        ),
+        skill_env_keys=("TEST_API_TOKEN",) if grant_source == "skill" else (),
+    )
+    resolved: list[str] = []
+
+    def resolve_credential(key: str) -> str:
+        resolved.append(key)
+        return "hidden-token"
+
+    result = await bash_handler(
+        context,
+        {
+            "command": "import os; print(os.environ['TEST_API_TOKEN'])",
+            "mode": "foreground",
+            "env_keys": ["TEST_API_TOKEN"],
+        },
+        manager,
+        credential_resolver=resolve_credential,
+    )
+
+    assert result["ok"] is True
+    assert result["data"]["output"].strip() == "hidden-token"
+    assert resolved == ["TEST_API_TOKEN"]
+    assert bash_module._cached_shell_env == {"PATH": "original-path"}
+
+
+@pytest.mark.asyncio
+async def test_ungranted_env_key_is_rejected_before_spawn(
+    manager: ProcessManager,
+    tmp_path: Path,
+) -> None:
+    result = await bash_handler(
+        make_context(tmp_path),
+        {
+            "command": "print('must not run')",
+            "mode": "foreground",
+            "env_keys": ["OPENAI_API_KEY"],
+        },
+        manager,
+        credential_resolver=lambda _key: pytest.fail("credential must not be resolved"),
+    )
+
+    assert result["ok"] is False
+    assert result["error"]["code"] == "invalid_arguments"
+    assert "OPENAI_API_KEY" in result["error"]["message"]
+    assert manager.list_sessions(AGENT_ID) == []
 
 
 @pytest.mark.asyncio
@@ -1428,6 +1493,7 @@ def test_register_bash_tool() -> None:
         "workdir",
         "yield_after",
         "timeout",
+        "env_keys",
     }
     assert tool.parameters["required"] == ["mode", "command"]
     assert tool.parameters["properties"]["mode"]["enum"] == [
@@ -1435,7 +1501,7 @@ def test_register_bash_tool() -> None:
         "auto",
         "background",
     ]
-    assert "env" not in tool.parameters["properties"]
+    assert tool.parameters["properties"]["env_keys"]["uniqueItems"] is True
     assert tool.parameters["properties"]["yield_after"]["default"] == 30
     assert "does not extend yield_after" in tool.parameters["properties"]["timeout"]["description"]
     assert "complete combined stdout/stderr stream through exit" in tool.description
@@ -1491,10 +1557,12 @@ async def test_two_bash_calls_can_run_concurrently_by_default(
         process_manager: ProcessManager,
         *,
         trigger_service: Any | None = None,
+        credential_resolver: Callable[[str], str] | None = None,
     ) -> dict[str, Any]:
         nonlocal active_count, max_active_count
         assert process_manager is manager
         assert trigger_service is None
+        assert credential_resolver is None
         assert arguments["command"].startswith("download-")
         active_count += 1
         max_active_count = max(max_active_count, active_count)

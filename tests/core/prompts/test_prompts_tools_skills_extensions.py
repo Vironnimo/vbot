@@ -6,7 +6,9 @@ from typing import cast
 
 from core.projects import ProjectStore
 from core.subagents import SubAgentPromptTarget
+from core.tools.bash import register_bash_tool
 from core.tools.file_state import FileReadState
+from core.tools.process_manager import ProcessManager
 from core.tools.project import register_project_tool
 from core.tools.subagent import register_subagent_tools
 from core.tools.tools import ToolPromptBlockRegistry
@@ -72,6 +74,42 @@ def test_prompt_tool_definitions_use_agent_configuration_profile(
 
     assert tools.prompt_profile_agent_ids
     assert set(tools.prompt_profile_agent_ids) == {"profile-owner"}
+
+
+def test_bash_env_block_renders_only_for_permanent_agent_grants(
+    workspace: Path,
+    tmp_path: Path,
+) -> None:
+    tools = ToolRegistry()
+    prompt_blocks = ToolPromptBlockRegistry()
+    process_manager = ProcessManager(sweep_interval_seconds=3600)
+    register_bash_tool(tools, process_manager, prompt_blocks=prompt_blocks)
+    manager = _manager(
+        tmp_path,
+        tools=tools,
+        block_definitions=prompt_blocks.block_definitions(),
+    )
+    granted = _agent(
+        workspace,
+        allowed_tools=["bash"],
+        tools={"bash": {"allowed_env": ["OPENAI_API_KEY", "OPENROUTER_API_KEY"]}},
+    )
+    ungranted = _agent(workspace, allowed_tools=["bash"])
+    bash_denied = _agent(
+        workspace,
+        allowed_tools=[],
+        tools={"bash": {"allowed_env": ["OPENAI_API_KEY"]}},
+    )
+
+    prompt = manager.build_system_prompt(granted)
+
+    assert "## Bash Environment Access" in prompt
+    assert "permanent permission" in prompt
+    assert "- `OPENAI_API_KEY`" in prompt
+    assert "- `OPENROUTER_API_KEY`" in prompt
+    assert "`env_keys` array of every `bash` call" in prompt
+    assert "## Bash Environment Access" not in manager.build_system_prompt(ungranted)
+    assert "## Bash Environment Access" not in manager.build_system_prompt(bash_denied)
 
 
 def test_provider_tool_definitions_omit_memory_when_agent_memory_is_off(

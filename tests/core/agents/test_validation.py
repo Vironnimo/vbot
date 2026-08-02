@@ -81,6 +81,19 @@ def test_validate_agent_data_validates_optional_subagent_tool_settings() -> None
     ]
 
 
+def test_validate_agent_data_validates_optional_bash_env_grants() -> None:
+    data = _valid_agent_data()
+    data["tools"] = {"bash": {"allowed_env": ["OPENAI_API_KEY", "bad-key"]}}
+
+    assert _diagnostics(data) == [
+        (
+            "error",
+            "$.tools.bash.allowed_env",
+            "tools.bash.allowed_env has invalid environment key name(s): 'bad-key'",
+        )
+    ]
+
+
 def test_validate_agent_data_rejects_non_bool_custom_prompt_toggle() -> None:
     data = _valid_agent_data()
     data["custom_system_prompt_enabled"] = "yes"

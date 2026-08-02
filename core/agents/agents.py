@@ -52,7 +52,12 @@ from core.settings.validation import (
     validate_temperature_diagnostic,
     validate_thinking_effort_diagnostic,
 )
-from core.tools.availability import sanitize_configured_allowed_tools
+from core.tools.availability import (
+    BASH_ALLOWED_ENV_KEY,
+    BASH_TOOL_SETTINGS_KEY,
+    normalize_env_keys,
+    sanitize_configured_allowed_tools,
+)
 from core.utils.atomic import atomic_write_text
 from core.utils.logging import get_logger
 
@@ -94,6 +99,7 @@ _AGENT_CONFIG_FIELDS = frozenset(
     }
 )
 _SUBAGENT_TOOL_SETTING_FIELDS = frozenset({"allowed_agents"})
+_BASH_TOOL_SETTING_FIELDS = frozenset({BASH_ALLOWED_ENV_KEY})
 _AGENT_ORDER_FIELDS = frozenset({"agent_ids", "revision"})
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -245,6 +251,29 @@ def _validate_agent_tools_diagnostics(diagnostics: list[JsonDiagnostic], tools: 
             continue
         if not isinstance(tool_settings, dict):
             add_error(diagnostics, path, "must be an object")
+    bash = tools.get(BASH_TOOL_SETTINGS_KEY)
+    if isinstance(bash, dict):
+        bash_path = f"$.tools.{BASH_TOOL_SETTINGS_KEY}"
+        warn_unknown_keys(
+            diagnostics,
+            bash_path,
+            bash,
+            _BASH_TOOL_SETTING_FIELDS,
+            "bash setting",
+        )
+        allowed_env = bash.get(BASH_ALLOWED_ENV_KEY)
+        if allowed_env is not None:
+            try:
+                normalize_env_keys(
+                    allowed_env,
+                    field_name=f"tools.{BASH_TOOL_SETTINGS_KEY}.{BASH_ALLOWED_ENV_KEY}",
+                )
+            except ValueError as error:
+                add_error(
+                    diagnostics,
+                    f"{bash_path}.{BASH_ALLOWED_ENV_KEY}",
+                    str(error),
+                )
     subagent = tools.get("subagent")
     if not isinstance(subagent, dict):
         return
@@ -1289,6 +1318,21 @@ def _normalize_agent_tools(tools: Mapping[str, Any] | None) -> dict[str, Any]:
         if not isinstance(tool_settings, Mapping):
             raise AgentError(f"tools.{tool_name} must be an object")
         normalized_tools[tool_name] = deepcopy(dict(tool_settings))
+    bash = normalized_tools.get(BASH_TOOL_SETTINGS_KEY)
+    if isinstance(bash, dict):
+        unsupported_bash = sorted(set(bash) - _BASH_TOOL_SETTING_FIELDS)
+        if unsupported_bash:
+            raise AgentError(
+                f"Unsupported tools.{BASH_TOOL_SETTINGS_KEY} fields: " + ", ".join(unsupported_bash)
+            )
+        if BASH_ALLOWED_ENV_KEY in bash:
+            try:
+                bash[BASH_ALLOWED_ENV_KEY] = normalize_env_keys(
+                    bash[BASH_ALLOWED_ENV_KEY],
+                    field_name=f"tools.{BASH_TOOL_SETTINGS_KEY}.{BASH_ALLOWED_ENV_KEY}",
+                )
+            except ValueError as error:
+                raise AgentError(str(error)) from error
     subagent = normalized_tools.get("subagent")
     if isinstance(subagent, dict):
         unsupported_subagent = sorted(set(subagent) - _SUBAGENT_TOOL_SETTING_FIELDS)

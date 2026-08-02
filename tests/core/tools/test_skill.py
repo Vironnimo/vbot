@@ -81,6 +81,49 @@ def test_skill_tool_result_carries_full_content(tmp_path: Path) -> None:
     assert registered == {"debugging": content}
 
 
+def test_skill_with_env_requirements_prepends_bash_usage_guidance(tmp_path: Path) -> None:
+    skill_dir = tmp_path / "skills" / "provider-probe"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        """---
+name: provider-probe
+description: Probe provider APIs.
+metadata:
+  vbot:
+    requirements:
+      all:
+        - env: OPENAI_API_KEY
+        - env: OPENROUTER_API_KEY
+---
+
+# Provider Probe
+
+Call the provider API.
+""",
+        encoding="utf-8",
+    )
+    registry = SkillRegistry.load(
+        tmp_path / "skills",
+        environment={
+            "OPENAI_API_KEY": "available",
+            "OPENROUTER_API_KEY": "available",
+        },
+    )
+    tools = ToolRegistry()
+    register_skill_tool(tools, _fixed_registry(registry), _no_refresh)
+
+    result = asyncio.run(async_dispatch(tools, _context(tmp_path), {"name": "provider-probe"}))
+
+    content = cast(str, cast(dict[str, Any], result["data"])["content"])
+    guidance_index = content.index("<environment_access>")
+    body_index = content.index("# Provider Probe")
+    assert guidance_index < body_index
+    assert "Loading this Skill makes these additional environment credentials" in content
+    assert "- `OPENAI_API_KEY`" in content
+    assert "- `OPENROUTER_API_KEY`" in content
+    assert "`env_keys` array of every `bash` call" in content
+
+
 def test_skill_tool_handler_rejects_unknown_arguments(tmp_path: Path) -> None:
     tools = ToolRegistry()
     register_skill_tool(

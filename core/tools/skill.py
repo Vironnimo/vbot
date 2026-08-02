@@ -7,6 +7,7 @@ from html import escape
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+from core.skills.requirements import environment_requirement_names
 from core.skills.skills import (
     FRONT_MATTER_DELIMITER,
     RESOURCE_DIRECTORIES,
@@ -15,6 +16,7 @@ from core.skills.skills import (
     _scan_skill_resources,
     skill_origin_sort_key,
 )
+from core.tools.bash import format_bash_env_usage
 from core.tools.tools import (
     JsonObject,
     ToolContext,
@@ -179,7 +181,11 @@ def make_skill_handler(
             )
 
         try:
-            data = load_skill_content(skill_name, skill.path)
+            data = load_skill_content(
+                skill_name,
+                skill.path,
+                env_keys=environment_requirement_names(skill.requirements),
+            )
         except OSError as error:
             return tool_failure(
                 "skill_read_error",
@@ -250,7 +256,12 @@ def register_skill_tool(
     )
 
 
-def load_skill_content(skill_name: str, skill_file: Path) -> JsonObject:
+def load_skill_content(
+    skill_name: str,
+    skill_file: Path,
+    *,
+    env_keys: Sequence[str] = (),
+) -> JsonObject:
     """Load and wrap activation content for one skill file."""
     body = _read_skill_body(skill_file)
     skill_directory = skill_file.resolve().parent
@@ -258,7 +269,13 @@ def load_skill_content(skill_name: str, skill_file: Path) -> JsonObject:
     body = body.replace(SKILL_BASE_DIR_MARKER, directory)
     resources = _scan_skill_resources(skill_directory)
     return {
-        "content": _wrap_skill_content(skill_name, body, resources, directory),
+        "content": _wrap_skill_content(
+            skill_name,
+            body,
+            resources,
+            directory,
+            env_keys=env_keys,
+        ),
         "resources": resources,
         "directory": directory,
     }
@@ -412,8 +429,24 @@ def _normalized_skill_file_path(file_path: str) -> str:
     return normalized
 
 
-def _wrap_skill_content(skill_name: str, body: str, resources: list[str], directory: str) -> str:
+def _wrap_skill_content(
+    skill_name: str,
+    body: str,
+    resources: list[str],
+    directory: str,
+    *,
+    env_keys: Sequence[str] = (),
+) -> str:
     lines = [f'<skill_content name="{escape(skill_name, quote=True)}">']
+    if env_keys:
+        guidance = format_bash_env_usage(
+            env_keys,
+            intro=(
+                "Loading this Skill makes these additional environment credentials "
+                "available to Bash calls."
+            ),
+        )
+        lines.extend(["<environment_access>", guidance, "</environment_access>"])
     lines.append(f"Skill directory: {escape(directory)}")
     lines.append(SKILL_PATH_RESOLUTION_NOTE)
     if resources:

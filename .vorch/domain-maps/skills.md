@@ -125,6 +125,7 @@ metadata:
 - `any` requires at least one child node.
 - `optional` is a list of nodes whose missing checks are reported but do not change `available` status.
 - `env` checks for a non-empty value in the snapshot skill environment: process environment first, then data-dir `.env` fallback (see Constraints & Gotchas).
+- Every declared `env` leaf is also an activation-time Bash grant. Activating the Skill places an `<environment_access>` notice before its instructions that lists those names and explains per-call `bash.env_keys`; the current Run derives Skill grants from the Session's active Skill names and effective Skill registry. Permanent Agent Bash grants are a separate `tools.bash.allowed_env` source (see `tools/bash.md`).
 - `binary` looks up the snapshot environment's `PATH` with `shutil.which` — safe path lookup, not shell execution.
 - `skill` checks that the dependency skill is loadable, available, and allowed for the current agent.
 - `skill` dependency chains are walked with a cycle guard: a circular `skill:` requirement resolves to `unavailable` with a `skill dependency cycle: a -> b -> a` reason instead of recursing.

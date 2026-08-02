@@ -88,6 +88,25 @@ async def test_agent_update_empty_name_restores_id_default(tmp_path: Path) -> No
 
 
 @pytest.mark.asyncio
+async def test_agent_update_accepts_and_normalizes_bash_env_grants(tmp_path: Path) -> None:
+    state = make_state(tmp_path, StubAdapter())
+
+    response = await dispatch_rpc(
+        state,
+        {
+            "method": "agent.update",
+            "params": {
+                "id": "coder",
+                "tools": {"bash": {"allowed_env": ["OPENAI_API_KEY", "OPENAI_API_KEY"]}},
+            },
+        },
+    )
+
+    assert response["ok"] is True
+    assert response["result"]["tools"] == {"bash": {"allowed_env": ["OPENAI_API_KEY"]}}
+
+
+@pytest.mark.asyncio
 async def test_agent_update_enabling_custom_prompt_seeds_agent_fragments(tmp_path: Path) -> None:
     state = make_state(tmp_path, StubAdapter())
     state.runtime.storage.write_prompt_fragment("runtime.md", "custom default runtime")
@@ -709,6 +728,14 @@ async def test_agent_create_returns_resolved_defaults_and_signals_agents_reload(
                 "tools": {"subagent": {"allowed_agents": ["worker", None]}},
             },
         ),
+        (
+            "agent.create",
+            {
+                "id": "writer",
+                "name": "Writer",
+                "tools": {"bash": {"allowed_env": ["bad-key"]}},
+            },
+        ),
         ("agent.create", {"id": "writer", "name": "Writer", "temperature": "0.7"}),
         ("agent.create", {"id": "writer", "name": "Writer", "temperature": -0.1}),
         ("agent.create", {"id": "writer", "name": "Writer", "temperature": 2.1}),
@@ -724,6 +751,10 @@ async def test_agent_create_returns_resolved_defaults_and_signals_agents_reload(
                 "id": "coder",
                 "tools": {"subagent": {"allowed_agents": ["worker", None]}},
             },
+        ),
+        (
+            "agent.update",
+            {"id": "coder", "tools": {"bash": {"allowed_env": "OPENAI_API_KEY"}}},
         ),
         ("agent.update", {"id": "coder", "temperature": "0.7"}),
         ("agent.update", {"id": "coder", "temperature": -0.1}),

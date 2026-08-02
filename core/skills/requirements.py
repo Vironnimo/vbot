@@ -78,6 +78,25 @@ class SkillAvailability:
 AVAILABLE = SkillAvailability("available")
 
 
+def environment_requirement_names(requirements: SkillRequirements) -> tuple[str, ...]:
+    """Return declared environment requirements in stable, deduplicated order."""
+    names: list[str] = []
+    if requirements.required is not None:
+        _collect_environment_requirement_names(requirements.required, names)
+    for optional in requirements.optional:
+        _collect_environment_requirement_names(optional, names)
+    return tuple(dict.fromkeys(names))
+
+
+def _collect_environment_requirement_names(node: RequirementNode, names: list[str]) -> None:
+    if isinstance(node, RequirementCheck):
+        if node.kind == "env":
+            names.append(node.name)
+        return
+    for child in node.children:
+        _collect_environment_requirement_names(child, names)
+
+
 def parse_vbot_requirements(metadata: dict[str, Any]) -> SkillRequirements:
     """Parse ``metadata.vbot.requirements`` into a typed requirement tree."""
 

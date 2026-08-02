@@ -15,6 +15,7 @@ import pytest
 from core.chat.messages import JsonObject, ToolCall
 from core.chat.tool_dispatch import (
     ToolDispatchContext,
+    _activate_triggered_skills,
     _resolve_tool_cwd,
 )
 from core.chat.tool_dispatch import (
@@ -23,6 +24,7 @@ from core.chat.tool_dispatch import (
 from core.extensions import Deny, ExtensionRegistry, HookContext, Modify, Replace
 from core.runs import TOOL_CALL_STARTED_EVENT, Run, RunStatus
 from core.sessions import ChatSessionManager
+from core.skills import SkillRegistry
 from core.tools import (
     ToolContext,
     ToolContract,
@@ -92,6 +94,7 @@ async def _dispatch_tool_calls(
     project_cwd: Path | None = None,
     project_id: str | None = None,
     skill_project_id: str | None = None,
+    skill_registry: SkillRegistry | None = None,
     tool_restriction: Sequence[str] | None = None,
     base_allowed_tools: Sequence[str] | None = None,
     session_tool_grants: tuple[str, ...] = (),
@@ -112,6 +115,7 @@ async def _dispatch_tool_calls(
             project_cwd=project_cwd,
             project_id=project_id,
             skill_project_id=skill_project_id,
+            skill_registry=skill_registry,
             tool_restriction=tool_restriction,
             base_allowed_tools=base_allowed_tools,
             session_tool_grants=session_tool_grants,
@@ -120,6 +124,81 @@ async def _dispatch_tool_calls(
         ),
         tool_calls,
     )
+
+
+def _env_skill_registry(tmp_path: Path) -> SkillRegistry:
+    skill_dir = tmp_path / "skills" / "provider-probe"
+    skill_dir.mkdir(parents=True, exist_ok=True)
+    (skill_dir / "SKILL.md").write_text(
+        """---
+name: provider-probe
+description: Probe provider APIs.
+metadata:
+  vbot:
+    requirements:
+      env: OPENAI_API_KEY
+---
+
+Probe the provider.
+""",
+        encoding="utf-8",
+    )
+    return SkillRegistry.load(
+        tmp_path / "skills",
+        environment={"OPENAI_API_KEY": "available"},
+    )
+
+
+def test_triggered_env_skill_carries_bash_usage_guidance(tmp_path: Path) -> None:
+    session = _build_session(tmp_path)
+    registry = _env_skill_registry(tmp_path)
+    agent = _StubAgent(
+        id="coder",
+        workspace=tmp_path / "workspace",
+        allowed_skills=["provider-probe"],
+    )
+
+    _activate_triggered_skills(agent, session, "$provider-probe run a probe", registry)
+
+    content = session.activated_skill_contents()["provider-probe"]
+    assert content.index("<environment_access>") < content.index("Probe the provider.")
+    assert "- `OPENAI_API_KEY`" in content
+    assert "`env_keys` array of every `bash` call" in content
+
+
+@pytest.mark.asyncio
+async def test_dispatch_exposes_current_active_skill_env_grants(tmp_path: Path) -> None:
+    seen: list[tuple[str, ...]] = []
+    tools = ToolRegistry()
+
+    def probe(context: ToolContext, _arguments: JsonObject) -> JsonObject:
+        seen.append(tuple(context.skill_env_keys))
+        return tool_success({"status": "completed"})
+
+    tools.register(
+        "probe",
+        "Probe ToolContext",
+        {"type": "object", "properties": {}},
+        probe,
+        open_input_schema=True,
+    )
+    runtime, agent = _build_runtime_and_agent(tmp_path, tools)
+    session = _build_session(tmp_path)
+    session.register_skill_activation("provider-probe", "active content")
+    registry = _env_skill_registry(tmp_path)
+    run = Run(run_id="run-one", agent_id=agent.id, session_id=session.id)
+
+    await _dispatch_tool_calls(
+        runtime,
+        agent,
+        [ToolCall(id="call-one", name="probe", arguments={})],
+        session,
+        run,
+        nesting_depth=0,
+        skill_registry=registry,
+    )
+
+    assert seen == [("OPENAI_API_KEY",)]
 
 
 @pytest.mark.asyncio

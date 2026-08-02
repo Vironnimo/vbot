@@ -19,6 +19,7 @@ from core.chat.messages import ChatMessage, JsonObject, ToolCall
 from core.extensions import ExtensionRegistry, HookContext
 from core.runs import TOOL_CALL_RESULT_EVENT, TOOL_CALL_STARTED_EVENT, Run
 from core.sessions import ChatSession
+from core.skills.requirements import SkillRequirements, environment_requirement_names
 from core.skills.skill_validator import SKILL_NAME_CHARSET_FRAGMENT
 from core.tools import (
     READ_MEDIA_ARTIFACT_KIND,
@@ -70,6 +71,7 @@ class ToolDispatchContext:
     project_cwd: Path | None = None
     project_id: str | None = None
     skill_project_id: str | None = None
+    skill_registry: SkillRegistry | None = None
     tool_restriction: Sequence[str] | None = None
     tool_denial_resolver: Callable[[str], str | None] | None = None
     base_allowed_tools: Sequence[str] | None = None
@@ -434,6 +436,7 @@ async def _dispatch_tool_calls(
             ),
             session_tool_grants=context.session_tool_grants,
             allowed_skills=getattr(agent, "allowed_skills", ["*"]),
+            skill_env_keys=_active_skill_env_keys(session, context.skill_registry),
             tool_settings=agent_tool_settings(getattr(agent, "tools", {})),
             emit_hook=lambda event_type, payload: _emit_tool_context_event(
                 run,
@@ -465,6 +468,23 @@ async def _dispatch_tool_calls(
         )
         media_outputs.extend(_read_media_outputs(result, tool_call_id=tool_call.id))
     return tool_messages, media_outputs
+
+
+def _active_skill_env_keys(
+    session: ChatSession,
+    skill_registry: SkillRegistry | None,
+) -> tuple[str, ...]:
+    """Return Env grants declared by Skills active in the current Session state."""
+    if skill_registry is None:
+        return ()
+    names: list[str] = []
+    for skill_name in session.activated_skill_contents():
+        try:
+            skill = skill_registry.get(skill_name)
+        except KeyError:
+            continue
+        names.extend(environment_requirement_names(skill.requirements))
+    return tuple(dict.fromkeys(names))
 
 
 def _fail_tool_calls_without_dispatch(
@@ -622,7 +642,13 @@ def _activate_triggered_skills(
             )
             continue
         try:
-            data = load_skill_content(skill.name, skill.path)
+            data = load_skill_content(
+                skill.name,
+                skill.path,
+                env_keys=environment_requirement_names(
+                    getattr(skill, "requirements", SkillRequirements())
+                ),
+            )
         except OSError as error:
             _LOGGER.warning(
                 "Failed to load triggered skill '%s' for agent=%s session=%s: %s",

@@ -30,6 +30,11 @@ from core.settings import (
     validate_thinking_effort,
 )
 from core.settings.normalizers import normalize_compaction_settings
+from core.tools.availability import (
+    BASH_ALLOWED_ENV_KEY,
+    BASH_TOOL_SETTINGS_KEY,
+    normalize_env_keys,
+)
 from core.utils.errors import StorageError
 from core.utils.logging import get_logger
 from server.events import (
@@ -852,6 +857,28 @@ def _validate_agent_field(key: str, value: Any) -> Any:
     if key == "tools":
         if not isinstance(value, dict):
             raise RpcError(RPC_ERROR_INVALID_REQUEST, "params.tools must be an object")
+        bash = value.get(BASH_TOOL_SETTINGS_KEY)
+        if bash is not None and not isinstance(bash, dict):
+            raise RpcError(
+                RPC_ERROR_INVALID_REQUEST,
+                f"params.tools.{BASH_TOOL_SETTINGS_KEY} must be an object",
+            )
+        if isinstance(bash, dict):
+            unsupported_bash = sorted(set(bash) - {BASH_ALLOWED_ENV_KEY})
+            if unsupported_bash:
+                raise RpcError(
+                    RPC_ERROR_INVALID_REQUEST,
+                    f"unsupported tools.{BASH_TOOL_SETTINGS_KEY} fields: "
+                    + ", ".join(unsupported_bash),
+                )
+            if BASH_ALLOWED_ENV_KEY in bash:
+                try:
+                    bash[BASH_ALLOWED_ENV_KEY] = normalize_env_keys(
+                        bash[BASH_ALLOWED_ENV_KEY],
+                        field_name=(f"tools.{BASH_TOOL_SETTINGS_KEY}.{BASH_ALLOWED_ENV_KEY}"),
+                    )
+                except ValueError as error:
+                    raise RpcError(RPC_ERROR_INVALID_REQUEST, str(error)) from error
         subagent = value.get("subagent")
         if subagent is not None and not isinstance(subagent, dict):
             raise RpcError(
