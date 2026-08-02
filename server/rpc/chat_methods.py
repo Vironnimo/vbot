@@ -180,12 +180,13 @@ def _complete_history_segment_start(messages: list[JsonObject], page_start: int)
     """Expand the oldest page boundary to one complete persisted Run segment."""
     if page_start <= 0 or page_start >= len(messages):
         return page_start
-    if not any(message.get("role") == "run_summary" for message in messages[page_start:]):
-        return page_start
+    has_later_summary = any(
+        message.get("role") == "run_summary" for message in messages[page_start:]
+    )
     for index in range(page_start - 1, -1, -1):
         if messages[index].get("role") == "run_summary":
             return index + 1
-    return 0
+    return 0 if has_later_summary else page_start
 
 
 def _subagent_inspect(state: Any, params: JsonObject) -> JsonObject:
