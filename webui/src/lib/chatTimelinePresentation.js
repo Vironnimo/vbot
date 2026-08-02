@@ -553,11 +553,18 @@ export const subAgentEffectiveRunId = (tool, subAgentStatuses = {}) => {
   if (runId) {
     return runId;
   }
+  const statuses = isPlainObject(subAgentStatuses) ? subAgentStatuses : {};
+  const workId = trimmedString(subAgentResultData(tool).id);
+  if (workId) {
+    const inspectedRunId = trimmedString(statuses[`workRun:${workId}`]);
+    if (inspectedRunId) {
+      return inspectedRunId;
+    }
+  }
   const queueItemId = subAgentQueueItemId(tool);
   if (!queueItemId) {
     return '';
   }
-  const statuses = isPlainObject(subAgentStatuses) ? subAgentStatuses : {};
   return trimmedString(statuses[`queueRun:${queueItemId}`]);
 };
 
