@@ -134,6 +134,29 @@ async def test_run_excluded_from_agent_activity_still_persists_its_session_histo
 
 
 @pytest.mark.asyncio
+async def test_run_summary_persists_durable_work_id(tmp_path: Path) -> None:
+    agent = StubAgent(id="coder", model="openrouter/anthropic/claude-sonnet-4")
+    adapter = StubAdapter([{"content": "Sub-Agent done", "reasoning": None, "tool_calls": None}])
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+    runtime.chat_sessions.create("coder", session_id="session-one")
+    loop = build_chat_loop(runtime)
+
+    run = await runtime.chat_run_manager.start(
+        agent_id="coder",
+        session_id="session-one",
+        executor=loop.run_executor("Do work"),
+        project_id=None,
+        work_id="sub-work-one",
+    )
+    await run.wait()
+
+    persisted = runtime.chat_sessions.get("coder", "session-one").load()
+    assert persisted[-1].role == "run_summary"
+    assert persisted[-1].run_id == run.id
+    assert persisted[-1].work_id == "sub-work-one"
+
+
+@pytest.mark.asyncio
 async def test_run_end_notification_failure_never_breaks_the_run(tmp_path: Path) -> None:
     agent = StubAgent(
         id="coder",

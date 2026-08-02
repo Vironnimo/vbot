@@ -407,6 +407,7 @@ class TestChatMessageFactories:
     def test_run_summary_contains_run_status_and_timing(self):
         message = ChatMessage.run_summary(
             run_id="run-one",
+            work_id="sub-work-one",
             status="completed",
             timing=FIXED_TIMING,
             timestamp=FIXED_TIMESTAMP,
@@ -418,6 +419,7 @@ class TestChatMessageFactories:
             "role": "run_summary",
             "timing": FIXED_TIMING,
             "run_id": "run-one",
+            "work_id": "sub-work-one",
             "status": "completed",
         }
 
@@ -590,6 +592,7 @@ class TestChatMessageParsing:
             "timestamp": "2026-05-03T14:30:05+00:00",
             "role": "run_summary",
             "run_id": "run-one",
+            "work_id": "sub-work-one",
             "status": "completed",
             "timing": FIXED_TIMING,
         }

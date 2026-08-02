@@ -337,6 +337,7 @@ class ChatMessage:
     compaction_policy: str | None = None
     compaction_strategy: str | None = None
     run_id: str | None = None
+    work_id: str | None = None
     status: str | None = None
     sender: MessageSender | None = None
     interrupted: bool = False
@@ -463,6 +464,7 @@ class ChatMessage:
         cls,
         *,
         run_id: str,
+        work_id: str | None = None,
         status: str,
         timing: JsonObject,
         timestamp: datetime | None = None,
@@ -473,6 +475,7 @@ class ChatMessage:
             timestamp=_format_timestamp(timestamp),
             role="run_summary",
             run_id=run_id,
+            work_id=work_id,
             status=status,
             timing=dict(timing),
         )
@@ -600,6 +603,7 @@ class ChatMessage:
         _add_if_not_none(message, "compaction_policy", self.compaction_policy)
         _add_if_not_none(message, "compaction_strategy", self.compaction_strategy)
         _add_if_not_none(message, "run_id", self.run_id)
+        _add_if_not_none(message, "work_id", self.work_id)
         _add_if_not_none(message, "status", self.status)
         if self.sender is not None:
             message["sender"] = self.sender.to_dict()
@@ -660,6 +664,7 @@ class ChatMessage:
             compaction_policy=_optional_string(data, "compaction_policy"),
             compaction_strategy=_optional_string(data, "compaction_strategy"),
             run_id=_optional_string(data, "run_id"),
+            work_id=_optional_string(data, "work_id"),
             status=_optional_string(data, "status"),
             sender=MessageSender.from_dict(sender_data) if sender_data is not None else None,
             interrupted=interrupted,
@@ -1640,6 +1645,7 @@ def _validate_system_message(message: ChatMessage) -> None:
         "name",
         "error_kind",
         "run_id",
+        "work_id",
         "status",
         "sender",
     )
@@ -1669,6 +1675,7 @@ def _validate_user_message(message: ChatMessage) -> None:
         "name",
         "error_kind",
         "run_id",
+        "work_id",
         "status",
     )
 
@@ -1705,6 +1712,7 @@ def _validate_assistant_message(message: ChatMessage) -> None:
         "name",
         "error_kind",
         "run_id",
+        "work_id",
         "status",
         "sender",
     )
@@ -1734,6 +1742,7 @@ def _validate_tool_message(message: ChatMessage) -> None:
         "tool_calls",
         "error_kind",
         "run_id",
+        "work_id",
         "status",
         "sender",
     )
@@ -1757,6 +1766,7 @@ def _validate_note_message(message: ChatMessage) -> None:
         "name",
         "error_kind",
         "run_id",
+        "work_id",
         "status",
         "sender",
     )
@@ -1780,6 +1790,7 @@ def _validate_error_message(message: ChatMessage) -> None:
         "tool_call_id",
         "name",
         "run_id",
+        "work_id",
         "status",
         "sender",
     )
@@ -1851,6 +1862,7 @@ def _validate_compaction_checkpoint_message(message: ChatMessage) -> None:
         "name",
         "error_kind",
         "run_id",
+        "work_id",
         "status",
         "sender",
     )
@@ -1900,6 +1912,7 @@ def _validate_agent_takeover_message(message: ChatMessage) -> None:
         "name",
         "error_kind",
         "run_id",
+        "work_id",
         "status",
         "sender",
     )

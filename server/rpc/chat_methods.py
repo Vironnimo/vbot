@@ -170,8 +170,42 @@ def _history_page(
     if limit is None:
         return list(page_source), False
 
-    page = page_source[-limit:]
+    page_start = max(0, len(page_source) - limit)
+    page_start = _complete_history_segment_start(page_source, page_start)
+    page = page_source[page_start:]
     return page, len(page_source) > len(page)
+
+
+def _complete_history_segment_start(messages: list[JsonObject], page_start: int) -> int:
+    """Expand the oldest page boundary to one complete persisted Run segment."""
+    if page_start <= 0 or page_start >= len(messages):
+        return page_start
+    if not any(message.get("role") == "run_summary" for message in messages[page_start:]):
+        return page_start
+    for index in range(page_start - 1, -1, -1):
+        if messages[index].get("role") == "run_summary":
+            return index + 1
+    return 0
+
+
+def _subagent_inspect(state: Any, params: JsonObject) -> JsonObject:
+    supported_fields = {"id", "agent_id", "session_id"}
+    _reject_unsupported(params, supported_fields, "subagent.inspect")
+    work_id = _required_string(params, "id")
+    agent_id, project_id = _required_agent_address(params, "agent_id")
+    session_id = _required_string(params, "session_id")
+    try:
+        inspection = state.runtime.subagents.inspect(
+            agent_id,
+            session_id,
+            work_id,
+            project_id=project_id,
+        )
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
+    if inspection is None:
+        raise RpcError(RPC_ERROR_RUN_NOT_FOUND, f"sub-agent work not found: {work_id}")
+    return cast(JsonObject, inspection)
 
 
 def _command_output(outcome: CommandOutcome) -> str:
@@ -586,4 +620,5 @@ def method_handlers() -> dict[str, RpcMethodHandler]:
         "chat.queue_list": _chat_queue_list,
         "chat.queue_remove": _chat_queue_remove,
         "chat.queue_update": _chat_queue_update,
+        "subagent.inspect": _subagent_inspect,
     }

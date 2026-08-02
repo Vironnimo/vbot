@@ -274,6 +274,7 @@ class FakeRunManager:
         project_id: str | None = None,
         working_project_id: str | None = None,
         run_kind: RunKind = RunKind.USER,
+        work_id: str | None = None,
     ) -> Run:
         if self.start_error is not None:
             raise self.start_error
@@ -286,6 +287,7 @@ class FakeRunManager:
             project_id=project_id,
             working_project_id=working_project_id,
             run_kind=run_kind,
+            work_id=work_id,
         )
         self.started.append((agent_id, session_id, executor, run))
         self.runs[run.id] = run
@@ -303,11 +305,13 @@ class FakeRunManager:
         project_id: str | None = None,
         working_project_id: str | None = None,
         run_kind: RunKind = RunKind.USER,
+        work_id: str | None = None,
     ) -> Any:
         future: asyncio.Future[Run] = asyncio.get_running_loop().create_future()
         item = SimpleNamespace(
             future=future,
             item_id=f"queued-item-{len(self.enqueued) + 1}",
+            work_id=work_id,
         )
         run = Run(
             run_id=f"queued-sub-run-{len(self.enqueued) + 1}",
@@ -316,6 +320,7 @@ class FakeRunManager:
             project_id=project_id,
             working_project_id=working_project_id,
             run_kind=run_kind,
+            work_id=work_id,
         )
         self.enqueued.append(
             {
@@ -328,6 +333,7 @@ class FakeRunManager:
                 "working_project_id": working_project_id,
                 "item": item,
                 "run": run,
+                "work_id": work_id,
             }
         )
         self.runs[run.id] = run

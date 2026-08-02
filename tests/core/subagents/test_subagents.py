@@ -22,6 +22,7 @@ from core.runs import ActiveRunError, Run, RunKind, RunNotFoundError
 from core.storage import TemporaryFileManager
 from core.subagents.subagents import (
     SubAgentBatchTracker,
+    SubAgentCoordinator,
     _handle_subagent_status,
 )
 from core.subagents.subagents import (
@@ -128,6 +129,7 @@ async def test_foreground_result_keeps_handle_and_child_unread_until_parent_pers
     result = await task
 
     assert result["ok"] is True
+    assert manager.started[0]["work_id"] == result["data"]["id"]
     assert len(persisted_callbacks) == 1
     child_session_id = result["data"]["session_id"]
     child_run_id = manager.started[0]["run"].id
@@ -332,6 +334,7 @@ class FakeRunManager:
         project_id: str | None = None,
         working_project_id: str | None = None,
         run_kind: RunKind = RunKind.USER,
+        work_id: str | None = None,
     ) -> Run:
         if (agent_id, session_id) in self.busy_sessions:
             raise ActiveRunError(f"session already has an active run: {session_id}")
@@ -342,6 +345,7 @@ class FakeRunManager:
             project_id=project_id,
             working_project_id=working_project_id,
             run_kind=run_kind,
+            work_id=work_id,
         )
         self.started.append(
             {
@@ -351,6 +355,7 @@ class FakeRunManager:
                 "project_id": project_id,
                 "working_project_id": working_project_id,
                 "run_kind": run_kind,
+                "work_id": work_id,
                 "run": run,
             }
         )
@@ -406,6 +411,82 @@ def make_runtime(
         storage=FakeStorage(tmp_path),
         streaming_chat_loop=child_loop,
     )
+
+
+async def test_inspect_resolves_exact_completed_work_after_child_session_reuse(
+    tmp_path: Path,
+) -> None:
+    manager = FakeRunManager()
+    runtime = make_runtime(tmp_path, manager)
+    session = runtime.chat_sessions.create("worker", session_id="reused-child")
+    old_timing = {
+        "started_at": "2026-07-24T10:00:00+00:00",
+        "completed_at": "2026-07-24T10:00:01+00:00",
+        "duration_ms": 1000,
+    }
+    new_timing = {
+        "started_at": "2026-07-24T11:00:00+00:00",
+        "completed_at": "2026-07-24T11:00:01+00:00",
+        "duration_ms": 1000,
+    }
+    session.append(ChatMessage.user("old request"))
+    session.append(ChatMessage.assistant(model="openai/gpt-5.2", content="old result"))
+    session.append(
+        ChatMessage.run_summary(
+            run_id="old-run",
+            work_id="sub_old",
+            status="completed",
+            timing=old_timing,
+        )
+    )
+    session.append(ChatMessage.user("new request"))
+    session.append(ChatMessage.assistant(model="openai/gpt-5.2", content="new result"))
+    session.append(
+        ChatMessage.run_summary(
+            run_id="new-run",
+            work_id="sub_new",
+            status="completed",
+            timing=new_timing,
+        )
+    )
+
+    result = SubAgentCoordinator(runtime, RecordingTriggerService()).inspect(
+        "worker",
+        "reused-child",
+        "sub_old",
+    )
+
+    assert result is not None
+    assert result["id"] == "sub_old"
+    assert result["run_id"] == "old-run"
+    assert result["status"] == "completed"
+    assert result["result"] == "old result"
+    assert result["timing"] == old_timing
+
+
+async def test_inspect_prefers_matching_live_work_in_child_session(tmp_path: Path) -> None:
+    manager = FakeRunManager()
+    runtime = make_runtime(tmp_path, manager)
+    runtime.chat_sessions.create("worker", session_id="live-child")
+    active = Run(
+        run_id="live-run",
+        agent_id="worker",
+        session_id="live-child",
+        work_id="sub_live",
+    )
+    manager.busy_sessions[("worker", "live-child")] = active
+
+    result = SubAgentCoordinator(runtime, RecordingTriggerService()).inspect(
+        "worker",
+        "live-child",
+        "sub_live",
+    )
+
+    assert result is not None
+    assert result["id"] == "sub_live"
+    assert result["run_id"] == "live-run"
+    assert result["status"] == "running"
+    assert result["result"] is None
 
 
 async def test_project_subagent_session_lives_under_project_anchor(tmp_path: Path) -> None:
