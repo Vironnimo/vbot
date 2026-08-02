@@ -22,6 +22,7 @@ const SSE_RECOVERY_RETRY_DELAY_MS = 5_000;
 // needs to comfortably exceed that window; everything older can be forgotten
 // without risking a duplicate (handoff3 B10).
 const MAX_HANDLED_RUN_SERVER_EVENT_KEYS = 2000;
+const MAX_PENDING_ORDERED_RUN_EVENTS = 1024;
 const RUN_EVENT_FLUSH_DELAY_MS = 33;
 const DELAYED_RUN_EVENT_TYPES = new Set([
   'assistant_output_delta',
@@ -63,6 +64,7 @@ export function createChatRunStream({
   const pendingReconciliations = {};
   const pendingRunEventQueues = {};
   const pendingRunEventFlushes = {};
+  const orderedRunEventBuffers = {};
   let destroyed = false;
   const handledRunServerEventKeys = createBoundedKeySet(
     MAX_HANDLED_RUN_SERVER_EVENT_KEYS,
@@ -80,6 +82,7 @@ export function createChatRunStream({
     clearPendingRecoveryRetry(sessionState.key);
     const afterSequence =
       options.afterSequence ?? highestContiguousRunEventSequence(sessionState);
+    prepareOrderedRunEventBuffer(sessionState, afterSequence);
     let retryAttempt = options.retryAttempt ?? 0;
     let subscription;
     const markStreamAlive = ({ resetRetryBudget = false } = {}) => {
@@ -198,6 +201,68 @@ export function createChatRunStream({
     scheduleRunEventFlush(sessionKey);
   }
 
+  function prepareOrderedRunEventBuffer(sessionState, afterSequence = 0) {
+    const runId = sessionState.currentRun?.runId ?? '';
+    if (!runId) {
+      delete orderedRunEventBuffers[sessionState.key];
+      return null;
+    }
+    const nextSequence = Math.max(1, Math.trunc(afterSequence) + 1);
+    const existing = orderedRunEventBuffers[sessionState.key];
+    if (existing?.runId === runId) {
+      existing.nextSequence = Math.max(existing.nextSequence, nextSequence);
+      return existing;
+    }
+    const buffer = {
+      runId,
+      nextSequence,
+      // A plain Map is intentional: this transport-owned buffer is not UI
+      // state. Only events promoted through appendRunEvent become reactive.
+      pending: new Map(),
+    };
+    orderedRunEventBuffers[sessionState.key] = buffer;
+    return buffer;
+  }
+
+  function appendOrderedRunEvent(sessionState, eventData) {
+    const runId = typeof eventData?.run_id === 'string' ? eventData.run_id : '';
+    const sequence = Number(eventData?.sequence);
+    if (!runId || !Number.isInteger(sequence) || sequence < 1) {
+      const appended = appendRunEvent(sessionState, eventData);
+      return appended ? [appended] : [];
+    }
+
+    let buffer = orderedRunEventBuffers[sessionState.key];
+    if (buffer?.runId !== runId) {
+      const afterSequence =
+        sessionState.currentRun?.runId === runId
+          ? highestContiguousRunEventSequence(sessionState)
+          : 0;
+      buffer = prepareOrderedRunEventBuffer(sessionState, afterSequence);
+    }
+    if (!buffer || sequence < buffer.nextSequence) {
+      return [];
+    }
+    if (sequence - buffer.nextSequence >= MAX_PENDING_ORDERED_RUN_EVENTS) {
+      return [];
+    }
+    if (!buffer.pending.has(sequence)) {
+      buffer.pending.set(sequence, eventData);
+    }
+
+    const appendedEvents = [];
+    while (buffer.pending.has(buffer.nextSequence)) {
+      const nextEventData = buffer.pending.get(buffer.nextSequence);
+      buffer.pending.delete(buffer.nextSequence);
+      buffer.nextSequence += 1;
+      const appended = appendRunEvent(sessionState, nextEventData);
+      if (appended) {
+        appendedEvents.push(appended);
+      }
+    }
+    return appendedEvents;
+  }
+
   function scheduleRunEventFlush(sessionKey) {
     if (pendingRunEventFlushes[sessionKey] !== undefined) {
       return;
@@ -226,10 +291,11 @@ export function createChatRunStream({
 
     let terminalEvent = null;
     for (const eventData of pendingEvents) {
-      const event = appendRunEvent(sessionState, eventData);
-      handleAppendedRunEvent(sessionState, event);
-      if (event && TERMINAL_RUN_EVENTS.has(event.type)) {
-        terminalEvent = event;
+      for (const event of appendOrderedRunEvent(sessionState, eventData)) {
+        handleAppendedRunEvent(sessionState, event);
+        if (TERMINAL_RUN_EVENTS.has(event.type)) {
+          terminalEvent = event;
+        }
       }
     }
     return terminalEvent;
@@ -257,6 +323,7 @@ export function createChatRunStream({
       removeQueuedMessage(sessionState, event.payload.queue_item_id);
     }
     if (TERMINAL_RUN_EVENTS.has(event.type)) {
+      delete orderedRunEventBuffers[sessionState.key];
       clearPendingReconnect(sessionState.key);
       clearPendingRecoveryRetry(sessionState.key);
       if (!options.fromServerEvent || !activeSubscriptions[sessionState.key]) {
@@ -547,7 +614,19 @@ export function createChatRunStream({
       event.agent_id,
       event.session_id,
     );
+    const canonicalStreamOwnsRun =
+      event.type !== 'run_started' &&
+      sessionState.currentRun?.runId === event.run_id &&
+      Boolean(activeSubscriptions[sessionState.key]);
     flushPendingRunEvents(sessionState.key);
+    // The displayed Run's SSE stream is the canonical detailed timeline. Its
+    // non-delta events are also mirrored over WebSocket for discovery and
+    // inactive Sessions, but applying that mirror here would let terminal
+    // lifecycle overtake final Assistant output on a different transport.
+    if (canonicalStreamOwnsRun) {
+      mergeMirroredRunMetadata(sessionState, event);
+      return;
+    }
     const appended = appendRunEvent(sessionState, event);
     handleAppendedRunEvent(sessionState, appended, { fromServerEvent: true });
     if (
@@ -567,6 +646,18 @@ export function createChatRunStream({
         },
         { afterSequence: highestContiguousRunEventSequence(sessionState) },
       );
+    }
+  }
+
+  function mergeMirroredRunMetadata(sessionState, event) {
+    if (event.payload?.context_usage) {
+      sessionState.contextUsage = event.payload.context_usage;
+    }
+    if (event.payload?.session_usage) {
+      sessionState.sessionUsage = event.payload.session_usage;
+    }
+    if (event.type === 'run_completed' && event.payload?.usage) {
+      sessionState.usage = event.payload.usage;
     }
   }
 
@@ -644,6 +735,7 @@ export function createChatRunStream({
 
   function closeSubscriptionFor(sessionKey) {
     closeRunSubscription(sessionKey);
+    delete orderedRunEventBuffers[sessionKey];
     clearPendingReconnect(sessionKey);
     clearPendingRecoveryRetry(sessionKey);
   }
@@ -738,6 +830,9 @@ export function createChatRunStream({
     clearHeartbeatWatchdogs();
     clearPendingRecoveryRetries();
     clearPendingRunEventFlushes();
+    for (const key of Object.keys(orderedRunEventBuffers)) {
+      delete orderedRunEventBuffers[key];
+    }
   }
 
   function applyConnectionSnapshot(snapshot) {

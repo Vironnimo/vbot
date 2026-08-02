@@ -417,6 +417,164 @@ describe('createChatRunStream().applyConnectionSnapshot()', () => {
     expect(agentActivityStatus(chatState, DISPLAYED_AGENT_ID)).toBe('idle');
     expect(harness.subAgentRunStatuses).toEqual({});
   });
+
+  it('lets the displayed SSE stream settle final output before its mirrored WebSocket terminal event', () => {
+    let onEvent;
+    const close = vi.fn();
+    const harness = makeStreamHarness({
+      chatState,
+      displayedAgentId: DISPLAYED_AGENT_ID,
+      displayedSessionId: DISPLAYED_SESSION_ID,
+      subscribeRunEvents: vi.fn((_url, handlers) => {
+        onEvent = handlers.onEvent;
+        return { close };
+      }),
+    });
+
+    harness.stream.handleServerEvents({
+      type: 'run_started',
+      payload: {
+        run_id: 'run-ordered-terminal',
+        agent_id: DISPLAYED_AGENT_ID,
+        session_id: DISPLAYED_SESSION_ID,
+        run_event_type: 'run_started',
+        run_event_sequence: 1,
+        status: 'running',
+        output: { status: 'running' },
+      },
+    });
+    onEvent({
+      data: {
+        type: 'assistant_output_delta',
+        run_id: 'run-ordered-terminal',
+        sequence: 2,
+        payload: { content_delta: 'Final answer' },
+      },
+    });
+
+    harness.stream.handleServerEvents({
+      type: 'run_completed',
+      payload: {
+        run_id: 'run-ordered-terminal',
+        agent_id: DISPLAYED_AGENT_ID,
+        session_id: DISPLAYED_SESSION_ID,
+        run_event_type: 'run_completed',
+        run_event_sequence: 4,
+        status: 'completed',
+      },
+    });
+
+    const sessionState = ensureSessionState(
+      chatState,
+      DISPLAYED_AGENT_ID,
+      DISPLAYED_SESSION_ID,
+    );
+    expect(sessionState.status).toBe(CHAT_STATUS_RUNNING);
+    expect(close).not.toHaveBeenCalled();
+    expect(
+      visibleTimelineItemsForRender(sessionState)[0].outputs[0].content,
+    ).toBe('Final answer');
+
+    onEvent({
+      data: {
+        type: 'assistant_output',
+        run_id: 'run-ordered-terminal',
+        sequence: 3,
+        payload: {
+          message: { role: 'assistant', content: 'Final answer' },
+        },
+      },
+    });
+    onEvent({
+      data: {
+        type: 'run_completed',
+        run_id: 'run-ordered-terminal',
+        sequence: 4,
+        payload: { status: 'completed' },
+      },
+    });
+
+    expect(sessionState.status).toBe('completed');
+    expect(close).toHaveBeenCalledOnce();
+    expect(
+      visibleTimelineItemsForRender(sessionState)[0].outputs[0].content,
+    ).toBe('Final answer');
+  });
+
+  it('applies SSE events only after their Run sequence becomes contiguous', () => {
+    let onEvent;
+    const harness = makeStreamHarness({
+      chatState,
+      displayedAgentId: DISPLAYED_AGENT_ID,
+      displayedSessionId: DISPLAYED_SESSION_ID,
+      subscribeRunEvents: vi.fn((_url, handlers) => {
+        onEvent = handlers.onEvent;
+        return { close: vi.fn() };
+      }),
+    });
+    harness.stream.applyConnectionSnapshot({
+      type: 'connection_ready',
+      active_runs: [
+        {
+          run_id: 'run-out-of-order',
+          agent_id: DISPLAYED_AGENT_ID,
+          session_id: DISPLAYED_SESSION_ID,
+          status: 'running',
+          sse_url: '/api/runs/run-out-of-order/events',
+        },
+      ],
+    });
+    const sessionState = ensureSessionState(
+      chatState,
+      DISPLAYED_AGENT_ID,
+      DISPLAYED_SESSION_ID,
+    );
+
+    onEvent({
+      data: {
+        type: 'run_started',
+        run_id: 'run-out-of-order',
+        sequence: 1,
+        payload: { status: 'running' },
+      },
+    });
+    onEvent({
+      data: {
+        type: 'run_completed',
+        run_id: 'run-out-of-order',
+        sequence: 4,
+        payload: { status: 'completed' },
+      },
+    });
+    onEvent({
+      data: {
+        type: 'assistant_output',
+        run_id: 'run-out-of-order',
+        sequence: 3,
+        payload: { message: { role: 'assistant', content: 'Ordered final' } },
+      },
+    });
+
+    expect(sessionState.status).toBe(CHAT_STATUS_RUNNING);
+    expect(sessionState.runEvents.map((event) => event.sequence)).toEqual([1]);
+
+    onEvent({
+      data: {
+        type: 'reasoning',
+        run_id: 'run-out-of-order',
+        sequence: 2,
+        payload: { reasoning: 'Missing event arrived.' },
+      },
+    });
+
+    expect(sessionState.runEvents.map((event) => event.sequence)).toEqual([
+      1, 2, 3, 4,
+    ]);
+    expect(sessionState.status).toBe('completed');
+    expect(
+      visibleTimelineItemsForRender(sessionState)[0].outputs.at(-1).content,
+    ).toBe('Ordered final');
+  });
 });
 
 describe('createChatRunStream().mergeRunResponse()', () => {
