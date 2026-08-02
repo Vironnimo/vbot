@@ -182,6 +182,9 @@ class ToolContext:
     skill_activation_hook: ToolSkillActivationHook | None = None
     result_persisted_hook: ToolResultPersistedHook | None = None
     allowed_skills: Sequence[str] | None = None
+    # Environment credentials made available by Skills active in this Session.
+    # Bash combines these transient grants with the Agent's permanent Tool settings.
+    skill_env_keys: Sequence[str] = field(default_factory=tuple)
     tool_settings: Mapping[str, Any] | None = None
     # Grants for Session-scoped tools whose authority is derived while building
     # the Session request state. Chat grants ``skill_list`` with the stable
@@ -310,6 +313,7 @@ class ToolExecutionConfig:
     skill_activation_hook: ToolSkillActivationHook | None = None
     tool_call_result_persisted_registrar: ToolCallResultPersistedRegistrar | None = None
     allowed_skills: Sequence[str] | None = None
+    skill_env_keys: Sequence[str] = field(default_factory=tuple)
     tool_settings: Mapping[str, Any] | None = None
     session_tool_grants: Sequence[str] = field(default_factory=tuple)
     nesting_depth: int = 0
@@ -1026,6 +1030,7 @@ class ToolExecutor:
                 skill_activation_hook=config.skill_activation_hook,
                 result_persisted_hook=result_persisted_hook,
                 allowed_skills=config.allowed_skills,
+                skill_env_keys=config.skill_env_keys,
                 tool_settings=config.tool_settings,
                 session_tool_grants=config.session_tool_grants,
                 nesting_depth=config.nesting_depth,

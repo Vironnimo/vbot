@@ -8,11 +8,13 @@ import os
 import signal
 import subprocess
 import sys
+from collections.abc import Callable, Sequence
 from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
 from core.tools.arguments import optional_number, optional_string
+from core.tools.availability import bash_allowed_env_keys, normalize_env_keys
 from core.tools.process_manager import (
     ProcessManager,
     ProcessSession,
@@ -23,6 +25,7 @@ from core.tools.tools import (
     JsonObject,
     ToolContext,
     ToolDisplay,
+    ToolPromptBlockRegistry,
     ToolRegistry,
     tool_failure,
     tool_success,
@@ -30,6 +33,7 @@ from core.tools.tools import (
 from core.utils.logging import get_logger
 
 BASH_TOOL_NAME = "bash"
+CredentialResolver = Callable[[str], str]
 
 # Model-facing output cap. The complete output always lands in the process log
 # file, so the result only ever carries the newest slice; anything bigger is a
@@ -106,6 +110,19 @@ _BASH_TIMEOUT_PARAMETER: JsonObject = {
         "not extend yield_after."
     ),
 }
+_BASH_ENV_KEYS_PARAMETER: JsonObject = {
+    "type": "array",
+    "items": {
+        "type": "string",
+        "pattern": r"^[A-Za-z_][A-Za-z0-9_]*$",
+    },
+    "uniqueItems": True,
+    "description": (
+        "Environment credential names to inject into this process. Every name must be "
+        "granted by the Agent configuration or an active Skill; values are resolved by vBot "
+        "and must never be included in the command."
+    ),
+}
 
 
 def _bash_tool_parameters(*, subagent: bool) -> JsonObject:
@@ -145,6 +162,7 @@ def _bash_tool_parameters(*, subagent: bool) -> JsonObject:
                 "default": yield_after_default,
             },
             "timeout": _BASH_TIMEOUT_PARAMETER,
+            "env_keys": _BASH_ENV_KEYS_PARAMETER,
         },
         "required": ["mode", "command"],
     }
@@ -242,6 +260,7 @@ async def bash_handler(
     arguments: JsonObject,
     process_manager: ProcessManager,
     trigger_service: Any | None = None,
+    credential_resolver: CredentialResolver | None = None,
 ) -> JsonObject:
     """Run a shell command and return a stable tool result envelope."""
     parsed = _parse_arguments(arguments)
@@ -259,7 +278,21 @@ async def bash_handler(
 
     command = parsed["command"]
     workdir = _resolve_workdir(context, parsed.get("workdir"))
+    requested_env_keys = parsed["env_keys"]
+    allowed_env_keys = set(bash_allowed_env_keys(context.tool_settings)) | set(
+        context.skill_env_keys
+    )
+    unauthorized_env_keys = [key for key in requested_env_keys if key not in allowed_env_keys]
+    if unauthorized_env_keys:
+        names = ", ".join(unauthorized_env_keys)
+        return tool_failure(
+            "invalid_arguments",
+            f"env_keys contains key(s) not granted to this Agent: {names}",
+        )
     env = await _get_shell_env()
+    resolve_credential = credential_resolver or (lambda key: os.environ.get(key, ""))
+    for key in requested_env_keys:
+        env[key] = resolve_credential(key)
     argv = _shell_argv(command)
 
     try:
@@ -358,6 +391,9 @@ def register_bash_tool(
     registry: ToolRegistry,
     process_manager: ProcessManager,
     trigger_service: Any | None = None,
+    *,
+    credential_resolver: CredentialResolver | None = None,
+    prompt_blocks: ToolPromptBlockRegistry | None = None,
 ) -> None:
     """Register the bash tool with a vBot tool registry."""
 
@@ -367,6 +403,7 @@ def register_bash_tool(
             arguments,
             process_manager,
             trigger_service=trigger_service,
+            credential_resolver=credential_resolver,
         )
 
     registry.register(
@@ -378,6 +415,39 @@ def register_bash_tool(
         result_schema={"type": "object", "required": ["status"]},
         display=ToolDisplay(summary_fields=("command",)),
     )
+    if prompt_blocks is not None:
+        prompt_blocks.register(
+            BASH_TOOL_NAME,
+            render=_render_bash_env_prompt_block,
+        )
+
+
+def format_bash_env_usage(env_keys: Sequence[str], *, intro: str) -> str:
+    """Render the shared model-facing contract for granted Bash credentials."""
+    keys = list(dict.fromkeys(env_keys))
+    if not keys:
+        return ""
+    key_lines = "\n".join(f"- `{key}`" for key in keys)
+    return (
+        f"{intro}\n\n"
+        f"Available environment keys:\n{key_lines}\n\n"
+        "To use one, include its exact name in the `env_keys` array of every `bash` call "
+        "that needs it. vBot resolves the value server-side and injects it only into that "
+        "process environment; put the name, never the credential value, in the Tool call. "
+        "Refer to the variable with the current host shell's environment syntax and do not "
+        "print or otherwise expose its value."
+    )
+
+
+def _render_bash_env_prompt_block(context: Any) -> str:
+    env_keys = bash_allowed_env_keys(getattr(context.agent, "tools", None))
+    if not env_keys:
+        return ""
+    guidance = format_bash_env_usage(
+        env_keys,
+        intro="This Agent has permanent permission to use these credentials in Bash calls.",
+    )
+    return f"## Bash Environment Access\n\n{guidance}"
 
 
 def _log_background_task_result(task: asyncio.Task[Any], message: str) -> None:
@@ -562,6 +632,7 @@ def _parse_arguments(arguments: JsonObject) -> JsonObject | str:
         "workdir",
         "yield_after",
         "timeout",
+        "env_keys",
     }
     if unknown_arguments:
         names = ", ".join(sorted(unknown_arguments))
@@ -591,6 +662,10 @@ def _parse_arguments(arguments: JsonObject) -> JsonObject | str:
             minimum=0,
             minimum_exclusive=True,
         )
+        env_keys = normalize_env_keys(
+            arguments.get("env_keys", []),
+            field_name="env_keys",
+        )
     except ValueError as error:
         return str(error)
 
@@ -600,6 +675,7 @@ def _parse_arguments(arguments: JsonObject) -> JsonObject | str:
         "workdir": workdir,
         "yield_after": yield_after,
         "timeout": timeout,
+        "env_keys": env_keys,
     }
 
 
@@ -994,6 +1070,7 @@ __all__ = [
     "BASH_TOOL_PARAMETERS",
     "FAILURE_OUTPUT_TAIL_CHARS",
     "bash_handler",
+    "format_bash_env_usage",
     "project_bash_tool_definitions",
     "register_bash_tool",
 ]

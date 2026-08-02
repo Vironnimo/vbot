@@ -5,6 +5,7 @@ from __future__ import annotations
 from core.tools.availability import (
     PROJECT_TOOL_NAME,
     apply_agent_target_tool_visibility,
+    bash_allowed_env_keys,
     effective_agent_allowed_tools,
     expand_companion_tools,
     subagent_allowed_agents,
@@ -113,6 +114,16 @@ def test_empty_additional_targets_do_not_remove_subagent_tools_from_dispatch() -
 
 def test_missing_subagent_tool_settings_defaults_to_wildcard() -> None:
     assert subagent_allowed_agents({}) == ["*"]
+
+
+def test_bash_env_settings_return_ordered_unique_grants() -> None:
+    assert bash_allowed_env_keys(
+        {"bash": {"allowed_env": ["OPENAI_API_KEY", "OPENAI_API_KEY", "HA_TOKEN"]}}
+    ) == ["OPENAI_API_KEY", "HA_TOKEN"]
+
+
+def test_invalid_bash_env_settings_fail_closed() -> None:
+    assert bash_allowed_env_keys({"bash": {"allowed_env": ["bad-key"]}}) == []
 
 
 def test_project_tool_is_available_only_with_identity_workspace() -> None:

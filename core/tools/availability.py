@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping, Sequence
 from copy import deepcopy
 from typing import Any
@@ -9,6 +10,8 @@ from typing import Any
 from core.memory import MEMORY_PROMPT_MODE_OFF, MemoryPromptMode
 
 MEMORY_TOOL_NAME = "memory"
+BASH_TOOL_SETTINGS_KEY = "bash"
+BASH_ALLOWED_ENV_KEY = "allowed_env"
 SKILL_MANAGE_TOOL_NAME = "skill_manage"
 PROJECT_TOOL_NAME = "project"
 SESSION_SEARCH_TOOL_NAME = "session_search"
@@ -17,6 +20,7 @@ SUBAGENT_TOOL_NAMES: frozenset[str] = frozenset({"subagent"})
 SUBAGENT_TOOL_SETTINGS_KEY = "subagent"
 SUBAGENT_ALLOWED_AGENTS_KEY = "allowed_agents"
 DEFAULT_SUBAGENT_ALLOWED_AGENTS: tuple[str, ...] = ("*",)
+ENV_KEY_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 # Tools usable only by an identity agent (one with a Workspace). ``project`` loads
 # context for work outside that Workspace, while ``skill_manage`` writes to the agent's
@@ -153,6 +157,36 @@ def agent_tool_settings(agent_tools: Any) -> dict[str, Any]:
     return deepcopy(dict(agent_tools))
 
 
+def normalize_env_keys(value: Any, *, field_name: str) -> list[str]:
+    """Validate and deduplicate one ordered environment-key list."""
+    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+        raise ValueError(f"{field_name} must be a list of environment key names")
+    invalid = [item for item in value if ENV_KEY_PATTERN.fullmatch(item) is None]
+    if invalid:
+        names = ", ".join(repr(item) for item in invalid)
+        raise ValueError(f"{field_name} has invalid environment key name(s): {names}")
+    return list(dict.fromkeys(value))
+
+
+def bash_allowed_env_keys(tool_settings: Mapping[str, Any] | None) -> list[str]:
+    """Return an Agent's validated permanent Bash environment grants."""
+    if not isinstance(tool_settings, Mapping):
+        return []
+    bash = tool_settings.get(BASH_TOOL_SETTINGS_KEY)
+    if not isinstance(bash, Mapping):
+        return []
+    allowed = bash.get(BASH_ALLOWED_ENV_KEY)
+    if allowed is None:
+        return []
+    try:
+        return normalize_env_keys(
+            allowed,
+            field_name=f"tools.{BASH_TOOL_SETTINGS_KEY}.{BASH_ALLOWED_ENV_KEY}",
+        )
+    except ValueError:
+        return []
+
+
 def subagent_allowed_agents(tool_settings: Mapping[str, Any] | None) -> list[str]:
     """Resolve the Sub-Agent target policy from its optional Tool settings block."""
     if not isinstance(tool_settings, Mapping):
@@ -175,6 +209,8 @@ def _without(tool_names: Sequence[str], excluded: set[str]) -> list[str]:
 
 
 __all__ = [
+    "BASH_ALLOWED_ENV_KEY",
+    "BASH_TOOL_SETTINGS_KEY",
     "IDENTITY_ONLY_TOOLS",
     "MEMORY_TOOL_NAME",
     "PROJECT_TOOL_NAME",
@@ -185,9 +221,11 @@ __all__ = [
     "SUBAGENT_TOOL_NAMES",
     "agent_tool_settings",
     "apply_agent_target_tool_visibility",
+    "bash_allowed_env_keys",
     "effective_agent_allowed_tools",
     "expand_companion_tools",
     "memory_tool_enabled",
+    "normalize_env_keys",
     "sanitize_configured_allowed_tools",
     "subagent_allowed_agents",
 ]

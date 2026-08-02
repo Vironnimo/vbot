@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from core.skills.requirements import environment_requirement_names
 from core.skills.skills import (
     SkillMetadata,
     SkillRegistry,
@@ -138,6 +139,7 @@ metadata:
 
             assert skill.metadata["vbot"]["requirements"]["all"]
             assert not skill.requirements.empty
+            assert environment_requirement_names(skill.requirements) == ("C_COMPILER",)
 
         def test_unavailable_when_required_env_missing(self, tmp_path: Path) -> None:
             skills_dir = tmp_path / "skills"
