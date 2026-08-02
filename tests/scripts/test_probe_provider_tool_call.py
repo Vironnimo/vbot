@@ -595,6 +595,41 @@ def test_bash_cases_use_production_profiles_and_exact_arguments() -> None:
         "mode": "auto",
         "command": "python -m pytest tests/core/tools/test_bash.py -q",
     }
+    assert PROBE._bash_scenario("top_foreground_env_one").expected_arguments == {
+        "mode": "foreground",
+        "command": "python -c \"import os; print(bool(os.environ['OPENAI_API_KEY']))\"",
+        "env_keys": ["OPENAI_API_KEY"],
+    }
+    assert PROBE._bash_scenario("top_foreground_env_many").expected_arguments == {
+        "mode": "foreground",
+        "command": 'python -c "import os; print(len(os.environ))"',
+        "env_keys": ["OPENAI_API_KEY", "OPENROUTER_API_KEY"],
+    }
+    top_contracts = PROBE._compile_probe_contracts(
+        top.tools,
+        require_closed_input=top.require_closed_input,
+    )
+    for env_keys, keyword in (
+        ([], "minItems"),
+        ([""], "minLength"),
+        (["OPENAI_API_KEY", "OPENAI_API_KEY"], "uniqueItems"),
+    ):
+        validation = PROBE._validation_measurements(
+            [
+                {
+                    "name": PROBE.BASH_TOOL_NAME,
+                    "arguments": {
+                        "mode": "foreground",
+                        "command": "python --version",
+                        "env_keys": env_keys,
+                    },
+                }
+            ],
+            top_contracts,
+        )
+        assert validation["schema_valid"] is False
+        assert validation["validation_path"].startswith("/env_keys")
+        assert validation["validation_keyword"] == keyword
     assert top.tools[0]["parameters"]["properties"]["yield_after"]["default"] == 30
     assert sub.tools[0]["parameters"]["properties"]["mode"]["enum"] == [
         "foreground",

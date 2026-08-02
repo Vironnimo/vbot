@@ -224,6 +224,8 @@ BASH_CASES = (
     "top_foreground",
     "top_foreground_workdir",
     "top_foreground_timeout",
+    "top_foreground_env_one",
+    "top_foreground_env_many",
     "top_foreground_all_multiline",
     "top_auto_default",
     "top_auto_zero",
@@ -1425,6 +1427,16 @@ def _bash_scenario(case_name: str) -> ProbeScenario:
             "mode": "foreground",
             "command": "python --version",
             "timeout": 120,
+        },
+        "top_foreground_env_one": {
+            "mode": "foreground",
+            "command": "python -c \"import os; print(bool(os.environ['OPENAI_API_KEY']))\"",
+            "env_keys": ["OPENAI_API_KEY"],
+        },
+        "top_foreground_env_many": {
+            "mode": "foreground",
+            "command": 'python -c "import os; print(len(os.environ))"',
+            "env_keys": ["OPENAI_API_KEY", "OPENROUTER_API_KEY"],
         },
         "top_foreground_all_multiline": {
             "mode": "foreground",
