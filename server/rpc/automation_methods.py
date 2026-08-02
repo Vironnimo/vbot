@@ -20,6 +20,7 @@ from server.rpc.validation import (
 JsonObject = dict[str, Any]
 CRON_SCHEDULE_TYPES = frozenset(("cron", "interval", "once"))
 CRON_JOB_STATUSES = frozenset(("active", "paused"))
+BOOTSTRAP_MODES = frozenset(("once", "always"))
 
 
 async def _cron_create(state: Any, params: JsonObject) -> JsonObject:
@@ -268,10 +269,146 @@ def _cron_job_response(cron_service: Any, job: Any) -> JsonObject:
     }
 
 
+async def _bootstrap_create(state: Any, params: JsonObject) -> JsonObject:
+    _reject_unsupported(
+        params,
+        {"agent_id", "name", "prompt", "mode", "session_id"},
+        "bootstrap.create",
+    )
+    agent_id, project_id = _required_agent_address(params, "agent_id")
+    name = _optional_string(params, "name")
+    prompt = _required_string(params, "prompt")
+    mode = _bootstrap_mode(params)
+    session_id = _optional_string(params, "session_id")
+    try:
+        async with _agent_reference_lock(state):
+            job = state.runtime.bootstrap_service.create_job(
+                agent_id=agent_id,
+                project_id=project_id,
+                name=name,
+                prompt=prompt,
+                mode=mode,
+                session_id=session_id,
+            )
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
+    return _bootstrap_job_response(job)
+
+
+def _bootstrap_list(state: Any, params: JsonObject) -> JsonObject:
+    if params:
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, "bootstrap.list does not accept params")
+    try:
+        jobs = state.runtime.bootstrap_service.list_jobs()
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
+    return {"jobs": [_bootstrap_job_response(job) for job in jobs]}
+
+
+async def _bootstrap_update(state: Any, params: JsonObject) -> JsonObject:
+    _reject_unsupported(
+        params,
+        {"id", "agent_id", "name", "prompt", "mode", "session_id"},
+        "bootstrap.update",
+    )
+    job_id = _required_string(params, "id")
+    updates: JsonObject = {}
+    if "agent_id" in params:
+        agent_id, project_id = _required_agent_address(params, "agent_id")
+        updates["agent_id"] = agent_id
+        updates["project_id"] = project_id
+    if "name" in params:
+        updates["name"] = _required_string(params, "name")
+    if "prompt" in params:
+        updates["prompt"] = _required_string(params, "prompt")
+    if "mode" in params:
+        updates["mode"] = _bootstrap_mode(params)
+    if "session_id" in params:
+        updates["session_id"] = _optional_string(params, "session_id")
+    try:
+        if "agent_id" in updates or "session_id" in updates:
+            async with _agent_reference_lock(state):
+                job = state.runtime.bootstrap_service.update_job(job_id, **updates)
+        else:
+            job = state.runtime.bootstrap_service.update_job(job_id, **updates)
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
+    return _bootstrap_job_response(job)
+
+
+def _bootstrap_delete(state: Any, params: JsonObject) -> JsonObject:
+    _reject_unsupported(params, {"id"}, "bootstrap.delete")
+    job_id = _required_string(params, "id")
+    try:
+        state.runtime.bootstrap_service.delete_job(job_id)
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
+    return {"ok": True, "id": job_id}
+
+
+def _bootstrap_enable(state: Any, params: JsonObject) -> JsonObject:
+    _reject_unsupported(params, {"id"}, "bootstrap.enable")
+    try:
+        return _bootstrap_job_response(
+            state.runtime.bootstrap_service.enable_job(_required_string(params, "id"))
+        )
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
+
+
+def _bootstrap_disable(state: Any, params: JsonObject) -> JsonObject:
+    _reject_unsupported(params, {"id"}, "bootstrap.disable")
+    try:
+        return _bootstrap_job_response(
+            state.runtime.bootstrap_service.disable_job(_required_string(params, "id"))
+        )
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
+
+
+def _bootstrap_mode(params: JsonObject) -> str:
+    mode = _required_string(params, "mode")
+    if mode not in BOOTSTRAP_MODES:
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST,
+            f"params.mode must be one of: {', '.join(sorted(BOOTSTRAP_MODES))}",
+        )
+    return mode
+
+
+def _bootstrap_job_response(job: Any) -> JsonObject:
+    return {
+        "id": job.id,
+        "agent_id": job.agent_id,
+        "project_id": job.project_id,
+        "target": format_agent_address(job.agent_id, job.project_id),
+        "name": job.name,
+        "prompt": job.prompt,
+        "mode": job.mode,
+        "session_id": job.session_id,
+        "status": job.status,
+        "created_at": job.created_at,
+        "armed_after_startup_id": job.armed_after_startup_id,
+        "last_started_startup_id": job.last_started_startup_id,
+        "last_started_at": job.last_started_at,
+        "last_completed_at": job.last_completed_at,
+        "last_run_id": job.last_run_id,
+        "last_session_id": job.last_session_id,
+        "last_outcome": job.last_outcome,
+        "last_error": job.last_error,
+    }
+
+
 def method_handlers() -> dict[str, RpcMethodHandler]:
     """Return automation RPC handlers."""
 
     return {
+        "bootstrap.create": _bootstrap_create,
+        "bootstrap.list": _bootstrap_list,
+        "bootstrap.update": _bootstrap_update,
+        "bootstrap.delete": _bootstrap_delete,
+        "bootstrap.enable": _bootstrap_enable,
+        "bootstrap.disable": _bootstrap_disable,
         "cron.create": _cron_create,
         "cron.list": _cron_list,
         "cron.update": _cron_update,

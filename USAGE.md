@@ -625,6 +625,24 @@ vbot cron delete JOB_ID
 
 Recurring expressions contain exactly five fields and have a minimum cadence of one minute. A job without `--session` receives a fresh Session for every fire. Invalid individual job records are skipped and preserved for repair; a malformed Cron store disables scheduling and blocks mutations rather than overwriting the source.
 
+## Bootstrap
+
+Bootstrap schedules an Agent Run after the server has fully reached its ready point. It is CLI-only and supports a one-shot next-startup check or one Run after every startup. Multiple jobs may run in the same startup; jobs targeting the same Session stay ordered while independent Sessions can run concurrently.
+
+```bash
+vbot bootstrap create assistant --name "Startup health" --prompt "Check server status and logs" --mode always
+vbot bootstrap create --current-session --name "Verify vBot update" --prompt "Check server status and the latest logs, then report whether the update succeeded. Do not repeat the update." --mode once
+vbot bootstrap list
+vbot bootstrap update JOB_ID --prompt "Check status, logs, and Provider health"
+vbot bootstrap disable JOB_ID
+vbot bootstrap enable JOB_ID
+vbot bootstrap delete JOB_ID
+```
+
+Creation requires `--mode once|always`. A job created, updated, or enabled is armed for a future startup and cannot fire immediately in the current process. `--current-session` is available only from Bash inside a vBot Run and uses that Run's exact Agent/Project/Session context; otherwise pass an Agent address and optional `--session` explicitly. A completed one-shot is immutable history. Failed one-shots may be rearmed with `enable`.
+
+Before `vbot update` when it will restart the server, create a one-shot Bootstrap with `--current-session`, verify it with `vbot bootstrap list`, and give it a prompt that runs `vbot server status`, `vbot log list`, and `vbot log read` on the latest log before reporting the result. `vbot update --no-restart` does not need a Bootstrap unless a later startup check is wanted.
+
 ## Extensions and Home Assistant
 
 Extensions are trusted Python code loaded into the Runtime process. They may register Tools, hooks, Recall backends, System Prompt blocks, settings fields, Channel interaction handlers, and Skills. Because they run with the same OS permissions as vBot, install only code you trust.
@@ -680,6 +698,7 @@ Installed commands use `vbot`. From a source checkout, `python cli/main.py` expo
 | Models | `model list`, `model refresh`, `task-model list`, `task-model targets`, `task-model options`, `task-model set`, `task-model clear` |
 | Extensions | `extensions list`, `extensions reload`, `extensions enable`, `extensions disable`, `extensions <name>`, `extensions <name> set` |
 | Cron | `cron list`, `cron create`, `cron update`, `cron delete`, `cron enable`, `cron disable` |
+| Bootstrap | `bootstrap list`, `bootstrap create`, `bootstrap update`, `bootstrap delete`, `bootstrap enable`, `bootstrap disable` |
 | Statistics | `statistics overview`, `statistics usage`, `statistics runs`, `statistics errors`, `statistics tools`, `statistics skills` |
 | Configuration | `config list`, `config describe`, `config effective`, `config raw`, `config get`, `config set`, `config unset`, `config patch`, `doctor settings`, `doctor config` |
 | Diagnostics | `log list`, `log read`, `debug status`, `debug traces`, `debug trace`, `debug clear`, `debug probe` |

@@ -28,6 +28,16 @@ Prints the absolute `vbot_root` of the running checkout/install and the resolved
 vbot update [--discard | --stash] [--no-restart] [--service-name <unit>]
 ```
 
+Before an update that will restart the server, create a one-shot Bootstrap in the current Session and verify that it was saved before starting the update:
+
+```bash
+vbot bootstrap create --current-session --name "Verify vBot update" --mode once --prompt "The vBot update that interrupted this Session should now be complete. Use the vbot CLI to run vbot server status, vbot log list, and vbot log read on the latest log. Verify startup and update health, investigate relevant errors if present, then report clearly whether the update succeeded and what needs user attention. Do not repeat the update."
+vbot bootstrap list
+vbot update
+```
+
+`--current-session` works only inside a vBot Run Bash command. It binds both the current Agent address and Session without guessing from an Agent's default Session. The created job is armed for the next startup and cannot fire in the current process. Use `vbot bootstrap list` to confirm its `mode=once`, `status=active`, and Session before running the update. If the user requested `--no-restart`, do not create this Bootstrap unless a later startup check is explicitly wanted.
+
 Updates the installation from the git checkout it was installed from, then restarts the server. Never touches the `~/.vbot` data directory.
 
 - The track is auto-detected: a branch checkout pulls and rebuilds the WebUI locally (needs Node); a release-tag checkout fetches the latest release with its prebuilt WebUI (no Node, re-downloaded only when the tag changed).
@@ -71,4 +81,4 @@ vbot doctor settings [--data-dir <path>]
 vbot doctor config [--data-dir <path>]
 ```
 
-Local validation with file/path diagnostics; no server needed. `settings` checks `settings.json` only; `config` checks the full user-editable JSON bundle (settings, agents, channels, cron jobs). Run `doctor config` after any manual JSON edit. Doctor takes only `--data-dir`, no `--host`/`--port`.
+Local validation with file/path diagnostics; no server needed. `settings` checks `settings.json` only; `config` checks the full user-editable JSON bundle (settings, agents, channels, cron jobs, Bootstrap jobs). Run `doctor config` after any manual JSON edit. Doctor takes only `--data-dir`, no `--host`/`--port`.

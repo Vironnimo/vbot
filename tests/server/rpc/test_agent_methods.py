@@ -509,6 +509,29 @@ async def test_delete_busy_session_is_rejected() -> None:
 
 
 @pytest.mark.asyncio
+async def test_delete_session_referenced_by_bootstrap_is_rejected() -> None:
+    state, _resolver, sessions = _make_state()
+    state.runtime.bootstrap_service = SimpleNamespace(
+        list_jobs=lambda: [
+            SimpleNamespace(
+                id="boot-1",
+                agent_id="builder",
+                project_id=None,
+                session_id="s1",
+                status="active",
+            )
+        ]
+    )
+
+    with pytest.raises(RpcError) as exc_info:
+        await _delete_session(state, {"agent_id": "builder", "session_id": "s1"})
+
+    assert exc_info.value.code == "session_busy"
+    assert "bootstrap:boot-1" in exc_info.value.message
+    assert sessions.archived == []
+
+
+@pytest.mark.asyncio
 async def test_delete_guard_rejects_run_while_archive_is_waiting() -> None:
     state, _resolver, sessions = _make_state()
     sessions.archive_started = asyncio.Event()

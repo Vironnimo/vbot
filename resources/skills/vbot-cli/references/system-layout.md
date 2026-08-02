@@ -50,6 +50,7 @@ Some directories are created only when their owning feature first writes data.
 | `prompts/` | Default-scope System Prompt layout and overrides | `vbot prompt ... --scope default` |
 | `channels/<channel-id>/` | Channel configuration plus Channel-owned routing/idempotency state | `vbot channel list/status/update`; credentials remain outside Channel JSON |
 | `cron/` | Cron jobs and scheduler-owned once-fire claims | `vbot cron list/create/update/delete` |
+| `bootstrap/` | Startup-triggered Agent Run jobs | `vbot bootstrap list/create/update/delete` |
 | `attachments/` | Durable uploaded/downloaded blobs with JSON sidecars | Resolve through Session/attachment behavior; do not infer content from filename extensions alone |
 | `speech/` and `images/` | Durable speech and generated-image artifacts with metadata sidecars | Use the task result and serving interfaces; these are not temporary files |
 | `models/` | Complete runtime Model DB published by Model refresh | `vbot model list/refresh`; do not hand-edit generated catalogs |

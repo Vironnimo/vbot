@@ -845,6 +845,10 @@ async def test_agent_rename_retargets_live_references_and_publishes_mapping(
         SimpleNamespace(id="history", agent_id="coder", project_id=None, status="completed"),
         SimpleNamespace(id="project", agent_id="coder", project_id="vbot", status="active"),
     ]
+    bootstrap_jobs = [
+        SimpleNamespace(id="boot-active", agent_id="coder", project_id=None, status="active"),
+        SimpleNamespace(id="boot-history", agent_id="coder", project_id=None, status="completed"),
+    ]
 
     def update_channel(channel_id: str, **fields: Any) -> None:
         channel = next(item for item in channels if item.id == channel_id)
@@ -855,6 +859,11 @@ async def test_agent_rename_retargets_live_references_and_publishes_mapping(
         job.agent_id = fields["agent_id"]
         return job
 
+    def update_bootstrap_job(job_id: str, **fields: Any) -> Any:
+        job = next(item for item in bootstrap_jobs if item.id == job_id)
+        job.agent_id = fields["agent_id"]
+        return job
+
     state.runtime.channel_service = SimpleNamespace(
         list_channels=lambda: channels,
         update_channel=update_channel,
@@ -862,6 +871,10 @@ async def test_agent_rename_retargets_live_references_and_publishes_mapping(
     state.runtime.cron_service = SimpleNamespace(
         list_jobs=lambda: jobs,
         update_job=update_job,
+    )
+    state.runtime.bootstrap_service = SimpleNamespace(
+        list_jobs=lambda: bootstrap_jobs,
+        update_job=update_bootstrap_job,
     )
 
     response = await dispatch_rpc(
@@ -876,6 +889,7 @@ async def test_agent_rename_retargets_live_references_and_publishes_mapping(
         "new_id": "researcher",
         "channels_updated": ["telegram"],
         "cron_jobs_updated": ["active"],
+        "bootstrap_jobs_updated": ["boot-active"],
         "agent_policies_updated": ["manager", "researcher"],
         "session_links_updated": 1,
     }
@@ -883,6 +897,8 @@ async def test_agent_rename_retargets_live_references_and_publishes_mapping(
     assert jobs[0].agent_id == "researcher"
     assert jobs[1].agent_id == "coder"
     assert jobs[2].agent_id == "coder"
+    assert bootstrap_jobs[0].agent_id == "researcher"
+    assert bootstrap_jobs[1].agent_id == "coder"
     assert state.runtime.agents.get("researcher").tools["subagent"]["allowed_agents"] == [
         "researcher",
         "coder@vbot",
@@ -1089,6 +1105,28 @@ async def test_agent_delete_rejects_agent_with_cron_reference(tmp_path: Path) ->
     assert response["error"]["code"] == "agent_in_use"
     assert "cron:job-coder" in response["error"]["message"]
     assert state.runtime.agents.get("coder").id == "coder"
+
+
+@pytest.mark.asyncio
+async def test_agent_delete_rejects_agent_with_bootstrap_reference(tmp_path: Path) -> None:
+    state = make_state(tmp_path, StubAdapter())
+    state.runtime.agents.create("writer", "Writer")
+    state.runtime.bootstrap_service = SimpleNamespace(
+        list_jobs=lambda: [
+            SimpleNamespace(
+                id="boot-coder",
+                agent_id="coder",
+                project_id=None,
+                status="active",
+            )
+        ]
+    )
+
+    response = await dispatch_rpc(state, {"method": "agent.delete", "params": {"id": "coder"}})
+
+    assert response["ok"] is False
+    assert response["error"]["code"] == "agent_in_use"
+    assert "bootstrap:boot-coder" in response["error"]["message"]
 
 
 @pytest.mark.asyncio

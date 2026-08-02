@@ -194,7 +194,7 @@ def validate_data_dir_config(data_dir: str | Path) -> tuple[JsonValidationReport
     # by its domain. Imports stay local so those domains may reuse Settings-owned
     # scalar/Policy rules without creating package initialization cycles.
     from core.agents import validate_agent_file, validate_agent_order_file
-    from core.automation import validate_cron_jobs_file
+    from core.automation import validate_bootstrap_jobs_file, validate_cron_jobs_file
     from core.channels import validate_channel_file
     from core.projects import validate_project_file
 
@@ -218,6 +218,9 @@ def validate_data_dir_config(data_dir: str | Path) -> tuple[JsonValidationReport
     cron_jobs_path = root / "cron" / "jobs.json"
     if cron_jobs_path.exists():
         reports.append(validate_cron_jobs_file(cron_jobs_path))
+    bootstrap_jobs_path = root / "bootstrap" / "jobs.json"
+    if bootstrap_jobs_path.exists():
+        reports.append(validate_bootstrap_jobs_file(bootstrap_jobs_path))
     return tuple(reports)
 
 

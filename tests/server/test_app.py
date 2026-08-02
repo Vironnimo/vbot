@@ -74,6 +74,30 @@ def test_create_app_wires_runtime_services_into_state(tmp_path: Path) -> None:
     assert runtime.logger is not None
 
 
+def test_bootstrap_rpc_persists_job_without_firing_in_current_process(tmp_path: Path) -> None:
+    runtime = Runtime(Config(data_dir=tmp_path / "data"))
+    app = create_app(runtime=runtime)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/rpc",
+            json={
+                "method": "bootstrap.create",
+                "params": {
+                    "agent_id": "main",
+                    "name": "Verify restart",
+                    "prompt": "Check status and logs",
+                    "mode": "once",
+                },
+            },
+        )
+        listed = client.post("/api/rpc", json={"method": "bootstrap.list", "params": {}}).json()
+
+        assert response.json()["ok"] is True
+        assert listed["result"]["jobs"][0]["status"] == "active"
+        assert listed["result"]["jobs"][0]["last_run_id"] is None
+
+
 def test_create_app_starts_when_a_once_fire_claim_is_invalid(tmp_path: Path) -> None:
     data_dir = tmp_path / "data"
     seed_cron = CronService(cast(Any, SimpleNamespace()), data_dir)
@@ -97,6 +121,21 @@ def test_create_app_starts_when_a_once_fire_claim_is_invalid(tmp_path: Path) -> 
     assert response.json() == {"status": "ok"}
 
 
+def test_create_app_starts_when_bootstrap_store_is_malformed(tmp_path: Path) -> None:
+    data_dir = tmp_path / "data"
+    jobs_path = data_dir / "bootstrap" / "jobs.json"
+    jobs_path.parent.mkdir(parents=True)
+    jobs_path.write_text("{", encoding="utf-8")
+    runtime = Runtime(Config(data_dir=data_dir))
+    app = create_app(runtime=runtime)
+
+    with TestClient(app) as client:
+        response = client.get("/health")
+        assert runtime.bootstrap_service.list_jobs() == []
+
+    assert response.status_code == 200
+
+
 def test_create_app_wires_runtime_owned_chat_runs_for_stub_runtime(tmp_path: Path) -> None:
     runtime = _StubServerRuntime(tmp_path)
     app = create_app(runtime=cast(Any, runtime))
@@ -106,6 +145,7 @@ def test_create_app_wires_runtime_owned_chat_runs_for_stub_runtime(tmp_path: Pat
         assert app.state.chat_loop is runtime.chat_loop
         assert app.state.streaming_chat_loop is runtime.streaming_chat_loop
         assert app.state.command_dispatcher is runtime.command_dispatcher
+        assert runtime.bootstrap_activated is True
 
 
 def test_create_app_uses_explicit_server_bind_state(tmp_path: Path) -> None:
@@ -740,12 +780,16 @@ class _StubServerRuntime:
         self.streaming_chat_loop = object()
         self.command_dispatcher = object()
         self.storage = type("Storage", (), {"data_dir": data_dir})()
+        self.bootstrap_activated = False
 
     def start(self) -> None:
         return None
 
     def stop(self) -> None:
         return None
+
+    def activate_bootstrap(self) -> None:
+        self.bootstrap_activated = True
 
 
 class _AsyncCloseRuntime(_StubServerRuntime):

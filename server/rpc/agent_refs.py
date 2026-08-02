@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from core.automation.bootstrap import TERMINAL_BOOTSTRAP_STATUSES
 from core.automation.cron import TERMINAL_CRON_JOB_STATUSES
 from core.utils.logging import get_logger
 
@@ -19,6 +20,7 @@ class AgentRenameCoordinationResult:
     session_ids: tuple[str, ...]
     channel_ids: tuple[str, ...]
     cron_job_ids: tuple[str, ...]
+    bootstrap_job_ids: tuple[str, ...]
     policy_agent_ids: tuple[str, ...]
     session_reference_count: int
 
@@ -63,6 +65,18 @@ def _agent_reference_ids(state: Any, agent_id: str) -> list[str]:
             )
         )
 
+    bootstrap_service = getattr(runtime, "bootstrap_service", None)
+    if bootstrap_service is not None:
+        references.extend(
+            f"bootstrap:{job.id}"
+            for job in bootstrap_service.list_jobs()
+            if (
+                job.agent_id == agent_id
+                and job.project_id is None
+                and getattr(job, "status", "active") not in TERMINAL_BOOTSTRAP_STATUSES
+            )
+        )
+
     return sorted(references)
 
 
@@ -89,6 +103,8 @@ def _rename_agent_and_retarget_references(
     session_updates: tuple[Any, ...] = ()
     updated_channel_ids: list[str] = []
     updated_cron_job_ids: list[str] = []
+    updated_bootstrap_job_ids: list[str] = []
+    prior_bootstrap_jobs: dict[str, Any] = {}
 
     channel_service = getattr(runtime, "channel_service", None)
     channels = (
@@ -110,6 +126,20 @@ def _rename_agent_and_retarget_references(
         if cron_service is not None
         else []
     )
+    bootstrap_service = getattr(runtime, "bootstrap_service", None)
+    bootstrap_jobs = (
+        [
+            job
+            for job in bootstrap_service.list_jobs()
+            if (
+                job.agent_id == agent_id
+                and job.project_id is None
+                and getattr(job, "status", "active") not in TERMINAL_BOOTSTRAP_STATUSES
+            )
+        ]
+        if bootstrap_service is not None
+        else []
+    )
 
     try:
         rename_result = runtime.agents.rename(agent_id, new_agent_id)
@@ -129,6 +159,11 @@ def _rename_agent_and_retarget_references(
             for job in cron_jobs:
                 cron_service.update_job(job.id, agent_id=new_agent_id)
                 updated_cron_job_ids.append(job.id)
+        if bootstrap_service is not None:
+            for job in bootstrap_jobs:
+                prior_bootstrap_jobs[job.id] = job
+                bootstrap_service.update_job(job.id, agent_id=new_agent_id)
+                updated_bootstrap_job_ids.append(job.id)
     except Exception:
         rollback_errors: list[Exception] = []
         if session_updates:
@@ -153,6 +188,22 @@ def _rename_agent_and_retarget_references(
                     job_id,
                     agent_id=agent_id,
                 )
+        if bootstrap_service is not None:
+            for job_id in reversed(updated_bootstrap_job_ids):
+                restore_job = getattr(bootstrap_service, "restore_job", None)
+                if callable(restore_job):
+                    _attempt_rollback(
+                        rollback_errors,
+                        restore_job,
+                        prior_bootstrap_jobs[job_id],
+                    )
+                else:
+                    _attempt_rollback(
+                        rollback_errors,
+                        bootstrap_service.update_job,
+                        job_id,
+                        agent_id=agent_id,
+                    )
         if channel_service is not None:
             for channel_id in reversed(updated_channel_ids):
                 _attempt_rollback(
@@ -175,6 +226,7 @@ def _rename_agent_and_retarget_references(
         session_ids=session_ids,
         channel_ids=tuple(updated_channel_ids),
         cron_job_ids=tuple(updated_cron_job_ids),
+        bootstrap_job_ids=tuple(updated_bootstrap_job_ids),
         policy_agent_ids=policy_result.agent_ids,
         session_reference_count=len(session_updates),
     )

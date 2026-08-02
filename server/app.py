@@ -141,6 +141,9 @@ def create_app(
             resolved_server_bind["listen_host"],
             resolved_server_bind["listen_port"],
         )
+        activate_bootstrap = getattr(app_runtime, "activate_bootstrap", None)
+        if callable(activate_bootstrap):
+            activate_bootstrap()
         try:
             yield
         finally:

@@ -187,6 +187,56 @@ async def test_granted_env_key_is_resolved_into_only_the_spawned_process(
 
 
 @pytest.mark.asyncio
+async def test_bash_injects_current_run_context(
+    manager: ProcessManager,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(bash_module, "_shell_argv", python_command)
+    context = make_context(tmp_path, project_id="vbot")
+
+    result = await bash_handler(
+        context,
+        {
+            "command": (
+                "import os; print(os.environ['VBOT_RUN_AGENT_ID']); "
+                "print(os.environ['VBOT_RUN_SESSION_ID']); "
+                "print(os.environ['VBOT_RUN_PROJECT_ID'])"
+            ),
+            "mode": "foreground",
+        },
+        manager,
+    )
+
+    assert result["data"]["output"].replace("\r\n", "\n") == "agent-a\nsession-a\nvbot\n"
+
+
+@pytest.mark.asyncio
+async def test_identity_bash_removes_host_project_context(
+    manager: ProcessManager,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        bash_module,
+        "_cached_shell_env",
+        {"PATH": "original-path", "VBOT_RUN_PROJECT_ID": "host-value"},
+    )
+    monkeypatch.setattr(bash_module, "_shell_argv", python_command)
+
+    result = await bash_handler(
+        make_context(tmp_path),
+        {
+            "command": "import os; print(os.environ.get('VBOT_RUN_PROJECT_ID', 'missing'))",
+            "mode": "foreground",
+        },
+        manager,
+    )
+
+    assert result["data"]["output"].strip() == "missing"
+
+
+@pytest.mark.asyncio
 async def test_ungranted_env_key_is_rejected_before_spawn(
     manager: ProcessManager,
     tmp_path: Path,

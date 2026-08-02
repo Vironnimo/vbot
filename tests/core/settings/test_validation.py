@@ -47,6 +47,18 @@ def test_validate_data_dir_config_delegates_agent_order_file(tmp_path: Path) -> 
     assert order_reports[0].diagnostics[0].path == "$.agent_ids[1]"
 
 
+def test_validate_data_dir_config_delegates_bootstrap_jobs(tmp_path: Path) -> None:
+    jobs_path = tmp_path / "bootstrap" / "jobs.json"
+    jobs_path.parent.mkdir(parents=True)
+    jobs_path.write_text('[{"mode": "sometimes"}]', encoding="utf-8")
+
+    reports = validate_data_dir_config(tmp_path)
+
+    bootstrap_reports = [report for report in reports if report.file_path == jobs_path]
+    assert len(bootstrap_reports) == 1
+    assert bootstrap_reports[0].ok is False
+
+
 def test_validate_custom_provider_accepts_secret_free_model_facts() -> None:
     diagnostics = validate_settings_data(
         {

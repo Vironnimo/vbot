@@ -423,6 +423,7 @@ class _RunRequest:
     tool_denial_resolver: Callable[[str], str | None] | None = None
     input_persisted_hook: Callable[[], None] | None = None
     agent_overrides: AgentRunOverrides | None = None
+    resume_process_restart: bool = False
 
 
 @dataclass(frozen=True)
@@ -806,6 +807,7 @@ class ChatLoop:
         input_persisted_hook: Callable[[], None] | None = None,
         run_kind: RunKind = RunKind.USER,
         contributes_to_agent_activity: bool = True,
+        resume_process_restart: bool = False,
     ) -> Run:
         """Start one chat run against an existing session for server-facing callers.
 
@@ -834,6 +836,7 @@ class ChatLoop:
             input_persisted_hook=input_persisted_hook,
             run_kind=run_kind,
             contributes_to_agent_activity=contributes_to_agent_activity,
+            resume_process_restart=resume_process_restart,
         )
 
     async def start_run_in_new_session(
@@ -851,6 +854,7 @@ class ChatLoop:
         input_persisted_hook: Callable[[], None] | None = None,
         run_kind: RunKind = RunKind.USER,
         contributes_to_agent_activity: bool = True,
+        resume_process_restart: bool = False,
     ) -> Run:
         """Validate a target, create its Session, and start one Run.
 
@@ -874,6 +878,7 @@ class ChatLoop:
             input_persisted_hook=input_persisted_hook,
             run_kind=run_kind,
             contributes_to_agent_activity=contributes_to_agent_activity,
+            resume_process_restart=resume_process_restart,
         )
 
     async def queue_run(
@@ -893,6 +898,7 @@ class ChatLoop:
         input_persisted_hook: Callable[[], None] | None = None,
         run_kind: RunKind = RunKind.USER,
         contributes_to_agent_activity: bool = True,
+        resume_process_restart: bool = False,
     ) -> QueuedRunItem:
         """Queue one chat run for a busy session or start it immediately when idle.
 
@@ -916,6 +922,7 @@ class ChatLoop:
             tool_restriction=(tuple(tool_restriction) if tool_restriction is not None else None),
             tool_denial_resolver=tool_denial_resolver,
             input_persisted_hook=input_persisted_hook,
+            resume_process_restart=resume_process_restart,
         )
         return await manager.enqueue(
             agent_id=agent_id,
@@ -1263,6 +1270,7 @@ class ChatLoop:
         input_persisted_hook: Callable[[], None] | None = None,
         run_kind: RunKind = RunKind.USER,
         contributes_to_agent_activity: bool = True,
+        resume_process_restart: bool = False,
     ) -> Run:
         agent = self._dependencies.agent_resolver.resolve_agent(project_id, agent_id)
         working_project_id = resolve_working_project_id(project_id, agent)
@@ -1281,6 +1289,7 @@ class ChatLoop:
             tool_restriction=(tuple(tool_restriction) if tool_restriction is not None else None),
             tool_denial_resolver=tool_denial_resolver,
             input_persisted_hook=input_persisted_hook,
+            resume_process_restart=resume_process_restart,
         )
         return await manager.start(
             agent_id=agent_id,
@@ -1312,19 +1321,23 @@ class ChatLoop:
         prior_continuation: ContinuationState | None = None
         continuation_reminder: str | None = None
         continuation_tracker: ContinuationTracker | None = None
-        if not request.internal:
-            prior_continuation = recover_continuation(session, active_run_id=run.id)
+        if not request.internal or request.resume_process_restart:
+            recovered = recover_continuation(session, active_run_id=run.id)
+            if request.internal and recovered is not None and recovered.cause != "process_restart":
+                recovered = None
+            prior_continuation = recovered
             if prior_continuation is not None and not prior_continuation.active:
                 continuation_reminder = render_continuation_reminder(
                     prior_continuation,
                     context_window=None,
                 )
-            continuation_tracker = ContinuationTracker(
-                session,
-                run_id=run.id,
-                request=_serialize_continuation_request(request.content),
-                prior_state=prior_continuation,
-            )
+            if not request.internal or prior_continuation is not None:
+                continuation_tracker = ContinuationTracker(
+                    session,
+                    run_id=run.id,
+                    request=_serialize_continuation_request(request.content),
+                    prior_state=prior_continuation,
+                )
         try:
             context = self._create_run_execution_context(
                 run,
