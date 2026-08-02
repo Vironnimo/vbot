@@ -302,6 +302,48 @@ async def test_chat_history_expands_limit_to_complete_oldest_run_segment(tmp_pat
 
 
 @pytest.mark.asyncio
+async def test_chat_history_keeps_the_active_tail_segment_together(tmp_path: Path) -> None:
+    state, chat_sessions = _history_state(tmp_path)
+    session = chat_sessions.create("parent", session_id="session-one")
+    timing = {
+        "started_at": "2026-07-24T10:00:00+00:00",
+        "completed_at": "2026-07-24T10:00:01+00:00",
+        "duration_ms": 1000,
+    }
+    messages = [
+        replace(ChatMessage.user("completed"), id="completed-user"),
+        replace(
+            ChatMessage.assistant(model="openai/gpt-5.2", content="done"),
+            id="completed-assistant",
+        ),
+        replace(
+            ChatMessage.run_summary(run_id="run-one", status="completed", timing=timing),
+            id="completed-summary",
+        ),
+        replace(ChatMessage.user("active"), id="active-user"),
+        replace(
+            ChatMessage.assistant(model="openai/gpt-5.2", content="partial"),
+            id="active-assistant",
+        ),
+    ]
+    for message in messages:
+        session.append(message)
+
+    response = await dispatch_rpc(
+        state,
+        {"method": "chat.history", "params": {"agent_id": "parent", "limit": 1}},
+    )
+
+    assert response["ok"] is True
+    result = response["result"]
+    assert [message["id"] for message in result["messages"]] == [
+        "active-user",
+        "active-assistant",
+    ]
+    assert result["has_more"] is True
+
+
+@pytest.mark.asyncio
 async def test_subagent_inspect_dispatches_exact_qualified_work_address() -> None:
     class InspectStub:
         def __init__(self) -> None:
