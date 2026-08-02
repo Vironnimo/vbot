@@ -8,6 +8,8 @@ Lives in the install tree at `resources/extensions/homeassistant/` (`extension.p
 
 The four tools are **always registered** regardless of configuration. A shared readiness predicate keeps them out of the prompt, the provider definitions, and every tool picker until `HASS_TOKEN` resolves to a non-empty string; the Extensions tab then shows the extension as loaded and `ready_state="waiting"` until it does.
 
+The bundled `home-assistant` Skill under `resources/skills/home-assistant/` is the separate deep-configuration surface. It requires the same `HASS_TOKEN`, which activation grants to Bash, and teaches the bundled WebSocket script for Lovelace dashboard export, validation, race-safe backup/apply, creation with rollback, and allowlisted read-only registry inspection. It assumes the Extension connection already exists and never teaches or mutates setup. Keep ordinary entity/state/service work in the four Extension Tools; do not widen the script to bypass their validation or blocked-domain policy.
+
 ## Interfaces
 
 Tool names: `ha_list_entities`, `ha_get_state`, `ha_list_services`, `ha_call_service`.
@@ -56,6 +58,7 @@ All four tools share `ready=lambda: bool(api.resolve_credential("HASS_TOKEN").st
 ## External Dependencies
 
 - Home Assistant REST API at `{url}/api/` via `httpx.AsyncClient` with `Authorization: Bearer {token}`.
+- Home Assistant WebSocket API at `/api/websocket` via the bundled Skill's `websockets` script. The script accepts only allowlisted raw reads; dashboard mutation goes through purpose-built commands with local validation, expected-content hashing, backup-before-save, and post-save verification.
 - Credential key `HASS_TOKEN` (Long-Lived Access Token). `HASS_URL` is **retired** — no env fallback of any kind (project rule: no legacy compatibility). Existing `HASS_TOKEN` `.env` entries keep working.
 - Timeout: 15s connect, 30s total. Retry: max 2 with exponential backoff + jitter via the shared policy in `core/utils/http_status.py` (`is_retryable_status`, idempotency-aware — `idempotent=method=="GET"`); a POST service call is not idempotent, so a 500 there is fatal. `_ha_request` takes the extension's logger (`api.logger`) as a parameter; it is the only helper that logs.
 
@@ -77,3 +80,4 @@ Retry signalling (inside `error`): an exhausted retryable status / transport err
 - The token is **never logged** (`_ha_request` logs status/detail, never the bearer value).
 - The handler guard (empty token → `home_assistant_error`) is defense in depth behind the dispatch-time readiness check; it fires without attempting any request.
 - Tests live at `tests/resources/extensions/test_homeassistant.py` (loaded through the real bundled root); `resources/` is not a mirrored quality-runner package, so a scoped gate run must name the test file explicitly.
+- Bundled Skill and script tests live at `tests/resources/skills/test_home_assistant_skill.py`; they verify the requirement metadata, WebSocket URL derivation, dashboard validation, dry-run behavior, race rejection, backup/verification, and create rollback without touching a live Home Assistant instance.
