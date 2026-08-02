@@ -19,11 +19,22 @@ import {
 
 describe('ChatTimeline', () => {
   let mountedComponent;
+  let resizeCallbacks;
 
   beforeEach(() => {
     document.body.innerHTML = '';
     init('en');
     mountedComponent = null;
+    resizeCallbacks = [];
+    globalThis.ResizeObserver = class {
+      constructor(callback) {
+        resizeCallbacks.push(callback);
+      }
+
+      observe() {}
+
+      disconnect() {}
+    };
   });
 
   afterEach(async () => {
@@ -33,8 +44,15 @@ describe('ChatTimeline', () => {
     }
 
     document.body.innerHTML = '';
+    delete globalThis.ResizeObserver;
     vi.useRealTimers();
   });
+
+  function notifyContentResize() {
+    for (const callback of resizeCallbacks) {
+      callback([]);
+    }
+  }
 
   it('restores the saved scroll position when returning to a previously viewed session', async () => {
     const { parentSession, childSession } = scrollMemorySessions();
@@ -180,6 +198,7 @@ describe('ChatTimeline', () => {
     // the stick-to-bottom behavior then follows new content again.
     container.dispatchEvent(new Event('wheel'));
     setScrollTop(1980);
+    container.dispatchEvent(new Event('scroll'));
     props.sessionState.messages = [
       ...props.sessionState.messages,
       {
@@ -190,6 +209,104 @@ describe('ChatTimeline', () => {
       },
     ];
     flushSync();
+    await waitForCondition(() => currentScrollTop() === 2000);
+  });
+
+  it('follows real content growth immediately while follow mode owns the viewport', async () => {
+    const { parentSession } = scrollMemorySessions();
+    mountedComponent = mount(ChatTimeline, {
+      target: document.body,
+      props: { sessionState: parentSession, agentName: 'Alpha' },
+    });
+    flushSync();
+
+    const container = document.querySelector('.messages');
+    const { currentScrollTop, setScrollHeight } = mockScrollGeometry(container);
+    await waitForCondition(() => currentScrollTop() === 2000);
+
+    setScrollHeight(2400);
+    notifyContentResize();
+
+    await waitForCondition(() => currentScrollTop() === 2400);
+  });
+
+  it('keeps a user-owned reading position stable while content grows', async () => {
+    const { parentSession } = scrollMemorySessions();
+    mountedComponent = mount(ChatTimeline, {
+      target: document.body,
+      props: { sessionState: parentSession, agentName: 'Alpha' },
+    });
+    flushSync();
+
+    const container = document.querySelector('.messages');
+    const { currentScrollTop, setScrollHeight, setScrollTop } =
+      mockScrollGeometry(container);
+    await waitForCondition(() => currentScrollTop() === 2000);
+
+    container.dispatchEvent(new Event('wheel'));
+    setScrollTop(600);
+    container.dispatchEvent(new Event('scroll'));
+    setScrollHeight(2400);
+    notifyContentResize();
+
+    await waitForCondition(() => currentScrollTop() === 600);
+  });
+
+  it('resumes following when the user returns to the bottom', async () => {
+    const { parentSession } = scrollMemorySessions();
+    mountedComponent = mount(ChatTimeline, {
+      target: document.body,
+      props: { sessionState: parentSession, agentName: 'Alpha' },
+    });
+    flushSync();
+
+    const container = document.querySelector('.messages');
+    const { currentScrollTop, setScrollHeight, setScrollTop } =
+      mockScrollGeometry(container);
+    await waitForCondition(() => currentScrollTop() === 2000);
+
+    container.dispatchEvent(new Event('wheel'));
+    setScrollTop(500);
+    container.dispatchEvent(new Event('scroll'));
+    container.dispatchEvent(new Event('wheel'));
+    setScrollTop(1980);
+    container.dispatchEvent(new Event('scroll'));
+    setScrollHeight(2300);
+    notifyContentResize();
+
+    await waitForCondition(() => currentScrollTop() === 2300);
+  });
+
+  it('ignores an older-history restore after switching sessions', async () => {
+    const { parentSession, childSession } = scrollMemorySessions();
+    let resolveOlder;
+    const olderLoaded = new Promise((resolve) => {
+      resolveOlder = resolve;
+    });
+    const props = reactiveProps({
+      sessionState: parentSession,
+      agentName: 'Alpha',
+      hasOlderHistory: true,
+      onLoadOlder: () => olderLoaded,
+    });
+    mountedComponent = mount(ChatTimeline, {
+      target: document.body,
+      props,
+    });
+    flushSync();
+
+    const container = document.querySelector('.messages');
+    const { currentScrollTop, setScrollTop } = mockScrollGeometry(container);
+    await waitForCondition(() => currentScrollTop() === 2000);
+
+    container.dispatchEvent(new Event('wheel'));
+    setScrollTop(0);
+    container.dispatchEvent(new Event('scroll'));
+    props.sessionState = childSession;
+    flushSync();
+    await waitForCondition(() => currentScrollTop() === 2000);
+
+    resolveOlder(true);
     await waitForCondition(() => currentScrollTop() === 2000);
   });
 });

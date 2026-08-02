@@ -1871,8 +1871,8 @@ textarea::placeholder {
 .messages {
   flex: 1;
   overflow-y: auto;
+  overflow-anchor: none;
   padding: 28px 0;
-  scroll-behavior: smooth;
 }
 
 .date-sep {

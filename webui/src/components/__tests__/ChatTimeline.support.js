@@ -47,9 +47,10 @@ export function scrollMemorySessions() {
 // 500px viewport and route scrollTo through the same writable scrollTop.
 export function mockScrollGeometry(container) {
   let scrollTop = 0;
+  let scrollHeight = 2000;
   Object.defineProperty(container, 'scrollHeight', {
     configurable: true,
-    get: () => 2000,
+    get: () => scrollHeight,
   });
   Object.defineProperty(container, 'offsetHeight', {
     configurable: true,
@@ -73,6 +74,9 @@ export function mockScrollGeometry(container) {
     setScrollTop: (value) => {
       scrollTop = value;
     },
+    setScrollHeight: (value) => {
+      scrollHeight = value;
+    },
     currentScrollTop: () => scrollTop,
   };
 }
@@ -85,6 +89,13 @@ export async function waitForCondition(check, attempts = 20) {
 
     if (check()) {
       return;
+    }
+    if (typeof requestAnimationFrame === 'function') {
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+      flushSync();
+      if (check()) {
+        return;
+      }
     }
   }
 
