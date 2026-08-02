@@ -613,7 +613,7 @@ describe('chat state helpers', () => {
     });
   });
 
-  it('resetStaleRun clears the live run state while preserving history and run events', () => {
+  it('resetStaleRun clears live Run replay after History settles the Session', () => {
     const sessionState = ensureSessionState(
       createChatState(),
       'alpha',
@@ -675,8 +675,6 @@ describe('chat state helpers', () => {
     expect(sessionState.runEvents).not.toHaveLength(0);
     expect(sessionState.messages).toEqual([]);
 
-    const runEventsBefore = sessionState.runEvents.slice();
-
     resetStaleRun(sessionState);
 
     // After reset: live run state is cleared
@@ -687,8 +685,9 @@ describe('chat state helpers', () => {
     expect(sessionState.streamingPhase).toBe(0);
     expect(sessionState.seenStreamingEventKeys).toEqual(new Set());
 
-    // History source (about to be reloaded) is preserved
-    expect(sessionState.runEvents).toEqual(runEventsBefore);
+    // Freshly loaded History is authoritative; no sparse replay may be
+    // appended behind it after the stale Run marker is removed.
+    expect(sessionState.runEvents).toEqual([]);
 
     // canCreateNewSession now allows a new session because no run is active
     expect(canCreateNewSession(sessionState)).toBe(true);
@@ -721,8 +720,6 @@ describe('chat state helpers', () => {
     });
 
     const messagesBefore = sessionState.messages;
-    const runEventsBefore = sessionState.runEvents.slice();
-
     resetStaleRun(sessionState);
 
     expect(sessionState.messages).toBe(messagesBefore);
@@ -730,7 +727,7 @@ describe('chat state helpers', () => {
       { id: 'user-one', role: 'user', content: 'Hi' },
       { id: 'assistant-one', role: 'assistant', content: 'Hello!' },
     ]);
-    expect(sessionState.runEvents).toEqual(runEventsBefore);
+    expect(sessionState.runEvents).toEqual([]);
     expect(sessionState.status).toBe(CHAT_STATUS_IDLE);
     expect(sessionState.currentRun).toBeNull();
   });

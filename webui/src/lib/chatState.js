@@ -1758,12 +1758,13 @@ function runContributesToAgentActivity(sessionState) {
   return sessionState?.currentRun?.contributesToAgentActivity !== false;
 }
 
-// Reset a session's live Run state when history has confirmed the Run is no
-// longer active (e.g. the terminal event was missed, the SSE stream gave up,
-// the bus buffer rolled, or the server restarted). Leaving `runEvents` and
-// `messages` untouched lets the freshly loaded history become the displayed
-// source: with `currentRun` null, `selectTrackedRunTimelineSource` falls back
-// to the persisted history and the session stops being treated as running.
+// Reset a session's live Run state when freshly loaded History has confirmed
+// the Run is no longer active (e.g. the terminal event was missed, the SSE
+// stream gave up, the bus buffer rolled, or the server restarted). History is
+// now the complete authoritative display source, so retained Run replay must
+// be discarded with the active marker. Otherwise sparse replay containing only
+// user_message_persisted events is appended behind History as duplicate User
+// messages and empty Assistant runs.
 export function resetStaleRun(sessionState) {
   if (!sessionState) {
     return sessionState;
@@ -1772,6 +1773,7 @@ export function resetStaleRun(sessionState) {
   sessionState.streamStatus = CHAT_STATUS_IDLE;
   sessionState.streamError = '';
   sessionState.currentRun = null;
+  sessionState.runEvents = [];
   sessionState.streamingRunEvents = [];
   sessionState.streamingPhase = 0;
   sessionState.seenStreamingEventKeys = new Set();

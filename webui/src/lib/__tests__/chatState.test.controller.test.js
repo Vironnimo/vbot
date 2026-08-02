@@ -1,10 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import {
+  appendRunEvent,
   createChatController,
   createChatState,
   ensureSessionState,
   startRun,
+  visibleTimelineItemsForRender,
 } from '../chatState.js';
 
 function setup({
@@ -240,6 +242,100 @@ describe('chat controller', () => {
     expect(runStream.closeSubscriptionFor).toHaveBeenCalledWith(
       sessionState.key,
     );
+  });
+
+  it('drops sparse live replay after history proves every Run is finished', async () => {
+    const durableMessages = [
+      {
+        id: 'compaction-one',
+        role: 'compaction_checkpoint',
+        content: 'Earlier context',
+      },
+      { id: 'user-one', role: 'user', content: 'First question' },
+      { id: 'assistant-one', role: 'assistant', content: 'First answer' },
+      {
+        id: 'summary-one',
+        role: 'run_summary',
+        run_id: 'run-one',
+        status: 'completed',
+      },
+      { id: 'user-two', role: 'user', content: 'Second question' },
+      { id: 'assistant-two', role: 'assistant', content: 'Second answer' },
+      {
+        id: 'summary-two',
+        role: 'run_summary',
+        run_id: 'run-two',
+        status: 'completed',
+      },
+      { id: 'user-three', role: 'user', content: 'Latest question' },
+      { id: 'assistant-three', role: 'assistant', content: 'Latest answer' },
+      {
+        id: 'summary-three',
+        role: 'run_summary',
+        run_id: 'run-stalled',
+        status: 'completed',
+      },
+    ];
+    const loadChatHistory = vi.fn().mockResolvedValue({
+      active_run: null,
+      has_more: false,
+      messages: durableMessages,
+    });
+    const { chatState, controller } = setup({
+      isDisplayedSession: () => true,
+      operationOverrides: { loadChatHistory },
+    });
+    const sessionState = ensureSessionState(chatState, 'alpha', 'session-one');
+
+    for (const [index, run] of [
+      ['run-one', durableMessages[1]],
+      ['run-two', durableMessages[4]],
+      ['run-stalled', durableMessages[7]],
+    ].entries()) {
+      appendRunEvent(sessionState, {
+        type: 'run_started',
+        run_id: run[0],
+        sequence: 1,
+        payload: { status: 'running' },
+      });
+      appendRunEvent(sessionState, {
+        type: 'user_message_persisted',
+        run_id: run[0],
+        sequence: 2,
+        payload: { message: run[1] },
+        timestamp: `2026-08-02T20:0${index}:00+00:00`,
+      });
+    }
+
+    expect(
+      await controller.reconcileRunSession(sessionState, 'run-stalled'),
+    ).toBe(true);
+
+    const timelineItems = visibleTimelineItemsForRender(sessionState);
+    const visibleUserTexts = timelineItems.flatMap((item) => {
+      if (item.type === 'message' && item.message?.role === 'user') {
+        return [item.message.content];
+      }
+      if (
+        item.type === 'event' &&
+        item.event?.type === 'user_message_persisted'
+      ) {
+        return [item.event.payload?.message?.content];
+      }
+      return [];
+    });
+
+    expect(visibleUserTexts).toEqual([
+      'First question',
+      'Second question',
+      'Latest question',
+    ]);
+    expect(
+      timelineItems.filter(
+        (item) => item.type === 'assistant_run' && item.source === 'live',
+      ),
+    ).toEqual([]);
+    expect(sessionState.runEvents).toEqual([]);
   });
 
   it('reattaches a Run that durable history still reports as active', async () => {
