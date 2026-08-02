@@ -1749,6 +1749,7 @@ class ChatLoop:
             )
             run_summary = ChatMessage.run_summary(
                 run_id=run.id,
+                work_id=run.work_id,
                 status=run_status,
                 timing=run_timing,
             )

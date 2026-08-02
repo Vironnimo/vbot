@@ -132,6 +132,7 @@ class QueuedRunItem:
     run_kind: RunKind = field(default=RunKind.USER, repr=False)
     contributes_to_agent_activity: bool = field(default=True, repr=False)
     working_project_id: str | None = field(default=None, repr=False)
+    work_id: str | None = field(default=None, repr=False)
     created_at: str = field(default_factory=lambda: datetime.now(UTC).isoformat())
     waiting_scope: str | None = field(default=None, repr=False)
 
@@ -202,6 +203,7 @@ class Run:
         working_project_id: str | None = None,
         run_kind: RunKind = RunKind.USER,
         contributes_to_agent_activity: bool = True,
+        work_id: str | None = None,
         event_retention_limit: int = DEFAULT_RUN_EVENT_RETENTION_LIMIT,
         subscriber_queue_limit: int = DEFAULT_RUN_SUBSCRIBER_QUEUE_LIMIT,
     ) -> None:
@@ -219,6 +221,10 @@ class Run:
         # Accessors may exclude system work from Agent/Session status while the
         # Run remains fully executable, observable, and persisted.
         self.contributes_to_agent_activity = contributes_to_agent_activity
+        # Stable public correlation for work whose durable result must remain
+        # addressable after the in-memory Run has been pruned. It is internal
+        # to Run orchestration and is persisted only on the terminal summary.
+        self.work_id = work_id
         self.status = RunStatus.RUNNING
         self.created_at = datetime.now(UTC).isoformat()
         self.updated_at = self.created_at
@@ -640,6 +646,7 @@ class ChatRunManager:
         working_project_id: str | None = None,
         run_kind: RunKind = RunKind.USER,
         contributes_to_agent_activity: bool = True,
+        work_id: str | None = None,
     ) -> Run:
         """Start one run if the session has no active run.
 
@@ -659,6 +666,7 @@ class ChatRunManager:
                 working_project_id=working_project_id,
                 run_kind=run_kind,
                 contributes_to_agent_activity=contributes_to_agent_activity,
+                work_id=work_id,
             )
 
     async def enqueue(
@@ -673,6 +681,7 @@ class ChatRunManager:
         working_project_id: str | None = None,
         run_kind: RunKind = RunKind.USER,
         contributes_to_agent_activity: bool = True,
+        work_id: str | None = None,
         waiting_work_admission: WaitingWorkAdmission | None = None,
     ) -> QueuedRunItem:
         """Start immediately when idle or append one item to the session queue."""
@@ -687,6 +696,7 @@ class ChatRunManager:
             run_kind=run_kind,
             contributes_to_agent_activity=contributes_to_agent_activity,
             working_project_id=working_project_id,
+            work_id=work_id,
         )
 
         def remove_abandoned_item(completed_future: asyncio.Future[Run]) -> None:
@@ -719,6 +729,7 @@ class ChatRunManager:
                     run_kind=item.run_kind,
                     queue_item_id=item.item_id,
                     contributes_to_agent_activity=item.contributes_to_agent_activity,
+                    work_id=item.work_id,
                 )
                 item.future.set_result(run)
                 return item
@@ -1067,6 +1078,7 @@ class ChatRunManager:
                     working_project_id=item.working_project_id,
                     run_kind=item.run_kind,
                     contributes_to_agent_activity=item.contributes_to_agent_activity,
+                    work_id=item.work_id,
                 )
                 item.future.set_result(run)
                 return
@@ -1082,6 +1094,7 @@ class ChatRunManager:
         working_project_id: str | None = None,
         run_kind: RunKind = RunKind.USER,
         contributes_to_agent_activity: bool = True,
+        work_id: str | None = None,
     ) -> Run:
         # The key is the single source of the run's identity: the project anchor,
         # agent, and session all come from it, so a drained queue item can never
@@ -1095,6 +1108,7 @@ class ChatRunManager:
             working_project_id=working_project_id,
             run_kind=run_kind,
             contributes_to_agent_activity=contributes_to_agent_activity,
+            work_id=work_id,
             event_retention_limit=self._run_event_retention_limit,
         )
         run._started_from_queue_item_id = queue_item_id  # noqa: SLF001 - run carries its own start origin.

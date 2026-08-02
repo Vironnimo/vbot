@@ -255,6 +255,97 @@ async def test_chat_history_limit_returns_newest_visible_messages(tmp_path: Path
 
 
 @pytest.mark.asyncio
+async def test_chat_history_expands_limit_to_complete_oldest_run_segment(tmp_path: Path) -> None:
+    state, chat_sessions = _history_state(tmp_path)
+    session = chat_sessions.create("parent", session_id="session-one")
+    timing = {
+        "started_at": "2026-07-24T10:00:00+00:00",
+        "completed_at": "2026-07-24T10:00:01+00:00",
+        "duration_ms": 1000,
+    }
+    messages = [
+        replace(ChatMessage.user("first"), id="first-user"),
+        replace(
+            ChatMessage.assistant(model="openai/gpt-5.2", content="first result"),
+            id="first-assistant",
+        ),
+        replace(
+            ChatMessage.run_summary(run_id="run-one", status="completed", timing=timing),
+            id="first-summary",
+        ),
+        replace(ChatMessage.user("second"), id="second-user"),
+        replace(
+            ChatMessage.assistant(model="openai/gpt-5.2", content="second result"),
+            id="second-assistant",
+        ),
+        replace(
+            ChatMessage.run_summary(run_id="run-two", status="completed", timing=timing),
+            id="second-summary",
+        ),
+    ]
+    for message in messages:
+        session.append(message)
+
+    response = await dispatch_rpc(
+        state,
+        {"method": "chat.history", "params": {"agent_id": "parent", "limit": 2}},
+    )
+
+    assert response["ok"] is True
+    result = response["result"]
+    assert [message["id"] for message in result["messages"]] == [
+        "second-user",
+        "second-assistant",
+        "second-summary",
+    ]
+    assert result["has_more"] is True
+
+
+@pytest.mark.asyncio
+async def test_subagent_inspect_dispatches_exact_qualified_work_address() -> None:
+    class InspectStub:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, str, str, str | None]] = []
+
+        def inspect(
+            self,
+            agent_id: str,
+            session_id: str,
+            work_id: str,
+            *,
+            project_id: str | None = None,
+        ) -> dict[str, Any]:
+            self.calls.append((agent_id, session_id, work_id, project_id))
+            return {
+                "id": work_id,
+                "agent_id": agent_id,
+                "session_id": session_id,
+                "run_id": "child-run",
+                "status": "completed",
+                "result": "done",
+            }
+
+    subagents = InspectStub()
+    state = SimpleNamespace(runtime=SimpleNamespace(subagents=subagents))
+
+    response = await dispatch_rpc(
+        state,
+        {
+            "method": "subagent.inspect",
+            "params": {
+                "id": "sub-work-one",
+                "agent_id": "worker@project-one",
+                "session_id": "child-session",
+            },
+        },
+    )
+
+    assert response["ok"] is True
+    assert response["result"]["result"] == "done"
+    assert subagents.calls == [("worker", "child-session", "sub-work-one", "project-one")]
+
+
+@pytest.mark.asyncio
 async def test_chat_history_before_returns_older_visible_page(tmp_path: Path) -> None:
     state, chat_sessions = _history_state(tmp_path)
     session = chat_sessions.create("parent", session_id="session-one")

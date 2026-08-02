@@ -175,9 +175,11 @@ async def test_enqueue_when_session_is_busy_queues_and_drains_after_completion()
         executor=queued_execute,
         display_content="Queued next",
         project_id=None,
+        work_id="sub-work-one",
     )
 
     assert item.future.done() is False
+    assert item.work_id == "sub-work-one"
     assert [
         queued_item.item_id
         for queued_item in manager.list_queued("coder", "session-one", project_id=None)
@@ -189,6 +191,7 @@ async def test_enqueue_when_session_is_busy_queues_and_drains_after_completion()
     queued_run = await asyncio.wait_for(item.future, timeout=1)
 
     assert queued_run.status == RunStatus.RUNNING
+    assert queued_run.work_id == "sub-work-one"
     assert manager.list_queued("coder", "session-one", project_id=None) == []
 
     await queued_started.wait()

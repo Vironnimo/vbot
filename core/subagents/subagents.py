@@ -140,6 +140,173 @@ class SubAgentCoordinator:
             batch_tracker=self._batch_tracker,
         )
 
+    def inspect(
+        self,
+        agent_id: str,
+        session_id: str,
+        work_id: str,
+        *,
+        project_id: str | None = None,
+    ) -> JsonObject | None:
+        """Return the exact UI projection for one durable Sub-Agent work id."""
+        return _inspect_subagent_work(
+            self._runtime,
+            agent_id,
+            session_id,
+            work_id,
+            project_id=project_id,
+        )
+
+
+def _inspect_subagent_work(
+    runtime: RuntimeServices,
+    agent_id: str,
+    session_id: str,
+    work_id: str,
+    *,
+    project_id: str | None = None,
+) -> JsonObject | None:
+    session = runtime.chat_sessions.get(agent_id, session_id, project_id)
+    active_run = runtime.chat_run_manager.active_run(
+        agent_id=agent_id,
+        session_id=session_id,
+        project_id=project_id,
+    )
+    if active_run is not None and active_run.work_id == work_id:
+        return _subagent_work_inspection(
+            work_id,
+            agent_id,
+            session_id,
+            project_id,
+            run_id=active_run.id,
+            status=active_run.status.value,
+            tool_name=_latest_tool_name_from_run(active_run),
+        )
+
+    queued_item = next(
+        (
+            item
+            for item in reversed(
+                runtime.chat_run_manager.list_queued(
+                    agent_id,
+                    session_id,
+                    project_id=project_id,
+                )
+            )
+            if item.work_id == work_id
+        ),
+        None,
+    )
+    if queued_item is not None:
+        return _subagent_work_inspection(
+            work_id,
+            agent_id,
+            session_id,
+            project_id,
+            run_id=None,
+            status=SUBAGENT_STATUS_QUEUED,
+        )
+
+    messages = session.load()
+    summary = next(
+        (
+            message
+            for message in reversed(messages)
+            if message.role == "run_summary" and message.work_id == work_id
+        ),
+        None,
+    )
+    if summary is None or summary.run_id is None or summary.status is None:
+        return None
+    terminal_result = _terminal_session_result(messages, summary.run_id)
+    if terminal_result is None:
+        return None
+    assistant, _ = terminal_result
+    inspection = _subagent_work_inspection(
+        work_id,
+        agent_id,
+        session_id,
+        project_id,
+        run_id=summary.run_id,
+        status=summary.status,
+        result=assistant.content if assistant is not None else None,
+        usage=assistant.usage if assistant is not None else None,
+        timing=summary.timing,
+        tool_name=_latest_tool_name_from_segment(messages, summary.run_id),
+    )
+    if assistant is not None:
+        _add_interruption_details(inspection, assistant)
+    return inspection
+
+
+def _subagent_work_inspection(
+    work_id: str,
+    agent_id: str,
+    session_id: str,
+    project_id: str | None,
+    *,
+    run_id: str | None,
+    status: str,
+    result: str | list[Any] | None = None,
+    usage: JsonObject | None = None,
+    timing: JsonObject | None = None,
+    tool_name: str | None = None,
+) -> JsonObject:
+    inspection: JsonObject = {
+        "id": work_id,
+        "agent_id": agent_id,
+        "session_id": session_id,
+        "run_id": run_id,
+        "status": status,
+        "result": result,
+        "usage": usage,
+        "timing": timing,
+        "tool_name": tool_name,
+    }
+    return _with_target_project(inspection, project_id)
+
+
+def _latest_tool_name_from_run(run: Run) -> str | None:
+    for event in reversed(run.events):
+        if event.type != "tool_call_started":
+            continue
+        tool_call = event.payload.get("tool_call")
+        if not isinstance(tool_call, dict):
+            continue
+        name = tool_call.get("name")
+        if isinstance(name, str) and name:
+            return name
+    return None
+
+
+def _latest_tool_name_from_segment(
+    messages: list[ChatMessage],
+    run_id: str,
+) -> str | None:
+    summary_index = next(
+        (
+            index
+            for index in range(len(messages) - 1, -1, -1)
+            if messages[index].role == "run_summary" and messages[index].run_id == run_id
+        ),
+        None,
+    )
+    if summary_index is None:
+        return None
+    segment_start = next(
+        (
+            index + 1
+            for index in range(summary_index - 1, -1, -1)
+            if messages[index].role == "run_summary"
+        ),
+        0,
+    )
+    for message in reversed(messages[segment_start:summary_index]):
+        for tool_call in reversed(message.tool_calls or []):
+            if tool_call.name:
+                return tool_call.name
+    return None
+
 
 async def _handle_subagent(
     context: ToolContext,
@@ -297,6 +464,7 @@ async def _handle_subagent(
                 content,
                 context,
                 run_overrides,
+                work_id,
             )
         except ActiveRunError:
             if session_id is None:
@@ -320,6 +488,7 @@ async def _handle_subagent(
                 project_id=target_project_id,
                 working_project_id=resolve_working_project_id(target_project_id, target_agent),
                 run_kind=RunKind.SUBAGENT,
+                work_id=work_id,
             )
             if activity is not None:
                 activity.mark_queued()
@@ -835,6 +1004,7 @@ async def _start_subagent_run(
     content: str,
     context: ToolContext,
     run_overrides: AgentRunOverrides | None,
+    work_id: str,
 ) -> Run:
     _, executor = _make_subagent_executor(
         runtime,
@@ -850,6 +1020,7 @@ async def _start_subagent_run(
         project_id=project_id,
         working_project_id=resolve_working_project_id(project_id, target_agent),
         run_kind=RunKind.SUBAGENT,
+        work_id=work_id,
     )
 
 
