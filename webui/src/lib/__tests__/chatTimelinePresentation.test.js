@@ -333,9 +333,15 @@ describe('chatTimelinePresentation', () => {
     });
   });
 
-  it('resolves the effective run id from the descriptor or the queue mapping', () => {
+  it('resolves the effective run id from the descriptor or controller mappings', () => {
     expect(subAgentEffectiveRunId(runningSubAgentTool())).toBe('run-child');
     expect(subAgentEffectiveRunId(queuedSubAgentTool())).toBe('');
+    expect(
+      subAgentEffectiveRunId(queuedSubAgentTool(), {
+        'workRun:sub_queued': 'run-from-inspection',
+        'queueRun:queue-item-1': 'run-from-queue',
+      }),
+    ).toBe('run-from-inspection');
     expect(
       subAgentEffectiveRunId(queuedSubAgentTool(), {
         'queueRun:queue-item-1': 'run-from-queue',

@@ -501,6 +501,64 @@ describe('createChatRunStream().applyConnectionSnapshot()', () => {
     ).toBe('Final answer');
   });
 
+  it('settles a non-displayed Run from its sparse stable WebSocket events', () => {
+    const harness = makeStreamHarness({
+      chatState,
+      displayedAgentId: DISPLAYED_AGENT_ID,
+      displayedSessionId: DISPLAYED_SESSION_ID,
+    });
+    const basePayload = {
+      run_id: 'child-run',
+      agent_id: 'worker',
+      session_id: 'child-session',
+      run_kind: 'subagent',
+    };
+
+    harness.stream.handleServerEvents({
+      type: 'run_started',
+      payload: {
+        ...basePayload,
+        run_event_type: 'run_started',
+        run_event_sequence: 1,
+        status: 'running',
+      },
+    });
+    harness.stream.handleServerEvents({
+      type: 'run_output',
+      payload: {
+        ...basePayload,
+        run_event_type: 'assistant_output',
+        run_event_sequence: 6,
+        output: {
+          message: { role: 'assistant', content: 'Child result' },
+        },
+      },
+    });
+    harness.stream.handleServerEvents({
+      type: 'run_completed',
+      payload: {
+        ...basePayload,
+        run_event_type: 'run_completed',
+        run_event_sequence: 8,
+        status: 'completed',
+      },
+    });
+
+    const childSession = ensureSessionState(
+      chatState,
+      'worker',
+      'child-session',
+    );
+    expect(childSession.status).toBe('completed');
+    expect(childSession.runEvents.map((event) => event.sequence)).toEqual([
+      1, 6, 8,
+    ]);
+    expect(harness.subAgentRunStatuses).toMatchObject({
+      'run:child-run': 'completed',
+      'session:worker::child-session': 'completed',
+    });
+  });
+
   it('applies SSE events only after their Run sequence becomes contiguous', () => {
     let onEvent;
     const harness = makeStreamHarness({

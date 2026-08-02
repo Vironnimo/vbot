@@ -221,7 +221,7 @@ export function createChatController({
   }
 
   function applySubAgentInspection(
-    { agentId, sessionId, runId = '', queueItemId = '' },
+    { agentId, sessionId, runId = '', queueItemId = '', workId = '' },
     inspection,
   ) {
     const status = normalizedSubAgentStatus(inspection?.status);
@@ -229,6 +229,9 @@ export function createChatController({
     const updates = {};
     if (inspectedRunId) {
       updates[`run:${inspectedRunId}`] = status;
+      if (workId) {
+        updates[`workRun:${workId}`] = inspectedRunId;
+      }
     }
     if (queueItemId) {
       updates[`queue:${queueItemId}`] = status;
@@ -409,7 +412,7 @@ export function createChatController({
         projectId,
       });
       const projection = applySubAgentInspection(
-        { agentId, sessionId, runId, queueItemId },
+        { agentId, sessionId, runId, queueItemId, workId },
         inspection,
       );
       if (

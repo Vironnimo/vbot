@@ -619,15 +619,20 @@ export function createChatRunStream({
       event.agent_id,
       event.session_id,
     );
+    const displayed = isDisplayedSession(event.agent_id, event.session_id);
     flushPendingRunEvents(sessionState.key);
-    // SSE and WebSocket both carry sequenced Run events. Feed either transport
-    // through the same contiguous reducer: the first copy fills a gap and the
-    // duplicate becomes a no-op. A mirrored terminal event can therefore never
-    // overtake missing output, while WebSocket output remains a useful backstop
-    // when an SSE replay is delayed or unavailable.
+    // A displayed Run has both its complete SSE stream and the stable events
+    // mirrored over WebSocket. Feed both transports through one contiguous
+    // reducer so a mirrored terminal event cannot overtake missing output.
+    // Non-displayed Runs intentionally have no SSE subscription, while their
+    // WebSocket feed omits high-volume deltas and therefore has sequence gaps;
+    // reduce those stable events directly in WebSocket order. Opening such a
+    // Session later reloads its durable History rather than relying on this
+    // transient projection.
     if (
       event.type !== 'run_started' &&
-      sessionState.currentRun?.runId === event.run_id
+      sessionState.currentRun?.runId === event.run_id &&
+      displayed
     ) {
       for (const appendedEvent of appendOrderedRunEvent(sessionState, event)) {
         handleAppendedRunEvent(sessionState, appendedEvent, {
@@ -638,10 +643,7 @@ export function createChatRunStream({
     }
     const appended = appendRunEvent(sessionState, event);
     handleAppendedRunEvent(sessionState, appended, { fromServerEvent: true });
-    if (
-      event.type === 'run_started' &&
-      isDisplayedSession(event.agent_id, event.session_id)
-    ) {
+    if (event.type === 'run_started' && displayed) {
       attachRunStream(
         sessionState,
         {

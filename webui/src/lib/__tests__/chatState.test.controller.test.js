@@ -587,7 +587,74 @@ describe('chat controller', () => {
     expect(chatState.subAgentStatuses).toMatchObject({
       'run:old-child-run': 'completed',
       'runDuration:old-child-run': 4200,
+      'workRun:sub-old-work': 'old-child-run',
     });
+  });
+
+  it('settles a live Subagent row after inspection discovers its child Run', async () => {
+    const inspectSubAgentWork = vi
+      .fn()
+      .mockResolvedValueOnce({
+        id: 'sub-live-work',
+        agent_id: 'worker',
+        session_id: 'child-session',
+        run_id: 'child-run',
+        status: 'running',
+        result: null,
+      })
+      .mockResolvedValueOnce({
+        id: 'sub-live-work',
+        agent_id: 'worker',
+        session_id: 'child-session',
+        run_id: 'child-run',
+        status: 'completed',
+        result: 'Live child result',
+      });
+    const { chatState, controller } = setup({
+      operationOverrides: { inspectSubAgentWork },
+    });
+    const tool = {
+      type: 'tool_call',
+      name: 'subagent',
+      status: 'success',
+      arguments: {
+        action: 'run',
+        agent_id: 'worker',
+        content: 'Run in the background',
+      },
+      result: {
+        ok: true,
+        data: {
+          id: 'sub-live-work',
+          agent_id: 'worker',
+          session_id: 'child-session',
+          status: 'running',
+          delivery: 'automatic',
+        },
+      },
+    };
+    const items = [{ type: 'assistant_run', items: [tool] }];
+
+    controller.reconcileSubAgentRows(items);
+    await vi.waitFor(() =>
+      expect(chatState.subAgentStatuses).toMatchObject({
+        'run:child-run': 'running',
+        'workRun:sub-live-work': 'child-run',
+      }),
+    );
+
+    controller.applySubAgentStatusUpdates({
+      'run:child-run': 'completed',
+    });
+    controller.reconcileSubAgentRows(items);
+
+    await vi.waitFor(() =>
+      expect(chatState.subAgentResults['work:sub-live-work']).toMatchObject({
+        loading: false,
+        result: 'Live child result',
+      }),
+    );
+    expect(inspectSubAgentWork).toHaveBeenCalledTimes(2);
   });
 
   it('cancels a consumed queued Subagent through exact work inspection', async () => {
