@@ -49,6 +49,8 @@
   const MIN_SUBMITTED_TURN_SPACER_HEIGHT = 360;
   const LOAD_OLDER_SCROLL_THRESHOLD = 48;
   const SESSION_SCROLL_POSITION_LIMIT = 100;
+  const FOLLOW_BOTTOM_THRESHOLD = 56;
+  const USER_SCROLL_INTENT_WINDOW_MS = 750;
 
   let timelineItems = $derived(visibleTimelineItemsForRender(sessionState));
   // Transient cards interleaved with the timeline: each renders after the
@@ -64,6 +66,7 @@
     new Set(timelineDateKeys.filter(Boolean)).size > 1,
   );
   let scrollContainer = $state();
+  let timelineContent = $state();
   let lightboxImage = $state(null);
   let reasoningDisclosureState = $state({});
   let pendingSubmittedTurnScrollKey = $state(0);
@@ -79,21 +82,14 @@
     hasSubmittedTurnUserItem(),
   );
   let sessionScrollKey = $derived(sessionState?.key ?? '');
-  // Per-session scroll memory: the scroll container survives session
-  // switches (sub-agent "View session", drawer picks, "Return to current
-  // session"), so each displayed session's position is saved on switch-away
-  // and restored on switch-back. Deliberately plain (non-reactive)
-  // bookkeeping: the map is read and written inside the scroll pre-effect,
-  // and a SvelteMap would register itself as a dependency of that effect.
   let renderedSessionScrollKey = null;
-  // While a mid-history restore is pinned, content turbulence after a session
-  // switch (history reload, late-rendering content, run events) re-asserts the
-  // restored position instead of letting stick-to-bottom steal it; only real
-  // user scroll input (wheel/touch/pointer/keys) or a new submitted turn
-  // releases the pin.
-  let pinnedRestoreTop = null;
+  let viewportGeneration = 0;
+  let pendingViewportSync = null;
+  let viewportSyncQueued = false;
+  let viewportSyncFrame = null;
+  let userScrollIntentUntil = 0;
   // eslint-disable-next-line svelte/prefer-svelte-reactivity
-  const sessionScrollPositions = new Map();
+  const sessionViewports = new Map();
 
   $effect(() => {
     if (
@@ -102,43 +98,29 @@
     ) {
       pendingSubmittedTurnScrollKey = submittedTurnScrollKey;
       pendingSubmittedTurnScrollRunId = submittedTurnScrollRunId;
-      pinnedRestoreTop = null;
+      setViewportMode(sessionScrollKey, 'follow');
       syncSubmittedTurnSpacerHeight();
     }
   });
 
-  // One pre-effect owns all scroll behaviors so they cannot fight: a
-  // session switch saves the outgoing session's position (in a pre-effect
-  // the DOM still shows the old session) and restores the incoming one's
-  // after render; while a mid-history restore is pinned, content changes
-  // re-assert it; otherwise content changes within the same session keep
-  // the stick-to-bottom behavior.
+  // Capture the outgoing DOM before Svelte replaces it, then let the single
+  // viewport coordinator restore the incoming Session after render. Ordinary
+  // content changes use the same coordinator; ResizeObserver below also feeds
+  // it for growth that is invisible to Svelte state (images, fonts, Markdown).
   $effect.pre(() => {
     timelineSignature;
     const key = sessionScrollKey;
     if (key !== renderedSessionScrollKey) {
-      saveSessionScrollPosition(renderedSessionScrollKey);
+      saveSessionViewport(renderedSessionScrollKey);
       renderedSessionScrollKey = key;
-      pinnedRestoreTop = null;
-      tick().then(() => restoreSessionScrollPosition(key));
+      viewportGeneration += 1;
+      beginViewportRestore(key);
+      const generation = viewportGeneration;
+      tick().then(() => queueViewportSync(key, generation));
       return;
     }
-    if (pinnedRestoreTop !== null) {
-      const top = pinnedRestoreTop;
-      tick().then(() => {
-        if (pinnedRestoreTop === top && key === renderedSessionScrollKey) {
-          scrollContainer?.scrollTo?.(0, top);
-        }
-      });
-      return;
-    }
-    const shouldAutoscroll =
-      !hasPendingSubmittedTurnScroll() && isNearBottom(scrollContainer);
-    if (shouldAutoscroll) {
-      tick().then(() => {
-        scrollContainer?.scrollTo?.(0, scrollContainer.scrollHeight);
-      });
-    }
+    const generation = viewportGeneration;
+    tick().then(() => queueViewportSync(key, generation));
   });
 
   $effect(() => {
@@ -180,42 +162,221 @@
     });
   });
 
-  // Delegated listener (not a markup handler) because Markdown images are
-  // rendered through {@html} and cannot carry their own Svelte click handler.
-  // The user-input listeners release a pinned restore position: only the
-  // user moving the view (not programmatic scrolls or browser re-clamps)
-  // hands scroll ownership back to the stick-to-bottom behavior.
+  // Delegated click handling is needed because Markdown images are rendered
+  // through {@html}. Input listeners mark the next scroll as user-owned;
+  // programmatic scroll events therefore cannot silently change follow mode.
   $effect(() => {
     const container = scrollContainer;
     if (!container) {
       return undefined;
     }
-    const releasePinnedRestore = () => {
-      pinnedRestoreTop = null;
+    const markUserScrollIntent = () => {
+      userScrollIntentUntil = Date.now() + USER_SCROLL_INTENT_WINDOW_MS;
     };
     container.addEventListener('click', handleTimelineClick);
-    container.addEventListener('wheel', releasePinnedRestore, {
+    container.addEventListener('wheel', markUserScrollIntent, {
       passive: true,
     });
-    container.addEventListener('touchstart', releasePinnedRestore, {
+    container.addEventListener('touchstart', markUserScrollIntent, {
       passive: true,
     });
-    container.addEventListener('pointerdown', releasePinnedRestore);
-    container.addEventListener('keydown', releasePinnedRestore);
+    container.addEventListener('pointerdown', markUserScrollIntent);
+    container.addEventListener('keydown', markUserScrollIntent);
     return () => {
       container.removeEventListener('click', handleTimelineClick);
-      container.removeEventListener('wheel', releasePinnedRestore);
-      container.removeEventListener('touchstart', releasePinnedRestore);
-      container.removeEventListener('pointerdown', releasePinnedRestore);
-      container.removeEventListener('keydown', releasePinnedRestore);
+      container.removeEventListener('wheel', markUserScrollIntent);
+      container.removeEventListener('touchstart', markUserScrollIntent);
+      container.removeEventListener('pointerdown', markUserScrollIntent);
+      container.removeEventListener('keydown', markUserScrollIntent);
+    };
+  });
+
+  $effect(() => {
+    const content = timelineContent;
+    if (!content) {
+      return undefined;
+    }
+    const key = sessionScrollKey;
+    const generation = viewportGeneration;
+    const observer =
+      typeof ResizeObserver === 'function'
+        ? new ResizeObserver(() => queueViewportSync(key, generation))
+        : null;
+    observer?.observe(content);
+    return () => observer?.disconnect();
+  });
+
+  $effect(() => {
+    return () => {
+      viewportGeneration += 1;
+      cancelQueuedViewportSync();
     };
   });
 
   function isNearBottom(container) {
     return (
       !container ||
-      container.offsetHeight + container.scrollTop > container.scrollHeight - 56
+      container.offsetHeight + container.scrollTop >
+        container.scrollHeight - FOLLOW_BOTTOM_THRESHOLD
     );
+  }
+
+  function createSessionViewport() {
+    return {
+      mode: 'follow',
+      restoreMode: 'follow',
+      anchorId: '',
+      anchorOffset: 0,
+      fallbackTop: 0,
+    };
+  }
+
+  function sessionViewport(key) {
+    if (!key) {
+      return createSessionViewport();
+    }
+    let viewport = sessionViewports.get(key);
+    if (!viewport) {
+      viewport = createSessionViewport();
+      sessionViewports.set(key, viewport);
+      trimSessionViewports();
+    }
+    return viewport;
+  }
+
+  function trimSessionViewports() {
+    while (sessionViewports.size > SESSION_SCROLL_POSITION_LIMIT) {
+      const oldestKey = sessionViewports.keys().next().value;
+      sessionViewports.delete(oldestKey);
+    }
+  }
+
+  function setViewportMode(key, mode) {
+    if (!key) {
+      return;
+    }
+    const viewport = sessionViewport(key);
+    viewport.mode = mode;
+    viewport.restoreMode = mode;
+    if (mode === 'follow') {
+      viewport.anchorId = '';
+    }
+  }
+
+  function beginViewportRestore(key) {
+    const viewport = sessionViewport(key);
+    viewport.restoreMode = viewport.mode === 'reading' ? 'reading' : 'follow';
+    viewport.mode = 'restoring';
+  }
+
+  function queueViewportSync(
+    key = sessionScrollKey,
+    generation = viewportGeneration,
+  ) {
+    pendingViewportSync = { key, generation };
+    if (viewportSyncQueued) {
+      return;
+    }
+    viewportSyncQueued = true;
+    if (typeof requestAnimationFrame === 'function') {
+      viewportSyncFrame = requestAnimationFrame(flushViewportSync);
+      return;
+    }
+    queueMicrotask(flushViewportSync);
+  }
+
+  function flushViewportSync() {
+    viewportSyncQueued = false;
+    viewportSyncFrame = null;
+    const pending = pendingViewportSync;
+    pendingViewportSync = null;
+    if (
+      !pending ||
+      pending.key !== renderedSessionScrollKey ||
+      pending.generation !== viewportGeneration ||
+      !scrollContainer ||
+      hasPendingSubmittedTurnScroll()
+    ) {
+      return;
+    }
+    applySessionViewport(pending.key);
+  }
+
+  function cancelQueuedViewportSync() {
+    if (
+      viewportSyncFrame !== null &&
+      typeof cancelAnimationFrame === 'function'
+    ) {
+      cancelAnimationFrame(viewportSyncFrame);
+    }
+    viewportSyncFrame = null;
+    viewportSyncQueued = false;
+    pendingViewportSync = null;
+  }
+
+  function applySessionViewport(key) {
+    const viewport = sessionViewport(key);
+    const mode =
+      viewport.mode === 'restoring' ? viewport.restoreMode : viewport.mode;
+    if (mode === 'follow') {
+      scrollContainer.scrollTop = scrollContainer.scrollHeight;
+    } else {
+      restoreViewportAnchor(viewport);
+    }
+    viewport.mode = mode;
+  }
+
+  function restoreViewportAnchor(viewport) {
+    const anchor = timelineItemElement(viewport.anchorId);
+    if (!anchor || !elementHasLayout(anchor)) {
+      scrollContainer.scrollTop = viewport.fallbackTop;
+      return;
+    }
+    const containerTop = scrollContainer.getBoundingClientRect().top;
+    const currentOffset = anchor.getBoundingClientRect().top - containerTop;
+    scrollContainer.scrollTop += currentOffset - viewport.anchorOffset;
+  }
+
+  function captureViewportAnchor(viewport) {
+    if (!scrollContainer) {
+      return;
+    }
+    viewport.fallbackTop = scrollContainer.scrollTop;
+    const containerTop = scrollContainer.getBoundingClientRect().top;
+    const anchor = timelineItemElements().find(
+      (element) =>
+        elementHasLayout(element) &&
+        element.getBoundingClientRect().bottom > containerTop,
+    );
+    if (!anchor) {
+      viewport.anchorId = '';
+      viewport.anchorOffset = 0;
+      return;
+    }
+    viewport.anchorId = anchor.dataset.timelineItemId ?? '';
+    viewport.anchorOffset = anchor.getBoundingClientRect().top - containerTop;
+  }
+
+  function timelineItemElements() {
+    return Array.from(
+      timelineContent?.querySelectorAll?.('[data-timeline-item-id]') ?? [],
+    );
+  }
+
+  function timelineItemElement(itemId) {
+    if (!itemId) {
+      return null;
+    }
+    return (
+      timelineItemElements().find(
+        (element) => element.dataset.timelineItemId === itemId,
+      ) ?? null
+    );
+  }
+
+  function elementHasLayout(element) {
+    const rect = element.getBoundingClientRect();
+    return rect.height > 0 || element.offsetHeight > 0;
   }
 
   function timelineItemSignature(item) {
@@ -297,38 +458,21 @@
     return pendingSubmittedTurnScrollKey > handledSubmittedTurnScrollKey;
   }
 
-  function saveSessionScrollPosition(key) {
+  function saveSessionViewport(key) {
     if (!key || !scrollContainer) {
       return;
     }
-    sessionScrollPositions.delete(key);
-    sessionScrollPositions.set(key, {
-      top: scrollContainer.scrollTop,
-      atBottom: isNearBottom(scrollContainer),
-    });
-    while (sessionScrollPositions.size > SESSION_SCROLL_POSITION_LIMIT) {
-      const oldestKey = sessionScrollPositions.keys().next().value;
-      sessionScrollPositions.delete(oldestKey);
+    const viewport = sessionViewport(key);
+    if (isNearBottom(scrollContainer)) {
+      setViewportMode(key, 'follow');
+    } else {
+      viewport.mode = 'reading';
+      viewport.restoreMode = 'reading';
+      captureViewportAnchor(viewport);
     }
-  }
-
-  function restoreSessionScrollPosition(key) {
-    if (key !== renderedSessionScrollKey) {
-      // A newer switch superseded this restore; its own restore handles it.
-      return;
-    }
-    if (!key || !scrollContainer || hasPendingSubmittedTurnScroll()) {
-      return;
-    }
-    const saved = sessionScrollPositions.get(key);
-    if (saved && !saved.atBottom) {
-      pinnedRestoreTop = saved.top;
-      scrollContainer.scrollTo?.(0, saved.top);
-      return;
-    }
-    // First view of this session, or the user left it at the bottom: start
-    // at the newest content (content may have grown while away).
-    scrollContainer.scrollTo?.(0, scrollContainer.scrollHeight);
+    sessionViewports.delete(key);
+    sessionViewports.set(key, viewport);
+    trimSessionViewports();
   }
 
   function scrollSubmittedTurnIntoView() {
@@ -362,13 +506,37 @@
     return userMessages[userMessages.length - 1] ?? null;
   }
 
-  async function handleMessagesScroll() {
+  function handleMessagesScroll() {
+    if (Date.now() <= userScrollIntentUntil) {
+      updateViewportFromUserScroll();
+    }
+    void loadOlderHistoryFromScroll();
+  }
+
+  function updateViewportFromUserScroll() {
+    const viewport = sessionViewport(sessionScrollKey);
+    if (isNearBottom(scrollContainer)) {
+      setViewportMode(sessionScrollKey, 'follow');
+      return;
+    }
+    viewport.mode = 'reading';
+    viewport.restoreMode = 'reading';
+    captureViewportAnchor(viewport);
+  }
+
+  async function loadOlderHistoryFromScroll() {
     if (!shouldLoadOlderHistory()) {
       return;
     }
 
+    const key = sessionScrollKey;
+    const generation = viewportGeneration;
+    const viewport = sessionViewport(key);
     const previousScrollHeight = scrollContainer.scrollHeight;
-    const previousScrollTop = scrollContainer.scrollTop;
+    viewport.mode = 'reading';
+    viewport.restoreMode = 'reading';
+    captureViewportAnchor(viewport);
+    viewport.mode = 'restoring';
     loadingOlderFromScroll = true;
     try {
       const loaded = await onLoadOlder?.();
@@ -376,9 +544,16 @@
         return;
       }
       await tick();
-      const scrollHeightDelta =
-        scrollContainer.scrollHeight - previousScrollHeight;
-      scrollContainer.scrollTop = previousScrollTop + scrollHeightDelta;
+      if (
+        key === renderedSessionScrollKey &&
+        generation === viewportGeneration
+      ) {
+        if (!viewport.anchorId) {
+          viewport.fallbackTop +=
+            scrollContainer.scrollHeight - previousScrollHeight;
+        }
+        applySessionViewport(key);
+      }
     } finally {
       loadingOlderFromScroll = false;
     }
@@ -460,7 +635,7 @@
   aria-live="polite"
   onscroll={handleMessagesScroll}
 >
-  <div class="messages__content">
+  <div class="messages__content" bind:this={timelineContent}>
     {#if timelineItems.length === 0 && transientCards.length === 0}
       {#if loadingHistory}
         <!-- While history is loading, a quiet placeholder — flashing the
@@ -491,36 +666,38 @@
         {@render transientCard(card)}
       {/each}
       {#each timelineItems as item, itemIndex (item.id)}
-        {#if shouldRenderTimelineDateSeparator(itemIndex)}
-          <div class="date-sep">
-            {formatDate(timestampForItem(item))}
-          </div>
-        {/if}
-        {#if item.type === 'assistant_run'}
-          <ChatAssistantRun
-            {item}
-            {agentName}
-            {subAgentStatuses}
-            {subAgentResults}
-            {isReasoningOpen}
-            onReasoningOpenChange={setReasoningOpen}
-            {onNavigateToSubAgent}
-            {onRequestSubAgentResult}
-            {onVerifySubAgentStatus}
-            {onCancelToolCall}
-            {onCancelSubAgent}
-          />
-        {:else}
-          <ChatTimelineEntry
-            {item}
-            {agentName}
-            {isReasoningOpen}
-            onReasoningOpenChange={setReasoningOpen}
-          />
-        {/if}
-        {#each transientCardGroups.byItemId.get(item.id) ?? [] as card (card.id)}
-          {@render transientCard(card)}
-        {/each}
+        <div class="timeline-item" data-timeline-item-id={item.id}>
+          {#if shouldRenderTimelineDateSeparator(itemIndex)}
+            <div class="date-sep">
+              {formatDate(timestampForItem(item))}
+            </div>
+          {/if}
+          {#if item.type === 'assistant_run'}
+            <ChatAssistantRun
+              {item}
+              {agentName}
+              {subAgentStatuses}
+              {subAgentResults}
+              {isReasoningOpen}
+              onReasoningOpenChange={setReasoningOpen}
+              {onNavigateToSubAgent}
+              {onRequestSubAgentResult}
+              {onVerifySubAgentStatus}
+              {onCancelToolCall}
+              {onCancelSubAgent}
+            />
+          {:else}
+            <ChatTimelineEntry
+              {item}
+              {agentName}
+              {isReasoningOpen}
+              onReasoningOpenChange={setReasoningOpen}
+            />
+          {/if}
+          {#each transientCardGroups.byItemId.get(item.id) ?? [] as card (card.id)}
+            {@render transientCard(card)}
+          {/each}
+        </div>
       {/each}
       {#each transientCardGroups.trailing as card (card.id)}
         {@render transientCard(card)}
