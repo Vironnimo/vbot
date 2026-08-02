@@ -530,4 +530,135 @@ describe('chat controller', () => {
     expect(other.actionError).toBe('');
     expect(chatState.actionError).toBe('');
   });
+
+  it('reconciles a persisted Subagent row through its exact durable work id', async () => {
+    const inspectSubAgentWork = vi.fn().mockResolvedValue({
+      id: 'sub-old-work',
+      agent_id: 'worker',
+      project_id: 'project-one',
+      session_id: 'reused-child',
+      run_id: 'old-child-run',
+      status: 'completed',
+      result: 'Exact older result',
+      timing: { duration_ms: 4200 },
+    });
+    const { chatState, controller } = setup({
+      operationOverrides: { inspectSubAgentWork },
+    });
+    const tool = {
+      type: 'tool_call',
+      name: 'subagent',
+      status: 'success',
+      arguments: {
+        action: 'run',
+        agent_id: 'worker',
+        content: 'Inspect the old state',
+        background: true,
+      },
+      result: {
+        ok: true,
+        data: {
+          id: 'sub-old-work',
+          agent_id: 'worker',
+          session_id: 'reused-child',
+          run_id: 'old-child-run',
+          status: 'running',
+          delivery: 'automatic',
+        },
+      },
+    };
+
+    controller.reconcileSubAgentRows(
+      [{ type: 'assistant_run', items: [tool] }],
+      { projectId: 'project-one' },
+    );
+    await vi.waitFor(() =>
+      expect(chatState.subAgentResults['work:sub-old-work']).toMatchObject({
+        loading: false,
+        result: 'Exact older result',
+      }),
+    );
+
+    expect(inspectSubAgentWork).toHaveBeenCalledWith({
+      id: 'sub-old-work',
+      agent_id: 'worker@project-one',
+      session_id: 'reused-child',
+    });
+    expect(chatState.subAgentStatuses).toMatchObject({
+      'run:old-child-run': 'completed',
+      'runDuration:old-child-run': 4200,
+    });
+  });
+
+  it('cancels a consumed queued Subagent through exact work inspection', async () => {
+    const removeFromQueue = vi.fn().mockRejectedValue(
+      Object.assign(new Error('already started'), {
+        code: 'queue_item_not_found',
+      }),
+    );
+    const inspectSubAgentWork = vi.fn().mockResolvedValue({
+      id: 'sub-queued-work',
+      agent_id: 'worker',
+      project_id: 'project-one',
+      session_id: 'child-session',
+      run_id: 'admitted-child-run',
+      status: 'running',
+      result: null,
+    });
+    const cancelRun = vi.fn().mockResolvedValue({ status: 'cancelled' });
+    const { chatState, controller } = setup({
+      operationOverrides: {
+        cancelRun,
+        inspectSubAgentWork,
+        removeFromQueue,
+      },
+    });
+    const sessionState = ensureSessionState(
+      chatState,
+      'parent',
+      'parent-session',
+    );
+    const tool = {
+      type: 'tool_call',
+      name: 'subagent',
+      status: 'success',
+      arguments: {
+        action: 'run',
+        agent_id: 'worker',
+        content: 'Queued work',
+      },
+      result: {
+        ok: true,
+        data: {
+          id: 'sub-queued-work',
+          agent_id: 'worker',
+          session_id: 'child-session',
+          queue_item_id: 'queue-item-one',
+          status: 'queued',
+        },
+      },
+    };
+
+    await expect(
+      controller.cancelSubAgent({
+        tool,
+        sessionState,
+        projectId: 'project-one',
+      }),
+    ).resolves.toBe(true);
+
+    expect(inspectSubAgentWork).toHaveBeenCalledWith({
+      id: 'sub-queued-work',
+      agent_id: 'worker@project-one',
+      session_id: 'child-session',
+    });
+    expect(cancelRun).toHaveBeenCalledWith('admitted-child-run', {
+      reason: 'user',
+    });
+    expect(chatState.subAgentStatuses).toMatchObject({
+      'run:admitted-child-run': 'cancelled',
+      'queue:queue-item-one': 'cancelled',
+      'queueRun:queue-item-one': 'admitted-child-run',
+    });
+  });
 });

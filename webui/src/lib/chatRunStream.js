@@ -207,7 +207,12 @@ export function createChatRunStream({
       delete orderedRunEventBuffers[sessionState.key];
       return null;
     }
-    const nextSequence = Math.max(1, Math.trunc(afterSequence) + 1);
+    const nextSequence =
+      Math.max(
+        0,
+        Math.trunc(afterSequence),
+        highestContiguousRunEventSequence(sessionState),
+      ) + 1;
     const existing = orderedRunEventBuffers[sessionState.key];
     if (existing?.runId === runId) {
       existing.nextSequence = Math.max(existing.nextSequence, nextSequence);
@@ -614,17 +619,21 @@ export function createChatRunStream({
       event.agent_id,
       event.session_id,
     );
-    const canonicalStreamOwnsRun =
-      event.type !== 'run_started' &&
-      sessionState.currentRun?.runId === event.run_id &&
-      Boolean(activeSubscriptions[sessionState.key]);
     flushPendingRunEvents(sessionState.key);
-    // The displayed Run's SSE stream is the canonical detailed timeline. Its
-    // non-delta events are also mirrored over WebSocket for discovery and
-    // inactive Sessions, but applying that mirror here would let terminal
-    // lifecycle overtake final Assistant output on a different transport.
-    if (canonicalStreamOwnsRun) {
-      mergeMirroredRunMetadata(sessionState, event);
+    // SSE and WebSocket both carry sequenced Run events. Feed either transport
+    // through the same contiguous reducer: the first copy fills a gap and the
+    // duplicate becomes a no-op. A mirrored terminal event can therefore never
+    // overtake missing output, while WebSocket output remains a useful backstop
+    // when an SSE replay is delayed or unavailable.
+    if (
+      event.type !== 'run_started' &&
+      sessionState.currentRun?.runId === event.run_id
+    ) {
+      for (const appendedEvent of appendOrderedRunEvent(sessionState, event)) {
+        handleAppendedRunEvent(sessionState, appendedEvent, {
+          fromServerEvent: true,
+        });
+      }
       return;
     }
     const appended = appendRunEvent(sessionState, event);
@@ -646,18 +655,6 @@ export function createChatRunStream({
         },
         { afterSequence: highestContiguousRunEventSequence(sessionState) },
       );
-    }
-  }
-
-  function mergeMirroredRunMetadata(sessionState, event) {
-    if (event.payload?.context_usage) {
-      sessionState.contextUsage = event.payload.context_usage;
-    }
-    if (event.payload?.session_usage) {
-      sessionState.sessionUsage = event.payload.session_usage;
-    }
-    if (event.type === 'run_completed' && event.payload?.usage) {
-      sessionState.usage = event.payload.usage;
     }
   }
 

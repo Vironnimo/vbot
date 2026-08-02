@@ -31,6 +31,7 @@ import {
   setProject,
   showProject,
   getTaskModelOptions,
+  inspectSubAgentWork,
   listTaskModelTargets,
   listQueue,
   listLogs,
@@ -298,6 +299,30 @@ describe('rpc()', () => {
         item_id: 'queue-1',
         content: 'Updated content',
       },
+    });
+  });
+});
+
+describe('inspectSubAgentWork()', () => {
+  it('sends the durable Subagent work address through subagent.inspect', async () => {
+    const fetchFunction = vi
+      .fn()
+      .mockResolvedValue(
+        jsonResponse({ ok: true, result: { id: 'sub-work-one' } }),
+      );
+    const params = {
+      id: 'sub-work-one',
+      agent_id: 'worker@project-one',
+      session_id: 'child-session',
+    };
+
+    await expect(
+      inspectSubAgentWork(params, { fetch: fetchFunction }),
+    ).resolves.toEqual({ id: 'sub-work-one' });
+
+    expect(JSON.parse(fetchFunction.mock.calls[0][1].body)).toEqual({
+      method: 'subagent.inspect',
+      params,
     });
   });
 });

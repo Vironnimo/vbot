@@ -6,6 +6,7 @@ import {
   cancelRun as requestCancelRun,
   cancelToolCall as requestCancelToolCall,
   createSession as requestCreateSession,
+  inspectSubAgentWork as requestInspectSubAgentWork,
   listAgents as requestListAgents,
   listChatCommands as requestListChatCommands,
   listFiles as requestListFiles,
@@ -20,7 +21,27 @@ import {
 } from './api.js';
 
 import { parseAgentAddress } from './agentAddress.js';
+import {
+  mergeBoundedEntries,
+  replaceActiveSubAgentStatuses,
+  subAgentGuardKeysForEvictedStatuses,
+} from './clientCaches.js';
 import { pruneRunEventsPersistedInHistory } from './chatTimeline.js';
+import {
+  isSubAgentSpawnTool,
+  resolveSubAgentCancelPlan,
+  subAgentDotStatus,
+  subAgentEffectiveRunId,
+  subAgentNavigationTarget,
+  subAgentNeedsStatusVerification,
+  subAgentQueueItemId,
+  subAgentResultData,
+  subAgentResultEntryAllowsFetch,
+  subAgentResultKey,
+  subAgentResultTextFromMessages,
+  subAgentShouldFetchResult,
+  visibleRunChildren,
+} from './chatTimelinePresentation.js';
 import { isBackgroundOnlySession } from './sessionListView.js';
 import { createToolArgumentPreviewScanner } from './toolArgumentPreview.js';
 
@@ -50,6 +71,11 @@ const TERMINAL_VISIBLE_DRAFT_EVENT_TYPES = new Set([
 
 const HISTORY_INITIAL_LIMIT = 100;
 const HISTORY_OLDER_LIMIT = 50;
+const SUBAGENT_LEGACY_HISTORY_LIMIT = 20;
+const SUBAGENT_STATUS_CACHE_LIMIT = 2000;
+const SUBAGENT_RESULT_CACHE_LIMIT = 100;
+const RPC_ERROR_QUEUE_ITEM_NOT_FOUND = 'queue_item_not_found';
+const RPC_ERROR_RUN_NOT_FOUND = 'run_not_found';
 
 export function createChatState() {
   return {
@@ -64,6 +90,8 @@ export function createChatState() {
     commandsError: '',
     cancellingRun: false,
     availableSkills: [],
+    subAgentStatuses: {},
+    subAgentResults: {},
   };
 }
 
@@ -72,6 +100,7 @@ function defaultChatOperations() {
     cancelRun: (...args) => requestCancelRun(...args),
     cancelToolCall: (...args) => requestCancelToolCall(...args),
     createSession: (...args) => requestCreateSession(...args),
+    inspectSubAgentWork: (...args) => requestInspectSubAgentWork(...args),
     listAgents: (...args) => requestListAgents(...args),
     listChatCommands: (...args) => requestListChatCommands(...args),
     listFiles: (...args) => requestListFiles(...args),
@@ -105,11 +134,447 @@ export function createChatController({
   let handledQueueInvalidation = null;
   let activityRefreshVersion = 0;
   let commandsLoadVersion = 0;
+  const subAgentStatusVerificationKeys = new Set();
+  const subAgentStatusInflightKeys = new Set();
 
   function errorMessage(error) {
     return typeof error?.message === 'string' && error.message
       ? error.message
       : String(error ?? '');
+  }
+
+  function trimmedString(value) {
+    return typeof value === 'string' ? value.trim() : '';
+  }
+
+  function qualifiedAgentAddress(agentId, projectId = '') {
+    const normalizedAgentId = trimmedString(agentId);
+    if (!normalizedAgentId) {
+      return '';
+    }
+    const parsed = parseAgentAddress(normalizedAgentId);
+    return parsed.projectId || !projectId
+      ? normalizedAgentId
+      : formatAgentAddress(parsed.agentId, projectId);
+  }
+
+  function applySubAgentStatusUpdates(updates, { replaceActive = false } = {}) {
+    const { entries, evictedKeys } = replaceActive
+      ? replaceActiveSubAgentStatuses(
+          chatState.subAgentStatuses,
+          updates,
+          SUBAGENT_STATUS_CACHE_LIMIT,
+        )
+      : mergeBoundedEntries(
+          chatState.subAgentStatuses,
+          updates,
+          SUBAGENT_STATUS_CACHE_LIMIT,
+        );
+    chatState.subAgentStatuses = entries;
+    for (const guardKey of subAgentGuardKeysForEvictedStatuses(evictedKeys)) {
+      subAgentStatusVerificationKeys.delete(guardKey);
+    }
+  }
+
+  function setSubAgentResultEntry(key, entry) {
+    chatState.subAgentResults = mergeBoundedEntries(
+      chatState.subAgentResults,
+      { [key]: entry },
+      SUBAGENT_RESULT_CACHE_LIMIT,
+    ).entries;
+  }
+
+  function normalizedSubAgentStatus(value) {
+    const status = trimmedString(value).toLowerCase();
+    if (status === 'failed' || status === 'error') {
+      return 'failed';
+    }
+    if (status === 'cancelled' || status === 'canceled') {
+      return 'cancelled';
+    }
+    if (status === 'queued') {
+      return 'queued';
+    }
+    if (status === 'running') {
+      return 'running';
+    }
+    return 'completed';
+  }
+
+  function subAgentStatusAddresses(agentId, inspection) {
+    const addresses = new Set();
+    const requested = trimmedString(agentId);
+    if (requested) {
+      addresses.add(requested);
+      const parsed = parseAgentAddress(requested);
+      if (parsed.agentId) {
+        addresses.add(parsed.agentId);
+      }
+    }
+    const inspectedAgentId = trimmedString(inspection?.agent_id);
+    const inspectedProjectId = trimmedString(inspection?.project_id);
+    if (inspectedAgentId) {
+      addresses.add(inspectedAgentId);
+      addresses.add(formatAgentAddress(inspectedAgentId, inspectedProjectId));
+    }
+    return [...addresses].filter(Boolean);
+  }
+
+  function applySubAgentInspection(
+    { agentId, sessionId, runId = '', queueItemId = '' },
+    inspection,
+  ) {
+    const status = normalizedSubAgentStatus(inspection?.status);
+    const inspectedRunId = trimmedString(inspection?.run_id) || runId;
+    const updates = {};
+    if (inspectedRunId) {
+      updates[`run:${inspectedRunId}`] = status;
+    }
+    if (queueItemId) {
+      updates[`queue:${queueItemId}`] = status;
+      if (inspectedRunId) {
+        updates[`queueRun:${queueItemId}`] = inspectedRunId;
+      }
+    }
+    if (!inspectedRunId && !queueItemId) {
+      for (const address of subAgentStatusAddresses(agentId, inspection)) {
+        updates[`session:${address}::${sessionId}`] = status;
+      }
+    }
+
+    const durationMs = inspection?.timing?.duration_ms;
+    if (Number.isFinite(durationMs) && durationMs >= 0) {
+      if (inspectedRunId) {
+        updates[`runDuration:${inspectedRunId}`] = durationMs;
+      } else {
+        for (const address of subAgentStatusAddresses(agentId, inspection)) {
+          updates[`sessionDuration:${address}::${sessionId}`] = durationMs;
+        }
+      }
+    }
+    const toolName = trimmedString(inspection?.tool_name);
+    if (toolName) {
+      if (inspectedRunId) {
+        updates[`runTool:${inspectedRunId}`] = toolName;
+      } else {
+        for (const address of subAgentStatusAddresses(agentId, inspection)) {
+          updates[`sessionTool:${address}::${sessionId}`] = toolName;
+        }
+      }
+    }
+    if (Object.keys(updates).length > 0) {
+      applySubAgentStatusUpdates(updates);
+    }
+    return { status, runId: inspectedRunId };
+  }
+
+  async function inspectExactSubAgentWork({
+    workId,
+    agentId,
+    sessionId,
+    projectId = '',
+  }) {
+    if (!workId) {
+      return null;
+    }
+    return operations.inspectSubAgentWork({
+      id: workId,
+      agent_id: qualifiedAgentAddress(agentId, projectId),
+      session_id: sessionId,
+    });
+  }
+
+  async function queuedSubAgentStillPending(
+    agentId,
+    sessionId,
+    queueItemId,
+    projectId,
+  ) {
+    const result = await operations.listQueue(
+      qualifiedAgentAddress(agentId, projectId),
+      sessionId,
+    );
+    return (Array.isArray(result?.items) ? result.items : []).some(
+      (item) => item?.id === queueItemId,
+    );
+  }
+
+  async function legacySubAgentInspection({
+    agentId,
+    sessionId,
+    runId = '',
+    queueItemId = '',
+    projectId = '',
+  }) {
+    const history = await operations.loadChatHistory({
+      agent_id: qualifiedAgentAddress(agentId, projectId),
+      session_id: sessionId,
+      limit: SUBAGENT_LEGACY_HISTORY_LIMIT,
+    });
+    const activeRunId = trimmedString(history?.active_run?.run_id);
+    if (history?.active_run && (!runId || activeRunId === runId)) {
+      return {
+        agent_id: agentId,
+        session_id: sessionId,
+        run_id: activeRunId,
+        status: 'running',
+        result: null,
+      };
+    }
+
+    const messages = Array.isArray(history?.messages) ? history.messages : [];
+    const summary = [...messages].reverse().find((message) => {
+      if (!message || message.role !== 'run_summary') {
+        return false;
+      }
+      return !runId || trimmedString(message.run_id) === runId;
+    });
+    if (summary) {
+      const summaryRunId = trimmedString(summary.run_id);
+      return {
+        agent_id: agentId,
+        session_id: sessionId,
+        run_id: summaryRunId,
+        status: normalizedSubAgentStatus(summary.status),
+        result: subAgentResultTextFromMessages(messages, summaryRunId),
+        timing: summary.timing,
+      };
+    }
+    if (
+      !runId &&
+      queueItemId &&
+      (await queuedSubAgentStillPending(
+        agentId,
+        sessionId,
+        queueItemId,
+        projectId,
+      ))
+    ) {
+      return {
+        agent_id: agentId,
+        session_id: sessionId,
+        run_id: null,
+        status: 'queued',
+        result: null,
+      };
+    }
+    return {
+      agent_id: agentId,
+      session_id: sessionId,
+      run_id: runId || null,
+      status: queueItemId ? 'cancelled' : 'completed',
+      result: null,
+    };
+  }
+
+  async function resolveSubAgentInspection(target) {
+    if (target.workId) {
+      try {
+        return await inspectExactSubAgentWork(target);
+      } catch (error) {
+        if (error?.code !== RPC_ERROR_RUN_NOT_FOUND) {
+          throw error;
+        }
+      }
+    }
+    return legacySubAgentInspection(target);
+  }
+
+  async function verifySubAgentStatus({
+    agentId,
+    sessionId,
+    runId = '',
+    queueItemId = '',
+    workId = '',
+    projectId = '',
+  }) {
+    if (!agentId || !sessionId) {
+      return false;
+    }
+    const guardKey = runId || queueItemId || `${agentId}::${sessionId}`;
+    if (
+      subAgentStatusVerificationKeys.has(guardKey) ||
+      subAgentStatusInflightKeys.has(guardKey)
+    ) {
+      return false;
+    }
+    subAgentStatusInflightKeys.add(guardKey);
+    try {
+      const inspection = await resolveSubAgentInspection({
+        agentId,
+        sessionId,
+        runId,
+        queueItemId,
+        workId,
+        projectId,
+      });
+      const projection = applySubAgentInspection(
+        { agentId, sessionId, runId, queueItemId },
+        inspection,
+      );
+      if (
+        workId &&
+        projection.status !== 'running' &&
+        projection.status !== 'queued'
+      ) {
+        setSubAgentResultEntry(`work:${workId}`, {
+          loading: false,
+          result: trimmedString(inspection?.result),
+          usage: inspection?.usage ?? null,
+        });
+      }
+      subAgentStatusVerificationKeys.add(guardKey);
+      return true;
+    } catch {
+      return false;
+    } finally {
+      subAgentStatusInflightKeys.delete(guardKey);
+    }
+  }
+
+  async function requestSubAgentResult(tool, projectId = '') {
+    const target = subAgentNavigationTarget(tool);
+    const cacheKey = subAgentResultKey(tool, chatState.subAgentStatuses);
+    if (
+      !target ||
+      !cacheKey ||
+      !subAgentResultEntryAllowsFetch(chatState.subAgentResults[cacheKey])
+    ) {
+      return false;
+    }
+    setSubAgentResultEntry(cacheKey, { loading: true, result: '' });
+    const data = subAgentResultData(tool);
+    const request = {
+      agentId: target.agentId,
+      sessionId: target.sessionId,
+      runId: subAgentEffectiveRunId(tool, chatState.subAgentStatuses),
+      queueItemId: subAgentQueueItemId(tool),
+      workId: trimmedString(data.id),
+      projectId,
+    };
+    try {
+      const inspection = await resolveSubAgentInspection(request);
+      const projection = applySubAgentInspection(request, inspection);
+      if (projection.status === 'running' || projection.status === 'queued') {
+        setSubAgentResultEntry(cacheKey, {
+          loading: false,
+          result: '',
+          error: true,
+          failedAt: Date.now(),
+        });
+        return false;
+      }
+      setSubAgentResultEntry(cacheKey, {
+        loading: false,
+        result: trimmedString(inspection?.result),
+        usage: inspection?.usage ?? null,
+      });
+      return true;
+    } catch {
+      setSubAgentResultEntry(cacheKey, {
+        loading: false,
+        result: '',
+        error: true,
+        failedAt: Date.now(),
+      });
+      return false;
+    }
+  }
+
+  async function cancelSubAgent({ tool, sessionState, projectId = '' } = {}) {
+    if (!tool || !sessionState) {
+      return false;
+    }
+    const plan = resolveSubAgentCancelPlan(tool, chatState.subAgentStatuses);
+    if (!plan) {
+      return false;
+    }
+    sessionState.actionError = '';
+    try {
+      if (plan.kind === 'run') {
+        await operations.cancelRun(plan.runId, { reason: 'user' });
+        applySubAgentStatusUpdates({ [`run:${plan.runId}`]: 'cancelled' });
+        return true;
+      }
+
+      try {
+        await operations.removeFromQueue(
+          qualifiedAgentAddress(plan.agentId, projectId),
+          plan.sessionId,
+          plan.queueItemId,
+        );
+        applySubAgentStatusUpdates({
+          [`queue:${plan.queueItemId}`]: 'cancelled',
+        });
+        return true;
+      } catch (error) {
+        if (error?.code !== RPC_ERROR_QUEUE_ITEM_NOT_FOUND) {
+          throw error;
+        }
+      }
+
+      const target = subAgentNavigationTarget(tool);
+      if (!target) {
+        return false;
+      }
+      const data = subAgentResultData(tool);
+      const request = {
+        agentId: target.agentId,
+        sessionId: target.sessionId,
+        runId: '',
+        queueItemId: plan.queueItemId,
+        workId: trimmedString(data.id),
+        projectId,
+      };
+      const inspection = await resolveSubAgentInspection(request);
+      const projection = applySubAgentInspection(request, inspection);
+      if (projection.status !== 'running' || !projection.runId) {
+        return true;
+      }
+      await operations.cancelRun(projection.runId, { reason: 'user' });
+      applySubAgentStatusUpdates({
+        [`run:${projection.runId}`]: 'cancelled',
+        [`queue:${plan.queueItemId}`]: 'cancelled',
+      });
+      return true;
+    } catch (error) {
+      sessionState.actionError = `${translate('chat.cancelError', 'Run could not be cancelled.')} ${errorMessage(error)}`;
+      return false;
+    }
+  }
+
+  function reconcileSubAgentRows(items, { projectId = '' } = {}) {
+    for (const item of Array.isArray(items) ? items : []) {
+      for (const tool of visibleRunChildren(item).filter((child) =>
+        isSubAgentSpawnTool(child),
+      )) {
+        const target = subAgentNavigationTarget(tool);
+        if (!target) {
+          continue;
+        }
+        const dotStatus = subAgentDotStatus(tool, chatState.subAgentStatuses);
+        const data = subAgentResultData(tool);
+        if (
+          subAgentNeedsStatusVerification(
+            tool,
+            dotStatus,
+            chatState.subAgentStatuses,
+          )
+        ) {
+          void verifySubAgentStatus({
+            agentId: target.agentId,
+            sessionId: target.sessionId,
+            runId: subAgentEffectiveRunId(tool, chatState.subAgentStatuses),
+            queueItemId: subAgentQueueItemId(tool),
+            workId: trimmedString(data.id),
+            projectId,
+          });
+        }
+        if (subAgentShouldFetchResult(tool, dotStatus)) {
+          void requestSubAgentResult(tool, projectId);
+        }
+      }
+    }
   }
 
   async function syncSessionQueue(sessionState) {
@@ -600,38 +1065,37 @@ export function createChatController({
 
   function destroy() {
     runStream.closeSubscriptions();
+    subAgentStatusInflightKeys.clear();
+    subAgentStatusVerificationKeys.clear();
   }
 
   return {
     applyConnectionSnapshot,
     applyQueueInvalidation,
+    applySubAgentStatusUpdates,
     cancelActiveRun,
-    cancelRunById: (runId, options = { reason: 'user' }) =>
-      operations.cancelRun(runId, options),
+    cancelSubAgent,
     cancelTool,
     createSession: (agentAddress) => operations.createSession(agentAddress),
     destroy,
     handleServerEvents,
     listFiles: (agentAddress) => operations.listFiles(agentAddress),
-    listQueueItems: (agentAddress, sessionId) =>
-      operations.listQueue(agentAddress, sessionId),
     listSessions: (agentAddress) => operations.listSessions(agentAddress),
     loadAgents,
     loadCommands,
     loadCurrentHistory,
     loadHistoryForSession,
-    loadHistoryPage: (params) => operations.loadChatHistory(params),
     loadOlderHistory,
     loadProject: (projectId) => operations.showProject(projectId),
     markSessionCompletionRead,
     reconcileRunSession,
+    reconcileSubAgentRows,
     refreshAgentActivity,
-    removeQueueItem: (agentAddress, sessionId, queuedMessageId) =>
-      operations.removeFromQueue(agentAddress, sessionId, queuedMessageId),
     removeQueued,
     sendMessage,
     syncSessionQueue,
     updateQueued,
+    verifySubAgentStatus,
   };
 }
 

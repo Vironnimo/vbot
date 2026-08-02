@@ -1,25 +1,13 @@
 <script>
   import { onDestroy, onMount } from 'svelte';
-  import { SvelteSet } from 'svelte/reactivity';
 
   import { subscribeRunEvents } from '$lib/api.js';
-  import {
-    mergeBoundedEntries,
-    replaceActiveSubAgentStatuses,
-    subAgentGuardKeysForEvictedStatuses,
-  } from '$lib/clientCaches.js';
   import { getDraft } from '$lib/composerMemory.js';
   import {
     extractMentionTokens,
     matchMentionCandidates,
   } from '$lib/fileMentions.js';
   import { t } from '$lib/i18n.js';
-  import {
-    resolveSubAgentCancelPlan,
-    subAgentResultEntryAllowsFetch,
-    subAgentResultTextFromMessages,
-  } from '$lib/chatTimelinePresentation.js';
-
   import { agentNeedsModel } from '$lib/onboarding.js';
   import { parseAgentAddress } from '$lib/agentAddress.js';
   import { tooltip } from '$lib/tooltip.js';
@@ -132,21 +120,11 @@
   let viewingSubAgentSession = $state(false);
   let submittedTurnScrollKey = $state(0);
   let submittedTurnScrollRunId = $state('');
-  let subAgentRunStatuses = $state({});
-  let subAgentResults = $state({});
   let handledSessionNavigationKey = '';
   // Bottom command toast auto-dismiss. Kept as a single constant so the
   // dwell time can be tuned in one place.
   const CHAT_TOAST_TIMEOUT_MS = 5000;
   const MOBILE_CHAT_MEDIA_QUERY = '(max-width: 640px)';
-  const SUBAGENT_RESULT_HISTORY_LIMIT = 20;
-  // Both caches grow per run/spawn for the lifetime of the tab (handoff3
-  // B10), so they are LRU-capped. Statuses are tiny strings — a generous cap
-  // keeps every plausibly rendered row covered (~7 entries per run). Results
-  // hold full child outputs, so the cap is much tighter; an evicted entry of
-  // a still-rendered row simply refetches (missing entries allow fetch).
-  const SUBAGENT_STATUS_CACHE_LIMIT = 2000;
-  const SUBAGENT_RESULT_CACHE_LIMIT = 100;
   let chatToastTimeoutId = null;
 
   const requestComposerFocus = ({ includeMobile = false } = {}) => {
@@ -825,217 +803,6 @@
   const loadCommands = (agentAddress) =>
     chatController.loadCommands(agentAddress);
 
-  // Sub-agent status self-heal lookup. When a sub-agent tool row's dot shows
-  // "running" but no live status has been recorded in `subAgentRunStatuses`,
-  // the row's "running" belief comes from a frozen persisted descriptor alone
-  // (typical after a page refresh, a missed terminal event, a rolled replay
-  // buffer, or a server restart that killed the child). This path asks the
-  // server for the child's durable truth (`chat.history` → `active_run` or the
-  // last `run_summary`) and projects it into the same `run:`/`session:` keys
-  // the run stream would have written, so the dot settles correctly without
-  // depending on event replay. The once-per-key guard prevents re-verification
-  // churn across re-renders; the error path releases the guard so a later
-  // attempt can retry.
-  const SUBAGENT_STATUS_VERIFICATION_HISTORY_LIMIT = 20;
-  // The cancel fallback only needs the `active_run` envelope field, not the
-  // transcript, so it fetches the smallest allowed page.
-  const SUBAGENT_CANCEL_LOOKUP_HISTORY_LIMIT = 1;
-  // Server RPC error code for a queue item that no longer exists (already
-  // started or already removed) — the sub-agent cancel fallback pivots on it.
-  const RPC_ERROR_QUEUE_ITEM_NOT_FOUND = 'queue_item_not_found';
-  const subAgentStatusVerificationKeys = new SvelteSet();
-  const subAgentStatusInflightKeys = new SvelteSet();
-
-  // Single write path for the status projection: LRU-merge under the cap and
-  // release the verification guards of evicted `run:`/`session:` keys, so a
-  // still-rendered row whose status entry aged out can self-heal again
-  // instead of showing a frozen "running" dot behind a spent guard.
-  const applySubAgentRunStatusUpdates = (
-    updates,
-    { replaceActive = false } = {},
-  ) => {
-    const { entries, evictedKeys } = replaceActive
-      ? replaceActiveSubAgentStatuses(
-          subAgentRunStatuses,
-          updates,
-          SUBAGENT_STATUS_CACHE_LIMIT,
-        )
-      : mergeBoundedEntries(
-          subAgentRunStatuses,
-          updates,
-          SUBAGENT_STATUS_CACHE_LIMIT,
-        );
-    subAgentRunStatuses = entries;
-    for (const guardKey of subAgentGuardKeysForEvictedStatuses(evictedKeys)) {
-      subAgentStatusVerificationKeys.delete(guardKey);
-    }
-  };
-
-  const setSubAgentResultEntry = (key, entry) => {
-    subAgentResults = mergeBoundedEntries(
-      subAgentResults,
-      { [key]: entry },
-      SUBAGENT_RESULT_CACHE_LIMIT,
-    ).entries;
-  };
-  const handleVerifySubAgentStatus = async (
-    agentId,
-    sessionId,
-    runId,
-    queueItemId = '',
-  ) => {
-    if (!agentId || !sessionId) {
-      return;
-    }
-    const trimmedRunId = typeof runId === 'string' ? runId.trim() : '';
-    const trimmedQueueItemId =
-      typeof queueItemId === 'string' ? queueItemId.trim() : '';
-    const key =
-      trimmedRunId || trimmedQueueItemId || `${agentId}::${sessionId}`;
-    if (
-      subAgentStatusVerificationKeys.has(key) ||
-      subAgentStatusInflightKeys.has(key)
-    ) {
-      return;
-    }
-    subAgentStatusInflightKeys.add(key);
-    try {
-      // The RPC needs the full `child@projekt` address for a project child
-      // (trap 2); the projection keys below stay bare like the descriptors.
-      const history = await chatController.loadHistoryPage({
-        agent_id: qualifiedChildAgentAddress(agentId),
-        session_id: sessionId,
-        limit: SUBAGENT_STATUS_VERIFICATION_HISTORY_LIMIT,
-      });
-      const updates = {};
-      const activeRunId =
-        typeof history?.active_run?.run_id === 'string'
-          ? history.active_run.run_id.trim()
-          : '';
-      // With a verified run id, only run-scoped keys are written: session-level
-      // keys would bleed this run's state into other spawn rows that reuse the
-      // same child session (handoff3 B6). A different run being active means
-      // the verified run itself is over, so fall through to the summary scan.
-      if (
-        history?.active_run &&
-        (!trimmedRunId || activeRunId === trimmedRunId)
-      ) {
-        if (activeRunId) {
-          updates[`run:${activeRunId}`] = 'running';
-        }
-        if (!trimmedRunId) {
-          updates[`session:${agentId}::${sessionId}`] = 'running';
-        }
-      } else {
-        const messages = Array.isArray(history?.messages)
-          ? history.messages
-          : [];
-        let summary = null;
-        for (let index = messages.length - 1; index >= 0; index -= 1) {
-          const message = messages[index];
-          if (!message || message.role !== 'run_summary') {
-            continue;
-          }
-          if (trimmedRunId) {
-            const summaryRunId =
-              typeof message.run_id === 'string' ? message.run_id.trim() : '';
-            if (summaryRunId !== trimmedRunId) {
-              continue;
-            }
-          }
-          summary = message;
-          break;
-        }
-        let status;
-        if (summary) {
-          status = normalizeSubAgentRunSummaryStatus(summary.status);
-        } else if (!trimmedRunId && trimmedQueueItemId) {
-          // A queued spawn that never started leaves no summary and no active
-          // run — "no trace" must not read as success. When its queue item
-          // still waits, the child is genuinely pending; when the item is
-          // gone without a run ever starting, the spawn was cancelled before
-          // start.
-          status = (await queuedSubAgentStillPending(
-            agentId,
-            sessionId,
-            trimmedQueueItemId,
-          ))
-            ? 'running'
-            : 'cancelled';
-        } else {
-          status = 'completed';
-        }
-        const summaryRunId = summary
-          ? typeof summary.run_id === 'string'
-            ? summary.run_id.trim()
-            : ''
-          : '';
-        const runKey = trimmedRunId || summaryRunId;
-        if (runKey) {
-          updates[`run:${runKey}`] = status;
-        }
-        if (!trimmedRunId) {
-          updates[`session:${agentId}::${sessionId}`] = status;
-        }
-        if (trimmedQueueItemId) {
-          updates[`queue:${trimmedQueueItemId}`] = status;
-        }
-        const durationMs = summary?.timing?.duration_ms;
-        if (Number.isFinite(durationMs) && durationMs >= 0) {
-          if (runKey) {
-            updates[`runDuration:${runKey}`] = durationMs;
-          }
-          if (!trimmedRunId) {
-            updates[`sessionDuration:${agentId}::${sessionId}`] = durationMs;
-          }
-        }
-      }
-      if (Object.keys(updates).length > 0) {
-        applySubAgentRunStatusUpdates(updates);
-      }
-      subAgentStatusVerificationKeys.add(key);
-    } catch {
-      // Release the guard so a later attempt can retry; verification
-      // failures are never cached (contrast with `subAgentResults`).
-    } finally {
-      subAgentStatusInflightKeys.delete(key);
-    }
-  };
-
-  // Whether a queued sub-agent spawn's queue item is still pending in the
-  // child session's queue. `chat.queue_list` parses an agent address (trap 2):
-  // a project run's child is queued under the same project anchor, so the bare
-  // descriptor id is qualified with the displayed project; a sub-agent spawn's
-  // queue item is public, so the list contains it.
-  const queuedSubAgentStillPending = async (
-    agentId,
-    sessionId,
-    queueItemId,
-  ) => {
-    const result = await chatController.listQueueItems(
-      qualifiedChildAgentAddress(agentId),
-      sessionId,
-    );
-    const items = Array.isArray(result?.items) ? result.items : [];
-    return items.some((item) => item?.id === queueItemId);
-  };
-
-  // Normalizes a `run_summary` message's terminal `status` into one of the
-  // status values `statusFromRunEvent` produces (`completed`/`failed`/
-  // `cancelled`). Anything unrecognised falls back to `completed` so the dot
-  // settles to success and the row can fetch its result instead of staying
-  // stuck on `running` forever.
-  function normalizeSubAgentRunSummaryStatus(value) {
-    const status = typeof value === 'string' ? value.trim().toLowerCase() : '';
-    if (status === 'failed' || status === 'error') {
-      return 'failed';
-    }
-    if (status === 'cancelled' || status === 'canceled') {
-      return 'cancelled';
-    }
-    return 'completed';
-  }
-
   const loadAgents = (options = {}) => chatController.loadAgents(options);
 
   const loadCurrentHistory = () => {
@@ -1058,51 +825,6 @@
   const loadHistoryForSession = (agentId, sessionId) => {
     chatState.actionError = '';
     return chatController.loadHistoryForSession(agentId, sessionId);
-  };
-
-  // Background sub-agent spawns only return a "running" descriptor, so once the
-  // child run finishes the timeline asks for its final output here. We fetch the
-  // child session's exact terminal Run segment and cache it under the row's
-  // run-scoped key, so repeated spawns into one child session cannot borrow a
-  // later Run's Assistant output.
-  const requestSubAgentResult = async (
-    agentId,
-    sessionId,
-    cacheKey = '',
-    runId = '',
-  ) => {
-    if (!agentId || !sessionId) {
-      return;
-    }
-    const key = cacheKey || `${agentId}::${sessionId}`;
-    if (!subAgentResultEntryAllowsFetch(subAgentResults[key])) {
-      return;
-    }
-    setSubAgentResultEntry(key, { loading: true, result: '' });
-    try {
-      // Project children are fetched with the full address (trap 2); the cache
-      // key stays the caller-provided bare-keyed one.
-      const history = await chatController.loadHistoryPage({
-        agent_id: qualifiedChildAgentAddress(agentId),
-        session_id: sessionId,
-        limit: SUBAGENT_RESULT_HISTORY_LIMIT,
-      });
-      const result = subAgentResultTextFromMessages(
-        history.messages ?? [],
-        runId,
-      );
-      setSubAgentResultEntry(key, { loading: false, result });
-    } catch {
-      // Non-critical: the user can still open the sub-agent session directly.
-      // Marked as a retryable failure instead of a permanent empty result, so
-      // a transient chat.history error does not blank the row forever.
-      setSubAgentResultEntry(key, {
-        loading: false,
-        result: '',
-        error: true,
-        failedAt: Date.now(),
-      });
-    }
   };
 
   const loadOlderHistory = () =>
@@ -1856,94 +1578,29 @@
     });
   };
 
-  // Per-sub-agent cancel: a running child is itself a Run, so route through
-  // chat.cancel with reason="user". The child run id comes from the frozen
-  // descriptor or the queueRun:<item> mapping — a queued spawn's descriptor
-  // never learns it (B6). A still-queued child is removed from the child
-  // session's queue instead; when the queue item is already consumed and no
-  // mapping survived (page reload), the child session's active run is looked
-  // up server-side and cancelled.
   const handleCancelSubAgent = async ({ tool } = {}) => {
-    const sessionState = activeSessionState;
-    if (!tool || !sessionState) {
-      return;
-    }
-    const plan = resolveSubAgentCancelPlan(tool, subAgentRunStatuses);
-    if (!plan) {
-      return;
-    }
-
-    sessionState.actionError = '';
-    try {
-      if (plan.kind === 'run') {
-        await chatController.cancelRunById(plan.runId, { reason: 'user' });
-        return;
-      }
-      try {
-        // `chat.queue_remove` parses an agent address (trap 2): qualify the
-        // descriptor's bare agent_id with the displayed project — a project
-        // run's child is queued under the same project anchor.
-        await chatController.removeQueueItem(
-          qualifiedChildAgentAddress(plan.agentId),
-          plan.sessionId,
-          plan.queueItemId,
-        );
-        // Nothing will ever report this never-started child (no run, no
-        // summary), so settle the row's run-id-less session key here.
-        applySubAgentRunStatusUpdates({
-          [`session:${plan.agentId}::${plan.sessionId}`]: 'cancelled',
-          [`queue:${plan.queueItemId}`]: 'cancelled',
-        });
-      } catch (error) {
-        if (error?.code !== RPC_ERROR_QUEUE_ITEM_NOT_FOUND) {
-          throw error;
-        }
-        await cancelSubAgentActiveRun(plan.agentId, plan.sessionId);
-      }
-    } catch (error) {
-      sessionState.actionError = `${t('chat.cancelError', 'Run could not be cancelled.')} ${error.message}`;
-    }
-  };
-
-  // Post-reload fallback for a formerly queued spawn: the queue item is gone
-  // but no run id survived (the queueRun mapping lives only in this tab's
-  // memory). Ask the server whether the child session is running right now —
-  // cancel that run, or, when the child is already terminal, force a fresh
-  // verification so the stale "running" dot settles to the durable state.
-  const cancelSubAgentActiveRun = async (agentId, sessionId) => {
-    const history = await chatController.loadHistoryPage({
-      agent_id: qualifiedChildAgentAddress(agentId),
-      session_id: sessionId,
-      limit: SUBAGENT_CANCEL_LOOKUP_HISTORY_LIMIT,
+    await chatController.cancelSubAgent({
+      tool,
+      sessionState: activeSessionState,
+      projectId: displayedSessionProjectId(),
     });
-    const activeRunId =
-      typeof history?.active_run?.run_id === 'string'
-        ? history.active_run.run_id.trim()
-        : '';
-    if (activeRunId) {
-      await chatController.cancelRunById(activeRunId, { reason: 'user' });
-      // The run-id-less row reads the session key; write it immediately so
-      // the dot settles without waiting for the bridged run_cancelled event.
-      applySubAgentRunStatusUpdates({
-        [`session:${agentId}::${sessionId}`]: 'cancelled',
-      });
-      return;
-    }
-    subAgentStatusVerificationKeys.delete(`${agentId}::${sessionId}`);
-    await handleVerifySubAgentStatus(agentId, sessionId, '');
   };
 
-  // Exposed for tests and for the run-component verification wiring
-  // (`onVerifySubAgentStatus` callback chain → ChatTimeline → ChatAssistantRun
-  // → subAgentNeedsStatusVerification). Returns a promise that resolves when
-  // the verification round-trip finishes.
+  // Exposed for focused controller-boundary tests. Normal rows are reconciled
+  // in one batch from the displayed Timeline below.
   export async function verifySubAgentStatus(
     agentId,
     sessionId,
     runId,
     queueItemId = '',
   ) {
-    await handleVerifySubAgentStatus(agentId, sessionId, runId, queueItemId);
+    await chatController.verifySubAgentStatus({
+      agentId,
+      sessionId,
+      runId,
+      queueItemId,
+      projectId: displayedSessionProjectId(),
+    });
   }
 
   // Exposed for tests (mirrors `verifySubAgentStatus`): drives the per-row
@@ -1997,7 +1654,8 @@
     reconcileRunSession: (sessionState, expectedRunId) =>
       chatController.reconcileRunSession(sessionState, expectedRunId),
     isDisplayedSession,
-    updateSubAgentRunStatuses: applySubAgentRunStatusUpdates,
+    updateSubAgentRunStatuses: (updates, options) =>
+      chatController.applySubAgentStatusUpdates(updates, options),
   });
   chatController = createChatController({
     chatState,
@@ -2021,6 +1679,13 @@
             ),
       );
     },
+  });
+
+  $effect(() => {
+    chatController.reconcileSubAgentRows(
+      visibleTimelineItemsForRender(activeSessionState),
+      { projectId: displayedSessionProjectId() },
+    );
   });
 </script>
 
@@ -2196,12 +1861,10 @@
             hasOlderHistory={activeSessionState?.hasOlderHistory === true}
             loadingOlderHistory={activeSessionState?.loadingOlderHistory ===
               true}
-            subAgentStatuses={subAgentRunStatuses}
-            {subAgentResults}
+            subAgentStatuses={chatState.subAgentStatuses}
+            subAgentResults={chatState.subAgentResults}
             onLoadOlder={loadOlderHistory}
             onNavigateToSubAgent={handleNavigateToSubAgentLink}
-            onRequestSubAgentResult={requestSubAgentResult}
-            onVerifySubAgentStatus={verifySubAgentStatus}
             onCancelToolCall={handleCancelToolCall}
             onCancelSubAgent={handleCancelSubAgent}
           />

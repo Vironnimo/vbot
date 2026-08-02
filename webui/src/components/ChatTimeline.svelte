@@ -28,8 +28,6 @@
     subAgentStatuses = {},
     subAgentResults = {},
     onNavigateToSubAgent = () => {},
-    onRequestSubAgentResult = () => {},
-    onVerifySubAgentStatus = () => {},
     onCancelToolCall = () => {},
     onCancelSubAgent = () => {},
     hasOlderHistory = false,
@@ -681,8 +679,6 @@
               {isReasoningOpen}
               onReasoningOpenChange={setReasoningOpen}
               {onNavigateToSubAgent}
-              {onRequestSubAgentResult}
-              {onVerifySubAgentStatus}
               {onCancelToolCall}
               {onCancelSubAgent}
             />
