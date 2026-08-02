@@ -330,6 +330,15 @@ export function loadChatHistory(params = {}, options = {}) {
   return rpc('chat.history', params, options);
 }
 
+export function inspectSubAgentWork(params = {}, options = {}) {
+  requirePlainObject(
+    params,
+    'Sub-agent inspection request must be an object',
+    'subagent.inspect',
+  );
+  return rpc('subagent.inspect', params, options);
+}
+
 export function createSession(params = {}, options = {}) {
   requirePlainObject(
     params,

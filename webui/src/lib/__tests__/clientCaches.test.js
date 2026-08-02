@@ -85,13 +85,14 @@ describe('mergeBoundedEntries', () => {
 });
 
 describe('subAgentGuardKeysForEvictedStatuses', () => {
-  it('maps run- and session-scoped status keys to their verification-guard keys', () => {
+  it('maps run-, queue-, and session-scoped statuses to verification keys', () => {
     const guardKeys = subAgentGuardKeysForEvictedStatuses([
       'run:run-1',
+      'queue:item-1',
       'session:agent-a::session-b',
     ]);
 
-    expect(guardKeys).toEqual(['run-1', 'agent-a::session-b']);
+    expect(guardKeys).toEqual(['run-1', 'item-1', 'agent-a::session-b']);
   });
 
   it('ignores duration, queue-mapping, and non-string keys', () => {

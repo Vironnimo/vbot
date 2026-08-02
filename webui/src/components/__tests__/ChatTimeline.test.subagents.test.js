@@ -335,17 +335,12 @@ describe('ChatTimeline', () => {
     flushSync();
   }
 
-  it('requests the final result when a non-blocking sub-agent run completes', () => {
+  it('does not start result recovery as a presentation side effect', () => {
     const onRequestSubAgentResult = vi.fn();
 
     mountCompletedNonBlockingSubAgent({ onRequestSubAgentResult });
 
-    expect(onRequestSubAgentResult).toHaveBeenCalledWith(
-      'beta',
-      'sub-session-running',
-      'beta::sub-session-running::sub-run-completed',
-      'sub-run-completed',
-    );
+    expect(onRequestSubAgentResult).not.toHaveBeenCalled();
   });
 
   it('renders a fetched non-blocking sub-agent result in the tool body', () => {

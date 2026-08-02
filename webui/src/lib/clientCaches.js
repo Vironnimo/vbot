@@ -73,11 +73,9 @@ export function replaceActiveSubAgentStatuses(entries, updates, maxEntries) {
   };
 }
 
-// Map evicted sub-agent status keys back to the verification-guard keys
-// ChatView uses (`run:<run_id>` → `<run_id>`, `session:<agent>::<session>` →
-// `<agent>::<session>`). Releasing those guards lets a still-rendered row
-// whose status entry was evicted re-verify against chat.history instead of
-// being stuck behind its once-per-key guard with a frozen "running" dot.
+// Map evicted sub-agent status keys back to the controller's verification keys.
+// Releasing those guards lets a still-rendered row whose status entry aged out
+// inspect its durable work again instead of trusting a frozen descriptor.
 export function subAgentGuardKeysForEvictedStatuses(evictedKeys) {
   const guardKeys = [];
   for (const key of evictedKeys ?? []) {
@@ -86,6 +84,8 @@ export function subAgentGuardKeysForEvictedStatuses(evictedKeys) {
     }
     if (key.startsWith('run:')) {
       guardKeys.push(key.slice('run:'.length));
+    } else if (key.startsWith('queue:')) {
+      guardKeys.push(key.slice('queue:'.length));
     } else if (key.startsWith('session:')) {
       guardKeys.push(key.slice('session:'.length));
     }

@@ -18,15 +18,10 @@
     subAgentAgentId,
     subAgentDisplayResult,
     subAgentDotStatus,
-    subAgentEffectiveRunId,
     subAgentLastToolName,
     subAgentNavigationTarget,
-    subAgentNeedsStatusVerification,
     subAgentPreview,
-    subAgentQueueItemId,
-    subAgentResultEntryAllowsFetch,
     subAgentResultKey,
-    subAgentShouldFetchResult,
     subAgentToolStatusLabel,
     timestampForItem,
     toolArgumentSummary,
@@ -48,8 +43,6 @@
     isReasoningOpen = () => false,
     onReasoningOpenChange = () => {},
     onNavigateToSubAgent = () => {},
-    onRequestSubAgentResult = () => {},
-    onVerifySubAgentStatus = () => {},
     onCancelToolCall = () => {},
     onCancelSubAgent = () => {},
   } = $props();
@@ -94,89 +87,6 @@
 
     onCancelSubAgent({ tool });
   }
-
-  // Once a background sub-agent run finishes (dot flips to success) and we have
-  // no fetched result yet, request its final output so it appears automatically.
-  // The cache key is run-scoped when the child run id is known, so repeated
-  // spawns into the same child session each fetch their own result.
-  const subAgentResultFetchTargets = $derived(
-    visibleRunChildren(item)
-      .filter((child) => isSubAgentSpawnTool(child))
-      .filter((child) =>
-        subAgentShouldFetchResult(
-          child,
-          subAgentDotStatus(child, subAgentStatuses),
-        ),
-      )
-      .map((child) => {
-        const key = subAgentResultKey(child, subAgentStatuses);
-        if (!key || !subAgentResultEntryAllowsFetch(subAgentResults[key])) {
-          return null;
-        }
-        const target = subAgentNavigationTarget(child);
-        return target
-          ? {
-              ...target,
-              key,
-              runId: subAgentEffectiveRunId(child, subAgentStatuses),
-            }
-          : null;
-      })
-      .filter(Boolean),
-  );
-
-  $effect(() => {
-    for (const target of subAgentResultFetchTargets) {
-      onRequestSubAgentResult(
-        target.agentId,
-        target.sessionId,
-        target.key,
-        target.runId,
-      );
-    }
-  });
-
-  // A sub-agent row whose "running" dot comes only from the frozen persisted
-  // descriptor (no live `run:`/`session:` status has ever arrived) needs a
-  // verification round-trip against chat.history so it can settle to a terminal
-  // state. The parent (ChatView) owns the once-per-key guard and the history
-  // call; we just surface the rows that need it.
-  const subAgentVerificationTargets = $derived(
-    visibleRunChildren(item)
-      .filter((child) => isSubAgentSpawnTool(child))
-      .filter((child) =>
-        subAgentNeedsStatusVerification(
-          child,
-          subAgentDotStatus(child, subAgentStatuses),
-          subAgentStatuses,
-        ),
-      )
-      .map((child) => {
-        const target = subAgentNavigationTarget(child);
-        if (!target) {
-          return null;
-        }
-        return {
-          ...target,
-          runId: subAgentEffectiveRunId(child, subAgentStatuses),
-          // Lets the run-id-less verification of a queued spawn ask the queue
-          // whether the child is still pending instead of assuming "done".
-          queueItemId: subAgentQueueItemId(child),
-        };
-      })
-      .filter(Boolean),
-  );
-
-  $effect(() => {
-    for (const target of subAgentVerificationTargets) {
-      onVerifySubAgentStatus(
-        target.agentId,
-        target.sessionId,
-        target.runId,
-        target.queueItemId,
-      );
-    }
-  });
 </script>
 
 {#snippet toolDetailSection(

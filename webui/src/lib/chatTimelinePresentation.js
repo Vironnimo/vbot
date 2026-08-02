@@ -662,7 +662,7 @@ export const subAgentResultKey = (tool, subAgentStatuses = {}) => {
     : `${target.agentId}::${target.sessionId}`;
 };
 
-// A failed result fetch must not be cached forever (a transient chat.history
+// A failed result fetch must not be cached forever (a transient inspection
 // error would otherwise permanently blank the Result row), but deleting the
 // entry would retrigger the fetch effect in a tight loop. Instead failed
 // entries carry `error`/`failedAt` and become fetchable again after a cooldown,
@@ -683,7 +683,7 @@ export const subAgentResultEntryAllowsFetch = (entry, now = Date.now()) => {
 // A background spawn returns a "running" descriptor as its tool result, so the
 // final output never lands in tool.result. Foreground spawns already carry it as
 // data.result. When the child run has finished and no inline result exists, the
-// child session's last assistant message must be fetched to show the response.
+// durable work result must be inspected to show the response.
 export const subAgentShouldFetchResult = (tool, dotStatus) => {
   if (!isSubAgentSpawnTool(tool)) {
     return false;
@@ -710,8 +710,7 @@ export const subAgentShouldFetchResult = (tool, dotStatus) => {
 // terminal event, a rolled replay buffer, or a server restart. When neither the
 // `run:<run_id>` nor the `session:<agent_id>::<session_id>` key has been seen
 // at all, the only thing telling us the child is still running is that frozen
-// descriptor, and the run component should ask the parent to verify against
-// durable chat.history.
+// descriptor, and the Chat controller should verify the durable work record.
 export const subAgentNeedsStatusVerification = (
   tool,
   dotStatus,
