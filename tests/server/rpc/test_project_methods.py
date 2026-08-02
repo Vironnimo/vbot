@@ -168,7 +168,12 @@ def _write_claude_agent(repo: Path, filename: str, name: str) -> None:
     )
 
 
-def _make_state(tmp_path: Path, *, cron_jobs: list | None = None) -> SimpleNamespace:
+def _make_state(
+    tmp_path: Path,
+    *,
+    cron_jobs: list | None = None,
+    bootstrap_jobs: list | None = None,
+) -> SimpleNamespace:
     data_dir = tmp_path / "data"
     projects = ProjectStore(data_dir)
     agents = AgentStore(data_dir)
@@ -180,11 +185,13 @@ def _make_state(tmp_path: Path, *, cron_jobs: list | None = None) -> SimpleNames
     )
     chat_runs = ChatRunManager()
     cron_service = SimpleNamespace(list_jobs=lambda: list(cron_jobs or []))
+    bootstrap_service = SimpleNamespace(list_jobs=lambda: list(bootstrap_jobs or []))
     runtime = SimpleNamespace(
         projects=projects,
         agents=agents,
         agent_resolver=resolver,
         cron_service=cron_service,
+        bootstrap_service=bootstrap_service,
         # ``project.set_override``'s model gate reads ``runtime.models`` only for a pinned
         # ``::connection`` suffix (never in these tests), but expose it so a plain
         # model override never trips an AttributeError.
@@ -1348,6 +1355,27 @@ async def test_rm_blocked_by_cron_pointing_at_project_agent(tmp_path: Path) -> N
     assert exc_info.value.code == "project_in_use"
     assert "cron:job-1" in exc_info.value.message
     assert state.runtime.projects.exists("vbot")
+
+
+@pytest.mark.asyncio
+async def test_rm_blocked_by_bootstrap_pointing_at_project_agent(tmp_path: Path) -> None:
+    jobs = [
+        SimpleNamespace(
+            id="boot-1",
+            agent_id="builder",
+            project_id="vbot",
+            status="active",
+        )
+    ]
+    state = _make_state(tmp_path, bootstrap_jobs=jobs)
+    repo = _make_repo(tmp_path, "vbot", "builder.md")
+    _add_project(state, {"cwd": str(repo), "display_name": "vBot"})
+
+    with pytest.raises(RpcError) as exc_info:
+        await _remove_project(state, {"project_id": "vbot"})
+
+    assert exc_info.value.code == "project_in_use"
+    assert "bootstrap:boot-1" in exc_info.value.message
 
 
 @pytest.mark.asyncio

@@ -65,6 +65,98 @@ def _cron_job(**changes: Any) -> SimpleNamespace:
     return SimpleNamespace(**fields)
 
 
+def _bootstrap_job(**changes: Any) -> SimpleNamespace:
+    fields: dict[str, Any] = {
+        "id": "bootstrap-123",
+        "agent_id": "main",
+        "project_id": None,
+        "name": "Verify update",
+        "prompt": "Check status and logs",
+        "mode": "once",
+        "session_id": "session-one",
+        "status": "active",
+        "created_at": "2026-08-02T12:00:00+00:00",
+        "armed_after_startup_id": "startup-one",
+        "last_started_startup_id": None,
+        "last_started_at": None,
+        "last_completed_at": None,
+        "last_run_id": None,
+        "last_session_id": None,
+        "last_outcome": None,
+        "last_error": None,
+    }
+    fields.update(changes)
+    return SimpleNamespace(**fields)
+
+
+def _state_with_bootstrap_service(service: Any) -> SimpleNamespace:
+    return SimpleNamespace(runtime=SimpleNamespace(bootstrap_service=service))
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_create_parses_project_target_and_session() -> None:
+    service = Mock()
+    service.create_job.return_value = _bootstrap_job(agent_id="builder", project_id="vbot")
+    state = _state_with_bootstrap_service(service)
+
+    response = await dispatch_rpc(
+        state,
+        {
+            "method": "bootstrap.create",
+            "params": {
+                "agent_id": "builder@vbot",
+                "name": "Verify update",
+                "prompt": "Check status and logs",
+                "mode": "once",
+                "session_id": "session-one",
+            },
+        },
+    )
+
+    assert response["ok"] is True
+    assert response["result"]["target"] == "builder@vbot"
+    service.create_job.assert_called_once_with(
+        agent_id="builder",
+        project_id="vbot",
+        name="Verify update",
+        prompt="Check status and logs",
+        mode="once",
+        session_id="session-one",
+    )
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_update_can_clear_session() -> None:
+    service = Mock()
+    service.update_job.return_value = _bootstrap_job(session_id=None)
+    state = _state_with_bootstrap_service(service)
+
+    response = await dispatch_rpc(
+        state,
+        {
+            "method": "bootstrap.update",
+            "params": {"id": "bootstrap-123", "session_id": None},
+        },
+    )
+
+    assert response["ok"] is True
+    service.update_job.assert_called_once_with("bootstrap-123", session_id=None)
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_rejects_unknown_mode() -> None:
+    response = await dispatch_rpc(
+        _state_with_bootstrap_service(Mock()),
+        {
+            "method": "bootstrap.create",
+            "params": {"agent_id": "main", "prompt": "Check", "mode": "sometimes"},
+        },
+    )
+
+    assert response["ok"] is False
+    assert response["error"]["code"] == "invalid_request"
+
+
 @pytest.mark.asyncio
 async def test_cron_create_happy_path() -> None:
     cron_service = Mock()

@@ -7,6 +7,7 @@ from typing import Any
 
 import pytest
 
+from core.chat.continuation import ContinuationTracker
 from tests.core.chat.chat_loop_support import (
     RecordingReflection,
     StubAdapter,
@@ -64,6 +65,44 @@ async def test_run_end_notifies_reflection_with_internal_flag(tmp_path: Path) ->
     # The loop reports the flag verbatim; the service is the one that gates it.
     assert len(reflection.calls) == 1
     assert reflection.calls[0]["internal"] is True
+
+
+@pytest.mark.asyncio
+async def test_internal_bootstrap_can_resume_process_restart_continuation(tmp_path: Path) -> None:
+    agent = StubAgent(id="coder", model="openrouter/anthropic/claude-sonnet-4")
+    adapter = StubAdapter([{"content": "Verified", "reasoning": None, "tool_calls": None}])
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+    session = runtime.chat_sessions.create("coder", session_id="session-one")
+    tracker = ContinuationTracker(session, run_id="run-before-restart", request="update vBot")
+    await tracker.interrupt("process_restart")
+
+    run = await build_chat_loop(runtime).start_run(
+        "coder",
+        "Verify the update and report",
+        session_id="session-one",
+        internal=True,
+        resume_process_restart=True,
+    )
+    await run.wait()
+
+    assert session.load_continuation_records() == []
+
+
+@pytest.mark.asyncio
+async def test_ordinary_internal_run_does_not_consume_continuation(tmp_path: Path) -> None:
+    agent = StubAgent(id="coder", model="openrouter/anthropic/claude-sonnet-4")
+    adapter = StubAdapter([{"content": "Done", "reasoning": None, "tool_calls": None}])
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+    session = runtime.chat_sessions.create("coder", session_id="session-one")
+    tracker = ContinuationTracker(session, run_id="run-before-restart", request="update vBot")
+    await tracker.interrupt("process_restart")
+
+    run = await build_chat_loop(runtime).start_run(
+        "coder", "unrelated internal work", session_id="session-one", internal=True
+    )
+    await run.wait()
+
+    assert session.load_continuation_records()
 
 
 @pytest.mark.asyncio

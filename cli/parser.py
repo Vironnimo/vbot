@@ -30,6 +30,7 @@ CHANNEL_PLATFORMS = tuple(sorted(ALLOWED_CHANNEL_PLATFORMS))
 CHANNEL_DM_SCOPES = tuple(sorted(ALLOWED_CHANNEL_DM_SCOPES))
 CHANNEL_RESPONSE_MODES = tuple(sorted(ALLOWED_CHANNEL_RESPONSE_MODES))
 CRON_STATUSES = ("active", "paused")
+BOOTSTRAP_MODES = ("once", "always")
 STATISTICS_SECTIONS = (
     "overview",
     "usage",
@@ -61,6 +62,7 @@ AREA_HELP = {
     "skill": "Inspect skill availability and diagnostics",
     "extensions": "Inspect and toggle loaded extensions",
     "cron": "Inspect and manage scheduled cron jobs",
+    "bootstrap": "Inspect and manage startup-triggered Agent Runs",
     "statistics": "Inspect usage statistics computed from persisted sessions",
     "config": "Inspect and update public Settings paths",
     "debug": "Inspect debug mode state and stored traces",
@@ -163,6 +165,14 @@ CRON_HELP = {
     "enable": "Enable a cron job",
     "disable": "Disable a cron job",
 }
+BOOTSTRAP_HELP = {
+    "list": "List Bootstrap jobs",
+    "create": "Create a Bootstrap job for a future server startup",
+    "update": "Update and rearm a Bootstrap job",
+    "delete": "Delete a Bootstrap job",
+    "enable": "Enable and rearm a Bootstrap job",
+    "disable": "Pause a Bootstrap job",
+}
 STATISTICS_HELP = {
     "overview": "Show the overview section: agents, sessions, runs, and message totals",
     "usage": "Show the usage section: token totals and per-provider/model breakdowns",
@@ -242,6 +252,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     _add_skill_parsers(subparsers)
     _add_extensions_parsers(subparsers)
     _add_cron_parsers(subparsers)
+    _add_bootstrap_parsers(subparsers)
     _add_statistics_parsers(subparsers)
     _add_config_parsers(subparsers)
     _add_debug_parsers(subparsers)
@@ -1692,6 +1703,64 @@ def _add_cron_session_argument(parser: argparse.ArgumentParser) -> None:
         metavar="<session-id>",
         help="Run in this existing Session; omit to create a fresh Session for every fire",
     )
+
+
+def _add_bootstrap_parsers(
+    subparsers: argparse._SubParsersAction[argparse.ArgumentParser],
+) -> None:
+    bootstrap_parser = subparsers.add_parser(
+        "bootstrap",
+        help=AREA_HELP["bootstrap"],
+        description=AREA_HELP["bootstrap"],
+    )
+    commands = bootstrap_parser.add_subparsers(dest="command", required=True)
+    _add_command_parser(commands, "list", BOOTSTRAP_HELP["list"], example="bootstrap list")
+    create = _add_command_parser(
+        commands,
+        "create",
+        BOOTSTRAP_HELP["create"],
+        example=(
+            'bootstrap create --current-session --name "Verify update" '
+            '--prompt "Check status and logs" --mode once'
+        ),
+    )
+    create.add_argument(
+        "agent",
+        nargs="?",
+        metavar="<agent>",
+        help="Agent that runs the job, as agent or agent@projekt",
+    )
+    create.add_argument("--current-session", action="store_true")
+    create.add_argument("--name", help="Optional human-readable job name")
+    create.add_argument("--prompt", required=True, help="Prompt injected after startup")
+    create.add_argument("--mode", required=True, choices=BOOTSTRAP_MODES)
+    create.add_argument(
+        "--session",
+        metavar="<session-id>",
+        help="Run in this existing Session; omit to create a fresh Session",
+    )
+    update = _add_command_parser(
+        commands,
+        "update",
+        BOOTSTRAP_HELP["update"],
+        example='bootstrap update <job-id> --prompt "Check status and logs"',
+    )
+    update.add_argument("id", metavar="<job-id>")
+    update.add_argument("--agent", metavar="<agent>")
+    update.add_argument("--name")
+    update.add_argument("--prompt")
+    update.add_argument("--mode", choices=BOOTSTRAP_MODES)
+    session_group = update.add_mutually_exclusive_group()
+    session_group.add_argument("--session", metavar="<session-id>")
+    session_group.add_argument("--clear-session", action="store_true")
+    for command in ("delete", "enable", "disable"):
+        command_parser = _add_command_parser(
+            commands,
+            command,
+            BOOTSTRAP_HELP[command],
+            example=f"bootstrap {command} <job-id>",
+        )
+        command_parser.add_argument("id", metavar="<job-id>")
 
 
 def _add_statistics_parsers(

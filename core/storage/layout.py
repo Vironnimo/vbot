@@ -23,6 +23,7 @@ DATA_DIRECTORY_RELATIVE_PATHS = (
     Path("statistics/provider-usage"),
     Path("agents"),
     Path("archive"),
+    Path("bootstrap"),
     Path("channels"),
     Path("cron"),
     Path("extensions"),
@@ -108,6 +109,10 @@ class DataDirectoryLayout:
     @property
     def channels(self) -> Path:
         return self.root / "channels"
+
+    @property
+    def bootstrap(self) -> Path:
+        return self.root / "bootstrap"
 
     @property
     def cron(self) -> Path:

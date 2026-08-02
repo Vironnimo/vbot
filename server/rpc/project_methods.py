@@ -30,6 +30,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from core.automation.bootstrap import TERMINAL_BOOTSTRAP_STATUSES
 from core.automation.cron import TERMINAL_CRON_JOB_STATUSES
 from core.projects import (
     Project,
@@ -486,7 +487,7 @@ async def _remove_project(state: Any, params: JsonObject) -> JsonObject:
 
 
 def _ensure_no_cron_reference(state: Any, project_id: str) -> None:
-    """Reject removal while a cron job points at a Project agent.
+    """Reject removal while an automation points at a Project agent.
 
     Mirrors the Agent ``agent_in_use`` cron guard, qualified to this project by a
     direct ``job.project_id == project_id`` match now that cron carries the
@@ -506,6 +507,22 @@ def _ensure_no_cron_reference(state: Any, project_id: str) -> None:
         raise RpcError(
             RPC_ERROR_PROJECT_IN_USE,
             f"cannot remove project referenced by {', '.join(referencing)}",
+        )
+    bootstrap_service = getattr(state.runtime, "bootstrap_service", None)
+    if bootstrap_service is None:
+        return
+    bootstrap_references = sorted(
+        f"bootstrap:{job.id}"
+        for job in bootstrap_service.list_jobs()
+        if (
+            job.project_id == project_id
+            and getattr(job, "status", "active") not in TERMINAL_BOOTSTRAP_STATUSES
+        )
+    )
+    if bootstrap_references:
+        raise RpcError(
+            RPC_ERROR_PROJECT_IN_USE,
+            f"cannot remove project referenced by {', '.join(bootstrap_references)}",
         )
 
 

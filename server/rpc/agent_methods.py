@@ -268,6 +268,7 @@ async def _rename_agent(state: Any, params: JsonObject) -> JsonObject:
         "new_id": new_agent_id,
         "channels_updated": list(result.channel_ids),
         "cron_jobs_updated": list(result.cron_job_ids),
+        "bootstrap_jobs_updated": list(result.bootstrap_job_ids),
         "agent_policies_updated": list(result.policy_agent_ids),
         "session_links_updated": result.session_reference_count,
     }
@@ -279,11 +280,13 @@ async def _rename_agent(state: Any, params: JsonObject) -> JsonObject:
     if result.cron_job_ids:
         publish_resource_changed(state, RESOURCE_KIND_CRON)
     _LOGGER.info(
-        "Agent renamed (agent=%s new_agent=%s channels=%s cron=%s policies=%s session_links=%s)",
+        "Agent renamed (agent=%s new_agent=%s channels=%s cron=%s "
+        "bootstrap=%s policies=%s session_links=%s)",
         agent_id,
         new_agent_id,
         len(result.channel_ids),
         len(result.cron_job_ids),
+        len(result.bootstrap_job_ids),
         len(result.policy_agent_ids),
         result.session_reference_count,
     )
@@ -422,9 +425,11 @@ async def _delete_session(state: Any, params: JsonObject) -> JsonObject:
         state.runtime.agent_resolver.resolve_agent(project_id, agent_id)
         chat_sessions = state.runtime.chat_sessions
         try:
-            async with _state_chat_runs(state).session_admission_guard(
-                (project_id, agent_id, session_id)
+            async with (
+                _agent_reference_lock(state),
+                _state_chat_runs(state).session_admission_guard((project_id, agent_id, session_id)),
             ):
+                _ensure_no_bootstrap_session_reference(state, agent_id, project_id, session_id)
                 # Existence check under the guard: concurrent deletes cannot both
                 # cross the storage boundary, and a missing Session still maps to
                 # the ordinary domain error.
@@ -460,6 +465,32 @@ async def _delete_session(state: Any, params: JsonObject) -> JsonObject:
         session_id,
     )
     return {"agent_id": agent_id, "session_id": session_id, "next_session_id": next_session_id}
+
+
+def _ensure_no_bootstrap_session_reference(
+    state: Any,
+    agent_id: str,
+    project_id: str | None,
+    session_id: str,
+) -> None:
+    service = getattr(state.runtime, "bootstrap_service", None)
+    if service is None:
+        return
+    references = sorted(
+        f"bootstrap:{job.id}"
+        for job in service.list_jobs()
+        if (
+            job.agent_id == agent_id
+            and job.project_id == project_id
+            and job.session_id == session_id
+            and getattr(job, "status", "active") != "completed"
+        )
+    )
+    if references:
+        raise RpcError(
+            RPC_ERROR_SESSION_BUSY,
+            f"cannot delete Session referenced by {', '.join(references)}",
+        )
 
 
 def _resolve_post_delete_landing(

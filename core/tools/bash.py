@@ -91,6 +91,9 @@ BASH_SUBAGENT_TOOL_DESCRIPTION = (
     + _shell_syntax_notes()
 )
 BASH_EXECUTION_MODES = ("foreground", "auto", "background")
+VBOT_RUN_AGENT_ID_ENV = "VBOT_RUN_AGENT_ID"
+VBOT_RUN_SESSION_ID_ENV = "VBOT_RUN_SESSION_ID"
+VBOT_RUN_PROJECT_ID_ENV = "VBOT_RUN_PROJECT_ID"
 _BASH_COMMAND_PARAMETER: JsonObject = {
     "type": "string",
     "minLength": 1,
@@ -290,6 +293,12 @@ async def bash_handler(
     resolve_credential = credential_resolver or (lambda key: os.environ.get(key, ""))
     for key in requested_env_keys:
         env[key] = resolve_credential(key)
+    env[VBOT_RUN_AGENT_ID_ENV] = context.agent_id
+    env[VBOT_RUN_SESSION_ID_ENV] = context.session_id
+    if context.project_id is None:
+        env.pop(VBOT_RUN_PROJECT_ID_ENV, None)
+    else:
+        env[VBOT_RUN_PROJECT_ID_ENV] = context.project_id
     argv = _shell_argv(command)
 
     try:

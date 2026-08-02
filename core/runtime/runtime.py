@@ -17,10 +17,11 @@ from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as _installed_package_version
 from pathlib import Path
 from typing import Any, Protocol, cast
+from uuid import uuid4
 
 from core.agents.agents import AgentStore
 from core.attachments import AttachmentStore
-from core.automation import CronService, ReflectionService, TriggerService
+from core.automation import BootstrapService, CronService, ReflectionService, TriggerService
 from core.channels import ChannelService
 from core.chat import ChatLoop, ChatLoopDependencies, CommandDispatcher
 from core.chat.block_resolver import ContentBlockResolver
@@ -415,11 +416,13 @@ class Runtime:
         self._chat_loop: ChatLoop | None = None
         self._streaming_chat_loop: ChatLoop | None = None
         self._started_at: datetime | None = None
+        self._startup_id: str | None = None
         self._trigger_service: TriggerService | None = None
         self._reflection_service: ReflectionService | None = None
         self._session_title_service: SessionTitleService | None = None
         self._channel_service: ChannelService | None = None
         self._cron_service: CronService | None = None
+        self._bootstrap_service: BootstrapService | None = None
         self._subagent_coordinator: SubAgentCoordinator | None = None
         self._system_prompts: SystemPromptManager | None = None
 
@@ -437,6 +440,7 @@ class Runtime:
             return
 
         self._started_at = datetime.now(UTC)
+        self._startup_id = str(uuid4())
         self.logger = self._log_manager.get_logger("core")
         self.logger.info("Runtime startup initiated")
 
@@ -697,6 +701,13 @@ class Runtime:
             trigger_chat_loop=self._streaming_chat_loop,
             sessions=self._chat_sessions,
         )
+        self._bootstrap_service = BootstrapService(
+            self._trigger_service,
+            self._storage.data_dir,
+            startup_id=self._startup_id,
+            agent_resolver=self._agent_resolver,
+            sessions=self._chat_sessions,
+        )
         self._command_dispatcher = CommandDispatcher(
             self._chat_run_manager,
             agent_resolver=self._agent_resolver,
@@ -799,6 +810,10 @@ class Runtime:
         if self._extensions is not None:
             await self._extensions.fire_startup()
 
+    def activate_bootstrap(self) -> None:
+        """Start eligible Bootstrap Runs after the serving lifespan is ready."""
+        self.bootstrap_service.activate()
+
     def stop(self) -> None:
         """Gracefully shut down the runtime.
 
@@ -814,6 +829,8 @@ class Runtime:
             self._channel_service.stop()
         if self._cron_service is not None:
             self._cron_service.stop()
+        if self._bootstrap_service is not None:
+            self._bootstrap_service.stop()
         if self._provider_usage is not None:
             self._provider_usage.stop()
         if self._process_manager is not None:
@@ -836,6 +853,8 @@ class Runtime:
             await self._channel_service.aclose()
         if self._cron_service is not None:
             await self._cron_service.aclose()
+        if self._bootstrap_service is not None:
+            await self._bootstrap_service.aclose()
         if self._provider_usage is not None:
             await self._provider_usage.aclose()
         if self._process_manager is not None:
@@ -882,6 +901,7 @@ class Runtime:
         self._recall_backend_name = None
         self._channel_service = None
         self._cron_service = None
+        self._bootstrap_service = None
         self._trigger_service = None
         self._reflection_service = None
         self._session_title_service = None
@@ -2084,6 +2104,14 @@ class Runtime:
         if self._cron_service is None:
             raise RuntimeError("Cron service not available")
         return self._cron_service
+
+    @property
+    def bootstrap_service(self) -> BootstrapService:
+        """Access persisted startup-triggered Runs and Bootstrap CRUD."""
+        self._ensure_started()
+        if self._bootstrap_service is None:
+            raise RuntimeError("Bootstrap service not available")
+        return self._bootstrap_service
 
     @property
     def provider_usage(self) -> ProviderUsageService:

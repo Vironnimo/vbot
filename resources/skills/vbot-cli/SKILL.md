@@ -1,6 +1,6 @@
 ---
 name: vbot-cli
-description: Configure, inspect, and operate vBot through the vbot CLI, including locating the vBot root and runtime data. Use when asked to start, stop, restart, update, or uninstall vBot, set up provider credentials (API key or OAuth), find vBot files or diagnose stored state, list/add/edit/remove agents, projects, sessions, channels (Telegram, Discord), cron jobs, prompts, skills, extensions, or settings, inspect complete Model data, or configure specialized Task Models such as TTS/STT including model-specific voices and options — as well as to inspect tools, logs, debug traces, Provider subscription usage, and Session usage statistics (tokens, runs, errors, tool and skill usage).
+description: Configure, inspect, and operate vBot through the vbot CLI, including locating the vBot root and runtime data. Use when asked to start, stop, restart, update, or uninstall vBot, set up provider credentials (API key or OAuth), find vBot files or diagnose stored state, list/add/edit/remove agents, projects, sessions, channels (Telegram, Discord), cron jobs, Bootstrap Runs, prompts, skills, extensions, or settings, inspect complete Model data, or configure specialized Task Models such as TTS/STT including model-specific voices and options — as well as to inspect tools, logs, debug traces, Provider subscription usage, and Session usage statistics (tokens, runs, errors, tool and skill usage).
 ---
 
 # vBot CLI
@@ -26,11 +26,12 @@ Read `references/system-layout.md` before searching runtime files, diagnosing mi
 - Primary identifiers are positional (`vbot agent show assistant`); secondary parameters are flags. `vbot <area> <command> --help` shows exact flags plus a usage example.
 - Only `server start|stop|restart|status`, `desktop`, `update`, `uninstall`, `autostart`, and `doctor` work without a running target server. Everything else needs one. When operating the vBot instance hosting the current Run, execute the requested command directly — the Run already proves that server is available. Check `vbot server status` and start with `vbot server start` only when targeting another instance or troubleshooting connectivity.
 - Non-default instance: add `--host`, `--port`, `--data-dir` to every command.
-- Prefer CLI commands over direct file edits — settings, agents, channels, cron jobs, prompt blocks, and provider keys all have commands. If a manual JSON edit was unavoidable, validate with `vbot doctor config`.
+- Prefer CLI commands over direct file edits — settings, agents, channels, cron jobs, Bootstrap jobs, prompt blocks, and provider keys all have commands. If a manual JSON edit was unavoidable, validate with `vbot doctor config`.
+- Before `vbot update` when it will restart the server, arm and verify a one-shot Bootstrap in the current Session so the Run resumes after startup and checks the result. Follow `references/server.md`; do not create one for `--no-restart` unless the user separately wants a later-startup check.
 - Never echo secrets in output. API keys go through `provider set-key`, extension secrets through `extensions <name> set <field> --stdin`, and managed channel tokens through `channel add ... --token-stdin` or `channel set-token ... --stdin`. Channel tokens never belong in shell arguments; use `--token-env` only when an external deployment environment already owns the variable.
 - Inspect before changing; verify after with the matching list/show/status command. For Settings, discover paths with `vbot config list [prefix]`, inspect type/default/lifecycle with `vbot config describe <path>`, then verify the effective result with `vbot config get <path> --details`.
 - Treat `vbot model show` and `vbot task-model options` as authoritative for Model capabilities, voices, and accepted Task Model values. Never infer one Model's options from another Model or from generic provider documentation.
-- Mutation output is a verification result, not merely an acknowledgement: Agent, Project, Channel, and Cron create/update commands print the saved resource; Project removal prints affected rooted Agents and file-copy/backup effects. Read it before issuing a separate verification call, then use `show`/`list` when the requested outcome depends on live discovery or runtime health.
+- Mutation output is a verification result, not merely an acknowledgement: Agent, Project, Channel, Cron, and Bootstrap create/update commands print the saved resource; Project removal prints affected rooted Agents and file-copy/backup effects. Read it before issuing a separate verification call, then use `show`/`list` when the requested outcome depends on live discovery or runtime health.
 - Keep Identity Agent, Project Agent, Workspace, and Project cwd separate. A generic request to create an Agent means an Identity Agent; root it in a Project when its file/shell work should run there. A Project Agent is a repo-discovered Config Agent with no Workspace, SOUL, or Memory and is created only when the user explicitly asks for a Project Team profile. See `references/agents-projects.md`.
 - Follow CLI error hints (`did you mean`, candidate lists) before retrying. If another process occupies the port, report it — don't kill it.
 - Finish with a compact report: commands run, what changed, verification result, and any remaining user action (complete an OAuth login, send a Telegram message, ...).
@@ -63,6 +64,7 @@ Read the reference file before using an area's write commands — it has the exa
 | `session` | `list` `create` `fork` `rename` `set-compaction-policy` `delete` `link-channel` | `references/agents-projects.md` |
 | `channel` | `add` `list` `status` `update` `set-token` `enable` `disable` `remove` | `references/channels.md` |
 | `cron` | `list` `create` `update` `delete` `enable` `disable` | `references/cron.md` |
+| `bootstrap` | `list` `create` `update` `delete` `enable` `disable` | `references/bootstrap.md` |
 | `config` | `list` `describe` `effective` `raw` `get` `set` `unset` `patch` | `references/configuration.md` |
 | `prompt` | `list` `update` `reset` `create` `remove` `set-layout` `reset-layout` `preview` | `references/configuration.md` |
 | `extensions` | `list` `reload` `<name>` `<name> set` `enable` `disable` | `references/configuration.md` |
@@ -86,5 +88,6 @@ vbot task-model options text_to_speech                          # current TTS ta
 vbot agent update <agent-id> --model <provider>/<model-id>      # switch an agent's model
 vbot config set <path> <value>                                  # change one cataloged Settings path
 vbot channel status <channel-id>                                # channel health + denied inbound chats
+vbot bootstrap create --current-session --name "Verify restart" --prompt "Check status and logs, then report" --mode once
 vbot server restart                                             # apply code or unavoidable manual config edits
 ```

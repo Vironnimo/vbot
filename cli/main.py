@@ -23,6 +23,14 @@ from cli.autostart_management import (
     disable_autostart,
     enable_autostart,
 )
+from cli.bootstrap_management import (
+    bootstrap_create,
+    bootstrap_delete,
+    bootstrap_disable,
+    bootstrap_enable,
+    bootstrap_list,
+    bootstrap_update,
+)
 from cli.channel_management import (
     channel_access,
     channel_add,
@@ -479,6 +487,10 @@ def run(
 
     if args.area == "cron":
         result = dispatch_cron_command(args, instance)
+        print_management_command_result(result)
+        return SUCCESS_EXIT_CODE if result.ok else FAILURE_EXIT_CODE
+    if args.area == "bootstrap":
+        result = dispatch_bootstrap_command(args, instance)
         print_management_command_result(result)
         return SUCCESS_EXIT_CODE if result.ok else FAILURE_EXIT_CODE
 
@@ -1314,6 +1326,63 @@ def dispatch_cron_command(
     if args.command == "disable":
         return disable_cron_fn(instance, args.id)
     raise ValueError(f"Unsupported cron command: {args.command}")
+
+
+def dispatch_bootstrap_command(
+    args: argparse.Namespace,
+    instance: ServerInstance,
+    *,
+    create_fn: Callable[..., CommandResult] = bootstrap_create,
+    list_fn: Callable[[ServerInstance], CommandResult] = bootstrap_list,
+    update_fn: Callable[[ServerInstance, str, dict[str, Any]], CommandResult] = bootstrap_update,
+    delete_fn: Callable[[ServerInstance, str], CommandResult] = bootstrap_delete,
+    enable_fn: Callable[[ServerInstance, str], CommandResult] = bootstrap_enable,
+    disable_fn: Callable[[ServerInstance, str], CommandResult] = bootstrap_disable,
+) -> CommandResult:
+    if args.command == "list":
+        return list_fn(instance)
+    if args.command == "create":
+        if args.current_session and (args.agent is not None or args.session is not None):
+            return CommandResult(
+                ok=False,
+                message="--current-session cannot be combined with <agent> or --session",
+                instance=instance,
+            )
+        if not args.current_session and args.agent is None:
+            return CommandResult(
+                ok=False,
+                message="provide <agent> or use --current-session",
+                instance=instance,
+            )
+        fields: dict[str, Any] = {"prompt": args.prompt, "mode": args.mode}
+        if args.agent is not None:
+            fields["agent_id"] = args.agent
+        if args.name is not None:
+            fields["name"] = args.name
+        if args.session is not None:
+            fields["session_id"] = args.session
+        return create_fn(instance, fields, current_session=args.current_session)
+    if args.command == "update":
+        changes: dict[str, Any] = {}
+        for argument, field in (
+            (args.agent, "agent_id"),
+            (args.name, "name"),
+            (args.prompt, "prompt"),
+            (args.mode, "mode"),
+            (args.session, "session_id"),
+        ):
+            if argument is not None:
+                changes[field] = argument
+        if args.clear_session:
+            changes["session_id"] = None
+        return update_fn(instance, args.id, changes)
+    if args.command == "delete":
+        return delete_fn(instance, args.id)
+    if args.command == "enable":
+        return enable_fn(instance, args.id)
+    if args.command == "disable":
+        return disable_fn(instance, args.id)
+    raise ValueError(f"Unsupported Bootstrap command: {args.command}")
 
 
 def _cron_create_fields_from_args(args: argparse.Namespace) -> dict[str, Any]:
