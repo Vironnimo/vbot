@@ -249,7 +249,12 @@ def test_statistics_overview_formats_from_report(
                 "run_summary": 60,
             },
             "last_activity": "2026-07-01T10:00:00+00:00",
-            "run_status": {"completed": 10, "failed": 1, "cancelled": 1},
+            "run_status": {
+                "completed": 10,
+                "failed": 1,
+                "cancelled": 0,
+                "interrupted": 1,
+            },
             "average_run_duration_ms": 1234.5,
             "median_run_duration_ms": 900.0,
             "runs_with_tool_calls": 8,
@@ -284,7 +289,7 @@ def test_statistics_overview_formats_from_report(
     assert "stored session records by role:" in result.message
     assert "  note: 55" in result.message
     assert "  run_summary: 60" in result.message
-    assert "run status: completed=10 failed=1 cancelled=1" in result.message
+    assert "run status: completed=10 failed=1 cancelled=0 interrupted=1" in result.message
     assert (
         "  assistant: sessions=5 runs=12 chat_messages=85 session_records=200 errors=2 "
         "last_activity=2026-07-01T10:00:00+00:00"
@@ -302,9 +307,10 @@ def test_statistics_runs_formats_agent_messages_and_model_steps(
         "runs": {
             "total_runs": 4,
             "open_run_groups": 1,
-            "status": {"completed": 3, "failed": 1, "cancelled": 0},
+            "status": {"completed": 2, "failed": 1, "cancelled": 0, "interrupted": 1},
             "cancel_rate": 0.0,
             "failure_rate": 0.25,
+            "interruption_rate": 0.25,
             "duration": {
                 "count": 4,
                 "average_ms": 1000.0,
@@ -333,6 +339,8 @@ def test_statistics_runs_formats_agent_messages_and_model_steps(
     result = statistics_management.statistics_report(instance, "runs")
 
     assert result.ok is True
+    assert "status: completed=2 failed=1 cancelled=0 interrupted=1" in result.message
+    assert "interruption rate: 0.25" in result.message
     assert "agent messages: 6" in result.message
     assert "model steps: 14" in result.message
     assert "average agent messages per run: 1.50" in result.message

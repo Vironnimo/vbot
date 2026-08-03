@@ -417,6 +417,7 @@ describe('statisticsView activity timeline', () => {
       completed: 0,
       failed: 0,
       cancelled: 0,
+      interrupted: 0,
     });
     expect(result.at(-1)).toMatchObject({ date: '2026-06-13', runs: 1 });
   });
@@ -450,6 +451,7 @@ describe('statisticsView activity timeline', () => {
       completed: 1,
       failed: 1,
       cancelled: 0,
+      interrupted: 0,
     });
     expect(result.at(-1)).toMatchObject({ date: '2026-06-08', runs: 0 });
   });
@@ -465,6 +467,7 @@ describe('statisticsView activity timeline', () => {
       completed: 11,
       failed: 1,
       cancelled: 2,
+      interrupted: 0,
       completionRate: 11 / 14,
       peak: { date: '2026-06-13', runs: 11 },
       scaleMax: 15,

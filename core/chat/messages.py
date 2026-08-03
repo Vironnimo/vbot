@@ -1871,9 +1871,9 @@ def _validate_compaction_checkpoint_message(message: ChatMessage) -> None:
 def _validate_run_summary_message(message: ChatMessage) -> None:
     if not message.run_id:
         raise ChatMessageValidationError("run summaries require run_id")
-    if message.status not in {"completed", "failed", "cancelled"}:
+    if message.status not in {"completed", "failed", "cancelled", "interrupted"}:
         raise ChatMessageValidationError(
-            "run summaries status must be completed, failed, or cancelled"
+            "run summaries status must be completed, failed, cancelled, or interrupted"
         )
     if message.timing is None:
         raise ChatMessageValidationError("run summaries require timing")

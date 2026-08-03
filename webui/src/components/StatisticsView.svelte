@@ -53,7 +53,7 @@
     'compaction_checkpoint',
     'agent_takeover',
   ];
-  const STATUS_KEYS = ['completed', 'failed', 'cancelled'];
+  const STATUS_KEYS = ['completed', 'failed', 'cancelled', 'interrupted'];
   const USAGE_REFRESH_INTERVAL_MS = 10_000;
 
   let report = $state(null);
@@ -312,13 +312,14 @@
   function activityTooltip(point) {
     return t(
       'statistics.overview.activityTooltip',
-      '{period} · {runs} Runs · {completed} completed · {failed} failed · {cancelled} cancelled',
+      '{period} · {runs} Runs · {completed} completed · {failed} failed · {cancelled} cancelled · {interrupted} interrupted',
       {
         period: activityPeriodLabel(point.date, true),
         runs: formatInteger(point.runs, locale),
         completed: formatInteger(point.completed, locale),
         failed: formatInteger(point.failed, locale),
         cancelled: formatInteger(point.cancelled, locale),
+        interrupted: formatInteger(point.interrupted, locale),
       },
     );
   }
@@ -616,6 +617,9 @@
       <span class="stats-legend stats-legend--cancelled"
         >{statusLabel('cancelled')}</span
       >
+      <span class="stats-legend stats-legend--interrupted"
+        >{statusLabel('interrupted')}</span
+      >
     </div>
   {/if}
 {/snippet}
@@ -682,11 +686,15 @@
           role="img"
           aria-label={t(
             'statistics.overview.statusAria',
-            '{completed} completed, {failed} failed, {cancelled} cancelled.',
+            '{completed} completed, {failed} failed, {cancelled} cancelled, {interrupted} interrupted.',
             {
               completed: formatInteger(overview.run_status.completed, locale),
               failed: formatInteger(overview.run_status.failed, locale),
               cancelled: formatInteger(overview.run_status.cancelled, locale),
+              interrupted: formatInteger(
+                overview.run_status.interrupted,
+                locale,
+              ),
             },
           )}
         >
@@ -721,11 +729,15 @@
               '{count} Runs ({share}) did not complete.',
               {
                 count: formatInteger(
-                  overview.run_status.failed + overview.run_status.cancelled,
+                  overview.run_status.failed +
+                    overview.run_status.cancelled +
+                    overview.run_status.interrupted,
                   locale,
                 ),
                 share: formatShare(
-                  overview.run_status.failed + overview.run_status.cancelled,
+                  overview.run_status.failed +
+                    overview.run_status.cancelled +
+                    overview.run_status.interrupted,
                   statusTotal,
                 ),
               },
@@ -1268,6 +1280,10 @@
       {@render statCard(
         t('statistics.runs.failureRate', 'Failure rate'),
         formatPercent(runs.failure_rate),
+      )}
+      {@render statCard(
+        t('statistics.runs.interruptionRate', 'Interruption rate'),
+        formatPercent(runs.interruption_rate),
       )}
       {@render statCard(
         t('statistics.runs.fallbackRuns', 'Fallback runs (derived)'),
@@ -2179,12 +2195,17 @@
   .stats-activity__segment--cancelled {
     background: var(--text-lo);
   }
+  .stats-health__segment--interrupted,
+  .stats-health__marker--interrupted,
+  .stats-activity__segment--interrupted {
+    background: var(--amber);
+  }
   .stats-health__outcomes {
     list-style: none;
     margin: 0;
     padding: 0;
     display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(4, minmax(0, 1fr));
     gap: 8px;
   }
   .stats-health__outcomes li {
@@ -2394,6 +2415,9 @@
   }
   .stats-legend--cancelled::before {
     background: var(--text-lo);
+  }
+  .stats-legend--interrupted::before {
+    background: var(--amber);
   }
   .stats-legend--measured::before {
     background: var(--accent);

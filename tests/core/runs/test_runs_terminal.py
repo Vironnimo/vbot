@@ -7,6 +7,7 @@ from .runs_test_support import (
     ChatRunManager,
     Run,
     RunCancelledError,
+    RunInterruptedError,
     VBotError,
     assert_timing_payload,
     asyncio,
@@ -31,6 +32,33 @@ async def test_mark_completed_includes_payload_extras_when_provided() -> None:
         "status": "completed",
         "usage": {"input_tokens": 150, "output_tokens": 12},
     }
+
+
+async def test_manager_marks_interruption_terminal_and_wait_raises_signal() -> None:
+    manager = ChatRunManager()
+    partial = {"content": "partial"}
+
+    async def execute(run: Run) -> None:
+        run.terminal_payload_extras["session_usage"] = {"input_tokens": 4}
+        raise RunInterruptedError("network", result=partial)
+
+    run = await manager.start(
+        agent_id="coder", session_id="session-one", executor=execute, project_id=None
+    )
+
+    with pytest.raises(RunInterruptedError) as exc_info:
+        await run.wait()
+
+    assert exc_info.value.cause == "network"
+    assert exc_info.value.result == partial
+    assert run.result == partial
+    assert run.status.value == "interrupted"
+    interrupted_events = [event for event in run.events if event.type == "run_interrupted"]
+    assert len(interrupted_events) == 1
+    assert interrupted_events[0].payload["status"] == "interrupted"
+    assert interrupted_events[0].payload["cause"] == "network"
+    assert interrupted_events[0].payload["session_usage"] == {"input_tokens": 4}
+    assert_timing_payload(interrupted_events[0].payload)
 
 
 async def test_executor_terminal_payload_extras_ride_completed_event() -> None:

@@ -265,7 +265,7 @@ async def test_streaming_mode_malformed_tool_arguments_persist_provider_error(
 
 
 @pytest.mark.asyncio
-async def test_streaming_mode_missing_finish_delta_preserves_visible_partial(
+async def test_streaming_mode_missing_finish_delta_continues_after_visible_partial(
     tmp_path: Path,
 ) -> None:
     agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
@@ -274,7 +274,11 @@ async def test_streaming_mode_missing_finish_delta_preserves_visible_partial(
         stream_responses=[
             [
                 {"type": "content_delta", "text": "Partial answer"},
-            ]
+            ],
+            [
+                {"type": "content_delta", "text": " continued"},
+                {"type": "finish", "reason": "stop"},
+            ],
         ],
     )
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
@@ -286,16 +290,19 @@ async def test_streaming_mode_missing_finish_delta_preserves_visible_partial(
     run = next(iter(runtime.chat_runs._runs.values()))
     messages = runtime.chat_sessions.get("coder", "session-one").load()
 
-    # A stream that ends without a finish delta but already streamed visible
-    # content is an interrupted turn: the partial answer is preserved, not lost.
-    assert assistant.content == "Partial answer"
-    assert assistant.interrupted is True
+    # The partial boundary remains durable while a fresh Model step continues
+    # the same Run without replaying the original visible output.
+    assert assistant.content == " continued"
+    assert assistant.interrupted is False
     assert run.status == RunStatus.COMPLETED
-    assert persisted_roles(messages) == ["user", "assistant"]
+    assert persisted_roles(messages) == ["user", "assistant", "note", "assistant"]
     assert messages[1].interrupted is True
     assert [event.type for event in run.events] == [
         "run_started",
         "user_message_persisted",
+        ASSISTANT_OUTPUT_DELTA_EVENT,
+        "assistant_output",
+        MODEL_STEP_USAGE_EVENT,
         ASSISTANT_OUTPUT_DELTA_EVENT,
         "assistant_output",
         MODEL_STEP_USAGE_EVENT,

@@ -244,7 +244,19 @@ async def test_failed_once_job_can_be_rearmed_for_a_later_startup(tmp_path: Path
 
 
 @pytest.mark.asyncio
-async def test_restart_reconciles_terminal_run_before_retry(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("run_status", "expected_job_status", "expected_outcome"),
+    [
+        ("completed", "completed", "success"),
+        ("interrupted", "failed", "failed"),
+    ],
+)
+async def test_restart_reconciles_terminal_run_before_retry(
+    tmp_path: Path,
+    run_status: str,
+    expected_job_status: str,
+    expected_outcome: str,
+) -> None:
     creator = make_service(StubTriggerService(), tmp_path, "creator")
     created = creator.create_job(agent_id="main", prompt="Verify", mode="once")
     sessions = ChatSessionManager(tmp_path)
@@ -252,7 +264,7 @@ async def test_restart_reconciles_terminal_run_before_retry(tmp_path: Path) -> N
     session.append(
         ChatMessage.run_summary(
             run_id="run-before-crash",
-            status="completed",
+            status=run_status,
             timing={
                 "started_at": "2026-08-02T12:00:00+00:00",
                 "completed_at": "2026-08-02T12:00:01+00:00",
@@ -278,7 +290,9 @@ async def test_restart_reconciles_terminal_run_before_retry(tmp_path: Path) -> N
     await service.wait_until_idle()
 
     assert trigger.calls == []
-    assert service.get_job(created.id).status == "completed"
+    reconciled = service.get_job(created.id)
+    assert reconciled.status == expected_job_status
+    assert reconciled.last_outcome == expected_outcome
 
 
 def test_validation_reports_invalid_mode() -> None:

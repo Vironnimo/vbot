@@ -446,15 +446,56 @@ describe('interrupted assistant turn projection', () => {
       },
     });
     appendRunEvent(sessionState, {
-      type: 'run_completed',
+      type: 'run_interrupted',
       run_id: 'run-int',
       sequence: 3,
-      payload: { status: CHAT_STATUS_COMPLETED },
+      payload: { status: 'interrupted', cause: 'network' },
     });
 
     const output = assistantOutputChild(sessionState, 'run-int');
     expect(output.content).toBe('Half');
     expect(output.interrupted).toBe(true);
+  });
+
+  it('drops an unfinished Tool preview when the Run is interrupted', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-interrupted-tool-preview',
+    );
+    startRun(sessionState, {
+      run_id: 'run-tool-preview',
+      sse_url: '/api/runs/run-tool-preview/events',
+      status: CHAT_STATUS_RUNNING,
+    });
+    appendRunEvent(sessionState, {
+      type: 'run_started',
+      run_id: 'run-tool-preview',
+      sequence: 1,
+      payload: { status: CHAT_STATUS_RUNNING },
+    });
+    appendRunEvent(sessionState, {
+      type: 'tool_call_delta',
+      run_id: 'run-tool-preview',
+      sequence: 2,
+      payload: {
+        tool_call_id: 'call-partial',
+        name_delta: 'subagent',
+        arguments_delta: '{"action":"run","agent_id":"work',
+      },
+    });
+    appendRunEvent(sessionState, {
+      type: 'run_interrupted',
+      run_id: 'run-tool-preview',
+      sequence: 3,
+      payload: { status: 'interrupted', cause: 'network' },
+    });
+
+    const run = visibleTimelineItemsForRender(sessionState).find(
+      (item) => item.type === 'assistant_run',
+    );
+    expect(run.status).toBe('interrupted');
+    expect(run.tools).toEqual([]);
   });
 
   it('does not flag a normal assistant_output event', () => {
@@ -614,7 +655,34 @@ describe('cancelled run rendering', () => {
     expect(run.items).toEqual([]);
   });
 
-  it('does not render bare rows for anchorless non-cancelled summaries (page-slice orphans)', () => {
+  it('renders a bare interrupted run row when recovery ended before visible output', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-interrupted-empty',
+    );
+    loadHistory(sessionState, [
+      { id: 'u1', role: 'user', content: 'continue the task' },
+      {
+        id: 's1',
+        role: 'run_summary',
+        run_id: 'run-interrupted',
+        status: 'interrupted',
+        timing: { duration_ms: 3000 },
+      },
+    ]);
+
+    const items = visibleTimelineItemsForRender(sessionState);
+    expect(items.map((item) => item.type)).toEqual([
+      'message',
+      'assistant_run',
+    ]);
+    expect(items[1].status).toBe('interrupted');
+    expect(items[1].runId).toBe('run-interrupted');
+    expect(items[1].items).toEqual([]);
+  });
+
+  it('does not render bare rows for anchorless completed summaries (page-slice orphans)', () => {
     const sessionState = ensureSessionState(
       createChatState(),
       'alpha',

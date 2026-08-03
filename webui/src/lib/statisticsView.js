@@ -30,6 +30,7 @@ const ACTIVITY_FIELDS = Object.freeze([
   'completed',
   'failed',
   'cancelled',
+  'interrupted',
 ]);
 const CHART_SCALE_STEPS = Object.freeze([1, 1.5, 2, 2.5, 5, 10]);
 
@@ -572,6 +573,7 @@ export function activitySummary(points) {
     completed: 0,
     failed: 0,
     cancelled: 0,
+    interrupted: 0,
   };
   let peak = null;
   for (const point of series) {
@@ -580,6 +582,7 @@ export function activitySummary(points) {
     totals.completed += toFiniteNumber(point?.completed);
     totals.failed += toFiniteNumber(point?.failed);
     totals.cancelled += toFiniteNumber(point?.cancelled);
+    totals.interrupted += toFiniteNumber(point?.interrupted);
     if (peak === null || runs > peak.runs) {
       peak = { date: point?.date ?? '', runs };
     }

@@ -175,6 +175,7 @@ class RunStatusCounts:
     completed: int
     failed: int
     cancelled: int
+    interrupted: int
 
 
 @dataclass(frozen=True)
@@ -195,6 +196,7 @@ class DailyTrendPoint:
     completed: int
     failed: int
     cancelled: int
+    interrupted: int
 
 
 @dataclass(frozen=True)
@@ -431,6 +433,7 @@ class RunsSection:
     status: RunStatusCounts
     cancel_rate: float
     failure_rate: float
+    interruption_rate: float
     duration: DurationStats
     runs_with_tool_calls: int
     total_tool_calls: int
@@ -617,6 +620,7 @@ class _DailyAcc:
     completed: int = 0
     failed: int = 0
     cancelled: int = 0
+    interrupted: int = 0
     errors: int = 0
     measured_input_tokens: int = 0
     measured_output_tokens: int = 0
@@ -1133,6 +1137,8 @@ class _Aggregator:
                 bucket.failed += 1
             elif status == "cancelled":
                 bucket.cancelled += 1
+            elif status == "interrupted":
+                bucket.interrupted += 1
 
     # -- build -------------------------------------------------------------
 
@@ -1255,6 +1261,7 @@ class _Aggregator:
                     completed=bucket.completed,
                     failed=bucket.failed,
                     cancelled=bucket.cancelled,
+                    interrupted=bucket.interrupted,
                 )
                 for date, bucket in self._sorted_daily()
             ],
@@ -1360,6 +1367,7 @@ class _Aggregator:
             status=self._build_status(),
             cancel_rate=_ratio(self._status_counts.get("cancelled", 0), total),
             failure_rate=_ratio(self._status_counts.get("failed", 0), total),
+            interruption_rate=_ratio(self._status_counts.get("interrupted", 0), total),
             duration=DurationStats(
                 count=len(durations),
                 average_ms=_mean(durations),
@@ -1423,6 +1431,7 @@ class _Aggregator:
             completed=self._status_counts.get("completed", 0),
             failed=self._status_counts.get("failed", 0),
             cancelled=self._status_counts.get("cancelled", 0),
+            interrupted=self._status_counts.get("interrupted", 0),
         )
 
     def _provider_usage(self, accumulator: _ProviderAcc) -> ProviderUsage:

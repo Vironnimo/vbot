@@ -40,6 +40,7 @@ const RUN_SERVER_EVENT_TYPES = new Set([
   'run_completed',
   'run_cancelled',
   'run_failed',
+  'run_interrupted',
 ]);
 
 export function createAppControllerState(activeViewId) {

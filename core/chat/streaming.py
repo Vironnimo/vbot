@@ -55,13 +55,14 @@ class StreamRecoveryAction(Enum):
     The single, provider-agnostic vocabulary for stream-break recovery: deciding
     which action applies is :func:`decide_stream_recovery` (here); executing it —
     restarting, falling back to non-streaming, finalizing the partial answer,
-    or re-raising — stays in the chat loop.
+    interrupting after bounded recovery, or re-raising — stays in the chat loop.
     """
 
     ACCEPT_COMPLETE = "accept_complete"
     RESTART = "restart"
     FALLBACK = "fallback"
     PRESERVE_PARTIAL = "preserve_partial"
+    INTERRUPT = "interrupt"
     FAIL = "fail"
 
 
@@ -86,17 +87,20 @@ def decide_stream_recovery(
     answer text a drop can otherwise be replayed cleanly: a
     streaming-unsupported error falls back to a non-streaming request, a
     restartable transient (transport/timeout drop or chunk stall) replays the
-    whole stream while restarts remain, anything else fails. Once answer text
-    has escaped, the stream is never replayed and accumulated content is
-    preserved as an interrupted Assistant turn.
+    whole stream while restarts remain and interrupts when that budget is
+    exhausted; anything else fails. Once answer text has escaped, the stream is
+    never replayed and accumulated content is preserved as an interrupted
+    Assistant boundary for same-Run continuation.
     """
     if finish_received:
         return StreamRecoveryAction.ACCEPT_COMPLETE
     if not has_partial_content:
         if _is_streaming_fallback_error(error):
             return StreamRecoveryAction.FALLBACK
-        if can_restart and _is_stream_restartable_error(error):
-            return StreamRecoveryAction.RESTART
+        if _is_stream_restartable_error(error):
+            if can_restart:
+                return StreamRecoveryAction.RESTART
+            return StreamRecoveryAction.INTERRUPT
         return StreamRecoveryAction.FAIL
     return StreamRecoveryAction.PRESERVE_PARTIAL
 

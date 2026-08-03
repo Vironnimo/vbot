@@ -135,6 +135,7 @@ export const englishCatalog = Object.freeze({
   'chat.event.completed': 'Run completed',
   'chat.event.failed': 'Run failed',
   'chat.event.cancelled': 'Run cancelled',
+  'chat.event.interrupted': 'Run interrupted',
   'chat.runStatus.idle': 'Idle',
   'chat.runStatus.running': 'Running',
   'chat.runStatus.queued': 'Queued',
@@ -142,6 +143,7 @@ export const englishCatalog = Object.freeze({
   'chat.runStatus.failed': 'Failed',
   'chat.runStatus.cancelling': 'Cancelling',
   'chat.runStatus.cancelled': 'Cancelled',
+  'chat.runStatus.interrupted': 'Interrupted',
   'chat.agentActivity.idle': '{name}: Idle',
   'chat.agentActivity.running': '{name}: Running',
   'chat.agentActivity.unread': '{name}: Unread result',
@@ -1680,6 +1682,7 @@ export const englishCatalog = Object.freeze({
   'statistics.status.completed': 'Completed',
   'statistics.status.failed': 'Failed',
   'statistics.status.cancelled': 'Cancelled',
+  'statistics.status.interrupted': 'Interrupted',
   'statistics.role.system': 'System',
   'statistics.role.user': 'User',
   'statistics.role.assistant': 'Assistant',
@@ -1703,7 +1706,7 @@ export const englishCatalog = Object.freeze({
   'statistics.overview.totalRuns': '{count} total Runs',
   'statistics.overview.completedLabel': 'completed',
   'statistics.overview.statusAria':
-    '{completed} completed, {failed} failed, {cancelled} cancelled.',
+    '{completed} completed, {failed} failed, {cancelled} cancelled, {interrupted} interrupted.',
   'statistics.overview.nonCompleted':
     '{count} Runs ({share}) did not complete.',
   'statistics.overview.facts': 'At a glance',
@@ -1724,7 +1727,7 @@ export const englishCatalog = Object.freeze({
   'statistics.overview.peak': 'Peak',
   'statistics.overview.weekOf': 'Week of {date}',
   'statistics.overview.activityTooltip':
-    '{period} · {runs} Runs · {completed} completed · {failed} failed · {cancelled} cancelled',
+    '{period} · {runs} Runs · {completed} completed · {failed} failed · {cancelled} cancelled · {interrupted} interrupted',
   'statistics.overview.activityAria':
     '{runs} Runs in this period; {completion} completed.',
   'statistics.overview.agentsTable': 'Per agent',
@@ -1804,6 +1807,7 @@ export const englishCatalog = Object.freeze({
     'Trailing turns with no completion record yet — interrupted, crashed, or still running. Best-effort, and counted apart from the finished runs above.',
   'statistics.runs.cancelRate': 'Cancel rate',
   'statistics.runs.failureRate': 'Failure rate',
+  'statistics.runs.interruptionRate': 'Interruption rate',
   'statistics.runs.fallbackRuns': 'Fallback runs (derived)',
   'statistics.runs.avgToolsPerRun': 'Avg Tool calls / Run',
   'statistics.runs.avgAgentMessagesPerRun': 'Avg Agent messages / Run',

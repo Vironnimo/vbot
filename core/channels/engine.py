@@ -49,6 +49,7 @@ from core.runs import (
     RUN_CANCELLED_EVENT,
     RUN_COMPLETED_EVENT,
     RUN_FAILED_EVENT,
+    RUN_INTERRUPTED_EVENT,
     RunKind,
     WaitingWorkAdmission,
     WaitingWorkLimitError,
@@ -67,6 +68,7 @@ _LOGGER = get_logger("channels.engine")
 
 _FAILED_REPLY = "Sorry, I couldn't complete that request. Please try again."
 _CANCELLED_REPLY = "Sorry, this request was cancelled before completion."
+_INTERRUPTED_REPLY = "Sorry, this request was interrupted before it could finish."
 _EMPTY_ASSISTANT_REPLY = "I finished processing your message, but no reply text was produced."
 _UNSUPPORTED_FILE_REPLY = "Sorry, this file type isn't supported yet."
 _FILE_TOO_LARGE_REPLY = "Sorry, this file is too large to process."
@@ -1062,6 +1064,7 @@ class ChannelConversationEngine:
 
     async def _relay_run_events(self, run: Run, reply_plan: ReplyPlanFacts) -> None:
         assistant_text: str | None = None
+        interrupted_segments: list[str] = []
         compaction_completed = False
         reply: str | None = None
 
@@ -1070,9 +1073,16 @@ class ChannelConversationEngine:
         ):
             async for event in run.subscribe():
                 if event.type == ASSISTANT_OUTPUT_EVENT:
-                    extracted = _extract_assistant_output(event)
+                    is_interrupted = _assistant_output_interrupted(event)
+                    extracted = _extract_assistant_output(
+                        event,
+                        preserve_whitespace=is_interrupted or bool(interrupted_segments),
+                    )
                     if extracted is not None:
-                        assistant_text = extracted
+                        if is_interrupted or interrupted_segments:
+                            interrupted_segments.append(extracted)
+                        else:
+                            assistant_text = extracted
                     continue
 
                 if event.type == COMPACTION_COMPLETED_EVENT:
@@ -1081,7 +1091,8 @@ class ChannelConversationEngine:
 
                 if event.type == RUN_COMPLETED_EVENT:
                     reply = (
-                        assistant_text
+                        _combined_interrupted_output(interrupted_segments)
+                        or assistant_text
                         or ("Context compacted." if compaction_completed else None)
                         or _EMPTY_ASSISTANT_REPLY
                     )
@@ -1093,6 +1104,14 @@ class ChannelConversationEngine:
 
                 if event.type == RUN_CANCELLED_EVENT:
                     reply = _CANCELLED_REPLY
+                    break
+
+                if event.type == RUN_INTERRUPTED_EVENT:
+                    reply = (
+                        _combined_interrupted_output(interrupted_segments)
+                        or assistant_text
+                        or _INTERRUPTED_REPLY
+                    )
                     break
 
         if reply is not None:
@@ -1397,7 +1416,7 @@ def _sender_tag(sender: MessageSender) -> str:
     )
 
 
-def _extract_assistant_output(event: RunEvent) -> str | None:
+def _extract_assistant_output(event: RunEvent, *, preserve_whitespace: bool = False) -> str | None:
     payload = event.payload
     if not isinstance(payload, dict):
         return None
@@ -1410,8 +1429,21 @@ def _extract_assistant_output(event: RunEvent) -> str | None:
     if not isinstance(content, str):
         return None
 
-    content = content.strip()
-    return content or None
+    if not content.strip():
+        return None
+    return content if preserve_whitespace else content.strip()
+
+
+def _assistant_output_interrupted(event: RunEvent) -> bool:
+    message = event.payload.get("message")
+    return isinstance(message, dict) and message.get("interrupted") is True
+
+
+def _combined_interrupted_output(segments: list[str]) -> str | None:
+    # These are consecutive fragments of one visible answer across internal
+    # Model boundaries. Preserve their bytes instead of inventing separators;
+    # the continuation Model owns any required whitespace or Markdown break.
+    return "".join(segments) if segments else None
 
 
 def _media_failure_reply(error: Exception) -> str:

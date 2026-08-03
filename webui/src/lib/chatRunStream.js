@@ -35,6 +35,7 @@ const RUN_SERVER_EVENT_TYPES = new Set([
   'run_completed',
   'run_cancelled',
   'run_failed',
+  'run_interrupted',
 ]);
 
 // Session-scoped status keys are read against persisted spawn descriptors,
@@ -497,6 +498,9 @@ export function createChatRunStream({
     }
     if (event.type === 'run_cancelled') {
       return 'cancelled';
+    }
+    if (event.type === 'run_interrupted') {
+      return 'interrupted';
     }
     return '';
   }

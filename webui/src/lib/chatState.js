@@ -55,6 +55,7 @@ export const CHAT_STATUS_RUNNING = 'running';
 export const CHAT_STATUS_COMPLETED = 'completed';
 export const CHAT_STATUS_FAILED = 'failed';
 export const CHAT_STATUS_CANCELLED = 'cancelled';
+export const CHAT_STATUS_INTERRUPTED = 'interrupted';
 export const AGENT_ACTIVITY_IDLE = 'idle';
 export const AGENT_ACTIVITY_RUNNING = 'running';
 export const AGENT_ACTIVITY_UNREAD = 'unread';
@@ -63,6 +64,7 @@ export const TERMINAL_RUN_EVENTS = new Set([
   'run_completed',
   'run_failed',
   'run_cancelled',
+  'run_interrupted',
 ]);
 const TERMINAL_VISIBLE_DRAFT_EVENT_TYPES = new Set([
   RUN_EVENT_ASSISTANT_OUTPUT_DELTA,
@@ -191,6 +193,9 @@ export function createChatController({
     }
     if (status === 'cancelled' || status === 'canceled') {
       return 'cancelled';
+    }
+    if (status === 'interrupted') {
+      return 'interrupted';
     }
     if (status === 'queued') {
       return 'queued';
@@ -1810,6 +1815,9 @@ function terminalStatus(eventType) {
   }
   if (eventType === 'run_cancelled') {
     return CHAT_STATUS_CANCELLED;
+  }
+  if (eventType === 'run_interrupted') {
+    return CHAT_STATUS_INTERRUPTED;
   }
   return CHAT_STATUS_COMPLETED;
 }
