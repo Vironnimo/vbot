@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import queue
 from collections.abc import AsyncIterator, Mapping, Sequence
 from pathlib import Path
@@ -13,7 +12,6 @@ import pytest
 import pytest_asyncio
 
 import core.tools.terminal_manager as terminal_module
-from core.tools.terminal_hook_sink import TERMINAL_HOOK_EVENT_VERSION
 from core.tools.terminal_manager import (
     TerminalCursorError,
     TerminalManager,
@@ -113,7 +111,11 @@ class PendingTriggerService:
 @pytest_asyncio.fixture
 async def terminal_manager() -> AsyncIterator[tuple[TerminalManager, AdapterFactory]]:
     factory = AdapterFactory()
-    manager = TerminalManager(adapter_factory=factory, sweep_interval_seconds=3600)
+    manager = TerminalManager(
+        adapter_factory=factory,
+        sweep_interval_seconds=3600,
+        activity_quiet_seconds=0.03,
+    )
     manager.start()
     try:
         yield manager, factory
@@ -248,12 +250,12 @@ async def test_operator_stream_starts_with_ansi_snapshot_and_continues_in_sequen
 
     next_event = asyncio.create_task(anext(stream))
     adapter.emit("next")
-    output = await asyncio.wait_for(next_event, timeout=1)
-    assert output == {
-        "type": "terminal_output",
-        "sequence": ready["sequence"] + 1,
-        "data": "next",
-    }
+    event = await asyncio.wait_for(next_event, timeout=1)
+    while event["type"] != "terminal_output":
+        assert event["sequence"] > ready["sequence"]
+        event = await asyncio.wait_for(anext(stream), timeout=1)
+    assert event["data"] == "next"
+    assert event["sequence"] > ready["sequence"]
     await stream.aclose()
 
 
@@ -272,7 +274,7 @@ async def test_operator_controls_same_live_session_and_changed_callbacks(
 
     result = await manager.send_operator_input(session.terminal_id, "hello\r")
     assert result["state"] == "working"
-    assert factory.adapters[0].writes == ["hello", "\r"]
+    assert factory.adapters[0].writes == ["hello\r"]
 
     resized = await manager.resize_for_operator(session.terminal_id, columns=90, rows=28)
     assert resized["columns"] == 90
@@ -320,57 +322,82 @@ async def test_status_is_bounded_and_scrollback_cursor_is_signed(
 
 
 @pytest.mark.asyncio
-async def test_codex_hooks_project_question_approval_and_turn_completion(
+async def test_launch_passes_every_program_exact_argv_without_private_environment(
     terminal_manager: tuple[TerminalManager, AdapterFactory], tmp_path: Path
 ) -> None:
     manager, factory = terminal_manager
-    session = await spawn(manager, tmp_path, command="codex")
-    assert session.event_nonce is not None
+    session = await manager.spawn(
+        owner(),
+        ["codex", "--profile", "work"],
+        cwd=tmp_path,
+        env={"CALLER_VALUE": "unchanged"},
+        columns=120,
+        rows=32,
+        origin_run_id="run-a",
+    )
     launch_argv, _cwd, launch_env, _rows, _columns = factory.calls[0]
-    assert "--no-alt-screen" in launch_argv
-    assert "hooks.Stop=" in " ".join(launch_argv)
-    assert launch_env["VBOT_TERMINAL_EVENT_NONCE"] == session.event_nonce
+    assert launch_argv == ["codex", "--profile", "work"]
+    assert launch_env["CALLER_VALUE"] == "unchanged"
+    assert not any(name.startswith("VBOT_TERMINAL_") for name in launch_env)
+    assert not hasattr(session, "codex_integration")
 
-    question = {
-        "hook_event_name": "PreToolUse",
-        "session_id": "codex-session",
-        "turn_id": "turn-1",
-        "tool_use_id": "question-1",
-        "tool_name": "request_user_input",
-        "tool_input": {"questions": [{"question": "red or blue?"}]},
-    }
-    await manager._consume_hook_record(session, _record(session, question))
-    await manager._consume_hook_record(session, _record(session, question))
-    assert session.state == "needs_input"
-    assert session.attention_revision == 1
-    assert session.attention is not None
-    assert session.attention.kind == "question"
-    assert session.attention.details["questions"] == [{"question": "red or blue?"}]
 
-    approval = {
-        "hook_event_name": "PermissionRequest",
-        "session_id": "codex-session",
-        "turn_id": "turn-1",
-        "tool_use_id": "approval-1",
-        "tool_name": "Bash",
-        "tool_input": {"command": "echo hello"},
-    }
-    await manager._consume_hook_record(session, _record(session, approval))
-    assert session.attention is not None
-    assert session.attention.kind == "approval"
-    assert session.attention.details["tool_input"] == {"command": "echo hello"}
+@pytest.mark.asyncio
+async def test_exact_agent_data_and_named_keys_share_the_generic_pty(
+    terminal_manager: tuple[TerminalManager, AdapterFactory], tmp_path: Path
+) -> None:
+    manager, factory = terminal_manager
+    session = await spawn(manager, tmp_path)
 
-    complete = {
-        "hook_event_name": "Stop",
-        "session_id": "codex-session",
-        "turn_id": "turn-1",
-        "last_assistant_message": "Finished cleanly.",
-    }
-    await manager._consume_hook_record(session, _record(session, complete))
-    assert session.state == "turn_complete"
-    assert session.adapter.is_alive()
-    assert session.attention is not None
-    assert session.attention.details["final_message"] == "Finished cleanly."
+    raw = "\x1b[200~paste\r\n\x1b[201~"
+    sent = await manager.send_input(
+        session.terminal_id,
+        owner(),
+        data=raw,
+        text=None,
+        key=None,
+        enter=False,
+        expected_screen_revision=None,
+        origin_run_id="run-b",
+    )
+    await manager.send_input(
+        session.terminal_id,
+        owner(),
+        data=None,
+        text=None,
+        key="f12",
+        enter=False,
+        expected_screen_revision=None,
+        origin_run_id="run-b",
+    )
+
+    assert factory.adapters[0].writes == [raw, "\x1b[24~"]
+    assert sent["characters_sent"] == len(raw)
+
+
+@pytest.mark.asyncio
+async def test_operator_activity_settles_without_automatic_agent_wakeup(tmp_path: Path) -> None:
+    trigger = PendingTriggerService()
+    factory = AdapterFactory()
+    manager = TerminalManager(
+        trigger,
+        adapter_factory=factory,
+        sweep_interval_seconds=3600,
+        activity_quiet_seconds=0.03,
+    )
+    manager.start()
+    try:
+        session = await spawn(manager, tmp_path)
+        await manager.send_operator_input(session.terminal_id, "look\r")
+        factory.adapters[0].emit("screen changed")
+        await eventually(lambda: session.attention_revision == 1)
+
+        assert session.state == "ready"
+        assert session.attention is not None
+        assert session.attention.kind == "output_settled"
+        assert trigger.submissions == []
+    finally:
+        await manager.aclose()
 
 
 @pytest.mark.asyncio
@@ -400,25 +427,37 @@ async def test_attention_auto_delivers_and_manual_ack_cancels_exactly_once(
 ) -> None:
     trigger = PendingTriggerService()
     factory = AdapterFactory()
-    manager = TerminalManager(trigger, adapter_factory=factory, sweep_interval_seconds=3600)
+    manager = TerminalManager(
+        trigger,
+        adapter_factory=factory,
+        sweep_interval_seconds=3600,
+        activity_quiet_seconds=0.03,
+    )
     manager.start()
     try:
-        session = await spawn(manager, tmp_path, command="codex")
-        complete = {
-            "hook_event_name": "Stop",
-            "session_id": "codex-session",
-            "turn_id": "turn-1",
-            "last_assistant_message": "Done.",
-        }
-        await manager._consume_hook_record(session, _record(session, complete))
+        session = await spawn(manager, tmp_path)
+        await manager.send_input(
+            session.terminal_id,
+            owner(),
+            data=None,
+            text="do work",
+            key=None,
+            enter=True,
+            expected_screen_revision=None,
+            origin_run_id="run-b",
+        )
+        factory.adapters[0].emit("working...\r\nREADY> ")
         await eventually(lambda: len(trigger.submissions) == 1)
 
         args, kwargs = trigger.submissions[0]
         assert args == ("agent-a", "session-a")
-        assert kwargs["origin_run_id"] == "run-a"
+        assert kwargs["origin_run_id"] == "run-b"
         assert kwargs["project_id"] == "project-a"
-        assert "Codex turn complete" in kwargs["body"]
-        assert "Terminal Session remains open" in kwargs["body"]
+        assert "Terminal output settled" in kwargs["body"]
+        assert "does not imply" in kwargs["body"]
+        assert "Reuse this Terminal Session" in kwargs["body"]
+        assert session.attention is not None
+        assert session.attention.kind == "output_settled"
 
         manager.acknowledge_attention(session.terminal_id, owner(), 1)
         await asyncio.sleep(0)
@@ -431,24 +470,67 @@ async def test_attention_auto_delivers_and_manual_ack_cancels_exactly_once(
 
 
 @pytest.mark.asyncio
+async def test_new_output_postpones_a_pending_agent_wakeup_to_the_next_quiet_boundary(
+    tmp_path: Path,
+) -> None:
+    trigger = PendingTriggerService()
+    factory = AdapterFactory()
+    manager = TerminalManager(
+        trigger,
+        adapter_factory=factory,
+        sweep_interval_seconds=3600,
+        activity_quiet_seconds=0.03,
+    )
+    manager.start()
+    try:
+        session = await spawn(manager, tmp_path)
+        await manager.send_input(
+            session.terminal_id,
+            owner(),
+            data="begin",
+            text=None,
+            key=None,
+            enter=False,
+            expected_screen_revision=None,
+            origin_run_id="run-b",
+        )
+        await eventually(lambda: len(trigger.submissions) == 1)
+
+        factory.adapters[0].emit("late output")
+        await eventually(lambda: len(trigger.cancellations) == 1)
+        await eventually(lambda: len(trigger.submissions) == 2)
+
+        assert session.attention_revision == 2
+        assert session.attention is not None
+        assert session.attention.kind == "output_settled"
+        assert trigger.submissions[0][1]["notice_id"] != trigger.submissions[1][1]["notice_id"]
+        assert trigger.submissions[1][1]["origin_run_id"] == "run-b"
+    finally:
+        await manager.aclose()
+
+
+@pytest.mark.asyncio
 async def test_session_move_reroutes_pending_attention_to_new_owner(tmp_path: Path) -> None:
     trigger = PendingTriggerService()
     factory = AdapterFactory()
-    manager = TerminalManager(trigger, adapter_factory=factory, sweep_interval_seconds=3600)
+    manager = TerminalManager(
+        trigger,
+        adapter_factory=factory,
+        sweep_interval_seconds=3600,
+        activity_quiet_seconds=0.03,
+    )
     manager.start()
     try:
-        session = await spawn(manager, tmp_path, command="codex")
-        await manager._consume_hook_record(
-            session,
-            _record(
-                session,
-                {
-                    "hook_event_name": "Stop",
-                    "session_id": "codex-session",
-                    "turn_id": "turn-1",
-                    "last_assistant_message": "Done.",
-                },
-            ),
+        session = await spawn(manager, tmp_path)
+        await manager.send_input(
+            session.terminal_id,
+            owner(),
+            data=None,
+            text="do work",
+            key=None,
+            enter=True,
+            expected_screen_revision=None,
+            origin_run_id="run-b",
         )
         await eventually(lambda: len(trigger.submissions) == 1)
         target = TerminalOwner("project-b", "agent-b", "session-a")
@@ -463,13 +545,3 @@ async def test_session_move_reroutes_pending_attention_to_new_owner(tmp_path: Pa
         assert manager.get_session(session.terminal_id, target) is session
     finally:
         await manager.aclose()
-
-
-def _record(session: Any, event: dict[str, Any]) -> bytes:
-    return json.dumps(
-        {
-            "version": TERMINAL_HOOK_EVENT_VERSION,
-            "nonce": session.event_nonce,
-            "event": event,
-        }
-    ).encode("utf-8")

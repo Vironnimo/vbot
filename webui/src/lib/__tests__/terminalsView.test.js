@@ -21,7 +21,7 @@ describe('terminal list projection', () => {
     reconcileTerminalList(state, {
       terminals: [
         terminal('term-1'),
-        terminal('term-2', { state: 'needs_input' }),
+        terminal('term-2', { state: 'ready' }),
         terminal('term-3', { state: 'exited' }),
       ],
     });
@@ -31,7 +31,7 @@ describe('terminal list projection', () => {
       'term-1',
       'term-2',
     ]);
-    expect(selectedTerminal(state)?.state).toBe('needs_input');
+    expect(selectedTerminal(state)?.state).toBe('ready');
   });
 });
 
@@ -148,7 +148,7 @@ function terminal(terminalId, changes = {}) {
   return {
     terminal_id: terminalId,
     state: 'working',
-    command: 'codex',
+    command: 'python',
     workdir: 'C:\\repo',
     pid: 123,
     started_at: '2026-08-03T12:00:00+00:00',
@@ -160,7 +160,6 @@ function terminal(terminalId, changes = {}) {
       session_id: 'session-1',
     },
     attention: null,
-    integration: 'codex',
     ...changes,
   };
 }

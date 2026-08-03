@@ -27,7 +27,11 @@ from tests.core.tools.test_terminal_manager import AdapterFactory, eventually
 @pytest_asyncio.fixture
 async def manager() -> AsyncIterator[tuple[TerminalManager, AdapterFactory]]:
     factory = AdapterFactory()
-    manager = TerminalManager(adapter_factory=factory, sweep_interval_seconds=3600)
+    manager = TerminalManager(
+        adapter_factory=factory,
+        sweep_interval_seconds=3600,
+        activity_quiet_seconds=0.03,
+    )
     manager.start()
     try:
         yield manager, factory
@@ -72,11 +76,19 @@ def test_schema_matches_flat_action_tool_conventions() -> None:
     assert properties["rows"]["default"] == 32
     assert properties["lines"]["default"] == 30
     assert properties["timeout_ms"]["default"] == TERMINAL_BETA_DEFAULT_WAIT_MS
-    assert "Omit to launch Codex" in properties["command"]["description"]
+    assert properties["command"]["default"] == TERMINAL_BETA_DEFAULT_COMMAND
+    assert "no program-specific flags" in properties["command"]["description"]
+    assert "sent unchanged" in properties["data"]["description"]
+    assert properties["data"]["maxLength"] == 65_536
+    assert properties["text"]["maxLength"] == 65_536
+    assert "f12" in properties["key"]["enum"]
+    assert "ctrl_z" in properties["key"]["enum"]
     assert "When set, send only action" in properties["cursor"]["description"]
     assert "survive individual Runs" in TERMINAL_BETA_TOOL_DESCRIPTION
-    assert "automatically wakes" in TERMINAL_BETA_TOOL_DESCRIPTION
-    assert "leaves the Terminal Session open and reusable" in TERMINAL_BETA_TOOL_DESCRIPTION
+    assert "without program-specific flags, hooks, or configuration" in (
+        TERMINAL_BETA_TOOL_DESCRIPTION
+    )
+    assert "Quiet output is only an activity boundary" in TERMINAL_BETA_TOOL_DESCRIPTION
 
     registry = ToolRegistry()
     register_terminal_beta_tool(registry, TerminalManager(adapter_factory=AdapterFactory()))
@@ -86,7 +98,7 @@ def test_schema_matches_flat_action_tool_conventions() -> None:
 
 
 @pytest.mark.asyncio
-async def test_start_defaults_to_codex_and_returns_non_polling_handoff(
+async def test_start_defaults_to_unmodified_codex_and_returns_non_polling_handoff(
     manager: tuple[TerminalManager, AdapterFactory], tmp_path: Path
 ) -> None:
     terminal_manager, factory = manager
@@ -98,11 +110,12 @@ async def test_start_defaults_to_codex_and_returns_non_polling_handoff(
     assert data["command"] == TERMINAL_BETA_DEFAULT_COMMAND
     assert data["columns"] == 120
     assert data["rows"] == 32
-    assert data["delivery"] == "automatic_attention"
+    assert data["delivery"] == "automatic_terminal_activity"
     assert "continues independently of this vBot Run" in data["handoff_note"]
+    assert "Quiet output does not prove" in data["handoff_note"]
     assert "do not poll" in data["handoff_note"]
-    assert factory.calls[0][0][0] == TERMINAL_BETA_DEFAULT_COMMAND
-    assert "--no-alt-screen" in factory.calls[0][0]
+    assert factory.calls[0][0] == [TERMINAL_BETA_DEFAULT_COMMAND]
+    assert not any(name.startswith("VBOT_TERMINAL_") for name in factory.calls[0][2])
 
 
 @pytest.mark.asyncio
@@ -153,7 +166,7 @@ async def test_list_is_session_scoped_and_status_paginates(
 
 
 @pytest.mark.asyncio
-async def test_input_defaults_to_separate_enter_and_rejects_stale_screen(
+async def test_input_supports_convenient_and_exact_data_and_rejects_stale_screen(
     manager: tuple[TerminalManager, AdapterFactory], tmp_path: Path
 ) -> None:
     terminal_manager, factory = manager
@@ -198,7 +211,16 @@ async def test_input_defaults_to_separate_enter_and_rejects_stale_screen(
     )
     assert result["ok"] is True
     assert factory.adapters[0].writes == ["answer", "\r"]
-    assert cast(dict[str, Any], result["data"])["delivery"] == "automatic_attention"
+    assert cast(dict[str, Any], result["data"])["delivery"] == ("automatic_terminal_activity")
+
+    raw = "\x1b[200~more\r\n\x1b[201~"
+    exact = await call(
+        terminal_manager,
+        context,
+        {"action": "input", "terminal_id": terminal_id, "data": raw},
+    )
+    assert exact["ok"] is True
+    assert factory.adapters[0].writes[-1] == raw
 
 
 @pytest.mark.asyncio
@@ -221,10 +243,10 @@ async def test_manual_attention_result_acknowledges_only_after_persistence(
     )
     terminal_manager._set_attention(
         session,
-        kind="question",
-        turn_id="turn-a",
-        summary="Answer required.",
-        details={"questions": []},
+        kind="output_settled",
+        summary="Output is quiet.",
+        details={"screen_revision": 0},
+        deliver=False,
     )
 
     status = await call(
@@ -246,6 +268,12 @@ async def test_manual_attention_result_acknowledges_only_after_persistence(
         {"action": "list", "terminal_id": "not-accepted"},
         {"action": "status"},
         {"action": "input", "terminal_id": "missing", "key": "space"},
+        {
+            "action": "input",
+            "terminal_id": "missing",
+            "data": "raw",
+            "enter": False,
+        },
         {"action": "resize", "terminal_id": "missing", "columns": 120},
         {"action": "unknown"},
     ),
