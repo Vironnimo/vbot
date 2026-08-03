@@ -57,8 +57,9 @@ TERMINAL_BETA_TOOL_DESCRIPTION = (
     "or when the process exits or the terminal fails. Quiet output is only an activity boundary: "
     "inspect status to decide whether the program is working, waiting for input, or finished. Use "
     "data for exact terminal sequences, text/key/enter for convenient input, status for the "
-    "rendered screen and paginated scrollback, wait only for a short same-Run pause, resize for "
-    "TUI dimensions, and kill only when the process tree should end. Reuse a live Terminal "
+    "rendered screen and paginated scrollback, and list/status titles announced by programs "
+    "through the standard terminal protocol. Use wait only for a short same-Run pause, resize "
+    "for TUI dimensions, and kill only when the process tree should end. Reuse a live Terminal "
     "Session for later work instead of starting a duplicate process."
 )
 
@@ -542,6 +543,7 @@ def _terminal_summary(session: TerminalSession) -> JsonObject:
         "terminal_id": session.terminal_id,
         "state": session.state,
         "command": session.command,
+        "title": session.renderer.title,
         "workdir": str(session.cwd),
         "pid": session.adapter.pid,
         "exit_code": session.exit_code,

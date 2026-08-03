@@ -361,6 +361,29 @@
     return projectId ? `${agentId}@${projectId}` : agentId;
   }
 
+  function terminalTitle(item) {
+    const announcedTitle =
+      typeof item?.title === 'string' ? item.title.trim() : '';
+    if (announcedTitle) {
+      return announcedTitle;
+    }
+    const command = String(item?.command || '').trim();
+    const executable = command.split(/[\\/]/).pop()?.toLowerCase() || '';
+    const labels = {
+      'pwsh.exe': 'PowerShell',
+      pwsh: 'PowerShell',
+      'powershell.exe': 'Windows PowerShell',
+      powershell: 'Windows PowerShell',
+      'cmd.exe': 'Command Prompt',
+      cmd: 'Command Prompt',
+      'bash.exe': 'Bash',
+      bash: 'Bash',
+      zsh: 'Zsh',
+      fish: 'Fish',
+    };
+    return labels[executable] || command || 'Terminal';
+  }
+
   function terminalSession(item) {
     return (
       item?.owner?.session_id || t('terminals.localOperator', 'Local operator')
@@ -527,7 +550,10 @@
             onclick={() => controller.selectTerminal(item.terminal_id)}
           >
             <span class="terminals-view__item-topline">
-              <span class="terminals-view__command">{item.command}</span>
+              <span
+                class="terminals-view__item-title"
+                use:tooltip={terminalTitle(item)}>{terminalTitle(item)}</span
+              >
               <span
                 class={`terminals-view__state-dot terminals-view__state-dot--${item.state}`}
                 aria-hidden="true"
@@ -585,12 +611,15 @@
       <div class="terminals-view__toolbar view-toolbar view-toolbar--split">
         <div class="terminals-view__identity">
           <span class="terminals-view__identity-primary">
-            <span>{terminal.command}</span>
+            <span use:tooltip={terminalTitle(terminal)}
+              >{terminalTitle(terminal)}</span
+            >
             <span class="terminals-view__target-marker"
               >{terminalTarget(terminal)}</span
             >
           </span>
           <span class="terminals-view__identity-meta">
+            <span use:tooltip={terminal.command}>{terminal.command}</span>
             <span>PID {terminal.pid}</span>
             <span>{terminal.columns}×{terminal.rows}</span>
             <span use:tooltip={terminal.workdir}>{terminal.workdir}</span>
@@ -905,7 +934,7 @@
     gap: 8px;
   }
 
-  .terminals-view__command,
+  .terminals-view__item-title,
   .terminals-view__target,
   .terminals-view__item-meta {
     overflow: hidden;
@@ -914,7 +943,7 @@
     white-space: nowrap;
   }
 
-  .terminals-view__command {
+  .terminals-view__item-title {
     color: var(--text-hi);
     font-size: var(--fs-mono-body);
     font-weight: 500;

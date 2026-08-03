@@ -22,6 +22,7 @@ from core.tools.process_manager import subprocess_creation_flags
 _HARD_KILL_SIGNAL = getattr(signal, "SIGKILL", 9)
 _ALTERNATE_SCREEN_MODES = frozenset({47, 1047, 1049})
 _WINDOWS_INTERACTIVE_SHELLS = ("pwsh.exe", "powershell.exe")
+TERMINAL_TITLE_MAX_CHARS = 160
 _SCREEN_STATE_FIELDS = (
     "savepoints",
     "columns",
@@ -220,6 +221,11 @@ class TerminalRenderer:
             lines.pop()
         return "\n".join(lines)
 
+    @property
+    def title(self) -> str:
+        """Return one bounded single-line title announced through the VT stream."""
+        return _normalize_terminal_title(self._screen.title or self._screen.icon_name)
+
     def ansi_snapshot(self) -> str:
         """Serialize the current screen into bounded ANSI for a late viewer."""
         parts = ["\x1b[?25l", "\x1b[0m", "\x1b[2J", "\x1b[H"]
@@ -391,6 +397,13 @@ def _render_buffer_line(line: Any, columns: int) -> str:
     return "".join(line[column].data for column in range(columns)).rstrip()
 
 
+def _normalize_terminal_title(value: object) -> str:
+    printable = "".join(
+        character if character.isprintable() else " " for character in str(value or "")
+    )
+    return " ".join(printable.split())[:TERMINAL_TITLE_MAX_CHARS]
+
+
 def _cell_style(cell: Any) -> tuple[Any, ...]:
     return (
         cell.fg,
@@ -445,6 +458,7 @@ __all__ = [
     "TerminalAdapter",
     "TerminalAdapterFactory",
     "TerminalRenderer",
+    "TERMINAL_TITLE_MAX_CHARS",
     "default_terminal_argv",
     "spawn_terminal_adapter",
     "terminate_process_tree",

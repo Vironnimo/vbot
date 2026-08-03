@@ -110,6 +110,7 @@ describe('TerminalsView', () => {
       type: 'terminal_ready',
       sequence: 2,
       terminal: terminal({
+        title: 'Auth refactor · Codex',
         columns: 100,
         rows: 28,
         attention: {
@@ -122,6 +123,7 @@ describe('TerminalsView', () => {
     });
     flushSync();
 
+    expect(document.body.textContent).toContain('Auth refactor · Codex');
     expect(document.body.textContent).toContain('python');
     expect(document.body.textContent).toContain('PTY');
     expect(document.body.textContent).toContain('main@vbot');
@@ -154,6 +156,18 @@ describe('TerminalsView', () => {
 
     expect(document.body.textContent).toContain('Open a terminal');
     expect(subscribeTerminalEventsMock).not.toHaveBeenCalled();
+  });
+
+  it('humanizes a shell command while no program has announced a title', async () => {
+    listTerminalsMock.mockResolvedValue({
+      terminals: [terminal({ command: 'pwsh.exe', title: '' })],
+    });
+    mountedComponent = mount(TerminalsView, { target: document.body });
+    flushSync();
+    await waitFor(() => streams.length === 1);
+
+    expect(document.body.textContent).toContain('PowerShell');
+    expect(document.body.textContent).toContain('pwsh.exe');
   });
 
   it('starts a manual terminal from the modal and enables direct control', async () => {
@@ -231,6 +245,7 @@ function terminal(changes = {}) {
     terminal_id: 'term-1',
     state: 'working',
     command: 'python',
+    title: '',
     workdir: 'C:\\Development\\vBot',
     pid: 4321,
     started_at: '2026-08-03T12:00:00+00:00',

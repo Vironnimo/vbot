@@ -73,11 +73,12 @@ async function stopSelectedTerminal(page) {
 }
 
 function pythonHarness(label, backgroundDelaySeconds = null) {
+  const setTitle = `lambda value:(sys.stdout.write('\\x1b]0;'+value+'\\x07'),sys.stdout.flush())`;
   const background =
     backgroundDelaySeconds === null
       ? ""
-      : `threading.Timer(${backgroundDelaySeconds},lambda:print('BACKGROUND-${label}',flush=True)).start();`;
-  return `import sys,threading;print('READY-${label}',flush=True);${background}[print('${label}:'+line.rstrip(),flush=True) for line in sys.stdin]`;
+      : `threading.Timer(${backgroundDelaySeconds},lambda:(set_title('E2E-${label} active'),print('BACKGROUND-${label}',flush=True))).start();`;
+  return `import sys,threading;set_title=${setTitle};set_title('E2E-${label}');print('READY-${label}',flush=True);${background}[print('${label}:'+line.rstrip(),flush=True) for line in sys.stdin]`;
 }
 
 function windowsCommandExists(command) {
@@ -100,6 +101,20 @@ function expectedDefaultShell() {
     return "powershell.exe";
   }
   return process.env.COMSPEC || "cmd.exe";
+}
+
+function expectedDefaultShellTitle(command) {
+  const executable = command.split(/[\\/]/).pop().toLowerCase();
+  if (executable === "pwsh.exe" || executable === "pwsh") {
+    return "PowerShell";
+  }
+  if (executable === "powershell.exe" || executable === "powershell") {
+    return "Windows PowerShell";
+  }
+  if (executable === "cmd.exe" || executable === "cmd") {
+    return "Command Prompt";
+  }
+  return command;
 }
 
 function defaultShellProbe(command) {
@@ -127,7 +142,7 @@ test("the platform default shell starts as a native interactive terminal", async
 
   const expectedCommand = expectedDefaultShell();
   await expect(page.locator(".terminals-view__identity-primary")).toContainText(
-    expectedCommand,
+    expectedDefaultShellTitle(expectedCommand),
   );
   await sendToSelectedTerminal(page, defaultShellProbe(expectedCommand));
   await expect(terminalOutput(page)).toContainText(DEFAULT_SHELL_MARKER);
@@ -144,6 +159,7 @@ test("multiple terminals keep output, input, reconnect, and stop lifecycle isola
     arguments: ["-u", "-c", pythonHarness("ALPHA", 1)],
   });
   await expect(terminalItems).toHaveCount(1);
+  await expect(terminalItems.nth(0)).toContainText("E2E-ALPHA");
   await expect(terminalOutput(page)).toContainText("READY-ALPHA");
 
   await startTerminal(page, {
@@ -152,11 +168,13 @@ test("multiple terminals keep output, input, reconnect, and stop lifecycle isola
   });
   await expect(terminalItems).toHaveCount(2);
   await expect(terminalItems.nth(0)).toHaveAttribute("aria-current", "true");
+  await expect(terminalItems.nth(0)).toContainText("E2E-BRAVO");
   await expect(terminalOutput(page)).toContainText("READY-BRAVO");
   await sendToSelectedTerminal(page, "message-for-bravo");
   await expect(terminalOutput(page)).toContainText("BRAVO:message-for-bravo");
 
   await terminalItems.nth(1).click();
+  await expect(terminalItems.nth(1)).toContainText("E2E-ALPHA active");
   await expect(terminalOutput(page)).toContainText("BACKGROUND-ALPHA");
   await expect(terminalOutput(page)).not.toContainText(
     "BRAVO:message-for-bravo",
