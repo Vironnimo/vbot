@@ -83,7 +83,8 @@ def test_schema_matches_flat_action_tool_conventions() -> None:
     assert properties["text"]["maxLength"] == 65_536
     assert "f12" in properties["key"]["enum"]
     assert "ctrl_z" in properties["key"]["enum"]
-    assert "When set, send only action" in properties["cursor"]["description"]
+    assert "next_request unchanged" in properties["cursor"]["description"]
+    assert "May be used with or without cursor" in properties["lines"]["description"]
     assert "survive individual Runs" in TERMINAL_BETA_TOOL_DESCRIPTION
     assert "without program-specific flags, hooks, or configuration" in (
         TERMINAL_BETA_TOOL_DESCRIPTION
@@ -95,6 +96,15 @@ def test_schema_matches_flat_action_tool_conventions() -> None:
     tool = registry.get(TERMINAL_BETA_TOOL_NAME)
     assert tool.open_input_schema is True
     assert tool.display.summary({"action": "start"}) == "start · codex"
+    with pytest.raises(ValueError, match="greater than the maximum of 100"):
+        tool.contract.validate_arguments(
+            {
+                "action": "status",
+                "terminal_id": "terminal-a",
+                "cursor": "signed-cursor",
+                "lines": 150,
+            }
+        )
 
 
 @pytest.mark.asyncio
@@ -157,16 +167,34 @@ async def test_list_is_session_scoped_and_status_paginates(
     scrollback = status_data["scrollback"]
     assert scrollback["line_count"] == 3
     assert scrollback["next_cursor"] is not None
+    assert scrollback["next_request"] == {
+        "action": "status",
+        "terminal_id": terminal_id,
+        "cursor": scrollback["next_cursor"],
+        "lines": 3,
+    }
     continued = await call(
+        terminal_manager,
+        context,
+        cast(dict[str, Any], scrollback["next_request"]),
+    )
+    assert continued["ok"] is True
+    continued_scrollback = cast(dict[str, Any], continued["data"])["scrollback"]
+    assert continued_scrollback["line_count"] == 3
+    assert continued_scrollback["next_request"]["lines"] == 3
+
+    larger_continuation = await call(
         terminal_manager,
         context,
         {
             "action": "status",
             "terminal_id": terminal_id,
             "cursor": scrollback["next_cursor"],
+            "lines": 100,
         },
     )
-    assert continued["ok"] is True
+    assert larger_continuation["ok"] is True
+    assert cast(dict[str, Any], larger_continuation["data"])["scrollback"]["line_count"] > 3
 
 
 @pytest.mark.asyncio

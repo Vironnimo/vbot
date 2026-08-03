@@ -58,9 +58,10 @@ TERMINAL_BETA_TOOL_DESCRIPTION = (
     "inspect status to decide whether the program is working, waiting for input, or finished. Use "
     "data for exact terminal sequences, text/key/enter for convenient input, status for the "
     "rendered screen and paginated scrollback, and list/status titles announced by programs "
-    "through the standard terminal protocol. Use wait only for a short same-Run pause, resize "
-    "for TUI dimensions, and kill only when the process tree should end. Reuse a live Terminal "
-    "Session for later work instead of starting a duplicate process."
+    "through the standard terminal protocol. Follow scrollback.next_request unchanged to read "
+    "each older status page. Use wait only for a short same-Run pause, resize for TUI dimensions, "
+    "and kill only when the process tree should end. Reuse a live Terminal Session for later "
+    "work instead of starting a duplicate process."
 )
 
 _ACTION_FIELDS = {
@@ -178,16 +179,16 @@ TERMINAL_BETA_TOOL_PARAMETERS: JsonObject = {
             "default": TERMINAL_STATUS_DEFAULT_LINES,
             "description": (
                 f"Prior scrollback lines for status; default {TERMINAL_STATUS_DEFAULT_LINES}, "
-                f"maximum {TERMINAL_STATUS_MAX_LINES}. The current rendered screen is "
-                "returned separately."
+                f"maximum {TERMINAL_STATUS_MAX_LINES}. May be used with or without cursor. The "
+                "current rendered screen is returned separately."
             ),
         },
         "cursor": {
             "type": "string",
             "minLength": 1,
             "description": (
-                "Older-scrollback continuation returned by status. When set, send only action, "
-                "terminal_id, and cursor."
+                "Signed older-scrollback continuation returned by status. May be combined with "
+                "lines to choose a page size; prefer passing scrollback.next_request unchanged."
             ),
         },
         "after_revision": {
@@ -375,28 +376,25 @@ async def _handle_status(
     arguments: JsonObject,
 ) -> JsonObject:
     terminal_id = required_string(arguments.get("terminal_id"), field_name="terminal_id")
+    lines = optional_int(
+        arguments.get("lines"),
+        field_name="lines",
+        default=TERMINAL_STATUS_DEFAULT_LINES,
+        minimum=1,
+        maximum=TERMINAL_STATUS_MAX_LINES,
+    )
+    assert lines is not None
     cursor = arguments.get("cursor")
     if cursor is not None:
         if not isinstance(cursor, str) or not cursor.strip():
             raise ValueError("cursor must be a non-empty string")
-        if set(arguments) != {"action", "terminal_id", "cursor"}:
-            raise ValueError("A cursor continuation accepts only action, terminal_id, and cursor")
         before = terminal_manager.decode_cursor(cursor, terminal_id)
-        lines = TERMINAL_STATUS_DEFAULT_LINES
     else:
         before = None
-        lines = optional_int(
-            arguments.get("lines"),
-            field_name="lines",
-            default=TERMINAL_STATUS_DEFAULT_LINES,
-            minimum=1,
-            maximum=TERMINAL_STATUS_MAX_LINES,
-        )
-        assert lines is not None
     owner = _owner(context)
     snapshot = await terminal_manager.snapshot(terminal_id, owner, lines=lines, before=before)
     _acknowledge_after_persistence(terminal_manager, context, owner, snapshot)
-    return tool_success(_project_snapshot(terminal_manager, snapshot))
+    return tool_success(_project_snapshot(terminal_manager, snapshot, page_lines=lines))
 
 
 async def _handle_wait(
@@ -524,13 +522,29 @@ async def _handle_kill(
     return tool_success(_project_snapshot(terminal_manager, snapshot))
 
 
-def _project_snapshot(terminal_manager: TerminalManager, snapshot: dict[str, Any]) -> JsonObject:
+def _project_snapshot(
+    terminal_manager: TerminalManager,
+    snapshot: dict[str, Any],
+    *,
+    page_lines: int = TERMINAL_STATUS_DEFAULT_LINES,
+) -> JsonObject:
     projected = dict(snapshot)
     scrollback = dict(projected.get("scrollback", {}))
     before = scrollback.pop("next_before", None)
-    scrollback["next_cursor"] = (
+    next_cursor = (
         terminal_manager.encode_cursor(str(snapshot["terminal_id"]), before)
         if isinstance(before, int)
+        else None
+    )
+    scrollback["next_cursor"] = next_cursor
+    scrollback["next_request"] = (
+        {
+            "action": "status",
+            "terminal_id": str(snapshot["terminal_id"]),
+            "cursor": next_cursor,
+            "lines": page_lines,
+        }
+        if next_cursor is not None
         else None
     )
     projected["scrollback"] = scrollback
