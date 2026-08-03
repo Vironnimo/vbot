@@ -11,6 +11,7 @@ import pytest
 from server.rpc.errors import RpcError
 from server.rpc.methods import build_method_handlers
 from server.rpc.terminal_methods import (
+    _terminal_forget,
     _terminal_input,
     _terminal_kill,
     _terminal_list,
@@ -24,9 +25,10 @@ class FakeTerminalManager:
         self.inputs: list[tuple[str, str]] = []
         self.resizes: list[tuple[str, int, int]] = []
         self.kills: list[str] = []
+        self.forgotten: list[str] = []
         self.starts: list[dict[str, Any]] = []
 
-    def list_active_for_operator(self) -> list[dict[str, Any]]:
+    def list_for_operator(self) -> list[dict[str, Any]]:
         return [{"terminal_id": "term-1", "state": "working"}]
 
     async def send_operator_input(self, terminal_id: str, data: str) -> dict[str, Any]:
@@ -45,6 +47,10 @@ class FakeTerminalManager:
 
     async def kill_for_operator(self, terminal_id: str) -> dict[str, Any]:
         self.kills.append(terminal_id)
+        return {"terminal_id": terminal_id, "state": "exited"}
+
+    def forget_for_operator(self, terminal_id: str) -> dict[str, Any]:
+        self.forgotten.append(terminal_id)
         return {"terminal_id": terminal_id, "state": "exited"}
 
 
@@ -83,9 +89,13 @@ async def test_terminal_operator_handlers_project_list_input_resize_and_kill() -
     assert await _terminal_kill(state, {"terminal_id": "term-1"}) == {
         "terminal": {"terminal_id": "term-1", "state": "exited"}
     }
+    assert _terminal_forget(state, {"terminal_id": "term-1"}) == {
+        "terminal": {"terminal_id": "term-1", "state": "exited"}
+    }
     assert manager.inputs == [("term-1", "status\r")]
     assert manager.resizes == [("term-1", 100, 30)]
     assert manager.kills == ["term-1"]
+    assert manager.forgotten == ["term-1"]
     assert manager.starts == [
         {
             "command": "codex",
@@ -116,4 +126,5 @@ async def test_terminal_operator_handlers_validate_and_register_contract() -> No
         "terminal.input",
         "terminal.resize",
         "terminal.kill",
+        "terminal.forget",
     } <= set(handlers)

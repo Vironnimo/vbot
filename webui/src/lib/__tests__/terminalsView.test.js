@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   TERMINAL_STREAM_CONNECTED,
   TERMINAL_STREAM_RECONNECTING,
+  TERMINAL_STREAM_SNAPSHOT,
   createTerminalsController,
   createTerminalsViewState,
   reconcileTerminalList,
@@ -14,7 +15,7 @@ afterEach(() => {
 });
 
 describe('terminal list projection', () => {
-  it('keeps a valid selection and excludes finished terminals', () => {
+  it('keeps a valid selection and includes retained finished terminals', () => {
     const state = createTerminalsViewState();
     state.selectedTerminalId = 'term-2';
 
@@ -30,6 +31,7 @@ describe('terminal list projection', () => {
     expect(state.terminals.map((item) => item.terminal_id)).toEqual([
       'term-1',
       'term-2',
+      'term-3',
     ]);
     expect(selectedTerminal(state)?.state).toBe('ready');
   });
@@ -88,7 +90,9 @@ describe('terminal live controller', () => {
     const controller = createTerminalsController({ state, api });
 
     await controller.start();
-    api.listTerminals.mockResolvedValueOnce({ terminals: [] });
+    api.listTerminals.mockResolvedValueOnce({
+      terminals: [terminal('term-1', { state: 'exited' })],
+    });
     streams[0].emit({
       type: 'terminal_ready',
       sequence: 5,
@@ -99,8 +103,12 @@ describe('terminal live controller', () => {
     await vi.runAllTimersAsync();
 
     expect(streams).toHaveLength(1);
-    expect(state.terminals).toEqual([]);
-    expect(state.selectedTerminalId).toBe('');
+    expect(state.streamStatus).toBe(TERMINAL_STREAM_SNAPSHOT);
+    expect(state.terminals[0]).toMatchObject({
+      terminal_id: 'term-1',
+      state: 'exited',
+    });
+    expect(state.selectedTerminalId).toBe('term-1');
     controller.destroy();
   });
 

@@ -22,12 +22,12 @@ export const englishCatalog = Object.freeze({
   'terminals.title': 'Terminals',
   'terminals.eyebrow': 'Live PTY / ConPTY',
   'terminals.subtitle':
-    'Open and use your own terminals, or watch and control the same interactive terminal an agent is using.',
-  'terminals.activeLabel': 'Active terminals',
-  'terminals.activeCount': '{count} active',
-  'terminals.loading': 'Loading active terminals…',
-  'terminals.listError': 'Active terminals could not be loaded.',
-  'terminals.emptyTitle': 'No active terminals',
+    'Open and use your own terminals, inspect their retained output, or watch and control the same interactive terminal an agent is using.',
+  'terminals.sessionsLabel': 'Terminal sessions',
+  'terminals.sessionCount': '{count} sessions',
+  'terminals.loading': 'Loading terminal sessions…',
+  'terminals.listError': 'Terminal sessions could not be loaded.',
+  'terminals.emptyTitle': 'No terminal sessions',
   'terminals.emptyDescription':
     'Open a manual terminal here, or monitor Terminal Sessions started by an agent.',
   'terminals.detailEmptyTitle': 'Open a terminal',
@@ -58,8 +58,11 @@ export const englishCatalog = Object.freeze({
   'terminals.controlLabel': 'Take control',
   'terminals.stop': 'Stop terminal',
   'terminals.liveTerminalLabel': 'Live terminal. Click to take control.',
+  'terminals.historyTerminalLabel': 'Retained terminal history.',
   'terminals.mode.control': 'Control enabled — keystrokes go to the process',
   'terminals.mode.observe': 'Observe mode — click terminal to take control',
+  'terminals.mode.history':
+    'Read-only history — retained temporarily after exit',
   'terminals.scrollLatest': 'Jump to latest',
   'terminals.stopConfirmTitle': 'Stop this Terminal Session?',
   'terminals.stopConfirmBody':
@@ -71,6 +74,7 @@ export const englishCatalog = Object.freeze({
   'terminals.stream.connecting': 'Connecting…',
   'terminals.stream.reconnecting': 'Reconnecting…',
   'terminals.stream.error': 'Stream error',
+  'terminals.stream.snapshot': 'History loaded',
   'terminals.stream.idle': 'Idle',
   'terminals.streamGap':
     'Terminal output continuity was lost; rebuilding the live screen.',

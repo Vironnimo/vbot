@@ -18,9 +18,11 @@
     TERMINAL_STREAM_CONNECTING,
     TERMINAL_STREAM_ERROR,
     TERMINAL_STREAM_RECONNECTING,
+    TERMINAL_STREAM_SNAPSHOT,
     createTerminalsController,
     createTerminalsViewState,
     selectedTerminal,
+    terminalIsFinished,
   } from '$lib/terminalsView.js';
   import { tooltip } from '$lib/tooltip.js';
 
@@ -52,6 +54,7 @@
   let scrollDisposable = null;
 
   let terminal = $derived(selectedTerminal(viewState));
+  let terminalFinished = $derived(terminalIsFinished(terminal));
   let streamStatusLabel = $derived(streamLabel(viewState.streamStatus));
   let streamStatusVariant = $derived(streamVariant(viewState.streamStatus));
 
@@ -100,6 +103,12 @@
       setControlEnabled(false);
       terminalScrolledBack = false;
       stopDialogOpen = false;
+    }
+  });
+
+  $effect(() => {
+    if (terminalFinished && controlEnabled) {
+      setControlEnabled(false);
     }
   });
 
@@ -263,7 +272,10 @@
   }
 
   function setControlEnabled(enabled) {
-    controlEnabled = enabled === true && Boolean(viewState.selectedTerminalId);
+    controlEnabled =
+      enabled === true &&
+      Boolean(viewState.selectedTerminalId) &&
+      !terminalFinished;
     if (!xterm) {
       return;
     }
@@ -280,7 +292,12 @@
   }
 
   function takeTerminalControl(event) {
-    if (event.button !== 0 || !terminal || serverUnavailable) {
+    if (
+      event.button !== 0 ||
+      !terminal ||
+      terminalFinished ||
+      serverUnavailable
+    ) {
       return;
     }
     setControlEnabled(true);
@@ -425,6 +442,9 @@
     if (status === TERMINAL_STREAM_ERROR) {
       return t('terminals.stream.error', 'Stream error');
     }
+    if (status === TERMINAL_STREAM_SNAPSHOT) {
+      return t('terminals.stream.snapshot', 'History loaded');
+    }
     return t('terminals.stream.idle', 'Idle');
   }
 
@@ -434,6 +454,9 @@
     }
     if (status === TERMINAL_STREAM_RECONNECTING) {
       return 'warn';
+    }
+    if (status === TERMINAL_STREAM_SNAPSHOT) {
+      return 'neutral';
     }
     if (status === TERMINAL_STREAM_ERROR) {
       return 'error';
@@ -499,11 +522,11 @@
   <aside class="terminals-view__list-pane secondary-pane">
     <div class="terminals-view__list-heading">
       <span class="secondary-pane__title">
-        {t('terminals.activeLabel', 'Active terminals')}
+        {t('terminals.sessionsLabel', 'Terminal sessions')}
       </span>
       <span
         class="terminals-view__count"
-        aria-label={t('terminals.activeCount', '{count} active', {
+        aria-label={t('terminals.sessionCount', '{count} sessions', {
           count: viewState.terminals.length,
         })}
       >
@@ -513,14 +536,14 @@
 
     {#if viewState.loading && viewState.terminals.length === 0}
       <Banner variant="neutral" class="terminals-view__list-feedback">
-        {t('terminals.loading', 'Loading active terminals…')}
+        {t('terminals.loading', 'Loading terminal sessions…')}
       </Banner>
     {:else if viewState.listError && !serverUnavailable}
       <Banner variant="error" class="terminals-view__list-feedback">
         <span
           >{t(
             'terminals.listError',
-            'Active terminals could not be loaded.',
+            'Terminal sessions could not be loaded.',
           )}</span
         >
         <Button variant="secondary" onClick={() => controller.loadTerminals()}>
@@ -530,7 +553,7 @@
     {:else if viewState.terminals.length === 0}
       <EmptyState
         density="compact"
-        title={t('terminals.emptyTitle', 'No active terminals')}
+        title={t('terminals.emptyTitle', 'No terminal sessions')}
         description={t(
           'terminals.emptyDescription',
           'Open a manual terminal here, or monitor Terminal Sessions started by an agent.',
@@ -556,7 +579,9 @@
               >
               <span
                 class={`terminals-view__state-dot terminals-view__state-dot--${item.state}`}
-                aria-hidden="true"
+                role="img"
+                aria-label={stateLabel(item.state)}
+                use:tooltip={stateLabel(item.state)}
               ></span>
             </span>
             <span class="terminals-view__target">{terminalTarget(item)}</span>
@@ -625,24 +650,26 @@
             <span use:tooltip={terminal.workdir}>{terminal.workdir}</span>
           </span>
         </div>
-        <div class="terminals-view__controls">
-          <label class="terminals-view__control-toggle">
-            <span>{t('terminals.controlLabel', 'Take control')}</span>
-            <Toggle
-              size="sm"
-              checked={controlEnabled}
-              onChange={setControlEnabled}
-              ariaLabel={t('terminals.controlLabel', 'Take control')}
-            />
-          </label>
-          <Button
-            variant="danger"
-            loading={viewState.killing}
-            onClick={() => (stopDialogOpen = true)}
-          >
-            {t('terminals.stop', 'Stop terminal')}
-          </Button>
-        </div>
+        {#if !terminalFinished}
+          <div class="terminals-view__controls">
+            <label class="terminals-view__control-toggle">
+              <span>{t('terminals.controlLabel', 'Take control')}</span>
+              <Toggle
+                size="sm"
+                checked={controlEnabled}
+                onChange={setControlEnabled}
+                ariaLabel={t('terminals.controlLabel', 'Take control')}
+              />
+            </label>
+            <Button
+              variant="danger"
+              loading={viewState.killing}
+              onClick={() => (stopDialogOpen = true)}
+            >
+              {t('terminals.stop', 'Stop terminal')}
+            </Button>
+          </div>
+        {/if}
       </div>
 
       {#if viewState.streamError && !serverUnavailable}
@@ -672,15 +699,20 @@
       >
         <div class="terminals-view__terminal-bar">
           <span class="terminals-view__terminal-mode">
-            {controlEnabled
+            {terminalFinished
               ? t(
-                  'terminals.mode.control',
-                  'Control enabled — keystrokes go to the process',
+                  'terminals.mode.history',
+                  'Read-only history — retained temporarily after exit',
                 )
-              : t(
-                  'terminals.mode.observe',
-                  'Observe mode — click terminal to take control',
-                )}
+              : controlEnabled
+                ? t(
+                    'terminals.mode.control',
+                    'Control enabled — keystrokes go to the process',
+                  )
+                : t(
+                    'terminals.mode.observe',
+                    'Observe mode — click terminal to take control',
+                  )}
           </span>
           <div class="terminals-view__terminal-bar-actions">
             {#if terminalScrolledBack}
@@ -700,8 +732,12 @@
           class="terminals-view__terminal-host"
           role="group"
           aria-label={t(
-            'terminals.liveTerminalLabel',
-            'Live terminal. Click to take control.',
+            terminalFinished
+              ? 'terminals.historyTerminalLabel'
+              : 'terminals.liveTerminalLabel',
+            terminalFinished
+              ? 'Retained terminal history.'
+              : 'Live terminal. Click to take control.',
           )}
           onpointerdown={takeTerminalControl}
         ></div>
@@ -854,7 +890,7 @@
   </Modal>
 {/if}
 
-{#if stopDialogOpen && terminal}
+{#if stopDialogOpen && terminal && !terminalFinished}
   <ConfirmDialog
     title={t('terminals.stopConfirmTitle', 'Stop this Terminal Session?')}
     body={t(
@@ -975,6 +1011,10 @@
 
   .terminals-view__state-dot--starting {
     background: var(--amber);
+  }
+
+  .terminals-view__state-dot--error {
+    background: var(--red);
   }
 
   .terminals-view__detail {

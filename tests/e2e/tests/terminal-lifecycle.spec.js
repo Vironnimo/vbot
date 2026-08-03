@@ -21,8 +21,16 @@ async function rpc(request, method, params = {}) {
 async function cleanupTerminals(request) {
   const result = await rpc(request, "terminal.list");
   await Promise.all(
-    result.terminals.map((terminal) =>
-      rpc(request, "terminal.kill", { terminal_id: terminal.terminal_id }),
+    result.terminals
+      .filter((terminal) => !["exited", "error"].includes(terminal.state))
+      .map((terminal) =>
+        rpc(request, "terminal.kill", { terminal_id: terminal.terminal_id }),
+      ),
+  );
+  const retained = await rpc(request, "terminal.list");
+  await Promise.all(
+    retained.terminals.map((terminal) =>
+      rpc(request, "terminal.forget", { terminal_id: terminal.terminal_id }),
     ),
   );
 }
@@ -195,7 +203,9 @@ test("multiple terminals keep output, input, reconnect, and stop lifecycle isola
   await expect(terminalOutput(page)).toContainText("BRAVO:message-for-bravo");
 
   await stopSelectedTerminal(page);
-  await expect(terminalItems).toHaveCount(1);
+  await expect(terminalItems).toHaveCount(2);
+  await expect(terminalOutput(page)).toContainText("BRAVO:message-for-bravo");
+  await terminalItems.filter({ hasText: "E2E-ALPHA" }).click();
   await expect(terminalOutput(page)).toContainText("ALPHA:message-for-alpha");
   await sendToSelectedTerminal(page, "alpha-survived-bravo-stop");
   await expect(terminalOutput(page)).toContainText(
@@ -203,6 +213,9 @@ test("multiple terminals keep output, input, reconnect, and stop lifecycle isola
   );
 
   await stopSelectedTerminal(page);
-  await expect(terminalItems).toHaveCount(0);
-  await expect(page.getByText("No active terminals")).toBeVisible();
+  await expect(terminalItems).toHaveCount(2);
+  await expect(terminalOutput(page)).toContainText(
+    "ALPHA:alpha-survived-bravo-stop",
+  );
+  await expect(page.getByText("Read-only history", { exact: false })).toBeVisible();
 });

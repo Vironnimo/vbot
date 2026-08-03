@@ -13,6 +13,7 @@ export const TERMINAL_STREAM_CONNECTING = 'connecting';
 export const TERMINAL_STREAM_CONNECTED = 'connected';
 export const TERMINAL_STREAM_RECONNECTING = 'reconnecting';
 export const TERMINAL_STREAM_ERROR = 'error';
+export const TERMINAL_STREAM_SNAPSHOT = 'snapshot';
 
 const RECONNECT_INITIAL_DELAY_MS = 500;
 const RECONNECT_MAX_DELAY_MS = 8_000;
@@ -46,13 +47,14 @@ export function selectedTerminal(state) {
   );
 }
 
+export function terminalIsFinished(terminal) {
+  return TERMINAL_STATES_FINISHED.has(terminal?.state);
+}
+
 export function reconcileTerminalList(state, result) {
   const terminals = Array.isArray(result?.terminals) ? result.terminals : [];
   state.terminals = terminals.filter(
-    (terminal) =>
-      terminal &&
-      typeof terminal.terminal_id === 'string' &&
-      !TERMINAL_STATES_FINISHED.has(terminal.state),
+    (terminal) => terminal && typeof terminal.terminal_id === 'string',
   );
   if (
     state.selectedTerminalId &&
@@ -73,14 +75,6 @@ export function mergeTerminalSummary(state, terminal) {
   const index = state.terminals.findIndex(
     (item) => item.terminal_id === terminal.terminal_id,
   );
-  if (TERMINAL_STATES_FINISHED.has(terminal.state)) {
-    if (index >= 0) {
-      state.terminals = state.terminals.filter(
-        (item) => item.terminal_id !== terminal.terminal_id,
-      );
-    }
-    return terminal;
-  }
   if (index < 0) {
     state.terminals = [terminal, ...state.terminals];
   } else {
@@ -138,7 +132,12 @@ export function createTerminalsController({
       const nextSelection = reconcileTerminalList(state, result);
       if (nextSelection !== previousSelection) {
         switchStream(nextSelection);
-      } else if (nextSelection && !currentStream && !serverUnavailable) {
+      } else if (
+        nextSelection &&
+        !currentStream &&
+        !serverUnavailable &&
+        state.streamStatus !== TERMINAL_STREAM_SNAPSHOT
+      ) {
         connectStream(nextSelection);
       }
     } catch (error) {
@@ -227,11 +226,13 @@ export function createTerminalsController({
       state.lastSequence = sequence;
       state.streamError = '';
       state.streamErrorCode = '';
-      state.streamStatus = TERMINAL_STREAM_CONNECTED;
       reconnectAttempt = 0;
       const terminal = mergeTerminalSummary(state, event.terminal);
+      state.streamStatus = terminalIsFinished(terminal)
+        ? TERMINAL_STREAM_SNAPSHOT
+        : TERMINAL_STREAM_CONNECTED;
       onSnapshot(event.ansi, terminal);
-      if (terminal && TERMINAL_STATES_FINISHED.has(terminal.state)) {
+      if (terminalIsFinished(terminal)) {
         stream.terminalEnded = true;
         stream.shouldReconnect = false;
         void loadTerminals({ silent: true });
@@ -252,9 +253,10 @@ export function createTerminalsController({
     }
     if (event.type === 'terminal_state') {
       const terminal = mergeTerminalSummary(state, event.terminal);
-      if (terminal && TERMINAL_STATES_FINISHED.has(terminal.state)) {
+      if (terminalIsFinished(terminal)) {
         stream.terminalEnded = true;
         stream.shouldReconnect = false;
+        state.streamStatus = TERMINAL_STREAM_SNAPSHOT;
         void loadTerminals({ silent: true });
       }
     }
@@ -323,6 +325,7 @@ export function createTerminalsController({
       typeof data !== 'string' ||
       !data ||
       !state.selectedTerminalId ||
+      terminalIsFinished(selectedTerminal(state)) ||
       serverUnavailable
     ) {
       return;
@@ -372,6 +375,7 @@ export function createTerminalsController({
       !Number.isInteger(columns) ||
       !Number.isInteger(rows) ||
       !state.selectedTerminalId ||
+      terminalIsFinished(selectedTerminal(state)) ||
       serverUnavailable
     ) {
       return;
@@ -417,7 +421,11 @@ export function createTerminalsController({
 
   async function killSelected() {
     const terminalId = state.selectedTerminalId;
-    if (!terminalId || state.killing) {
+    if (
+      !terminalId ||
+      state.killing ||
+      terminalIsFinished(selectedTerminal(state))
+    ) {
       return false;
     }
     state.killing = true;
