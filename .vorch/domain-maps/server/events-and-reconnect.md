@@ -38,7 +38,7 @@ Streaming deltas (`assistant_output_delta`, `reasoning_delta`, `tool_call_delta`
 
 ## `resource_changed`
 
-`publish_resource_changed(state, kind, scope=None)` is the single generic invalidation seam. Payload is `{kind, scope?}` and contains no resource data; consumers re-fetch through normal RPC. It no-ops when no bus exists (CLI/runtime stubs) and rejects unknown kinds. Current allowed kinds are `models`, `queue`, `sessions`, `agents`, `providers`, `clients`, `channels`, `debug_traces`, `projects`, `cron`, and `commands`.
+`publish_resource_changed(state, kind, scope=None)` is the single generic invalidation seam. Payload is `{kind, scope?}` and contains no resource data; consumers re-fetch through normal RPC. It no-ops when no bus exists (CLI/runtime stubs) and rejects unknown kinds. Current allowed kinds are `models`, `queue`, `sessions`, `agents`, `providers`, `clients`, `channels`, `debug_traces`, `projects`, `cron`, `commands`, and `terminals`.
 
 `commands` is emitted after a successful explicit Extension reload and after Settings mutations that reload, enable, or disable Extensions. Config-only Extension saves do not emit it because runtime values are read live and the Command structure is unchanged.
 
@@ -49,18 +49,22 @@ Emission belongs to the server mutation edge, never `core/`. Representative owne
 - RPC Queue mutations and the queued branches of `chat.send`/`chat.stream` → scoped `queue`. Core-origin enqueues intentionally do not publish this browser invalidation.
 - Channel mutations → `channels`; `/ws` presence lifecycle → `clients`; terminal Run bridge and Debug mutations → `debug_traces`.
 - `CronService.add_changed_callback` is bridged in `server/app.py` → `cron`, covering RPC/Tool mutations and scheduler-owned status/health transitions without importing the server bus into core.
+- `TerminalManager.add_changed_callback` is bridged in `server/app.py` → scoped `terminals`, covering active-catalog and state changes from Agent Tool calls, process lifecycle, hooks, and operator mutations without publishing high-volume PTY output to the shared bus.
 
 The exact emitters remain source-of-truth in `server/rpc/*_methods.py`, `server/rpc/event_bridge.py`, and `server/app.py`. A new consumer normally requires one allowed kind, one mutation-edge emit, and one client reload path rather than a new event family.
 
-## SSE and log WebSocket
+## SSE and dedicated WebSockets
 
 `GET /api/runs/{run_id}/events` streams the complete provider-agnostic Run timeline over SSE. It replays after an explicit `after_sequence` query value or, when absent, `Last-Event-ID`; invalid/negative values clamp to zero. Every Run frame uses the Run event sequence as SSE `id`, the Run event type as `event`, and sanitized event JSON as `data`, then follows until terminal state. While a running Run is quiet, the server emits transport-only `heartbeat` events without a Run sequence; clients use them for liveness but never add them to timeline or replay state.
 
 `/ws/logs` is separate from the shared bus. It subscribes to one log file using the cursor returned by `log.read`, preventing the read-to-subscribe gap, and emits file append/reset plus catalog updates. Log transport behavior belongs in `logs.md`; it has no bus epoch or Run semantics.
 
+`/ws/terminals/{terminal_id}` is also separate from the shared bus and is server-push only. `TerminalManager.watch_for_operator()` captures a locked authoritative ANSI snapshot plus its current sequence, then subscribes after that sequence so bytes published during handoff replay without a gap. Live `terminal_output` and `terminal_state` events use a bounded per-Terminal replay stream; the browser detects non-contiguous sequence, discards its derived screen, and reconnects for a new snapshot. An exited/error snapshot or final state ends the stream without reconnecting, while `terminal.list` remains the authoritative active catalog.
+
 ## Source and tests
 
 - Bus and allowlists: `server/events.py`; `tests/server/test_events.py`.
 - Shared WebSocket/SSE and handshake: `server/app.py`; `tests/server/test_websocket.py` and `test_sse.py`.
+- Terminal operator RPC and dedicated stream: `server/rpc/terminal_methods.py`, `server/app.py`; `tests/server/rpc/test_terminal_methods.py` and `tests/server/test_websocket.py`.
 - Run/resource bridge: `server/rpc/event_bridge.py`; `tests/server/rpc/test_event_bridge.py` and `test_rpc_payload_events.py`.
 - Presence: `server/clients.py`; `tests/server/test_clients.py` and `tests/server/rpc/test_client_methods.py`.

@@ -21,6 +21,7 @@ export const RESOURCE_TOKEN_DEBUG_TRACES = 'debug_traces';
 export const RESOURCE_TOKEN_PROJECTS = 'projects';
 export const RESOURCE_TOKEN_CRON = 'cron';
 export const RESOURCE_TOKEN_COMMANDS = 'commands';
+export const RESOURCE_TOKEN_TERMINALS = 'terminals';
 
 // Which token group(s) each resource kind invalidates. Both a model-catalog
 // refresh ("models") and a provider/credential change ("providers") alter which
@@ -39,6 +40,7 @@ const KIND_TOKEN_GROUPS = {
   projects: [RESOURCE_TOKEN_PROJECTS],
   cron: [RESOURCE_TOKEN_CRON],
   commands: [RESOURCE_TOKEN_COMMANDS],
+  terminals: [RESOURCE_TOKEN_TERMINALS],
 };
 
 // Return the refresh-token group(s) a resource kind invalidates (empty for an

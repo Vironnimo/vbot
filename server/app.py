@@ -29,6 +29,7 @@ from core.model_tasks import (
 )
 from core.runs import RUN_AGENT_ACTIVITY_FIELD, ChatRunManager, RunNotFoundError, RunStatus
 from core.settings import SettingsValidationError, load_runtime_settings_json
+from core.tools.terminal_manager import TerminalNotFoundError
 from core.utils.config import Config
 from core.utils.log_viewer import LogViewer
 from server.clients import ClientRegistry
@@ -36,6 +37,7 @@ from server.events import (
     RESOURCE_KIND_CLIENTS,
     RESOURCE_KIND_CRON,
     RESOURCE_KIND_SESSIONS,
+    RESOURCE_KIND_TERMINALS,
     ServerEventBus,
 )
 from server.rpc.errors import RPC_ERROR_INVALID_REQUEST
@@ -156,6 +158,7 @@ def create_app(
             _unregister_session_title_bridge(app.state)
             _unregister_session_completion_read_bridge(app.state)
             _unregister_cron_change_bridge(app.state)
+            _unregister_terminal_change_bridge(app.state)
             await _shutdown_log_viewer(app.state.log_viewer, server_logger)
             await _shutdown_device_flow_engine(
                 getattr(app.state, "device_flow_engine", None),
@@ -368,6 +371,22 @@ def create_app(
         finally:
             await _close_log_stream(stream)
 
+    @app.websocket("/ws/terminals/{terminal_id}")
+    async def websocket_terminal(websocket: WebSocket, terminal_id: str) -> None:
+        await websocket.accept()
+        manager = getattr(websocket.app.state.runtime, "terminal_manager", None)
+        if manager is None:
+            await websocket.close(code=1011, reason="Interactive terminals are unavailable")
+            return
+        stream = manager.watch_for_operator(terminal_id)
+        try:
+            async with aclosing(stream) as events:
+                await _stream_websocket_events(websocket, events)
+        except TerminalNotFoundError as exc:
+            await websocket.close(code=1008, reason=str(exc))
+        except WebSocketDisconnect:
+            return
+
     _mount_webui(app)
 
     return app
@@ -387,6 +406,7 @@ def _initialize_app_state(
         app.state
     )
     app.state.cron_change_bridge_unsubscribe = _register_cron_change_bridge(app.state)
+    app.state.terminal_change_bridge_unsubscribe = _register_terminal_change_bridge(app.state)
     app.state.chat_loop = runtime.chat_loop
     app.state.streaming_chat_loop = runtime.streaming_chat_loop
     app.state.command_dispatcher = runtime.command_dispatcher
@@ -465,6 +485,27 @@ def _unregister_cron_change_bridge(state: Any) -> None:
     if callable(unsubscribe):
         unsubscribe()
     state.cron_change_bridge_unsubscribe = None
+
+
+def _register_terminal_change_bridge(state: Any) -> Any:
+    manager = getattr(state.runtime, "terminal_manager", None)
+    add_callback = getattr(manager, "add_changed_callback", None)
+    if not callable(add_callback):
+        return None
+    return add_callback(
+        lambda terminal_id: publish_resource_changed(
+            state,
+            RESOURCE_KIND_TERMINALS,
+            scope={"terminal_id": terminal_id},
+        )
+    )
+
+
+def _unregister_terminal_change_bridge(state: Any) -> None:
+    unsubscribe = getattr(state, "terminal_change_bridge_unsubscribe", None)
+    if callable(unsubscribe):
+        unsubscribe()
+    state.terminal_change_bridge_unsubscribe = None
 
 
 async def _read_upload_file_with_limit(

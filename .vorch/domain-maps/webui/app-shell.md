@@ -32,6 +32,7 @@ Domain controllers still own their data. The app shell may request a refresh or 
 - `resource_changed` events carry a resource family and optional scope. `resourceInvalidation.js` converts them into refresh tokens or targeted callbacks rather than copying RPC-specific branching into every component.
 - `commands` invalidation bumps the App-owned Command refresh token forwarded to Chat. Replay gaps and epoch changes bump it with the other server-backed projections so the active autocomplete catalog is re-fetched after uncertain continuity.
 - Queue invalidation is scoped to the addressed Agent and Session. Other resource families refresh the controller that owns their displayed projection.
+- `terminals` invalidation bumps the App-owned terminal refresh token. The mounted Terminals controller re-fetches the active catalog without replacing a still-valid selection; PTY output is not an invalidation and remains on the selected terminal's dedicated stream.
 - Refresh completion does not automatically replace an active editing surface. A controller can retain the visible snapshot while a modal, picker, or draft is busy, then adopt the newest server result at the safe boundary.
 - Event handlers must be idempotent because reconnect replay and explicit refreshes can describe state the browser already knows.
 
@@ -39,6 +40,7 @@ Domain controllers still own their data. The app shell may request a refresh or 
 
 - RPC requests go through the wrappers in `api.js`; validation, network, HTTP, malformed-envelope, malformed-SSE, and malformed-WebSocket failures are normalized before reaching views.
 - `subscribeLogEvents()` owns the per-file log WebSocket. Log browsing behavior lives with the Settings/log surfaces; it does not share Run SSE semantics.
+- `subscribeTerminalEvents()` owns the per-Terminal server-push WebSocket. It carries an authoritative snapshot plus sequenced live output/state only; terminal input, resize, and stop remain RPC wrappers, and the view/controller owns reconnect and cleanup.
 - Attachment downloads use server URLs returned by `getAttachmentUrl()` and remain outside JSON-RPC.
 - Debug wrappers remain guarded by the frontend development gate and the server's debug policy.
 

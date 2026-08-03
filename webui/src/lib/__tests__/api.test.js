@@ -35,6 +35,7 @@ import {
   listTaskModelTargets,
   listQueue,
   listLogs,
+  listTerminals,
   normalizeRpcError,
   readLogFile,
   reorderAgents,
@@ -46,6 +47,10 @@ import {
   subscribeLogEvents,
   subscribeRunEvents,
   subscribeServerEvents,
+  subscribeTerminalEvents,
+  sendTerminalInput,
+  resizeTerminal,
+  killTerminal,
   updateQueueItem,
   updateTaskModelSettings,
 } from '../api.js';
@@ -1383,6 +1388,66 @@ describe('subscribeLogEvents()', () => {
     ).toThrow(
       expect.objectContaining({ code: RPC_ERROR_INVALID_CLIENT_REQUEST }),
     );
+  });
+});
+
+describe('terminal operator API', () => {
+  it('wraps list, input, resize, and kill RPCs', async () => {
+    const fetchFunction = vi
+      .fn()
+      .mockResolvedValue(jsonResponse({ ok: true, result: { ok: true } }));
+
+    await listTerminals({ fetch: fetchFunction });
+    await sendTerminalInput('term/one', 'hello\r', { fetch: fetchFunction });
+    await resizeTerminal('term/one', 100, 30, { fetch: fetchFunction });
+    await killTerminal('term/one', { fetch: fetchFunction });
+
+    expect(
+      fetchFunction.mock.calls.map((call) => JSON.parse(call[1].body)),
+    ).toEqual([
+      { method: 'terminal.list', params: {} },
+      {
+        method: 'terminal.input',
+        params: { terminal_id: 'term/one', data: 'hello\r' },
+      },
+      {
+        method: 'terminal.resize',
+        params: { terminal_id: 'term/one', columns: 100, rows: 30 },
+      },
+      { method: 'terminal.kill', params: { terminal_id: 'term/one' } },
+    ]);
+  });
+
+  it('streams one encoded terminal path and validates frames', () => {
+    const onEvent = vi.fn();
+    const onError = vi.fn();
+    const connection = subscribeTerminalEvents(
+      'term/one',
+      { onEvent, onError },
+      { WebSocket: MockWebSocket, baseUrl: 'https://localhost:8420/' },
+    );
+
+    connection.socket.emit('message', {
+      data: JSON.stringify({
+        type: 'terminal_output',
+        sequence: 2,
+        data: 'hello',
+      }),
+    });
+    connection.socket.emit('message', { data: '{' });
+
+    expect(connection.socket.url).toBe(
+      'wss://localhost:8420/ws/terminals/term%2Fone',
+    );
+    expect(onEvent).toHaveBeenCalledWith(
+      { type: 'terminal_output', sequence: 2, data: 'hello' },
+      expect.any(Object),
+    );
+    expect(onError).toHaveBeenCalledWith(
+      expect.objectContaining({ code: WEBSOCKET_ERROR_RESPONSE }),
+      expect.any(Object),
+    );
+    connection.close();
   });
 });
 

@@ -24,6 +24,24 @@ from core.tools.terminal_hook_sink import TERMINAL_EVENT_FILE_ENV, TERMINAL_EVEN
 _HOOK_COMMAND = "python -m core.tools.terminal_hook_sink"
 _CODEX_FEATURE = "default_mode_request_user_input"
 _HARD_KILL_SIGNAL = getattr(signal, "SIGKILL", 9)
+_ANSI_COLOR_CODES = {
+    "black": 30,
+    "red": 31,
+    "green": 32,
+    "brown": 33,
+    "blue": 34,
+    "magenta": 35,
+    "cyan": 36,
+    "white": 37,
+    "brightblack": 90,
+    "brightred": 91,
+    "brightgreen": 92,
+    "brightbrown": 93,
+    "brightblue": 94,
+    "brightmagenta": 95,
+    "brightcyan": 96,
+    "brightwhite": 97,
+}
 
 
 class TerminalAdapter(Protocol):
@@ -97,6 +115,31 @@ class TerminalRenderer:
         while lines and not lines[-1]:
             lines.pop()
         return "\n".join(lines)
+
+    def ansi_snapshot(self) -> str:
+        """Serialize the current screen into bounded ANSI for a late viewer."""
+        parts = ["\x1b[?25l", "\x1b[0m", "\x1b[2J", "\x1b[H"]
+        active_style: tuple[Any, ...] | None = None
+        for row_index in range(self.rows):
+            parts.append(f"\x1b[{row_index + 1};1H")
+            line = self._screen.buffer[row_index]
+            for column_index in range(self.columns):
+                cell = line[column_index]
+                style = _cell_style(cell)
+                if style != active_style:
+                    parts.append(_style_sequence(cell))
+                    active_style = style
+                parts.append(cell.data or " ")
+
+        cursor = self._screen.cursor
+        parts.extend(
+            (
+                "\x1b[0m",
+                f"\x1b[{cursor.y + 1};{cursor.x + 1}H",
+                "\x1b[?25l" if cursor.hidden else "\x1b[?25h",
+            )
+        )
+        return "".join(parts)
 
     def page(self, *, before: int | None, limit: int) -> dict[str, Any]:
         available = list(self._scrollback)
@@ -318,6 +361,56 @@ def _with_codex_hooks(argv: Sequence[str]) -> list[str]:
 
 def _render_buffer_line(line: Any, columns: int) -> str:
     return "".join(line[column].data for column in range(columns)).rstrip()
+
+
+def _cell_style(cell: Any) -> tuple[Any, ...]:
+    return (
+        cell.fg,
+        cell.bg,
+        cell.bold,
+        cell.italics,
+        cell.underscore,
+        cell.strikethrough,
+        cell.reverse,
+        cell.blink,
+    )
+
+
+def _style_sequence(cell: Any) -> str:
+    codes = [0]
+    codes.extend(_ansi_color(cell.fg, background=False))
+    codes.extend(_ansi_color(cell.bg, background=True))
+    if cell.bold:
+        codes.append(1)
+    if cell.italics:
+        codes.append(3)
+    if cell.underscore:
+        codes.append(4)
+    if cell.blink:
+        codes.append(5)
+    if cell.reverse:
+        codes.append(7)
+    if cell.strikethrough:
+        codes.append(9)
+    return f"\x1b[{';'.join(str(code) for code in codes)}m"
+
+
+def _ansi_color(value: Any, *, background: bool) -> list[int]:
+    if not isinstance(value, str) or value == "default":
+        return [49 if background else 39]
+    named = _ANSI_COLOR_CODES.get(value)
+    if named is not None:
+        return [named + 10 if background else named]
+    if len(value) == 6:
+        try:
+            red = int(value[0:2], 16)
+            green = int(value[2:4], 16)
+            blue = int(value[4:6], 16)
+        except ValueError:
+            pass
+        else:
+            return [48 if background else 38, 2, red, green, blue]
+    return [49 if background else 39]
 
 
 __all__ = [

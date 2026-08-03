@@ -226,6 +226,81 @@ async def test_screen_revision_guards_input_and_resize_updates_both_sides(
 
 
 @pytest.mark.asyncio
+async def test_operator_stream_starts_with_ansi_snapshot_and_continues_in_sequence(
+    terminal_manager: tuple[TerminalManager, AdapterFactory], tmp_path: Path
+) -> None:
+    manager, factory = terminal_manager
+    session = await spawn(manager, tmp_path)
+    adapter = factory.adapters[0]
+    adapter.emit("\x1b[31mREADY>\x1b[0m ")
+    await eventually(lambda: session.renderer.revision > 0)
+
+    stream = manager.watch_for_operator(session.terminal_id)
+    ready = await anext(stream)
+    assert ready["type"] == "terminal_ready"
+    assert ready["terminal"]["owner"] == {
+        "project_id": "project-a",
+        "agent_id": "agent-a",
+        "session_id": "session-a",
+    }
+    assert "READY>" in ready["ansi"]
+    assert "\x1b[2J" in ready["ansi"]
+
+    next_event = asyncio.create_task(anext(stream))
+    adapter.emit("next")
+    output = await asyncio.wait_for(next_event, timeout=1)
+    assert output == {
+        "type": "terminal_output",
+        "sequence": ready["sequence"] + 1,
+        "data": "next",
+    }
+    await stream.aclose()
+
+
+@pytest.mark.asyncio
+async def test_operator_controls_same_live_session_and_changed_callbacks(
+    terminal_manager: tuple[TerminalManager, AdapterFactory], tmp_path: Path
+) -> None:
+    manager, factory = terminal_manager
+    changed: list[str] = []
+    unsubscribe = manager.add_changed_callback(changed.append)
+    session = await spawn(manager, tmp_path)
+
+    listed = manager.list_active_for_operator()
+    assert [item["terminal_id"] for item in listed] == [session.terminal_id]
+    assert changed == [session.terminal_id]
+
+    result = await manager.send_operator_input(session.terminal_id, "hello\r")
+    assert result["state"] == "working"
+    assert factory.adapters[0].writes == ["hello", "\r"]
+
+    resized = await manager.resize_for_operator(session.terminal_id, columns=90, rows=28)
+    assert resized["columns"] == 90
+    assert resized["rows"] == 28
+    assert factory.adapters[0].resizes == [(28, 90)]
+
+    killed = await manager.kill_for_operator(session.terminal_id)
+    assert killed["state"] == "exited"
+    assert manager.list_active_for_operator() == []
+    assert changed.count(session.terminal_id) >= 4
+    unsubscribe()
+
+
+@pytest.mark.asyncio
+async def test_operator_kill_recovers_a_partially_recorded_finish(
+    terminal_manager: tuple[TerminalManager, AdapterFactory], tmp_path: Path
+) -> None:
+    manager, _factory = terminal_manager
+    session = await spawn(manager, tmp_path)
+    session.finished_at = session.started_at
+
+    result = await manager.kill_for_operator(session.terminal_id)
+
+    assert result["state"] == "exited"
+    assert manager.list_active_for_operator() == []
+
+
+@pytest.mark.asyncio
 async def test_status_is_bounded_and_scrollback_cursor_is_signed(
     terminal_manager: tuple[TerminalManager, AdapterFactory], tmp_path: Path
 ) -> None:

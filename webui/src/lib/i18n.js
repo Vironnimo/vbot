@@ -7,6 +7,7 @@ export const englishCatalog = Object.freeze({
   'navigation.sections': 'Sections',
   'navigation.chat': 'Chat',
   'navigation.agents': 'Agents',
+  'navigation.terminals': 'Terminals',
   'navigation.projects': 'Projects',
   'navigation.cron': 'Schedules',
   'navigation.systemPrompt': 'System Prompt',
@@ -17,6 +18,55 @@ export const englishCatalog = Object.freeze({
   'nav.section.work': 'Work',
   'nav.section.configure': 'Configure',
   'nav.section.insights': 'Insights',
+
+  'terminals.title': 'Terminals',
+  'terminals.eyebrow': 'Live PTY / ConPTY',
+  'terminals.subtitle':
+    'Watch the same interactive terminal an agent is using, take control when needed, or stop it explicitly.',
+  'terminals.activeLabel': 'Active terminals',
+  'terminals.activeCount': '{count} active',
+  'terminals.loading': 'Loading active terminals…',
+  'terminals.listError': 'Active terminals could not be loaded.',
+  'terminals.emptyTitle': 'No active terminals',
+  'terminals.emptyDescription':
+    'Terminal Sessions started by an agent will appear here and keep running across Runs.',
+  'terminals.detailEmptyTitle': 'Nothing to monitor yet',
+  'terminals.detailEmptyDescription':
+    'When an agent starts terminal_beta, its live TUI appears here without taking ownership away from the agent.',
+  'terminals.controlLabel': 'Take control',
+  'terminals.stop': 'Stop terminal',
+  'terminals.attentionLabel': 'Attention',
+  'terminals.liveTerminalLabel': 'Live terminal output',
+  'terminals.mode.control': 'Control enabled — keystrokes go to the process',
+  'terminals.mode.observe': 'Observe mode — keyboard input is locked',
+  'terminals.sendLabel': 'Send to terminal',
+  'terminals.sendHint': 'Ctrl+Enter sends the text followed by Enter.',
+  'terminals.sendPlaceholder':
+    'Add context, answer a question, or give the next instruction…',
+  'terminals.send': 'Send + Enter',
+  'terminals.stopConfirmTitle': 'Stop this Terminal Session?',
+  'terminals.stopConfirmBody':
+    'This terminates the selected process tree. The Terminal Session cannot be resumed afterward.',
+  'terminals.stoppedTitle': 'Terminal stopped',
+  'terminals.stoppedMessage':
+    'The selected Terminal Session and its process tree were stopped.',
+  'terminals.stream.live': 'Live',
+  'terminals.stream.connecting': 'Connecting…',
+  'terminals.stream.reconnecting': 'Reconnecting…',
+  'terminals.stream.error': 'Stream error',
+  'terminals.stream.idle': 'Idle',
+  'terminals.streamGap':
+    'Terminal output continuity was lost; rebuilding the live screen.',
+  'terminals.unknownError': 'Unknown terminal error',
+  'terminals.rendererError':
+    'The browser terminal renderer could not be loaded.',
+  'terminals.state.starting': 'Starting',
+  'terminals.state.ready': 'Ready',
+  'terminals.state.working': 'Working',
+  'terminals.state.needs_input': 'Needs input',
+  'terminals.state.turn_complete': 'Turn complete',
+  'terminals.state.exited': 'Exited',
+  'terminals.state.error': 'Error',
 
   'common.alreadySaved': 'Already saved',
   'common.add': 'Add',

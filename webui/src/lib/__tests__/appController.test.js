@@ -158,6 +158,7 @@ describe('App controller', () => {
       expect(state.cronRefreshToken).toBe(1);
       expect(state.debugTracesRefreshToken).toBe(1);
       expect(state.commandsRefreshToken).toBe(1);
+      expect(state.terminalsRefreshToken).toBe(1);
       expect(actions.onLoadProjects).toHaveBeenCalledOnce();
       expect(actions.onReloadAgents).toHaveBeenCalledOnce();
     },
@@ -181,6 +182,7 @@ describe('App controller', () => {
     expect(state.cronRefreshToken).toBe(0);
     expect(state.debugTracesRefreshToken).toBe(0);
     expect(state.commandsRefreshToken).toBe(0);
+    expect(state.terminalsRefreshToken).toBe(0);
     expect(actions.onLoadProjects).not.toHaveBeenCalled();
     expect(actions.onReloadAgents).not.toHaveBeenCalled();
   });
@@ -205,6 +207,17 @@ describe('App controller', () => {
     });
 
     expect(state.commandsRefreshToken).toBe(1);
+  });
+
+  it('bumps the terminals refresh token for Terminal Session changes', async () => {
+    const { controller, state } = setup();
+
+    await controller.handleServerEvent({
+      type: 'resource_changed',
+      payload: { kind: 'terminals' },
+    });
+
+    expect(state.terminalsRefreshToken).toBe(1);
   });
 
   it('owns delayed offline and restored connection notices', async () => {
