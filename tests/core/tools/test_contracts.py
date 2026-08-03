@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -159,8 +160,8 @@ def test_compile_rejects_nonportable_tool_names(name: str) -> None:
     [
         ({}, "arguments: 'count' is a required property [required]"),
         (
-            {"count": "1"},
-            'arguments/count: expected JSON integer, received JSON string "1" [type]',
+            {"count": "1.5"},
+            'arguments/count: expected JSON integer, received JSON string "1.5" [type]',
         ),
         (
             {"count": 1, "extra": True},
@@ -188,6 +189,205 @@ async def test_dispatch_rejects_invalid_arguments_before_handler(
 
     assert str(exc_info.value) == message
     assert calls == 0
+
+
+@pytest.mark.asyncio
+async def test_dispatch_normalizes_unambiguous_model_encodings_without_mutating_call() -> None:
+    received: JsonObject | None = None
+
+    def handler(_context: ToolContext, arguments: JsonObject) -> JsonObject:
+        nonlocal received
+        received = arguments
+        return tool_success({"value": "ok"})
+
+    schema: JsonObject = {
+        "type": "object",
+        "properties": {
+            "count": {"type": "integer", "minimum": 1},
+            "ratio": {"type": "number"},
+            "enabled": {"type": "boolean"},
+            "items": {"type": "array", "items": {"type": "integer"}},
+            "config": {
+                "type": "object",
+                "properties": {"retries": {"type": "integer"}},
+                "required": ["retries"],
+                "additionalProperties": False,
+            },
+            "optional": {"type": ["object", "null"]},
+        },
+        "required": ["count", "ratio", "enabled", "items", "config", "optional"],
+        "additionalProperties": False,
+    }
+    registry = ToolRegistry()
+    registry.register("sample", "Sample.", schema, handler)
+    original = {
+        "count": "72",
+        "ratio": "0.7",
+        "enabled": " TRUE ",
+        "items": '["1", "2"]',
+        "config": '{"retries":"3"}',
+        "optional": "null",
+    }
+
+    result = await registry.dispatch(_context("sample"), original, ["sample"])
+
+    assert result == tool_success({"value": "ok"})
+    assert received == {
+        "count": 72,
+        "ratio": 0.7,
+        "enabled": True,
+        "items": [1, 2],
+        "config": {"retries": 3},
+        "optional": None,
+    }
+    assert original == {
+        "count": "72",
+        "ratio": "0.7",
+        "enabled": " TRUE ",
+        "items": '["1", "2"]',
+        "config": '{"retries":"3"}',
+        "optional": "null",
+    }
+
+
+@pytest.mark.asyncio
+async def test_dispatch_wraps_one_array_item_and_uses_active_input_contract() -> None:
+    received: JsonObject | None = None
+
+    def handler(_context: ToolContext, arguments: JsonObject) -> JsonObject:
+        nonlocal received
+        received = arguments
+        return tool_success({"value": "ok"})
+
+    registry = ToolRegistry()
+    registry.register(
+        "sample",
+        "Sample.",
+        {
+            "type": "object",
+            "properties": {"items": {"type": "string"}},
+            "required": ["items"],
+            "additionalProperties": False,
+        },
+        handler,
+    )
+    active_contract = compile_tool_contract(
+        name="sample",
+        input_schema={
+            "type": "object",
+            "properties": {"items": {"type": "array", "items": {"type": "string"}}},
+            "required": ["items"],
+            "additionalProperties": False,
+        },
+    )
+    context = replace(_context("sample"), input_contract=active_contract)
+
+    await registry.dispatch(context, {"items": "one"}, ["sample"])
+
+    assert received == {"items": ["one"]}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("arguments", "message"),
+    [
+        ({"count": "0"}, "0 is less than the minimum of 1 [minimum]"),
+        (
+            {"count": "3.5"},
+            'expected JSON integer, received JSON string "3.5" [type]',
+        ),
+        (
+            {"count": "abc"},
+            'expected JSON integer, received JSON string "abc" [type]',
+        ),
+        (
+            {"count": "1e1000"},
+            'expected JSON integer, received JSON string "1e1000" [type]',
+        ),
+        (
+            {"count": "2", "extra": True},
+            "Additional properties are not allowed ('extra' was unexpected)",
+        ),
+    ],
+)
+async def test_dispatch_keeps_semantic_and_shape_validation_after_normalization(
+    arguments: JsonObject,
+    message: str,
+) -> None:
+    calls = 0
+
+    def handler(_context: ToolContext, _arguments: JsonObject) -> JsonObject:
+        nonlocal calls
+        calls += 1
+        return tool_success({"value": "ok"})
+
+    registry = ToolRegistry()
+    registry.register("sample", "Sample.", _input_schema(), handler)
+
+    with pytest.raises(ToolContractError) as exc_info:
+        await registry.dispatch(_context("sample"), arguments, ["sample"])
+
+    assert message in str(exc_info.value)
+    assert calls == 0
+
+
+def test_normalization_preserves_a_string_when_the_schema_accepts_it() -> None:
+    contract = compile_tool_contract(
+        name="sample",
+        input_schema={
+            "type": "object",
+            "properties": {"value": {"type": ["integer", "string"]}},
+            "required": ["value"],
+            "additionalProperties": False,
+        },
+    )
+
+    assert contract.normalize_arguments({"value": "72"}) == {"value": "72"}
+
+
+@pytest.mark.parametrize("value", ("yes", "1", ""))
+def test_normalization_does_not_invent_boolean_aliases(value: str) -> None:
+    contract = compile_tool_contract(
+        name="sample",
+        input_schema={
+            "type": "object",
+            "properties": {"enabled": {"type": "boolean"}},
+            "required": ["enabled"],
+            "additionalProperties": False,
+        },
+    )
+
+    normalized = contract.normalize_arguments({"enabled": value})
+
+    assert normalized == {"enabled": value}
+    with pytest.raises(ToolContractError, match="expected JSON boolean"):
+        contract.validate_arguments(normalized)
+
+
+def test_normalization_selects_the_matching_discriminated_union_branch() -> None:
+    contract = compile_tool_contract(
+        name="sample",
+        input_schema=action_schema(
+            {
+                "add": {
+                    "type": "object",
+                    "properties": {"content": {"type": "string"}},
+                    "required": ["content"],
+                },
+                "remove": {
+                    "type": "object",
+                    "properties": {"entry_id": {"type": "integer"}},
+                    "required": ["entry_id"],
+                },
+            },
+            description="Choose an action.",
+        ),
+    )
+
+    normalized = contract.normalize_arguments({"action": "remove", "entry_id": "72"})
+
+    assert normalized == {"action": "remove", "entry_id": 72}
+    contract.validate_arguments(normalized)
 
 
 def test_type_error_explains_optional_default_without_coercion() -> None:
