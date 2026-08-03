@@ -22,17 +22,39 @@ export const englishCatalog = Object.freeze({
   'terminals.title': 'Terminals',
   'terminals.eyebrow': 'Live PTY / ConPTY',
   'terminals.subtitle':
-    'Watch the same interactive terminal an agent is using, take control when needed, or stop it explicitly.',
+    'Open and use your own terminals, or watch and control the same interactive terminal an agent is using.',
   'terminals.activeLabel': 'Active terminals',
   'terminals.activeCount': '{count} active',
   'terminals.loading': 'Loading active terminals…',
   'terminals.listError': 'Active terminals could not be loaded.',
   'terminals.emptyTitle': 'No active terminals',
   'terminals.emptyDescription':
-    'Terminal Sessions started by an agent will appear here and keep running across Runs.',
-  'terminals.detailEmptyTitle': 'Nothing to monitor yet',
+    'Open a manual terminal here, or monitor Terminal Sessions started by an agent.',
+  'terminals.detailEmptyTitle': 'Open a terminal',
   'terminals.detailEmptyDescription':
-    'When an agent starts terminal_beta, its live TUI appears here without taking ownership away from the agent.',
+    'Start the local default shell or choose a command such as codex. Agent terminals will appear here too.',
+  'terminals.new': 'New terminal',
+  'terminals.startTitle': 'New terminal',
+  'terminals.startIntro':
+    'Leave Command empty to open the server user’s default shell. Every command uses the same real PTY / ConPTY.',
+  'terminals.commandLabel': 'Command',
+  'terminals.commandHelp':
+    'Optional. For example: codex, powershell, bash, or python.',
+  'terminals.commandPlaceholder': 'Default shell',
+  'terminals.argumentsLabel': 'Arguments',
+  'terminals.argumentsHelp':
+    'Optional. Enter one exact argument per line; spaces within a line are preserved.',
+  'terminals.argumentsPlaceholder': '--profile\nwork',
+  'terminals.workdirLabel': 'Working directory',
+  'terminals.workdirHelp':
+    'Optional. Defaults to the server user’s home directory.',
+  'terminals.workdirPlaceholder': 'User home directory',
+  'terminals.start': 'Start terminal',
+  'terminals.startedTitle': 'Terminal started',
+  'terminals.startedMessage':
+    'The manual Terminal Session is live and ready for input.',
+  'terminals.manualOwner': 'Manual',
+  'terminals.localOperator': 'Local operator',
   'terminals.controlLabel': 'Take control',
   'terminals.stop': 'Stop terminal',
   'terminals.liveTerminalLabel': 'Live terminal output',

@@ -6,6 +6,7 @@ import { flushSync, mount, unmount } from 'svelte';
 import { init } from '../../lib/i18n.js';
 
 const listTerminalsMock = vi.fn();
+const startTerminalMock = vi.fn();
 const sendTerminalInputMock = vi.fn();
 const resizeTerminalMock = vi.fn();
 const killTerminalMock = vi.fn();
@@ -19,6 +20,7 @@ vi.mock('svelte', async () => {
 
 vi.mock('$lib/api.js', () => ({
   listTerminals: (...args) => listTerminalsMock(...args),
+  startTerminal: (...args) => startTerminalMock(...args),
   sendTerminalInput: (...args) => sendTerminalInputMock(...args),
   resizeTerminal: (...args) => resizeTerminalMock(...args),
   killTerminal: (...args) => killTerminalMock(...args),
@@ -69,6 +71,7 @@ describe('TerminalsView', () => {
     streams.length = 0;
     terminalInstances.length = 0;
     listTerminalsMock.mockReset();
+    startTerminalMock.mockReset().mockResolvedValue({});
     sendTerminalInputMock.mockReset().mockResolvedValue({});
     resizeTerminalMock.mockReset().mockResolvedValue({});
     killTerminalMock.mockReset().mockResolvedValue({});
@@ -141,8 +144,44 @@ describe('TerminalsView', () => {
       document.body.textContent.includes('No active terminals'),
     );
 
-    expect(document.body.textContent).toContain('Nothing to monitor yet');
+    expect(document.body.textContent).toContain('Open a terminal');
     expect(subscribeTerminalEventsMock).not.toHaveBeenCalled();
+  });
+
+  it('starts a manual terminal from the modal and enables direct control', async () => {
+    listTerminalsMock.mockResolvedValue({ terminals: [] });
+    startTerminalMock.mockResolvedValue({
+      terminal: terminal({
+        terminal_id: 'manual-1',
+        command: 'codex',
+        owner: null,
+      }),
+    });
+    mountedComponent = mount(TerminalsView, { target: document.body });
+    flushSync();
+    await waitFor(() => document.body.textContent.includes('Open a terminal'));
+
+    findButton('New terminal').click();
+    flushSync();
+    setField('#terminal-start-command', 'codex');
+    setField('#terminal-start-arguments', '--profile\nwork space');
+    setField('#terminal-start-workdir', 'C:\\repo');
+    document
+      .querySelector('#terminal-start-form')
+      .dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+
+    await waitFor(() => streams.length === 1 && terminalInstances.length === 1);
+    expect(startTerminalMock).toHaveBeenCalledWith({
+      command: 'codex',
+      args: ['--profile', 'work space'],
+      workdir: 'C:\\repo',
+    });
+    expect(document.body.textContent).toContain('Manual');
+    expect(document.body.textContent).toContain(
+      'Control enabled — keystrokes go to the process',
+    );
+    expect(terminalInstances[0].options.disableStdin).toBe(false);
+    expect(terminalInstances[0].focus).toHaveBeenCalled();
   });
 });
 
@@ -175,4 +214,20 @@ async function waitFor(predicate, attempts = 50) {
     }
   }
   throw new Error('condition was not reached');
+}
+
+function findButton(label) {
+  const button = [...document.querySelectorAll('button')].find(
+    (item) => item.textContent.trim() === label,
+  );
+  if (!button) {
+    throw new Error(`button not found: ${label}`);
+  }
+  return button;
+}
+
+function setField(selector, value) {
+  const field = document.querySelector(selector);
+  field.value = value;
+  field.dispatchEvent(new Event('input', { bubbles: true }));
 }

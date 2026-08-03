@@ -855,6 +855,10 @@ export function listTerminals(options = {}) {
   return rpc('terminal.list', {}, options);
 }
 
+export function startTerminal(params = {}, options = {}) {
+  return rpc('terminal.start', params, options);
+}
+
 export function sendTerminalInput(terminalId, data, options = {}) {
   requireNonEmptyString(
     terminalId,

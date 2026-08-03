@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
@@ -14,6 +15,7 @@ from server.rpc.terminal_methods import (
     _terminal_kill,
     _terminal_list,
     _terminal_resize,
+    _terminal_start,
 )
 
 
@@ -22,6 +24,7 @@ class FakeTerminalManager:
         self.inputs: list[tuple[str, str]] = []
         self.resizes: list[tuple[str, int, int]] = []
         self.kills: list[str] = []
+        self.starts: list[dict[str, Any]] = []
 
     def list_active_for_operator(self) -> list[dict[str, Any]]:
         return [{"terminal_id": "term-1", "state": "working"}]
@@ -29,6 +32,10 @@ class FakeTerminalManager:
     async def send_operator_input(self, terminal_id: str, data: str) -> dict[str, Any]:
         self.inputs.append((terminal_id, data))
         return {"terminal_id": terminal_id, "state": "working"}
+
+    async def spawn_for_operator(self, **kwargs: Any) -> dict[str, Any]:
+        self.starts.append(kwargs)
+        return {"terminal_id": "manual-1", "state": "ready", "owner": None}
 
     async def resize_for_operator(
         self, terminal_id: str, *, columns: int, rows: int
@@ -53,6 +60,16 @@ async def test_terminal_operator_handlers_project_list_input_resize_and_kill() -
     assert _terminal_list(state, {}) == {
         "terminals": [{"terminal_id": "term-1", "state": "working"}]
     }
+    assert await _terminal_start(
+        state,
+        {
+            "command": "codex",
+            "args": ["--profile", "work space"],
+            "workdir": "~/repo",
+            "columns": 100,
+            "rows": 30,
+        },
+    ) == {"terminal": {"terminal_id": "manual-1", "state": "ready", "owner": None}}
     assert await _terminal_input(state, {"terminal_id": "term-1", "data": "status\r"}) == {
         "terminal": {"terminal_id": "term-1", "state": "working"}
     }
@@ -69,6 +86,15 @@ async def test_terminal_operator_handlers_project_list_input_resize_and_kill() -
     assert manager.inputs == [("term-1", "status\r")]
     assert manager.resizes == [("term-1", 100, 30)]
     assert manager.kills == ["term-1"]
+    assert manager.starts == [
+        {
+            "command": "codex",
+            "arguments": ["--profile", "work space"],
+            "cwd": Path("~/repo").expanduser(),
+            "columns": 100,
+            "rows": 30,
+        }
+    ]
 
 
 @pytest.mark.asyncio
@@ -80,6 +106,14 @@ async def test_terminal_operator_handlers_validate_and_register_contract() -> No
         _terminal_list(state, {"extra": True})
     with pytest.raises(RpcError, match="params.columns must be an integer"):
         await _terminal_resize(state, {"terminal_id": "term-1", "columns": True, "rows": 30})
+    with pytest.raises(RpcError, match="params.args must be a list of strings"):
+        await _terminal_start(state, {"args": ["valid", 1]})
 
     handlers = build_method_handlers()
-    assert {"terminal.list", "terminal.input", "terminal.resize", "terminal.kill"} <= set(handlers)
+    assert {
+        "terminal.list",
+        "terminal.start",
+        "terminal.input",
+        "terminal.resize",
+        "terminal.kill",
+    } <= set(handlers)

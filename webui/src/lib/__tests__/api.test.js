@@ -36,6 +36,7 @@ import {
   listQueue,
   listLogs,
   listTerminals,
+  startTerminal,
   normalizeRpcError,
   readLogFile,
   reorderAgents,
@@ -1392,12 +1393,16 @@ describe('subscribeLogEvents()', () => {
 });
 
 describe('terminal operator API', () => {
-  it('wraps list, input, resize, and kill RPCs', async () => {
+  it('wraps list, start, input, resize, and kill RPCs', async () => {
     const fetchFunction = vi
       .fn()
       .mockResolvedValue(jsonResponse({ ok: true, result: { ok: true } }));
 
     await listTerminals({ fetch: fetchFunction });
+    await startTerminal(
+      { command: 'codex', args: ['--profile', 'work'] },
+      { fetch: fetchFunction },
+    );
     await sendTerminalInput('term/one', 'hello\r', { fetch: fetchFunction });
     await resizeTerminal('term/one', 100, 30, { fetch: fetchFunction });
     await killTerminal('term/one', { fetch: fetchFunction });
@@ -1406,6 +1411,10 @@ describe('terminal operator API', () => {
       fetchFunction.mock.calls.map((call) => JSON.parse(call[1].body)),
     ).toEqual([
       { method: 'terminal.list', params: {} },
+      {
+        method: 'terminal.start',
+        params: { command: 'codex', args: ['--profile', 'work'] },
+      },
       {
         method: 'terminal.input',
         params: { terminal_id: 'term/one', data: 'hello\r' },

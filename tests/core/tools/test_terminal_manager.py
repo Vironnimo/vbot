@@ -289,6 +289,49 @@ async def test_operator_controls_same_live_session_and_changed_callbacks(
 
 
 @pytest.mark.asyncio
+async def test_manual_terminal_has_no_agent_owner_or_attention_delivery(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    trigger = PendingTriggerService()
+    factory = AdapterFactory()
+    manager = TerminalManager(
+        trigger,
+        adapter_factory=factory,
+        sweep_interval_seconds=3600,
+        activity_quiet_seconds=0.03,
+    )
+    monkeypatch.setattr(terminal_module, "default_terminal_argv", lambda: ["host-shell"])
+    manager.start()
+    try:
+        result = await manager.spawn_for_operator(
+            command=None,
+            arguments=["--login"],
+            cwd=tmp_path,
+        )
+        terminal_id = result["terminal_id"]
+        session = manager._sessions[terminal_id]
+
+        assert factory.calls[0][0] == ["host-shell", "--login"]
+        assert result["owner"] is None
+        assert session.owner is None
+        assert manager.list_sessions(owner()) == []
+
+        await manager.close_project_scope("project-a")
+        assert factory.adapters[0].alive is True
+
+        await manager.send_operator_input(terminal_id, "echo ready\r")
+        factory.adapters[0].emit("ready\r\n")
+        await eventually(lambda: session.state == "ready")
+        assert trigger.submissions == []
+
+        factory.adapters[0].finish(0)
+        await eventually(lambda: session.state == "exited")
+        assert trigger.submissions == []
+    finally:
+        await manager.aclose()
+
+
+@pytest.mark.asyncio
 async def test_operator_kill_recovers_a_partially_recorded_finish(
     terminal_manager: tuple[TerminalManager, AdapterFactory], tmp_path: Path
 ) -> None:
