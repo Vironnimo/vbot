@@ -9,6 +9,7 @@ import {
   RESOURCE_TOKEN_DEBUG_TRACES,
   RESOURCE_TOKEN_MODELS,
   RESOURCE_TOKEN_SESSIONS,
+  RESOURCE_TOKEN_TERMINALS,
   SURFACE_DISPLAY,
   SURFACE_FORM,
   isSurfaceBusy,
@@ -50,6 +51,10 @@ describe('tokenKeysForKind()', () => {
 
   it('routes command catalog changes to the commands token', () => {
     expect(tokenKeysForKind('commands')).toEqual([RESOURCE_TOKEN_COMMANDS]);
+  });
+
+  it('routes Terminal Session changes to the terminals token', () => {
+    expect(tokenKeysForKind('terminals')).toEqual([RESOURCE_TOKEN_TERMINALS]);
   });
 
   it('returns no tokens for the queue kind (scope-routed, not token-routed)', () => {

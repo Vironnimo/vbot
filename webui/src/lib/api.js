@@ -13,6 +13,7 @@ const ATTACHMENT_BASE_ENDPOINT = '/api/attachments';
 const SPEECH_TRANSCRIBE_ENDPOINT = '/api/speech/transcribe';
 const WEBSOCKET_ENDPOINT = '/ws';
 const LOGS_WEBSOCKET_ENDPOINT = '/ws/logs';
+const TERMINALS_WEBSOCKET_ENDPOINT = '/ws/terminals';
 
 export const RPC_ERROR_INVALID_CLIENT_REQUEST = 'invalid_client_request';
 export const RPC_ERROR_NETWORK = 'network_error';
@@ -850,6 +851,46 @@ export function listClients(options = {}) {
   return rpc('client.list', {}, options);
 }
 
+export function listTerminals(options = {}) {
+  return rpc('terminal.list', {}, options);
+}
+
+export function sendTerminalInput(terminalId, data, options = {}) {
+  requireNonEmptyString(
+    terminalId,
+    'Terminal id must be a non-empty string',
+    'terminal.input',
+  );
+  requireNonEmptyString(
+    data,
+    'Terminal input must be a non-empty string',
+    'terminal.input',
+  );
+  return rpc('terminal.input', { terminal_id: terminalId, data }, options);
+}
+
+export function resizeTerminal(terminalId, columns, rows, options = {}) {
+  requireNonEmptyString(
+    terminalId,
+    'Terminal id must be a non-empty string',
+    'terminal.resize',
+  );
+  return rpc(
+    'terminal.resize',
+    { terminal_id: terminalId, columns, rows },
+    options,
+  );
+}
+
+export function killTerminal(terminalId, options = {}) {
+  requireNonEmptyString(
+    terminalId,
+    'Terminal id must be a non-empty string',
+    'terminal.kill',
+  );
+  return rpc('terminal.kill', { terminal_id: terminalId }, options);
+}
+
 export function listCronJobs(options = {}) {
   return rpc('cron.list', {}, options);
 }
@@ -1517,6 +1558,60 @@ export function subscribeLogEvents(file, handlers = {}, options = {}) {
         event.data,
         WEBSOCKET_ERROR_RESPONSE,
         'WebSocket event data must be JSON',
+      );
+      if (parsed instanceof ApiClientError) {
+        handlers.onError?.(parsed, event);
+        return;
+      }
+      handlers.onEvent?.(parsed, event);
+    },
+    cleanupCallbacks,
+  );
+
+  const close = (code, reason) => {
+    if (closed) {
+      return;
+    }
+    closed = true;
+    for (const cleanup of cleanupCallbacks) {
+      cleanup();
+    }
+    socket.close(code, reason);
+  };
+
+  return { close, socket };
+}
+
+export function subscribeTerminalEvents(
+  terminalId,
+  handlers = {},
+  options = {},
+) {
+  requireNonEmptyString(terminalId, 'Terminal id must be a non-empty string');
+
+  const WebSocketClass = options.WebSocket ?? globalThis.WebSocket;
+  if (typeof WebSocketClass !== 'function') {
+    throw new ApiClientError(RPC_ERROR_NETWORK, 'WebSocket is not available');
+  }
+
+  const path = `${options.path ?? TERMINALS_WEBSOCKET_ENDPOINT}/${encodeURIComponent(terminalId)}`;
+  const socket = new WebSocketClass(
+    buildWebSocketUrlWithParams(path, options.baseUrl),
+  );
+  const cleanupCallbacks = [];
+  let closed = false;
+
+  addListener(socket, 'open', handlers.onOpen, cleanupCallbacks);
+  addListener(socket, 'error', handlers.onError, cleanupCallbacks);
+  addListener(socket, 'close', handlers.onClose, cleanupCallbacks);
+  addListener(
+    socket,
+    'message',
+    (event) => {
+      const parsed = parseJsonEventData(
+        event.data,
+        WEBSOCKET_ERROR_RESPONSE,
+        'Terminal WebSocket event data must be JSON',
       );
       if (parsed instanceof ApiClientError) {
         handlers.onError?.(parsed, event);

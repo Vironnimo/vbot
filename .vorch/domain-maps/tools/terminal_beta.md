@@ -27,6 +27,14 @@ Lets an Agent start and control a real TUI in a Session-scoped Terminal Session 
 - Commands are argv tokens and never shell-interpolated. Windows `.cmd` launchers use a controlled `cmd.exe` fallback; the npm Codex launcher resolves to its adjacent Node entry point so inline hook TOML survives Windows quoting.
 - When Storage is injected, raw terminal output is flushed to a leased `<data_dir>/artifacts/temp/terminals/*.log`; Codex hook events use a separate leased JSONL file. Both start the 72-hour Storage retention clock after the Terminal Session ends. The Agent receives only the log path plus bounded rendered output, not an unbounded Tool Result.
 
+## Local operator surface
+
+- `TerminalManager` also owns a local-operator projection across all active Terminal Sessions. It exposes command, owner, PID, state, dimensions, timestamps, working directory, attention summary, and integration metadata without exposing Tool-only arguments or artifact paths; this projection does not weaken the exact-owner authorization of Agent-facing `terminal_beta` calls.
+- Each Terminal Session owns a bounded sequenced `ReplayEventStream`. A new WebUI watcher receives one authoritative ANSI snapshot of the rendered screen and current sequence, then ordered raw PTY deltas plus state projections; a missing sequence requires rebuilding from a fresh snapshot rather than guessing at VT state.
+- The app-wide server socket receives `resource_changed(kind="terminals")` only for active-catalog or projected-state changes. High-volume PTY output stays on `/ws/terminals/{terminal_id}` and never enters the shared bus, Session history, or model context. Operator input, resize, and kill are RPC mutations, not WebSocket commands.
+- The WebUI is an observer, not a lifetime owner. Opening, navigating away from, reconnecting, or closing the view never ends a Terminal Session; only the existing lifecycle boundaries do. Confirmed operator stop terminates only the selected process tree and suppresses redundant exit attention.
+- `TerminalRenderer.ansi_snapshot()` reconstructs the current pyte screen as VT/ANSI state including cell styles, indexed/RGB colors, and cursor position. This authoritative reconstruction lets xterm.js recover after navigation or a stream gap without replaying an unbounded raw log.
+
 ## Codex integration
 
 - A command whose executable basename is `codex` receives invocation-local options for inline-screen rendering, startup-update-dialog suppression, hook trust, and the `default_mode_request_user_input` feature. vBot does not edit the user's Codex configuration and does not use non-interactive Codex execution.
@@ -39,4 +47,4 @@ Lets an Agent start and control a real TUI in a Session-scoped Terminal Session 
 
 - Runtime creates `TerminalManager` after `TriggerService`, registers `terminal_beta`, injects the manager into `CommandDispatcher`, and stops it before temporary-file cleanup. Run cancellation does not own or cancel Terminal Sessions.
 - A successful `/agent` Session move transfers matching Terminal ownership to the destination address. Session deletion, Identity Agent deletion, and Project removal terminate matching Terminal Sessions inside their admission-guarded workflows.
-- Unit coverage lives in `tests/core/tools/test_terminal_manager.py`, `test_terminal_beta.py`, and `test_terminal_hook_sink.py`; Runtime, Storage, Command, and RPC tests cover registration, retention paths, transfer, and deletion cleanup. Real Windows validation must use an actual interactive Codex TUI through ConPTY because pipe-based tests cannot prove TTY behavior or hook delivery.
+- Unit coverage lives in `tests/core/tools/test_terminal_manager.py`, `test_terminal_beta.py`, and `test_terminal_hook_sink.py`; Runtime, Storage, Command, RPC, WebSocket, and WebUI tests cover registration, retention paths, transfer, deletion cleanup, operator projection/control, stream sequencing, and reconnect. Real Windows validation must use an actual interactive Codex TUI through ConPTY because pipe-based tests cannot prove TTY rendering, hook delivery, resize, or process-tree stop behavior.

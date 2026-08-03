@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from collections.abc import AsyncIterator
 from contextlib import aclosing
 from pathlib import Path
 from typing import Any, cast
@@ -25,6 +26,62 @@ from server.rpc.event_bridge import (
     SERVER_EVENT_TYPES,
 )
 from tests.server.test_rpc import StubAdapter, StubRuntime
+
+
+def test_terminal_websocket_sends_snapshot_then_live_output_and_terminal_state(
+    tmp_path: Path,
+) -> None:
+    runtime = StubRuntime(tmp_path, StubAdapter())
+    terminal_manager = StubTerminalWebsocketManager()
+    runtime.terminal_manager = cast(Any, terminal_manager)
+    app = create_app(runtime=cast(Any, runtime))
+
+    with (
+        TestClient(app) as client,
+        client.websocket_connect("/ws/terminals/term-1") as websocket,
+    ):
+        events = [websocket.receive_json() for _ in range(3)]
+
+    assert events == [
+        {
+            "type": "terminal_ready",
+            "sequence": 2,
+            "terminal": {"terminal_id": "term-1", "state": "working"},
+            "ansi": "\x1b[2Jready",
+        },
+        {"type": "terminal_output", "sequence": 3, "data": "next"},
+        {
+            "type": "terminal_state",
+            "sequence": 4,
+            "terminal": {"terminal_id": "term-1", "state": "exited"},
+        },
+    ]
+    assert terminal_manager.unsubscribed
+
+
+class StubTerminalWebsocketManager:
+    def __init__(self) -> None:
+        self.unsubscribed = False
+
+    def add_changed_callback(self, _callback: Any) -> Any:
+        def unsubscribe() -> None:
+            self.unsubscribed = True
+
+        return unsubscribe
+
+    async def watch_for_operator(self, terminal_id: str) -> AsyncIterator[dict[str, Any]]:
+        yield {
+            "type": "terminal_ready",
+            "sequence": 2,
+            "terminal": {"terminal_id": terminal_id, "state": "working"},
+            "ansi": "\x1b[2Jready",
+        }
+        yield {"type": "terminal_output", "sequence": 3, "data": "next"}
+        yield {
+            "type": "terminal_state",
+            "sequence": 4,
+            "terminal": {"terminal_id": terminal_id, "state": "exited"},
+        }
 
 
 def test_websocket_receives_run_lifecycle_events_without_provider_metadata(tmp_path: Path) -> None:

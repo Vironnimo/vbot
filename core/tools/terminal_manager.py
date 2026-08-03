@@ -12,12 +12,13 @@ import os
 import tempfile
 import uuid
 from collections import deque
-from collections.abc import Mapping, Sequence
+from collections.abc import AsyncGenerator, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Literal, TextIO, cast
 
+from core.event_stream import ReplayEventStream
 from core.storage.temp_files import TemporaryFileLease, TemporaryFileManager
 from core.tools.terminal_backend import (
     TerminalAdapter,
@@ -56,6 +57,9 @@ TERMINAL_TEMPORARY_CATEGORY = "terminals"
 TERMINAL_INITIAL_INPUT_QUIET_SECONDS = 0.5
 TERMINAL_INITIAL_INPUT_TIMEOUT_SECONDS = 15.0
 TERMINAL_INPUT_KEY_DELAY_SECONDS = 0.1
+TERMINAL_STREAM_RETENTION_EVENTS = 4_096
+TERMINAL_STREAM_SUBSCRIBER_QUEUE_EVENTS = 512
+TERMINAL_OPERATOR_INPUT_MAX_CHARS = 65_536
 _CODEX_QUESTION_TOOL = "request_user_input"
 
 TerminalState = Literal[
@@ -68,6 +72,21 @@ TerminalState = Literal[
     "error",
 ]
 AttentionKind = Literal["approval", "question", "turn_complete", "exited", "error"]
+TerminalStreamEvent = dict[str, Any]
+TerminalChangedCallback = Callable[[str], None]
+
+
+def _new_terminal_stream() -> ReplayEventStream[TerminalStreamEvent]:
+    return ReplayEventStream(
+        event_retention_limit=TERMINAL_STREAM_RETENTION_EVENTS,
+        subscriber_queue_limit=TERMINAL_STREAM_SUBSCRIBER_QUEUE_EVENTS,
+        sequence_of=lambda event: int(event.get("sequence", 0)),
+        terminal_when=lambda event: (
+            event.get("type") == "terminal_state"
+            and event.get("terminal", {}).get("state") in {"exited", "error"}
+        ),
+        on_lagged=lambda: _LOGGER.warning("Evicted lagging Terminal stream subscriber"),
+    )
 
 
 class TerminalManagerError(VBotError):
@@ -158,6 +177,10 @@ class TerminalSession:
     event_task: asyncio.Task[None] | None = field(default=None, repr=False)
     initial_input_task: asyncio.Task[None] | None = field(default=None, repr=False)
     notification_task: asyncio.Task[None] | None = field(default=None, repr=False)
+    stream_sequence: int = 0
+    stream: ReplayEventStream[TerminalStreamEvent] = field(
+        default_factory=_new_terminal_stream, repr=False
+    )
 
 
 class TerminalManager:
@@ -186,8 +209,19 @@ class TerminalManager:
         self._finished_session_ttl = finished_session_ttl
         self._sweep_interval_seconds = sweep_interval_seconds
         self._sessions: dict[str, TerminalSession] = {}
+        self._changed_callbacks: list[TerminalChangedCallback] = []
         self._cursor_secret = os.urandom(32)
         self._sweeper_task: asyncio.Task[None] | None = None
+
+    def add_changed_callback(self, callback: TerminalChangedCallback) -> Callable[[], None]:
+        """Notify transport edges when operator-visible Terminal state changes."""
+        self._changed_callbacks.append(callback)
+
+        def unsubscribe() -> None:
+            if callback in self._changed_callbacks:
+                self._changed_callbacks.remove(callback)
+
+        return unsubscribe
 
     def start(self) -> None:
         """Start bounded retention cleanup when an event loop is available."""
@@ -347,6 +381,7 @@ class TerminalManager:
                     task, f"Terminal initial input failed for terminal={terminal_id}"
                 )
             )
+        self._publish_state(session)
         return session
 
     def list_sessions(self, owner: TerminalOwner) -> list[TerminalSession]:
@@ -362,6 +397,79 @@ class TerminalManager:
         if session is None or session.owner != owner:
             raise TerminalNotFoundError(f"Terminal Session not found: {terminal_id}")
         return session
+
+    def list_active_for_operator(self) -> list[dict[str, Any]]:
+        """Return every live Terminal Session for the local operator surface."""
+        sessions = (
+            session
+            for session in self._sessions.values()
+            if session.finished_at is None and session.state not in {"exited", "error"}
+        )
+        return [
+            self._operator_summary(session)
+            for session in sorted(sessions, key=lambda item: item.started_at, reverse=True)
+        ]
+
+    async def watch_for_operator(
+        self, terminal_id: str
+    ) -> AsyncGenerator[TerminalStreamEvent, None]:
+        """Yield an authoritative VT snapshot followed by sequenced live events."""
+        session = self._get_for_operator(terminal_id)
+        async with session.lock:
+            after_sequence = session.stream_sequence
+            ready: TerminalStreamEvent = {
+                "type": "terminal_ready",
+                "sequence": after_sequence,
+                "terminal": self._operator_summary(session),
+                "ansi": session.renderer.ansi_snapshot(),
+            }
+        yield ready
+        if session.state in {"exited", "error"}:
+            return
+        async with contextlib.aclosing(
+            session.stream.subscribe(after_sequence=after_sequence)
+        ) as events:
+            async for event in events:
+                yield event
+
+    async def send_operator_input(self, terminal_id: str, data: str) -> dict[str, Any]:
+        """Write exact user-controlled terminal bytes through the existing PTY."""
+        if not isinstance(data, str) or not data:
+            raise ValueError("Terminal input must be a non-empty string")
+        if len(data) > TERMINAL_OPERATOR_INPUT_MAX_CHARS:
+            raise ValueError(
+                f"Terminal input must not exceed {TERMINAL_OPERATOR_INPUT_MAX_CHARS} characters"
+            )
+        session = self._get_for_operator(terminal_id)
+        initial_task = session.initial_input_task
+        if initial_task is not None and not initial_task.done():
+            initial_task.cancel()
+        async with session.lock:
+            self._require_live(session)
+            state_changed = session.state != "working"
+            session.state = "working"
+            for index, chunk in enumerate(_operator_input_chunks(data)):
+                if index:
+                    await asyncio.sleep(TERMINAL_INPUT_KEY_DELAY_SECONDS)
+                await asyncio.to_thread(session.adapter.write, chunk)
+            session.output_event.set()
+            if state_changed:
+                self._publish_state(session)
+            return self._operator_summary(session)
+
+    async def resize_for_operator(
+        self, terminal_id: str, *, columns: int, rows: int
+    ) -> dict[str, Any]:
+        """Resize an operator-selected Terminal Session."""
+        session = self._get_for_operator(terminal_id)
+        await self.resize(terminal_id, session.owner, columns=columns, rows=rows)
+        return self._operator_summary(session)
+
+    async def kill_for_operator(self, terminal_id: str) -> dict[str, Any]:
+        """Explicitly stop an operator-selected Terminal Session."""
+        session = self._get_for_operator(terminal_id)
+        await self._terminate_session(session, suppress_attention=True)
+        return self._operator_summary(session)
 
     async def snapshot(
         self,
@@ -453,6 +561,8 @@ class TerminalManager:
                     await asyncio.sleep(TERMINAL_INPUT_KEY_DELAY_SECONDS)
                 await asyncio.to_thread(session.adapter.write, chunk)
             session.output_event.set()
+            if prior_state != "working":
+                self._publish_state(session)
             return {
                 "terminal_id": terminal_id,
                 "state": session.state,
@@ -522,6 +632,7 @@ class TerminalManager:
             self._require_live(session)
             await asyncio.to_thread(session.adapter.resize, rows, columns)
             session.renderer.resize(columns, rows)
+            self._publish_state(session)
             return {
                 "terminal_id": terminal_id,
                 "state": session.state,
@@ -580,6 +691,7 @@ class TerminalManager:
                 if pending_delivery:
                     self._cancel_delivery(session)
                 session.owner = target
+                self._publish_state(session)
                 if pending_delivery and attention is not None:
                     self._schedule_attention_delivery(session, attention)
                 transferred += 1
@@ -661,6 +773,7 @@ class TerminalManager:
                         session.log_handle.write(text)
                         session.log_handle.flush()
                     session.renderer.feed(text)
+                    self._publish_output(session, text)
                     session.output_event.set()
         except asyncio.CancelledError:
             raise
@@ -775,9 +888,9 @@ class TerminalManager:
         ):
             initial_task.cancel()
         async with session.lock:
-            if session.finished_at is not None:
+            if session.state in {"exited", "error"}:
                 return
-            session.finished_at = _utc_now()
+            session.finished_at = session.finished_at or _utc_now()
             session.exit_code = await asyncio.to_thread(session.adapter.exit_code)
             if error is None:
                 session.state = "exited"
@@ -789,6 +902,8 @@ class TerminalManager:
                         summary=f"Terminal process exited with code {session.exit_code}.",
                         details={"exit_code": session.exit_code},
                     )
+                else:
+                    self._publish_state(session)
             else:
                 session.state = "error"
                 if not session.suppress_exit_attention:
@@ -799,6 +914,8 @@ class TerminalManager:
                         summary="Terminal transport or rendering failed.",
                         details={"error": str(error)},
                     )
+                else:
+                    self._publish_state(session)
             session.attention_event.set()
             session.output_event.set()
             self._finish_files(session)
@@ -834,6 +951,7 @@ class TerminalManager:
         session.attention = attention
         session.attention_event.set()
         self._schedule_attention_delivery(session, attention)
+        self._publish_state(session)
 
     def _schedule_attention_delivery(
         self, session: TerminalSession, attention: TerminalAttention
@@ -893,7 +1011,7 @@ class TerminalManager:
             except TimeoutError:
                 reader.cancel()
                 await asyncio.gather(reader, return_exceptions=True)
-        if session.finished_at is None:
+        if session.state not in {"exited", "error"}:
             await self._mark_finished(session, None)
 
     def _cancel_delivery(self, session: TerminalSession) -> None:
@@ -941,6 +1059,70 @@ class TerminalManager:
             ),
             "log_file": str(session.log_path) if session.log_path is not None else None,
         }
+
+    def _get_for_operator(self, terminal_id: str) -> TerminalSession:
+        session = self._sessions.get(terminal_id)
+        if session is None:
+            raise TerminalNotFoundError(f"Terminal Session not found: {terminal_id}")
+        return session
+
+    def _operator_summary(self, session: TerminalSession) -> dict[str, Any]:
+        attention = session.attention
+        return {
+            "terminal_id": session.terminal_id,
+            "state": session.state,
+            "command": Path(session.command).name or session.command,
+            "workdir": str(session.cwd),
+            "pid": session.adapter.pid,
+            "started_at": session.started_at.isoformat(),
+            "finished_at": session.finished_at.isoformat() if session.finished_at else None,
+            "columns": session.renderer.columns,
+            "rows": session.renderer.rows,
+            "screen_revision": session.renderer.revision,
+            "owner": {
+                "project_id": session.owner.project_id,
+                "agent_id": session.owner.agent_id,
+                "session_id": session.owner.session_id,
+            },
+            "attention": (
+                {
+                    "revision": attention.revision,
+                    "kind": attention.kind,
+                    "summary": attention.summary,
+                    "created_at": attention.created_at.isoformat(),
+                }
+                if attention is not None
+                else None
+            ),
+            "integration": "codex" if session.codex_integration else "terminal",
+        }
+
+    def _publish_output(self, session: TerminalSession, text: str) -> None:
+        session.stream_sequence += 1
+        session.stream.publish(
+            {
+                "type": "terminal_output",
+                "sequence": session.stream_sequence,
+                "data": text,
+            }
+        )
+
+    def _publish_state(self, session: TerminalSession) -> None:
+        session.stream_sequence += 1
+        session.stream.publish(
+            {
+                "type": "terminal_state",
+                "sequence": session.stream_sequence,
+                "terminal": self._operator_summary(session),
+            }
+        )
+        for callback in list(self._changed_callbacks):
+            try:
+                callback(session.terminal_id)
+            except Exception:
+                _LOGGER.exception(
+                    "Terminal changed callback failed for terminal=%s", session.terminal_id
+                )
 
     def _enforce_capacity(self, owner: TerminalOwner) -> None:
         live = [
@@ -994,7 +1176,7 @@ class TerminalManager:
 
     @staticmethod
     def _require_live(session: TerminalSession) -> None:
-        if session.state in {"exited", "error"}:
+        if session.finished_at is not None or session.state in {"exited", "error"}:
             raise TerminalClosedError("Terminal Session is no longer running")
 
     async def _sweep_loop(self) -> None:
@@ -1031,6 +1213,12 @@ def _input_chunks(*, text: str | None, key: str | None, enter: bool) -> tuple[st
     if not chunks:
         raise ValueError("input must send text, a key, or Enter")
     return tuple(chunks)
+
+
+def _operator_input_chunks(data: str) -> tuple[str, ...]:
+    if len(data) > 1 and data[-1] in {"\r", "\n"}:
+        return data[:-1], data[-1]
+    return (data,)
 
 
 def _attention_body(session: TerminalSession, attention: TerminalAttention) -> str:

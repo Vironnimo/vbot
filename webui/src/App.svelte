@@ -13,6 +13,12 @@
       section: 'work',
     },
     {
+      id: 'terminals',
+      labelKey: 'navigation.terminals',
+      labelFallback: 'Terminals',
+      section: 'work',
+    },
+    {
       id: 'projects',
       labelKey: 'navigation.projects',
       labelFallback: 'Projects',
@@ -71,6 +77,7 @@
   import DesktopConnectionSettings from './components/settings/DesktopConnectionSettings.svelte';
   import StatisticsView from './components/StatisticsView.svelte';
   import SystemPromptView from './components/SystemPromptView.svelte';
+  import TerminalsView from './components/TerminalsView.svelte';
   import OnboardingView from './components/OnboardingView.svelte';
   import ToastStack from './components/ToastStack.svelte';
   import Banner from './components/ui/Banner.svelte';
@@ -259,6 +266,9 @@
   let cronRefreshToken = $derived(appControllerState.cronRefreshToken);
   let debugTracesRefreshToken = $derived(
     appControllerState.debugTracesRefreshToken,
+  );
+  let terminalsRefreshToken = $derived(
+    appControllerState.terminalsRefreshToken,
   );
   let connectionState = $derived(appControllerState.connectionState);
   let serverNoticeState = $derived(appControllerState.serverNoticeState);
@@ -1063,6 +1073,12 @@
         {agentsRefreshToken}
         {modelsRefreshToken}
         {projectsRefreshToken}
+      />
+    {:else if activeViewId === 'terminals'}
+      <TerminalsView
+        {terminalsRefreshToken}
+        {serverUnavailable}
+        onToast={showToast}
       />
     {:else if activeViewId === 'projects'}
       <ProjectsView

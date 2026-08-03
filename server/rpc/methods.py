@@ -20,6 +20,7 @@ from server.rpc import (
     settings_methods,
     skill_methods,
     statistics_methods,
+    terminal_methods,
 )
 from server.rpc.dispatcher import RpcMethodHandler
 from server.rpc.dispatcher import dispatch_rpc as _dispatch_rpc_envelope
@@ -47,6 +48,7 @@ def build_method_handlers() -> dict[str, RpcMethodHandler]:
         provider_usage_methods,
         client_methods,
         skill_methods,
+        terminal_methods,
     ):
         handlers.update(registry.method_handlers())
     return handlers

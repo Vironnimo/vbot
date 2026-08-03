@@ -8,6 +8,7 @@ describe('app navigation surface', () => {
     expect(NAVIGATION_ITEMS.map((item) => item.id)).toEqual([
       'chat',
       'agents',
+      'terminals',
       'projects',
       'settings',
       'system-prompt',
@@ -25,6 +26,7 @@ describe('app navigation surface', () => {
     expect(sectionById).toEqual({
       chat: 'work',
       agents: 'work',
+      terminals: 'work',
       projects: 'work',
       settings: 'configure',
       'system-prompt': 'configure',
