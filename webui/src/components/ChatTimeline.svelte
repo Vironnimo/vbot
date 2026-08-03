@@ -25,6 +25,10 @@
     transientCards = [],
     submittedTurnScrollKey = 0,
     submittedTurnScrollRunId = '',
+    // Explicit navigation through a Sub-Agent row starts that Session as a
+    // live tail even when its ordinary per-Session viewport was saved higher
+    // in History. Passive restoration does not send this request.
+    followSessionRequest = null,
     subAgentStatuses = {},
     subAgentResults = {},
     onNavigateToSubAgent = () => {},
@@ -81,6 +85,7 @@
   );
   let sessionScrollKey = $derived(sessionState?.key ?? '');
   let renderedSessionScrollKey = null;
+  let handledFollowSessionRequestId = 0;
   let viewportGeneration = 0;
   let pendingViewportSync = null;
   let viewportSyncQueued = false;
@@ -88,6 +93,22 @@
   let userScrollIntentUntil = 0;
   // eslint-disable-next-line svelte/prefer-svelte-reactivity
   const sessionViewports = new Map();
+
+  $effect(() => {
+    const requestId = followSessionRequest?.requestId ?? 0;
+    const targetSessionKey = followSessionRequest?.sessionKey ?? '';
+    if (
+      requestId <= handledFollowSessionRequestId ||
+      !targetSessionKey ||
+      targetSessionKey !== sessionScrollKey
+    ) {
+      return;
+    }
+    handledFollowSessionRequestId = requestId;
+    setViewportMode(targetSessionKey, 'follow');
+    const generation = viewportGeneration;
+    tick().then(() => queueViewportSync(targetSessionKey, generation));
+  });
 
   $effect(() => {
     if (
@@ -168,24 +189,53 @@
     if (!container) {
       return undefined;
     }
+    let touchY = null;
     const markUserScrollIntent = () => {
       userScrollIntentUntil = Date.now() + USER_SCROLL_INTENT_WINDOW_MS;
     };
+    const handleWheel = (event) => {
+      markUserScrollIntent();
+      if (event.deltaY < 0) {
+        takeReadingControl();
+      }
+    };
+    const handleTouchStart = (event) => {
+      markUserScrollIntent();
+      touchY = event.touches?.[0]?.clientY ?? null;
+    };
+    const handleTouchMove = (event) => {
+      markUserScrollIntent();
+      const nextTouchY = event.touches?.[0]?.clientY ?? null;
+      if (touchY !== null && nextTouchY !== null && nextTouchY > touchY) {
+        takeReadingControl();
+      }
+      touchY = nextTouchY;
+    };
+    const handleKeyDown = (event) => {
+      markUserScrollIntent();
+      if (isUpwardScrollKey(event.key)) {
+        takeReadingControl();
+      }
+    };
     container.addEventListener('click', handleTimelineClick);
-    container.addEventListener('wheel', markUserScrollIntent, {
+    container.addEventListener('wheel', handleWheel, {
       passive: true,
     });
-    container.addEventListener('touchstart', markUserScrollIntent, {
+    container.addEventListener('touchstart', handleTouchStart, {
+      passive: true,
+    });
+    container.addEventListener('touchmove', handleTouchMove, {
       passive: true,
     });
     container.addEventListener('pointerdown', markUserScrollIntent);
-    container.addEventListener('keydown', markUserScrollIntent);
+    container.addEventListener('keydown', handleKeyDown);
     return () => {
       container.removeEventListener('click', handleTimelineClick);
-      container.removeEventListener('wheel', markUserScrollIntent);
-      container.removeEventListener('touchstart', markUserScrollIntent);
+      container.removeEventListener('wheel', handleWheel);
+      container.removeEventListener('touchstart', handleTouchStart);
+      container.removeEventListener('touchmove', handleTouchMove);
       container.removeEventListener('pointerdown', markUserScrollIntent);
-      container.removeEventListener('keydown', markUserScrollIntent);
+      container.removeEventListener('keydown', handleKeyDown);
     };
   });
 
@@ -520,6 +570,20 @@
     viewport.mode = 'reading';
     viewport.restoreMode = 'reading';
     captureViewportAnchor(viewport);
+  }
+
+  function takeReadingControl() {
+    if (!sessionScrollKey || !scrollContainer) {
+      return;
+    }
+    const viewport = sessionViewport(sessionScrollKey);
+    viewport.mode = 'reading';
+    viewport.restoreMode = 'reading';
+    captureViewportAnchor(viewport);
+  }
+
+  function isUpwardScrollKey(key) {
+    return key === 'ArrowUp' || key === 'PageUp' || key === 'Home';
   }
 
   async function loadOlderHistoryFromScroll() {

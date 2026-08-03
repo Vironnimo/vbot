@@ -120,6 +120,8 @@
   let viewingSubAgentSession = $state(false);
   let submittedTurnScrollKey = $state(0);
   let submittedTurnScrollRunId = $state('');
+  let subAgentLinkFollowRequest = $state(null);
+  let subAgentLinkFollowRequestId = 0;
   let handledSessionNavigationKey = '';
   // Bottom command toast auto-dismiss. Kept as a single constant so the
   // dwell time can be tuned in one place.
@@ -1091,6 +1093,13 @@
     }
 
     if (navigation.subAgent === true) {
+      if (navigation.followSession === true) {
+        subAgentLinkFollowRequestId += 1;
+        subAgentLinkFollowRequest = {
+          requestId: subAgentLinkFollowRequestId,
+          sessionKey: `${navigation.agentId}::${navigation.sessionId}`,
+        };
+      }
       await handleSubAgentNavigation(navigation.agentId, navigation.sessionId);
       return;
     }
@@ -1502,9 +1511,10 @@
     if (!target?.agentId || !target?.sessionId) {
       return;
     }
+    const agentId = qualifiedChildAgentAddress(target.agentId);
     navigateToSubAgent({
       ...target,
-      agentId: qualifiedChildAgentAddress(target.agentId),
+      agentId,
     });
   };
 
@@ -1858,6 +1868,7 @@
             {transientCards}
             {submittedTurnScrollKey}
             {submittedTurnScrollRunId}
+            followSessionRequest={subAgentLinkFollowRequest}
             hasOlderHistory={activeSessionState?.hasOlderHistory === true}
             loadingOlderHistory={activeSessionState?.loadingOlderHistory ===
               true}
