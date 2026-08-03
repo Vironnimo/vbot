@@ -21,6 +21,7 @@ from core.tools.process_manager import subprocess_creation_flags
 
 _HARD_KILL_SIGNAL = getattr(signal, "SIGKILL", 9)
 _ALTERNATE_SCREEN_MODES = frozenset({47, 1047, 1049})
+_WINDOWS_INTERACTIVE_SHELLS = ("pwsh.exe", "powershell.exe")
 _SCREEN_STATE_FIELDS = (
     "savepoints",
     "columns",
@@ -84,10 +85,46 @@ TerminalAdapterFactory = Callable[
 
 def default_terminal_argv(env: Mapping[str, str] | None = None) -> list[str]:
     """Return the host user's default interactive shell command."""
-    environment = env or os.environ
-    if os.name == "nt":
-        return [environment.get("COMSPEC") or os.environ.get("COMSPEC") or "cmd.exe"]
-    return [environment.get("SHELL") or os.environ.get("SHELL") or "/bin/sh"]
+    environment = os.environ if env is None else env
+    login_shell = None if os.name == "nt" else _posix_login_shell()
+    return _select_default_terminal_argv(
+        os.name,
+        environment,
+        executable_lookup=shutil.which,
+        posix_login_shell=login_shell,
+    )
+
+
+def _select_default_terminal_argv(
+    platform_name: str,
+    environment: Mapping[str, str],
+    *,
+    executable_lookup: Callable[..., str | None],
+    posix_login_shell: str | None,
+) -> list[str]:
+    if platform_name == "nt":
+        search_path = environment.get("PATH", "")
+        for command in _WINDOWS_INTERACTIVE_SHELLS:
+            if executable_lookup(command, path=search_path) is not None:
+                return [command]
+        return [environment.get("COMSPEC") or "cmd.exe"]
+
+    environment_shell = environment.get("SHELL")
+    return [environment_shell or posix_login_shell or "/bin/sh"]
+
+
+def _posix_login_shell() -> str | None:
+    try:
+        import pwd
+
+        get_user_id = getattr(os, "getuid", None)
+        get_password_entry = getattr(pwd, "getpwuid", None)
+        if not callable(get_user_id) or not callable(get_password_entry):
+            return None
+        shell = getattr(get_password_entry(get_user_id()), "pw_shell", None)
+    except (ImportError, KeyError, OSError):
+        return None
+    return str(shell) if shell else None
 
 
 class _TerminalScreen(pyte.Screen):

@@ -2,7 +2,51 @@
 
 from __future__ import annotations
 
+import core.tools.terminal_backend as terminal_backend
 from core.tools.terminal_backend import TerminalRenderer
+
+
+def select_default_terminal(
+    platform_name: str,
+    environment: dict[str, str],
+    available: set[str],
+    *,
+    login_shell: str | None = None,
+) -> list[str]:
+    def lookup(command: str, *, path: str) -> str | None:
+        assert path == environment.get("PATH", "")
+        return command if command in available else None
+
+    return terminal_backend._select_default_terminal_argv(
+        platform_name,
+        environment,
+        executable_lookup=lookup,
+        posix_login_shell=login_shell,
+    )
+
+
+def test_windows_default_terminal_prefers_powershell_7() -> None:
+    assert select_default_terminal(
+        "nt",
+        {"PATH": "windows-path", "COMSPEC": "custom-cmd.exe"},
+        {"pwsh.exe", "powershell.exe"},
+    ) == ["pwsh.exe"]
+
+
+def test_windows_default_terminal_falls_back_through_windows_powershell_to_comspec() -> None:
+    environment = {"PATH": "windows-path", "COMSPEC": "custom-cmd.exe"}
+
+    assert select_default_terminal("nt", environment, {"powershell.exe"}) == ["powershell.exe"]
+    assert select_default_terminal("nt", environment, set()) == ["custom-cmd.exe"]
+    assert select_default_terminal("nt", {}, set()) == ["cmd.exe"]
+
+
+def test_posix_default_terminal_uses_environment_then_login_shell_then_sh() -> None:
+    assert select_default_terminal(
+        "posix", {"SHELL": "/bin/fish"}, set(), login_shell="/bin/zsh"
+    ) == ["/bin/fish"]
+    assert select_default_terminal("posix", {}, set(), login_shell="/bin/zsh") == ["/bin/zsh"]
+    assert select_default_terminal("posix", {}, set()) == ["/bin/sh"]
 
 
 def test_alternate_screen_is_rendered_and_primary_screen_restores_after_resize() -> None:
