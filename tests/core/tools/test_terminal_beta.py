@@ -133,12 +133,15 @@ async def test_list_is_session_scoped_and_status_paginates(
     session = terminal_manager.get_session(
         terminal_id, TerminalOwner("project-a", "agent-a", "session-a")
     )
-    factory.adapters[0].emit("".join(f"line-{index}\r\n" for index in range(50)))
+    factory.adapters[0].emit(
+        "\x1b]0;Codex migration\x07" + "".join(f"line-{index}\r\n" for index in range(50))
+    )
     await eventually(lambda: session.renderer.revision > 0)
 
     listed = await call(terminal_manager, context, {"action": "list"})
     terminals = cast(dict[str, Any], listed["data"])["terminals"]
     assert [item["terminal_id"] for item in terminals] == [terminal_id]
+    assert terminals[0]["title"] == "Codex migration"
     hidden = await call(
         terminal_manager, make_context(tmp_path, session_id="other"), {"action": "list"}
     )
@@ -150,6 +153,7 @@ async def test_list_is_session_scoped_and_status_paginates(
         {"action": "status", "terminal_id": terminal_id, "lines": 3},
     )
     status_data = cast(dict[str, Any], status["data"])
+    assert status_data["title"] == "Codex migration"
     scrollback = status_data["scrollback"]
     assert scrollback["line_count"] == 3
     assert scrollback["next_cursor"] is not None

@@ -16,6 +16,8 @@ from core.skills.skills import (
     skill_origin_sort_key,
 )
 
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
+
 
 def write_skill(skills_dir: Path, directory_name: str, metadata: str) -> Path:
     skill_dir = skills_dir / directory_name
@@ -23,6 +25,33 @@ def write_skill(skills_dir: Path, directory_name: str, metadata: str) -> Path:
     skill_file = skill_dir / "SKILL.md"
     skill_file.write_text(metadata, encoding="utf-8")
     return skill_file
+
+
+def test_bundled_coding_agents_uses_interactive_terminal_contract() -> None:
+    package = PROJECT_ROOT / "resources" / "skills" / "coding-agents"
+    skill_text = (package / "SKILL.md").read_text(encoding="utf-8")
+    reference_text = "\n".join(
+        path.read_text(encoding="utf-8") for path in sorted((package / "references").glob("*.md"))
+    )
+    combined = f"{skill_text}\n{reference_text}"
+
+    assert "terminal_beta" in skill_text
+    assert "Terminal Sessions survive individual Runs" in skill_text
+    assert "expected_screen_revision" in skill_text
+    assert "terminal_id" in reference_text
+    assert "machine-output invocation" in skill_text
+    assert "permission checks" in skill_text
+    forbidden_invocations = (
+        "claude" + " -p",
+        "codex" + " exec",
+        "opencode" + " run",
+    )
+    assert all(invocation not in combined for invocation in forbidden_invocations)
+
+    registry = SkillRegistry.load(PROJECT_ROOT / "resources" / "skills")
+    skill = registry.get("coding-agents")
+    assert skill.requirements.empty
+    assert registry.availability_for("coding-agents", ["coding-agents"]).state == "available"
 
 
 class TestSkillMetadata:

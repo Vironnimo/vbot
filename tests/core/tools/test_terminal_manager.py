@@ -269,7 +269,7 @@ async def test_operator_stream_starts_with_ansi_snapshot_and_continues_in_sequen
     manager, factory = terminal_manager
     session = await spawn(manager, tmp_path)
     adapter = factory.adapters[0]
-    adapter.emit("\x1b[31mREADY>\x1b[0m ")
+    adapter.emit("\x1b]0;Codex auth refactor\x07\x1b[31mREADY>\x1b[0m ")
     await eventually(lambda: session.renderer.revision > 0)
 
     stream = manager.watch_for_operator(session.terminal_id)
@@ -280,17 +280,21 @@ async def test_operator_stream_starts_with_ansi_snapshot_and_continues_in_sequen
         "agent_id": "agent-a",
         "session_id": "session-a",
     }
+    assert ready["terminal"]["title"] == "Codex auth refactor"
     assert "READY>" in ready["ansi"]
     assert "\x1b[2J" in ready["ansi"]
 
     next_event = asyncio.create_task(anext(stream))
-    adapter.emit("next")
+    adapter.emit("\x1b]0;Codex tests\x07next")
     event = await asyncio.wait_for(next_event, timeout=1)
     while event["type"] != "terminal_output":
         assert event["sequence"] > ready["sequence"]
         event = await asyncio.wait_for(anext(stream), timeout=1)
-    assert event["data"] == "next"
+    assert event["data"].endswith("next")
     assert event["sequence"] > ready["sequence"]
+    state_event = await asyncio.wait_for(anext(stream), timeout=1)
+    assert state_event["type"] == "terminal_state"
+    assert state_event["terminal"]["title"] == "Codex tests"
     await stream.aclose()
 
 

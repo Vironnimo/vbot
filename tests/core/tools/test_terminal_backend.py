@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import core.tools.terminal_backend as terminal_backend
-from core.tools.terminal_backend import TerminalRenderer
+from core.tools.terminal_backend import TERMINAL_TITLE_MAX_CHARS, TerminalRenderer
 
 
 def select_default_terminal(
@@ -47,6 +47,17 @@ def test_posix_default_terminal_uses_environment_then_login_shell_then_sh() -> N
     ) == ["/bin/fish"]
     assert select_default_terminal("posix", {}, set(), login_shell="/bin/zsh") == ["/bin/zsh"]
     assert select_default_terminal("posix", {}, set()) == ["/bin/sh"]
+
+
+def test_terminal_title_uses_vt_metadata_and_is_safe_for_single_line_ui() -> None:
+    renderer = TerminalRenderer(20, 2, scrollback_lines=20)
+
+    renderer.feed("\x1b]1;  fallback   icon  \x07")
+    assert renderer.title == "fallback icon"
+
+    renderer.feed(f"\x1b]2;  Codex\trefactor  {'x' * 200}\x07")
+    assert renderer.title.startswith("Codex refactor ")
+    assert len(renderer.title) == TERMINAL_TITLE_MAX_CHARS
 
 
 def test_alternate_screen_is_rendered_and_primary_screen_restores_after_resize() -> None:

@@ -61,12 +61,18 @@ describe('terminal live controller', () => {
       ansi: '\u001b[2Jready',
     });
     streams[0].emit({ type: 'terminal_output', sequence: 5, data: 'next' });
+    streams[0].emit({
+      type: 'terminal_state',
+      sequence: 6,
+      terminal: terminal('term-1', { title: 'Codex tests' }),
+    });
 
     expect(state.streamStatus).toBe(TERMINAL_STREAM_CONNECTED);
     expect(snapshots).toEqual(['\u001b[2Jready']);
     expect(output).toEqual(['next']);
+    expect(selectedTerminal(state)?.title).toBe('Codex tests');
 
-    streams[0].emit({ type: 'terminal_output', sequence: 7, data: 'gap' });
+    streams[0].emit({ type: 'terminal_output', sequence: 8, data: 'gap' });
     expect(state.streamStatus).toBe(TERMINAL_STREAM_RECONNECTING);
     expect(streams[0].connection.close).toHaveBeenCalled();
     await vi.runAllTimersAsync();
@@ -175,6 +181,7 @@ function terminal(terminalId, changes = {}) {
     terminal_id: terminalId,
     state: 'working',
     command: 'python',
+    title: '',
     workdir: 'C:\\repo',
     pid: 123,
     started_at: '2026-08-03T12:00:00+00:00',

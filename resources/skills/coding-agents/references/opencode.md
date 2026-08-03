@@ -1,77 +1,21 @@
-# OpenCode (`opencode`) — non-interactive reference
+# OpenCode interactive reference
 
-Headless entrypoint is **`opencode run`**: executes a prompt without launching the TUI. The bare
-`opencode` command opens the interactive TUI and will hang in an automated call.
+Launch `opencode` as a real TUI through `terminal_beta`. Keep the returned `terminal_id` and send every follow-up or menu interaction to that same live Terminal Session.
 
-## Run
+## Start
 
-```bash
-opencode run "Add pagination to the users list endpoint"
-opencode run "Summarize the changes in this diff" < changes.diff
-```
+Use `command: "opencode"`, set the repository as `workdir`, and provide the task as `text` after confirming the CLI is configured. Optional interactive flags include `--model` and `--agent`. Preserve configured defaults unless the user or task requires a specific choice.
 
-## Output (capture the session id here)
+If authentication, provider selection, workspace setup, or a session picker may appear, start without `text`, inspect `status`, and interact with the actual screen before sending the task.
 
-```bash
-opencode run "task" --format json
-```
+## Work with the live TUI
 
-`--format` accepts `default` (formatted text) or `json` (raw JSON events). Use `json` to read the
-session id and structured result instead of scraping prose. `--thinking` additionally surfaces the
-model's thinking blocks. List existing sessions with `opencode session list` to recover an id.
+Use `wait` for short activity boundaries, then call `status` for the current rendered screen. Send ordinary instructions with text plus Enter and use named keys for selections, dialogs, and interruption. Reread the screen and use `expected_screen_revision` for approvals or other choices that must not land on a changed prompt.
 
-## Continue / resume a session
+Do not infer completion from quiet output. Require OpenCode's explicit final response, verify its claimed changes, and preserve the Terminal Session for follow-up work.
 
-```bash
-opencode run -c "next instruction"          # --continue: continue the most recent session
-opencode run -s <session-id> "next step"    # --session: continue a specific session id
-```
+## Continue after exit
 
-Pattern: run with `--format json`, capture the session id, then pass it with `-s`/`--session` on the
-next call. `-c`/`--continue` continues the most recent session when you don't need a specific id.
-Note: opencode's non-interactive session continuation has had rough edges across versions — verify
-that the follow-up actually attached to the intended session, and prefer an explicit `--session <id>`
-over `--continue` when correctness matters.
+While OpenCode remains alive, continue through the same `terminal_id`. After it exits, start a new interactive Terminal Session with `opencode --continue` for the most recent relevant session or `opencode --session <session-id>` when an exact OpenCode session id is known. Verify that the intended session was restored before sending new instructions.
 
-## Model, agent, reasoning effort
-
-```bash
-opencode run "task" --model anthropic/claude-sonnet-4-5   # -m, always provider/model form
-opencode run "task" --agent build                         # select a defined agent
-opencode run "task" --variant <name>                      # provider-specific reasoning-effort variant
-```
-
-- `--model` / `-m`: `provider/model` (e.g. `openai/gpt-5`, `anthropic/claude-sonnet-4-5`). List
-  options with `opencode models`.
-- `--agent`: selects an agent. Agents are defined in `opencode.json` under the `agent` key, or as
-  markdown files in the opencode agent config directory (frontmatter: `mode: primary|subagent`,
-  `model`, `reasoningEffort`). Define a high-effort agent there and select it with `--agent` when you
-  want a fixed reasoning effort rather than a per-run `--variant`.
-- `reasoningEffort` (e.g. `low|medium|high`) is set per agent in config, not as a top-level run flag.
-
-## Headless server (robust orchestration)
-
-For multi-step orchestration, run a persistent server and attach runs to it:
-
-```bash
-opencode serve --port 4096                          # start the server (long-lived, run in background)
-opencode run --attach http://localhost:4096 "task"  # send a run to the running server
-```
-
-This keeps one engine alive across calls and is more reliable than re-spawning the CLI for each step.
-
-## Auth for automation
-
-OpenCode authenticates via `opencode auth login` (interactive — do it beforehand) or provider
-environment variables / its config. Do not put credentials in the task prompt.
-
-## Minimal multi-step example
-
-```bash
-# Step 1 — start, capture the session id from JSON output
-opencode run "Create a CLI flag --dry-run for the deploy script" --format json --agent build
-#   → read the session id from the JSON events
-
-# Step 2 — continue that session
-opencode run -s <session-id> "Now document the flag in the README" --format json --agent build
-```
+The vBot `terminal_id` is the stable control handle for the live PTY. An OpenCode session id is separate and is only needed to restore an exited CLI process.

@@ -826,14 +826,17 @@ class TerminalManager:
                     if session.log_handle is not None:
                         session.log_handle.write(text)
                         session.log_handle.flush()
+                    previous_title = session.renderer.title
                     session.renderer.feed(text)
+                    title_changed = session.renderer.title != previous_title
                     self._publish_output(session, text)
+                    state_changed = False
                     if session.state != "starting":
                         state_changed = session.state != "working"
                         session.state = "working"
                         self._schedule_settle(session, notify=False)
-                        if state_changed:
-                            self._publish_state(session)
+                    if state_changed or title_changed:
+                        self._publish_state(session)
                     session.output_event.set()
         except asyncio.CancelledError:
             raise
@@ -1064,6 +1067,7 @@ class TerminalManager:
             "terminal_id": session.terminal_id,
             "state": session.state,
             "command": session.command,
+            "title": session.renderer.title,
             "arguments": list(session.arguments),
             "workdir": str(session.cwd),
             "pid": session.adapter.pid,
@@ -1093,6 +1097,7 @@ class TerminalManager:
             "terminal_id": session.terminal_id,
             "state": session.state,
             "command": Path(session.command).name or session.command,
+            "title": session.renderer.title,
             "workdir": str(session.cwd),
             "pid": session.adapter.pid,
             "started_at": session.started_at.isoformat(),
