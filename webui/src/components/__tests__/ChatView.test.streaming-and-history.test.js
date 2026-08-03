@@ -519,6 +519,68 @@ describe('ChatView', () => {
     );
   });
 
+  it('keeps an opened sub-agent session live after the Run replay prefix was evicted', async () => {
+    rpcMock.mockImplementation(
+      createChatRpcMock({
+        activeRuns: {
+          'sub-session-1': {
+            run_id: 'long-sub-run',
+            sse_url: '/api/runs/long-sub-run/events',
+            status: 'running',
+            events: [
+              {
+                type: 'assistant_output_delta',
+                run_id: 'long-sub-run',
+                agent_id: 'alpha',
+                session_id: 'sub-session-1',
+                sequence: 5_000,
+                payload: { content_delta: 'Retained ' },
+              },
+            ],
+          },
+        },
+      }),
+    );
+
+    chatViewTest.mount({
+      target: document.body,
+      props: {
+        sharedAgents: [createAgent()],
+        sharedSelectedAgentId: 'alpha',
+        pendingSessionNavigation: {
+          agentId: 'alpha',
+          sessionId: 'sub-session-1',
+          subAgent: true,
+        },
+      },
+    });
+    flushSync();
+
+    await waitForCondition(
+      () => subscribeRunEventsMock.mock.calls.length === 1,
+      100,
+    );
+    const handlers = subscribeRunEventsMock.mock.calls[0][1];
+    handlers.onEvent({
+      data: {
+        type: 'assistant_output_delta',
+        run_id: 'long-sub-run',
+        sequence: 5_001,
+        payload: { content_delta: 'live' },
+      },
+    });
+
+    await waitForCondition(
+      () => document.body.textContent.includes('Retained live'),
+      100,
+    );
+    expect(subscribeRunEventsMock).toHaveBeenCalledWith(
+      '/api/runs/long-sub-run/events',
+      expect.any(Object),
+      { afterSequence: 0 },
+    );
+  });
+
   it('merges retained active-run events when reloading the same displayed session', async () => {
     const activeRuns = {
       'session-1': {

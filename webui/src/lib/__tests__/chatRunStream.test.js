@@ -633,6 +633,60 @@ describe('createChatRunStream().applyConnectionSnapshot()', () => {
       visibleTimelineItemsForRender(sessionState)[0].outputs.at(-1).content,
     ).toBe('Ordered final');
   });
+
+  it('resumes from the first retained SSE event when the replay prefix was evicted', async () => {
+    let onEvent;
+    const harness = makeStreamHarness({
+      chatState,
+      displayedAgentId: DISPLAYED_AGENT_ID,
+      displayedSessionId: DISPLAYED_SESSION_ID,
+      subscribeRunEvents: vi.fn((_url, handlers) => {
+        onEvent = handlers.onEvent;
+        return { close: vi.fn() };
+      }),
+    });
+    harness.stream.applyConnectionSnapshot({
+      type: 'connection_ready',
+      active_runs: [
+        {
+          run_id: 'run-truncated-replay',
+          agent_id: DISPLAYED_AGENT_ID,
+          session_id: DISPLAYED_SESSION_ID,
+          status: 'running',
+          sse_url: '/api/runs/run-truncated-replay/events',
+        },
+      ],
+    });
+    const sessionState = ensureSessionState(
+      chatState,
+      DISPLAYED_AGENT_ID,
+      DISPLAYED_SESSION_ID,
+    );
+
+    onEvent({
+      data: {
+        type: 'assistant_output_delta',
+        run_id: 'run-truncated-replay',
+        sequence: 5_000,
+        payload: { content_delta: 'Still ' },
+      },
+    });
+    onEvent({
+      data: {
+        type: 'assistant_output_delta',
+        run_id: 'run-truncated-replay',
+        sequence: 5_001,
+        payload: { content_delta: 'live' },
+      },
+    });
+
+    await vi.waitFor(() =>
+      expect(
+        visibleTimelineItemsForRender(sessionState)[0].outputs[0].content,
+      ).toBe('Still live'),
+    );
+    expect(sessionState.status).toBe(CHAT_STATUS_RUNNING);
+  });
 });
 
 describe('createChatRunStream().mergeRunResponse()', () => {
