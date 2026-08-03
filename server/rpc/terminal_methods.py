@@ -17,7 +17,7 @@ JsonObject = dict[str, Any]
 def _terminal_list(state: Any, params: JsonObject) -> JsonObject:
     if params:
         raise RpcError(RPC_ERROR_INVALID_REQUEST, "terminal.list does not accept params")
-    return {"terminals": _terminal_manager(state).list_active_for_operator()}
+    return {"terminals": _terminal_manager(state).list_for_operator()}
 
 
 async def _terminal_start(state: Any, params: JsonObject) -> JsonObject:
@@ -87,6 +87,18 @@ async def _terminal_kill(state: Any, params: JsonObject) -> JsonObject:
     return {"terminal": terminal}
 
 
+def _terminal_forget(state: Any, params: JsonObject) -> JsonObject:
+    _reject_unsupported(params, {"terminal_id"}, "terminal.forget")
+    terminal_id = _required_string(params, "terminal_id")
+    try:
+        terminal = _terminal_manager(state).forget_for_operator(terminal_id)
+    except ValueError as exc:
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, str(exc)) from exc
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
+    return {"terminal": terminal}
+
+
 def _required_integer(params: JsonObject, key: str) -> int:
     value = params.get(key)
     if isinstance(value, bool) or not isinstance(value, int):
@@ -120,4 +132,5 @@ def method_handlers() -> dict[str, RpcMethodHandler]:
         "terminal.input": _terminal_input,
         "terminal.resize": _terminal_resize,
         "terminal.kill": _terminal_kill,
+        "terminal.forget": _terminal_forget,
     }

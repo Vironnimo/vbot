@@ -151,7 +151,7 @@ describe('TerminalsView', () => {
     mountedComponent = mount(TerminalsView, { target: document.body });
     flushSync();
     await waitFor(() =>
-      document.body.textContent.includes('No active terminals'),
+      document.body.textContent.includes('No terminal sessions'),
     );
 
     expect(document.body.textContent).toContain('Open a terminal');
@@ -168,6 +168,64 @@ describe('TerminalsView', () => {
 
     expect(document.body.textContent).toContain('PowerShell');
     expect(document.body.textContent).toContain('pwsh.exe');
+  });
+
+  it('rebuilds retained scrollback when the Terminals tab is mounted again', async () => {
+    listTerminalsMock.mockResolvedValue({ terminals: [terminal()] });
+    mountedComponent = mount(TerminalsView, { target: document.body });
+    flushSync();
+    await waitFor(() => streams.length === 1 && terminalInstances.length === 1);
+    streams[0].handlers.onEvent({
+      type: 'terminal_ready',
+      sequence: 1,
+      terminal: terminal(),
+      ansi: '\u001b[2Jfirst visit',
+    });
+    await unmount(mountedComponent);
+    mountedComponent = null;
+
+    mountedComponent = mount(TerminalsView, { target: document.body });
+    flushSync();
+    await waitFor(() => streams.length === 2 && terminalInstances.length === 2);
+    const retainedSnapshot =
+      '\u001b[2J\u001b[Hhistory-0\r\nhistory-1\r\ncurrent screen';
+    streams[1].handlers.onEvent({
+      type: 'terminal_ready',
+      sequence: 4,
+      terminal: terminal(),
+      ansi: retainedSnapshot,
+    });
+
+    expect(terminalInstances[1].write).toHaveBeenCalledWith(
+      retainedSnapshot,
+      expect.any(Function),
+    );
+  });
+
+  it('keeps a finished Terminal Session available as read-only history', async () => {
+    listTerminalsMock.mockResolvedValue({
+      terminals: [terminal({ state: 'exited' })],
+    });
+    mountedComponent = mount(TerminalsView, { target: document.body });
+    flushSync();
+    await waitFor(() => streams.length === 1 && terminalInstances.length === 1);
+    streams[0].handlers.onEvent({
+      type: 'terminal_ready',
+      sequence: 6,
+      terminal: terminal({ state: 'exited' }),
+      ansi: '\u001b[2Jretained final answer',
+    });
+    flushSync();
+
+    expect(document.body.textContent).toContain('Exited');
+    expect(document.body.textContent).toContain('History loaded');
+    expect(document.body.textContent).toContain('Read-only history');
+    expect(
+      [...document.querySelectorAll('button')].some(
+        (button) => button.textContent.trim() === 'Stop terminal',
+      ),
+    ).toBe(false);
+    expect(document.body.textContent).not.toContain('Take control');
   });
 
   it('starts a manual terminal from the modal and enables direct control', async () => {

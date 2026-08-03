@@ -227,11 +227,15 @@ class TerminalRenderer:
         return _normalize_terminal_title(self._screen.title or self._screen.icon_name)
 
     def ansi_snapshot(self) -> str:
-        """Serialize the current screen into bounded ANSI for a late viewer."""
+        """Serialize bounded scrollback plus the current screen for a late viewer."""
         parts = ["\x1b[?25l", "\x1b[0m", "\x1b[2J", "\x1b[H"]
+        if self._scrollback:
+            parts.append("\r\n".join(line.text for line in self._scrollback))
+            parts.append("\r\n")
         active_style: tuple[Any, ...] | None = None
         for row_index in range(self.rows):
-            parts.append(f"\x1b[{row_index + 1};1H")
+            if row_index:
+                parts.append("\r\n")
             line = self._screen.buffer[row_index]
             for column_index in range(self.columns):
                 cell = line[column_index]

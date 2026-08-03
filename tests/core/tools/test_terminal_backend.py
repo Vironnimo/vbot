@@ -92,3 +92,15 @@ def test_ansi_snapshot_preserves_styles_cursor_and_visibility() -> None:
     assert "red" in snapshot
     assert "tail" in snapshot
     assert snapshot.endswith("\x1b[?25l")
+
+
+def test_ansi_snapshot_rebuilds_bounded_scrollback_for_a_late_viewer() -> None:
+    source = TerminalRenderer(12, 3, scrollback_lines=4)
+    source.feed("".join(f"line-{index}\r\n" for index in range(8)))
+    source.feed("\x1b[31mFINAL\x1b[0m")
+
+    late_viewer = TerminalRenderer(12, 3, scrollback_lines=20)
+    late_viewer.feed(source.ansi_snapshot())
+
+    assert late_viewer.page(before=None, limit=20) == source.page(before=None, limit=20)
+    assert late_viewer.screen_text() == source.screen_text()

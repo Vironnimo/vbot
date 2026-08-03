@@ -269,8 +269,12 @@ async def test_operator_stream_starts_with_ansi_snapshot_and_continues_in_sequen
     manager, factory = terminal_manager
     session = await spawn(manager, tmp_path)
     adapter = factory.adapters[0]
-    adapter.emit("\x1b]0;Codex auth refactor\x07\x1b[31mREADY>\x1b[0m ")
-    await eventually(lambda: session.renderer.revision > 0)
+    adapter.emit(
+        "\x1b]0;Codex auth refactor\x07"
+        + "".join(f"history-{index}\r\n" for index in range(40))
+        + "\x1b[31mREADY>\x1b[0m "
+    )
+    await eventually(lambda: session.renderer.page(before=None, limit=100)["line_count"] > 0)
 
     stream = manager.watch_for_operator(session.terminal_id)
     ready = await anext(stream)
@@ -281,6 +285,7 @@ async def test_operator_stream_starts_with_ansi_snapshot_and_continues_in_sequen
         "session_id": "session-a",
     }
     assert ready["terminal"]["title"] == "Codex auth refactor"
+    assert "history-0" in ready["ansi"]
     assert "READY>" in ready["ansi"]
     assert "\x1b[2J" in ready["ansi"]
 
@@ -307,7 +312,7 @@ async def test_operator_controls_same_live_session_and_changed_callbacks(
     unsubscribe = manager.add_changed_callback(changed.append)
     session = await spawn(manager, tmp_path)
 
-    listed = manager.list_active_for_operator()
+    listed = manager.list_for_operator()
     assert [item["terminal_id"] for item in listed] == [session.terminal_id]
     assert changed == [session.terminal_id]
 
@@ -322,8 +327,11 @@ async def test_operator_controls_same_live_session_and_changed_callbacks(
 
     killed = await manager.kill_for_operator(session.terminal_id)
     assert killed["state"] == "exited"
-    assert manager.list_active_for_operator() == []
-    assert changed.count(session.terminal_id) >= 4
+    assert manager.list_for_operator()[0]["state"] == "exited"
+    forgotten = manager.forget_for_operator(session.terminal_id)
+    assert forgotten["state"] == "exited"
+    assert manager.list_for_operator() == []
+    assert changed.count(session.terminal_id) >= 5
     unsubscribe()
 
 
@@ -381,7 +389,25 @@ async def test_operator_kill_recovers_a_partially_recorded_finish(
     result = await manager.kill_for_operator(session.terminal_id)
 
     assert result["state"] == "exited"
-    assert manager.list_active_for_operator() == []
+    assert manager.list_for_operator()[0]["state"] == "exited"
+
+
+@pytest.mark.asyncio
+async def test_finished_operator_history_expires_with_a_catalog_change(
+    terminal_manager: tuple[TerminalManager, AdapterFactory], tmp_path: Path
+) -> None:
+    manager, _factory = terminal_manager
+    changed: list[str] = []
+    manager.add_changed_callback(changed.append)
+    session = await spawn(manager, tmp_path)
+    await manager.kill_for_operator(session.terminal_id)
+    session.finished_at = terminal_module._utc_now() - terminal_module.TERMINAL_FINISHED_TTL
+    changed.clear()
+
+    await manager.sweep_finished()
+
+    assert manager.list_for_operator() == []
+    assert changed == [session.terminal_id]
 
 
 @pytest.mark.asyncio

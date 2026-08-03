@@ -436,17 +436,17 @@ class TerminalManager:
             raise TerminalNotFoundError(f"Terminal Session not found: {terminal_id}")
         return session
 
-    def list_active_for_operator(self) -> list[dict[str, Any]]:
-        """Return every live Terminal Session for the local operator surface."""
-        sessions = (
-            session
-            for session in self._sessions.values()
-            if session.finished_at is None and session.state not in {"exited", "error"}
+    def list_for_operator(self) -> list[dict[str, Any]]:
+        """Return live and temporarily retained Terminal Sessions for inspection."""
+        sessions = sorted(
+            self._sessions.values(),
+            key=lambda session: (
+                session.finished_at is None,
+                session.finished_at or session.started_at,
+            ),
+            reverse=True,
         )
-        return [
-            self._operator_summary(session)
-            for session in sorted(sessions, key=lambda item: item.started_at, reverse=True)
-        ]
+        return [self._operator_summary(session) for session in sessions]
 
     async def watch_for_operator(
         self, terminal_id: str
@@ -506,6 +506,18 @@ class TerminalManager:
         session = self._get_for_operator(terminal_id)
         await self._terminate_session(session, suppress_attention=True)
         return self._operator_summary(session)
+
+    def forget_for_operator(self, terminal_id: str) -> dict[str, Any]:
+        """Remove one finished Terminal Session from the retained operator catalog."""
+        session = self._get_for_operator(terminal_id)
+        if session.state not in {"exited", "error"} or session.finished_at is None:
+            raise ValueError("A running Terminal Session must be stopped before removal")
+        summary = self._operator_summary(session)
+        self._sessions.pop(terminal_id)
+        self._cancel_delivery(session)
+        self._finish_files(session)
+        self._notify_changed(terminal_id)
+        return summary
 
     async def snapshot(
         self,
@@ -812,6 +824,7 @@ class TerminalManager:
             session = self._sessions.pop(terminal_id)
             self._cancel_delivery(session)
             self._finish_files(session)
+            self._notify_changed(terminal_id)
 
     async def _read_terminal(self, session: TerminalSession) -> None:
         error: BaseException | None = None
@@ -1145,13 +1158,14 @@ class TerminalManager:
                 "terminal": self._operator_summary(session),
             }
         )
+        self._notify_changed(session.terminal_id)
+
+    def _notify_changed(self, terminal_id: str) -> None:
         for callback in list(self._changed_callbacks):
             try:
-                callback(session.terminal_id)
+                callback(terminal_id)
             except Exception:
-                _LOGGER.exception(
-                    "Terminal changed callback failed for terminal=%s", session.terminal_id
-                )
+                _LOGGER.exception("Terminal changed callback failed for terminal=%s", terminal_id)
 
     def _enforce_capacity(self, owner: TerminalOwner | None) -> None:
         live = [
