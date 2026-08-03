@@ -117,6 +117,14 @@ class _FakeTools:
         return [SimpleNamespace(name=name) for name in sorted(self.names)]
 
 
+class _FakeTerminalManager:
+    def __init__(self) -> None:
+        self.closed_projects: list[str] = []
+
+    async def close_project_scope(self, project_id: str) -> None:
+        self.closed_projects.append(project_id)
+
+
 def _openai_configured() -> ModelConfigurationChecker:
     return ModelConfigurationChecker(
         _FakeModels({("openai", "gpt-5.2"), ("openai", "gpt-mini")}),
@@ -190,6 +198,7 @@ def _make_state(
         projects=projects,
         agents=agents,
         agent_resolver=resolver,
+        terminal_manager=_FakeTerminalManager(),
         cron_service=cron_service,
         bootstrap_service=bootstrap_service,
         # ``project.set_override``'s model gate reads ``runtime.models`` only for a pinned
@@ -1179,6 +1188,7 @@ async def test_rm_archives_project(tmp_path: Path) -> None:
 
     assert result["archived"] is True
     assert not state.runtime.projects.exists("vbot")
+    assert state.runtime.terminal_manager.closed_projects == ["vbot"]
     # The repo (cwd) is never touched by removal.
     assert repo.joinpath(*OPENCODE_AGENTS_SUBPATH, "builder.md").exists()
 

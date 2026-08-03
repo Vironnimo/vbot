@@ -1,0 +1,594 @@
+"""Agent-facing interactive Terminal Sessions backed by PTY/ConPTY."""
+
+from __future__ import annotations
+
+from typing import Any
+
+from core.tools.arguments import (
+    optional_bool,
+    optional_int,
+    optional_string,
+    required_int,
+    required_string,
+)
+from core.tools.terminal_manager import (
+    TERMINAL_DEFAULT_COLUMNS,
+    TERMINAL_DEFAULT_ROWS,
+    TERMINAL_MAX_COLUMNS,
+    TERMINAL_MAX_ROWS,
+    TERMINAL_MIN_COLUMNS,
+    TERMINAL_MIN_ROWS,
+    TERMINAL_STATUS_DEFAULT_LINES,
+    TERMINAL_STATUS_MAX_LINES,
+    TerminalCapacityError,
+    TerminalClosedError,
+    TerminalCursorError,
+    TerminalManager,
+    TerminalNotFoundError,
+    TerminalOwner,
+    TerminalSession,
+    TerminalStaleScreenError,
+)
+from core.tools.tools import (
+    JsonObject,
+    ToolContext,
+    ToolDisplay,
+    ToolRegistry,
+    tool_failure,
+    tool_success,
+)
+
+TERMINAL_BETA_TOOL_NAME = "terminal_beta"
+TERMINAL_BETA_ACTIONS = ("start", "list", "status", "wait", "input", "resize", "kill")
+TERMINAL_BETA_DEFAULT_COMMAND = "codex"
+TERMINAL_BETA_DEFAULT_WAIT_MS = 1_000
+TERMINAL_BETA_MAX_WAIT_MS = 10_000
+TERMINAL_BETA_KEYS = (
+    "enter",
+    "escape",
+    "ctrl_c",
+    "ctrl_d",
+    "tab",
+    "backspace",
+    "up",
+    "down",
+    "left",
+    "right",
+)
+
+TERMINAL_BETA_TOOL_DESCRIPTION = (
+    "Run and control real interactive TUI programs in Terminal Sessions that belong to this "
+    "vBot Session and survive individual Runs. Use start with text to launch Codex and submit "
+    "its first task in one call; vBot keeps terminal output server-side and automatically wakes "
+    "you only for Codex approvals, structured questions, turn completion, process exit, or "
+    "terminal failure. Use status for a bounded rendered screen plus paginated scrollback, input "
+    "to answer or begin another turn in the same terminal, wait only for a short same-Run pause, "
+    "resize for TUI dimensions, and kill only when the terminal should end. A completed Codex "
+    "turn leaves the Terminal Session open and reusable. This is a real PTY/ConPTY, unlike the "
+    "bash/process stdin pipe."
+)
+
+_ACTION_FIELDS = {
+    "start": frozenset({"action", "command", "args", "text", "workdir", "columns", "rows"}),
+    "list": frozenset({"action"}),
+    "status": frozenset({"action", "terminal_id", "lines", "cursor"}),
+    "wait": frozenset({"action", "terminal_id", "after_revision", "timeout_ms"}),
+    "input": frozenset(
+        {"action", "terminal_id", "text", "key", "enter", "expected_screen_revision"}
+    ),
+    "resize": frozenset({"action", "terminal_id", "columns", "rows"}),
+    "kill": frozenset({"action", "terminal_id"}),
+}
+
+TERMINAL_BETA_TOOL_PARAMETERS: JsonObject = {
+    "type": "object",
+    "description": (
+        "Use start to create a Terminal Session, list to discover this vBot Session's terminals, "
+        "and the returned terminal_id for every other action."
+    ),
+    "properties": {
+        "action": {
+            "type": "string",
+            "enum": list(TERMINAL_BETA_ACTIONS),
+            "description": (
+                "start launches a TUI, list returns owned Terminal Sessions, status reads a "
+                "bounded screen page, wait pauses briefly for attention, input sends terminal "
+                "text or keys, resize changes dimensions, and kill terminates the process tree."
+            ),
+        },
+        "terminal_id": {
+            "type": "string",
+            "minLength": 1,
+            "description": (
+                "Terminal Session id returned by start or list. Required except for start and list."
+            ),
+        },
+        "command": {
+            "type": "string",
+            "minLength": 1,
+            "description": (
+                "Executable for start. Omit to launch Codex. vBot invokes it directly rather "
+                "than interpolating it into a shell."
+            ),
+        },
+        "args": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": (
+                "Argument tokens for start. Omit for no extra arguments. When command is Codex, "
+                "vBot automatically adds inline-screen and structured-attention integration "
+                "options without changing the user's Codex configuration."
+            ),
+        },
+        "text": {
+            "type": "string",
+            "description": (
+                "For start, the first task to submit after launch. For input, text to type. "
+                "Omit on start to leave the TUI ready without beginning a task."
+            ),
+        },
+        "workdir": {
+            "type": "string",
+            "minLength": 1,
+            "description": (
+                "Working directory for start. Relative paths use the current workspace; "
+                "omit for the current workspace."
+            ),
+        },
+        "columns": {
+            "type": "integer",
+            "minimum": TERMINAL_MIN_COLUMNS,
+            "maximum": TERMINAL_MAX_COLUMNS,
+            "default": TERMINAL_DEFAULT_COLUMNS,
+            "description": (
+                f"Terminal width for start or resize; default {TERMINAL_DEFAULT_COLUMNS} on start."
+            ),
+        },
+        "rows": {
+            "type": "integer",
+            "minimum": TERMINAL_MIN_ROWS,
+            "maximum": TERMINAL_MAX_ROWS,
+            "default": TERMINAL_DEFAULT_ROWS,
+            "description": (
+                f"Terminal height for start or resize; default {TERMINAL_DEFAULT_ROWS} on start."
+            ),
+        },
+        "lines": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": TERMINAL_STATUS_MAX_LINES,
+            "default": TERMINAL_STATUS_DEFAULT_LINES,
+            "description": (
+                f"Prior scrollback lines for status; default {TERMINAL_STATUS_DEFAULT_LINES}, "
+                f"maximum {TERMINAL_STATUS_MAX_LINES}. The current rendered screen is "
+                "returned separately."
+            ),
+        },
+        "cursor": {
+            "type": "string",
+            "minLength": 1,
+            "description": (
+                "Older-scrollback continuation returned by status. When set, send only action, "
+                "terminal_id, and cursor."
+            ),
+        },
+        "after_revision": {
+            "type": "integer",
+            "minimum": 0,
+            "description": (
+                "For wait, return only after a newer attention revision. Omit to return for any "
+                "currently unacknowledged attention or the next new event."
+            ),
+        },
+        "timeout_ms": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": TERMINAL_BETA_MAX_WAIT_MS,
+            "default": TERMINAL_BETA_DEFAULT_WAIT_MS,
+            "description": (
+                f"Maximum same-Run wait in milliseconds; default {TERMINAL_BETA_DEFAULT_WAIT_MS}, "
+                f"maximum {TERMINAL_BETA_MAX_WAIT_MS}. The terminal continues after timeout."
+            ),
+        },
+        "key": {
+            "type": "string",
+            "enum": list(TERMINAL_BETA_KEYS),
+            "description": "Named terminal key for input. May be combined with text.",
+        },
+        "enter": {
+            "type": "boolean",
+            "description": (
+                "For input, append Enter after text/key. Omit to append Enter when text is present "
+                "without a key, otherwise omit it."
+            ),
+        },
+        "expected_screen_revision": {
+            "type": "integer",
+            "minimum": 0,
+            "description": (
+                "For input, require the exact screen_revision previously inspected. Use this "
+                "when answering a prompt so stale input is rejected instead of sent elsewhere."
+            ),
+        },
+    },
+    "required": ["action"],
+}
+
+
+def make_terminal_beta_handler(terminal_manager: TerminalManager):
+    """Create a terminal_beta Tool handler bound to one Terminal Manager."""
+
+    async def handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
+        return await _handle_terminal_beta(terminal_manager, context, arguments)
+
+    return handler
+
+
+async def _handle_terminal_beta(
+    terminal_manager: TerminalManager,
+    context: ToolContext,
+    arguments: JsonObject,
+) -> JsonObject:
+    action = arguments.get("action")
+    if not isinstance(action, str) or action not in TERMINAL_BETA_ACTIONS:
+        return tool_failure(
+            "invalid_arguments",
+            f"action must be one of: {', '.join(TERMINAL_BETA_ACTIONS)}",
+            retryable=False,
+        )
+    unsupported = sorted(set(arguments) - _ACTION_FIELDS[action])
+    if unsupported:
+        return tool_failure(
+            "invalid_arguments",
+            f"Action '{action}' does not accept: {', '.join(unsupported)}",
+            retryable=False,
+        )
+
+    try:
+        if action == "start":
+            return await _handle_start(terminal_manager, context, arguments)
+        if action == "list":
+            return _handle_list(terminal_manager, context)
+        if action == "status":
+            return await _handle_status(terminal_manager, context, arguments)
+        if action == "wait":
+            return await _handle_wait(terminal_manager, context, arguments)
+        if action == "input":
+            return await _handle_input(terminal_manager, context, arguments)
+        if action == "resize":
+            return await _handle_resize(terminal_manager, context, arguments)
+        return await _handle_kill(terminal_manager, context, arguments)
+    except TerminalNotFoundError:
+        return tool_failure("terminal_not_found", "Terminal Session not found", retryable=False)
+    except TerminalClosedError as error:
+        return tool_failure("terminal_closed", str(error), retryable=False)
+    except TerminalCapacityError as error:
+        return tool_failure("terminal_capacity", str(error), retryable=True)
+    except TerminalStaleScreenError as error:
+        return tool_failure("stale_screen", str(error), retryable=True)
+    except TerminalCursorError as error:
+        return tool_failure("invalid_cursor", str(error), retryable=False)
+    except FileNotFoundError as error:
+        command = error.filename or TERMINAL_BETA_DEFAULT_COMMAND
+        return tool_failure(
+            "terminal_command_not_found",
+            f"Interactive terminal executable was not found: {command}",
+            retryable=False,
+        )
+    except (OSError, ValueError) as error:
+        return tool_failure("invalid_arguments", str(error), retryable=False)
+
+
+async def _handle_start(
+    terminal_manager: TerminalManager,
+    context: ToolContext,
+    arguments: JsonObject,
+) -> JsonObject:
+    raw_command = arguments.get("command")
+    command = (
+        TERMINAL_BETA_DEFAULT_COMMAND
+        if raw_command is None
+        else required_string(raw_command, field_name="command")
+    )
+    args = _optional_string_array(arguments.get("args"), field_name="args")
+    text = arguments.get("text")
+    if text is not None and (not isinstance(text, str) or not text.strip()):
+        raise ValueError("text must be a non-empty string when provided")
+    workdir_value = optional_string(arguments.get("workdir"), field_name="workdir")
+    workdir = (
+        context.resolve_path(workdir_value) if workdir_value else context.effective_cwd.resolve()
+    )
+    columns = optional_int(
+        arguments.get("columns"),
+        field_name="columns",
+        default=TERMINAL_DEFAULT_COLUMNS,
+        minimum=TERMINAL_MIN_COLUMNS,
+        maximum=TERMINAL_MAX_COLUMNS,
+    )
+    rows = optional_int(
+        arguments.get("rows"),
+        field_name="rows",
+        default=TERMINAL_DEFAULT_ROWS,
+        minimum=TERMINAL_MIN_ROWS,
+        maximum=TERMINAL_MAX_ROWS,
+    )
+    assert columns is not None and rows is not None
+    owner = _owner(context)
+    session = await terminal_manager.spawn(
+        owner,
+        [command, *args],
+        cwd=workdir,
+        env=None,
+        columns=columns,
+        rows=rows,
+        origin_run_id=context.run_id,
+        initial_text=text if isinstance(text, str) else None,
+    )
+    snapshot = await terminal_manager.snapshot(session.terminal_id, owner)
+    data = _project_snapshot(terminal_manager, snapshot)
+    data.update(
+        {
+            "delivery": "automatic_attention",
+            "handoff_note": (
+                "The Terminal Session continues independently of this vBot Run. vBot will wake "
+                "you for Codex approval, question, turn completion, process exit, or terminal "
+                "failure. You may finish this Run after reporting that Codex is running; do not "
+                "poll merely to wait and do not start a duplicate Codex process."
+            ),
+        }
+    )
+    return tool_success(data)
+
+
+def _handle_list(terminal_manager: TerminalManager, context: ToolContext) -> JsonObject:
+    sessions = terminal_manager.list_sessions(_owner(context))
+    return tool_success({"terminals": [_terminal_summary(session) for session in sessions]})
+
+
+async def _handle_status(
+    terminal_manager: TerminalManager,
+    context: ToolContext,
+    arguments: JsonObject,
+) -> JsonObject:
+    terminal_id = required_string(arguments.get("terminal_id"), field_name="terminal_id")
+    cursor = arguments.get("cursor")
+    if cursor is not None:
+        if not isinstance(cursor, str) or not cursor.strip():
+            raise ValueError("cursor must be a non-empty string")
+        if set(arguments) != {"action", "terminal_id", "cursor"}:
+            raise ValueError("A cursor continuation accepts only action, terminal_id, and cursor")
+        before = terminal_manager.decode_cursor(cursor, terminal_id)
+        lines = TERMINAL_STATUS_DEFAULT_LINES
+    else:
+        before = None
+        lines = optional_int(
+            arguments.get("lines"),
+            field_name="lines",
+            default=TERMINAL_STATUS_DEFAULT_LINES,
+            minimum=1,
+            maximum=TERMINAL_STATUS_MAX_LINES,
+        )
+        assert lines is not None
+    owner = _owner(context)
+    snapshot = await terminal_manager.snapshot(terminal_id, owner, lines=lines, before=before)
+    _acknowledge_after_persistence(terminal_manager, context, owner, snapshot)
+    return tool_success(_project_snapshot(terminal_manager, snapshot))
+
+
+async def _handle_wait(
+    terminal_manager: TerminalManager,
+    context: ToolContext,
+    arguments: JsonObject,
+) -> JsonObject:
+    terminal_id = required_string(arguments.get("terminal_id"), field_name="terminal_id")
+    owner = _owner(context)
+    session = terminal_manager.get_session(terminal_id, owner)
+    after_revision = optional_int(
+        arguments.get("after_revision"),
+        field_name="after_revision",
+        default=None,
+        minimum=0,
+    )
+    if after_revision is None:
+        after_revision = session.acknowledged_attention_revision
+    timeout_ms = optional_int(
+        arguments.get("timeout_ms"),
+        field_name="timeout_ms",
+        default=TERMINAL_BETA_DEFAULT_WAIT_MS,
+        minimum=0,
+        maximum=TERMINAL_BETA_MAX_WAIT_MS,
+    )
+    assert timeout_ms is not None
+    snapshot, timed_out = await terminal_manager.wait_for_attention(
+        terminal_id,
+        owner,
+        after_revision=after_revision,
+        timeout_ms=timeout_ms,
+    )
+    _acknowledge_after_persistence(terminal_manager, context, owner, snapshot)
+    data = _project_snapshot(terminal_manager, snapshot)
+    data["timed_out"] = timed_out
+    return tool_success(data)
+
+
+async def _handle_input(
+    terminal_manager: TerminalManager,
+    context: ToolContext,
+    arguments: JsonObject,
+) -> JsonObject:
+    terminal_id = required_string(arguments.get("terminal_id"), field_name="terminal_id")
+    text = arguments.get("text")
+    if text is not None and not isinstance(text, str):
+        raise ValueError("text must be a string")
+    key = optional_string(arguments.get("key"), field_name="key")
+    if key is not None and key not in TERMINAL_BETA_KEYS:
+        raise ValueError(f"key must be one of: {', '.join(TERMINAL_BETA_KEYS)}")
+    enter_default = text is not None and key is None
+    enter = optional_bool(arguments.get("enter"), field_name="enter", default=enter_default)
+    expected_revision = optional_int(
+        arguments.get("expected_screen_revision"),
+        field_name="expected_screen_revision",
+        default=None,
+        minimum=0,
+    )
+    owner = _owner(context)
+    session = terminal_manager.get_session(terminal_id, owner)
+    prior_attention_revision = session.attention_revision if session.attention is not None else None
+    data = await terminal_manager.send_input(
+        terminal_id,
+        owner,
+        text=text if isinstance(text, str) else None,
+        key=key,
+        enter=enter,
+        expected_screen_revision=expected_revision,
+        origin_run_id=context.run_id,
+    )
+    if prior_attention_revision is not None:
+        context.after_result_persisted(
+            lambda: terminal_manager.acknowledge_attention(
+                terminal_id, owner, prior_attention_revision
+            )
+        )
+    data["delivery"] = "automatic_attention"
+    return tool_success(data)
+
+
+async def _handle_resize(
+    terminal_manager: TerminalManager,
+    context: ToolContext,
+    arguments: JsonObject,
+) -> JsonObject:
+    terminal_id = required_string(arguments.get("terminal_id"), field_name="terminal_id")
+    columns = required_int(
+        arguments.get("columns"),
+        field_name="columns",
+        minimum=TERMINAL_MIN_COLUMNS,
+        maximum=TERMINAL_MAX_COLUMNS,
+    )
+    rows = required_int(
+        arguments.get("rows"),
+        field_name="rows",
+        minimum=TERMINAL_MIN_ROWS,
+        maximum=TERMINAL_MAX_ROWS,
+    )
+    data = await terminal_manager.resize(terminal_id, _owner(context), columns=columns, rows=rows)
+    return tool_success(data)
+
+
+async def _handle_kill(
+    terminal_manager: TerminalManager,
+    context: ToolContext,
+    arguments: JsonObject,
+) -> JsonObject:
+    terminal_id = required_string(arguments.get("terminal_id"), field_name="terminal_id")
+    owner = _owner(context)
+    session = terminal_manager.get_session(terminal_id, owner)
+    prior_attention_revision = session.attention_revision if session.attention is not None else None
+    snapshot = await terminal_manager.kill(terminal_id, owner)
+    if prior_attention_revision is not None:
+        context.after_result_persisted(
+            lambda: terminal_manager.acknowledge_attention(
+                terminal_id, owner, prior_attention_revision
+            )
+        )
+    return tool_success(_project_snapshot(terminal_manager, snapshot))
+
+
+def _project_snapshot(terminal_manager: TerminalManager, snapshot: dict[str, Any]) -> JsonObject:
+    projected = dict(snapshot)
+    scrollback = dict(projected.get("scrollback", {}))
+    before = scrollback.pop("next_before", None)
+    scrollback["next_cursor"] = (
+        terminal_manager.encode_cursor(str(snapshot["terminal_id"]), before)
+        if isinstance(before, int)
+        else None
+    )
+    projected["scrollback"] = scrollback
+    return projected
+
+
+def _terminal_summary(session: TerminalSession) -> JsonObject:
+    attention = session.attention
+    return {
+        "terminal_id": session.terminal_id,
+        "state": session.state,
+        "command": session.command,
+        "workdir": str(session.cwd),
+        "pid": session.adapter.pid,
+        "exit_code": session.exit_code,
+        "started_at": session.started_at.isoformat(),
+        "finished_at": session.finished_at.isoformat() if session.finished_at else None,
+        "screen_revision": session.renderer.revision,
+        "attention_revision": session.attention_revision,
+        "attention_kind": attention.kind if attention is not None else None,
+    }
+
+
+def _acknowledge_after_persistence(
+    terminal_manager: TerminalManager,
+    context: ToolContext,
+    owner: TerminalOwner,
+    snapshot: dict[str, Any],
+) -> None:
+    attention = snapshot.get("attention")
+    if not isinstance(attention, dict) or not isinstance(attention.get("revision"), int):
+        return
+    terminal_id = str(snapshot["terminal_id"])
+    revision = int(attention["revision"])
+    context.after_result_persisted(
+        lambda: terminal_manager.acknowledge_attention(terminal_id, owner, revision)
+    )
+
+
+def _optional_string_array(value: object, *, field_name: str) -> list[str]:
+    if value is None:
+        return []
+    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+        raise ValueError(f"{field_name} must be an array of strings")
+    if any("\x00" in item for item in value):
+        raise ValueError(f"{field_name} must not contain NUL characters")
+    return list(value)
+
+
+def _owner(context: ToolContext) -> TerminalOwner:
+    return TerminalOwner(context.project_id, context.agent_id, context.session_id)
+
+
+def register_terminal_beta_tool(registry: ToolRegistry, terminal_manager: TerminalManager) -> None:
+    """Register the Agent-facing interactive terminal Tool."""
+    registry.register(
+        TERMINAL_BETA_TOOL_NAME,
+        TERMINAL_BETA_TOOL_DESCRIPTION,
+        TERMINAL_BETA_TOOL_PARAMETERS,
+        make_terminal_beta_handler(terminal_manager),
+        open_input_schema=True,
+        result_schema={"type": "object"},
+        display=ToolDisplay(summary_builder=_terminal_display_summary),
+    )
+
+
+def _terminal_display_summary(arguments: JsonObject) -> str:
+    action = arguments.get("action")
+    if not isinstance(action, str) or action not in TERMINAL_BETA_ACTIONS:
+        return ""
+    terminal_id = arguments.get("terminal_id")
+    if isinstance(terminal_id, str) and terminal_id:
+        return f"{action} · {terminal_id}"
+    command = arguments.get("command")
+    if action == "start":
+        return f"start · {command or TERMINAL_BETA_DEFAULT_COMMAND}"
+    return action
+
+
+__all__ = [
+    "TERMINAL_BETA_ACTIONS",
+    "TERMINAL_BETA_DEFAULT_COMMAND",
+    "TERMINAL_BETA_DEFAULT_WAIT_MS",
+    "TERMINAL_BETA_KEYS",
+    "TERMINAL_BETA_MAX_WAIT_MS",
+    "TERMINAL_BETA_TOOL_DESCRIPTION",
+    "TERMINAL_BETA_TOOL_NAME",
+    "TERMINAL_BETA_TOOL_PARAMETERS",
+    "make_terminal_beta_handler",
+    "register_terminal_beta_tool",
+]

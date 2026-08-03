@@ -434,6 +434,7 @@ async def _remove_project(state: Any, params: JsonObject) -> JsonObject:
                     rooted_agents = state.runtime.agents.agents_rooted_in(project_id)
                     completed_updates: list[tuple[Any, Any]] = []
                     try:
+                        await state.runtime.terminal_manager.close_project_scope(project_id)
                         for agent in rooted_agents:
                             default_workspace = state.runtime.agents.default_workspace(agent.id)
                             changes: JsonObject = {"root_project_id": None}

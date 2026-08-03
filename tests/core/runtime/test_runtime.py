@@ -27,6 +27,7 @@ from core.storage.storage import StorageManager
 from core.subagents import SubAgentCoordinator
 from core.tools.file_state import FileReadState
 from core.tools.process_manager import ProcessManager
+from core.tools.terminal_manager import TerminalManager
 from core.tools.tools import ToolRegistry
 from core.utils.config import Config
 from tests.core.chat.chat_loop_support import build_chat_loop
@@ -51,6 +52,7 @@ CANONICAL_BUILTIN_TOOLS = [
     "skill_manage",
     "status",
     "subagent",
+    "terminal_beta",
     "text_to_speech",
     "web_fetch",
     "web_search",
@@ -337,6 +339,7 @@ def test_phase_two_services_available_after_start(config: Config):
     assert isinstance(runtime.provider_credentials, ProviderCredentialResolver)
     assert isinstance(runtime.tools, ToolRegistry)
     assert isinstance(runtime.process_manager, ProcessManager)
+    assert isinstance(runtime.terminal_manager, TerminalManager)
     assert isinstance(runtime.skills, SkillRegistry)
     assert isinstance(runtime.chat_sessions, ChatSessionManager)
     assert isinstance(runtime.system_prompts, SystemPromptManager)
@@ -438,6 +441,7 @@ def test_phase_two_services_inaccessible_before_start(config: Config):
         "provider_credentials",
         "tools",
         "process_manager",
+        "terminal_manager",
         "skills",
         "chat_sessions",
         "system_prompts",
@@ -719,6 +723,8 @@ def test_runtime_stop_clears_phase_two_services(config: Config):
         _ = runtime.provider_credentials
     with pytest.raises(RuntimeError, match="not started"):
         _ = runtime.process_manager
+    with pytest.raises(RuntimeError, match="not started"):
+        _ = runtime.terminal_manager
 
 
 @pytest.mark.asyncio
@@ -729,16 +735,20 @@ async def test_runtime_starts_and_stops_process_manager_sweeper(config: Config) 
 
     runtime.start()
     process_manager = runtime.process_manager
+    terminal_manager = runtime.terminal_manager
     temporary_files = runtime.storage.temporary_files
 
     assert process_manager._sweeper_task is not None
     assert not process_manager._sweeper_task.done()
+    assert terminal_manager._sweeper_task is not None
+    assert not terminal_manager._sweeper_task.done()
     assert temporary_files._sweeper_task is not None
     assert not temporary_files._sweeper_task.done()
 
     runtime.stop()
 
     assert process_manager._sweeper_task is None
+    assert terminal_manager._sweeper_task is None
     assert temporary_files._sweeper_task is None
 
 

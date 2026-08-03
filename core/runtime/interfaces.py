@@ -26,6 +26,7 @@ if TYPE_CHECKING:
     from core.storage import StorageManager
     from core.tools.file_state import FileReadState
     from core.tools.process_manager import ProcessManager
+    from core.tools.terminal_manager import TerminalManager
     from core.tools.tools import ToolRegistry
 
 
@@ -213,6 +214,11 @@ class RuntimeServices(Protocol):
     @property
     def process_manager(self) -> ProcessManager:
         """Shared host process lifecycle management."""
+        ...
+
+    @property
+    def terminal_manager(self) -> TerminalManager:
+        """Shared Session-scoped interactive terminal lifecycle management."""
         ...
 
     @property

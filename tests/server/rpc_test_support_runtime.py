@@ -761,6 +761,20 @@ class RecordingCompactionService:
         )
 
 
+class StubTerminalManager:
+    async def close_scope(self, _owner: Any) -> None:
+        return None
+
+    async def close_agent_scope(self, _agent_id: str, _project_id: str | None) -> None:
+        return None
+
+    async def close_project_scope(self, _project_id: str) -> None:
+        return None
+
+    def transfer_scope(self, _source: Any, _target: Any) -> int:
+        return 0
+
+
 class StubRuntime:
     def __init__(self, tmp_path: Path, adapter: StubAdapter) -> None:
         self.resources_dir = tmp_path / "resources"
@@ -782,6 +796,7 @@ class StubRuntime:
         self.chat_runs: ChatRunManager | None = None
         self.extensions: Any = None
         self.process_manager = StubProcessManager()
+        self.terminal_manager = StubTerminalManager()
         self.trigger_service: Any = None
         self.recall_reload_count = 0
         self.extension_reload_count = 0
@@ -796,6 +811,7 @@ class StubRuntime:
             projects=cast(Any, self.projects),
             agents=cast(Any, self.agents),
             storage=cast(Any, self.storage),
+            terminal_manager=cast(Any, self.terminal_manager),
         )
 
     @property

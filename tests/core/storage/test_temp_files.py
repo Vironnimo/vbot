@@ -30,6 +30,14 @@ def test_create_allocates_unique_category_confined_files(tmp_path: Path) -> None
     assert second.path.is_file()
 
 
+def test_terminal_files_use_their_canonical_retained_category(tmp_path: Path) -> None:
+    manager = TemporaryFileManager(tmp_path)
+
+    lease = manager.create("terminals", ".events.jsonl")
+
+    assert lease.path.parent == DataDirectoryLayout(tmp_path).terminal_temporary
+
+
 @pytest.mark.parametrize(
     ("category", "suffix"),
     [

@@ -15,3 +15,7 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 `tests/fixtures/wakeword/okay_nabu.wav` and `tests/fixtures/wakeword/unrelated_hey_jarvis.wav` come from the corresponding test directories in [rhasspy/pyopen-wakeword](https://github.com/rhasspy/pyopen-wakeword/tree/main/tests) and are distributed under that project's Apache License 2.0. Their SHA-256 values are `c19747e603b00db74eb53ee2a65ae0489dd9feb574a9e98683fc3be8740b6c66` and `05bf58195bd9c6af46becd373565c87bf0e57d133a950f2c0aa441daf1acb908`, respectively.
 
 `tests/fixtures/wakeword/hey_nabu.wav` is a generated test fixture containing the spoken phrase "Hey Naboo", synthesized with the Microsoft Zira Desktop voice at rate -2. Its SHA-256 is `2bc6ddba7c57e6451de96d621bba95479b24085677f58fc933861e102e966679`.
+
+## Interactive terminal dependencies
+
+The `terminal_beta` Tool uses [pyte](https://github.com/selectel/pyte), distributed under the GNU Lesser General Public License v3, as an in-memory VT terminal emulator. It uses [pywinpty](https://github.com/andfoy/pywinpty), distributed under the MIT License, for ConPTY access on Windows and [ptyprocess](https://github.com/pexpect/ptyprocess), distributed under the ISC License, for PTY process control on POSIX systems. These libraries remain separately installed dependencies; their source distributions and license texts are available from the linked upstream projects and installed package metadata.

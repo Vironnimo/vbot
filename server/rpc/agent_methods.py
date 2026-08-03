@@ -35,6 +35,7 @@ from core.tools.availability import (
     BASH_TOOL_SETTINGS_KEY,
     normalize_env_keys,
 )
+from core.tools.terminal_manager import TerminalOwner
 from core.utils.errors import StorageError
 from core.utils.logging import get_logger
 from server.events import (
@@ -357,6 +358,7 @@ async def _delete_agent(state: Any, params: JsonObject) -> JsonObject:
                                 f"{', '.join(references)}: {agent_id}"
                             ),
                         )
+                    await state.runtime.terminal_manager.close_agent_scope(agent_id, None)
                     state.runtime.agents.delete(agent_id)
             except RunAdmissionBlockedError as exc:
                 raise RpcError(
@@ -440,6 +442,9 @@ async def _delete_session(state: Any, params: JsonObject) -> JsonObject:
                     deleting_current = (
                         state.runtime.agents.get(agent_id).current_session_id == session_id
                     )
+                await state.runtime.terminal_manager.close_scope(
+                    TerminalOwner(project_id, agent_id, session_id)
+                )
                 await chat_sessions.archive(agent_id, session_id, project_id)
                 next_session_id = _resolve_post_delete_landing(
                     state, agent_id, session_id, project_id

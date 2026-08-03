@@ -25,6 +25,7 @@ from core.projects.resolver import AgentResolver
 from core.projects.store import ProjectStore
 from core.runs import ChatRunManager, RunAdmissionBlockedError
 from core.sessions import FORK_SOURCE_META_KEY
+from core.tools.terminal_manager import TerminalOwner
 from server.events import ServerEventBus
 from server.rpc.agent_methods import (
     SESSION_FORK_ALWAYS_STRIP_META_KEYS,
@@ -175,6 +176,18 @@ class _FakeSessions:
         return normalized or None
 
 
+class _FakeTerminalManager:
+    def __init__(self) -> None:
+        self.closed_scopes: list[Any] = []
+        self.closed_agents: list[tuple[str, str | None]] = []
+
+    async def close_scope(self, owner: Any) -> None:
+        self.closed_scopes.append(owner)
+
+    async def close_agent_scope(self, agent_id: str, project_id: str | None) -> None:
+        self.closed_agents.append((agent_id, project_id))
+
+
 def _make_state() -> tuple[SimpleNamespace, _FakeResolver, _FakeSessions]:
     resolver = _FakeResolver()
     sessions = _FakeSessions()
@@ -198,6 +211,7 @@ def _make_state() -> tuple[SimpleNamespace, _FakeResolver, _FakeSessions]:
     runtime = SimpleNamespace(
         agent_resolver=resolver,
         chat_sessions=sessions,
+        terminal_manager=_FakeTerminalManager(),
         agents=SimpleNamespace(
             update=lambda agent_id, **k: updates.append({agent_id: k}),
             reset_current_after_session_removed=_reset_current,
@@ -460,6 +474,7 @@ async def test_delete_bare_agent_archives_and_lands_on_reaimed_current() -> None
     assert resolver.resolved == [(None, "builder")]
     # Archived (not hard-deleted) under the identity scope.
     assert sessions.archived == [("builder", "s1", None)]
+    assert state.runtime.terminal_manager.closed_scopes == [TerminalOwner(None, "builder", "s1")]
     # Identity pointer re-aimed through the shared seam; the landing is its result.
     assert state._resets == [("builder", "s1")]
     # Dropped from the recall index immediately (#6).
