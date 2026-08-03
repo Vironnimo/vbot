@@ -36,6 +36,7 @@
   let mounted = false;
   let rendererPromise = null;
   let pendingSnapshot = '';
+  let pendingSnapshotTerminal = null;
   let pendingOutput = [];
   let xterm = null;
   let fitAddon = null;
@@ -48,14 +49,14 @@
 
   const controller = createTerminalsController({
     state: viewState,
-    onSnapshot: (ansi) => {
+    onSnapshot: (ansi, snapshotTerminal) => {
       pendingSnapshot = ansi;
+      pendingSnapshotTerminal = snapshotTerminal;
       pendingOutput = [];
       if (!xterm) {
         return;
       }
-      xterm.reset();
-      xterm.write(ansi, scheduleFit);
+      writeSnapshot(ansi, snapshotTerminal);
     },
     onOutput: (data) => {
       if (xterm) {
@@ -66,6 +67,7 @@
     },
     onClear: () => {
       pendingSnapshot = '';
+      pendingSnapshotTerminal = null;
       pendingOutput = [];
       xterm?.reset();
     },
@@ -103,6 +105,7 @@
       controller.destroy();
       disposeRenderer();
       pendingSnapshot = '';
+      pendingSnapshotTerminal = null;
       pendingOutput = [];
     };
   });
@@ -190,14 +193,32 @@
       resizeObserver.observe(terminalHost);
     }
     if (pendingSnapshot) {
-      xterm.reset();
-      xterm.write(pendingSnapshot);
+      writeSnapshot(pendingSnapshot, pendingSnapshotTerminal);
     }
     for (const data of pendingOutput) {
       xterm.write(data);
     }
     pendingOutput = [];
     scheduleFit();
+  }
+
+  function writeSnapshot(ansi, snapshotTerminal) {
+    if (!xterm) {
+      return;
+    }
+    const columns = snapshotTerminal?.columns;
+    const rows = snapshotTerminal?.rows;
+    if (
+      Number.isInteger(columns) &&
+      Number.isInteger(rows) &&
+      columns > 0 &&
+      rows > 0 &&
+      (xterm.cols !== columns || xterm.rows !== rows)
+    ) {
+      xterm.resize(columns, rows);
+    }
+    xterm.reset();
+    xterm.write(ansi, scheduleFit);
   }
 
   function scheduleFit() {
@@ -287,11 +308,8 @@
     if (state === 'working' || state === 'ready') {
       return 'success';
     }
-    if (state === 'starting' || state === 'needs_input') {
+    if (state === 'starting') {
       return 'warn';
-    }
-    if (state === 'turn_complete') {
-      return 'info';
     }
     if (state === 'error') {
       return 'error';
@@ -519,17 +537,6 @@
         </div>
       </div>
 
-      {#if terminal.attention}
-        <Banner
-          variant={terminal.attention.kind === 'error' ? 'error' : 'warn'}
-          class="terminals-view__attention"
-        >
-          <span>
-            <strong>{t('terminals.attentionLabel', 'Attention')}</strong>
-            {terminal.attention.summary}
-          </span>
-        </Banner>
-      {/if}
       {#if viewState.streamError && !serverUnavailable}
         <Banner variant="warn" class="terminals-view__feedback">
           <span>{terminalError(viewState.streamError)}</span>
@@ -567,7 +574,7 @@
                   'Observe mode — keyboard input is locked',
                 )}
           </span>
-          <span>{terminal.integration === 'codex' ? 'CODEX' : 'PTY'}</span>
+          <span>PTY</span>
         </div>
         <div
           use:mountTerminal
@@ -740,13 +747,8 @@
     background: var(--green);
   }
 
-  .terminals-view__state-dot--starting,
-  .terminals-view__state-dot--needs_input {
+  .terminals-view__state-dot--starting {
     background: var(--amber);
-  }
-
-  .terminals-view__state-dot--turn_complete {
-    background: var(--blue);
   }
 
   .terminals-view__detail {
@@ -816,7 +818,6 @@
     font-size: var(--fs-label-sm);
   }
 
-  :global(.terminals-view__attention),
   :global(.terminals-view__feedback) {
     margin-bottom: 8px;
   }

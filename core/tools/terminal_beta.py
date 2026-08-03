@@ -14,6 +14,8 @@ from core.tools.arguments import (
 from core.tools.terminal_manager import (
     TERMINAL_DEFAULT_COLUMNS,
     TERMINAL_DEFAULT_ROWS,
+    TERMINAL_INPUT_KEY_SEQUENCES,
+    TERMINAL_INPUT_MAX_CHARS,
     TERMINAL_MAX_COLUMNS,
     TERMINAL_MAX_ROWS,
     TERMINAL_MIN_COLUMNS,
@@ -43,29 +45,21 @@ TERMINAL_BETA_ACTIONS = ("start", "list", "status", "wait", "input", "resize", "
 TERMINAL_BETA_DEFAULT_COMMAND = "codex"
 TERMINAL_BETA_DEFAULT_WAIT_MS = 1_000
 TERMINAL_BETA_MAX_WAIT_MS = 10_000
-TERMINAL_BETA_KEYS = (
-    "enter",
-    "escape",
-    "ctrl_c",
-    "ctrl_d",
-    "tab",
-    "backspace",
-    "up",
-    "down",
-    "left",
-    "right",
-)
+TERMINAL_BETA_KEYS = tuple(TERMINAL_INPUT_KEY_SEQUENCES)
 
 TERMINAL_BETA_TOOL_DESCRIPTION = (
-    "Run and control real interactive TUI programs in Terminal Sessions that belong to this "
-    "vBot Session and survive individual Runs. Use start with text to launch Codex and submit "
-    "its first task in one call; vBot keeps terminal output server-side and automatically wakes "
-    "you only for Codex approvals, structured questions, turn completion, process exit, or "
-    "terminal failure. Use status for a bounded rendered screen plus paginated scrollback, input "
-    "to answer or begin another turn in the same terminal, wait only for a short same-Run pause, "
-    "resize for TUI dimensions, and kill only when the terminal should end. A completed Codex "
-    "turn leaves the Terminal Session open and reusable. This is a real PTY/ConPTY, unlike the "
-    "bash/process stdin pipe."
+    "Run and control any interactive terminal program through a real PTY/ConPTY. Terminal "
+    "Sessions belong to this vBot Session, survive individual Runs, and are also visible and "
+    "controllable in the WebUI. vBot launches the requested command and arguments without "
+    "program-specific flags, hooks, or configuration. Use start with text to launch the default "
+    "Codex command and send its first input in one call, or set command and args for any other "
+    "program. After Agent input, vBot wakes you when PTY output has been quiet for a short period, "
+    "or when the process exits or the terminal fails. Quiet output is only an activity boundary: "
+    "inspect status to decide whether the program is working, waiting for input, or finished. Use "
+    "data for exact terminal sequences, text/key/enter for convenient input, status for the "
+    "rendered screen and paginated scrollback, wait only for a short same-Run pause, resize for "
+    "TUI dimensions, and kill only when the process tree should end. Reuse a live Terminal "
+    "Session for later work instead of starting a duplicate process."
 )
 
 _ACTION_FIELDS = {
@@ -74,7 +68,15 @@ _ACTION_FIELDS = {
     "status": frozenset({"action", "terminal_id", "lines", "cursor"}),
     "wait": frozenset({"action", "terminal_id", "after_revision", "timeout_ms"}),
     "input": frozenset(
-        {"action", "terminal_id", "text", "key", "enter", "expected_screen_revision"}
+        {
+            "action",
+            "terminal_id",
+            "data",
+            "text",
+            "key",
+            "enter",
+            "expected_screen_revision",
+        }
     ),
     "resize": frozenset({"action", "terminal_id", "columns", "rows"}),
     "kill": frozenset({"action", "terminal_id"}),
@@ -92,8 +94,9 @@ TERMINAL_BETA_TOOL_PARAMETERS: JsonObject = {
             "enum": list(TERMINAL_BETA_ACTIONS),
             "description": (
                 "start launches a TUI, list returns owned Terminal Sessions, status reads a "
-                "bounded screen page, wait pauses briefly for attention, input sends terminal "
-                "text or keys, resize changes dimensions, and kill terminates the process tree."
+                "bounded screen page, wait pauses briefly for a new activity boundary, input sends "
+                "exact data or convenient text/keys, resize changes dimensions, and kill "
+                "terminates the process tree."
             ),
         },
         "terminal_id": {
@@ -106,25 +109,39 @@ TERMINAL_BETA_TOOL_PARAMETERS: JsonObject = {
         "command": {
             "type": "string",
             "minLength": 1,
+            "default": TERMINAL_BETA_DEFAULT_COMMAND,
             "description": (
-                "Executable for start. Omit to launch Codex. vBot invokes it directly rather "
-                "than interpolating it into a shell."
+                f"Executable for start; default {TERMINAL_BETA_DEFAULT_COMMAND}. Every executable "
+                "uses the same generic PTY path with no program-specific flags, hooks, or "
+                "configuration. vBot does not interpolate the value into a shell."
             ),
         },
         "args": {
             "type": "array",
             "items": {"type": "string"},
             "description": (
-                "Argument tokens for start. Omit for no extra arguments. When command is Codex, "
-                "vBot automatically adds inline-screen and structured-attention integration "
-                "options without changing the user's Codex configuration."
+                "Exact argument tokens for start; default no arguments. vBot does not add, remove, "
+                "or rewrite program arguments."
+            ),
+        },
+        "data": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": TERMINAL_INPUT_MAX_CHARS,
+            "description": (
+                "For input, exact terminal data sent unchanged in one PTY write. Use for "
+                "arbitrary escape/control sequences or protocols. Cannot be combined with text, "
+                "key, or enter."
             ),
         },
         "text": {
             "type": "string",
+            "minLength": 1,
+            "maxLength": TERMINAL_INPUT_MAX_CHARS,
             "description": (
                 "For start, the first task to submit after launch. For input, text to type. "
-                "Omit on start to leave the TUI ready without beginning a task."
+                "Omit on start to leave the TUI ready without beginning a task. For exact control "
+                "sequences, use data instead."
             ),
         },
         "workdir": {
@@ -176,8 +193,9 @@ TERMINAL_BETA_TOOL_PARAMETERS: JsonObject = {
             "type": "integer",
             "minimum": 0,
             "description": (
-                "For wait, return only after a newer attention revision. Omit to return for any "
-                "currently unacknowledged attention or the next new event."
+                "For wait, return only after a newer generic activity revision. Omit to return for "
+                "any currently unacknowledged revision or the next output-settled, exit, or error "
+                "event."
             ),
         },
         "timeout_ms": {
@@ -193,7 +211,10 @@ TERMINAL_BETA_TOOL_PARAMETERS: JsonObject = {
         "key": {
             "type": "string",
             "enum": list(TERMINAL_BETA_KEYS),
-            "description": "Named terminal key for input. May be combined with text.",
+            "description": (
+                "Named terminal key for input. Supports navigation, F1-F12, Shift-Tab, and "
+                "Ctrl-A through Ctrl-Z; may be combined with text. Use data for any other sequence."
+            ),
         },
         "enter": {
             "type": "boolean",
@@ -328,12 +349,14 @@ async def _handle_start(
     data = _project_snapshot(terminal_manager, snapshot)
     data.update(
         {
-            "delivery": "automatic_attention",
+            "delivery": "automatic_terminal_activity",
             "handoff_note": (
                 "The Terminal Session continues independently of this vBot Run. vBot will wake "
-                "you for Codex approval, question, turn completion, process exit, or terminal "
-                "failure. You may finish this Run after reporting that Codex is running; do not "
-                "poll merely to wait and do not start a duplicate Codex process."
+                "you after output settles following Agent input, or if the process exits or the "
+                "terminal fails. Quiet output does not prove that the program finished or needs "
+                "input, so inspect status when resumed. You may finish this Run after reporting "
+                "that the program is running; do not poll merely to wait and do not start a "
+                "duplicate process."
             ),
         }
     )
@@ -417,6 +440,11 @@ async def _handle_input(
     arguments: JsonObject,
 ) -> JsonObject:
     terminal_id = required_string(arguments.get("terminal_id"), field_name="terminal_id")
+    raw_data = arguments.get("data")
+    if raw_data is not None and not isinstance(raw_data, str):
+        raise ValueError("data must be a string")
+    if raw_data is not None and any(field in arguments for field in ("text", "key", "enter")):
+        raise ValueError("data cannot be combined with text, key, or enter")
     text = arguments.get("text")
     if text is not None and not isinstance(text, str):
         raise ValueError("text must be a string")
@@ -437,6 +465,7 @@ async def _handle_input(
     data = await terminal_manager.send_input(
         terminal_id,
         owner,
+        data=raw_data if isinstance(raw_data, str) else None,
         text=text if isinstance(text, str) else None,
         key=key,
         enter=enter,
@@ -449,7 +478,7 @@ async def _handle_input(
                 terminal_id, owner, prior_attention_revision
             )
         )
-    data["delivery"] = "automatic_attention"
+    data["delivery"] = "automatic_terminal_activity"
     return tool_success(data)
 
 

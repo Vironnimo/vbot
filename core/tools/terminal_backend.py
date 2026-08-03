@@ -1,15 +1,14 @@
-"""Private PTY/ConPTY transport, VT rendering, and Codex launch integration."""
+"""Private PTY/ConPTY transport, VT rendering, and process-tree control."""
 
 from __future__ import annotations
 
 import codecs
 import contextlib
-import json
+import copy
 import os
 import shutil
 import signal
 import subprocess
-import sys
 from collections import deque
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -19,11 +18,26 @@ from typing import Any, Protocol
 import pyte
 
 from core.tools.process_manager import subprocess_creation_flags
-from core.tools.terminal_hook_sink import TERMINAL_EVENT_FILE_ENV, TERMINAL_EVENT_NONCE_ENV
 
-_HOOK_COMMAND = "python -m core.tools.terminal_hook_sink"
-_CODEX_FEATURE = "default_mode_request_user_input"
 _HARD_KILL_SIGNAL = getattr(signal, "SIGKILL", 9)
+_ALTERNATE_SCREEN_MODES = frozenset({47, 1047, 1049})
+_SCREEN_STATE_FIELDS = (
+    "savepoints",
+    "columns",
+    "lines",
+    "buffer",
+    "dirty",
+    "margins",
+    "mode",
+    "title",
+    "icon_name",
+    "charset",
+    "g0_charset",
+    "g1_charset",
+    "tabstops",
+    "cursor",
+    "saved_columns",
+)
 _ANSI_COLOR_CODES = {
     "black": 30,
     "red": 31,
@@ -71,13 +85,58 @@ TerminalAdapterFactory = Callable[
 class _TerminalScreen(pyte.Screen):
     def __init__(self, columns: int, lines: int, on_scroll: Callable[[str], None]) -> None:
         self._on_scroll = on_scroll
+        self._primary_state: dict[str, Any] | None = None
+        self._alternate_modes: set[int] = set()
         super().__init__(columns, lines)
 
     def index(self) -> None:
         top, bottom = self.margins or (0, self.lines - 1)
-        if self.cursor.y == bottom:
+        if self.cursor.y == bottom and self._primary_state is None:
             self._on_scroll(_render_buffer_line(self.buffer[top], self.columns))
         super().index()
+
+    def set_mode(self, *modes: int, **kwargs: Any) -> None:
+        alternate = _ALTERNATE_SCREEN_MODES.intersection(modes) if kwargs.get("private") else set()
+        if alternate and self._primary_state is None:
+            self._primary_state = self._capture_state()
+            super().reset()
+        self._alternate_modes.update(alternate)
+        super().set_mode(*modes, **kwargs)
+
+    def reset_mode(self, *modes: int, **kwargs: Any) -> None:
+        alternate = _ALTERNATE_SCREEN_MODES.intersection(modes) if kwargs.get("private") else set()
+        self._alternate_modes.difference_update(alternate)
+        if alternate and not self._alternate_modes and self._primary_state is not None:
+            primary_state = self._primary_state
+            self._primary_state = None
+            self._restore_state(primary_state)
+            remaining = tuple(mode for mode in modes if mode not in alternate)
+            if remaining:
+                super().reset_mode(*remaining, **kwargs)
+            return
+        super().reset_mode(*modes, **kwargs)
+
+    def resize(self, lines: int | None = None, columns: int | None = None) -> None:
+        if self._primary_state is None:
+            super().resize(lines=lines, columns=columns)
+            return
+        alternate_state = self._capture_state()
+        primary_state = self._primary_state
+        self._restore_state(primary_state)
+        super().resize(lines=lines, columns=columns)
+        self._primary_state = self._capture_state()
+        self._restore_state(alternate_state)
+        super().resize(lines=lines, columns=columns)
+
+    def _capture_state(self) -> dict[str, Any]:
+        return {
+            field_name: copy.deepcopy(getattr(self, field_name))
+            for field_name in _SCREEN_STATE_FIELDS
+        }
+
+    def _restore_state(self, state: Mapping[str, Any]) -> None:
+        for field_name in _SCREEN_STATE_FIELDS:
+            setattr(self, field_name, copy.deepcopy(state[field_name]))
 
 
 @dataclass(frozen=True, slots=True)
@@ -244,29 +303,6 @@ def spawn_terminal_adapter(
     return _PosixTerminalAdapter(process)
 
 
-def prepare_codex_launch(
-    argv: Sequence[str], env: dict[str, str], event_path: Path, nonce: str
-) -> list[str]:
-    python_dir = str(Path(sys.executable).resolve().parent)
-    env["PATH"] = os.pathsep.join(part for part in (python_dir, env.get("PATH", "")) if part)
-    package_root = str(Path(__file__).resolve().parents[2])
-    env["PYTHONPATH"] = os.pathsep.join(
-        part for part in (package_root, env.get("PYTHONPATH", "")) if part
-    )
-    env[TERMINAL_EVENT_FILE_ENV] = str(event_path)
-    env[TERMINAL_EVENT_NONCE_ENV] = nonce
-    return _with_codex_hooks(argv)
-
-
-def is_codex_executable(command: str) -> bool:
-    name = Path(command).name.lower()
-    for suffix in (".exe", ".cmd", ".bat", ".ps1"):
-        if name.endswith(suffix):
-            name = name[: -len(suffix)]
-            break
-    return name == "codex"
-
-
 def terminate_process_tree(adapter: TerminalAdapter) -> None:
     if not adapter.is_alive():
         return
@@ -300,63 +336,10 @@ def _windows_spawn_argv(argv: Sequence[str], env: Mapping[str, str]) -> list[str
     executable = shutil.which(argv[0], path=env.get("PATH"))
     resolved = executable or argv[0]
     prepared = [resolved, *argv[1:]]
-    codex_node_argv = _windows_codex_node_argv(prepared, env)
-    if codex_node_argv is not None:
-        return codex_node_argv
     if Path(resolved).suffix.lower() not in {".bat", ".cmd"}:
         return prepared
     command_processor = env.get("COMSPEC") or os.environ.get("COMSPEC") or "cmd.exe"
     return [command_processor, "/d", "/s", "/c", subprocess.list2cmdline(prepared)]
-
-
-def _windows_codex_node_argv(argv: Sequence[str], env: Mapping[str, str]) -> list[str] | None:
-    launcher = Path(argv[0])
-    if launcher.stem.lower() != "codex" or launcher.suffix.lower() != ".cmd":
-        return None
-    script = launcher.parent / "node_modules" / "@openai" / "codex" / "bin" / "codex.js"
-    if not script.is_file():
-        return None
-    bundled_node = launcher.parent / "node.exe"
-    node = (
-        str(bundled_node) if bundled_node.is_file() else shutil.which("node", path=env.get("PATH"))
-    )
-    return [node, str(script), *argv[1:]] if node is not None else None
-
-
-def _with_codex_hooks(argv: Sequence[str]) -> list[str]:
-    command = json.dumps(_HOOK_COMMAND)
-    handler = (
-        '[{hooks=[{type="command",command='
-        + command
-        + ",command_windows="
-        + command
-        + ",timeout=5}]}]"
-    )
-    question_handler = (
-        '[{matcher="^request_user_input$",hooks=[{type="command",command='
-        + command
-        + ",command_windows="
-        + command
-        + ",timeout=5}]}]"
-    )
-    injected = [
-        "--dangerously-bypass-hook-trust",
-        "--enable",
-        _CODEX_FEATURE,
-        "-c",
-        "check_for_update_on_startup=false",
-        "-c",
-        "suppress_unstable_features_warning=true",
-        "-c",
-        "hooks.Stop=" + handler,
-        "-c",
-        "hooks.PermissionRequest=" + handler,
-        "-c",
-        "hooks.PreToolUse=" + question_handler,
-    ]
-    if "--no-alt-screen" not in argv[1:]:
-        injected.insert(0, "--no-alt-screen")
-    return [argv[0], *injected, *argv[1:]]
 
 
 def _render_buffer_line(line: Any, columns: int) -> str:
@@ -417,8 +400,6 @@ __all__ = [
     "TerminalAdapter",
     "TerminalAdapterFactory",
     "TerminalRenderer",
-    "is_codex_executable",
-    "prepare_codex_launch",
     "spawn_terminal_adapter",
     "terminate_process_tree",
 ]

@@ -1,4 +1,4 @@
-"""Session-scoped interactive PTY/ConPTY lifecycle and attention management."""
+"""Session-scoped interactive PTY/ConPTY lifecycle and activity management."""
 
 from __future__ import annotations
 
@@ -9,9 +9,7 @@ import hashlib
 import hmac
 import json
 import os
-import tempfile
 import uuid
-from collections import deque
 from collections.abc import AsyncGenerator, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -24,13 +22,8 @@ from core.tools.terminal_backend import (
     TerminalAdapter,
     TerminalAdapterFactory,
     TerminalRenderer,
-    is_codex_executable,
-    prepare_codex_launch,
     spawn_terminal_adapter,
     terminate_process_tree,
-)
-from core.tools.terminal_hook_sink import (
-    TERMINAL_HOOK_EVENT_VERSION,
 )
 from core.utils.errors import VBotError
 from core.utils.logging import get_logger
@@ -48,7 +41,6 @@ TERMINAL_STATUS_DEFAULT_LINES = 30
 TERMINAL_STATUS_MAX_LINES = 100
 TERMINAL_MAX_LIVE_PER_SESSION = 4
 TERMINAL_MAX_LIVE_GLOBAL = 32
-TERMINAL_EVENT_POLL_SECONDS = 0.1
 TERMINAL_SWEEP_INTERVAL_SECONDS = 60.0
 TERMINAL_FINISHED_TTL = timedelta(minutes=30)
 TERMINAL_NOTICE_MESSAGE_CAP_CHARS = 16_000
@@ -56,22 +48,49 @@ TERMINAL_CURSOR_VERSION = 1
 TERMINAL_TEMPORARY_CATEGORY = "terminals"
 TERMINAL_INITIAL_INPUT_QUIET_SECONDS = 0.5
 TERMINAL_INITIAL_INPUT_TIMEOUT_SECONDS = 15.0
+TERMINAL_ACTIVITY_QUIET_SECONDS = 2.0
 TERMINAL_INPUT_KEY_DELAY_SECONDS = 0.1
 TERMINAL_STREAM_RETENTION_EVENTS = 4_096
 TERMINAL_STREAM_SUBSCRIBER_QUEUE_EVENTS = 512
-TERMINAL_OPERATOR_INPUT_MAX_CHARS = 65_536
-_CODEX_QUESTION_TOOL = "request_user_input"
-
+TERMINAL_INPUT_MAX_CHARS = 65_536
+TERMINAL_INPUT_KEY_SEQUENCES = {
+    "enter": "\r",
+    "escape": "\x1b",
+    "tab": "\t",
+    "shift_tab": "\x1b[Z",
+    "backspace": "\x7f",
+    "insert": "\x1b[2~",
+    "delete": "\x1b[3~",
+    "home": "\x1b[H",
+    "end": "\x1b[F",
+    "page_up": "\x1b[5~",
+    "page_down": "\x1b[6~",
+    "up": "\x1b[A",
+    "down": "\x1b[B",
+    "right": "\x1b[C",
+    "left": "\x1b[D",
+    "f1": "\x1bOP",
+    "f2": "\x1bOQ",
+    "f3": "\x1bOR",
+    "f4": "\x1bOS",
+    "f5": "\x1b[15~",
+    "f6": "\x1b[17~",
+    "f7": "\x1b[18~",
+    "f8": "\x1b[19~",
+    "f9": "\x1b[20~",
+    "f10": "\x1b[21~",
+    "f11": "\x1b[23~",
+    "f12": "\x1b[24~",
+    **{f"ctrl_{chr(code + 96)}": chr(code) for code in range(1, 27)},
+}
 TerminalState = Literal[
     "starting",
     "ready",
     "working",
-    "needs_input",
-    "turn_complete",
     "exited",
     "error",
 ]
-AttentionKind = Literal["approval", "question", "turn_complete", "exited", "error"]
+AttentionKind = Literal["output_settled", "exited", "error"]
 TerminalStreamEvent = dict[str, Any]
 TerminalChangedCallback = Callable[[str], None]
 
@@ -124,12 +143,11 @@ class TerminalOwner:
 
 @dataclass(slots=True)
 class TerminalAttention:
-    """One structured Agent-attention boundary for a Terminal Session."""
+    """One program-agnostic Agent-attention boundary for a Terminal Session."""
 
     revision: int
     kind: AttentionKind
     notice_id: str
-    turn_id: str | None
     summary: str
     details: dict[str, Any]
     created_at: datetime
@@ -150,32 +168,24 @@ class TerminalSession:
     state: TerminalState
     started_at: datetime
     origin_run_id: str
-    turn_origin_run_id: str | None
-    codex_integration: bool
-    event_nonce: str | None
-    event_path: Path | None
-    event_lease: TemporaryFileLease | None
-    delete_event_on_finish: bool
+    activity_origin_run_id: str | None
     log_path: Path | None
     log_handle: TextIO | None
     log_lease: TemporaryFileLease | None
     exit_code: int | None = None
     finished_at: datetime | None = None
-    external_session_id: str | None = None
-    external_turn_id: str | None = None
     attention_revision: int = 0
     acknowledged_attention_revision: int = 0
     attention: TerminalAttention | None = None
-    event_offset: int = 0
-    event_remainder: bytes = b""
-    seen_event_keys: deque[str] = field(default_factory=lambda: deque(maxlen=128))
+    activity_generation: int = 0
+    notify_on_settle: bool = False
     suppress_exit_attention: bool = False
     lock: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False)
     output_event: asyncio.Event = field(default_factory=asyncio.Event, repr=False)
     attention_event: asyncio.Event = field(default_factory=asyncio.Event, repr=False)
     reader_task: asyncio.Task[None] | None = field(default=None, repr=False)
-    event_task: asyncio.Task[None] | None = field(default=None, repr=False)
     initial_input_task: asyncio.Task[None] | None = field(default=None, repr=False)
+    settle_task: asyncio.Task[None] | None = field(default=None, repr=False)
     notification_task: asyncio.Task[None] | None = field(default=None, repr=False)
     stream_sequence: int = 0
     stream: ReplayEventStream[TerminalStreamEvent] = field(
@@ -195,6 +205,7 @@ class TerminalManager:
         scrollback_lines: int = TERMINAL_SCROLLBACK_LINES,
         finished_session_ttl: timedelta = TERMINAL_FINISHED_TTL,
         sweep_interval_seconds: float = TERMINAL_SWEEP_INTERVAL_SECONDS,
+        activity_quiet_seconds: float = TERMINAL_ACTIVITY_QUIET_SECONDS,
     ) -> None:
         if scrollback_lines < 1:
             raise ValueError("Terminal scrollback cap must be positive")
@@ -202,12 +213,15 @@ class TerminalManager:
             raise ValueError("Terminal finished-session TTL must be positive")
         if sweep_interval_seconds <= 0:
             raise ValueError("Terminal sweep interval must be positive")
+        if activity_quiet_seconds <= 0:
+            raise ValueError("Terminal activity quiet period must be positive")
         self._trigger_service = trigger_service
         self._temporary_files = temporary_files
         self._adapter_factory = adapter_factory or spawn_terminal_adapter
         self._scrollback_lines = scrollback_lines
         self._finished_session_ttl = finished_session_ttl
         self._sweep_interval_seconds = sweep_interval_seconds
+        self._activity_quiet_seconds = activity_quiet_seconds
         self._sessions: dict[str, TerminalSession] = {}
         self._changed_callbacks: list[TerminalChangedCallback] = []
         self._cursor_secret = os.urandom(32)
@@ -243,7 +257,7 @@ class TerminalManager:
             self._cancel_delivery(session)
             if session.state not in {"exited", "error"}:
                 terminate_process_tree(session.adapter)
-            for task in (session.reader_task, session.event_task, session.initial_input_task):
+            for task in (session.reader_task, session.initial_input_task, session.settle_task):
                 if task is not None and not task.done():
                     task.cancel()
             self._finish_files(session)
@@ -258,8 +272,8 @@ class TerminalManager:
         for session in self._sessions.values():
             for task in (
                 session.reader_task,
-                session.event_task,
                 session.initial_input_task,
+                session.settle_task,
                 session.notification_task,
             ):
                 if task is not None and not task.done():
@@ -279,7 +293,7 @@ class TerminalManager:
         origin_run_id: str,
         initial_text: str | None = None,
     ) -> TerminalSession:
-        """Start one PTY/ConPTY child and optionally submit its first turn."""
+        """Start one unmodified program behind PTY/ConPTY and optionally send initial text."""
         _validate_owner(owner)
         if not argv or not argv[0]:
             raise ValueError("Terminal command must not be empty")
@@ -289,11 +303,6 @@ class TerminalManager:
         self._enforce_capacity(owner)
 
         terminal_id = uuid.uuid4().hex
-        codex_integration = is_codex_executable(argv[0])
-        event_path: Path | None = None
-        event_lease: TemporaryFileLease | None = None
-        delete_event_on_finish = False
-        event_nonce: str | None = None
         log_path: Path | None = None
         log_handle: TextIO | None = None
         log_lease: TemporaryFileLease | None = None
@@ -301,19 +310,12 @@ class TerminalManager:
         if env is not None:
             process_env.update(env)
         process_env.setdefault("TERM", "xterm-256color")
-        process_env["PYTHONIOENCODING"] = "utf-8"
 
         try:
             log_path, log_handle, log_lease = self._open_raw_log()
-            if codex_integration:
-                event_path, event_lease, delete_event_on_finish = self._create_event_file()
-                event_nonce = uuid.uuid4().hex
-                prepared_argv = prepare_codex_launch(argv, process_env, event_path, event_nonce)
-            else:
-                prepared_argv = list(argv)
             adapter = await asyncio.to_thread(
                 self._adapter_factory,
-                prepared_argv,
+                list(argv),
                 cwd,
                 process_env,
                 rows,
@@ -324,10 +326,6 @@ class TerminalManager:
                 log_handle.close()
             if log_lease is not None:
                 log_lease.finish()
-            if event_lease is not None:
-                event_lease.finish()
-            if delete_event_on_finish and event_path is not None:
-                event_path.unlink(missing_ok=True)
             raise
 
         session = TerminalSession(
@@ -341,12 +339,7 @@ class TerminalManager:
             state="starting" if initial_text is not None else "ready",
             started_at=_utc_now(),
             origin_run_id=origin_run_id,
-            turn_origin_run_id=None,
-            codex_integration=codex_integration,
-            event_nonce=event_nonce,
-            event_path=event_path,
-            event_lease=event_lease,
-            delete_event_on_finish=delete_event_on_finish,
+            activity_origin_run_id=None,
             log_path=log_path,
             log_handle=log_handle,
             log_lease=log_lease,
@@ -360,15 +353,6 @@ class TerminalManager:
                 task, f"Terminal reader failed for terminal={terminal_id}"
             )
         )
-        if event_path is not None:
-            session.event_task = asyncio.create_task(
-                self._read_hook_events(session), name=f"terminal:{terminal_id}:events"
-            )
-            session.event_task.add_done_callback(
-                lambda task: _log_background_task_result(
-                    task, f"Terminal event reader failed for terminal={terminal_id}"
-                )
-            )
         if initial_text is not None:
             session.initial_input_task = asyncio.create_task(
                 self._send_initial_input_when_ready(
@@ -436,9 +420,9 @@ class TerminalManager:
         """Write exact user-controlled terminal bytes through the existing PTY."""
         if not isinstance(data, str) or not data:
             raise ValueError("Terminal input must be a non-empty string")
-        if len(data) > TERMINAL_OPERATOR_INPUT_MAX_CHARS:
+        if len(data) > TERMINAL_INPUT_MAX_CHARS:
             raise ValueError(
-                f"Terminal input must not exceed {TERMINAL_OPERATOR_INPUT_MAX_CHARS} characters"
+                f"Terminal input must not exceed {TERMINAL_INPUT_MAX_CHARS} characters"
             )
         session = self._get_for_operator(terminal_id)
         initial_task = session.initial_input_task
@@ -448,10 +432,8 @@ class TerminalManager:
             self._require_live(session)
             state_changed = session.state != "working"
             session.state = "working"
-            for index, chunk in enumerate(_operator_input_chunks(data)):
-                if index:
-                    await asyncio.sleep(TERMINAL_INPUT_KEY_DELAY_SECONDS)
-                await asyncio.to_thread(session.adapter.write, chunk)
+            await asyncio.to_thread(session.adapter.write, data)
+            self._schedule_settle(session, notify=False)
             session.output_event.set()
             if state_changed:
                 self._publish_state(session)
@@ -530,10 +512,11 @@ class TerminalManager:
         enter: bool,
         expected_screen_revision: int | None,
         origin_run_id: str,
+        data: str | None = None,
     ) -> dict[str, Any]:
-        """Write terminal text/keys and update the projected Codex turn state."""
+        """Write exact data or named terminal input and track generic PTY activity."""
         session = self.get_session(terminal_id, owner)
-        chunks = _input_chunks(text=text, key=key, enter=enter)
+        chunks = _input_chunks(data=data, text=text, key=key, enter=enter)
         initial_task = session.initial_input_task
         if (
             initial_task is not None
@@ -552,25 +535,24 @@ class TerminalManager:
                 )
             prior_state = session.state
             prior_attention_revision = session.attention_revision
-            if prior_state in {"ready", "turn_complete"}:
-                session.turn_origin_run_id = origin_run_id
-                session.external_turn_id = None
+            session.activity_origin_run_id = origin_run_id
             session.state = "working"
             for index, chunk in enumerate(chunks):
                 if index:
                     await asyncio.sleep(TERMINAL_INPUT_KEY_DELAY_SECONDS)
                 await asyncio.to_thread(session.adapter.write, chunk)
+            self._schedule_settle(session, notify=True)
             session.output_event.set()
             if prior_state != "working":
                 self._publish_state(session)
             return {
                 "terminal_id": terminal_id,
                 "state": session.state,
-                "characters_sent": len(text or ""),
+                "characters_sent": sum(len(chunk) for chunk in chunks),
                 "key": key,
                 "enter": enter,
-                "answered_attention_revision": (
-                    prior_attention_revision if prior_state == "needs_input" else None
+                "superseded_attention_revision": (
+                    prior_attention_revision if session.attention is not None else None
                 ),
                 "screen_revision": session.renderer.revision,
             }
@@ -608,6 +590,7 @@ class TerminalManager:
             await self.send_input(
                 session.terminal_id,
                 session.owner,
+                data=None,
                 text=text,
                 key=None,
                 enter=True,
@@ -774,6 +757,12 @@ class TerminalManager:
                         session.log_handle.flush()
                     session.renderer.feed(text)
                     self._publish_output(session, text)
+                    if session.state != "starting":
+                        state_changed = session.state != "working"
+                        session.state = "working"
+                        self._schedule_settle(session, notify=False)
+                        if state_changed:
+                            self._publish_state(session)
                     session.output_event.set()
         except asyncio.CancelledError:
             raise
@@ -784,100 +773,63 @@ class TerminalManager:
         finally:
             await self._mark_finished(session, error)
 
-    async def _read_hook_events(self, session: TerminalSession) -> None:
-        assert session.event_path is not None
+    def _schedule_settle(self, session: TerminalSession, *, notify: bool) -> None:
+        """Restart the generic quiet timer after PTY input or output activity."""
+        attention = session.attention
+        pending_agent_delivery = (
+            attention is not None
+            and attention.kind == "output_settled"
+            and not attention.delivered
+            and session.notification_task is not None
+            and not session.notification_task.done()
+        )
+        if pending_agent_delivery:
+            self._cancel_delivery(session)
+            notify = True
+        session.activity_generation += 1
+        generation = session.activity_generation
+        session.notify_on_settle = session.notify_on_settle or notify
+        previous = session.settle_task
+        if previous is not None and not previous.done():
+            previous.cancel()
+        session.settle_task = asyncio.create_task(
+            self._settle_after_quiet(session, generation),
+            name=f"terminal:{session.terminal_id}:settle:{generation}",
+        )
+        session.settle_task.add_done_callback(
+            lambda task: _log_background_task_result(
+                task,
+                f"Terminal quiet detection failed for terminal={session.terminal_id} "
+                f"generation={generation}",
+            )
+        )
+
+    async def _settle_after_quiet(self, session: TerminalSession, generation: int) -> None:
         try:
-            while session.state not in {"exited", "error"}:
-                await asyncio.sleep(TERMINAL_EVENT_POLL_SECONDS)
-                data = await asyncio.to_thread(
-                    _read_file_from_offset, session.event_path, session.event_offset
+            await asyncio.sleep(self._activity_quiet_seconds)
+            async with session.lock:
+                if (
+                    generation != session.activity_generation
+                    or session.state in {"starting", "exited", "error"}
+                    or session.finished_at is not None
+                ):
+                    return
+                deliver = session.notify_on_settle
+                session.notify_on_settle = False
+                session.state = "ready"
+                self._set_attention(
+                    session,
+                    kind="output_settled",
+                    summary=(
+                        "Terminal output has been quiet after recent activity. Inspect the "
+                        "current screen; this does not imply that the program finished or "
+                        "requires input."
+                    ),
+                    details={"screen_revision": session.renderer.revision},
+                    deliver=deliver,
                 )
-                if not data:
-                    continue
-                session.event_offset += len(data)
-                combined = session.event_remainder + data
-                lines = combined.split(b"\n")
-                session.event_remainder = lines.pop()
-                for line in lines:
-                    if line:
-                        await self._consume_hook_record(session, line)
         except asyncio.CancelledError:
             return
-
-    async def _consume_hook_record(self, session: TerminalSession, line: bytes) -> None:
-        try:
-            record = json.loads(line.decode("utf-8"))
-        except (UnicodeError, json.JSONDecodeError):
-            return
-        if (
-            not isinstance(record, dict)
-            or record.get("version") != TERMINAL_HOOK_EVENT_VERSION
-            or record.get("nonce") != session.event_nonce
-            or not isinstance(record.get("event"), dict)
-        ):
-            return
-        event = cast(dict[str, Any], record["event"])
-        event_key = _hook_event_key(event)
-        if event_key in session.seen_event_keys:
-            return
-        session.seen_event_keys.append(event_key)
-        external_session_id = _optional_nonblank_string(event.get("session_id"))
-        if session.external_session_id is None:
-            session.external_session_id = external_session_id
-        elif external_session_id != session.external_session_id:
-            return
-        hook_name = event.get("hook_event_name")
-        turn_id = _optional_nonblank_string(event.get("turn_id"))
-        async with session.lock:
-            if session.state in {"exited", "error"}:
-                return
-            session.external_turn_id = turn_id
-            if hook_name == "PermissionRequest":
-                tool_name = _optional_nonblank_string(event.get("tool_name"))
-                tool_input = event.get("tool_input")
-                details = {
-                    "tool_name": tool_name,
-                    "tool_input": tool_input if _is_json_value(tool_input) else None,
-                }
-                session.state = "needs_input"
-                self._set_attention(
-                    session,
-                    kind="approval",
-                    turn_id=turn_id,
-                    summary=f"Codex requests approval for {tool_name or 'a tool'}.",
-                    details=details,
-                )
-                return
-            if hook_name == "PreToolUse" and event.get("tool_name") == _CODEX_QUESTION_TOOL:
-                tool_input = event.get("tool_input")
-                details = {
-                    "questions": (
-                        tool_input.get("questions")
-                        if isinstance(tool_input, dict)
-                        and _is_json_value(tool_input.get("questions"))
-                        else None
-                    )
-                }
-                session.state = "needs_input"
-                self._set_attention(
-                    session,
-                    kind="question",
-                    turn_id=turn_id,
-                    summary="Codex is waiting for an answer to a structured question.",
-                    details=details,
-                )
-                return
-            if hook_name == "Stop":
-                message = event.get("last_assistant_message")
-                final_message = message if isinstance(message, str) else ""
-                session.state = "turn_complete"
-                self._set_attention(
-                    session,
-                    kind="turn_complete",
-                    turn_id=turn_id,
-                    summary="Codex completed its current turn.",
-                    details={"final_message": final_message},
-                )
 
     async def _mark_finished(self, session: TerminalSession, error: BaseException | None) -> None:
         initial_task = session.initial_input_task
@@ -887,6 +839,13 @@ class TerminalManager:
             and not initial_task.done()
         ):
             initial_task.cancel()
+        settle_task = session.settle_task
+        if (
+            settle_task is not None
+            and settle_task is not asyncio.current_task()
+            and not settle_task.done()
+        ):
+            settle_task.cancel()
         async with session.lock:
             if session.state in {"exited", "error"}:
                 return
@@ -898,7 +857,6 @@ class TerminalManager:
                     self._set_attention(
                         session,
                         kind="exited",
-                        turn_id=session.external_turn_id,
                         summary=f"Terminal process exited with code {session.exit_code}.",
                         details={"exit_code": session.exit_code},
                     )
@@ -910,7 +868,6 @@ class TerminalManager:
                     self._set_attention(
                         session,
                         kind="error",
-                        turn_id=session.external_turn_id,
                         summary="Terminal transport or rendering failed.",
                         details={"error": str(error)},
                     )
@@ -919,22 +876,15 @@ class TerminalManager:
             session.attention_event.set()
             session.output_event.set()
             self._finish_files(session)
-        event_task = session.event_task
-        if (
-            event_task is not None
-            and event_task is not asyncio.current_task()
-            and not event_task.done()
-        ):
-            event_task.cancel()
 
     def _set_attention(
         self,
         session: TerminalSession,
         *,
         kind: AttentionKind,
-        turn_id: str | None,
         summary: str,
         details: dict[str, Any],
+        deliver: bool = True,
     ) -> None:
         self._cancel_delivery(session)
         session.attention_revision += 1
@@ -943,14 +893,14 @@ class TerminalManager:
             revision=revision,
             kind=kind,
             notice_id=f"terminal:{session.terminal_id}:attention:{revision}",
-            turn_id=turn_id,
             summary=summary,
             details=details,
             created_at=_utc_now(),
         )
         session.attention = attention
         session.attention_event.set()
-        self._schedule_attention_delivery(session, attention)
+        if deliver:
+            self._schedule_attention_delivery(session, attention)
         self._publish_state(session)
 
     def _schedule_attention_delivery(
@@ -977,7 +927,7 @@ class TerminalManager:
         trigger_service = self._trigger_service
         if trigger_service is None:
             return
-        origin_run_id = session.turn_origin_run_id or session.origin_run_id
+        origin_run_id = session.activity_origin_run_id or session.origin_run_id
         delivery = trigger_service.submit_completion(
             session.owner.agent_id,
             session.owner.session_id,
@@ -1002,6 +952,9 @@ class TerminalManager:
         if suppress_attention:
             session.suppress_exit_attention = True
             self._cancel_delivery(session)
+        settle_task = session.settle_task
+        if settle_task is not None and not settle_task.done():
+            settle_task.cancel()
         if session.state not in {"exited", "error"}:
             await asyncio.to_thread(terminate_process_tree, session.adapter)
         reader = session.reader_task
@@ -1049,14 +1002,6 @@ class TerminalManager:
             "screen": session.renderer.screen_text(),
             "scrollback": scrollback,
             "attention": _attention_data(attention),
-            "integration": (
-                {
-                    "kind": "codex_hooks",
-                    "structured_attention": ["approval", "question", "turn_complete"],
-                }
-                if session.codex_integration
-                else None
-            ),
             "log_file": str(session.log_path) if session.log_path is not None else None,
         }
 
@@ -1094,7 +1039,6 @@ class TerminalManager:
                 if attention is not None
                 else None
             ),
-            "integration": "codex" if session.codex_integration else "terminal",
         }
 
     def _publish_output(self, session: TerminalSession, text: str) -> None:
@@ -1149,14 +1093,6 @@ class TerminalManager:
         lease = self._temporary_files.create(TERMINAL_TEMPORARY_CATEGORY, ".log")
         return lease.path, lease.path.open("a", encoding="utf-8", newline=""), lease
 
-    def _create_event_file(self) -> tuple[Path, TemporaryFileLease | None, bool]:
-        if self._temporary_files is not None:
-            lease = self._temporary_files.create(TERMINAL_TEMPORARY_CATEGORY, ".events.jsonl")
-            return lease.path, lease, False
-        descriptor, raw_path = tempfile.mkstemp(prefix="vbot-terminal-", suffix=".events.jsonl")
-        os.close(descriptor)
-        return Path(raw_path), None, True
-
     @staticmethod
     def _finish_files(session: TerminalSession) -> None:
         if session.log_handle is not None:
@@ -1166,13 +1102,6 @@ class TerminalManager:
         if session.log_lease is not None:
             session.log_lease.finish()
             session.log_lease = None
-        if session.event_lease is not None:
-            session.event_lease.finish()
-            session.event_lease = None
-        if session.delete_event_on_finish and session.event_path is not None:
-            with contextlib.suppress(OSError):
-                session.event_path.unlink(missing_ok=True)
-            session.delete_event_on_finish = False
 
     @staticmethod
     def _require_live(session: TerminalSession) -> None:
@@ -1188,26 +1117,28 @@ class TerminalManager:
             return
 
 
-def _input_chunks(*, text: str | None, key: str | None, enter: bool) -> tuple[str, ...]:
-    key_sequences = {
-        "enter": "\r",
-        "escape": "\x1b",
-        "ctrl_c": "\x03",
-        "ctrl_d": "\x04",
-        "tab": "\t",
-        "backspace": "\x7f",
-        "up": "\x1b[A",
-        "down": "\x1b[B",
-        "right": "\x1b[C",
-        "left": "\x1b[D",
-    }
-    if key is not None and key not in key_sequences:
+def _input_chunks(
+    *, data: str | None, text: str | None, key: str | None, enter: bool
+) -> tuple[str, ...]:
+    if data is not None:
+        if text is not None or key is not None or enter:
+            raise ValueError("data cannot be combined with text, key, or enter")
+        if not data:
+            raise ValueError("data must be a non-empty string")
+        if len(data) > TERMINAL_INPUT_MAX_CHARS:
+            raise ValueError(f"data must not exceed {TERMINAL_INPUT_MAX_CHARS} characters")
+        return (data,)
+    if key is not None and key not in TERMINAL_INPUT_KEY_SEQUENCES:
         raise ValueError(f"Unsupported terminal key: {key}")
     chunks: list[str] = []
-    if text:
+    if text is not None:
+        if not text:
+            raise ValueError("text must be non-empty when provided")
+        if len(text) > TERMINAL_INPUT_MAX_CHARS:
+            raise ValueError(f"text must not exceed {TERMINAL_INPUT_MAX_CHARS} characters")
         chunks.append(text)
     if key is not None:
-        chunks.append(key_sequences[key])
+        chunks.append(TERMINAL_INPUT_KEY_SEQUENCES[key])
     if enter:
         chunks.append("\r")
     if not chunks:
@@ -1215,17 +1146,9 @@ def _input_chunks(*, text: str | None, key: str | None, enter: bool) -> tuple[st
     return tuple(chunks)
 
 
-def _operator_input_chunks(data: str) -> tuple[str, ...]:
-    if len(data) > 1 and data[-1] in {"\r", "\n"}:
-        return data[:-1], data[-1]
-    return (data,)
-
-
 def _attention_body(session: TerminalSession, attention: TerminalAttention) -> str:
     heading = {
-        "approval": "Codex approval required",
-        "question": "Codex question requires an answer",
-        "turn_complete": "Codex turn complete",
+        "output_settled": "Terminal output settled",
         "exited": "Terminal process exited",
         "error": "Terminal failure",
     }[attention.kind]
@@ -1236,24 +1159,13 @@ def _attention_body(session: TerminalSession, attention: TerminalAttention) -> s
         f"Attention revision: {attention.revision}",
         attention.summary,
     ]
-    if attention.turn_id:
-        sections.append(f"Codex turn id: {attention.turn_id}")
-    if attention.kind == "turn_complete":
-        final_message = attention.details.get("final_message")
-        if isinstance(final_message, str) and final_message:
-            sections.extend(("Codex final response:", final_message))
-        sections.append(
-            "The Terminal Session remains open for later tasks. Re-evaluate the original "
-            "user goal and current workspace state before deciding whether more work is "
-            "required."
-        )
-    elif attention.kind in {"approval", "question"}:
+    if attention.kind == "output_settled":
         sections.extend(
             (
-                "Structured request:",
-                json.dumps(attention.details, ensure_ascii=False, indent=2),
-                "Use terminal_beta status if more screen context is needed, then answer with "
-                "terminal_beta input or ask the user. Do not start another Codex process.",
+                "Use terminal_beta status to inspect the current screen. Decide from that "
+                "screen whether the program is still working, is waiting for input, has "
+                "returned to a prompt, or needs no action. Reuse this Terminal Session; do "
+                "not start a duplicate process.",
             )
         )
     elif attention.details:
@@ -1270,43 +1182,11 @@ def _attention_data(attention: TerminalAttention | None) -> dict[str, Any] | Non
     return {
         "revision": attention.revision,
         "kind": attention.kind,
-        "turn_id": attention.turn_id,
         "summary": attention.summary,
         "details": attention.details,
         "created_at": attention.created_at.isoformat(),
         "delivered": attention.delivered,
     }
-
-
-def _hook_event_key(event: Mapping[str, Any]) -> str:
-    stable = {
-        "hook": event.get("hook_event_name"),
-        "turn": event.get("turn_id"),
-        "tool_use": event.get("tool_use_id"),
-        "tool": event.get("tool_name"),
-        "message": event.get("last_assistant_message"),
-    }
-    return hashlib.sha256(
-        json.dumps(stable, ensure_ascii=False, sort_keys=True, default=str).encode("utf-8")
-    ).hexdigest()
-
-
-def _read_file_from_offset(path: Path, offset: int) -> bytes:
-    with path.open("rb") as handle:
-        handle.seek(offset)
-        return handle.read()
-
-
-def _is_json_value(value: Any) -> bool:
-    try:
-        json.dumps(value)
-    except (TypeError, ValueError):
-        return False
-    return True
-
-
-def _optional_nonblank_string(value: Any) -> str | None:
-    return value if isinstance(value, str) and value.strip() else None
 
 
 def _validate_owner(owner: TerminalOwner) -> None:
@@ -1346,6 +1226,8 @@ __all__ = [
     "TERMINAL_DEFAULT_COLUMNS",
     "TERMINAL_DEFAULT_ROWS",
     "TERMINAL_FINISHED_TTL",
+    "TERMINAL_INPUT_MAX_CHARS",
+    "TERMINAL_INPUT_KEY_SEQUENCES",
     "TERMINAL_MAX_COLUMNS",
     "TERMINAL_MAX_ROWS",
     "TERMINAL_MIN_COLUMNS",

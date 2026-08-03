@@ -35,7 +35,6 @@ export const englishCatalog = Object.freeze({
     'When an agent starts terminal_beta, its live TUI appears here without taking ownership away from the agent.',
   'terminals.controlLabel': 'Take control',
   'terminals.stop': 'Stop terminal',
-  'terminals.attentionLabel': 'Attention',
   'terminals.liveTerminalLabel': 'Live terminal output',
   'terminals.mode.control': 'Control enabled — keystrokes go to the process',
   'terminals.mode.observe': 'Observe mode — keyboard input is locked',
@@ -63,8 +62,6 @@ export const englishCatalog = Object.freeze({
   'terminals.state.starting': 'Starting',
   'terminals.state.ready': 'Ready',
   'terminals.state.working': 'Working',
-  'terminals.state.needs_input': 'Needs input',
-  'terminals.state.turn_complete': 'Turn complete',
   'terminals.state.exited': 'Exited',
   'terminals.state.error': 'Error',
 
