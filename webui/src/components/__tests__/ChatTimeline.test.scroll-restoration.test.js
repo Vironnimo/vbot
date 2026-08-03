@@ -230,6 +230,33 @@ describe('ChatTimeline', () => {
     await waitForCondition(() => currentScrollTop() === 2400);
   });
 
+  it('releases follow mode before upward wheel scrolling can race content growth', async () => {
+    const { parentSession } = scrollMemorySessions();
+    mountedComponent = mount(ChatTimeline, {
+      target: document.body,
+      props: { sessionState: parentSession, agentName: 'Alpha' },
+    });
+    flushSync();
+
+    const container = document.querySelector('.messages');
+    const { currentScrollTop, setScrollHeight, setScrollTop } =
+      mockScrollGeometry(container);
+    await waitForCondition(() => currentScrollTop() === 2000);
+
+    // Tool output may resize between the wheel input and the browser's scroll
+    // event. The upward intent must already own the viewport at that point.
+    container.dispatchEvent(new WheelEvent('wheel', { deltaY: -120 }));
+    setScrollHeight(2400);
+    notifyContentResize();
+    await waitForCondition(() => currentScrollTop() === 2000);
+
+    setScrollTop(600);
+    container.dispatchEvent(new Event('scroll'));
+    setScrollHeight(2600);
+    notifyContentResize();
+    await waitForCondition(() => currentScrollTop() === 600);
+  });
+
   it('keeps a user-owned reading position stable while content grows', async () => {
     const { parentSession } = scrollMemorySessions();
     mountedComponent = mount(ChatTimeline, {
@@ -275,6 +302,47 @@ describe('ChatTimeline', () => {
     notifyContentResize();
 
     await waitForCondition(() => currentScrollTop() === 2300);
+  });
+
+  it('starts every explicit Sub-Agent link visit at the bottom and follows new output', async () => {
+    const { parentSession, childSession } = scrollMemorySessions();
+    const props = reactiveProps({
+      sessionState: childSession,
+      agentName: 'Subagent',
+      followSessionRequest: {
+        requestId: 1,
+        sessionKey: childSession.key,
+      },
+    });
+    mountedComponent = mount(ChatTimeline, {
+      target: document.body,
+      props,
+    });
+    flushSync();
+
+    const container = document.querySelector('.messages');
+    const { currentScrollTop, setScrollHeight, setScrollTop } =
+      mockScrollGeometry(container);
+    await waitForCondition(() => currentScrollTop() === 2000);
+
+    container.dispatchEvent(new Event('wheel'));
+    setScrollTop(300);
+    container.dispatchEvent(new Event('scroll'));
+    props.sessionState = parentSession;
+    flushSync();
+    await waitForCondition(() => currentScrollTop() === 2000);
+
+    props.followSessionRequest = {
+      requestId: 2,
+      sessionKey: childSession.key,
+    };
+    props.sessionState = childSession;
+    flushSync();
+    await waitForCondition(() => currentScrollTop() === 2000);
+
+    setScrollHeight(2400);
+    notifyContentResize();
+    await waitForCondition(() => currentScrollTop() === 2400);
   });
 
   it('ignores an older-history restore after switching sessions', async () => {

@@ -71,6 +71,43 @@ describe('App controller', () => {
     );
   });
 
+  it('marks direct Sub-Agent link navigation for live-tail scrolling only', () => {
+    const { browserHistory, controller, state } = setup();
+
+    expect(controller.navigateToSubAgent('subagent', 'child-session')).toBe(
+      true,
+    );
+    expect(state.pendingSessionNavigation).toMatchObject({
+      agentId: 'subagent',
+      sessionId: 'child-session',
+      subAgent: true,
+      followSession: true,
+    });
+    expect(browserHistory.pushState).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        session: {
+          agentId: 'subagent',
+          sessionId: 'child-session',
+          subAgent: true,
+        },
+      }),
+      '',
+      '#chat',
+    );
+
+    controller.applyNavigationState({
+      view: 'chat',
+      session: {
+        agentId: 'subagent',
+        sessionId: 'other-child-session',
+        subAgent: true,
+      },
+      selection: { agentId: 'alpha', projectId: '', projectAgentId: null },
+    });
+
+    expect(state.pendingSessionNavigation).not.toHaveProperty('followSession');
+  });
+
   it('projects server events into run state and scoped invalidations', async () => {
     const { actions, controller, state } = setup();
     const hello = { type: 'connection_ready', active_runs: [] };

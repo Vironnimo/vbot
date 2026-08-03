@@ -300,6 +300,7 @@ export function createAppController({
       agentId,
       sessionId,
       subAgent: true,
+      followSession: true,
       requestId: sessionNavigationRequestId,
     };
     return true;
