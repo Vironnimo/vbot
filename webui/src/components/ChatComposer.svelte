@@ -71,6 +71,7 @@
   let attachmentToastMessage = $state('');
   let recordingState = $state('idle');
   let inputOrigin = $state('');
+  let submitInFlight = $state(false);
   let activeRecorder = null;
   let attachmentToastTimeoutId = null;
   let _suppressSelectionUpdate = false;
@@ -468,27 +469,49 @@
   // Which @-tokens in the outgoing text are actual files. Decided against the
   // picker's file list (fetched now if this draft never opened the picker, e.g.
   // a restored draft), so pasted code decorators and handles never expand.
-  const collectFileMentions = async (tokens) => {
-    let files = fileCandidates;
-    if (files === null && typeof onListFiles === 'function') {
+  const collectFileMentions = async (snapshot) => {
+    let files = snapshot.fileCandidates;
+    if (files === null && typeof snapshot.listFiles === 'function') {
       try {
-        const result = await onListFiles();
+        const result = await snapshot.listFiles();
         files = Array.isArray(result?.files) ? result.files : [];
-        fileCandidates = files;
-        fileListTruncated = Boolean(result?.truncated);
+        if (draftKey === snapshot.draftKey) {
+          fileCandidates = files;
+          fileListTruncated = Boolean(result?.truncated);
+        }
       } catch {
         files = [];
       }
     }
-    return matchMentionCandidates(tokens, files ?? []);
+    return matchMentionCandidates(snapshot.mentionTokens, files ?? []);
   };
 
-  const submit = () => {
+  const createSubmitSnapshot = () => ({
+    content,
+    trimmedContent: content.trim(),
+    inputOrigin,
+    draftKey,
+    historyKey,
+    mentionTokens: extractMentionTokens(content),
+    fileCandidates: fileCandidates === null ? null : Array.from(fileCandidates),
+    listFiles: onListFiles,
+    sendMessage: onSendMessage,
+    attachments: pendingAttachments.map((attachment) => ({
+      source: attachment,
+      attachment_id: attachment.attachment_id,
+      filename: attachment.filename,
+      media_type: attachment.media_type,
+    })),
+  });
+
+  const submit = async () => {
+    const snapshot = createSubmitSnapshot();
     const trimmedContent = content.trim();
     const hasPendingAttachments = pendingAttachments.length > 0;
 
     if (
       disabled ||
+      submitInFlight ||
       hasUploadingAttachments ||
       voiceBusy ||
       (!trimmedContent && !hasPendingAttachments)
@@ -496,25 +519,22 @@
       return;
     }
 
+    submitInFlight = true;
     cancelActiveRecording();
-    // Record the typed text (if any) so it can be recalled later from any of
-    // this agent's sessions. Attachment-only sends contribute no history entry.
-    pushHistory(historyKey, content);
-    // A message without @-tokens sends synchronously (the common case); only a
-    // mention-bearing message waits for the file-list check.
-    const mentionTokens = extractMentionTokens(content);
-    if (mentionTokens.length === 0) {
-      finishSubmit([]);
-      return;
+    try {
+      const fileMentions =
+        snapshot.mentionTokens.length === 0
+          ? []
+          : await collectFileMentions(snapshot);
+      await finishSubmit(snapshot, fileMentions);
+    } finally {
+      submitInFlight = false;
     }
-    collectFileMentions(mentionTokens).then(finishSubmit);
   };
 
-  const finishSubmit = (fileMentions) => {
-    const trimmedContent = content.trim();
-    const hasPendingAttachments = pendingAttachments.length > 0;
+  const finishSubmit = async (snapshot, fileMentions) => {
     const sendOptionCandidates = {
-      ...(inputOrigin ? { inputOrigin } : {}),
+      ...(snapshot.inputOrigin ? { inputOrigin: snapshot.inputOrigin } : {}),
       ...(fileMentions.length > 0 ? { fileMentions } : {}),
     };
     const sendOptions =
@@ -522,17 +542,12 @@
         ? sendOptionCandidates
         : null;
 
-    if (!hasPendingAttachments) {
-      if (sendOptions) {
-        onSendMessage?.(content, sendOptions);
-      } else {
-        onSendMessage?.(content);
-      }
+    let outgoingContent;
+    if (snapshot.attachments.length === 0) {
+      outgoingContent = snapshot.content;
     } else {
-      const contentBlocks = pendingAttachments
-        .filter(
-          (attachment) => !attachment.uploading && attachment.attachment_id,
-        )
+      const contentBlocks = snapshot.attachments
+        .filter((attachment) => attachment.attachment_id)
         .flatMap((attachment) => {
           if (hasMediaMediaType(attachment.media_type)) {
             return [
@@ -555,31 +570,70 @@
           return [fileBlock];
         });
 
-      if (trimmedContent) {
-        contentBlocks.unshift({ type: 'text', text: trimmedContent });
+      if (snapshot.trimmedContent) {
+        contentBlocks.unshift({
+          type: 'text',
+          text: snapshot.trimmedContent,
+        });
       }
 
       if (contentBlocks.length === 0) {
-        return;
+        return false;
       }
-
-      if (sendOptions) {
-        onSendMessage?.(contentBlocks, sendOptions);
-      } else {
-        onSendMessage?.(contentBlocks);
-      }
-      clearPendingAttachments();
+      outgoingContent = contentBlocks;
     }
 
-    content = '';
-    inputOrigin = '';
-    triggerContext = null;
-    activeSkillIndex = 0;
-    isDragOver = false;
-    clearDraft(draftKey);
-    historyCursor = -1;
-    navWorkingCopies = {};
-    resetInputHeight();
+    if (typeof snapshot.sendMessage !== 'function') {
+      return false;
+    }
+
+    let sent = false;
+    try {
+      sent =
+        (sendOptions
+          ? await snapshot.sendMessage(outgoingContent, sendOptions)
+          : await snapshot.sendMessage(outgoingContent)) === true;
+    } catch {
+      sent = false;
+    }
+    if (!sent) {
+      return false;
+    }
+
+    // Only successful admission makes this a sent-history entry. A failed RPC
+    // leaves both the draft and its recall history untouched.
+    pushHistory(snapshot.historyKey, snapshot.content);
+
+    const submittedAttachmentSources = new Set(
+      snapshot.attachments.map((attachment) => attachment.source),
+    );
+    const submittedAttachmentsStillPresent = pendingAttachments.filter(
+      (attachment) => submittedAttachmentSources.has(attachment),
+    );
+    for (const attachment of submittedAttachmentsStillPresent) {
+      safeRevokeObjectUrl(attachment.preview_url);
+    }
+    pendingAttachments = pendingAttachments.filter(
+      (attachment) => !submittedAttachmentSources.has(attachment),
+    );
+
+    // Typing and navigation stay available while admission is pending. Clear
+    // only the exact draft snapshot that succeeded; later edits or another
+    // Session's draft must survive the older request completing.
+    if (getDraft(snapshot.draftKey) === snapshot.content) {
+      clearDraft(snapshot.draftKey);
+    }
+    if (draftKey === snapshot.draftKey && content === snapshot.content) {
+      content = '';
+      inputOrigin = '';
+      triggerContext = null;
+      activeSkillIndex = 0;
+      isDragOver = false;
+      historyCursor = -1;
+      navWorkingCopies = {};
+      resetInputHeight();
+    }
+    return true;
   };
 
   const focusInputFromWrap = (event) => {
@@ -1198,6 +1252,7 @@
         variant="primary"
         icon
         disabled={disabled ||
+          submitInFlight ||
           hasUploadingAttachments ||
           voiceBusy ||
           (!content.trim() && pendingAttachments.length === 0)}
