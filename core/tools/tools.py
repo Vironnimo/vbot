@@ -730,9 +730,11 @@ class ToolRegistry:
                 f"tool '{context.tool_name}' is not available: its extension is not configured",
                 retryable=False,
             )
-        (context.input_contract or tool.contract).validate_arguments(arguments)
+        input_contract = context.input_contract or tool.contract
+        normalized_arguments = input_contract.normalize_arguments(arguments)
+        input_contract.validate_arguments(normalized_arguments)
 
-        result = tool.handler(context, arguments)
+        result = tool.handler(context, normalized_arguments)
         if inspect.isawaitable(result):
             result = await result
         return self.validate_result(context.tool_name, result)

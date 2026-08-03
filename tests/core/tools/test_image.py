@@ -224,20 +224,20 @@ async def test_image_generation_tool_resolves_local_source_images(tmp_path: Path
 
 
 @pytest.mark.asyncio
-async def test_image_generation_tool_rejects_single_source_path_string(tmp_path: Path) -> None:
+async def test_image_generation_tool_accepts_single_source_path_string(tmp_path: Path) -> None:
     source = tmp_path / "photo.png"
     source.write_bytes(b"\x89PNG\r\n\x1a\nsource")
     service = _ImageService(tmp_path / "artifact-1.png")
     registry = ToolRegistry()
     register_image_generation_tool(registry, service)
 
-    with pytest.raises(ToolContractError, match="expected JSON array"):
-        await registry.dispatch(
-            _make_context(tmp_path),
-            {"prompt": "make it rainy", "source_images": str(source)},
-        )
+    result = await registry.dispatch(
+        _make_context(tmp_path),
+        {"prompt": "make it rainy", "source_images": str(source)},
+    )
 
-    assert service.received_source_paths is None
+    assert result["ok"] is True
+    assert service.received_source_paths == (source.resolve(),)
 
 
 @pytest.mark.asyncio
@@ -267,7 +267,7 @@ async def test_image_generation_tool_rejects_invalid_source_paths_shape(tmp_path
     registry = ToolRegistry()
     register_image_generation_tool(registry, service)
 
-    with pytest.raises(ToolContractError, match="expected JSON array"):
+    with pytest.raises(ToolContractError, match="expected JSON string"):
         await registry.dispatch(
             _make_context(tmp_path),
             {"prompt": "make it rainy", "source_images": {"path": "photo.png"}},
@@ -310,18 +310,20 @@ async def test_analyze_image_tool_resolves_paths_and_returns_analysis(
 
 
 @pytest.mark.asyncio
-async def test_analyze_image_tool_rejects_single_path_string(tmp_path: Path) -> None:
+async def test_analyze_image_tool_accepts_single_path_string(tmp_path: Path) -> None:
+    image = tmp_path / "photo.png"
+    image.write_bytes(b"\x89PNG\r\n\x1a\nsource")
     service = _ImageService(tmp_path / "unused.png")
     registry = ToolRegistry()
     register_analyze_image_tool(registry, service)
 
-    with pytest.raises(ToolContractError, match="expected JSON array"):
-        await registry.dispatch(
-            _make_context(tmp_path, tool_name=ANALYZE_IMAGE_TOOL_NAME),
-            {"prompt": "Describe it.", "images": "photo.png"},
-        )
+    result = await registry.dispatch(
+        _make_context(tmp_path, tool_name=ANALYZE_IMAGE_TOOL_NAME),
+        {"prompt": "Describe it.", "images": "photo.png"},
+    )
 
-    assert service.received_analysis_paths is None
+    assert result["ok"] is True
+    assert service.received_analysis_paths == (image.resolve(),)
 
 
 @pytest.mark.asyncio
