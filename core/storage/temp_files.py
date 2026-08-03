@@ -21,6 +21,7 @@ _LOGGER = get_logger("storage.temp_files")
 TEMPORARY_FILE_RETENTION: Mapping[str, timedelta] = {
     "bash": timedelta(hours=72),
     "subagents": timedelta(hours=24),
+    "terminals": timedelta(hours=72),
 }
 TEMPORARY_FILE_SWEEP_INTERVAL_SECONDS = 60.0
 _SUFFIX_PATTERN = re.compile(r"^\.[A-Za-z0-9][A-Za-z0-9._-]*$")

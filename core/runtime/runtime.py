@@ -122,6 +122,7 @@ from core.tools import (
     register_session_search_tool,
     register_skill_manage_tool,
     register_skill_tool,
+    register_terminal_beta_tool,
     register_text_to_speech_tool,
     register_web_fetch_tool,
     register_web_search_tool,
@@ -131,6 +132,7 @@ from core.tools.cron import register_cron_tool
 from core.tools.process_manager import ProcessManager
 from core.tools.status import register_status_tool
 from core.tools.subagent import register_subagent_tools
+from core.tools.terminal_manager import TerminalManager
 from core.tools.tools import ToolPromptBlockRegistry, ToolRegistry
 from core.utils.config import VBOT_ROOT
 from core.utils.errors import ConfigError, StorageError
@@ -382,6 +384,7 @@ class Runtime:
         self._memory_service: MemoryService | None = None
         self._file_state: FileReadState | None = None
         self._process_manager: ProcessManager | None = None
+        self._terminal_manager: TerminalManager | None = None
         self._skills: SkillRegistry | None = None
         # Per-project merged skill registries + project-skill names, cached by
         # project id like the resolver's Team cache; ``skills_for`` / project skill
@@ -701,6 +704,12 @@ class Runtime:
             trigger_chat_loop=self._streaming_chat_loop,
             sessions=self._chat_sessions,
         )
+        self._terminal_manager = TerminalManager(
+            self._trigger_service,
+            temporary_files=self._storage.temporary_files,
+        )
+        self._start_terminal_manager()
+        register_terminal_beta_tool(self._tools, self._terminal_manager)
         self._bootstrap_service = BootstrapService(
             self._trigger_service,
             self._storage.data_dir,
@@ -721,6 +730,7 @@ class Runtime:
             trigger_service=self._trigger_service,
             reflection_service=self._reflection_service,
             storage=self._storage,
+            terminal_manager=self._terminal_manager,
         )
         if self._extensions is not None:
             self._extensions.apply_commands(self._command_dispatcher)
@@ -835,6 +845,8 @@ class Runtime:
             self._provider_usage.stop()
         if self._process_manager is not None:
             self._process_manager.stop()
+        if self._terminal_manager is not None:
+            self._terminal_manager.stop()
         if self._storage is not None:
             self._storage.temporary_files.stop()
 
@@ -859,6 +871,8 @@ class Runtime:
             await self._provider_usage.aclose()
         if self._process_manager is not None:
             await self._process_manager.aclose()
+        if self._terminal_manager is not None:
+            await self._terminal_manager.aclose()
         if self._storage is not None:
             await self._storage.temporary_files.aclose()
 
@@ -888,6 +902,7 @@ class Runtime:
         self._memory_service = None
         self._file_state = None
         self._process_manager = None
+        self._terminal_manager = None
         self._skills = None
         self._project_skills = {}
         self._agent_skills = {}
@@ -1092,6 +1107,11 @@ class Runtime:
         except RuntimeError:
             return
         self._process_manager.start()
+
+    def _start_terminal_manager(self) -> None:
+        if self._terminal_manager is None:
+            raise RuntimeError("Terminal manager service not available")
+        self._terminal_manager.start()
 
     def _start_cron_service(self) -> None:
         if self._cron_service is None:
@@ -1950,6 +1970,14 @@ class Runtime:
         if self._process_manager is None:
             raise RuntimeError("Process manager service not available")
         return self._process_manager
+
+    @property
+    def terminal_manager(self) -> TerminalManager:
+        """Access to Session-scoped interactive Terminal lifecycle management."""
+        self._ensure_started()
+        if self._terminal_manager is None:
+            raise RuntimeError("Terminal manager service not available")
+        return self._terminal_manager
 
     @property
     def file_read_state(self) -> FileReadState:

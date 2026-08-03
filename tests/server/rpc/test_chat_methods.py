@@ -38,6 +38,7 @@ from core.projects import AgentResolutionError, ModelConfigurationError, format_
 from core.runs import ActiveRunError, ChatRunManager, RunAdmissionBlockedError, RunKind
 from core.sessions import SESSION_FORK_ALWAYS_STRIP_META_KEYS, SESSION_MOVE_STRIP_META_KEYS
 from core.tools.file_state import FileReadState
+from core.tools.terminal_manager import TerminalOwner
 from server.events import ServerEventBus
 from server.rpc.chat_methods import (
     _chat_queue_remove,
@@ -93,6 +94,7 @@ def _core_dispatcher(state: SimpleNamespace) -> CommandDispatcher:
         trigger_service=getattr(runtime, "trigger_service", None),
         reflection_service=getattr(runtime, "reflection", None),
         storage=getattr(runtime, "storage", None),
+        terminal_manager=getattr(runtime, "terminal_manager", None),
     )
 
 
@@ -1252,6 +1254,7 @@ def _make_move_state(
     agents = _FakeMoveAgents()
     task_loop = _RecordingLoop()  # project-target task run path (chat_loop.start_run)
     trigger_calls: list[dict[str, Any]] = []
+    terminal_transfers: list[tuple[TerminalOwner, TerminalOwner]] = []
 
     async def trigger_run(agent_id: str, message: Any, **kwargs: Any) -> _FakeRun:
         trigger_calls.append({"agent_id": agent_id, "message": message, **kwargs})
@@ -1262,6 +1265,9 @@ def _make_move_state(
         agents=agents,
         agent_resolver=_ConfigurableResolver(resolver_error),
         trigger_service=SimpleNamespace(trigger_run=trigger_run),
+        terminal_manager=SimpleNamespace(
+            transfer_scope=lambda source, target: terminal_transfers.append((source, target))
+        ),
     )
     state = SimpleNamespace(
         chat_loop=task_loop,
@@ -1275,6 +1281,7 @@ def _make_move_state(
     state._agents = agents  # type: ignore[attr-defined]
     state._trigger_calls = trigger_calls  # type: ignore[attr-defined]
     state._task_loop = task_loop  # type: ignore[attr-defined]
+    state._terminal_transfers = terminal_transfers  # type: ignore[attr-defined]
     state._command_changes = []  # type: ignore[attr-defined]
     return state
 
@@ -1338,6 +1345,12 @@ async def test_move_directions_relocate_and_re_home_pointers(
     assert divider.role == "agent_takeover"
     assert json.loads(divider.content)["to"] == target_address
     assert state._sessions.destination.notes  # silent takeover note added
+    assert state._terminal_transfers == [
+        (
+            TerminalOwner(source_project, "builder", "s1"),
+            TerminalOwner(target_project, target_agent, "s1"),
+        )
+    ]
 
     # No task → the target waits; payload lands the accessor on the same session.
     assert state._trigger_calls == []

@@ -52,6 +52,7 @@ def test_layout_exposes_every_canonical_named_path(tmp_path: Path) -> None:
     assert layout.atomic_temporary == tmp_path / "artifacts" / "temp" / "atomic"
     assert layout.bash_temporary == tmp_path / "artifacts" / "temp" / "bash"
     assert layout.subagent_temporary == tmp_path / "artifacts" / "temp" / "subagents"
+    assert layout.terminal_temporary == tmp_path / "artifacts" / "temp" / "terminals"
     assert layout.provider_usage == tmp_path / "statistics" / "provider-usage"
     assert layout.bootstrap == tmp_path / "bootstrap"
     assert layout.processes == tmp_path / "processes"

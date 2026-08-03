@@ -37,6 +37,7 @@ from core.runs import (
 from core.sessions import SESSION_MOVE_STRIP_META_KEYS
 from core.skills.skill_validator import SKILL_NAME_TRIGGER_PATTERN
 from core.tools.availability import memory_tool_enabled
+from core.tools.terminal_manager import TerminalManager, TerminalOwner
 from core.utils.logging import get_logger
 
 if TYPE_CHECKING:
@@ -483,6 +484,7 @@ class CommandDispatcher:
         trigger_service: Any | None = None,
         reflection_service: Any | None = None,
         storage: Any | None = None,
+        terminal_manager: TerminalManager | None = None,
     ) -> None:
         self._chat_runs = chat_runs
         self._agent_resolver = agent_resolver
@@ -495,6 +497,7 @@ class CommandDispatcher:
         self._trigger_service = trigger_service
         self._reflection_service = reflection_service
         self._storage = storage
+        self._terminal_manager = terminal_manager
         # Live loader for the user-configured local-model window map, read at
         # execution time so a settings change applies to the next /status.
         self._local_context_windows_loader = local_context_windows_loader
@@ -1109,6 +1112,20 @@ class CommandDispatcher:
                         )
                     )
                     destination.add_note(AGENT_TAKEOVER_NOTE.format(source=source_display))
+
+                if self._terminal_manager is not None:
+                    self._terminal_manager.transfer_scope(
+                        TerminalOwner(
+                            context.project_id,
+                            context.agent_id,
+                            context.session_id,
+                        ),
+                        TerminalOwner(
+                            target_project_id,
+                            target_agent_id,
+                            context.session_id,
+                        ),
+                    )
 
                 if context.project_id is None:
                     agents.reset_current_after_session_removed(context.agent_id, context.session_id)
