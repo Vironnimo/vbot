@@ -936,13 +936,20 @@ class _FakeQueueRuns:
     agent address).
     """
 
-    def __init__(self) -> None:
+    def __init__(self, *, editable: bool = True) -> None:
         self.list_project_ids: list[str | None] = []
         self.update_project_ids: list[str | None] = []
+        self.editable = editable
 
     def list_queued(self, agent_id: str, session_id: str, *, project_id: str | None) -> list[Any]:
         self.list_project_ids.append(project_id)
-        return [SimpleNamespace(item_id="q-1", internal=False)]
+        return [
+            SimpleNamespace(
+                item_id="q-1",
+                internal=False,
+                editable=self.editable,
+            )
+        ]
 
     def remove_queued(
         self, agent_id: str, session_id: str, item_id: str, *, project_id: str | None
@@ -1072,6 +1079,18 @@ async def test_queue_update_scopes_on_resolved_session_id() -> None:
     assert _queue_resource_events(state) == [
         {"kind": "queue", "scope": {"agent_id": "builder", "session_id": "resolved-s1"}}
     ]
+
+
+@pytest.mark.asyncio
+async def test_queue_update_rejects_attachment_items() -> None:
+    state = _make_queue_state(_QueueOnBusyLoop())
+    state.chat_runs = _FakeQueueRuns(editable=False)
+
+    with pytest.raises(RpcError, match="cannot be edited losslessly"):
+        await _chat_queue_update(
+            state,
+            {"agent_id": "builder", "session_id": "s1", "item_id": "q-1", "content": "edit"},
+        )
 
 
 @pytest.mark.asyncio

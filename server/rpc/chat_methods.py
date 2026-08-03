@@ -13,6 +13,7 @@ from core.chat import (
     ReplySurface,
     aggregate_session_usage,
     latest_session_context_usage,
+    queue_content_is_editable,
 )
 from core.chat.content_blocks import ContentBlock
 from core.chat.file_mentions import expand_file_mentions, resolve_mention_root
@@ -534,6 +535,11 @@ async def _chat_queue_update(state: Any, params: JsonObject) -> JsonObject:
         queued_item = _public_queue_item(chat_runs, agent_id, session_id, item_id, project_id)
         if queued_item is None:
             raise RpcError(RPC_ERROR_QUEUE_ITEM_NOT_FOUND, f"queued item not found: {item_id}")
+        if not queued_item.editable:
+            raise RpcError(
+                RPC_ERROR_INVALID_REQUEST,
+                "queued item content cannot be edited losslessly",
+            )
 
         # The address's project is the anchor the item was queued under — the queue
         # key carries it, and the item above was found via that key. Rebuild against
@@ -558,6 +564,7 @@ async def _chat_queue_update(state: Any, params: JsonObject) -> JsonObject:
             updated_executor,
             updated_display_content,
             project_id=project_id,
+            editable=queue_content_is_editable(content),
         )
     except Exception as exc:
         raise _map_expected_error(exc) from exc

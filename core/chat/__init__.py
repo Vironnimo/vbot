@@ -39,6 +39,7 @@ if TYPE_CHECKING:
     from core.chat.errors import ChatSessionError as ChatSessionError
     from core.chat.errors import CompactionUnavailableError as CompactionUnavailableError
     from core.chat.errors import ToolIterationLimitError as ToolIterationLimitError
+    from core.chat.messages import queue_content_is_editable as queue_content_is_editable
     from core.chat.usage import aggregate_session_usage as aggregate_session_usage
     from core.chat.usage import latest_session_context_usage as latest_session_context_usage
     from core.sessions import ChatSession as ChatSession
@@ -76,6 +77,7 @@ _EXPORT_MODULES = {
     "parse_agent_argument": "core.chat.commands",
     "parse_bare_model": "core.chat.chat",
     "parse_handoff_argument": "core.chat.commands",
+    "queue_content_is_editable": "core.chat.messages",
     "ToolCall": "core.chat.chat",
     "ToolIterationLimitError": "core.chat.errors",
     "aggregate_session_usage": "core.chat.usage",

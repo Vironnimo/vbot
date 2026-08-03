@@ -6,6 +6,7 @@ import {
   createAgent,
   createChatRpcMock,
   expect,
+  findButtonByText,
   findCancelRunButton,
   flushSync,
   it,
@@ -215,6 +216,90 @@ describe('ChatView', () => {
       limit: 100,
     });
     expect(activeAgentTab()?.textContent).toContain('Beta');
+  });
+
+  it('does not apply stale command navigation after the user selects another Agent', async () => {
+    const { createChatViewParentHarness } =
+      await import('./chatViewParentHarness.svelte.js');
+    let resolveMove;
+    const moveResponse = new Promise((resolve) => {
+      resolveMove = resolve;
+    });
+    const agents = [
+      createAgent({ current_session_id: 'shared-session' }),
+      createAgent({
+        id: 'beta',
+        name: 'Beta',
+        current_session_id: 'beta-session',
+      }),
+      createAgent({
+        id: 'gamma',
+        name: 'Gamma',
+        current_session_id: 'gamma-session',
+      }),
+    ];
+    rpcMock.mockImplementation(
+      createChatRpcMock({
+        agents,
+        sessionMessages: {
+          'shared-session': [
+            { id: 'alpha-reply', role: 'assistant', content: 'Alpha reply' },
+          ],
+          'gamma-session': [
+            { id: 'gamma-reply', role: 'assistant', content: 'Gamma reply' },
+          ],
+        },
+        streamHandler: ({ content }) => {
+          if (content === '/agent beta') {
+            return moveResponse;
+          }
+          throw new Error(`Unexpected stream content: ${content}`);
+        },
+      }),
+    );
+    const parentHarness = createChatViewParentHarness();
+    chatViewTest.mount({
+      target: document.body,
+      props: {
+        sharedAgents: agents,
+        get sharedSelectedAgentId() {
+          return parentHarness.selectedAgentId;
+        },
+        onAgentSelected: (agentId) => parentHarness.setSelectedAgentId(agentId),
+      },
+    });
+    flushSync();
+    await waitForCondition(
+      () => document.body.textContent.includes('Alpha reply'),
+      100,
+    );
+
+    sendComposerMessage('/agent beta');
+    findButtonByText('Gamma').click();
+    await waitForCondition(
+      () => document.body.textContent.includes('Gamma reply'),
+      100,
+    );
+
+    resolveMove({
+      command_handled: true,
+      reply: 'Moved to beta.',
+      output: 'action',
+      data: {
+        command: 'agent',
+        session_id: 'shared-session',
+        agent_id: 'beta',
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    flushSync();
+
+    expect(activeAgentTab()?.textContent).toContain('Gamma');
+    expect(rpcMock).not.toHaveBeenCalledWith('chat.history', {
+      agent_id: 'beta',
+      session_id: 'shared-session',
+      limit: 100,
+    });
   });
 
   it('moves the current session to a project team agent (identity → project)', async () => {

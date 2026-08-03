@@ -806,6 +806,95 @@ describe('ChatView', () => {
     expect(subscribeRunEventsMock).not.toHaveBeenCalled();
   });
 
+  it('drops a stale transient command result after navigating away and back', async () => {
+    const { createChatViewParentHarness } =
+      await import('./chatViewParentHarness.svelte.js');
+    let resolveStatus;
+    const statusResponse = new Promise((resolve) => {
+      resolveStatus = resolve;
+    });
+    const agents = [
+      createAgent(),
+      createAgent({
+        id: 'beta',
+        name: 'Beta',
+        current_session_id: 'session-beta',
+      }),
+    ];
+    rpcMock.mockImplementation(
+      createChatRpcMock({
+        agents,
+        sessionMessages: {
+          'session-beta': [
+            { id: 'beta-reply', role: 'assistant', content: 'Beta reply' },
+          ],
+        },
+        commandItems: [
+          {
+            name: 'status',
+            description: 'Show status.',
+            type: 'command',
+            argument: 'none',
+            output: 'transient',
+          },
+        ],
+        streamHandler: ({ content }) => {
+          if (content === '/status') {
+            return statusResponse;
+          }
+          throw new Error(`Unexpected stream content: ${content}`);
+        },
+      }),
+    );
+    const parentHarness = createChatViewParentHarness();
+    chatViewTest.mount({
+      target: document.body,
+      props: {
+        sharedAgents: agents,
+        get sharedSelectedAgentId() {
+          return parentHarness.selectedAgentId;
+        },
+        onAgentSelected: (agentId) => parentHarness.setSelectedAgentId(agentId),
+      },
+    });
+    flushSync();
+    await waitForCondition(
+      () => document.body.textContent.includes('Hello'),
+      100,
+    );
+
+    sendComposerMessage('/status');
+    findButtonByText('Beta').click();
+    await waitForCondition(
+      () => document.body.textContent.includes('Beta reply'),
+      100,
+    );
+    findButtonByText('Alpha').click();
+    await waitForCondition(
+      () => activeAgentTab()?.textContent?.includes('Alpha'),
+      100,
+    );
+
+    resolveStatus({
+      command_handled: true,
+      reply: 'Stale Alpha status',
+      output: 'transient',
+    });
+    await waitForCondition(
+      () =>
+        rpcMock.mock.calls.some(
+          ([method, params]) =>
+            method === 'chat.stream' && params?.content === '/status',
+        ),
+      100,
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    flushSync();
+
+    expect(activeAgentTab()?.textContent).toContain('Alpha');
+    expect(document.body.querySelector('.transient-card')).toBeNull();
+  });
+
   it('stacks transient cards so successive snapshots can be compared', async () => {
     rpcMock.mockImplementation(
       createChatRpcMock({

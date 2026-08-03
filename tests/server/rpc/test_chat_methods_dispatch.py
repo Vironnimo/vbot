@@ -87,7 +87,7 @@ class QueueManagerStub:
         self._update_result = update_result
         self.list_calls: list[tuple[str, str, str | None]] = []
         self.remove_calls: list[tuple[str, str, str, str | None]] = []
-        self.update_calls: list[tuple[str, str, str, Any, str, str | None]] = []
+        self.update_calls: list[tuple[str, str, str, Any, str, str | None, bool | None]] = []
 
     def list_queued(
         self, agent_id: str, session_id: str, *, project_id: str | None
@@ -110,9 +110,18 @@ class QueueManagerStub:
         new_display_content: str,
         *,
         project_id: str | None,
+        editable: bool | None = None,
     ) -> bool:
         self.update_calls.append(
-            (agent_id, session_id, item_id, new_executor, new_display_content, project_id)
+            (
+                agent_id,
+                session_id,
+                item_id,
+                new_executor,
+                new_display_content,
+                project_id,
+                editable,
+            )
         )
         return self._update_result
 
@@ -152,7 +161,9 @@ def test_transport_layers_do_not_own_command_workflows() -> None:
         assert f'case "{command}"' not in combined
 
 
-def _make_queued_item(*, item_id: str, content: str, internal: bool = False) -> QueuedRunItem:
+def _make_queued_item(
+    *, item_id: str, content: str, internal: bool = False, editable: bool = True
+) -> QueuedRunItem:
     async def _executor(_run: Run) -> None:
         return None
 
@@ -162,6 +173,7 @@ def _make_queued_item(*, item_id: str, content: str, internal: bool = False) -> 
         executor=_executor,
         internal=internal,
         future=asyncio.get_running_loop().create_future(),
+        editable=editable,
         created_at="2026-05-22T00:00:00+00:00",
     )
 
@@ -1017,7 +1029,15 @@ async def test_chat_queue_update_returns_ok(monkeypatch: pytest.MonkeyPatch) -> 
         "project_id": None,
     }
     assert queue_manager.update_calls == [
-        ("agent-1", "session-1", "queue-1", fake_executor, "Updated queued message", None)
+        (
+            "agent-1",
+            "session-1",
+            "queue-1",
+            fake_executor,
+            "Updated queued message",
+            None,
+            False,
+        )
     ]
 
 

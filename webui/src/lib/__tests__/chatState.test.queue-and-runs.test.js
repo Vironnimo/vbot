@@ -37,11 +37,13 @@ describe('chat state helpers', () => {
       {
         id: 'queue-1',
         content: 'First message',
+        editable: true,
         created_at: '2026-05-22T01:00:00+00:00',
       },
       {
         id: 'queue-2',
         content: 'Second message',
+        editable: false,
         created_at: '2026-05-22T01:01:00+00:00',
       },
     ]);
@@ -50,11 +52,13 @@ describe('chat state helpers', () => {
       {
         id: 'queue-1',
         content: 'First message',
+        editable: true,
         created_at: '2026-05-22T01:00:00+00:00',
       },
       {
         id: 'queue-2',
         content: 'Second message',
+        editable: false,
         created_at: '2026-05-22T01:01:00+00:00',
       },
     ]);
@@ -94,6 +98,7 @@ describe('chat state helpers', () => {
     addServerQueuedMessage(sessionState, {
       id: 'queue-1',
       content: 'Original content',
+      editable: true,
       created_at: '2026-05-22T01:00:00+00:00',
     });
 
@@ -101,10 +106,12 @@ describe('chat state helpers', () => {
       sessionState,
       'queue-1',
       'Updated content',
+      { editable: false },
     );
 
     expect(updated).toBe(true);
     expect(sessionState.queue[0].content).toBe('Updated content');
+    expect(sessionState.queue[0].editable).toBe(false);
     expect(
       updateQueuedMessageContent(sessionState, 'queue-missing', 'Anything'),
     ).toBe(false);
@@ -133,6 +140,7 @@ describe('chat state helpers', () => {
       {
         id: 'queue-2',
         content: 'Second message',
+        editable: false,
         created_at: '2026-05-22T01:01:00+00:00',
       },
     ]);
