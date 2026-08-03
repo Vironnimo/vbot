@@ -22,6 +22,7 @@ from core.tools.terminal_backend import (
     TerminalAdapter,
     TerminalAdapterFactory,
     TerminalRenderer,
+    default_terminal_argv,
     spawn_terminal_adapter,
     terminate_process_tree,
 )
@@ -124,6 +125,10 @@ class TerminalCapacityError(TerminalManagerError):
     """Raised when a live Terminal Session capacity limit is reached."""
 
 
+class TerminalLaunchError(TerminalManagerError):
+    """Raised when the host cannot start a requested terminal process."""
+
+
 class TerminalStaleScreenError(TerminalManagerError):
     """Raised when input was based on an obsolete rendered screen."""
 
@@ -159,7 +164,7 @@ class TerminalSession:
     """In-memory state for one interactive terminal process."""
 
     terminal_id: str
-    owner: TerminalOwner
+    owner: TerminalOwner | None
     adapter: TerminalAdapter
     renderer: TerminalRenderer
     command: str
@@ -167,7 +172,7 @@ class TerminalSession:
     cwd: Path
     state: TerminalState
     started_at: datetime
-    origin_run_id: str
+    origin_run_id: str | None
     activity_origin_run_id: str | None
     log_path: Path | None
     log_handle: TextIO | None
@@ -194,7 +199,7 @@ class TerminalSession:
 
 
 class TerminalManager:
-    """Own interactive terminal processes across Runs within one vBot Session."""
+    """Own Agent and manually started interactive terminal processes."""
 
     def __init__(
         self,
@@ -293,10 +298,59 @@ class TerminalManager:
         origin_run_id: str,
         initial_text: str | None = None,
     ) -> TerminalSession:
-        """Start one unmodified program behind PTY/ConPTY and optionally send initial text."""
+        """Start one Agent-owned program behind PTY/ConPTY."""
         _validate_owner(owner)
+        return await self._spawn(
+            owner,
+            argv,
+            cwd=cwd,
+            env=env,
+            columns=columns,
+            rows=rows,
+            origin_run_id=origin_run_id,
+            initial_text=initial_text,
+        )
+
+    async def spawn_for_operator(
+        self,
+        *,
+        command: str | None,
+        arguments: Sequence[str],
+        cwd: Path | None,
+        columns: int = TERMINAL_DEFAULT_COLUMNS,
+        rows: int = TERMINAL_DEFAULT_ROWS,
+    ) -> dict[str, Any]:
+        """Start one manual Terminal Session through the ordinary PTY path."""
+        argv = [command] if command is not None else default_terminal_argv()
+        argv.extend(arguments)
+        session = await self._spawn(
+            None,
+            argv,
+            cwd=cwd or Path.home(),
+            env=None,
+            columns=columns,
+            rows=rows,
+            origin_run_id=None,
+        )
+        return self._operator_summary(session)
+
+    async def _spawn(
+        self,
+        owner: TerminalOwner | None,
+        argv: Sequence[str],
+        *,
+        cwd: Path,
+        env: Mapping[str, str] | None,
+        columns: int,
+        rows: int,
+        origin_run_id: str | None,
+        initial_text: str | None = None,
+    ) -> TerminalSession:
+        """Start one unmodified program behind PTY/ConPTY."""
         if not argv or not argv[0]:
             raise ValueError("Terminal command must not be empty")
+        if any(not isinstance(token, str) for token in argv):
+            raise ValueError("Terminal command and arguments must be strings")
         _validate_dimensions(columns, rows)
         if not cwd.is_dir():
             raise ValueError(f"Terminal workdir is not a directory: {cwd}")
@@ -321,12 +375,12 @@ class TerminalManager:
                 rows,
                 columns,
             )
-        except Exception:
+        except Exception as error:
             if log_handle is not None:
                 log_handle.close()
             if log_lease is not None:
                 log_lease.finish()
-            raise
+            raise TerminalLaunchError(f"Terminal process could not be started: {error}") from error
 
         session = TerminalSession(
             terminal_id=terminal_id,
@@ -353,7 +407,7 @@ class TerminalManager:
                 task, f"Terminal reader failed for terminal={terminal_id}"
             )
         )
-        if initial_text is not None:
+        if initial_text is not None and origin_run_id is not None:
             session.initial_input_task = asyncio.create_task(
                 self._send_initial_input_when_ready(
                     session, initial_text, origin_run_id=origin_run_id
@@ -444,7 +498,7 @@ class TerminalManager:
     ) -> dict[str, Any]:
         """Resize an operator-selected Terminal Session."""
         session = self._get_for_operator(terminal_id)
-        await self.resize(terminal_id, session.owner, columns=columns, rows=rows)
+        await self._resize_session(session, columns=columns, rows=rows)
         return self._operator_summary(session)
 
     async def kill_for_operator(self, terminal_id: str) -> dict[str, Any]:
@@ -587,9 +641,12 @@ class TerminalManager:
                     await asyncio.wait_for(session.output_event.wait(), timeout=0.1)
             if session.state in {"exited", "error"}:
                 return
+            owner = session.owner
+            if owner is None:
+                return
             await self.send_input(
                 session.terminal_id,
-                session.owner,
+                owner,
                 data=None,
                 text=text,
                 key=None,
@@ -609,15 +666,25 @@ class TerminalManager:
         rows: int,
     ) -> dict[str, Any]:
         """Resize both the host PTY/ConPTY and rendered screen."""
-        _validate_dimensions(columns, rows)
         session = self.get_session(terminal_id, owner)
+        return await self._resize_session(session, columns=columns, rows=rows)
+
+    async def _resize_session(
+        self,
+        session: TerminalSession,
+        *,
+        columns: int,
+        rows: int,
+    ) -> dict[str, Any]:
+        """Resize one already-authorized Terminal Session."""
+        _validate_dimensions(columns, rows)
         async with session.lock:
             self._require_live(session)
             await asyncio.to_thread(session.adapter.resize, rows, columns)
             session.renderer.resize(columns, rows)
             self._publish_state(session)
             return {
-                "terminal_id": terminal_id,
+                "terminal_id": session.terminal_id,
                 "state": session.state,
                 "columns": columns,
                 "rows": rows,
@@ -643,7 +710,9 @@ class TerminalManager:
         sessions = [
             session
             for session in self._sessions.values()
-            if session.owner.agent_id == agent_id and session.owner.project_id == project_id
+            if session.owner is not None
+            and session.owner.agent_id == agent_id
+            and session.owner.project_id == project_id
         ]
         await asyncio.gather(
             *(self._terminate_session(session, suppress_attention=True) for session in sessions),
@@ -653,7 +722,9 @@ class TerminalManager:
     async def close_project_scope(self, project_id: str) -> None:
         """Terminate every Terminal Session under a removed Project."""
         sessions = [
-            session for session in self._sessions.values() if session.owner.project_id == project_id
+            session
+            for session in self._sessions.values()
+            if session.owner is not None and session.owner.project_id == project_id
         ]
         await asyncio.gather(
             *(self._terminate_session(session, suppress_attention=True) for session in sessions),
@@ -906,7 +977,7 @@ class TerminalManager:
     def _schedule_attention_delivery(
         self, session: TerminalSession, attention: TerminalAttention
     ) -> None:
-        if self._trigger_service is None:
+        if self._trigger_service is None or session.owner is None:
             return
         revision = attention.revision
         session.notification_task = asyncio.create_task(
@@ -925,16 +996,19 @@ class TerminalManager:
         self, session: TerminalSession, attention: TerminalAttention
     ) -> None:
         trigger_service = self._trigger_service
-        if trigger_service is None:
+        owner = session.owner
+        if trigger_service is None or owner is None:
             return
         origin_run_id = session.activity_origin_run_id or session.origin_run_id
+        if origin_run_id is None:
+            return
         delivery = trigger_service.submit_completion(
-            session.owner.agent_id,
-            session.owner.session_id,
+            owner.agent_id,
+            owner.session_id,
             notice_id=attention.notice_id,
             origin_run_id=origin_run_id,
             body=_attention_body(session, attention),
-            project_id=session.owner.project_id,
+            project_id=owner.project_id,
         )
         await delivery
         attention.delivered = True
@@ -970,14 +1044,15 @@ class TerminalManager:
     def _cancel_delivery(self, session: TerminalSession) -> None:
         task = session.notification_task
         attention = session.attention
-        if task is None or task.done() or attention is None:
+        owner = session.owner
+        if task is None or task.done() or attention is None or owner is None:
             return
         if self._trigger_service is not None:
             self._trigger_service.cancel_completion(
-                session.owner.agent_id,
-                session.owner.session_id,
+                owner.agent_id,
+                owner.session_id,
                 notice_id=attention.notice_id,
-                project_id=session.owner.project_id,
+                project_id=owner.project_id,
             )
         task.cancel()
 
@@ -1013,6 +1088,7 @@ class TerminalManager:
 
     def _operator_summary(self, session: TerminalSession) -> dict[str, Any]:
         attention = session.attention
+        owner = session.owner
         return {
             "terminal_id": session.terminal_id,
             "state": session.state,
@@ -1024,11 +1100,15 @@ class TerminalManager:
             "columns": session.renderer.columns,
             "rows": session.renderer.rows,
             "screen_revision": session.renderer.revision,
-            "owner": {
-                "project_id": session.owner.project_id,
-                "agent_id": session.owner.agent_id,
-                "session_id": session.owner.session_id,
-            },
+            "owner": (
+                {
+                    "project_id": owner.project_id,
+                    "agent_id": owner.agent_id,
+                    "session_id": owner.session_id,
+                }
+                if owner is not None
+                else None
+            ),
             "attention": (
                 {
                     "revision": attention.revision,
@@ -1068,7 +1148,7 @@ class TerminalManager:
                     "Terminal changed callback failed for terminal=%s", session.terminal_id
                 )
 
-    def _enforce_capacity(self, owner: TerminalOwner) -> None:
+    def _enforce_capacity(self, owner: TerminalOwner | None) -> None:
         live = [
             session
             for session in self._sessions.values()
@@ -1078,8 +1158,8 @@ class TerminalManager:
             raise TerminalCapacityError(
                 f"Live Terminal Session limit reached ({TERMINAL_MAX_LIVE_GLOBAL})"
             )
-        owned = sum(1 for session in live if session.owner == owner)
-        if owned >= TERMINAL_MAX_LIVE_PER_SESSION:
+        owned = sum(1 for session in live if owner is not None and session.owner == owner)
+        if owner is not None and owned >= TERMINAL_MAX_LIVE_PER_SESSION:
             raise TerminalCapacityError(
                 "Live Terminal Session limit reached for this vBot Session "
                 f"({TERMINAL_MAX_LIVE_PER_SESSION})"
@@ -1239,6 +1319,7 @@ __all__ = [
     "TerminalCapacityError",
     "TerminalClosedError",
     "TerminalCursorError",
+    "TerminalLaunchError",
     "TerminalManager",
     "TerminalManagerError",
     "TerminalNotFoundError",

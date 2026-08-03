@@ -122,6 +122,31 @@ describe('terminal live controller', () => {
     expect(state.selectedTerminalId).toBe('');
     controller.destroy();
   });
+
+  it('starts, selects, and connects one manual terminal', async () => {
+    const state = createTerminalsViewState();
+    const streams = [];
+    const api = fakeApi({ streams });
+    const controller = createTerminalsController({ state, api });
+
+    await controller.start();
+    api.startTerminal.mockResolvedValueOnce({
+      terminal: terminal('manual-1', { command: 'codex', owner: null }),
+    });
+
+    const started = await controller.startManualTerminal({ command: 'codex' });
+
+    expect(api.startTerminal).toHaveBeenCalledWith({ command: 'codex' });
+    expect(started).toMatchObject({ terminal_id: 'manual-1', owner: null });
+    expect(state.selectedTerminalId).toBe('manual-1');
+    expect(state.startError).toBe('');
+    expect(streams).toHaveLength(2);
+    expect(streams[0].connection.close).toHaveBeenCalledWith(
+      1000,
+      'terminals-view-close',
+    );
+    controller.destroy();
+  });
 });
 
 function fakeApi({ streams }) {
@@ -130,6 +155,7 @@ function fakeApi({ streams }) {
       .fn()
       .mockResolvedValue({ terminals: [terminal('term-1')] }),
     sendTerminalInput: vi.fn().mockResolvedValue({}),
+    startTerminal: vi.fn().mockResolvedValue({}),
     resizeTerminal: vi.fn().mockResolvedValue({}),
     killTerminal: vi.fn().mockResolvedValue({}),
     subscribeTerminalEvents: vi.fn((_terminalId, handlers) => {

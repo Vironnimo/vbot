@@ -82,6 +82,14 @@ TerminalAdapterFactory = Callable[
 ]
 
 
+def default_terminal_argv(env: Mapping[str, str] | None = None) -> list[str]:
+    """Return the host user's default interactive shell command."""
+    environment = env or os.environ
+    if os.name == "nt":
+        return [environment.get("COMSPEC") or os.environ.get("COMSPEC") or "cmd.exe"]
+    return [environment.get("SHELL") or os.environ.get("SHELL") or "/bin/sh"]
+
+
 class _TerminalScreen(pyte.Screen):
     def __init__(self, columns: int, lines: int, on_scroll: Callable[[str], None]) -> None:
         self._on_scroll = on_scroll
@@ -400,6 +408,7 @@ __all__ = [
     "TerminalAdapter",
     "TerminalAdapterFactory",
     "TerminalRenderer",
+    "default_terminal_argv",
     "spawn_terminal_adapter",
     "terminate_process_tree",
 ]

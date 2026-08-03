@@ -3,6 +3,7 @@ import {
   listTerminals,
   resizeTerminal,
   sendTerminalInput,
+  startTerminal,
   subscribeTerminalEvents,
 } from './api.js';
 import { reconnectBackoffDelay } from './backoff.js';
@@ -32,6 +33,8 @@ export function createTerminalsViewState() {
     streamStatus: TERMINAL_STREAM_IDLE,
     lastSequence: 0,
     killing: false,
+    startingTerminal: false,
+    startError: '',
   };
 }
 
@@ -96,6 +99,7 @@ export function createTerminalsController({
     listTerminals,
     resizeTerminal,
     sendTerminalInput,
+    startTerminal,
     subscribeTerminalEvents,
   },
   setTimeoutFn = globalThis.setTimeout,
@@ -430,6 +434,34 @@ export function createTerminalsController({
     }
   }
 
+  async function startManualTerminal(params = {}) {
+    if (state.startingTerminal || serverUnavailable) {
+      return null;
+    }
+    state.startingTerminal = true;
+    state.startError = '';
+    try {
+      const result = await api.startTerminal(params);
+      if (destroyed) {
+        return null;
+      }
+      const terminal = mergeTerminalSummary(state, result?.terminal);
+      if (!terminal) {
+        throw new Error('The server returned an invalid terminal.');
+      }
+      state.selectedTerminalId = terminal.terminal_id;
+      switchStream(terminal.terminal_id);
+      return terminal;
+    } catch (error) {
+      if (!destroyed) {
+        state.startError = errorMessage(error);
+      }
+      return null;
+    } finally {
+      state.startingTerminal = false;
+    }
+  }
+
   function setServerUnavailable(unavailable) {
     const next = unavailable === true;
     if (next === serverUnavailable) {
@@ -493,6 +525,7 @@ export function createTerminalsController({
     resize,
     selectTerminal,
     setServerUnavailable,
+    startManualTerminal,
     start,
   };
 }

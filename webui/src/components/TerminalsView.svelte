@@ -1,13 +1,16 @@
 <script>
-  import { onMount } from 'svelte';
+  import { onMount, tick } from 'svelte';
   import '@xterm/xterm/css/xterm.css';
 
   import Banner from './ui/Banner.svelte';
   import Button from './ui/Button.svelte';
   import ConfirmDialog from './ui/ConfirmDialog.svelte';
   import EmptyState from './ui/EmptyState.svelte';
+  import FormField from './ui/FormField.svelte';
+  import Modal from './ui/Modal.svelte';
   import StatusChip from './ui/StatusChip.svelte';
   import TextArea from './ui/TextArea.svelte';
+  import TextField from './ui/TextField.svelte';
   import Toggle from './ui/Toggle.svelte';
   import { t } from '$lib/i18n.js';
   import {
@@ -33,6 +36,10 @@
   let controlledTerminalId = $state('');
   let contextText = $state('');
   let stopDialogOpen = $state(false);
+  let startDialogOpen = $state(false);
+  let startCommand = $state('');
+  let startArguments = $state('');
+  let startWorkdir = $state('');
   let mounted = false;
   let rendererPromise = null;
   let pendingSnapshot = '';
@@ -167,9 +174,9 @@
     xterm = new Terminal({
       allowTransparency: false,
       convertEol: false,
-      cursorBlink: false,
+      cursorBlink: controlEnabled,
       cursorInactiveStyle: 'outline',
-      disableStdin: true,
+      disableStdin: !controlEnabled,
       fontFamily: cssToken('--font-mono', 'IBM Plex Mono, monospace'),
       fontSize: 12,
       lineHeight: 1.12,
@@ -200,6 +207,9 @@
     }
     pendingOutput = [];
     scheduleFit();
+    if (controlEnabled) {
+      xterm.focus();
+    }
   }
 
   function writeSnapshot(ansi, snapshotTerminal) {
@@ -285,14 +295,70 @@
     }
   }
 
+  function openStartDialog() {
+    startCommand = '';
+    startArguments = '';
+    startWorkdir = '';
+    viewState.startError = '';
+    startDialogOpen = true;
+  }
+
+  function closeStartDialog() {
+    if (viewState.startingTerminal) {
+      return;
+    }
+    startDialogOpen = false;
+    viewState.startError = '';
+  }
+
+  async function submitStartTerminal(event) {
+    event.preventDefault();
+    const command = startCommand.trim();
+    const workdir = startWorkdir.trim();
+    const args = startArguments
+      .split(/\r?\n/)
+      .filter((argument) => argument.length > 0);
+    const params = {};
+    if (command) {
+      params.command = command;
+    }
+    if (args.length) {
+      params.args = args;
+    }
+    if (workdir) {
+      params.workdir = workdir;
+    }
+
+    const started = await controller.startManualTerminal(params);
+    if (!started) {
+      return;
+    }
+    startDialogOpen = false;
+    await tick();
+    setControlEnabled(true);
+    onToast({
+      title: t('terminals.startedTitle', 'Terminal started'),
+      message: t(
+        'terminals.startedMessage',
+        'The manual Terminal Session is live and ready for input.',
+      ),
+      variant: 'success',
+    });
+  }
+
   function terminalTarget(item) {
+    if (!item?.owner) {
+      return t('terminals.manualOwner', 'Manual');
+    }
     const agentId = item?.owner?.agent_id || '—';
     const projectId = item?.owner?.project_id;
     return projectId ? `${agentId}@${projectId}` : agentId;
   }
 
   function terminalSession(item) {
-    return item?.owner?.session_id || '—';
+    return (
+      item?.owner?.session_id || t('terminals.localOperator', 'Local operator')
+    );
   }
 
   function shortSession(item) {
@@ -438,7 +504,7 @@
         title={t('terminals.emptyTitle', 'No active terminals')}
         description={t(
           'terminals.emptyDescription',
-          'Terminal Sessions started by an agent will appear here and keep running across Runs.',
+          'Open a manual terminal here, or monitor Terminal Sessions started by an agent.',
         )}
       />
     {:else}
@@ -486,20 +552,27 @@
         <p class="view-header__subtitle">
           {t(
             'terminals.subtitle',
-            'Watch the same interactive terminal an agent is using, take control when needed, or stop it explicitly.',
+            'Open and use your own terminals, or watch and control the same interactive terminal an agent is using.',
           )}
         </p>
       </div>
-      {#if terminal}
-        <div class="view-header__actions terminals-view__header-status">
+      <div class="view-header__actions terminals-view__header-status">
+        {#if terminal}
           <StatusChip variant={stateVariant(terminal.state)}>
             {stateLabel(terminal.state)}
           </StatusChip>
           <StatusChip variant={streamStatusVariant}>
             {streamStatusLabel}
           </StatusChip>
-        </div>
-      {/if}
+        {/if}
+        <Button
+          variant="primary"
+          disabled={serverUnavailable}
+          onClick={openStartDialog}
+        >
+          {t('terminals.new', 'New terminal')}
+        </Button>
+      </div>
     </header>
 
     {#if terminal}
@@ -618,15 +691,150 @@
     {:else}
       <EmptyState
         fill
-        title={t('terminals.detailEmptyTitle', 'Nothing to monitor yet')}
+        title={t('terminals.detailEmptyTitle', 'Open a terminal')}
         description={t(
           'terminals.detailEmptyDescription',
-          'When an agent starts terminal_beta, its live TUI appears here without taking ownership away from the agent.',
+          'Start the local default shell or choose a command such as codex. Agent terminals will appear here too.',
         )}
-      />
+      >
+        {#snippet actions()}
+          <Button
+            variant="primary"
+            disabled={serverUnavailable}
+            onClick={openStartDialog}
+          >
+            {t('terminals.new', 'New terminal')}
+          </Button>
+        {/snippet}
+      </EmptyState>
     {/if}
   </div>
 </section>
+
+{#if startDialogOpen}
+  <Modal
+    title={t('terminals.startTitle', 'New terminal')}
+    labelledById="terminal-start-modal-title"
+    class="terminals-view__start-modal"
+    closeDisabled={viewState.startingTerminal}
+    onClose={closeStartDialog}
+  >
+    {#snippet body()}
+      <form id="terminal-start-form" onsubmit={submitStartTerminal}>
+        <div class="modal-body terminals-view__start-form">
+          <p class="terminals-view__start-intro">
+            {t(
+              'terminals.startIntro',
+              'Leave Command empty to open the server user’s default shell. Every command uses the same real PTY / ConPTY.',
+            )}
+          </p>
+
+          {#if viewState.startError && !serverUnavailable}
+            <Banner variant="error" role="alert">
+              {terminalError(viewState.startError)}
+            </Banner>
+          {/if}
+
+          <FormField
+            controlId="terminal-start-command"
+            label={t('terminals.commandLabel', 'Command')}
+            help={t(
+              'terminals.commandHelp',
+              'Optional. For example: codex, powershell, bash, or python.',
+            )}
+          >
+            {#snippet children(field)}
+              <TextField
+                id={field.controlId}
+                variant="modal"
+                aria-describedby={field.describedBy}
+                value={startCommand}
+                disabled={viewState.startingTerminal}
+                placeholder={t('terminals.commandPlaceholder', 'Default shell')}
+                onInput={(next) => {
+                  startCommand = next;
+                  viewState.startError = '';
+                }}
+              />
+            {/snippet}
+          </FormField>
+
+          <FormField
+            controlId="terminal-start-arguments"
+            label={t('terminals.argumentsLabel', 'Arguments')}
+            help={t(
+              'terminals.argumentsHelp',
+              'Optional. Enter one exact argument per line; spaces within a line are preserved.',
+            )}
+          >
+            {#snippet children(field)}
+              <TextArea
+                id={field.controlId}
+                code
+                rows={4}
+                aria-describedby={field.describedBy}
+                value={startArguments}
+                disabled={viewState.startingTerminal}
+                placeholder={t(
+                  'terminals.argumentsPlaceholder',
+                  '--profile\nwork',
+                )}
+                onInput={(next) => {
+                  startArguments = next;
+                  viewState.startError = '';
+                }}
+              />
+            {/snippet}
+          </FormField>
+
+          <FormField
+            controlId="terminal-start-workdir"
+            label={t('terminals.workdirLabel', 'Working directory')}
+            help={t(
+              'terminals.workdirHelp',
+              'Optional. Defaults to the server user’s home directory.',
+            )}
+          >
+            {#snippet children(field)}
+              <TextField
+                id={field.controlId}
+                variant="modal"
+                aria-describedby={field.describedBy}
+                value={startWorkdir}
+                disabled={viewState.startingTerminal}
+                placeholder={t(
+                  'terminals.workdirPlaceholder',
+                  'User home directory',
+                )}
+                onInput={(next) => {
+                  startWorkdir = next;
+                  viewState.startError = '';
+                }}
+              />
+            {/snippet}
+          </FormField>
+        </div>
+      </form>
+    {/snippet}
+    {#snippet footer()}
+      <Button
+        variant="secondary"
+        disabled={viewState.startingTerminal}
+        onClick={closeStartDialog}
+      >
+        {t('common.cancel', 'Cancel')}
+      </Button>
+      <Button
+        type="submit"
+        form="terminal-start-form"
+        variant="primary"
+        loading={viewState.startingTerminal}
+      >
+        {t('terminals.start', 'Start terminal')}
+      </Button>
+    {/snippet}
+  </Modal>
+{/if}
 
 {#if stopDialogOpen && terminal}
   <ConfirmDialog
@@ -820,6 +1028,22 @@
 
   :global(.terminals-view__feedback) {
     margin-bottom: 8px;
+  }
+
+  :global(.modal.terminals-view__start-modal) {
+    width: 520px;
+  }
+
+  .terminals-view__start-form {
+    max-height: min(640px, 70vh);
+    overflow-y: auto;
+  }
+
+  .terminals-view__start-intro {
+    margin: 0;
+    color: var(--text-med);
+    font-size: var(--fs-body-sm);
+    line-height: 1.5;
   }
 
   :global(.terminals-view__attention strong) {
