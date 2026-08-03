@@ -441,11 +441,13 @@ function runOutputPersistedInHistory(events, messages) {
 // block (plus user_message_persisted item) for every run_id, but
 // selectTrackedRunTimelineSource only reconciles the single active run against
 // history; every other run leaks in as a duplicate of its already-persisted
-// turn. Drop the live items of any non-active run whose output is fully
-// persisted in history. The active run is left untouched because it may still
-// be streaming output that is not persisted yet; its own splice/anchor
-// handling deduplicates it.
+// turn. Drop the live items of any non-active run that History has finalized
+// with a Run Summary, even when the bounded replay retained no output events;
+// matching persisted output ids remain the fallback before a summary loads.
+// The active run is left untouched because it may still be streaming output
+// that is not persisted yet; its own splice/anchor handling deduplicates it.
 function dropPersistedInactiveLiveRuns(liveItems, messages, activeRunId) {
+  const summarizedRunIds = persistedRunSummaryIds(messages);
   const persistedRunIds = new Set();
   for (const item of liveItems) {
     if (item.type !== 'assistant_run') {
@@ -455,7 +457,10 @@ function dropPersistedInactiveLiveRuns(liveItems, messages, activeRunId) {
     if (!runId || runId === activeRunId) {
       continue;
     }
-    if (liveRunOutputPersistedInHistory(item, messages)) {
+    if (
+      summarizedRunIds.has(runId) ||
+      liveRunOutputPersistedInHistory(item, messages)
+    ) {
       persistedRunIds.add(runId);
     }
   }
@@ -469,16 +474,17 @@ function dropPersistedInactiveLiveRuns(liveItems, messages, activeRunId) {
 
 // Event-level counterpart of dropPersistedInactiveLiveRuns, used by
 // `loadHistory` to shrink `sessionState.runEvents` instead of only hiding the
-// duplicates at render time (handoff3 B10). Events of a non-active run whose
-// output is fully persisted in the freshly loaded history would be dropped by
-// the render-time predicate anyway, so removing them from the retained array
-// changes nothing visually while keeping the array from growing across
+// duplicates at render time (handoff3 B10). Events of a summarized non-active
+// run, or one whose output ids are fully persisted in freshly loaded History,
+// would be dropped by the render-time predicate anyway. Removing them from the
+// retained array changes nothing visually while keeping it from growing across
 // navigations and reloads during an active run.
 export function pruneRunEventsPersistedInHistory(
   runEvents,
   messages,
   activeRunId,
 ) {
+  const summarizedRunIds = persistedRunSummaryIds(messages);
   const eventsByRun = new Map();
   for (const event of runEvents ?? []) {
     const runId = event?.run_id;
@@ -493,7 +499,10 @@ export function pruneRunEventsPersistedInHistory(
 
   const prunedRunIds = new Set();
   for (const [runId, events] of eventsByRun) {
-    if (runOutputPersistedInHistory(events, messages)) {
+    if (
+      summarizedRunIds.has(runId) ||
+      runOutputPersistedInHistory(events, messages)
+    ) {
       prunedRunIds.add(runId);
     }
   }
@@ -501,6 +510,19 @@ export function pruneRunEventsPersistedInHistory(
     return runEvents ?? [];
   }
   return (runEvents ?? []).filter((event) => !prunedRunIds.has(event?.run_id));
+}
+
+function persistedRunSummaryIds(messages) {
+  return new Set(
+    (messages ?? [])
+      .filter(
+        (message) =>
+          message?.role === 'run_summary' &&
+          typeof message.run_id === 'string' &&
+          message.run_id.length > 0,
+      )
+      .map((message) => message.run_id),
+  );
 }
 
 function liveItemBelongsToRuns(item, runIds) {

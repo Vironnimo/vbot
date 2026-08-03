@@ -734,6 +734,113 @@ describe('chat state helpers', () => {
     ).toHaveLength(0);
   });
 
+  it('drops sparse summarized Run replay while a newer Run keeps streaming', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-sparse-replay',
+    );
+    loadHistory(sessionState, [
+      { id: 'user-one', role: 'user', content: 'First question' },
+      { id: 'assistant-one', role: 'assistant', content: 'First answer' },
+      {
+        id: 'summary-one',
+        role: 'run_summary',
+        run_id: 'run-one',
+        status: 'completed',
+      },
+      { id: 'user-two', role: 'user', content: 'Second question' },
+    ]);
+    startRun(sessionState, {
+      run_id: 'run-two',
+      sse_url: '/api/runs/run-two/events',
+      status: CHAT_STATUS_RUNNING,
+    });
+
+    // A remounted Chat consumes App's retained WebSocket list. The bounded
+    // list may contain only the old Run's start and User event, without the
+    // Assistant output that the previous Chat instance already observed.
+    appendRunEvent(sessionState, {
+      type: 'run_started',
+      run_id: 'run-one',
+      sequence: 1,
+      payload: { status: CHAT_STATUS_RUNNING },
+    });
+    appendRunEvent(sessionState, {
+      type: 'user_message_persisted',
+      run_id: 'run-one',
+      sequence: 2,
+      payload: {
+        message: {
+          id: 'user-one',
+          role: 'user',
+          content: 'First question',
+        },
+      },
+    });
+    appendRunEvent(sessionState, {
+      type: 'run_started',
+      run_id: 'run-two',
+      sequence: 1,
+      payload: { status: CHAT_STATUS_RUNNING },
+    });
+    appendRunEvent(sessionState, {
+      type: 'user_message_persisted',
+      run_id: 'run-two',
+      sequence: 2,
+      payload: {
+        message: {
+          id: 'user-two',
+          role: 'user',
+          content: 'Second question',
+        },
+      },
+    });
+    appendRunEvent(sessionState, {
+      type: 'assistant_output_delta',
+      run_id: 'run-two',
+      sequence: 3,
+      payload: { content_delta: 'Second answer is still streaming' },
+    });
+
+    const timelineItems = visibleTimelineItemsForRender(sessionState);
+
+    expect(
+      timelineItems.flatMap((item) => {
+        if (item.type === 'message' && item.message?.role === 'user') {
+          return [item.message.content];
+        }
+        if (
+          item.type === 'event' &&
+          item.event?.type === 'user_message_persisted'
+        ) {
+          return [item.event.payload?.message?.content];
+        }
+        return [];
+      }),
+    ).toEqual(['First question', 'Second question']);
+    expect(
+      timelineItems.filter(
+        (item) =>
+          item.type === 'assistant_run' &&
+          item.source === 'live' &&
+          (item.runId ?? item.run_id) === 'run-one',
+      ),
+    ).toEqual([]);
+    expect(timelineItems.at(-1)).toEqual(
+      expect.objectContaining({
+        type: 'assistant_run',
+        runId: 'run-two',
+        outputs: [
+          expect.objectContaining({
+            content: 'Second answer is still streaming',
+            streaming: true,
+          }),
+        ],
+      }),
+    );
+  });
+
   it('preserves active streaming run events when history refreshes during a run', () => {
     const sessionState = ensureSessionState(
       createChatState(),

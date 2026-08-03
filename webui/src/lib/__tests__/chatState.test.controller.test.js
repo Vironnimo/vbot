@@ -200,6 +200,59 @@ describe('chat controller', () => {
     expect(sessionState.status).toBe('idle');
   });
 
+  it('ignores an older History response for the same Session', async () => {
+    let resolveOlderHistory;
+    let resolveNewerHistory;
+    const loadChatHistory = vi
+      .fn()
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveOlderHistory = resolve;
+          }),
+      )
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveNewerHistory = resolve;
+          }),
+      );
+    const { chatState, controller, runStream } = setup({
+      isDisplayedSession: () => true,
+      operationOverrides: { loadChatHistory },
+    });
+
+    const olderLoad = controller.loadHistoryForSession('alpha', 'session-one');
+    const newerLoad = controller.loadHistoryForSession('alpha', 'session-one');
+    resolveOlderHistory({
+      active_run: { run_id: 'run-old', status: 'running' },
+      has_more: false,
+      messages: [{ id: 'user-old', role: 'user', content: 'Old snapshot' }],
+    });
+
+    expect(await olderLoad).toBe(false);
+    expect(chatState.loadingHistory).toBe(true);
+    expect(runStream.attachRunStream).not.toHaveBeenCalled();
+
+    const newerHistory = {
+      active_run: { run_id: 'run-new', status: 'running' },
+      has_more: false,
+      messages: [{ id: 'user-new', role: 'user', content: 'New snapshot' }],
+    };
+    resolveNewerHistory(newerHistory);
+
+    expect(await newerLoad).toBe(true);
+    expect(chatState.loadingHistory).toBe(false);
+    expect(
+      ensureSessionState(chatState, 'alpha', 'session-one').messages,
+    ).toEqual(newerHistory.messages);
+    expect(runStream.attachRunStream).toHaveBeenCalledOnce();
+    expect(runStream.attachRunStream).toHaveBeenCalledWith(
+      ensureSessionState(chatState, 'alpha', 'session-one'),
+      newerHistory.active_run,
+    );
+  });
+
   it('reconciles a stalled Run to its durable final assistant answer without re-executing it', async () => {
     const loadChatHistory = vi.fn().mockResolvedValue({
       active_run: null,
