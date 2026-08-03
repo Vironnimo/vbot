@@ -57,14 +57,10 @@ export const englishCatalog = Object.freeze({
   'terminals.localOperator': 'Local operator',
   'terminals.controlLabel': 'Take control',
   'terminals.stop': 'Stop terminal',
-  'terminals.liveTerminalLabel': 'Live terminal output',
+  'terminals.liveTerminalLabel': 'Live terminal. Click to take control.',
   'terminals.mode.control': 'Control enabled — keystrokes go to the process',
-  'terminals.mode.observe': 'Observe mode — keyboard input is locked',
-  'terminals.sendLabel': 'Send to terminal',
-  'terminals.sendHint': 'Ctrl+Enter sends the text followed by Enter.',
-  'terminals.sendPlaceholder':
-    'Add context, answer a question, or give the next instruction…',
-  'terminals.send': 'Send + Enter',
+  'terminals.mode.observe': 'Observe mode — click terminal to take control',
+  'terminals.scrollLatest': 'Jump to latest',
   'terminals.stopConfirmTitle': 'Stop this Terminal Session?',
   'terminals.stopConfirmBody':
     'This terminates the selected process tree. The Terminal Session cannot be resumed afterward.',

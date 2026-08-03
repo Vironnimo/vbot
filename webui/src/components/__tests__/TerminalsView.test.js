@@ -41,6 +41,10 @@ vi.mock('@xterm/xterm', () => ({
       this.write = vi.fn((_data, callback) => callback?.());
       this.dispose = vi.fn();
       this.focus = vi.fn();
+      this.scrollToBottom = vi.fn(() => {
+        this.buffer.active.viewportY = this.buffer.active.baseY;
+      });
+      this.buffer = { active: { viewportY: 0, baseY: 0 } };
       terminalInstances.push(this);
     }
 
@@ -48,6 +52,10 @@ vi.mock('@xterm/xterm', () => ({
     open() {}
     onData(callback) {
       this.onDataCallback = callback;
+      return { dispose: vi.fn() };
+    }
+    onScroll(callback) {
+      this.onScrollCallback = callback;
       return { dispose: vi.fn() };
     }
   },
@@ -182,6 +190,39 @@ describe('TerminalsView', () => {
     );
     expect(terminalInstances[0].options.disableStdin).toBe(false);
     expect(terminalInstances[0].focus).toHaveBeenCalled();
+  });
+
+  it('takes control on terminal click, forwards native keys, and exposes scrollback recovery', async () => {
+    listTerminalsMock.mockResolvedValue({ terminals: [terminal()] });
+    mountedComponent = mount(TerminalsView, { target: document.body });
+    flushSync();
+    await waitFor(() => streams.length === 1 && terminalInstances.length === 1);
+
+    expect(document.body.textContent).not.toContain('Send to terminal');
+    expect(terminalInstances[0].options.disableStdin).toBe(true);
+    document.querySelector('.terminals-view__terminal-host').dispatchEvent(
+      new MouseEvent('pointerdown', {
+        bubbles: true,
+        button: 0,
+      }),
+    );
+    flushSync();
+    expect(document.body.textContent).toContain(
+      'Control enabled — keystrokes go to the process',
+    );
+    expect(terminalInstances[0].options.disableStdin).toBe(false);
+    expect(terminalInstances[0].focus).toHaveBeenCalled();
+
+    terminalInstances[0].onDataCallback('\u001b[A');
+    terminalInstances[0].onDataCallback('\r');
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(sendTerminalInputMock).toHaveBeenCalledWith('term-1', '\u001b[A\r');
+
+    terminalInstances[0].buffer.active = { viewportY: 3, baseY: 12 };
+    terminalInstances[0].onScrollCallback();
+    flushSync();
+    findButton('Jump to latest').click();
+    expect(terminalInstances[0].scrollToBottom).toHaveBeenCalledTimes(1);
   });
 });
 

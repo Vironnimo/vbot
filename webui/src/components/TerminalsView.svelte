@@ -34,7 +34,7 @@
   let terminalHost = $state(null);
   let controlEnabled = $state(false);
   let controlledTerminalId = $state('');
-  let contextText = $state('');
+  let terminalScrolledBack = $state(false);
   let stopDialogOpen = $state(false);
   let startDialogOpen = $state(false);
   let startCommand = $state('');
@@ -49,6 +49,7 @@
   let fitAddon = null;
   let resizeObserver = null;
   let inputDisposable = null;
+  let scrollDisposable = null;
 
   let terminal = $derived(selectedTerminal(viewState));
   let streamStatusLabel = $derived(streamLabel(viewState.streamStatus));
@@ -76,6 +77,7 @@
       pendingSnapshot = '';
       pendingSnapshotTerminal = null;
       pendingOutput = [];
+      terminalScrolledBack = false;
       xterm?.reset();
     },
   });
@@ -96,7 +98,7 @@
     if (selectedId !== controlledTerminalId) {
       controlledTerminalId = selectedId;
       setControlEnabled(false);
-      contextText = '';
+      terminalScrolledBack = false;
       stopDialogOpen = false;
     }
   });
@@ -155,9 +157,11 @@
   function disposeRenderer() {
     resizeObserver?.disconnect();
     inputDisposable?.dispose();
+    scrollDisposable?.dispose();
     xterm?.dispose();
     resizeObserver = null;
     inputDisposable = null;
+    scrollDisposable = null;
     fitAddon = null;
     xterm = null;
     rendererPromise = null;
@@ -195,6 +199,10 @@
         controller.queueInput(data);
       }
     });
+    scrollDisposable = xterm.onScroll(() => {
+      terminalScrolledBack =
+        xterm.buffer.active.viewportY < xterm.buffer.active.baseY;
+    });
     if (typeof globalThis.ResizeObserver === 'function') {
       resizeObserver = new ResizeObserver(scheduleFit);
       resizeObserver.observe(terminalHost);
@@ -228,6 +236,7 @@
       xterm.resize(columns, rows);
     }
     xterm.reset();
+    terminalScrolledBack = false;
     xterm.write(ansi, scheduleFit);
   }
 
@@ -265,19 +274,16 @@
     }
   }
 
-  function sendContext() {
-    if (!contextText.trim() || !terminal) {
-      return;
-    }
-    controller.queueInput(`${contextText}\r`, { immediate: true });
-    contextText = '';
+  function scrollToLatest() {
+    xterm?.scrollToBottom();
+    terminalScrolledBack = false;
   }
 
-  function handleContextKeydown(event) {
-    if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') {
-      event.preventDefault();
-      sendContext();
+  function takeTerminalControl(event) {
+    if (event.button !== 0 || !terminal || serverUnavailable) {
+      return;
     }
+    setControlEnabled(true);
   }
 
   async function confirmStop() {
@@ -644,49 +650,32 @@
                 )
               : t(
                   'terminals.mode.observe',
-                  'Observe mode — keyboard input is locked',
+                  'Observe mode — click terminal to take control',
                 )}
           </span>
-          <span>PTY</span>
+          <div class="terminals-view__terminal-bar-actions">
+            {#if terminalScrolledBack}
+              <button
+                type="button"
+                class="terminals-view__latest-action"
+                onclick={scrollToLatest}
+              >
+                {t('terminals.scrollLatest', 'Jump to latest')}
+              </button>
+            {/if}
+            <span>PTY</span>
+          </div>
         </div>
         <div
           use:mountTerminal
           class="terminals-view__terminal-host"
-          aria-label={t('terminals.liveTerminalLabel', 'Live terminal output')}
-        ></div>
-      </div>
-
-      <div class="terminals-view__composer">
-        <div class="terminals-view__composer-copy">
-          <span class="terminals-view__composer-label">
-            {t('terminals.sendLabel', 'Send to terminal')}
-          </span>
-          <span class="terminals-view__composer-hint">
-            {t(
-              'terminals.sendHint',
-              'Ctrl+Enter sends the text followed by Enter.',
-            )}
-          </span>
-        </div>
-        <TextArea
-          class="terminals-view__context-input"
-          value={contextText}
-          rows={2}
-          placeholder={t(
-            'terminals.sendPlaceholder',
-            'Add context, answer a question, or give the next instruction…',
+          role="group"
+          aria-label={t(
+            'terminals.liveTerminalLabel',
+            'Live terminal. Click to take control.',
           )}
-          ariaLabel={t('terminals.sendLabel', 'Send to terminal')}
-          onInput={(next) => (contextText = next)}
-          onkeydown={handleContextKeydown}
-        />
-        <Button
-          variant="primary"
-          disabled={!contextText.trim() || serverUnavailable}
-          onClick={sendContext}
-        >
-          {t('terminals.send', 'Send + Enter')}
-        </Button>
+          onpointerdown={takeTerminalControl}
+        ></div>
       </div>
     {:else}
       <EmptyState
@@ -964,6 +953,7 @@
     min-width: 0;
     min-height: 0;
     flex: 1;
+    height: 100%;
     flex-direction: column;
     overflow: hidden;
     padding: 20px;
@@ -1054,7 +1044,7 @@
   .terminals-view__terminal-shell {
     display: flex;
     min-height: 240px;
-    flex: 1;
+    flex: 1 1 0;
     flex-direction: column;
     overflow: hidden;
     border: 1px solid var(--border);
@@ -1081,6 +1071,28 @@
     letter-spacing: 0.04em;
   }
 
+  .terminals-view__terminal-bar-actions {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .terminals-view__latest-action {
+    padding: 0;
+    border: 0;
+    color: var(--accent);
+    background: transparent;
+    font: inherit;
+  }
+
+  .terminals-view__latest-action:hover,
+  .terminals-view__latest-action:focus-visible {
+    color: var(--text-hi);
+    outline: none;
+    text-decoration: underline;
+    text-underline-offset: 3px;
+  }
+
   .terminals-view__terminal-shell[data-control='enabled']
     .terminals-view__terminal-mode {
     color: var(--accent);
@@ -1103,41 +1115,18 @@
     border-radius: var(--r-sm);
   }
 
-  .terminals-view__composer {
-    display: grid;
-    grid-template-columns: minmax(180px, 240px) minmax(0, 1fr) auto;
-    gap: 12px;
-    align-items: end;
-    margin-top: 14px;
-    padding: 12px;
-    border: 1px solid var(--border);
-    border-radius: var(--r-lg);
-    background: var(--surface);
+  .terminals-view__terminal-host
+    :global(.xterm-scrollable-element > .scrollbar.vertical) {
+    opacity: 1 !important;
+    pointer-events: auto !important;
+    background: var(--surface-2);
   }
 
-  .terminals-view__composer-copy {
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-    align-self: center;
-  }
-
-  .terminals-view__composer-label {
-    color: var(--text-hi);
-    font-size: var(--fs-label-sm);
-    font-weight: 600;
-  }
-
-  .terminals-view__composer-hint {
-    color: var(--text-lo);
-    font-size: var(--fs-body-sm);
-  }
-
-  :global(.terminals-view__context-input) {
-    min-height: 54px;
-    max-height: 112px;
-    resize: vertical;
-    font-family: var(--font-mono);
+  .terminals-view__terminal-host
+    :global(.xterm-scrollable-element > .scrollbar.vertical > .slider) {
+    border: 2px solid var(--surface-2);
+    border-radius: var(--r-sm);
+    background: var(--text-lo);
   }
 
   @media (max-width: 960px) {
@@ -1147,14 +1136,6 @@
 
     .terminals-view__toolbar {
       align-items: flex-start;
-    }
-
-    .terminals-view__composer {
-      grid-template-columns: minmax(0, 1fr) auto;
-    }
-
-    .terminals-view__composer-copy {
-      grid-column: 1 / -1;
     }
   }
 
@@ -1177,10 +1158,6 @@
     .terminals-view__controls {
       width: 100%;
       justify-content: space-between;
-    }
-
-    .terminals-view__composer {
-      grid-template-columns: minmax(0, 1fr);
     }
   }
 
