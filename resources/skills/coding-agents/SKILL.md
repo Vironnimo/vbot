@@ -38,7 +38,9 @@ For another coding-agent CLI, launch its ordinary interactive command in `termin
 
 Keep the last returned `attention_revision`. Call `wait` with that revision and a timeout of at most 10 seconds when a short same-Run pause is useful. A timeout only means no new activity boundary arrived during that interval; the Terminal Session continues independently.
 
-After a wakeup, call `status`. Read the current screen first, then use paginated scrollback when the visible screen lacks needed context. Report meaningful progress rather than every output fragment. It is valid to end the current Run while the coding agent keeps working; a later Run can recover the Terminal Session with `list`.
+After a wakeup, call `status`. Read the current screen first, then use paginated scrollback when the visible screen lacks needed context. Request at most 100 lines. When `scrollback.next_request` is non-null, pass that complete object unchanged to `terminal_beta`; repeat until `next_request` is null. Each continuation is older than the page before it, so prepend older pages when reconstructing chronological output, then append the current `screen`. Do not add fields to the returned continuation or replace its cursor. Use the raw `log_file` only for VT-level diagnostics or an expired scrollback cursor, not as the normal way to recover a final response, because it contains unrendered control sequences and redraws.
+
+Report meaningful progress rather than every output fragment. It is valid to end the current Run while the coding agent keeps working; a later Run can recover the Terminal Session with `list`.
 
 ## Interact with the TUI
 
