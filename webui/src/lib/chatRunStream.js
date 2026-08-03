@@ -84,6 +84,7 @@ export function createChatRunStream({
       options.afterSequence ?? highestContiguousRunEventSequence(sessionState);
     prepareOrderedRunEventBuffer(sessionState, afterSequence);
     let retryAttempt = options.retryAttempt ?? 0;
+    let awaitingReplayHead = true;
     let subscription;
     const markStreamAlive = ({ resetRetryBudget = false } = {}) => {
       if (
@@ -112,7 +113,10 @@ export function createChatRunStream({
         onHeartbeat: markStreamHealthy,
         onEvent: ({ data }) => {
           markStreamHealthy();
-          queueRunEvent(sessionState, data);
+          queueRunEvent(sessionState, data, {
+            acceptAsReplayHead: awaitingReplayHead,
+          });
+          awaitingReplayHead = false;
         },
         onError: (error) => {
           if (activeSubscriptions[sessionState.key] !== subscription) {
@@ -190,10 +194,10 @@ export function createChatRunStream({
     return true;
   }
 
-  function queueRunEvent(sessionState, eventData) {
+  function queueRunEvent(sessionState, eventData, options = {}) {
     const sessionKey = sessionState.key;
     pendingRunEventQueues[sessionKey] ??= [];
-    pendingRunEventQueues[sessionKey].push(eventData);
+    pendingRunEventQueues[sessionKey].push({ eventData, options });
     if (!DELAYED_RUN_EVENT_TYPES.has(eventData?.type)) {
       flushPendingRunEvents(sessionKey);
       return;
@@ -229,7 +233,7 @@ export function createChatRunStream({
     return buffer;
   }
 
-  function appendOrderedRunEvent(sessionState, eventData) {
+  function appendOrderedRunEvent(sessionState, eventData, options = {}) {
     const runId = typeof eventData?.run_id === 'string' ? eventData.run_id : '';
     const sequence = Number(eventData?.sequence);
     if (!runId || !Number.isInteger(sequence) || sequence < 1) {
@@ -247,6 +251,20 @@ export function createChatRunStream({
     }
     if (!buffer || sequence < buffer.nextSequence) {
       return [];
+    }
+    // The first Run event on a new SSE connection is the server's oldest
+    // retained event after our requested cursor. If it starts beyond the
+    // expected sequence, the missing prefix has already fallen out of the
+    // bounded replay window and can never arrive on this connection. Rebase
+    // only at that transport-proven boundary; later gaps still wait for their
+    // missing event so mirrored WebSocket terminal output cannot overtake SSE.
+    if (options.acceptAsReplayHead && sequence > buffer.nextSequence) {
+      buffer.nextSequence = sequence;
+      for (const pendingSequence of buffer.pending.keys()) {
+        if (pendingSequence < sequence) {
+          buffer.pending.delete(pendingSequence);
+        }
+      }
     }
     if (sequence - buffer.nextSequence >= MAX_PENDING_ORDERED_RUN_EVENTS) {
       return [];
@@ -295,8 +313,12 @@ export function createChatRunStream({
     }
 
     let terminalEvent = null;
-    for (const eventData of pendingEvents) {
-      for (const event of appendOrderedRunEvent(sessionState, eventData)) {
+    for (const pendingEvent of pendingEvents) {
+      for (const event of appendOrderedRunEvent(
+        sessionState,
+        pendingEvent.eventData,
+        pendingEvent.options,
+      )) {
         handleAppendedRunEvent(sessionState, event);
         if (TERMINAL_RUN_EVENTS.has(event.type)) {
           terminalEvent = event;
