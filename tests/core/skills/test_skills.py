@@ -30,9 +30,11 @@ def write_skill(skills_dir: Path, directory_name: str, metadata: str) -> Path:
 def test_bundled_coding_agents_uses_interactive_terminal_contract() -> None:
     package = PROJECT_ROOT / "resources" / "skills" / "coding-agents"
     skill_text = (package / "SKILL.md").read_text(encoding="utf-8")
-    reference_text = "\n".join(
-        path.read_text(encoding="utf-8") for path in sorted((package / "references").glob("*.md"))
-    )
+    references = {
+        path.name: path.read_text(encoding="utf-8")
+        for path in sorted((package / "references").glob("*.md"))
+    }
+    reference_text = "\n".join(references.values())
     combined = f"{skill_text}\n{reference_text}"
 
     assert "terminal_beta" in skill_text
@@ -41,6 +43,13 @@ def test_bundled_coding_agents_uses_interactive_terminal_contract() -> None:
     assert "terminal_id" in reference_text
     assert "machine-output invocation" in skill_text
     assert "permission checks" in skill_text
+    assert "preserve the CLI or project default for every value they omit" in skill_text
+    assert '"gpt-5.6-terra"' in references["codex.md"]
+    assert 'model_reasoning_effort=\\"medium\\"' in references["codex.md"]
+    assert '"--effort"' in references["claude-code.md"]
+    assert '"medium"' in references["claude-code.md"]
+    assert "/variants" in references["opencode.md"]
+    assert "reasoningEffort" in references["opencode.md"]
     forbidden_invocations = (
         "claude" + " -p",
         "codex" + " exec",
