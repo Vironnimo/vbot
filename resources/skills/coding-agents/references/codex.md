@@ -4,7 +4,43 @@ Launch `codex` as a real TUI through `terminal_beta`. Keep the returned `termina
 
 ## Start
 
-Use `command: "codex"`, set `workdir` to the repository, and provide the task as `text` when Codex is already configured. Optional interactive flags include `--model`, `--sandbox`, and `--ask-for-approval`. Preserve the user's configured defaults unless the task requires an explicit override.
+Use `command: "codex"`, set `workdir` to the repository, and provide the task as `text` when Codex is already configured. Put startup overrides into the exact `args` array; do not embed them in the task text.
+
+For “run this with Codex, GPT-5.6 Terra, medium reasoning,” start the interactive TUI with:
+
+```json
+{
+  "action": "start",
+  "command": "codex",
+  "args": [
+    "--model",
+    "gpt-5.6-terra",
+    "-c",
+    "model_reasoning_effort=\"medium\""
+  ],
+  "workdir": "C:/repo",
+  "text": "Implement the requested task and verify the result."
+}
+```
+
+`--model` selects the model for this session. Codex currently exposes reasoning as the configuration key `model_reasoning_effort`, so pass it with `-c`/`--config`. Supported efforts are model-specific. Inspect `codex debug models` when the requested model or effort is uncertain; a current catalog may expose levels such as `low`, `medium`, `high`, `xhigh`, `max`, and `ultra`, but never assume every model supports every level.
+
+Useful interactive start settings:
+
+| Intent | Arguments | Guidance |
+|---|---|---|
+| Model | `--model <model>` | Use the exact catalog slug, such as `gpt-5.6-terra`. |
+| Reasoning | `-c model_reasoning_effort="<level>"` | Quote the TOML string inside the single argument. |
+| Config profile | `--profile <name>` | Layer a named Codex profile over base configuration. |
+| Sandbox | `--sandbox read-only\|workspace-write\|danger-full-access` | Preserve the configured sandbox unless the user requests an override. |
+| Approvals | `--ask-for-approval untrusted\|on-request\|never` | Do not choose `never` merely to avoid interaction. |
+| Extra writable directory | `--add-dir <path>` | Repeat for each explicitly authorized directory. |
+| Web search | `--search` | Enable only when requested or required by the task. |
+| Initial image | `--image <file>` | Repeat for image inputs supplied for the task. |
+| Inline TUI | `--no-alt-screen` | Keep terminal scrollback inline when specifically useful; the normal alternate-screen TUI is supported. |
+| Strict config | `--strict-config` | Fail early when unknown configuration keys should be treated as errors. |
+
+Prefer `terminal_beta`'s `workdir` over also passing Codex `--cd`; using both creates two sources of truth. Leave unspecified settings to the user's global, Project, or profile configuration.
 
 If authentication, workspace trust, or first-run setup is uncertain, start without `text`, inspect `status`, and complete or hand off setup before sending the task.
 

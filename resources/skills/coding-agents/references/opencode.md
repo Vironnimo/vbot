@@ -4,7 +4,39 @@ Launch `opencode` as a real TUI through `terminal_beta`. Keep the returned `term
 
 ## Start
 
-Use `command: "opencode"`, set the repository as `workdir`, and provide the task as `text` after confirming the CLI is configured. Optional interactive flags include `--model` and `--agent`. Preserve configured defaults unless the user or task requires a specific choice.
+Use `command: "opencode"`, set the repository as `workdir`, and provide the task as `text` after confirming the CLI is configured. Put supported startup overrides into the exact `args` array.
+
+For a selected model and a configured Agent that already carries the desired provider-specific reasoning settings:
+
+```json
+{
+  "action": "start",
+  "command": "opencode",
+  "args": [
+    "--model",
+    "openai/gpt-5",
+    "--agent",
+    "deep-thinker"
+  ],
+  "workdir": "C:/repo",
+  "text": "Implement the requested task and verify the result."
+}
+```
+
+Useful interactive start settings:
+
+| Intent | Arguments | Guidance |
+|---|---|---|
+| Model | `--model <provider/model>` | Use `opencode models` to discover available provider-qualified model ids. |
+| Agent | `--agent <name>` | Select a configured Agent; its configuration may set model, permissions, `reasoningEffort`, `textVerbosity`, temperature, and other provider options. |
+| Continue latest | `--continue` | Use only after the original CLI process exited. |
+| Continue exact | `--session <session-id>` | Resume an exact OpenCode session after process exit. |
+| Fork resumed work | `--fork` with `--continue` or `--session` | Branch intentionally instead of mutating the resumed session. |
+| Minimal customization | `--pure` | Disable external plugins for troubleshooting when explicitly desired. |
+
+Reasoning in OpenCode is model- and provider-specific. Current versions expose named variants in the TUI through `/variants` or the configured `variant_cycle` keybinding, commonly Ctrl+T. Variants may map to values such as `reasoningEffort: "low"` or `reasoningEffort: "high"`, but their names and availability depend on the selected model. A configured Agent can set `reasoningEffort` directly and is the cleanest repeatable way to request a fixed level.
+
+Do not pass `--variant` to the default TUI unless the installed `opencode --help` actually exposes it for that command. When the user requests a reasoning level and no matching configured Agent or supported start flag exists, start OpenCode with the requested `--model` but without task `text`, select the actual advertised variant in the TUI, and only then send the task. Do not assume that a variant named `medium`, `high`, or `max` exists.
 
 If authentication, provider selection, workspace setup, or a session picker may appear, start without `text`, inspect `status`, and interact with the actual screen before sending the task.
 
