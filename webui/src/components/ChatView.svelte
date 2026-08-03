@@ -345,6 +345,25 @@
     const separator = composerDraftKey.indexOf('::');
     return separator >= 0 ? composerDraftKey.slice(0, separator) : '';
   });
+  // Each callback closes over the displayed address at the moment Svelte hands
+  // it to the Composer. The Composer snapshots that function before any async
+  // @-mention lookup, so navigation cannot redirect an older submit.
+  let composerSendMessage = $derived.by(() => {
+    const agent = activeAgent;
+    const sessionState = activeSessionState;
+    if (!agent || !sessionState) {
+      return null;
+    }
+    return async (content, options = {}) =>
+      await sendStream(agent, sessionState, content, options);
+  });
+  let composerListFiles = $derived.by(() => {
+    const agentId = activeSessionState?.agentId ?? '';
+    if (!agentId) {
+      return null;
+    }
+    return async () => await chatController.listFiles(agentId);
+  });
   const displayedSessionIsEmpty = () =>
     isSessionEmpty(activeSessionState) &&
     getDraft(composerDraftKey).trim().length === 0 &&
@@ -1518,26 +1537,6 @@
     });
   };
 
-  const handleSendMessage = async (content, options = {}) => {
-    const agent = activeAgent;
-    const sessionState = activeSessionState;
-    if (!agent || !sessionState) {
-      return;
-    }
-    await sendStream(agent, sessionState, content, options);
-  };
-
-  // File list for the composer's @-mention picker: the active session's cwd
-  // decides the tree (project repo or agent workspace), so the address is all
-  // the server needs. Fetched per picker open; the composer filters locally.
-  const handleListFiles = async () => {
-    const sessionState = activeSessionState;
-    if (!sessionState?.agentId) {
-      return { files: [], truncated: false };
-    }
-    return await chatController.listFiles(sessionState.agentId);
-  };
-
   const handleTranscriptionError = (message) => {
     setSessionActionError(message);
   };
@@ -1643,7 +1642,11 @@
       return [];
     }
     try {
-      const result = await handleListFiles();
+      const listFiles = composerListFiles;
+      if (!listFiles) {
+        return [];
+      }
+      const result = await listFiles();
       return matchMentionCandidates(
         tokens,
         Array.isArray(result?.files) ? result.files : [],
@@ -1997,10 +2000,10 @@
               historyKey={composerHistoryKey}
               focusRequest={composerFocusRequest}
               availableSkills={chatState.availableSkills}
-              onSendMessage={handleSendMessage}
+              onSendMessage={composerSendMessage}
               onCancelRun={handleCancelRun}
               onTranscriptionError={handleTranscriptionError}
-              onListFiles={handleListFiles}
+              onListFiles={composerListFiles}
             />
           </div>
         </div>

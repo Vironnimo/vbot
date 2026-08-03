@@ -104,7 +104,7 @@ describe('ChatComposer', () => {
   });
 
   it('runs a no-argument command immediately without inserting it', async () => {
-    const onSendMessage = vi.fn();
+    const onSendMessage = vi.fn().mockResolvedValue(true);
     mountedComponent = mount(ChatComposer, {
       target: document.body,
       props: {
@@ -138,7 +138,7 @@ describe('ChatComposer', () => {
   });
 
   it('inserts an argument-bearing command instead of running it', async () => {
-    const onSendMessage = vi.fn();
+    const onSendMessage = vi.fn().mockResolvedValue(true);
     mountedComponent = mount(ChatComposer, {
       target: document.body,
       props: {
@@ -204,7 +204,7 @@ describe('ChatComposer', () => {
   });
 
   it('inserts inline skill triggers without rewriting the message', async () => {
-    const onSendMessage = vi.fn();
+    const onSendMessage = vi.fn().mockResolvedValue(true);
     mountedComponent = mount(ChatComposer, {
       target: document.body,
       props: { availableSkills: skillFixtures(), onSendMessage },
@@ -471,8 +471,8 @@ describe('ChatComposer', () => {
     expect(document.activeElement).toBe(composerInput());
   });
 
-  it('resets the textarea height after sending a tall draft', () => {
-    const onSendMessage = vi.fn();
+  it('resets the textarea height after sending a tall draft', async () => {
+    const onSendMessage = vi.fn().mockResolvedValue(true);
     mountedComponent = mount(ChatComposer, {
       target: document.body,
       props: { onSendMessage },
@@ -492,6 +492,7 @@ describe('ChatComposer', () => {
     expect(input.style.height).toBe('144px');
 
     submitComposer();
+    await flushComposerAsyncWork();
 
     expect(onSendMessage).toHaveBeenCalledWith(
       'line one\nline two\nline three',
@@ -501,7 +502,7 @@ describe('ChatComposer', () => {
   });
 
   it('marks submitted transcribed text with speech input origin', async () => {
-    const onSendMessage = vi.fn();
+    const onSendMessage = vi.fn().mockResolvedValue(true);
     const recorder = {
       start: vi.fn(),
       stop: vi
@@ -543,7 +544,7 @@ describe('ChatComposer', () => {
   });
 
   it('sends uploaded text files as a file reference', async () => {
-    const onSendMessage = vi.fn();
+    const onSendMessage = vi.fn().mockResolvedValue(true);
     uploadAttachment.mockResolvedValue({
       attachment_id: 'attachment-text-1',
       filename: 'note.txt',
@@ -573,7 +574,7 @@ describe('ChatComposer', () => {
   });
 
   it('sends an uploaded empty text file as a file reference only', async () => {
-    const onSendMessage = vi.fn();
+    const onSendMessage = vi.fn().mockResolvedValue(true);
     uploadAttachment.mockResolvedValue({
       attachment_id: 'attachment-text-empty-1',
       filename: 'empty.txt',
@@ -603,7 +604,7 @@ describe('ChatComposer', () => {
   });
 
   it('sends uploaded images as media blocks', async () => {
-    const onSendMessage = vi.fn();
+    const onSendMessage = vi.fn().mockResolvedValue(true);
     uploadAttachment.mockResolvedValue({
       attachment_id: 'attachment-image-1',
       filename: 'photo.png',
@@ -636,7 +637,7 @@ describe('ChatComposer', () => {
     ['voice.ogg', 'audio/ogg'],
     ['clip.mp4', 'video/mp4'],
   ])('sends uploaded %s as media block', async (filename, mediaType) => {
-    const onSendMessage = vi.fn();
+    const onSendMessage = vi.fn().mockResolvedValue(true);
     uploadAttachment.mockResolvedValue({
       attachment_id: 'attachment-av-1',
       filename,
@@ -666,7 +667,7 @@ describe('ChatComposer', () => {
   });
 
   it('sends non-image binary uploads as file blocks', async () => {
-    const onSendMessage = vi.fn();
+    const onSendMessage = vi.fn().mockResolvedValue(true);
     uploadAttachment.mockResolvedValue({
       attachment_id: 'attachment-file-1',
       filename: 'paper.pdf',
@@ -719,8 +720,8 @@ describe('ChatComposer', () => {
     expect(getDraft('agent::one')).toBe('work in progress');
   });
 
-  it('clears the draft and records history when a message is sent', () => {
-    const onSendMessage = vi.fn();
+  it('clears the draft and records history when a message is sent', async () => {
+    const onSendMessage = vi.fn().mockResolvedValue(true);
     mountedComponent = mount(ChatComposer, {
       target: document.body,
       props: { draftKey: 'agent::one', historyKey: 'agent', onSendMessage },
@@ -729,6 +730,7 @@ describe('ChatComposer', () => {
 
     typeInComposer(composerInput(), 'hello there');
     submitComposer();
+    await flushComposerAsyncWork();
 
     expect(onSendMessage).toHaveBeenCalledWith('hello there');
     expect(composerInput().value).toBe('');
@@ -896,7 +898,7 @@ describe('ChatComposer', () => {
   });
 
   it('sends verified @-mentions as fileMentions with the message', async () => {
-    const onSendMessage = vi.fn();
+    const onSendMessage = vi.fn().mockResolvedValue(true);
     const onListFiles = vi.fn().mockResolvedValue({
       files: ['notes.md'],
       truncated: false,
@@ -916,11 +918,103 @@ describe('ChatComposer', () => {
       'check @notes.md and @nofile.txt',
       { fileMentions: ['notes.md'] },
     );
-    expect(composerInput().value).toBe('');
+    await vi.waitFor(() => {
+      expect(composerInput().value).toBe('');
+    });
+  });
+
+  it('serializes mention submits and sends the original snapshot', async () => {
+    let resolveFiles;
+    let resolveSend;
+    const onListFiles = vi.fn(
+      () =>
+        new Promise((resolve) => {
+          resolveFiles = resolve;
+        }),
+    );
+    const onSendMessage = vi.fn(
+      () =>
+        new Promise((resolve) => {
+          resolveSend = resolve;
+        }),
+    );
+    setDraft('agent::one', 'first @notes.md');
+    mountedComponent = mount(ChatComposer, {
+      target: document.body,
+      props: {
+        draftKey: 'agent::one',
+        historyKey: 'agent',
+        onSendMessage,
+        onListFiles,
+      },
+    });
+    flushSync();
+
+    submitComposer();
+    submitComposer();
+
+    expect(onListFiles).toHaveBeenCalledTimes(1);
+    typeInComposer(composerInput(), 'second draft');
+    resolveFiles({ files: ['notes.md'], truncated: false });
+    await vi.waitFor(() => {
+      expect(onSendMessage).toHaveBeenCalledTimes(1);
+    });
+    expect(onSendMessage).toHaveBeenCalledWith('first @notes.md', {
+      fileMentions: ['notes.md'],
+    });
+
+    submitComposer();
+    expect(onSendMessage).toHaveBeenCalledTimes(1);
+
+    resolveSend(true);
+    await flushComposerAsyncWork();
+
+    expect(composerInput().value).toBe('second draft');
+    expect(getDraft('agent::one')).toBe('second draft');
+  });
+
+  it('keeps the draft and attachments when send admission fails', async () => {
+    const onSendMessage = vi.fn().mockResolvedValue(false);
+    uploadAttachment.mockResolvedValue({
+      attachment_id: 'attachment-file-1',
+      filename: 'paper.pdf',
+      media_type: 'application/pdf',
+      size_bytes: 11,
+    });
+    mountedComponent = mount(ChatComposer, {
+      target: document.body,
+      props: {
+        draftKey: 'agent::one',
+        historyKey: 'agent',
+        onSendMessage,
+      },
+    });
+    flushSync();
+
+    typeInComposer(composerInput(), 'keep this');
+    await selectFileFromPicker(
+      new File(['pdf-content'], 'paper.pdf', { type: 'application/pdf' }),
+    );
+    submitComposer();
+    await flushComposerAsyncWork();
+
+    expect(onSendMessage).toHaveBeenCalledWith([
+      { type: 'text', text: 'keep this' },
+      {
+        type: 'file',
+        attachment_id: 'attachment-file-1',
+        filename: 'paper.pdf',
+        media_type: 'application/pdf',
+      },
+    ]);
+    expect(composerInput().value).toBe('keep this');
+    expect(getDraft('agent::one')).toBe('keep this');
+    expect(document.body.querySelectorAll('.attachment-item')).toHaveLength(1);
+    expect(getHistory('agent')).toEqual([]);
   });
 
   it('sends without options when no @-token is a real file', async () => {
-    const onSendMessage = vi.fn();
+    const onSendMessage = vi.fn().mockResolvedValue(true);
     const onListFiles = vi.fn().mockResolvedValue({ files: [] });
     mountedComponent = mount(ChatComposer, {
       target: document.body,
