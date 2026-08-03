@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from core.chat.content_blocks import FileBlock
 from tests.core.chat.chat_loop_support import build_chat_loop
 
 from .runs_test_support import (
@@ -543,18 +544,26 @@ async def test_update_queued_item_replaces_executor_and_display_content() -> Non
         session_id="session-one",
         executor=original_execute,
         display_content="original",
+        editable=True,
         project_id=None,
     )
 
     assert (
         manager.update_queued(
-            "coder", "session-one", item.item_id, updated_execute, "updated", project_id=None
+            "coder",
+            "session-one",
+            item.item_id,
+            updated_execute,
+            "updated",
+            project_id=None,
+            editable=False,
         )
         is True
     )
     assert (
         manager.list_queued("coder", "session-one", project_id=None)[0].display_content == "updated"
     )
+    assert manager.list_queued("coder", "session-one", project_id=None)[0].editable is False
     assert (
         manager.update_queued(
             "coder", "session-one", "missing", updated_execute, "updated", project_id=None
@@ -655,10 +664,48 @@ async def test_chat_loop_queue_run_uses_display_preview_for_busy_session(tmp_pat
     )
 
     assert item.display_content == "x" * 500
+    assert item.editable is False
     assert runtime.chat_runs.list_queued("coder", session_id, project_id=None)[0] is item
+
+    short_text_item = await build_chat_loop(runtime).queue_run(
+        "coder",
+        "short text",
+        session_id=session_id,
+    )
+
+    assert short_text_item.display_content == "short text"
+    assert short_text_item.editable is True
+
+    attachment_item = await build_chat_loop(runtime).queue_run(
+        "coder",
+        [
+            FileBlock(
+                type="file",
+                attachment_id="attachment-one",
+                filename="report.pdf",
+                media_type="application/pdf",
+            )
+        ],
+        session_id=session_id,
+    )
+
+    assert attachment_item.display_content == "[attachment]"
+    assert attachment_item.editable is False
 
     assert (
         runtime.chat_runs.remove_queued("coder", session_id, item.item_id, project_id=None) is True
+    )
+    assert (
+        runtime.chat_runs.remove_queued(
+            "coder", session_id, attachment_item.item_id, project_id=None
+        )
+        is True
+    )
+    assert (
+        runtime.chat_runs.remove_queued(
+            "coder", session_id, short_text_item.item_id, project_id=None
+        )
+        is True
     )
     active_release.set()
     assert await active_run.wait() == "active"

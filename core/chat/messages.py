@@ -713,14 +713,22 @@ def error_kind_llm_visible(kind: str) -> bool:
     return ERROR_KIND_LLM_VISIBLE.get(kind, False)
 
 
+QUEUE_DISPLAY_CONTENT_LIMIT = 500
+
+
+def queue_content_is_editable(content: str | list[ContentBlock]) -> bool:
+    """Return whether the Queue preview preserves the complete editable content."""
+    return isinstance(content, str) and len(content) <= QUEUE_DISPLAY_CONTENT_LIMIT
+
+
 def _display_content_preview(content: str | list[ContentBlock]) -> str:
     if isinstance(content, str):
-        return content[:500]
+        return content[:QUEUE_DISPLAY_CONTENT_LIMIT]
 
     text_blocks = [block.text for block in content if isinstance(block, TextBlock) and block.text]
     if not text_blocks:
         return "[attachment]"
-    return " ".join(text_blocks)[:500]
+    return " ".join(text_blocks)[:QUEUE_DISPLAY_CONTENT_LIMIT]
 
 
 def _append_input_origin_note(session: ChatSession, input_origin: InputOrigin | None) -> None:

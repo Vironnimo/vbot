@@ -26,7 +26,7 @@ function setup({
     subscribeToRun: vi.fn(),
   };
   const listQueue = vi.fn().mockResolvedValue({
-    items: [{ id: 'queued-one', content: 'Next' }],
+    items: [{ id: 'queued-one', content: 'Next', editable: true }],
   });
   const onRestartQueueDiscarded = vi.fn();
   const controller = createChatController({
@@ -76,7 +76,7 @@ describe('chat controller', () => {
       'session-one',
     );
     expect(target.queue).toEqual([
-      { id: 'queued-one', content: 'Next', created_at: null },
+      { id: 'queued-one', content: 'Next', editable: true, created_at: null },
     ]);
   });
 
@@ -106,14 +106,14 @@ describe('chat controller', () => {
           project_id: 'project-one',
           agent_id: 'builder',
           session_id: 'session-two',
-          items: [{ id: 'kept', content: 'Server text' }],
+          items: [{ id: 'kept', content: 'Server text', editable: true }],
         },
       ],
     });
 
     expect(identitySession.queue).toEqual([]);
     expect(projectSession.queue).toEqual([
-      { id: 'kept', content: 'Server text', created_at: null },
+      { id: 'kept', content: 'Server text', editable: true, created_at: null },
     ]);
     expect(onRestartQueueDiscarded).toHaveBeenCalledWith(2);
   });
@@ -145,6 +145,36 @@ describe('chat controller', () => {
     expect(sessionState.actionError).toContain('offline');
     expect(chatState.actionError).toBe('');
     expect(runStream.closeSubscriptions).toHaveBeenCalledOnce();
+  });
+
+  it('returns whether a Queue edit was saved and preserves failed edits', async () => {
+    const updateQueueItem = vi
+      .fn()
+      .mockResolvedValueOnce({ ok: true })
+      .mockRejectedValueOnce(new Error('offline'));
+    const { chatState, controller } = setup({
+      operationOverrides: { updateQueueItem },
+    });
+    const sessionState = ensureSessionState(chatState, 'alpha', 'session-one');
+    sessionState.queue = [
+      { id: 'queued-one', content: 'Original', editable: true },
+    ];
+
+    expect(
+      await controller.updateQueued(sessionState, 'queued-one', 'With file', [
+        'notes.md',
+      ]),
+    ).toBe(true);
+    expect(sessionState.queue[0]).toMatchObject({
+      content: 'With file',
+      editable: false,
+    });
+
+    expect(
+      await controller.updateQueued(sessionState, 'queued-one', 'Unsaved', []),
+    ).toBe(false);
+    expect(sessionState.queue[0].content).toBe('With file');
+    expect(sessionState.actionError).toContain('offline');
   });
 
   it('merges the terminal cancel response into the active Run projection', async () => {

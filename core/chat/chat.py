@@ -92,6 +92,7 @@ from core.chat.messages import (
     checkpoint_ordinal,
     finalize_checkpoint_history_guidance,
     history_available,
+    queue_content_is_editable,
 )
 from core.chat.messages import (
     InputOrigin as InputOrigin,
@@ -967,6 +968,7 @@ class ChatLoop:
             session_id=session.id,
             executor=lambda run: self._execute_run(run, request),
             display_content=_display_content_preview(content),
+            editable=queue_content_is_editable(content),
             internal=internal,
             project_id=project_id,
             working_project_id=working_project_id,

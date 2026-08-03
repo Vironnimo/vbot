@@ -12,8 +12,12 @@
   let editingId = $state('');
   let editedContent = $state('');
   let editError = $state('');
+  let editSaving = $state(false);
 
   const beginEdit = (message) => {
+    if (editSaving || message?.editable !== true) {
+      return;
+    }
     editingId = message.id;
     editedContent = message.content ?? '';
     editError = '';
@@ -23,6 +27,7 @@
     editingId = '';
     editedContent = '';
     editError = '';
+    editSaving = false;
   };
 
   const saveEdit = async () => {
@@ -37,8 +42,30 @@
       return;
     }
 
-    await onEditQueuedMessage?.(currentEditingId, nextContent);
-    cancelEdit();
+    if (editSaving) {
+      return;
+    }
+
+    editSaving = true;
+    let saved = false;
+    try {
+      saved =
+        (await onEditQueuedMessage?.(currentEditingId, nextContent)) === true;
+    } catch {
+      saved = false;
+    }
+
+    if (editingId !== currentEditingId) {
+      return;
+    }
+    editSaving = false;
+    if (!saved) {
+      editError = t('queue.editError', 'Queued message could not be edited.');
+      return;
+    }
+    if (editedContent.trim() === nextContent) {
+      cancelEdit();
+    }
   };
 </script>
 
@@ -71,6 +98,7 @@
             <div class="queued-messages__actions">
               <Button
                 variant="tertiary"
+                disabled={editSaving}
                 ariaLabel={t('queue.saveEdit', 'Save edit')}
                 onClick={saveEdit}
               >
@@ -100,13 +128,16 @@
           {:else}
             <span class="queued-messages__content">{message.content}</span>
             <div class="queued-messages__actions">
-              <Button
-                variant="tertiary"
-                ariaLabel={t('queue.editMessage', 'Edit queued message')}
-                onClick={() => beginEdit(message)}
-              >
-                {t('queue.editMessage', 'Edit')}
-              </Button>
+              {#if message.editable === true}
+                <Button
+                  variant="tertiary"
+                  disabled={editSaving}
+                  ariaLabel={t('queue.editMessage', 'Edit queued message')}
+                  onClick={() => beginEdit(message)}
+                >
+                  {t('queue.editMessage', 'Edit')}
+                </Button>
+              {/if}
               <Button
                 variant="tertiary"
                 ariaLabel={t('queue.removeMessage', 'Remove queued message')}

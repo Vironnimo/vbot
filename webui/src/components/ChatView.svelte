@@ -113,6 +113,8 @@
   // timeline anchors it in place instead of restacking all cards at the bottom.
   let transientCards = $state([]);
   let transientCardsSessionKey = '';
+  let displayedSessionGeneration = 0;
+  let generationSessionKey = '';
   let transientCardSeq = 0;
   let showSessionDrawer = $state(false);
   let viewingSessionId = $state('');
@@ -761,6 +763,10 @@
   // (e.g. after /compact) does not, because the displayed key is unchanged.
   $effect(() => {
     const key = displayedSessionKey();
+    if (key !== generationSessionKey) {
+      generationSessionKey = key;
+      displayedSessionGeneration += 1;
+    }
     if (key !== transientCardsSessionKey) {
       transientCardsSessionKey = key;
       transientCards = [];
@@ -803,7 +809,7 @@
     chatState.actionError = message;
   };
 
-  const appendTransientCard = (text) => {
+  const appendTransientCard = (text, sessionState) => {
     const body = typeof text === 'string' ? text : '';
     if (!body) {
       return;
@@ -812,7 +818,7 @@
     // stays at that position (like a chat message) instead of being pushed to
     // the bottom by later messages. `null` anchors a card created on an empty
     // timeline to the top.
-    const items = visibleTimelineItemsForRender(activeSessionState);
+    const items = visibleTimelineItemsForRender(sessionState);
     const anchorId = items.length > 0 ? items[items.length - 1].id : null;
     transientCardSeq += 1;
     transientCards = [
@@ -1542,11 +1548,20 @@
   };
 
   const sendStream = async (agent, sessionState, content, options = {}) => {
+    const sourceSessionKey = sessionState?.key ?? '';
+    const sourceUiGeneration = displayedSessionGeneration;
     const outcome = await chatController.sendMessage(
       sessionState,
       content,
       options,
     );
+    const presentationIsCurrent =
+      sourceSessionKey &&
+      displayedSessionKey() === sourceSessionKey &&
+      displayedSessionGeneration === sourceUiGeneration;
+    if (!presentationIsCurrent) {
+      return outcome.kind !== 'failed' && outcome.kind !== 'ignored';
+    }
     if (outcome.kind === 'move') {
       await moveSessionToAgent(outcome.move);
       requestComposerFocus({ includeMobile: true });
@@ -1562,7 +1577,7 @@
       );
       requestComposerFocus({ includeMobile: true });
     } else if (outcome.kind === 'transient') {
-      appendTransientCard(outcome.reply);
+      appendTransientCard(outcome.reply, sessionState);
     } else if (outcome.kind === 'toast') {
       showChatToast(outcome.reply);
     } else if (outcome.kind === 'started') {
@@ -1625,28 +1640,31 @@
 
   const handleEditQueuedMessage = async (queuedMessageId, newContent) => {
     const sessionState = activeSessionState;
-    if (!sessionState || !activeAgent) {
-      return;
+    if (!sessionState) {
+      return false;
     }
-    await chatController.updateQueued(
+    const fileMentions = await collectQueueEditFileMentions(
+      newContent,
+      sessionState.agentId,
+    );
+    return await chatController.updateQueued(
       sessionState,
       queuedMessageId,
       newContent,
-      await collectQueueEditFileMentions(newContent),
+      fileMentions,
     );
   };
 
-  const collectQueueEditFileMentions = async (text) => {
+  const collectQueueEditFileMentions = async (text, agentAddress) => {
     const tokens = extractMentionTokens(typeof text === 'string' ? text : '');
     if (tokens.length === 0) {
       return [];
     }
     try {
-      const listFiles = composerListFiles;
-      if (!listFiles) {
+      if (!agentAddress) {
         return [];
       }
-      const result = await listFiles();
+      const result = await chatController.listFiles(agentAddress);
       return matchMentionCandidates(
         tokens,
         Array.isArray(result?.files) ? result.files : [],

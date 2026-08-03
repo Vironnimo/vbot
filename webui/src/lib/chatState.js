@@ -73,6 +73,7 @@ const TERMINAL_VISIBLE_DRAFT_EVENT_TYPES = new Set([
 
 const HISTORY_INITIAL_LIMIT = 100;
 const HISTORY_OLDER_LIMIT = 50;
+const QUEUE_DISPLAY_CONTENT_LIMIT = 500;
 const SUBAGENT_LEGACY_HISTORY_LIMIT = 20;
 const SUBAGENT_STATUS_CACHE_LIMIT = 2000;
 const SUBAGENT_RESULT_CACHE_LIMIT = 100;
@@ -925,20 +926,29 @@ export function createChatController({
     fileMentions,
   ) {
     if (!sessionState) {
-      return;
+      return false;
     }
     sessionState.actionError = '';
     try {
+      const normalizedFileMentions = Array.isArray(fileMentions)
+        ? fileMentions
+        : [];
       await operations.updateQueueItem(
         sessionState.agentId,
         sessionState.sessionId,
         queuedMessageId,
         newContent,
-        { fileMentions },
+        { fileMentions: normalizedFileMentions },
       );
-      updateQueuedMessageContent(sessionState, queuedMessageId, newContent);
+      updateQueuedMessageContent(sessionState, queuedMessageId, newContent, {
+        editable:
+          normalizedFileMentions.length === 0 &&
+          newContent.length <= QUEUE_DISPLAY_CONTENT_LIMIT,
+      });
+      return true;
     } catch (error) {
       sessionState.actionError = `${translate('queue.editError', 'Queued message could not be edited.')} ${errorMessage(error)}`;
+      return false;
     }
   }
 
@@ -1698,6 +1708,7 @@ function normalizeServerQueuedItem(item) {
   return {
     id: item.id,
     content: typeof item?.content === 'string' ? item.content : '',
+    editable: item?.editable === true,
     created_at: typeof item?.created_at === 'string' ? item.created_at : null,
   };
 }
@@ -1732,12 +1743,20 @@ export function addServerQueuedMessage(sessionState, item) {
   return normalizedItem;
 }
 
-export function updateQueuedMessageContent(sessionState, itemId, newContent) {
+export function updateQueuedMessageContent(
+  sessionState,
+  itemId,
+  newContent,
+  { editable } = {},
+) {
   const queuedItem = sessionState.queue.find((item) => item.id === itemId);
   if (!queuedItem) {
     return false;
   }
   queuedItem.content = newContent;
+  if (typeof editable === 'boolean') {
+    queuedItem.editable = editable;
+  }
   return true;
 }
 

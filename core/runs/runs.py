@@ -145,6 +145,7 @@ class QueuedRunItem:
     executor: RunExecutor
     internal: bool
     future: asyncio.Future[Run]
+    editable: bool = False
     run_kind: RunKind = field(default=RunKind.USER, repr=False)
     contributes_to_agent_activity: bool = field(default=True, repr=False)
     working_project_id: str | None = field(default=None, repr=False)
@@ -157,6 +158,7 @@ class QueuedRunItem:
         return {
             "id": self.item_id,
             "content": self.display_content,
+            "editable": self.editable,
             "internal": self.internal,
             RUN_KIND_FIELD: self.run_kind.value,
             "created_at": self.created_at,
@@ -718,6 +720,7 @@ class ChatRunManager:
         session_id: str,
         executor: RunExecutor,
         display_content: str = "",
+        editable: bool = False,
         internal: bool = False,
         project_id: str | None,
         working_project_id: str | None = None,
@@ -735,6 +738,7 @@ class ChatRunManager:
             executor=executor,
             internal=internal,
             future=future,
+            editable=editable,
             run_kind=run_kind,
             contributes_to_agent_activity=contributes_to_agent_activity,
             working_project_id=working_project_id,
@@ -858,6 +862,7 @@ class ChatRunManager:
         new_display_content: str,
         *,
         project_id: str | None,
+        editable: bool | None = None,
     ) -> bool:
         """Replace the queued executor and display text for one item."""
         queue = self._queues.get((project_id, agent_id, session_id))
@@ -869,6 +874,8 @@ class ChatRunManager:
                 continue
             item.executor = new_executor
             item.display_content = new_display_content
+            if editable is not None:
+                item.editable = editable
             return True
         return False
 
