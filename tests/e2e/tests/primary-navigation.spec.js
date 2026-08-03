@@ -3,6 +3,7 @@ import { expect, test } from "@playwright/test";
 const sections = [
   { button: "Chat", hash: "#chat", region: "Chat" },
   { button: "Agents", hash: "#agents", region: "Agents" },
+  { button: "Terminals", hash: "#terminals", region: "Terminals" },
   { button: "Projects", hash: "#projects", region: "Projects" },
   { button: "Settings", hash: "#settings", region: "Settings" },
   { button: "System Prompt", hash: "#system-prompt", region: "System Prompt" },

@@ -13,6 +13,7 @@ import pytest_asyncio
 
 import core.tools.terminal_manager as terminal_module
 from core.tools.terminal_manager import (
+    TerminalCapacityError,
     TerminalCursorError,
     TerminalManager,
     TerminalNotFoundError,
@@ -186,6 +187,40 @@ async def test_sessions_are_owner_isolated_and_transfer_with_agent_move(
     assert manager.transfer_scope(owner(), other) == 1
     assert manager.get_session(session.terminal_id, other) is session
     assert manager.list_sessions(owner()) == []
+
+
+@pytest.mark.asyncio
+async def test_live_terminal_capacity_is_owner_scoped_and_globally_bounded(
+    terminal_manager: tuple[TerminalManager, AdapterFactory],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manager, _factory = terminal_manager
+    monkeypatch.setattr(terminal_module, "TERMINAL_MAX_LIVE_PER_SESSION", 2)
+    monkeypatch.setattr(terminal_module, "TERMINAL_MAX_LIVE_GLOBAL", 3)
+
+    await spawn(manager, tmp_path, command="owner-a-1")
+    await spawn(manager, tmp_path, command="owner-a-2")
+    with pytest.raises(TerminalCapacityError, match="for this vBot Session"):
+        await spawn(manager, tmp_path, command="owner-a-3")
+
+    other_owner = TerminalOwner("project-a", "agent-a", "session-b")
+    await manager.spawn(
+        other_owner,
+        ["owner-b-1"],
+        cwd=tmp_path,
+        env=None,
+        columns=120,
+        rows=32,
+        origin_run_id="run-b",
+    )
+
+    with pytest.raises(TerminalCapacityError, match=r"Live Terminal Session limit reached \(3\)"):
+        await manager.spawn_for_operator(
+            command="manual-terminal",
+            arguments=[],
+            cwd=tmp_path,
+        )
 
 
 @pytest.mark.asyncio
