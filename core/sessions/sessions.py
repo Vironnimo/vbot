@@ -45,7 +45,7 @@ SESSION_TITLE_KEY = "title"
 SESSION_AUTO_TITLE_KEY = "auto_title"
 SESSION_AUTO_TITLE_INITIALIZED_KEY = "auto_title_initialized"
 SESSION_TITLE_MAX_LENGTH = 200
-SESSION_TERMINAL_RUN_STATUSES = frozenset({"completed", "failed", "cancelled"})
+SESSION_TERMINAL_RUN_STATUSES = frozenset({"completed", "failed", "cancelled", "interrupted"})
 # Sidecar key recording a forked session's provenance: which source session it was
 # copied from and the fork point. Written on every fork (even when the source had no
 # sidecar) so a fork is self-describing.

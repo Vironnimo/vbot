@@ -189,6 +189,7 @@ from core.runs import (
     QueuedRunItem,
     Run,
     RunExecutor,
+    RunInterruptedError,
     RunKind,
     WaitingWorkAdmission,
 )
@@ -259,6 +260,7 @@ class _AssistantStep:
 
     message: ChatMessage
     terminal_outcome: TerminalOutcome | None
+    recovery: Literal["none", "continue", "interrupt"] = "none"
 
 
 @dataclass
@@ -358,6 +360,30 @@ def _terminal_outcome_error(
     return ProviderError(
         f"Provider ended the Assistant turn with unsafe terminal outcome {terminal_outcome!r}",
         retryable=False,
+    )
+
+
+def _combined_interrupted_result(messages: list[ChatMessage]) -> ChatMessage:
+    """Return one consumer-facing view of every visible recovery fragment."""
+    if not messages:
+        raise AssertionError("interrupted result requires at least one Assistant message")
+    if len(messages) == 1:
+        return messages[0]
+
+    latest = messages[-1]
+    if latest.model is None:
+        raise AssertionError("interrupted Assistant result requires a model")
+    content = "".join(message.content for message in messages if isinstance(message.content, str))
+    reasoning = "".join(message.reasoning for message in messages if message.reasoning)
+    return ChatMessage.assistant(
+        model=latest.model,
+        content=content or None,
+        reasoning=reasoning or None,
+        reasoning_scope=latest.reasoning_scope,
+        phase=latest.phase,
+        usage=latest.usage,
+        interrupted=True,
+        interruption_cause=latest.interruption_cause,
     )
 
 
@@ -494,6 +520,18 @@ SKILL_AVAILABLE_NEW_SKILLS_HEADER = (
 # adapter's own connect-level retry still applies per attempt), so this bounds
 # only the post-connect mid-stream replays.
 MAX_STREAM_RESTARTS = 2
+# Answer text cannot be replayed without duplication, so a broken visible step
+# is persisted and followed by a fresh continuation request in the same Run.
+# Keep this budget separate from stream replay and Tool iterations: it bounds
+# only consecutive broken continuations after visible answer text.
+MAX_STREAM_CONTINUATIONS = 2
+STREAM_RECOVERY_NOTE = (
+    "The previous Model response stream ended unexpectedly after producing visible "
+    "answer text. The partial Assistant response is already part of this conversation. "
+    "Continue the same task from exactly where it stopped without repeating that visible "
+    "text. No Tool Call from the interrupted Model step was executed; if tools are still "
+    "needed, emit every intended Tool Call again as a complete call."
+)
 
 
 class _StreamRestartNeeded(Exception):  # noqa: N818 — control-flow signal, not an error
@@ -1514,6 +1552,7 @@ class ChatLoop:
         run_timing_started_at = datetime.now(UTC)
         run_timing_started_perf = time.perf_counter()
         _run_succeeded = True
+        _run_interrupted = False
         run_error: BaseException | None = None
         completed_assistant: ChatMessage | None = None
         start_line_extras = ""
@@ -1698,6 +1737,13 @@ class ChatLoop:
                                 context, fallback_target
                             )
                             return completed_assistant
+                        except RunInterruptedError as fallback_exc:
+                            _run_succeeded = False
+                            _run_interrupted = True
+                            run_error = fallback_exc
+                            if isinstance(fallback_exc.result, ChatMessage):
+                                completed_assistant = fallback_exc.result
+                            raise
                         except (ProviderError, ChatError, ConfigError, VBotError) as fallback_exc:
                             _run_succeeded = False
                             run_error = fallback_exc
@@ -1709,6 +1755,13 @@ class ChatLoop:
                 _run_succeeded = False
                 run_error = primary_exc
                 _persist_run_error(run, session, primary_exc)
+                raise
+            except RunInterruptedError as exc:
+                _run_succeeded = False
+                _run_interrupted = True
+                run_error = exc
+                if isinstance(exc.result, ChatMessage):
+                    completed_assistant = exc.result
                 raise
             except (ChatError, ConfigError, VBotError) as exc:
                 _run_succeeded = False
@@ -1730,9 +1783,11 @@ class ChatLoop:
                 outcome = "success"
             else:
                 outcome = "error"
-            run_status = {"success": "completed", "error": "failed", "cancelled": "cancelled"}[
-                outcome
-            ]
+            run_status = (
+                "interrupted"
+                if _run_interrupted and outcome != "cancelled"
+                else {"success": "completed", "error": "failed", "cancelled": "cancelled"}[outcome]
+            )
             run_timing = _timing_payload(run_timing_started_at, run_timing_started_perf)
             _LOGGER.info(
                 "Run %s %s (agent=%s session=%s duration_ms=%s model_steps=%d "
@@ -2394,8 +2449,10 @@ class ChatLoop:
             run.terminal_payload_extras["session_usage"] = session_usage
         tool_iteration_count = 0
         iteration_number = 1
+        stream_continuation_count = 0
+        interruption_chain: list[ChatMessage] = []
         failed_tool_call_breaker = _FailedToolCallCircuitBreaker()
-        for _ in range(self._max_tool_iterations + 1):
+        while True:
             run.raise_if_cancelled()
             async with self._dependencies.sessions.write_lock(
                 run.agent_id, run.session_id, project_id
@@ -2461,6 +2518,7 @@ class ChatLoop:
             )
             assistant_message = assistant_step.message
             terminal_outcome = assistant_step.terminal_outcome
+            recovery = assistant_step.recovery
             # A user cancel after visible streamed output returns the preserved
             # partial as an interrupted turn — it must reach the persist block
             # below before the cancel is honored, or the answer the user
@@ -2527,20 +2585,40 @@ class ChatLoop:
                 if not self._streaming:
                     _emit_assistant_events(run, assistant_message)
                 messages.append(assistant_request_message)
+                if (recovery != "none" or interruption_chain) and (
+                    isinstance(assistant_message.content, str)
+                    or assistant_message.reasoning is not None
+                ):
+                    interruption_chain.append(assistant_message)
 
                 if not assistant_message.tool_calls:
-                    terminal_error = _terminal_outcome_error(
-                        terminal_outcome,
-                        has_tool_calls=False,
-                    )
-                    if terminal_error is not None:
-                        raise terminal_error
                     if preserve_cancelled_partial:
                         # The preserved partial is persisted; end the turn
                         # without new provider work (no auto-compaction). The
                         # run manager sees ``cancel_requested`` and marks the
                         # Run cancelled despite the normal return.
                         return assistant_message
+                    if recovery == "interrupt":
+                        raise RunInterruptedError(
+                            assistant_message.interruption_cause or "internal",
+                            result=_combined_interrupted_result(interruption_chain),
+                        )
+                    if recovery == "continue":
+                        if stream_continuation_count >= MAX_STREAM_CONTINUATIONS:
+                            raise RunInterruptedError(
+                                assistant_message.interruption_cause or "internal",
+                                result=_combined_interrupted_result(interruption_chain),
+                            )
+                        session.add_note(STREAM_RECOVERY_NOTE)
+                        stream_continuation_count += 1
+                        iteration_number += 1
+                        continue
+                    terminal_error = _terminal_outcome_error(
+                        terminal_outcome,
+                        has_tool_calls=False,
+                    )
+                    if terminal_error is not None:
+                        raise terminal_error
                     if self._compaction_service is not None:
                         await self._maybe_auto_compact_state(
                             context,
@@ -2556,6 +2634,7 @@ class ChatLoop:
                         )
                     return assistant_message
 
+                stream_continuation_count = 0
                 if tool_iteration_count >= self._max_tool_iterations:
                     raise ToolIterationLimitError("maximum tool iterations exceeded")
                 tool_iteration_count += 1  # noqa: SIM113 - paired with iteration_number; enumerate would obscure the pre-increment limit check.
@@ -2673,8 +2752,6 @@ class ChatLoop:
                 state = compacted_state
                 messages = compacted_state.messages
                 tools = compacted_state.tools
-
-        raise ToolIterationLimitError("maximum tool iterations exceeded")
 
     async def _attach_tool_result_content(
         self,
@@ -3237,8 +3314,8 @@ class ChatLoop:
     ) -> _AssistantStep:
         # A transient drop before answer text is replayed as a full stream
         # restart. Readable Reasoning and any unexecuted Tool Call preview are
-        # discarded before replay. Once answer text arrives, partial output
-        # cannot be replayed cleanly.
+        # discarded before replay. Once answer text arrives, partial output is
+        # persisted so the progression loop can continue it without duplication.
         for attempt in range(MAX_STREAM_RESTARTS + 1):
             try:
                 return await self._consume_stream_attempt(
@@ -3381,7 +3458,30 @@ class ChatLoop:
                     accumulator,
                     run,
                     interruption_cause=interruption_cause,
+                    recovery="continue",
                 )
+            elif action is StreamRecoveryAction.INTERRUPT:
+                interruption_cause = normalize_interruption_cause(exc)
+                if continuation_tracker is not None:
+                    continuation_tracker.mark_interruption_cause(interruption_cause)
+                _LOGGER.warning(
+                    "Provider stream recovery exhausted before answer text "
+                    "(run=%s model=%s cause=%s error=%s)",
+                    run.id,
+                    model_id,
+                    interruption_cause,
+                    exc,
+                )
+                if accumulator.partial_reasoning is not None:
+                    return self._finalize_interrupted_partial(
+                        agent,
+                        response_model,
+                        accumulator,
+                        run,
+                        interruption_cause=interruption_cause,
+                        recovery="interrupt",
+                    )
+                raise RunInterruptedError(interruption_cause) from exc
             else:
                 raise
         except asyncio.CancelledError:
@@ -3423,15 +3523,17 @@ class ChatLoop:
         run: Run,
         *,
         interruption_cause: ContinuationCause,
+        recovery: Literal["none", "continue", "interrupt"] = "none",
     ) -> _AssistantStep:
         """Preserve a stream broken after visible output as an interrupted turn.
 
         The visible answer streamed so far is finalized into an assistant message
         flagged ``interrupted`` (no finish reason; any in-flight tool call is
         dropped — it was never executed, so dropping it is side-effect-free).
-        The run ends as a normal turn-less assistant turn instead of failing or
-        re-running, so the next turn sees the truncated answer in history and
-        continues it naturally — no auto-retry, no duplicate output.
+        A provider break after answer text asks the progression loop for a fresh
+        continuation request in the same Run. Exhausted replay may instead ask
+        the loop to terminate after preserving readable Reasoning. Both paths
+        drop any in-flight Tool Call because it was never complete or executed.
 
         Also the finalize path for a user cancel after visible output: there the
         run ends as *cancelled*, and ``allow_after_cancel`` lets the settled
@@ -3446,7 +3548,11 @@ class ChatLoop:
             interruption_cause=interruption_cause,
         )
         _emit_streaming_assistant_events(run, assistant_message, allow_after_cancel=True)
-        return _AssistantStep(message=assistant_message, terminal_outcome=None)
+        return _AssistantStep(
+            message=assistant_message,
+            terminal_outcome=None,
+            recovery=recovery,
+        )
 
     def _resolve_chunk_timeout(self, provider_id: str, connection_id: str) -> float | None:
         """Return the per-chunk stall timeout for this connection, or None locally.

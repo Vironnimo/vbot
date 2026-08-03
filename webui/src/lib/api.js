@@ -55,12 +55,14 @@ export const RUN_EVENT_TYPES = [
   'run_completed',
   'run_cancelled',
   'run_failed',
+  'run_interrupted',
 ];
 
 const TERMINAL_RUN_EVENT_TYPES = new Set([
   'run_completed',
   'run_cancelled',
   'run_failed',
+  'run_interrupted',
 ]);
 
 export class ApiClientError extends Error {

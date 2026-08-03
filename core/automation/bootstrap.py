@@ -556,13 +556,18 @@ class BootstrapService:
                 ),
                 None,
             )
-            if summary is None or summary.status not in {"completed", "failed", "cancelled"}:
+            if summary is None or summary.status not in {
+                "completed",
+                "failed",
+                "cancelled",
+                "interrupted",
+            }:
                 continue
             job.status = "completed" if summary.status == "completed" else "failed"
             job.last_outcome = (
                 "success"
                 if summary.status == "completed"
-                else cast("BootstrapOutcome", summary.status)
+                else ("cancelled" if summary.status == "cancelled" else "failed")
             )
             job.last_completed_at = summary.timestamp
             if summary.status != "completed":

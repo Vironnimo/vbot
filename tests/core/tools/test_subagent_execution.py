@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from core.runs import RunInterruptedError
 from tests.core.chat.chat_loop_support import build_chat_loop
 
 from .subagent_test_support import (
@@ -510,6 +511,25 @@ async def test_wait_for_subagent_result_converts_normal_failures_to_result_dict(
     # Assert
     assert result["status"] == "failed"
     assert result["result"] == "provider failed"
+
+
+async def test_wait_for_subagent_result_preserves_interrupted_partial() -> None:
+    run = Run(run_id="sub-run", agent_id="worker", session_id="sub-session")
+    partial = ChatMessage.assistant(
+        model="openai/gpt-5.2",
+        content="partial result",
+        interrupted=True,
+        interruption_cause="network",
+    )
+    run.mark_interrupted(RunInterruptedError("network", result=partial))
+
+    result = await _wait_for_subagent_result(run)
+
+    assert result["status"] == "interrupted"
+    assert result["result"] == "partial result"
+    assert result["interrupted"] is True
+    assert result["interruption_cause"] == "network"
+    assert "Continue the same Session" in result["note"]
 
 
 async def test_wait_for_subagent_result_does_not_swallow_waiter_cancellation() -> None:

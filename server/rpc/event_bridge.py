@@ -23,6 +23,7 @@ from core.runs import (
     RUN_CANCELLED_EVENT,
     RUN_COMPLETED_EVENT,
     RUN_FAILED_EVENT,
+    RUN_INTERRUPTED_EVENT,
     RUN_STARTED_EVENT,
     STREAM_ATTEMPT_RESTARTED_EVENT,
     TOOL_CALL_DELTA_EVENT,
@@ -48,6 +49,7 @@ from server.events import (
     RUN_CANCELLED_SERVER_EVENT,
     RUN_COMPLETED_SERVER_EVENT,
     RUN_FAILED_SERVER_EVENT,
+    RUN_INTERRUPTED_SERVER_EVENT,
     RUN_OUTPUT_SERVER_EVENT,
     RUN_STARTED_SERVER_EVENT,
 )
@@ -229,6 +231,8 @@ def _server_event_from_run_event(event: RunEvent) -> JsonObject:
         payload["usage"] = remove_opaque_provider_metadata(event.payload["usage"])
     if event.type == RUN_FAILED_EVENT and "error" in event.payload:
         payload["error"] = remove_opaque_provider_metadata(event.payload["error"])
+    if event.type == RUN_INTERRUPTED_EVENT and "cause" in event.payload:
+        payload["cause"] = remove_opaque_provider_metadata(event.payload["cause"])
     return {"type": SERVER_EVENT_TYPES.get(event.type, RUN_OUTPUT_SERVER_EVENT), "payload": payload}
 
 
@@ -256,7 +260,12 @@ RUN_DELTA_EVENT_TYPES = {
     TOOL_CALL_STDOUT_EVENT,
     TOOL_CALL_STDERR_EVENT,
 }
-RUN_TERMINAL_EVENT_TYPES = {RUN_COMPLETED_EVENT, RUN_CANCELLED_EVENT, RUN_FAILED_EVENT}
+RUN_TERMINAL_EVENT_TYPES = {
+    RUN_COMPLETED_EVENT,
+    RUN_CANCELLED_EVENT,
+    RUN_FAILED_EVENT,
+    RUN_INTERRUPTED_EVENT,
+}
 SERVER_EVENT_TYPES = {
     RUN_STARTED_EVENT: RUN_STARTED_SERVER_EVENT,
     USER_MESSAGE_EVENT: RUN_OUTPUT_SERVER_EVENT,
@@ -276,4 +285,5 @@ SERVER_EVENT_TYPES = {
     RUN_COMPLETED_EVENT: RUN_COMPLETED_SERVER_EVENT,
     RUN_CANCELLED_EVENT: RUN_CANCELLED_SERVER_EVENT,
     RUN_FAILED_EVENT: RUN_FAILED_SERVER_EVENT,
+    RUN_INTERRUPTED_EVENT: RUN_INTERRUPTED_SERVER_EVENT,
 }

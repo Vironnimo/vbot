@@ -11,11 +11,13 @@ const CHAT_STATUS_RUNNING = 'running';
 const CHAT_STATUS_COMPLETED = 'completed';
 const CHAT_STATUS_FAILED = 'failed';
 const CHAT_STATUS_CANCELLED = 'cancelled';
+const CHAT_STATUS_INTERRUPTED = 'interrupted';
 
 const TERMINAL_RUN_EVENTS = new Set([
   'run_completed',
   'run_failed',
   'run_cancelled',
+  'run_interrupted',
 ]);
 const PROVIDER_PROGRESS_RUN_EVENTS = new Set([
   RUN_EVENT_REASONING_DELTA,
@@ -169,6 +171,9 @@ function terminalStatus(eventType) {
   if (eventType === 'run_cancelled') {
     return CHAT_STATUS_CANCELLED;
   }
+  if (eventType === 'run_interrupted') {
+    return CHAT_STATUS_INTERRUPTED;
+  }
   return CHAT_STATUS_COMPLETED;
 }
 
@@ -209,13 +214,14 @@ function historyTimelineItems(messages) {
         appendHistoryRunSummary(activeAssistantRun, message);
         pushActiveAssistantRun(timelineItems, activeAssistantRun);
         activeAssistantRun = null;
-      } else if (message.status === 'cancelled') {
-        // A run cancelled before any visible output persists no assistant or
-        // tool message — the summary is its only trace. Render a bare
-        // cancelled run row (status label + timing) instead of leaving a
-        // hole where the cancelled turn happened.
+      } else if (
+        message.status === 'cancelled' ||
+        message.status === 'interrupted'
+      ) {
+        // A terminal run with no visible output has only its summary as a
+        // durable trace. Render a bare status row instead of leaving a hole.
         timelineItems.push(
-          cancelledRunSummaryItem(message, timelineItems.length),
+          terminalRunSummaryItem(message, timelineItems.length),
         );
       }
       previousVisibleRole = 'run_summary';
@@ -541,9 +547,12 @@ function isTrackedRunTerminal(sessionState, liveAssistantRun) {
   return (
     !isRunActive(sessionState) ||
     TERMINAL_RUN_EVENTS.has(liveAssistantRun.terminalEvent?.type) ||
-    [CHAT_STATUS_COMPLETED, CHAT_STATUS_FAILED, CHAT_STATUS_CANCELLED].includes(
-      sessionState.currentRun?.status,
-    )
+    [
+      CHAT_STATUS_COMPLETED,
+      CHAT_STATUS_FAILED,
+      CHAT_STATUS_CANCELLED,
+      CHAT_STATUS_INTERRUPTED,
+    ].includes(sessionState.currentRun?.status)
   );
 }
 
@@ -925,9 +934,13 @@ function appendLiveRunEvent(assistantRun, event) {
   if (TERMINAL_RUN_EVENTS.has(event.type)) {
     assistantRun.items = assistantRun.items.filter(
       (item) =>
-        item.type !== 'compaction_separator' ||
-        item.status !== CHAT_STATUS_RUNNING,
+        (item.type !== 'compaction_separator' ||
+          item.status !== CHAT_STATUS_RUNNING) &&
+        (event.type !== 'run_interrupted' ||
+          item.type !== 'tool_call' ||
+          !item.streaming),
     );
+    syncAssistantRunCollections(assistantRun);
     const timing = normalizedTiming(event.payload?.timing);
     assistantRun.endTimestamp = event.timestamp ?? assistantRun.endTimestamp;
     assistantRun.startTimestamp =
@@ -977,6 +990,12 @@ function appendLiveRunEvent(assistantRun, event) {
 
   if (event.type === 'assistant_output') {
     const message = event.payload?.message;
+    if (message?.interrupted) {
+      assistantRun.items = assistantRun.items.filter(
+        (item) => item.type !== 'tool_call' || !item.streaming,
+      );
+      syncAssistantRunCollections(assistantRun);
+    }
     if (message?.reasoning) {
       appendTextSection(assistantRun, {
         type: 'reasoning',
@@ -1084,11 +1103,10 @@ function appendHistoryToolResult(assistantRun, message) {
   assistantRun.status = runFailed ? CHAT_STATUS_FAILED : CHAT_STATUS_COMPLETED;
 }
 
-// A run row built from a cancelled run_summary alone (no assistant/tool
-// anchor): header with the "Cancelled" status and the run's timing, no
-// children. Used for runs the user cancelled while nothing visible had
-// streamed yet, so the timeline still shows that the turn happened.
-function cancelledRunSummaryItem(message, sequence) {
+// A run row built from a cancelled/interrupted run_summary alone (no
+// assistant/tool anchor): status and timing, with no children. This keeps a
+// durable trace when the terminal Run produced no visible output.
+function terminalRunSummaryItem(message, sequence) {
   const assistantRun = createAssistantRunItem({
     id: `history-run-summary-${message.id ?? message.timestamp ?? sequence}`,
     runId: message.run_id ?? null,
@@ -1461,6 +1479,7 @@ function markPendingToolsCancelled(assistantRun, event) {
       item.status === CHAT_STATUS_COMPLETED ||
       item.status === CHAT_STATUS_FAILED ||
       item.status === CHAT_STATUS_CANCELLED ||
+      item.status === CHAT_STATUS_INTERRUPTED ||
       item.status === 'success'
     ) {
       continue;
@@ -1529,6 +1548,7 @@ function isAssistantRunEvent(event) {
     'run_completed',
     'run_failed',
     'run_cancelled',
+    'run_interrupted',
   ].includes(event?.type);
 }
 

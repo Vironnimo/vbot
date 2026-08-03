@@ -29,6 +29,7 @@ from core.runs import (
     MODEL_STEP_USAGE_EVENT,
     STREAM_ATTEMPT_RESTARTED_EVENT,
     RunCancelledError,
+    RunInterruptedError,
     RunStatus,
 )
 from core.tools import (
@@ -43,7 +44,6 @@ from tests.core.chat.chat_loop_support import (
     PolicyStubAdapter,
     SilentBlockingStreamingStubAdapter,
     SlowStreamingStubAdapter,
-    StalledStreamingStubAdapter,
     StubAdapter,
     StubAgent,
     StubRuntime,
@@ -111,12 +111,13 @@ async def test_streaming_mode_preserves_partial_instead_of_fallback_after_visibl
 ) -> None:
     agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
     adapter = StubAdapter(
-        [{"content": "Should not use", "tool_calls": None}],
+        [{"content": "Continued answer", "tool_calls": None}],
         stream_responses=[
             [
                 {"type": "content_delta", "text": "partial"},
                 ProviderStreamingUnsupportedError("streaming is not supported"),
-            ]
+            ],
+            ProviderStreamingUnsupportedError("streaming is not supported"),
         ],
     )
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
@@ -129,10 +130,10 @@ async def test_streaming_mode_preserves_partial_instead_of_fallback_after_visibl
     messages = runtime.chat_sessions.get("coder", "session-one").load()
     # Once visible output escaped, the break preserves the partial answer rather
     # than silently re-issuing the request as a non-streaming call.
-    assert assistant.content == "partial"
-    assert assistant.interrupted is True
+    assert assistant.content == "Continued answer"
+    assert assistant.interrupted is False
     assert run.status == RunStatus.COMPLETED
-    assert persisted_roles(messages) == ["user", "assistant"]
+    assert persisted_roles(messages) == ["user", "assistant", "note", "assistant"]
     assert messages[1].interrupted is True
     assert [event.type for event in run.events] == [
         "run_started",
@@ -140,9 +141,12 @@ async def test_streaming_mode_preserves_partial_instead_of_fallback_after_visibl
         ASSISTANT_OUTPUT_DELTA_EVENT,
         "assistant_output",
         MODEL_STEP_USAGE_EVENT,
+        "assistant_output",
+        MODEL_STEP_USAGE_EVENT,
         "run_completed",
     ]
-    assert adapter.requests == []
+    assert len(adapter.stream_requests) == 2
+    assert len(adapter.requests) == 1
 
 
 @pytest.mark.asyncio
@@ -152,7 +156,19 @@ async def test_streaming_mode_chunk_timeout_preserves_partial_after_visible_outp
 ) -> None:
     monkeypatch.setattr("core.chat.chat.STREAM_CHUNK_TIMEOUT_SECONDS", 0.01)
     agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
-    adapter = StalledStreamingStubAdapter([])
+    adapter = StubAdapter(
+        [],
+        stream_responses=[
+            [
+                {"type": "content_delta", "text": "partial"},
+                StreamingChunkTimeoutError("provider stream stalled"),
+            ],
+            [
+                {"type": "content_delta", "text": " continued"},
+                {"type": "finish", "reason": "stop"},
+            ],
+        ],
+    )
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
 
     assistant = await build_chat_loop(runtime, streaming=True).send(
@@ -163,16 +179,18 @@ async def test_streaming_mode_chunk_timeout_preserves_partial_after_visible_outp
     messages = runtime.chat_sessions.get("coder", "session-one").load()
     # A remote provider that stalls after streaming visible content has its
     # partial answer preserved as an interrupted turn (no timeout failure).
-    assert assistant.content == "partial"
-    assert assistant.interrupted is True
-    assert assistant.interruption_cause == "timeout"
+    assert assistant.content == " continued"
+    assert assistant.interrupted is False
     assert run.status == RunStatus.COMPLETED
-    assert persisted_roles(messages) == ["user", "assistant"]
+    assert persisted_roles(messages) == ["user", "assistant", "note", "assistant"]
     assert messages[1].interrupted is True
     assert messages[1].interruption_cause == "timeout"
     assert [event.type for event in run.events] == [
         "run_started",
         "user_message_persisted",
+        ASSISTANT_OUTPUT_DELTA_EVENT,
+        "assistant_output",
+        MODEL_STEP_USAGE_EVENT,
         ASSISTANT_OUTPUT_DELTA_EVENT,
         "assistant_output",
         MODEL_STEP_USAGE_EVENT,
@@ -288,15 +306,23 @@ async def test_reasoning_only_restart_exhaustion_keeps_only_final_attempt_checkp
     )
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
 
-    with pytest.raises(NetworkError, match="drop 3"):
+    with pytest.raises(RunInterruptedError, match="run interrupted: network"):
         await build_chat_loop(runtime, streaming=True).send("coder", "Hi", session_id="session-one")
 
     session = runtime.chat_sessions.get("coder", "session-one")
+    run = next(iter(runtime.chat_runs._runs.values()))
     state = recover_continuation(session)
     assert state is not None
     assert state.reasoning == "Attempt 3"
     assert state.cause == "network"
     assert len(adapter.stream_requests) == 3
+    assert run.status == RunStatus.INTERRUPTED
+    messages = session.load()
+    assert persisted_roles(messages) == ["user", "assistant"]
+    assert messages[1].reasoning == "Attempt 3"
+    assert messages[1].interrupted is True
+    assert messages[-1].role == "run_summary"
+    assert messages[-1].status == "interrupted"
 
 
 @pytest.mark.asyncio
@@ -310,7 +336,11 @@ async def test_streaming_network_error_after_visible_content_preserves_partial(
             [
                 {"type": "content_delta", "text": "partial"},
                 NetworkError("offline"),
-            ]
+            ],
+            [
+                {"type": "content_delta", "text": " continued"},
+                {"type": "finish", "reason": "stop"},
+            ],
         ],
     )
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
@@ -323,11 +353,15 @@ async def test_streaming_network_error_after_visible_content_preserves_partial(
     messages = runtime.chat_sessions.get("coder", "session-one").load()
     # Visible content present at the drop → preserved as an interrupted turn,
     # not discarded; the Continuation Checkpoint retains the readable state.
-    assert assistant.content == "partial"
-    assert assistant.interrupted is True
+    assert assistant.content == " continued"
+    assert assistant.interrupted is False
     assert run.status == RunStatus.COMPLETED
-    assert persisted_roles(messages) == ["user", "assistant"]
+    assert persisted_roles(messages) == ["user", "assistant", "note", "assistant"]
     assert messages[1].interrupted is True
+    continuation_request = adapter.stream_requests[1]["messages"]
+    assert continuation_request[-2]["role"] == "assistant"
+    assert continuation_request[-2]["content"] == "partial"
+    assert "Continue the same task" in continuation_request[-1]["content"]
 
 
 @pytest.mark.asyncio
@@ -448,7 +482,7 @@ async def test_streaming_mode_restarts_after_reasoning_only_responses_error(
 
 
 @pytest.mark.asyncio
-async def test_streaming_mode_does_not_restart_after_visible_delta(tmp_path: Path) -> None:
+async def test_streaming_mode_continues_same_run_after_visible_delta(tmp_path: Path) -> None:
     agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
     adapter = StubAdapter(
         [],
@@ -456,7 +490,11 @@ async def test_streaming_mode_does_not_restart_after_visible_delta(tmp_path: Pat
             [
                 {"type": "content_delta", "text": "Visible"},
                 NetworkError("dropped mid-stream"),
-            ]
+            ],
+            [
+                {"type": "content_delta", "text": " continuation"},
+                {"type": "finish", "reason": "stop"},
+            ],
         ],
     )
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
@@ -467,14 +505,15 @@ async def test_streaming_mode_does_not_restart_after_visible_delta(tmp_path: Pat
 
     run = next(iter(runtime.chat_runs._runs.values()))
     messages = runtime.chat_sessions.get("coder", "session-one").load()
-    # A drop after visible output is not replayed — exactly one stream attempt —
-    # and the visible answer is preserved instead of failing the run.
-    assert len(adapter.stream_requests) == 1
-    assert assistant.content == "Visible"
-    assert assistant.interrupted is True
+    # The original request is not replayed. Its durable partial plus an internal
+    # recovery reminder form a new Model step inside the same Run.
+    assert len(adapter.stream_requests) == 2
+    assert assistant.content == " continuation"
+    assert assistant.interrupted is False
     assert run.status == RunStatus.COMPLETED
-    assert persisted_roles(messages) == ["user", "assistant"]
+    assert persisted_roles(messages) == ["user", "assistant", "note", "assistant"]
     assert messages[1].interrupted is True
+    assert adapter.stream_requests[0]["messages"] != adapter.stream_requests[1]["messages"]
 
 
 @pytest.mark.asyncio
@@ -499,7 +538,11 @@ async def test_streaming_mode_preserves_partial_after_classified_responses_error
             [
                 {"type": "content_delta", "text": "Visible"},
                 classified_error,
-            ]
+            ],
+            [
+                {"type": "content_delta", "text": " continued"},
+                {"type": "finish", "reason": "stop"},
+            ],
         ],
     )
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
@@ -510,9 +553,9 @@ async def test_streaming_mode_preserves_partial_after_classified_responses_error
         session_id="session-one",
     )
 
-    assert len(adapter.stream_requests) == 1
-    assert assistant.content == "Visible"
-    assert assistant.interrupted is True
+    assert len(adapter.stream_requests) == 2
+    assert assistant.content == " continued"
+    assert assistant.interrupted is False
 
 
 @pytest.mark.asyncio
@@ -569,7 +612,7 @@ def _classified_responses_error(
 
 
 @pytest.mark.asyncio
-async def test_streaming_mode_restart_exhaustion_persists_error(tmp_path: Path) -> None:
+async def test_streaming_mode_restart_exhaustion_marks_run_interrupted(tmp_path: Path) -> None:
     agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
     adapter = StubAdapter(
         [],
@@ -581,16 +624,18 @@ async def test_streaming_mode_restart_exhaustion_persists_error(tmp_path: Path) 
     )
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
 
-    with pytest.raises(NetworkError, match="drop 3"):
+    with pytest.raises(RunInterruptedError, match="run interrupted: network"):
         await build_chat_loop(runtime, streaming=True).send("coder", "Hi", session_id="session-one")
 
     run = next(iter(runtime.chat_runs._runs.values()))
     messages = runtime.chat_sessions.get("coder", "session-one").load()
-    # Initial attempt plus MAX_STREAM_RESTARTS replays, then the error surfaces.
+    # Initial attempt plus MAX_STREAM_RESTARTS replays, then recovery ends with
+    # an explicit interruption instead of a fabricated normal completion/error.
     assert len(adapter.stream_requests) == 3
-    assert run.status == RunStatus.FAILED
-    assert persisted_roles(messages) == ["user", "error"]
-    assert messages[1].error_kind == "network_error"
+    assert run.status == RunStatus.INTERRUPTED
+    assert persisted_roles(messages) == ["user"]
+    assert messages[-1].role == "run_summary"
+    assert messages[-1].status == "interrupted"
 
 
 @pytest.mark.asyncio
@@ -632,7 +677,7 @@ async def test_streaming_mode_restarts_after_chunk_stall_before_visible_output(
 
 
 @pytest.mark.asyncio
-async def test_streaming_mode_does_not_restart_after_chunk_stall_with_visible_output(
+async def test_streaming_mode_continues_after_chunk_stall_with_visible_output(
     tmp_path: Path,
 ) -> None:
     agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
@@ -642,7 +687,11 @@ async def test_streaming_mode_does_not_restart_after_chunk_stall_with_visible_ou
             [
                 {"type": "content_delta", "text": "Visible"},
                 StreamingChunkTimeoutError("provider stream stalled"),
-            ]
+            ],
+            [
+                {"type": "content_delta", "text": " continued"},
+                {"type": "finish", "reason": "stop"},
+            ],
         ],
     )
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
@@ -653,13 +702,11 @@ async def test_streaming_mode_does_not_restart_after_chunk_stall_with_visible_ou
 
     run = next(iter(runtime.chat_runs._runs.values()))
     messages = runtime.chat_sessions.get("coder", "session-one").load()
-    # A stall after visible output is not replayed — exactly one stream attempt —
-    # and the visible answer is preserved as an interrupted turn.
-    assert len(adapter.stream_requests) == 1
-    assert assistant.content == "Visible"
-    assert assistant.interrupted is True
+    assert len(adapter.stream_requests) == 2
+    assert assistant.content == " continued"
+    assert assistant.interrupted is False
     assert run.status == RunStatus.COMPLETED
-    assert persisted_roles(messages) == ["user", "assistant"]
+    assert persisted_roles(messages) == ["user", "assistant", "note", "assistant"]
     assert messages[1].interrupted is True
 
 
@@ -682,7 +729,20 @@ async def test_streaming_interrupted_partial_discards_in_flight_tool_call(
                     "arguments_delta": '{"city":"Ber',
                 },
                 NetworkError("dropped mid tool-call"),
-            ]
+            ],
+            [
+                {
+                    "type": "tool_call_delta",
+                    "id": "call_full",
+                    "name_delta": "get_weather",
+                    "arguments_delta": '{"city":"Berlin"}',
+                },
+                {"type": "finish", "reason": "tool_calls"},
+            ],
+            [
+                {"type": "content_delta", "text": "Weather checked"},
+                {"type": "finish", "reason": "stop"},
+            ],
         ],
     )
     executed: list[str] = []
@@ -706,15 +766,24 @@ async def test_streaming_interrupted_partial_discards_in_flight_tool_call(
 
     run = next(iter(runtime.chat_runs._runs.values()))
     messages = runtime.chat_sessions.get("coder", "session-one").load()
-    # The half-streamed tool call leaves no tool_calls on the preserved turn and
-    # never runs (side-effect-free), so no tool result is persisted.
-    assert assistant.content == "Let me check"
-    assert assistant.interrupted is True
+    # The half-streamed Tool Call is dropped. The continuation must regenerate a
+    # complete call before dispatch, so the Tool runs exactly once.
+    assert assistant.content == "Weather checked"
+    assert assistant.interrupted is False
     assert assistant.tool_calls is None
-    assert executed == []
+    assert executed == ["ran"]
     assert run.status == RunStatus.COMPLETED
-    assert persisted_roles(messages) == ["user", "assistant"]
+    assert persisted_roles(messages) == [
+        "user",
+        "assistant",
+        "note",
+        "assistant",
+        "tool",
+        "assistant",
+    ]
     assert messages[1].tool_calls is None
+    assert messages[3].tool_calls is not None
+    assert messages[3].tool_calls[0].arguments == {"city": "Berlin"}
 
 
 @pytest.mark.asyncio
@@ -788,17 +857,27 @@ async def test_remote_provider_stream_aborted_by_chunk_stall(
         provider_base_url="https://api.openai.com/v1",
     )
 
-    assistant = await build_chat_loop(runtime, streaming=True).send(
-        "coder", "Hi", session_id="session-one"
-    )
+    with pytest.raises(RunInterruptedError, match="run interrupted: timeout") as exc_info:
+        await build_chat_loop(runtime, streaming=True).send("coder", "Hi", session_id="session-one")
 
     run = next(iter(runtime.chat_runs._runs.values()))
-    # A remote provider keeps the stall guard: the silence trips a chunk stall
-    # after visible output, so only the pre-stall content is preserved.
-    assert assistant.content == "partial"
-    assert assistant.interrupted is True
-    assert assistant.interruption_cause == "timeout"
-    assert run.status == RunStatus.COMPLETED
+    messages = runtime.chat_sessions.get("coder", "session-one").load()
+    # A remote provider keeps the stall guard. Consecutive visible partials are
+    # continued twice, then the bounded recovery ends explicitly.
+    assert len(adapter.stream_requests) == 3
+    assert run.status == RunStatus.INTERRUPTED
+    assert isinstance(exc_info.value.result, ChatMessage)
+    assert exc_info.value.result.content == "partialpartialpartial"
+    assert persisted_roles(messages) == [
+        "user",
+        "assistant",
+        "note",
+        "assistant",
+        "note",
+        "assistant",
+    ]
+    assert messages[-1].role == "run_summary"
+    assert messages[-1].status == "interrupted"
 
 
 @pytest.mark.asyncio

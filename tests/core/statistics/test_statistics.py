@@ -373,6 +373,29 @@ def test_fork_counts_only_activity_appended_after_copied_history(tmp_path: Path)
     assert edit.failures == 1
 
 
+def test_interrupted_runs_have_distinct_count_rate_and_daily_bucket(tmp_path: Path) -> None:
+    service, manager = _service(tmp_path, ["main"])
+    session = manager.create("main")
+    session.append(ChatMessage.user("work", timestamp=BASE))
+    session.append(
+        _run_summary(
+            status="interrupted",
+            at=BASE + timedelta(seconds=1),
+            duration_ms=250,
+            run_id="interrupted-run",
+        )
+    )
+
+    report = service.report()
+
+    assert report.overview.run_status.interrupted == 1
+    assert report.overview.run_status.failed == 0
+    assert report.overview.daily_trend[0].interrupted == 1
+    assert report.runs.status.interrupted == 1
+    assert report.runs.interruption_rate == pytest.approx(1.0)
+    assert report.runs.failure_rate == pytest.approx(0.0)
+
+
 def test_compactions_report_distribution_reclaim_strategy_window_and_forks(
     tmp_path: Path,
 ) -> None:

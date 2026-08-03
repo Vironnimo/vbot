@@ -8,6 +8,7 @@ from core.channels.adapter import RunButtonBinding, bound_run_callback_data
 from core.channels.channels import ChannelStorage
 
 from .engine_test_support import (
+    ASSISTANT_OUTPUT_EVENT,
     CHANNEL_REPLY_SURFACE,
     SESSION_ID,
     AsyncMock,
@@ -15,6 +16,7 @@ from .engine_test_support import (
     InteractionButton,
     InteractionEvent,
     Path,
+    Run,
     drain,
     engine_module,
     logging,
@@ -24,6 +26,7 @@ from .engine_test_support import (
     make_empty_completed_run,
     make_engine,
     make_failed_run,
+    make_interrupted_run,
     make_new_only_dispatcher,
     pytest,
 )
@@ -95,6 +98,39 @@ async def test_cancelled_run_sends_cancellation_reply(tmp_path: Path) -> None:
     await drain(engine, 12345)
 
     assert transport.sent_texts == [engine_module._CANCELLED_REPLY]
+    await engine.stop()
+
+
+@pytest.mark.asyncio
+async def test_interrupted_run_forwards_preserved_partial_output(tmp_path: Path) -> None:
+    trigger_mock = AsyncMock(return_value=make_interrupted_run(output_text="preserved partial"))
+    engine, _sessions, _trigger, transport = make_engine(tmp_path, trigger_run=trigger_mock)
+
+    await engine.handle_inbound_text(make_conversation(), "hello")
+    await drain(engine, 12345)
+
+    assert transport.sent_texts == ["preserved partial"]
+    await engine.stop()
+
+
+@pytest.mark.asyncio
+async def test_recovered_run_forwards_partial_and_continuation_without_added_text(
+    tmp_path: Path,
+) -> None:
+    run = Run(run_id="run-recovered", agent_id="assistant", session_id=SESSION_ID)
+    run.emit(
+        ASSISTANT_OUTPUT_EVENT,
+        {"message": {"content": "preserved partial", "interrupted": True}},
+    )
+    run.emit(ASSISTANT_OUTPUT_EVENT, {"message": {"content": " continuation"}})
+    run.mark_completed("ok")
+    trigger_mock = AsyncMock(return_value=run)
+    engine, _sessions, _trigger, transport = make_engine(tmp_path, trigger_run=trigger_mock)
+
+    await engine.handle_inbound_text(make_conversation(), "hello")
+    await drain(engine, 12345)
+
+    assert transport.sent_texts == ["preserved partial continuation"]
     await engine.stop()
 
 

@@ -27,6 +27,7 @@ from core.providers.reasoning import (
 from core.runs import (
     ActiveRunError,
     RunCancelledError,
+    RunInterruptedError,
     RunStatus,
 )
 from core.tools import (
@@ -80,7 +81,7 @@ async def test_content_block_request_is_serialized_in_continuation_journal(
         ),
     ]
 
-    with pytest.raises(NetworkError):
+    with pytest.raises(RunInterruptedError, match="network"):
         await build_chat_loop(runtime, streaming=True).send(
             "coder",
             content,
@@ -270,7 +271,7 @@ async def test_second_interrupted_message_extends_same_checkpoint(tmp_path: Path
     )
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=first_adapter)
     loop = build_chat_loop(runtime, streaming=True)
-    with pytest.raises(NetworkError):
+    with pytest.raises(RunInterruptedError, match="network"):
         await loop.send("coder", "Do the work", session_id="session-one")
     first_state = recover_continuation(runtime.chat_sessions.get("coder", "session-one"))
     assert first_state is not None
@@ -290,7 +291,7 @@ async def test_second_interrupted_message_extends_same_checkpoint(tmp_path: Path
         "Try again",
         session_id="session-one",
     )
-    with pytest.raises(NetworkError):
+    with pytest.raises(RunInterruptedError, match="network"):
         await second_run.wait()
 
     second_state = recover_continuation(runtime.chat_sessions.get("coder", "session-one"))

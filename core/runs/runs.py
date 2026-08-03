@@ -57,7 +57,13 @@ PROVIDER_HEARTBEAT_EVENT = "provider_heartbeat"
 RUN_COMPLETED_EVENT = "run_completed"
 RUN_FAILED_EVENT = "run_failed"
 RUN_CANCELLED_EVENT = "run_cancelled"
-TERMINAL_EVENT_TYPES = {RUN_COMPLETED_EVENT, RUN_FAILED_EVENT, RUN_CANCELLED_EVENT}
+RUN_INTERRUPTED_EVENT = "run_interrupted"
+TERMINAL_EVENT_TYPES = {
+    RUN_COMPLETED_EVENT,
+    RUN_FAILED_EVENT,
+    RUN_CANCELLED_EVENT,
+    RUN_INTERRUPTED_EVENT,
+}
 RUN_AGENT_ACTIVITY_FIELD = "contributes_to_agent_activity"
 RUN_KIND_FIELD = "run_kind"
 
@@ -69,6 +75,7 @@ class RunStatus(StrEnum):
     COMPLETED = "completed"
     FAILED = "failed"
     CANCELLED = "cancelled"
+    INTERRUPTED = "interrupted"
 
 
 class RunKind(StrEnum):
@@ -100,6 +107,15 @@ class RunNotFoundError(RunError):
 
 class RunCancelledError(RunError):
     """Raised when awaiting a cancelled run."""
+
+
+class RunInterruptedError(RunError):
+    """Signal that bounded automatic recovery could not finish a Run."""
+
+    def __init__(self, cause: str, *, result: Any | None = None) -> None:
+        super().__init__(f"run interrupted: {cause}")
+        self.cause = cause
+        self.result = result
 
 
 class WaitingWorkLimitError(RunError):
@@ -395,6 +411,8 @@ class Run:
         await self._done.wait()
         if self.status == RunStatus.CANCELLED:
             raise RunCancelledError(f"run cancelled: {self.id}")
+        if self.status == RunStatus.INTERRUPTED and self.error is not None:
+            raise self.error
         if self.status == RunStatus.FAILED and self.error is not None:
             raise self.error
         return self.result
@@ -444,6 +462,30 @@ class Run:
         if payload_extras:
             payload.update(payload_extras)
         self.emit(RUN_FAILED_EVENT, payload)
+        self._done.set()
+
+    def mark_interrupted(
+        self,
+        error: RunInterruptedError,
+        payload_extras: JsonObject | None = None,
+    ) -> None:
+        """Move the run to interrupted and publish the terminal event."""
+        if self.status != RunStatus.RUNNING:
+            return
+        self.result = error.result
+        self.error = error
+        self.status = RunStatus.INTERRUPTED
+        _LOGGER.warning(
+            "Run %s interrupted after recovery was exhausted (agent=%s session=%s cause=%s)",
+            self.id,
+            self.agent_id,
+            self.session_id,
+            error.cause,
+        )
+        payload: JsonObject = {"status": self.status.value, "cause": error.cause}
+        if payload_extras:
+            payload.update(payload_extras)
+        self.emit(RUN_INTERRUPTED_EVENT, payload)
         self._done.set()
 
     def mark_cancelled(self, payload_extras: JsonObject | None = None) -> None:
@@ -1029,6 +1071,11 @@ class ChatRunManager:
             if result_usage:
                 payload_extras["usage"] = result_usage
             run.mark_completed(result, payload_extras=payload_extras)
+        except RunInterruptedError as error:
+            if run.cancel_requested:
+                run.mark_cancelled(payload_extras=terminal_extras())
+                return
+            run.mark_interrupted(error, payload_extras=terminal_extras())
         except asyncio.CancelledError:
             run.mark_cancelled(payload_extras=terminal_extras())
         except (KeyboardInterrupt, SystemExit):

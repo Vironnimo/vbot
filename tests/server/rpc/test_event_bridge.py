@@ -22,6 +22,7 @@ from core.runs import (
     MODEL_STEP_USAGE_EVENT,
     RUN_COMPLETED_EVENT,
     RUN_FAILED_EVENT,
+    RUN_INTERRUPTED_EVENT,
     RUN_STARTED_EVENT,
     TOOL_CALL_STDERR_EVENT,
     TOOL_CALL_STDOUT_EVENT,
@@ -187,6 +188,24 @@ def test_server_event_forwards_failed_run_error() -> None:
     summary = _server_event_from_run_event(event)
 
     assert summary["payload"]["error"] == "Provider request failed"
+
+
+def test_server_event_projects_interruption_status_and_normalized_cause() -> None:
+    event = RunEvent(
+        sequence=9,
+        run_id="run-1",
+        agent_id="builder",
+        session_id="sess-uuid",
+        type=RUN_INTERRUPTED_EVENT,
+        payload={"status": "interrupted", "cause": "network"},
+    )
+
+    summary = _server_event_from_run_event(event)
+
+    assert summary["type"] == "run_interrupted"
+    assert summary["payload"]["status"] == "interrupted"
+    assert summary["payload"]["cause"] == "network"
+    assert "error" not in summary["payload"]
 
 
 def test_server_event_forwards_model_step_usage_as_run_output() -> None:

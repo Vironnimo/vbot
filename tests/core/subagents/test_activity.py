@@ -18,6 +18,7 @@ from core.runs import (
     TOOL_CALL_STDOUT_EVENT,
     USER_MESSAGE_EVENT,
     Run,
+    RunInterruptedError,
 )
 from core.storage import TemporaryFileManager
 from core.subagents.activity import SubAgentActivity
@@ -117,6 +118,23 @@ async def test_activity_copies_non_streaming_assistant_output_and_failed_tool_st
     assert "`bash` failed" in text
     assert "private failure body" not in text
     assert "provider internals" not in text
+
+
+@pytest.mark.asyncio
+async def test_activity_records_interrupted_terminal_status(tmp_path: Path) -> None:
+    activity = SubAgentActivity.create(
+        TemporaryFileManager(tmp_path),
+        agent_id="worker",
+        session_id="child-session",
+    )
+    assert activity is not None
+    run = Run(run_id="child-run", agent_id="worker", session_id="child-session")
+    activity.attach(run)
+
+    run.mark_interrupted(RunInterruptedError("network"))
+
+    text = await _wait_for_text(activity.path, "interrupted (`child-run`)")
+    assert "Run status" in text
 
 
 @pytest.mark.asyncio

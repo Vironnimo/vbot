@@ -39,7 +39,14 @@ from core.chat.commands import (
 from core.chat.content_blocks import ContentBlock, MediaBlock, TextBlock
 from core.chat.messages import GroupRole
 from core.extensions.interactions import InteractionButton, InteractionEvent
-from core.runs import ASSISTANT_OUTPUT_EVENT, ChatRunManager, Run, RunKind, WaitingWorkAdmission
+from core.runs import (
+    ASSISTANT_OUTPUT_EVENT,
+    ChatRunManager,
+    Run,
+    RunInterruptedError,
+    RunKind,
+    WaitingWorkAdmission,
+)
 from core.sessions import ChatSessionManager
 
 SESSION_ID = "ch-tg-assistant-12345"
@@ -286,6 +293,17 @@ def make_cancelled_run(*, session_id: str = SESSION_ID) -> Run:
     return run
 
 
+def make_interrupted_run(*, output_text: str | None, session_id: str = SESSION_ID) -> Run:
+    run = Run(run_id="run-interrupted", agent_id="assistant", session_id=session_id)
+    if output_text is not None:
+        run.emit(
+            ASSISTANT_OUTPUT_EVENT,
+            {"message": {"content": output_text, "interrupted": True}},
+        )
+    run.mark_interrupted(RunInterruptedError("network", result=output_text))
+    return run
+
+
 def make_engine(
     tmp_path: Path,
     *,
@@ -451,6 +469,7 @@ __all__ = [
     "make_empty_completed_run",
     "make_failed_run",
     "make_cancelled_run",
+    "make_interrupted_run",
     "make_engine",
     "drain",
     "assert_member_trigger",

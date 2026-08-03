@@ -24,6 +24,7 @@ from core.runs import (
     Run,
     RunCancelledError,
     RunExecutor,
+    RunInterruptedError,
     RunKind,
     RunNotFoundError,
     RunStatus,
@@ -1110,6 +1111,13 @@ async def _wait_for_subagent_result(
         result = await run.wait()
     except RunCancelledError:
         return _cancelled_result_dict(run, activity_file)
+    except RunInterruptedError as error:
+        return _result_dict(
+            run,
+            status=RunStatus.INTERRUPTED.value,
+            message=error.result,
+            activity_file=activity_file,
+        )
     except Exception as error:
         return _result_dict(
             run,
@@ -1290,6 +1298,12 @@ def _result_dict(
         data["cancelled_by_user"] = True
     if status == RunStatus.FAILED.value and not content:
         data["note"] = "No assistant output found in sub-agent session."
+    if status == RunStatus.INTERRUPTED.value and not content:
+        data["note"] = (
+            "The Sub-Agent Run was interrupted before it produced Assistant output. "
+            "Continue the same Session by passing both agent_id and session_id from this "
+            "result to subagent."
+        )
     return data
 
 
@@ -1351,6 +1365,7 @@ def _should_poll_session_result(result: JsonObject) -> bool:
     return result.get("status") in {
         RunStatus.FAILED.value,
         RunStatus.CANCELLED.value,
+        RunStatus.INTERRUPTED.value,
     } or (result.get("status") == RunStatus.COMPLETED.value and not result.get("result"))
 
 
@@ -1378,6 +1393,7 @@ def _terminal_session_result(
         RunStatus.COMPLETED.value,
         RunStatus.FAILED.value,
         RunStatus.CANCELLED.value,
+        RunStatus.INTERRUPTED.value,
     }:
         return None
 

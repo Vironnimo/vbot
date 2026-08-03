@@ -13,6 +13,7 @@ from core.runs import (
     RUN_CANCELLED_EVENT,
     RUN_COMPLETED_EVENT,
     RUN_FAILED_EVENT,
+    RUN_INTERRUPTED_EVENT,
     TOOL_CALL_RESULT_EVENT,
     TOOL_CALL_STARTED_EVENT,
     Run,
@@ -219,6 +220,7 @@ def _terminal_status(event: RunEvent) -> str | None:
         RUN_COMPLETED_EVENT: "completed",
         RUN_FAILED_EVENT: "failed",
         RUN_CANCELLED_EVENT: "cancelled",
+        RUN_INTERRUPTED_EVENT: "interrupted",
     }.get(event.type)
 
 

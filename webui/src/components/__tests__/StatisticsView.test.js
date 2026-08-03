@@ -43,7 +43,7 @@ function makeReport(overrides = {}) {
         agent_takeover: 0,
       },
       last_activity: '2026-06-13T09:00:00+00:00',
-      run_status: { completed: 3, failed: 1, cancelled: 0 },
+      run_status: { completed: 3, failed: 1, cancelled: 0, interrupted: 0 },
       average_run_duration_ms: 1500,
       median_run_duration_ms: 1200,
       runs_with_tool_calls: 2,
@@ -182,9 +182,10 @@ function makeReport(overrides = {}) {
     runs: {
       total_runs: 4,
       open_run_groups: 1,
-      status: { completed: 3, failed: 1, cancelled: 0 },
+      status: { completed: 3, failed: 1, cancelled: 0, interrupted: 0 },
       cancel_rate: 0,
       failure_rate: 0.25,
+      interruption_rate: 0,
       duration: {
         count: 4,
         average_ms: 1500,
@@ -506,7 +507,7 @@ describe('StatisticsView', () => {
     expect(document.body.textContent).toContain('Activity & reliability');
     expect(document.body.textContent).toContain('Last 30 days');
     expect(document.querySelectorAll('.stats-activity__col')).toHaveLength(30);
-    expect(document.querySelectorAll('.stats-health__segment')).toHaveLength(3);
+    expect(document.querySelectorAll('.stats-health__segment')).toHaveLength(4);
     expect(document.querySelector('.stats-donut')).toBeNull();
     expect(
       document.querySelector('.stats-activity__legend').textContent,
@@ -580,7 +581,12 @@ describe('StatisticsView', () => {
   it('renders unavailable outcome shares instead of a misleading zero percent with no Runs', async () => {
     const report = makeReport();
     report.overview.total_runs = 0;
-    report.overview.run_status = { completed: 0, failed: 0, cancelled: 0 };
+    report.overview.run_status = {
+      completed: 0,
+      failed: 0,
+      cancelled: 0,
+      interrupted: 0,
+    };
     report.overview.daily_trend = [];
     rpcMock.mockResolvedValue(report);
 
@@ -596,7 +602,7 @@ describe('StatisticsView', () => {
       [...document.querySelectorAll('.stats-health__share')].map((share) =>
         share.textContent.trim(),
       ),
-    ).toEqual(['—', '—', '—']);
+    ).toEqual(['—', '—', '—', '—']);
   });
 
   it('switches to the usage sub-view and badges estimated tokens', async () => {

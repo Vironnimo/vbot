@@ -125,6 +125,7 @@ describe('chat state helpers', () => {
     ['run_completed', 'completed'],
     ['run_failed', 'failed'],
     ['run_cancelled', 'cancelled'],
+    ['run_interrupted', 'interrupted'],
   ])(
     'keeps an excluded Run out of Agent activity through %s while retaining its timeline',
     (terminalType, terminalStatus) => {

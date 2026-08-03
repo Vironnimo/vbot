@@ -261,6 +261,9 @@
     if (status === 'cancelled') {
       return 'warn';
     }
+    if (status === 'interrupted') {
+      return 'warn';
+    }
     return 'success';
   }
 

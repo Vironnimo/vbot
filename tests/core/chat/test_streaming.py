@@ -841,14 +841,16 @@ async def test_decide_recovery_restartable_transient_before_visible_restarts() -
         assert action is StreamRecoveryAction.RESTART, type(error).__name__
 
 
-async def test_decide_recovery_restartable_before_visible_fails_when_budget_exhausted() -> None:
+async def test_decide_recovery_restartable_before_visible_interrupts_when_budget_exhausted() -> (
+    None
+):
     action = decide_stream_recovery(
         NetworkError("dropped"),
         can_restart=False,
         has_partial_content=False,
     )
 
-    assert action is StreamRecoveryAction.FAIL
+    assert action is StreamRecoveryAction.INTERRUPT
 
 
 async def test_decide_recovery_non_restartable_before_visible_fails() -> None:

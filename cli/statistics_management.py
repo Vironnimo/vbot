@@ -96,7 +96,8 @@ def _format_overview(section: Mapping[str, Any], window: object) -> str:
             "run status: "
             f"completed={_int(status.get('completed'))} "
             f"failed={_int(status.get('failed'))} "
-            f"cancelled={_int(status.get('cancelled'))}"
+            f"cancelled={_int(status.get('cancelled'))} "
+            f"interrupted={_int(status.get('interrupted'))}"
         )
     lines.append(f"average run duration ms: {_number(section.get('average_run_duration_ms'))}")
     lines.append(f"median run duration ms: {_number(section.get('median_run_duration_ms'))}")
@@ -209,10 +210,12 @@ def _format_runs(section: Mapping[str, Any], window: object) -> str:
             "status: "
             f"completed={_int(status.get('completed'))} "
             f"failed={_int(status.get('failed'))} "
-            f"cancelled={_int(status.get('cancelled'))}"
+            f"cancelled={_int(status.get('cancelled'))} "
+            f"interrupted={_int(status.get('interrupted'))}"
         )
     lines.append(f"cancel rate: {_number(section.get('cancel_rate'))}")
     lines.append(f"failure rate: {_number(section.get('failure_rate'))}")
+    lines.append(f"interruption rate: {_number(section.get('interruption_rate'))}")
 
     duration = section.get("duration")
     if isinstance(duration, dict):

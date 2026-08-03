@@ -100,6 +100,9 @@ export const labelForEvent = (event) => {
   if (event.type === 'run_cancelled') {
     return t('chat.event.cancelled', 'Run cancelled');
   }
+  if (event.type === 'run_interrupted') {
+    return t('chat.event.interrupted', 'Run interrupted');
+  }
   if (event.type === 'user_message_persisted') {
     const displayName = senderDisplayName(messageFromEvent(event));
     return (displayName || t('chat.role.user', 'You')).toUpperCase();
@@ -310,9 +313,12 @@ export function isRunChildWorking(assistantRun, child) {
 export const runMetaParts = (assistantRun) => {
   const parts = [labelForRunIterations(assistantRun)];
   const duration = formatRunDuration(assistantRun);
-  if (assistantRun.status === 'cancelled') {
-    // A cancelled run always names the user action, with the runtime after
-    // it — the duration alone would read like a normal completed run.
+  if (
+    assistantRun.status === 'cancelled' ||
+    assistantRun.status === 'interrupted'
+  ) {
+    // Non-success terminal rows name the outcome before the runtime; the
+    // duration alone would read like a normal completed run.
     parts.push(runStatusLabel(assistantRun.status));
     if (duration) {
       parts.push(duration);
@@ -1051,6 +1057,9 @@ export const metaForEvent = (event) => {
   if (event.type === 'run_completed') {
     return t('chat.runStatus.completed', 'Completed');
   }
+  if (event.type === 'run_interrupted') {
+    return t('chat.runStatus.interrupted', 'Interrupted');
+  }
   return '';
 };
 
@@ -1124,6 +1133,9 @@ function runStatusLabel(status) {
   }
   if (status === 'cancelled') {
     return t('chat.runStatus.cancelled', 'Cancelled');
+  }
+  if (status === 'interrupted') {
+    return t('chat.runStatus.interrupted', 'Interrupted');
   }
   if (status === 'completed' || status === 'success') {
     return t('chat.runStatus.completed', 'Completed');

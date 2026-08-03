@@ -358,6 +358,37 @@ describe('createChatRunStream().applyConnectionSnapshot()', () => {
     expect(sessionState.error).toBe('Provider request failed');
   });
 
+  it('projects interrupted Run status and duration for Sub-Agent rows', () => {
+    const harness = makeStreamHarness({
+      chatState,
+      displayedAgentId: DISPLAYED_AGENT_ID,
+      displayedSessionId: DISPLAYED_SESSION_ID,
+    });
+
+    harness.stream.handleServerEvents({
+      type: 'run_interrupted',
+      payload: {
+        run_id: 'run-interrupted-1',
+        agent_id: 'worker',
+        session_id: 'session-child',
+        run_event_type: 'run_interrupted',
+        run_event_sequence: 3,
+        status: 'interrupted',
+        cause: 'network',
+        timing: { duration_ms: 2500 },
+      },
+    });
+
+    expect(harness.subAgentRunStatuses).toEqual(
+      expect.objectContaining({
+        'run:run-interrupted-1': 'interrupted',
+        'session:worker::session-child': 'interrupted',
+        'runDuration:run-interrupted-1': 2500,
+        'sessionDuration:worker::session-child': 2500,
+      }),
+    );
+  });
+
   it('keeps excluded WebSocket lifecycle events out of Agent activity', () => {
     const harness = makeStreamHarness({
       chatState,
