@@ -136,6 +136,7 @@ export function createChatController({
   let handledQueueInvalidation = null;
   let activityRefreshVersion = 0;
   let commandsLoadVersion = 0;
+  const historyLoadVersions = new Map();
   const subAgentStatusVerificationKeys = new Set();
   const subAgentStatusInflightKeys = new Set();
 
@@ -634,6 +635,10 @@ export function createChatController({
 
   async function loadHistoryForSession(agentId, sessionId) {
     const sessionState = ensureSessionState(chatState, agentId, sessionId);
+    const requestVersion = (historyLoadVersions.get(sessionState.key) ?? 0) + 1;
+    historyLoadVersions.set(sessionState.key, requestVersion);
+    const isLatestRequest = () =>
+      historyLoadVersions.get(sessionState.key) === requestVersion;
     const isDisplayed = () => isDisplayedSession(agentId, sessionId);
     const startedDisplayed = isDisplayed();
     if (startedDisplayed) {
@@ -648,6 +653,9 @@ export function createChatController({
         session_id: sessionId,
         limit: HISTORY_INITIAL_LIMIT,
       });
+      if (!isLatestRequest()) {
+        return false;
+      }
       loadHistory(sessionState, history?.messages ?? [], {
         hasMore: history?.has_more === true,
         sessionUsage: history?.session_usage,
@@ -674,12 +682,12 @@ export function createChatController({
       await syncSessionQueue(sessionState);
       return true;
     } catch (error) {
-      if (isDisplayed()) {
+      if (isLatestRequest() && isDisplayed()) {
         chatState.historyError = errorMessage(error);
       }
       return false;
     } finally {
-      if (startedDisplayed && isDisplayed()) {
+      if (isLatestRequest() && startedDisplayed && isDisplayed()) {
         chatState.loadingHistory = false;
       }
     }
@@ -1073,6 +1081,7 @@ export function createChatController({
 
   function destroy() {
     runStream.closeSubscriptions();
+    historyLoadVersions.clear();
     subAgentStatusInflightKeys.clear();
     subAgentStatusVerificationKeys.clear();
   }
