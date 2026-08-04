@@ -135,12 +135,14 @@ VALID_OAUTH_FLOWS = frozenset({"device"})
 STANDARD_DEVICE_FLOW = "oauth2"
 OPENAI_CODEX_DEVICE_FLOW = "openai_codex"
 MINIMAX_OAUTH_DEVICE_FLOW = "minimax_oauth"
+NOUS_OAUTH_DEVICE_FLOW = "nous_oauth"
 XAI_OAUTH_DEVICE_FLOW = "xai_oauth"
 VALID_DEVICE_FLOWS = frozenset(
     {
         STANDARD_DEVICE_FLOW,
         OPENAI_CODEX_DEVICE_FLOW,
         MINIMAX_OAUTH_DEVICE_FLOW,
+        NOUS_OAUTH_DEVICE_FLOW,
         XAI_OAUTH_DEVICE_FLOW,
     }
 )

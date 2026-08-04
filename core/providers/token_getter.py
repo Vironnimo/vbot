@@ -16,6 +16,7 @@ from core.providers.errors import ProviderAuthError, ProviderError, ProviderRate
 from core.providers.openai_subscription_auth import openai_subscription_token_extra
 from core.providers.providers import (
     MINIMAX_OAUTH_DEVICE_FLOW,
+    NOUS_OAUTH_DEVICE_FLOW,
     OPENAI_CODEX_DEVICE_FLOW,
     XAI_OAUTH_DEVICE_FLOW,
     OAuthConfig,
@@ -34,7 +35,11 @@ GITHUB_OAUTH_TOKEN_EXTRA_KEY = "github_oauth_token"
 COPILOT_API_ENDPOINT_EXTRA_KEY = "copilot_api_endpoint"
 COPILOT_INTEGRATION_ID = "vscode-chat"
 COPILOT_EDITOR_VERSION = "vscode/1.128.0"
-ROTATING_REFRESH_DEVICE_FLOWS = frozenset({MINIMAX_OAUTH_DEVICE_FLOW, XAI_OAUTH_DEVICE_FLOW})
+NOUS_INFERENCE_INVOKE_SCOPE = "inference:invoke"
+OAUTH_SCOPE_EXTRA_KEY = "oauth_scope"
+ROTATING_REFRESH_DEVICE_FLOWS = frozenset(
+    {MINIMAX_OAUTH_DEVICE_FLOW, NOUS_OAUTH_DEVICE_FLOW, XAI_OAUTH_DEVICE_FLOW}
+)
 _COPILOT_API_HOST_SUFFIXES = (
     ".githubcopilot.com",
     ".ghe.com",
@@ -176,7 +181,13 @@ class OAuthTokenGetter:
             raise ProviderAuthError("OAuth token expired — please reconnect")
         now = datetime.now(UTC)
         try:
-            response_data = await retry_async(self._post_refresh_token, token.refresh_token)
+            if self._oauth_config.device_flow == NOUS_OAUTH_DEVICE_FLOW:
+                # Nous refresh tokens are single-use. Retrying a POST after an
+                # ambiguous transport failure can replay the retired token and
+                # revoke the entire session chain.
+                response_data = await self._post_refresh_token(token.refresh_token)
+            else:
+                response_data = await retry_async(self._post_refresh_token, token.refresh_token)
             if (
                 self._oauth_config.device_flow == MINIMAX_OAUTH_DEVICE_FLOW
                 and response_data.get("status") != "success"
@@ -185,6 +196,11 @@ class OAuthTokenGetter:
             access_token = _required_token_string(response_data.get("access_token"))
             refresh_token = response_data.get("refresh_token")
             extra = dict(token.extra)
+            if self._oauth_config.device_flow == NOUS_OAUTH_DEVICE_FLOW:
+                validate_nous_oauth_scope(response_data, self._oauth_config.scopes)
+                extra[OAUTH_SCOPE_EXTRA_KEY] = oauth_scope_value(
+                    response_data, self._oauth_config.scopes
+                )
             if self._oauth_config.device_flow == OPENAI_CODEX_DEVICE_FLOW:
                 extra.update(openai_subscription_token_extra(access_token))
             if self._oauth_config.device_flow == MINIMAX_OAUTH_DEVICE_FLOW:
@@ -281,14 +297,19 @@ class OAuthTokenGetter:
             close_client = True
         try:
             try:
+                data: dict[str, object] = {
+                    "grant_type": "refresh_token",
+                    "client_id": self._oauth_config.client_id,
+                }
+                headers = {"Accept": "application/json"}
+                if self._oauth_config.device_flow == NOUS_OAUTH_DEVICE_FLOW:
+                    headers["x-nous-refresh-token"] = refresh_token
+                else:
+                    data["refresh_token"] = refresh_token
                 response = await client.post(
                     self._oauth_config.token_url,
-                    data={
-                        "grant_type": "refresh_token",
-                        "refresh_token": refresh_token,
-                        "client_id": self._oauth_config.client_id,
-                    },
-                    headers={"Accept": "application/json"},
+                    data=data,
+                    headers=headers,
                 )
             except httpx.TransportError as exc:
                 raise wrap_network_error(exc) from exc
@@ -296,7 +317,10 @@ class OAuthTokenGetter:
             if close_client:
                 await client.aclose()
 
-        _classify_token_exchange_status(response.status_code, response.text)
+        if self._oauth_config.device_flow == NOUS_OAUTH_DEVICE_FLOW:
+            _classify_nous_refresh_status(response.status_code, response.text)
+        else:
+            _classify_token_exchange_status(response.status_code, response.text)
         data = response.json()
         if not isinstance(data, dict):
             raise ProviderAuthError("OAuth token refresh failed — please reconnect")
@@ -361,6 +385,44 @@ def _required_token_string(value: object) -> str:
     if not isinstance(value, str) or not value:
         raise ProviderAuthError("OAuth token refresh failed — please reconnect")
     return value
+
+
+def _oauth_scope_tokens(value: object) -> tuple[str, ...]:
+    if isinstance(value, str):
+        return tuple(token for token in value.split() if token)
+    if isinstance(value, list) and all(isinstance(token, str) for token in value):
+        return tuple(token for token in value if token)
+    return ()
+
+
+def oauth_scope_value(data: dict[str, object], requested_scopes: list[str]) -> str:
+    """Return the advertised OAuth scope, or the exact requested scope."""
+
+    advertised = _oauth_scope_tokens(data.get("scope"))
+    return " ".join(advertised or tuple(requested_scopes))
+
+
+def validate_nous_oauth_scope(data: dict[str, object], requested_scopes: list[str]) -> None:
+    """Reject a Nous token response that explicitly lacks inference access."""
+
+    advertised = _oauth_scope_tokens(data.get("scope"))
+    if advertised and NOUS_INFERENCE_INVOKE_SCOPE not in advertised:
+        raise ProviderAuthError(
+            "Nous Portal login did not grant inference access — please reconnect"
+        )
+    if NOUS_INFERENCE_INVOKE_SCOPE not in requested_scopes:
+        raise ProviderAuthError("Nous Portal connection is missing the inference scope")
+
+
+def _classify_nous_refresh_status(status_code: int, response_body: str) -> None:
+    if status_code < 400:
+        return
+    normalized = response_body.casefold()
+    if "refresh_token_reused" in normalized or "reuse detected" in normalized:
+        raise ProviderAuthError(
+            "Nous Portal detected refresh-token reuse and revoked this login — reconnect"
+        )
+    _classify_token_exchange_status(status_code, response_body)
 
 
 def _classify_token_exchange_status(status_code: int, response_body: str) -> None:

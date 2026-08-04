@@ -25,6 +25,7 @@ from core.providers.kimi import KimiAdapter
 from core.providers.lmstudio import LMStudioAdapter
 from core.providers.minimax import MiniMaxAdapter
 from core.providers.mistral import MistralAdapter
+from core.providers.nous import NousAdapter
 from core.providers.ollama import OllamaAdapter
 from core.providers.openai import OpenAIAdapter
 from core.providers.openai_compatible import OpenAICompatibleAdapter
@@ -68,6 +69,7 @@ __all__ = [
     "LMStudioAdapter",
     "MiniMaxAdapter",
     "MistralAdapter",
+    "NousAdapter",
     "OllamaAdapter",
     "OpenAIAdapter",
     "OpenAICompatibleAdapter",

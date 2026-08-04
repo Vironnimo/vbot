@@ -26,6 +26,7 @@ TOKEN_EXCHANGE_URL = "https://api.github.com/copilot_internal/v2/token"
 OPENAI_TOKEN_URL = "https://auth.openai.com/oauth/token"
 MINIMAX_TOKEN_URL = "https://api.minimax.io/oauth/token"
 XAI_TOKEN_URL = "https://auth.x.ai/oauth2/token"
+NOUS_TOKEN_URL = "https://portal.nousresearch.com/api/oauth/token"
 
 
 def test_copilot_token_extra_accepts_only_official_exchange_endpoints() -> None:
@@ -106,6 +107,17 @@ def _xai_oauth_config() -> OAuthConfig:
         token_url=XAI_TOKEN_URL,
         scopes=["openid", "offline_access", "grok-cli:access", "api:access"],
         device_flow="xai_oauth",
+    )
+
+
+def _nous_oauth_config() -> OAuthConfig:
+    return OAuthConfig(
+        flow="device",
+        client_id="hermes-cli",
+        device_auth_url="https://portal.nousresearch.com/api/oauth/device/code",
+        token_url=NOUS_TOKEN_URL,
+        scopes=["inference:invoke"],
+        device_flow="nous_oauth",
     )
 
 
@@ -661,6 +673,89 @@ async def test_minimax_terminal_refresh_failure_quarantines_token(tmp_path: Path
         await getter()
 
     assert token_store.load("minimax", "subscription") is None
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_nous_refresh_rotates_single_use_token_in_header(tmp_path: Path) -> None:
+    token_store = TokenStore(tmp_path)
+    token_store.save(
+        "nous",
+        "subscription",
+        OAuthToken(
+            access_token="expired-access",
+            refresh_token="old-refresh",
+            expires_at=datetime.now(UTC) - timedelta(minutes=1),
+        ),
+    )
+    route = respx.post(NOUS_TOKEN_URL).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "access_token": "fresh-access",
+                "refresh_token": "rotated-refresh",
+                "expires_in": 900,
+                "scope": "inference:invoke",
+            },
+        )
+    )
+    getter = OAuthTokenGetter(token_store, "nous", "subscription", _nous_oauth_config())
+
+    assert await getter() == "fresh-access"
+    assert route.calls.last.request.headers["x-nous-refresh-token"] == "old-refresh"
+    assert parse_qs(route.calls.last.request.content.decode()) == {
+        "grant_type": ["refresh_token"],
+        "client_id": ["hermes-cli"],
+    }
+    stored = token_store.load("nous", "subscription")
+    assert stored is not None
+    assert stored.refresh_token == "rotated-refresh"
+    assert stored.extra == {"oauth_scope": "inference:invoke"}
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_nous_refresh_reuse_quarantines_token_without_retry(tmp_path: Path) -> None:
+    token_store = TokenStore(tmp_path)
+    token_store.save(
+        "nous",
+        "subscription",
+        OAuthToken(
+            access_token="expired-access",
+            refresh_token="burned-refresh",
+            expires_at=datetime.now(UTC) - timedelta(minutes=1),
+        ),
+    )
+    route = respx.post(NOUS_TOKEN_URL).mock(
+        return_value=httpx.Response(400, text="refresh_token_reused: reuse detected")
+    )
+    getter = OAuthTokenGetter(token_store, "nous", "subscription", _nous_oauth_config())
+
+    with pytest.raises(ProviderAuthError, match="reuse"):
+        await getter()
+
+    assert route.call_count == 1
+    assert token_store.load("nous", "subscription") is None
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_nous_retryable_refresh_failure_is_not_replayed(tmp_path: Path) -> None:
+    token_store = TokenStore(tmp_path)
+    original = OAuthToken(
+        access_token="expired-access",
+        refresh_token="still-valid-refresh",
+        expires_at=datetime.now(UTC) - timedelta(minutes=1),
+    )
+    token_store.save("nous", "subscription", original)
+    route = respx.post(NOUS_TOKEN_URL).mock(return_value=httpx.Response(503, text="unavailable"))
+    getter = OAuthTokenGetter(token_store, "nous", "subscription", _nous_oauth_config())
+
+    with pytest.raises(ProviderError):
+        await getter()
+
+    assert route.call_count == 1
+    assert token_store.load("nous", "subscription") == original
 
 
 @respx.mock

@@ -57,6 +57,7 @@ from core.providers.kimi import KimiAdapter
 from core.providers.lmstudio import LMStudioAdapter
 from core.providers.minimax import MiniMaxAdapter
 from core.providers.mistral import MistralAdapter
+from core.providers.nous import NousAdapter
 from core.providers.ollama import OllamaAdapter
 from core.providers.openai import OpenAIAdapter
 from core.providers.openai_compatible import OpenAICompatibleAdapter
@@ -326,6 +327,7 @@ _ADAPTER_MAP: dict[
     "kimi": KimiAdapter,
     "minimax": MiniMaxAdapter,
     "mistral": MistralAdapter,
+    "nous": NousAdapter,
     "opencode_go": OpenCodeGoAdapter,
     "github_copilot": GitHubCopilotAdapter,
     "anthropic": AnthropicAdapter,

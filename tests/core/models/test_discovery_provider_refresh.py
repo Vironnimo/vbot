@@ -817,6 +817,68 @@ class TestRefreshModels:
 
     @respx.mock
     @pytest.mark.asyncio
+    async def test_nous_discovery_uses_selected_connection_and_keeps_skips_in_raw(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        connection = ConnectionConfig(
+            id="subscription",
+            type="oauth",
+            label="Portal Login",
+            auth=AuthConfig(header="Authorization", prefix="Bearer "),
+            models_endpoint="/models",
+        )
+        config = ProviderConfig(
+            id="nous",
+            name="Nous Portal",
+            adapter="nous",
+            base_url="https://inference-api.nousresearch.com/v1",
+            connections=[connection],
+            defaults={"max_tokens": 32000},
+        )
+        route = respx.get("https://inference-api.nousresearch.com/v1/models").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "data": [
+                        {
+                            "id": "vendor/agent-model",
+                            "name": "Agent Model",
+                            "supported_parameters": ["tools", "reasoning"],
+                            "context_length": 200000,
+                            "top_provider": {"max_completion_tokens": 64000},
+                        },
+                        {"id": "Hermes-4-70B", "name": "Hermes 4 70B"},
+                    ]
+                },
+            )
+        )
+
+        result = await refresh_models(
+            config,
+            "nous-oauth-jwt",
+            tmp_path / "resources",
+            credential_connection=connection,
+        )
+
+        generated = json.loads(
+            (tmp_path / "resources" / "models" / "nous.json").read_text(encoding="utf-8")
+        )
+        raw = json.loads(
+            (tmp_path / "resources" / "models" / "nous.raw.json").read_text(encoding="utf-8")
+        )
+        assert result["model_count"] == 1
+        assert set(generated["models"]) == {"vendor/agent-model"}
+        assert generated["models"]["vendor/agent-model"]["connections"] == ["subscription"]
+        assert generated["models"]["vendor/agent-model"]["max_output_tokens"] == 32000
+        assert {entry["id"] for entry in raw["raw_response"]["data"]} == {
+            "vendor/agent-model",
+            "Hermes-4-70B",
+        }
+        assert route.calls.last.request.headers["authorization"] == "Bearer nous-oauth-jwt"
+
+    @respx.mock
+    @pytest.mark.asyncio
     async def test_refresh_models_writes_raw_file_with_full_provider_response(
         self,
         tmp_path: Path,
