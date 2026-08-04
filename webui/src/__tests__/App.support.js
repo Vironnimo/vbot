@@ -10,6 +10,9 @@ export const rpcMock = vi.fn();
 export const listClientsMock = vi.fn(() => Promise.resolve({ clients: [] }));
 export const listQueueMock = vi.fn(() => Promise.resolve({ items: [] }));
 export const listSessionsMock = vi.fn(() => Promise.resolve({ sessions: [] }));
+export const listSessionActivityMock = vi.fn(() =>
+  Promise.resolve({ agents: [] }),
+);
 export const listLogsMock = vi.fn();
 export const readLogFileMock = vi.fn();
 export const subscribeLogEventsMock = vi.fn(() => ({
@@ -43,6 +46,7 @@ vi.mock('$lib/api.js', () =>
     listClients: (...args) => listClientsMock(...args),
     listQueue: (...args) => listQueueMock(...args),
     listSessions: (...args) => listSessionsMock(...args),
+    listSessionActivity: (...args) => listSessionActivityMock(...args),
     listLogs: (...args) => listLogsMock(...args),
     readLogFile: (...args) => readLogFileMock(...args),
     subscribeLogEvents: (...args) => subscribeLogEventsMock(...args),
@@ -68,6 +72,8 @@ export function resetAppHarness() {
   listQueueMock.mockResolvedValue({ items: [] });
   listSessionsMock.mockReset();
   listSessionsMock.mockResolvedValue({ sessions: [] });
+  listSessionActivityMock.mockReset();
+  listSessionActivityMock.mockResolvedValue({ agents: [] });
   readLogFileMock.mockReset();
   subscribeLogEventsMock.mockClear();
   subscribeRunEventsMock.mockClear();

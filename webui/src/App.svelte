@@ -1033,8 +1033,9 @@
         onDismiss={dismissOnboarding}
         onToast={showToast}
       />
-    {:else if activeViewId === 'chat'}
+    {:else}
       <ChatView
+        active={activeViewId === 'chat'}
         sharedAgents={agents}
         sharedSelectedAgentId={selectedAgentId}
         chatWidth={appearancePrefs.chatWidth}
@@ -1062,70 +1063,71 @@
         onConnectProvider={navigateToProviders}
         onPickModel={navigateToAgentModel}
       />
-    {:else if activeViewId === 'agents'}
-      <AgentsView
-        sharedSelectedAgentId={selectedAgentId}
-        onAgentsChanged={refreshAgents}
-        onAgentSelected={selectAgent}
-        onToast={showToast}
-        onNavigateToSettingsPanel={navigateToSettingsPanel}
-        onNavigateToAgentPrompt={navigateToAgentPromptScope}
-        {agentsRefreshToken}
-        {modelsRefreshToken}
-        {projectsRefreshToken}
-      />
-    {:else if activeViewId === 'terminals'}
-      <TerminalsView
-        {terminalsRefreshToken}
-        {serverUnavailable}
-        onToast={showToast}
-      />
-    {:else if activeViewId === 'projects'}
-      <ProjectsView
-        selectedProjectId={managedProjectId}
-        onProjectSelected={selectManagedProject}
-        onToast={showToast}
-        onNavigateToSettingsPanel={navigateToSettingsPanel}
-        {modelsRefreshToken}
-        {projectsRefreshToken}
-      />
-    {:else if activeViewId === 'cron'}
-      <CronView
-        onToast={showToast}
-        {serverUnavailable}
-        {cronRefreshToken}
-        {agentsRefreshToken}
-        {projectsRefreshToken}
-      />
-    {:else if activeViewId === 'system-prompt'}
-      <SystemPromptView
-        onToast={showToast}
-        targetScopeAgentId={promptScopeTarget}
-        targetScopeRequestId={promptScopeTargetRequestId}
-      />
-    {:else if activeViewId === 'settings'}
-      <SettingsView
-        bind:this={settingsView}
-        {providerAuthEvent}
-        onToast={showToast}
-        {agents}
-        {desktopCapabilities}
-        targetPanelId={settingsPanelTarget}
-        targetPanelRequestId={settingsPanelTargetRequestId}
-        onDebugEnabledChange={handleDebugEnabledChange}
-        onOpenSetupGuide={reopenOnboarding}
-        {modelsRefreshToken}
-        {clientsRefreshToken}
-        {channelsRefreshToken}
-        initialScrollPosition={settingsScrollPosition}
-        onScrollPositionChange={rememberSettingsScrollPosition}
-      />
-    {:else if activeViewId === 'logs'}
-      <LogsView />
-    {:else if activeViewId === 'statistics'}
-      <StatisticsView />
-    {:else if activeViewId === 'debug'}
-      <DebugView {debugTracesRefreshToken} />
+      {#if activeViewId === 'agents'}
+        <AgentsView
+          sharedSelectedAgentId={selectedAgentId}
+          onAgentsChanged={refreshAgents}
+          onAgentSelected={selectAgent}
+          onToast={showToast}
+          onNavigateToSettingsPanel={navigateToSettingsPanel}
+          onNavigateToAgentPrompt={navigateToAgentPromptScope}
+          {agentsRefreshToken}
+          {modelsRefreshToken}
+          {projectsRefreshToken}
+        />
+      {:else if activeViewId === 'terminals'}
+        <TerminalsView
+          {terminalsRefreshToken}
+          {serverUnavailable}
+          onToast={showToast}
+        />
+      {:else if activeViewId === 'projects'}
+        <ProjectsView
+          selectedProjectId={managedProjectId}
+          onProjectSelected={selectManagedProject}
+          onToast={showToast}
+          onNavigateToSettingsPanel={navigateToSettingsPanel}
+          {modelsRefreshToken}
+          {projectsRefreshToken}
+        />
+      {:else if activeViewId === 'cron'}
+        <CronView
+          onToast={showToast}
+          {serverUnavailable}
+          {cronRefreshToken}
+          {agentsRefreshToken}
+          {projectsRefreshToken}
+        />
+      {:else if activeViewId === 'system-prompt'}
+        <SystemPromptView
+          onToast={showToast}
+          targetScopeAgentId={promptScopeTarget}
+          targetScopeRequestId={promptScopeTargetRequestId}
+        />
+      {:else if activeViewId === 'settings'}
+        <SettingsView
+          bind:this={settingsView}
+          {providerAuthEvent}
+          onToast={showToast}
+          {agents}
+          {desktopCapabilities}
+          targetPanelId={settingsPanelTarget}
+          targetPanelRequestId={settingsPanelTargetRequestId}
+          onDebugEnabledChange={handleDebugEnabledChange}
+          onOpenSetupGuide={reopenOnboarding}
+          {modelsRefreshToken}
+          {clientsRefreshToken}
+          {channelsRefreshToken}
+          initialScrollPosition={settingsScrollPosition}
+          onScrollPositionChange={rememberSettingsScrollPosition}
+        />
+      {:else if activeViewId === 'logs'}
+        <LogsView />
+      {:else if activeViewId === 'statistics'}
+        <StatisticsView />
+      {:else if activeViewId === 'debug'}
+        <DebugView {debugTracesRefreshToken} />
+      {/if}
     {/if}
   {/key}
   <ToastStack toasts={toastState.toasts} onDismiss={dismissAppToast} />

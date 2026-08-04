@@ -47,6 +47,7 @@
   import EmptyState from './ui/EmptyState.svelte';
 
   let {
+    active = true,
     sharedAgents = [],
     sharedSelectedAgentId = '',
     // Chat reading-column width preference: 'comfortable' | 'wide' | 'full'.
@@ -1724,6 +1725,7 @@
   class="view view-chat active chat-view"
   data-chat-width={chatWidth}
   aria-labelledby="chat-title"
+  hidden={!active}
 >
   <ChatHeader
     agents={chatState.agents}
@@ -2039,6 +2041,10 @@
     flex-direction: column;
     overflow: hidden;
     background: var(--bg);
+  }
+
+  .chat-view[hidden] {
+    display: none;
   }
 
   .chat-view__surface {

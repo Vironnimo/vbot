@@ -13,6 +13,7 @@ export const subscribeRunEventsMock = vi.fn(() => ({
   source: null,
 }));
 export const listSessionsMock = vi.fn(async () => ({ sessions: [] }));
+export const listSessionActivityMock = vi.fn(async () => ({ agents: [] }));
 export const listQueueMock = vi.fn(async () => ({ items: [] }));
 export const removeFromQueueMock = vi.fn(async () => ({ ok: true }));
 export const updateQueueItemMock = vi.fn(async () => ({ ok: true }));
@@ -43,6 +44,7 @@ vi.mock('$lib/api.js', () =>
     RUN_EVENT_TOOL_CALL_STDOUT: 'tool_call_stdout',
     subscribeRunEvents: (...args) => subscribeRunEventsMock(...args),
     listSessions: (...args) => listSessionsMock(...args),
+    listSessionActivity: (...args) => listSessionActivityMock(...args),
     markSessionRead: (agentId, sessionId, runId) =>
       rpcMock('session.mark_read', {
         agent_id: agentId,
@@ -109,6 +111,8 @@ export function setupChatViewTestSuite() {
     }));
     listSessionsMock.mockReset();
     listSessionsMock.mockResolvedValue({ sessions: [] });
+    listSessionActivityMock.mockReset();
+    listSessionActivityMock.mockResolvedValue({ agents: [] });
     listQueueMock.mockReset();
     listQueueMock.mockResolvedValue({ items: [] });
     removeFromQueueMock.mockReset();

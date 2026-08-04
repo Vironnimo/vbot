@@ -1185,6 +1185,25 @@ class ChatSessionManager:
             sessions_with_metadata.append(session_data)
         return sessions_with_metadata
 
+    def list_completion_activity(
+        self, agent_id: str, project_id: str | None = None
+    ) -> builtins.list[dict[str, Any]]:
+        """List only the durable completion projection for every Session.
+
+        Agent attention badges need Session identity plus terminal completion/read
+        state, not transcript timestamps or general metadata. Keeping that narrow
+        projection here prevents an accessor refresh from opening both transcript
+        bookends and metadata sidecars for every Session it merely wants to mark
+        running, unread, or idle.
+        """
+        return [
+            {
+                "id": session.id,
+                **self._completion_activity(session),
+            }
+            for session in self.list(agent_id, project_id)
+        ]
+
     def delete(self, agent_id: str, session_id: str, project_id: str | None = None) -> None:
         """Hard-delete one agent session's transcript and sidecars.
 
