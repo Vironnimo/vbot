@@ -102,6 +102,7 @@ function buildVisibleTimelineItems(sessionState, runEvents) {
     sessionState.messages,
     sessionState.currentRun?.runId ?? null,
   );
+  applyCurrentRunIterationCount(liveItems, sessionState.currentRun);
   const reconciledItems = shouldSelectTrackedRunSource(sessionState, runEvents)
     ? selectTrackedRunTimelineSource(
         sessionState,
@@ -112,6 +113,19 @@ function buildVisibleTimelineItems(sessionState, runEvents) {
     : [...historyItems, ...liveItems];
 
   return reconciledItems.map((item) => stripTimelineSequence(item));
+}
+
+function applyCurrentRunIterationCount(liveItems, currentRun) {
+  const iterationCount = normalizedIterationCount(currentRun?.iterationCount);
+  if (iterationCount === null || !currentRun?.runId) {
+    return;
+  }
+  const assistantRun = (liveItems ?? []).find(
+    (item) => item?.type === 'assistant_run' && item.runId === currentRun.runId,
+  );
+  if (assistantRun) {
+    assistantRun.iterationCount = iterationCount;
+  }
 }
 
 function childStreamingProgress(child) {
@@ -614,6 +628,9 @@ function applyLiveTerminalStateToHistory(
     liveAssistantRun.endTimestamp ?? historyAssistantRun.endTimestamp;
   historyAssistantRun.durationMs =
     liveAssistantRun.durationMs ?? historyAssistantRun.durationMs;
+  if (normalizedIterationCount(liveAssistantRun.iterationCount) !== null) {
+    historyAssistantRun.iterationCount = liveAssistantRun.iterationCount;
+  }
   historyAssistantRun.terminalEvent = liveAssistantRun.terminalEvent;
   if (liveAssistantRun.terminalEvent?.type === 'run_cancelled') {
     markPendingToolsCancelled(
@@ -761,6 +778,12 @@ function liveTimelineEntryItems(entry, projectionCache) {
     return [entry.item];
   }
 
+  // Iteration telemetry is non-visual. A sparse WebSocket replay containing
+  // only Usage must not fabricate an empty Assistant Run row.
+  if (entry.events.every((event) => event.type === 'model_step_usage')) {
+    return [entry.userItem].filter(Boolean);
+  }
+
   const assistantRun = projectedLiveAssistantRunItem(entry, projectionCache);
   return [entry.userItem, assistantRun].filter(Boolean);
 }
@@ -839,6 +862,7 @@ function createAssistantRunItem({ id, runId, source, sequence, timestamp }) {
     timing: null,
     durationMs: null,
     providerHeartbeat: null,
+    iterationCount: source === 'live' ? 0 : null,
     items: [],
     reasoning: [],
     outputs: [],
@@ -953,6 +977,16 @@ function appendLiveRunEvent(assistantRun, event) {
     assistantRun.providerHeartbeat = null;
   }
 
+  if (event.type === 'model_step_usage') {
+    const iterationCount = normalizedIterationCount(
+      event.payload?.iteration_count,
+    );
+    if (iterationCount !== null) {
+      assistantRun.iterationCount = iterationCount;
+    }
+    return;
+  }
+
   if (TERMINAL_RUN_EVENTS.has(event.type)) {
     assistantRun.items = assistantRun.items.filter(
       (item) =>
@@ -973,6 +1007,12 @@ function appendLiveRunEvent(assistantRun, event) {
     assistantRun.durationMs =
       timingDurationMs(timing) ?? assistantRun.durationMs;
     assistantRun.status = event.payload?.status ?? terminalStatus(event.type);
+    const iterationCount = normalizedIterationCount(
+      event.payload?.iteration_count,
+    );
+    if (iterationCount !== null) {
+      assistantRun.iterationCount = iterationCount;
+    }
     assistantRun.terminalEvent = event;
     if (event.type === 'run_cancelled') {
       markPendingToolsCancelled(assistantRun, event);
@@ -1151,6 +1191,10 @@ function appendHistoryRunSummary(assistantRun, message) {
     timing?.started_at ?? assistantRun.startTimestamp;
   assistantRun.endTimestamp = timing?.completed_at ?? assistantRun.endTimestamp;
   assistantRun.durationMs = timingDurationMs(timing) ?? assistantRun.durationMs;
+  const iterationCount = normalizedIterationCount(message?.iteration_count);
+  if (iterationCount !== null) {
+    assistantRun.iterationCount = iterationCount;
+  }
   assistantRun.runSummaryMessage = message;
   if (assistantRun.status === CHAT_STATUS_CANCELLED) {
     // Live run_cancelled events settle every still-open Tool row. History must
@@ -1551,6 +1595,7 @@ function historyMessageItem(message) {
 function isAssistantRunEvent(event) {
   return [
     'run_started',
+    'model_step_usage',
     'model_fallback_activated',
     RUN_EVENT_PROVIDER_HEARTBEAT,
     RUN_EVENT_REASONING_DELTA,
@@ -1572,6 +1617,10 @@ function isAssistantRunEvent(event) {
     'run_cancelled',
     'run_interrupted',
   ].includes(event?.type);
+}
+
+function normalizedIterationCount(value) {
+  return Number.isInteger(value) && value >= 0 ? value : null;
 }
 
 function shouldShowStandaloneRunEvent(event) {

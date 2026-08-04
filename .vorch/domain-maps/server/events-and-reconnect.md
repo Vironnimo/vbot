@@ -14,7 +14,7 @@ The buffers are not durable. Old conversation state comes from Session history, 
 
 The shared `/ws` socket is server-push only. Clients send commands through RPC. On connect `server/app.py` sends one direct, connection-specific frame that never enters bus retention:
 
-`{"type":"connection_ready","epoch":"<bus generation>","last_sequence":<high water>,"active_runs":[{"run_id","agent_id","project_id","session_id","status":"running","sse_url"}]}`
+`{"type":"connection_ready","epoch":"<bus generation>","last_sequence":<high water>,"active_runs":[{"run_id","agent_id","project_id","session_id","status":"running","iteration_count","sse_url"}]}`
 
 `agent_id` is bare and `project_id` is separate (`null` for Identity Sessions) so clients can rebuild `agent@projekt`. The hello has no event `sequence` field and must not advance client sequence bookkeeping.
 
@@ -34,7 +34,7 @@ The registry emits one `INFO` log at each logical app-window presence boundary: 
 
 Streaming deltas (`assistant_output_delta`, `reasoning_delta`, `tool_call_delta`, stdout/stderr) are deliberately excluded from `/ws`; SSE is their transport. Stable Run output and terminal events become the small server lifecycle types and carry `run_id`, bare `agent_id`, `project_id`, `session_id`, original Run event type/sequence/timestamp, and sanitized output/terminal fields. Opaque Provider metadata is recursively removed. For the displayed Session, the WebUI feeds mirrored stable events and SSE events into the same Run-sequence reducer, so the bridge may fill an SSE gap without letting a terminal event overtake earlier output. Non-displayed Sessions have no SSE subscription and therefore receive an intentionally sparse WebSocket sequence; their stable events are reduced directly in WebSocket order, and opening one later reloads durable History. Terminal bridges also publish `resource_changed(kind="debug_traces")` and a scoped `resource_changed(kind="sessions")` after the terminal summary so trace views and durable completion projections re-fetch.
 
-`working_project_id` is internal execution state and never appears in SSE, WebSocket, Queue, history, or public Run payloads.
+`working_project_id` is internal execution state and never appears in SSE, WebSocket, Queue, history, or public Run payloads. The Run-owned `iteration_count` is deliberately public: active snapshots and Run RPC responses expose its current value, `model_step_usage` exposes the value after each completed Model response, terminal events expose the final value, and Chat Run Summaries persist it for History.
 
 ## `resource_changed`
 

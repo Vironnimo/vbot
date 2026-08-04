@@ -945,6 +945,7 @@ class RecordingReflection:
             {
                 "agent_id": run.agent_id,
                 "session_id": run.session_id,
+                "iteration_count": run.iteration_count,
                 "agent": agent,
                 "internal": internal,
                 "outcome": outcome,

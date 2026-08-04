@@ -58,6 +58,7 @@ class _FakeRun:
         # with no events is enough for these address-threading assertions.
         self.status = SimpleNamespace(value="completed")
         self.run_kind = RunKind.USER
+        self.iteration_count = 1
         self.events: list[Any] = []
 
     async def wait(self) -> ChatMessage:
@@ -580,7 +581,7 @@ async def test_reflect_forks_and_runs_restricted_review(monkeypatch: pytest.Monk
             {
                 REFLECTION_COUNTERS_META_KEY: {
                     "turns_since_memory_review": 0,
-                    "model_steps_since_skill_review": 0,
+                    "iterations_since_skill_review": 0,
                     COUNTER_GENERATION_KEY: 1,
                 }
             },

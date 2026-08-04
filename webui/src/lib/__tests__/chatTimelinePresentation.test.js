@@ -984,6 +984,42 @@ describe('runMetaParts', () => {
     init('en');
   });
 
+  it('uses only the canonical Iteration count from the backend', () => {
+    const parts = runMetaParts({
+      status: 'completed',
+      durationMs: 1000,
+      iterationCount: 2,
+      outputs: [{ content: 'done' }],
+      tools: Array.from({ length: 5 }, () => ({ name: 'read' })),
+    });
+
+    expect(parts[0]).toBe('2 iter');
+  });
+
+  it('does not estimate an Iteration count when backend truth is absent', () => {
+    const parts = runMetaParts({
+      status: 'completed',
+      durationMs: 1000,
+      outputs: [{ content: 'done' }, { content: 'another message' }],
+      tools: [{ name: 'read' }],
+    });
+
+    expect(parts).not.toContain('3 iter');
+    expect(parts.every((part) => !part.endsWith(' iter'))).toBe(true);
+  });
+
+  it('shows zero before the first Model response returns', () => {
+    const parts = runMetaParts({
+      status: 'running',
+      durationMs: null,
+      iterationCount: 0,
+      outputs: [],
+      tools: [],
+    });
+
+    expect(parts[0]).toBe('0 iter');
+  });
+
   it('shows the Cancelled label plus the runtime for a cancelled run', () => {
     const parts = runMetaParts({
       status: 'cancelled',

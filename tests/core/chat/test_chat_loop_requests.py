@@ -105,7 +105,7 @@ async def test_send_logs_run_start_and_end_lines(
     assert "agent=coder" in end_line
     assert "session=session-one" in end_line
     assert "duration_ms=" in end_line
-    assert "model_steps=1" in end_line
+    assert "iterations=1" in end_line
     assert "tool_calls=0" in end_line
     assert "input_tokens=" in end_line
     assert "output_tokens=" in end_line

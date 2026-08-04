@@ -353,7 +353,7 @@ def _result_passed(result: JsonObject) -> bool:
         result.get("status") == "completed"
         and result.get("synthetic_requests") == 1
         and result.get("live_provider_requests") == 1
-        and result.get("model_steps") == 2
+        and result.get("iterations") == 2
         and all(result.get(name) is True for name in required_true)
     )
 
@@ -505,7 +505,7 @@ async def _run_case(
         "elapsed_seconds": round(time.monotonic() - started, 3),
         "synthetic_requests": wrapper.synthetic_request_count if wrapper is not None else 0,
         "live_provider_requests": wrapper.live_request_count if wrapper is not None else 0,
-        "model_steps": primary_run.model_step_count if primary_run is not None else 0,
+        "iterations": primary_run.iteration_count if primary_run is not None else 0,
         "completion_acknowledged": (
             len(completion_futures) == NOTICE_COUNT
             and all(future.done() and not future.cancelled() for future in completion_futures)

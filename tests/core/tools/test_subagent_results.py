@@ -112,6 +112,7 @@ async def test_subagent_result_preserves_interruption_details_from_jsonl(tmp_pat
             run_id="missing-run",
             status="completed",
             timing=TERMINAL_TIMING,
+            iteration_count=1,
         )
     )
     tracker = SubAgentBatchTracker(RecordingTriggerService())
@@ -155,6 +156,7 @@ async def test_subagent_result_falls_back_to_jsonl_when_run_is_missing(tmp_path:
             run_id="missing-run",
             status="completed",
             timing=TERMINAL_TIMING,
+            iteration_count=1,
         )
     )
     tracker = SubAgentBatchTracker(RecordingTriggerService())
@@ -428,6 +430,7 @@ async def test_subagent_result_falls_back_to_jsonl_when_live_run_has_no_output(
             run_id="sub-run",
             status="completed",
             timing=TERMINAL_TIMING,
+            iteration_count=1,
         )
     )
     sub_run = Run(run_id="sub-run", agent_id="worker", session_id="sub-session")
@@ -478,6 +481,7 @@ async def test_subagent_result_failed_live_run_error_falls_back_to_jsonl_output(
             run_id="sub-run",
             status="failed",
             timing=TERMINAL_TIMING,
+            iteration_count=1,
         )
     )
     sub_run = Run(run_id="sub-run", agent_id="worker", session_id="sub-session")
@@ -539,6 +543,7 @@ async def test_subagent_result_polls_jsonl_until_assistant_output_appears(
                 run_id="sub-run",
                 status="failed",
                 timing=TERMINAL_TIMING,
+                iteration_count=1,
             )
         )
         await real_sleep(0)
@@ -608,6 +613,7 @@ async def test_subagent_result_ignores_prior_terminal_run_when_new_output_is_unf
             run_id="first-run",
             status="completed",
             timing=TERMINAL_TIMING,
+            iteration_count=1,
         )
     )
     session.append(ChatMessage.user("continue"))

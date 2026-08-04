@@ -154,6 +154,9 @@ export function createChatRunStream({
     } else {
       currentRun.status = run.status ?? currentRun.status;
       currentRun.sseUrl = sseUrl;
+      if (Number.isInteger(run.iteration_count) && run.iteration_count >= 0) {
+        currentRun.iterationCount = run.iteration_count;
+      }
       if (run.contributes_to_agent_activity === false) {
         currentRun.contributesToAgentActivity = false;
       }
@@ -928,6 +931,7 @@ export function createChatRunStream({
           run_id: activeRun.run_id,
           status: 'running',
           sse_url: activeRun.sse_url,
+          iteration_count: activeRun.iteration_count,
           ...(activeRun.contributes_to_agent_activity === false
             ? { contributes_to_agent_activity: false }
             : {}),
@@ -941,6 +945,7 @@ export function createChatRunStream({
         run_id: activeRun.run_id,
         status: 'running',
         sse_url: activeRun.sse_url,
+        iteration_count: activeRun.iteration_count,
         ...(activeRun.contributes_to_agent_activity === false
           ? { contributes_to_agent_activity: false }
           : {}),

@@ -111,6 +111,7 @@ def _run_summary(*, status: str, at: datetime, duration_ms: int, run_id: str) ->
         run_id=run_id,
         status=status,
         timing=_timing(at, duration_ms),
+        iteration_count=1,
         timestamp=at,
     )
 

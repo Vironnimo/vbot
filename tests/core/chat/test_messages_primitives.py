@@ -410,6 +410,7 @@ class TestChatMessageFactories:
             work_id="sub-work-one",
             status="completed",
             timing=FIXED_TIMING,
+            iteration_count=3,
             timestamp=FIXED_TIMESTAMP,
         )
 
@@ -421,6 +422,7 @@ class TestChatMessageFactories:
             "run_id": "run-one",
             "work_id": "sub-work-one",
             "status": "completed",
+            "iteration_count": 3,
         }
 
     def test_assistant_message_with_usage(self):
@@ -600,6 +602,23 @@ class TestChatMessageParsing:
         message = ChatMessage.from_dict(data)
 
         assert message.to_dict() == data
+
+    @pytest.mark.parametrize("iteration_count", [-1, True, 1.5, "1", None])
+    def test_from_dict_rejects_invalid_run_summary_iteration_count(
+        self, iteration_count: object
+    ) -> None:
+        with pytest.raises(ChatMessageValidationError, match="iteration_count"):
+            ChatMessage.from_dict(
+                {
+                    "id": "summary-one",
+                    "timestamp": "2026-05-03T14:30:05+00:00",
+                    "role": "run_summary",
+                    "run_id": "run-one",
+                    "status": "completed",
+                    "iteration_count": iteration_count,
+                    "timing": FIXED_TIMING,
+                }
+            )
 
     def test_from_dict_rejects_bad_timing_duration(self):
         with pytest.raises(ChatMessageValidationError, match="duration_ms"):

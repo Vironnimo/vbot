@@ -282,7 +282,12 @@ async def test_chat_history_expands_limit_to_complete_oldest_run_segment(tmp_pat
             id="first-assistant",
         ),
         replace(
-            ChatMessage.run_summary(run_id="run-one", status="completed", timing=timing),
+            ChatMessage.run_summary(
+                run_id="run-one",
+                status="completed",
+                timing=timing,
+                iteration_count=1,
+            ),
             id="first-summary",
         ),
         replace(ChatMessage.user("second"), id="second-user"),
@@ -291,7 +296,12 @@ async def test_chat_history_expands_limit_to_complete_oldest_run_segment(tmp_pat
             id="second-assistant",
         ),
         replace(
-            ChatMessage.run_summary(run_id="run-two", status="completed", timing=timing),
+            ChatMessage.run_summary(
+                run_id="run-two",
+                status="completed",
+                timing=timing,
+                iteration_count=1,
+            ),
             id="second-summary",
         ),
     ]
@@ -329,7 +339,12 @@ async def test_chat_history_keeps_the_active_tail_segment_together(tmp_path: Pat
             id="completed-assistant",
         ),
         replace(
-            ChatMessage.run_summary(run_id="run-one", status="completed", timing=timing),
+            ChatMessage.run_summary(
+                run_id="run-one",
+                status="completed",
+                timing=timing,
+                iteration_count=1,
+            ),
             id="completed-summary",
         ),
         replace(ChatMessage.user("active"), id="active-user"),

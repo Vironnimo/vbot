@@ -10,7 +10,7 @@ The reflection service owns two halves of one capability:
    source session is never touched.
 2. The cadence policy behind the background trigger: per-session counters in
    the session metadata sidecar (user turns since the last memory review,
-   Model steps since the last skill review), incremented at the end of every
+   Iterations since the last skill review), incremented at the end of every
    successful visible run of an identity agent. When a threshold is reached,
    one review run fires in the background. A successful review consumes the
    due counts it covered; a failed review leaves them due for the next run.
@@ -62,7 +62,7 @@ REFLECTION_TOOL_RESTRICTIONS: dict[ReflectionScope, tuple[str, ...]] = {
 # always-strip policy in ``core/sessions`` so a fork restarts at zero.
 REFLECTION_COUNTERS_META_KEY = "reflection_counters"
 TURNS_SINCE_MEMORY_REVIEW_KEY = "turns_since_memory_review"
-MODEL_STEPS_SINCE_SKILL_REVIEW_KEY = "model_steps_since_skill_review"
+ITERATIONS_SINCE_SKILL_REVIEW_KEY = "iterations_since_skill_review"
 # A manual reset advances this generation so a concurrent background review
 # cannot consume activity recorded after that reset.
 COUNTER_GENERATION_KEY = "generation"
@@ -116,7 +116,7 @@ class ReflectionService:
                 agent_id=run.agent_id,
                 session_id=run.session_id,
                 project_id=run.project_id,
-                model_step_count=run.model_step_count,
+                iteration_count=run.iteration_count,
                 memory_tool_called=memory_tool_called,
                 count_run=count_run,
             )
@@ -138,7 +138,7 @@ class ReflectionService:
         agent_id: str,
         session_id: str,
         project_id: str | None,
-        model_step_count: int,
+        iteration_count: int,
         memory_tool_called: bool,
         count_run: bool,
     ) -> None:
@@ -158,18 +158,18 @@ class ReflectionService:
             else _non_negative_int(counters.get(TURNS_SINCE_MEMORY_REVIEW_KEY))
             + (1 if count_run else 0)
         )
-        model_steps = _non_negative_int(counters.get(MODEL_STEPS_SINCE_SKILL_REVIEW_KEY)) + (
-            max(model_step_count, 0) if count_run else 0
+        iterations = _non_negative_int(counters.get(ITERATIONS_SINCE_SKILL_REVIEW_KEY)) + (
+            max(iteration_count, 0) if count_run else 0
         )
         counter_generation = _non_negative_int(counters.get(COUNTER_GENERATION_KEY))
         memory_due = turns >= settings["memory_turn_interval"]
-        skill_due = model_steps >= settings["skill_model_step_interval"]
+        skill_due = iterations >= settings["skill_model_step_interval"]
         # One review at a time per agent: a due session while a review is already
         # running keeps its counters and re-checks on its next run end.
         should_review = (memory_due or skill_due) and agent_id not in self._agents_in_review
         metadata[REFLECTION_COUNTERS_META_KEY] = {
             TURNS_SINCE_MEMORY_REVIEW_KEY: turns,
-            MODEL_STEPS_SINCE_SKILL_REVIEW_KEY: model_steps,
+            ITERATIONS_SINCE_SKILL_REVIEW_KEY: iterations,
             COUNTER_GENERATION_KEY: counter_generation,
         }
         sessions.set_metadata(agent_id, session_id, metadata, project_id)
@@ -199,7 +199,7 @@ class ReflectionService:
                 project_id=project_id,
                 counter_generation=counter_generation,
                 reviewed_turns=turns if memory_due else 0,
-                reviewed_model_steps=model_steps if skill_due else 0,
+                reviewed_iterations=iterations if skill_due else 0,
             )
             _LOGGER.info(
                 "Reflection review completed (agent=%s fork=%s): %s",
@@ -225,7 +225,7 @@ class ReflectionService:
         project_id: str | None,
         counter_generation: int,
         reviewed_turns: int,
-        reviewed_model_steps: int,
+        reviewed_iterations: int,
     ) -> None:
         """Consume only counts covered by a successful background review."""
         sessions = self._runtime.chat_sessions
@@ -236,10 +236,10 @@ class ReflectionService:
         if current_generation != counter_generation:
             return
         current_turns = _non_negative_int(counters.get(TURNS_SINCE_MEMORY_REVIEW_KEY))
-        current_model_steps = _non_negative_int(counters.get(MODEL_STEPS_SINCE_SKILL_REVIEW_KEY))
+        current_iterations = _non_negative_int(counters.get(ITERATIONS_SINCE_SKILL_REVIEW_KEY))
         metadata[REFLECTION_COUNTERS_META_KEY] = {
             TURNS_SINCE_MEMORY_REVIEW_KEY: max(current_turns - reviewed_turns, 0),
-            MODEL_STEPS_SINCE_SKILL_REVIEW_KEY: max(current_model_steps - reviewed_model_steps, 0),
+            ITERATIONS_SINCE_SKILL_REVIEW_KEY: max(current_iterations - reviewed_iterations, 0),
             COUNTER_GENERATION_KEY: current_generation,
         }
         sessions.set_metadata(agent_id, session_id, metadata, project_id)
@@ -313,7 +313,7 @@ class ReflectionService:
         counters = raw_counters if isinstance(raw_counters, dict) else {}
         metadata[REFLECTION_COUNTERS_META_KEY] = {
             TURNS_SINCE_MEMORY_REVIEW_KEY: 0,
-            MODEL_STEPS_SINCE_SKILL_REVIEW_KEY: 0,
+            ITERATIONS_SINCE_SKILL_REVIEW_KEY: 0,
             COUNTER_GENERATION_KEY: _non_negative_int(counters.get(COUNTER_GENERATION_KEY)) + 1,
         }
         sessions.set_metadata(agent_id, session_id, metadata, project_id)

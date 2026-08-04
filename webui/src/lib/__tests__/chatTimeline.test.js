@@ -740,6 +740,114 @@ describe('cancelled run rendering', () => {
   });
 });
 
+describe('canonical Iteration count projection', () => {
+  it('restores the server count from a persisted Run Summary', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-iterations-history',
+    );
+    loadHistory(sessionState, [
+      { id: 'u1', role: 'user', content: 'Use five tools' },
+      {
+        id: 'a1',
+        role: 'assistant',
+        tool_calls: Array.from({ length: 5 }, (_, index) => ({
+          id: `c${index}`,
+          name: 'read',
+          arguments: {},
+        })),
+      },
+      ...Array.from({ length: 5 }, (_, index) => ({
+        id: `t${index}`,
+        role: 'tool',
+        tool_call_id: `c${index}`,
+        name: 'read',
+        content: '{}',
+      })),
+      { id: 'a2', role: 'assistant', content: 'Done' },
+      {
+        id: 's1',
+        role: 'run_summary',
+        run_id: 'run-two-iterations',
+        status: 'completed',
+        iteration_count: 2,
+      },
+    ]);
+
+    const run = visibleTimelineItemsForRender(sessionState).find(
+      (item) => item.type === 'assistant_run',
+    );
+    expect(run.iterationCount).toBe(2);
+    expect(run.tools).toHaveLength(5);
+  });
+
+  it('tracks the server count through live response and terminal events', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-iterations-live',
+    );
+    startRun(sessionState, {
+      run_id: 'run-live',
+      sse_url: '/runs/run-live',
+      iteration_count: 0,
+    });
+    appendRunEvent(sessionState, {
+      type: 'run_started',
+      run_id: 'run-live',
+      sequence: 1,
+      payload: { status: 'running' },
+    });
+    appendRunEvent(sessionState, {
+      type: 'model_step_usage',
+      run_id: 'run-live',
+      sequence: 2,
+      payload: { iteration_count: 1 },
+    });
+    appendRunEvent(sessionState, {
+      type: 'model_step_usage',
+      run_id: 'run-live',
+      sequence: 3,
+      payload: { iteration_count: 2 },
+    });
+    appendRunEvent(sessionState, {
+      type: 'run_completed',
+      run_id: 'run-live',
+      sequence: 4,
+      payload: { status: 'completed', iteration_count: 2 },
+    });
+
+    const run = visibleTimelineItemsForRender(sessionState).find(
+      (item) => item.type === 'assistant_run',
+    );
+    expect(run.iterationCount).toBe(2);
+  });
+
+  it('does not invent a count for an older summary without the field', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-iterations-unknown',
+    );
+    loadHistory(sessionState, [
+      { id: 'u1', role: 'user', content: 'Old run' },
+      { id: 'a1', role: 'assistant', content: 'Done' },
+      {
+        id: 's1',
+        role: 'run_summary',
+        run_id: 'run-unknown',
+        status: 'completed',
+      },
+    ]);
+
+    const run = visibleTimelineItemsForRender(sessionState).find(
+      (item) => item.type === 'assistant_run',
+    );
+    expect(run.iterationCount).toBeNull();
+  });
+});
+
 describe('per-tool-call user cancel projection', () => {
   const cancelledEnvelope = {
     ok: false,

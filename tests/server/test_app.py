@@ -518,6 +518,7 @@ def test_active_runs_snapshot_includes_only_running_runs_with_sse_url(
                 "session_id": "session-running",
                 "run_kind": RunKind.USER,
                 "status": RunStatus.RUNNING,
+                "iteration_count": 4,
             },
         )(),
     )
@@ -533,6 +534,7 @@ def test_active_runs_snapshot_includes_only_running_runs_with_sse_url(
                 "session_id": "session-terminal",
                 "run_kind": RunKind.USER,
                 "status": RunStatus.COMPLETED,
+                "iteration_count": 2,
             },
         )(),
     )
@@ -551,6 +553,7 @@ def test_active_runs_snapshot_includes_only_running_runs_with_sse_url(
             "session_id": "session-running",
             "run_kind": "user",
             "status": "running",
+            "iteration_count": 4,
             "sse_url": "/api/runs/run-running/events",
         }
     ]
@@ -669,6 +672,7 @@ def test_active_runs_snapshot_keeps_project_id_none_for_identity_run(
                 "session_id": "session-identity",
                 "run_kind": RunKind.USER,
                 "status": RunStatus.RUNNING,
+                "iteration_count": 1,
             },
         )(),
     )
@@ -694,6 +698,7 @@ def test_active_runs_snapshot_marks_runs_excluded_from_agent_activity() -> None:
                 "session_id": "session-system",
                 "run_kind": RunKind.SYSTEM,
                 "status": RunStatus.RUNNING,
+                "iteration_count": 0,
                 "contributes_to_agent_activity": False,
             },
         )(),

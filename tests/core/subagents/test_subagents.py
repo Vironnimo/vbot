@@ -167,6 +167,7 @@ async def test_status_result_keeps_handle_and_child_unread_until_parent_persiste
         ChatMessage.run_summary(
             run_id="child-run",
             status="completed",
+            iteration_count=1,
             timing={
                 "started_at": "2026-07-22T10:00:00+00:00",
                 "completed_at": "2026-07-22T10:00:01+00:00",
@@ -437,6 +438,7 @@ async def test_inspect_resolves_exact_completed_work_after_child_session_reuse(
             work_id="sub_old",
             status="completed",
             timing=old_timing,
+            iteration_count=1,
         )
     )
     session.append(ChatMessage.user("new request"))
@@ -447,6 +449,7 @@ async def test_inspect_resolves_exact_completed_work_after_child_session_reuse(
             work_id="sub_new",
             status="completed",
             timing=new_timing,
+            iteration_count=1,
         )
     )
 
@@ -746,6 +749,7 @@ async def test_qualified_subagent_result_uses_target_project_for_persisted_fallb
         ChatMessage.run_summary(
             run_id="missing-run",
             status="completed",
+            iteration_count=1,
             timing={
                 "started_at": "2026-07-24T10:00:00+00:00",
                 "completed_at": "2026-07-24T10:00:01+00:00",

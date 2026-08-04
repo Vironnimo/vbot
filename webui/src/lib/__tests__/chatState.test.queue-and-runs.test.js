@@ -315,6 +315,7 @@ describe('chat state helpers', () => {
       runId: 'run-from-ws',
       sseUrl: '',
       status: CHAT_STATUS_RUNNING,
+      iterationCount: 0,
     });
   });
 
