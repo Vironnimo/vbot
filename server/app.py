@@ -44,6 +44,7 @@ from server.rpc.errors import RPC_ERROR_INVALID_REQUEST
 from server.rpc.event_bridge import bridge_run_to_event_bus, publish_resource_changed
 from server.rpc.methods import dispatch_rpc
 from server.rpc.payloads import remove_opaque_provider_metadata
+from server.rpc.statistics_methods import statistics_service
 
 JsonObject = dict[str, Any]
 
@@ -128,6 +129,7 @@ def create_app(
     async def lifespan(app: FastAPIType) -> AsyncIterator[None]:
         app_runtime.start()
         _initialize_app_state(app, app_runtime, server_bind=resolved_server_bind)
+        app.state.statistics_warmup_task = _start_statistics_warmup(app.state)
         await _fire_extension_startup(app_runtime)
         # Local model catalogs (auto_refresh connections, e.g. Ollama) refresh
         # in the background — never blocking startup; the method itself is
@@ -154,6 +156,7 @@ def create_app(
                 getattr(app.state, "local_catalog_refresh_task", None),
                 server_logger,
             )
+            await _shutdown_statistics_warmup(getattr(app.state, "statistics_warmup_task", None))
             _unregister_run_event_bridge(app.state)
             _unregister_session_title_bridge(app.state)
             _unregister_session_completion_read_bridge(app.state)
@@ -421,6 +424,35 @@ def _register_run_event_bridge(state: Any) -> Any:
     if not callable(add_callback):
         return None
     return add_callback(lambda run: bridge_run_to_event_bus(state, run))
+
+
+def _start_statistics_warmup(state: Any) -> asyncio.Task[None] | None:
+    runtime = state.runtime
+    sessions = getattr(runtime, "chat_sessions", None)
+    agents = getattr(runtime, "agents", None)
+    projects = getattr(runtime, "projects", None)
+    if not (
+        sessions is not None
+        and hasattr(sessions, "data_dir")
+        and callable(getattr(sessions, "list_with_metadata", None))
+        and callable(getattr(sessions, "get", None))
+        and callable(getattr(agents, "list", None))
+        and callable(getattr(projects, "list", None))
+        and callable(getattr(projects, "session_owning_agents", None))
+    ):
+        return None
+    service = statistics_service(state)
+    return asyncio.create_task(_warm_statistics_index(service))
+
+
+async def _warm_statistics_index(service: Any) -> None:
+    try:
+        await asyncio.to_thread(service.warm_index)
+    except Exception:
+        logging.getLogger("vbot.server.app").warning(
+            "Statistics index warmup failed",
+            exc_info=True,
+        )
 
 
 def _unregister_run_event_bridge(state: Any) -> None:
@@ -733,6 +765,15 @@ async def _shutdown_local_catalog_refresh(
         return
     except Exception:
         logger.warning("Local model catalog refresh failed during shutdown", exc_info=True)
+
+
+async def _shutdown_statistics_warmup(task: asyncio.Task[None] | None) -> None:
+    """Cancel the optional derived-index warmup during server shutdown."""
+    if task is None:
+        return
+    task.cancel()
+    with suppress(asyncio.CancelledError):
+        await task
 
 
 async def _shutdown_log_viewer(log_viewer: LogViewer, logger: logging.Logger) -> None:

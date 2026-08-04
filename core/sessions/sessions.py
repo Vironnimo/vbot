@@ -140,6 +140,23 @@ class SessionIdentityReferenceUpdate:
     previous_metadata: JsonObject
 
 
+@dataclass(frozen=True)
+class SessionReadCursor:
+    """Opaque append cursor for incrementally reading canonical Session messages."""
+
+    byte_offset: int
+    message_count: int
+    last_message_id: str | None
+
+
+@dataclass(frozen=True)
+class SessionReadBatch:
+    """Validated messages appended after a matching :class:`SessionReadCursor`."""
+
+    messages: tuple[ChatMessage, ...]
+    cursor: SessionReadCursor
+
+
 class ChatSession:
     """Append-only UTF-8 JSONL session file."""
 
@@ -383,28 +400,58 @@ class ChatSession:
 
     def load(self) -> list[ChatMessage]:
         """Load all valid JSONL messages from this session file."""
+        batch = self.load_since()
+        if batch is None:  # A full read has no prefix cursor that can become stale.
+            raise ChatSessionError(f"failed to read session: {self.path}")
+        return list(batch.messages)
+
+    def load_since(self, cursor: SessionReadCursor | None = None) -> SessionReadBatch | None:
+        """Load and validate only messages appended after *cursor*.
+
+        ``None`` starts at the beginning. A supplied cursor is accepted only when
+        its byte boundary still ends at the same last canonical Message id; a
+        mismatching or truncated boundary returns ``None`` so a disposable read
+        model can discard that Session's projection and rebuild it. The returned
+        cursor always points immediately after the last complete line observed by
+        this read.
+        """
         if not self.path.exists():
             raise ChatSessionError(f"session does not exist: {self.path}")
 
+        current_cursor = cursor or SessionReadCursor(
+            byte_offset=0,
+            message_count=0,
+            last_message_id=None,
+        )
+        if not self._cursor_matches(current_cursor):
+            return None
+
         messages: list[ChatMessage] = []
         with self.path.open("rb") as session_file:
-            line_number = 0
+            session_file.seek(current_cursor.byte_offset)
+            line_number = current_cursor.message_count
+            message_count = current_cursor.message_count
+            last_message_id = current_cursor.last_message_id
+            next_offset = current_cursor.byte_offset
             while True:
                 line_start_offset = session_file.tell()
                 line_bytes = session_file.readline()
                 if line_bytes == b"":
+                    next_offset = session_file.tell()
                     break
                 line_number += 1
                 if not line_bytes.strip():
+                    next_offset = session_file.tell()
                     continue
                 try:
-                    messages.append(self._parse_line_bytes(line_bytes, line_number))
+                    message = self._parse_line_bytes(line_bytes, line_number)
                 except UnicodeDecodeError as exc:
                     if _is_unterminated_line(line_bytes):
                         self._truncate_partial_tail(
                             byte_offset=line_start_offset,
                             line_number=line_number,
                         )
+                        next_offset = line_start_offset
                         break
                     raise ChatSessionError(f"invalid UTF-8 at line {line_number}") from exc
                 except json.JSONDecodeError as exc:
@@ -413,6 +460,7 @@ class ChatSession:
                             byte_offset=line_start_offset,
                             line_number=line_number,
                         )
+                        next_offset = line_start_offset
                         break
                     raise ChatSessionError(f"invalid JSON at line {line_number}") from exc
                 except ChatSessionError:
@@ -421,9 +469,41 @@ class ChatSession:
                             byte_offset=line_start_offset,
                             line_number=line_number,
                         )
+                        next_offset = line_start_offset
                         break
                     raise
-        return messages
+                messages.append(message)
+                message_count += 1
+                last_message_id = message.id
+                next_offset = session_file.tell()
+        return SessionReadBatch(
+            messages=tuple(messages),
+            cursor=SessionReadCursor(
+                byte_offset=next_offset,
+                message_count=message_count,
+                last_message_id=last_message_id,
+            ),
+        )
+
+    def _cursor_matches(self, cursor: SessionReadCursor) -> bool:
+        if (
+            isinstance(cursor.byte_offset, bool)
+            or not isinstance(cursor.byte_offset, int)
+            or cursor.byte_offset < 0
+            or isinstance(cursor.message_count, bool)
+            or not isinstance(cursor.message_count, int)
+            or cursor.message_count < 0
+        ):
+            return False
+        if cursor.byte_offset == 0:
+            return cursor.message_count == 0 and cursor.last_message_id is None
+        if cursor.message_count == 0 or not cursor.last_message_id:
+            return False
+        try:
+            line = _read_complete_line_ending_at(self.path, cursor.byte_offset)
+        except OSError:
+            return False
+        return line is not None and _message_id_from_line(line) == cursor.last_message_id
 
     def delete(self) -> None:
         """Delete the session file and its sidecars if they exist."""
@@ -1635,6 +1715,32 @@ def _read_last_complete_line(path: Path) -> bytes | None:
     return None
 
 
+def _read_complete_line_ending_at(path: Path, end_offset: int) -> bytes | None:
+    """Return the last non-blank complete line ending at *end_offset*."""
+    with path.open("rb") as session_file:
+        session_file.seek(0, os.SEEK_END)
+        file_size = session_file.tell()
+        if end_offset <= 0 or end_offset > file_size:
+            return None
+        session_file.seek(end_offset - 1)
+        if session_file.read(1) != SESSION_LINE_ENDING_BYTES:
+            return None
+
+        buffer = b""
+        position = end_offset
+        while position > 0:
+            read_size = min(_TAIL_CHUNK_SIZE, position)
+            position -= read_size
+            session_file.seek(position)
+            buffer = session_file.read(read_size) + buffer
+            lines = buffer.split(SESSION_LINE_ENDING_BYTES)
+            candidates = lines if position == 0 else lines[1:]
+            for line in reversed(candidates):
+                if line.strip():
+                    return line + SESSION_LINE_ENDING_BYTES
+    return None
+
+
 def _timestamp_from_line(line: bytes) -> str | None:
     """Extract the timestamp field from one JSONL message line, or None."""
     try:
@@ -1647,6 +1753,18 @@ def _timestamp_from_line(line: bytes) -> str | None:
     if not isinstance(timestamp, str) or not timestamp:
         return None
     return timestamp
+
+
+def _message_id_from_line(line: bytes) -> str | None:
+    """Extract the canonical Message id from one JSONL line, or ``None``."""
+    try:
+        data = json.loads(line.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    message_id = data.get("id")
+    return message_id if isinstance(message_id, str) and message_id else None
 
 
 def _append_bytes(path: Path, data: bytes) -> None:

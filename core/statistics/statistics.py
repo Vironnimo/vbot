@@ -1,9 +1,8 @@
-"""Read-only aggregation over persisted Sessions for the Statistics surface.
+"""Statistics aggregation over a disposable projection of persisted Sessions.
 
-This domain computes a full :class:`StatisticsReport` on demand by scanning the
-canonical JSONL Sessions that already exist — it adds no persistence of its own
-and writes nothing. Every figure is derived from persisted ``ChatMessage`` data
-(see ``.vorch/domain-maps/statistics.md``):
+Every figure remains derivable from canonical ``ChatMessage`` JSONL data, while
+an incrementally reconciled SQLite read model keeps unchanged Session content off
+the report path (see ``.vorch/domain-maps/statistics.md``):
 
 - **Runs** come from ``run_summary`` records, which annotate the immediately
   preceding Assistant Run. Assistant/tool messages carry no ``run_id`` of their
@@ -27,14 +26,29 @@ from __future__ import annotations
 import builtins
 import json
 import math
+import sqlite3
 from collections import Counter
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any, Protocol
 
 from core.chat.messages import ChatMessage
 from core.chat.model_resolution import parse_bare_model
-from core.sessions import FORK_SOURCE_META_KEY, skill_context_note_name, skill_tool_activation_name
+from core.sessions import (
+    FORK_SOURCE_META_KEY,
+    SessionReadBatch,
+    SessionReadCursor,
+    skill_context_note_name,
+    skill_tool_activation_name,
+)
+from core.statistics.index import (
+    IndexedStatisticsSession,
+    StatisticsIndex,
+    StatisticsIndexError,
+    StatisticsScope,
+    statistics_session_key,
+)
 from core.statistics.skills import (
     SkillInventorySource,
     SkillsSection,
@@ -45,8 +59,10 @@ from core.statistics.skills import (
 )
 from core.statistics.timestamps import parse_timestamp
 from core.tools import is_tool_result_envelope
+from core.utils.logging import get_logger
 
 JsonObject = dict[str, Any]
+_LOGGER = get_logger("statistics")
 
 # Visible conversation roles stay separate from the full persisted Session
 # record vocabulary. User records always count; Assistant records count only
@@ -134,7 +150,11 @@ class ProjectDirectory(Protocol):
 class SessionHandle(Protocol):
     """One session whose canonical messages can be loaded in append order."""
 
+    path: Path
+
     def load(self) -> list[ChatMessage]: ...
+
+    def load_since(self, cursor: SessionReadCursor | None = None) -> SessionReadBatch | None: ...
 
 
 class SessionSource(Protocol):
@@ -146,6 +166,8 @@ class SessionSource(Protocol):
     through unchanged, so a project session and an identity session never share
     a path even when they share a session id.
     """
+
+    data_dir: Path
 
     def list_with_metadata(
         self, agent_id: str, project_id: str | None = None
@@ -1568,13 +1590,13 @@ class _Aggregator:
 
 
 class StatisticsService:
-    """Compute a full :class:`StatisticsReport` from persisted Sessions.
+    """Compute a full :class:`StatisticsReport` from a disposable Session index.
 
-    Pure read side: the service only reads through the injected session source,
-    agent directory, project directory, and (optionally) skill inventory, and
-    writes nothing. One scan walks every session scope — the global identity
-    agents plus every project-scoped agent that owns sessions under a project
-    anchor — and visits each session's messages exactly once.
+    The service reconciles canonical Sessions into a compact SQLite projection
+    before every read. Unchanged transcripts are never loaded; append-only growth
+    validates and ingests only the new tail. A failed or incompatible projection
+    is discarded and rebuilt once, with the canonical live scan retained as a
+    final availability fallback.
 
     Project sessions feed the same report as identity sessions; a project agent
     appears under its outer address form ``agent@project`` so it stays distinct
@@ -1601,19 +1623,24 @@ class StatisticsService:
         self._agents = agents
         self._projects = projects
         self._skill_inventory = skill_inventory
+        self._index = StatisticsIndex(Path(chat_sessions.data_dir))
+
+    def warm_index(self) -> None:
+        """Reconcile the disposable index without building a report."""
+        self._indexed_snapshot(self._statistics_scopes())
 
     def report(
         self, *, since: datetime | None = None, until: datetime | None = None
     ) -> StatisticsReport:
-        """Scan all session scopes once and return the aggregated report."""
+        """Reconcile all Session scopes and return the aggregated report."""
         aggregator = _Aggregator(since=since, until=until)
-        for agent in self._agents.list():
-            self._scan_scope(aggregator, project_id=None, agent_id=agent.id, display_key=agent.id)
-        for project_id, agent_id in self._project_scopes():
-            display_key = f"{agent_id}{PROJECT_ADDRESS_SEPARATOR}{project_id}"
-            self._scan_scope(
-                aggregator, project_id=project_id, agent_id=agent_id, display_key=display_key
-            )
+        scopes = self._statistics_scopes()
+        snapshot = self._indexed_snapshot(scopes)
+        if snapshot is None:
+            self._scan_live_report(aggregator, scopes)
+        else:
+            for scope in scopes:
+                self._scan_indexed_scope(aggregator, scope, snapshot)
         return aggregator.build(self._skill_inventory)
 
     def run_activity(
@@ -1625,24 +1652,28 @@ class StatisticsService:
         """Return persisted Runs whose execution overlaps the selected interval."""
 
         runs: list[RunActivity] = []
-        for agent in self._agents.list():
-            self._scan_run_activity_scope(
-                runs,
-                project_id=None,
-                agent_id=agent.id,
-                display_key=agent.id,
-                since=since,
-                until=until,
-            )
-        for project_id, agent_id in self._project_scopes():
-            self._scan_run_activity_scope(
-                runs,
-                project_id=project_id,
-                agent_id=agent_id,
-                display_key=f"{agent_id}{PROJECT_ADDRESS_SEPARATOR}{project_id}",
-                since=since,
-                until=until,
-            )
+        scopes = self._statistics_scopes()
+        snapshot = self._indexed_snapshot(scopes)
+        if snapshot is None:
+            for scope in scopes:
+                self._scan_run_activity_scope(
+                    runs,
+                    project_id=scope.project_id,
+                    agent_id=scope.agent_id,
+                    display_key=scope.display_key,
+                    since=since,
+                    until=until,
+                    summaries=list(scope.summaries),
+                )
+        else:
+            for scope in scopes:
+                self._scan_indexed_run_activity_scope(
+                    runs,
+                    scope,
+                    snapshot,
+                    since=since,
+                    until=until,
+                )
 
         runs.sort(key=lambda run: run.started_at, reverse=True)
         total_runs = len(runs)
@@ -1665,6 +1696,90 @@ class StatisticsService:
                 scopes.append((project_id, agent_id))
         return scopes
 
+    def _statistics_scopes(self) -> tuple[StatisticsScope, ...]:
+        scopes = [
+            StatisticsScope(
+                project_id=None,
+                agent_id=agent.id,
+                display_key=agent.id,
+                summaries=tuple(self._sessions.list_with_metadata(agent.id, None)),
+            )
+            for agent in self._agents.list()
+        ]
+        for project_id, agent_id in self._project_scopes():
+            scopes.append(
+                StatisticsScope(
+                    project_id=project_id,
+                    agent_id=agent_id,
+                    display_key=f"{agent_id}{PROJECT_ADDRESS_SEPARATOR}{project_id}",
+                    summaries=tuple(self._sessions.list_with_metadata(agent_id, project_id)),
+                )
+            )
+        return tuple(scopes)
+
+    def _indexed_snapshot(
+        self,
+        scopes: tuple[StatisticsScope, ...],
+    ) -> dict[tuple[str, str, str], IndexedStatisticsSession] | None:
+        for attempt in range(2):
+            try:
+                return self._index.snapshot(self._sessions, scopes)
+            except (OSError, sqlite3.DatabaseError, StatisticsIndexError) as error:
+                if attempt == 0:
+                    _LOGGER.warning(
+                        "Statistics index failed; rebuilding once: %s",
+                        error,
+                    )
+                    try:
+                        self._index.discard()
+                    except OSError as discard_error:
+                        _LOGGER.warning(
+                            "Could not discard failed Statistics index: %s",
+                            discard_error,
+                        )
+                else:
+                    _LOGGER.warning(
+                        "Statistics index rebuild failed; using canonical Session scan: %s",
+                        error,
+                    )
+        return None
+
+    def _scan_live_report(
+        self,
+        aggregator: _Aggregator,
+        scopes: tuple[StatisticsScope, ...],
+    ) -> None:
+        for scope in scopes:
+            self._scan_scope(
+                aggregator,
+                project_id=scope.project_id,
+                agent_id=scope.agent_id,
+                display_key=scope.display_key,
+                summaries=list(scope.summaries),
+            )
+
+    @staticmethod
+    def _scan_indexed_scope(
+        aggregator: _Aggregator,
+        scope: StatisticsScope,
+        snapshot: dict[tuple[str, str, str], IndexedStatisticsSession],
+    ) -> None:
+        indexed_sessions = [
+            snapshot[statistics_session_key(scope.project_id, scope.agent_id, str(summary["id"]))]
+            for summary in scope.summaries
+        ]
+        summaries = [session.summary for session in indexed_sessions]
+        aggregator.register_agent(scope.display_key, summaries)
+        aggregator.register_scope(agent_id=scope.agent_id, project_id=scope.project_id)
+        for session in indexed_sessions:
+            summary = _indexed_activity_summary(session.summary)
+            aggregator.process_session(
+                scope.display_key,
+                str(summary["id"]),
+                list(session.messages),
+                summary,
+            )
+
     def _scan_scope(
         self,
         aggregator: _Aggregator,
@@ -1672,12 +1787,17 @@ class StatisticsService:
         project_id: str | None,
         agent_id: str,
         display_key: str,
+        summaries: list[JsonObject] | None = None,
     ) -> None:
         """Aggregate one session scope under its report display key."""
-        summaries = self._sessions.list_with_metadata(agent_id, project_id)
-        aggregator.register_agent(display_key, summaries)
+        resolved_summaries = (
+            self._sessions.list_with_metadata(agent_id, project_id)
+            if summaries is None
+            else summaries
+        )
+        aggregator.register_agent(display_key, resolved_summaries)
         aggregator.register_scope(agent_id=agent_id, project_id=project_id)
-        for summary in summaries:
+        for summary in resolved_summaries:
             session_id = str(summary["id"])
             messages = self._sessions.get(agent_id, session_id, project_id).load()
             aggregator.process_session(display_key, session_id, messages, summary)
@@ -1691,8 +1811,14 @@ class StatisticsService:
         display_key: str,
         since: datetime,
         until: datetime,
+        summaries: list[JsonObject] | None = None,
     ) -> None:
-        for summary in self._sessions.list_with_metadata(agent_id, project_id):
+        resolved_summaries = (
+            self._sessions.list_with_metadata(agent_id, project_id)
+            if summaries is None
+            else summaries
+        )
+        for summary in resolved_summaries:
             session_id = str(summary["id"])
             title = summary.get("title")
             session_title = title if isinstance(title, str) and title else None
@@ -1714,10 +1840,48 @@ class StatisticsService:
                     runs.append(activity)
                 group = []
 
+    @staticmethod
+    def _scan_indexed_run_activity_scope(
+        runs: list[RunActivity],
+        scope: StatisticsScope,
+        snapshot: dict[tuple[str, str, str], IndexedStatisticsSession],
+        *,
+        since: datetime,
+        until: datetime,
+    ) -> None:
+        for raw_summary in scope.summaries:
+            session_id = str(raw_summary["id"])
+            indexed = snapshot[statistics_session_key(scope.project_id, scope.agent_id, session_id)]
+            summary = _indexed_activity_summary(indexed.summary)
+            title = summary.get("title")
+            session_title = title if isinstance(title, str) and title else None
+            group: list[ChatMessage] = []
+            for message in indexed.messages:
+                if message.role != "run_summary":
+                    group.append(message)
+                    continue
+                activity = _run_activity_record(
+                    scope.display_key,
+                    session_id,
+                    session_title,
+                    group,
+                    message,
+                )
+                if _run_overlaps(activity, since=since, until=until):
+                    runs.append(activity)
+                group = []
+
 
 # ---------------------------------------------------------------------------
 # Pure helpers
 # ---------------------------------------------------------------------------
+
+
+def _indexed_activity_summary(summary: JsonObject) -> JsonObject:
+    """Remove fork slicing metadata after the index already omitted that prefix."""
+    projected = dict(summary)
+    projected.pop(FORK_SOURCE_META_KEY, None)
+    return projected
 
 
 def _run_activity_record(

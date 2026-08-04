@@ -208,6 +208,37 @@ class TestChatSession:
             tool_message.to_dict(),
         ]
 
+    def test_load_since_reads_only_messages_after_matching_cursor(self, tmp_path):
+        session = ChatSession.create(tmp_path, session_id="session-one")
+        first = ChatMessage.user("first", timestamp=FIXED_TIMESTAMP)
+        second = ChatMessage.user("second", timestamp=FIXED_TIMESTAMP)
+        session.append(first)
+
+        initial = session.load_since()
+        assert initial is not None
+        session.append(second)
+
+        appended = session.load_since(initial.cursor)
+
+        assert appended is not None
+        assert [message.to_dict() for message in appended.messages] == [second.to_dict()]
+        assert appended.cursor.message_count == 2
+        assert appended.cursor.byte_offset == session.path.stat().st_size
+        assert appended.cursor.last_message_id == second.id
+
+    def test_load_since_rejects_cursor_after_canonical_prefix_is_replaced(self, tmp_path):
+        session = ChatSession.create(tmp_path, session_id="session-one")
+        session.append(ChatMessage.user("first", timestamp=FIXED_TIMESTAMP))
+        initial = session.load_since()
+        assert initial is not None
+        replacement = ChatMessage.user("replacement", timestamp=FIXED_TIMESTAMP)
+        session.path.write_text(
+            json.dumps(replacement.to_dict(), separators=(",", ":")) + "\n",
+            encoding="utf-8",
+        )
+
+        assert session.load_since(initial.cursor) is None
+
     def test_load_recovers_partial_trailing_json_line(self, tmp_path):
         session = ChatSession.create(tmp_path, session_id="session-one")
         message = ChatMessage.user("Survives crash", timestamp=FIXED_TIMESTAMP)

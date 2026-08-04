@@ -1,13 +1,15 @@
 """Statistics RPC handler.
 
-``statistics.report`` returns a full read-only :class:`StatisticsReport`
-computed on demand from persisted Sessions. ``statistics.run_activity`` returns
+``statistics.report`` returns a full :class:`StatisticsReport` from the
+incrementally reconciled Session read model. ``statistics.run_activity`` returns
 the bounded Run projection overlapping a required time window for Provider-limit
-correlation. Neither stores derived data or exposes raw Tool arguments/reasoning.
+correlation. Both offload filesystem/SQLite work and expose no raw Tool arguments
+or Reasoning.
 """
 
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime
 from typing import Any, cast
 
@@ -23,7 +25,7 @@ _SUPPORTED_FIELDS = {"since", "until"}
 _RUN_ACTIVITY_SUPPORTED_FIELDS = {"since", "until"}
 
 
-def _statistics_report(state: Any, params: JsonObject) -> JsonObject:
+async def _statistics_report(state: Any, params: JsonObject) -> JsonObject:
     _reject_unsupported(params, _SUPPORTED_FIELDS, "statistics.report")
 
     since = _optional_utc_timestamp(params, "since")
@@ -31,11 +33,15 @@ def _statistics_report(state: Any, params: JsonObject) -> JsonObject:
     if since is not None and until is not None and since > until:
         raise RpcError(RPC_ERROR_INVALID_REQUEST, "params.since must not be after params.until")
 
-    report = _statistics_service(state).report(since=since, until=until)
+    report = await asyncio.to_thread(
+        statistics_service(state).report,
+        since=since,
+        until=until,
+    )
     return report.to_dict()
 
 
-def _statistics_run_activity(state: Any, params: JsonObject) -> JsonObject:
+async def _statistics_run_activity(state: Any, params: JsonObject) -> JsonObject:
     _reject_unsupported(
         params,
         _RUN_ACTIVITY_SUPPORTED_FIELDS,
@@ -45,7 +51,12 @@ def _statistics_run_activity(state: Any, params: JsonObject) -> JsonObject:
     until = _required_utc_timestamp(params, "until")
     if since > until:
         raise RpcError(RPC_ERROR_INVALID_REQUEST, "params.since must not be after params.until")
-    return _statistics_service(state).run_activity(since=since, until=until).to_dict()
+    report = await asyncio.to_thread(
+        statistics_service(state).run_activity,
+        since=since,
+        until=until,
+    )
+    return report.to_dict()
 
 
 def _required_utc_timestamp(params: JsonObject, key: str) -> datetime:
@@ -116,7 +127,7 @@ class _RuntimeSkillInventory:
         return [(skill.name, origin) for skill in self._runtime.project_own_skills(project_id)]
 
 
-def _statistics_service(state: Any) -> StatisticsService:
+def statistics_service(state: Any) -> StatisticsService:
     service = getattr(state, "statistics_service", None)
     if service is not None:
         return cast(StatisticsService, service)
