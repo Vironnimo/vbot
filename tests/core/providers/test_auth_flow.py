@@ -17,6 +17,7 @@ import pytest
 import respx
 
 from core.providers.auth_flow import DeviceFlowEngine, DeviceFlowTerminalError
+from core.providers.errors import ProviderError
 from core.providers.providers import OAuthConfig
 from core.providers.token_store import TokenStore
 
@@ -31,6 +32,8 @@ OPENAI_REDIRECT_URI = "https://auth.openai.com/deviceauth/callback"
 MINIMAX_DEVICE_AUTH_URL = "https://api.minimax.io/oauth/code"
 MINIMAX_TOKEN_URL = "https://api.minimax.io/oauth/token"
 MINIMAX_VERIFICATION_URI = "https://api.minimax.io/oauth/verify"
+XAI_DEVICE_AUTH_URL = "https://auth.x.ai/oauth2/device/code"
+XAI_TOKEN_URL = "https://auth.x.ai/oauth2/token"
 
 
 def _oauth_config(*, token_exchange_url: str | None = None) -> OAuthConfig:
@@ -66,6 +69,17 @@ def _minimax_oauth_config() -> OAuthConfig:
         token_url=MINIMAX_TOKEN_URL,
         scopes=["group_id", "profile", "model.completion"],
         device_flow="minimax_oauth",
+    )
+
+
+def _xai_oauth_config() -> OAuthConfig:
+    return OAuthConfig(
+        flow="device",
+        client_id="xai-client-id",
+        device_auth_url=XAI_DEVICE_AUTH_URL,
+        token_url=XAI_TOKEN_URL,
+        scopes=["openid", "offline_access", "grok-cli:access", "api:access"],
+        device_flow="xai_oauth",
     )
 
 
@@ -110,6 +124,94 @@ async def test_start_device_flow_posts_client_id_and_scope(tmp_path: Path) -> No
     assert session.expires_in == 900
     assert session.interval == 3
     assert route.calls.last.request.content == b"client_id=client-id&scope=read%3Auser"
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_start_xai_flow_prefers_complete_verification_uri(tmp_path: Path) -> None:
+    engine = DeviceFlowEngine(TokenStore(tmp_path))
+    route = respx.post(XAI_DEVICE_AUTH_URL).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "device_code": "xai-device-code",
+                "user_code": "XAI-CODE",
+                "verification_uri": "https://auth.x.ai/device",
+                "verification_uri_complete": "https://auth.x.ai/device?user_code=XAI-CODE",
+                "expires_in": 900,
+                "interval": 5,
+            },
+        )
+    )
+
+    session = await engine.start_device_flow("xai", "subscription", _xai_oauth_config())
+
+    assert session.verification_uri == "https://auth.x.ai/device?user_code=XAI-CODE"
+    assert parse_qs(route.calls.last.request.content.decode()) == {
+        "client_id": ["xai-client-id"],
+        "scope": ["openid offline_access grok-cli:access api:access"],
+    }
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_xai_flow_accepts_http_400_pending_then_saves_rotated_token(
+    tmp_path: Path,
+) -> None:
+    token_store = TokenStore(tmp_path)
+    engine = DeviceFlowEngine(token_store)
+    responses = [
+        httpx.Response(400, json={"error": "authorization_pending"}),
+        httpx.Response(
+            200,
+            json={
+                "access_token": "xai-access",
+                "refresh_token": "xai-refresh",
+                "expires_in": 900,
+            },
+        ),
+    ]
+    route = respx.post(XAI_TOKEN_URL).mock(side_effect=responses)
+
+    with patch("core.providers.auth_flow.asyncio.sleep", new_callable=AsyncMock):
+        await engine._poll_for_token(
+            "xai",
+            "subscription",
+            _xai_oauth_config(),
+            "xai-device-code",
+            5,
+            900,
+            AsyncMock(),
+        )
+
+    assert route.call_count == 2
+    request_form = parse_qs(route.calls.last.request.content.decode())
+    assert request_form == {
+        "client_id": ["xai-client-id"],
+        "device_code": ["xai-device-code"],
+        "grant_type": ["urn:ietf:params:oauth:grant-type:device_code"],
+    }
+    token = token_store.load("xai", "subscription")
+    assert token is not None
+    assert token.access_token == "xai-access"
+    assert token.refresh_token == "xai-refresh"
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_xai_flow_rejects_non_polling_http_400(tmp_path: Path) -> None:
+    engine = DeviceFlowEngine(TokenStore(tmp_path))
+    respx.post(XAI_TOKEN_URL).mock(
+        return_value=httpx.Response(400, json={"error": "invalid_client"})
+    )
+
+    async with httpx.AsyncClient() as client:
+        with pytest.raises(ProviderError):
+            await engine._request_device_token(
+                client,
+                _xai_oauth_config(),
+                "xai-device-code",
+            )
 
 
 @respx.mock

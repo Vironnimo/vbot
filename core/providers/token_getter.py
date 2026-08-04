@@ -15,6 +15,7 @@ from core.providers.openai_subscription_auth import openai_subscription_token_ex
 from core.providers.providers import (
     MINIMAX_OAUTH_DEVICE_FLOW,
     OPENAI_CODEX_DEVICE_FLOW,
+    XAI_OAUTH_DEVICE_FLOW,
     OAuthConfig,
     resolve_minimax_oauth_expiry,
 )
@@ -30,6 +31,7 @@ TOKEN_EXCHANGE_FALLBACK_MINUTES = 25
 GITHUB_OAUTH_TOKEN_EXTRA_KEY = "github_oauth_token"
 COPILOT_INTEGRATION_ID = "vscode-chat"
 COPILOT_EDITOR_VERSION = "vBot/0.1.0"
+ROTATING_REFRESH_DEVICE_FLOWS = frozenset({MINIMAX_OAUTH_DEVICE_FLOW, XAI_OAUTH_DEVICE_FLOW})
 
 
 class TokenGetter(Protocol):
@@ -202,7 +204,7 @@ class OAuthTokenGetter:
         except ProviderError as exc:
             if (
                 isinstance(exc, ProviderAuthError)
-                and self._oauth_config.device_flow == MINIMAX_OAUTH_DEVICE_FLOW
+                and self._oauth_config.device_flow in ROTATING_REFRESH_DEVICE_FLOWS
             ):
                 self._token_store.delete(
                     self._provider_id,

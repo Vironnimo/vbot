@@ -47,6 +47,7 @@ from core.providers.reasoning import (
     REASONING_REPLAY_POLICIES,
     ReasoningReplayPolicy,
 )
+from core.providers.xai import XAIAdapter
 
 __all__ = [
     "DEFAULT_ACCOUNT_ID",
@@ -68,6 +69,7 @@ __all__ = [
     "OpenAICompatibleAdapter",
     "OpenCodeGoAdapter",
     "OpenRouterAdapter",
+    "XAIAdapter",
     "ProviderAccount",
     "ProviderCredentialResolver",
     "ProviderAdapter",

@@ -88,3 +88,4 @@ Read these only when your task matches — not by default.
 - Changing OpenAI Platform or ChatGPT subscription behavior → `providers/openai.md`
 - Changing OpenCode Go's per-Model OpenAI/Messages routing → `providers/opencode-go.md`
 - Changing OpenRouter runtime, routing, prompt caching, catalog, reasoning, or task discovery → `providers/openrouter.md`
+- Changing xAI API-key/SuperGrok auth, Responses policy, reasoning replay, media, or catalog behavior → `providers/xai.md`
