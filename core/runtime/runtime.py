@@ -711,7 +711,7 @@ class Runtime:
             temporary_files=self._storage.temporary_files,
         )
         self._start_terminal_manager()
-        register_terminal_beta_tool(self._tools, self._terminal_manager)
+        register_terminal_beta_tool(self._tools, self._terminal_manager, self._projects)
         self._bootstrap_service = BootstrapService(
             self._trigger_service,
             self._storage.data_dir,
