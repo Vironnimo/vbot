@@ -998,6 +998,30 @@ describe('runMetaParts', () => {
     expect(parts.length).toBeGreaterThan(cancelledIndex + 1);
   });
 
+  it('uses the backend Model-step count instead of inferring from visible rows', () => {
+    const parts = runMetaParts({
+      status: 'completed',
+      durationMs: 1000,
+      modelStepCount: 3,
+      outputs: [{ content: 'done' }],
+      tools: [{ name: 'read' }, { name: 'write' }],
+    });
+
+    expect(parts[0]).toBe('3 iter');
+  });
+
+  it('shows zero for a Run that completed without a persisted Model step', () => {
+    const parts = runMetaParts({
+      status: 'failed',
+      durationMs: 100,
+      modelStepCount: 0,
+      outputs: [{ content: 'an unrelated visible error row' }],
+      tools: [{ name: 'read' }],
+    });
+
+    expect(parts[0]).toBe('0 iter');
+  });
+
   it('shows only the Cancelled label when a cancelled run has no timing', () => {
     const parts = runMetaParts({
       status: 'cancelled',

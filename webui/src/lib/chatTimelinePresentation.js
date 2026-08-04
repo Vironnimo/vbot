@@ -1116,9 +1116,9 @@ function shouldRenderToolCall(tool) {
 }
 
 function runIterationCount(assistantRun) {
-  const outputCount = (assistantRun.outputs ?? []).length;
-  const toolCount = (assistantRun.tools ?? []).length;
-  return Math.max(1, outputCount + (toolCount > 0 ? 1 : 0));
+  return Number.isInteger(assistantRun.modelStepCount)
+    ? Math.max(0, assistantRun.modelStepCount)
+    : 0;
 }
 
 function labelForRunIterations(assistantRun) {

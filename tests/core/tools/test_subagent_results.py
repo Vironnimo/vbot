@@ -111,6 +111,7 @@ async def test_subagent_result_preserves_interruption_details_from_jsonl(tmp_pat
         ChatMessage.run_summary(
             run_id="missing-run",
             status="completed",
+            model_step_count=1,
             timing=TERMINAL_TIMING,
         )
     )
@@ -154,6 +155,7 @@ async def test_subagent_result_falls_back_to_jsonl_when_run_is_missing(tmp_path:
         ChatMessage.run_summary(
             run_id="missing-run",
             status="completed",
+            model_step_count=1,
             timing=TERMINAL_TIMING,
         )
     )
@@ -427,6 +429,7 @@ async def test_subagent_result_falls_back_to_jsonl_when_live_run_has_no_output(
         ChatMessage.run_summary(
             run_id="sub-run",
             status="completed",
+            model_step_count=1,
             timing=TERMINAL_TIMING,
         )
     )
@@ -477,6 +480,7 @@ async def test_subagent_result_failed_live_run_error_falls_back_to_jsonl_output(
         ChatMessage.run_summary(
             run_id="sub-run",
             status="failed",
+            model_step_count=1,
             timing=TERMINAL_TIMING,
         )
     )
@@ -538,6 +542,7 @@ async def test_subagent_result_polls_jsonl_until_assistant_output_appears(
             ChatMessage.run_summary(
                 run_id="sub-run",
                 status="failed",
+                model_step_count=1,
                 timing=TERMINAL_TIMING,
             )
         )
@@ -607,6 +612,7 @@ async def test_subagent_result_ignores_prior_terminal_run_when_new_output_is_unf
         ChatMessage.run_summary(
             run_id="first-run",
             status="completed",
+            model_step_count=1,
             timing=TERMINAL_TIMING,
         )
     )

@@ -295,7 +295,11 @@ async def test_chat_history_includes_tool_timing_and_run_summary(tmp_path: Path)
         )
     )
     session.append(ChatMessage.assistant(model="openai/gpt-5.2", content="Done"))
-    session.append(ChatMessage.run_summary(run_id="run-one", status="completed", timing=timing))
+    session.append(
+        ChatMessage.run_summary(
+            run_id="run-one", status="completed", timing=timing, model_step_count=1
+        )
+    )
 
     response = await dispatch_rpc(
         state,

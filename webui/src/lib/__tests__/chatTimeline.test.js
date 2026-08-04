@@ -740,6 +740,94 @@ describe('cancelled run rendering', () => {
   });
 });
 
+describe('Model-step count projection', () => {
+  it('restores the canonical count from a persisted Run Summary', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-model-steps-history',
+    );
+    loadHistory(sessionState, [
+      { id: 'u1', role: 'user', content: 'Do three steps' },
+      {
+        id: 'a1',
+        role: 'assistant',
+        tool_calls: [{ id: 'c1', name: 'read', arguments: {} }],
+      },
+      {
+        id: 't1',
+        role: 'tool',
+        tool_call_id: 'c1',
+        name: 'read',
+        content: '{}',
+      },
+      {
+        id: 'a2',
+        role: 'assistant',
+        tool_calls: [{ id: 'c2', name: 'read', arguments: {} }],
+      },
+      {
+        id: 't2',
+        role: 'tool',
+        tool_call_id: 'c2',
+        name: 'read',
+        content: '{}',
+      },
+      { id: 'a3', role: 'assistant', content: 'Done' },
+      {
+        id: 's1',
+        role: 'run_summary',
+        run_id: 'run-three',
+        status: 'completed',
+        model_step_count: 3,
+      },
+    ]);
+
+    const run = visibleTimelineItemsForRender(sessionState).find(
+      (item) => item.type === 'assistant_run',
+    );
+    expect(run.modelStepCount).toBe(3);
+  });
+
+  it('tracks the server count through live usage and terminal events', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-model-steps-live',
+    );
+    startRun(sessionState, { run_id: 'run-live', sse_url: '/runs/run-live' });
+    appendRunEvent(sessionState, {
+      type: 'run_started',
+      run_id: 'run-live',
+      sequence: 1,
+      payload: { status: 'running' },
+    });
+    appendRunEvent(sessionState, {
+      type: 'model_step_usage',
+      run_id: 'run-live',
+      sequence: 2,
+      payload: { model_step_count: 1 },
+    });
+    appendRunEvent(sessionState, {
+      type: 'model_step_usage',
+      run_id: 'run-live',
+      sequence: 3,
+      payload: { model_step_count: 2 },
+    });
+    appendRunEvent(sessionState, {
+      type: 'run_completed',
+      run_id: 'run-live',
+      sequence: 4,
+      payload: { status: 'completed', model_step_count: 2 },
+    });
+
+    const run = visibleTimelineItemsForRender(sessionState).find(
+      (item) => item.type === 'assistant_run',
+    );
+    expect(run.modelStepCount).toBe(2);
+  });
+});
+
 describe('per-tool-call user cancel projection', () => {
   const cancelledEnvelope = {
     ok: false,
