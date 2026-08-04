@@ -38,12 +38,15 @@ from core.providers.kimi import KimiAdapter
 from core.providers.lmstudio import LMStudioAdapter
 from core.providers.minimax import MiniMaxAdapter
 from core.providers.mistral import MistralAdapter
+from core.providers.nous import NousAdapter
 from core.providers.ollama import OllamaAdapter
 from core.providers.openai import OpenAIAdapter
 from core.providers.openai_compatible import OpenAICompatibleAdapter
 from core.providers.opencode_go import OpenCodeGoAdapter
+from core.providers.opencode_zen import OpenCodeZenAdapter
 from core.providers.openrouter import OpenRouterAdapter
 from core.providers.providers import ConnectionConfig, ProviderConfig
+from core.providers.stepfun import StepFunAdapter
 from core.providers.xai import XAIAdapter
 from core.utils.errors import ProviderError, VBotError
 from core.utils.logging import get_logger
@@ -198,6 +201,16 @@ async def refresh_models(
         normalized_models: dict[str, Model] = {}
         for raw_model in raw_models:
             if not raw_filter.accepts(raw_model):
+                continue
+            connection_catalog_filter = getattr(
+                adapter_class,
+                "accepts_discovered_model",
+                None,
+            )
+            if callable(connection_catalog_filter) and not connection_catalog_filter(
+                raw_model,
+                credential_connection,
+            ):
                 continue
             try:
                 model = adapter_class.normalize_catalog_entry(raw_model, provider_config.defaults)
@@ -687,11 +700,12 @@ def _merge_models_by_connection(
 ) -> dict[str, dict[str, Any]]:
     """Combine fresh discovery output with existing catalog models.
 
-    Models are partitioned by the ``connections`` allowlist. Models tagged
-    with ``connection_id`` are replaced by the fresh fetch; models tagged
-    with any other connection are kept untouched. Passing
-    ``connection_id=None`` (no selected connection) falls back to a full
-    overwrite for backward compatibility with non-connection-aware callers.
+    Models are partitioned by the ``connections`` allowlist. A refresh replaces
+    only the selected Connection's membership and preserves every other
+    membership on the same wire id; a fresh shared entry unions those retained
+    memberships back in. Passing ``connection_id=None`` (no selected Connection)
+    falls back to a full overwrite for backward compatibility with
+    non-Connection-aware callers.
     """
 
     merged: dict[str, dict[str, Any]] = {}
@@ -702,8 +716,23 @@ def _merge_models_by_connection(
     for model_id, model_data in existing_models.items():
         model_connections = model_data.get("connections")
         if not isinstance(model_connections, list) or connection_id not in model_connections:
-            merged[model_id] = model_data
-    merged.update(fresh_models)
+            merged[model_id] = dict(model_data)
+            continue
+
+        remaining_connections = [item for item in model_connections if item != connection_id]
+        if remaining_connections:
+            retained = dict(model_data)
+            retained["connections"] = remaining_connections
+            merged[model_id] = retained
+
+    for model_id, fresh_model in fresh_models.items():
+        data = dict(fresh_model)
+        retained_model = merged.get(model_id)
+        retained_connections = retained_model.get("connections") if retained_model else None
+        fresh_connections = data.get("connections")
+        if isinstance(retained_connections, list) and isinstance(fresh_connections, list):
+            data["connections"] = list(dict.fromkeys([*retained_connections, *fresh_connections]))
+        merged[model_id] = data
     return merged
 
 
@@ -877,10 +906,13 @@ _DISCOVERY_ADAPTER_MAP = {
     "openai": OpenAIAdapter,
     "anthropic": AnthropicAdapter,
     "opencode_go": OpenCodeGoAdapter,
+    "opencode_zen": OpenCodeZenAdapter,
     "openrouter": OpenRouterAdapter,
     "kimi": KimiAdapter,
     "minimax": MiniMaxAdapter,
     "mistral": MistralAdapter,
+    "nous": NousAdapter,
+    "stepfun": StepFunAdapter,
     "github_copilot": GitHubCopilotAdapter,
     "ollama": OllamaAdapter,
     "lmstudio": LMStudioAdapter,

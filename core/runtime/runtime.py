@@ -57,10 +57,12 @@ from core.providers.kimi import KimiAdapter
 from core.providers.lmstudio import LMStudioAdapter
 from core.providers.minimax import MiniMaxAdapter
 from core.providers.mistral import MistralAdapter
+from core.providers.nous import NousAdapter
 from core.providers.ollama import OllamaAdapter
 from core.providers.openai import OpenAIAdapter
 from core.providers.openai_compatible import OpenAICompatibleAdapter
 from core.providers.opencode_go import OpenCodeGoAdapter
+from core.providers.opencode_zen import OpenCodeZenAdapter
 from core.providers.openrouter import OpenRouterAdapter
 from core.providers.providers import (
     ConnectionConfig,
@@ -69,7 +71,13 @@ from core.providers.providers import (
     model_is_local,
     resolve_effective_context_window,
 )
-from core.providers.token_getter import OAuthTokenGetter, StaticTokenGetter, TokenGetter
+from core.providers.stepfun import StepFunAdapter
+from core.providers.token_getter import (
+    COPILOT_API_ENDPOINT_EXTRA_KEY,
+    OAuthTokenGetter,
+    StaticTokenGetter,
+    TokenGetter,
+)
 from core.providers.token_store import TokenStore
 from core.providers.usage import ProviderUsageService
 from core.providers.xai import XAIAdapter
@@ -321,7 +329,10 @@ _ADAPTER_MAP: dict[
     "kimi": KimiAdapter,
     "minimax": MiniMaxAdapter,
     "mistral": MistralAdapter,
+    "nous": NousAdapter,
+    "stepfun": StepFunAdapter,
     "opencode_go": OpenCodeGoAdapter,
+    "opencode_zen": OpenCodeZenAdapter,
     "github_copilot": GitHubCopilotAdapter,
     "anthropic": AnthropicAdapter,
     "ollama": OllamaAdapter,
@@ -2223,10 +2234,18 @@ class Runtime:
             # an active Tool loop and invalidating its warm prompt cache.
             extra_kwargs["routing"] = self.storage.load_openrouter_routing_settings()
 
+        base_url = connection.base_url
+        if adapter_class is GitHubCopilotAdapter:
+            copilot_endpoint = self.get_connection_token_extra(provider_id, connection_id).get(
+                COPILOT_API_ENDPOINT_EXTRA_KEY
+            )
+            if copilot_endpoint:
+                base_url = copilot_endpoint
+
         adapter = cast(Any, adapter_class)(
             provider_config,
             token_getter,
-            connection.base_url,
+            base_url,
             connection.auth,
             model_lookup=self._model_lookup_for(provider_id),
             debug_recorder=debug_recorder,

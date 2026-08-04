@@ -20,10 +20,20 @@ from core.providers.accounts import DEFAULT_ACCOUNT_ID
 from core.providers.openai_subscription_auth import openai_subscription_token_extra
 from core.providers.providers import (
     MINIMAX_OAUTH_DEVICE_FLOW,
+    NOUS_OAUTH_DEVICE_FLOW,
     OPENAI_CODEX_DEVICE_FLOW,
+    OPENCODE_OAUTH_DEVICE_FLOW,
     XAI_OAUTH_DEVICE_FLOW,
     OAuthConfig,
     resolve_minimax_oauth_expiry,
+)
+from core.providers.token_getter import (
+    COPILOT_EDITOR_VERSION,
+    COPILOT_INTEGRATION_ID,
+    OAUTH_SCOPE_EXTRA_KEY,
+    copilot_token_extra,
+    oauth_scope_value,
+    validate_nous_oauth_scope,
 )
 from core.providers.token_store import OAuthToken, TokenStore
 from core.utils.errors import ProviderError
@@ -37,8 +47,6 @@ DEFAULT_DEVICE_FLOW_INTERVAL_SECONDS = 5
 DEFAULT_OPENAI_DEVICE_FLOW_EXPIRES_IN_SECONDS = 600
 DEFAULT_COPILOT_TOKEN_LIFETIME_MINUTES = 25
 HTTP_TIMEOUT_SECONDS = 60.0
-COPILOT_INTEGRATION_ID = "vscode-chat"
-COPILOT_EDITOR_VERSION = "vBot/0.1.0"
 OPENAI_DEVICE_CALLBACK_URI = "https://auth.openai.com/deviceauth/callback"
 OPENAI_DEVICE_PENDING_STATUS_CODES = frozenset({403, 404})
 
@@ -303,6 +311,8 @@ class DeviceFlowEngine:
     ) -> httpx.Response:
         if self._is_openai_codex_flow(oauth_config):
             return await self._post_openai_device_authorization(client, oauth_config)
+        if self._is_opencode_flow(oauth_config):
+            return await self._post_opencode_device_authorization(client, oauth_config)
 
         try:
             response = await client.post(
@@ -311,6 +321,25 @@ class DeviceFlowEngine:
                     "client_id": oauth_config.client_id,
                     "scope": " ".join(oauth_config.scopes),
                 },
+                headers={"Accept": "application/json"},
+            )
+        except httpx.HTTPError as error:
+            raise wrap_network_error(error) from error
+
+        classify_http_status(
+            response.status_code, detail=response.text, response_headers=response.headers
+        )
+        return response
+
+    async def _post_opencode_device_authorization(
+        self,
+        client: httpx.AsyncClient,
+        oauth_config: OAuthConfig,
+    ) -> httpx.Response:
+        try:
+            response = await client.post(
+                oauth_config.device_auth_url,
+                json={"client_id": oauth_config.client_id},
                 headers={"Accept": "application/json"},
             )
         except httpx.HTTPError as error:
@@ -495,6 +524,12 @@ class DeviceFlowEngine:
                 user_code,
                 code_verifier,
             )
+        if self._is_opencode_flow(oauth_config):
+            return await self._post_opencode_device_token(
+                client,
+                oauth_config,
+                device_code,
+            )
 
         try:
             response = await client.post(
@@ -509,7 +544,35 @@ class DeviceFlowEngine:
         except httpx.HTTPError as error:
             raise wrap_network_error(error) from error
 
-        if self._is_xai_flow(oauth_config) and _is_standard_device_flow_error(response):
+        if (
+            self._is_xai_flow(oauth_config) or self._is_nous_flow(oauth_config)
+        ) and _is_standard_device_flow_error(response):
+            return response
+        classify_http_status(
+            response.status_code, detail=response.text, response_headers=response.headers
+        )
+        return response
+
+    async def _post_opencode_device_token(
+        self,
+        client: httpx.AsyncClient,
+        oauth_config: OAuthConfig,
+        device_code: str,
+    ) -> httpx.Response:
+        try:
+            response = await client.post(
+                oauth_config.token_url,
+                json={
+                    "grant_type": DEVICE_CODE_GRANT_TYPE,
+                    "device_code": device_code,
+                    "client_id": oauth_config.client_id,
+                },
+                headers={"Accept": "application/json"},
+            )
+        except httpx.HTTPError as error:
+            raise wrap_network_error(error) from error
+
+        if _is_standard_device_flow_error(response):
             return response
         classify_http_status(
             response.status_code, detail=response.text, response_headers=response.headers
@@ -594,6 +657,21 @@ class DeviceFlowEngine:
                 ),
             )
 
+        if self._is_nous_flow(oauth_config):
+            for required_field in ("access_token", "refresh_token"):
+                if not token_data.get(required_field):
+                    raise DeviceFlowTerminalError("invalid_token_response")
+            try:
+                validate_nous_oauth_scope(token_data, oauth_config.scopes)
+            except ProviderError as exc:
+                raise DeviceFlowTerminalError("missing_inference_invoke_scope") from exc
+            return OAuthToken(
+                access_token=str(token_data["access_token"]),
+                refresh_token=str(token_data["refresh_token"]),
+                expires_at=self._expires_at_from_response(token_data),
+                extra={OAUTH_SCOPE_EXTRA_KEY: oauth_scope_value(token_data, oauth_config.scopes)},
+            )
+
         provider_oauth_token = str(token_data["access_token"])
         if oauth_config.token_exchange_url:
             return await self._exchange_copilot_token(
@@ -669,11 +747,12 @@ class DeviceFlowEngine:
             )
             _LOGGER.warning("Copilot token exchange response did not include expires_at")
 
+        access_token = str(data["token"])
         return OAuthToken(
-            access_token=str(data["token"]),
+            access_token=access_token,
             refresh_token=None,
             expires_at=expires_at,
-            extra={"github_oauth_token": github_oauth_token},
+            extra=copilot_token_extra(data, github_oauth_token, access_token),
         )
 
     async def _get_token_exchange(
@@ -721,6 +800,12 @@ class DeviceFlowEngine:
     def _is_minimax_flow(self, oauth_config: OAuthConfig) -> bool:
         return oauth_config.device_flow == MINIMAX_OAUTH_DEVICE_FLOW
 
+    def _is_nous_flow(self, oauth_config: OAuthConfig) -> bool:
+        return oauth_config.device_flow == NOUS_OAUTH_DEVICE_FLOW
+
+    def _is_opencode_flow(self, oauth_config: OAuthConfig) -> bool:
+        return oauth_config.device_flow == OPENCODE_OAUTH_DEVICE_FLOW
+
     def _is_xai_flow(self, oauth_config: OAuthConfig) -> bool:
         return oauth_config.device_flow == XAI_OAUTH_DEVICE_FLOW
 
@@ -762,9 +847,24 @@ class DeviceFlowEngine:
         return datetime.now(UTC) + timedelta(seconds=int(expires_in))
 
     def _parse_expires_at(self, value: Any) -> datetime | None:
+        if isinstance(value, bool) or value is None:
+            return None
+        if isinstance(value, int | float):
+            try:
+                return datetime.fromtimestamp(float(value), tz=UTC)
+            except (OverflowError, OSError, ValueError):
+                return None
         if not isinstance(value, str) or not value:
             return None
-        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        if value.isdecimal():
+            try:
+                return datetime.fromtimestamp(float(value), tz=UTC)
+            except (OverflowError, OSError, ValueError):
+                return None
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
         if parsed.tzinfo is None:
             return parsed.replace(tzinfo=UTC)
         return parsed.astimezone(UTC)

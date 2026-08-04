@@ -21,6 +21,7 @@ from .discovery_test_support import (
     Model,
     ModelDiscoveryError,
     ModelRegistry,
+    ModelsDevCatalog,
     Path,
     ProviderConfig,
     ReasoningCapabilities,
@@ -48,6 +49,144 @@ from .discovery_test_support import openrouter_config as openrouter_config
 
 
 class TestRefreshModels:
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_opencode_zen_discovery_enriches_exact_allowlist_and_merges_connections(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        resources_dir = tmp_path / "resources"
+        config = ProviderConfig(
+            id="opencode-zen",
+            name="OpenCode Zen",
+            adapter="opencode_zen",
+            base_url="https://opencode.ai/zen/v1",
+            connections=[
+                ConnectionConfig(
+                    id="api-key",
+                    type="api_key",
+                    label="API Key",
+                    auth=AuthConfig(
+                        header="Authorization",
+                        prefix="Bearer ",
+                        credential_key="OPENCODE_API_KEY",
+                    ),
+                    models_endpoint="/models",
+                ),
+                ConnectionConfig(
+                    id="account",
+                    type="oauth",
+                    label="OpenCode Account",
+                    auth=AuthConfig(header="Authorization", prefix="Bearer "),
+                    models_endpoint="/models",
+                ),
+            ],
+            defaults={"max_tokens": 8192},
+            models_endpoint="/models",
+            models_dev_id="opencode",
+            catalog_exclusions=frozenset({"glm-5"}),
+        )
+        catalog = ModelsDevCatalog(
+            {
+                "models": {
+                    "google/gemini-3.5-flash": {
+                        "id": "google/gemini-3.5-flash",
+                        "name": "Gemini 3.5 Flash",
+                        "modalities": {
+                            "input": ["text", "image", "video", "audio", "pdf"],
+                            "output": ["text"],
+                        },
+                        "reasoning": True,
+                    }
+                },
+                "providers": {
+                    "opencode": {
+                        "id": "opencode",
+                        "name": "OpenCode",
+                        "models": {
+                            "gemini-3.5-flash": {
+                                "id": "gemini-3.5-flash",
+                                "name": "Gemini 3.5 Flash",
+                                "family": "gemini",
+                                "limit": {"context": 1_048_576, "output": 65_536},
+                                "modalities": {
+                                    "input": ["text", "image", "video", "audio", "pdf"],
+                                    "output": ["text"],
+                                },
+                                "reasoning": True,
+                                "tool_call": True,
+                                "reasoning_options": [
+                                    {
+                                        "type": "effort",
+                                        "values": ["minimal", "low", "medium", "high"],
+                                    }
+                                ],
+                            }
+                        },
+                    }
+                },
+            }
+        )
+        route = respx.get("https://opencode.ai/zen/v1/models").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "data": [
+                        {"id": "gemini-3.5-flash"},
+                        {"id": "claude-opus-4-1"},
+                        {"id": "glm-5"},
+                        {"id": "unreviewed-future-model"},
+                    ]
+                },
+            )
+        )
+
+        first = await refresh_models(
+            config,
+            "api-key-secret",
+            resources_dir,
+            credential_connection=config.get_connection("api-key"),
+            models_dev_catalog=catalog,
+        )
+        second = await refresh_models(
+            config,
+            "account-access-token",
+            resources_dir,
+            credential_connection=config.get_connection("account"),
+            models_dev_catalog=catalog,
+        )
+
+        written = json.loads(
+            (resources_dir / "models" / "opencode-zen.json").read_text(encoding="utf-8")
+        )
+        raw = json.loads(
+            (resources_dir / "models" / "opencode-zen.raw.json").read_text(encoding="utf-8")
+        )
+        gemini = written["models"]["gemini-3.5-flash"]
+        opus = written["models"]["claude-opus-4-1"]
+        assert first["model_count"] == 2
+        assert second["model_count"] == 2
+        assert route.call_count == 2
+        assert set(written["models"]) == {"gemini-3.5-flash", "claude-opus-4-1"}
+        assert gemini["connections"] == ["api-key", "account"]
+        assert gemini["context_window"] == 1_048_576
+        assert gemini["max_output_tokens"] == 65_536
+        assert gemini["capabilities"]["input_modalities"] == [
+            "text",
+            "image",
+            "video",
+            "audio",
+            "pdf",
+        ]
+        assert gemini["metadata"]["opencode_zen"]["protocol"] == ("gemini_generate_content")
+        assert opus["metadata"]["opencode_zen"]["deprecates_at"] == "2026-08-05"
+        assert {entry["id"] for entry in raw["raw_response"]["data"]} == {
+            "gemini-3.5-flash",
+            "claude-opus-4-1",
+            "glm-5",
+            "unreviewed-future-model",
+        }
+
     @respx.mock
     @pytest.mark.asyncio
     async def test_refresh_models_tags_models_with_selected_connection_id(
@@ -752,6 +891,203 @@ class TestRefreshModels:
         ] == ("/chat/completions", "/responses", "ws:/responses")
         assert route.calls.last.request.headers["Authorization"] == f"Bearer {API_KEY}"
         assert route.calls.last.request.headers["Copilot-Integration-Id"] == "vbot"
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_copilot_discovery_keeps_hidden_entries_only_in_raw_audit(
+        self,
+        tmp_path: Path,
+        github_copilot_config: ProviderConfig,
+    ) -> None:
+        raw_fixture = {
+            "data": [
+                {
+                    "id": "visible-chat",
+                    "name": "Visible Chat",
+                    "model_picker_enabled": True,
+                    "supported_endpoints": ["/chat/completions"],
+                    "capabilities": {"type": "chat", "supports": {}},
+                },
+                {
+                    "id": "hidden-chat",
+                    "name": "Hidden Chat",
+                    "model_picker_enabled": False,
+                    "capabilities": {"type": "chat", "supports": {}},
+                },
+                {
+                    "id": "embedding-only",
+                    "name": "Embedding Only",
+                    "capabilities": {"type": "embeddings", "supports": {}},
+                },
+                {
+                    "id": "websocket-only",
+                    "name": "Websocket Only",
+                    "supported_endpoints": ["ws:/responses"],
+                    "capabilities": {"type": "chat", "supports": {}},
+                },
+            ]
+        }
+        respx.get(GITHUB_COPILOT_MODELS_URL).mock(
+            return_value=httpx.Response(200, json=raw_fixture)
+        )
+
+        result = await refresh_models(
+            github_copilot_config,
+            API_KEY,
+            tmp_path / "resources",
+        )
+
+        generated = json.loads(
+            (tmp_path / "resources" / "models" / "github-copilot.json").read_text(encoding="utf-8")
+        )
+        raw = json.loads(
+            (tmp_path / "resources" / "models" / "github-copilot.raw.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        assert result["model_count"] == 1
+        assert set(generated["models"]) == {"visible-chat"}
+        assert {entry["id"] for entry in raw["raw_response"]["data"]} == {
+            "visible-chat",
+            "hidden-chat",
+            "embedding-only",
+            "websocket-only",
+        }
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_nous_discovery_uses_selected_connection_and_keeps_skips_in_raw(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        connection = ConnectionConfig(
+            id="subscription",
+            type="oauth",
+            label="Portal Login",
+            auth=AuthConfig(header="Authorization", prefix="Bearer "),
+            models_endpoint="/models",
+        )
+        config = ProviderConfig(
+            id="nous",
+            name="Nous Portal",
+            adapter="nous",
+            base_url="https://inference-api.nousresearch.com/v1",
+            connections=[connection],
+            defaults={"max_tokens": 32000},
+        )
+        route = respx.get("https://inference-api.nousresearch.com/v1/models").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "data": [
+                        {
+                            "id": "vendor/agent-model",
+                            "name": "Agent Model",
+                            "supported_parameters": ["tools", "reasoning"],
+                            "context_length": 200000,
+                            "top_provider": {"max_completion_tokens": 64000},
+                        },
+                        {"id": "Hermes-4-70B", "name": "Hermes 4 70B"},
+                    ]
+                },
+            )
+        )
+
+        result = await refresh_models(
+            config,
+            "nous-oauth-jwt",
+            tmp_path / "resources",
+            credential_connection=connection,
+        )
+
+        generated = json.loads(
+            (tmp_path / "resources" / "models" / "nous.json").read_text(encoding="utf-8")
+        )
+        raw = json.loads(
+            (tmp_path / "resources" / "models" / "nous.raw.json").read_text(encoding="utf-8")
+        )
+        assert result["model_count"] == 1
+        assert set(generated["models"]) == {"vendor/agent-model"}
+        assert generated["models"]["vendor/agent-model"]["connections"] == ["subscription"]
+        assert generated["models"]["vendor/agent-model"]["max_output_tokens"] == 32000
+        assert {entry["id"] for entry in raw["raw_response"]["data"]} == {
+            "vendor/agent-model",
+            "Hermes-4-70B",
+        }
+        assert route.calls.last.request.headers["authorization"] == "Bearer nous-oauth-jwt"
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_stepfun_discovery_preserves_other_connection_memberships_and_raw(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        direct = ConnectionConfig(
+            id="direct-api",
+            type="api_key",
+            label="Direct API",
+            mode="direct_api",
+            auth=AuthConfig(
+                header="Authorization",
+                prefix="Bearer ",
+                credential_key="STEPFUN_DIRECT_API_KEY",
+            ),
+            models_endpoint="/models",
+        )
+        config = ProviderConfig(
+            id="stepfun",
+            name="StepFun",
+            adapter="stepfun",
+            base_url="https://api.stepfun.com/v1",
+            connections=[direct],
+            defaults={"temperature": 0.5},
+            context_window=256000,
+        )
+        resources_dir = tmp_path / "resources"
+        models_dir = resources_dir / "models"
+        models_dir.mkdir(parents=True)
+        existing = json.loads(
+            (Path("resources") / "models" / "stepfun.json").read_text(encoding="utf-8")
+        )
+        (models_dir / "stepfun.json").write_text(
+            json.dumps(existing),
+            encoding="utf-8",
+        )
+        route = respx.get("https://api.stepfun.com/v1/models").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "data": [
+                        {"id": "step-3.7-flash", "name": "Step 3.7 Flash"},
+                        {"id": "step-router-v1", "name": "Step Router V1"},
+                        {"id": "stepaudio-2.5-chat", "name": "StepAudio 2.5 Chat"},
+                    ]
+                },
+            )
+        )
+
+        result = await refresh_models(
+            config,
+            "direct-token",
+            resources_dir,
+            credential_connection=direct,
+        )
+
+        generated = json.loads((models_dir / "stepfun.json").read_text(encoding="utf-8"))
+        raw = json.loads((models_dir / "stepfun.raw.json").read_text(encoding="utf-8"))
+        assert result["model_count"] == 4
+        assert generated["models"]["step-3.7-flash"]["connections"] == [
+            "step-plan",
+            "direct-api",
+        ]
+        assert generated["models"]["step-3.5-flash"]["connections"] == ["step-plan"]
+        assert generated["models"]["step-router-v1"]["connections"] == ["step-plan"]
+        assert {entry["id"] for entry in raw["raw_response"]["data"]} == {
+            "step-3.7-flash",
+            "step-router-v1",
+            "stepaudio-2.5-chat",
+        }
+        assert route.calls.last.request.headers["authorization"] == "Bearer direct-token"
 
     @respx.mock
     @pytest.mark.asyncio

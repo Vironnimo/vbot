@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import re
 from datetime import UTC, datetime, timedelta
 from typing import Protocol
+from urllib.parse import urlparse
 
 import httpx
 
@@ -14,7 +16,9 @@ from core.providers.errors import ProviderAuthError, ProviderError, ProviderRate
 from core.providers.openai_subscription_auth import openai_subscription_token_extra
 from core.providers.providers import (
     MINIMAX_OAUTH_DEVICE_FLOW,
+    NOUS_OAUTH_DEVICE_FLOW,
     OPENAI_CODEX_DEVICE_FLOW,
+    OPENCODE_OAUTH_DEVICE_FLOW,
     XAI_OAUTH_DEVICE_FLOW,
     OAuthConfig,
     resolve_minimax_oauth_expiry,
@@ -29,9 +33,24 @@ _LOGGER = get_logger("providers.token_getter")
 TOKEN_EXPIRY_BUFFER_SECONDS = 30
 TOKEN_EXCHANGE_FALLBACK_MINUTES = 25
 GITHUB_OAUTH_TOKEN_EXTRA_KEY = "github_oauth_token"
+COPILOT_API_ENDPOINT_EXTRA_KEY = "copilot_api_endpoint"
 COPILOT_INTEGRATION_ID = "vscode-chat"
-COPILOT_EDITOR_VERSION = "vBot/0.1.0"
-ROTATING_REFRESH_DEVICE_FLOWS = frozenset({MINIMAX_OAUTH_DEVICE_FLOW, XAI_OAUTH_DEVICE_FLOW})
+COPILOT_EDITOR_VERSION = "vscode/1.128.0"
+NOUS_INFERENCE_INVOKE_SCOPE = "inference:invoke"
+OAUTH_SCOPE_EXTRA_KEY = "oauth_scope"
+ROTATING_REFRESH_DEVICE_FLOWS = frozenset(
+    {
+        MINIMAX_OAUTH_DEVICE_FLOW,
+        NOUS_OAUTH_DEVICE_FLOW,
+        OPENCODE_OAUTH_DEVICE_FLOW,
+        XAI_OAUTH_DEVICE_FLOW,
+    }
+)
+_COPILOT_API_HOST_SUFFIXES = (
+    ".githubcopilot.com",
+    ".ghe.com",
+)
+_COPILOT_PROXY_ENDPOINT_PATTERN = re.compile(r"(?:^|;)\s*proxy-ep=([^;\s]+)")
 
 
 class TokenGetter(Protocol):
@@ -143,7 +162,10 @@ class OAuthTokenGetter:
             access_token=access_token,
             refresh_token=token.refresh_token,
             expires_at=_parse_exchange_expiry(response_data.get("expires_at"), now),
-            extra={**token.extra, GITHUB_OAUTH_TOKEN_EXTRA_KEY: github_oauth_token},
+            extra={
+                **token.extra,
+                **copilot_token_extra(response_data, github_oauth_token, access_token),
+            },
         )
         self._token_store.save(
             self._provider_id,
@@ -165,7 +187,16 @@ class OAuthTokenGetter:
             raise ProviderAuthError("OAuth token expired — please reconnect")
         now = datetime.now(UTC)
         try:
-            response_data = await retry_async(self._post_refresh_token, token.refresh_token)
+            if self._oauth_config.device_flow in {
+                NOUS_OAUTH_DEVICE_FLOW,
+                OPENCODE_OAUTH_DEVICE_FLOW,
+            }:
+                # These providers rotate refresh tokens. Retrying a POST after
+                # an ambiguous transport failure can replay the retired token
+                # and invalidate the session chain.
+                response_data = await self._post_refresh_token(token.refresh_token)
+            else:
+                response_data = await retry_async(self._post_refresh_token, token.refresh_token)
             if (
                 self._oauth_config.device_flow == MINIMAX_OAUTH_DEVICE_FLOW
                 and response_data.get("status") != "success"
@@ -174,6 +205,11 @@ class OAuthTokenGetter:
             access_token = _required_token_string(response_data.get("access_token"))
             refresh_token = response_data.get("refresh_token")
             extra = dict(token.extra)
+            if self._oauth_config.device_flow == NOUS_OAUTH_DEVICE_FLOW:
+                validate_nous_oauth_scope(response_data, self._oauth_config.scopes)
+                extra[OAUTH_SCOPE_EXTRA_KEY] = oauth_scope_value(
+                    response_data, self._oauth_config.scopes
+                )
             if self._oauth_config.device_flow == OPENAI_CODEX_DEVICE_FLOW:
                 extra.update(openai_subscription_token_extra(access_token))
             if self._oauth_config.device_flow == MINIMAX_OAUTH_DEVICE_FLOW:
@@ -270,22 +306,37 @@ class OAuthTokenGetter:
             close_client = True
         try:
             try:
-                response = await client.post(
-                    self._oauth_config.token_url,
-                    data={
-                        "grant_type": "refresh_token",
-                        "refresh_token": refresh_token,
-                        "client_id": self._oauth_config.client_id,
-                    },
-                    headers={"Accept": "application/json"},
-                )
+                data: dict[str, object] = {
+                    "grant_type": "refresh_token",
+                    "client_id": self._oauth_config.client_id,
+                }
+                headers = {"Accept": "application/json"}
+                if self._oauth_config.device_flow == NOUS_OAUTH_DEVICE_FLOW:
+                    headers["x-nous-refresh-token"] = refresh_token
+                elif self._oauth_config.device_flow == OPENCODE_OAUTH_DEVICE_FLOW:
+                    response = await client.post(
+                        self._oauth_config.token_url,
+                        json={**data, "refresh_token": refresh_token},
+                        headers=headers,
+                    )
+                else:
+                    data["refresh_token"] = refresh_token
+                if self._oauth_config.device_flow != OPENCODE_OAUTH_DEVICE_FLOW:
+                    response = await client.post(
+                        self._oauth_config.token_url,
+                        data=data,
+                        headers=headers,
+                    )
             except httpx.TransportError as exc:
                 raise wrap_network_error(exc) from exc
         finally:
             if close_client:
                 await client.aclose()
 
-        _classify_token_exchange_status(response.status_code, response.text)
+        if self._oauth_config.device_flow == NOUS_OAUTH_DEVICE_FLOW:
+            _classify_nous_refresh_status(response.status_code, response.text)
+        else:
+            _classify_token_exchange_status(response.status_code, response.text)
         data = response.json()
         if not isinstance(data, dict):
             raise ProviderAuthError("OAuth token refresh failed — please reconnect")
@@ -301,10 +352,22 @@ def _is_expiring(token: OAuthToken) -> bool:
 
 def _parse_exchange_expiry(value: object, now: datetime) -> datetime:
     fallback = now + timedelta(minutes=TOKEN_EXCHANGE_FALLBACK_MINUTES)
+    if isinstance(value, bool) or value is None:
+        return fallback
+    if isinstance(value, int | float):
+        try:
+            return datetime.fromtimestamp(float(value), tz=UTC)
+        except (OverflowError, OSError, ValueError):
+            return fallback
     if not isinstance(value, str) or not value:
         return fallback
+    if value.isdecimal():
+        try:
+            return datetime.fromtimestamp(float(value), tz=UTC)
+        except (OverflowError, OSError, ValueError):
+            return fallback
     try:
-        parsed = datetime.fromisoformat(value)
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
     except ValueError:
         return fallback
     if parsed.tzinfo is None:
@@ -340,6 +403,44 @@ def _required_token_string(value: object) -> str:
     return value
 
 
+def _oauth_scope_tokens(value: object) -> tuple[str, ...]:
+    if isinstance(value, str):
+        return tuple(token for token in value.split() if token)
+    if isinstance(value, list) and all(isinstance(token, str) for token in value):
+        return tuple(token for token in value if token)
+    return ()
+
+
+def oauth_scope_value(data: dict[str, object], requested_scopes: list[str]) -> str:
+    """Return the advertised OAuth scope, or the exact requested scope."""
+
+    advertised = _oauth_scope_tokens(data.get("scope"))
+    return " ".join(advertised or tuple(requested_scopes))
+
+
+def validate_nous_oauth_scope(data: dict[str, object], requested_scopes: list[str]) -> None:
+    """Reject a Nous token response that explicitly lacks inference access."""
+
+    advertised = _oauth_scope_tokens(data.get("scope"))
+    if advertised and NOUS_INFERENCE_INVOKE_SCOPE not in advertised:
+        raise ProviderAuthError(
+            "Nous Portal login did not grant inference access — please reconnect"
+        )
+    if NOUS_INFERENCE_INVOKE_SCOPE not in requested_scopes:
+        raise ProviderAuthError("Nous Portal connection is missing the inference scope")
+
+
+def _classify_nous_refresh_status(status_code: int, response_body: str) -> None:
+    if status_code < 400:
+        return
+    normalized = response_body.casefold()
+    if "refresh_token_reused" in normalized or "reuse detected" in normalized:
+        raise ProviderAuthError(
+            "Nous Portal detected refresh-token reuse and revoked this login — reconnect"
+        )
+    _classify_token_exchange_status(status_code, response_body)
+
+
 def _classify_token_exchange_status(status_code: int, response_body: str) -> None:
     if status_code < 400:
         return
@@ -352,3 +453,53 @@ def _classify_token_exchange_status(status_code: int, response_body: str) -> Non
     if is_retryable_status(status_code, idempotent=False):
         raise ProviderError(f"Provider error: {detail}", retryable=True)
     raise ProviderAuthError("OAuth token refresh failed — please reconnect")
+
+
+def copilot_token_extra(
+    response_data: dict[str, object],
+    github_oauth_token: str,
+    copilot_api_token: str,
+) -> dict[str, str]:
+    """Return the safe persisted metadata from one Copilot token exchange."""
+
+    extra = {GITHUB_OAUTH_TOKEN_EXTRA_KEY: github_oauth_token}
+    api_endpoint = _copilot_api_endpoint(response_data, copilot_api_token)
+    if api_endpoint is not None:
+        extra[COPILOT_API_ENDPOINT_EXTRA_KEY] = api_endpoint
+    return extra
+
+
+def _copilot_api_endpoint(
+    response_data: dict[str, object],
+    copilot_api_token: str,
+) -> str | None:
+    endpoints = response_data.get("endpoints")
+    if isinstance(endpoints, dict):
+        api_endpoint = _validated_copilot_api_endpoint(endpoints.get("api"))
+        if api_endpoint is not None:
+            return api_endpoint
+
+    proxy_match = _COPILOT_PROXY_ENDPOINT_PATTERN.search(copilot_api_token)
+    if proxy_match is None:
+        return None
+    proxy_endpoint = proxy_match.group(1).strip().rstrip("/")
+    parsed_proxy = urlparse(
+        proxy_endpoint if "://" in proxy_endpoint else f"https://{proxy_endpoint}"
+    )
+    proxy_host = (parsed_proxy.hostname or "").lower()
+    if proxy_host.startswith("proxy."):
+        proxy_host = f"api.{proxy_host.removeprefix('proxy.')}"
+    return _validated_copilot_api_endpoint(f"https://{proxy_host}")
+
+
+def _validated_copilot_api_endpoint(value: object) -> str | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    endpoint = value.strip().rstrip("/")
+    parsed = urlparse(endpoint)
+    host = (parsed.hostname or "").lower()
+    if parsed.scheme != "https" or not host:
+        return None
+    if host == "api.githubcopilot.com" or host.endswith(_COPILOT_API_HOST_SUFFIXES):
+        return endpoint
+    return None

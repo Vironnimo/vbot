@@ -24,7 +24,6 @@ if TYPE_CHECKING:
 
 from core.models.models import Capabilities, Model, ReasoningCapabilities
 from core.providers._http_shared import (
-    classify_http_status,
     decode_response_json,
     wrap_network_error,
 )
@@ -621,7 +620,7 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
             except httpx.TransportError as exc:
                 raise wrap_network_error(exc) from exc
 
-            classify_http_status(
+            self._classify_http_status(
                 response.status_code,
                 detail=_http_error_detail(response),
                 response_headers=response.headers,
@@ -655,7 +654,7 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
             if response.status_code >= 400:
                 error_body = (await response.aread()).decode("utf-8", errors="replace")
                 await response.aclose()
-                classify_http_status(
+                self._classify_http_status(
                     response.status_code,
                     detail=_http_error_detail(response, error_body),
                     response_headers=response.headers,

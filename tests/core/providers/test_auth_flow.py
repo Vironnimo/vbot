@@ -34,6 +34,10 @@ MINIMAX_TOKEN_URL = "https://api.minimax.io/oauth/token"
 MINIMAX_VERIFICATION_URI = "https://api.minimax.io/oauth/verify"
 XAI_DEVICE_AUTH_URL = "https://auth.x.ai/oauth2/device/code"
 XAI_TOKEN_URL = "https://auth.x.ai/oauth2/token"
+NOUS_DEVICE_AUTH_URL = "https://portal.nousresearch.com/api/oauth/device/code"
+NOUS_TOKEN_URL = "https://portal.nousresearch.com/api/oauth/token"
+OPENCODE_DEVICE_AUTH_URL = "https://console.opencode.ai/auth/device/code"
+OPENCODE_TOKEN_URL = "https://console.opencode.ai/auth/device/token"
 
 
 def _oauth_config(*, token_exchange_url: str | None = None) -> OAuthConfig:
@@ -80,6 +84,28 @@ def _xai_oauth_config() -> OAuthConfig:
         token_url=XAI_TOKEN_URL,
         scopes=["openid", "offline_access", "grok-cli:access", "api:access"],
         device_flow="xai_oauth",
+    )
+
+
+def _nous_oauth_config() -> OAuthConfig:
+    return OAuthConfig(
+        flow="device",
+        client_id="hermes-cli",
+        device_auth_url=NOUS_DEVICE_AUTH_URL,
+        token_url=NOUS_TOKEN_URL,
+        scopes=["inference:invoke"],
+        device_flow="nous_oauth",
+    )
+
+
+def _opencode_oauth_config() -> OAuthConfig:
+    return OAuthConfig(
+        flow="device",
+        client_id="opencode-cli",
+        device_auth_url=OPENCODE_DEVICE_AUTH_URL,
+        token_url=OPENCODE_TOKEN_URL,
+        scopes=[],
+        device_flow="opencode_oauth",
     )
 
 
@@ -195,6 +221,159 @@ async def test_xai_flow_accepts_http_400_pending_then_saves_rotated_token(
     assert token is not None
     assert token.access_token == "xai-access"
     assert token.refresh_token == "xai-refresh"
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_nous_flow_uses_inference_scope_and_accepts_http_400_pending(
+    tmp_path: Path,
+) -> None:
+    token_store = TokenStore(tmp_path)
+    engine = DeviceFlowEngine(token_store)
+    device_route = respx.post(NOUS_DEVICE_AUTH_URL).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "device_code": "nous-device-code",
+                "user_code": "NOUS-CODE",
+                "verification_uri": "https://portal.nousresearch.com/device",
+                "verification_uri_complete": (
+                    "https://portal.nousresearch.com/device?user_code=NOUS-CODE"
+                ),
+                "expires_in": 900,
+                "interval": 5,
+            },
+        )
+    )
+    token_route = respx.post(NOUS_TOKEN_URL).mock(
+        side_effect=[
+            httpx.Response(400, json={"error": "authorization_pending"}),
+            httpx.Response(
+                200,
+                json={
+                    "access_token": "nous-access",
+                    "refresh_token": "nous-refresh",
+                    "expires_in": 900,
+                    "scope": "inference:invoke",
+                },
+            ),
+        ]
+    )
+
+    session = await engine.start_device_flow("nous", "subscription", _nous_oauth_config())
+    with patch("core.providers.auth_flow.asyncio.sleep", new_callable=AsyncMock):
+        await engine._poll_for_token(
+            "nous",
+            "subscription",
+            _nous_oauth_config(),
+            session.device_code,
+            session.interval,
+            session.expires_in,
+            AsyncMock(),
+        )
+
+    assert session.verification_uri.endswith("user_code=NOUS-CODE")
+    assert parse_qs(device_route.calls.last.request.content.decode()) == {
+        "client_id": ["hermes-cli"],
+        "scope": ["inference:invoke"],
+    }
+    assert token_route.call_count == 2
+    stored = token_store.load("nous", "subscription")
+    assert stored is not None
+    assert stored.access_token == "nous-access"
+    assert stored.refresh_token == "nous-refresh"
+    assert stored.extra == {"oauth_scope": "inference:invoke"}
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_nous_flow_rejects_explicitly_missing_inference_scope(tmp_path: Path) -> None:
+    engine = DeviceFlowEngine(TokenStore(tmp_path))
+    respx.post(NOUS_TOKEN_URL).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "access_token": "wrong-access",
+                "refresh_token": "wrong-refresh",
+                "expires_in": 900,
+                "scope": "profile",
+            },
+        )
+    )
+
+    async with httpx.AsyncClient() as client:
+        data = await engine._request_device_token(
+            client,
+            _nous_oauth_config(),
+            "nous-device-code",
+        )
+        with pytest.raises(DeviceFlowTerminalError, match="missing_inference_invoke_scope"):
+            await engine._build_token(client, _nous_oauth_config(), data)
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_opencode_flow_posts_json_accepts_pending_and_stores_rotating_token(
+    tmp_path: Path,
+) -> None:
+    token_store = TokenStore(tmp_path)
+    engine = DeviceFlowEngine(token_store)
+    device_route = respx.post(OPENCODE_DEVICE_AUTH_URL).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "device_code": "zen-device-code",
+                "user_code": "ZEN-CODE",
+                "verification_uri": "https://console.opencode.ai/device",
+                "verification_uri_complete": (
+                    "https://console.opencode.ai/device?user_code=ZEN-CODE"
+                ),
+                "expires_in": 900,
+                "interval": 5,
+            },
+        )
+    )
+    token_route = respx.post(OPENCODE_TOKEN_URL).mock(
+        side_effect=[
+            httpx.Response(400, json={"error": "authorization_pending"}),
+            httpx.Response(
+                200,
+                json={
+                    "access_token": "zen-access",
+                    "refresh_token": "zen-refresh",
+                    "expires_in": 900,
+                },
+            ),
+        ]
+    )
+
+    session = await engine.start_device_flow(
+        "opencode-zen",
+        "account",
+        _opencode_oauth_config(),
+    )
+    with patch("core.providers.auth_flow.asyncio.sleep", new_callable=AsyncMock):
+        await engine._poll_for_token(
+            "opencode-zen",
+            "account",
+            _opencode_oauth_config(),
+            session.device_code,
+            session.interval,
+            session.expires_in,
+            AsyncMock(),
+        )
+
+    assert json.loads(device_route.calls.last.request.content) == {"client_id": "opencode-cli"}
+    assert token_route.call_count == 2
+    assert json.loads(token_route.calls.last.request.content) == {
+        "grant_type": "urn:ietf:params:oauth:grant-type:device_code",
+        "device_code": "zen-device-code",
+        "client_id": "opencode-cli",
+    }
+    stored = token_store.load("opencode-zen", "account")
+    assert stored is not None
+    assert stored.access_token == "zen-access"
+    assert stored.refresh_token == "zen-refresh"
 
 
 @respx.mock
@@ -503,7 +682,11 @@ async def test_poll_loop_exchanges_copilot_token_and_stores_github_token(
     exchange_route = respx.get(TOKEN_EXCHANGE_URL).mock(
         return_value=httpx.Response(
             200,
-            json={"token": "copilot-api-secret", "expires_at": expires_at.isoformat()},
+            json={
+                "token": "copilot-api-secret",
+                "expires_at": expires_at.timestamp(),
+                "endpoints": {"api": "https://api.business.githubcopilot.com"},
+            },
         )
     )
 
@@ -524,12 +707,15 @@ async def test_poll_loop_exchanges_copilot_token_and_stores_github_token(
     assert token.access_token == "copilot-api-secret"
     assert token.refresh_token is None
     assert token.expires_at == expires_at
-    assert token.extra == {"github_oauth_token": "github-oauth-secret"}
+    assert token.extra == {
+        "github_oauth_token": "github-oauth-secret",
+        "copilot_api_endpoint": "https://api.business.githubcopilot.com",
+    }
     exchange_headers = exchange_route.calls.last.request.headers
     assert exchange_headers["Accept"] == "application/json"
     assert exchange_headers["Authorization"] == "Bearer github-oauth-secret"
     assert exchange_headers["Copilot-Integration-Id"] == "vscode-chat"
-    assert exchange_headers["Editor-Version"] == "vBot/0.1.0"
+    assert exchange_headers["Editor-Version"] == "vscode/1.128.0"
 
 
 @respx.mock

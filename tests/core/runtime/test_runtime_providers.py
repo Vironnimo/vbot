@@ -18,12 +18,15 @@ from core.providers.github_copilot_policy import RESPONSES_ENDPOINT
 from core.providers.kimi import KIMI_CODING_MODE, KimiAdapter
 from core.providers.minimax import MiniMaxAdapter
 from core.providers.mistral import MistralAdapter
+from core.providers.nous import NousAdapter
 from core.providers.ollama import OllamaAdapter
 from core.providers.openai import CODEX_RESPONSES_MODE, OpenAIAdapter
 from core.providers.openai_compatible import OpenAICompatibleAdapter
 from core.providers.opencode_go import OpenCodeGoAdapter
+from core.providers.opencode_zen import OpenCodeZenAdapter
 from core.providers.openrouter import OpenRouterAdapter
 from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig, ProviderRegistry
+from core.providers.stepfun import STEPFUN_DIRECT_MODE, STEPFUN_PLAN_MODE, StepFunAdapter
 from core.providers.token_getter import OAuthTokenGetter, StaticTokenGetter
 from core.providers.token_store import OAuthToken
 from core.providers.xai import XAIAdapter
@@ -64,6 +67,9 @@ def test_runtime_providers_populated(runtime: Runtime) -> None:
     assert "minimax" in ids
     assert "kimi" in ids
     assert "xai" in ids
+    assert "nous" in ids
+    assert "stepfun" in ids
+    assert "opencode-zen" in ids
 
 
 def test_runtime_provider_config_fields(runtime: Runtime) -> None:
@@ -75,6 +81,9 @@ def test_runtime_provider_config_fields(runtime: Runtime) -> None:
     minimax_config = runtime.providers.get("minimax")
     kimi_config = runtime.providers.get("kimi")
     xai_config = runtime.providers.get("xai")
+    nous_config = runtime.providers.get("nous")
+    stepfun_config = runtime.providers.get("stepfun")
+    opencode_zen_config = runtime.providers.get("opencode-zen")
 
     # Assert
     assert openai_config.id == "openai"
@@ -140,6 +149,48 @@ def test_runtime_provider_config_fields(runtime: Runtime) -> None:
     assert xai_oauth.device_flow == "xai_oauth"
     assert xai_oauth.device_auth_url == "https://auth.x.ai/oauth2/device/code"
     assert xai_oauth.token_url == "https://auth.x.ai/oauth2/token"
+    assert nous_config.adapter == "nous"
+    assert nous_config.base_url == "https://inference-api.nousresearch.com/v1"
+    assert [connection.id for connection in nous_config.connections] == [
+        "api-key",
+        "subscription",
+    ]
+    assert nous_config.get_connection("api-key").auth.credential_key == "NOUS_API_KEY"
+    nous_oauth = nous_config.get_connection("subscription").oauth
+    assert nous_oauth is not None
+    assert nous_oauth.device_flow == "nous_oauth"
+    assert nous_oauth.client_id == "hermes-cli"
+    assert nous_oauth.scopes == ["inference:invoke"]
+    assert stepfun_config.adapter == "stepfun"
+    assert stepfun_config.base_url == "https://api.stepfun.com/v1"
+    assert [connection.id for connection in stepfun_config.connections] == [
+        "direct-api",
+        "step-plan",
+    ]
+    stepfun_direct = stepfun_config.get_connection("direct-api")
+    assert stepfun_direct.mode == STEPFUN_DIRECT_MODE
+    assert stepfun_direct.auth.credential_key == "STEPFUN_DIRECT_API_KEY"
+    assert stepfun_direct.models_endpoint == "/models"
+    stepfun_plan = stepfun_config.get_connection("step-plan")
+    assert stepfun_plan.mode == STEPFUN_PLAN_MODE
+    assert stepfun_plan.base_url == "https://api.stepfun.com/step_plan/v1"
+    assert stepfun_plan.auth.credential_key == "STEPFUN_API_KEY"
+    assert stepfun_plan.models_endpoint == "/models"
+    assert opencode_zen_config.adapter == "opencode_zen"
+    assert opencode_zen_config.base_url == "https://opencode.ai/zen/v1"
+    assert [connection.id for connection in opencode_zen_config.connections] == [
+        "api-key",
+        "account",
+    ]
+    zen_api_key = opencode_zen_config.get_connection("api-key")
+    assert zen_api_key.auth.credential_key == "OPENCODE_API_KEY"
+    assert zen_api_key.models_endpoint == "/models"
+    zen_oauth = opencode_zen_config.get_connection("account").oauth
+    assert zen_oauth is not None
+    assert zen_oauth.device_flow == "opencode_oauth"
+    assert zen_oauth.client_id == "opencode-cli"
+    assert zen_oauth.device_auth_url == "https://console.opencode.ai/auth/device/code"
+    assert zen_oauth.token_url == "https://console.opencode.ai/auth/device/token"
 
 
 def test_runtime_loads_xai_model_overrides(runtime: Runtime) -> None:
@@ -158,6 +209,41 @@ def test_runtime_loads_xai_model_overrides(runtime: Runtime) -> None:
         "xhigh",
     )
     assert grok_multi.context_window == 1000000
+
+
+def test_runtime_loads_opencode_zen_current_catalog_and_connection_allowlist(
+    runtime: Runtime,
+) -> None:
+    models = runtime.models.list_for_provider("opencode-zen")
+    gemini = runtime.models.get("opencode-zen", "gemini-3.5-flash")
+    expiring = runtime.models.get("opencode-zen", "claude-opus-4-1")
+    free = runtime.models.get("opencode-zen", "big-pickle")
+
+    assert len(models) == 53
+    assert gemini.connections == ("api-key", "account")
+    assert gemini.context_window == 1_048_576
+    assert gemini.max_output_tokens == 65_536
+    assert gemini.capabilities.input_modalities == (
+        "text",
+        "image",
+        "video",
+        "audio",
+        "pdf",
+    )
+    assert gemini.metadata["opencode_zen"]["protocol"] == "gemini_generate_content"
+    assert expiring.metadata["opencode_zen"]["deprecates_at"] == "2026-08-05"
+    assert free.metadata["opencode_zen"]["privacy"] == "free_model_data_collection"
+    assert {model.model_id for model in models}.isdisjoint(
+        {
+            "gpt-5.2-codex",
+            "gpt-5.1-codex",
+            "gpt-5.1-codex-max",
+            "gpt-5.1-codex-mini",
+            "gpt-5-codex",
+            "claude-sonnet-4",
+            "glm-5",
+        }
+    )
 
 
 def test_runtime_loads_kimi_models_with_connection_limits(runtime: Runtime) -> None:
@@ -198,6 +284,51 @@ def test_runtime_loads_minimax_override_only_models_with_connection_limits(
     assert m3.connections == ("api-key", "api-key-cn")
     assert m3.context_window == 1000000
     assert m3.max_output_tokens == 131072
+
+
+def test_runtime_loads_nous_curated_fallback_catalog(runtime: Runtime) -> None:
+    models = {model.model_id: model for model in runtime.models.list_for_provider("nous")}
+
+    assert set(models) == {
+        "anthropic/claude-sonnet-4.6",
+        "deepseek/deepseek-v4-pro",
+        "google/gemini-3-pro-preview",
+        "openai/gpt-5.5-pro",
+    }
+    assert all(model.connections == ("api-key", "subscription") for model in models.values())
+    assert all(model.max_output_tokens == 32000 for model in models.values())
+    assert models["anthropic/claude-sonnet-4.6"].capabilities.tools is True
+    assert models["google/gemini-3-pro-preview"].context_window == 1048576
+
+
+def test_runtime_loads_stepfun_models_with_connection_limits(runtime: Runtime) -> None:
+    models = {model.model_id: model for model in runtime.models.list_for_provider("stepfun")}
+
+    assert set(models) == {
+        "step-3.5-flash",
+        "step-3.5-flash-2603",
+        "step-3.7-flash",
+        "step-router-v1",
+    }
+    assert models["step-3.5-flash"].connections == ("direct-api", "step-plan")
+    assert models["step-3.5-flash"].capabilities.reasoning.levels == ()
+    assert models["step-3.5-flash-2603"].capabilities.reasoning.levels == ("low", "high")
+    assert models["step-3.7-flash"].capabilities.reasoning.levels == (
+        "low",
+        "medium",
+        "high",
+    )
+    assert models["step-3.7-flash"].capabilities.input_modalities == (
+        "text",
+        "image",
+        "video",
+    )
+    assert models["step-router-v1"].connections == ("step-plan",)
+    assert models["step-router-v1"].max_output_tokens == 250000
+    assert models["step-router-v1"].metadata["stepfun"]["routes_between"] == (
+        "deepseek-v4-pro",
+        "step-3.7-flash",
+    )
 
 
 def test_runtime_injects_openrouter_routing_snapshot(
@@ -407,6 +538,21 @@ def test_runtime_get_adapter_selects_opencode_go_adapter_from_provider_config(
     # Assert
     assert runtime.providers.get("opencode-go").adapter == "opencode_go"
     assert isinstance(adapter, OpenCodeGoAdapter)
+
+
+def test_runtime_get_adapter_selects_opencode_zen_adapter_from_explicit_connection(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OPENCODE_API_KEY", "opencode-zen-token")
+    runtime = Runtime(Config(data_dir=tmp_path / "data"))
+    runtime.start()
+
+    adapter = runtime.get_adapter("opencode-zen", "opencode-zen:api-key")
+
+    assert runtime.providers.get("opencode-zen").adapter == "opencode_zen"
+    assert isinstance(adapter, OpenCodeZenAdapter)
+    assert adapter._model_lookup is not None  # type: ignore[attr-defined]
 
 
 def test_runtime_wires_opencode_go_adapter_with_model_lookup(runtime: Runtime) -> None:
@@ -847,6 +993,30 @@ def test_runtime_wires_xai_adapter(runtime: Runtime) -> None:
     assert isinstance(adapter, XAIAdapter)
 
 
+def test_runtime_wires_nous_adapter(runtime: Runtime) -> None:
+    runtime._provider_credentials = ProviderCredentialResolver(  # type: ignore[attr-defined]
+        runtime.providers,
+        process_env={"NOUS_API_KEY": "nous-token"},
+    )
+
+    adapter = runtime.get_adapter("nous", "nous:api-key")
+
+    assert isinstance(adapter, NousAdapter)
+
+
+def test_runtime_wires_stepfun_adapter_and_explicit_connection_mode(runtime: Runtime) -> None:
+    runtime._provider_credentials = ProviderCredentialResolver(  # type: ignore[attr-defined]
+        runtime.providers,
+        process_env={"STEPFUN_API_KEY": "step-plan-token"},
+    )
+
+    adapter = runtime.get_adapter("stepfun", "stepfun:step-plan")
+
+    assert isinstance(adapter, StepFunAdapter)
+    assert adapter._connection_mode == STEPFUN_PLAN_MODE  # type: ignore[attr-defined]
+    assert str(adapter._client.base_url) == "https://api.stepfun.com/step_plan/v1/"  # type: ignore[attr-defined]
+
+
 def test_runtime_wires_kimi_adapter_and_connection_mode(runtime: Runtime) -> None:
     runtime._provider_credentials = ProviderCredentialResolver(  # type: ignore[attr-defined]
         runtime.providers,
@@ -1261,6 +1431,26 @@ def test_get_connection_token_extra_returns_stored_extra(runtime: Runtime) -> No
 
     # Assert
     assert extra == {"github_oauth_token": "gho_example"}
+
+
+def test_copilot_adapter_uses_account_specific_exchange_endpoint(runtime: Runtime) -> None:
+    """Copilot OAuth Accounts route through the endpoint returned by exchange."""
+
+    runtime.token_store.save(
+        "github-copilot",
+        "oauth",
+        OAuthToken(
+            access_token="copilot-token",
+            extra={
+                "github_oauth_token": "gho_example",
+                "copilot_api_endpoint": "https://api.enterprise.githubcopilot.com",
+            },
+        ),
+    )
+
+    adapter = runtime.get_adapter("github-copilot", "github-copilot:oauth")
+
+    assert str(adapter._client.base_url) == "https://api.enterprise.githubcopilot.com"  # type: ignore[attr-defined]
 
 
 def test_get_connection_token_extra_returns_empty_when_absent(runtime: Runtime) -> None:
