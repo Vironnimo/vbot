@@ -21,6 +21,7 @@ from core.providers.errors import (
     ProviderTimeoutError,
 )
 from core.providers.github_copilot import GitHubCopilotAdapter
+from core.providers.kimi import KimiAdapter
 from core.providers.lmstudio import LMStudioAdapter
 from core.providers.minimax import MiniMaxAdapter
 from core.providers.mistral import MistralAdapter
@@ -48,6 +49,7 @@ from core.providers.reasoning import (
     REASONING_REPLAY_POLICIES,
     ReasoningReplayPolicy,
 )
+from core.providers.xai import XAIAdapter
 
 __all__ = [
     "DEFAULT_ACCOUNT_ID",
@@ -62,6 +64,7 @@ __all__ = [
     "AuthConfig",
     "ConnectionConfig",
     "GitHubCopilotAdapter",
+    "KimiAdapter",
     "LMStudioAdapter",
     "MiniMaxAdapter",
     "MistralAdapter",
@@ -70,6 +73,7 @@ __all__ = [
     "OpenAICompatibleAdapter",
     "OpenCodeGoAdapter",
     "OpenRouterAdapter",
+    "XAIAdapter",
     "ProviderAccount",
     "ProviderCredentialResolver",
     "ProviderAdapter",

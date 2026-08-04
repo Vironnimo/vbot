@@ -831,6 +831,35 @@ class TestModelRegistryLoad:
 
         assert registry.get("openrouter", "override-only").name == "Override Only"
 
+    def test_override_only_provider_loads_without_generated_catalog(self, tmp_path: Path):
+        """A hand-only provider needs no empty generated provider file."""
+
+        models_dir = tmp_path / "models"
+        models_dir.mkdir()
+        models_dir.joinpath("hand-only.overrides.json").write_text(
+            """
+            {
+              "provider_id": "hand-only",
+              "models": {
+                "model-a": {
+                  "name": "Hand Only Model",
+                  "capabilities": {
+                    "vision": false, "tools": true, "json_mode": false,
+                    "reasoning": {"supported": true}
+                  },
+                  "context_window": 2000,
+                  "max_output_tokens": 200
+                }
+              }
+            }
+            """,
+            encoding="utf-8",
+        )
+
+        registry = ModelRegistry.load(tmp_path)
+
+        assert registry.get("hand-only", "model-a").name == "Hand Only Model"
+
     def test_load_ignores_colocated_raw_files(self, tmp_path: Path):
         models_dir = tmp_path / "models"
         models_dir.mkdir()

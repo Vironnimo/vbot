@@ -539,8 +539,9 @@ def _apply_remaining_kwargs(
 ) -> None:
     request_kwargs.pop("include", None)
     request_kwargs.pop("cache_control", None)
-    request_kwargs.pop("prompt_cache_key", None)
+    prompt_cache_key = request_kwargs.pop("prompt_cache_key", None)
     request_kwargs.pop("prompt_cache_retention", None)
+    service_tier = request_kwargs.pop("service_tier", None)
     max_tokens = request_kwargs.pop("max_tokens", None)
     if max_tokens is not None and "max_output_tokens" not in request_kwargs:
         payload["max_output_tokens"] = max_tokens
@@ -551,6 +552,15 @@ def _apply_remaining_kwargs(
         payload["temperature"] = request_kwargs["temperature"]
     if "top_p" in request_kwargs:
         payload["top_p"] = request_kwargs["top_p"]
+    if policy.supports_request_parameter("prompt_cache_key") and isinstance(prompt_cache_key, str):
+        normalized_cache_key = prompt_cache_key.strip()
+        if normalized_cache_key:
+            payload["prompt_cache_key"] = normalized_cache_key
+    if policy.supports_request_parameter("service_tier") and service_tier in {
+        "default",
+        "priority",
+    }:
+        payload["service_tier"] = service_tier
     parallel_tool_calls = request_kwargs.pop("parallel_tool_calls", None)
     if policy.supports_parallel_tool_calls and isinstance(parallel_tool_calls, bool):
         payload["parallel_tool_calls"] = parallel_tool_calls

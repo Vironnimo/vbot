@@ -53,6 +53,7 @@ from core.providers.adapter import ModelLookup, ProviderAdapter
 from core.providers.anthropic import AnthropicAdapter
 from core.providers.credentials import ProviderCredentialResolver
 from core.providers.github_copilot import GitHubCopilotAdapter
+from core.providers.kimi import KimiAdapter
 from core.providers.lmstudio import LMStudioAdapter
 from core.providers.minimax import MiniMaxAdapter
 from core.providers.mistral import MistralAdapter
@@ -71,6 +72,7 @@ from core.providers.providers import (
 from core.providers.token_getter import OAuthTokenGetter, StaticTokenGetter, TokenGetter
 from core.providers.token_store import TokenStore
 from core.providers.usage import ProviderUsageService
+from core.providers.xai import XAIAdapter
 from core.recall import (
     DEFAULT_RECALL_BACKEND,
     RecallBackend,
@@ -316,6 +318,7 @@ _ADAPTER_MAP: dict[
     "openai_compatible": OpenAICompatibleAdapter,
     "openai": OpenAIAdapter,
     "openrouter": OpenRouterAdapter,
+    "kimi": KimiAdapter,
     "minimax": MiniMaxAdapter,
     "mistral": MistralAdapter,
     "opencode_go": OpenCodeGoAdapter,
@@ -323,6 +326,7 @@ _ADAPTER_MAP: dict[
     "anthropic": AnthropicAdapter,
     "ollama": OllamaAdapter,
     "lmstudio": LMStudioAdapter,
+    "xai": XAIAdapter,
 }
 
 
