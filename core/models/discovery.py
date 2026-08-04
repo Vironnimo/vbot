@@ -43,6 +43,7 @@ from core.providers.ollama import OllamaAdapter
 from core.providers.openai import OpenAIAdapter
 from core.providers.openai_compatible import OpenAICompatibleAdapter
 from core.providers.opencode_go import OpenCodeGoAdapter
+from core.providers.opencode_zen import OpenCodeZenAdapter
 from core.providers.openrouter import OpenRouterAdapter
 from core.providers.providers import ConnectionConfig, ProviderConfig
 from core.providers.stepfun import StepFunAdapter
@@ -905,6 +906,7 @@ _DISCOVERY_ADAPTER_MAP = {
     "openai": OpenAIAdapter,
     "anthropic": AnthropicAdapter,
     "opencode_go": OpenCodeGoAdapter,
+    "opencode_zen": OpenCodeZenAdapter,
     "openrouter": OpenRouterAdapter,
     "kimi": KimiAdapter,
     "minimax": MiniMaxAdapter,

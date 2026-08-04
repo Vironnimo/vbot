@@ -91,5 +91,6 @@ Read these only when your task matches — not by default.
 - Changing LM Studio native discovery, lazy loading, or OpenAI-compatible Chat behavior → `providers/lmstudio.md`
 - Changing OpenAI Platform or ChatGPT subscription behavior → `providers/openai.md`
 - Changing OpenCode Go's per-Model OpenAI/Messages routing → `providers/opencode-go.md`
+- Changing OpenCode Zen Connections, four-wire routing, Gemini replay/media, catalog policy, or errors → `providers/opencode-zen.md`
 - Changing OpenRouter runtime, routing, prompt caching, catalog, reasoning, or task discovery → `providers/openrouter.md`
 - Changing xAI API-key/SuperGrok auth, Responses policy, reasoning replay, media, or catalog behavior → `providers/xai.md`

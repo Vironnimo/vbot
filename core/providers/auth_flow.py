@@ -22,6 +22,7 @@ from core.providers.providers import (
     MINIMAX_OAUTH_DEVICE_FLOW,
     NOUS_OAUTH_DEVICE_FLOW,
     OPENAI_CODEX_DEVICE_FLOW,
+    OPENCODE_OAUTH_DEVICE_FLOW,
     XAI_OAUTH_DEVICE_FLOW,
     OAuthConfig,
     resolve_minimax_oauth_expiry,
@@ -310,6 +311,8 @@ class DeviceFlowEngine:
     ) -> httpx.Response:
         if self._is_openai_codex_flow(oauth_config):
             return await self._post_openai_device_authorization(client, oauth_config)
+        if self._is_opencode_flow(oauth_config):
+            return await self._post_opencode_device_authorization(client, oauth_config)
 
         try:
             response = await client.post(
@@ -318,6 +321,25 @@ class DeviceFlowEngine:
                     "client_id": oauth_config.client_id,
                     "scope": " ".join(oauth_config.scopes),
                 },
+                headers={"Accept": "application/json"},
+            )
+        except httpx.HTTPError as error:
+            raise wrap_network_error(error) from error
+
+        classify_http_status(
+            response.status_code, detail=response.text, response_headers=response.headers
+        )
+        return response
+
+    async def _post_opencode_device_authorization(
+        self,
+        client: httpx.AsyncClient,
+        oauth_config: OAuthConfig,
+    ) -> httpx.Response:
+        try:
+            response = await client.post(
+                oauth_config.device_auth_url,
+                json={"client_id": oauth_config.client_id},
                 headers={"Accept": "application/json"},
             )
         except httpx.HTTPError as error:
@@ -502,6 +524,12 @@ class DeviceFlowEngine:
                 user_code,
                 code_verifier,
             )
+        if self._is_opencode_flow(oauth_config):
+            return await self._post_opencode_device_token(
+                client,
+                oauth_config,
+                device_code,
+            )
 
         try:
             response = await client.post(
@@ -519,6 +547,32 @@ class DeviceFlowEngine:
         if (
             self._is_xai_flow(oauth_config) or self._is_nous_flow(oauth_config)
         ) and _is_standard_device_flow_error(response):
+            return response
+        classify_http_status(
+            response.status_code, detail=response.text, response_headers=response.headers
+        )
+        return response
+
+    async def _post_opencode_device_token(
+        self,
+        client: httpx.AsyncClient,
+        oauth_config: OAuthConfig,
+        device_code: str,
+    ) -> httpx.Response:
+        try:
+            response = await client.post(
+                oauth_config.token_url,
+                json={
+                    "grant_type": DEVICE_CODE_GRANT_TYPE,
+                    "device_code": device_code,
+                    "client_id": oauth_config.client_id,
+                },
+                headers={"Accept": "application/json"},
+            )
+        except httpx.HTTPError as error:
+            raise wrap_network_error(error) from error
+
+        if _is_standard_device_flow_error(response):
             return response
         classify_http_status(
             response.status_code, detail=response.text, response_headers=response.headers
@@ -748,6 +802,9 @@ class DeviceFlowEngine:
 
     def _is_nous_flow(self, oauth_config: OAuthConfig) -> bool:
         return oauth_config.device_flow == NOUS_OAUTH_DEVICE_FLOW
+
+    def _is_opencode_flow(self, oauth_config: OAuthConfig) -> bool:
+        return oauth_config.device_flow == OPENCODE_OAUTH_DEVICE_FLOW
 
     def _is_xai_flow(self, oauth_config: OAuthConfig) -> bool:
         return oauth_config.device_flow == XAI_OAUTH_DEVICE_FLOW

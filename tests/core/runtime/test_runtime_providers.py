@@ -23,6 +23,7 @@ from core.providers.ollama import OllamaAdapter
 from core.providers.openai import CODEX_RESPONSES_MODE, OpenAIAdapter
 from core.providers.openai_compatible import OpenAICompatibleAdapter
 from core.providers.opencode_go import OpenCodeGoAdapter
+from core.providers.opencode_zen import OpenCodeZenAdapter
 from core.providers.openrouter import OpenRouterAdapter
 from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig, ProviderRegistry
 from core.providers.stepfun import STEPFUN_DIRECT_MODE, STEPFUN_PLAN_MODE, StepFunAdapter
@@ -68,6 +69,7 @@ def test_runtime_providers_populated(runtime: Runtime) -> None:
     assert "xai" in ids
     assert "nous" in ids
     assert "stepfun" in ids
+    assert "opencode-zen" in ids
 
 
 def test_runtime_provider_config_fields(runtime: Runtime) -> None:
@@ -81,6 +83,7 @@ def test_runtime_provider_config_fields(runtime: Runtime) -> None:
     xai_config = runtime.providers.get("xai")
     nous_config = runtime.providers.get("nous")
     stepfun_config = runtime.providers.get("stepfun")
+    opencode_zen_config = runtime.providers.get("opencode-zen")
 
     # Assert
     assert openai_config.id == "openai"
@@ -173,6 +176,21 @@ def test_runtime_provider_config_fields(runtime: Runtime) -> None:
     assert stepfun_plan.base_url == "https://api.stepfun.com/step_plan/v1"
     assert stepfun_plan.auth.credential_key == "STEPFUN_API_KEY"
     assert stepfun_plan.models_endpoint == "/models"
+    assert opencode_zen_config.adapter == "opencode_zen"
+    assert opencode_zen_config.base_url == "https://opencode.ai/zen/v1"
+    assert [connection.id for connection in opencode_zen_config.connections] == [
+        "api-key",
+        "account",
+    ]
+    zen_api_key = opencode_zen_config.get_connection("api-key")
+    assert zen_api_key.auth.credential_key == "OPENCODE_API_KEY"
+    assert zen_api_key.models_endpoint == "/models"
+    zen_oauth = opencode_zen_config.get_connection("account").oauth
+    assert zen_oauth is not None
+    assert zen_oauth.device_flow == "opencode_oauth"
+    assert zen_oauth.client_id == "opencode-cli"
+    assert zen_oauth.device_auth_url == "https://console.opencode.ai/auth/device/code"
+    assert zen_oauth.token_url == "https://console.opencode.ai/auth/device/token"
 
 
 def test_runtime_loads_xai_model_overrides(runtime: Runtime) -> None:
@@ -191,6 +209,41 @@ def test_runtime_loads_xai_model_overrides(runtime: Runtime) -> None:
         "xhigh",
     )
     assert grok_multi.context_window == 1000000
+
+
+def test_runtime_loads_opencode_zen_current_catalog_and_connection_allowlist(
+    runtime: Runtime,
+) -> None:
+    models = runtime.models.list_for_provider("opencode-zen")
+    gemini = runtime.models.get("opencode-zen", "gemini-3.5-flash")
+    expiring = runtime.models.get("opencode-zen", "claude-opus-4-1")
+    free = runtime.models.get("opencode-zen", "big-pickle")
+
+    assert len(models) == 53
+    assert gemini.connections == ("api-key", "account")
+    assert gemini.context_window == 1_048_576
+    assert gemini.max_output_tokens == 65_536
+    assert gemini.capabilities.input_modalities == (
+        "text",
+        "image",
+        "video",
+        "audio",
+        "pdf",
+    )
+    assert gemini.metadata["opencode_zen"]["protocol"] == "gemini_generate_content"
+    assert expiring.metadata["opencode_zen"]["deprecates_at"] == "2026-08-05"
+    assert free.metadata["opencode_zen"]["privacy"] == "free_model_data_collection"
+    assert {model.model_id for model in models}.isdisjoint(
+        {
+            "gpt-5.2-codex",
+            "gpt-5.1-codex",
+            "gpt-5.1-codex-max",
+            "gpt-5.1-codex-mini",
+            "gpt-5-codex",
+            "claude-sonnet-4",
+            "glm-5",
+        }
+    )
 
 
 def test_runtime_loads_kimi_models_with_connection_limits(runtime: Runtime) -> None:
@@ -485,6 +538,21 @@ def test_runtime_get_adapter_selects_opencode_go_adapter_from_provider_config(
     # Assert
     assert runtime.providers.get("opencode-go").adapter == "opencode_go"
     assert isinstance(adapter, OpenCodeGoAdapter)
+
+
+def test_runtime_get_adapter_selects_opencode_zen_adapter_from_explicit_connection(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OPENCODE_API_KEY", "opencode-zen-token")
+    runtime = Runtime(Config(data_dir=tmp_path / "data"))
+    runtime.start()
+
+    adapter = runtime.get_adapter("opencode-zen", "opencode-zen:api-key")
+
+    assert runtime.providers.get("opencode-zen").adapter == "opencode_zen"
+    assert isinstance(adapter, OpenCodeZenAdapter)
+    assert adapter._model_lookup is not None  # type: ignore[attr-defined]
 
 
 def test_runtime_wires_opencode_go_adapter_with_model_lookup(runtime: Runtime) -> None:
