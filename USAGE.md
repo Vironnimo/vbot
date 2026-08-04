@@ -316,22 +316,15 @@ Current application code reads only the canonical paths. Convert every older dat
    python scripts/converters/attachment_blob_extensions.py <data-dir>
    ```
 
-6. If the data contains Session Run Summaries without canonical Model-step counts, preflight and apply the Session converter while vBot remains stopped:
-
-   ```bash
-   python scripts/converters/session_model_step_counts.py <data-dir>
-   python scripts/converters/session_model_step_counts.py <data-dir> --apply
-   ```
-
-7. Validate all configuration files:
+6. Validate all configuration files:
 
    ```bash
    vbot doctor config --data-dir <data-dir>
    ```
 
-8. Start the instance and verify its reported data root, Agents and Sessions, artifact serving, Debug status when enabled, and Provider usage history.
+7. Start the instance and verify its reported data root, Agents and Sessions, artifact serving, Debug status when enabled, and Provider usage history.
 
-The structural and Session converters default to read-only preflight. The structural converter rejects symlinks, special files, unknown legacy temporary categories, and every matching destination, and never overwrites data; apply moves regular leaf files atomically within the data root and is resumable after interruption. The Session converter preflights every live and archived transcript before writing, rejects malformed/incomplete records and inconsistent existing counts, then atomically replaces only files with missing Run-Summary counts. Retired `temp/skill-drafts/` content is preserved in place but ignored by current vBot; remove it manually only after confirming it contains nothing you want to recover. Previously persisted absolute paths in old Session text are not rewritten.
+The structural converter defaults to a read-only preflight, rejects symlinks, special files, unknown legacy temporary categories, and every matching destination, and never overwrites data. Apply moves regular leaf files atomically within the data root and is resumable after interruption. Retired `temp/skill-drafts/` content is preserved in place but ignored by current vBot; remove it manually only after confirming it contains nothing you want to recover. Previously persisted absolute paths in old Session text are not rewritten.
 
 Desktop owns separate per-user settings because it can connect to different servers. On Windows they live under `%APPDATA%\vbot`; on Linux they live under `$XDG_CONFIG_HOME/vbot` or `~/.config/vbot`. Remembered servers, wakeword configuration, and imported wakeword Models are Desktop-local and are not server Settings.
 
