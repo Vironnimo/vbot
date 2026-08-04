@@ -410,7 +410,6 @@ class TestChatMessageFactories:
             work_id="sub-work-one",
             status="completed",
             timing=FIXED_TIMING,
-            model_step_count=3,
             timestamp=FIXED_TIMESTAMP,
         )
 
@@ -422,7 +421,6 @@ class TestChatMessageFactories:
             "run_id": "run-one",
             "work_id": "sub-work-one",
             "status": "completed",
-            "model_step_count": 3,
         }
 
     def test_assistant_message_with_usage(self):
@@ -597,7 +595,6 @@ class TestChatMessageParsing:
             "work_id": "sub-work-one",
             "status": "completed",
             "timing": FIXED_TIMING,
-            "model_step_count": 3,
         }
 
         message = ChatMessage.from_dict(data)
@@ -613,42 +610,11 @@ class TestChatMessageParsing:
                     "role": "run_summary",
                     "run_id": "run-one",
                     "status": "completed",
-                    "model_step_count": 1,
                     "timing": {
                         "started_at": "2026-05-03T14:30:01+00:00",
                         "completed_at": "2026-05-03T14:30:02+00:00",
                         "duration_ms": -1,
                     },
-                }
-            )
-
-    @pytest.mark.parametrize("model_step_count", [-1, True, 1.5, "1"])
-    def test_from_dict_rejects_invalid_run_summary_model_step_count(
-        self, model_step_count: object
-    ) -> None:
-        with pytest.raises(ChatMessageValidationError, match="model_step_count"):
-            ChatMessage.from_dict(
-                {
-                    "id": "summary-one",
-                    "timestamp": "2026-05-03T14:30:05+00:00",
-                    "role": "run_summary",
-                    "run_id": "run-one",
-                    "status": "completed",
-                    "model_step_count": model_step_count,
-                    "timing": FIXED_TIMING,
-                }
-            )
-
-    def test_from_dict_requires_run_summary_model_step_count(self) -> None:
-        with pytest.raises(ChatMessageValidationError, match="require model_step_count"):
-            ChatMessage.from_dict(
-                {
-                    "id": "summary-one",
-                    "timestamp": "2026-05-03T14:30:05+00:00",
-                    "role": "run_summary",
-                    "run_id": "run-one",
-                    "status": "completed",
-                    "timing": FIXED_TIMING,
                 }
             )
 
@@ -1011,12 +977,7 @@ class TestChatMessageParsing:
             ),
             (
                 "run_summary",
-                {
-                    "run_id": "run-one",
-                    "status": "completed",
-                    "timing": FIXED_TIMING,
-                    "model_step_count": 1,
-                },
+                {"run_id": "run-one", "status": "completed", "timing": FIXED_TIMING},
             ),
         ],
     )

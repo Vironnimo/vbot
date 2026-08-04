@@ -339,7 +339,6 @@ class ChatMessage:
     run_id: str | None = None
     work_id: str | None = None
     status: str | None = None
-    model_step_count: int | None = None
     sender: MessageSender | None = None
     interrupted: bool = False
     interruption_cause: str | None = None
@@ -468,7 +467,6 @@ class ChatMessage:
         work_id: str | None = None,
         status: str,
         timing: JsonObject,
-        model_step_count: int,
         timestamp: datetime | None = None,
     ) -> ChatMessage:
         """Create an append-only run summary annotation."""
@@ -480,7 +478,6 @@ class ChatMessage:
             work_id=work_id,
             status=status,
             timing=dict(timing),
-            model_step_count=model_step_count,
         )
 
     @classmethod
@@ -608,7 +605,6 @@ class ChatMessage:
         _add_if_not_none(message, "run_id", self.run_id)
         _add_if_not_none(message, "work_id", self.work_id)
         _add_if_not_none(message, "status", self.status)
-        _add_if_not_none(message, "model_step_count", self.model_step_count)
         if self.sender is not None:
             message["sender"] = self.sender.to_dict()
         if self.interrupted:
@@ -637,13 +633,6 @@ class ChatMessage:
         if not isinstance(interrupted, bool):
             raise ChatMessageValidationError("interrupted must be a boolean")
         interruption_cause = _optional_string(data, "interruption_cause")
-        model_step_count = data.get("model_step_count")
-        if model_step_count is not None and (
-            isinstance(model_step_count, bool)
-            or not isinstance(model_step_count, int)
-            or model_step_count < 0
-        ):
-            raise ChatMessageValidationError("model_step_count must be a non-negative integer")
 
         projection_data = data.get("projection")
         if projection_data is not None:
@@ -677,7 +666,6 @@ class ChatMessage:
             run_id=_optional_string(data, "run_id"),
             work_id=_optional_string(data, "work_id"),
             status=_optional_string(data, "status"),
-            model_step_count=model_step_count,
             sender=MessageSender.from_dict(sender_data) if sender_data is not None else None,
             interrupted=interrupted,
             interruption_cause=interruption_cause,
@@ -699,10 +687,6 @@ class ChatMessage:
                 raise ChatMessageValidationError(
                     f"invalid interruption_cause: {self.interruption_cause}"
                 )
-        if self.model_step_count is not None and self.role != "run_summary":
-            raise ChatMessageValidationError(
-                f"{self.role} messages cannot include model_step_count"
-            )
         match self.role:
             case "system":
                 _validate_system_message(self)
@@ -1901,14 +1885,6 @@ def _validate_run_summary_message(message: ChatMessage) -> None:
         )
     if message.timing is None:
         raise ChatMessageValidationError("run summaries require timing")
-    if message.model_step_count is None:
-        raise ChatMessageValidationError("run summaries require model_step_count")
-    if (
-        isinstance(message.model_step_count, bool)
-        or not isinstance(message.model_step_count, int)
-        or message.model_step_count < 0
-    ):
-        raise ChatMessageValidationError("run summaries model_step_count must be non-negative")
     _validate_timing_payload(message.timing)
     _reject_fields(
         message,
