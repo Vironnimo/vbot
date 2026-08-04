@@ -50,6 +50,7 @@ from core.providers.reasoning import (
     REASONING_REPLAY_POLICIES,
     ReasoningReplayPolicy,
 )
+from core.providers.stepfun import StepFunAdapter
 from core.providers.xai import XAIAdapter
 
 __all__ = [
@@ -88,6 +89,7 @@ __all__ = [
     "ProviderStreamingUnsupportedError",
     "ProviderTimeoutError",
     "ReasoningReplayPolicy",
+    "StepFunAdapter",
     "compose_connection_id",
     "connection_default_enabled",
     "derive_credential_key",

@@ -879,6 +879,79 @@ class TestRefreshModels:
 
     @respx.mock
     @pytest.mark.asyncio
+    async def test_stepfun_discovery_preserves_other_connection_memberships_and_raw(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        direct = ConnectionConfig(
+            id="direct-api",
+            type="api_key",
+            label="Direct API",
+            mode="direct_api",
+            auth=AuthConfig(
+                header="Authorization",
+                prefix="Bearer ",
+                credential_key="STEPFUN_DIRECT_API_KEY",
+            ),
+            models_endpoint="/models",
+        )
+        config = ProviderConfig(
+            id="stepfun",
+            name="StepFun",
+            adapter="stepfun",
+            base_url="https://api.stepfun.com/v1",
+            connections=[direct],
+            defaults={"temperature": 0.5},
+            context_window=256000,
+        )
+        resources_dir = tmp_path / "resources"
+        models_dir = resources_dir / "models"
+        models_dir.mkdir(parents=True)
+        existing = json.loads(
+            (Path("resources") / "models" / "stepfun.json").read_text(encoding="utf-8")
+        )
+        (models_dir / "stepfun.json").write_text(
+            json.dumps(existing),
+            encoding="utf-8",
+        )
+        route = respx.get("https://api.stepfun.com/v1/models").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "data": [
+                        {"id": "step-3.7-flash", "name": "Step 3.7 Flash"},
+                        {"id": "step-router-v1", "name": "Step Router V1"},
+                        {"id": "stepaudio-2.5-chat", "name": "StepAudio 2.5 Chat"},
+                    ]
+                },
+            )
+        )
+
+        result = await refresh_models(
+            config,
+            "direct-token",
+            resources_dir,
+            credential_connection=direct,
+        )
+
+        generated = json.loads((models_dir / "stepfun.json").read_text(encoding="utf-8"))
+        raw = json.loads((models_dir / "stepfun.raw.json").read_text(encoding="utf-8"))
+        assert result["model_count"] == 4
+        assert generated["models"]["step-3.7-flash"]["connections"] == [
+            "step-plan",
+            "direct-api",
+        ]
+        assert generated["models"]["step-3.5-flash"]["connections"] == ["step-plan"]
+        assert generated["models"]["step-router-v1"]["connections"] == ["step-plan"]
+        assert {entry["id"] for entry in raw["raw_response"]["data"]} == {
+            "step-3.7-flash",
+            "step-router-v1",
+            "stepaudio-2.5-chat",
+        }
+        assert route.calls.last.request.headers["authorization"] == "Bearer direct-token"
+
+    @respx.mock
+    @pytest.mark.asyncio
     async def test_refresh_models_writes_raw_file_with_full_provider_response(
         self,
         tmp_path: Path,
