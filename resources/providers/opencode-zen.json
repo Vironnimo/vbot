@@ -1,0 +1,51 @@
+{
+  "id": "opencode-zen",
+  "name": "OpenCode Zen",
+  "adapter": "opencode_zen",
+  "base_url": "https://opencode.ai/zen/v1",
+  "connections": [
+    {
+      "id": "api-key",
+      "type": "api_key",
+      "label": "API Key",
+      "auth": {
+        "header": "Authorization",
+        "prefix": "Bearer ",
+        "credential_key": "OPENCODE_API_KEY"
+      },
+      "models_endpoint": "/models"
+    },
+    {
+      "id": "account",
+      "type": "oauth",
+      "label": "OpenCode Account",
+      "auth": {
+        "header": "Authorization",
+        "prefix": "Bearer "
+      },
+      "oauth": {
+        "flow": "device",
+        "device_flow": "opencode_oauth",
+        "client_id": "opencode-cli",
+        "device_auth_url": "https://console.opencode.ai/auth/device/code",
+        "token_url": "https://console.opencode.ai/auth/device/token",
+        "scopes": []
+      },
+      "models_endpoint": "/models"
+    }
+  ],
+  "defaults": {
+    "max_tokens": 8192
+  },
+  "models_endpoint": "/models",
+  "models_dev_id": "opencode",
+  "catalog_exclusions": [
+    "gpt-5.2-codex",
+    "gpt-5.1-codex",
+    "gpt-5.1-codex-max",
+    "gpt-5.1-codex-mini",
+    "gpt-5-codex",
+    "claude-sonnet-4",
+    "glm-5"
+  ]
+}

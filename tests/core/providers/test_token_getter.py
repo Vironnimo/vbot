@@ -17,7 +17,7 @@ import respx
 
 from core.providers.errors import ProviderAuthError, ProviderError
 from core.providers.providers import OAuthConfig
-from core.providers.token_getter import OAuthTokenGetter, StaticTokenGetter
+from core.providers.token_getter import OAuthTokenGetter, StaticTokenGetter, copilot_token_extra
 from core.providers.token_store import OAuthToken, TokenStore
 
 PROVIDER_ID = "github-copilot"
@@ -26,6 +26,24 @@ TOKEN_EXCHANGE_URL = "https://api.github.com/copilot_internal/v2/token"
 OPENAI_TOKEN_URL = "https://auth.openai.com/oauth/token"
 MINIMAX_TOKEN_URL = "https://api.minimax.io/oauth/token"
 XAI_TOKEN_URL = "https://auth.x.ai/oauth2/token"
+NOUS_TOKEN_URL = "https://portal.nousresearch.com/api/oauth/token"
+OPENCODE_TOKEN_URL = "https://console.opencode.ai/auth/device/token"
+
+
+def test_copilot_token_extra_accepts_only_official_exchange_endpoints() -> None:
+    trusted = copilot_token_extra(
+        {"endpoints": {"api": "https://api.example.enterprise.githubcopilot.com/"}},
+        "github-token",
+        "copilot-token",
+    )
+    untrusted = copilot_token_extra(
+        {"endpoints": {"api": "https://attacker.example/api"}},
+        "github-token",
+        "proxy-ep=proxy.business.githubcopilot.com;exp=123",
+    )
+
+    assert trusted["copilot_api_endpoint"] == ("https://api.example.enterprise.githubcopilot.com")
+    assert untrusted["copilot_api_endpoint"] == "https://api.business.githubcopilot.com"
 
 
 class StubAsyncClient:
@@ -90,6 +108,28 @@ def _xai_oauth_config() -> OAuthConfig:
         token_url=XAI_TOKEN_URL,
         scopes=["openid", "offline_access", "grok-cli:access", "api:access"],
         device_flow="xai_oauth",
+    )
+
+
+def _nous_oauth_config() -> OAuthConfig:
+    return OAuthConfig(
+        flow="device",
+        client_id="hermes-cli",
+        device_auth_url="https://portal.nousresearch.com/api/oauth/device/code",
+        token_url=NOUS_TOKEN_URL,
+        scopes=["inference:invoke"],
+        device_flow="nous_oauth",
+    )
+
+
+def _opencode_oauth_config() -> OAuthConfig:
+    return OAuthConfig(
+        flow="device",
+        client_id="opencode-cli",
+        device_auth_url="https://console.opencode.ai/auth/device/code",
+        token_url=OPENCODE_TOKEN_URL,
+        scopes=[],
+        device_flow="opencode_oauth",
     )
 
 
@@ -161,7 +201,11 @@ async def test_oauth_token_getter_refreshes_expired_token_with_exchange_url(
     route = respx.get(TOKEN_EXCHANGE_URL).mock(
         return_value=httpx.Response(
             200,
-            json={"token": "fresh-copilot-token", "expires_at": expires_at.isoformat()},
+            json={
+                "token": "fresh-copilot-token",
+                "expires_at": expires_at.timestamp(),
+                "endpoints": {"api": "https://api.enterprise.githubcopilot.com"},
+            },
         )
     )
     getter = OAuthTokenGetter(token_store, PROVIDER_ID, CONNECTION_ID, oauth_config)
@@ -174,12 +218,13 @@ async def test_oauth_token_getter_refreshes_expired_token_with_exchange_url(
     assert exchange_headers.get("accept") == "application/json"
     assert exchange_headers.get("authorization") == "Bearer github-oauth-secret"
     assert exchange_headers.get("copilot-integration-id") == "vscode-chat"
-    assert exchange_headers.get("editor-version") == "vBot/0.1.0"
+    assert exchange_headers.get("editor-version") == "vscode/1.128.0"
     stored = token_store.load(PROVIDER_ID, CONNECTION_ID)
     assert stored is not None
     assert stored.access_token == "fresh-copilot-token"
     assert stored.expires_at == expires_at
     assert stored.extra["github_oauth_token"] == "github-oauth-secret"
+    assert stored.extra["copilot_api_endpoint"] == ("https://api.enterprise.githubcopilot.com")
 
 
 @respx.mock
@@ -423,7 +468,7 @@ async def test_oauth_token_getter_preserves_injected_client_lifecycle(
         "Accept": "application/json",
         "Authorization": "Bearer github-oauth-secret",
         "Copilot-Integration-Id": "vscode-chat",
-        "Editor-Version": "vBot/0.1.0",
+        "Editor-Version": "vscode/1.128.0",
     }
 
 
@@ -640,6 +685,164 @@ async def test_minimax_terminal_refresh_failure_quarantines_token(tmp_path: Path
         await getter()
 
     assert token_store.load("minimax", "subscription") is None
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_nous_refresh_rotates_single_use_token_in_header(tmp_path: Path) -> None:
+    token_store = TokenStore(tmp_path)
+    token_store.save(
+        "nous",
+        "subscription",
+        OAuthToken(
+            access_token="expired-access",
+            refresh_token="old-refresh",
+            expires_at=datetime.now(UTC) - timedelta(minutes=1),
+        ),
+    )
+    route = respx.post(NOUS_TOKEN_URL).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "access_token": "fresh-access",
+                "refresh_token": "rotated-refresh",
+                "expires_in": 900,
+                "scope": "inference:invoke",
+            },
+        )
+    )
+    getter = OAuthTokenGetter(token_store, "nous", "subscription", _nous_oauth_config())
+
+    assert await getter() == "fresh-access"
+    assert route.calls.last.request.headers["x-nous-refresh-token"] == "old-refresh"
+    assert parse_qs(route.calls.last.request.content.decode()) == {
+        "grant_type": ["refresh_token"],
+        "client_id": ["hermes-cli"],
+    }
+    stored = token_store.load("nous", "subscription")
+    assert stored is not None
+    assert stored.refresh_token == "rotated-refresh"
+    assert stored.extra == {"oauth_scope": "inference:invoke"}
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_nous_refresh_reuse_quarantines_token_without_retry(tmp_path: Path) -> None:
+    token_store = TokenStore(tmp_path)
+    token_store.save(
+        "nous",
+        "subscription",
+        OAuthToken(
+            access_token="expired-access",
+            refresh_token="burned-refresh",
+            expires_at=datetime.now(UTC) - timedelta(minutes=1),
+        ),
+    )
+    route = respx.post(NOUS_TOKEN_URL).mock(
+        return_value=httpx.Response(400, text="refresh_token_reused: reuse detected")
+    )
+    getter = OAuthTokenGetter(token_store, "nous", "subscription", _nous_oauth_config())
+
+    with pytest.raises(ProviderAuthError, match="reuse"):
+        await getter()
+
+    assert route.call_count == 1
+    assert token_store.load("nous", "subscription") is None
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_nous_retryable_refresh_failure_is_not_replayed(tmp_path: Path) -> None:
+    token_store = TokenStore(tmp_path)
+    original = OAuthToken(
+        access_token="expired-access",
+        refresh_token="still-valid-refresh",
+        expires_at=datetime.now(UTC) - timedelta(minutes=1),
+    )
+    token_store.save("nous", "subscription", original)
+    route = respx.post(NOUS_TOKEN_URL).mock(return_value=httpx.Response(503, text="unavailable"))
+    getter = OAuthTokenGetter(token_store, "nous", "subscription", _nous_oauth_config())
+
+    with pytest.raises(ProviderError):
+        await getter()
+
+    assert route.call_count == 1
+    assert token_store.load("nous", "subscription") == original
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_opencode_refresh_posts_json_and_persists_rotated_refresh_token(
+    tmp_path: Path,
+) -> None:
+    token_store = TokenStore(tmp_path)
+    token_store.save(
+        "opencode-zen",
+        "account",
+        OAuthToken(
+            access_token="expired-access",
+            refresh_token="old-refresh",
+            expires_at=datetime.now(UTC) - timedelta(minutes=1),
+        ),
+    )
+    route = respx.post(OPENCODE_TOKEN_URL).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "access_token": "fresh-access",
+                "refresh_token": "rotated-refresh",
+                "expires_in": 900,
+            },
+        )
+    )
+    getter = OAuthTokenGetter(
+        token_store,
+        "opencode-zen",
+        "account",
+        _opencode_oauth_config(),
+    )
+
+    assert await getter() == "fresh-access"
+    assert json.loads(route.calls.last.request.content) == {
+        "grant_type": "refresh_token",
+        "client_id": "opencode-cli",
+        "refresh_token": "old-refresh",
+    }
+    stored = token_store.load("opencode-zen", "account")
+    assert stored is not None
+    assert stored.refresh_token == "rotated-refresh"
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_opencode_refresh_auth_failure_quarantines_token_without_retry(
+    tmp_path: Path,
+) -> None:
+    token_store = TokenStore(tmp_path)
+    token_store.save(
+        "opencode-zen",
+        "account",
+        OAuthToken(
+            access_token="expired-access",
+            refresh_token="burned-refresh",
+            expires_at=datetime.now(UTC) - timedelta(minutes=1),
+        ),
+    )
+    route = respx.post(OPENCODE_TOKEN_URL).mock(
+        return_value=httpx.Response(401, json={"error": "invalid_refresh_token"})
+    )
+    getter = OAuthTokenGetter(
+        token_store,
+        "opencode-zen",
+        "account",
+        _opencode_oauth_config(),
+    )
+
+    with pytest.raises(ProviderAuthError, match="reconnect"):
+        await getter()
+
+    assert route.call_count == 1
+    assert token_store.load("opencode-zen", "account") is None
 
 
 @respx.mock

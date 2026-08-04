@@ -9,9 +9,11 @@ import pytest
 import respx
 
 from core.providers.adapter import IMAGE_WIRE_MEDIA_TYPES
+from core.providers.errors import ProviderError
 from core.providers.github_copilot import (
     GitHubCopilotAdapter,
 )
+from core.providers.github_copilot_policy import RESPONSES_ENDPOINT
 from core.providers.providers import ProviderConfig
 from tests.core.providers.github_copilot_test_support import (
     API_KEY,
@@ -23,6 +25,7 @@ from tests.core.providers.github_copilot_test_support import (
     SUCCESS_RESPONSE,
     _copilot_metadata_lookup,
     _copilot_model,
+    _copilot_model_with_metadata,
 )
 from tests.core.providers.github_copilot_test_support import (
     copilot_adapter as _copilot_adapter_fixture,
@@ -96,7 +99,7 @@ async def test_send_routes_gpt_5_mini_to_responses_from_metadata(
     request_body = json.loads(route.calls.last.request.content)
     assert request_body["model"] == "gpt-5-mini"
     assert request_body["reasoning"] == {"effort": "high", "summary": "auto"}
-    assert request_body["max_output_tokens"] == 4096
+    assert request_body["max_output_tokens"] == 64000
     assert request_body["text"] == {"format": {"type": "json_object"}}
     assert metadata_copilot_adapter.normalize_response(response) == {
         "role": "assistant",
@@ -206,7 +209,7 @@ async def test_messages_models_send_exact_on_wire_payload(
         "messages": [{"role": "user", "content": [{"type": "text", "text": "Hello"}]}],
         "thinking": {"type": "adaptive", "display": "summarized"},
         **({"output_config": {"effort": "high"}} if model_id == "claude-sonnet-4.6" else {}),
-        "max_tokens": 4096,
+        "max_tokens": 32000 if model_id == "claude-sonnet-4.6" else 4096,
         **({} if model_id == "claude-sonnet-4.6" else {"temperature": 0.25}),
     }
 
@@ -235,7 +238,7 @@ async def test_responses_models_send_exact_on_wire_payload_without_temperature(
         "reasoning": {"effort": "high", "summary": "auto"},
         "include": ["reasoning.encrypted_content"],
         "text": {"format": {"type": "json_object"}},
-        "max_output_tokens": 4096,
+        "max_output_tokens": 64000 if model_id == "gpt-5-mini" else 4096,
     }
 
 
@@ -427,3 +430,92 @@ async def test_headers_include_auth_and_extra_headers_for_all_endpoint_families(
         headers = route.calls.last.request.headers
         assert headers["Authorization"] == f"Bearer {API_KEY}"
         assert headers["Editor-Version"] == "vBot/test"
+        assert headers["x-initiator"] == "user"
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_copilot_vision_headers_and_media_limits_follow_catalog_metadata() -> None:
+    metadata = {
+        "github_copilot": {
+            "vendor": "OpenAI",
+            "family": "gpt-5.4",
+            "supported_endpoints": [RESPONSES_ENDPOINT],
+            "tool_calls": True,
+            "vision": {
+                "max_prompt_image_size": 4,
+                "max_prompt_images": 1,
+                "supported_media_types": ["image/png"],
+            },
+        }
+    }
+    adapter = GitHubCopilotAdapter(
+        COPILOT_CONFIG,
+        API_KEY,
+        model_lookup=lambda model_id: _copilot_model_with_metadata(model_id, metadata),
+    )
+    route = respx.post(RESPONSES_URL).mock(return_value=httpx.Response(200, json={"output": []}))
+    image = {"type": "media", "media_type": "image/png", "base64": "aW1n"}
+
+    await adapter.send(
+        [{"role": "user", "content": [{"type": "text", "text": "Look"}, image]}],
+        model_id="gpt-5.4",
+    )
+
+    assert route.calls.last.request.headers["Copilot-Vision-Request"] == "true"
+    assert adapter.wire_media_support("gpt-5.4") == frozenset({"image/png"})
+
+    with pytest.raises(ProviderError, match="image-count limit exceeded"):
+        await adapter.send(
+            [{"role": "user", "content": [image, image]}],
+            model_id="gpt-5.4",
+        )
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_copilot_tool_followup_is_marked_as_agent_initiated() -> None:
+    route = respx.post(COPILOT_URL).mock(return_value=httpx.Response(200, json=SUCCESS_RESPONSE))
+    adapter = GitHubCopilotAdapter(COPILOT_CONFIG, API_KEY)
+
+    await adapter.send(
+        [
+            {"role": "user", "content": "Run it"},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "name": "run",
+                        "arguments": "{}",
+                    }
+                ],
+            },
+            {"role": "tool", "tool_call_id": "call_1", "content": "ok"},
+        ],
+        model_id="unknown-copilot-model",
+    )
+
+    assert route.calls.last.request.headers["x-initiator"] == "agent"
+
+
+@pytest.mark.asyncio
+async def test_copilot_prompt_limit_fails_locally_before_request() -> None:
+    metadata = {
+        "github_copilot": {
+            "vendor": "OpenAI",
+            "family": "gpt-5.4",
+            "supported_endpoints": [RESPONSES_ENDPOINT],
+            "max_prompt_tokens": 1,
+        }
+    }
+    adapter = GitHubCopilotAdapter(
+        COPILOT_CONFIG,
+        API_KEY,
+        model_lookup=lambda model_id: _copilot_model_with_metadata(model_id, metadata),
+    )
+
+    with pytest.raises(ProviderError, match="prompt limit"):
+        await adapter.send(SAMPLE_MESSAGES, model_id="gpt-5.4")

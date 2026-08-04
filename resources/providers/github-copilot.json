@@ -24,7 +24,15 @@
   ],
   "extra_headers": {
     "Copilot-Integration-Id": "vscode-chat",
-    "Editor-Version": "vBot/0.1.0"
+    "Editor-Version": "vscode/1.128.0",
+    "Openai-Intent": "conversation-edits",
+    "User-Agent": "vBot/0.1.0"
   },
-  "models_endpoint": "/models"
+  "models_endpoint": "/models",
+  "catalog_exclusions": [
+    "gemini-2.5-pro",
+    "gemini-3-flash-preview",
+    "gpt-4.1",
+    "gpt-4.1-2025-04-14"
+  ]
 }

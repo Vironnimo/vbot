@@ -1,0 +1,38 @@
+{
+  "id": "stepfun",
+  "name": "StepFun",
+  "adapter": "stepfun",
+  "base_url": "https://api.stepfun.com/v1",
+  "connections": [
+    {
+      "id": "direct-api",
+      "type": "api_key",
+      "label": "Direct API (Usage-Based)",
+      "mode": "direct_api",
+      "auth": {
+        "header": "Authorization",
+        "prefix": "Bearer ",
+        "credential_key": "STEPFUN_DIRECT_API_KEY"
+      },
+      "models_endpoint": "/models"
+    },
+    {
+      "id": "step-plan",
+      "type": "api_key",
+      "label": "Step Plan (Subscription)",
+      "base_url": "https://api.stepfun.com/step_plan/v1",
+      "mode": "step_plan",
+      "auth": {
+        "header": "Authorization",
+        "prefix": "Bearer ",
+        "credential_key": "STEPFUN_API_KEY"
+      },
+      "models_endpoint": "/models"
+    }
+  ],
+  "defaults": {
+    "temperature": 0.5
+  },
+  "context_window": 256000,
+  "models_dev_id": "stepfun"
+}
