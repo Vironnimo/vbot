@@ -2,22 +2,55 @@
   "id": "minimax",
   "name": "MiniMax",
   "adapter": "minimax",
-  "base_url": "https://api.minimaxi.com/v1",
+  "base_url": "https://api.minimax.io/v1",
   "connections": [
     {
       "id": "api-key",
       "type": "api_key",
-      "label": "API / Token Plan Key",
+      "label": "Global API / Token Plan Key",
       "auth": {
         "header": "Authorization",
         "prefix": "Bearer ",
         "credential_key": "MINIMAX_API_KEY"
-      }
+      },
+      "models_endpoint": "/models"
+    },
+    {
+      "id": "api-key-cn",
+      "type": "api_key",
+      "label": "China API / Token Plan Key",
+      "base_url": "https://api.minimaxi.com/v1",
+      "auth": {
+        "header": "Authorization",
+        "prefix": "Bearer ",
+        "credential_key": "MINIMAX_CN_API_KEY"
+      },
+      "models_endpoint": "/models"
+    },
+    {
+      "id": "subscription",
+      "type": "oauth",
+      "label": "MiniMax Login (Subscription)",
+      "base_url": "https://api.minimax.io/anthropic/v1",
+      "mode": "anthropic_messages",
+      "auth": {
+        "header": "Authorization",
+        "prefix": "Bearer "
+      },
+      "oauth": {
+        "flow": "device",
+        "device_flow": "minimax_oauth",
+        "client_id": "78257093-7e40-4613-99e0-527b14b39113",
+        "device_auth_url": "https://api.minimax.io/oauth/code",
+        "token_url": "https://api.minimax.io/oauth/token",
+        "scopes": ["group_id", "profile", "model.completion"]
+      },
+      "models_endpoint": "/models"
     }
   ],
   "defaults": {
     "max_tokens": 8192,
     "temperature": 0.7
   },
-  "models_endpoint": "/models"
+  "models_dev_id": "minimax"
 }

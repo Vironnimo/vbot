@@ -413,6 +413,7 @@ class ModelRegistry:
 
         canonical_layer = load_canonical_layer(models_dir)
         models: dict[tuple[str, str], Model] = {}
+        provider_layers: dict[str, dict[str, Any]] = {}
 
         for json_file in sorted(models_dir.glob("*.json")):
             if not is_provider_file(json_file.name):
@@ -420,9 +421,27 @@ class ModelRegistry:
 
             data = json.loads(json_file.read_text(encoding="utf-8"))
             provider_id = data["provider_id"]
+            provider_layers[provider_id] = data["models"]
+
+        # A provider with no refreshable/static catalog can still be defined by
+        # its hand layer alone. Include those provider ids without manufacturing
+        # an empty generated ``<provider>.json`` file just to make the override
+        # discoverable.
+        for overrides_file in sorted(models_dir.glob(f"*{OVERRIDES_FILE_SUFFIX}")):
+            if overrides_file.name == CANONICAL_OVERRIDES_FILE_NAME:
+                continue
+            override_data = json.loads(overrides_file.read_text(encoding="utf-8"))
+            provider_id = override_data.get("provider_id") or overrides_file.name.removesuffix(
+                OVERRIDES_FILE_SUFFIX
+            )
+            if not isinstance(provider_id, str) or not provider_id:
+                raise ValueError(f"Override file '{overrides_file}' has an invalid provider_id")
+            provider_layers.setdefault(provider_id, {})
+
+        for provider_id, provider_models in sorted(provider_layers.items()):
             override_models = cls._read_override_models(models_dir, provider_id)
 
-            for wire_id, provider_model in data["models"].items():
+            for wire_id, provider_model in provider_models.items():
                 record = assemble_provider_model(
                     wire_id,
                     provider_model,
@@ -435,7 +454,7 @@ class ModelRegistry:
             # (a manual override-only model). Assemble those too, since the old
             # refresh-time path also supported override-only models.
             for wire_id, override_model in override_models.items():
-                if wire_id in data["models"]:
+                if wire_id in provider_models:
                     continue
                 record = assemble_provider_model(
                     wire_id,

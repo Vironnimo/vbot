@@ -88,9 +88,40 @@ def test_runtime_provider_config_fields(runtime: Runtime) -> None:
     assert openrouter_config.adapter == "openrouter"
     assert github_copilot_config.adapter == "github_copilot"
     assert minimax_config.adapter == "minimax"
-    assert minimax_config.base_url == "https://api.minimaxi.com/v1"
-    assert minimax_config.models_endpoint == "/models"
+    assert minimax_config.base_url == "https://api.minimax.io/v1"
+    assert minimax_config.models_endpoint is None
+    assert [connection.id for connection in minimax_config.connections] == [
+        "api-key",
+        "api-key-cn",
+        "subscription",
+    ]
     assert minimax_config.get_connection("api-key").auth.credential_key == "MINIMAX_API_KEY"
+    assert minimax_config.get_connection("api-key").models_endpoint == "/models"
+    minimax_cn = minimax_config.get_connection("api-key-cn")
+    assert minimax_cn.base_url == "https://api.minimaxi.com/v1"
+    assert minimax_cn.auth.credential_key == "MINIMAX_CN_API_KEY"
+    minimax_subscription = minimax_config.get_connection("subscription")
+    assert minimax_subscription.base_url == "https://api.minimax.io/anthropic/v1"
+    assert minimax_subscription.mode == "anthropic_messages"
+    assert minimax_subscription.models_endpoint == "/models"
+    assert minimax_subscription.oauth is not None
+    assert minimax_subscription.oauth.device_flow == "minimax_oauth"
+
+
+def test_runtime_loads_minimax_override_only_models_with_connection_limits(
+    runtime: Runtime,
+) -> None:
+    m25 = runtime.models.get("minimax", "MiniMax-M2.5")
+    m27 = runtime.models.get("minimax", "MiniMax-M2.7")
+    m3 = runtime.models.get("minimax", "MiniMax-M3")
+
+    assert m25.connections == ("api-key", "api-key-cn")
+    assert m27.connections == ("api-key", "api-key-cn", "subscription")
+    assert m27.context_window == 204800
+    assert m27.max_output_tokens == 65536
+    assert m3.connections == ("api-key", "api-key-cn")
+    assert m3.context_window == 1000000
+    assert m3.max_output_tokens == 131072
 
 
 def test_runtime_injects_openrouter_routing_snapshot(
@@ -700,7 +731,7 @@ def test_runtime_wires_minimax_adapter(runtime: Runtime) -> None:
         id="minimax",
         name="MiniMax",
         adapter="minimax",
-        base_url="https://api.minimaxi.com/v1",
+        base_url="https://api.minimax.io/v1",
         connections=[
             ConnectionConfig(
                 id="api-key",
