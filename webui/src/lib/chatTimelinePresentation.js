@@ -311,7 +311,11 @@ export function isRunChildWorking(assistantRun, child) {
 }
 
 export const runMetaParts = (assistantRun) => {
-  const parts = [labelForRunIterations(assistantRun)];
+  const parts = [];
+  const iterationLabel = labelForRunIterations(assistantRun);
+  if (iterationLabel) {
+    parts.push(iterationLabel);
+  }
   const duration = formatRunDuration(assistantRun);
   if (
     assistantRun.status === 'cancelled' ||
@@ -1115,15 +1119,13 @@ function shouldRenderToolCall(tool) {
   );
 }
 
-function runIterationCount(assistantRun) {
-  const outputCount = (assistantRun.outputs ?? []).length;
-  const toolCount = (assistantRun.tools ?? []).length;
-  return Math.max(1, outputCount + (toolCount > 0 ? 1 : 0));
-}
-
 function labelForRunIterations(assistantRun) {
+  const iterationCount = assistantRun?.iterationCount;
+  if (!Number.isInteger(iterationCount) || iterationCount < 0) {
+    return '';
+  }
   return t('chat.runIterations', '{count} iter', {
-    count: runIterationCount(assistantRun),
+    count: iterationCount,
   });
 }
 

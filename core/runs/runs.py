@@ -274,11 +274,12 @@ class Run:
         # executor before it returns/raises; the manager merges it alongside
         # ``timing`` regardless of the terminal outcome.
         self.terminal_payload_extras: JsonObject = {}
-        # Log-facing run telemetry, incremented by the chat loop as the run
-        # progresses and read by the end-of-run log line. Token totals sum the
-        # per-turn usage payloads (estimated turns included — the log line cares
-        # about magnitude; the statistics domain owns real-vs-estimated rigor).
-        self.model_step_count = 0
+        # Canonical Agentic Loop iteration count. Chat increments this only
+        # after one Model request has returned a response; callers must never
+        # reconstruct it from Assistant messages or Tool Calls. Token totals
+        # sum the per-turn usage payloads (estimated turns included — the log
+        # line cares about magnitude; Statistics owns real-vs-estimated rigor).
+        self.iteration_count = 0
         self.tool_call_count = 0
         self.tool_call_names: set[str] = set()
         self.input_token_total = 0
@@ -1060,6 +1061,7 @@ class ChatRunManager:
 
         def terminal_extras() -> JsonObject:
             extras: JsonObject = dict(run.terminal_payload_extras)
+            extras["iteration_count"] = run.iteration_count
             extras["timing"] = terminal_timing()
             return extras
 

@@ -248,13 +248,13 @@
     <div class="s-row-label">
       {t(
         'settings.reflection.skillInterval',
-        'Skill review interval (Model steps)',
+        'Skill review interval (Iterations)',
       )}
     </div>
     <div class="s-row-desc">
       {t(
         'settings.reflection.skillIntervalDescription',
-        'A skill review becomes due after this many Agentic Loop iterations in a conversation.',
+        'A skill review becomes due after this many completed Model request/response pairs in a conversation.',
       )}
     </div>
   </div>
@@ -267,7 +267,7 @@
       value={reflectionSettings.skill_model_step_interval}
       ariaLabel={t(
         'settings.reflection.skillInterval',
-        'Skill review interval (Model steps)',
+        'Skill review interval (Iterations)',
       )}
       onInput={(next) => handleIntervalInput('skill_model_step_interval', next)}
     />

@@ -265,6 +265,7 @@ async def test_restart_reconciles_terminal_run_before_retry(
         ChatMessage.run_summary(
             run_id="run-before-crash",
             status=run_status,
+            iteration_count=1,
             timing={
                 "started_at": "2026-08-02T12:00:00+00:00",
                 "completed_at": "2026-08-02T12:00:01+00:00",

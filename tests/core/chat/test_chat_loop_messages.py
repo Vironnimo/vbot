@@ -280,6 +280,7 @@ class TestMessageToRequestDict:
             ChatMessage.run_summary(
                 run_id="run-one",
                 status="completed",
+                iteration_count=1,
                 timing={
                     "started_at": "2026-05-03T14:30:01+00:00",
                     "completed_at": "2026-05-03T14:30:02+00:00",

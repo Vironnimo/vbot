@@ -136,7 +136,7 @@ def test_result_pass_requires_every_behavioral_invariant() -> None:
         "status": "completed",
         "synthetic_requests": 1,
         "live_provider_requests": 1,
-        "model_steps": 2,
+        "iterations": 2,
         "completion_acknowledged": True,
         "one_completion_note_persisted": True,
         "one_completion_reminder": True,

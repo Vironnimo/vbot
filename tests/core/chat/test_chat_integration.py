@@ -23,7 +23,7 @@ from core.skills.skills import SkillRegistry
 from core.tools import tool_success
 from core.tools.memory import MEMORY_TOOL_DESCRIPTION, MEMORY_TOOL_PARAMETERS
 from core.utils.config import Config
-from tests.core.chat.chat_loop_support import build_chat_loop
+from tests.core.chat.chat_loop_support import RecordingReflection, build_chat_loop
 
 JsonObject = dict[str, Any]
 
@@ -131,6 +131,7 @@ async def test_agent_sends_message_and_persists_assistant_response(
         assert messages[0].content == "Hello"
         assert messages[1].model == "fake-provider/fake-model-v1"
         assert messages[1].content == "assistant response"
+        assert messages[-1].iteration_count == 1
         assert adapter.requests[0].model_id == "fake-model-v1"
         assert adapter.requests[0].kwargs["thinking_effort"] == "high"
         assert adapter.requests[0].kwargs["temperature"] is None
@@ -190,11 +191,117 @@ async def test_read_tool_success_persists_result_and_final_response_uses_content
         ]
         assert messages[-1].status == "completed"
         assert messages[-1].timing is not None
+        assert messages[-1].iteration_count == 2
         assert tool_result["ok"] is True
         assert tool_result["error"] is None
         assert tool_result["data"] == {"content": "1|file content"}
         assert tool_result["artifacts"] == []
         assert adapter.requests[1].messages[3]["content"] == messages[2].content
+    finally:
+        runtime.stop()
+
+
+@pytest.mark.asyncio
+async def test_parallel_tool_calls_count_one_iteration_per_model_response(
+    tmp_path: Path,
+    resources_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter = FakeAdapter(
+        [
+            {
+                "content": None,
+                "reasoning": "Read all five files together.",
+                "tool_calls": [
+                    {
+                        "id": f"call_read_{index}",
+                        "name": "read",
+                        "arguments": {"path": "note.txt"},
+                    }
+                    for index in range(5)
+                ],
+            },
+            {
+                "content": "All five reads completed.",
+                "reasoning": "The results agree.",
+                "tool_calls": None,
+            },
+        ]
+    )
+    config = Config(data_dir=tmp_path / "data")
+    config._data["RESOURCES_PATH"] = str(resources_dir)
+    config._data["VBOT_VERSION"] = "test-version"
+    runtime = Runtime(config)
+    monkeypatch.setenv("FAKE_API_KEY", "test-key")
+    monkeypatch.setattr(runtime, "get_adapter", lambda provider_id, connection_id: adapter)
+
+    runtime.start()
+    try:
+        reflection = RecordingReflection()
+        agent = runtime.agents.create(
+            "coder",
+            "Coder Agent",
+            model="fake-provider/fake-model-v1",
+        )
+        Path(agent.workspace).joinpath("note.txt").write_text("same", encoding="utf-8")
+
+        await build_chat_loop(runtime, reflection_service=reflection).send(
+            "coder", "Read this five times", session_id="session-one"
+        )
+
+        messages = runtime.chat_sessions.get("coder", "session-one").load()
+        run = runtime.chat_run_manager.get(str(messages[-1].run_id))
+        live_counts = [
+            event.payload["iteration_count"]
+            for event in run.events
+            if event.type == "model_step_usage"
+        ]
+        assert len(adapter.requests) == 2
+        assert run.iteration_count == 2
+        assert run.tool_call_count == 5
+        assert messages[-1].iteration_count == 2
+        assert live_counts == [1, 2]
+        assert run.events[-1].payload["iteration_count"] == 2
+        assert reflection.calls[0]["iteration_count"] == 2
+    finally:
+        runtime.stop()
+
+
+@pytest.mark.asyncio
+async def test_reasoning_only_response_is_one_iteration(
+    tmp_path: Path,
+    resources_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter = FakeAdapter(
+        {"content": None, "reasoning": "Only thinking this time.", "tool_calls": None}
+    )
+    config = Config(data_dir=tmp_path / "data")
+    config._data["RESOURCES_PATH"] = str(resources_dir)
+    config._data["VBOT_VERSION"] = "test-version"
+    runtime = Runtime(config)
+    monkeypatch.setenv("FAKE_API_KEY", "test-key")
+    monkeypatch.setattr(runtime, "get_adapter", lambda provider_id, connection_id: adapter)
+
+    runtime.start()
+    try:
+        runtime.agents.create(
+            "coder",
+            "Coder Agent",
+            model="fake-provider/fake-model-v1",
+        )
+
+        await build_chat_loop(runtime).send(
+            "coder", "Think without answering", session_id="session-one"
+        )
+
+        messages = runtime.chat_sessions.get("coder", "session-one").load()
+        run = runtime.chat_run_manager.get(str(messages[-1].run_id))
+        assert len(adapter.requests) == 1
+        assert messages[1].reasoning == "Only thinking this time."
+        assert messages[1].content is None
+        assert run.iteration_count == 1
+        assert messages[-1].iteration_count == 1
     finally:
         runtime.stop()
 

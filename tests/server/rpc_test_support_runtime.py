@@ -1015,12 +1015,14 @@ class StubDelegateRun:
         session_id: str,
         status: str,
         final_message: ChatMessage | None = None,
+        iteration_count: int = 0,
     ) -> None:
         self.id = run_id
         self.agent_id = agent_id
         self.session_id = session_id
         self.status = SimpleNamespace(value=status)
         self.run_kind = RunKind.USER
+        self.iteration_count = iteration_count
         self.events: list[Any] = []
         self._final_message = final_message or ChatMessage.assistant(
             model="openai/gpt-5.2",

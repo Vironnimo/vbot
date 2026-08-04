@@ -1454,6 +1454,10 @@ export function startRun(sessionState, run) {
     runId: run.run_id,
     sseUrl: run.sse_url,
     status: run.status ?? CHAT_STATUS_RUNNING,
+    iterationCount:
+      Number.isInteger(run.iteration_count) && run.iteration_count >= 0
+        ? run.iteration_count
+        : 0,
     ...(run.contributes_to_agent_activity === false ||
     run.contributesToAgentActivity === false
       ? { contributesToAgentActivity: false }
@@ -1523,6 +1527,13 @@ function applyModelStepUsage(sessionState, payload) {
   if (payload?.session_usage) {
     sessionState.sessionUsage = payload.session_usage;
   }
+  if (
+    sessionState.currentRun &&
+    Number.isInteger(payload?.iteration_count) &&
+    payload.iteration_count >= 0
+  ) {
+    sessionState.currentRun.iterationCount = payload.iteration_count;
+  }
 }
 
 function appendRunEvents(sessionState, events) {
@@ -1540,6 +1551,10 @@ function beginRunFromEvent(sessionState, event) {
     runId: event.run_id,
     sseUrl: currentSseUrl,
     status: CHAT_STATUS_RUNNING,
+    iterationCount:
+      isSameRun && Number.isInteger(currentRun?.iterationCount)
+        ? currentRun.iterationCount
+        : 0,
     ...(event.contributes_to_agent_activity === false
       ? { contributesToAgentActivity: false }
       : {}),
@@ -1563,6 +1578,12 @@ export function finishRun(sessionState, event) {
     event?.contributes_to_agent_activity !== false;
   if (sessionState.currentRun) {
     sessionState.currentRun.status = status ?? terminalStatus(type);
+    if (
+      Number.isInteger(event?.payload?.iteration_count) &&
+      event.payload.iteration_count >= 0
+    ) {
+      sessionState.currentRun.iterationCount = event.payload.iteration_count;
+    }
   }
   sessionState.status = status ?? terminalStatus(type);
   sessionState.streamStatus = CHAT_STATUS_IDLE;

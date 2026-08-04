@@ -1792,14 +1792,14 @@ class ChatLoop:
             )
             run_timing = _timing_payload(run_timing_started_at, run_timing_started_perf)
             _LOGGER.info(
-                "Run %s %s (agent=%s session=%s duration_ms=%s model_steps=%d "
+                "Run %s %s (agent=%s session=%s duration_ms=%s iterations=%d "
                 "tool_calls=%d input_tokens=%d output_tokens=%d)",
                 run.id,
                 run_status,
                 run.agent_id,
                 run.session_id,
                 run_timing["duration_ms"],
-                run.model_step_count,
+                run.iteration_count,
                 run.tool_call_count,
                 run.input_token_total,
                 run.output_token_total,
@@ -1809,6 +1809,7 @@ class ChatLoop:
                 work_id=run.work_id,
                 status=run_status,
                 timing=run_timing,
+                iteration_count=run.iteration_count,
             )
             session.append(run_summary)
             if run.contributes_to_agent_activity:
@@ -2450,7 +2451,6 @@ class ChatLoop:
             session_usage = aggregate_session_usage(session.load())
             run.terminal_payload_extras["session_usage"] = session_usage
         tool_iteration_count = 0
-        iteration_number = 1
         stream_continuation_count = 0
         interruption_chain: list[ChatMessage] = []
         failed_tool_call_breaker = _FailedToolCallCircuitBreaker()
@@ -2484,6 +2484,9 @@ class ChatLoop:
                     messages=messages_for_request,
                 )
 
+            # The next ordinal is derived from the canonical completed count.
+            # Failed requests therefore do not consume an Iteration number.
+            request_iteration_number = run.iteration_count + 1
             if hasattr(target.adapter, "set_debug_context"):
                 target.adapter.set_debug_context(
                     DebugContext(
@@ -2494,13 +2497,12 @@ class ChatLoop:
                         connection_id=target.connection_id,
                         model_id=target.model_id,
                         streaming=self._streaming,
-                        iteration_number=iteration_number,
+                        iteration_number=request_iteration_number,
                     )
                 )
-            run.model_step_count += 1
             _LOGGER.debug(
-                "Model step %d requested (run=%s model=%s messages=%d)",
-                iteration_number,
+                "Iteration %d requested (run=%s model=%s messages=%d)",
+                request_iteration_number,
                 run.id,
                 target.model_id,
                 len(messages_for_request),
@@ -2518,6 +2520,10 @@ class ChatLoop:
                 chunk_timeout_seconds=target.chunk_timeout_seconds,
                 continuation_tracker=context.continuation_tracker,
             )
+            # This is the sole mutation point for the Iteration count: one
+            # completed request/response pair, independent of how many Tool
+            # Calls or readable Assistant blocks the response contains.
+            run.iteration_count = request_iteration_number
             assistant_message = assistant_step.message
             terminal_outcome = assistant_step.terminal_outcome
             recovery = assistant_step.recovery
@@ -2533,9 +2539,9 @@ class ChatLoop:
             run.input_token_total += _usage_token_count(assistant_message.usage, "input_tokens")
             run.output_token_total += _usage_token_count(assistant_message.usage, "output_tokens")
             _LOGGER.debug(
-                "Model step %d completed (run=%s duration_ms=%d input_tokens=%d "
+                "Iteration %d completed (run=%s duration_ms=%d input_tokens=%d "
                 "output_tokens=%d tool_calls=%d)",
-                iteration_number,
+                request_iteration_number,
                 run.id,
                 round((time.perf_counter() - step_started_perf) * 1000),
                 _usage_token_count(assistant_message.usage, "input_tokens"),
@@ -2569,6 +2575,7 @@ class ChatLoop:
                         "usage": dict(assistant_message.usage),
                         "session_usage": dict(session_usage),
                         "context_usage": dict(assistant_context_usage),
+                        "iteration_count": run.iteration_count,
                     },
                     allow_after_cancel=preserve_cancelled_partial,
                 )
@@ -2613,7 +2620,6 @@ class ChatLoop:
                             )
                         session.add_note(STREAM_RECOVERY_NOTE)
                         stream_continuation_count += 1
-                        iteration_number += 1
                         continue
                     terminal_error = _terminal_outcome_error(
                         terminal_outcome,
@@ -2639,8 +2645,7 @@ class ChatLoop:
                 stream_continuation_count = 0
                 if tool_iteration_count >= self._max_tool_iterations:
                     raise ToolIterationLimitError("maximum tool iterations exceeded")
-                tool_iteration_count += 1  # noqa: SIM113 - paired with iteration_number; enumerate would obscure the pre-increment limit check.
-                iteration_number += 1
+                tool_iteration_count += 1
 
                 session.begin_defer_notes()
                 try:

@@ -1127,8 +1127,8 @@ async def test_build_session_chunks_skips_chunks_with_no_embeddable_text() -> No
     """
 
     messages = [
-        ChatMessage.run_summary(run_id="r1", status="completed", timing={}),
-        ChatMessage.run_summary(run_id="r2", status="completed", timing={}),
+        ChatMessage.run_summary(run_id="r1", status="completed", timing={}, iteration_count=1),
+        ChatMessage.run_summary(run_id="r2", status="completed", timing={}, iteration_count=1),
     ]
 
     assert build_session_chunks(messages) == []
@@ -1138,7 +1138,7 @@ async def test_build_session_chunks_anchors_on_context_message_not_run_summary()
     """A chunk mixing a run_summary with a real message anchors on the real one."""
 
     messages = [
-        ChatMessage.run_summary(run_id="r1", status="completed", timing={}),
+        ChatMessage.run_summary(run_id="r1", status="completed", timing={}, iteration_count=1),
         ChatMessage.user("I love bananas and fruit", timestamp=timestamp(2)),
     ]
 
@@ -1469,7 +1469,9 @@ async def test_vector_backend_never_surfaces_run_summary_as_a_match(tmp_path: Pa
     }
     sessions = ChatSessionManager(tmp_path)
     session = sessions.create("coder", session_id="mixed")
-    session.append(ChatMessage.run_summary(run_id="r1", status="completed", timing=timing))
+    session.append(
+        ChatMessage.run_summary(run_id="r1", status="completed", timing=timing, iteration_count=1)
+    )
     session.append(ChatMessage.user("I love bananas and fruit", timestamp=timestamp(1)))
 
     data = await backend(tmp_path, sessions, embeddings=_StubEmbeddings()).search(
