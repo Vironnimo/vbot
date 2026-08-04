@@ -412,6 +412,7 @@ def test_restart_reconciliation_uses_only_current_transcript_tail(tmp_path: Path
         ChatMessage.run_summary(
             run_id="old-run",
             status="completed",
+            model_step_count=1,
             timing={
                 "started_at": "2026-07-11T11:00:00+00:00",
                 "completed_at": "2026-07-11T11:00:01+00:00",
@@ -461,6 +462,7 @@ def test_recover_clears_stale_journal_when_transcript_proves_normal_completion(
         ChatMessage.run_summary(
             run_id="run-one",
             status="completed",
+            model_step_count=1,
             timing={
                 "started_at": "2026-07-11T12:00:00+00:00",
                 "completed_at": "2026-07-11T12:00:01+00:00",

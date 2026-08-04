@@ -115,6 +115,7 @@ def _seed_session(manager: ChatSessionManager, agent_id: str) -> None:
             run_id="r1",
             status="completed",
             timing=_timing(BASE + timedelta(seconds=1), 1200),
+            model_step_count=1,
             timestamp=BASE + timedelta(seconds=2),
         )
     )
@@ -251,6 +252,7 @@ def test_report_includes_project_sessions_under_address_form(tmp_path: Path) -> 
             run_id="p1",
             status="completed",
             timing=_timing(BASE + timedelta(seconds=1), 800),
+            model_step_count=1,
             timestamp=BASE + timedelta(seconds=2),
         )
     )

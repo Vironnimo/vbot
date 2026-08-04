@@ -1809,6 +1809,7 @@ class ChatLoop:
                 work_id=run.work_id,
                 status=run_status,
                 timing=run_timing,
+                model_step_count=run.model_step_count,
             )
             session.append(run_summary)
             if run.contributes_to_agent_activity:
@@ -2497,7 +2498,6 @@ class ChatLoop:
                         iteration_number=iteration_number,
                     )
                 )
-            run.model_step_count += 1
             _LOGGER.debug(
                 "Model step %d requested (run=%s model=%s messages=%d)",
                 iteration_number,
@@ -2551,6 +2551,10 @@ class ChatLoop:
                 run.agent_id, run.session_id, project_id
             ):
                 session.append(assistant_message)
+                # A Model step becomes canonical only with its persisted
+                # Assistant response. Failed Provider attempts and transport
+                # retries therefore do not inflate Run/Reflection telemetry.
+                run.model_step_count += 1
                 assert isinstance(assistant_message.usage, dict)
                 assistant_request_message = _assistant_continuation_dict(
                     assistant_message,
@@ -2569,6 +2573,7 @@ class ChatLoop:
                         "usage": dict(assistant_message.usage),
                         "session_usage": dict(session_usage),
                         "context_usage": dict(assistant_context_usage),
+                        "model_step_count": run.model_step_count,
                     },
                     allow_after_cancel=preserve_cancelled_partial,
                 )

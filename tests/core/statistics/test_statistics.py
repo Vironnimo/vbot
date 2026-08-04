@@ -106,11 +106,19 @@ def _tool(*, name: str, at: datetime, envelope: dict, duration_ms: int) -> ChatM
     )
 
 
-def _run_summary(*, status: str, at: datetime, duration_ms: int, run_id: str) -> ChatMessage:
+def _run_summary(
+    *,
+    status: str,
+    at: datetime,
+    duration_ms: int,
+    run_id: str,
+    model_step_count: int = 1,
+) -> ChatMessage:
     return ChatMessage.run_summary(
         run_id=run_id,
         status=status,
         timing=_timing(at, duration_ms),
+        model_step_count=model_step_count,
         timestamp=at,
     )
 
@@ -383,6 +391,7 @@ def test_interrupted_runs_have_distinct_count_rate_and_daily_bucket(tmp_path: Pa
             at=BASE + timedelta(seconds=1),
             duration_ms=250,
             run_id="interrupted-run",
+            model_step_count=0,
         )
     )
 
@@ -496,6 +505,7 @@ def test_chat_messages_exclude_thinking_and_tool_only_model_steps(tmp_path: Path
                 at=BASE + timedelta(seconds=5),
                 duration_ms=5000,
                 run_id="r1",
+                model_step_count=4,
             ),
         ],
     )
@@ -563,7 +573,11 @@ def test_derived_fallback_detects_mid_run_model_switch(tmp_path: Path) -> None:
             _assistant(model="openrouter/anthropic/claude-sonnet-4", at=BASE),
             _assistant(model="openai/gpt-5", at=BASE + timedelta(seconds=1)),
             _run_summary(
-                status="completed", at=BASE + timedelta(seconds=2), duration_ms=1000, run_id="r1"
+                status="completed",
+                at=BASE + timedelta(seconds=2),
+                duration_ms=1000,
+                run_id="r1",
+                model_step_count=2,
             ),
             # Single-model run — no fallback.
             _assistant(model="openai/gpt-5", at=BASE + timedelta(seconds=3)),
