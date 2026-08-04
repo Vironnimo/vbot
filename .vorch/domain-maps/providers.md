@@ -82,6 +82,7 @@ Read these only when your task matches — not by default.
 - Adding a Provider, Connection variant, Adapter selector, discovery normalizer, or Provider-specific map → `providers/add-a-provider.md`
 - Changing native Anthropic Messages behavior → `providers/anthropic.md`
 - Changing GitHub Copilot auth, routing, policy, or catalog metadata → `providers/github-copilot.md`
+- Changing Kimi Coding Plan/Platform Connections, reasoning replay, media, or catalog behavior → `providers/kimi.md`
 - Changing MiniMax wire, reasoning, catalog, or usage parsing → `providers/minimax.md`
 - Changing Mistral request policy or catalog normalization → `providers/mistral.md`
 - Changing Ollama native chat, local/cloud Connections, enrichment, or context enforcement → `providers/ollama.md`

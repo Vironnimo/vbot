@@ -197,9 +197,14 @@ class ContentBlockResolver:
                 wire_media_types=wire_media_types,
             )
         if media_type.startswith("video/"):
-            # No supported provider wire accepts raw video; the path note lets the
-            # agent work on the file with tools instead.
-            return [self._path_note_block("Video", attachment_id, filename, media_type)]
+            return self._resolve_video_block(
+                attachment_id,
+                filename,
+                media_type,
+                is_current_turn=is_current_turn,
+                input_modalities=input_modalities,
+                wire_media_types=wire_media_types,
+            )
 
         # An unexpected media prefix cannot be shown natively — hand over the file
         # path rather than aborting the run.
@@ -251,6 +256,31 @@ class ContentBlockResolver:
         return [
             native_block,
             self._path_note_block("Image", attachment_id, filename, media_type),
+        ]
+
+    def _resolve_video_block(
+        self,
+        attachment_id: str,
+        filename: str,
+        media_type: str,
+        *,
+        is_current_turn: bool,
+        input_modalities: frozenset[str],
+        wire_media_types: frozenset[str],
+    ) -> list[JsonObject]:
+        """Pass current-turn video only when both Model and wire support it."""
+
+        if not (is_current_turn and "video" in input_modalities and media_type in wire_media_types):
+            return [self._path_note_block("Video", attachment_id, filename, media_type)]
+
+        blob_data = self._read_attachment_bytes(attachment_id)
+        return [
+            {
+                "type": "media",
+                "base64": base64.b64encode(blob_data).decode("ascii"),
+                "media_type": media_type,
+            },
+            self._path_note_block("Video", attachment_id, filename, media_type),
         ]
 
     async def _resolve_audio_block(

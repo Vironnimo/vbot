@@ -34,6 +34,7 @@ from core.providers._http_shared import classify_http_status, wrap_network_error
 from core.providers.anthropic import AnthropicAdapter
 from core.providers.errors import CatalogEntrySkipped, NetworkError
 from core.providers.github_copilot import GitHubCopilotAdapter
+from core.providers.kimi import KimiAdapter
 from core.providers.minimax import MiniMaxAdapter
 from core.providers.mistral import MistralAdapter
 from core.providers.ollama import OllamaAdapter
@@ -876,6 +877,7 @@ _DISCOVERY_ADAPTER_MAP = {
     "anthropic": AnthropicAdapter,
     "opencode_go": OpenCodeGoAdapter,
     "openrouter": OpenRouterAdapter,
+    "kimi": KimiAdapter,
     "minimax": MiniMaxAdapter,
     "mistral": MistralAdapter,
     "github_copilot": GitHubCopilotAdapter,

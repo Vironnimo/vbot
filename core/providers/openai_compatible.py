@@ -317,7 +317,16 @@ class OpenAICompatibleAdapter(ProviderAdapter):
         """Convert one internal message to its wire representation."""
         if message.get("role") == "assistant":
             return self._format_assistant_message(message)
+        if message.get("role") == "user" and isinstance(message.get("content"), list):
+            return {
+                "role": "user",
+                "content": [self._format_user_content_part(part) for part in message["content"]],
+            }
         return _to_openai_message(message)
+
+    def _format_user_content_part(self, part: Any) -> dict[str, Any]:
+        """Encode one canonical user content part for this provider's wire."""
+        return _to_openai_user_content_part(part)
 
     def _build_payload(
         self,
