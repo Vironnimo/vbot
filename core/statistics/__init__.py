@@ -1,4 +1,4 @@
-"""Read-only statistics aggregation over persisted Sessions."""
+"""Incrementally indexed statistics aggregation over persisted Sessions."""
 
 from __future__ import annotations
 

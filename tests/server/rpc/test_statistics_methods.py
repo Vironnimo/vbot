@@ -9,6 +9,7 @@ Coverage:
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -125,7 +126,7 @@ def test_report_returns_full_shape_for_seeded_data(tmp_path: Path) -> None:
     state, manager = _state(tmp_path, ["main"])
     _seed_session(manager, "main")
 
-    result = _statistics_report(state, {})
+    result = asyncio.run(_statistics_report(state, {}))
 
     assert set(result) == {
         "generated_at",
@@ -156,9 +157,11 @@ def test_report_applies_time_window(tmp_path: Path) -> None:
     state, manager = _state(tmp_path, ["main"])
     _seed_session(manager, "main")
 
-    result = _statistics_report(
-        state,
-        {"since": "2026-07-01T00:00:00Z", "until": "2026-07-31T00:00:00Z"},
+    result = asyncio.run(
+        _statistics_report(
+            state,
+            {"since": "2026-07-01T00:00:00Z", "until": "2026-07-31T00:00:00Z"},
+        )
     )
 
     assert result["overview"]["total_runs"] == 0
@@ -170,12 +173,14 @@ def test_run_activity_returns_correlated_run_details(tmp_path: Path) -> None:
     state, manager = _state(tmp_path, ["main"])
     _seed_session(manager, "main")
 
-    result = _statistics_run_activity(
-        state,
-        {
-            "since": "2026-06-01T12:00:00Z",
-            "until": "2026-06-01T12:01:00Z",
-        },
+    result = asyncio.run(
+        _statistics_run_activity(
+            state,
+            {
+                "since": "2026-06-01T12:00:00Z",
+                "until": "2026-06-01T12:01:00Z",
+            },
+        )
     )
 
     assert result["total_runs"] == 1
@@ -188,16 +193,16 @@ def test_run_activity_requires_complete_window(tmp_path: Path) -> None:
     state, _manager = _state(tmp_path, ["main"])
 
     with pytest.raises(RpcError, match="params.until must be an ISO 8601 timestamp string"):
-        _statistics_run_activity(state, {"since": "2026-06-01T12:00:00Z"})
+        asyncio.run(_statistics_run_activity(state, {"since": "2026-06-01T12:00:00Z"}))
 
 
 def test_report_lazily_caches_service_on_state(tmp_path: Path) -> None:
     state, manager = _state(tmp_path, ["main"])
     _seed_session(manager, "main")
 
-    _statistics_report(state, {})
+    asyncio.run(_statistics_report(state, {}))
     cached = state.statistics_service
-    _statistics_report(state, {})
+    asyncio.run(_statistics_report(state, {}))
 
     assert state.statistics_service is cached
 
@@ -206,30 +211,32 @@ def test_report_rejects_unknown_params(tmp_path: Path) -> None:
     state, _manager = _state(tmp_path, ["main"])
 
     with pytest.raises(RpcError, match="unsupported statistics.report fields: bogus"):
-        _statistics_report(state, {"bogus": 1})
+        asyncio.run(_statistics_report(state, {"bogus": 1}))
 
 
 def test_report_rejects_malformed_timestamp(tmp_path: Path) -> None:
     state, _manager = _state(tmp_path, ["main"])
 
     with pytest.raises(RpcError, match="params.since must be an ISO 8601 timestamp string"):
-        _statistics_report(state, {"since": "not-a-date"})
+        asyncio.run(_statistics_report(state, {"since": "not-a-date"}))
 
 
 def test_report_rejects_inverted_window(tmp_path: Path) -> None:
     state, _manager = _state(tmp_path, ["main"])
 
     with pytest.raises(RpcError, match="params.since must not be after params.until"):
-        _statistics_report(
-            state,
-            {"since": "2026-06-10T00:00:00Z", "until": "2026-06-01T00:00:00Z"},
+        asyncio.run(
+            _statistics_report(
+                state,
+                {"since": "2026-06-10T00:00:00Z", "until": "2026-06-01T00:00:00Z"},
+            )
         )
 
 
 def test_report_empty_data_returns_zeroed_report(tmp_path: Path) -> None:
     state, _manager = _state(tmp_path, [])
 
-    result = _statistics_report(state, {})
+    result = asyncio.run(_statistics_report(state, {}))
 
     assert result["overview"]["total_agents"] == 0
     assert result["overview"]["total_runs"] == 0
@@ -257,7 +264,7 @@ def test_report_includes_project_sessions_under_address_form(tmp_path: Path) -> 
         )
     )
 
-    result = _statistics_report(state, {})
+    result = asyncio.run(_statistics_report(state, {}))
 
     agent_ids = {agent["agent_id"] for agent in result["overview"]["agents"]}
     assert agent_ids == {"main", "builder@vbot"}
@@ -308,7 +315,7 @@ def test_report_skills_section_joins_usage_against_inventory(tmp_path: Path) -> 
     )
     manager.set_metadata("main", session.id, {"seen_skills": ["deploy", "teach"]})
 
-    result = _statistics_report(state, {})
+    result = asyncio.run(_statistics_report(state, {}))
     skills = result["skills"]
     by_name = {row["name"]: row for row in skills["skills"]}
 
@@ -329,7 +336,7 @@ def test_report_skills_section_empty_when_no_inventory_skills(tmp_path: Path) ->
     state, manager = _state(tmp_path, ["main"])
     _seed_session(manager, "main")
 
-    result = _statistics_report(state, {})
+    result = asyncio.run(_statistics_report(state, {}))
 
     assert result["skills"]["skills"] == []
     assert result["skills"]["total_skills"] == 0

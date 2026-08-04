@@ -18,6 +18,7 @@ The Sessions domain owns persistence and file-format details. Chat code may appe
 - `ChatSession.continuation_path` — internal continuation journal path `<session-id>.continuation.jsonl`; Chat owns the record semantics, while Sessions alone owns this path and its file lifecycle.
 - `ChatSession.append(message)` — appends one compact UTF-8 JSON object plus newline.
 - `ChatSession.load()` — returns validated `ChatMessage` objects in append order.
+- `ChatSession.load_since(cursor=None) -> SessionReadBatch | None` — validates only complete Messages after an opaque `SessionReadCursor{byte_offset, message_count, last_message_id}`; `None` starts at byte zero, while a supplied cursor whose prior complete line no longer ends with the recorded Message id returns `None` so disposable consumers rebuild. The returned cursor lands after the last complete observed line and preserves the same torn-tail recovery as `load()`.
 - `ChatSession.append_continuation_record(record)` / `append_continuation_records(records)` — append one record or one fsynced batch to the journal without rewriting its accumulated contents. `load_continuation_records()` returns ordered JSON objects and repairs only an incomplete trailing line; `clear_continuation()` removes the disposable journal.
 - `ChatSession.add_note(content)` — persists a kernel-internal `role: "note"` message and queues it for the next provider request.
 - `ChatSession.begin_defer_notes()` / `flush_deferred_notes()` — bracket tool dispatch so notes created during a tool-use turn are persisted after that turn's tool-result messages.
@@ -73,7 +74,7 @@ The Sessions domain owns persistence and file-format details. Chat code may appe
 - Channel adapters must use `ChatSessionManager.exists()` / `get_or_create()` / metadata methods instead of deriving `.jsonl` paths.
 - Server RPC delegates should expose session operations through the runtime service and keep storage details out of the public contract.
 - Session deletion remains the Sessions archive workflow, but its admission-guarded server orchestrator first asks `TerminalManager` to terminate every Terminal Session with the exact same `(project_id, agent_id, session_id)` owner. A Chat Session archive must not leave its interactive children reachable without an owner.
-- `core/recall/` may maintain derived search indexes, but JSONL remains canonical. Recall indexes must be disposable and rebuildable from `ChatSessionManager`.
+- `core/recall/` and `core/statistics/` may maintain derived indexes, but JSONL remains canonical. Their indexes must be disposable and rebuildable through `ChatSessionManager`; Statistics uses the Sessions-owned append cursor instead of parsing or constructing JSONL paths itself.
 - **Cross-accessor append ordering:** a Run's tool cycle must stay contiguous in the transcript. Runs on one Session are serialized by `ChatRunManager`, while out-of-band note writers such as Channel observations and `channel_send` acquire `ChatSessionManager.write_lock(...)` around their append. The Chat executor also uses that lock to append any speech note, tagged reply-surface note, and initiating visible/internal message as one ordered boundary. `session.link_channel` writes metadata only and no longer appends a note.
 
 ## Constraints & Gotchas

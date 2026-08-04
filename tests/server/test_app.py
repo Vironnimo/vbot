@@ -30,6 +30,7 @@ from server.app import (
     _register_session_completion_read_bridge,
     _register_session_title_bridge,
     _shutdown_local_catalog_refresh,
+    _start_statistics_warmup,
     _stream_websocket_events,
     create_app,
 )
@@ -72,6 +73,26 @@ def test_create_app_wires_runtime_services_into_state(tmp_path: Path) -> None:
         assert runtime.trigger_service is not None
 
     assert runtime.logger is not None
+
+
+@pytest.mark.asyncio
+async def test_statistics_warmup_builds_disposable_index_for_complete_runtime_surface(
+    tmp_path: Path,
+) -> None:
+    manager = ChatSessionManager(tmp_path)
+    runtime = SimpleNamespace(
+        chat_sessions=manager,
+        agents=SimpleNamespace(list=lambda: []),
+        projects=SimpleNamespace(list=lambda: [], session_owning_agents=lambda _project_id: []),
+    )
+    state = SimpleNamespace(runtime=runtime)
+
+    task = _start_statistics_warmup(state)
+
+    assert task is not None
+    await task
+    assert (tmp_path / "statistics" / "session-statistics.sqlite").is_file()
+    assert state.statistics_service is not None
 
 
 def test_bootstrap_rpc_persists_job_without_firing_in_current_process(tmp_path: Path) -> None:
