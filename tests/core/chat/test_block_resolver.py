@@ -887,6 +887,34 @@ def test_video_block_resolves_to_path_note(tmp_path: Path, current_turn: bool) -
     ]
 
 
+def test_current_turn_video_resolves_natively_when_model_and_wire_support_it(
+    tmp_path: Path,
+) -> None:
+    store = AttachmentStore(tmp_path)
+    record = store.store("clip.mp4", MP4_BYTES)
+    resolver = ContentBlockResolver(store)
+
+    resolved = _resolve(
+        resolver,
+        [_media_message(record, message_id="user-current")],
+        current_user_message_id="user-current",
+        input_modalities=frozenset({"text", "video"}),
+        wire_media_types=frozenset({"video/mp4"}),
+    )
+
+    assert resolved[0]["content"] == [
+        {
+            "type": "media",
+            "base64": base64.b64encode(MP4_BYTES).decode("ascii"),
+            "media_type": "video/mp4",
+        },
+        {
+            "type": "text",
+            "text": f"[Video: clip.mp4 (video/mp4) — Path: {record.file_path}]",
+        },
+    ]
+
+
 def test_mixed_text_and_image_blocks_resolve_in_order(tmp_path: Path) -> None:
     # Arrange
     store = AttachmentStore(tmp_path)

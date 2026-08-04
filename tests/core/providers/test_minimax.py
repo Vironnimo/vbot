@@ -10,11 +10,13 @@ import pytest
 import respx
 
 from core.models.models import Capabilities, Model, ReasoningCapabilities
+from core.providers.errors import ProviderError
 from core.providers.minimax import MiniMaxAdapter
 from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig
 
 API_KEY = "test-minimax-key"
-MINIMAX_URL = "https://api.minimaxi.com/v1/chat/completions"
+MINIMAX_URL = "https://api.minimax.io/v1/chat/completions"
+MINIMAX_MESSAGES_URL = "https://api.minimax.io/anthropic/v1/messages"
 SUCCESS_RESPONSE = {
     "choices": [{"message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}]
 }
@@ -27,7 +29,7 @@ def minimax_config() -> ProviderConfig:
         id="minimax",
         name="MiniMax",
         adapter="minimax",
-        base_url="https://api.minimaxi.com/v1",
+        base_url="https://api.minimax.io/v1",
         connections=[
             ConnectionConfig(
                 id="api-key",
@@ -47,6 +49,18 @@ def minimax_config() -> ProviderConfig:
 @pytest.fixture()
 def minimax_adapter(minimax_config: ProviderConfig) -> MiniMaxAdapter:
     return MiniMaxAdapter(minimax_config, API_KEY)
+
+
+@pytest.fixture()
+def minimax_subscription_adapter(minimax_config: ProviderConfig) -> MiniMaxAdapter:
+    return MiniMaxAdapter(
+        minimax_config,
+        API_KEY,
+        base_url="https://api.minimax.io/anthropic/v1",
+        auth_config=AuthConfig(header="Authorization", prefix="Bearer "),
+        model_lookup=lambda model_id: MiniMaxAdapter.normalize_catalog_entry({"id": model_id}),
+        connection_mode="anthropic_messages",
+    )
 
 
 def test_reasoning_replay_policy_is_full_history(minimax_adapter: MiniMaxAdapter) -> None:
@@ -261,3 +275,126 @@ async def test_build_payload_replays_reasoning_details_on_history(
     request_body = json.loads(route.calls.last.request.content)
     assistant_message = request_body["messages"][1]
     assert assistant_message["reasoning_details"] == [{"text": "Earlier reasoning"}]
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_subscription_uses_messages_wire_and_replays_signed_reasoning(
+    minimax_subscription_adapter: MiniMaxAdapter,
+) -> None:
+    route = respx.post(MINIMAX_MESSAGES_URL).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "role": "assistant",
+                "content": [{"type": "text", "text": "ok"}],
+                "stop_reason": "end_turn",
+            },
+        )
+    )
+    history: list[dict[str, Any]] = [
+        {"role": "user", "content": "Hi"},
+        {
+            "role": "assistant",
+            "content": "Earlier answer",
+            "reasoning": "Earlier reasoning",
+            "reasoning_meta": {
+                "content_blocks": [
+                    {
+                        "type": "thinking",
+                        "thinking": "Earlier reasoning",
+                        "signature": "signed-trace",
+                    }
+                ]
+            },
+        },
+        {"role": "user", "content": "Follow-up"},
+    ]
+
+    await minimax_subscription_adapter.send(
+        history,
+        model_id="MiniMax-M2.7",
+        thinking_effort="none",
+        reasoning_split=True,
+    )
+
+    request = route.calls.last.request
+    request_body = json.loads(request.content)
+    assert request.headers["Authorization"] == f"Bearer {API_KEY}"
+    assert request_body["max_tokens"] == 65536
+    assert "thinking" not in request_body
+    assert "output_config" not in request_body
+    assert "reasoning_split" not in request_body
+    assert request_body["messages"][1]["content"][0] == {
+        "type": "thinking",
+        "thinking": "Earlier reasoning",
+        "signature": "signed-trace",
+    }
+    assert "cache_control" in json.dumps(request_body)
+
+
+def test_subscription_normalizes_signed_reasoning_blocks(
+    minimax_subscription_adapter: MiniMaxAdapter,
+) -> None:
+    thinking_block = {
+        "type": "thinking",
+        "thinking": "Reasoning trace",
+        "signature": "signed-trace",
+    }
+    normalized = minimax_subscription_adapter.normalize_response(
+        {
+            "role": "assistant",
+            "content": [thinking_block, {"type": "text", "text": "Final answer"}],
+            "stop_reason": "end_turn",
+        },
+        model_id="MiniMax-M2.7",
+    )
+
+    assert normalized["content"] == "Final answer"
+    assert normalized["reasoning"] == "Reasoning trace"
+    assert normalized["reasoning_meta"] == {"content_blocks": [thinking_block]}
+    assert normalized["terminal_outcome"] == "stop"
+
+
+def test_subscription_wire_is_text_only(
+    minimax_subscription_adapter: MiniMaxAdapter,
+) -> None:
+    assert minimax_subscription_adapter.wire_media_support("MiniMax-M2.7") == frozenset()
+
+
+@respx.mock
+@pytest.mark.asyncio
+@pytest.mark.parametrize("temperature", [0, -0.1, 1.1, float("nan")])
+async def test_direct_wire_rejects_unsupported_temperature_locally(
+    minimax_adapter: MiniMaxAdapter,
+    temperature: float,
+) -> None:
+    route = respx.post(MINIMAX_URL).mock(return_value=httpx.Response(200, json=SUCCESS_RESPONSE))
+
+    with pytest.raises(ProviderError, match=r"range \(0, 1\]"):
+        await minimax_adapter.send(
+            SAMPLE_MESSAGES,
+            model_id="MiniMax-M2.7",
+            temperature=temperature,
+        )
+
+    assert route.called is False
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_subscription_wire_rejects_zero_temperature_locally(
+    minimax_subscription_adapter: MiniMaxAdapter,
+) -> None:
+    route = respx.post(MINIMAX_MESSAGES_URL).mock(
+        return_value=httpx.Response(200, json={"content": [], "stop_reason": "end_turn"})
+    )
+
+    with pytest.raises(ProviderError, match=r"range \(0, 1\]"):
+        await minimax_subscription_adapter.send(
+            SAMPLE_MESSAGES,
+            model_id="MiniMax-M2.7",
+            temperature=0,
+        )
+
+    assert route.called is False

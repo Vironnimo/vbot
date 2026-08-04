@@ -15,7 +15,7 @@ import httpx
 import pytest
 import respx
 
-from core.providers.errors import ProviderAuthError
+from core.providers.errors import ProviderAuthError, ProviderError
 from core.providers.providers import OAuthConfig
 from core.providers.token_getter import OAuthTokenGetter, StaticTokenGetter
 from core.providers.token_store import OAuthToken, TokenStore
@@ -24,6 +24,8 @@ PROVIDER_ID = "github-copilot"
 CONNECTION_ID = "oauth"
 TOKEN_EXCHANGE_URL = "https://api.github.com/copilot_internal/v2/token"
 OPENAI_TOKEN_URL = "https://auth.openai.com/oauth/token"
+MINIMAX_TOKEN_URL = "https://api.minimax.io/oauth/token"
+XAI_TOKEN_URL = "https://auth.x.ai/oauth2/token"
 
 
 class StubAsyncClient:
@@ -66,6 +68,28 @@ def _openai_oauth_config() -> OAuthConfig:
         token_url=OPENAI_TOKEN_URL,
         scopes=["openid", "profile", "email", "offline_access"],
         device_flow="openai_codex",
+    )
+
+
+def _minimax_oauth_config() -> OAuthConfig:
+    return OAuthConfig(
+        flow="device",
+        client_id="minimax-client-id",
+        device_auth_url="https://api.minimax.io/oauth/code",
+        token_url=MINIMAX_TOKEN_URL,
+        scopes=["group_id", "profile", "model.completion"],
+        device_flow="minimax_oauth",
+    )
+
+
+def _xai_oauth_config() -> OAuthConfig:
+    return OAuthConfig(
+        flow="device",
+        client_id="xai-client-id",
+        device_auth_url="https://auth.x.ai/oauth2/device/code",
+        token_url=XAI_TOKEN_URL,
+        scopes=["openid", "offline_access", "grok-cli:access", "api:access"],
+        device_flow="xai_oauth",
     )
 
 
@@ -539,3 +563,157 @@ async def test_oauth_token_getter_logs_warning_when_no_token(
     warning_records = [r for r in caplog.records if r.levelno == logging.WARNING]
     assert any("No usable OAuth token" in r.getMessage() for r in warning_records)
     assert all(r.exc_info is None for r in warning_records)
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_minimax_refresh_accepts_absolute_millisecond_expiry(tmp_path: Path) -> None:
+    token_store = TokenStore(tmp_path)
+    token_store.save(
+        "minimax",
+        "subscription",
+        OAuthToken(
+            access_token="expired-access",
+            refresh_token="refresh-secret",
+            expires_at=datetime.now(UTC) - timedelta(minutes=1),
+        ),
+    )
+    expires_at_milliseconds = int((datetime.now(UTC) + timedelta(minutes=15)).timestamp() * 1000)
+    route = respx.post(MINIMAX_TOKEN_URL).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "status": "success",
+                "access_token": "fresh-access",
+                "refresh_token": "fresh-refresh",
+                "expired_in": expires_at_milliseconds,
+            },
+        )
+    )
+    getter = OAuthTokenGetter(
+        token_store,
+        "minimax",
+        "subscription",
+        _minimax_oauth_config(),
+    )
+
+    access_token = await getter()
+
+    assert access_token == "fresh-access"
+    request_form = parse_qs(route.calls.last.request.content.decode())
+    assert request_form == {
+        "grant_type": ["refresh_token"],
+        "refresh_token": ["refresh-secret"],
+        "client_id": ["minimax-client-id"],
+    }
+    stored = token_store.load("minimax", "subscription")
+    assert stored is not None
+    assert stored.refresh_token == "fresh-refresh"
+    assert stored.expires_at is not None
+    assert 890 <= (stored.expires_at - datetime.now(UTC)).total_seconds() <= 900
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_minimax_terminal_refresh_failure_quarantines_token(tmp_path: Path) -> None:
+    token_store = TokenStore(tmp_path)
+    token_store.save(
+        "minimax",
+        "subscription",
+        OAuthToken(
+            access_token="expired-access",
+            refresh_token="burned-refresh",
+            expires_at=datetime.now(UTC) - timedelta(minutes=1),
+        ),
+    )
+    respx.post(MINIMAX_TOKEN_URL).mock(
+        return_value=httpx.Response(400, text="invalid_grant: refresh_token_reused")
+    )
+    getter = OAuthTokenGetter(
+        token_store,
+        "minimax",
+        "subscription",
+        _minimax_oauth_config(),
+    )
+
+    with pytest.raises(ProviderAuthError, match="reconnect"):
+        await getter()
+
+    assert token_store.load("minimax", "subscription") is None
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_xai_refresh_rotates_refresh_token(tmp_path: Path) -> None:
+    token_store = TokenStore(tmp_path)
+    token_store.save(
+        "xai",
+        "subscription",
+        OAuthToken(
+            access_token="expired-access",
+            refresh_token="old-refresh",
+            expires_at=datetime.now(UTC) - timedelta(minutes=1),
+        ),
+    )
+    route = respx.post(XAI_TOKEN_URL).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "access_token": "fresh-access",
+                "refresh_token": "rotated-refresh",
+                "expires_in": 900,
+            },
+        )
+    )
+    getter = OAuthTokenGetter(token_store, "xai", "subscription", _xai_oauth_config())
+
+    assert await getter() == "fresh-access"
+    assert parse_qs(route.calls.last.request.content.decode()) == {
+        "grant_type": ["refresh_token"],
+        "refresh_token": ["old-refresh"],
+        "client_id": ["xai-client-id"],
+    }
+    stored = token_store.load("xai", "subscription")
+    assert stored is not None
+    assert stored.refresh_token == "rotated-refresh"
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_xai_terminal_refresh_failure_quarantines_token(tmp_path: Path) -> None:
+    token_store = TokenStore(tmp_path)
+    token_store.save(
+        "xai",
+        "subscription",
+        OAuthToken(
+            access_token="expired-access",
+            refresh_token="burned-refresh",
+            expires_at=datetime.now(UTC) - timedelta(minutes=1),
+        ),
+    )
+    respx.post(XAI_TOKEN_URL).mock(return_value=httpx.Response(400, text="invalid_grant"))
+    getter = OAuthTokenGetter(token_store, "xai", "subscription", _xai_oauth_config())
+
+    with pytest.raises(ProviderAuthError, match="reconnect"):
+        await getter()
+
+    assert token_store.load("xai", "subscription") is None
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_xai_retryable_refresh_failure_preserves_token(tmp_path: Path) -> None:
+    token_store = TokenStore(tmp_path)
+    original = OAuthToken(
+        access_token="expired-access",
+        refresh_token="still-valid-refresh",
+        expires_at=datetime.now(UTC) - timedelta(minutes=1),
+    )
+    token_store.save("xai", "subscription", original)
+    respx.post(XAI_TOKEN_URL).mock(return_value=httpx.Response(503, text="unavailable"))
+    getter = OAuthTokenGetter(token_store, "xai", "subscription", _xai_oauth_config())
+
+    with pytest.raises(ProviderError):
+        await getter()
+
+    assert token_store.load("xai", "subscription") == original

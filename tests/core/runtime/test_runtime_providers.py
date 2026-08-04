@@ -15,6 +15,7 @@ from core.providers.anthropic import AnthropicAdapter
 from core.providers.credentials import ProviderCredentialResolver
 from core.providers.github_copilot import GitHubCopilotAdapter
 from core.providers.github_copilot_policy import RESPONSES_ENDPOINT
+from core.providers.kimi import KIMI_CODING_MODE, KimiAdapter
 from core.providers.minimax import MiniMaxAdapter
 from core.providers.mistral import MistralAdapter
 from core.providers.ollama import OllamaAdapter
@@ -25,6 +26,7 @@ from core.providers.openrouter import OpenRouterAdapter
 from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig, ProviderRegistry
 from core.providers.token_getter import OAuthTokenGetter, StaticTokenGetter
 from core.providers.token_store import OAuthToken
+from core.providers.xai import XAIAdapter
 from core.runtime.runtime import Runtime
 from core.storage.layout import DataDirectoryLayout
 from core.utils.config import Config
@@ -60,6 +62,8 @@ def test_runtime_providers_populated(runtime: Runtime) -> None:
     assert "anthropic" in ids
     assert "openrouter" in ids
     assert "minimax" in ids
+    assert "kimi" in ids
+    assert "xai" in ids
 
 
 def test_runtime_provider_config_fields(runtime: Runtime) -> None:
@@ -69,6 +73,8 @@ def test_runtime_provider_config_fields(runtime: Runtime) -> None:
     openrouter_config = runtime.providers.get("openrouter")
     github_copilot_config = runtime.providers.get("github-copilot")
     minimax_config = runtime.providers.get("minimax")
+    kimi_config = runtime.providers.get("kimi")
+    xai_config = runtime.providers.get("xai")
 
     # Assert
     assert openai_config.id == "openai"
@@ -88,9 +94,110 @@ def test_runtime_provider_config_fields(runtime: Runtime) -> None:
     assert openrouter_config.adapter == "openrouter"
     assert github_copilot_config.adapter == "github_copilot"
     assert minimax_config.adapter == "minimax"
-    assert minimax_config.base_url == "https://api.minimaxi.com/v1"
-    assert minimax_config.models_endpoint == "/models"
+    assert minimax_config.base_url == "https://api.minimax.io/v1"
+    assert minimax_config.models_endpoint is None
+    assert [connection.id for connection in minimax_config.connections] == [
+        "api-key",
+        "api-key-cn",
+        "subscription",
+    ]
     assert minimax_config.get_connection("api-key").auth.credential_key == "MINIMAX_API_KEY"
+    assert minimax_config.get_connection("api-key").models_endpoint == "/models"
+    minimax_cn = minimax_config.get_connection("api-key-cn")
+    assert minimax_cn.base_url == "https://api.minimaxi.com/v1"
+    assert minimax_cn.auth.credential_key == "MINIMAX_CN_API_KEY"
+    minimax_subscription = minimax_config.get_connection("subscription")
+    assert minimax_subscription.base_url == "https://api.minimax.io/anthropic/v1"
+    assert minimax_subscription.mode == "anthropic_messages"
+    assert minimax_subscription.models_endpoint == "/models"
+    assert minimax_subscription.oauth is not None
+    assert minimax_subscription.oauth.device_flow == "minimax_oauth"
+    assert kimi_config.adapter == "kimi"
+    assert kimi_config.base_url == "https://api.moonshot.ai/v1"
+    assert [connection.id for connection in kimi_config.connections] == [
+        "coding-plan",
+        "api-key",
+        "api-key-cn",
+    ]
+    kimi_coding = kimi_config.get_connection("coding-plan")
+    assert kimi_coding.base_url == "https://api.kimi.com/coding/v1"
+    assert kimi_coding.mode == KIMI_CODING_MODE
+    assert kimi_coding.auth.credential_key == "KIMI_CODING_API_KEY"
+    assert kimi_coding.models_endpoint == "/models"
+    assert kimi_config.get_connection("api-key").auth.credential_key == "KIMI_API_KEY"
+    kimi_cn = kimi_config.get_connection("api-key-cn")
+    assert kimi_cn.base_url == "https://api.moonshot.cn/v1"
+    assert kimi_cn.auth.credential_key == "KIMI_CN_API_KEY"
+    assert xai_config.adapter == "xai"
+    assert xai_config.base_url == "https://api.x.ai/v1"
+    assert [connection.id for connection in xai_config.connections] == [
+        "api-key",
+        "subscription",
+    ]
+    assert xai_config.get_connection("api-key").models_endpoint == "/language-models"
+    xai_oauth = xai_config.get_connection("subscription").oauth
+    assert xai_oauth is not None
+    assert xai_oauth.device_flow == "xai_oauth"
+    assert xai_oauth.device_auth_url == "https://auth.x.ai/oauth2/device/code"
+    assert xai_oauth.token_url == "https://auth.x.ai/oauth2/token"
+
+
+def test_runtime_loads_xai_model_overrides(runtime: Runtime) -> None:
+    grok_45 = runtime.models.get("xai", "grok-4.5")
+    grok_fixed = runtime.models.get("xai", "grok-4.20-0309-reasoning")
+    grok_multi = runtime.models.get("xai", "grok-4.20-multi-agent-0309")
+
+    assert grok_45.connections == ("api-key", "subscription")
+    assert grok_45.capabilities.reasoning.levels == ("low", "medium", "high")
+    assert grok_fixed.capabilities.input_modalities == ("text", "image")
+    assert grok_fixed.capabilities.reasoning.levels == ()
+    assert grok_multi.capabilities.reasoning.levels == (
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+    )
+    assert grok_multi.context_window == 1000000
+
+
+def test_runtime_loads_kimi_models_with_connection_limits(runtime: Runtime) -> None:
+    coding_k3 = runtime.models.get("kimi", "k3")
+    coding_k3_256k = runtime.models.get("kimi", "k3-256k")
+    coding_k27 = runtime.models.get("kimi", "kimi-for-coding")
+    direct_k3 = runtime.models.get("kimi", "kimi-k3")
+    direct_k26 = runtime.models.get("kimi", "kimi-k2.6")
+
+    assert coding_k3.connections == ("coding-plan",)
+    assert coding_k3.context_window == 1048576
+    assert coding_k3.capabilities.reasoning.levels == ("low", "high", "max")
+    assert coding_k3_256k.connections == ("coding-plan",)
+    assert coding_k3_256k.context_window == 262144
+    assert coding_k3_256k.capabilities.input_modalities == ("text", "image")
+    assert coding_k27.connections == ("coding-plan",)
+    assert coding_k27.max_output_tokens == 32768
+    assert direct_k3.connections == ("api-key", "api-key-cn")
+    assert direct_k26.connections == ("api-key", "api-key-cn")
+    assert direct_k26.capabilities.reasoning.control == "on_off"
+    assert direct_k26.max_output_tokens == 32768
+    assert all(
+        model.model_id != "kimi-k2-thinking" for model in runtime.models.list_for_provider("kimi")
+    )
+
+
+def test_runtime_loads_minimax_override_only_models_with_connection_limits(
+    runtime: Runtime,
+) -> None:
+    m25 = runtime.models.get("minimax", "MiniMax-M2.5")
+    m27 = runtime.models.get("minimax", "MiniMax-M2.7")
+    m3 = runtime.models.get("minimax", "MiniMax-M3")
+
+    assert m25.connections == ("api-key", "api-key-cn")
+    assert m27.connections == ("api-key", "api-key-cn", "subscription")
+    assert m27.context_window == 204800
+    assert m27.max_output_tokens == 65536
+    assert m3.connections == ("api-key", "api-key-cn")
+    assert m3.context_window == 1000000
+    assert m3.max_output_tokens == 131072
 
 
 def test_runtime_injects_openrouter_routing_snapshot(
@@ -700,7 +807,7 @@ def test_runtime_wires_minimax_adapter(runtime: Runtime) -> None:
         id="minimax",
         name="MiniMax",
         adapter="minimax",
-        base_url="https://api.minimaxi.com/v1",
+        base_url="https://api.minimax.io/v1",
         connections=[
             ConnectionConfig(
                 id="api-key",
@@ -727,6 +834,29 @@ def test_runtime_wires_minimax_adapter(runtime: Runtime) -> None:
 
     # Assert
     assert isinstance(adapter, MiniMaxAdapter)
+
+
+def test_runtime_wires_xai_adapter(runtime: Runtime) -> None:
+    runtime._provider_credentials = ProviderCredentialResolver(  # type: ignore[attr-defined]
+        runtime.providers,
+        process_env={"XAI_API_KEY": "xai-token"},
+    )
+
+    adapter = runtime.get_adapter("xai", "xai:api-key")
+
+    assert isinstance(adapter, XAIAdapter)
+
+
+def test_runtime_wires_kimi_adapter_and_connection_mode(runtime: Runtime) -> None:
+    runtime._provider_credentials = ProviderCredentialResolver(  # type: ignore[attr-defined]
+        runtime.providers,
+        process_env={"KIMI_CODING_API_KEY": "kimi-token"},
+    )
+
+    adapter = runtime.get_adapter("kimi", "kimi:coding-plan")
+
+    assert isinstance(adapter, KimiAdapter)
+    assert adapter._connection_mode == KIMI_CODING_MODE  # type: ignore[attr-defined]
 
 
 # ------------------------------------------------------------------

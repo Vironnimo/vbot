@@ -1,0 +1,121 @@
+{
+  "provider_id": "xai",
+  "models": {
+    "grok-build-0.1": {
+      "canonical": "xai/grok-build-0.1",
+      "connections": ["api-key", "subscription"],
+      "capabilities": {
+        "input_modalities": ["text", "image"],
+        "supported_parameters": [
+          "max_output_tokens",
+          "parallel_tool_calls",
+          "prompt_cache_key",
+          "response_format",
+          "service_tier",
+          "temperature",
+          "tools",
+          "top_p"
+        ]
+      }
+    },
+    "grok-4.5": {
+      "canonical": "xai/grok-4.5",
+      "connections": ["api-key", "subscription"],
+      "capabilities": {
+        "supported_parameters": [
+          "max_output_tokens",
+          "parallel_tool_calls",
+          "prompt_cache_key",
+          "reasoning_effort",
+          "response_format",
+          "service_tier",
+          "temperature",
+          "tools",
+          "top_p"
+        ]
+      }
+    },
+    "grok-4.3": {
+      "canonical": "xai/grok-4.3",
+      "connections": ["api-key", "subscription"],
+      "capabilities": {
+        "input_modalities": ["text", "image"],
+        "supported_parameters": [
+          "max_output_tokens",
+          "parallel_tool_calls",
+          "prompt_cache_key",
+          "reasoning_effort",
+          "response_format",
+          "service_tier",
+          "temperature",
+          "tools",
+          "top_p"
+        ]
+      }
+    },
+    "grok-4.20-0309-reasoning": {
+      "canonical": "xai/grok-4.20-0309-reasoning",
+      "connections": ["api-key", "subscription"],
+      "capabilities": {
+        "input_modalities": ["text", "image"],
+        "supported_parameters": [
+          "max_output_tokens",
+          "parallel_tool_calls",
+          "prompt_cache_key",
+          "response_format",
+          "service_tier",
+          "temperature",
+          "tools",
+          "top_p"
+        ]
+      }
+    },
+    "grok-4.20-0309-non-reasoning": {
+      "canonical": "xai/grok-4.20-0309-non-reasoning",
+      "connections": ["api-key", "subscription"],
+      "capabilities": {
+        "input_modalities": ["text", "image"],
+        "supported_parameters": [
+          "max_output_tokens",
+          "parallel_tool_calls",
+          "prompt_cache_key",
+          "response_format",
+          "service_tier",
+          "temperature",
+          "tools",
+          "top_p"
+        ]
+      }
+    },
+    "grok-4.20-multi-agent-0309": {
+      "name": "Grok 4.20 Multi-Agent",
+      "connections": ["api-key", "subscription"],
+      "capabilities": {
+        "vision": true,
+        "tools": true,
+        "json_mode": true,
+        "reasoning": {
+          "supported": true,
+          "control": "levels",
+          "levels": ["low", "medium", "high", "xhigh"]
+        },
+        "input_modalities": ["text", "image"],
+        "output_modalities": ["text"],
+        "supported_parameters": [
+          "max_output_tokens",
+          "parallel_tool_calls",
+          "prompt_cache_key",
+          "reasoning_effort",
+          "response_format",
+          "service_tier",
+          "temperature",
+          "tools",
+          "top_p"
+        ]
+      },
+      "context_window": 1000000,
+      "max_output_tokens": 30000,
+      "family": "grok"
+    }
+  }
+}

@@ -2,15 +2,23 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
-from typing import Any
+import math
+from collections.abc import AsyncIterator, Mapping
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from core.debug import ProviderDebugRecorder
 
 from core.models.models import Capabilities, Model, ReasoningCapabilities
+from core.providers.adapter import ModelLookup
+from core.providers.anthropic_compatible import AnthropicCompatibleAdapter
+from core.providers.errors import ProviderError
 from core.providers.openai_compatible import (
     OpenAICompatibleAdapter,
     _read_optional_non_empty_string,
     _read_string,
 )
+from core.providers.providers import AuthConfig, ProviderConfig
 from core.providers.reasoning import (
     REASONING_INTENT_DEFAULT,
     REASONING_INTENT_OFF,
@@ -20,10 +28,20 @@ from core.providers.reasoning import (
     ReasoningReplayPolicy,
     model_reasoning_control,
     model_reasoning_levels,
+    remove_reasoning_kwargs,
     resolve_reasoning_intent,
 )
+from core.providers.token_getter import TokenGetter
 
 MINIMAX_M3_MODEL_ID = "MiniMax-M3"
+MINIMAX_ANTHROPIC_MODE = "anthropic_messages"
+MINIMAX_MESSAGES_REASONING_KEYS = (
+    "thinking_effort",
+    "reasoning_effort",
+    "thinking",
+    "output_config",
+    "reasoning_split",
+)
 
 # MiniMax M3 engages reasoning as a binary thinking toggle (``adaptive`` on /
 # ``disabled`` off), not a per-level effort, so the resolver only needs to tell
@@ -121,8 +139,105 @@ MINIMAX_MODEL_FACTS: dict[str, dict[str, Any]] = {
 }
 
 
+class _MiniMaxMessagesAdapter(AnthropicCompatibleAdapter):
+    """MiniMax's Anthropic-compatible M2.x wire."""
+
+    def _apply_reasoning(
+        self,
+        payload: dict[str, Any],
+        request_kwargs: dict[str, Any],
+        model_id: str,
+        *,
+        reasoning_supported: bool | None,
+        max_tokens: int | None,
+    ) -> None:
+        # M2.x reasons by default and MiniMax does not expose Anthropic's
+        # adaptive/effort/budget controls. Keep historical signed thinking
+        # blocks, but do not send Claude-specific request controls.
+        del payload, model_id, reasoning_supported, max_tokens
+        remove_reasoning_kwargs(request_kwargs, *MINIMAX_MESSAGES_REASONING_KEYS)
+
+    def _build_payload(
+        self,
+        messages: list[dict[str, Any]],
+        model_id: str,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        payload = super()._build_payload(messages, model_id, **kwargs)
+        _validate_minimax_temperature(payload.get("temperature"))
+        return payload
+
+
 class MiniMaxAdapter(OpenAICompatibleAdapter):
-    """OpenAI-compatible adapter with MiniMax catalog and thinking behavior."""
+    """MiniMax adapter for direct OpenAI and subscription Messages wires."""
+
+    def __init__(
+        self,
+        config: ProviderConfig,
+        token_getter: TokenGetter | str,
+        base_url: str | None = None,
+        auth_config: AuthConfig | None = None,
+        model_lookup: ModelLookup | None = None,
+        debug_recorder: ProviderDebugRecorder | None = None,
+        *,
+        connection_mode: str | None = None,
+    ) -> None:
+        super().__init__(
+            config,
+            token_getter,
+            base_url,
+            auth_config,
+            model_lookup=model_lookup,
+            debug_recorder=debug_recorder,
+            connection_mode=connection_mode,
+        )
+        selected_auth_config = auth_config or config.connections[0].auth
+        self._messages = _MiniMaxMessagesAdapter(
+            config,
+            self._token_getter,
+            base_url=base_url,
+            auth_config=selected_auth_config,
+            model_lookup=model_lookup,
+            debug_recorder=debug_recorder,
+            client=self._client,
+            wire_media_types=frozenset(),
+            prompt_caching=True,
+        )
+
+    async def aclose(self) -> None:
+        await self._messages.aclose()
+        await super().aclose()
+
+    def wire_media_support(self, model_id: str) -> frozenset[str]:
+        if self._uses_anthropic_messages:
+            return self._messages.wire_media_support(model_id)
+        return super().wire_media_support(model_id)
+
+    async def send(
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        model_id: str,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        if self._uses_anthropic_messages:
+            request_kwargs = dict(kwargs)
+            self._apply_model_output_limit(request_kwargs, model_id, messages)
+            return await self._messages.send(messages, model_id=model_id, **request_kwargs)
+        return await super().send(messages, model_id=model_id, **kwargs)
+
+    def stream(
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        model_id: str,
+        **kwargs: Any,
+    ) -> AsyncIterator[dict[str, Any]]:
+        if self._uses_anthropic_messages:
+            request_kwargs = dict(kwargs)
+            self._apply_model_output_limit(request_kwargs, model_id, messages)
+            return self._messages.stream(messages, model_id=model_id, **request_kwargs)
+        return super().stream(messages, model_id=model_id, **kwargs)
 
     @classmethod
     def normalize_catalog_entry(
@@ -177,6 +292,7 @@ class MiniMaxAdapter(OpenAICompatibleAdapter):
         if self._model_reasoning_supported(model_id) is False:
             payload.pop("thinking", None)
             payload.pop("reasoning_split", None)
+            _validate_minimax_temperature(payload.get("temperature"))
             return payload
 
         if model_id != MINIMAX_M3_MODEL_ID:
@@ -185,6 +301,7 @@ class MiniMaxAdapter(OpenAICompatibleAdapter):
             # across runs under the full_history policy.
             payload.pop("thinking", None)
             payload.setdefault("reasoning_split", True)
+            _validate_minimax_temperature(payload.get("temperature"))
             return payload
 
         intent = resolve_reasoning_intent(
@@ -194,6 +311,7 @@ class MiniMaxAdapter(OpenAICompatibleAdapter):
             effort=thinking_effort or reasoning_effort,
         )
         _render_minimax_m3_thinking(payload, intent)
+        _validate_minimax_temperature(payload.get("temperature"))
         return payload
 
     def reasoning_replay_policy(self, model_id: str) -> ReasoningReplayPolicy:
@@ -217,12 +335,18 @@ class MiniMaxAdapter(OpenAICompatibleAdapter):
     def normalize_response(
         self, response: dict[str, Any], *, model_id: str | None = None
     ) -> dict[str, Any]:
+        if self._uses_anthropic_messages:
+            return self._messages.normalize_response(response, model_id=model_id)
         normalized = super().normalize_response(response, model_id=model_id)
         if normalized.get("reasoning") is None:
             reasoning = _extract_reasoning_details_text(normalized.get("reasoning_meta"))
             if reasoning:
                 normalized["reasoning"] = reasoning
         return normalized
+
+    @property
+    def _uses_anthropic_messages(self) -> bool:
+        return self._connection_mode == MINIMAX_ANTHROPIC_MODE
 
 
 def _render_minimax_m3_thinking(payload: dict[str, Any], intent: ReasoningIntent) -> None:
@@ -262,3 +386,19 @@ def _extract_reasoning_details_text(reasoning_meta: Any) -> str | None:
             parts.append(text)
 
     return "".join(parts) or None
+
+
+def _validate_minimax_temperature(value: Any) -> None:
+    if value is None:
+        return
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ProviderError(
+            "MiniMax temperature must be a finite number in the range (0, 1]",
+            retryable=False,
+        )
+    normalized = float(value)
+    if not math.isfinite(normalized) or normalized <= 0 or normalized > 1:
+        raise ProviderError(
+            "MiniMax temperature must be a finite number in the range (0, 1]",
+            retryable=False,
+        )
