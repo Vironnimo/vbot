@@ -17,7 +17,7 @@ import respx
 
 from core.providers.errors import ProviderAuthError, ProviderError
 from core.providers.providers import OAuthConfig
-from core.providers.token_getter import OAuthTokenGetter, StaticTokenGetter
+from core.providers.token_getter import OAuthTokenGetter, StaticTokenGetter, copilot_token_extra
 from core.providers.token_store import OAuthToken, TokenStore
 
 PROVIDER_ID = "github-copilot"
@@ -26,6 +26,22 @@ TOKEN_EXCHANGE_URL = "https://api.github.com/copilot_internal/v2/token"
 OPENAI_TOKEN_URL = "https://auth.openai.com/oauth/token"
 MINIMAX_TOKEN_URL = "https://api.minimax.io/oauth/token"
 XAI_TOKEN_URL = "https://auth.x.ai/oauth2/token"
+
+
+def test_copilot_token_extra_accepts_only_official_exchange_endpoints() -> None:
+    trusted = copilot_token_extra(
+        {"endpoints": {"api": "https://api.example.enterprise.githubcopilot.com/"}},
+        "github-token",
+        "copilot-token",
+    )
+    untrusted = copilot_token_extra(
+        {"endpoints": {"api": "https://attacker.example/api"}},
+        "github-token",
+        "proxy-ep=proxy.business.githubcopilot.com;exp=123",
+    )
+
+    assert trusted["copilot_api_endpoint"] == ("https://api.example.enterprise.githubcopilot.com")
+    assert untrusted["copilot_api_endpoint"] == "https://api.business.githubcopilot.com"
 
 
 class StubAsyncClient:
@@ -161,7 +177,11 @@ async def test_oauth_token_getter_refreshes_expired_token_with_exchange_url(
     route = respx.get(TOKEN_EXCHANGE_URL).mock(
         return_value=httpx.Response(
             200,
-            json={"token": "fresh-copilot-token", "expires_at": expires_at.isoformat()},
+            json={
+                "token": "fresh-copilot-token",
+                "expires_at": expires_at.timestamp(),
+                "endpoints": {"api": "https://api.enterprise.githubcopilot.com"},
+            },
         )
     )
     getter = OAuthTokenGetter(token_store, PROVIDER_ID, CONNECTION_ID, oauth_config)
@@ -174,12 +194,13 @@ async def test_oauth_token_getter_refreshes_expired_token_with_exchange_url(
     assert exchange_headers.get("accept") == "application/json"
     assert exchange_headers.get("authorization") == "Bearer github-oauth-secret"
     assert exchange_headers.get("copilot-integration-id") == "vscode-chat"
-    assert exchange_headers.get("editor-version") == "vBot/0.1.0"
+    assert exchange_headers.get("editor-version") == "vscode/1.128.0"
     stored = token_store.load(PROVIDER_ID, CONNECTION_ID)
     assert stored is not None
     assert stored.access_token == "fresh-copilot-token"
     assert stored.expires_at == expires_at
     assert stored.extra["github_oauth_token"] == "github-oauth-secret"
+    assert stored.extra["copilot_api_endpoint"] == ("https://api.enterprise.githubcopilot.com")
 
 
 @respx.mock
@@ -423,7 +444,7 @@ async def test_oauth_token_getter_preserves_injected_client_lifecycle(
         "Accept": "application/json",
         "Authorization": "Bearer github-oauth-secret",
         "Copilot-Integration-Id": "vscode-chat",
-        "Editor-Version": "vBot/0.1.0",
+        "Editor-Version": "vscode/1.128.0",
     }
 
 

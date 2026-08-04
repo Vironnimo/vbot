@@ -755,6 +755,68 @@ class TestRefreshModels:
 
     @respx.mock
     @pytest.mark.asyncio
+    async def test_copilot_discovery_keeps_hidden_entries_only_in_raw_audit(
+        self,
+        tmp_path: Path,
+        github_copilot_config: ProviderConfig,
+    ) -> None:
+        raw_fixture = {
+            "data": [
+                {
+                    "id": "visible-chat",
+                    "name": "Visible Chat",
+                    "model_picker_enabled": True,
+                    "supported_endpoints": ["/chat/completions"],
+                    "capabilities": {"type": "chat", "supports": {}},
+                },
+                {
+                    "id": "hidden-chat",
+                    "name": "Hidden Chat",
+                    "model_picker_enabled": False,
+                    "capabilities": {"type": "chat", "supports": {}},
+                },
+                {
+                    "id": "embedding-only",
+                    "name": "Embedding Only",
+                    "capabilities": {"type": "embeddings", "supports": {}},
+                },
+                {
+                    "id": "websocket-only",
+                    "name": "Websocket Only",
+                    "supported_endpoints": ["ws:/responses"],
+                    "capabilities": {"type": "chat", "supports": {}},
+                },
+            ]
+        }
+        respx.get(GITHUB_COPILOT_MODELS_URL).mock(
+            return_value=httpx.Response(200, json=raw_fixture)
+        )
+
+        result = await refresh_models(
+            github_copilot_config,
+            API_KEY,
+            tmp_path / "resources",
+        )
+
+        generated = json.loads(
+            (tmp_path / "resources" / "models" / "github-copilot.json").read_text(encoding="utf-8")
+        )
+        raw = json.loads(
+            (tmp_path / "resources" / "models" / "github-copilot.raw.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        assert result["model_count"] == 1
+        assert set(generated["models"]) == {"visible-chat"}
+        assert {entry["id"] for entry in raw["raw_response"]["data"]} == {
+            "visible-chat",
+            "hidden-chat",
+            "embedding-only",
+            "websocket-only",
+        }
+
+    @respx.mock
+    @pytest.mark.asyncio
     async def test_refresh_models_writes_raw_file_with_full_provider_response(
         self,
         tmp_path: Path,

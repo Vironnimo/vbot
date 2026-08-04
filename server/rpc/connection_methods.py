@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from dataclasses import replace
 from difflib import get_close_matches
 from pathlib import Path
 from typing import Any
@@ -34,6 +35,7 @@ from core.providers.accounts import (
 )
 from core.providers.errors import NetworkError, ProviderError
 from core.providers.providers import custom_provider_credential_key
+from core.providers.token_getter import COPILOT_API_ENDPOINT_EXTRA_KEY
 from core.settings.normalizers import (
     normalize_custom_provider_id,
     normalize_custom_provider_settings,
@@ -1052,11 +1054,22 @@ async def _refresh_provider_connections(
             )
             continue
         try:
+            discovery_connection = connection
+            if provider_id == "github-copilot":
+                token_extra_reader = getattr(runtime, "get_connection_token_extra", None)
+                token_extra = (
+                    token_extra_reader(provider_id, connection_id)
+                    if callable(token_extra_reader)
+                    else {}
+                )
+                copilot_endpoint = token_extra.get(COPILOT_API_ENDPOINT_EXTRA_KEY)
+                if copilot_endpoint:
+                    discovery_connection = replace(connection, base_url=copilot_endpoint)
             result = await refresh_models(
                 provider,
                 credential_value,
                 resources_dir,
-                credential_connection=connection,
+                credential_connection=discovery_connection,
                 models_dev_catalog=models_dev_catalog,
             )
         except ModelDiscoveryError as exc:

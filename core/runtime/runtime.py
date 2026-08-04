@@ -69,7 +69,12 @@ from core.providers.providers import (
     model_is_local,
     resolve_effective_context_window,
 )
-from core.providers.token_getter import OAuthTokenGetter, StaticTokenGetter, TokenGetter
+from core.providers.token_getter import (
+    COPILOT_API_ENDPOINT_EXTRA_KEY,
+    OAuthTokenGetter,
+    StaticTokenGetter,
+    TokenGetter,
+)
 from core.providers.token_store import TokenStore
 from core.providers.usage import ProviderUsageService
 from core.providers.xai import XAIAdapter
@@ -2223,10 +2228,18 @@ class Runtime:
             # an active Tool loop and invalidating its warm prompt cache.
             extra_kwargs["routing"] = self.storage.load_openrouter_routing_settings()
 
+        base_url = connection.base_url
+        if adapter_class is GitHubCopilotAdapter:
+            copilot_endpoint = self.get_connection_token_extra(provider_id, connection_id).get(
+                COPILOT_API_ENDPOINT_EXTRA_KEY
+            )
+            if copilot_endpoint:
+                base_url = copilot_endpoint
+
         adapter = cast(Any, adapter_class)(
             provider_config,
             token_getter,
-            connection.base_url,
+            base_url,
             connection.auth,
             model_lookup=self._model_lookup_for(provider_id),
             debug_recorder=debug_recorder,

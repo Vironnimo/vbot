@@ -2,6 +2,12 @@
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
+import pytest
+
+from core.providers.errors import CatalogEntrySkipped
 from core.providers.github_copilot import (
     GitHubCopilotAdapter,
 )
@@ -30,6 +36,8 @@ def test_reasoning_effort_list_marks_o_series_model_as_reasoning_capable() -> No
     model = GitHubCopilotAdapter.normalize_catalog_entry(raw_models["gpt-5-mini"], {})
 
     assert model.capabilities.reasoning.supported is True
+    assert model.capabilities.reasoning.control == "levels"
+    assert model.capabilities.reasoning.levels == ("low", "medium", "high")
     assert model.metadata["github_copilot"]["reasoning_efforts"] == ("low", "medium", "high")
     assert model.metadata["github_copilot"]["supported_endpoints"] == (
         "/chat/completions",
@@ -192,3 +200,76 @@ def test_invalid_copilot_capabilities_shape_still_fails() -> None:
         assert str(exc) == "Expected 'capabilities' to be an object"
     else:
         raise AssertionError("Expected invalid capabilities shape to fail")
+
+
+@pytest.mark.parametrize(
+    "raw_model",
+    [
+        {
+            "id": "hidden-utility",
+            "model_picker_enabled": False,
+            "capabilities": {"type": "chat"},
+        },
+        {
+            "id": "embedding-only",
+            "capabilities": {"type": "embeddings"},
+        },
+        {
+            "id": "websocket-only",
+            "supported_endpoints": ["ws:/responses"],
+            "capabilities": {"type": "chat"},
+        },
+    ],
+)
+def test_non_selectable_copilot_catalog_entries_are_skipped(raw_model: dict) -> None:
+    with pytest.raises(CatalogEntrySkipped):
+        GitHubCopilotAdapter.normalize_catalog_entry(raw_model, {})
+
+
+def test_catalog_preserves_prompt_and_image_limits_as_runtime_policy() -> None:
+    raw_model = {
+        "id": "vision-model",
+        "name": "Vision Model",
+        "model_picker_enabled": True,
+        "supported_endpoints": ["/responses"],
+        "capabilities": {
+            "type": "chat",
+            "limits": {
+                "max_context_window_tokens": 128000,
+                "max_prompt_tokens": 96000,
+                "max_output_tokens": 32000,
+                "vision": {
+                    "max_prompt_image_size": 3145728,
+                    "max_prompt_images": 5,
+                    "supported_media_types": ["image/jpeg", "image/png"],
+                },
+            },
+            "supports": {"vision": True},
+        },
+    }
+
+    model = GitHubCopilotAdapter.normalize_catalog_entry(raw_model, {})
+
+    assert model.metadata["github_copilot"]["max_prompt_tokens"] == 96000
+    assert model.metadata["github_copilot"]["vision"] == {
+        "max_prompt_image_size": 3145728,
+        "max_prompt_images": 5,
+        "supported_media_types": ("image/jpeg", "image/png"),
+    }
+
+
+def test_bundled_copilot_catalog_omits_hidden_and_retired_entries() -> None:
+    raw = json.loads(Path("resources/models/github-copilot.raw.json").read_text(encoding="utf-8"))
+    generated = json.loads(Path("resources/models/github-copilot.json").read_text(encoding="utf-8"))
+    provider = json.loads(
+        Path("resources/providers/github-copilot.json").read_text(encoding="utf-8")
+    )
+    hidden_ids = {
+        entry["id"]
+        for entry in raw["raw_response"]["data"]
+        if entry.get("model_picker_enabled") is False
+    }
+    generated_ids = set(generated["models"])
+
+    assert generated_ids.isdisjoint(hidden_ids)
+    assert generated_ids.isdisjoint(provider["catalog_exclusions"])

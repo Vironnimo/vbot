@@ -1263,6 +1263,26 @@ def test_get_connection_token_extra_returns_stored_extra(runtime: Runtime) -> No
     assert extra == {"github_oauth_token": "gho_example"}
 
 
+def test_copilot_adapter_uses_account_specific_exchange_endpoint(runtime: Runtime) -> None:
+    """Copilot OAuth Accounts route through the endpoint returned by exchange."""
+
+    runtime.token_store.save(
+        "github-copilot",
+        "oauth",
+        OAuthToken(
+            access_token="copilot-token",
+            extra={
+                "github_oauth_token": "gho_example",
+                "copilot_api_endpoint": "https://api.enterprise.githubcopilot.com",
+            },
+        ),
+    )
+
+    adapter = runtime.get_adapter("github-copilot", "github-copilot:oauth")
+
+    assert str(adapter._client.base_url) == "https://api.enterprise.githubcopilot.com"  # type: ignore[attr-defined]
+
+
 def test_get_connection_token_extra_returns_empty_when_absent(runtime: Runtime) -> None:
     """A connection with no stored token yields an empty extra mapping."""
     # Act
