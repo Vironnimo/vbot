@@ -898,6 +898,20 @@ class TestCatalogNormalization:
         assert model.metadata["ollama"] == {"remote": True}
         assert model.family == "kimi"
 
+    def test_current_tags_facts_are_used_before_show_enrichment(self) -> None:
+        raw = {
+            "model": "ministral-3:8b",
+            "details": {"family": "mistral3", "context_length": 262144},
+            "capabilities": ["vision", "completion", "tools"],
+        }
+
+        model = OllamaAdapter.normalize_catalog_entry(raw)
+
+        assert model.context_window == 262144
+        assert model.capabilities.vision is True
+        assert model.capabilities.tools is True
+        assert model.capabilities.input_modalities == ("text", "image")
+
     def test_entry_without_model_id_raises(self) -> None:
         with pytest.raises(ProviderError, match="no model id"):
             OllamaAdapter.normalize_catalog_entry({"details": {}})

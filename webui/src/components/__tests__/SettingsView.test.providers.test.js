@@ -215,6 +215,7 @@ describe('SettingsView', () => {
           id: 'ollama:local',
           type: 'none',
           label: 'Local',
+          added: true,
           configured: true,
           accounts: [{ id: 'default', usable: true, source: 'none' }],
         },

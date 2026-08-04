@@ -82,6 +82,10 @@ class ProviderCredentialResolverProtocol(Protocol):
         """Return whether the connection (or any of the provider's) is enabled."""
         ...
 
+    def is_connection_added(self, provider_id: str, connection_id: str | None = None) -> bool:
+        """Return whether the connection (or any of the provider's) was explicitly added."""
+        ...
+
     def is_usable(self, provider_id: str, connection_id: str | None = None) -> bool:
         """Return whether the connection (or any of the provider's) is enabled AND credentialed."""
         ...

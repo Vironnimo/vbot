@@ -15,6 +15,9 @@ class StubCredentials:
     def is_connection_enabled(self, provider_id: str, connection_id: str) -> bool:
         return False
 
+    def is_connection_added(self, provider_id: str, connection_id: str) -> bool:
+        return False
+
     def is_usable(self, provider_id: str, connection_id: str) -> bool:
         return False
 
@@ -37,6 +40,7 @@ def test_settings_connection_keeps_configured_enabled_and_usable_distinct() -> N
         "id": "ollama:local",
         "type": "none",
         "label": "Local",
+        "added": False,
         "configured": True,
         "enabled": False,
         "usable": False,

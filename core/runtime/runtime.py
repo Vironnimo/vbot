@@ -53,6 +53,7 @@ from core.providers.adapter import ModelLookup, ProviderAdapter
 from core.providers.anthropic import AnthropicAdapter
 from core.providers.credentials import ProviderCredentialResolver
 from core.providers.github_copilot import GitHubCopilotAdapter
+from core.providers.lmstudio import LMStudioAdapter
 from core.providers.minimax import MiniMaxAdapter
 from core.providers.mistral import MistralAdapter
 from core.providers.ollama import OllamaAdapter
@@ -321,6 +322,7 @@ _ADAPTER_MAP: dict[
     "github_copilot": GitHubCopilotAdapter,
     "anthropic": AnthropicAdapter,
     "ollama": OllamaAdapter,
+    "lmstudio": LMStudioAdapter,
 }
 
 
@@ -2207,10 +2209,9 @@ class Runtime:
         debug_recorder = self._build_debug_recorder()
 
         extra_kwargs: dict[str, Any] = {}
-        if adapter_class is OllamaAdapter:
-            # The Ollama adapter enforces the effective context window on the
-            # wire (options.num_ctx) for flagged-local models; the resolver
-            # reads the live settings per call (no reload hook needed).
+        if adapter_class in (OllamaAdapter, LMStudioAdapter):
+            # Local adapters enforce the live effective context when they load
+            # a model; no runtime reload hook is needed.
             extra_kwargs["local_context_resolver"] = self._local_context_resolver_for(provider_id)
         if adapter_class is OpenRouterAdapter:
             # Snapshot routing policy for this Adapter/Run. A Settings save
@@ -2512,7 +2513,7 @@ class Runtime:
         return cast("Mapping[str, Any]", windows)
 
     def _local_context_resolver_for(self, provider_id: str) -> Callable[[str], int | None]:
-        """Build the per-provider resolver the Ollama adapter enforces num_ctx with.
+        """Build the per-provider context resolver local adapters enforce on load.
 
         Returns the effective context window for flagged-local models and
         ``None`` for everything else (proxied ``:cloud`` models, unknown

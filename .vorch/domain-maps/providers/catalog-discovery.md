@@ -27,6 +27,8 @@ Every discovered Model receives `connections: [<local_connection_id>]`. Refresh 
 
 Adapter normalizers must preserve durable discoverable facts such as modalities, output/context limits, reasoning capability, task options, and Provider-scoped wire metadata. Missing optional facts stay unknown; sparse OpenAI-compatible lists still produce usable text-chat Models rather than authoritative negatives.
 
+LM Studio discovery uses its native `GET /api/v1/models` response rather than the sparse OpenAI-compatible `/v1/models` list so installed chat Models retain display name, capabilities, theoretical context, locality, and loaded-instance facts. Non-LLM entries are skipped from this Chat Provider catalog.
+
 Provider-generated data can be enriched from that Provider's own models.dev section under the Models-domain fill-without-overwrite rules. Hand-maintained overrides are for durable facts the upstream feeds cannot supply and are applied at Model load, not discovery.
 
 ## Retry and failure behavior

@@ -130,6 +130,87 @@ describe('SettingsProvidersPanel', () => {
     });
     expect(onReloadSettingsMock).toHaveBeenCalled();
   });
+
+  it('adds a fresh keyless local provider through Add provider', async () => {
+    const onToast = vi.fn();
+    rpcMock.mockImplementation((method) => {
+      if (method === 'connection.set_enabled') {
+        return Promise.resolve({ added: true, enabled: true, reachable: true });
+      }
+      if (method === 'model.list') {
+        return Promise.resolve({ models: [] });
+      }
+      return Promise.resolve({});
+    });
+    mountedComponent = mount(SettingsProvidersPanel, {
+      target: document.body,
+      props: {
+        settings: {
+          providers: {
+            items: [
+              {
+                id: 'lmstudio',
+                name: 'LM Studio',
+                base_url: 'http://localhost:1234',
+                connections: [
+                  {
+                    id: 'lmstudio:local',
+                    type: 'none',
+                    label: 'Local',
+                    added: false,
+                    configured: true,
+                    enabled: false,
+                    usable: false,
+                    accounts: [{ id: 'default', usable: true, source: 'none' }],
+                  },
+                ],
+              },
+            ],
+          },
+        },
+        visible: true,
+        onReloadSettings: onReloadSettingsMock,
+        onToast,
+      },
+    });
+    flushSync();
+
+    expect(document.body.textContent).not.toContain('LM Studio');
+    [...document.querySelectorAll('button')]
+      .filter((button) => button.textContent.trim() === 'Add provider')
+      .at(-1)
+      .click();
+    flushSync();
+    [...document.querySelectorAll('button')]
+      .find((button) => button.textContent.includes('LM Studio'))
+      .click();
+    flushSync();
+    expect(document.body.textContent).toContain(
+      'Models are discovered now and loaded only when used.',
+    );
+    [...document.querySelectorAll('button')]
+      .filter((button) => button.textContent.trim() === 'Add provider')
+      .at(-1)
+      .click();
+
+    await waitForCondition(() =>
+      rpcMock.mock.calls.some(
+        ([method]) => method === 'connection.set_enabled',
+      ),
+    );
+    expect(rpcMock).toHaveBeenCalledWith('connection.set_enabled', {
+      provider_id: 'lmstudio',
+      connection_id: 'lmstudio:local',
+      enabled: true,
+    });
+    expect(onReloadSettingsMock).toHaveBeenCalled();
+    expect(onToast).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: 'LM Studio added successfully.',
+        variant: 'success',
+      }),
+    );
+  });
 });
 
 function findButton(label, aria = false) {
