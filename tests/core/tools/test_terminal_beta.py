@@ -9,10 +9,12 @@ from typing import Any, cast
 import pytest
 import pytest_asyncio
 
+from core.projects import ProjectStore
 from core.tools.terminal_beta import (
     TERMINAL_BETA_ACTIONS,
     TERMINAL_BETA_DEFAULT_COMMAND,
     TERMINAL_BETA_DEFAULT_WAIT_MS,
+    TERMINAL_BETA_PROJECT_WORKDIR_PREFIX,
     TERMINAL_BETA_TOOL_DESCRIPTION,
     TERMINAL_BETA_TOOL_NAME,
     TERMINAL_BETA_TOOL_PARAMETERS,
@@ -61,11 +63,20 @@ def make_context(
     )
 
 
-async def call(manager: TerminalManager, context: ToolContext, arguments: JsonObject) -> JsonObject:
-    return cast(JsonObject, await make_terminal_beta_handler(manager)(context, arguments))
+async def call(
+    manager: TerminalManager,
+    context: ToolContext,
+    arguments: JsonObject,
+    projects: ProjectStore | None = None,
+) -> JsonObject:
+    project_store = projects if projects is not None else ProjectStore(context.data_root)
+    return cast(
+        JsonObject,
+        await make_terminal_beta_handler(manager, project_store)(context, arguments),
+    )
 
 
-def test_schema_matches_flat_action_tool_conventions() -> None:
+def test_schema_matches_flat_action_tool_conventions(tmp_path: Path) -> None:
     assert TERMINAL_BETA_TOOL_PARAMETERS["type"] == "object"
     assert TERMINAL_BETA_TOOL_PARAMETERS["required"] == ["action"]
     assert "oneOf" not in TERMINAL_BETA_TOOL_PARAMETERS
@@ -85,6 +96,7 @@ def test_schema_matches_flat_action_tool_conventions() -> None:
     assert "ctrl_z" in properties["key"]["enum"]
     assert "next_request unchanged" in properties["cursor"]["description"]
     assert "May be used with or without cursor" in properties["lines"]["description"]
+    assert "project:<project-id>" in properties["workdir"]["description"]
     assert "survive individual Runs" in TERMINAL_BETA_TOOL_DESCRIPTION
     assert "without program-specific flags, hooks, or configuration" in (
         TERMINAL_BETA_TOOL_DESCRIPTION
@@ -92,7 +104,11 @@ def test_schema_matches_flat_action_tool_conventions() -> None:
     assert "Quiet output is only an activity boundary" in TERMINAL_BETA_TOOL_DESCRIPTION
 
     registry = ToolRegistry()
-    register_terminal_beta_tool(registry, TerminalManager(adapter_factory=AdapterFactory()))
+    register_terminal_beta_tool(
+        registry,
+        TerminalManager(adapter_factory=AdapterFactory()),
+        ProjectStore(tmp_path),
+    )
     tool = registry.get(TERMINAL_BETA_TOOL_NAME)
     assert tool.open_input_schema is True
     assert tool.display.summary({"action": "start"}) == "start · codex"
@@ -126,6 +142,107 @@ async def test_start_defaults_to_unmodified_codex_and_returns_non_polling_handof
     assert "do not poll" in data["handoff_note"]
     assert factory.calls[0][0] == [TERMINAL_BETA_DEFAULT_COMMAND]
     assert not any(name.startswith("VBOT_TERMINAL_") for name in factory.calls[0][2])
+
+
+@pytest.mark.asyncio
+async def test_start_resolves_live_project_cwd_by_stable_id_without_changing_owner(
+    manager: tuple[TerminalManager, AdapterFactory], tmp_path: Path
+) -> None:
+    terminal_manager, factory = manager
+    first_repo = tmp_path / "first-repo"
+    second_repo = tmp_path / "second-repo"
+    first_repo.mkdir()
+    second_repo.mkdir()
+    projects = ProjectStore(tmp_path / "data")
+    projects.create("vbot", "Renamable Project", first_repo)
+    context = make_context(tmp_path)
+
+    first = await call(
+        terminal_manager,
+        context,
+        {
+            "action": "start",
+            "command": "fake-tui",
+            "workdir": f"{TERMINAL_BETA_PROJECT_WORKDIR_PREFIX}vbot",
+        },
+        projects,
+    )
+
+    assert first["ok"] is True
+    first_data = cast(dict[str, Any], first["data"])
+    assert first_data["workdir"] == str(first_repo.resolve())
+    assert factory.calls[0][1] == first_repo.resolve()
+    terminal_manager.get_session(
+        first_data["terminal_id"],
+        TerminalOwner("project-a", "agent-a", "session-a"),
+    )
+
+    projects.update("vbot", display_name="Different Name", cwd=second_repo)
+    second = await call(
+        terminal_manager,
+        context,
+        {
+            "action": "start",
+            "command": "fake-tui",
+            "workdir": f"{TERMINAL_BETA_PROJECT_WORKDIR_PREFIX}vbot",
+        },
+        projects,
+    )
+
+    assert second["ok"] is True
+    assert factory.calls[1][1] == second_repo.resolve()
+
+
+@pytest.mark.asyncio
+async def test_start_keeps_relative_workdir_resolution_unchanged(
+    manager: tuple[TerminalManager, AdapterFactory], tmp_path: Path
+) -> None:
+    terminal_manager, factory = manager
+    child = tmp_path / "child"
+    child.mkdir()
+
+    result = await call(
+        terminal_manager,
+        make_context(tmp_path),
+        {"action": "start", "command": "fake-tui", "workdir": "child"},
+    )
+
+    assert result["ok"] is True
+    assert factory.calls[0][1] == child.resolve()
+
+
+@pytest.mark.asyncio
+async def test_start_rejects_unresolvable_project_workdirs_before_spawn(
+    manager: tuple[TerminalManager, AdapterFactory], tmp_path: Path
+) -> None:
+    terminal_manager, factory = manager
+    projects = ProjectStore(tmp_path / "data")
+    projects.create("offline", "Offline", tmp_path / "missing-repo")
+    context = make_context(tmp_path)
+
+    missing = await call(
+        terminal_manager,
+        context,
+        {"action": "start", "workdir": "project:missing"},
+        projects,
+    )
+    unavailable = await call(
+        terminal_manager,
+        context,
+        {"action": "start", "workdir": "project:offline"},
+        projects,
+    )
+    empty = await call(
+        terminal_manager,
+        context,
+        {"action": "start", "workdir": "project:"},
+        projects,
+    )
+
+    assert cast(dict[str, Any], missing["error"])["code"] == "project_not_found"
+    assert cast(dict[str, Any], unavailable["error"])["code"] == "project_unavailable"
+    assert cast(dict[str, Any], empty["error"])["code"] == "invalid_arguments"
+    assert factory.calls == []
 
 
 @pytest.mark.asyncio

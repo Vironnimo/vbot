@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
+from core.projects import ProjectError, ProjectNotFoundError, ProjectStore, cwd_exists
 from core.tools.arguments import (
     optional_bool,
     optional_int,
@@ -46,6 +48,7 @@ TERMINAL_BETA_DEFAULT_COMMAND = "codex"
 TERMINAL_BETA_DEFAULT_WAIT_MS = 1_000
 TERMINAL_BETA_MAX_WAIT_MS = 10_000
 TERMINAL_BETA_KEYS = tuple(TERMINAL_INPUT_KEY_SEQUENCES)
+TERMINAL_BETA_PROJECT_WORKDIR_PREFIX = "project:"
 
 TERMINAL_BETA_TOOL_DESCRIPTION = (
     "Run and control any interactive terminal program through a real PTY/ConPTY. Terminal "
@@ -53,16 +56,23 @@ TERMINAL_BETA_TOOL_DESCRIPTION = (
     "controllable in the WebUI. vBot launches the requested command and arguments without "
     "program-specific flags, hooks, or configuration. Use start with text to launch the default "
     "Codex command and send its first input in one call, or set command and args for any other "
-    "program. After Agent input, vBot wakes you when PTY output has been quiet for a short period, "
-    "or when the process exits or the terminal fails. Quiet output is only an activity boundary: "
-    "inspect status to decide whether the program is working, waiting for input, or finished. Use "
-    "data for exact terminal sequences, text/key/enter for convenient input, status for the "
-    "rendered screen and paginated scrollback, and list/status titles announced by programs "
-    "through the standard terminal protocol. Follow scrollback.next_request unchanged to read "
-    "each older status page. Use wait only for a short same-Run pause, resize for TUI dimensions, "
-    "and kill only when the process tree should end. Reuse a live Terminal Session for later "
-    "work instead of starting a duplicate process."
+    "program. For a registered Project, set workdir to project:<project-id> to resolve its current "
+    "cwd without changing Rooting, Project Context, or Terminal ownership. After Agent input, vBot "
+    "wakes you when PTY output has been quiet for a short period, or when the process exits or the "
+    "terminal fails. Quiet output is only an activity boundary: inspect status to decide whether "
+    "the program is working, waiting for input, or finished. Use data for exact terminal "
+    "sequences, text/key/enter for convenient input, status for the rendered screen and paginated "
+    "scrollback, and list/status titles announced by programs through the standard terminal "
+    "protocol. Follow scrollback.next_request unchanged to read each older status page. Use wait "
+    "only for a short same-Run pause, resize for TUI dimensions, and kill only when the process "
+    "tree should end. Reuse a live Terminal Session for later work instead of starting a duplicate "
+    "process."
 )
+
+
+class _ProjectWorkdirUnavailableError(ValueError):
+    """A Project workdir reference exists syntactically but cannot be resolved."""
+
 
 _ACTION_FIELDS = {
     "start": frozenset({"action", "command", "args", "text", "workdir", "columns", "rows"}),
@@ -150,8 +160,10 @@ TERMINAL_BETA_TOOL_PARAMETERS: JsonObject = {
             "type": "string",
             "minLength": 1,
             "description": (
-                "Working directory for start. Relative paths use the current workspace; "
-                "omit for the current workspace."
+                "Working directory for start. Relative paths use the current working directory; "
+                "omit for that directory. Use project:<project-id> to resolve a registered "
+                "Project's current cwd by stable id. This selects only the start directory and "
+                "does not load Project Context or change Terminal ownership."
             ),
         },
         "columns": {
@@ -238,17 +250,18 @@ TERMINAL_BETA_TOOL_PARAMETERS: JsonObject = {
 }
 
 
-def make_terminal_beta_handler(terminal_manager: TerminalManager):
+def make_terminal_beta_handler(terminal_manager: TerminalManager, projects: ProjectStore):
     """Create a terminal_beta Tool handler bound to one Terminal Manager."""
 
     async def handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
-        return await _handle_terminal_beta(terminal_manager, context, arguments)
+        return await _handle_terminal_beta(terminal_manager, projects, context, arguments)
 
     return handler
 
 
 async def _handle_terminal_beta(
     terminal_manager: TerminalManager,
+    projects: ProjectStore,
     context: ToolContext,
     arguments: JsonObject,
 ) -> JsonObject:
@@ -269,7 +282,7 @@ async def _handle_terminal_beta(
 
     try:
         if action == "start":
-            return await _handle_start(terminal_manager, context, arguments)
+            return await _handle_start(terminal_manager, projects, context, arguments)
         if action == "list":
             return _handle_list(terminal_manager, context)
         if action == "status":
@@ -291,6 +304,10 @@ async def _handle_terminal_beta(
         return tool_failure("stale_screen", str(error), retryable=True)
     except TerminalCursorError as error:
         return tool_failure("invalid_cursor", str(error), retryable=False)
+    except ProjectNotFoundError as error:
+        return tool_failure("project_not_found", str(error), retryable=False)
+    except _ProjectWorkdirUnavailableError as error:
+        return tool_failure("project_unavailable", str(error), retryable=False)
     except FileNotFoundError as error:
         command = error.filename or TERMINAL_BETA_DEFAULT_COMMAND
         return tool_failure(
@@ -304,6 +321,7 @@ async def _handle_terminal_beta(
 
 async def _handle_start(
     terminal_manager: TerminalManager,
+    projects: ProjectStore,
     context: ToolContext,
     arguments: JsonObject,
 ) -> JsonObject:
@@ -318,9 +336,7 @@ async def _handle_start(
     if text is not None and (not isinstance(text, str) or not text.strip()):
         raise ValueError("text must be a non-empty string when provided")
     workdir_value = optional_string(arguments.get("workdir"), field_name="workdir")
-    workdir = (
-        context.resolve_path(workdir_value) if workdir_value else context.effective_cwd.resolve()
-    )
+    workdir = _resolve_workdir(projects, context, workdir_value)
     columns = optional_int(
         arguments.get("columns"),
         field_name="columns",
@@ -595,17 +611,51 @@ def _optional_string_array(value: object, *, field_name: str) -> list[str]:
     return list(value)
 
 
+def _resolve_workdir(
+    projects: ProjectStore,
+    context: ToolContext,
+    workdir_value: str | None,
+) -> Path:
+    if workdir_value is None:
+        return context.effective_cwd.resolve()
+    if not workdir_value.startswith(TERMINAL_BETA_PROJECT_WORKDIR_PREFIX):
+        return context.resolve_path(workdir_value)
+
+    project_id = workdir_value.removeprefix(TERMINAL_BETA_PROJECT_WORKDIR_PREFIX)
+    if not project_id:
+        raise ValueError(
+            "workdir Project reference must use project:<project-id> with a non-empty id"
+        )
+    try:
+        project = projects.get(project_id)
+    except ProjectNotFoundError:
+        raise
+    except (ProjectError, OSError) as error:
+        raise _ProjectWorkdirUnavailableError(
+            f"Project '{project_id}' could not be resolved: {error}"
+        ) from error
+    if not cwd_exists(project.cwd):
+        raise _ProjectWorkdirUnavailableError(
+            f"Project '{project.project_id}' has no reachable cwd: {project.cwd}"
+        )
+    return Path(project.cwd).resolve()
+
+
 def _owner(context: ToolContext) -> TerminalOwner:
     return TerminalOwner(context.project_id, context.agent_id, context.session_id)
 
 
-def register_terminal_beta_tool(registry: ToolRegistry, terminal_manager: TerminalManager) -> None:
+def register_terminal_beta_tool(
+    registry: ToolRegistry,
+    terminal_manager: TerminalManager,
+    projects: ProjectStore,
+) -> None:
     """Register the Agent-facing interactive terminal Tool."""
     registry.register(
         TERMINAL_BETA_TOOL_NAME,
         TERMINAL_BETA_TOOL_DESCRIPTION,
         TERMINAL_BETA_TOOL_PARAMETERS,
-        make_terminal_beta_handler(terminal_manager),
+        make_terminal_beta_handler(terminal_manager, projects),
         open_input_schema=True,
         result_schema={"type": "object"},
         display=ToolDisplay(summary_builder=_terminal_display_summary),
@@ -631,6 +681,7 @@ __all__ = [
     "TERMINAL_BETA_DEFAULT_WAIT_MS",
     "TERMINAL_BETA_KEYS",
     "TERMINAL_BETA_MAX_WAIT_MS",
+    "TERMINAL_BETA_PROJECT_WORKDIR_PREFIX",
     "TERMINAL_BETA_TOOL_DESCRIPTION",
     "TERMINAL_BETA_TOOL_NAME",
     "TERMINAL_BETA_TOOL_PARAMETERS",

@@ -20,7 +20,7 @@ Use a real interactive Terminal Session for the coding agent's entire lifecycle.
 
 First call `list`. Reuse the intended live Terminal Session when one already exists. Its program-announced `title`, command, working directory, state, and recent screen help identify it.
 
-For a configured CLI, call `start` with the interactive command, the intended `workdir`, any explicitly chosen model or safety arguments, and the initial instruction in `text`. `start` sends the text followed by Enter after the PTY is ready.
+For a configured CLI, call `start` with the interactive command, the intended `workdir`, any explicitly chosen model or safety arguments, and the initial instruction in `text`. For a registered Project, `workdir: "project:<project-id>"` resolves its current cwd by stable id without loading Project Context or changing Terminal ownership. `start` sends the text followed by Enter after the PTY is ready.
 
 Translate user-selected launch settings into the CLI's exact `args`. Model, reasoning or effort, named agent, profile, permission mode, sandbox, extra directories, and other startup choices are independent: pass every value the user specifies and preserve the CLI or project default for every value they omit. Never silently substitute a different model or reasoning level. When support is model-, provider-, account-, or version-dependent, inspect the installed CLI's help or model catalog; if the requested combination is unavailable, surface the actual choices instead of guessing.
 
