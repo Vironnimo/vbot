@@ -12,7 +12,12 @@ from core.providers._http_shared import wrap_network_error
 from core.providers.accounts import DEFAULT_ACCOUNT_ID
 from core.providers.errors import ProviderAuthError, ProviderError, ProviderRateLimitError
 from core.providers.openai_subscription_auth import openai_subscription_token_extra
-from core.providers.providers import OPENAI_CODEX_DEVICE_FLOW, OAuthConfig
+from core.providers.providers import (
+    MINIMAX_OAUTH_DEVICE_FLOW,
+    OPENAI_CODEX_DEVICE_FLOW,
+    OAuthConfig,
+    resolve_minimax_oauth_expiry,
+)
 from core.providers.token_store import OAuthToken, TokenStore
 from core.utils.http_status import is_retryable_status
 from core.utils.logging import get_logger
@@ -159,26 +164,53 @@ class OAuthTokenGetter:
         now = datetime.now(UTC)
         try:
             response_data = await retry_async(self._post_refresh_token, token.refresh_token)
+            if (
+                self._oauth_config.device_flow == MINIMAX_OAUTH_DEVICE_FLOW
+                and response_data.get("status") != "success"
+            ):
+                raise ProviderAuthError("OAuth token refresh failed — please reconnect")
+            access_token = _required_token_string(response_data.get("access_token"))
+            refresh_token = response_data.get("refresh_token")
+            extra = dict(token.extra)
+            if self._oauth_config.device_flow == OPENAI_CODEX_DEVICE_FLOW:
+                extra.update(openai_subscription_token_extra(access_token))
+            if self._oauth_config.device_flow == MINIMAX_OAUTH_DEVICE_FLOW:
+                try:
+                    expires_at = resolve_minimax_oauth_expiry(
+                        response_data.get("expired_in"), now=now
+                    )
+                except ValueError as exc:
+                    raise ProviderAuthError(
+                        "OAuth token refresh failed — please reconnect"
+                    ) from exc
+            else:
+                expires_at = _parse_oauth_expiry(response_data, now)
+            refreshed_token = OAuthToken(
+                access_token=access_token,
+                refresh_token=(
+                    refresh_token if isinstance(refresh_token, str) else token.refresh_token
+                ),
+                expires_at=expires_at,
+                extra=extra,
+            )
+            self._token_store.save(
+                self._provider_id,
+                self._local_connection_id,
+                refreshed_token,
+                account_id=self._account_id,
+            )
         except ProviderError as exc:
+            if (
+                isinstance(exc, ProviderAuthError)
+                and self._oauth_config.device_flow == MINIMAX_OAUTH_DEVICE_FLOW
+            ):
+                self._token_store.delete(
+                    self._provider_id,
+                    self._local_connection_id,
+                    account_id=self._account_id,
+                )
             self._log_refresh_failure(exc)
             raise
-        access_token = _required_token_string(response_data.get("access_token"))
-        refresh_token = response_data.get("refresh_token")
-        extra = dict(token.extra)
-        if self._oauth_config.device_flow == OPENAI_CODEX_DEVICE_FLOW:
-            extra.update(openai_subscription_token_extra(access_token))
-        refreshed_token = OAuthToken(
-            access_token=access_token,
-            refresh_token=refresh_token if isinstance(refresh_token, str) else token.refresh_token,
-            expires_at=_parse_oauth_expiry(response_data, now),
-            extra=extra,
-        )
-        self._token_store.save(
-            self._provider_id,
-            self._local_connection_id,
-            refreshed_token,
-            account_id=self._account_id,
-        )
         self._log_refresh_success()
         return refreshed_token.access_token
 

@@ -1,0 +1,87 @@
+{
+  "provider_id": "minimax",
+  "models": {
+    "MiniMax-M2": {
+      "canonical": "minimax/MiniMax-M2",
+      "connections": ["api-key", "api-key-cn"],
+      "capabilities": {
+        "supported_parameters": ["max_tokens", "reasoning_split", "temperature", "tools", "top_p"]
+      },
+      "context_window": 204800,
+      "max_output_tokens": 65536
+    },
+    "MiniMax-M2.1": {
+      "canonical": "minimax/MiniMax-M2.1",
+      "connections": ["api-key", "api-key-cn"],
+      "capabilities": {
+        "supported_parameters": ["max_tokens", "reasoning_split", "temperature", "tools", "top_p"]
+      },
+      "context_window": 204800,
+      "max_output_tokens": 65536
+    },
+    "MiniMax-M2.1-highspeed": {
+      "canonical": "minimax/MiniMax-M2.1",
+      "name": "MiniMax M2.1 Highspeed",
+      "connections": ["api-key", "api-key-cn"],
+      "capabilities": {
+        "supported_parameters": ["max_tokens", "reasoning_split", "temperature", "tools", "top_p"]
+      },
+      "context_window": 204800,
+      "max_output_tokens": 65536
+    },
+    "MiniMax-M2.5": {
+      "canonical": "minimax/MiniMax-M2.5",
+      "connections": ["api-key", "api-key-cn"],
+      "capabilities": {
+        "supported_parameters": ["max_tokens", "reasoning_split", "temperature", "tools", "top_p"]
+      },
+      "context_window": 204800,
+      "max_output_tokens": 65536
+    },
+    "MiniMax-M2.5-highspeed": {
+      "canonical": "minimax/MiniMax-M2.5-highspeed",
+      "connections": ["api-key", "api-key-cn"],
+      "capabilities": {
+        "supported_parameters": ["max_tokens", "reasoning_split", "temperature", "tools", "top_p"]
+      },
+      "context_window": 204800,
+      "max_output_tokens": 65536
+    },
+    "MiniMax-M2.7": {
+      "canonical": "minimax/MiniMax-M2.7",
+      "connections": ["api-key", "api-key-cn", "subscription"],
+      "capabilities": {
+        "supported_parameters": ["max_tokens", "reasoning_split", "temperature", "tools", "top_p"]
+      },
+      "context_window": 204800,
+      "max_output_tokens": 65536
+    },
+    "MiniMax-M2.7-highspeed": {
+      "canonical": "minimax/MiniMax-M2.7-highspeed",
+      "connections": ["api-key", "api-key-cn", "subscription"],
+      "capabilities": {
+        "supported_parameters": ["max_tokens", "reasoning_split", "temperature", "tools", "top_p"]
+      },
+      "context_window": 204800,
+      "max_output_tokens": 65536
+    },
+    "MiniMax-M3": {
+      "canonical": "minimax/MiniMax-M3",
+      "connections": ["api-key", "api-key-cn"],
+      "capabilities": {
+        "supported_parameters": [
+          "max_completion_tokens",
+          "max_tokens",
+          "reasoning_split",
+          "stream_options",
+          "temperature",
+          "thinking",
+          "tools",
+          "top_p"
+        ]
+      },
+      "context_window": 1000000,
+      "max_output_tokens": 131072
+    }
+  }
+}

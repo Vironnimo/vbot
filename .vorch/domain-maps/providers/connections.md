@@ -38,9 +38,9 @@ Model listing, task targets, catalog auto-refresh, usage probes, Chat's unpinned
 
 API keys resolve from process environment first and data-dir `.env` second. Key set/unset RPCs can mutate only the data-dir value, so removing it can still leave the Account configured through process environment. They reload the fallback snapshot into the existing `ProviderCredentialResolver`; its stable identity ensures every already-injected consumer sees the new credential state on its next check. `none` Connections reject key mutation.
 
-`StaticTokenGetter` wraps fixed API-key/keyless values. `OAuthTokenGetter` reads the Account token, refreshes near expiry, stores refreshed values under the same Account, and coalesces concurrent refresh. Adapters and task/usage clients ask the getter inside each request attempt rather than retaining raw access tokens.
+`StaticTokenGetter` wraps fixed API-key/keyless values. `OAuthTokenGetter` reads the Account token, refreshes near expiry, stores refreshed values under the same Account, and coalesces concurrent refresh. Adapters and task/usage clients ask the getter inside each request attempt rather than retaining raw access tokens. MiniMax refresh accepts either TTL seconds or absolute Unix milliseconds and quarantines terminally rejected refresh state by deleting the dead Account token; retryable failures keep it.
 
-`DeviceFlowEngine` owns OAuth device sessions, polling cadence, provider-specific exchange, terminal errors, and token persistence. Connection RPCs start/poll/disconnect against declared OAuth metadata; UI/CLI code must not reproduce flow policy.
+`DeviceFlowEngine` owns OAuth device sessions, polling cadence, provider-specific exchange, terminal errors, and token persistence. Connection RPCs start/poll/disconnect against declared OAuth metadata; UI/CLI code must not reproduce flow policy. `device_flow` selects the standard OAuth2 shape, OpenAI Codex's two-step device authorization, or MiniMax's PKCE/user-code variant; provider-specific secrets remain engine-internal.
 
 ## RPC and runtime projections
 

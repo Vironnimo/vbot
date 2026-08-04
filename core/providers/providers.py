@@ -17,6 +17,7 @@ import json
 import math
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -133,7 +134,37 @@ VALID_CONNECTION_TYPES = frozenset({"api_key", "oauth", "none"})
 VALID_OAUTH_FLOWS = frozenset({"device"})
 STANDARD_DEVICE_FLOW = "oauth2"
 OPENAI_CODEX_DEVICE_FLOW = "openai_codex"
-VALID_DEVICE_FLOWS = frozenset({STANDARD_DEVICE_FLOW, OPENAI_CODEX_DEVICE_FLOW})
+MINIMAX_OAUTH_DEVICE_FLOW = "minimax_oauth"
+VALID_DEVICE_FLOWS = frozenset(
+    {STANDARD_DEVICE_FLOW, OPENAI_CODEX_DEVICE_FLOW, MINIMAX_OAUTH_DEVICE_FLOW}
+)
+UNIX_MILLISECONDS_PER_SECOND = 1000
+UNIX_MILLISECONDS_DETECTION_DIVISOR = 2
+
+
+def resolve_minimax_oauth_expiry(value: Any, *, now: datetime) -> datetime:
+    """Resolve MiniMax's ambiguous ``expired_in`` field to a UTC instant.
+
+    MiniMax has returned this field both as a TTL in seconds and as an absolute
+    Unix timestamp in milliseconds. A genuine TTL is many orders of magnitude
+    below half the current Unix-millisecond timestamp, so the two shapes can be
+    distinguished without guessing a fixed calendar cutoff.
+    """
+
+    if isinstance(value, bool):
+        raise ValueError("MiniMax OAuth expired_in must be an integer")
+    try:
+        raw_value = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("MiniMax OAuth expired_in must be an integer") from exc
+    if raw_value <= 0:
+        raise ValueError("MiniMax OAuth expired_in must be positive")
+
+    normalized_now = now.astimezone(UTC)
+    now_milliseconds = int(normalized_now.timestamp() * UNIX_MILLISECONDS_PER_SECOND)
+    if raw_value > now_milliseconds // UNIX_MILLISECONDS_DETECTION_DIVISOR:
+        return datetime.fromtimestamp(raw_value / UNIX_MILLISECONDS_PER_SECOND, tz=UTC)
+    return normalized_now + timedelta(seconds=raw_value)
 
 
 @dataclass(frozen=True)
