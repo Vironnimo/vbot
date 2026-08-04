@@ -38,6 +38,7 @@ from core.providers.adapter import (
     ModelLookup,
     ProviderAdapter,
     TerminalOutcome,
+    normalize_tool_call_candidate,
     project_tool_result_content_fallbacks,
 )
 from core.providers.errors import NetworkError, ProviderError
@@ -1125,40 +1126,21 @@ def _extract_openai_tool_calls(message: dict[str, Any]) -> list[dict[str, Any]] 
     raw_tool_calls = message.get("tool_calls")
     if not raw_tool_calls:
         return None
+    raw_call_values = raw_tool_calls if isinstance(raw_tool_calls, list) else [raw_tool_calls]
     tool_calls: list[dict[str, Any]] = []
-    for raw_call in raw_tool_calls:
-        if not isinstance(raw_call, dict):
-            continue
-        function = raw_call.get("function", {})
-        if not isinstance(function, dict):
-            continue
-        arguments = _parse_tool_arguments(function.get("arguments"))
-        if arguments is None:
-            continue
+    for position, raw_call_value in enumerate(raw_call_values):
+        raw_call = raw_call_value if isinstance(raw_call_value, Mapping) else {}
+        function_value = raw_call.get("function")
+        function = function_value if isinstance(function_value, Mapping) else {}
         tool_calls.append(
-            {
-                "id": raw_call["id"],
-                "name": function.get("name", ""),
-                "arguments": arguments,
-            }
+            normalize_tool_call_candidate(
+                tool_call_id=raw_call.get("id"),
+                name=function.get("name"),
+                arguments=function.get("arguments"),
+                fallback_id=f"tool_call_{position}",
+            )
         )
     return tool_calls or None
-
-
-def _parse_tool_arguments(arguments: Any) -> dict[str, Any] | None:
-    if isinstance(arguments, dict):
-        return dict(arguments)
-    if arguments is None:
-        return {}
-    if not isinstance(arguments, str):
-        return None
-    if not arguments:
-        return {}
-    try:
-        parsed = json.loads(arguments)
-    except json.JSONDecodeError:
-        return None
-    return parsed if isinstance(parsed, dict) else None
 
 
 def _extract_openai_reasoning(

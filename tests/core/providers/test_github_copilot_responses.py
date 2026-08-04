@@ -340,6 +340,61 @@ def test_build_payload_replays_complete_response_output_without_reconstruction()
     ]
 
 
+def test_build_payload_replaces_rejected_raw_function_call_with_safe_canonical_item() -> None:
+    response_output = [
+        {"type": "reasoning", "id": "rs_1", "encrypted_content": "opaque"},
+        {
+            "type": "function_call",
+            "id": "fc_bad",
+            "call_id": "call_bad",
+            "name": "write",
+            "arguments": '{"path":"README.md"',
+        },
+    ]
+    failure = '{"ok":false,"error":{"code":"malformed_tool_arguments"}}'
+
+    payload = build_responses_payload(
+        [
+            {
+                "role": "assistant",
+                "content": None,
+                "reasoning_meta": {"response_output": response_output},
+                "tool_calls": [
+                    {
+                        "id": "call_bad",
+                        "name": "write",
+                        "arguments": {},
+                        "rejection": {
+                            "code": "malformed_tool_arguments",
+                            "message": "Arguments were malformed.",
+                            "fingerprint": "sha256",
+                        },
+                    }
+                ],
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "call_bad",
+                "name": "write",
+                "content": failure,
+            },
+        ],
+        model_id="gpt-5.6-sol",
+        policy=responses_policy("gpt-5.6-sol"),
+    )
+
+    assert payload["input"] == [
+        response_output[0],
+        {
+            "type": "function_call",
+            "call_id": "call_bad",
+            "name": "write",
+            "arguments": "{}",
+        },
+        {"type": "function_call_output", "call_id": "call_bad", "output": failure},
+    ]
+
+
 def test_build_payload_replays_phase_from_canonical_fallback_message() -> None:
     payload = build_responses_payload(
         [
@@ -577,7 +632,7 @@ def test_normalize_response_ignores_non_int_cached_tokens() -> None:
     assert normalized["usage"] == {"input_tokens": 11, "output_tokens": 7}
 
 
-def test_normalize_response_drops_malformed_function_arguments_json() -> None:
+def test_normalize_response_preserves_malformed_function_arguments_as_rejected_call() -> None:
     normalized = normalize_responses_response(
         {
             "output": [
@@ -591,7 +646,29 @@ def test_normalize_response_drops_malformed_function_arguments_json() -> None:
         }
     )
 
-    assert normalized["tool_calls"] is None
+    assert normalized["tool_calls"] is not None
+    tool_call = normalized["tool_calls"][0]
+    assert tool_call["id"] == "call_1"
+    assert tool_call["name"] == "search"
+    assert tool_call["arguments"] == {}
+    assert tool_call["rejection"]["code"] == "malformed_tool_arguments"
+
+
+def test_normalize_response_accepts_collapsed_single_output_item() -> None:
+    normalized = normalize_responses_response(
+        {
+            "output": {
+                "type": "function_call",
+                "call_id": "call_one",
+                "name": "search",
+                "arguments": '{"q":"docs"}',
+            }
+        }
+    )
+
+    assert normalized["tool_calls"] == [
+        {"id": "call_one", "name": "search", "arguments": {"q": "docs"}}
+    ]
 
 
 def test_normalize_response_keeps_valid_sibling_when_one_function_arguments_json_is_malformed() -> (
@@ -616,9 +693,15 @@ def test_normalize_response_keeps_valid_sibling_when_one_function_arguments_json
         }
     )
 
-    assert normalized["tool_calls"] == [
-        {"id": "call_ok", "name": "read_file", "arguments": {"path": "README.md"}}
-    ]
+    assert normalized["tool_calls"] is not None
+    assert [call["id"] for call in normalized["tool_calls"]] == ["call_bad", "call_ok"]
+    assert normalized["tool_calls"][0]["arguments"] == {}
+    assert normalized["tool_calls"][0]["rejection"]["code"] == "malformed_tool_arguments"
+    assert normalized["tool_calls"][1] == {
+        "id": "call_ok",
+        "name": "read_file",
+        "arguments": {"path": "README.md"},
+    }
 
 
 def test_normalize_response_extracts_nested_function_call_name_and_visible_reasoning() -> None:

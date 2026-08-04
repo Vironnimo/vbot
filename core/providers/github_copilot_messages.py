@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from core.providers.adapter import tool_result_content_blocks
+from core.providers.adapter import normalize_tool_call_candidate, tool_result_content_blocks
 from core.providers.anthropic_compatible import (
     AnthropicMessagesStreamDecoder,
     apply_anthropic_cache_usage,
@@ -574,21 +574,27 @@ def _extract_messages_reasoning_meta(content_blocks: Any) -> dict[str, Any] | No
 
 
 def _extract_messages_tool_calls(content_blocks: Any) -> list[dict[str, Any]] | None:
+    blocks = (
+        content_blocks
+        if isinstance(content_blocks, list)
+        else [content_blocks]
+        if isinstance(content_blocks, dict)
+        else []
+    )
     tool_calls: list[dict[str, Any]] = []
-    for block in _content_blocks(content_blocks):
+    for position, raw_block in enumerate(blocks):
+        if not isinstance(raw_block, dict):
+            continue
+        block = raw_block
         if block.get("type") != TOOL_USE_BLOCK_TYPE:
             continue
-        tool_id = block.get("id")
-        name = block.get("name")
-        if not isinstance(tool_id, str) or not isinstance(name, str):
-            continue
-        tool_input = block.get("input")
         tool_calls.append(
-            {
-                "id": tool_id,
-                "name": name,
-                "arguments": dict(tool_input) if isinstance(tool_input, dict) else {},
-            }
+            normalize_tool_call_candidate(
+                tool_call_id=block.get("id"),
+                name=block.get("name"),
+                arguments=block.get("input"),
+                fallback_id=f"tool_call_{position}",
+            )
         )
     return tool_calls or None
 

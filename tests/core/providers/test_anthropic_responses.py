@@ -334,6 +334,23 @@ class TestSendSuccess:
             "terminal_outcome": "unknown",
         }
 
+    def test_normalize_response_accepts_collapsed_single_tool_use_block(self, anthropic_adapter):
+        normalized = anthropic_adapter.normalize_response(
+            {
+                "content": {
+                    "type": "tool_use",
+                    "id": "toolu_one",
+                    "name": "get_weather",
+                    "input": {"city": "Berlin"},
+                },
+                "stop_reason": "tool_use",
+            }
+        )
+
+        assert normalized["tool_calls"] == [
+            {"id": "toolu_one", "name": "get_weather", "arguments": {"city": "Berlin"}}
+        ]
+
     @pytest.mark.parametrize(
         ("stop_reason", "expected_outcome"),
         [

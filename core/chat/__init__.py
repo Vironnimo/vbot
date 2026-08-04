@@ -17,6 +17,7 @@ if TYPE_CHECKING:
     from core.chat.chat import MessageSender as MessageSender
     from core.chat.chat import ReplySurface as ReplySurface
     from core.chat.chat import ToolCall as ToolCall
+    from core.chat.chat import ToolCallRejection as ToolCallRejection
     from core.chat.chat import parse_bare_model as parse_bare_model
     from core.chat.commands import AgentArgument as AgentArgument
     from core.chat.commands import CommandDispatcher as CommandDispatcher
@@ -79,6 +80,7 @@ _EXPORT_MODULES = {
     "parse_handoff_argument": "core.chat.commands",
     "queue_content_is_editable": "core.chat.messages",
     "ToolCall": "core.chat.chat",
+    "ToolCallRejection": "core.chat.chat",
     "ToolIterationLimitError": "core.chat.errors",
     "aggregate_session_usage": "core.chat.usage",
     "latest_session_context_usage": "core.chat.usage",

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import ipaddress
-import json
 import time
 from collections import OrderedDict
 from collections.abc import AsyncIterator
@@ -16,6 +15,7 @@ from urllib.parse import urlparse
 from core.providers.adapter import (
     TERMINAL_OUTCOME_UNKNOWN,
     TerminalOutcome,
+    normalize_tool_call_candidate,
     terminal_outcome_from_response,
 )
 from core.providers.errors import ProviderStreamingUnsupportedError
@@ -30,7 +30,6 @@ JsonObject = dict[str, Any]
 
 STREAM_CHUNK_TIMEOUT_SECONDS = 180.0
 STREAM_PROGRESS_TIMEOUT_SECONDS = 900.0
-MALFORMED_TOOL_ARGUMENT_PREVIEW_CHARS = 1200
 
 
 class StreamingError(VBotError):
@@ -228,19 +227,12 @@ class _ToolCallFragments:
         return normalized_name_delta, normalized_arguments_delta
 
     def to_tool_call(self) -> JsonObject:
-        arguments = _parse_tool_arguments(self.arguments_text)
-        if arguments is None:
-            raise StreamingDeltaError(
-                f"streamed tool call {self.tool_call_id!r} has malformed or incomplete "
-                "arguments JSON fragment "
-                f"({len(self.arguments_text)} chars): "
-                f"{_preview_malformed_tool_arguments(self.arguments_text)}"
-            )
-        return {
-            "id": self.tool_call_id,
-            "name": self.name_text,
-            "arguments": arguments,
-        }
+        return normalize_tool_call_candidate(
+            tool_call_id=self.provider_id,
+            name=self.name_text,
+            arguments=self.arguments_text,
+            fallback_id=f"tool_call_{self.synthetic_id_suffix}",
+        )
 
 
 class StreamingAccumulator:
@@ -308,7 +300,7 @@ class StreamingAccumulator:
         return [visible_delta]
 
     def finalize_assistant_fields(self) -> StreamingAssistantFields:
-        """Build final canonical assistant fields from accumulated deltas."""
+        """Build final fields, preserving malformed Tool Calls as rejected calls."""
         tool_calls: list[JsonObject] = []
         for fragments in self._tool_calls.values():
             tool_calls.append(fragments.to_tool_call())
@@ -324,12 +316,10 @@ class StreamingAccumulator:
     def finalize_partial_fields(self) -> StreamingAssistantFields:
         """Build assistant fields from a stream interrupted after visible output.
 
-        Unlike :meth:`finalize_assistant_fields`, this never parses tool-call
-        arguments and never raises on a malformed fragment: a tool call cut off
-        mid-stream was never executed, so its in-flight fragment is dropped
-        rather than parsed (side-effect-free). No ``finish_reason`` is set — the
-        turn did not finish — so the result reads as an interrupted assistant
-        turn the next request can continue.
+        This never normalizes tool-call arguments: a Tool Call cut off mid-stream
+        was never completed or executed, so its in-flight fragment is dropped.
+        No ``finish_reason`` is set, so the result reads as an interrupted
+        Assistant turn the next request can continue.
         """
         return StreamingAssistantFields(
             content=_joined_or_none(self._content_parts),
@@ -550,29 +540,6 @@ def _merge_stream_fragment(existing: str, delta: str) -> tuple[str, str]:
         suffix = delta[len(existing) :]
         return delta, suffix
     return existing + delta, delta
-
-
-def _parse_tool_arguments(arguments_text: str) -> JsonObject | None:
-    if not arguments_text:
-        return {}
-    try:
-        value = json.loads(arguments_text)
-    except json.JSONDecodeError:
-        return None
-    if not isinstance(value, dict):
-        return None
-    return value
-
-
-def _preview_malformed_tool_arguments(arguments_text: str) -> str:
-    if len(arguments_text) <= MALFORMED_TOOL_ARGUMENT_PREVIEW_CHARS:
-        return repr(arguments_text)
-
-    edge_length = MALFORMED_TOOL_ARGUMENT_PREVIEW_CHARS // 2
-    head = arguments_text[:edge_length]
-    tail = arguments_text[-edge_length:]
-    omitted_count = len(arguments_text) - (edge_length * 2)
-    return f"{head!r} ... <{omitted_count} chars omitted> ... {tail!r}"
 
 
 async def _close_async_iterator(iterator: AsyncIterator[JsonObject]) -> None:

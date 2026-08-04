@@ -10,14 +10,15 @@ from typing import Any, cast
 import pytest
 
 from core.chat import (
-    ChatError,
     ChatMessage,
 )
 from core.chat.chat import (
     MAX_IDENTICAL_FAILED_TOOL_CALLS,
+    TOOL_FINALIZATION_DISABLED_FAILURE_CODE,
+    TOOL_ITERATION_LIMIT_FAILURE_CODE,
     _FailedToolCallCircuitBreaker,
 )
-from core.chat.messages import HISTORY_COMPACTION_GUIDANCE, ToolCall
+from core.chat.messages import HISTORY_COMPACTION_GUIDANCE, ToolCall, ToolCallRejection
 from core.model_tasks import TASK_IMAGE_UNDERSTANDING
 from core.runs import (
     MODEL_STEP_USAGE_EVENT,
@@ -1306,7 +1307,102 @@ async def test_tool_non_envelope_result_is_failure_envelope(tmp_path: Path) -> N
 
 
 @pytest.mark.asyncio
-async def test_max_tool_iteration_stop_raises_chat_error(tmp_path: Path) -> None:
+async def test_malformed_non_streaming_call_fails_without_blocking_valid_sibling(
+    tmp_path: Path,
+) -> None:
+    executed_arguments: list[JsonObject] = []
+
+    def echo_handler(_context: ToolContext, arguments: JsonObject) -> JsonObject:
+        executed_arguments.append(arguments)
+        return tool_success({"value": arguments["value"]})
+
+    adapter = StubAdapter(
+        [
+            {
+                "content": None,
+                "tool_calls": [
+                    {"id": "call_bad", "name": "echo", "arguments": "{not json"},
+                    {"id": "call_ok", "name": "echo", "arguments": {"value": "kept"}},
+                ],
+            },
+            {"content": "Recovered after the rejected sibling.", "tool_calls": None},
+        ]
+    )
+    tools = ToolRegistry()
+    tools.register(
+        "echo",
+        "Echo one value.",
+        {
+            "type": "object",
+            "properties": {"value": {"type": "string"}},
+            "required": ["value"],
+            "additionalProperties": False,
+        },
+        echo_handler,
+    )
+    runtime: Any = StubRuntime(
+        data_dir=tmp_path,
+        agent=StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["echo"]),
+        adapter=adapter,
+        tools=tools,
+    )
+
+    result = await build_chat_loop(runtime).send(
+        "coder",
+        "Run both calls",
+        session_id="session-one",
+    )
+
+    messages = runtime.chat_sessions.get("coder", "session-one").load()
+    assert result.content == "Recovered after the rejected sibling."
+    assert executed_arguments == [{"value": "kept"}]
+    assert persisted_roles(messages) == ["user", "assistant", "tool", "tool", "assistant"]
+    assert messages[1].tool_calls is not None
+    assert messages[1].tool_calls[0].rejection is not None
+    assert messages[1].tool_calls[1].rejection is None
+    assert isinstance(messages[2].content, str)
+    assert isinstance(messages[3].content, str)
+    assert json.loads(messages[2].content)["error"]["code"] == "malformed_tool_arguments"
+    assert json.loads(messages[3].content) == tool_success({"value": "kept"})
+    run = next(iter(runtime.chat_runs._runs.values()))
+    assert run.status == RunStatus.COMPLETED
+
+
+@pytest.mark.asyncio
+async def test_malformed_tool_calls_container_becomes_rejected_call(tmp_path: Path) -> None:
+    adapter = StubAdapter(
+        [
+            {"content": None, "tool_calls": "broken-container"},
+            {"content": "Recovered from the malformed Tool Call container.", "tool_calls": None},
+        ]
+    )
+    runtime: Any = StubRuntime(
+        data_dir=tmp_path,
+        agent=StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"]),
+        adapter=adapter,
+    )
+
+    result = await build_chat_loop(runtime).send(
+        "coder",
+        "Try the malformed call",
+        session_id="session-one",
+    )
+
+    messages = runtime.chat_sessions.get("coder", "session-one").load()
+    assert result.content == "Recovered from the malformed Tool Call container."
+    assert persisted_roles(messages) == ["user", "assistant", "tool", "assistant"]
+    assert messages[1].tool_calls is not None
+    assert messages[1].tool_calls[0].name == "invalid_tool_call"
+    assert messages[1].tool_calls[0].rejection is not None
+    assert messages[1].tool_calls[0].rejection.code == "malformed_tool_call"
+    assert isinstance(messages[2].content, str)
+    assert json.loads(messages[2].content)["error"]["code"] == "malformed_tool_call"
+
+
+@pytest.mark.asyncio
+async def test_max_tool_iteration_limit_returns_failure_then_finalizes_without_tools(
+    tmp_path: Path,
+) -> None:
     agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["get_weather"])
     adapter = StubAdapter(
         [
@@ -1315,7 +1411,11 @@ async def test_max_tool_iteration_stop_raises_chat_error(tmp_path: Path) -> None
                 "tool_calls": [
                     {"id": "call_abc", "name": "get_weather", "arguments": {"city": "Berlin"}}
                 ],
-            }
+            },
+            {
+                "content": "I cannot call more Tools, so this is my final answer.",
+                "tool_calls": None,
+            },
         ]
     )
     tools = ToolRegistry()
@@ -1327,16 +1427,133 @@ async def test_max_tool_iteration_stop_raises_chat_error(tmp_path: Path) -> None
     )
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter, tools=tools)
 
-    with pytest.raises(ChatError, match="maximum tool iterations"):
-        await build_chat_loop(runtime, max_tool_iterations=0).send(
-            "coder",
-            "Weather?",
-            session_id="session-one",
-        )
+    result = await build_chat_loop(runtime, max_tool_iterations=0).send(
+        "coder",
+        "Weather?",
+        session_id="session-one",
+    )
 
     messages = runtime.chat_sessions.get("coder", "session-one").load()
-    assert persisted_roles(messages) == ["user", "assistant", "error"]
-    assert messages[2].error_kind == "tool_iterations_exceeded"
+    assert result.content == "I cannot call more Tools, so this is my final answer."
+    assert persisted_roles(messages) == ["user", "assistant", "tool", "note", "assistant"]
+    assert isinstance(messages[2].content, str)
+    assert json.loads(messages[2].content)["error"]["code"] == TOOL_ITERATION_LIMIT_FAILURE_CODE
+    assert adapter.requests[-1]["kwargs"]["tools"] == []
+
+
+@pytest.mark.asyncio
+async def test_tool_call_during_no_tool_finalization_is_rejected_and_run_completes(
+    tmp_path: Path,
+) -> None:
+    invocation_count = 0
+
+    def handler(_context: ToolContext, _arguments: JsonObject) -> JsonObject:
+        nonlocal invocation_count
+        invocation_count += 1
+        return tool_success({})
+
+    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["get_weather"])
+    adapter = StubAdapter(
+        [
+            {
+                "content": None,
+                "tool_calls": [{"id": "call_first", "name": "get_weather", "arguments": {}}],
+            },
+            {
+                "content": None,
+                "tool_calls": [{"id": "call_ignored", "name": "get_weather", "arguments": {}}],
+            },
+            {
+                "content": "I received the disabled-Tool Result and will answer without Tools.",
+                "tool_calls": None,
+            },
+        ]
+    )
+    tools = ToolRegistry()
+    tools.register("get_weather", "Get weather.", {"type": "object"}, handler)
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter, tools=tools)
+
+    result = await build_chat_loop(runtime, max_tool_iterations=0).send(
+        "coder",
+        "Weather?",
+        session_id="session-one",
+    )
+
+    messages = runtime.chat_sessions.get("coder", "session-one").load()
+    assert result.content == "I received the disabled-Tool Result and will answer without Tools."
+    assert invocation_count == 0
+    assert len(adapter.requests) == 3
+    assert all(request["kwargs"]["tools"] == [] for request in adapter.requests[1:])
+    assert persisted_roles(messages) == [
+        "user",
+        "assistant",
+        "tool",
+        "note",
+        "assistant",
+        "tool",
+        "assistant",
+    ]
+    final_tool_message = next(message for message in reversed(messages) if message.role == "tool")
+    assert isinstance(final_tool_message.content, str)
+    assert json.loads(final_tool_message.content)["error"]["code"] == (
+        TOOL_FINALIZATION_DISABLED_FAILURE_CODE
+    )
+    run = next(iter(runtime.chat_runs._runs.values()))
+    assert run.status == RunStatus.COMPLETED
+
+
+@pytest.mark.asyncio
+async def test_repeated_no_tool_finalization_violations_complete_without_unbounded_loop(
+    tmp_path: Path,
+) -> None:
+    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["get_weather"])
+    adapter = StubAdapter(
+        [
+            {
+                "content": None,
+                "tool_calls": [{"id": "call_limit", "name": "get_weather", "arguments": {}}],
+            },
+            {
+                "content": None,
+                "tool_calls": [{"id": "call_violation_1", "name": "get_weather", "arguments": {}}],
+            },
+            {
+                "content": None,
+                "tool_calls": [{"id": "call_violation_2", "name": "get_weather", "arguments": {}}],
+            },
+        ]
+    )
+    tools = ToolRegistry()
+    tools.register(
+        "get_weather",
+        "Get weather.",
+        {"type": "object"},
+        lambda _context, _arguments: tool_success({}),
+    )
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter, tools=tools)
+
+    result = await build_chat_loop(runtime, max_tool_iterations=0).send(
+        "coder",
+        "Weather?",
+        session_id="session-one",
+    )
+
+    assert result.tool_calls is not None
+    assert result.tool_calls[0].id == "call_violation_2"
+    assert len(adapter.requests) == 3
+    assert all(request["kwargs"]["tools"] == [] for request in adapter.requests[1:])
+    messages = runtime.chat_sessions.get("coder", "session-one").load()
+    disabled_results = [
+        json.loads(message.content)
+        for message in messages
+        if message.role == "tool" and isinstance(message.content, str)
+    ][1:]
+    assert [tool_result["error"]["code"] for tool_result in disabled_results] == [
+        TOOL_FINALIZATION_DISABLED_FAILURE_CODE,
+        TOOL_FINALIZATION_DISABLED_FAILURE_CODE,
+    ]
+    run = next(iter(runtime.chat_runs._runs.values()))
+    assert run.status == RunStatus.COMPLETED
 
 
 def test_failed_tool_call_circuit_breaker_resets_on_change_and_success() -> None:
@@ -1390,8 +1607,39 @@ def test_failed_tool_call_circuit_breaker_keys_error_class_and_schema_version() 
     assert breaker.observe([call], [failed("permission_denied")], registry) == "weather"
 
 
+def test_failed_tool_call_circuit_breaker_keys_rejection_fingerprint() -> None:
+    breaker = _FailedToolCallCircuitBreaker(limit=2)
+
+    def rejected(fingerprint: str) -> ToolCall:
+        return ToolCall(
+            id=f"call-{fingerprint}",
+            name="write",
+            arguments={},
+            rejection=ToolCallRejection(
+                code="malformed_tool_arguments",
+                message="Arguments were malformed.",
+                fingerprint=fingerprint,
+            ),
+        )
+
+    def failed(call: ToolCall) -> ChatMessage:
+        return ChatMessage.tool(
+            tool_call_id=call.id,
+            name=call.name,
+            content=json.dumps(tool_failure("malformed_tool_arguments", "rejected")),
+        )
+
+    first = rejected("raw-a")
+    second = rejected("raw-b")
+    assert breaker.observe([first], [failed(first)]) is None
+    assert breaker.observe([second], [failed(second)]) is None
+    assert breaker.observe([second], [failed(second)]) == "write"
+
+
 @pytest.mark.asyncio
-async def test_identical_failed_tool_call_stops_run_on_eighth_call(tmp_path: Path) -> None:
+async def test_identical_failed_tool_call_finalizes_without_tools_after_eighth_call(
+    tmp_path: Path,
+) -> None:
     invocation_count = 0
 
     def failing_handler(
@@ -1414,6 +1662,7 @@ async def test_identical_failed_tool_call_stops_run_on_eighth_call(tmp_path: Pat
             }
             for index in range(MAX_IDENTICAL_FAILED_TOOL_CALLS)
         ]
+        + [{"content": "The Tool remains blocked; I cannot complete it.", "tool_calls": None}]
     )
     tools = ToolRegistry()
     tools.register(
@@ -1433,22 +1682,22 @@ async def test_identical_failed_tool_call_stops_run_on_eighth_call(tmp_path: Pat
         tools=tools,
     )
 
-    with pytest.raises(ChatError, match="repeated the same failed call 8 times"):
-        await build_chat_loop(runtime).send(
-            "coder",
-            "Create a Skill",
-            session_id="session-one",
-        )
+    result = await build_chat_loop(runtime).send(
+        "coder",
+        "Create a Skill",
+        session_id="session-one",
+    )
 
     messages = runtime.chat_sessions.get("coder", "session-one").load()
+    assert result.content == "The Tool remains blocked; I cannot complete it."
     assert invocation_count == MAX_IDENTICAL_FAILED_TOOL_CALLS
-    assert len(adapter.requests) == MAX_IDENTICAL_FAILED_TOOL_CALLS
-    assert messages[-2].role == "error"
-    assert messages[-2].error_kind == "tool_iterations_exceeded"
+    assert len(adapter.requests) == MAX_IDENTICAL_FAILED_TOOL_CALLS + 1
+    assert adapter.requests[-1]["kwargs"]["tools"] == []
     assert persisted_roles(messages) == [
         "user",
         *(["assistant", "tool"] * MAX_IDENTICAL_FAILED_TOOL_CALLS),
-        "error",
+        "note",
+        "assistant",
     ]
 
 

@@ -12,7 +12,7 @@ from typing import Any, cast
 
 import pytest
 
-from core.chat.messages import JsonObject, ToolCall
+from core.chat.messages import JsonObject, ToolCall, ToolCallRejection
 from core.chat.tool_dispatch import (
     ToolDispatchContext,
     _activate_triggered_skills,
@@ -618,6 +618,66 @@ async def test_dispatch_validates_and_emits_exact_provider_cycle_contract(
 
 class TestExtensionDecisionWiring:
     """The tool_call decision model wired through ``_dispatch_tool_calls``."""
+
+    @pytest.mark.asyncio
+    async def test_rejected_call_bypasses_hooks_and_handler(self, tmp_path: Path) -> None:
+        executed: list[str] = []
+        hook_calls: list[str] = []
+        tools = ToolRegistry()
+
+        def handler(context: ToolContext, _arguments: JsonObject) -> JsonObject:
+            executed.append(context.tool_call_id)
+            return tool_success({"ran": True})
+
+        tools.register(
+            "echo",
+            "Echo input.",
+            {"type": "object"},
+            handler,
+        )
+        runtime, agent = _build_runtime_and_agent(tmp_path, tools)
+        registry = ExtensionRegistry()
+        registry.install_handler(
+            "observer",
+            "tool_call",
+            lambda _context, **_payload: hook_calls.append("tool_call"),
+        )
+        registry.install_handler(
+            "observer",
+            "tool_result",
+            lambda _context, **_payload: hook_calls.append("tool_result"),
+        )
+        runtime.extensions = registry
+        session = _build_session(tmp_path)
+        run = Run(run_id="run-one", agent_id=agent.id, session_id=session.id)
+
+        messages, _ = await _dispatch_tool_calls(
+            runtime,
+            agent,
+            [
+                ToolCall(
+                    id="call-bad",
+                    name="echo",
+                    arguments={},
+                    rejection=ToolCallRejection(
+                        code="malformed_tool_arguments",
+                        message="Arguments were malformed.",
+                        fingerprint="sha256",
+                    ),
+                )
+            ],
+            session,
+            run,
+            nesting_depth=0,
+        )
+
+        assert executed == []
+        assert hook_calls == []
+        assert _decode_tool_result(messages[0].content) == tool_failure(
+            "malformed_tool_arguments",
+            "Arguments were malformed.",
+            retryable=False,
+        )
 
     @pytest.mark.asyncio
     async def test_tool_hooks_serialize_without_serializing_tool_handlers(

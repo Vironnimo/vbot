@@ -57,6 +57,7 @@ from core.providers.adapter import (
     IMAGE_WIRE_MEDIA_TYPES,
     ModelLookup,
     ProviderAdapter,
+    normalize_tool_call_candidate,
     project_tool_result_content_fallbacks,
 )
 from core.providers.errors import NetworkError, ProviderError
@@ -562,7 +563,7 @@ class OllamaAdapter(ProviderAdapter):
                     content = message.get("content")
                     if isinstance(content, str) and content:
                         yield {"type": "content_delta", "text": content}
-                    for tool_call in _extract_ollama_tool_calls(message.get("tool_calls")) or []:
+                    for tool_call in _ollama_stream_tool_calls(message.get("tool_calls")):
                         has_tool_calls = True
                         yield {
                             "type": "tool_call_delta",
@@ -704,26 +705,49 @@ def _flatten_text_content(content: Any) -> str:
 
 
 def _extract_ollama_tool_calls(raw_tool_calls: Any) -> list[dict[str, Any]] | None:
-    if not isinstance(raw_tool_calls, list):
+    if not raw_tool_calls:
         return None
+    raw_call_values = raw_tool_calls if isinstance(raw_tool_calls, list) else [raw_tool_calls]
     tool_calls: list[dict[str, Any]] = []
-    for position, raw_call in enumerate(raw_tool_calls):
-        if not isinstance(raw_call, dict):
-            continue
-        function = raw_call.get("function")
-        if not isinstance(function, dict):
-            continue
-        name = function.get("name")
-        if not isinstance(name, str) or not name:
-            continue
-        arguments = function.get("arguments")
-        if not isinstance(arguments, dict):
-            arguments = {}
+    for position, raw_call_value in enumerate(raw_call_values):
+        raw_call = raw_call_value if isinstance(raw_call_value, Mapping) else {}
+        function_value = raw_call.get("function")
+        function = function_value if isinstance(function_value, Mapping) else {}
+        tool_calls.append(
+            normalize_tool_call_candidate(
+                tool_call_id=raw_call.get("id"),
+                name=function.get("name"),
+                arguments=function.get("arguments"),
+                fallback_id=f"tool_call_{position}",
+            )
+        )
+    return tool_calls or None
+
+
+def _ollama_stream_tool_calls(raw_tool_calls: Any) -> list[dict[str, Any]]:
+    """Preserve malformed wire values so Chat can reject rather than dispatch them."""
+
+    if not raw_tool_calls:
+        return []
+    raw_call_values = raw_tool_calls if isinstance(raw_tool_calls, list) else [raw_tool_calls]
+    tool_calls: list[dict[str, Any]] = []
+    for position, raw_call_value in enumerate(raw_call_values):
+        raw_call = raw_call_value if isinstance(raw_call_value, Mapping) else {}
+        function_value = raw_call.get("function")
+        function = function_value if isinstance(function_value, Mapping) else {}
         tool_call_id = raw_call.get("id")
         if not isinstance(tool_call_id, str) or not tool_call_id:
             tool_call_id = f"tool_call_{position}"
-        tool_calls.append({"id": tool_call_id, "name": name, "arguments": dict(arguments)})
-    return tool_calls or None
+        name = function.get("name")
+        arguments = function.get("arguments")
+        tool_calls.append(
+            {
+                "id": tool_call_id,
+                "name": name if isinstance(name, str) else "",
+                "arguments": arguments if arguments is not None else {},
+            }
+        )
+    return tool_calls
 
 
 def _extract_ollama_usage(response: Mapping[str, Any]) -> dict[str, Any] | None:

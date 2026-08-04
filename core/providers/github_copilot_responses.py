@@ -20,7 +20,9 @@ from core.providers.adapter import (
     TERMINAL_OUTCOME_STOP,
     TERMINAL_OUTCOME_TOOL_CALLS,
     TERMINAL_OUTCOME_UNKNOWN,
+    TOOL_CALL_REJECTION_FIELD,
     TerminalOutcome,
+    normalize_tool_call_candidate,
     normalize_tool_call_ids,
     tool_result_content_blocks,
 )
@@ -102,16 +104,14 @@ class ResponsesStreamState:
             *self.emitted_tool_names,
             *self.emitted_tool_arguments,
         ]
-        for tool_call_id in dict.fromkeys(known_tool_ids):
-            arguments = _parse_tool_arguments(self.emitted_tool_arguments.get(tool_call_id, ""))
-            if arguments is None:
-                continue
+        for position, tool_call_id in enumerate(dict.fromkeys(known_tool_ids)):
             tool_calls.append(
-                {
-                    "id": tool_call_id,
-                    "name": self.emitted_tool_names.get(tool_call_id, ""),
-                    "arguments": arguments,
-                }
+                normalize_tool_call_candidate(
+                    tool_call_id=tool_call_id,
+                    name=self.emitted_tool_names.get(tool_call_id),
+                    arguments=self.emitted_tool_arguments.get(tool_call_id),
+                    fallback_id=f"tool_call_{position}",
+                )
             )
         result: dict[str, Any] = {
             "role": "assistant",
@@ -175,7 +175,7 @@ def build_responses_payload(
 def normalize_responses_response(response: Mapping[str, Any]) -> dict[str, Any]:
     """Normalize a non-streaming Responses result to canonical assistant fields."""
 
-    output_items = _mapping_list(response.get("output"))
+    output_items = _response_output_items(response.get("output"))
     normalized: dict[str, Any] = {
         "role": "assistant",
         "content": _joined_or_none(_extract_output_text_parts(output_items)),
@@ -275,7 +275,7 @@ def _assistant_message_to_input_items(message: dict[str, Any]) -> list[dict[str,
         # reconstruction protocol. Preserve every output item verbatim so opaque
         # reasoning, assistant phase, program items, and future item kinds keep
         # their original ordering and identifiers.
-        return [dict(item) for item in response_output]
+        return _safe_response_output_items(response_output, message.get("tool_calls"))
 
     input_items: list[dict[str, Any]] = []
     input_items.extend(_reasoning_meta_input_items(message.get("reasoning_meta")))
@@ -287,6 +287,35 @@ def _assistant_message_to_input_items(message: dict[str, Any]) -> list[dict[str,
     for tool_call in _mapping_list(message.get("tool_calls")):
         input_items.append(_tool_call_to_function_call(tool_call))
     return input_items
+
+
+def _safe_response_output_items(
+    response_output: list[Mapping[str, Any]],
+    raw_tool_calls: Any,
+) -> list[dict[str, Any]]:
+    """Replace only rejected raw function items with their safe canonical calls."""
+
+    tool_calls = _mapping_list(raw_tool_calls)
+    if not any(TOOL_CALL_REJECTION_FIELD in tool_call for tool_call in tool_calls):
+        return [dict(item) for item in response_output]
+
+    safe_items: list[dict[str, Any]] = []
+    tool_call_index = 0
+    for item in response_output:
+        if item.get("type") != "function_call" or tool_call_index >= len(tool_calls):
+            safe_items.append(dict(item))
+            continue
+        tool_call = tool_calls[tool_call_index]
+        tool_call_index += 1
+        safe_items.append(
+            _tool_call_to_function_call(tool_call)
+            if TOOL_CALL_REJECTION_FIELD in tool_call
+            else dict(item)
+        )
+    safe_items.extend(
+        _tool_call_to_function_call(tool_call) for tool_call in tool_calls[tool_call_index:]
+    )
+    return safe_items
 
 
 def _text_message_to_input_item(
@@ -632,18 +661,16 @@ def _content_text_parts(content: Any, allowed_types: set[str]) -> list[str]:
 
 def _extract_function_calls(output_items: list[Mapping[str, Any]]) -> list[dict[str, Any]] | None:
     tool_calls: list[dict[str, Any]] = []
-    for item in output_items:
+    for position, item in enumerate(output_items):
         if item.get("type") != "function_call":
             continue
-        arguments = _parse_tool_arguments(_function_call_arguments(item))
-        if arguments is None:
-            continue
         tool_calls.append(
-            {
-                "id": _function_call_id(item),
-                "name": _function_call_name(item),
-                "arguments": arguments,
-            }
+            normalize_tool_call_candidate(
+                tool_call_id=item.get("call_id") or item.get("id"),
+                name=_function_call_name(item),
+                arguments=_function_call_arguments(item),
+                fallback_id=f"tool_call_{position}",
+            )
         )
     return tool_calls or None
 
@@ -914,7 +941,7 @@ def _completed_event_deltas(
         response = {**response, "status": implied_status}
     state.completed_response = dict(response)
     deltas: list[dict[str, Any]] = []
-    completed_output_items = _mapping_list(response.get("output"))
+    completed_output_items = _response_output_items(response.get("output"))
     if completed_output_items:
         state.output_items_by_index = {
             output_index: dict(item) for output_index, item in enumerate(completed_output_items)
@@ -1044,7 +1071,7 @@ def _responses_finish_reason(
     if status != "completed":
         return TERMINAL_OUTCOME_UNKNOWN
 
-    output_items = _mapping_list(response.get("output"))
+    output_items = _response_output_items(response.get("output"))
     if any(item.get("type") == "function_call" for item in output_items):
         return TERMINAL_OUTCOME_TOOL_CALLS
     if state is not None and _stream_has_tool_calls(state):
@@ -1217,26 +1244,16 @@ def _serialize_tool_arguments(arguments: Any) -> str:
     return json.dumps(arguments if arguments is not None else {}, separators=(",", ":"))
 
 
-def _parse_tool_arguments(arguments: Any) -> dict[str, Any] | None:
-    if isinstance(arguments, Mapping):
-        return dict(arguments)
-    if arguments is None:
-        return {}
-    if not isinstance(arguments, str):
-        return None
-    if not arguments:
-        return {}
-    try:
-        parsed = json.loads(arguments)
-    except json.JSONDecodeError:
-        return None
-    return dict(parsed) if isinstance(parsed, Mapping) else None
-
-
 def _mapping_list(value: Any) -> list[Mapping[str, Any]]:
     if not isinstance(value, list):
         return []
     return [item for item in value if isinstance(item, Mapping)]
+
+
+def _response_output_items(value: Any) -> list[Mapping[str, Any]]:
+    if isinstance(value, Mapping):
+        return [value]
+    return _mapping_list(value)
 
 
 def _joined_or_none(parts: list[str]) -> str | None:

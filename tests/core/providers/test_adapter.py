@@ -15,6 +15,7 @@ from core.providers.adapter import (
     IMAGE_WIRE_MEDIA_TYPES,
     TOOL_RESULT_CONTENT_BLOCKS_FIELD,
     ProviderAdapter,
+    normalize_tool_call_candidate,
     project_tool_result_content_fallbacks,
 )
 from core.providers.reasoning import REASONING_REPLAY_CURRENT_RUN
@@ -217,3 +218,32 @@ class TestProviderAdapterABC:
             {"type": "reasoning_meta", "reasoning_meta": {"provider": "opaque"}},
             {"type": "finish", "reason": "tool_calls"},
         ]
+
+
+def test_normalize_tool_call_candidate_preserves_malformed_attempt_with_safe_arguments() -> None:
+    candidate = normalize_tool_call_candidate(
+        tool_call_id="call_bad",
+        name="write",
+        arguments='{"path":"README.md"',
+        fallback_id="tool_call_0",
+    )
+
+    assert candidate["id"] == "call_bad"
+    assert candidate["name"] == "write"
+    assert candidate["arguments"] == {}
+    assert candidate["rejection"]["code"] == "malformed_tool_arguments"
+    assert "malformed or incomplete JSON" in candidate["rejection"]["message"]
+
+
+def test_normalize_tool_call_candidate_synthesizes_addressable_missing_name_failure() -> None:
+    candidate = normalize_tool_call_candidate(
+        tool_call_id=None,
+        name=None,
+        arguments={"path": "README.md"},
+        fallback_id="tool_call_3",
+    )
+
+    assert candidate["id"] == "tool_call_3"
+    assert candidate["name"] == "invalid_tool_call"
+    assert candidate["arguments"] == {"path": "README.md"}
+    assert candidate["rejection"]["code"] == "malformed_tool_call"

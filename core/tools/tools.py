@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import copy
 import inspect
+import json
 import weakref
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -590,6 +591,17 @@ class ToolRegistry:
                 raise InvalidToolResultError(
                     f"Tool result violates its contract: {name}: {error}"
                 ) from None
+        try:
+            json.dumps(
+                result,
+                ensure_ascii=False,
+                separators=(",", ":"),
+                allow_nan=False,
+            )
+        except (TypeError, ValueError, OverflowError) as error:
+            raise InvalidToolResultError(
+                f"Tool result is not JSON-serializable: {name}: {error}"
+            ) from None
         return result
 
     def list_tools(

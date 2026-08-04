@@ -61,6 +61,146 @@ _TOOL_CALL_ID_HASH_LENGTH = 12
 _RESPONSES_OUTPUT_META_KEY = "response_output"
 _TOOL_RESULT_ENVELOPE_KEYS = frozenset({"ok", "error", "data", "artifacts"})
 TOOL_RESULT_CONTENT_BLOCKS_FIELD = "tool_result_content"
+TOOL_CALL_REJECTION_FIELD = "rejection"
+INVALID_TOOL_CALL_NAME = "invalid_tool_call"
+MALFORMED_TOOL_ARGUMENT_PREVIEW_CHARS = 1200
+
+
+def normalize_tool_call_candidate(
+    *,
+    tool_call_id: Any,
+    name: Any,
+    arguments: Any,
+    fallback_id: str,
+    rejection: Any = None,
+) -> JsonObject:
+    """Return one safe canonical Tool Call without discarding malformed attempts.
+
+    Provider wires disagree on whether arguments arrive as an object or an encoded
+    JSON string, and some omit call ids. Every recognizable call still needs a
+    stable canonical identity so Chat can correlate a failure Result. Malformed
+    names or arguments are therefore represented with safe placeholder fields and
+    an explicit rejection; Chat will return that rejection without dispatching the
+    Tool or its Extension hooks.
+    """
+
+    resolved_id = tool_call_id if isinstance(tool_call_id, str) and tool_call_id else fallback_id
+    resolved_name = name if isinstance(name, str) and name else INVALID_TOOL_CALL_NAME
+    normalized_arguments, argument_error = _normalize_tool_call_arguments(arguments)
+
+    problems: list[str] = []
+    if resolved_name == INVALID_TOOL_CALL_NAME and name != INVALID_TOOL_CALL_NAME:
+        problems.append("the Tool name is missing or is not a non-empty string")
+    if argument_error is not None:
+        problems.append(argument_error)
+
+    normalized_rejection = _normalized_existing_tool_call_rejection(rejection)
+    if rejection is not None and normalized_rejection is None:
+        problems.append("the Provider supplied invalid Tool Call rejection metadata")
+
+    candidate: JsonObject = {
+        "id": resolved_id,
+        "name": resolved_name,
+        "arguments": normalized_arguments,
+    }
+    if problems:
+        code = (
+            "malformed_tool_arguments"
+            if len(problems) == 1 and argument_error
+            else "malformed_tool_call"
+        )
+        detail = "; ".join(problems)
+        candidate[TOOL_CALL_REJECTION_FIELD] = {
+            "code": code,
+            "message": (
+                f"Tool Call {resolved_id!r} was rejected before execution because {detail}. "
+                "Reissue the complete Tool Call with a non-empty Tool name and arguments "
+                "encoded as one JSON object."
+            ),
+            "fingerprint": _tool_call_rejection_fingerprint(name, arguments, detail),
+        }
+    elif normalized_rejection is not None:
+        candidate[TOOL_CALL_REJECTION_FIELD] = normalized_rejection
+    return candidate
+
+
+def _normalize_tool_call_arguments(arguments: Any) -> tuple[JsonObject, str | None]:
+    if arguments is None or (isinstance(arguments, str) and not arguments):
+        return {}, None
+    if isinstance(arguments, Mapping):
+        normalized = dict(arguments)
+    elif isinstance(arguments, str):
+        try:
+            decoded = json.loads(arguments)
+        except json.JSONDecodeError:
+            return {}, (
+                "the arguments contain malformed or incomplete JSON "
+                f"({len(arguments)} chars): {_preview_malformed_tool_arguments(arguments)}"
+            )
+        if not isinstance(decoded, Mapping):
+            return {}, (
+                "the arguments JSON decoded to "
+                f"{type(decoded).__name__}, but a JSON object is required"
+            )
+        normalized = dict(decoded)
+    else:
+        return {}, (
+            "the arguments must be a JSON object or an encoded JSON object, but received "
+            f"{type(arguments).__name__}"
+        )
+
+    if any(not isinstance(key, str) for key in normalized):
+        return {}, "the arguments object contains a non-string property name"
+    try:
+        json.dumps(
+            normalized,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
+    except (TypeError, ValueError, OverflowError) as error:
+        return {}, f"the arguments object is not JSON-serializable: {error}"
+    return normalized, None
+
+
+def _normalized_existing_tool_call_rejection(value: Any) -> JsonObject | None:
+    if not isinstance(value, Mapping):
+        return None
+    code = value.get("code")
+    message = value.get("message")
+    fingerprint = value.get("fingerprint")
+    if not all(isinstance(field, str) and field for field in (code, message, fingerprint)):
+        return None
+    return {"code": code, "message": message, "fingerprint": fingerprint}
+
+
+def _preview_malformed_tool_arguments(arguments_text: str) -> str:
+    if len(arguments_text) <= MALFORMED_TOOL_ARGUMENT_PREVIEW_CHARS:
+        return repr(arguments_text)
+    edge_length = MALFORMED_TOOL_ARGUMENT_PREVIEW_CHARS // 2
+    head = arguments_text[:edge_length]
+    tail = arguments_text[-edge_length:]
+    omitted_count = len(arguments_text) - (edge_length * 2)
+    return f"{head!r} ... <{omitted_count} chars omitted> ... {tail!r}"
+
+
+def _tool_call_rejection_fingerprint(name: Any, arguments: Any, detail: str) -> str:
+    if isinstance(arguments, str):
+        argument_evidence = arguments
+    else:
+        try:
+            argument_evidence = json.dumps(
+                arguments,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+                default=lambda value: f"<{type(value).__name__}>",
+            )
+        except (TypeError, ValueError, OverflowError):
+            argument_evidence = f"<{type(arguments).__name__}>"
+    evidence = f"{name!r}\0{argument_evidence}\0{detail}"
+    return hashlib.sha256(evidence.encode("utf-8", errors="replace")).hexdigest()
 
 
 def canonical_tool_result_is_error(message: Mapping[str, Any]) -> bool:

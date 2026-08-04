@@ -1342,6 +1342,27 @@ class TestToolExecutor:
         assert crash_records[0].exc_info is not None
 
     @pytest.mark.asyncio
+    async def test_non_serializable_handler_result_becomes_failed_result(self) -> None:
+        registry = ToolRegistry()
+
+        registry.register(
+            "broken_result",
+            "Return a value that cannot enter Session JSON.",
+            {"type": "object"},
+            lambda _context, _arguments: tool_success({"path": Path("README.md")}),
+        )
+        executor = ToolExecutor(registry)
+
+        results = await executor.execute_many(
+            [ToolCall(id="call-1", name="broken_result", arguments={})],
+            make_execution_config(allowed_tools=["*"]),
+        )
+
+        assert results[0]["ok"] is False
+        assert results[0]["error"]["code"] == "invalid_tool_result"
+        assert "not JSON-serializable" in results[0]["error"]["message"]
+
+    @pytest.mark.asyncio
     async def test_parallel_execution_overlaps_and_preserves_order(self) -> None:
         registry = ToolRegistry()
         started: list[str] = []

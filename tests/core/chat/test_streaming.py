@@ -471,7 +471,7 @@ async def test_tool_argument_merge_preserves_backslash_escape_pair_at_chunk_boun
     ]
 
 
-async def test_malformed_tool_arguments_raise_visible_streaming_error() -> None:
+async def test_malformed_tool_arguments_become_rejected_tool_call() -> None:
     accumulator = StreamingAccumulator()
 
     accumulator.add_delta(
@@ -483,11 +483,16 @@ async def test_malformed_tool_arguments_raise_visible_streaming_error() -> None:
         }
     )
 
-    with pytest.raises(StreamingDeltaError, match="malformed or incomplete arguments"):
-        accumulator.finalize_assistant_fields()
+    fields = accumulator.finalize_assistant_fields()
+
+    assert fields.tool_calls is not None
+    tool_call = fields.tool_calls[0]
+    assert tool_call["arguments"] == {}
+    assert tool_call["rejection"]["code"] == "malformed_tool_arguments"
+    assert "malformed or incomplete JSON" in tool_call["rejection"]["message"]
 
 
-async def test_malformed_tool_arguments_error_abbreviates_large_fragments() -> None:
+async def test_malformed_tool_arguments_rejection_abbreviates_large_fragments() -> None:
     accumulator = StreamingAccumulator()
     huge_fragment = '{"path":"todo.html","content":"' + ("x" * 5000)
 
@@ -500,10 +505,10 @@ async def test_malformed_tool_arguments_error_abbreviates_large_fragments() -> N
         }
     )
 
-    with pytest.raises(StreamingDeltaError) as exc_info:
-        accumulator.finalize_assistant_fields()
+    fields = accumulator.finalize_assistant_fields()
 
-    error_message = str(exc_info.value)
+    assert fields.tool_calls is not None
+    error_message = fields.tool_calls[0]["rejection"]["message"]
     assert f"{len(huge_fragment)} chars" in error_message
     assert "chars omitted" in error_message
     assert huge_fragment not in error_message

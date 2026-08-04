@@ -31,6 +31,7 @@ from core.providers.adapter import (
     TERMINAL_OUTCOME_UNKNOWN,
     ModelLookup,
     TerminalOutcome,
+    normalize_tool_call_candidate,
     project_tool_result_content_fallbacks,
 )
 from core.providers.anthropic_compatible import (
@@ -820,7 +821,13 @@ def _normalize_gemini_response(response: Mapping[str, Any]) -> dict[str, Any]:
     candidate = candidate if isinstance(candidate, Mapping) else {}
     content = candidate.get("content")
     raw_parts = content.get("parts") if isinstance(content, Mapping) else None
-    parts = raw_parts if isinstance(raw_parts, list) else []
+    parts = (
+        raw_parts
+        if isinstance(raw_parts, list)
+        else [raw_parts]
+        if isinstance(raw_parts, Mapping)
+        else []
+    )
     replay_parts = [copy.deepcopy(dict(part)) for part in parts if isinstance(part, Mapping)]
     text_parts: list[str] = []
     reasoning_parts: list[str] = []
@@ -831,13 +838,13 @@ def _normalize_gemini_response(response: Mapping[str, Any]) -> dict[str, Any]:
             (reasoning_parts if part.get("thought") is True else text_parts).append(text)
         function_call = part.get("functionCall")
         if isinstance(function_call, Mapping):
-            arguments = function_call.get("args")
             tool_calls.append(
-                {
-                    "id": _gemini_tool_call_id(function_call, response, index),
-                    "name": str(function_call.get("name") or "tool"),
-                    "arguments": dict(arguments) if isinstance(arguments, Mapping) else {},
-                }
+                normalize_tool_call_candidate(
+                    tool_call_id=_gemini_tool_call_id(function_call, response, index),
+                    name=function_call.get("name"),
+                    arguments=function_call.get("args"),
+                    fallback_id=f"tool_call_{index}",
+                )
             )
     result: dict[str, Any] = {
         "role": "assistant",
@@ -876,7 +883,10 @@ def _normalize_gemini_stream_chunk(
     candidate = candidate if isinstance(candidate, Mapping) else {}
     content = candidate.get("content")
     parts = content.get("parts") if isinstance(content, Mapping) else []
-    for position, raw_part in enumerate(parts if isinstance(parts, list) else []):
+    part_values = (
+        parts if isinstance(parts, list) else [parts] if isinstance(parts, Mapping) else []
+    )
+    for position, raw_part in enumerate(part_values):
         if not isinstance(raw_part, Mapping):
             continue
         part = copy.deepcopy(dict(raw_part))
@@ -892,13 +902,15 @@ def _normalize_gemini_stream_chunk(
         function_call = part.get("functionCall")
         if isinstance(function_call, Mapping):
             chunk_has_tools = True
+            name = function_call.get("name")
+            arguments = function_call.get("args")
             deltas.append(
                 {
                     "type": "tool_call_delta",
                     "id": _gemini_tool_call_id(function_call, chunk, position),
-                    "name_delta": str(function_call.get("name") or "tool"),
+                    "name_delta": name if isinstance(name, str) else "",
                     "arguments_delta": json.dumps(
-                        function_call.get("args") or {},
+                        arguments if arguments is not None else {},
                         separators=(",", ":"),
                     ),
                 }

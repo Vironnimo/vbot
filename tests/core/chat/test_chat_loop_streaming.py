@@ -11,13 +11,11 @@ import pytest
 from core.chat.continuation import (
     recover_continuation,
 )
-from core.chat.streaming import StreamingDeltaError
 from core.providers.errors import (
     NetworkError,
 )
 from core.runs import (
     ASSISTANT_OUTPUT_DELTA_EVENT,
-    ERROR_MESSAGE_PERSISTED_EVENT,
     MODEL_STEP_USAGE_EVENT,
     PROVIDER_HEARTBEAT_EVENT,
     REASONING_DELTA_EVENT,
@@ -222,7 +220,7 @@ async def test_streaming_mode_persists_only_final_messages_and_continues_tool_lo
 
 
 @pytest.mark.asyncio
-async def test_streaming_mode_malformed_tool_arguments_persist_provider_error(
+async def test_streaming_mode_malformed_tool_arguments_return_tool_failure_and_continue(
     tmp_path: Path,
 ) -> None:
     agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
@@ -238,30 +236,35 @@ async def test_streaming_mode_malformed_tool_arguments_persist_provider_error(
                     "arguments_delta": '{"path":"todo.html","content":"<html>',
                 },
                 {"type": "finish", "reason": "tool_calls"},
-            ]
+            ],
+            [
+                {"type": "content_delta", "text": "The Tool Call was malformed, so I stopped."},
+                {"type": "finish", "reason": "stop"},
+            ],
         ],
     )
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
 
     loop = build_chat_loop(runtime, streaming=True)
-    with pytest.raises(StreamingDeltaError, match="malformed or incomplete arguments"):
-        await loop.send("coder", "Build it", session_id="session-one")
+    result = await loop.send("coder", "Build it", session_id="session-one")
 
     run = next(iter(runtime.chat_runs._runs.values()))
     messages = runtime.chat_sessions.get("coder", "session-one").load()
 
-    assert run.status == RunStatus.FAILED
-    assert persisted_roles(messages) == ["user", "error"]
-    state = recover_continuation(runtime.chat_sessions.get("coder", "session-one"))
-    assert state is not None
-    assert state.cause == "internal"
-    assert state.reasoning == "Need to write the file."
-    assert messages[1].error_kind == "provider_error"
-    assert "malformed or incomplete arguments" in (messages[1].content or "")
-    assert [event.type for event in run.events][-2:] == [
-        ERROR_MESSAGE_PERSISTED_EVENT,
-        "run_failed",
-    ]
+    assert result.content == "The Tool Call was malformed, so I stopped."
+    assert run.status == RunStatus.COMPLETED
+    assert persisted_roles(messages) == ["user", "assistant", "tool", "assistant"]
+    assert messages[1].tool_calls is not None
+    assert messages[1].tool_calls[0].arguments == {}
+    assert messages[1].tool_calls[0].rejection is not None
+    assert messages[1].tool_calls[0].rejection.code == "malformed_tool_arguments"
+    assert isinstance(messages[2].content, str)
+    failure = json.loads(messages[2].content)
+    assert failure["error"]["code"] == "malformed_tool_arguments"
+    assert failure["error"]["retryable"] is False
+    assert not (tmp_path / "todo.html").exists()
+    assert recover_continuation(runtime.chat_sessions.get("coder", "session-one")) is None
+    assert [event.type for event in run.events][-1] == "run_completed"
 
 
 @pytest.mark.asyncio

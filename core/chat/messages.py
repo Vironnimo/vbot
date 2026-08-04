@@ -19,6 +19,10 @@ from core.chat.content_blocks import (
     content_block_to_dict,
 )
 from core.chat.errors import ChatError, ChatMessageValidationError
+from core.providers.adapter import (
+    TOOL_CALL_REJECTION_FIELD,
+    normalize_tool_call_candidate,
+)
 from core.providers.reasoning import (
     REASONING_REPLAY_CURRENT_RUN,
     REASONING_REPLAY_FULL_HISTORY,
@@ -128,20 +132,50 @@ ERROR_KIND_LLM_VISIBLE: dict[str, bool] = {
 
 
 @dataclass(frozen=True)
+class ToolCallRejection:
+    """Why one canonical Provider Tool Call must not cross the dispatch boundary."""
+
+    code: str
+    message: str
+    fingerprint: str
+
+    def to_dict(self) -> JsonObject:
+        return {
+            "code": self.code,
+            "message": self.message,
+            "fingerprint": self.fingerprint,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Any) -> ToolCallRejection:
+        if not isinstance(data, dict):
+            raise ChatMessageValidationError("tool call rejection must be an object")
+        return cls(
+            code=_require_string(data, "code"),
+            message=_require_string(data, "message"),
+            fingerprint=_require_string(data, "fingerprint"),
+        )
+
+
+@dataclass(frozen=True)
 class ToolCall:
     """A canonical assistant-requested tool call."""
 
     id: str
     name: str
     arguments: JsonObject = field(default_factory=dict)
+    rejection: ToolCallRejection | None = None
 
     def to_dict(self) -> JsonObject:
         """Return a JSON-serializable tool call dictionary."""
-        return {
+        result: JsonObject = {
             "id": self.id,
             "name": self.name,
             "arguments": dict(self.arguments),
         }
+        if self.rejection is not None:
+            result[TOOL_CALL_REJECTION_FIELD] = self.rejection.to_dict()
+        return result
 
     @classmethod
     def from_dict(cls, data: JsonObject) -> ToolCall:
@@ -151,7 +185,16 @@ class ToolCall:
         arguments = data.get("arguments", {})
         if not isinstance(arguments, dict):
             raise ChatMessageValidationError("tool call arguments must be an object")
-        return cls(id=tool_call_id, name=name, arguments=dict(arguments))
+        rejection_data = data.get(TOOL_CALL_REJECTION_FIELD)
+        rejection = (
+            ToolCallRejection.from_dict(rejection_data) if rejection_data is not None else None
+        )
+        return cls(
+            id=tool_call_id,
+            name=name,
+            arguments=dict(arguments),
+            rejection=rejection,
+        )
 
 
 @dataclass(frozen=True)
@@ -1431,7 +1474,7 @@ def _assistant_message_from_response(
     interrupted: bool = False,
     interruption_cause: str | None = None,
 ) -> ChatMessage:
-    tool_calls = _parse_tool_calls(response.get("tool_calls"))
+    tool_calls = _parse_response_tool_calls(response.get("tool_calls"))
     reasoning = _nullable_response_string(response, "reasoning")
     reasoning_meta = _response_reasoning_meta(response)
     return ChatMessage.assistant(
@@ -1580,6 +1623,38 @@ def _parse_tool_calls(value: Any) -> list[ToolCall] | None:
     if not isinstance(value, list):
         raise ChatMessageValidationError("tool_calls must be an array")
     return [ToolCall.from_dict(item) for item in value if _is_tool_call_object(item)]
+
+
+def _parse_response_tool_calls(value: Any) -> list[ToolCall] | None:
+    """Normalize every recognizable Provider call, including malformed attempts."""
+
+    if value is None:
+        return None
+
+    if isinstance(value, list):
+        raw_calls = value
+    elif isinstance(value, dict):
+        # A Provider occasionally collapses a one-element Tool Call array into
+        # an object. It is still addressable, so preserve it as one attempt.
+        raw_calls = [value]
+    else:
+        # Provider response-shape corruption must not turn a Tool-level problem
+        # into a Run-level failure. Preserve one synthetic rejected attempt so
+        # the Model receives a correlated failure Result and can recover.
+        raw_calls = [{"arguments": value}]
+
+    tool_calls: list[ToolCall] = []
+    for index, raw_call in enumerate(raw_calls):
+        call = raw_call if isinstance(raw_call, dict) else {}
+        candidate = normalize_tool_call_candidate(
+            tool_call_id=call.get("id"),
+            name=call.get("name"),
+            arguments=call.get("arguments"),
+            fallback_id=f"tool_call_{index}",
+            rejection=call.get(TOOL_CALL_REJECTION_FIELD),
+        )
+        tool_calls.append(ToolCall.from_dict(candidate))
+    return tool_calls or None
 
 
 def _is_content_block(value: Any) -> bool:

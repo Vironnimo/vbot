@@ -328,6 +328,31 @@ def test_gemini_response_normalizes_signature_tools_cache_usage_and_outcome(
     }
 
 
+def test_gemini_response_preserves_malformed_tool_call_as_rejection(
+    adapter: OpenCodeZenAdapter,
+) -> None:
+    normalized = adapter.normalize_response(
+        {
+            "responseId": "gem_bad",
+            "candidates": [
+                {
+                    "content": {
+                        "role": "model",
+                        "parts": {"functionCall": {"id": "call_bad", "args": ["bad"]}},
+                    },
+                    "finishReason": "STOP",
+                }
+            ],
+        },
+        model_id="gemini-3.5-flash",
+    )
+
+    assert normalized["tool_calls"][0]["id"] == "call_bad"
+    assert normalized["tool_calls"][0]["name"] == "invalid_tool_call"
+    assert normalized["tool_calls"][0]["arguments"] == {}
+    assert normalized["tool_calls"][0]["rejection"]["code"] == "malformed_tool_call"
+
+
 @respx.mock
 @pytest.mark.asyncio
 async def test_gemini_stream_preserves_reasoning_meta_tools_usage_and_finish(
@@ -411,6 +436,46 @@ async def test_gemini_stream_preserves_reasoning_meta_tools_usage_and_finish(
         "reasoning_tokens": 3,
     }
     assert replay["reasoning_meta"]["gemini_parts"][0]["thoughtSignature"] == "opaque"
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_gemini_stream_preserves_malformed_tool_values_for_chat_rejection(
+    adapter: OpenCodeZenAdapter,
+) -> None:
+    chunk = {
+        "responseId": "gem_bad",
+        "candidates": [
+            {
+                "content": {"parts": [{"functionCall": {"id": "call_bad", "args": ["bad"]}}]},
+                "finishReason": "STOP",
+            }
+        ],
+    }
+    body = f"data: {json.dumps(chunk)}\n\n"
+    respx.post(GEMINI_STREAM_URL).mock(
+        return_value=httpx.Response(
+            200,
+            text=body,
+            headers={"content-type": "text/event-stream"},
+        )
+    )
+
+    deltas = [
+        delta
+        async for delta in adapter.stream(
+            [{"role": "user", "content": "hello"}],
+            model_id="gemini-3.5-flash",
+        )
+    ]
+
+    tool_delta = next(delta for delta in deltas if delta["type"] == "tool_call_delta")
+    assert tool_delta == {
+        "type": "tool_call_delta",
+        "id": "call_bad",
+        "name_delta": "",
+        "arguments_delta": '["bad"]',
+    }
 
 
 def test_catalog_policy_is_exact_and_marks_privacy_and_deprecation() -> None:
