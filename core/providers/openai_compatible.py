@@ -251,6 +251,16 @@ class OpenAICompatibleAdapter(ProviderAdapter):
             headers.update(self._config.extra_headers)
         return headers
 
+    async def _build_request_headers(
+        self,
+        messages: list[dict[str, Any]],
+        payload: Mapping[str, Any],
+    ) -> dict[str, str]:
+        """Build headers that may depend on one concrete request payload."""
+
+        del messages, payload
+        return await self._build_headers()
+
     def normalize_response(
         self, response: dict[str, Any], *, model_id: str | None = None
     ) -> dict[str, Any]:
@@ -590,8 +600,8 @@ class OpenAICompatibleAdapter(ProviderAdapter):
         selected_effort = _selected_thinking_effort(kwargs)
 
         async def _do_request() -> dict[str, Any]:
-            headers = await self._build_headers()
             payload = self._build_payload(messages, model_id, **kwargs)
+            headers = await self._build_request_headers(messages, payload)
             try:
                 response = await self._client.post(
                     CHAT_COMPLETIONS_ENDPOINT,
@@ -675,7 +685,7 @@ class OpenAICompatibleAdapter(ProviderAdapter):
         async def _connect_stream() -> httpx.Response:
             # Rebuild headers per attempt: an OAuth token may refresh during a
             # retry backoff, and the getter must be re-consulted each time.
-            headers = await self._build_headers()
+            headers = await self._build_request_headers(messages, payload)
             request = self._client.build_request(
                 "POST",
                 CHAT_COMPLETIONS_ENDPOINT,

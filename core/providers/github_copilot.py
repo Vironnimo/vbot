@@ -16,7 +16,7 @@ from core.providers._http_shared import (
     wrap_network_error,
 )
 from core.providers.adapter import IMAGE_WIRE_MEDIA_TYPES
-from core.providers.errors import NetworkError, ProviderError
+from core.providers.errors import CatalogEntrySkipped, NetworkError, ProviderError
 from core.providers.github_copilot_messages import (
     CopilotMessagesStreamState,
     build_copilot_messages_payload,
@@ -44,8 +44,9 @@ from core.providers.openai_compatible import (
     _read_optional_mapping,
     _read_string,
 )
-from core.providers.reasoning import ReasoningReplayPolicy
+from core.providers.reasoning import THINKING_EFFORT_RANKS, ReasoningReplayPolicy
 from core.utils.retry import retry_async
+from core.utils.tokens import estimate_request_input_tokens
 
 
 class GitHubCopilotAdapter(OpenAICompatibleAdapter):
@@ -63,15 +64,25 @@ class GitHubCopilotAdapter(OpenAICompatibleAdapter):
         return self._policy_for_model(model_id).reasoning_replay
 
     def wire_media_support(self, model_id: str) -> frozenset[str]:
-        """Every Copilot endpoint family carries images only.
+        """Return the exact catalog-advertised image formats for this Model.
 
         Both the ``/responses`` and ``/v1/messages`` routes accept image input
         but no audio; overriding the OpenAI-compatible base (which advertises
         WAV/MP3) keeps the chat layer from emitting audio the Copilot wire
         cannot carry.
         """
-        del model_id
-        return IMAGE_WIRE_MEDIA_TYPES
+        metadata = self._runtime_metadata_for_model(model_id)
+        vision = metadata.get("vision")
+        if not isinstance(vision, Mapping):
+            return IMAGE_WIRE_MEDIA_TYPES
+        media_types = vision.get("supported_media_types")
+        if not isinstance(media_types, tuple | list):
+            return IMAGE_WIRE_MEDIA_TYPES
+        return frozenset(
+            media_type
+            for media_type in media_types
+            if isinstance(media_type, str) and media_type in IMAGE_WIRE_MEDIA_TYPES
+        )
 
     # ------------------------------------------------------------------
     # Payload / request helpers
@@ -111,17 +122,17 @@ class GitHubCopilotAdapter(OpenAICompatibleAdapter):
                 messages,
                 model_id=model_id,
                 policy=policy,
-                **self._request_kwargs_with_defaults(kwargs),
+                **self._request_kwargs_with_defaults(messages, model_id, kwargs),
             )
-            return await self._post_json(RESPONSES_ENDPOINT, payload)
+            return await self._post_json(RESPONSES_ENDPOINT, payload, messages)
         if policy.endpoint_path == MESSAGES_ENDPOINT:
             payload = build_copilot_messages_payload(
                 messages,
                 model_id=model_id,
                 policy=policy,
-                **self._request_kwargs_with_defaults(kwargs),
+                **self._request_kwargs_with_defaults(messages, model_id, kwargs),
             )
-            return await self._post_json(MESSAGES_ENDPOINT, payload)
+            return await self._post_json(MESSAGES_ENDPOINT, payload, messages)
         return await super().send(
             messages,
             model_id=model_id,
@@ -158,9 +169,9 @@ class GitHubCopilotAdapter(OpenAICompatibleAdapter):
                 model_id=model_id,
                 policy=policy,
                 stream=True,
-                **self._request_kwargs_with_defaults(kwargs),
+                **self._request_kwargs_with_defaults(messages, model_id, kwargs),
             )
-            async for delta in self._stream_responses(payload):
+            async for delta in self._stream_responses(payload, messages):
                 yield delta
             return
         if policy.endpoint_path == MESSAGES_ENDPOINT:
@@ -168,10 +179,10 @@ class GitHubCopilotAdapter(OpenAICompatibleAdapter):
                 messages,
                 model_id=model_id,
                 policy=policy,
-                **self._request_kwargs_with_defaults(kwargs),
+                **self._request_kwargs_with_defaults(messages, model_id, kwargs),
             )
             payload["stream"] = True
-            async for delta in self._stream_messages(payload):
+            async for delta in self._stream_messages(payload, messages):
                 yield delta
             return
         async for delta in super().stream(
@@ -195,7 +206,7 @@ class GitHubCopilotAdapter(OpenAICompatibleAdapter):
         )
 
     def _policy_for_model(self, model_id: str) -> GitHubCopilotModelPolicy:
-        metadata = None
+        metadata: Mapping[str, Any] | None = None
         family = ""
         if self._model_lookup is not None:
             model = self._model_lookup(model_id)
@@ -207,12 +218,93 @@ class GitHubCopilotAdapter(OpenAICompatibleAdapter):
                 family = model.family
         return copilot_model_policy(model_id, metadata, family)
 
-    def _request_kwargs_with_defaults(self, kwargs: Mapping[str, Any]) -> dict[str, Any]:
-        request_kwargs: dict[str, Any] = {}
+    def _runtime_metadata_for_model(self, model_id: str) -> Mapping[str, Any]:
+        if self._model_lookup is None:
+            return {}
+        model = self._model_lookup(model_id.split("::", 1)[0])
+        if model is None:
+            return {}
+        metadata = model.metadata.get(COPILOT_METADATA_KEY)
+        return metadata if isinstance(metadata, Mapping) else {}
+
+    def _request_kwargs_with_defaults(
+        self,
+        messages: list[dict[str, Any]],
+        model_id: str,
+        kwargs: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        request_kwargs = {key: value for key, value in kwargs.items() if value is not None}
+        self._apply_model_output_limit(request_kwargs, model_id, messages)
         if self._config.defaults:
-            request_kwargs.update(self._config.defaults)
-        request_kwargs.update(kwargs)
+            for key, value in self._config.defaults.items():
+                request_kwargs.setdefault(key, value)
         return request_kwargs
+
+    def _apply_model_output_limit(
+        self,
+        request_kwargs: dict[str, Any],
+        model_id: str,
+        messages: list[dict[str, Any]],
+    ) -> None:
+        self._validate_image_limits(model_id, _copilot_message_images(messages))
+        max_prompt_tokens = self._runtime_metadata_for_model(model_id).get("max_prompt_tokens")
+        if isinstance(max_prompt_tokens, int) and not isinstance(max_prompt_tokens, bool):
+            tools = request_kwargs.get("tools")
+            tool_definitions = tools if isinstance(tools, list) else None
+            estimated_input, _ = estimate_request_input_tokens(messages, tool_definitions)
+            if estimated_input > max_prompt_tokens:
+                raise ProviderError(
+                    "Request input exceeds the GitHub Copilot Model prompt limit "
+                    f"(estimated_input_tokens={estimated_input}, "
+                    f"max_prompt_tokens={max_prompt_tokens})",
+                    retryable=False,
+                )
+        super()._apply_model_output_limit(request_kwargs, model_id, messages)
+
+    async def _build_request_headers(
+        self,
+        messages: list[dict[str, Any]],
+        payload: Mapping[str, Any],
+    ) -> dict[str, str]:
+        headers = await super()._build_request_headers(messages, payload)
+        headers["x-initiator"] = _copilot_request_initiator(messages)
+        if _copilot_payload_images(payload):
+            headers["Copilot-Vision-Request"] = "true"
+        self._validate_media_limits(payload)
+        return headers
+
+    def _validate_media_limits(self, payload: Mapping[str, Any]) -> None:
+        model_id = payload.get("model")
+        if not isinstance(model_id, str):
+            return
+        self._validate_image_limits(model_id, _copilot_payload_images(payload))
+
+    def _validate_image_limits(self, model_id: str, images: list[str]) -> None:
+        vision = self._runtime_metadata_for_model(model_id).get("vision")
+        if not isinstance(vision, Mapping):
+            return
+        max_images = vision.get("max_prompt_images")
+        if (
+            isinstance(max_images, int)
+            and not isinstance(max_images, bool)
+            and len(images) > max_images
+        ):
+            raise ProviderError(
+                "GitHub Copilot Model image-count limit exceeded "
+                f"(images={len(images)}, max_prompt_images={max_images})",
+                retryable=False,
+            )
+        max_image_size = vision.get("max_prompt_image_size")
+        if not isinstance(max_image_size, int) or isinstance(max_image_size, bool):
+            return
+        for image in images:
+            encoded_size = _base64_payload_size(image)
+            if encoded_size is not None and encoded_size > max_image_size:
+                raise ProviderError(
+                    "GitHub Copilot Model image-size limit exceeded "
+                    f"(image_bytes={encoded_size}, max_prompt_image_size={max_image_size})",
+                    retryable=False,
+                )
 
     def _chat_request_kwargs(
         self,
@@ -224,9 +316,14 @@ class GitHubCopilotAdapter(OpenAICompatibleAdapter):
             request_kwargs.pop(endpoint_specific_key, None)
         return request_kwargs
 
-    async def _post_json(self, endpoint_path: str, payload: dict[str, Any]) -> dict[str, Any]:
+    async def _post_json(
+        self,
+        endpoint_path: str,
+        payload: dict[str, Any],
+        messages: list[dict[str, Any]],
+    ) -> dict[str, Any]:
         async def _do_request() -> dict[str, Any]:
-            headers = await self._build_headers()
+            headers = await self._build_request_headers(messages, payload)
             try:
                 response = await self._client.post(endpoint_path, json=payload, headers=headers)
             except httpx.TransportError as exc:
@@ -245,11 +342,12 @@ class GitHubCopilotAdapter(OpenAICompatibleAdapter):
         self,
         endpoint_path: str,
         payload: dict[str, Any],
+        messages: list[dict[str, Any]],
     ) -> httpx.Response:
         async def _connect() -> httpx.Response:
             # Rebuild headers per attempt: the Copilot session token may refresh
             # during a retry backoff, and the getter must be re-consulted each time.
-            headers = await self._build_headers()
+            headers = await self._build_request_headers(messages, payload)
             request = self._client.build_request(
                 "POST",
                 endpoint_path,
@@ -274,8 +372,12 @@ class GitHubCopilotAdapter(OpenAICompatibleAdapter):
 
         return await retry_async(_connect)
 
-    async def _stream_responses(self, payload: dict[str, Any]) -> AsyncIterator[dict[str, Any]]:
-        response = await self._connect_stream(RESPONSES_ENDPOINT, payload)
+    async def _stream_responses(
+        self,
+        payload: dict[str, Any],
+        messages: list[dict[str, Any]],
+    ) -> AsyncIterator[dict[str, Any]]:
+        response = await self._connect_stream(RESPONSES_ENDPOINT, payload, messages)
         state = ResponsesStreamState()
         event_lines: list[str] = []
         seen_finish_delta = False
@@ -303,8 +405,12 @@ class GitHubCopilotAdapter(OpenAICompatibleAdapter):
         finally:
             await response.aclose()
 
-    async def _stream_messages(self, payload: dict[str, Any]) -> AsyncIterator[dict[str, Any]]:
-        response = await self._connect_stream(MESSAGES_ENDPOINT, payload)
+    async def _stream_messages(
+        self,
+        payload: dict[str, Any],
+        messages: list[dict[str, Any]],
+    ) -> AsyncIterator[dict[str, Any]]:
+        response = await self._connect_stream(MESSAGES_ENDPOINT, payload, messages)
         state = CopilotMessagesStreamState()
         seen_finish_delta = False
         try:
@@ -338,6 +444,10 @@ class GitHubCopilotAdapter(OpenAICompatibleAdapter):
     ) -> Model:
         """Normalize one captured GitHub Copilot ``/models`` entry."""
 
+        del defaults
+        skip_reason = _copilot_catalog_skip_reason(raw)
+        if skip_reason is not None:
+            raise CatalogEntrySkipped(skip_reason)
         capabilities = _read_mapping(raw, "capabilities")
         limits = _read_optional_mapping(capabilities, "limits")
         supports = _read_optional_mapping(capabilities, "supports")
@@ -353,7 +463,7 @@ class GitHubCopilotAdapter(OpenAICompatibleAdapter):
                 vision=vision_supported,
                 tools=tools_supported,
                 json_mode=json_mode_supported,
-                reasoning=ReasoningCapabilities(supported=reasoning_supported),
+                reasoning=_copilot_reasoning_capabilities(supports),
                 input_modalities=("text", "image") if vision_supported else ("text",),
                 output_modalities=("text",),
                 supported_parameters=tuple(
@@ -369,7 +479,7 @@ class GitHubCopilotAdapter(OpenAICompatibleAdapter):
             # read-side default chain; no fake ``0`` baked into the catalog.
             context_window=_read_optional_token_limit(limits, "max_context_window_tokens"),
             max_output_tokens=_read_optional_token_limit(limits, "max_output_tokens"),
-            metadata=_copilot_runtime_metadata(raw, capabilities, supports),
+            metadata=_copilot_runtime_metadata(raw, capabilities, limits, supports),
         )
 
 
@@ -378,6 +488,32 @@ def _copilot_supports_reasoning(supports: Mapping[str, Any]) -> bool:
     if isinstance(reasoning_effort, list) and reasoning_effort:
         return True
     return "min_thinking_budget" in supports or "max_thinking_budget" in supports
+
+
+def _copilot_reasoning_capabilities(
+    supports: Mapping[str, Any],
+) -> ReasoningCapabilities:
+    reasoning_efforts = supports.get("reasoning_effort")
+    if isinstance(reasoning_efforts, list):
+        levels = tuple(
+            effort
+            for effort in reasoning_efforts
+            if isinstance(effort, str) and effort in THINKING_EFFORT_RANKS
+        )
+        if levels:
+            return ReasoningCapabilities(
+                supported=True,
+                control="levels",
+                levels=levels,
+            )
+    max_thinking_budget = supports.get("max_thinking_budget")
+    if isinstance(max_thinking_budget, int) and not isinstance(max_thinking_budget, bool):
+        return ReasoningCapabilities(
+            supported=True,
+            control="budget",
+            budget_max=max_thinking_budget,
+        )
+    return ReasoningCapabilities(supported=_copilot_supports_reasoning(supports))
 
 
 def _copilot_supported_parameters(
@@ -406,6 +542,7 @@ def _http_error_detail(response: httpx.Response, body: str | None = None) -> str
 def _copilot_runtime_metadata(
     raw: Mapping[str, Any],
     capabilities: Mapping[str, Any],
+    limits: Mapping[str, Any],
     supports: Mapping[str, Any],
 ) -> Mapping[str, Any]:
     metadata: dict[str, Any] = {}
@@ -429,6 +566,29 @@ def _copilot_runtime_metadata(
         if efforts:
             metadata["reasoning_efforts"] = efforts
 
+    max_prompt_tokens = _read_optional_token_limit(limits, "max_prompt_tokens")
+    if max_prompt_tokens is not None:
+        metadata["max_prompt_tokens"] = max_prompt_tokens
+
+    vision_limits = limits.get("vision")
+    if isinstance(vision_limits, Mapping):
+        normalized_vision_limits: dict[str, Any] = {}
+        for limit_key in ("max_prompt_image_size", "max_prompt_images"):
+            value = vision_limits.get(limit_key)
+            if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+                normalized_vision_limits[limit_key] = value
+        supported_media_types = vision_limits.get("supported_media_types")
+        if isinstance(supported_media_types, list):
+            normalized_media_types = [
+                media_type
+                for media_type in supported_media_types
+                if isinstance(media_type, str) and media_type.startswith("image/")
+            ]
+            if normalized_media_types:
+                normalized_vision_limits["supported_media_types"] = normalized_media_types
+        if normalized_vision_limits:
+            metadata["vision"] = normalized_vision_limits
+
     for support_key in (
         "min_thinking_budget",
         "max_thinking_budget",
@@ -447,6 +607,35 @@ def _copilot_runtime_metadata(
     return {COPILOT_METADATA_KEY: metadata} if metadata else {}
 
 
+def _copilot_catalog_skip_reason(raw: Mapping[str, Any]) -> str | None:
+    model_id = raw.get("id")
+    label = model_id if isinstance(model_id, str) and model_id else "unknown"
+    if raw.get("model_picker_enabled") is False:
+        return f"Copilot catalog entry '{label}' is not picker-enabled"
+
+    capabilities = raw.get("capabilities")
+    if isinstance(capabilities, Mapping):
+        model_type = capabilities.get("type")
+        if isinstance(model_type, str) and model_type and model_type.lower() != "chat":
+            return f"Copilot catalog entry '{label}' is not a chat Model"
+
+    supported_endpoints = raw.get("supported_endpoints")
+    if isinstance(supported_endpoints, list):
+        endpoints = {
+            endpoint.strip()
+            for endpoint in supported_endpoints
+            if isinstance(endpoint, str) and endpoint.strip()
+        }
+        supported_chat_endpoints = {
+            CHAT_COMPLETIONS_ENDPOINT,
+            RESPONSES_ENDPOINT,
+            MESSAGES_ENDPOINT,
+        }
+        if endpoints and endpoints.isdisjoint(supported_chat_endpoints):
+            return f"Copilot catalog entry '{label}' has no supported chat endpoint"
+    return None
+
+
 def _read_optional_token_limit(
     data: Mapping[str, Any],
     key: str,
@@ -459,6 +648,85 @@ def _read_optional_token_limit(
     if isinstance(value, str) and value.isdecimal():
         return int(value)
     return None
+
+
+def _copilot_request_initiator(messages: list[dict[str, Any]]) -> str:
+    for message in reversed(messages):
+        role = message.get("role")
+        if role == "tool":
+            return "agent"
+        if role in {"user", "assistant"}:
+            return "user"
+    return "user"
+
+
+def _copilot_message_images(messages: list[dict[str, Any]]) -> list[str]:
+    images: list[str] = []
+    for message in messages:
+        content = message.get("content")
+        if not isinstance(content, list):
+            continue
+        for block in content:
+            if not isinstance(block, Mapping) or block.get("type") != "media":
+                continue
+            media_type = block.get("media_type")
+            base64_data = block.get("base64")
+            if (
+                isinstance(media_type, str)
+                and media_type.startswith("image/")
+                and isinstance(base64_data, str)
+            ):
+                images.append(base64_data)
+    return images
+
+
+def _copilot_payload_images(payload: Mapping[str, Any]) -> list[str]:
+    images: list[str] = []
+
+    def _walk(value: Any) -> None:
+        if isinstance(value, Mapping):
+            block_type = value.get("type")
+            if block_type == "image_url":
+                image_url = value.get("image_url")
+                if isinstance(image_url, Mapping):
+                    image_url = image_url.get("url")
+                if isinstance(image_url, str):
+                    images.append(image_url)
+                return
+            if block_type == "input_image":
+                image_url = value.get("image_url")
+                if isinstance(image_url, str):
+                    images.append(image_url)
+                return
+            if block_type == "image":
+                source = value.get("source")
+                if isinstance(source, Mapping):
+                    data = source.get("data")
+                    if isinstance(data, str):
+                        images.append(data)
+                return
+            for child in value.values():
+                _walk(child)
+            return
+        if isinstance(value, tuple | list):
+            for child in value:
+                _walk(child)
+
+    _walk(payload)
+    return images
+
+
+def _base64_payload_size(value: str) -> int | None:
+    encoded = value
+    if value.startswith("data:"):
+        header, separator, encoded = value.partition(",")
+        if not separator or ";base64" not in header.lower():
+            return None
+    compact = "".join(encoded.split())
+    if not compact:
+        return 0
+    padding = len(compact) - len(compact.rstrip("="))
+    return max(0, (len(compact) * 3) // 4 - padding)
 
 
 def _normalize_copilot_chat_response(response: dict[str, Any]) -> dict[str, Any]:

@@ -25,6 +25,11 @@ from core.providers.providers import (
     OAuthConfig,
     resolve_minimax_oauth_expiry,
 )
+from core.providers.token_getter import (
+    COPILOT_EDITOR_VERSION,
+    COPILOT_INTEGRATION_ID,
+    copilot_token_extra,
+)
 from core.providers.token_store import OAuthToken, TokenStore
 from core.utils.errors import ProviderError
 from core.utils.logging import get_logger
@@ -37,8 +42,6 @@ DEFAULT_DEVICE_FLOW_INTERVAL_SECONDS = 5
 DEFAULT_OPENAI_DEVICE_FLOW_EXPIRES_IN_SECONDS = 600
 DEFAULT_COPILOT_TOKEN_LIFETIME_MINUTES = 25
 HTTP_TIMEOUT_SECONDS = 60.0
-COPILOT_INTEGRATION_ID = "vscode-chat"
-COPILOT_EDITOR_VERSION = "vBot/0.1.0"
 OPENAI_DEVICE_CALLBACK_URI = "https://auth.openai.com/deviceauth/callback"
 OPENAI_DEVICE_PENDING_STATUS_CODES = frozenset({403, 404})
 
@@ -669,11 +672,12 @@ class DeviceFlowEngine:
             )
             _LOGGER.warning("Copilot token exchange response did not include expires_at")
 
+        access_token = str(data["token"])
         return OAuthToken(
-            access_token=str(data["token"]),
+            access_token=access_token,
             refresh_token=None,
             expires_at=expires_at,
-            extra={"github_oauth_token": github_oauth_token},
+            extra=copilot_token_extra(data, github_oauth_token, access_token),
         )
 
     async def _get_token_exchange(
@@ -762,9 +766,24 @@ class DeviceFlowEngine:
         return datetime.now(UTC) + timedelta(seconds=int(expires_in))
 
     def _parse_expires_at(self, value: Any) -> datetime | None:
+        if isinstance(value, bool) or value is None:
+            return None
+        if isinstance(value, int | float):
+            try:
+                return datetime.fromtimestamp(float(value), tz=UTC)
+            except (OverflowError, OSError, ValueError):
+                return None
         if not isinstance(value, str) or not value:
             return None
-        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        if value.isdecimal():
+            try:
+                return datetime.fromtimestamp(float(value), tz=UTC)
+            except (OverflowError, OSError, ValueError):
+                return None
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
         if parsed.tzinfo is None:
             return parsed.replace(tzinfo=UTC)
         return parsed.astimezone(UTC)

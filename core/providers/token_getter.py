@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import re
 from datetime import UTC, datetime, timedelta
 from typing import Protocol
+from urllib.parse import urlparse
 
 import httpx
 
@@ -29,9 +31,15 @@ _LOGGER = get_logger("providers.token_getter")
 TOKEN_EXPIRY_BUFFER_SECONDS = 30
 TOKEN_EXCHANGE_FALLBACK_MINUTES = 25
 GITHUB_OAUTH_TOKEN_EXTRA_KEY = "github_oauth_token"
+COPILOT_API_ENDPOINT_EXTRA_KEY = "copilot_api_endpoint"
 COPILOT_INTEGRATION_ID = "vscode-chat"
-COPILOT_EDITOR_VERSION = "vBot/0.1.0"
+COPILOT_EDITOR_VERSION = "vscode/1.128.0"
 ROTATING_REFRESH_DEVICE_FLOWS = frozenset({MINIMAX_OAUTH_DEVICE_FLOW, XAI_OAUTH_DEVICE_FLOW})
+_COPILOT_API_HOST_SUFFIXES = (
+    ".githubcopilot.com",
+    ".ghe.com",
+)
+_COPILOT_PROXY_ENDPOINT_PATTERN = re.compile(r"(?:^|;)\s*proxy-ep=([^;\s]+)")
 
 
 class TokenGetter(Protocol):
@@ -143,7 +151,10 @@ class OAuthTokenGetter:
             access_token=access_token,
             refresh_token=token.refresh_token,
             expires_at=_parse_exchange_expiry(response_data.get("expires_at"), now),
-            extra={**token.extra, GITHUB_OAUTH_TOKEN_EXTRA_KEY: github_oauth_token},
+            extra={
+                **token.extra,
+                **copilot_token_extra(response_data, github_oauth_token, access_token),
+            },
         )
         self._token_store.save(
             self._provider_id,
@@ -301,10 +312,22 @@ def _is_expiring(token: OAuthToken) -> bool:
 
 def _parse_exchange_expiry(value: object, now: datetime) -> datetime:
     fallback = now + timedelta(minutes=TOKEN_EXCHANGE_FALLBACK_MINUTES)
+    if isinstance(value, bool) or value is None:
+        return fallback
+    if isinstance(value, int | float):
+        try:
+            return datetime.fromtimestamp(float(value), tz=UTC)
+        except (OverflowError, OSError, ValueError):
+            return fallback
     if not isinstance(value, str) or not value:
         return fallback
+    if value.isdecimal():
+        try:
+            return datetime.fromtimestamp(float(value), tz=UTC)
+        except (OverflowError, OSError, ValueError):
+            return fallback
     try:
-        parsed = datetime.fromisoformat(value)
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
     except ValueError:
         return fallback
     if parsed.tzinfo is None:
@@ -352,3 +375,53 @@ def _classify_token_exchange_status(status_code: int, response_body: str) -> Non
     if is_retryable_status(status_code, idempotent=False):
         raise ProviderError(f"Provider error: {detail}", retryable=True)
     raise ProviderAuthError("OAuth token refresh failed — please reconnect")
+
+
+def copilot_token_extra(
+    response_data: dict[str, object],
+    github_oauth_token: str,
+    copilot_api_token: str,
+) -> dict[str, str]:
+    """Return the safe persisted metadata from one Copilot token exchange."""
+
+    extra = {GITHUB_OAUTH_TOKEN_EXTRA_KEY: github_oauth_token}
+    api_endpoint = _copilot_api_endpoint(response_data, copilot_api_token)
+    if api_endpoint is not None:
+        extra[COPILOT_API_ENDPOINT_EXTRA_KEY] = api_endpoint
+    return extra
+
+
+def _copilot_api_endpoint(
+    response_data: dict[str, object],
+    copilot_api_token: str,
+) -> str | None:
+    endpoints = response_data.get("endpoints")
+    if isinstance(endpoints, dict):
+        api_endpoint = _validated_copilot_api_endpoint(endpoints.get("api"))
+        if api_endpoint is not None:
+            return api_endpoint
+
+    proxy_match = _COPILOT_PROXY_ENDPOINT_PATTERN.search(copilot_api_token)
+    if proxy_match is None:
+        return None
+    proxy_endpoint = proxy_match.group(1).strip().rstrip("/")
+    parsed_proxy = urlparse(
+        proxy_endpoint if "://" in proxy_endpoint else f"https://{proxy_endpoint}"
+    )
+    proxy_host = (parsed_proxy.hostname or "").lower()
+    if proxy_host.startswith("proxy."):
+        proxy_host = f"api.{proxy_host.removeprefix('proxy.')}"
+    return _validated_copilot_api_endpoint(f"https://{proxy_host}")
+
+
+def _validated_copilot_api_endpoint(value: object) -> str | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    endpoint = value.strip().rstrip("/")
+    parsed = urlparse(endpoint)
+    host = (parsed.hostname or "").lower()
+    if parsed.scheme != "https" or not host:
+        return None
+    if host == "api.githubcopilot.com" or host.endswith(_COPILOT_API_HOST_SUFFIXES):
+        return endpoint
+    return None

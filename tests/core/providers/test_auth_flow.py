@@ -503,7 +503,11 @@ async def test_poll_loop_exchanges_copilot_token_and_stores_github_token(
     exchange_route = respx.get(TOKEN_EXCHANGE_URL).mock(
         return_value=httpx.Response(
             200,
-            json={"token": "copilot-api-secret", "expires_at": expires_at.isoformat()},
+            json={
+                "token": "copilot-api-secret",
+                "expires_at": expires_at.timestamp(),
+                "endpoints": {"api": "https://api.business.githubcopilot.com"},
+            },
         )
     )
 
@@ -524,12 +528,15 @@ async def test_poll_loop_exchanges_copilot_token_and_stores_github_token(
     assert token.access_token == "copilot-api-secret"
     assert token.refresh_token is None
     assert token.expires_at == expires_at
-    assert token.extra == {"github_oauth_token": "github-oauth-secret"}
+    assert token.extra == {
+        "github_oauth_token": "github-oauth-secret",
+        "copilot_api_endpoint": "https://api.business.githubcopilot.com",
+    }
     exchange_headers = exchange_route.calls.last.request.headers
     assert exchange_headers["Accept"] == "application/json"
     assert exchange_headers["Authorization"] == "Bearer github-oauth-secret"
     assert exchange_headers["Copilot-Integration-Id"] == "vscode-chat"
-    assert exchange_headers["Editor-Version"] == "vBot/0.1.0"
+    assert exchange_headers["Editor-Version"] == "vscode/1.128.0"
 
 
 @respx.mock
