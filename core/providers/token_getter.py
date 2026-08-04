@@ -18,6 +18,7 @@ from core.providers.providers import (
     MINIMAX_OAUTH_DEVICE_FLOW,
     NOUS_OAUTH_DEVICE_FLOW,
     OPENAI_CODEX_DEVICE_FLOW,
+    OPENCODE_OAUTH_DEVICE_FLOW,
     XAI_OAUTH_DEVICE_FLOW,
     OAuthConfig,
     resolve_minimax_oauth_expiry,
@@ -38,7 +39,12 @@ COPILOT_EDITOR_VERSION = "vscode/1.128.0"
 NOUS_INFERENCE_INVOKE_SCOPE = "inference:invoke"
 OAUTH_SCOPE_EXTRA_KEY = "oauth_scope"
 ROTATING_REFRESH_DEVICE_FLOWS = frozenset(
-    {MINIMAX_OAUTH_DEVICE_FLOW, NOUS_OAUTH_DEVICE_FLOW, XAI_OAUTH_DEVICE_FLOW}
+    {
+        MINIMAX_OAUTH_DEVICE_FLOW,
+        NOUS_OAUTH_DEVICE_FLOW,
+        OPENCODE_OAUTH_DEVICE_FLOW,
+        XAI_OAUTH_DEVICE_FLOW,
+    }
 )
 _COPILOT_API_HOST_SUFFIXES = (
     ".githubcopilot.com",
@@ -181,10 +187,13 @@ class OAuthTokenGetter:
             raise ProviderAuthError("OAuth token expired — please reconnect")
         now = datetime.now(UTC)
         try:
-            if self._oauth_config.device_flow == NOUS_OAUTH_DEVICE_FLOW:
-                # Nous refresh tokens are single-use. Retrying a POST after an
-                # ambiguous transport failure can replay the retired token and
-                # revoke the entire session chain.
+            if self._oauth_config.device_flow in {
+                NOUS_OAUTH_DEVICE_FLOW,
+                OPENCODE_OAUTH_DEVICE_FLOW,
+            }:
+                # These providers rotate refresh tokens. Retrying a POST after
+                # an ambiguous transport failure can replay the retired token
+                # and invalidate the session chain.
                 response_data = await self._post_refresh_token(token.refresh_token)
             else:
                 response_data = await retry_async(self._post_refresh_token, token.refresh_token)
@@ -304,13 +313,20 @@ class OAuthTokenGetter:
                 headers = {"Accept": "application/json"}
                 if self._oauth_config.device_flow == NOUS_OAUTH_DEVICE_FLOW:
                     headers["x-nous-refresh-token"] = refresh_token
+                elif self._oauth_config.device_flow == OPENCODE_OAUTH_DEVICE_FLOW:
+                    response = await client.post(
+                        self._oauth_config.token_url,
+                        json={**data, "refresh_token": refresh_token},
+                        headers=headers,
+                    )
                 else:
                     data["refresh_token"] = refresh_token
-                response = await client.post(
-                    self._oauth_config.token_url,
-                    data=data,
-                    headers=headers,
-                )
+                if self._oauth_config.device_flow != OPENCODE_OAUTH_DEVICE_FLOW:
+                    response = await client.post(
+                        self._oauth_config.token_url,
+                        data=data,
+                        headers=headers,
+                    )
             except httpx.TransportError as exc:
                 raise wrap_network_error(exc) from exc
         finally:

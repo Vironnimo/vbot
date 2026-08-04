@@ -36,6 +36,8 @@ XAI_DEVICE_AUTH_URL = "https://auth.x.ai/oauth2/device/code"
 XAI_TOKEN_URL = "https://auth.x.ai/oauth2/token"
 NOUS_DEVICE_AUTH_URL = "https://portal.nousresearch.com/api/oauth/device/code"
 NOUS_TOKEN_URL = "https://portal.nousresearch.com/api/oauth/token"
+OPENCODE_DEVICE_AUTH_URL = "https://console.opencode.ai/auth/device/code"
+OPENCODE_TOKEN_URL = "https://console.opencode.ai/auth/device/token"
 
 
 def _oauth_config(*, token_exchange_url: str | None = None) -> OAuthConfig:
@@ -93,6 +95,17 @@ def _nous_oauth_config() -> OAuthConfig:
         token_url=NOUS_TOKEN_URL,
         scopes=["inference:invoke"],
         device_flow="nous_oauth",
+    )
+
+
+def _opencode_oauth_config() -> OAuthConfig:
+    return OAuthConfig(
+        flow="device",
+        client_id="opencode-cli",
+        device_auth_url=OPENCODE_DEVICE_AUTH_URL,
+        token_url=OPENCODE_TOKEN_URL,
+        scopes=[],
+        device_flow="opencode_oauth",
     )
 
 
@@ -296,6 +309,71 @@ async def test_nous_flow_rejects_explicitly_missing_inference_scope(tmp_path: Pa
         )
         with pytest.raises(DeviceFlowTerminalError, match="missing_inference_invoke_scope"):
             await engine._build_token(client, _nous_oauth_config(), data)
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_opencode_flow_posts_json_accepts_pending_and_stores_rotating_token(
+    tmp_path: Path,
+) -> None:
+    token_store = TokenStore(tmp_path)
+    engine = DeviceFlowEngine(token_store)
+    device_route = respx.post(OPENCODE_DEVICE_AUTH_URL).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "device_code": "zen-device-code",
+                "user_code": "ZEN-CODE",
+                "verification_uri": "https://console.opencode.ai/device",
+                "verification_uri_complete": (
+                    "https://console.opencode.ai/device?user_code=ZEN-CODE"
+                ),
+                "expires_in": 900,
+                "interval": 5,
+            },
+        )
+    )
+    token_route = respx.post(OPENCODE_TOKEN_URL).mock(
+        side_effect=[
+            httpx.Response(400, json={"error": "authorization_pending"}),
+            httpx.Response(
+                200,
+                json={
+                    "access_token": "zen-access",
+                    "refresh_token": "zen-refresh",
+                    "expires_in": 900,
+                },
+            ),
+        ]
+    )
+
+    session = await engine.start_device_flow(
+        "opencode-zen",
+        "account",
+        _opencode_oauth_config(),
+    )
+    with patch("core.providers.auth_flow.asyncio.sleep", new_callable=AsyncMock):
+        await engine._poll_for_token(
+            "opencode-zen",
+            "account",
+            _opencode_oauth_config(),
+            session.device_code,
+            session.interval,
+            session.expires_in,
+            AsyncMock(),
+        )
+
+    assert json.loads(device_route.calls.last.request.content) == {"client_id": "opencode-cli"}
+    assert token_route.call_count == 2
+    assert json.loads(token_route.calls.last.request.content) == {
+        "grant_type": "urn:ietf:params:oauth:grant-type:device_code",
+        "device_code": "zen-device-code",
+        "client_id": "opencode-cli",
+    }
+    stored = token_store.load("opencode-zen", "account")
+    assert stored is not None
+    assert stored.access_token == "zen-access"
+    assert stored.refresh_token == "zen-refresh"
 
 
 @respx.mock

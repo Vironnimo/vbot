@@ -30,6 +30,7 @@ from core.providers.ollama import OllamaAdapter
 from core.providers.openai import OpenAIAdapter
 from core.providers.openai_compatible import OpenAICompatibleAdapter
 from core.providers.opencode_go import OpenCodeGoAdapter
+from core.providers.opencode_zen import OpenCodeZenAdapter
 from core.providers.openrouter import OpenRouterAdapter
 from core.providers.providers import (
     GLOBAL_CONTEXT_WINDOW_FLOOR,
@@ -75,6 +76,7 @@ __all__ = [
     "OpenAIAdapter",
     "OpenAICompatibleAdapter",
     "OpenCodeGoAdapter",
+    "OpenCodeZenAdapter",
     "OpenRouterAdapter",
     "XAIAdapter",
     "ProviderAccount",

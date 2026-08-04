@@ -62,6 +62,7 @@ from core.providers.ollama import OllamaAdapter
 from core.providers.openai import OpenAIAdapter
 from core.providers.openai_compatible import OpenAICompatibleAdapter
 from core.providers.opencode_go import OpenCodeGoAdapter
+from core.providers.opencode_zen import OpenCodeZenAdapter
 from core.providers.openrouter import OpenRouterAdapter
 from core.providers.providers import (
     ConnectionConfig,
@@ -331,6 +332,7 @@ _ADAPTER_MAP: dict[
     "nous": NousAdapter,
     "stepfun": StepFunAdapter,
     "opencode_go": OpenCodeGoAdapter,
+    "opencode_zen": OpenCodeZenAdapter,
     "github_copilot": GitHubCopilotAdapter,
     "anthropic": AnthropicAdapter,
     "ollama": OllamaAdapter,
