@@ -1096,6 +1096,22 @@ export function listSessions(agentId, options = {}) {
   return rpc('session.list', { agent_id: agentId }, options);
 }
 
+export function listSessionActivity(agentIds, options = {}) {
+  if (
+    !Array.isArray(agentIds) ||
+    agentIds.some(
+      (agentId) => typeof agentId !== 'string' || agentId.trim().length === 0,
+    )
+  ) {
+    throw new ApiClientError(
+      RPC_ERROR_INVALID_CLIENT_REQUEST,
+      'Agent ids must be a list of non-empty strings',
+      { method: 'session.activity_list' },
+    );
+  }
+  return rpc('session.activity_list', { agent_ids: agentIds }, options);
+}
+
 export function markSessionRead(agentId, sessionId, runId, options = {}) {
   requireNonEmptyString(
     agentId,

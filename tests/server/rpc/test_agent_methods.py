@@ -34,6 +34,7 @@ from server.rpc.agent_methods import (
     _delete_session,
     _fork_session,
     _get_agent,
+    _list_session_activity,
     _list_sessions,
     _mark_session_read,
     _rename_session,
@@ -71,6 +72,17 @@ class _FakeSessions:
         # Rows returned by list_with_metadata; default keeps the existing
         # listing tests byte-identical. Delete tests override it.
         self.metadata_rows: list[dict[str, Any]] = [{"id": "s1"}]
+        self.activity_rows: list[dict[str, Any]] = [
+            {
+                "id": "s1",
+                "latest_completion_run_id": "run-one",
+                "has_unread_completion": True,
+                "unread_run_id": "run-one",
+                "unread_run_status": "completed",
+                "unread_run_at": "2026-07-20T10:00:00+00:00",
+            }
+        ]
+        self.activity_error: Exception | None = None
         # Sidecar the source carries; ``fork`` strips the requested keys off it so
         # fork tests can assert what the fork retains. Fork tests override it.
         self.source_metadata: dict[str, Any] = {}
@@ -105,6 +117,12 @@ class _FakeSessions:
     def list_with_metadata(self, agent_id: str, project_id: str | None = None) -> list[Any]:
         self.listed.append((agent_id, project_id))
         return self.metadata_rows
+
+    def list_completion_activity(self, agent_id: str, project_id: str | None = None) -> list[Any]:
+        self.listed.append((agent_id, project_id))
+        if self.activity_error is not None:
+            raise self.activity_error
+        return self.activity_rows
 
     def mark_terminal_run_read(
         self,
@@ -301,6 +319,77 @@ def test_list_bare_agent_is_identity() -> None:
 
     _list_sessions(state, {"agent_id": "builder"})
 
+    assert sessions.listed == [("builder", None)]
+
+
+@pytest.mark.asyncio
+async def test_activity_list_batches_identity_and_project_addresses_in_order() -> None:
+    state, resolver, sessions = _make_state()
+
+    result = await _list_session_activity(
+        state,
+        {
+            "agent_ids": [
+                "builder",
+                "reviewer@vbot",
+                "builder",
+            ]
+        },
+    )
+
+    assert result == {
+        "agents": [
+            {
+                "agent_id": "builder",
+                "project_id": None,
+                "sessions": sessions.activity_rows,
+            },
+            {
+                "agent_id": "reviewer",
+                "project_id": "vbot",
+                "sessions": sessions.activity_rows,
+            },
+        ]
+    }
+    assert resolver.resolved == [(None, "builder"), ("vbot", "reviewer")]
+    assert sessions.listed == [("builder", None), ("reviewer", "vbot")]
+
+
+@pytest.mark.asyncio
+async def test_activity_list_accepts_an_empty_address_batch() -> None:
+    state, resolver, sessions = _make_state()
+
+    result = await _list_session_activity(state, {"agent_ids": []})
+
+    assert result == {"agents": []}
+    assert resolver.resolved == []
+    assert sessions.listed == []
+
+
+@pytest.mark.asyncio
+async def test_activity_list_rejects_a_malformed_address_before_storage() -> None:
+    state, resolver, sessions = _make_state()
+
+    with pytest.raises(RpcError) as exc_info:
+        await _list_session_activity(
+            state,
+            {"agent_ids": ["builder", "reviewer@bad project"]},
+        )
+
+    assert exc_info.value.code == "invalid_request"
+    assert resolver.resolved == []
+    assert sessions.listed == []
+
+
+@pytest.mark.asyncio
+async def test_activity_list_maps_session_storage_failures() -> None:
+    state, _resolver, sessions = _make_state()
+    sessions.activity_error = ChatSessionError("activity sidecar unavailable")
+
+    with pytest.raises(RpcError) as exc_info:
+        await _list_session_activity(state, {"agent_ids": ["builder"]})
+
+    assert exc_info.value.code == "domain_error"
     assert sessions.listed == [("builder", None)]
 
 

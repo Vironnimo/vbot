@@ -11,6 +11,7 @@ import {
   listChatCommands as requestListChatCommands,
   listFiles as requestListFiles,
   listQueue as requestListQueue,
+  listSessionActivity as requestListSessionActivity,
   listSessions as requestListSessions,
   loadChatHistory as requestLoadChatHistory,
   markSessionRead as requestMarkSessionRead,
@@ -88,7 +89,9 @@ export function createChatState() {
     loadingAgents: false,
     agentsError: null,
     loadingHistory: false,
+    loadingAgentActivity: false,
     historyError: '',
+    agentActivityError: '',
     actionError: '',
     commandsError: '',
     cancellingRun: false,
@@ -108,6 +111,7 @@ function defaultChatOperations() {
     listChatCommands: (...args) => requestListChatCommands(...args),
     listFiles: (...args) => requestListFiles(...args),
     listQueue: (...args) => requestListQueue(...args),
+    listSessionActivity: (...args) => requestListSessionActivity(...args),
     listSessions: (...args) => requestListSessions(...args),
     loadChatHistory: (...args) => requestLoadChatHistory(...args),
     markSessionRead: (...args) => requestMarkSessionRead(...args),
@@ -605,25 +609,28 @@ export function createChatController({
   async function loadAgents({ preferredAgentId = '' } = {}) {
     chatState.loadingAgents = true;
     chatState.agentsError = null;
+    let selectedAgentId = '';
     try {
       const result = await operations.listAgents();
       const preferred = chatState.selectedAgentId || preferredAgentId;
       if (preferred) {
         selectAgent(chatState, preferred);
       }
-      const selectedAgentId = setAgents(chatState, result?.agents ?? []);
+      selectedAgentId = setAgents(chatState, result?.agents ?? []);
       onAgentsChanged(chatState.agents);
       if (selectedAgentId) {
         onAgentSelected(selectedAgentId);
       }
-      if (selectedAgentId && shouldLoadCurrentHistory()) {
-        await loadCurrentHistory();
-      }
     } catch (error) {
       chatState.agentsError = errorMessage(error);
+      return false;
     } finally {
       chatState.loadingAgents = false;
     }
+    if (selectedAgentId && shouldLoadCurrentHistory()) {
+      await loadCurrentHistory();
+    }
+    return true;
   }
 
   async function loadCurrentHistory() {
@@ -1010,26 +1017,44 @@ export function createChatController({
       ),
     ];
     const requestVersion = ++activityRefreshVersion;
-    const results = await Promise.allSettled(
-      addresses.map(async (agentAddress) => ({
-        agentAddress,
-        response: await operations.listSessions(agentAddress),
-      })),
-    );
-    if (requestVersion !== activityRefreshVersion) {
-      return false;
+    chatState.loadingAgentActivity = addresses.length > 0;
+    chatState.agentActivityError = '';
+    if (addresses.length === 0) {
+      return true;
     }
-    for (const result of results) {
-      if (result.status !== 'fulfilled') {
-        continue;
+    try {
+      const response = await operations.listSessionActivity(addresses);
+      if (requestVersion !== activityRefreshVersion) {
+        return false;
       }
-      syncAgentSessionActivity(
-        chatState,
-        result.value.agentAddress,
-        result.value.response?.sessions ?? [],
-      );
+      const requestedAddresses = new Set(addresses);
+      for (const agentActivity of Array.isArray(response?.agents)
+        ? response.agents
+        : []) {
+        const agentAddress = formatAgentAddress(
+          agentActivity?.agent_id,
+          agentActivity?.project_id,
+        );
+        if (!requestedAddresses.has(agentAddress)) {
+          continue;
+        }
+        syncAgentSessionActivity(
+          chatState,
+          agentAddress,
+          agentActivity?.sessions ?? [],
+        );
+      }
+      return true;
+    } catch (error) {
+      if (requestVersion === activityRefreshVersion) {
+        chatState.agentActivityError = errorMessage(error);
+      }
+      return false;
+    } finally {
+      if (requestVersion === activityRefreshVersion) {
+        chatState.loadingAgentActivity = false;
+      }
     }
-    return true;
   }
 
   async function markSessionCompletionRead(sessionState) {
@@ -1053,6 +1078,7 @@ export function createChatController({
       // still carry the old unread bit. Retire those responses before applying
       // the authoritative acknowledgement so blue cannot briefly resurrect.
       activityRefreshVersion += 1;
+      chatState.loadingAgentActivity = false;
       applySessionCompletionActivity(sessionState, result);
       sessionState.markReadFailedRunId = '';
       return result?.marked_read === true;

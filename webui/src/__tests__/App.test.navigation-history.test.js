@@ -16,6 +16,7 @@ import {
   createSettingsRpcMock,
   createSubAgentNavigationRpcMock,
   listLogsMock,
+  listSessionActivityMock,
   readLogFileMock,
   resetAppHarness,
   returnToCurrentSessionButton,
@@ -258,6 +259,78 @@ describe('App', () => {
         'page',
       );
     });
+  });
+
+  it('keeps Chat initialized while another main view is active', async () => {
+    const agents = [
+      { id: 'alpha', name: 'Alpha', current_session_id: 'session-alpha' },
+    ];
+    rpcMock.mockImplementation(createChatRpcMock(agents));
+    listSessionActivityMock.mockResolvedValue({
+      agents: [
+        {
+          agent_id: 'alpha',
+          project_id: null,
+          sessions: [],
+        },
+      ],
+    });
+    mountedComponent = mount(App, { target: document.body });
+    flushSync();
+
+    await waitForCondition(() => {
+      expect(document.querySelector('#chat-composer-input')).toBeTruthy();
+      expect(
+        rpcMock.mock.calls.some(([method]) => method === 'chat.history'),
+      ).toBe(true);
+      expect(listSessionActivityMock).toHaveBeenCalled();
+    });
+
+    const composer = document.querySelector('#chat-composer-input');
+    const chatView = document.querySelector('.chat-view');
+    const timeline = document.querySelector('.messages');
+    composer.value = 'Draft kept across views';
+    composer.dispatchEvent(new Event('input', { bubbles: true }));
+    timeline.scrollTop = 137;
+    flushSync();
+
+    const agentLoadsBeforeSwitch = rpcMock.mock.calls.filter(
+      ([method]) => method === 'agent.list',
+    ).length;
+    const historyLoadsBeforeSwitch = rpcMock.mock.calls.filter(
+      ([method]) => method === 'chat.history',
+    ).length;
+    const activityLoadsBeforeSwitch = listSessionActivityMock.mock.calls.length;
+
+    sidebarNavButton('Logs')?.click();
+    await waitForCondition(() => {
+      expect(document.querySelector('#logs-title')).toBeTruthy();
+      expect(document.querySelector('.chat-view')).toBe(chatView);
+      expect(chatView.hidden).toBe(true);
+      expect(document.querySelector('#chat-composer-input')).toBe(composer);
+    });
+
+    sidebarNavButton('Chat')?.click();
+    await waitForCondition(() => {
+      expect(document.querySelector('.chat-view')).toBe(chatView);
+      expect(chatView.hidden).toBe(false);
+      expect(document.querySelector('#chat-composer-input')).toBe(composer);
+      expect(document.querySelector('#chat-composer-input')?.value).toBe(
+        'Draft kept across views',
+      );
+      expect(document.querySelector('.messages')?.scrollTop).toBe(137);
+    });
+
+    expect(
+      rpcMock.mock.calls.filter(([method]) => method === 'agent.list'),
+    ).toHaveLength(agentLoadsBeforeSwitch);
+    expect(
+      rpcMock.mock.calls.filter(([method]) => method === 'chat.history'),
+    ).toHaveLength(historyLoadsBeforeSwitch);
+    expect(listSessionActivityMock).toHaveBeenCalledTimes(
+      activityLoadsBeforeSwitch,
+    );
+    expect(document.body.textContent).not.toContain('Loading agents…');
   });
 
   it('restores the Settings reading position after switching to another tab', async () => {
@@ -589,7 +662,7 @@ describe('App', () => {
       expect(document.body.textContent).toContain('Sub-agent response');
     });
 
-    // Tab away (override dies with ChatView) and back to Chat.
+    // Tab away and back while the persistent Chat owner retains the override.
     sidebarNavButton('Logs')?.click();
     flushSync();
     await waitForCondition(() => {
@@ -608,8 +681,8 @@ describe('App', () => {
     });
 
     // Back #2 pops the chat+child entry: the sub-agent session is displayed
-    // AND history.state still carries the override — the remount must not
-    // push a phantom chat(null) entry over the restored one.
+    // AND history.state still carries the override — passive restoration must
+    // not push a phantom chat(null) entry over the restored one.
     window.history.back();
     await waitForAssertion(() => {
       expect(window.location.hash).toBe('#chat');

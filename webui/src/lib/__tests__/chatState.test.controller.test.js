@@ -505,6 +505,39 @@ describe('chat controller', () => {
     expect(chatState.loadingHistory).toBe(false);
   });
 
+  it('stops the Agent loading state before current History settles', async () => {
+    let resolveHistory;
+    const loadChatHistory = vi.fn(
+      () =>
+        new Promise((resolve) => {
+          resolveHistory = resolve;
+        }),
+    );
+    const listAgents = vi.fn().mockResolvedValue({
+      agents: [
+        {
+          id: 'alpha',
+          name: 'Alpha',
+          current_session_id: 'session-one',
+        },
+      ],
+    });
+    const { chatState, controller } = setup({
+      isDisplayedSession: () => true,
+      operationOverrides: { listAgents, loadChatHistory },
+    });
+
+    const loading = controller.loadAgents();
+    await vi.waitFor(() => expect(loadChatHistory).toHaveBeenCalledOnce());
+
+    expect(chatState.loadingAgents).toBe(false);
+    expect(chatState.loadingHistory).toBe(true);
+
+    resolveHistory({ active_run: null, messages: [], has_more: false });
+    await expect(loading).resolves.toBe(true);
+    expect(chatState.loadingHistory).toBe(false);
+  });
+
   it('normalizes command suggestions inside the controller', async () => {
     const listChatCommands = vi.fn().mockResolvedValue({
       items: [
@@ -554,27 +587,34 @@ describe('chat controller', () => {
   });
 
   it('refreshes durable completion activity for every listed Agent Session', async () => {
-    const listSessions = vi.fn(async (agentId) => ({
-      sessions:
-        agentId === 'alpha'
-          ? [
-              {
-                id: 'session-one',
-                has_unread_completion: true,
-                unread_run_id: 'run-one',
-                unread_run_status: 'completed',
-                unread_run_at: '2026-07-20T10:00:00+00:00',
-              },
-            ]
-          : [],
+    const listSessionActivity = vi.fn(async () => ({
+      agents: [
+        {
+          agent_id: 'alpha',
+          project_id: null,
+          sessions: [
+            {
+              id: 'session-one',
+              has_unread_completion: true,
+              unread_run_id: 'run-one',
+              unread_run_status: 'completed',
+              unread_run_at: '2026-07-20T10:00:00+00:00',
+            },
+          ],
+        },
+        { agent_id: 'beta', project_id: null, sessions: [] },
+      ],
     }));
     const { chatState, controller } = setup({
-      operationOverrides: { listSessions },
+      operationOverrides: { listSessionActivity },
     });
 
     await controller.refreshAgentActivity(['alpha', 'beta', 'alpha']);
 
-    expect(listSessions).toHaveBeenCalledTimes(2);
+    expect(listSessionActivity).toHaveBeenCalledOnce();
+    expect(listSessionActivity).toHaveBeenCalledWith(['alpha', 'beta']);
+    expect(chatState.loadingAgentActivity).toBe(false);
+    expect(chatState.agentActivityError).toBe('');
     expect(ensureSessionState(chatState, 'alpha', 'session-one')).toMatchObject(
       {
         hasUnreadCompletion: true,
@@ -582,6 +622,41 @@ describe('chat controller', () => {
         unreadRunStatus: 'completed',
       },
     );
+  });
+
+  it('keeps Project Agent activity scoped to its qualified address', async () => {
+    const listSessionActivity = vi.fn(async () => ({
+      agents: [
+        {
+          agent_id: 'builder',
+          project_id: 'project-one',
+          sessions: [
+            {
+              id: 'project-session',
+              has_unread_completion: true,
+              unread_run_id: 'project-run',
+              unread_run_status: 'failed',
+              unread_run_at: '2026-07-20T11:00:00+00:00',
+            },
+          ],
+        },
+      ],
+    }));
+    const { chatState, controller } = setup({
+      operationOverrides: { listSessionActivity },
+    });
+
+    await controller.refreshAgentActivity(['builder@project-one']);
+
+    expect(listSessionActivity).toHaveBeenCalledWith(['builder@project-one']);
+    expect(
+      ensureSessionState(chatState, 'builder@project-one', 'project-session'),
+    ).toMatchObject({
+      hasUnreadCompletion: true,
+      unreadRunId: 'project-run',
+      unreadRunStatus: 'failed',
+    });
+    expect(chatState.sessions['builder::project-session']).toBeUndefined();
   });
 
   it('acknowledges only the exact completion rendered in the Session', async () => {
@@ -617,7 +692,7 @@ describe('chat controller', () => {
 
   it('does not let a stale Session list resurrect an acknowledged completion', async () => {
     let resolveList;
-    const listSessions = vi.fn(
+    const listSessionActivity = vi.fn(
       () =>
         new Promise((resolve) => {
           resolveList = resolve;
@@ -632,7 +707,7 @@ describe('chat controller', () => {
       unread_run_at: null,
     });
     const { chatState, controller } = setup({
-      operationOverrides: { listSessions, markSessionRead },
+      operationOverrides: { listSessionActivity, markSessionRead },
     });
     const sessionState = ensureSessionState(chatState, 'alpha', 'session-one');
     sessionState.hasUnreadCompletion = true;
@@ -641,19 +716,47 @@ describe('chat controller', () => {
 
     await controller.markSessionCompletionRead(sessionState);
     resolveList({
-      sessions: [
+      agents: [
         {
-          id: 'session-one',
-          has_unread_completion: true,
-          unread_run_id: 'run-one',
-          unread_run_status: 'completed',
-          unread_run_at: '2026-07-20T10:00:00+00:00',
+          agent_id: 'alpha',
+          project_id: null,
+          sessions: [
+            {
+              id: 'session-one',
+              has_unread_completion: true,
+              unread_run_id: 'run-one',
+              unread_run_status: 'completed',
+              unread_run_at: '2026-07-20T10:00:00+00:00',
+            },
+          ],
         },
       ],
     });
 
     expect(await refresh).toBe(false);
     expect(sessionState.hasUnreadCompletion).toBe(false);
+  });
+
+  it('retains known activity when the batched refresh fails', async () => {
+    const listSessionActivity = vi
+      .fn()
+      .mockRejectedValue(new Error('activity unavailable'));
+    const { chatState, controller } = setup({
+      operationOverrides: { listSessionActivity },
+    });
+    const sessionState = ensureSessionState(chatState, 'alpha', 'session-one');
+    sessionState.latestCompletionRunId = 'run-one';
+    sessionState.hasUnreadCompletion = true;
+    sessionState.unreadRunId = 'run-one';
+
+    await expect(controller.refreshAgentActivity(['alpha'])).resolves.toBe(
+      false,
+    );
+
+    expect(sessionState.hasUnreadCompletion).toBe(true);
+    expect(sessionState.unreadRunId).toBe('run-one');
+    expect(chatState.loadingAgentActivity).toBe(false);
+    expect(chatState.agentActivityError).toBe('activity unavailable');
   });
 
   it('reconciles queued and started send outcomes into Session state', async () => {

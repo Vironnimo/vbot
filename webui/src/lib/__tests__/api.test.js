@@ -25,6 +25,7 @@ import {
   setOverride,
   createRpcEnvelope,
   listProjects,
+  listSessionActivity,
   removeProject,
   deleteSession,
   renameSession,
@@ -716,6 +717,44 @@ describe('renameSession()', () => {
       expect.objectContaining({
         code: RPC_ERROR_INVALID_CLIENT_REQUEST,
         method: 'session.rename',
+      }),
+    );
+  });
+});
+
+describe('listSessionActivity()', () => {
+  it('posts one batched Agent-address request', async () => {
+    const fetchFunction = vi.fn().mockResolvedValue(
+      jsonResponse({
+        ok: true,
+        result: { agents: [] },
+      }),
+    );
+
+    await expect(
+      listSessionActivity(['alpha', 'builder@vbot'], {
+        fetch: fetchFunction,
+      }),
+    ).resolves.toEqual({ agents: [] });
+
+    expect(JSON.parse(fetchFunction.mock.calls[0][1].body)).toEqual({
+      method: 'session.activity_list',
+      params: { agent_ids: ['alpha', 'builder@vbot'] },
+    });
+  });
+
+  it('accepts an empty batch and rejects malformed Agent ids locally', async () => {
+    const fetchFunction = vi
+      .fn()
+      .mockResolvedValue(jsonResponse({ ok: true, result: { agents: [] } }));
+
+    await expect(
+      listSessionActivity([], { fetch: fetchFunction }),
+    ).resolves.toEqual({ agents: [] });
+    expect(() => listSessionActivity(['alpha', '  '])).toThrow(
+      expect.objectContaining({
+        code: RPC_ERROR_INVALID_CLIENT_REQUEST,
+        method: 'session.activity_list',
       }),
     );
   });

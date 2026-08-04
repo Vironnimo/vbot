@@ -826,6 +826,98 @@ class TestChatSessionManager:
             },
         ]
 
+    def test_list_completion_activity_avoids_transcript_and_general_metadata(self, tmp_path):
+        manager = ChatSessionManager(tmp_path)
+        session = manager.create("coder", session_id="session-a")
+        manager.record_terminal_run(
+            "coder",
+            "session-a",
+            "run-one",
+            "completed",
+            "2026-07-20T10:00:00+00:00",
+        )
+        session.path.write_text('{"not":"a valid ChatMessage"}\n', encoding="utf-8")
+        session.sidecar_path.write_text("not-json", encoding="utf-8")
+
+        activity = manager.list_completion_activity("coder")
+
+        assert activity == [
+            {
+                "id": "session-a",
+                "latest_completion_run_id": "run-one",
+                "has_unread_completion": True,
+                "unread_run_id": "run-one",
+                "unread_run_status": "completed",
+                "unread_run_at": "2026-07-20T10:00:00+00:00",
+            }
+        ]
+
+    def test_list_completion_activity_includes_empty_and_acknowledged_sessions(self, tmp_path):
+        manager = ChatSessionManager(tmp_path)
+        manager.create("coder", session_id="session-empty")
+        manager.create("coder", session_id="session-read")
+        manager.record_terminal_run(
+            "coder",
+            "session-read",
+            "run-one",
+            "completed",
+            "2026-07-20T10:00:00+00:00",
+        )
+        manager.mark_terminal_run_read("coder", "session-read", "run-one")
+
+        activity = manager.list_completion_activity("coder")
+
+        assert activity == [
+            {
+                "id": "session-empty",
+                "latest_completion_run_id": None,
+                "has_unread_completion": False,
+                "unread_run_id": None,
+                "unread_run_status": None,
+                "unread_run_at": None,
+            },
+            {
+                "id": "session-read",
+                "latest_completion_run_id": "run-one",
+                "has_unread_completion": False,
+                "unread_run_id": None,
+                "unread_run_status": None,
+                "unread_run_at": None,
+            },
+        ]
+
+    def test_list_completion_activity_respects_project_scope_and_current_transcripts(
+        self, tmp_path
+    ):
+        manager = ChatSessionManager(tmp_path)
+        identity = manager.create("builder", session_id="identity-session")
+        project = manager.create(
+            "builder",
+            session_id="project-session",
+            project_id="vbot",
+        )
+        manager.record_terminal_run(
+            "builder",
+            "project-session",
+            "run-project",
+            "failed",
+            "2026-07-20T11:00:00+00:00",
+            project_id="vbot",
+        )
+        identity.delete()
+
+        assert manager.list_completion_activity("builder") == []
+        assert manager.list_completion_activity("builder", "vbot") == [
+            {
+                "id": project.id,
+                "latest_completion_run_id": "run-project",
+                "has_unread_completion": True,
+                "unread_run_id": "run-project",
+                "unread_run_status": "failed",
+                "unread_run_at": "2026-07-20T11:00:00+00:00",
+            }
+        ]
+
     def test_terminal_run_stays_unread_until_exact_run_is_acknowledged(self, tmp_path):
         manager = ChatSessionManager(tmp_path)
         session = manager.create("coder", session_id="session-a")

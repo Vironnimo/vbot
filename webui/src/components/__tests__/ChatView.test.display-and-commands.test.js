@@ -10,7 +10,7 @@ import {
   flushSync,
   hoveredTokenBadgeTooltip,
   it,
-  listSessionsMock,
+  listSessionActivityMock,
   rpcMock,
   sendComposerMessage,
   setInputValue,
@@ -20,6 +20,7 @@ import {
   testRunStreamRefs,
   waitForCondition,
 } from './ChatView.support.js';
+import { reactiveProps } from './reactiveProps.svelte.js';
 
 describe('ChatView', () => {
   const chatViewTest = setupChatViewTestSuite();
@@ -59,6 +60,54 @@ describe('ChatView', () => {
     expect(
       document.querySelector('.chat-view')?.getAttribute('data-chat-width'),
     ).toBe('full');
+  });
+
+  it('hides presentation while inactive without recreating Chat state or DOM', async () => {
+    rpcMock.mockImplementation(createChatRpcMock());
+    const props = reactiveProps({
+      active: true,
+      sharedAgents: [createAgent()],
+      sharedSelectedAgentId: 'alpha',
+    });
+
+    chatViewTest.mount({ target: document.body, props });
+    flushSync();
+    await waitForCondition(
+      () => document.body.textContent.includes('Hello'),
+      100,
+    );
+    const agentLoads = rpcMock.mock.calls.filter(
+      ([method]) => method === 'agent.list',
+    ).length;
+    const historyLoads = rpcMock.mock.calls.filter(
+      ([method]) => method === 'chat.history',
+    ).length;
+    const activityLoads = listSessionActivityMock.mock.calls.length;
+    const chatView = document.querySelector('.chat-view');
+    const timeline = document.querySelector('.messages');
+    timeline.scrollTop = 93;
+    expect(testChatStateRefs).toHaveLength(1);
+
+    props.active = false;
+    flushSync();
+    expect(document.querySelector('.chat-view')).toBe(chatView);
+    expect(chatView.hidden).toBe(true);
+    expect(testChatStateRefs).toHaveLength(1);
+
+    props.active = true;
+    flushSync();
+    expect(document.querySelector('.chat-view')).toBe(chatView);
+    expect(chatView.hidden).toBe(false);
+    expect(document.querySelector('.messages')).toBe(timeline);
+    expect(timeline.scrollTop).toBe(93);
+    expect(document.body.textContent).toContain('Hello');
+    expect(
+      rpcMock.mock.calls.filter(([method]) => method === 'agent.list'),
+    ).toHaveLength(agentLoads);
+    expect(
+      rpcMock.mock.calls.filter(([method]) => method === 'chat.history'),
+    ).toHaveLength(historyLoads);
+    expect(listSessionActivityMock).toHaveBeenCalledTimes(activityLoads);
   });
 
   it('requests command suggestions scoped to the active agent address', async () => {
@@ -145,20 +194,23 @@ describe('ChatView', () => {
         },
       }),
     );
-    listSessionsMock.mockImplementation(async (agentId) => ({
-      sessions:
-        agentId === 'beta'
-          ? [
-              {
-                id: 'session-beta',
-                last_active_at: '2026-07-20T10:00:00+00:00',
-                has_unread_completion: true,
-                unread_run_id: 'run-beta',
-                unread_run_status: 'completed',
-                unread_run_at: '2026-07-20T10:00:00+00:00',
-              },
-            ]
-          : [],
+    listSessionActivityMock.mockImplementation(async (agentIds) => ({
+      agents: agentIds.map((agentId) => ({
+        agent_id: agentId,
+        project_id: null,
+        sessions:
+          agentId === 'beta'
+            ? [
+                {
+                  id: 'session-beta',
+                  has_unread_completion: true,
+                  unread_run_id: 'run-beta',
+                  unread_run_status: 'completed',
+                  unread_run_at: '2026-07-20T10:00:00+00:00',
+                },
+              ]
+            : [],
+      })),
     }));
 
     chatViewTest.mount({
@@ -217,21 +269,24 @@ describe('ChatView', () => {
     rpcMock.mockImplementation(
       createChatRpcMock({ agents: [createAgent(), beta] }),
     );
-    listSessionsMock.mockImplementation(async (agentId) => ({
-      sessions:
-        agentId === 'beta'
-          ? [
-              {
-                id: 'session-beta',
-                last_active_at: '2026-07-20T10:00:00+00:00',
-                latest_completion_run_id: 'run-beta',
-                has_unread_completion: false,
-                unread_run_id: null,
-                unread_run_status: null,
-                unread_run_at: null,
-              },
-            ]
-          : [],
+    listSessionActivityMock.mockImplementation(async (agentIds) => ({
+      agents: agentIds.map((agentId) => ({
+        agent_id: agentId,
+        project_id: null,
+        sessions:
+          agentId === 'beta'
+            ? [
+                {
+                  id: 'session-beta',
+                  latest_completion_run_id: 'run-beta',
+                  has_unread_completion: false,
+                  unread_run_id: null,
+                  unread_run_status: null,
+                  unread_run_at: null,
+                },
+              ]
+            : [],
+      })),
     }));
 
     chatViewTest.mount({
@@ -306,30 +361,31 @@ describe('ChatView', () => {
         },
       }),
     );
-    listSessionsMock.mockImplementation(async (agentId) => ({
-      sessions:
-        agentId === 'beta'
-          ? [
-              {
-                id: 'beta-user-session',
-                last_active_at: '2026-07-20T09:00:00+00:00',
-                latest_completion_run_id: null,
-                has_unread_completion: false,
-              },
-              {
-                id: 'beta-child-session',
-                last_active_at: '2026-07-20T10:00:00+00:00',
-                latest_completion_run_id: 'beta-child-run',
-                has_unread_completion: !childDelivered,
-                unread_run_id: childDelivered ? null : 'beta-child-run',
-                unread_run_status: childDelivered ? null : 'completed',
-                unread_run_at: childDelivered
-                  ? null
-                  : '2026-07-20T10:00:00+00:00',
-                is_subagent_session: true,
-              },
-            ]
-          : [],
+    listSessionActivityMock.mockImplementation(async (agentIds) => ({
+      agents: agentIds.map((agentId) => ({
+        agent_id: agentId,
+        project_id: null,
+        sessions:
+          agentId === 'beta'
+            ? [
+                {
+                  id: 'beta-user-session',
+                  latest_completion_run_id: null,
+                  has_unread_completion: false,
+                },
+                {
+                  id: 'beta-child-session',
+                  latest_completion_run_id: 'beta-child-run',
+                  has_unread_completion: !childDelivered,
+                  unread_run_id: childDelivered ? null : 'beta-child-run',
+                  unread_run_status: childDelivered ? null : 'completed',
+                  unread_run_at: childDelivered
+                    ? null
+                    : '2026-07-20T10:00:00+00:00',
+                },
+              ]
+            : [],
+      })),
     }));
     const { createChatViewParentHarness } =
       await import('./chatViewParentHarness.svelte.js');

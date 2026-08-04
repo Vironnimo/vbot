@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 from contextlib import AsyncExitStack
 from typing import Any, cast
@@ -561,6 +562,46 @@ def _list_sessions(state: Any, params: JsonObject) -> JsonObject:
     return {"sessions": sessions}
 
 
+async def _list_session_activity(state: Any, params: JsonObject) -> JsonObject:
+    """Return completion-only Session activity for a batch of Agent addresses."""
+    _reject_unsupported(params, {"agent_ids"}, "session.activity_list")
+    requested_addresses = _validate_string_list("agent_ids", params.get("agent_ids"))
+    parsed_addresses: list[tuple[str, str, str | None]] = []
+    seen_addresses: set[str] = set()
+    for requested_address in requested_addresses:
+        agent_id, project_id = _required_agent_address({"agent_id": requested_address}, "agent_id")
+        canonical_address = format_agent_address(agent_id, project_id)
+        if canonical_address in seen_addresses:
+            continue
+        seen_addresses.add(canonical_address)
+        parsed_addresses.append((canonical_address, agent_id, project_id))
+
+    def load_activity() -> list[JsonObject]:
+        activity_by_agent: list[JsonObject] = []
+        resolver = getattr(state.runtime, "agent_resolver", None)
+        agents = getattr(state.runtime, "agents", None)
+        for _address, agent_id, project_id in parsed_addresses:
+            if resolver is not None:
+                resolver.resolve_agent(project_id, agent_id)
+            elif agents is not None:
+                agents.get(agent_id)
+            sessions = state.runtime.chat_sessions.list_completion_activity(agent_id, project_id)
+            activity_by_agent.append(
+                {
+                    "agent_id": agent_id,
+                    "project_id": project_id,
+                    "sessions": sessions,
+                }
+            )
+        return activity_by_agent
+
+    try:
+        activity = await asyncio.to_thread(load_activity)
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
+    return {"agents": activity}
+
+
 def _mark_session_read(state: Any, params: JsonObject) -> JsonObject:
     """Acknowledge the exact terminal Run rendered in one Session."""
     _reject_unsupported(params, {"agent_id", "session_id", "run_id"}, "session.mark_read")
@@ -1001,6 +1042,7 @@ def method_handlers() -> dict[str, RpcMethodHandler]:
         "agent.rename": _rename_agent,
         "agent.delete": _delete_agent,
         "session.create": _create_session,
+        "session.activity_list": _list_session_activity,
         "session.list": _list_sessions,
         "session.mark_read": _mark_session_read,
         "session.fork": _fork_session,

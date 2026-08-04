@@ -44,6 +44,8 @@ export function rpcBackedApiMock(rpcMock, overrides = {}) {
     listChatCommands: (params = {}) => call('chat.commands', params),
     loadChatHistory: (params) => call('chat.history', params),
     createSession: (params) => call('session.create', params),
+    listSessionActivity: (agentIds) =>
+      call('session.activity_list', { agent_ids: agentIds }),
     startChatRun: (params) => call('chat.stream', params),
     listFiles: (agentId) => call('files.list', { agent_id: agentId }),
     listPrompts: (params = {}) => call('prompt.list', params),
