@@ -21,6 +21,7 @@ from core.providers.openai_subscription_auth import openai_subscription_token_ex
 from core.providers.providers import (
     MINIMAX_OAUTH_DEVICE_FLOW,
     OPENAI_CODEX_DEVICE_FLOW,
+    XAI_OAUTH_DEVICE_FLOW,
     OAuthConfig,
     resolve_minimax_oauth_expiry,
 )
@@ -45,6 +46,14 @@ AUTHORIZATION_PENDING_ERROR = "authorization_pending"
 SLOW_DOWN_ERROR = "slow_down"
 EXPIRED_TOKEN_ERROR = "expired_token"
 ACCESS_DENIED_ERROR = "access_denied"
+STANDARD_DEVICE_FLOW_ERRORS = frozenset(
+    {
+        AUTHORIZATION_PENDING_ERROR,
+        SLOW_DOWN_ERROR,
+        EXPIRED_TOKEN_ERROR,
+        ACCESS_DENIED_ERROR,
+    }
+)
 SLOW_DOWN_INTERVAL_INCREMENT_SECONDS = 5
 MINIMAX_OAUTH_GRANT_TYPE = "urn:ietf:params:oauth:grant-type:user_code"
 MINIMAX_DEFAULT_POLL_INTERVAL_MILLISECONDS = 2000
@@ -53,6 +62,18 @@ MILLISECONDS_PER_SECOND = 1000
 
 
 OnCompleteCallback = Callable[..., None | Awaitable[None]]
+
+
+def _is_standard_device_flow_error(response: httpx.Response) -> bool:
+    """Allow RFC 8628 polling states through even when returned as HTTP 400."""
+
+    if response.status_code != 400:
+        return False
+    try:
+        data = response.json()
+    except ValueError:
+        return False
+    return isinstance(data, dict) and data.get("error") in STANDARD_DEVICE_FLOW_ERRORS
 
 
 def _minimax_pkce_pair() -> tuple[str, str, str]:
@@ -378,7 +399,11 @@ class DeviceFlowEngine:
         return DeviceFlowSession(
             device_code=data["device_code"],
             user_code=data["user_code"],
-            verification_uri=data.get("verification_uri") or data["verification_url"],
+            verification_uri=(
+                data.get("verification_uri_complete")
+                or data.get("verification_uri")
+                or data["verification_url"]
+            ),
             expires_in=int(data["expires_in"]),
             interval=int(data.get("interval", DEFAULT_DEVICE_FLOW_INTERVAL_SECONDS)),
         )
@@ -484,6 +509,8 @@ class DeviceFlowEngine:
         except httpx.HTTPError as error:
             raise wrap_network_error(error) from error
 
+        if self._is_xai_flow(oauth_config) and _is_standard_device_flow_error(response):
+            return response
         classify_http_status(
             response.status_code, detail=response.text, response_headers=response.headers
         )
@@ -693,6 +720,9 @@ class DeviceFlowEngine:
 
     def _is_minimax_flow(self, oauth_config: OAuthConfig) -> bool:
         return oauth_config.device_flow == MINIMAX_OAUTH_DEVICE_FLOW
+
+    def _is_xai_flow(self, oauth_config: OAuthConfig) -> bool:
+        return oauth_config.device_flow == XAI_OAUTH_DEVICE_FLOW
 
     def _drop_minimax_verifiers(
         self,

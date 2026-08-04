@@ -1,0 +1,48 @@
+{
+  "id": "xai",
+  "name": "xAI",
+  "adapter": "xai",
+  "base_url": "https://api.x.ai/v1",
+  "connections": [
+    {
+      "id": "api-key",
+      "type": "api_key",
+      "label": "API Key",
+      "auth": {
+        "header": "Authorization",
+        "prefix": "Bearer ",
+        "credential_key": "XAI_API_KEY"
+      },
+      "models_endpoint": "/language-models"
+    },
+    {
+      "id": "subscription",
+      "type": "oauth",
+      "label": "SuperGrok Login (Subscription)",
+      "auth": {
+        "header": "Authorization",
+        "prefix": "Bearer "
+      },
+      "oauth": {
+        "flow": "device",
+        "device_flow": "xai_oauth",
+        "client_id": "b1a00492-073a-47ea-816f-4c329264a828",
+        "device_auth_url": "https://auth.x.ai/oauth2/device/code",
+        "token_url": "https://auth.x.ai/oauth2/token",
+        "scopes": [
+          "openid",
+          "profile",
+          "email",
+          "offline_access",
+          "grok-cli:access",
+          "api:access"
+        ]
+      },
+      "models_endpoint": "/language-models"
+    }
+  ],
+  "defaults": {
+    "max_tokens": 8192
+  },
+  "models_dev_id": "xai"
+}

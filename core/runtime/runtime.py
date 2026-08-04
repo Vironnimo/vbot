@@ -70,6 +70,7 @@ from core.providers.providers import (
 from core.providers.token_getter import OAuthTokenGetter, StaticTokenGetter, TokenGetter
 from core.providers.token_store import TokenStore
 from core.providers.usage import ProviderUsageService
+from core.providers.xai import XAIAdapter
 from core.recall import (
     DEFAULT_RECALL_BACKEND,
     RecallBackend,
@@ -321,6 +322,7 @@ _ADAPTER_MAP: dict[
     "github_copilot": GitHubCopilotAdapter,
     "anthropic": AnthropicAdapter,
     "ollama": OllamaAdapter,
+    "xai": XAIAdapter,
 }
 
 
