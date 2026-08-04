@@ -106,6 +106,26 @@ class ProviderCredentialResolver:
             for connection in provider_config.connections
         )
 
+    def is_connection_added(self, provider_id: str, connection_id: str | None = None) -> bool:
+        """Return whether a connection has been explicitly added by the user.
+
+        Credentialed connections are added by storing their credential. Keyless
+        connections have no credential artifact, so the presence of their
+        persisted enablement override is the durable enrollment marker. The
+        override's value is deliberately irrelevant: disabling an added local
+        Provider must not move it back into the Add Provider catalog.
+        """
+
+        provider_config = self._provider_registry.get(provider_id)
+        if connection_id is not None:
+            connection, _account_id = self._get_connection(provider_id, connection_id)
+            return self._connection_added(provider_id, connection)
+
+        return any(
+            self._connection_added(provider_id, connection)
+            for connection in provider_config.connections
+        )
+
     def is_usable(self, provider_id: str, connection_id: str | None = None) -> bool:
         """Return whether a connection (or any of a provider's) is enabled AND credentialed.
 
@@ -130,13 +150,21 @@ class ProviderCredentialResolver:
         )
 
     def _connection_enabled(self, provider_id: str, connection: ConnectionConfig) -> bool:
-        overrides: Mapping[str, bool] = {}
-        if self._enabled_overrides_loader is not None:
-            overrides = self._enabled_overrides_loader()
+        overrides = self._enabled_overrides()
         override = overrides.get(f"{provider_id}:{connection.id}")
         if isinstance(override, bool):
             return override
         return connection_default_enabled(connection)
+
+    def _connection_added(self, provider_id: str, connection: ConnectionConfig) -> bool:
+        if connection.type == "none":
+            return f"{provider_id}:{connection.id}" in self._enabled_overrides()
+        return self._has_connection_credentials(provider_id, connection, None)
+
+    def _enabled_overrides(self) -> Mapping[str, bool]:
+        if self._enabled_overrides_loader is None:
+            return {}
+        return self._enabled_overrides_loader()
 
     def get_credentials(self, provider_id: str, connection_id: str | None = None) -> str:
         """Return the configured credential value for a provider, connection, or account.

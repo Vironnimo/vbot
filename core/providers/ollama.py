@@ -213,13 +213,13 @@ class OllamaAdapter(ProviderAdapter):
         raw: Mapping[str, Any],
         defaults: Mapping[str, Any] | None = None,
     ) -> Model:
-        """Normalize one ``/api/tags`` entry into a conservative vBot :class:`Model`.
+        """Normalize one ``/api/tags`` entry into a vBot :class:`Model`.
 
-        ``/api/tags`` carries no capability or window facts, so the entry is
-        conservative (text-only, no tools) until the ``/api/show`` enrichment
-        hook fills in capabilities and the context window. Locality is stamped
-        here: an entry with ``remote_host`` runs on the remote host (a proxied
-        cloud model); one without runs on this Ollama host.
+        Current Ollama versions expose capabilities and context length here;
+        older versions omit them. Missing facts stay conservative until the
+        ``/api/show`` enrichment hook fills them in. Locality is stamped here:
+        an entry with ``remote_host`` is proxied, while one without runs on the
+        local Ollama host.
         """
 
         del defaults
@@ -234,6 +234,16 @@ class OllamaAdapter(ProviderAdapter):
             if isinstance(family_value, str):
                 family = family_value
 
+        raw_capabilities = raw.get("capabilities")
+        capability_names = (
+            {name for name in raw_capabilities if isinstance(name, str)}
+            if isinstance(raw_capabilities, list)
+            else set()
+        )
+        tools = _CAPABILITY_TOOLS in capability_names
+        vision = _CAPABILITY_VISION in capability_names
+        thinking = _CAPABILITY_THINKING in capability_names
+
         is_remote = bool(raw.get("remote_host"))
         locality_field = REMOTE_METADATA_FIELD if is_remote else LOCAL_METADATA_FIELD
 
@@ -241,14 +251,18 @@ class OllamaAdapter(ProviderAdapter):
             model_id=model_id,
             name=model_id,
             capabilities=Capabilities(
-                vision=False,
-                tools=False,
+                vision=vision,
+                tools=tools,
                 json_mode=False,
-                reasoning=ReasoningCapabilities(supported=False),
-                input_modalities=("text",),
+                reasoning=_ollama_reasoning_capabilities(model_id, thinking),
+                input_modalities=("text", "image") if vision else ("text",),
                 output_modalities=("text",),
             ),
-            context_window=None,
+            context_window=(
+                _positive_int(details.get("context_length"))
+                if isinstance(details, Mapping)
+                else None
+            ),
             max_output_tokens=None,
             family=family,
             metadata={OLLAMA_METADATA_KEY: {locality_field: True}},
@@ -831,6 +845,12 @@ def _context_window_from_show(show_response: Mapping[str, Any]) -> int | None:
     if not isinstance(architecture, str) or not architecture:
         return None
     value = model_info.get(f"{architecture}.context_length")
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        return None
+    return value
+
+
+def _positive_int(value: Any) -> int | None:
     if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
         return None
     return value

@@ -1,0 +1,15 @@
+{
+  "id": "lmstudio",
+  "name": "LM Studio",
+  "adapter": "lmstudio",
+  "base_url": "http://localhost:1234",
+  "models_endpoint": "/api/v1/models",
+  "connections": [
+    {
+      "id": "local",
+      "type": "none",
+      "label": "Local",
+      "auto_refresh": true
+    }
+  ]
+}

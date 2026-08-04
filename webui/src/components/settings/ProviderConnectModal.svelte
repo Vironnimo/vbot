@@ -7,6 +7,7 @@
   import {
     connectProvider as connectProviderRequest,
     disconnectProvider as disconnectProviderRequest,
+    setConnectionEnabled,
     setProviderKey,
   } from '$lib/api.js';
   import { t } from '$lib/i18n.js';
@@ -73,7 +74,9 @@
         ? 'method'
         : selectedConnection.type === 'api_key'
           ? 'api-key'
-          : 'oauth',
+          : selectedConnection.type === 'none'
+            ? 'keyless'
+            : 'oauth',
   );
   let methodOptions = $derived(
     selectedProvider ? getAddableConnections(selectedProvider) : [],
@@ -102,7 +105,11 @@
     if (currentStep === 'method') {
       return !scopedProvider;
     }
-    if (currentStep === 'api-key' || currentStep === 'oauth') {
+    if (
+      currentStep === 'api-key' ||
+      currentStep === 'keyless' ||
+      currentStep === 'oauth'
+    ) {
       if (scopedConnection) {
         return false;
       }
@@ -185,6 +192,43 @@
       onClose();
     } catch (error) {
       errorMessage = `${t('settings.providers.add.keyError', 'API key could not be saved.')} ${error.message}`;
+    } finally {
+      saving = false;
+    }
+  }
+
+  async function addKeylessProvider() {
+    if (saving) {
+      return;
+    }
+
+    saving = true;
+    errorMessage = '';
+    try {
+      const result = await setConnectionEnabled({
+        provider_id: selectedProvider.id,
+        connection_id: getPublicConnectionId(selectedConnection),
+        enabled: true,
+      });
+      onToast({
+        title:
+          result?.reachable === false
+            ? t(
+                'settings.providers.add.localUnreachable',
+                '{provider} was added, but is not reachable.',
+                providerValues(selectedProvider),
+              )
+            : t(
+                'settings.providers.add.localSuccess',
+                '{provider} added successfully.',
+                providerValues(selectedProvider),
+              ),
+        variant: result?.reachable === false ? 'warn' : 'success',
+      });
+      await onCompleted();
+      onClose();
+    } catch (error) {
+      errorMessage = `${t('settings.providers.add.localError', 'Provider could not be added.')} ${error.message}`;
     } finally {
       saving = false;
     }
@@ -325,21 +369,32 @@
   }
 
   function connectionMethodLabel(connection) {
-    return connection.type === 'api_key'
-      ? t('settings.providers.add.methodApiKey', 'API key')
-      : t('settings.providers.add.methodOAuth', 'Sign in (OAuth)');
+    if (connection.type === 'api_key') {
+      return t('settings.providers.add.methodApiKey', 'API key');
+    }
+    if (connection.type === 'none') {
+      return t('settings.providers.add.methodLocal', 'Local');
+    }
+    return t('settings.providers.add.methodOAuth', 'Sign in (OAuth)');
   }
 
   function connectionMethodDescription(connection) {
-    return connection.type === 'api_key'
-      ? t(
-          'settings.providers.add.methodApiKeyDescription',
-          'Paste a static API key; it is stored in the data directory.',
-        )
-      : t(
-          'settings.providers.add.methodOAuthDescription',
-          'Authorize vBot through the provider account in a browser.',
-        );
+    if (connection.type === 'api_key') {
+      return t(
+        'settings.providers.add.methodApiKeyDescription',
+        'Paste a static API key; it is stored in the data directory.',
+      );
+    }
+    if (connection.type === 'none') {
+      return t(
+        'settings.providers.add.methodLocalDescription',
+        'Connect to the local endpoint without credentials.',
+      );
+    }
+    return t(
+      'settings.providers.add.methodOAuthDescription',
+      'Authorize vBot through the provider account in a browser.',
+    );
   }
 </script>
 
@@ -496,6 +551,13 @@
             </p>
           {/if}
         </form>
+      {:else if step === 'keyless'}
+        <p class="provider-connect-modal__hint">
+          {t(
+            'settings.providers.add.localIntro',
+            'Add the local endpoint. Models are discovered now and loaded only when used.',
+          )}
+        </p>
       {:else if step === 'oauth'}
         {#if oauthActive && oauthData}
           <p class="device-flow-instructions">
@@ -589,6 +651,12 @@
         {saving
           ? t('common.saving', 'Saving…')
           : t('settings.providers.add.saveKey', 'Save key')}
+      </Button>
+    {:else if step === 'keyless'}
+      <Button variant="primary" disabled={saving} onClick={addKeylessProvider}>
+        {saving
+          ? t('common.saving', 'Saving…')
+          : t('settings.providers.add.localSubmit', 'Add provider')}
       </Button>
     {:else if step === 'oauth' && !oauthActive}
       <Button

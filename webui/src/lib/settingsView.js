@@ -1062,6 +1062,9 @@ export function connectionSupportsAddAccount(connection) {
 }
 
 export function isConnectionConfigured(connection) {
+  if (connection?.type === 'none') {
+    return connection?.added === true;
+  }
   return (
     connection?.configured === true ||
     connection?.usable === true ||
@@ -1129,6 +1132,10 @@ function isConnectionAddable(connection) {
     return true;
   }
 
+  if (connection?.type === 'none') {
+    return true;
+  }
+
   return isOAuthDeviceFlowConnection(connection);
 }
 
@@ -1141,6 +1148,7 @@ export function getAddableConnections(provider) {
 export function getAddProviderCandidates(settings) {
   return getProviderItems(settings).filter(
     (provider) =>
+      provider?.custom !== true &&
       !providerHasConfiguredConnection(provider) &&
       getAddableConnections(provider).length > 0,
   );

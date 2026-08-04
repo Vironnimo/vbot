@@ -10,6 +10,8 @@ Settings-owned Custom Providers use the same types with one implicit `default` C
 
 Supported Connection types are `api_key`, `oauth`, and `none`. Keyed Connections default enabled and are gated by credentials. A `none` Connection is keyless: auth may be empty, it resolves credential `""`, exposes one implicit usable default Account, and is disabled by default so vBot never probes a local endpoint without explicit opt-in.
 
+Connection addition is distinct from credentials, enablement, and usability. `ProviderCredentialResolver.is_connection_added()` treats a keyed Connection as added when it has credentials; for a keyless Connection, presence of its persisted `providers.connections` override is the enrollment marker regardless of whether that override is `true` or `false`. This lets fresh local Providers stay in Add Provider while an added-but-disabled Provider remains in the configured list.
+
 Connection-level base URL and models endpoint override Provider-level values. `mode` is an Adapter-interpreted wire selector. `auto_refresh` is a boolean for local catalogs whose installed Model set changes independently of vBot; it changes refresh behavior, not credential semantics.
 
 ## Identity and Accounts
@@ -27,6 +29,7 @@ Accounts are credential choices only. Model catalogs, discovery, Connection enab
 `ProviderCredentialResolver` is the single decision owner:
 
 - `has_credentials()` asks whether credentials exist and is used by management surfaces.
+- `is_connection_added()` asks whether the user has enrolled the Connection and is used only by management surfaces.
 - `is_connection_enabled()` reads the live `providers.connections` override, else the type default; an Account suffix is ignored.
 - `is_usable()` requires enabled and credentialed on the same Connection and is used for behavior gating.
 - `list_accounts()` returns deterministic `ProviderAccount` projections with source and usable state.
@@ -44,7 +47,7 @@ API keys resolve from process environment first and data-dir `.env` second. Key 
 
 ## RPC and runtime projections
 
-- `connection.list` combines static Provider/Connection config with Account/configured/enabled/usable state and optional local reachability. The Provider projection inside `settings.get` preserves the same Connection-level `configured`, `enabled`, and server-owned `usable` distinction so management surfaces and behavior gates do not infer one state from another.
+- `connection.list` combines static Provider/Connection config with Account/added/configured/enabled/usable state and optional local reachability. The Provider projection inside `settings.get` preserves the same Connection-level distinctions so management surfaces and behavior gates do not infer one state from another.
 - `connection.set_enabled` persists the explicit Connection override. Enabling an auto-refresh Connection forces an immediate local catalog attempt; enabled-but-unreachable remains a valid persisted state.
 - `provider.set_key`/`unset_key` address API-key Accounts through derived keys and never return secret values.
 - Provider connect/status/disconnect operate on OAuth Accounts and token-store state.

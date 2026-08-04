@@ -26,6 +26,14 @@ def _connection_is_enabled(runtime: Any, provider_id: str, connection_id: str) -
     return bool(runtime.provider_credentials.is_connection_enabled(provider_id, connection_id))
 
 
+def _connection_is_added(runtime: Any, provider_id: str, connection_id: str) -> bool:
+    resolver = runtime.provider_credentials
+    is_connection_added = getattr(resolver, "is_connection_added", None)
+    if callable(is_connection_added):
+        return bool(is_connection_added(provider_id, connection_id))
+    return bool(resolver.has_credentials(provider_id, connection_id))
+
+
 def _connection_is_usable(runtime: Any, provider_id: str, connection_id: str) -> bool:
     return bool(runtime.provider_credentials.is_usable(provider_id, connection_id))
 
@@ -189,6 +197,8 @@ def _connection_response(runtime: Any, provider_id: str, connection: Any) -> Jso
     }
     if getattr(connection, "auto_refresh", False):
         response["reachable"] = _connection_reachability(runtime, connection_id)
+    if getattr(connection, "type", "") == "none":
+        response["added"] = _connection_is_added(runtime, provider_id, connection_id)
     return response
 
 
@@ -205,6 +215,8 @@ def _provider_settings_connection(runtime: Any, provider_id: str, connection: An
     }
     if getattr(connection, "auto_refresh", False):
         response["reachable"] = _connection_reachability(runtime, connection_id)
+    if getattr(connection, "type", "") == "none":
+        response["added"] = _connection_is_added(runtime, provider_id, connection_id)
     if getattr(connection, "type", "") == "api_key":
         response["credential_key"] = connection.auth.credential_key
     if getattr(connection, "type", "") == "oauth":

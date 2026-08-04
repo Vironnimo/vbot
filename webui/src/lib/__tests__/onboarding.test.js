@@ -173,14 +173,15 @@ describe('onboardingMoreProviders', () => {
     const ids = onboardingMoreProviders(freshInstallSettings()).map(
       (provider) => provider.id,
     );
-    // OpenAI stays (it has an API key); GitHub Copilot (device-flow only) and
-    // OpenRouter (the hero) are excluded.
+    // OpenAI stays (it has an API key), and fresh keyless Ollama is addable;
+    // GitHub Copilot (device-flow only) and OpenRouter (the hero) are excluded.
     expect(ids).toEqual([
       'openai',
       'anthropic',
       'mistral',
       'minimax',
       'opencode-go',
+      'ollama',
     ]);
   });
 });

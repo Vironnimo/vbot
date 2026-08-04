@@ -165,6 +165,7 @@ describe('settingsView helpers', () => {
     const localConnection = {
       id: 'ollama:local',
       type: 'none',
+      added: true,
       configured: true,
       enabled: false,
       usable: false,
@@ -182,6 +183,40 @@ describe('settingsView helpers', () => {
       getConnectedProviderItems(settings).map((provider) => provider.id),
     ).toEqual(['ollama']);
     expect(getUsableProviderItems(settings)).toEqual([]);
+  });
+
+  it('offers fresh keyless providers through Add Provider and keeps disabled additions listed', () => {
+    const freshLocal = {
+      id: 'ollama:local',
+      type: 'none',
+      added: false,
+      configured: true,
+      enabled: false,
+      usable: false,
+      accounts: [{ id: 'default', usable: true, source: 'none' }],
+    };
+    const settings = {
+      providers: {
+        items: [{ id: 'ollama', connections: [freshLocal] }],
+      },
+    };
+
+    expect(isConnectionConfigured(freshLocal)).toBe(false);
+    expect(getConnectedProviderItems(settings)).toEqual([]);
+    expect(getAddableConnections(settings.providers.items[0])).toEqual([
+      freshLocal,
+    ]);
+    expect(
+      getAddProviderCandidates(settings).map((provider) => provider.id),
+    ).toEqual(['ollama']);
+
+    const disabledAddition = { ...freshLocal, added: true };
+    settings.providers.items[0].connections = [disabledAddition];
+    expect(isConnectionConfigured(disabledAddition)).toBe(true);
+    expect(
+      getConnectedProviderItems(settings).map((provider) => provider.id),
+    ).toEqual(['ollama']);
+    expect(getAddProviderCandidates(settings)).toEqual([]);
   });
 
   it('reads probe reachability only when the server states it', () => {

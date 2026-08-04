@@ -121,6 +121,28 @@ class TestIsConnectionEnabled:
         assert resolver.is_connection_enabled("ollama") is False
 
 
+class TestIsConnectionAdded:
+    def test_keyless_requires_explicit_override_presence(self) -> None:
+        assert _resolver().is_connection_added("ollama", "ollama:local") is False
+        assert (
+            _resolver(overrides={"ollama:local": True}).is_connection_added(
+                "ollama", "ollama:local"
+            )
+            is True
+        )
+
+    def test_disabled_keyless_connection_remains_added(self) -> None:
+        resolver = _resolver(overrides={"ollama:local": False})
+
+        assert resolver.is_connection_added("ollama", "ollama:local") is True
+        assert resolver.is_connection_enabled("ollama", "ollama:local") is False
+
+    def test_keyed_connection_is_added_when_it_has_credentials(self) -> None:
+        resolver = _resolver(process_env={"OPENAI_API_KEY": "sk-test"})
+
+        assert resolver.is_connection_added("openai", "openai:api-key") is True
+
+
 class TestIsUsable:
     def test_keyless_default_not_usable_despite_credentials(self) -> None:
         """Keyless passes the credential gate but stays unusable while disabled."""
