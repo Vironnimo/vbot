@@ -1105,9 +1105,7 @@ class _Aggregator:
                 model.run_duration_count += 1
 
         tool_calls = sum(1 for message in group if message.role == "tool")
-        if summary.model_step_count is None:
-            raise AssertionError("validated run summaries carry model_step_count")
-        self._run_model_steps += summary.model_step_count
+        self._run_model_steps += sum(1 for message in group if message.role == "assistant")
         self._run_agent_messages += sum(
             1 for message in group if _is_visible_assistant_message(message)
         )

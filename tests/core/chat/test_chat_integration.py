@@ -131,7 +131,6 @@ async def test_agent_sends_message_and_persists_assistant_response(
         assert messages[0].content == "Hello"
         assert messages[1].model == "fake-provider/fake-model-v1"
         assert messages[1].content == "assistant response"
-        assert messages[-1].model_step_count == 1
         assert adapter.requests[0].model_id == "fake-model-v1"
         assert adapter.requests[0].kwargs["thinking_effort"] == "high"
         assert adapter.requests[0].kwargs["temperature"] is None
@@ -191,69 +190,11 @@ async def test_read_tool_success_persists_result_and_final_response_uses_content
         ]
         assert messages[-1].status == "completed"
         assert messages[-1].timing is not None
-        assert messages[-1].model_step_count == 2
         assert tool_result["ok"] is True
         assert tool_result["error"] is None
         assert tool_result["data"] == {"content": "1|file content"}
         assert tool_result["artifacts"] == []
         assert adapter.requests[1].messages[3]["content"] == messages[2].content
-    finally:
-        runtime.stop()
-
-
-@pytest.mark.asyncio
-async def test_multiple_tool_rounds_share_one_canonical_model_step_count(
-    tmp_path: Path,
-    resources_dir: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    adapter = FakeAdapter(
-        [
-            {
-                "content": None,
-                "tool_calls": [
-                    {"id": "call_first", "name": "read", "arguments": {"path": "one.txt"}}
-                ],
-            },
-            {
-                "content": None,
-                "tool_calls": [
-                    {"id": "call_second", "name": "read", "arguments": {"path": "two.txt"}}
-                ],
-            },
-            {"content": "Both files read.", "tool_calls": None},
-        ]
-    )
-    config = Config(data_dir=tmp_path / "data")
-    config._data["RESOURCES_PATH"] = str(resources_dir)
-    config._data["VBOT_VERSION"] = "test-version"
-    runtime = Runtime(config)
-    monkeypatch.setenv("FAKE_API_KEY", "test-key")
-    monkeypatch.setattr(runtime, "get_adapter", lambda provider_id, connection_id: adapter)
-
-    runtime.start()
-    try:
-        agent = runtime.agents.create(
-            "coder",
-            "Coder Agent",
-            model="fake-provider/fake-model-v1",
-        )
-        Path(agent.workspace).joinpath("one.txt").write_text("one", encoding="utf-8")
-        Path(agent.workspace).joinpath("two.txt").write_text("two", encoding="utf-8")
-
-        await build_chat_loop(runtime).send("coder", "Read both", session_id="session-one")
-
-        messages = runtime.chat_sessions.get("coder", "session-one").load()
-        run = runtime.chat_run_manager.get(str(messages[-1].run_id))
-        usage_counts = [
-            event.payload["model_step_count"]
-            for event in run.events
-            if event.type == "model_step_usage"
-        ]
-        assert run.model_step_count == 3
-        assert messages[-1].model_step_count == 3
-        assert run.events[-1].payload["model_step_count"] == 3
-        assert usage_counts == [1, 2, 3]
     finally:
         runtime.stop()
 

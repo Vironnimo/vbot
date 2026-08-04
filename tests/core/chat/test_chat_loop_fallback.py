@@ -126,9 +126,6 @@ async def test_provider_rate_limit_error_is_persisted_and_run_fails(tmp_path: Pa
     messages = runtime.chat_sessions.get("coder", "session-one").load()
     assert run.status == RunStatus.FAILED
     assert persisted_roles(messages) == ["user", "error"]
-    assert run.model_step_count == 0
-    assert messages[-1].model_step_count == 0
-    assert run.events[-1].payload["model_step_count"] == 0
     assert messages[1].error_kind == "rate_limit"
     assert messages[1].content == "too many requests"
     assert [event.type for event in run.events] == [
@@ -171,9 +168,6 @@ async def test_fallback_model_activates_on_retryable_error(tmp_path: Path) -> No
     ]
     assert assistant.content == "Recovered"
     assert persisted_roles(messages) == ["user", "note", "assistant"]
-    assert run.model_step_count == 1
-    assert messages[-1].model_step_count == 1
-    assert run.events[-1].payload["model_step_count"] == 1
     assert messages[1].content == (
         "Primary model unavailable. Switched to anthropic/claude-sonnet-4::api-key for this run."
     )

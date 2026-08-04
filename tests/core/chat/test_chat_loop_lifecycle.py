@@ -39,7 +39,6 @@ async def test_run_end_notifies_reflection_service_on_success(tmp_path: Path) ->
     call = reflection.calls[0]
     assert call["agent_id"] == "coder"
     assert call["session_id"] == "session-one"
-    assert call["model_step_count"] == 1
     assert call["agent"].id == "coder"
     assert call["internal"] is False
     assert call["outcome"] == "success"
@@ -128,13 +127,6 @@ async def test_run_excluded_from_agent_activity_still_persists_its_session_histo
     assert [message.role for message in persisted] == ["note", "assistant", "run_summary"]
     assert persisted[-1].run_id == run.id
     assert persisted[-1].status == "completed"
-    assert persisted[-1].model_step_count == 1
-    assert (
-        next(event for event in run.events if event.type == "run_completed").payload[
-            "model_step_count"
-        ]
-        == 1
-    )
     activity = runtime.chat_sessions.list_with_metadata("coder")[0]
     assert activity["latest_completion_run_id"] is None
     assert activity["has_unread_completion"] is False

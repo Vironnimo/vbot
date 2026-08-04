@@ -614,7 +614,6 @@ function applyLiveTerminalStateToHistory(
     liveAssistantRun.endTimestamp ?? historyAssistantRun.endTimestamp;
   historyAssistantRun.durationMs =
     liveAssistantRun.durationMs ?? historyAssistantRun.durationMs;
-  historyAssistantRun.modelStepCount = liveAssistantRun.modelStepCount;
   historyAssistantRun.terminalEvent = liveAssistantRun.terminalEvent;
   if (liveAssistantRun.terminalEvent?.type === 'run_cancelled') {
     markPendingToolsCancelled(
@@ -762,13 +761,6 @@ function liveTimelineEntryItems(entry, projectionCache) {
     return [entry.item];
   }
 
-  // Usage carries the canonical live Model-step count but remains a
-  // non-visual event. Do not let a replay containing only Usage fabricate an
-  // empty Assistant row; another lifecycle/output event makes the Run visible.
-  if (entry.events.every((event) => event.type === 'model_step_usage')) {
-    return [entry.userItem].filter(Boolean);
-  }
-
   const assistantRun = projectedLiveAssistantRunItem(entry, projectionCache);
   return [entry.userItem, assistantRun].filter(Boolean);
 }
@@ -847,7 +839,6 @@ function createAssistantRunItem({ id, runId, source, sequence, timestamp }) {
     timing: null,
     durationMs: null,
     providerHeartbeat: null,
-    modelStepCount: 0,
     items: [],
     reasoning: [],
     outputs: [],
@@ -962,13 +953,6 @@ function appendLiveRunEvent(assistantRun, event) {
     assistantRun.providerHeartbeat = null;
   }
 
-  if (event.type === 'model_step_usage') {
-    if (Number.isInteger(event.payload?.model_step_count)) {
-      assistantRun.modelStepCount = Math.max(0, event.payload.model_step_count);
-    }
-    return;
-  }
-
   if (TERMINAL_RUN_EVENTS.has(event.type)) {
     assistantRun.items = assistantRun.items.filter(
       (item) =>
@@ -989,9 +973,6 @@ function appendLiveRunEvent(assistantRun, event) {
     assistantRun.durationMs =
       timingDurationMs(timing) ?? assistantRun.durationMs;
     assistantRun.status = event.payload?.status ?? terminalStatus(event.type);
-    if (Number.isInteger(event.payload?.model_step_count)) {
-      assistantRun.modelStepCount = Math.max(0, event.payload.model_step_count);
-    }
     assistantRun.terminalEvent = event;
     if (event.type === 'run_cancelled') {
       markPendingToolsCancelled(assistantRun, event);
@@ -1170,9 +1151,6 @@ function appendHistoryRunSummary(assistantRun, message) {
     timing?.started_at ?? assistantRun.startTimestamp;
   assistantRun.endTimestamp = timing?.completed_at ?? assistantRun.endTimestamp;
   assistantRun.durationMs = timingDurationMs(timing) ?? assistantRun.durationMs;
-  if (Number.isInteger(message?.model_step_count)) {
-    assistantRun.modelStepCount = Math.max(0, message.model_step_count);
-  }
   assistantRun.runSummaryMessage = message;
   if (assistantRun.status === CHAT_STATUS_CANCELLED) {
     // Live run_cancelled events settle every still-open Tool row. History must
@@ -1573,7 +1551,6 @@ function historyMessageItem(message) {
 function isAssistantRunEvent(event) {
   return [
     'run_started',
-    'model_step_usage',
     'model_fallback_activated',
     RUN_EVENT_PROVIDER_HEARTBEAT,
     RUN_EVENT_REASONING_DELTA,
