@@ -20,6 +20,7 @@ from core.providers.accounts import DEFAULT_ACCOUNT_ID
 from core.providers.openai_subscription_auth import openai_subscription_token_extra
 from core.providers.providers import (
     MINIMAX_OAUTH_DEVICE_FLOW,
+    NOUS_OAUTH_DEVICE_FLOW,
     OPENAI_CODEX_DEVICE_FLOW,
     XAI_OAUTH_DEVICE_FLOW,
     OAuthConfig,
@@ -28,7 +29,10 @@ from core.providers.providers import (
 from core.providers.token_getter import (
     COPILOT_EDITOR_VERSION,
     COPILOT_INTEGRATION_ID,
+    OAUTH_SCOPE_EXTRA_KEY,
     copilot_token_extra,
+    oauth_scope_value,
+    validate_nous_oauth_scope,
 )
 from core.providers.token_store import OAuthToken, TokenStore
 from core.utils.errors import ProviderError
@@ -512,7 +516,9 @@ class DeviceFlowEngine:
         except httpx.HTTPError as error:
             raise wrap_network_error(error) from error
 
-        if self._is_xai_flow(oauth_config) and _is_standard_device_flow_error(response):
+        if (
+            self._is_xai_flow(oauth_config) or self._is_nous_flow(oauth_config)
+        ) and _is_standard_device_flow_error(response):
             return response
         classify_http_status(
             response.status_code, detail=response.text, response_headers=response.headers
@@ -595,6 +601,21 @@ class DeviceFlowEngine:
                 expires_at=resolve_minimax_oauth_expiry(
                     token_data["expired_in"], now=datetime.now(UTC)
                 ),
+            )
+
+        if self._is_nous_flow(oauth_config):
+            for required_field in ("access_token", "refresh_token"):
+                if not token_data.get(required_field):
+                    raise DeviceFlowTerminalError("invalid_token_response")
+            try:
+                validate_nous_oauth_scope(token_data, oauth_config.scopes)
+            except ProviderError as exc:
+                raise DeviceFlowTerminalError("missing_inference_invoke_scope") from exc
+            return OAuthToken(
+                access_token=str(token_data["access_token"]),
+                refresh_token=str(token_data["refresh_token"]),
+                expires_at=self._expires_at_from_response(token_data),
+                extra={OAUTH_SCOPE_EXTRA_KEY: oauth_scope_value(token_data, oauth_config.scopes)},
             )
 
         provider_oauth_token = str(token_data["access_token"])
@@ -724,6 +745,9 @@ class DeviceFlowEngine:
 
     def _is_minimax_flow(self, oauth_config: OAuthConfig) -> bool:
         return oauth_config.device_flow == MINIMAX_OAUTH_DEVICE_FLOW
+
+    def _is_nous_flow(self, oauth_config: OAuthConfig) -> bool:
+        return oauth_config.device_flow == NOUS_OAUTH_DEVICE_FLOW
 
     def _is_xai_flow(self, oauth_config: OAuthConfig) -> bool:
         return oauth_config.device_flow == XAI_OAUTH_DEVICE_FLOW

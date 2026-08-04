@@ -18,6 +18,7 @@ from core.providers.github_copilot_policy import RESPONSES_ENDPOINT
 from core.providers.kimi import KIMI_CODING_MODE, KimiAdapter
 from core.providers.minimax import MiniMaxAdapter
 from core.providers.mistral import MistralAdapter
+from core.providers.nous import NousAdapter
 from core.providers.ollama import OllamaAdapter
 from core.providers.openai import CODEX_RESPONSES_MODE, OpenAIAdapter
 from core.providers.openai_compatible import OpenAICompatibleAdapter
@@ -64,6 +65,7 @@ def test_runtime_providers_populated(runtime: Runtime) -> None:
     assert "minimax" in ids
     assert "kimi" in ids
     assert "xai" in ids
+    assert "nous" in ids
 
 
 def test_runtime_provider_config_fields(runtime: Runtime) -> None:
@@ -75,6 +77,7 @@ def test_runtime_provider_config_fields(runtime: Runtime) -> None:
     minimax_config = runtime.providers.get("minimax")
     kimi_config = runtime.providers.get("kimi")
     xai_config = runtime.providers.get("xai")
+    nous_config = runtime.providers.get("nous")
 
     # Assert
     assert openai_config.id == "openai"
@@ -140,6 +143,18 @@ def test_runtime_provider_config_fields(runtime: Runtime) -> None:
     assert xai_oauth.device_flow == "xai_oauth"
     assert xai_oauth.device_auth_url == "https://auth.x.ai/oauth2/device/code"
     assert xai_oauth.token_url == "https://auth.x.ai/oauth2/token"
+    assert nous_config.adapter == "nous"
+    assert nous_config.base_url == "https://inference-api.nousresearch.com/v1"
+    assert [connection.id for connection in nous_config.connections] == [
+        "api-key",
+        "subscription",
+    ]
+    assert nous_config.get_connection("api-key").auth.credential_key == "NOUS_API_KEY"
+    nous_oauth = nous_config.get_connection("subscription").oauth
+    assert nous_oauth is not None
+    assert nous_oauth.device_flow == "nous_oauth"
+    assert nous_oauth.client_id == "hermes-cli"
+    assert nous_oauth.scopes == ["inference:invoke"]
 
 
 def test_runtime_loads_xai_model_overrides(runtime: Runtime) -> None:
@@ -198,6 +213,21 @@ def test_runtime_loads_minimax_override_only_models_with_connection_limits(
     assert m3.connections == ("api-key", "api-key-cn")
     assert m3.context_window == 1000000
     assert m3.max_output_tokens == 131072
+
+
+def test_runtime_loads_nous_curated_fallback_catalog(runtime: Runtime) -> None:
+    models = {model.model_id: model for model in runtime.models.list_for_provider("nous")}
+
+    assert set(models) == {
+        "anthropic/claude-sonnet-4.6",
+        "deepseek/deepseek-v4-pro",
+        "google/gemini-3-pro-preview",
+        "openai/gpt-5.5-pro",
+    }
+    assert all(model.connections == ("api-key", "subscription") for model in models.values())
+    assert all(model.max_output_tokens == 32000 for model in models.values())
+    assert models["anthropic/claude-sonnet-4.6"].capabilities.tools is True
+    assert models["google/gemini-3-pro-preview"].context_window == 1048576
 
 
 def test_runtime_injects_openrouter_routing_snapshot(
@@ -845,6 +875,17 @@ def test_runtime_wires_xai_adapter(runtime: Runtime) -> None:
     adapter = runtime.get_adapter("xai", "xai:api-key")
 
     assert isinstance(adapter, XAIAdapter)
+
+
+def test_runtime_wires_nous_adapter(runtime: Runtime) -> None:
+    runtime._provider_credentials = ProviderCredentialResolver(  # type: ignore[attr-defined]
+        runtime.providers,
+        process_env={"NOUS_API_KEY": "nous-token"},
+    )
+
+    adapter = runtime.get_adapter("nous", "nous:api-key")
+
+    assert isinstance(adapter, NousAdapter)
 
 
 def test_runtime_wires_kimi_adapter_and_connection_mode(runtime: Runtime) -> None:
