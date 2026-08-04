@@ -646,6 +646,16 @@ class OpenAICompatibleAdapter(ProviderAdapter):
     # stream() — SSE streaming
     # ------------------------------------------------------------------
 
+    def _prepare_stream_payload(self, payload: dict[str, Any]) -> None:
+        """Apply the generic OpenAI streaming request extensions.
+
+        Concrete compatible providers can override this when their documented
+        wire supports SSE but not OpenAI's optional ``stream_options`` field.
+        """
+
+        payload["stream"] = True
+        _merge_stream_usage_options(payload)
+
     async def stream(
         self,
         messages: list[dict[str, Any]],
@@ -679,8 +689,7 @@ class OpenAICompatibleAdapter(ProviderAdapter):
                 error payloads.
         """
         payload = self._build_payload(messages, model_id, **kwargs)
-        payload["stream"] = True
-        _merge_stream_usage_options(payload)
+        self._prepare_stream_payload(payload)
 
         async def _connect_stream() -> httpx.Response:
             # Rebuild headers per attempt: an OAuth token may refresh during a

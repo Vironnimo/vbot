@@ -70,6 +70,7 @@ from core.providers.providers import (
     model_is_local,
     resolve_effective_context_window,
 )
+from core.providers.stepfun import StepFunAdapter
 from core.providers.token_getter import (
     COPILOT_API_ENDPOINT_EXTRA_KEY,
     OAuthTokenGetter,
@@ -328,6 +329,7 @@ _ADAPTER_MAP: dict[
     "minimax": MiniMaxAdapter,
     "mistral": MistralAdapter,
     "nous": NousAdapter,
+    "stepfun": StepFunAdapter,
     "opencode_go": OpenCodeGoAdapter,
     "github_copilot": GitHubCopilotAdapter,
     "anthropic": AnthropicAdapter,

@@ -25,6 +25,7 @@ from core.providers.openai_compatible import OpenAICompatibleAdapter
 from core.providers.opencode_go import OpenCodeGoAdapter
 from core.providers.openrouter import OpenRouterAdapter
 from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig, ProviderRegistry
+from core.providers.stepfun import STEPFUN_DIRECT_MODE, STEPFUN_PLAN_MODE, StepFunAdapter
 from core.providers.token_getter import OAuthTokenGetter, StaticTokenGetter
 from core.providers.token_store import OAuthToken
 from core.providers.xai import XAIAdapter
@@ -66,6 +67,7 @@ def test_runtime_providers_populated(runtime: Runtime) -> None:
     assert "kimi" in ids
     assert "xai" in ids
     assert "nous" in ids
+    assert "stepfun" in ids
 
 
 def test_runtime_provider_config_fields(runtime: Runtime) -> None:
@@ -78,6 +80,7 @@ def test_runtime_provider_config_fields(runtime: Runtime) -> None:
     kimi_config = runtime.providers.get("kimi")
     xai_config = runtime.providers.get("xai")
     nous_config = runtime.providers.get("nous")
+    stepfun_config = runtime.providers.get("stepfun")
 
     # Assert
     assert openai_config.id == "openai"
@@ -155,6 +158,21 @@ def test_runtime_provider_config_fields(runtime: Runtime) -> None:
     assert nous_oauth.device_flow == "nous_oauth"
     assert nous_oauth.client_id == "hermes-cli"
     assert nous_oauth.scopes == ["inference:invoke"]
+    assert stepfun_config.adapter == "stepfun"
+    assert stepfun_config.base_url == "https://api.stepfun.com/v1"
+    assert [connection.id for connection in stepfun_config.connections] == [
+        "direct-api",
+        "step-plan",
+    ]
+    stepfun_direct = stepfun_config.get_connection("direct-api")
+    assert stepfun_direct.mode == STEPFUN_DIRECT_MODE
+    assert stepfun_direct.auth.credential_key == "STEPFUN_DIRECT_API_KEY"
+    assert stepfun_direct.models_endpoint == "/models"
+    stepfun_plan = stepfun_config.get_connection("step-plan")
+    assert stepfun_plan.mode == STEPFUN_PLAN_MODE
+    assert stepfun_plan.base_url == "https://api.stepfun.com/step_plan/v1"
+    assert stepfun_plan.auth.credential_key == "STEPFUN_API_KEY"
+    assert stepfun_plan.models_endpoint == "/models"
 
 
 def test_runtime_loads_xai_model_overrides(runtime: Runtime) -> None:
@@ -228,6 +246,36 @@ def test_runtime_loads_nous_curated_fallback_catalog(runtime: Runtime) -> None:
     assert all(model.max_output_tokens == 32000 for model in models.values())
     assert models["anthropic/claude-sonnet-4.6"].capabilities.tools is True
     assert models["google/gemini-3-pro-preview"].context_window == 1048576
+
+
+def test_runtime_loads_stepfun_models_with_connection_limits(runtime: Runtime) -> None:
+    models = {model.model_id: model for model in runtime.models.list_for_provider("stepfun")}
+
+    assert set(models) == {
+        "step-3.5-flash",
+        "step-3.5-flash-2603",
+        "step-3.7-flash",
+        "step-router-v1",
+    }
+    assert models["step-3.5-flash"].connections == ("direct-api", "step-plan")
+    assert models["step-3.5-flash"].capabilities.reasoning.levels == ()
+    assert models["step-3.5-flash-2603"].capabilities.reasoning.levels == ("low", "high")
+    assert models["step-3.7-flash"].capabilities.reasoning.levels == (
+        "low",
+        "medium",
+        "high",
+    )
+    assert models["step-3.7-flash"].capabilities.input_modalities == (
+        "text",
+        "image",
+        "video",
+    )
+    assert models["step-router-v1"].connections == ("step-plan",)
+    assert models["step-router-v1"].max_output_tokens == 250000
+    assert models["step-router-v1"].metadata["stepfun"]["routes_between"] == (
+        "deepseek-v4-pro",
+        "step-3.7-flash",
+    )
 
 
 def test_runtime_injects_openrouter_routing_snapshot(
@@ -886,6 +934,19 @@ def test_runtime_wires_nous_adapter(runtime: Runtime) -> None:
     adapter = runtime.get_adapter("nous", "nous:api-key")
 
     assert isinstance(adapter, NousAdapter)
+
+
+def test_runtime_wires_stepfun_adapter_and_explicit_connection_mode(runtime: Runtime) -> None:
+    runtime._provider_credentials = ProviderCredentialResolver(  # type: ignore[attr-defined]
+        runtime.providers,
+        process_env={"STEPFUN_API_KEY": "step-plan-token"},
+    )
+
+    adapter = runtime.get_adapter("stepfun", "stepfun:step-plan")
+
+    assert isinstance(adapter, StepFunAdapter)
+    assert adapter._connection_mode == STEPFUN_PLAN_MODE  # type: ignore[attr-defined]
+    assert str(adapter._client.base_url) == "https://api.stepfun.com/step_plan/v1/"  # type: ignore[attr-defined]
 
 
 def test_runtime_wires_kimi_adapter_and_connection_mode(runtime: Runtime) -> None:
