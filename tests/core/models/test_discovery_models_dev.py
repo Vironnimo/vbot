@@ -375,3 +375,10 @@ def test_xai_adapter_registered_for_discovery() -> None:
 
     assert discovery_module._DISCOVERY_ADAPTER_MAP["xai"] is XAIAdapter
     assert discovery_module._adapter_class_for_discovery("xai") is XAIAdapter
+
+
+def test_kimi_adapter_registered_for_discovery() -> None:
+    from core.providers.kimi import KimiAdapter
+
+    assert discovery_module._DISCOVERY_ADAPTER_MAP["kimi"] is KimiAdapter
+    assert discovery_module._adapter_class_for_discovery("kimi") is KimiAdapter

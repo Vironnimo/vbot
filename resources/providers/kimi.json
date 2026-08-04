@@ -1,0 +1,60 @@
+{
+  "id": "kimi",
+  "name": "Kimi",
+  "adapter": "kimi",
+  "base_url": "https://api.moonshot.ai/v1",
+  "connections": [
+    {
+      "id": "coding-plan",
+      "type": "api_key",
+      "label": "Kimi Code API Key (Subscription)",
+      "base_url": "https://api.kimi.com/coding/v1",
+      "mode": "coding_plan",
+      "auth": {
+        "header": "Authorization",
+        "prefix": "Bearer ",
+        "credential_key": "KIMI_CODING_API_KEY"
+      },
+      "models_endpoint": "/models"
+    },
+    {
+      "id": "api-key",
+      "type": "api_key",
+      "label": "Global Platform API Key",
+      "auth": {
+        "header": "Authorization",
+        "prefix": "Bearer ",
+        "credential_key": "KIMI_API_KEY"
+      },
+      "models_endpoint": "/models"
+    },
+    {
+      "id": "api-key-cn",
+      "type": "api_key",
+      "label": "China Platform API Key",
+      "base_url": "https://api.moonshot.cn/v1",
+      "auth": {
+        "header": "Authorization",
+        "prefix": "Bearer ",
+        "credential_key": "KIMI_CN_API_KEY"
+      },
+      "models_endpoint": "/models"
+    }
+  ],
+  "defaults": {
+    "max_tokens": 32768
+  },
+  "extra_headers": {
+    "User-Agent": "vBot"
+  },
+  "models_dev_id": "moonshotai",
+  "catalog_exclusions": [
+    "kimi-latest",
+    "kimi-thinking-preview",
+    "kimi-k2-0711-preview",
+    "kimi-k2-0905-preview",
+    "kimi-k2-turbo-preview",
+    "kimi-k2-thinking",
+    "kimi-k2-thinking-turbo"
+  ]
+}

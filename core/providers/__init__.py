@@ -21,6 +21,7 @@ from core.providers.errors import (
     ProviderTimeoutError,
 )
 from core.providers.github_copilot import GitHubCopilotAdapter
+from core.providers.kimi import KimiAdapter
 from core.providers.minimax import MiniMaxAdapter
 from core.providers.mistral import MistralAdapter
 from core.providers.ollama import OllamaAdapter
@@ -62,6 +63,7 @@ __all__ = [
     "AuthConfig",
     "ConnectionConfig",
     "GitHubCopilotAdapter",
+    "KimiAdapter",
     "MiniMaxAdapter",
     "MistralAdapter",
     "OllamaAdapter",
