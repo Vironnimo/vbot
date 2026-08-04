@@ -26,7 +26,9 @@ from core.chat.errors import (
     ChatError,
     ChatSessionError,
     CompactionUnavailableError,
-    ToolIterationLimitError,
+)
+from core.chat.errors import (
+    ToolIterationLimitError as ToolIterationLimitError,
 )
 from core.chat.events import (
     _close_adapter,
@@ -102,6 +104,9 @@ from core.chat.messages import (
 )
 from core.chat.messages import (
     ToolCall as ToolCall,
+)
+from core.chat.messages import (
+    ToolCallRejection as ToolCallRejection,
 )
 from core.chat.messages import (
     _validate_assistant_message as _validate_assistant_message,
@@ -236,6 +241,14 @@ _LOGGER = get_logger("chat")
 
 MAX_TOOL_ITERATIONS = 1000
 MAX_IDENTICAL_FAILED_TOOL_CALLS = 8
+MAX_TOOL_FINALIZATION_VIOLATIONS = 2
+TOOL_ITERATION_LIMIT_FAILURE_CODE = "tool_iteration_limit"
+TOOL_FINALIZATION_DISABLED_FAILURE_CODE = "tool_calls_disabled"
+TOOL_FINALIZATION_NOTE = (
+    "Tool execution is disabled for the remainder of this Run because {reason}. "
+    "Do not issue further Tool Calls. Explain the blocker and provide the best final answer "
+    "possible using the information already available."
+)
 
 # Prompt-epoch Skill catalog snapshot (the rendered ``<available_skills>`` text),
 # stored in Session metadata so ordinary Runs reuse one stable prefix. A successful
@@ -269,7 +282,7 @@ class _FailedToolCallCircuitBreaker:
     """Stop one Run after repeated identical failed Tool Calls make no progress."""
 
     limit: int = MAX_IDENTICAL_FAILED_TOOL_CALLS
-    _last_signature: tuple[str, str, str, str] | None = None
+    _last_signature: tuple[str, str, str, str, str] | None = None
     _consecutive_count: int = 0
 
     def observe(
@@ -302,6 +315,7 @@ class _FailedToolCallCircuitBreaker:
                 ),
                 error_code,
                 fingerprint,
+                tool_call.rejection.fingerprint if tool_call.rejection is not None else "",
             )
             if signature == self._last_signature:
                 self._consecutive_count += 1
@@ -2454,6 +2468,8 @@ class ChatLoop:
         stream_continuation_count = 0
         interruption_chain: list[ChatMessage] = []
         failed_tool_call_breaker = _FailedToolCallCircuitBreaker()
+        tool_finalization_reason: str | None = None
+        tool_finalization_violation_count = 0
         while True:
             run.raise_if_cancelled()
             async with self._dependencies.sessions.write_lock(
@@ -2514,7 +2530,7 @@ class ChatLoop:
                 target.model_id,
                 target.model_reference,
                 messages_for_request,
-                tools,
+                [] if tool_finalization_reason is not None else tools,
                 run,
                 prompt_cache_affinity_id=context.prompt_cache_affinity_id,
                 chunk_timeout_seconds=target.chunk_timeout_seconds,
@@ -2643,9 +2659,13 @@ class ChatLoop:
                     return assistant_message
 
                 stream_continuation_count = 0
-                if tool_iteration_count >= self._max_tool_iterations:
-                    raise ToolIterationLimitError("maximum tool iterations exceeded")
-                tool_iteration_count += 1
+                finalization_violation = tool_finalization_reason is not None
+                finalization_request_reason: str | None = None
+                tool_limit_reached = (
+                    not finalization_violation
+                    and terminal_outcome == TERMINAL_OUTCOME_TOOL_CALLS
+                    and tool_iteration_count >= self._max_tool_iterations
+                )
 
                 session.begin_defer_notes()
                 try:
@@ -2677,10 +2697,42 @@ class ChatLoop:
                         has_tool_calls=True,
                     )
                     if terminal_outcome == TERMINAL_OUTCOME_TOOL_CALLS:
-                        tool_messages, media_outputs = await _dispatch_tool_calls(
-                            tool_dispatch_context,
-                            assistant_message.tool_calls,
-                        )
+                        if finalization_violation:
+                            tool_messages = _fail_tool_calls_without_dispatch(
+                                tool_dispatch_context,
+                                assistant_message.tool_calls,
+                                code=TOOL_FINALIZATION_DISABLED_FAILURE_CODE,
+                                message=(
+                                    "Tool execution is disabled for the remainder of this Run. "
+                                    "This Tool was not executed; provide the final answer without "
+                                    "issuing another Tool Call."
+                                ),
+                                retryable=False,
+                            )
+                            media_outputs: list[JsonObject] = []
+                        elif tool_limit_reached:
+                            finalization_request_reason = (
+                                "the Run reached its limit of "
+                                f"{self._max_tool_iterations} dispatched Tool iterations"
+                            )
+                            tool_messages = _fail_tool_calls_without_dispatch(
+                                tool_dispatch_context,
+                                assistant_message.tool_calls,
+                                code=TOOL_ITERATION_LIMIT_FAILURE_CODE,
+                                message=(
+                                    f"The Run reached its limit of {self._max_tool_iterations} "
+                                    "dispatched Tool iterations. This Tool was not executed; "
+                                    "provide the final answer without issuing another Tool Call."
+                                ),
+                                retryable=False,
+                            )
+                            media_outputs = []
+                        else:
+                            tool_iteration_count += 1
+                            tool_messages, media_outputs = await _dispatch_tool_calls(
+                                tool_dispatch_context,
+                                assistant_message.tool_calls,
+                            )
                     else:
                         failure_code, failure_message = _terminal_tool_failure(terminal_outcome)
                         tool_messages = _fail_tool_calls_without_dispatch(
@@ -2710,6 +2762,15 @@ class ChatLoop:
                     )
                     if terminal_error is not None:
                         raise terminal_error
+                    if repeated_failed_tool is not None and finalization_request_reason is None:
+                        finalization_request_reason = (
+                            f"Tool {repeated_failed_tool!r} repeated the same failed Call "
+                            f"{MAX_IDENTICAL_FAILED_TOOL_CALLS} times"
+                        )
+                    if finalization_request_reason is not None:
+                        session.add_note(
+                            TOOL_FINALIZATION_NOTE.format(reason=finalization_request_reason)
+                        )
                     await self._attach_tool_result_content(
                         tool_request_messages,
                         media_outputs,
@@ -2740,12 +2801,15 @@ class ChatLoop:
             )
             run.terminal_payload_extras["context_usage"] = tool_context_usage
 
-            if repeated_failed_tool is not None:
-                raise ToolIterationLimitError(
-                    f"Tool '{repeated_failed_tool}' repeated the same failed call "
-                    f"{MAX_IDENTICAL_FAILED_TOOL_CALLS} times; the circuit breaker "
-                    "stopped this Run."
-                )
+            if finalization_violation:
+                tool_finalization_violation_count += 1
+                if tool_finalization_violation_count >= MAX_TOOL_FINALIZATION_VIOLATIONS:
+                    # The Model already received one correlated disabled-Tool
+                    # failure and ignored the boundary again. Complete gracefully
+                    # instead of creating an unbounded recovery loop.
+                    return assistant_message
+            if finalization_request_reason is not None:
+                tool_finalization_reason = finalization_request_reason
 
             if self._compaction_service is not None:
                 compacted_state = await self._maybe_auto_compact_state(

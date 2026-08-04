@@ -674,6 +674,45 @@ class TestNormalizeResponse:
         # Assert
         assert normalized["tool_calls"][0]["id"] == "tool_call_0"
 
+    def test_malformed_tool_arguments_become_rejected_call(self, adapter: OllamaAdapter) -> None:
+        normalized = adapter.normalize_response(
+            {
+                "message": {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "id": "call_bad",
+                            "function": {"name": "get_weather", "arguments": "{broken"},
+                        }
+                    ],
+                },
+                "done": True,
+            }
+        )
+
+        assert normalized["tool_calls"][0]["arguments"] == {}
+        assert normalized["tool_calls"][0]["rejection"]["code"] == ("malformed_tool_arguments")
+
+    def test_collapsed_single_tool_call_object_is_preserved(self, adapter: OllamaAdapter) -> None:
+        normalized = adapter.normalize_response(
+            {
+                "message": {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": {
+                        "id": "call_one",
+                        "function": {"name": "get_weather", "arguments": {"city": "Berlin"}},
+                    },
+                },
+                "done": True,
+            }
+        )
+
+        assert normalized["tool_calls"] == [
+            {"id": "call_one", "name": "get_weather", "arguments": {"city": "Berlin"}}
+        ]
+
     def test_missing_usage_counters_omit_usage(self, adapter: OllamaAdapter) -> None:
         # Act
         normalized = adapter.normalize_response({"message": {"content": "x"}, "done": True})
@@ -780,6 +819,39 @@ class TestStreamNdjson:
             "id": "call_dmop6zf4",
             "name_delta": "get_weather",
             "arguments_delta": '{"city":"Berlin"}',
+        }
+        assert deltas[-1] == {"type": "finish", "reason": "tool_calls"}
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_stream_preserves_malformed_tool_arguments_for_chat_rejection(
+        self, adapter: OllamaAdapter
+    ) -> None:
+        body = _ndjson(
+            {
+                "message": {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "id": "call_bad",
+                            "function": {"name": "get_weather", "arguments": "{broken"},
+                        }
+                    ],
+                },
+                "done": False,
+            },
+            {"message": {"content": ""}, "done": True, "done_reason": "stop"},
+        )
+        respx.post(OLLAMA_CHAT_URL).mock(return_value=httpx.Response(200, text=body))
+
+        deltas = [d async for d in adapter.stream(SAMPLE_MESSAGES, model_id="ministral-3:8b")]
+
+        assert deltas[0] == {
+            "type": "tool_call_delta",
+            "id": "call_bad",
+            "name_delta": "get_weather",
+            "arguments_delta": '"{broken"',
         }
         assert deltas[-1] == {"type": "finish", "reason": "tool_calls"}
 

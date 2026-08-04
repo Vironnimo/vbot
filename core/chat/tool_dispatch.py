@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 from core.agents import default_workspace_dir
 from core.chat.events import _emit_tool_context_event, _timing_payload
-from core.chat.messages import ChatMessage, JsonObject, ToolCall
+from core.chat.messages import ChatMessage, JsonObject, ToolCall, ToolCallRejection
 from core.extensions import ExtensionRegistry, HookContext
 from core.runs import TOOL_CALL_RESULT_EVENT, TOOL_CALL_STARTED_EVENT, Run
 from core.sessions import ChatSession
@@ -115,12 +115,14 @@ class _EmittingToolRegistry(ToolRegistry):
         extension_registry: ExtensionRegistry | None = None,
         note_hook: Callable[[str], None] | None = None,
         denial_resolver: Callable[[str], str | None] | None = None,
+        rejections: Mapping[int, ToolCallRejection] | None = None,
     ) -> None:
         self._registry = registry
         self._run = run
         self._extension_registry = extension_registry
         self._note_hook = note_hook
         self._denial_resolver = denial_resolver
+        self._rejections = dict(rejections or {})
         self._tool_timings: dict[str, JsonObject] = {}
         self._extension_hook_lock = asyncio.Lock()
 
@@ -163,6 +165,44 @@ class _EmittingToolRegistry(ToolRegistry):
         started_at = datetime.now(UTC)
         started_perf = time.perf_counter()
         try:
+            rejection = self._rejections.get(context.tool_call_index)
+            if rejection is not None:
+                rejected_result = tool_failure(
+                    rejection.code,
+                    rejection.message,
+                    retryable=False,
+                )
+                timing = _timing_payload(started_at, started_perf)
+                self._tool_timings[context.tool_call_id] = timing
+                fingerprint = _tool_context_schema_fingerprint(self, context)
+                self._run.emit(
+                    TOOL_CALL_STARTED_EVENT,
+                    {
+                        "tool_call": {
+                            "id": context.tool_call_id,
+                            "index": context.tool_call_index,
+                            "name": context.tool_name,
+                            "arguments": deepcopy(arguments),
+                        },
+                        "display": _empty_tool_display_payload(),
+                        "schema_fingerprint": fingerprint,
+                    },
+                )
+                self._run.emit(
+                    TOOL_CALL_RESULT_EVENT,
+                    {
+                        "tool_call": {
+                            "id": context.tool_call_id,
+                            "index": context.tool_call_index,
+                            "name": context.tool_name,
+                        },
+                        "result": rejected_result,
+                        "timing": timing,
+                        "schema_fingerprint": fingerprint,
+                        "error_code": rejection.code,
+                    },
+                )
+                return rejected_result
             denial_message = (
                 self._denial_resolver(context.tool_name)
                 if self._denial_resolver is not None
@@ -402,6 +442,11 @@ async def _dispatch_tool_calls(
         context.extension_registry,
         note_hook=session.add_note,
         denial_resolver=context.tool_denial_resolver,
+        rejections={
+            index: tool_call.rejection
+            for index, tool_call in enumerate(tool_calls)
+            if tool_call.rejection is not None
+        },
     )
     executor = ToolExecutor(emitting_registry)
     workspace = _agent_workspace(agent, context.data_root)
@@ -493,6 +538,7 @@ def _fail_tool_calls_without_dispatch(
     *,
     code: str,
     message: str,
+    retryable: bool | None = None,
 ) -> list[ChatMessage]:
     """Produce normal correlated failure Results without invoking any handler.
 
@@ -531,7 +577,7 @@ def _fail_tool_calls_without_dispatch(
                 "schema_fingerprint": fingerprint,
             },
         )
-        result = tool_failure(code, message)
+        result = tool_failure(code, message, retryable=retryable)
         timing = _timing_payload(started_at, started_perf)
         context.run.emit(
             TOOL_CALL_RESULT_EVENT,

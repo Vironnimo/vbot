@@ -47,6 +47,7 @@ from core.providers.adapter import (
     ProviderAdapter,
     TerminalOutcome,
     canonical_tool_result_is_error,
+    normalize_tool_call_candidate,
     normalize_tool_call_ids,
     tool_result_content_blocks,
 )
@@ -1423,15 +1424,25 @@ def _extract_anthropic_reasoning_meta(content_blocks: Any) -> dict[str, Any] | N
 
 
 def _extract_anthropic_tool_calls(content_blocks: Any) -> list[dict[str, Any]] | None:
-    tool_calls = [
-        {
-            "id": block["id"],
-            "name": block["name"],
-            "arguments": block.get("input", {}),
-        }
-        for block in _content_blocks(content_blocks)
-        if block.get("type") == "tool_use"
-    ]
+    blocks = (
+        content_blocks
+        if isinstance(content_blocks, list)
+        else [content_blocks]
+        if isinstance(content_blocks, Mapping)
+        else []
+    )
+    tool_calls: list[dict[str, Any]] = []
+    for position, block in enumerate(blocks):
+        if not isinstance(block, Mapping) or block.get("type") != "tool_use":
+            continue
+        tool_calls.append(
+            normalize_tool_call_candidate(
+                tool_call_id=block.get("id"),
+                name=block.get("name"),
+                arguments=block.get("input"),
+                fallback_id=f"tool_call_{position}",
+            )
+        )
     return tool_calls or None
 
 

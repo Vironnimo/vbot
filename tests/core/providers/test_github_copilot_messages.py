@@ -557,6 +557,23 @@ def test_normalize_response_extracts_text_thinking_meta_tool_calls_and_usage() -
     }
 
 
+def test_normalize_response_accepts_collapsed_single_tool_use_block() -> None:
+    normalized = normalize_copilot_messages_response(
+        {
+            "content": {
+                "type": "tool_use",
+                "id": "toolu_one",
+                "name": "read",
+                "input": {"path": "README.md"},
+            }
+        }
+    )
+
+    assert normalized["tool_calls"] == [
+        {"id": "toolu_one", "name": "read", "arguments": {"path": "README.md"}}
+    ]
+
+
 def test_normalize_response_folds_cache_tokens_into_input_tokens() -> None:
     normalized = normalize_copilot_messages_response(
         {

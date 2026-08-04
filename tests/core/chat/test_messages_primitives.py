@@ -1,5 +1,7 @@
 """Tool call, sender, reply-surface, factory, and parsing tests."""
 
+from core.chat.messages import ToolCallRejection
+
 from .messages_test_support import (
     ERROR_KIND_RATE_LIMIT,
     FIXED_TIMESTAMP,
@@ -34,6 +36,21 @@ class TestToolCall:
     def test_from_dict_rejects_non_object_arguments(self):
         with pytest.raises(ChatMessageValidationError, match="arguments"):
             ToolCall.from_dict({"id": "call_abc", "name": "get_weather", "arguments": []})
+
+    def test_rejection_round_trips_with_canonical_tool_call(self):
+        rejection = ToolCallRejection(
+            code="malformed_tool_arguments",
+            message="Arguments were malformed.",
+            fingerprint="sha256",
+        )
+        tool_call = ToolCall(
+            id="call_bad",
+            name="write",
+            arguments={},
+            rejection=rejection,
+        )
+
+        assert ToolCall.from_dict(tool_call.to_dict()) == tool_call
 
     def test_frozen(self):
         tool_call = ToolCall(id="call_abc", name="get_weather")
