@@ -56,17 +56,15 @@ TERMINAL_BETA_TOOL_DESCRIPTION = (
     "controllable in the WebUI. vBot launches the requested command and arguments without "
     "program-specific flags, hooks, or configuration. Use start with text to launch the default "
     "Codex command and send its first input in one call, or set command and args for any other "
-    "program. For a registered Project, set workdir to project:<project-id> to resolve its current "
-    "cwd without changing Rooting, Project Context, or Terminal ownership. After Agent input, vBot "
-    "wakes you when PTY output has been quiet for a short period, or when the process exits or the "
-    "terminal fails. Quiet output is only an activity boundary: inspect status to decide whether "
-    "the program is working, waiting for input, or finished. Use data for exact terminal "
-    "sequences, text/key/enter for convenient input, status for the rendered screen and paginated "
-    "scrollback, and list/status titles announced by programs through the standard terminal "
-    "protocol. Follow scrollback.next_request unchanged to read each older status page. Use wait "
-    "only for a short same-Run pause, resize for TUI dimensions, and kill only when the process "
-    "tree should end. Reuse a live Terminal Session for later work instead of starting a duplicate "
-    "process."
+    "program. After Agent input, vBot wakes you when PTY output has been quiet for a short period, "
+    "or when the process exits or the terminal fails. Quiet output is only an activity boundary: "
+    "inspect status to decide whether the program is working, waiting for input, or finished. Use "
+    "data for exact terminal sequences, text/key/enter for convenient input, status for the "
+    "rendered screen and paginated scrollback, and list/status titles announced by programs "
+    "through the standard terminal protocol. Follow scrollback.next_request unchanged to read "
+    "each older status page. Use wait only for a short same-Run pause, resize for TUI dimensions, "
+    "and kill only when the process tree should end. Reuse a live Terminal Session for later "
+    "work instead of starting a duplicate process."
 )
 
 
@@ -161,9 +159,8 @@ TERMINAL_BETA_TOOL_PARAMETERS: JsonObject = {
             "minLength": 1,
             "description": (
                 "Working directory for start. Relative paths use the current working directory; "
-                "omit for that directory. Use project:<project-id> to resolve a registered "
-                "Project's current cwd by stable id. This selects only the start directory and "
-                "does not load Project Context or change Terminal ownership."
+                "omit for that directory. Use 'project:<project-id>' to start in a registered "
+                "Project's directory."
             ),
         },
         "columns": {

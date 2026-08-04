@@ -96,7 +96,11 @@ def test_schema_matches_flat_action_tool_conventions(tmp_path: Path) -> None:
     assert "ctrl_z" in properties["key"]["enum"]
     assert "next_request unchanged" in properties["cursor"]["description"]
     assert "May be used with or without cursor" in properties["lines"]["description"]
-    assert "project:<project-id>" in properties["workdir"]["description"]
+    assert properties["workdir"]["description"] == (
+        "Working directory for start. Relative paths use the current working directory; omit "
+        "for that directory. Use 'project:<project-id>' to start in a registered Project's "
+        "directory."
+    )
     assert "survive individual Runs" in TERMINAL_BETA_TOOL_DESCRIPTION
     assert "without program-specific flags, hooks, or configuration" in (
         TERMINAL_BETA_TOOL_DESCRIPTION
