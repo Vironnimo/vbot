@@ -8,9 +8,19 @@ const md = markdownit({
   // Chat output is conversational: a single newline is an intentional line
   // break ("one number per line" lists), not a soft wrap to collapse.
   breaks: true,
-  linkify: false,
+  linkify: true,
   typographer: false,
 });
+
+// Literal links in Chat are deliberately narrower than Markdown's explicit
+// link syntax: only complete HTTP(S) URLs become interactive. This keeps email,
+// protocol-relative, FTP, and path-like text inert unless the author explicitly
+// writes a Markdown link.
+md.linkify
+  .set({ fuzzyLink: false, fuzzyEmail: false, fuzzyIP: false })
+  .add('ftp:', null)
+  .add('//', null)
+  .add('mailto:', null);
 
 md.renderer.rules.fence = (tokens, idx, _options, env) => {
   const token = tokens[idx];
@@ -51,6 +61,7 @@ md.renderer.rules['link_open'] = (tokens, idx, options, env, self) => {
 // is bounded with least-recently-used eviction so it cannot grow without limit.
 const RENDER_CACHE_LIMIT = 300;
 const renderCache = new Map();
+const linkifiedTextCache = new Map();
 
 function cachedRenderDocument(src, plainLanguageLabel) {
   const cacheKey = `${plainLanguageLabel}\u0000${src}`;
@@ -139,6 +150,79 @@ export function renderMarkdownDocument(
 
 export function renderMarkdown(src, options) {
   return renderMarkdownDocument(src, options).html;
+}
+
+function plainTextCodeRanges(src) {
+  const ranges = [];
+  let openingMarker = null;
+
+  for (const markerMatch of src.matchAll(/`+|~{3,}/g)) {
+    const marker = markerMatch[0];
+    if (!openingMarker) {
+      openingMarker = {
+        character: marker[0],
+        length: marker.length,
+        index: markerMatch.index,
+      };
+      continue;
+    }
+
+    if (
+      marker[0] === openingMarker.character &&
+      marker.length >= openingMarker.length
+    ) {
+      ranges.push({
+        start: openingMarker.index,
+        end: markerMatch.index + marker.length,
+      });
+      openingMarker = null;
+    }
+  }
+
+  if (openingMarker) {
+    ranges.push({ start: openingMarker.index, end: src.length });
+  }
+  return ranges;
+}
+
+export function linkifiedTextSegments(src) {
+  if (!src) return [];
+
+  const cached = linkifiedTextCache.get(src);
+  if (cached !== undefined) {
+    linkifiedTextCache.delete(src);
+    linkifiedTextCache.set(src, cached);
+    return cached;
+  }
+
+  const codeRanges = plainTextCodeRanges(src);
+  const matches = (md.linkify.match(src) ?? []).filter(
+    (match) =>
+      !codeRanges.some(
+        (range) => match.index >= range.start && match.index < range.end,
+      ),
+  );
+  const segments = [];
+  let cursor = 0;
+
+  for (const match of matches) {
+    if (match.index > cursor) {
+      segments.push({ text: src.slice(cursor, match.index), href: null });
+    }
+    segments.push({ text: match.raw, href: match.url });
+    cursor = match.lastIndex;
+  }
+
+  if (cursor < src.length) {
+    segments.push({ text: src.slice(cursor), href: null });
+  }
+
+  linkifiedTextCache.set(src, segments);
+  if (linkifiedTextCache.size > RENDER_CACHE_LIMIT) {
+    const oldestKey = linkifiedTextCache.keys().next().value;
+    linkifiedTextCache.delete(oldestKey);
+  }
+  return segments;
 }
 
 // Providers embed literal HTML comments in reasoning text as section separators

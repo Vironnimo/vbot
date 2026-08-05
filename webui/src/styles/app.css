@@ -2291,12 +2291,14 @@ textarea::placeholder {
   font-size: 13px;
 }
 
-.msg-markdown a {
+.msg-markdown a,
+.msg-body-text a {
   color: var(--accent);
   text-decoration: underline;
 }
 
-.msg-markdown a:hover {
+.msg-markdown a:hover,
+.msg-body-text a:hover {
   opacity: 0.8;
 }
 
