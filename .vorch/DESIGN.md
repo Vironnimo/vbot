@@ -305,6 +305,8 @@ On mobile (≤640px) the sidebar collapses to a top bar, two-pane splits stack, 
 
 Chat messages use 28px horizontal padding as the column gutter. User message bubbles are right-aligned at 75% max-width *of the capped reading measure*. Assistant prose flows free (no bounding box) but within the same centered, capped measure. The composer, notice stack, and session banner align to the same center axis as the messages.
 
+When the active Session is above the live tail, a 36px circular secondary `Button` floats centered over the bottom of the Chat timeline, immediately above the footer/composer stack. It uses a downward arrow, the shared Quick tooltip, `surface-2` fill, `border-2` outline, and the shared `--floating-elevation`; activating it jumps to the latest content, resumes follow mode, and hides the control. The mobile target grows to 40px.
+
 Completed Compaction dividers preserve the same muted mono divider at rest but are native disclosures: a small low-opacity chevron rotates when open, hover/focus brightens the existing label, and keyboard focus uses the standard accent ring. The expanded exact checkpoint text is not a card; it sits below the divider on a 2px `border-2` left rail, uses Mono body text with whitespace preserved, scrolls within a viewport-relative height cap, and reveals the shared Copy action on hover/focus. Running dividers stay amber status rows and never open.
 
 The spacing scale — five named anchors plus documented intermediates for this dense, technical UI:

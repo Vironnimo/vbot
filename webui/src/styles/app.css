@@ -55,6 +55,7 @@
   --accent-dim: var(--accent-08);
   /* The one focus treatment for inputs and interactive controls. */
   --focus-ring: 0 0 0 3px var(--accent-06);
+  --floating-elevation: 0 8px 24px rgba(0, 0, 0, 0.4);
   --green: #4ade80;
   --green-dim: #0e2419;
   --amber: #f59e0b;
@@ -1149,7 +1150,7 @@ textarea::placeholder {
 
   --dropdown-focus-border: var(--accent-40);
   --dropdown-focus-ring: var(--focus-ring);
-  --dropdown-elevation: 0 8px 24px rgba(0, 0, 0, 0.4);
+  --dropdown-elevation: var(--floating-elevation);
   --dropdown-elevation-strong: 0 8px 24px rgba(0, 0, 0, 0.5);
 }
 

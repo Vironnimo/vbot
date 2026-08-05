@@ -138,6 +138,7 @@ export const englishCatalog = Object.freeze({
   'chat.noAgentSelected': 'Choose an agent to start chatting.',
   'chat.noAgents': 'No agents are available yet.',
   'chat.newSession': 'New session',
+  'chat.jumpToLatest': 'Jump to latest',
   'chat.newSessionBlocked':
     'A new session can be started after the current run finishes.',
   'chat.historyEmpty': 'No messages yet. Send the first message to this agent.',

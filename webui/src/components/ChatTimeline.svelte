@@ -16,6 +16,7 @@
   import ChatTimelineEntry from './chat/ChatTimelineEntry.svelte';
   import ImageLightbox from './ImageLightbox.svelte';
   import Banner from './ui/Banner.svelte';
+  import Button from './ui/Button.svelte';
   import CopyButton from './ui/CopyButton.svelte';
   import EmptyState from './ui/EmptyState.svelte';
 
@@ -76,6 +77,7 @@
   let handledSubmittedTurnScrollKey = $state(0);
   let loadingOlderFromScroll = $state(false);
   let submittedTurnSpacerHeight = $state(MIN_SUBMITTED_TURN_SPACER_HEIGHT);
+  let showJumpToLatest = $state(false);
   let timelineSignature = $derived(
     `${timelineItems.map((item) => timelineItemSignature(item)).join('|')}` +
       `#${transientCards.map((card) => card.id).join(',')}`,
@@ -315,12 +317,19 @@
     const viewport = sessionViewport(key);
     viewport.restoreMode = viewport.mode === 'reading' ? 'reading' : 'follow';
     viewport.mode = 'restoring';
+    showJumpToLatest = viewport.restoreMode === 'reading';
   }
 
   function queueViewportSync(
     key = sessionScrollKey,
     generation = viewportGeneration,
   ) {
+    // A disconnected ResizeObserver may already have queued its callback. Do
+    // not let that stale Session replace the current Session's pending sync;
+    // the flush guard alone would discard both by losing the valid request.
+    if (key !== renderedSessionScrollKey || generation !== viewportGeneration) {
+      return;
+    }
     pendingViewportSync = { key, generation };
     if (viewportSyncQueued) {
       return;
@@ -372,6 +381,7 @@
       restoreViewportAnchor(viewport);
     }
     viewport.mode = mode;
+    syncJumpToLatestVisibility();
   }
 
   function restoreViewportAnchor(viewport) {
@@ -558,7 +568,23 @@
     if (Date.now() <= userScrollIntentUntil) {
       updateViewportFromUserScroll();
     }
+    syncJumpToLatestVisibility();
     void loadOlderHistoryFromScroll();
+  }
+
+  function syncJumpToLatestVisibility() {
+    showJumpToLatest = Boolean(
+      sessionScrollKey && scrollContainer && !isNearBottom(scrollContainer),
+    );
+  }
+
+  function jumpToLatest() {
+    if (!sessionScrollKey || !scrollContainer) {
+      return;
+    }
+    setViewportMode(sessionScrollKey, 'follow');
+    scrollContainer.scrollTop = scrollContainer.scrollHeight;
+    syncJumpToLatestVisibility();
   }
 
   function updateViewportFromUserScroll() {
@@ -691,87 +717,103 @@
   }
 </script>
 
-<section
-  class="messages"
-  bind:this={scrollContainer}
-  aria-live="polite"
-  onscroll={handleMessagesScroll}
->
-  <div class="messages__content" bind:this={timelineContent}>
-    {#if timelineItems.length === 0 && transientCards.length === 0}
-      {#if loadingHistory}
-        <!-- While history is loading, a quiet placeholder — flashing the
-             "No messages yet" empty state would be a lie for a session whose
-             messages just have not arrived yet. -->
-        <Banner variant="neutral" class="chat-timeline-loading">
-          {t('loading.history', 'Loading chat history…')}
-        </Banner>
+<div class="chat-timeline">
+  <section
+    class="messages"
+    bind:this={scrollContainer}
+    aria-live="polite"
+    onscroll={handleMessagesScroll}
+  >
+    <div class="messages__content" bind:this={timelineContent}>
+      {#if timelineItems.length === 0 && transientCards.length === 0}
+        {#if loadingHistory}
+          <!-- While history is loading, a quiet placeholder — flashing the
+               "No messages yet" empty state would be a lie for a session whose
+               messages just have not arrived yet. -->
+          <Banner variant="neutral" class="chat-timeline-loading">
+            {t('loading.history', 'Loading chat history…')}
+          </Banner>
+        {:else}
+          <EmptyState
+            fill
+            class="chat-timeline-empty"
+            title={t('chat.historyEmptyTitle', 'No messages yet')}
+            description={t(
+              'chat.historyEmpty',
+              'No messages yet. Send the first message to this agent.',
+            )}
+          >
+            {#snippet icon()}
+              <svg viewBox="0 0 32 32" width="38" height="38">
+                <path d="M5 7h22v14H16l-6 5v-5H5z" />
+              </svg>
+            {/snippet}
+          </EmptyState>
+        {/if}
       {:else}
-        <EmptyState
-          fill
-          class="chat-timeline-empty"
-          title={t('chat.historyEmptyTitle', 'No messages yet')}
-          description={t(
-            'chat.historyEmpty',
-            'No messages yet. Send the first message to this agent.',
-          )}
-        >
-          {#snippet icon()}
-            <svg viewBox="0 0 32 32" width="38" height="38">
-              <path d="M5 7h22v14H16l-6 5v-5H5z" />
-            </svg>
-          {/snippet}
-        </EmptyState>
+        {#each transientCardGroups.leading as card (card.id)}
+          {@render transientCard(card)}
+        {/each}
+        {#each timelineItems as item, itemIndex (item.id)}
+          <div class="timeline-item" data-timeline-item-id={item.id}>
+            {#if shouldRenderTimelineDateSeparator(itemIndex)}
+              <div class="date-sep">
+                {formatDate(timestampForItem(item))}
+              </div>
+            {/if}
+            {#if item.type === 'assistant_run'}
+              <ChatAssistantRun
+                {item}
+                {agentName}
+                {subAgentStatuses}
+                {subAgentResults}
+                {isReasoningOpen}
+                onReasoningOpenChange={setReasoningOpen}
+                {onNavigateToSubAgent}
+                {onCancelToolCall}
+                {onCancelSubAgent}
+              />
+            {:else}
+              <ChatTimelineEntry
+                {item}
+                {agentName}
+                {isReasoningOpen}
+                onReasoningOpenChange={setReasoningOpen}
+              />
+            {/if}
+            {#each transientCardGroups.byItemId.get(item.id) ?? [] as card (card.id)}
+              {@render transientCard(card)}
+            {/each}
+          </div>
+        {/each}
+        {#each transientCardGroups.trailing as card (card.id)}
+          {@render transientCard(card)}
+        {/each}
+        {#if shouldRenderSubmittedTurnScrollSpacer}
+          <div
+            class="submitted-turn-scroll-spacer"
+            style={`height: ${submittedTurnSpacerHeight}px`}
+            aria-hidden="true"
+          ></div>
+        {/if}
       {/if}
-    {:else}
-      {#each transientCardGroups.leading as card (card.id)}
-        {@render transientCard(card)}
-      {/each}
-      {#each timelineItems as item, itemIndex (item.id)}
-        <div class="timeline-item" data-timeline-item-id={item.id}>
-          {#if shouldRenderTimelineDateSeparator(itemIndex)}
-            <div class="date-sep">
-              {formatDate(timestampForItem(item))}
-            </div>
-          {/if}
-          {#if item.type === 'assistant_run'}
-            <ChatAssistantRun
-              {item}
-              {agentName}
-              {subAgentStatuses}
-              {subAgentResults}
-              {isReasoningOpen}
-              onReasoningOpenChange={setReasoningOpen}
-              {onNavigateToSubAgent}
-              {onCancelToolCall}
-              {onCancelSubAgent}
-            />
-          {:else}
-            <ChatTimelineEntry
-              {item}
-              {agentName}
-              {isReasoningOpen}
-              onReasoningOpenChange={setReasoningOpen}
-            />
-          {/if}
-          {#each transientCardGroups.byItemId.get(item.id) ?? [] as card (card.id)}
-            {@render transientCard(card)}
-          {/each}
-        </div>
-      {/each}
-      {#each transientCardGroups.trailing as card (card.id)}
-        {@render transientCard(card)}
-      {/each}
-      {#if shouldRenderSubmittedTurnScrollSpacer}
-        <div
-          class="submitted-turn-scroll-spacer"
-          style={`height: ${submittedTurnSpacerHeight}px`}
-          aria-hidden="true"
-        ></div>
-      {/if}
-    {/if}
-  </div>
-</section>
+    </div>
+  </section>
+  {#if showJumpToLatest}
+    <Button
+      variant="secondary"
+      icon
+      class="chat-timeline__jump-latest"
+      ariaLabel={t('chat.jumpToLatest', 'Jump to latest')}
+      tooltip={t('chat.jumpToLatest', 'Jump to latest')}
+      onClick={jumpToLatest}
+    >
+      <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+        <path d="m6 9 6 6 6-6M12 4v11" />
+      </svg>
+    </Button>
+  {/if}
+</div>
 
 {#snippet transientCard(card)}
   <div
