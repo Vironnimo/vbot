@@ -29,6 +29,7 @@ from core.tools.tools import (
     tool_failure,
     tool_success,
 )
+from core.utils.paths import model_path
 
 MAX_FILE_BYTES = 50 * 1024
 DEFAULT_LINE_LIMIT = 2000
@@ -558,11 +559,12 @@ def make_read_handler(
             resolved = context.resolve_path(path_argument)
         except RuntimeError as error:
             return tool_failure("invalid_path", str(error))
+        displayed_path = model_path(resolved)
 
         if not resolved.exists():
-            return tool_failure("file_not_found", f"file not found: {resolved}")
+            return tool_failure("file_not_found", f"file not found: {displayed_path}")
         if not resolved.is_file():
-            return tool_failure("not_a_file", f"path is not a file: {resolved}")
+            return tool_failure("not_a_file", f"path is not a file: {displayed_path}")
 
         # Stamp before reading bytes: if an external write lands in the tiny window
         # before the read, the stamp stays older than the new content, so the next
@@ -574,7 +576,9 @@ def make_read_handler(
             with resolved.open("rb") as handle:
                 probe = handle.read(_FILE_PROBE_BYTES)
         except OSError as error:
-            return tool_failure("file_read_error", f"failed to read file: {resolved}: {error}")
+            return tool_failure(
+                "file_read_error", f"failed to read file: {displayed_path}: {error}"
+            )
 
         media_type = sniff_media_type(probe, resolved.name)
         if media_type.startswith("image/"):
@@ -589,7 +593,9 @@ def make_read_handler(
                     f"Attachment size exceeds limit {error.max_bytes}",
                 )
             except OSError as error:
-                return tool_failure("file_read_error", f"failed to read file: {resolved}: {error}")
+                return tool_failure(
+                    "file_read_error", f"failed to read file: {displayed_path}: {error}"
+                )
             return _read_image(attachment_store, resolved, raw, media_type)
         if media_type.startswith("audio/"):
             if file_size > speech_max_size_bytes:
@@ -605,7 +611,9 @@ def make_read_handler(
                     f"Audio size exceeds limit {speech_max_size_bytes}",
                 )
             except OSError as error:
-                return tool_failure("file_read_error", f"failed to read file: {resolved}: {error}")
+                return tool_failure(
+                    "file_read_error", f"failed to read file: {displayed_path}: {error}"
+                )
             return await _read_audio(speech_service, resolved, raw, media_type)
         if media_type.startswith("video/"):
             return _read_video(resolved, media_type)
@@ -625,7 +633,9 @@ def make_read_handler(
                         error = limit_error
                 return tool_failure("document_too_large", str(error))
             except OSError as error:
-                return tool_failure("file_read_error", f"failed to read file: {resolved}: {error}")
+                return tool_failure(
+                    "file_read_error", f"failed to read file: {displayed_path}: {error}"
+                )
             extracted = _read_extracted_document(resolved.name, raw, kind, arguments)
             if extracted is not None:
                 return extracted
@@ -637,7 +647,9 @@ def make_read_handler(
         except ValueError as error:
             return tool_failure("invalid_arguments", str(error))
         except OSError as error:
-            return tool_failure("file_read_error", f"failed to read file: {resolved}: {error}")
+            return tool_failure(
+                "file_read_error", f"failed to read file: {displayed_path}: {error}"
+            )
         return tool_success({"content": content})
 
     return read_handler
@@ -750,7 +762,7 @@ def _read_binary_notice(resolved: Path) -> JsonObject:
     return tool_success(
         {
             "content": (
-                f"[Binary file: {resolved.name} — Path: {resolved}]. "
+                f"[Binary file: {resolved.name} — Path: {model_path(resolved)}]. "
                 "It contains non-text (binary) data and is not shown as text."
             )
         }
@@ -762,7 +774,7 @@ def _read_video(resolved: Path, media_type: str) -> JsonObject:
     return tool_success(
         {
             "content": (
-                f"[Video: {resolved.name} ({media_type}) — Path: {resolved}]. "
+                f"[Video: {resolved.name} ({media_type}) — Path: {model_path(resolved)}]. "
                 "This model cannot view video directly."
             )
         }

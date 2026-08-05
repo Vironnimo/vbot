@@ -19,6 +19,7 @@ from core.model_tasks import SpeechExecutionError
 from core.tools import ToolRegistry
 from core.tools.file_state import FileReadState
 from core.tools.read import render_text_file
+from core.utils.paths import model_path
 from tests.core.chat.chat_loop_support import build_chat_loop
 
 TEXT_IMAGE = frozenset({"text", "image"})
@@ -161,7 +162,7 @@ def test_current_turn_image_media_block_resolves_to_base64(tmp_path: Path) -> No
         },
         {
             "type": "text",
-            "text": f"[Image: photo.png (image/png) — Path: {record.file_path}]",
+            "text": f"[Image: photo.png (image/png) — Path: {model_path(record.file_path)}]",
         },
     ]
     assert messages[0]["content"][0] == {
@@ -259,7 +260,7 @@ def test_historical_turn_image_resolves_to_placeholder_text(tmp_path: Path) -> N
             "type": "text",
             "text": (
                 f"[Image from an earlier turn: old-photo.png (image/png) "
-                f"— Path: {record.file_path}]"
+                f"— Path: {model_path(record.file_path)}]"
             ),
         }
     ]
@@ -326,7 +327,9 @@ def test_file_block_resolves_to_text_path_note(tmp_path: Path, current_turn: boo
     assert resolved[0]["content"] == [
         {
             "type": "text",
-            "text": (f"[File: report.pdf (application/pdf) — Path: {record.file_path}]"),
+            "text": (
+                f"[File: report.pdf (application/pdf) — Path: {model_path(record.file_path)}]"
+            ),
         }
     ]
 
@@ -369,7 +372,7 @@ def test_text_file_block_resolves_through_the_read_renderer(
     assert resolved[0]["content"] == [
         {
             "type": "text",
-            "text": f"[File: notes.txt (text/plain) — Path: {record.file_path}]",
+            "text": f"[File: notes.txt (text/plain) — Path: {model_path(record.file_path)}]",
         },
         {"type": "text", "text": render_text_file(source)},
     ]
@@ -408,7 +411,7 @@ def test_full_text_previously_persisted_beside_an_attachment_is_suppressed(tmp_p
     assert resolved[0]["content"] == [
         {
             "type": "text",
-            "text": f"[File: large.txt (text/plain) — Path: {record.file_path}]",
+            "text": f"[File: large.txt (text/plain) — Path: {model_path(record.file_path)}]",
         },
         {"type": "text", "text": render_text_file(source)},
     ]
@@ -454,7 +457,7 @@ def test_current_turn_pdf_resolves_to_native_document_block(tmp_path: Path) -> N
         },
         {
             "type": "text",
-            "text": f"[File: report.pdf (application/pdf) — Path: {record.file_path}]",
+            "text": f"[File: report.pdf (application/pdf) — Path: {model_path(record.file_path)}]",
         },
     ]
 
@@ -477,7 +480,7 @@ def test_current_turn_pdf_degrades_to_path_note_without_pdf_modality(tmp_path: P
     assert resolved[0]["content"] == [
         {
             "type": "text",
-            "text": f"[File: report.pdf (application/pdf) — Path: {record.file_path}]",
+            "text": f"[File: report.pdf (application/pdf) — Path: {model_path(record.file_path)}]",
         },
     ]
 
@@ -570,7 +573,7 @@ def test_current_turn_image_degrades_to_path_note_when_vision_not_supported(
             "text": (
                 "[Image: photo.png (image/png) — this model has no vision "
                 "capability, so the image itself cannot be shown; only the stored "
-                f"file path is provided — Path: {record.file_path}]"
+                f"file path is provided — Path: {model_path(record.file_path)}]"
             ),
         }
     ]
@@ -601,7 +604,7 @@ def test_current_turn_native_audio_resolves_to_base64_for_audio_model(tmp_path: 
         },
         {
             "type": "text",
-            "text": f"[Audio: clip.wav (audio/wav) — Path: {record.file_path}]",
+            "text": f"[Audio: clip.wav (audio/wav) — Path: {model_path(record.file_path)}]",
         },
     ]
     assert transcriber.calls == []
@@ -636,7 +639,7 @@ def test_current_turn_audio_degrades_to_transcription_without_audio_modality(
         },
         {
             "type": "text",
-            "text": f"[Audio: voice.ogg (audio/ogg) — Path: {record.file_path}]",
+            "text": f"[Audio: voice.ogg (audio/ogg) — Path: {model_path(record.file_path)}]",
         },
     ]
     assert transcriber.calls == [("voice.ogg", "audio/ogg")]
@@ -710,7 +713,7 @@ def test_audio_model_on_image_only_wire_without_transcriber_degrades_to_path_not
             "text": (
                 "[Audio: clip.wav (audio/wav) — this model cannot accept audio and "
                 "no speech-to-text service is available, so only the stored file "
-                f"path is provided — Path: {record.file_path}]"
+                f"path is provided — Path: {model_path(record.file_path)}]"
             ),
         }
     ]
@@ -778,7 +781,8 @@ def test_historical_audio_without_transcription_resolves_to_path_note(tmp_path: 
         {
             "type": "text",
             "text": (
-                f"[Audio from an earlier turn: clip.wav (audio/wav) — Path: {record.file_path}]"
+                "[Audio from an earlier turn: clip.wav (audio/wav) — "
+                f"Path: {model_path(record.file_path)}]"
             ),
         }
     ]
@@ -805,7 +809,7 @@ def test_current_turn_audio_without_transcriber_degrades_to_path_note(tmp_path: 
             "text": (
                 "[Audio: voice.ogg (audio/ogg) — this model cannot accept audio and "
                 "no speech-to-text service is available, so only the stored file "
-                f"path is provided — Path: {record.file_path}]"
+                f"path is provided — Path: {model_path(record.file_path)}]"
             ),
         }
     ]
@@ -830,7 +834,8 @@ def test_current_turn_audio_transcription_failure_degrades_to_path_note(tmp_path
             "type": "text",
             "text": (
                 "[Audio: voice.ogg (audio/ogg) — speech-to-text could not transcribe "
-                f"this audio, so only the stored file path is provided — Path: {record.file_path}]"
+                "this audio, so only the stored file path is provided — "
+                f"Path: {model_path(record.file_path)}]"
             ),
         }
     ]
@@ -855,7 +860,8 @@ def test_current_turn_audio_empty_transcription_degrades_to_path_note(tmp_path: 
             "type": "text",
             "text": (
                 "[Audio: voice.ogg (audio/ogg) — speech-to-text could not transcribe "
-                f"this audio, so only the stored file path is provided — Path: {record.file_path}]"
+                "this audio, so only the stored file path is provided — "
+                f"Path: {model_path(record.file_path)}]"
             ),
         }
     ]
@@ -882,7 +888,7 @@ def test_video_block_resolves_to_path_note(tmp_path: Path, current_turn: bool) -
     assert resolved[0]["content"] == [
         {
             "type": "text",
-            "text": f"[Video: clip.mp4 (video/mp4) — Path: {record.file_path}]",
+            "text": f"[Video: clip.mp4 (video/mp4) — Path: {model_path(record.file_path)}]",
         }
     ]
 
@@ -910,7 +916,7 @@ def test_current_turn_video_resolves_natively_when_model_and_wire_support_it(
         },
         {
             "type": "text",
-            "text": f"[Video: clip.mp4 (video/mp4) — Path: {record.file_path}]",
+            "text": f"[Video: clip.mp4 (video/mp4) — Path: {model_path(record.file_path)}]",
         },
     ]
 
@@ -955,7 +961,7 @@ def test_mixed_text_and_image_blocks_resolve_in_order(tmp_path: Path) -> None:
         },
         {
             "type": "text",
-            "text": f"[Image: photo.png (image/png) — Path: {record.file_path}]",
+            "text": f"[Image: photo.png (image/png) — Path: {model_path(record.file_path)}]",
         },
     ]
 
@@ -1014,7 +1020,7 @@ def test_chat_loop_resolves_historical_blocks_when_latest_user_turn_is_plain_tex
             "type": "text",
             "text": (
                 f"[Image from an earlier turn: old-photo.png (image/png) "
-                f"— Path: {record.file_path}]"
+                f"— Path: {model_path(record.file_path)}]"
             ),
         }
     ]

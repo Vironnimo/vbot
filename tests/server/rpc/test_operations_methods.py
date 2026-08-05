@@ -26,6 +26,7 @@ from core.prompts import (
     PromptAgentStore,
     SystemPromptManager,
 )
+from core.utils.paths import model_path
 from server.rpc.errors import RPC_ERROR_INVALID_REQUEST, RpcError
 from server.rpc.operations_methods import (
     _create_prompt_block,
@@ -537,9 +538,9 @@ async def test_preview_resolves_rooted_identity_skill_pool(tmp_path: Path) -> No
 
     assert skills_for_calls == [("vbot", "coder")]
     assert "## Identity Environment" in result["text"]
-    assert f"Identity Workspace {identity_workspace}" in result["text"]
+    assert f"Identity Workspace {model_path(identity_workspace)}" in result["text"]
     assert "## Working Project" in result["text"]
-    assert f"Project Workspace {repo}" in result["text"]
+    assert f"Project Workspace {model_path(repo)}" in result["text"]
 
 
 @pytest.mark.asyncio
@@ -570,7 +571,7 @@ async def test_preview_project_config_agent_gets_only_working_project_runtime(
     assert "## Working Project" in result["text"]
     assert "Project vBot" in result["text"]
     assert "Project ID vbot" in result["text"]
-    assert f"Project Workspace {repo}" in result["text"]
+    assert f"Project Workspace {model_path(repo)}" in result["text"]
     assert "## Identity Environment" not in result["text"]
     assert "Host test-host" not in result["text"]
     assert "Identity Workspace" not in result["text"]

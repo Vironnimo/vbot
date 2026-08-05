@@ -28,6 +28,7 @@ from core.tools.terminal_backend import (
 )
 from core.utils.errors import VBotError
 from core.utils.logging import get_logger
+from core.utils.paths import model_path
 
 _LOGGER = get_logger("tools.terminal_manager")
 
@@ -353,7 +354,7 @@ class TerminalManager:
             raise ValueError("Terminal command and arguments must be strings")
         _validate_dimensions(columns, rows)
         if not cwd.is_dir():
-            raise ValueError(f"Terminal workdir is not a directory: {cwd}")
+            raise ValueError(f"Terminal workdir is not a directory: {model_path(cwd)}")
         self._enforce_capacity(owner)
 
         terminal_id = uuid.uuid4().hex
@@ -1082,7 +1083,7 @@ class TerminalManager:
             "command": session.command,
             "title": session.renderer.title,
             "arguments": list(session.arguments),
-            "workdir": str(session.cwd),
+            "workdir": model_path(session.cwd),
             "pid": session.adapter.pid,
             "exit_code": session.exit_code,
             "started_at": session.started_at.isoformat(),
@@ -1094,7 +1095,7 @@ class TerminalManager:
             "screen": session.renderer.screen_text(),
             "scrollback": scrollback,
             "attention": _attention_data(attention),
-            "log_file": str(session.log_path) if session.log_path is not None else None,
+            "log_file": model_path(session.log_path) if session.log_path is not None else None,
         }
 
     def _get_for_operator(self, terminal_id: str) -> TerminalSession:
@@ -1111,7 +1112,7 @@ class TerminalManager:
             "state": session.state,
             "command": Path(session.command).name or session.command,
             "title": session.renderer.title,
-            "workdir": str(session.cwd),
+            "workdir": model_path(session.cwd),
             "pid": session.adapter.pid,
             "started_at": session.started_at.isoformat(),
             "finished_at": session.finished_at.isoformat() if session.finished_at else None,

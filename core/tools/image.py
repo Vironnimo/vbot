@@ -18,6 +18,7 @@ from core.tools.tools import (
     tool_failure,
     tool_success,
 )
+from core.utils.paths import model_path
 
 IMAGE_GENERATION_TOOL_NAME = "image_generation"
 ANALYZE_IMAGE_TOOL_NAME = "analyze_image"
@@ -288,7 +289,7 @@ def make_image_generation_handler(image_service: Any):
         # payload stays path-free — the WebUI renders from `url`.
         artifact_payloads = [a.to_dict() for a in artifacts]
         image_payloads = [
-            {**payload, "path": str(artifact.file_path)}
+            {**payload, "path": model_path(artifact.file_path)}
             for artifact, payload in zip(artifacts, artifact_payloads, strict=True)
         ]
         return tool_success(

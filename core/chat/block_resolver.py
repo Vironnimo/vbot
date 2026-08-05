@@ -12,6 +12,7 @@ from core.chat.file_mentions import file_mention_request_text
 from core.model_tasks import SpeechError
 from core.tools.read import render_text_file
 from core.utils.logging import get_logger
+from core.utils.paths import model_path
 
 JsonObject = dict[str, Any]
 
@@ -418,7 +419,8 @@ class ContentBlockResolver:
             }
         reason_prefix = f"{reason} — " if reason else ""
         note_text = (
-            f"[{label}: {filename} ({media_type}) — {reason_prefix}Path: {record.file_path}]"
+            f"[{label}: {filename} ({media_type}) — "
+            f"{reason_prefix}Path: {model_path(record.file_path)}]"
         )
         return {"type": "text", "text": note_text}
 

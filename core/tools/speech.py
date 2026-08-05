@@ -13,6 +13,7 @@ from core.tools.tools import (
     tool_failure,
     tool_success,
 )
+from core.utils.paths import model_path
 
 TEXT_TO_SPEECH_TOOL_NAME = "text_to_speech"
 _TEXT_TO_SPEECH_ARGUMENTS = frozenset({"text"})
@@ -57,7 +58,7 @@ def make_text_to_speech_handler(speech_service: Any):
         # can deliver it outside the web chat (e.g. channel_send); the UI-facing
         # artifacts payload stays path-free — the WebUI renders from `url`.
         artifact_payload = artifact.to_dict()
-        file_path = str(artifact.file_path)
+        file_path = model_path(artifact.file_path)
         return tool_success(
             {
                 "message": (

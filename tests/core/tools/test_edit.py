@@ -12,6 +12,7 @@ from core.tools.edit import (
 )
 from core.tools.file_state import FileReadState
 from core.tools.tools import ToolContext, ToolRegistry, is_tool_result_envelope
+from core.utils.paths import model_path
 
 
 def make_context(
@@ -74,7 +75,7 @@ def test_edit_resolves_relative_path_against_cwd_not_workspace(tmp_path: Path) -
     data = assert_success_envelope(result)
     assert repo_file.read_text(encoding="utf-8") == "new value"
     assert workspace_file.read_text(encoding="utf-8") == "keep me"
-    assert data["path"] == str(repo_file.resolve())
+    assert data["path"] == model_path(repo_file.resolve())
 
 
 def test_register_edit_tool_exposes_provider_schema() -> None:
@@ -119,7 +120,7 @@ def test_edit_replaces_text_in_relative_workspace_path(tmp_path: Path) -> None:
     assert target.read_bytes() == b"hello agent\n"
     assert data["replacements"] == 1
     assert data["first_changed_line"] == 1
-    assert data["path"] == str(target.resolve())
+    assert data["path"] == model_path(target.resolve())
     assert isinstance(data["message"], str)
     assert "OK: updated" in data["message"]
 
@@ -137,7 +138,7 @@ def test_edit_replaces_text_in_absolute_path(tmp_path: Path) -> None:
 
     data = assert_success_envelope(result)
     assert target.read_bytes() == b"direct path\n"
-    assert data["path"] == str(target.resolve())
+    assert data["path"] == model_path(target.resolve())
 
 
 def test_edit_returns_failure_envelope_for_missing_file(tmp_path: Path) -> None:
@@ -478,7 +479,7 @@ def test_edit_returns_failure_envelope_for_filesystem_read_error(
     )
 
     error = assert_failure_envelope(result, "file_read_error")
-    assert str(target.resolve()) in error["message"]
+    assert model_path(target.resolve()) in error["message"]
     assert "access denied while reading" in error["message"]
 
 
@@ -502,7 +503,7 @@ def test_edit_returns_failure_envelope_for_filesystem_write_error(
     )
 
     error = assert_failure_envelope(result, "file_write_error")
-    assert str(target.resolve()) in error["message"]
+    assert model_path(target.resolve()) in error["message"]
     assert "access denied while writing" in error["message"]
 
 

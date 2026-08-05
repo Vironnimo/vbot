@@ -1,5 +1,7 @@
 """System Prompt assembly and core data-block tests."""
 
+from core.utils.paths import model_path
+
 from .prompts_test_support import (
     MEMORY_PROMPT_MODE_AGENT,
     MEMORY_PROMPT_MODE_AGENT_USER,
@@ -68,10 +70,10 @@ def test_identity_agent_prompt_assembles_blocks_in_default_layout_order(
     assert "- Server hostname: `test-host`" in prompt
     assert "- Operating system: `test-os`" in prompt
     assert "- vBot version: `0.1.0`" in prompt
-    assert f"- vBot root: `{(tmp_path / 'app').resolve()}`" in prompt
-    assert f"- vBot data root: `{(tmp_path / 'data').resolve()}`" in prompt
+    assert f"- vBot root: `{model_path((tmp_path / 'app').resolve())}`" in prompt
+    assert f"- vBot data root: `{model_path((tmp_path / 'data').resolve())}`" in prompt
     assert "- Model: `openai/gpt-5.2`" in prompt
-    assert f"{workspace}" in prompt
+    assert model_path(workspace) in prompt
     assert "- Configured thinking effort: `high`" in prompt
     assert "- Current date (UTC): `2026-05-04`" in prompt
     assert "## Working Project" not in prompt
@@ -334,7 +336,7 @@ def test_project_config_agent_receives_project_workspace_without_identity_runtim
     assert "## Working Project" in prompt
     assert "- Project: `vBot`" in prompt
     assert "- Project ID: `vbot`" in prompt
-    assert f"- Your Project Workspace: `{repo}`" in prompt
+    assert f"- Your Project Workspace: `{model_path(repo)}`" in prompt
     assert "<project_context>" in prompt
     assert "<project_context " not in prompt
     assert "## Identity Environment" not in prompt
@@ -363,9 +365,9 @@ def test_rooted_identity_prompt_distinguishes_identity_and_project_workspaces(
     )
 
     assert "## Identity Environment" in prompt
-    assert f"- Your Identity and Memory Workspace: `{workspace}`" in prompt
+    assert f"- Your Identity and Memory Workspace: `{model_path(workspace)}`" in prompt
     assert "## Working Project" in prompt
-    assert f"- Your Project Workspace: `{repo}`" in prompt
+    assert f"- Your Project Workspace: `{model_path(repo)}`" in prompt
 
 
 def test_project_files_render_in_order_after_memory(workspace: Path, tmp_path: Path) -> None:
@@ -414,7 +416,7 @@ def test_working_project_context_uses_exact_rooted_agent_frame(tmp_path: Path) -
         "## Working Project\n\n"
         "- Project: `Second Brain`\n"
         "- Project ID: `second-brain`\n"
-        f"- Your Project Workspace: `{repo}`\n\n"
+        f"- Your Project Workspace: `{model_path(repo)}`\n\n"
         "### Project Context\n\n"
         "Follow the instructions in any files included below and use their contents as "
         "context for all work in this Project Workspace.\n\n"
@@ -466,7 +468,7 @@ def test_working_project_template_preserves_plain_metadata_and_file_placeholders
     snapshot = manager.render_working_project_context(context)
 
     assert "- Project: `Research & Development`" in snapshot
-    assert f"- Your Project Workspace: `{repo}`" in snapshot
+    assert f"- Your Project Workspace: `{model_path(repo)}`" in snapshot
     assert "&amp;" not in snapshot
     assert "Keep {project_name}, {project_workspace}, and $project_name literal." in snapshot
 

@@ -53,6 +53,7 @@ from core.tools.tools import (
     tool_failure,
     tool_success,
 )
+from core.utils.paths import model_path
 
 if TYPE_CHECKING:
     from core.chat import ChatLoop
@@ -1698,7 +1699,7 @@ def _with_target_project(data: JsonObject, project_id: str | None) -> JsonObject
 def _activity_file(activity: SubAgentActivity | None) -> str | None:
     if activity is None:
         return None
-    return str(activity.path.resolve())
+    return model_path(activity.path.resolve())
 
 
 def _with_activity_note(data: JsonObject, activity_file: str | None) -> JsonObject:

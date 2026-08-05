@@ -59,6 +59,7 @@ from core.tools.availability import (
 )
 from core.tools.tools import ToolDefinitionProfileContext
 from core.utils.logging import get_logger
+from core.utils.paths import model_path
 
 JsonObject = dict[str, Any]
 
@@ -1260,7 +1261,7 @@ class SystemPromptManager:
             {
                 "{project_id}": project_context.project_id,
                 "{project_name}": " ".join(project_context.project_name.split()),
-                "{project_workspace}": str(project_context.cwd),
+                "{project_workspace}": model_path(project_context.cwd),
                 "{project_files}": "\n\n".join(project_files),
             },
         ).strip()
@@ -1278,9 +1279,9 @@ class SystemPromptManager:
             "{vbot_version}": self._vbot_version,
             "{operating_system}": self._operating_system or platform.platform(),
             "{model}": agent.model,
-            "{identity_workspace}": agent.workspace,
-            "{vbot_root}": str(self._vbot_root.resolve()),
-            "{data_root}": str(self._data_root.resolve()),
+            "{identity_workspace}": model_path(agent.workspace) if agent.workspace else "",
+            "{vbot_root}": model_path(self._vbot_root.resolve()),
+            "{data_root}": model_path(self._data_root.resolve()),
             "{thinking_effort}": thinking_effort,
             "{current_utc_date}": self._current_utc_date(),
         }
@@ -1380,7 +1381,7 @@ class SystemPromptManager:
             return ""
         lines = [f"Skills from project '{project_name}' — load one by name with the `skill` Tool:"]
         lines.extend(
-            f"- {skill.name}: {skill.description} ({skill.path})"
+            f"- {skill.name}: {skill.description} ({model_path(skill.path)})"
             for skill in sorted(skills, key=lambda item: item.name)
         )
         return "\n".join(lines)
@@ -1421,7 +1422,7 @@ class SystemPromptManager:
             return None
         if on_read is not None:
             on_read(file_path.resolve())
-        return wrap_include_file(filename, content)
+        return wrap_include_file(model_path(filename), content)
 
     def render_skill_catalog(
         self,

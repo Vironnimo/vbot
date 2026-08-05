@@ -10,7 +10,7 @@ A single runtime-owned `FileReadState` registry remembers, per session, the `(mt
 
 - `FileReadState.record_read(session_id, resolved)` — stat the file and store `(mtime, size)`. Called by `read` *before* reading bytes, and by `write`/`edit` *after* a successful write (a write is an implicit read → restamp, so the same session writes again without re-reading).
 - `FileReadState.check_stale(session_id, resolved) -> StaleReason | None` — `NEVER_READ` (no stamp for this session+path), `MODIFIED` (current `(mtime, size)` ≠ stamp), or `None` (safe). Returns `None` when the file cannot be stat'd (vanished mid-call → a race, not staleness).
-- `stale_failure_text(reason, resolved) -> (code, message)` — shared mapping so both tools emit identical failures: `file_not_read` / `file_modified_since_read`.
+- `stale_failure_text(reason, resolved) -> (code, message)` — shared mapping so both tools emit identical failures: `file_not_read` / `file_modified_since_read`; the known path inserted into the Model-facing message uses the shared forward-slash presentation.
 - `FILE_STATE_GUARD_ENABLED` (module constant, default `True`) — single process-wide off switch; when `False`, `record_read` no-ops and `check_stale` returns `None`.
 
 ## Constraints & Gotchas

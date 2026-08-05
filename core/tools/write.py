@@ -17,6 +17,7 @@ from core.tools.tools import (
     tool_failure,
     tool_success,
 )
+from core.utils.paths import model_path
 
 # UTF-8 BOM (byte form for detecting an existing file's marker, char form for
 # re-adding it). A full-file write preserves a BOM the file already had so the
@@ -95,6 +96,7 @@ def write_handler(
         resolved = context.resolve_path(path_argument)
     except RuntimeError as error:
         return tool_failure("invalid_path", str(error))
+    displayed_path = model_path(resolved)
 
     # A new file is never stale; the guard only gates overwriting an existing one.
     if file_state is not None and resolved.exists():
@@ -112,7 +114,7 @@ def write_handler(
         encoded = payload.encode("utf-8")
         resolved.write_bytes(encoded)
     except OSError as error:
-        return tool_failure("file_write_error", f"failed to write file: {resolved}: {error}")
+        return tool_failure("file_write_error", f"failed to write file: {displayed_path}: {error}")
 
     # The write is an implicit read: restamp so the same session can write again
     # without re-reading, and so the next stale check compares against this write.
@@ -120,9 +122,9 @@ def write_handler(
         file_state.record_read(context.session_id, resolved)
 
     byte_count = len(encoded)
-    message = f"OK: written {byte_count} bytes to {resolved}"
+    message = f"OK: written {byte_count} bytes to {displayed_path}"
     data: JsonObject = {
-        "path": str(resolved),
+        "path": displayed_path,
         "bytes": byte_count,
         "message": message,
     }

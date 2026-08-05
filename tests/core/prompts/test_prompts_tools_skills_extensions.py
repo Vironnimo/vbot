@@ -12,6 +12,7 @@ from core.tools.process_manager import ProcessManager
 from core.tools.project import register_project_tool
 from core.tools.subagent import register_subagent_tools
 from core.tools.tools import ToolPromptBlockRegistry
+from core.utils.paths import model_path
 
 from .prompts_test_support import (
     HISTORY_TOOL_NAME,
@@ -505,7 +506,7 @@ def test_project_block_lists_projects_only_for_identity_agent_with_tool(
 
     assert "## Projects" in prompt
     assert '<project id="vbot" name="vBot"' in prompt
-    assert f'cwd="{repo.resolve()}"' in prompt
+    assert f'cwd="{model_path(repo.resolve())}"' in prompt
     assert 'available="true" active="true"' in prompt
     assert "Call it alone and wait for the result" in prompt
     assert "on every `bash` call; each call starts a new shell" in prompt
