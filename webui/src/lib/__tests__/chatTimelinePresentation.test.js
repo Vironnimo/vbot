@@ -1,10 +1,12 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import {
+  backgroundSubAgentTasks,
   compactToolValue,
   compactionSummaryText,
   errorMessagePresentation,
   isRowCancellable,
+  isBackgroundSubAgentSpawn,
   isRunChildWorking,
   isSubAgentSpawnTool,
   isToolPreparing,
@@ -445,6 +447,101 @@ describe('chatTimelinePresentation', () => {
         arguments: { action: 'status', id: 'sub_child' },
       }),
     ).toBe(false);
+  });
+
+  it('projects automatic background tasks with active work first', () => {
+    const running = runningSubAgentTool({ type: 'tool_call' });
+    const completed = runningSubAgentTool({
+      type: 'tool_call',
+      id: 'tool-completed',
+      arguments: {
+        action: 'run',
+        agent_id: 'reviewer',
+        content: 'Review the implementation',
+      },
+      subAgentSession: {
+        id: 'sub_completed',
+        agent_id: 'reviewer',
+        session_id: 'session-reviewer',
+        run_id: 'run-reviewer',
+        status: 'completed',
+        delivery: 'automatic',
+      },
+      result: {
+        ok: true,
+        data: {
+          id: 'sub_completed',
+          agent_id: 'reviewer',
+          session_id: 'session-reviewer',
+          status: 'completed',
+          delivery: 'automatic',
+        },
+        artifacts: [],
+      },
+    });
+    const foreground = runningSubAgentTool({
+      type: 'tool_call',
+      id: 'tool-foreground',
+      subAgentSession: {
+        id: 'sub_foreground',
+        agent_id: 'worker',
+        session_id: 'session-foreground',
+        run_id: 'run-foreground',
+        status: 'completed',
+        delivery: 'inline',
+      },
+      result: {
+        ok: true,
+        data: {
+          id: 'sub_foreground',
+          agent_id: 'worker',
+          session_id: 'session-foreground',
+          status: 'completed',
+          delivery: 'inline',
+          result: 'done',
+        },
+        artifacts: [],
+      },
+    });
+
+    const tasks = backgroundSubAgentTasks([
+      { id: 'run-old', type: 'assistant_run', items: [running] },
+      {
+        id: 'run-new',
+        type: 'assistant_run',
+        items: [completed, foreground],
+      },
+    ]);
+
+    expect(tasks).toHaveLength(2);
+    expect(tasks.map((task) => task.tool.id)).toEqual([
+      running.id,
+      completed.id,
+    ]);
+    expect(tasks.map((task) => task.dotStatus)).toEqual(['running', 'success']);
+    expect(tasks[1]).toEqual(
+      expect.objectContaining({
+        agentId: 'reviewer',
+        preview: 'Review the implementation',
+        target: {
+          agentId: 'reviewer',
+          sessionId: 'session-reviewer',
+        },
+      }),
+    );
+  });
+
+  it('recognizes legacy explicit background spawns without delivery metadata', () => {
+    expect(
+      isBackgroundSubAgentSpawn({
+        name: 'subagent',
+        arguments: {
+          agent_id: 'worker',
+          background: true,
+          content: 'Inspect the project',
+        },
+      }),
+    ).toBe(true);
   });
 
   it('keeps an exact queued cancellation settled when its Session runs again', () => {
