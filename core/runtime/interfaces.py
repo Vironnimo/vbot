@@ -182,12 +182,12 @@ class RuntimeServices(Protocol):
         ``project_id``/``identity_agent_id`` both ``None`` returns the global
         registry (identity runs, unchanged); a set ``project_id`` returns the
         project's merged registry (its own source format's skill directory first, then the
-        bundled pool); an ``identity_agent_id`` with a private skills home layers
-        that on top (always-allowed for the owner). Callers pass the run's agent id
-        here **only for identity runs** — a config-agent run passes ``None``, so a
-        project-local team slug can never pull a same-named identity agent's private
-        skills past the project skill whitelist. The single seam every run-time
-        skill consumer resolves through.
+        bundled pool); an ``identity_agent_id`` layers its private Skills on top and
+        marks both those and the Project's effective Skills as allowed for the scoped
+        context. Callers pass the run's agent id here **only for identity runs** — a
+        config-agent run passes ``None``, so a project-local team slug can never pull
+        a same-named identity agent's private skills past the project skill whitelist.
+        The single seam every run-time skill consumer resolves through.
         """
         ...
 
@@ -203,6 +203,10 @@ class RuntimeServices(Protocol):
 
     def project_own_skills(self, project_id: str) -> list[SkillMetadata]:
         """Return a Project's own scanned skills for explicit Project Context."""
+        ...
+
+    def project_context_skills(self, project_id: str) -> list[SkillMetadata]:
+        """Return every Skill enabled by a Project for Project Context."""
         ...
 
     @property

@@ -585,7 +585,9 @@ class AgentResolver:
         resolved_temperature = _resolve_temperature(scanned, project, global_defaults)
         resolved_thinking_effort = _resolve_thinking_effort(scanned, project, global_defaults)
         allowed_tools = _effective_allowed_tools(project, scanned)
-        allowed_skills = _effective_allowed_skills(project, self._project_skill_names(project_id))
+        allowed_skills = effective_project_allowed_skills(
+            project, self._project_skill_names(project_id)
+        )
         allowed_agents = _effective_allowed_agents(scanned, team)
         tools = _project_agent_tools(allowed_tools, allowed_agents)
         return _build_config_agent(
@@ -957,8 +959,10 @@ def _effective_allowed_tools(project: Project, scanned: ScannedAgent) -> list[st
     return [tool for tool in project.allowed_tools if tool not in scanned.denied_tools]
 
 
-def _effective_allowed_skills(project: Project, project_skill_names: frozenset[str]) -> list[str]:
-    """Return the config agent's skills from the project Skill Whitelist rule.
+def effective_project_allowed_skills(
+    project: Project, project_skill_names: frozenset[str]
+) -> list[str]:
+    """Return the effective names from the Project Skill Whitelist rule.
 
     ``(project skills ∪ skills_bundled_enabled ∪ skills_global_enabled) −
     (skills_project_disabled ∩ project skills)`` — the project's own scanned skills
@@ -976,8 +980,10 @@ def _effective_allowed_skills(project: Project, project_skill_names: frozenset[s
       whitelist and expose the whole global pool to a project agent.
 
     OpenCode does not narrow skills per agent in v1, so this is purely
-    project-derived. The result is sorted for determinism; ``filter_allowed``
-    harmlessly ignores any name that no longer resolves to a loadable skill.
+    project-derived. Config-Agent resolution and Identity Project Context both use
+    this function so their interpretation cannot drift. The result is sorted for
+    determinism; ``filter_allowed`` harmlessly ignores any name that no longer
+    resolves to a loadable skill.
     """
     disabled = set(project.skills_project_disabled)
     enabled_bundled = set(project.skills_bundled_enabled)

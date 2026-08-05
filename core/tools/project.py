@@ -248,8 +248,9 @@ def _render_project_context(
         "The auto-loaded files below are this Project's instructions. Follow them for every "
         "action that affects this Project while this context is relevant in the Session. "
         "They apply only to this Project. This call did not change your home Workspace, cwd, "
-        "Rooting, Session ownership, or permissions. The Project Skills listed below are now "
-        "available through the `skill` Tool in this Session. Use absolute paths for file Tools. "
+        "Rooting, Session ownership, or configured permissions. The Skills enabled by this "
+        "Project are now available through the `skill` Tool in this Session while this Project "
+        "Context is active. Use absolute paths for file Tools. "
         f"Set `workdir` to '{cwd}' on every `bash` call; each call starts a new shell and does "
         "not retain cwd changes from an earlier call."
     )
