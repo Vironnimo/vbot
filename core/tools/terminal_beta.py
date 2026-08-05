@@ -41,6 +41,7 @@ from core.tools.tools import (
     tool_failure,
     tool_success,
 )
+from core.utils.paths import model_path
 
 TERMINAL_BETA_TOOL_NAME = "terminal_beta"
 TERMINAL_BETA_ACTIONS = ("start", "list", "status", "wait", "input", "resize", "kill")
@@ -571,7 +572,7 @@ def _terminal_summary(session: TerminalSession) -> JsonObject:
         "state": session.state,
         "command": session.command,
         "title": session.renderer.title,
-        "workdir": str(session.cwd),
+        "workdir": model_path(session.cwd),
         "pid": session.adapter.pid,
         "exit_code": session.exit_code,
         "started_at": session.started_at.isoformat(),
@@ -633,7 +634,7 @@ def _resolve_workdir(
         ) from error
     if not cwd_exists(project.cwd):
         raise _ProjectWorkdirUnavailableError(
-            f"Project '{project.project_id}' has no reachable cwd: {project.cwd}"
+            f"Project '{project.project_id}' has no reachable cwd: {model_path(project.cwd)}"
         )
     return Path(project.cwd).resolve()
 

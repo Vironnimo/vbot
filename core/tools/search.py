@@ -12,6 +12,8 @@ from typing import TYPE_CHECKING
 from pathspec import PathSpec
 from pathspec.pattern import Pattern
 
+from core.utils.paths import model_path
+
 if TYPE_CHECKING:
     from collections.abc import Iterator
 
@@ -205,9 +207,9 @@ def display_search_path(path: Path, *, cwd: Path) -> str:
     regardless of which search root produced it.
     """
     try:
-        return path.relative_to(cwd).as_posix()
+        return model_path(path.relative_to(cwd))
     except ValueError:
-        return path.as_posix()
+        return model_path(path)
 
 
 def cap_output_bytes(content: str, *, trailing_lines: list[str] | None = None) -> str:

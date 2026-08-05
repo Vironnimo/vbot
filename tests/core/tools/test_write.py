@@ -14,6 +14,7 @@ from core.tools.write import (
     register_write_tool,
     write_handler,
 )
+from core.utils.paths import model_path
 
 
 def make_context(
@@ -146,9 +147,11 @@ def test_write_writes_relative_workspace_path(tmp_path: Path) -> None:
     data = assert_success_envelope(result)
     target = workspace / "notes.txt"
     assert target.read_bytes() == b"hello\nworkspace\n"
-    assert data["path"] == str(target.resolve())
+    assert data["path"] == model_path(target.resolve())
     assert data["bytes"] == len(b"hello\nworkspace\n")
-    assert data["message"] == f"OK: written {data['bytes']} bytes to {target.resolve()}"
+    assert data["message"] == (
+        f"OK: written {data['bytes']} bytes to {model_path(target.resolve())}"
+    )
 
 
 def test_write_resolves_relative_path_against_cwd_not_workspace(tmp_path: Path) -> None:
@@ -167,7 +170,7 @@ def test_write_resolves_relative_path_against_cwd_not_workspace(tmp_path: Path) 
     data = assert_success_envelope(result)
     target = repo / "notes.txt"
     assert target.read_bytes() == b"in repo\n"
-    assert data["path"] == str(target.resolve())
+    assert data["path"] == model_path(target.resolve())
     assert not (workspace / "notes.txt").exists()
 
 
@@ -183,7 +186,7 @@ def test_write_writes_absolute_path(tmp_path: Path) -> None:
 
     data = assert_success_envelope(result)
     assert target.read_bytes() == b"absolute\npath\n"
-    assert data["path"] == str(target.resolve())
+    assert data["path"] == model_path(target.resolve())
 
 
 def test_write_creates_parent_directories(tmp_path: Path) -> None:
@@ -389,7 +392,7 @@ def test_write_returns_failure_envelope_for_filesystem_error(
     )
 
     error = assert_failure_envelope(result, "file_write_error")
-    assert str(target.resolve()) in error["message"]
+    assert model_path(target.resolve()) in error["message"]
     assert "access denied while writing" in error["message"]
 
 

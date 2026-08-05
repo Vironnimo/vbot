@@ -26,6 +26,7 @@ from core.tools import (
     make_read_handler,
     register_read_tool,
 )
+from core.utils.paths import model_path
 
 
 @dataclass(frozen=True)
@@ -305,7 +306,7 @@ async def test_read_returns_failure_envelope_for_read_time_filesystem_error(
     result = await make_handler()(make_context(workspace), {"path": "notes.txt"})
 
     error = assert_failure_envelope(result, "file_read_error")
-    assert str(target.resolve()) in error["message"]
+    assert model_path(target.resolve()) in error["message"]
     assert "access denied while reading" in error["message"]
 
 

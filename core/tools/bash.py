@@ -31,6 +31,7 @@ from core.tools.tools import (
     tool_success,
 )
 from core.utils.logging import get_logger
+from core.utils.paths import model_path
 
 BASH_TOOL_NAME = "bash"
 CredentialResolver = Callable[[str], str]
@@ -943,7 +944,7 @@ async def _background_result(
     if session.log_file is not None:
         # A background process keeps writing after this result; always hand the
         # model the log path so it can grep progress without polling.
-        fields["log_file"] = str(session.log_file)
+        fields["log_file"] = model_path(session.log_file)
     result: JsonObject = {
         "status": "running",
         "session_id": session_id,
@@ -999,7 +1000,7 @@ def _shape_output_fields(session: ProcessSession, output: str) -> JsonObject:
     process buffer cap that already dropped the oldest bytes in memory. Either
     way the missing part is the beginning, and the marker says so.
     """
-    log_file = str(session.log_file) if session.log_file is not None else None
+    log_file = model_path(session.log_file) if session.log_file is not None else None
     capped = len(output) > BASH_MODEL_OUTPUT_CAP_CHARS
     truncated = capped or session.truncated
     if capped:
@@ -1038,7 +1039,7 @@ async def _failure_output_suffix(
         label = "Output tail" if len(output) > len(tail) else "Output"
         parts.append(f"\n{label}:\n{tail}")
     if session.log_file is not None:
-        parts.append(f"\nComplete output: {session.log_file}")
+        parts.append(f"\nComplete output: {model_path(session.log_file)}")
     return "".join(parts)
 
 

@@ -25,6 +25,7 @@ from core.tools.tools import (
     tool_failure,
     tool_success,
 )
+from core.utils.paths import model_path
 
 PROJECT_TOOL_NAME = "project"
 PROJECT_TOOL_DESCRIPTION = (
@@ -130,7 +131,7 @@ def make_project_handler(
         if not cwd_exists(project.cwd):
             return tool_failure(
                 "project_unavailable",
-                f"Project '{project.project_id}' has no reachable cwd: {project.cwd}",
+                f"Project '{project.project_id}' has no reachable cwd: {model_path(project.cwd)}",
                 retryable=False,
             )
 
@@ -160,10 +161,11 @@ def make_project_handler(
         for path in read_paths:
             file_state.record_read(context.session_id, path)
 
+        displayed_cwd = model_path(project.cwd)
         content = _render_project_context(
             project.project_id,
             project.display_name,
-            project.cwd,
+            displayed_cwd,
             rendered_files,
             rendered_skills,
         )
@@ -172,9 +174,9 @@ def make_project_handler(
                 "status": "loaded",
                 "project_id": project.project_id,
                 "display_name": project.display_name,
-                "cwd": project.cwd,
+                "cwd": displayed_cwd,
                 "content": content,
-                "loaded_files": [str(path) for path in read_paths],
+                "loaded_files": [model_path(path) for path in read_paths],
                 "skills": [_skill_payload(skill) for skill in skills],
             }
         )
@@ -226,7 +228,7 @@ def _project_prompt_line(project: Any, *, active_project_id: str | None) -> str:
     attributes = [
         f'id="{escape(project.project_id, quote=True)}"',
         f'name="{escape(_single_line(project.display_name), quote=True)}"',
-        f'cwd="{escape(str(project.cwd), quote=True)}"',
+        f'cwd="{escape(model_path(project.cwd), quote=True)}"',
         f'available="{str(cwd_exists(project.cwd)).lower()}"',
     ]
     if project.project_id == active_project_id:
@@ -260,7 +262,7 @@ def _skill_payload(skill: Any) -> JsonObject:
     return {
         "name": str(skill.name),
         "description": str(skill.description),
-        "path": str(skill.path),
+        "path": model_path(skill.path),
     }
 
 

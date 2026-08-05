@@ -14,6 +14,7 @@ from core.tools.speech import (
     register_text_to_speech_tool,
 )
 from core.tools.tools import ToolContext, ToolRegistry
+from core.utils.paths import model_path
 
 
 @pytest.mark.asyncio
@@ -45,8 +46,8 @@ async def test_text_to_speech_tool_returns_artifact_payload(tmp_path: Path) -> N
     data = result["data"]
     assert isinstance(data, dict)
     # The model-facing copy carries the absolute file path for out-of-chat delivery.
-    assert data["artifact"] == {**_ARTIFACT_PAYLOAD, "path": str(audio_path)}
-    assert str(audio_path) in data["message"]
+    assert data["artifact"] == {**_ARTIFACT_PAYLOAD, "path": model_path(audio_path)}
+    assert model_path(audio_path) in data["message"]
 
 
 @pytest.mark.asyncio

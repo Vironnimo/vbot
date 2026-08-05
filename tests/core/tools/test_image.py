@@ -23,6 +23,7 @@ from core.tools.image import (
     register_image_generation_tool,
 )
 from core.tools.tools import ToolContext, ToolDefinitionProfileContext, ToolRegistry
+from core.utils.paths import model_path
 
 
 def test_image_generation_profile_matches_configured_model_capability(tmp_path: Path) -> None:
@@ -113,7 +114,7 @@ async def test_image_generation_tool_returns_artifact_payloads(tmp_path: Path) -
     data = result["data"]
     assert isinstance(data, dict)
     # The model-facing copies carry the absolute file path for out-of-chat use.
-    assert data["images"] == [{**_ARTIFACT_PAYLOAD, "path": str(image_path)}]
+    assert data["images"] == [{**_ARTIFACT_PAYLOAD, "path": model_path(image_path)}]
     assert "configured external provider" in IMAGE_GENERATION_TOOL_DESCRIPTION
     assert data["message"] == (
         "Image generation complete.\n\n"

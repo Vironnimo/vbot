@@ -17,6 +17,8 @@ from __future__ import annotations
 from enum import Enum
 from pathlib import Path
 
+from core.utils.paths import model_path
+
 # Single off-switch for the whole guard. Default on; set False to disable the
 # read-before-write / stale checks process-wide (escape hatch, mainly for tests).
 FILE_STATE_GUARD_ENABLED = True
@@ -90,11 +92,13 @@ def stale_failure_text(reason: StaleReason, resolved: Path) -> tuple[str, str]:
     if reason is StaleReason.NEVER_READ:
         return (
             "file_not_read",
-            f"{resolved} has not been read in this session. Read it first before writing to it.",
+            f"{model_path(resolved)} has not been read in this session. "
+            "Read it first before writing to it.",
         )
     return (
         "file_modified_since_read",
-        f"{resolved} has been modified since you last read it. Read it again before writing to it.",
+        f"{model_path(resolved)} has been modified since you last read it. "
+        "Read it again before writing to it.",
     )
 
 

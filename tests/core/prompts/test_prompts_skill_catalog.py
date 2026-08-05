@@ -1,5 +1,7 @@
 """Prompt Skill catalog and explicit Project Context rendering tests."""
 
+from core.utils.paths import model_path
+
 from .prompts_test_support import (
     MEMORY_PROMPT_MODE_OFF,
     Path,
@@ -63,7 +65,7 @@ def test_render_project_skills_lists_names_descriptions_and_paths(tmp_path: Path
 
     assert "Skills from project 'vBot'" in rendered
     assert "load one by name with the `skill` Tool" in rendered
-    assert f"- deploy: Ship it. ({deploy_path})" in rendered
+    assert f"- deploy: Ship it. ({model_path(deploy_path)})" in rendered
     # Sorted by name: audit before deploy.
     assert rendered.index("audit") < rendered.index("deploy")
 

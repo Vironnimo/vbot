@@ -17,6 +17,7 @@ from core.tools.project import (
     make_project_handler,
     register_project_tool,
 )
+from core.utils.paths import model_path
 
 
 class _Renderer:
@@ -106,16 +107,20 @@ def test_project_tool_loads_context_skills_and_stamps_files_read(tmp_path: Path)
     assert data["status"] == "loaded"
     assert data["project_id"] == "vbot"
     assert data["display_name"] == "vBot"
-    assert data["cwd"] == str(repo.resolve())
+    assert data["cwd"] == model_path(repo.resolve())
     assert "Project Context loaded for 'vBot'" in data["content"]
     assert "This call did not change your home Workspace, cwd, Rooting" in data["content"]
     assert "available through the `skill` Tool in this Session" in data["content"]
     assert "on every `bash` call; each call starts a new shell" in data["content"]
     assert "Follow the Project rules." in data["content"]
     assert "Skills from project 'vBot'" in data["content"]
-    assert data["loaded_files"] == [str(agents_file.resolve())]
+    assert data["loaded_files"] == [model_path(agents_file.resolve())]
     assert data["skills"] == [
-        {"name": "review", "description": "Review changes.", "path": str(skill_path)}
+        {
+            "name": "review",
+            "description": "Review changes.",
+            "path": model_path(skill_path),
+        }
     ]
     assert file_state.check_stale("session-one", agents_file.resolve()) is None
 
@@ -134,7 +139,7 @@ def test_project_tool_returns_context_for_bare_project(tmp_path: Path) -> None:
     assert data["loaded_files"] == []
     assert data["skills"] == []
     assert "Project Context loaded for 'Empty'" in data["content"]
-    assert str(repo.resolve()) in data["content"]
+    assert model_path(repo.resolve()) in data["content"]
 
 
 def test_project_tool_rejects_unknown_project(tmp_path: Path) -> None:

@@ -20,6 +20,7 @@ from core.tools.tools import (
     tool_failure,
     tool_success,
 )
+from core.utils.paths import model_path
 
 PROCESS_TOOL_NAME = "process"
 PROCESS_TOOL_DESCRIPTION = (
@@ -219,7 +220,7 @@ def _session_summary(session: ProcessSession) -> JsonObject:
         "started_at": _format_timestamp(session.started_at),
         "finished_at": _format_timestamp(session.finished_at),
         "stdin_open": session.stdin_open,
-        "log_file": str(session.log_file) if session.log_file is not None else None,
+        "log_file": model_path(session.log_file) if session.log_file is not None else None,
     }
 
 
@@ -232,7 +233,7 @@ def _status_snapshot_data(snapshot: JsonObject) -> JsonObject:
     truncated = bool(snapshot.get("truncated")) or capped
 
     raw_log_file = snapshot.get("log_file")
-    log_file = str(raw_log_file) if isinstance(raw_log_file, Path) else None
+    log_file = model_path(raw_log_file) if isinstance(raw_log_file, Path) else None
     return {
         "session_id": snapshot["session_id"],
         "status": snapshot["status"],

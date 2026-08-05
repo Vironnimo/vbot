@@ -23,6 +23,7 @@ from core.tools.terminal_beta import (
 )
 from core.tools.terminal_manager import TerminalManager, TerminalOwner
 from core.tools.tools import JsonObject, ToolContext, ToolRegistry, tool_failure
+from core.utils.paths import model_path
 from tests.core.tools.test_terminal_manager import AdapterFactory, eventually
 
 
@@ -174,7 +175,7 @@ async def test_start_resolves_live_project_cwd_by_stable_id_without_changing_own
 
     assert first["ok"] is True
     first_data = cast(dict[str, Any], first["data"])
-    assert first_data["workdir"] == str(first_repo.resolve())
+    assert first_data["workdir"] == model_path(first_repo.resolve())
     assert factory.calls[0][1] == first_repo.resolve()
     terminal_manager.get_session(
         first_data["terminal_id"],

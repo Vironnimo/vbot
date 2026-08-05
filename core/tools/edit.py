@@ -21,6 +21,7 @@ from core.tools.tools import (
     tool_failure,
     tool_success,
 )
+from core.utils.paths import model_path
 
 EDIT_TOOL_NAME = "edit"
 EDIT_TOOL_DESCRIPTION = (
@@ -182,13 +183,14 @@ def _build_success_data(
     replaced_count: int,
     syntax_warning: str | None,
 ) -> JsonObject:
+    displayed_path = model_path(resolved)
     message = (
-        f"OK: updated {resolved} (first changed line: {first_line_number}, "
+        f"OK: updated {displayed_path} (first changed line: {first_line_number}, "
         f"replacements: {replaced_count})"
     )
     data: JsonObject = {
         "message": message,
-        "path": str(resolved),
+        "path": displayed_path,
         "first_changed_line": first_line_number,
         "replacements": replaced_count,
     }
@@ -217,19 +219,20 @@ def edit_handler(
         resolved = context.resolve_path(path_argument)
     except RuntimeError as error:
         return tool_failure("invalid_path", str(error))
+    displayed_path = model_path(resolved)
 
     try:
         if not resolved.exists():
-            return tool_failure("file_not_found", f"file not found: {resolved}")
+            return tool_failure("file_not_found", f"file not found: {displayed_path}")
         if not resolved.is_file():
-            return tool_failure("not_a_file", f"path is not a file: {resolved}")
+            return tool_failure("not_a_file", f"path is not a file: {displayed_path}")
         if file_state is not None:
             reason = file_state.check_stale(context.session_id, resolved)
             if reason is not None:
                 return tool_failure(*stale_failure_text(reason, resolved))
         content = resolved.read_bytes().decode("utf-8", errors="replace")
     except OSError as error:
-        return tool_failure("file_read_error", f"failed to read file: {resolved}: {error}")
+        return tool_failure("file_read_error", f"failed to read file: {displayed_path}: {error}")
 
     # The matcher tries exact, then newline/Unicode-normalized, then whitespace-
     # tolerant line matching, always splicing the real original bytes.
@@ -248,7 +251,7 @@ def edit_handler(
     try:
         resolved.write_bytes(result.new_content.encode("utf-8"))
     except OSError as error:
-        return tool_failure("file_write_error", f"failed to write file: {resolved}: {error}")
+        return tool_failure("file_write_error", f"failed to write file: {displayed_path}: {error}")
 
     # The edit is an implicit read of the new content: restamp so the same session
     # can edit again without re-reading, and so the next stale check is accurate.
