@@ -63,7 +63,7 @@ Domain-specific vocabulary for tools. The core Tool term lives in `.vorch/GLOSSA
 - `tools/read.md` - `read`
 - `tools/edit.md` - `edit`
 - `tools/write.md` - `write`
-- `tools/file_state.md` - shared read-before-write / stale-file guard (`FileReadState`) used by `read`/`write`/`edit`
+- `tools/file_state.md` - shared read stamps, per-path mutation locks, and atomic replacement used by `read`/`write`/`edit`
 - `tools/glob.md` - `glob`
 - `tools/grep.md` - `grep`
 - `tools/web_fetch.md` - `web_fetch`

@@ -1,6 +1,6 @@
 # Edit Tool
 
-Replaces text inside an existing file, matching `old_string` with controlled fuzziness while always splicing the file's real original bytes.
+Replaces text inside an existing file, matching `old_string` with controlled fuzziness against the current on-disk content while always splicing the file's real original bytes.
 
 ## Interfaces
 
@@ -24,7 +24,8 @@ Replaces text inside an existing file, matching `old_string` with controlled fuz
 
 ## Constraints & Gotchas
 
-- **Read-before-write guard** (shared with `write`, see `file_state.md`): the edit is **blocked** (failure envelope) when the file was not read in this session (`file_not_read`) or its `(mtime, size)` changed on disk since the read (`file_modified_since_read`). The check runs right after the exists/is-file checks, before the content is read for matching; a successful edit restamps the file so the same session can edit again without re-reading. This is a hard block, separate from the fuzzy match and the (non-blocking) syntax check.
+- **Current-content optimistic edit:** `edit` does not require a prior `read` and does not block when the file changed since the Session last read it. Under the path's mutation lock it reads the current bytes, applies the unique `old_string` match to those bytes, and preserves every unmatched byte; a changed file whose target no longer matches still fails without writing through the normal `text_not_found` / `ambiguous_match` boundary. A successful edit restamps the file for later full-file `write` checks, and a successful edit after detected metadata drift includes `data.stale_warning` explaining that it merged against newer on-disk content.
+- **Serialized atomic mutation** (shared with `write`, see `file_state.md`): one Runtime serializes mutations of the same resolved path while different paths remain independent. The replacement is written to a same-directory temporary file, flushed, permission-matched to an existing target, and installed with atomic `os.replace`; a failed write removes the temporary file and leaves the original intact.
 - Missing text, ambiguous matches, validation failures, and expected filesystem errors return failure envelopes.
 - An `ambiguous_match` remains a hard no-write result and reports the occurrence count plus at most three raw candidate contexts. Each candidate includes the matched line and one neighboring line on either side, omits read's line-number gutter so its text can be reused safely, and truncates individual context lines at 160 characters; additional candidates are summarized rather than emitted without bound.
 - `new_string` dominated by read's `N|` line-number gutter is rejected with a `line_numbered_content` failure (it would write line-number prefixes into the file). When a not-found `old_string` itself carries the gutter, the `text_not_found` message points at the gutter rather than generic whitespace advice. Shared detector: `looks_like_line_numbered_content` in `core/tools/arguments.py`.

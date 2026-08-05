@@ -1,6 +1,7 @@
 """Tests for the built-in write tool."""
 
 import asyncio
+import os
 import threading
 from pathlib import Path
 
@@ -18,11 +19,15 @@ from core.utils.paths import model_path
 
 
 def make_context(
-    workspace: Path, tool_name: str = WRITE_TOOL_NAME, *, cwd: Path | None = None
+    workspace: Path,
+    tool_name: str = WRITE_TOOL_NAME,
+    *,
+    cwd: Path | None = None,
+    session_id: str = "session-1",
 ) -> ToolContext:
     return ToolContext(
         agent_id="agent-1",
-        session_id="session-1",
+        session_id=session_id,
         run_id="run-1",
         tool_call_id="call-1",
         tool_name=tool_name,
@@ -96,14 +101,14 @@ async def test_dispatch_write_offloads_sync_file_io(
     workspace.mkdir()
     handler_started = threading.Event()
     release_handler = threading.Event()
-    original_write_bytes = Path.write_bytes
+    original_replace = os.replace
 
-    def blocking_write_bytes(self: Path, data: bytes) -> int:
+    def blocking_replace(source: Path, target: Path) -> None:
         handler_started.set()
         release_handler.wait(timeout=1)
-        return original_write_bytes(self, data)
+        original_replace(source, target)
 
-    monkeypatch.setattr(Path, "write_bytes", blocking_write_bytes)
+    monkeypatch.setattr("core.tools.file_state.os.replace", blocking_replace)
 
     dispatch_task = asyncio.create_task(
         registry.dispatch(
@@ -381,10 +386,10 @@ def test_write_returns_failure_envelope_for_filesystem_error(
     workspace.mkdir()
     target = workspace / "notes.txt"
 
-    def raise_permission_error(self: Path, data: bytes) -> int:
+    def raise_permission_error(_source: Path, _target: Path) -> None:
         raise PermissionError("access denied while writing")
 
-    monkeypatch.setattr(Path, "write_bytes", raise_permission_error)
+    monkeypatch.setattr("core.tools.file_state.os.replace", raise_permission_error)
 
     result = write_handler(
         make_context(workspace),
@@ -500,3 +505,57 @@ def test_write_guard_restamps_so_next_write_needs_no_reread(tmp_path: Path) -> N
     assert_success_envelope(first)
     assert_success_envelope(second)
     assert target.read_bytes() == b"second\n"
+
+
+def test_concurrent_session_writes_serialize_and_reject_stale_overwrite(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    target = workspace / "notes.txt"
+    target.write_bytes(b"original\n")
+    file_state = FileReadState()
+    file_state.record_read("session-a", target.resolve())
+    file_state.record_read("session-b", target.resolve())
+
+    from core.tools.file_state import atomic_write_bytes as real_atomic_write_bytes
+
+    first_write_started = threading.Event()
+    release_first_write = threading.Event()
+
+    def blocking_atomic_write(path: Path, payload: bytes) -> None:
+        first_write_started.set()
+        release_first_write.wait(timeout=1)
+        real_atomic_write_bytes(path, payload)
+
+    monkeypatch.setattr("core.tools.write.atomic_write_bytes", blocking_atomic_write)
+    results: dict[str, dict[str, object]] = {}
+
+    def write_first() -> None:
+        results["a"] = write_handler(
+            make_context(workspace, session_id="session-a"),
+            {"path": "notes.txt", "content": "first\n"},
+            file_state=file_state,
+        )
+
+    def write_second() -> None:
+        results["b"] = write_handler(
+            make_context(workspace, session_id="session-b"),
+            {"path": "notes.txt", "content": "second\n"},
+            file_state=file_state,
+        )
+
+    first = threading.Thread(target=write_first)
+    second = threading.Thread(target=write_second)
+    first.start()
+    assert first_write_started.wait(timeout=1)
+    second.start()
+    release_first_write.set()
+    first.join(timeout=1)
+    second.join(timeout=1)
+
+    assert first.is_alive() is False
+    assert second.is_alive() is False
+    assert_success_envelope(results["a"])
+    assert_failure_envelope(results["b"], "file_modified_since_read")
+    assert target.read_bytes() == b"first\n"
