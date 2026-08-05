@@ -18,6 +18,7 @@ from core.tools.tools import (
     ToolDisplay,
     ToolDisplayPart,
     ToolRegistry,
+    result_count_fact_builder,
     tool_failure,
     tool_success,
 )
@@ -245,6 +246,7 @@ def register_history_tool(registry: ToolRegistry, sessions: ChatSessionManager) 
         open_input_schema=True,
         display=ToolDisplay(
             parts_builder=_history_display_parts,
+            fact_builder=result_count_fact_builder("items", at_least_field="has_more"),
             hidden_argument_keys=("query", "message_id", "cursor"),
         ),
     )

@@ -18,6 +18,7 @@ from core.tools.tools import (
     ToolDisplay,
     ToolDisplayPart,
     ToolRegistry,
+    result_count_fact_builder,
     tool_failure,
     tool_success,
 )
@@ -274,7 +275,10 @@ def register_process_tool(registry: ToolRegistry, process_manager: ProcessManage
         PROCESS_TOOL_PARAMETERS,
         make_process_handler(process_manager),
         result_schema={"type": "object"},
-        display=ToolDisplay(parts_builder=_process_display_parts),
+        display=ToolDisplay(
+            parts_builder=_process_display_parts,
+            fact_builder=result_count_fact_builder("sessions", when_arguments={"action": "status"}),
+        ),
         open_input_schema=True,
     )
 

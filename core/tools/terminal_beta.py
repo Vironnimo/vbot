@@ -39,6 +39,7 @@ from core.tools.tools import (
     ToolDisplay,
     ToolDisplayPart,
     ToolRegistry,
+    result_count_fact_builder,
     tool_failure,
     tool_success,
 )
@@ -657,7 +658,10 @@ def register_terminal_beta_tool(
         make_terminal_beta_handler(terminal_manager, projects),
         open_input_schema=True,
         result_schema={"type": "object"},
-        display=ToolDisplay(parts_builder=_terminal_display_parts),
+        display=ToolDisplay(
+            parts_builder=_terminal_display_parts,
+            fact_builder=result_count_fact_builder("terminals", when_arguments={"action": "list"}),
+        ),
     )
 
 

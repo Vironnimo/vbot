@@ -37,6 +37,7 @@ from core.tools.tools import (
     ToolDisplay,
     ToolDisplayPart,
     ToolRegistry,
+    result_count_fact_builder,
     tool_failure,
     tool_success,
 )
@@ -329,6 +330,7 @@ def register_session_search_tool(
         parallel_safe=True,
         display=ToolDisplay(
             parts_builder=_display_search_parts,
+            fact_builder=result_count_fact_builder("items", at_least_field="has_more"),
             hidden_argument_keys=("query", "cursor"),
         ),
     )
@@ -345,6 +347,7 @@ def register_session_search_tool(
         parallel_safe=True,
         display=ToolDisplay(
             parts_builder=_display_read_parts,
+            fact_builder=result_count_fact_builder("items", at_least_field="has_more"),
             hidden_argument_keys=("start_message_id", "end_message_id", "cursor"),
         ),
     )

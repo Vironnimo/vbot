@@ -117,6 +117,19 @@ def test_schema_matches_flat_action_tool_conventions(tmp_path: Path) -> None:
     tool = registry.get(TERMINAL_BETA_TOOL_NAME)
     assert tool.open_input_schema is True
     assert tool.display.summary({"action": "start"}) == "start · codex"
+    list_display = registry.display_for_call(
+        TERMINAL_BETA_TOOL_NAME,
+        {"action": "list"},
+        result={
+            "ok": True,
+            "data": {"terminals": [{"terminal_id": "terminal-a"}]},
+            "error": None,
+            "artifacts": [],
+        },
+    )
+    assert list_display["facts"] == [
+        {"kind": "count", "value": 1, "unit": "results", "at_least": False}
+    ]
     with pytest.raises(ValueError, match="greater than the maximum of 100"):
         tool.contract.validate_arguments(
             {

@@ -28,6 +28,7 @@ from core.tools import (
     ToolPromptBlockRegistry,
     ToolRegistry,
     is_tool_result_envelope,
+    result_count_fact_builder,
     tool_failure,
     tool_is_ready,
     tool_success,
@@ -519,6 +520,54 @@ class TestTool:
         assert context.presentation_facts == [
             {"kind": "count", "value": 10, "unit": "matches", "at_least": True}
         ]
+
+    def test_result_count_fact_builder_counts_successful_lists_and_pagination(self) -> None:
+        display = ToolDisplay(
+            fact_builder=result_count_fact_builder(
+                "items",
+                when_arguments={"action": "list"},
+                at_least_field="has_more",
+            )
+        )
+
+        payload = display.to_payload(
+            {"action": "list"},
+            result=tool_success({"items": [{"id": 1}, {"id": 2}], "has_more": True}),
+        )
+
+        assert payload["facts"] == [
+            {"kind": "count", "value": 2, "unit": "results", "at_least": True}
+        ]
+
+    def test_result_count_fact_builder_ignores_failures_and_other_actions(self) -> None:
+        display = ToolDisplay(
+            fact_builder=result_count_fact_builder("count", when_arguments={"action": "list"})
+        )
+
+        assert (
+            display.to_payload({"action": "list"}, result=tool_failure("failed", "no count"))[
+                "facts"
+            ]
+            == []
+        )
+        assert (
+            display.to_payload({"action": "add"}, result=tool_success({"count": 4}))["facts"] == []
+        )
+
+    def test_result_count_fact_builder_does_not_mark_empty_page_as_lower_bound(self) -> None:
+        display = ToolDisplay(
+            fact_builder=result_count_fact_builder("items", at_least_field="has_more")
+        )
+
+        assert display.to_payload({}, result=tool_success({"items": [], "has_more": True}))[
+            "facts"
+        ] == [{"kind": "count", "value": 0, "unit": "results", "at_least": False}]
+
+    @pytest.mark.parametrize("count", (-1, True, "4", None))
+    def test_result_count_fact_builder_rejects_invalid_result_counts(self, count: Any) -> None:
+        display = ToolDisplay(fact_builder=result_count_fact_builder("count"))
+
+        assert display.to_payload({}, result=tool_success({"count": count}))["facts"] == []
 
     def test_display_rejects_bare_string_summary_fields(self) -> None:
         with pytest.raises(ValueError, match="summary_fields"):

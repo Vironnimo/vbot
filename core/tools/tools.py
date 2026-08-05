@@ -134,6 +134,53 @@ class ToolDisplayPart:
 ToolDisplayPartBuilder = Callable[[JsonObject], Sequence[ToolDisplayPart]]
 
 
+def result_count_fact_builder(
+    data_field: str,
+    *,
+    when_arguments: Mapping[str, Any] | None = None,
+    at_least_field: str | None = None,
+    unit: str = "results",
+) -> ToolDisplayFactBuilder:
+    """Build a UI-only count fact from one successful Tool result field."""
+    if not isinstance(data_field, str) or not data_field:
+        raise ValueError("Tool display result count data_field must be a non-empty string")
+    if at_least_field is not None and (not isinstance(at_least_field, str) or not at_least_field):
+        raise ValueError("Tool display result count at_least_field must be a non-empty string")
+    if unit not in TOOL_DISPLAY_FACT_UNITS:
+        raise ValueError(f"Unsupported Tool display fact unit: {unit}")
+    conditions = dict(when_arguments or {})
+    if not all(isinstance(key, str) and key for key in conditions):
+        raise ValueError("Tool display result count conditions must use non-empty string keys")
+
+    def build(arguments: JsonObject, result: JsonObject) -> Sequence[JsonObject]:
+        if any(arguments.get(key) != expected for key, expected in conditions.items()):
+            return ()
+        if result.get("ok") is not True:
+            return ()
+        data = result.get("data")
+        if not isinstance(data, dict):
+            return ()
+        raw_count = data.get(data_field)
+        if isinstance(raw_count, list):
+            count = len(raw_count)
+        elif isinstance(raw_count, int) and not isinstance(raw_count, bool) and raw_count >= 0:
+            count = raw_count
+        else:
+            return ()
+        return (
+            {
+                "kind": "count",
+                "value": count,
+                "unit": unit,
+                "at_least": (
+                    count > 0 and data.get(at_least_field) is True if at_least_field else False
+                ),
+            },
+        )
+
+    return build
+
+
 @dataclass(frozen=True)
 class ToolDisplay:
     """Presentation metadata for one tool invocation."""

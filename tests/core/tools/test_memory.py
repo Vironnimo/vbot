@@ -86,6 +86,30 @@ def test_register_memory_tool_exposes_provider_schema(tmp_path: Path) -> None:
     assert "oneOf" not in parameters
     assert "additionalProperties" not in parameters
     assert tool.open_input_schema is True
+    list_display = registry.display_for_call(
+        MEMORY_TOOL_NAME,
+        {"action": "list", "scope": "user"},
+        result={
+            "ok": True,
+            "data": {"entries": [{"id": 1}]},
+            "error": None,
+            "artifacts": [],
+        },
+    )
+    mutation_display = registry.display_for_call(
+        MEMORY_TOOL_NAME,
+        {"action": "add", "scope": "user"},
+        result={
+            "ok": True,
+            "data": {"entries": [{"id": 1}]},
+            "error": None,
+            "artifacts": [],
+        },
+    )
+    assert list_display["facts"] == [
+        {"kind": "count", "value": 1, "unit": "results", "at_least": False}
+    ]
+    assert mutation_display["facts"] == []
 
 
 def test_memory_tool_adds_and_lists_user_entries(tmp_path: Path) -> None:

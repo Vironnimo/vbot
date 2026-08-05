@@ -279,13 +279,23 @@ def test_glob_applies_explicit_limit_keeping_newest_matches(tmp_path: Path) -> N
         file_path.write_text("x\n", encoding="utf-8")
         set_mtime(file_path, offset * 10)
 
-    result = glob_handler(make_context(workspace), {"pattern": "*.txt", "limit": 2})
+    context = make_context(workspace)
+    result = glob_handler(context, {"pattern": "*.txt", "limit": 2})
 
     assert get_success_content(result).splitlines() == [
         "newest.txt",
         "middle.txt",
         RESULTS_LIMITED_MARKER.format(limit=2),
     ]
+    registry = ToolRegistry()
+    register_glob_tool(registry)
+    display = registry.display_for_call(
+        GLOB_TOOL_NAME,
+        {"pattern": "*.txt", "limit": 2},
+        context=context,
+        result=result,
+    )
+    assert display["facts"] == [{"kind": "count", "value": 2, "unit": "results", "at_least": True}]
 
 
 def test_glob_returns_cancelled_failure_when_user_cancels(tmp_path: Path) -> None:
@@ -327,9 +337,13 @@ def test_glob_no_match_returns_success_content(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
 
-    result = glob_handler(make_context(workspace), {"pattern": "*.missing"})
+    context = make_context(workspace)
+    result = glob_handler(context, {"pattern": "*.missing"})
 
     assert get_success_content(result) == "No paths matched pattern: *.missing"
+    assert context.presentation_facts == [
+        {"kind": "count", "value": 0, "unit": "results", "at_least": False}
+    ]
 
 
 def test_glob_bare_star_pattern_matches_top_level_only(tmp_path: Path) -> None:

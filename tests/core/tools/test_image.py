@@ -123,6 +123,13 @@ async def test_image_generation_tool_returns_artifact_payloads(tmp_path: Path) -
         "Channel: call `channel_send` with the image `path` in `file_paths`. "
         "Never send the Markdown to a channel."
     )
+    display = registry.display_for_call(
+        IMAGE_GENERATION_TOOL_NAME,
+        {"prompt": "a red fox"},
+        context=context,
+        result=result,
+    )
+    assert display["facts"] == [{"kind": "count", "value": 1, "unit": "results", "at_least": False}]
 
 
 @pytest.mark.asyncio

@@ -8,7 +8,7 @@ Manages persisted time-based automation jobs through `CronService`.
 - Registration: `register_cron_tool(registry, cron_service)`
 - Schema: one open flat object requiring `action`, with optional siblings `id`, `target`, `name`, `prompt`, `schedule`, and `repeat`. The handler requires `prompt` + `schedule` for create, `id` plus at least one changed field for update, `id` for delete/enable/disable, no extra fields for list, and rejects every action-inapplicable or unknown field. The model-facing schema emits no branch keywords or `additionalProperties`; `repeat` retains the genuine `integer | null` semantic because update uses explicit null to make recurring jobs unlimited.
 - Actions: `create`, `list`, `update`, `delete`, `enable`, and `disable`. `create` requires `prompt` + `schedule`; `update` requires `id` + at least one changed field; delete/enable/disable require `id`; list needs only `action`.
-- Display: the summary leads with `action`, followed by available `name`, `id`, target, and schedule values.
+- Display: the summary leads with `action`, followed by available `name`, `id`, target, and schedule values. A successful `list` derives an exact presentation-only `results` count from `jobs`; mutations and failures publish no count.
 
 ## Conventions
 
