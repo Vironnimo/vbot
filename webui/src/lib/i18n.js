@@ -262,6 +262,8 @@ export const englishCatalog = Object.freeze({
     'Open activity panel · {count} tasks running',
   'chat.activity.close': 'Close activity panel',
   'chat.activity.empty': 'No background tasks',
+  'chat.activity.active': 'Active',
+  'chat.activity.finished': 'Finished',
   'chat.activity.taskAria': 'Open {agent} Session · {status}',
   'chat.activity.status.running': 'Working',
   'chat.activity.status.completed': 'Completed',

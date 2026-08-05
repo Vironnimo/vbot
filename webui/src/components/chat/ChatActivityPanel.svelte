@@ -16,9 +16,13 @@
   let tasks = $derived(
     backgroundSubAgentTasks(timelineItems, subAgentStatuses),
   );
-  let runningTaskCount = $derived(
-    tasks.filter((task) => task.dotStatus === 'running').length,
+  let activeTasks = $derived(
+    tasks.filter((task) => task.dotStatus === 'running'),
   );
+  let finishedTasks = $derived(
+    tasks.filter((task) => task.dotStatus !== 'running'),
+  );
+  let runningTaskCount = $derived(activeTasks.length);
 
   const panelId = 'chat-activity-panel';
 
@@ -87,6 +91,51 @@
   );
 </script>
 
+{#snippet taskRow(task)}
+  <Button
+    variant="tertiary"
+    class="chat-activity__task-row"
+    ariaLabel={taskLabel(task)}
+    disabled={!task.target}
+    onClick={() => task.target && onNavigateToSubAgent(task.target)}
+  >
+    <span class="chat-activity__agent">{task.agentId}</span>
+    <span
+      class="chat-activity__status"
+      class:chat-activity__status--running={task.dotStatus === 'running'}
+      class:chat-activity__status--success={task.dotStatus === 'success'}
+      class:chat-activity__status--failed={task.dotStatus === 'failed'}
+      class:chat-activity__status--cancelled={task.dotStatus === 'cancelled'}
+      data-status={task.dotStatus}
+      aria-hidden="true"
+    >
+      {#if task.dotStatus === 'running'}
+        <svg viewBox="0 0 16 16" width="14" height="14">
+          <circle cx="8" cy="8" r="5" />
+          <path d="M8 3a5 5 0 0 1 5 5" />
+        </svg>
+      {:else if task.dotStatus === 'success'}
+        <svg viewBox="0 0 16 16" width="14" height="14">
+          <path d="m3.5 8.2 2.8 2.8 6.2-6.2" />
+        </svg>
+      {:else if task.dotStatus === 'cancelled'}
+        <svg viewBox="0 0 16 16" width="14" height="14">
+          <path d="m4.5 4.5 7 7m0-7-7 7" />
+        </svg>
+      {:else if task.dotStatus === 'failed'}
+        <svg viewBox="0 0 16 16" width="14" height="14">
+          <path d="M8 3.2 13 12H3L8 3.2Z" />
+          <path d="M8 6.3v2.8m0 1.6v.1" />
+        </svg>
+      {:else}
+        <svg viewBox="0 0 16 16" width="14" height="14">
+          <circle cx="8" cy="8" r="2" />
+        </svg>
+      {/if}
+    </span>
+  </Button>
+{/snippet}
+
 <div class:chat-activity--open={open} class="chat-activity">
   <Button
     variant="tertiary"
@@ -131,59 +180,43 @@
             {t('chat.activity.empty', 'No background tasks')}
           </p>
         {:else}
-          <ul class="chat-activity__task-list">
-            {#each tasks as task (task.id)}
-              <li>
-                <Button
-                  variant="tertiary"
-                  class="chat-activity__task-row"
-                  ariaLabel={taskLabel(task)}
-                  disabled={!task.target}
-                  onClick={() =>
-                    task.target && onNavigateToSubAgent(task.target)}
-                >
-                  <span class="chat-activity__agent">{task.agentId}</span>
-                  <span
-                    class="chat-activity__status"
-                    class:chat-activity__status--running={task.dotStatus ===
-                      'running'}
-                    class:chat-activity__status--success={task.dotStatus ===
-                      'success'}
-                    class:chat-activity__status--failed={task.dotStatus ===
-                      'failed'}
-                    class:chat-activity__status--cancelled={task.dotStatus ===
-                      'cancelled'}
-                    data-status={task.dotStatus}
-                    aria-hidden="true"
-                  >
-                    {#if task.dotStatus === 'running'}
-                      <svg viewBox="0 0 16 16" width="14" height="14">
-                        <circle cx="8" cy="8" r="5" />
-                        <path d="M8 3a5 5 0 0 1 5 5" />
-                      </svg>
-                    {:else if task.dotStatus === 'success'}
-                      <svg viewBox="0 0 16 16" width="14" height="14">
-                        <path d="m3.5 8.2 2.8 2.8 6.2-6.2" />
-                      </svg>
-                    {:else if task.dotStatus === 'cancelled'}
-                      <svg viewBox="0 0 16 16" width="14" height="14">
-                        <path d="m4.5 4.5 7 7m0-7-7 7" />
-                      </svg>
-                    {:else if task.dotStatus === 'failed'}
-                      <svg viewBox="0 0 16 16" width="14" height="14">
-                        <path d="M8 3.2 13 12H3L8 3.2Z" />
-                        <path d="M8 6.3v2.8m0 1.6v.1" />
-                      </svg>
-                    {:else}
-                      <svg viewBox="0 0 16 16" width="14" height="14">
-                        <circle cx="8" cy="8" r="2" />
-                      </svg>
-                    {/if}
-                  </span>
-                </Button>
-              </li>
-            {/each}
-          </ul>
+          {#if activeTasks.length > 0}
+            <section
+              class="chat-activity__group chat-activity__group--active"
+              aria-labelledby="chat-activity-active-title"
+            >
+              <h3
+                id="chat-activity-active-title"
+                class="chat-activity__group-title"
+              >
+                {t('chat.activity.active', 'Active')}
+              </h3>
+              <ul class="chat-activity__task-list">
+                {#each activeTasks as task (task.id)}
+                  <li>{@render taskRow(task)}</li>
+                {/each}
+              </ul>
+            </section>
+          {/if}
+
+          {#if finishedTasks.length > 0}
+            <section
+              class="chat-activity__group chat-activity__group--finished"
+              aria-labelledby="chat-activity-finished-title"
+            >
+              <h3
+                id="chat-activity-finished-title"
+                class="chat-activity__group-title"
+              >
+                {t('chat.activity.finished', 'Finished')}
+              </h3>
+              <ul class="chat-activity__task-list">
+                {#each finishedTasks as task (task.id)}
+                  <li>{@render taskRow(task)}</li>
+                {/each}
+              </ul>
+            </section>
+          {/if}
         {/if}
       </div>
     </aside>
@@ -314,6 +347,23 @@
     margin: 0;
     padding: 0;
     list-style: none;
+  }
+
+  .chat-activity__group + .chat-activity__group {
+    margin-top: 5px;
+    padding-top: 5px;
+    border-top: 1px solid var(--border);
+  }
+
+  .chat-activity__group-title {
+    margin: 0;
+    padding: 5px 8px 4px;
+    color: var(--text-lo);
+    font-family: var(--font-mono);
+    font-size: var(--fs-mono-xs);
+    font-weight: 500;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
   }
 
   .chat-activity__task-list li + li {
