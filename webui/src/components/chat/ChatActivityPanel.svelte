@@ -1,5 +1,6 @@
 <script>
   import { onDestroy, onMount } from 'svelte';
+  import { SvelteSet } from 'svelte/reactivity';
 
   import { backgroundTasks } from '$lib/chatTimelinePresentation.js';
   import { t } from '$lib/i18n.js';
@@ -11,9 +12,12 @@
     subAgentStatuses = {},
     backgroundBashStatuses = {},
     onNavigateToSubAgent = () => {},
+    onCancelSubAgent = () => {},
+    onCancelBackgroundProcess = () => {},
   } = $props();
 
   let open = $state(false);
+  const cancellingTaskIds = new SvelteSet();
   let tasks = $derived(
     backgroundTasks(timelineItems, subAgentStatuses, backgroundBashStatuses),
   );
@@ -80,6 +84,41 @@
     });
   };
 
+  const cancelTaskLabel = (task) => {
+    if (task.kind === 'bash') {
+      return t(
+        'chat.activity.cancelBashAria',
+        'Cancel Bash background process · {command}',
+        { command: task.command },
+      );
+    }
+    return t(
+      'chat.activity.cancelSubAgentAria',
+      'Cancel {agent} background task',
+      { agent: task.agentId },
+    );
+  };
+
+  const isTaskCancelling = (task) => cancellingTaskIds.has(task.id);
+
+  const handleCancelTask = async (task) => {
+    if (isTaskCancelling(task)) {
+      return;
+    }
+    cancellingTaskIds.add(task.id);
+    try {
+      if (task.kind === 'bash') {
+        await onCancelBackgroundProcess({
+          processSessionId: task.processSessionId,
+        });
+      } else {
+        await onCancelSubAgent({ tool: task.tool });
+      }
+    } finally {
+      cancellingTaskIds.delete(task.id);
+    }
+  };
+
   let railLabel = $derived(
     open
       ? t('chat.activity.close', 'Close activity panel')
@@ -134,6 +173,25 @@
   </span>
 {/snippet}
 
+{#snippet cancelButton(task)}
+  {#if task.dotStatus === 'running'}
+    <Button
+      variant="danger"
+      icon
+      class="chat-activity__cancel"
+      ariaLabel={cancelTaskLabel(task)}
+      tooltip={cancelTaskLabel(task)}
+      loading={isTaskCancelling(task)}
+      data-cancel-kind={task.kind}
+      onClick={() => handleCancelTask(task)}
+    >
+      <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
+        <path d="m4.5 4.5 7 7m0-7-7 7" />
+      </svg>
+    </Button>
+  {/if}
+{/snippet}
+
 {#snippet taskRow(task)}
   {#if task.kind === 'bash'}
     <div
@@ -143,18 +201,22 @@
       <span class="chat-activity__bash-mark" aria-hidden="true">$</span>
       <span class="chat-activity__task-name">{task.command}</span>
       {@render statusIcon(task)}
+      {@render cancelButton(task)}
     </div>
   {:else}
-    <Button
-      variant="tertiary"
-      class="chat-activity__task-row"
-      ariaLabel={taskLabel(task)}
-      disabled={!task.target}
-      onClick={() => task.target && onNavigateToSubAgent(task.target)}
-    >
-      <span class="chat-activity__task-name">{task.agentId}</span>
+    <div class="chat-activity__task-row">
+      <Button
+        variant="tertiary"
+        class="chat-activity__task-link"
+        ariaLabel={taskLabel(task)}
+        disabled={!task.target}
+        onClick={() => task.target && onNavigateToSubAgent(task.target)}
+      >
+        <span class="chat-activity__task-name">{task.agentId}</span>
+      </Button>
       {@render statusIcon(task)}
-    </Button>
+      {@render cancelButton(task)}
+    </div>
   {/if}
 {/snippet}
 
@@ -392,27 +454,35 @@
     border-top: 1px solid var(--border);
   }
 
-  .chat-activity__task-row--bash,
-  :global(.chat-activity__task-row.btn-tertiary) {
+  .chat-activity__task-row {
     display: flex;
     width: 100%;
     min-height: 34px;
     align-items: center;
-    justify-content: space-between;
-    gap: 8px;
+    gap: 6px;
     padding: 5px 8px;
-    border: 0;
-    border-radius: 0;
     color: var(--text-med);
     text-align: left;
   }
 
-  :global(.chat-activity__task-row.btn-tertiary:hover) {
-    color: var(--text-hi);
-    background: var(--surface-2);
+  :global(.chat-activity__task-link.btn-tertiary) {
+    min-width: 0;
+    min-height: 24px;
+    flex: 1;
+    justify-content: flex-start;
+    padding: 0;
+    border: 0;
+    border-radius: var(--r-sm);
+    color: var(--text-med);
+    text-align: left;
   }
 
-  :global(.chat-activity__task-row.btn-tertiary:focus-visible) {
+  :global(.chat-activity__task-link.btn-tertiary:hover) {
+    color: var(--text-hi);
+    background: transparent;
+  }
+
+  :global(.chat-activity__task-link.btn-tertiary:focus-visible) {
     box-shadow: inset 0 0 0 1px var(--accent);
   }
 
@@ -437,6 +507,29 @@
     font-weight: 500;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+
+  :global(.chat-activity__cancel.btn-danger.btn-icon) {
+    width: 24px;
+    min-width: 24px;
+    height: 24px;
+    min-height: 24px;
+    flex: 0 0 24px;
+    border-color: transparent;
+    background: transparent;
+  }
+
+  :global(.chat-activity__cancel.btn-danger.btn-icon:hover),
+  :global(.chat-activity__cancel.btn-danger.btn-icon:focus-visible) {
+    border-color: rgba(252, 129, 129, 0.35);
+    background: rgba(252, 129, 129, 0.1);
+  }
+
+  :global(.chat-activity__cancel svg) {
+    fill: none;
+    stroke: currentColor;
+    stroke-linecap: round;
+    stroke-width: 1.7;
   }
 
   .chat-activity__status {

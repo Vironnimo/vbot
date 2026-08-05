@@ -551,7 +551,25 @@ async def test_kill_stops_process(manager: ProcessManager) -> None:
     result = await manager.poll(session_id, AGENT_A, timeout_ms=5000)
 
     assert result["status"] == "killed"
-    assert manager.get_session(session_id, AGENT_A).status == "killed"
+    session = manager.get_session(session_id, AGENT_A)
+    assert session.status == "killed"
+    assert session.cancelled_by_user is False
+
+
+@pytest.mark.asyncio
+async def test_cancel_for_user_retains_explicit_user_origin(manager: ProcessManager) -> None:
+    session_id = await manager.spawn(
+        SCOPE_A,
+        AGENT_A,
+        [sys.executable, "-c", "import time; time.sleep(30)"],
+        env=None,
+        cwd=None,
+    )
+
+    session = await manager.cancel_for_user(session_id, AGENT_A)
+
+    assert session.status == "killed"
+    assert session.cancelled_by_user is True
 
 
 @pytest.mark.asyncio

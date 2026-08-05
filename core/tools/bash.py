@@ -203,11 +203,6 @@ _LOGGER = get_logger("tools.bash")
 
 _cached_shell_env: dict[str, str] | None = None
 
-# Process session ids killed by the per-tool-call user-cancel callback. The
-# completion watcher reads this set to distinguish user-killed sessions from
-# natural completion and tool-enforced timeouts.
-_user_cancelled_session_ids: set[str] = set()
-
 
 def project_bash_tool_definitions(
     definitions: list[JsonObject],
@@ -520,7 +515,7 @@ async def _watch_background_process(
     # the same output cap and full-log pointer apply here.
     output = str(_shape_output_fields(session, output)["output"])
 
-    user_cancelled = process_session_id in _user_cancelled_session_ids
+    user_cancelled = session.cancelled_by_user
 
     if user_cancelled:
         body = (
@@ -531,7 +526,6 @@ async def _watch_background_process(
             "Output:\n"
             f"{output}"
         )
-        _user_cancelled_session_ids.discard(process_session_id)
     else:
         body = (
             f"{BASH_COMPLETION_STATUS_PREFIX}{session.status}\n"
@@ -617,9 +611,11 @@ def _register_user_cancel_callback(
     """
 
     def cancel_callback() -> None:
-        if context.was_cancelled_by_user():
-            _user_cancelled_session_ids.add(session_id)
-        kill_coro = process_manager.kill(session_id, context.agent_id)
+        kill_coro = (
+            process_manager.cancel_for_user(session_id, context.agent_id)
+            if context.was_cancelled_by_user()
+            else process_manager.kill(session_id, context.agent_id)
+        )
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:

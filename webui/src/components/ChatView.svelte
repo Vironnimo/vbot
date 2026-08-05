@@ -1615,6 +1615,15 @@
     });
   };
 
+  const handleCancelBackgroundProcess = async ({ processSessionId } = {}) => {
+    await chatController.cancelBackgroundProcess({
+      sessionState: activeSessionState,
+      agentId: activeSessionState?.agentId ?? activeAgent?.id ?? '',
+      processSessionId,
+      projectId: displayedSessionProjectId(),
+    });
+  };
+
   // Exposed for focused controller-boundary tests. Normal rows are reconciled
   // in one batch from the displayed Timeline below.
   export async function verifySubAgentStatus(
@@ -2036,6 +2045,8 @@
         subAgentStatuses={chatState.subAgentStatuses}
         backgroundBashStatuses={activeSessionState?.backgroundBashStatuses}
         onNavigateToSubAgent={handleNavigateToSubAgentLink}
+        onCancelSubAgent={handleCancelSubAgent}
+        onCancelBackgroundProcess={handleCancelBackgroundProcess}
       />
     </div>
   {/if}
