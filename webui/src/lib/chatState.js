@@ -3,6 +3,7 @@ import {
   RUN_EVENT_REASONING_DELTA,
   RUN_EVENT_STREAM_ATTEMPT_RESTARTED,
   RUN_EVENT_TOOL_CALL_DELTA,
+  cancelProcess as requestCancelProcess,
   cancelRun as requestCancelRun,
   cancelToolCall as requestCancelToolCall,
   createSession as requestCreateSession,
@@ -106,6 +107,7 @@ export function createChatState() {
 
 function defaultChatOperations() {
   return {
+    cancelProcess: (...args) => requestCancelProcess(...args),
     cancelRun: (...args) => requestCancelRun(...args),
     cancelToolCall: (...args) => requestCancelToolCall(...args),
     createSession: (...args) => requestCreateSession(...args),
@@ -556,6 +558,39 @@ export function createChatController({
       return true;
     } catch (error) {
       sessionState.actionError = `${translate('chat.cancelError', 'Run could not be cancelled.')} ${errorMessage(error)}`;
+      return false;
+    }
+  }
+
+  async function cancelBackgroundProcess({
+    sessionState,
+    agentId = '',
+    processSessionId = '',
+    projectId = '',
+  } = {}) {
+    const normalizedProcessSessionId = trimmedString(processSessionId);
+    const targetAgentId = qualifiedAgentAddress(agentId, projectId);
+    if (!sessionState || !normalizedProcessSessionId || !targetAgentId) {
+      return false;
+    }
+
+    sessionState.actionError = '';
+    try {
+      const result = await operations.cancelProcess({
+        agentId: targetAgentId,
+        processSessionId: normalizedProcessSessionId,
+      });
+      const status = trimmedString(result?.status) || 'cancelled';
+      sessionState.backgroundBashStatuses = {
+        ...sessionState.backgroundBashStatuses,
+        [normalizedProcessSessionId]: status,
+      };
+      return true;
+    } catch (error) {
+      sessionState.actionError = `${translate(
+        'chat.cancelBackgroundTaskError',
+        'Background task could not be cancelled.',
+      )} ${errorMessage(error)}`;
       return false;
     }
   }
@@ -1133,6 +1168,7 @@ export function createChatController({
     applyQueueInvalidation,
     applySubAgentStatusUpdates,
     cancelActiveRun,
+    cancelBackgroundProcess,
     cancelSubAgent,
     cancelTool,
     createSession: (agentAddress) => operations.createSession(agentAddress),

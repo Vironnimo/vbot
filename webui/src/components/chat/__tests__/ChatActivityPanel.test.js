@@ -86,8 +86,10 @@ describe('ChatActivityPanel', () => {
     document.body.innerHTML = '';
   });
 
-  it('keeps a narrow rail collapsed and opens the current Session tasks', () => {
+  it('opens current Session tasks with cancel controls only for active work', async () => {
     const navigate = vi.fn();
+    const cancelSubAgent = vi.fn();
+    const cancelBackgroundProcess = vi.fn();
     const running = subAgentTask({
       id: 'running',
       agentId: 'builder',
@@ -148,6 +150,8 @@ describe('ChatActivityPanel', () => {
         ],
         backgroundBashStatuses: { 'process-bash-failed': 'failed' },
         onNavigateToSubAgent: navigate,
+        onCancelSubAgent: cancelSubAgent,
+        onCancelBackgroundProcess: cancelBackgroundProcess,
       },
     });
     flushSync();
@@ -183,7 +187,10 @@ describe('ChatActivityPanel', () => {
     const runningSubAgentRow = rows.find(
       (row) => row.textContent.trim() === 'builder',
     );
-    expect(runningSubAgentRow.getAttribute('aria-label')).toBe(
+    const runningSubAgentLink = runningSubAgentRow.querySelector(
+      '.chat-activity__task-link',
+    );
+    expect(runningSubAgentLink.getAttribute('aria-label')).toBe(
       'Open builder Session · Working',
     );
     expect(
@@ -192,25 +199,31 @@ describe('ChatActivityPanel', () => {
     const completedRow = rows.find(
       (row) => row.textContent.trim() === 'reviewer',
     );
-    expect(completedRow.getAttribute('aria-label')).toBe(
-      'Open reviewer Session · Completed',
-    );
+    expect(
+      completedRow
+        .querySelector('.chat-activity__task-link')
+        .getAttribute('aria-label'),
+    ).toBe('Open reviewer Session · Completed');
     expect(
       completedRow.querySelector('[data-status="success"]'),
     ).not.toBeNull();
     const cancelledRow = rows.find(
       (row) => row.textContent.trim() === 'writer',
     );
-    expect(cancelledRow.getAttribute('aria-label')).toBe(
-      'Open writer Session · Cancelled',
-    );
+    expect(
+      cancelledRow
+        .querySelector('.chat-activity__task-link')
+        .getAttribute('aria-label'),
+    ).toBe('Open writer Session · Cancelled');
     expect(
       cancelledRow.querySelector('[data-status="cancelled"]'),
     ).not.toBeNull();
     const failedRow = rows.find((row) => row.textContent.trim() === 'tester');
-    expect(failedRow.getAttribute('aria-label')).toBe(
-      'Open tester Session · Failed',
-    );
+    expect(
+      failedRow
+        .querySelector('.chat-activity__task-link')
+        .getAttribute('aria-label'),
+    ).toBe('Open tester Session · Failed');
     expect(failedRow.querySelector('[data-status="failed"]')).not.toBeNull();
     const runningBashRow = rows.find((row) =>
       row.textContent.includes('npm run dev'),
@@ -233,6 +246,19 @@ describe('ChatActivityPanel', () => {
     expect(
       failedBashRow.querySelector('[data-status="failed"]'),
     ).not.toBeNull();
+    expect(document.querySelectorAll('.chat-activity__cancel')).toHaveLength(2);
+    expect(
+      runningSubAgentRow
+        .querySelector('[data-cancel-kind="subagent"]')
+        .getAttribute('aria-label'),
+    ).toBe('Cancel builder background task');
+    expect(
+      runningBashRow
+        .querySelector('[data-cancel-kind="bash"]')
+        .getAttribute('aria-label'),
+    ).toBe('Cancel Bash background process · npm run dev');
+    expect(cancelledRow.querySelector('.chat-activity__cancel')).toBeNull();
+    expect(failedBashRow.querySelector('.chat-activity__cancel')).toBeNull();
     expect(document.body.textContent).not.toContain('Implement the sidebar');
     expect(document.body.textContent).not.toContain('View session');
     expect(document.body.textContent).not.toContain('Run foreground checks');
@@ -240,11 +266,20 @@ describe('ChatActivityPanel', () => {
     runningBashRow.click();
     expect(navigate).not.toHaveBeenCalled();
 
-    runningSubAgentRow.click();
+    runningSubAgentLink.click();
     expect(navigate).toHaveBeenCalledWith({
       agentId: 'builder',
       sessionId: 'session-running',
     });
+
+    runningSubAgentRow.querySelector('[data-cancel-kind="subagent"]').click();
+    runningBashRow.querySelector('[data-cancel-kind="bash"]').click();
+    await Promise.resolve();
+    expect(cancelSubAgent).toHaveBeenCalledWith({ tool: running });
+    expect(cancelBackgroundProcess).toHaveBeenCalledWith({
+      processSessionId: 'process-bash-running',
+    });
+    expect(navigate).toHaveBeenCalledTimes(1);
 
     document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
     flushSync();

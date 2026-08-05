@@ -1260,6 +1260,27 @@ export function cancelToolCall(
   return rpc('chat.cancel_tool_call', params, options);
 }
 
+export function cancelProcess(
+  { agentId, processSessionId } = {},
+  options = {},
+) {
+  requireNonEmptyString(
+    agentId,
+    'Agent id must be a non-empty string',
+    'chat.cancel_process',
+  );
+  requireNonEmptyString(
+    processSessionId,
+    'Process session id must be a non-empty string',
+    'chat.cancel_process',
+  );
+  return rpc(
+    'chat.cancel_process',
+    { agent_id: agentId, process_session_id: processSessionId },
+    options,
+  );
+}
+
 export function removeFromQueue(agentId, sessionId, itemId, options = {}) {
   requireNonEmptyString(
     agentId,

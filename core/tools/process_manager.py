@@ -256,6 +256,7 @@ class ProcessSession:
     wait_task: asyncio.Task[None] | None = field(default=None, repr=False)
     completion_notification_task: asyncio.Task[None] | None = field(default=None, repr=False)
     completion_acknowledged: bool = False
+    cancelled_by_user: bool = False
 
 
 class ProcessManager:
@@ -540,6 +541,12 @@ class ProcessManager:
         session = self._session_for_agent(session_id, agent_id)
         await self._kill_session(session)
 
+    async def cancel_for_user(self, session_id: str, agent_id: str) -> ProcessSession:
+        """Terminate one running session and retain its explicit user origin."""
+        session = self._session_for_agent(session_id, agent_id)
+        await self._kill_session(session, cancelled_by_user=True)
+        return session
+
     def mark_backgrounded(self, session_id: str, agent_id: str) -> None:
         """Stop accumulating foreground-only stdout/stderr line buffers."""
         session = self._session_for_agent(session_id, agent_id)
@@ -798,18 +805,29 @@ class ProcessManager:
             if chunk.end_offset > session.buffer_start_offset
         ]
 
-    async def _kill_session(self, session: ProcessSession) -> None:
+    async def _kill_session(
+        self,
+        session: ProcessSession,
+        *,
+        cancelled_by_user: bool = False,
+    ) -> None:
         if session.status != "running":
             return
 
-        self._kill_session_now(session)
+        self._kill_session_now(session, cancelled_by_user=cancelled_by_user)
         if session.wait_task is not None:
             await asyncio.gather(session.wait_task, return_exceptions=True)
 
-    def _kill_session_now(self, session: ProcessSession) -> None:
+    def _kill_session_now(
+        self,
+        session: ProcessSession,
+        *,
+        cancelled_by_user: bool = False,
+    ) -> None:
         if session.status != "running":
             return
 
+        session.cancelled_by_user = cancelled_by_user
         session.status = "killed"
         self._close_stdin_now(session)
         try:

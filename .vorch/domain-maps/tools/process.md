@@ -25,6 +25,7 @@ Lets an Agent inspect and control only its own background Process Sessions creat
 - `activate_process_containment()` establishes the server-process boundary once; `guarded_process_launch(argv)` returns the exact ordinary argv when no POSIX boundary is active and otherwise returns the private guardian argv plus its inherited lifetime descriptor. `ProcessManager` and Terminal Backend share this seam so they cannot acquire different crash behavior.
 - `ProcessManager.poll(...)` and `ProcessManager.log(...)` remain internal Bash lifecycle/output primitives and are not public Process actions.
 - `ProcessManager.snapshot(session_id, agent_id)` provides the public non-consuming status view; `ProcessManager.send_input(session_id, agent_id, text, *, newline, eof)` owns stdin delivery; `ProcessManager.kill(session_id, agent_id)` owns termination.
+- `ProcessManager.cancel_for_user(session_id, agent_id) -> ProcessSession` terminates a running Process Session through the same kill machinery while retaining `cancelled_by_user: true` on the in-memory record; handed-off Bash completion delivery uses that fact for explicit user-abort wording. The Chat Activity surface exposes this through `chat.cancel_process` with an addressed Agent and exact Process Session id; it does not acknowledge or suppress the automatic completion notice.
 - `ProcessManager.list_sessions(agent_id) -> list[ProcessSession]`
 - `ProcessManager.cancel_scope(scope_key) -> None`
 

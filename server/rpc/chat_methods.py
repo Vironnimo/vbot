@@ -476,6 +476,26 @@ async def _cancel_tool_call_chat(state: Any, params: JsonObject) -> JsonObject:
     return {"ok": True}
 
 
+async def _cancel_process_chat(state: Any, params: JsonObject) -> JsonObject:
+    _reject_unsupported(
+        params,
+        {"agent_id", "process_session_id"},
+        "chat.cancel_process",
+    )
+
+    agent_id, _project_id = _required_agent_address(params, "agent_id")
+    process_session_id = _required_string(params, "process_session_id")
+    try:
+        session = await state.runtime.process_manager.cancel_for_user(
+            process_session_id,
+            agent_id,
+        )
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
+    status = "cancelled" if session.cancelled_by_user else session.status
+    return {"process_session_id": process_session_id, "status": status}
+
+
 def _chat_queue_list(state: Any, params: JsonObject) -> JsonObject:
     _reject_unsupported(params, {"agent_id", "session_id"}, "chat.queue_list")
 
@@ -627,6 +647,7 @@ def method_handlers() -> dict[str, RpcMethodHandler]:
         "chat.stream": _stream_chat,
         "chat.cancel": _cancel_chat,
         "chat.cancel_tool_call": _cancel_tool_call_chat,
+        "chat.cancel_process": _cancel_process_chat,
         "chat.queue_list": _chat_queue_list,
         "chat.queue_remove": _chat_queue_remove,
         "chat.queue_update": _chat_queue_update,

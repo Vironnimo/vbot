@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -240,6 +241,42 @@ class TestChatCancelReason:
         assert response["error"]["code"] == RPC_ERROR_INVALID_REQUEST
         assert "unsupported chat.cancel fields" in response["error"]["message"]
         assert "tool_call_id" in response["error"]["message"]
+
+
+class TestChatCancelProcess:
+    """Tests for the Chat Activity background Process cancel RPC."""
+
+    @pytest.mark.asyncio
+    async def test_cancels_process_as_user_for_addressed_agent(self, tmp_path: Path) -> None:
+        state = make_state(tmp_path, StubAdapter())
+        calls: list[tuple[str, str]] = []
+
+        class RecordingProcessManager:
+            async def cancel_for_user(self, session_id: str, agent_id: str) -> Any:
+                calls.append((session_id, agent_id))
+                return SimpleNamespace(status="killed", cancelled_by_user=True)
+
+        state.runtime.process_manager = RecordingProcessManager()
+
+        response = await dispatch_rpc(
+            state,
+            {
+                "method": "chat.cancel_process",
+                "params": {
+                    "agent_id": "builder@project-one",
+                    "process_session_id": "process-one",
+                },
+            },
+        )
+
+        assert response == {
+            "ok": True,
+            "result": {
+                "process_session_id": "process-one",
+                "status": "cancelled",
+            },
+        }
+        assert calls == [("process-one", "builder")]
 
 
 # ---------------------------------------------------------------------------

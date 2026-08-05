@@ -407,6 +407,38 @@ async def test_subagent_tool_does_not_propagate_parent_cancellation_for_backgrou
     assert tracker.spawn_count((context.agent_id, context.session_id, context.run_id)) == 1
 
 
+async def test_child_session_user_cancel_notifies_parent_session(tmp_path: Path) -> None:
+    manager = FakeRunManager()
+    runtime = make_runtime(tmp_path, manager)
+    trigger_service = RecordingTriggerService()
+    tracker = SubAgentBatchTracker(trigger_service)
+    context = make_context()
+
+    spawned = await _handle_subagent(
+        context,
+        {"content": "do work", "agent_id": "worker"},
+        runtime=runtime,
+        batch_tracker=tracker,
+    )
+    sub_run = manager.started[0][3]
+
+    # This is the same Run-level signal emitted when the user opens the Child
+    # Session and presses its own composer Cancel control.
+    sub_run.request_cancel(reason="user")
+    sub_run.mark_cancelled()
+    for _ in range(BACKGROUND_TASK_SETTLE_TICKS):
+        await asyncio.sleep(0)
+
+    assert spawned["data"]["delivery"] == "automatic"
+    assert len(trigger_service.calls) == 1
+    parent_agent_id, completion_body, parent_session_id, automatic = trigger_service.calls[0]
+    assert parent_agent_id == context.agent_id
+    assert parent_session_id == context.session_id
+    assert automatic is True
+    assert "cancelled by user" in completion_body
+    assert "Cancelled by the user" in completion_body
+
+
 async def test_subagent_tool_foreground_waits_for_full_result(tmp_path: Path) -> None:
     # Arrange
     assistant = ChatMessage.assistant(

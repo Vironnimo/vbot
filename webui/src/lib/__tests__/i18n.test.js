@@ -64,6 +64,9 @@ describe('i18n t()', () => {
       'chat.cancelToolCallAria',
       'chat.cancelSubAgent',
       'chat.cancelSubAgentAria',
+      'chat.activity.cancelSubAgentAria',
+      'chat.activity.cancelBashAria',
+      'chat.cancelBackgroundTaskError',
     ];
 
     for (const key of requiredKeys) {

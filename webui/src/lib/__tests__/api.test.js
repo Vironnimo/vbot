@@ -18,6 +18,7 @@ import {
   RUN_EVENT_TYPES,
   WEBSOCKET_ERROR_RESPONSE,
   addProject,
+  cancelProcess,
   cancelRun,
   cancelToolCall,
   clearOverride,
@@ -883,6 +884,50 @@ describe('cancelToolCall()', () => {
       expect.objectContaining({ code: RPC_ERROR_INVALID_CLIENT_REQUEST }),
     );
     expect(() => cancelToolCall({ runId: 'run-1' })).toThrow(
+      expect.objectContaining({ code: RPC_ERROR_INVALID_CLIENT_REQUEST }),
+    );
+  });
+});
+
+describe('cancelProcess()', () => {
+  it('cancels an owned background Process through chat.cancel_process', async () => {
+    const fetchFunction = vi.fn().mockResolvedValue(
+      jsonResponse({
+        ok: true,
+        result: {
+          process_session_id: 'process-1',
+          status: 'cancelled',
+        },
+      }),
+    );
+
+    await expect(
+      cancelProcess(
+        {
+          agentId: 'builder@project-one',
+          processSessionId: 'process-1',
+        },
+        { fetch: fetchFunction },
+      ),
+    ).resolves.toEqual({
+      process_session_id: 'process-1',
+      status: 'cancelled',
+    });
+
+    expect(JSON.parse(fetchFunction.mock.calls[0][1].body)).toEqual({
+      method: 'chat.cancel_process',
+      params: {
+        agent_id: 'builder@project-one',
+        process_session_id: 'process-1',
+      },
+    });
+  });
+
+  it('rejects a missing Agent or Process Session before sending', () => {
+    expect(() => cancelProcess({ processSessionId: 'process-1' })).toThrow(
+      expect.objectContaining({ code: RPC_ERROR_INVALID_CLIENT_REQUEST }),
+    );
+    expect(() => cancelProcess({ agentId: 'builder' })).toThrow(
       expect.objectContaining({ code: RPC_ERROR_INVALID_CLIENT_REQUEST }),
     );
   });
