@@ -118,11 +118,13 @@
     aria-label={t('navigation.primary', 'Primary navigation')}
   >
     <div class="app-shell__brand" aria-label={t('app.title', 'vBot')}>
-      <span class="app-shell__brand-mark" aria-hidden="true">
-        <svg viewBox="0 0 14 14" style="width: 14px; height: 14px"
-          ><path d="M7 1L13 4v6l-6 3L1 10V4l6-3z" /></svg
-        >
-      </span>
+      <img
+        class="app-shell__brand-mark"
+        src="/brand/vbot-mark-transparent.png"
+        alt=""
+        width="30"
+        height="30"
+      />
       <div>
         <h1>{t('app.title', 'vBot')}</h1>
       </div>
