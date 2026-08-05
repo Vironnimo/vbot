@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
-import { afterEach, beforeEach, describe, it, vi } from 'vitest';
-import { flushSync, mount, unmount } from 'svelte';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { flushSync, mount, tick, unmount } from 'svelte';
 
 import { init } from '../../lib/i18n.js';
 
@@ -230,6 +230,39 @@ describe('ChatTimeline', () => {
     await waitForCondition(() => currentScrollTop() === 2400);
   });
 
+  it('keeps the active restore when a stale session resize arrives during a rapid switch', async () => {
+    const { parentSession, childSession } = scrollMemorySessions();
+    const props = reactiveProps({
+      sessionState: parentSession,
+      agentName: 'Alpha',
+    });
+    mountedComponent = mount(ChatTimeline, {
+      target: document.body,
+      props,
+    });
+    flushSync();
+
+    const container = document.querySelector('.messages');
+    const { currentScrollTop, setScrollTop } = mockScrollGeometry(container);
+    await waitForCondition(() => currentScrollTop() === 2000);
+
+    props.sessionState = childSession;
+    flushSync();
+    await waitForCondition(() => currentScrollTop() === 2000);
+    const staleChildResize = resizeCallbacks.at(-1);
+
+    container.dispatchEvent(new WheelEvent('wheel', { deltaY: -120 }));
+    setScrollTop(400);
+    container.dispatchEvent(new Event('scroll'));
+
+    props.sessionState = parentSession;
+    flushSync();
+    await tick();
+    staleChildResize([]);
+
+    await waitForCondition(() => currentScrollTop() === 2000);
+  });
+
   it('releases follow mode before upward wheel scrolling can race content growth', async () => {
     const { parentSession } = scrollMemorySessions();
     mountedComponent = mount(ChatTimeline, {
@@ -302,6 +335,43 @@ describe('ChatTimeline', () => {
     notifyContentResize();
 
     await waitForCondition(() => currentScrollTop() === 2300);
+  });
+
+  it('offers a floating jump control while reading and resumes following after activation', async () => {
+    const { parentSession } = scrollMemorySessions();
+    mountedComponent = mount(ChatTimeline, {
+      target: document.body,
+      props: { sessionState: parentSession, agentName: 'Alpha' },
+    });
+    flushSync();
+
+    const container = document.querySelector('.messages');
+    const { currentScrollTop, setScrollHeight, setScrollTop } =
+      mockScrollGeometry(container);
+    await waitForCondition(() => currentScrollTop() === 2000);
+    expect(document.querySelector('[aria-label="Jump to latest"]')).toBeNull();
+
+    container.dispatchEvent(new WheelEvent('wheel', { deltaY: -120 }));
+    setScrollTop(600);
+    container.dispatchEvent(new Event('scroll'));
+    flushSync();
+
+    const jumpButton = document.querySelector('[aria-label="Jump to latest"]');
+    expect(jumpButton).toBeTruthy();
+    expect(jumpButton.classList.contains('chat-timeline__jump-latest')).toBe(
+      true,
+    );
+
+    jumpButton.click();
+    await waitForCondition(
+      () =>
+        currentScrollTop() === 2000 &&
+        document.querySelector('[aria-label="Jump to latest"]') === null,
+    );
+
+    setScrollHeight(2400);
+    notifyContentResize();
+    await waitForCondition(() => currentScrollTop() === 2400);
   });
 
   it('starts every explicit Sub-Agent link visit at the bottom and follows new output', async () => {
