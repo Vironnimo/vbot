@@ -128,6 +128,20 @@ describe('ChatActivityPanel', () => {
     );
     const rows = [...document.querySelectorAll('.chat-activity__task-row')];
     expect(rows).toHaveLength(4);
+    const activeGroup = document.querySelector('.chat-activity__group--active');
+    const finishedGroup = document.querySelector(
+      '.chat-activity__group--finished',
+    );
+    expect(activeGroup.querySelector('h3').textContent.trim()).toBe('Active');
+    expect(
+      activeGroup.querySelectorAll('.chat-activity__task-row'),
+    ).toHaveLength(1);
+    expect(finishedGroup.querySelector('h3').textContent.trim()).toBe(
+      'Finished',
+    );
+    expect(
+      finishedGroup.querySelectorAll('.chat-activity__task-row'),
+    ).toHaveLength(3);
     expect(rows[0].textContent.trim()).toBe('builder');
     expect(rows[0].getAttribute('aria-label')).toBe(
       'Open builder Session · Working',
@@ -185,5 +199,38 @@ describe('ChatActivityPanel', () => {
       document.querySelector('.chat-activity__empty').textContent.trim(),
     ).toBe('No background tasks');
     expect(document.body.textContent).toContain('No background tasks');
+  });
+
+  it('omits an empty Active group when every task is finished', () => {
+    mountedComponent = mount(ChatActivityPanel, {
+      target: document.body,
+      props: {
+        timelineItems: [
+          {
+            id: 'assistant-run',
+            type: 'assistant_run',
+            items: [
+              subAgentTask({
+                id: 'completed',
+                agentId: 'reviewer',
+                content: 'Review the result',
+                status: 'completed',
+              }),
+            ],
+          },
+        ],
+      },
+    });
+    flushSync();
+
+    document.querySelector('.chat-activity__rail').click();
+    flushSync();
+
+    expect(document.querySelector('.chat-activity__group--active')).toBeNull();
+    expect(
+      document
+        .querySelector('.chat-activity__group--finished h3')
+        .textContent.trim(),
+    ).toBe('Finished');
   });
 });
