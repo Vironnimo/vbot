@@ -214,6 +214,12 @@ The type system is split between **IBM Plex Sans** for all UI prose (navigation,
 
 Interaction is calm. Hover states are warm tint shifts, not bright flashes. The accent appears only where a human makes a decision: the active nav item, the send button, the accent border on user messages. It never decorates.
 
+## Brand mark
+
+The canonical vBot mark is the asymmetric metallic `V_` selected as refinement 04. `webui/public/brand/vbot-mark-transparent.png` is the transparent master used beside the vBot name in AppShell; preserve its proportions, colors, flat baseline, angled underscore start, and transparent canvas. Never redraw it with text, recolor it to the UI accent, stretch it, or place it on the retired solid-orange placeholder tile.
+
+`webui/public/brand/vbot-icon.png` is the canonical square icon treatment: the same unmodified mark centered on a dark rounded tile. Browser and OS-specific derivatives are `webui/public/favicon.ico`, `webui/public/apple-touch-icon.png`, and `desktop/icon.png`. Use the transparent mark when the surrounding surface already provides contrast and the square treatment when the asset must stand alone, including browser tabs and native app chrome.
+
 ## Colors
 
 The palette is organized around five layers of warm dark surface and three semantic status colors.

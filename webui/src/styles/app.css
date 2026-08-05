@@ -239,21 +239,12 @@ svg {
   border-bottom: 1px solid var(--border);
 }
 
-.app-shell__brand-mark,
-.logo-mark {
-  display: flex;
-  width: 28px;
-  height: 28px;
+.app-shell__brand-mark {
+  display: block;
+  width: 30px;
+  height: 30px;
   flex-shrink: 0;
-  align-items: center;
-  justify-content: center;
-  border-radius: var(--r-sm);
-  color: #fff;
-  background: var(--accent);
-  font-family: var(--font-mono);
-  font-size: 13px;
-  font-weight: 500;
-  line-height: 1;
+  object-fit: contain;
 }
 
 .app-shell__eyebrow,
