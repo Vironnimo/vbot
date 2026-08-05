@@ -8,8 +8,8 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 from core.skills.requirements import environment_requirement_names
+from core.skills.skill_validator import split_skill_document
 from core.skills.skills import (
-    FRONT_MATTER_DELIMITER,
     RESOURCE_DIRECTORIES,
     SKILL_FILENAME,
     SkillRegistry,
@@ -403,15 +403,8 @@ def _unavailable_skill_message(
 
 def _read_skill_body(skill_file: Path) -> str:
     content = skill_file.read_text(encoding="utf-8")
-    lines = content.splitlines()
-    if not lines or lines[0].strip() != FRONT_MATTER_DELIMITER:
-        raise ValueError(f"Skill metadata missing front matter: {skill_file}")
-
-    for index, line in enumerate(lines[1:], start=1):
-        if line.strip() == FRONT_MATTER_DELIMITER:
-            return "\n".join(lines[index + 1 :]).strip()
-
-    raise ValueError(f"Skill metadata front matter is not closed: {skill_file}")
+    _, body, _ = split_skill_document(content)
+    return body.strip()
 
 
 def _normalized_skill_file_path(file_path: str) -> str:

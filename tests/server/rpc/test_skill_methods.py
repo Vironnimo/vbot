@@ -157,19 +157,21 @@ def test_unknown_agent_scope_is_rejected(tmp_path: Path) -> None:
     assert not state.runtime.agent_skills_dir("ghost").exists()
 
 
-def test_bad_content_returns_authoring_diagnostics(tmp_path: Path) -> None:
+def test_missing_description_uses_body_and_reloads(tmp_path: Path) -> None:
     state = _state(tmp_path)
 
-    with pytest.raises(RpcError) as exc:
-        _skill_create(
-            state,
-            {"scope": "global", "name": "demo", "content": "---\nname: demo\n---\n\nbody\n"},
-        )
+    result = _skill_create(
+        state,
+        {"scope": "global", "name": "demo", "content": "---\nname: demo\n---\n\nbody\n"},
+    )
 
-    assert exc.value.code == RPC_ERROR_INVALID_REQUEST
-    assert "description" in exc.value.message
-    # A rejected write does not invalidate anything.
-    assert state.runtime.reload_calls == 0
+    assert result == {
+        "name": "demo",
+        "operation": "create",
+        "warnings": ["Skill metadata missing description; using the first body text line."],
+    }
+    assert SkillRegistry.load(state.runtime.global_skills_dir).get("demo").description == "body"
+    assert state.runtime.reload_calls == 1
 
 
 def test_missing_scope_is_rejected(tmp_path: Path) -> None:

@@ -23,18 +23,15 @@ from core.skills.requirements import (
     parse_vbot_requirements,
 )
 from core.skills.skill_validator import (
-    MALFORMED_YAML_FALLBACK_WARNING,
+    FRONT_MATTER_DELIMITER,
     MAX_SKILL_NAME_LENGTH,
     SKILL_NAME_TRIGGER_PATTERN,
     ValidationResult,
-    repair_colon_scalars,
-    validate_skill_metadata,
+    normalize_and_validate_skill_metadata,
+    parse_skill_front_matter,
+    split_skill_document,
 )
-from core.skills.skills import (
-    FRONT_MATTER_DELIMITER,
-    RESOURCE_DIRECTORIES,
-    SKILL_FILENAME,
-)
+from core.skills.skills import RESOURCE_DIRECTORIES, SKILL_FILENAME
 from core.utils.atomic import atomic_write_text
 from core.utils.errors import VBotError
 
@@ -294,22 +291,20 @@ class SkillAuthoringService:
         if author not in _VALID_AUTHORS:
             raise SkillAuthoringError(f"Unknown provenance author: {author!r}")
 
-        front_matter, body = _split_front_matter(content)
-        fields, parse_warnings = _parse_front_matter(front_matter)
-        result = validate_skill_metadata(
+        front_matter, body, document_warnings = split_skill_document(content)
+        fields, parse_warnings = parse_skill_front_matter(front_matter)
+        fields, result = normalize_and_validate_skill_metadata(
             fields,
             directory_name=skill_name,
             skill_file=skill_file,
-            parse_warnings=parse_warnings,
+            body=body,
+            parse_warnings=[*document_warnings, *parse_warnings],
         )
         if not result.valid:
             raise SkillAuthoringError(
                 "Skill metadata is invalid.",
                 diagnostics=result.warnings,
             )
-        if not isinstance(fields, dict):
-            raise SkillAuthoringError("Skill front matter must be a mapping.")
-
         declared_name = str(fields.get("name", "")).strip()
         if declared_name != skill_name:
             raise SkillAuthoringError(
@@ -373,31 +368,6 @@ def _validate_skill_name(skill_name: str) -> None:
             f"digits, '-', or '_', and be at most {MAX_SKILL_NAME_LENGTH} characters "
             f"long: {skill_name!r}"
         )
-
-
-def _split_front_matter(content: str) -> tuple[str, str]:
-    if not isinstance(content, str):
-        raise SkillAuthoringError("SKILL.md content must be a string.")
-    lines = content.splitlines()
-    if not lines or lines[0].strip() != FRONT_MATTER_DELIMITER:
-        raise SkillAuthoringError("SKILL.md must start with YAML front matter ('---').")
-    for index in range(1, len(lines)):
-        if lines[index].strip() == FRONT_MATTER_DELIMITER:
-            return "\n".join(lines[1:index]), "\n".join(lines[index + 1 :])
-    raise SkillAuthoringError("SKILL.md front matter is not closed with '---'.")
-
-
-def _parse_front_matter(front_matter: str) -> tuple[Any, list[str]]:
-    try:
-        return yaml.safe_load(front_matter) or {}, []
-    except yaml.YAMLError:
-        repaired = repair_colon_scalars(front_matter)
-        if repaired != front_matter:
-            try:
-                return yaml.safe_load(repaired) or {}, [MALFORMED_YAML_FALLBACK_WARNING]
-            except yaml.YAMLError:
-                pass
-        raise SkillAuthoringError("SKILL.md front matter is not valid YAML.") from None
 
 
 def _with_provenance(

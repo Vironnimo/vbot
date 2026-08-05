@@ -547,6 +547,18 @@ Run `python {baseDir}/scripts/ship.py` to deploy.
     assert result["directory"] == directory
 
 
+def test_load_skill_content_uses_full_body_without_front_matter(tmp_path: Path) -> None:
+    skill_dir = tmp_path / "skills" / "deploy"
+    skill_dir.mkdir(parents=True)
+    skill_file = skill_dir / "SKILL.md"
+    skill_file.write_text("# Deploy\n\nRun the deploy steps.\n", encoding="utf-8")
+
+    result = load_skill_content("deploy", skill_file)
+
+    content = cast(str, result["content"])
+    assert "# Deploy\n\nRun the deploy steps." in content
+
+
 async def async_dispatch(
     tools: ToolRegistry,
     context: ToolContext,
