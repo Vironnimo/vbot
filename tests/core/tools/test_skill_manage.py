@@ -190,15 +190,17 @@ def test_create_requires_content(tmp_path: Path) -> None:
     assert harness.invalidated == []
 
 
-def test_invalid_skill_document_is_rejected_without_invalidation(tmp_path: Path) -> None:
+def test_missing_description_uses_body_and_invalidates(tmp_path: Path) -> None:
     harness = _Harness(tmp_path)
 
     result = harness.create(content="---\nname: demo\n---\n\nbody\n")
 
-    assert result["ok"] is False
-    assert "description" in cast(dict[str, Any], result["error"])["message"]
-    assert not (harness.home("main") / "demo").exists()
-    assert harness.invalidated == []
+    assert result["ok"] is True
+    assert cast(dict[str, Any], result["data"])["warnings"] == [
+        "Skill metadata missing description; using the first body text line."
+    ]
+    assert SkillRegistry.load(harness.home("main")).get("demo").description == "body"
+    assert harness.invalidated == ["main"]
 
 
 def test_write_read_and_remove_support_file(tmp_path: Path) -> None:

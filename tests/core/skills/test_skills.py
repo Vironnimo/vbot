@@ -344,18 +344,23 @@ description: Second skill.
         assert invalid[0].path == second_file.resolve()
         assert "Duplicate skill name 'duplicate' rejected" in invalid[0].warnings[-1]
 
-    def test_missing_front_matter_is_preserved_as_invalid_diagnostic(self, tmp_path: Path) -> None:
+    def test_missing_front_matter_uses_directory_and_body_fallbacks(self, tmp_path: Path) -> None:
         skills_dir = tmp_path / "skills"
-        skill_file = write_skill(skills_dir, "broken", "# Broken\n")
+        skill_file = write_skill(skills_dir, "broken", "# Broken\n\nRun the repair steps.\n")
 
         registry = SkillRegistry.load(skills_dir)
 
-        assert registry.list_all() == []
-        invalid = registry.invalid_diagnostics()
-        assert invalid[0].path == skill_file.resolve()
-        assert "missing front matter" in invalid[0].warnings[0]
+        skill = registry.get("broken")
+        assert skill.path == skill_file.resolve()
+        assert skill.description == "Run the repair steps."
+        assert registry.invalid_diagnostics() == []
+        assert registry.warnings_for("broken") == [
+            "SKILL.md has no complete YAML front matter; using the full file as instructions.",
+            "Skill metadata missing name; using directory name 'broken'.",
+            "Skill metadata missing description; using the first body text line.",
+        ]
 
-    def test_missing_required_metadata_is_preserved_as_invalid_diagnostic(
+    def test_missing_description_remains_loadable_with_empty_description(
         self, tmp_path: Path
     ) -> None:
         skills_dir = tmp_path / "skills"
@@ -370,10 +375,12 @@ name: broken
 
         registry = SkillRegistry.load(skills_dir)
 
-        assert registry.list_all() == []
-        invalid = registry.invalid_diagnostics()
-        assert invalid[0].name == "broken"
-        assert "missing description" in invalid[0].warnings[0]
+        assert registry.get("broken").description == ""
+        assert registry.invalid_diagnostics() == []
+        assert registry.warnings_for("broken") == [
+            "Skill metadata missing description and no body text line was available; "
+            "using an empty description."
+        ]
 
     def test_loadable_skill_with_warning_remains_available(self, tmp_path: Path) -> None:
         skills_dir = tmp_path / "skills"
@@ -415,7 +422,7 @@ description: Use mode: careful
         ]
         assert registry.invalid_diagnostics() == []
 
-    def test_invalid_yaml_is_preserved_as_invalid_diagnostic(self, tmp_path: Path) -> None:
+    def test_invalid_yaml_uses_simple_key_value_fallback(self, tmp_path: Path) -> None:
         skills_dir = tmp_path / "skills"
         write_skill(
             skills_dir,
@@ -429,10 +436,11 @@ description: [unterminated
 
         registry = SkillRegistry.load(skills_dir)
 
-        assert registry.list_all() == []
-        invalid = registry.invalid_diagnostics()
-        assert invalid[0].name == "broken-yaml"
-        assert "Invalid YAML front matter" in invalid[0].warnings[0]
+        assert registry.get("broken-yaml").description == "[unterminated"
+        assert registry.invalid_diagnostics() == []
+        assert registry.warnings_for("broken-yaml") == [
+            "YAML front matter was read with the simple key: value fallback."
+        ]
 
     def test_extra_scan_directories_are_loaded_after_primary_dir(self, tmp_path: Path) -> None:
         skills_dir = tmp_path / "skills"

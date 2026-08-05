@@ -226,19 +226,36 @@ class TestSupportFiles:
             service.remove_file(tmp_path, "demo", "scripts/absent.py")
 
 
-class TestValidationRejection:
-    def test_missing_name(self, service: SkillAuthoringService, tmp_path: Path) -> None:
+class TestLenientMetadataAuthoring:
+    def test_missing_name_uses_directory_name(
+        self, service: SkillAuthoringService, tmp_path: Path
+    ) -> None:
         content = "---\ndescription: Has no name.\n---\n\nbody\n"
-        with pytest.raises(SkillAuthoringError) as exc:
-            service.create(tmp_path, "demo", content, author="agent")
-        assert any("name" in diagnostic for diagnostic in exc.value.diagnostics)
-        assert not (tmp_path / "demo").exists()
+        result = service.create(tmp_path, "demo", content, author="agent")
 
-    def test_missing_description(self, service: SkillAuthoringService, tmp_path: Path) -> None:
+        assert read_front_matter(result.path)["name"] == "demo"
+        assert result.warnings == ["Skill metadata missing name; using directory name 'demo'."]
+
+    def test_missing_description_uses_body(
+        self, service: SkillAuthoringService, tmp_path: Path
+    ) -> None:
         content = "---\nname: demo\n---\n\nbody\n"
-        with pytest.raises(SkillAuthoringError) as exc:
-            service.create(tmp_path, "demo", content, author="agent")
-        assert any("description" in diagnostic for diagnostic in exc.value.diagnostics)
+        result = service.create(tmp_path, "demo", content, author="agent")
+
+        assert read_front_matter(result.path)["description"] == "body"
+        assert result.warnings == [
+            "Skill metadata missing description; using the first body text line."
+        ]
+
+    def test_missing_front_matter_is_canonicalized(
+        self, service: SkillAuthoringService, tmp_path: Path
+    ) -> None:
+        result = service.create(tmp_path, "demo", "# Demo\n\nRun it.\n", author="agent")
+
+        fields = read_front_matter(result.path)
+        assert fields["name"] == "demo"
+        assert fields["description"] == "Run it."
+        assert result.path.read_text(encoding="utf-8").endswith("# Demo\n\nRun it.\n")
 
     def test_malformed_requirements(self, service: SkillAuthoringService, tmp_path: Path) -> None:
         content = """---
@@ -255,15 +272,19 @@ body
         with pytest.raises(SkillAuthoringError, match="unknown key"):
             service.create(tmp_path, "demo", content, author="agent")
 
-    def test_missing_front_matter(self, service: SkillAuthoringService, tmp_path: Path) -> None:
-        with pytest.raises(SkillAuthoringError, match="front matter"):
-            service.create(tmp_path, "demo", "# Just a body\n", author="agent")
+    def test_invalid_yaml_uses_simple_key_value_fallback(
+        self, service: SkillAuthoringService, tmp_path: Path
+    ) -> None:
+        content = "---\nname: demo\ndescription: [unclosed\n---\n\nbody\n"
+        result = service.create(tmp_path, "demo", content, author="agent")
 
-    def test_invalid_yaml(self, service: SkillAuthoringService, tmp_path: Path) -> None:
-        content = "---\nname: [unclosed\n---\n\nbody\n"
-        with pytest.raises(SkillAuthoringError, match="valid YAML"):
-            service.create(tmp_path, "demo", content, author="agent")
+        assert read_front_matter(result.path)["description"] == "[unclosed"
+        assert result.warnings == [
+            "YAML front matter was read with the simple key: value fallback."
+        ]
 
+
+class TestValidationRejection:
     def test_name_must_match_directory(
         self, service: SkillAuthoringService, tmp_path: Path
     ) -> None:

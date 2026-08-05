@@ -281,7 +281,17 @@ def test_runtime_warning_logs_use_shared_manager_format(config: Config) -> None:
     broken_skill_dir = extra_skills_dir / "broken"
     broken_skill_dir.mkdir(parents=True)
     broken_skill_dir.joinpath("SKILL.md").write_text(
-        "---\ndescription: Missing a skill name.\n---\n\n# Broken\n",
+        """---
+name: broken
+description: Has unsupported vBot requirements.
+metadata:
+  vbot:
+    requirements:
+      provider: missing
+---
+
+# Broken
+""",
         encoding="utf-8",
     )
     config.data_dir.joinpath("settings.json").write_text(

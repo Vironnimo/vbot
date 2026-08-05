@@ -16,8 +16,6 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
-import yaml
-
 from core.skills.requirements import (
     AVAILABLE,
     RequirementCheck,
@@ -30,14 +28,13 @@ from core.skills.requirements import (
     parse_vbot_requirements,
 )
 from core.skills.skill_validator import (
-    MALFORMED_YAML_FALLBACK_WARNING,
     ValidationResult,
-    repair_colon_scalars,
-    validate_skill_metadata,
+    normalize_and_validate_skill_metadata,
+    parse_skill_front_matter,
+    split_skill_document,
 )
 from core.utils.logging import get_logger
 
-FRONT_MATTER_DELIMITER = "---"
 WILDCARD_ALLOWLIST = "*"
 SKILL_FILENAME = "SKILL.md"
 RESOURCE_DIRECTORIES = ("scripts", "references", "assets")
@@ -439,15 +436,16 @@ def _load_skill_root(
 
 def _read_skill_metadata(skill_file: Path) -> tuple[SkillMetadata | None, ValidationResult]:
     content = skill_file.read_text(encoding="utf-8")
-    front_matter = _extract_front_matter(content, skill_file)
-    fields, parse_warnings = _parse_front_matter(front_matter, skill_file)
-    result = validate_skill_metadata(
+    front_matter, body, document_warnings = split_skill_document(content)
+    fields, parse_warnings = parse_skill_front_matter(front_matter)
+    fields, result = normalize_and_validate_skill_metadata(
         fields,
         directory_name=skill_file.parent.name,
         skill_file=skill_file,
-        parse_warnings=parse_warnings,
+        body=body,
+        parse_warnings=[*document_warnings, *parse_warnings],
     )
-    if not result.valid or not isinstance(fields, dict):
+    if not result.valid:
         return None, result
 
     name = _field_to_string(fields.get("name"))
@@ -456,7 +454,7 @@ def _read_skill_metadata(skill_file: Path) -> tuple[SkillMetadata | None, Valida
     try:
         requirements = parse_vbot_requirements(metadata)
     except RequirementParseError as exc:
-        return None, ValidationResult(valid=False, warnings=[str(exc)])
+        return None, ValidationResult(valid=False, warnings=[*result.warnings, str(exc)])
 
     return (
         SkillMetadata(
@@ -471,31 +469,6 @@ def _read_skill_metadata(skill_file: Path) -> tuple[SkillMetadata | None, Valida
         ),
         result,
     )
-
-
-def _extract_front_matter(content: str, skill_file: Path) -> str:
-    lines = content.splitlines()
-    if not lines or lines[0].strip() != FRONT_MATTER_DELIMITER:
-        raise ValueError(f"Skill metadata missing front matter: {skill_file}")
-
-    for index, line in enumerate(lines[1:], start=1):
-        if line.strip() == FRONT_MATTER_DELIMITER:
-            return "\n".join(lines[1:index])
-
-    raise ValueError(f"Skill metadata front matter is not closed: {skill_file}")
-
-
-def _parse_front_matter(front_matter: str, skill_file: Path) -> tuple[Any, list[str]]:
-    try:
-        return yaml.safe_load(front_matter) or {}, []
-    except yaml.YAMLError:
-        repaired = repair_colon_scalars(front_matter)
-        if repaired == front_matter:
-            return None, [f"Invalid YAML front matter: {skill_file}"]
-        try:
-            return yaml.safe_load(repaired) or {}, [MALFORMED_YAML_FALLBACK_WARNING]
-        except yaml.YAMLError:
-            return None, [f"Invalid YAML front matter: {skill_file}"]
 
 
 def _scan_skill_resources(skill_dir: Path) -> list[str]:

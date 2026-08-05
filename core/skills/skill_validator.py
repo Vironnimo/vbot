@@ -8,9 +8,18 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+import yaml
+
+FRONT_MATTER_DELIMITER = "---"
 MAX_SKILL_NAME_LENGTH = 64
 MALFORMED_YAML_FALLBACK_WARNING = (
     "YAML front matter was repaired by quoting scalar values with colons."
+)
+SIMPLE_KEY_VALUE_FALLBACK_WARNING = (
+    "YAML front matter was read with the simple key: value fallback."
+)
+MISSING_FRONT_MATTER_FALLBACK_WARNING = (
+    "SKILL.md has no complete YAML front matter; using the full file as instructions."
 )
 
 # Fragment (no anchors) for a skill name that the `/name` and `$name` chat triggers
@@ -47,35 +56,78 @@ def repair_colon_scalars(front_matter: str) -> str:
     return "\n".join(repaired_lines)
 
 
-def validate_skill_metadata(
+def split_skill_document(content: str) -> tuple[str, str, list[str]]:
+    """Split a Skill document without making front matter a loadability gate."""
+
+    if not isinstance(content, str):
+        raise TypeError("SKILL.md content must be a string")
+    if content.startswith("\ufeff"):
+        content = content[1:]
+    lines = content.splitlines()
+    if not lines or lines[0].strip() != FRONT_MATTER_DELIMITER:
+        return "", content, [MISSING_FRONT_MATTER_FALLBACK_WARNING]
+
+    for index, line in enumerate(lines[1:], start=1):
+        if line.strip() == FRONT_MATTER_DELIMITER:
+            return "\n".join(lines[1:index]), "\n".join(lines[index + 1 :]), []
+
+    return "", content, [MISSING_FRONT_MATTER_FALLBACK_WARNING]
+
+
+def parse_skill_front_matter(front_matter: str) -> tuple[Any, list[str]]:
+    """Parse YAML, then degrade to simple ``key: value`` extraction."""
+
+    if not front_matter.strip():
+        return {}, []
+    try:
+        return yaml.safe_load(front_matter) or {}, []
+    except yaml.YAMLError:
+        repaired = repair_colon_scalars(front_matter)
+        if repaired != front_matter:
+            try:
+                return yaml.safe_load(repaired) or {}, [MALFORMED_YAML_FALLBACK_WARNING]
+            except yaml.YAMLError:
+                pass
+        return _parse_simple_key_values(front_matter), [SIMPLE_KEY_VALUE_FALLBACK_WARNING]
+
+
+def normalize_and_validate_skill_metadata(
     fields: Any,
     *,
     directory_name: str,
     skill_file: Path,
+    body: str = "",
     parse_warnings: list[str] | None = None,
-) -> ValidationResult:
-    """Validate parsed skill metadata and return loadability plus warnings."""
+) -> tuple[dict[str, Any], ValidationResult]:
+    """Return usable metadata plus non-blocking diagnostics for local Skills."""
 
     warnings = list(parse_warnings or [])
     if not isinstance(fields, dict):
-        return ValidationResult(
-            valid=False,
-            warnings=[*warnings, f"Invalid YAML front matter in {skill_file}: expected a mapping."],
+        warnings.append(
+            f"Invalid YAML front matter in {skill_file}: expected a mapping; "
+            "using directory and body fallbacks."
         )
+        normalized: dict[str, Any] = {}
+    else:
+        normalized = dict(fields)
 
-    name = _field_to_string(fields.get("name"))
-    description = _field_to_string(fields.get("description"))
-
+    name = _field_to_string(normalized.get("name"))
     if not name:
-        return ValidationResult(
-            valid=False,
-            warnings=[*warnings, f"Skill metadata missing name: {skill_file}"],
-        )
+        name = directory_name
+        normalized["name"] = name
+        warnings.append(f"Skill metadata missing name; using directory name '{directory_name}'.")
+
+    description = _field_to_string(normalized.get("description"))
     if not description:
-        return ValidationResult(
-            valid=False,
-            warnings=[*warnings, f"Skill metadata missing description: {skill_file}"],
-        )
+        description = _infer_description(body)
+        normalized["description"] = description
+        if description:
+            warnings.append("Skill metadata missing description; using the first body text line.")
+        else:
+            warnings.append(
+                "Skill metadata missing description and no body text line was available; "
+                "using an empty description."
+            )
 
     if name != directory_name:
         warnings.append(f"Skill name '{name}' does not match directory name '{directory_name}'.")
@@ -88,7 +140,54 @@ def validate_skill_metadata(
             "with /name or $name, only loaded by name with the skill tool."
         )
 
-    return ValidationResult(valid=True, warnings=warnings)
+    return normalized, ValidationResult(valid=True, warnings=warnings)
+
+
+def validate_skill_metadata(
+    fields: Any,
+    *,
+    directory_name: str,
+    skill_file: Path,
+    body: str = "",
+    parse_warnings: list[str] | None = None,
+) -> ValidationResult:
+    """Compatibility wrapper returning only the validation result."""
+
+    _, result = normalize_and_validate_skill_metadata(
+        fields,
+        directory_name=directory_name,
+        skill_file=skill_file,
+        body=body,
+        parse_warnings=parse_warnings,
+    )
+    return result
+
+
+def _parse_simple_key_values(front_matter: str) -> dict[str, Any]:
+    fields: dict[str, Any] = {}
+    for line in front_matter.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or ":" not in stripped:
+            continue
+        key, raw_value = stripped.split(":", 1)
+        key = key.strip()
+        if not key:
+            continue
+        value = raw_value.strip()
+        fields[key] = value
+    return fields
+
+
+def _infer_description(body: str) -> str:
+    unclosed_front_matter = body.lstrip().startswith(FRONT_MATTER_DELIMITER)
+    for line in body.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped == FRONT_MATTER_DELIMITER or stripped.startswith("#"):
+            continue
+        if unclosed_front_matter and ":" in stripped:
+            continue
+        return stripped
+    return ""
 
 
 def _repair_colon_scalar_line(line: str) -> str:
