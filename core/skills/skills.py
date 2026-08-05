@@ -614,10 +614,10 @@ def scan_project_skill_names(
 
 
 # Skill registries are reloaded often — once per project, per run, and on every
-# explicit reload — so re-logging a skill's metadata warning on each scan floods
-# the log. Track the (path, warning) pairs already logged in this process and
+# explicit reload — so re-logging a skill's metadata diagnostic on each scan floods
+# debug logs. Track the (path, warning) pairs already logged in this process and
 # emit each one once: "once per server runtime". A server restart starts a fresh
-# process and logs the current warnings again. This is a process-scoped logging
+# process and logs the current diagnostics again. This is a process-scoped logging
 # concern (it lives beside the module logger it guards), not an injectable
 # service — the diagnostics returned to callers are never deduplicated, so the UI
 # still sees every warning on every load.
@@ -630,4 +630,4 @@ def _log_validation_warnings(skill_name: str, skill_path: Path, warnings: list[s
         if dedup_key in _logged_skill_warnings:
             continue
         _logged_skill_warnings.add(dedup_key)
-        _LOGGER.warning("Skill '%s' metadata warning: %s (at %s)", skill_name, warning, skill_path)
+        _LOGGER.debug("Skill '%s' metadata diagnostic: %s (at %s)", skill_name, warning, skill_path)

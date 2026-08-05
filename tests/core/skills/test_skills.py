@@ -458,10 +458,10 @@ description: [unterminated
         assert "Duplicate skill name 'shared' rejected" in invalid[0].warnings[-1]
 
 
-class TestSkillWarningLogging:
-    """The WARN log for a skill's metadata warning names its file and never floods.
+class TestSkillDiagnosticLogging:
+    """The DEBUG log for a skill diagnostic names its file and never floods.
 
-    Registries reload on every project run / reload, so the same warning would
+    Registries reload on every project run / reload, so the same diagnostic would
     otherwise be logged on each scan. It must carry the skill's path (so the user
     can find the offending file) and be emitted once per process.
     """
@@ -475,35 +475,38 @@ class TestSkillWarningLogging:
             "---\nname: careful\ndescription: Use mode: careful\n---\n",
         )
 
-    def test_warning_log_names_the_skill_file_path(
+    def test_debug_log_names_the_skill_file_path(
         self, tmp_path: Path, caplog: pytest.LogCaptureFixture
     ) -> None:
         _logged_skill_warnings.clear()
         skills_dir = tmp_path / "skills"
         skill_file = self._write_malformed_skill(skills_dir)
-        caplog.set_level(logging.WARNING, logger="vbot.skills")
+        caplog.set_level(logging.DEBUG, logger="vbot.skills")
 
         SkillRegistry.load(skills_dir)
 
         records = [record for record in caplog.records if record.name == "vbot.skills"]
         assert len(records) == 1
+        assert records[0].levelno == logging.DEBUG
         message = records[0].getMessage()
         assert "careful" in message
         assert str(skill_file.resolve()) in message
+        assert "metadata diagnostic" in message
 
-    def test_same_warning_is_logged_once_per_process(
+    def test_same_diagnostic_is_logged_once_per_process(
         self, tmp_path: Path, caplog: pytest.LogCaptureFixture
     ) -> None:
         _logged_skill_warnings.clear()
         skills_dir = tmp_path / "skills"
         self._write_malformed_skill(skills_dir)
-        caplog.set_level(logging.WARNING, logger="vbot.skills")
+        caplog.set_level(logging.DEBUG, logger="vbot.skills")
 
         SkillRegistry.load(skills_dir)
         SkillRegistry.load(skills_dir)
 
         records = [record for record in caplog.records if record.name == "vbot.skills"]
         assert len(records) == 1
+        assert records[0].levelno == logging.DEBUG
 
 
 class TestSkillRegistryGet:
