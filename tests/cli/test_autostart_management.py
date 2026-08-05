@@ -264,6 +264,8 @@ def test_enable_linux_writes_unit_and_enables(tmp_path: Path) -> None:
     assert '"--host" "127.0.0.1" "--port" "8420"' in unit
     escaped_repo = str(repo).replace("\\", "\\\\")
     assert f'WorkingDirectory="{escaped_repo}"' in unit
+    assert "KillMode=mixed" in unit
+    assert "KillMode=process" not in unit
     assert runner.ran("systemctl", "--user", "enable", "--now", "vbot.service")
 
 

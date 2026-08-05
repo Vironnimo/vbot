@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import sys
+from pathlib import Path
+from types import SimpleNamespace
+
 import core.tools.terminal_backend as terminal_backend
 from core.tools.terminal_backend import TERMINAL_TITLE_MAX_CHARS, TerminalRenderer
 
@@ -47,6 +51,40 @@ def test_posix_default_terminal_uses_environment_then_login_shell_then_sh() -> N
     ) == ["/bin/fish"]
     assert select_default_terminal("posix", {}, set(), login_shell="/bin/zsh") == ["/bin/zsh"]
     assert select_default_terminal("posix", {}, set()) == ["/bin/sh"]
+
+
+def test_posix_terminal_spawn_uses_shared_server_lifetime_guardian(monkeypatch) -> None:
+    spawned: dict[str, object] = {}
+
+    class FakePtyProcess:
+        @staticmethod
+        def spawn(argv, **kwargs):
+            spawned["argv"] = argv
+            spawned["kwargs"] = kwargs
+            return SimpleNamespace(pid=123)
+
+    monkeypatch.setattr(terminal_backend.os, "name", "posix")
+    monkeypatch.setattr(
+        terminal_backend,
+        "guarded_process_launch",
+        lambda _argv: SimpleNamespace(argv=("guardian", "--", "tool"), pass_fds=(41,)),
+    )
+    monkeypatch.setitem(sys.modules, "ptyprocess", SimpleNamespace(PtyProcess=FakePtyProcess))
+
+    adapter = terminal_backend.spawn_terminal_adapter(
+        ["tool"], Path("/work"), {"PATH": "/bin"}, 32, 120
+    )
+
+    assert adapter.pid == 123
+    assert spawned == {
+        "argv": ["guardian", "--", "tool"],
+        "kwargs": {
+            "cwd": "/work",
+            "env": {"PATH": "/bin"},
+            "dimensions": (32, 120),
+            "pass_fds": (41,),
+        },
+    }
 
 
 def test_terminal_title_uses_vt_metadata_and_is_safe_for_single_line_ui() -> None:

@@ -6,6 +6,7 @@ import json
 import logging
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 
 from core.utils.config import Config
 from core.utils.logging import ManagedLoggerProxyHandler, QuietLogsWebSocketLifecycleFilter
@@ -134,33 +135,37 @@ def test_resolve_server_bind_uses_explicit_port_before_environment_and_settings(
 
 
 def test_main_starts_uvicorn_with_configured_app(tmp_path: Path, monkeypatch) -> None:
-    calls = []
+    calls: list[dict[str, Any]] = []
 
-    def fake_run(
-        app,
-        *,
-        host: str,
-        port: int,
-        log_level: str,
-        access_log: bool,
-        log_config: dict[str, object],
-    ) -> None:
-        calls.append(
-            {
-                "app": app,
-                "host": host,
-                "port": port,
-                "log_level": log_level,
-                "access_log": access_log,
-                "log_config": log_config,
-            }
-        )
+    class FakeConfig:
+        def __init__(self, app, **kwargs) -> None:
+            self.app = app
+            calls.append({"app": app, **kwargs})
 
-    monkeypatch.setattr(server_main, "uvicorn", SimpleNamespace(run=fake_run))
+    class FakeServer:
+        def __init__(self, config: FakeConfig) -> None:
+            self.config = config
+            self.should_exit = False
+
+        def run(self) -> None:
+            self.config.app["request_shutdown"]()
+            assert self.should_exit is True
+
+    monkeypatch.setattr(
+        server_main,
+        "uvicorn",
+        SimpleNamespace(Config=FakeConfig, Server=FakeServer),
+    )
+    monkeypatch.setattr(server_main, "activate_process_containment", lambda: None)
     monkeypatch.setattr(
         server_main,
         "create_app",
-        lambda *, config, server_bind: {"config": config, "server_bind": server_bind},
+        lambda *, config, server_bind, shutdown_token, request_shutdown: {
+            "config": config,
+            "server_bind": server_bind,
+            "shutdown_token": shutdown_token,
+            "request_shutdown": request_shutdown,
+        },
     )
 
     main(["--data-dir", str(tmp_path / "data"), "--port", "8765"])
@@ -192,6 +197,8 @@ def test_main_starts_uvicorn_with_configured_app(tmp_path: Path, monkeypatch) ->
         "listen_port": 8765,
         "port_source": "cli",
     }
+    assert calls[0]["app"]["shutdown_token"]
+    assert not (tmp_path / "data" / "runtime" / "server-8765.json").exists()
 
 
 def test_managed_logger_proxy_handler_routes_records_into_vbot_namespace() -> None:

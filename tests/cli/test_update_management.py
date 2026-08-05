@@ -234,6 +234,44 @@ def test_dev_track_up_to_date_restarts(tmp_path: Path) -> None:
     assert events == ["stop", "start"]
 
 
+def test_agent_update_schedules_internal_restart_without_inline_stop(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / ".git").mkdir()
+    _write_state(tmp_path)
+
+    def handler(command: list[str]) -> CommandRun:
+        if command[:2] == ["git", "symbolic-ref"]:
+            return _ok("main")
+        if command[:2] == ["git", "status"]:
+            return _ok("")
+        return _ok("samesha") if command[:2] == ["git", "rev-parse"] else _ok("")
+
+    scheduled: list[tuple[ServerInstance, str]] = []
+
+    def schedule(instance: ServerInstance, *, service_name: str) -> CommandResult:
+        scheduled.append((instance, service_name))
+        return CommandResult(ok=True, message="restart scheduled", instance=instance)
+
+    monkeypatch.setenv("VBOT_RUN_AGENT_ID", "main")
+    monkeypatch.setenv("VBOT_RUN_SESSION_ID", "session-1")
+    monkeypatch.setattr(update_management, "schedule_server_restart", schedule)
+    events, stop, start = _recording_restart()
+
+    result = run_update(
+        _instance(),
+        runner=ScriptedRunner(handler),
+        root=tmp_path,
+        stop=stop,
+        start=start,
+    )
+
+    assert result.ok, result.message
+    assert "server: restart scheduled" in result.message
+    assert scheduled == [(_instance(), "vbot")]
+    assert events == []
+
+
 def test_update_restarts_the_installer_recorded_server_target(tmp_path: Path) -> None:
     (tmp_path / ".git").mkdir()
     recorded_data_dir = tmp_path / "custom-data"

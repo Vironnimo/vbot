@@ -465,8 +465,8 @@ def _linux_disable(
 
 
 def _systemd_unit(instance: ServerInstance, python_executable: str, repo_root: Path) -> str:
-    # KillMode=process so an agent-triggered `vbot server restart` (which replaces
-    # the process with a detached one in the same cgroup) is not killed with the unit.
+    # Stop the main process gracefully, then let systemd remove every remaining
+    # server-owned descendant from the service cgroup after TimeoutStopSec.
     command = " ".join(
         _systemd_quote(value)
         for value in (
@@ -490,7 +490,7 @@ def _systemd_unit(instance: ServerInstance, python_executable: str, repo_root: P
         f"ExecStart={command}\n"
         "Restart=on-failure\n"
         "RestartSec=5\n"
-        "KillMode=process\n"
+        "KillMode=mixed\n"
         "TimeoutStopSec=10\n\n"
         "[Install]\n"
         "WantedBy=default.target\n"
