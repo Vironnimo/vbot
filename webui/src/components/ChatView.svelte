@@ -36,6 +36,7 @@
     projectTeam as normalizeProjectTeam,
     normalizeScanReport,
   } from '../lib/projectsView.js';
+  import ChatActivityPanel from './chat/ChatActivityPanel.svelte';
   import ChatHeader from './chat/ChatHeader.svelte';
   import ProjectScanBanner from './chat/ProjectScanBanner.svelte';
   import ChatComposer from './ChatComposer.svelte';
@@ -188,6 +189,9 @@
 
   let activeAgent = $derived(getActiveAgent());
   let activeSessionState = $derived(getActiveSessionState());
+  let activeTimelineItems = $derived(
+    visibleTimelineItemsForRender(activeSessionState),
+  );
   let identityAgentStatuses = $derived.by(() =>
     Object.fromEntries(
       chatState.agents.map((agent) => [
@@ -1714,10 +1718,9 @@
   });
 
   $effect(() => {
-    chatController.reconcileSubAgentRows(
-      visibleTimelineItemsForRender(activeSessionState),
-      { projectId: displayedSessionProjectId() },
-    );
+    chatController.reconcileSubAgentRows(activeTimelineItems, {
+      projectId: displayedSessionProjectId(),
+    });
   });
 </script>
 
@@ -2028,6 +2031,12 @@
           </div>
         </div>
       </div>
+      <ChatActivityPanel
+        timelineItems={activeTimelineItems}
+        subAgentStatuses={chatState.subAgentStatuses}
+        onNavigateToSubAgent={handleNavigateToSubAgentLink}
+        onCancelSubAgent={handleCancelSubAgent}
+      />
     </div>
   {/if}
 </section>
@@ -2057,6 +2066,7 @@
   }
 
   .chat-view__content-shell {
+    position: relative;
     display: flex;
     min-height: 0;
     flex: 1;

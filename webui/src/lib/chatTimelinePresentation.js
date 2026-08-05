@@ -515,6 +515,17 @@ export const isSubAgentSpawnTool = (tool) => {
   return args.operation !== 'cancel';
 };
 
+export const isBackgroundSubAgentSpawn = (tool) => {
+  if (!isSubAgentSpawnTool(tool)) {
+    return false;
+  }
+  const delivery = trimmedString(subAgentResultData(tool).delivery);
+  if (delivery) {
+    return delivery === 'automatic';
+  }
+  return subAgentArguments(tool).background === true;
+};
+
 export const isStartingForegroundSubAgent = (tool) => {
   if (!isSubAgentSpawnTool(tool) || !tool.startedEvent) {
     return false;
@@ -787,6 +798,49 @@ export const subAgentDisplayResult = (tool, fetchedResult = null) => {
     payload.usage = fetchedResult.usage;
   }
   return { ok: true, error: null, data: payload, artifacts: [] };
+};
+
+export const backgroundSubAgentTasks = (
+  timelineItems,
+  subAgentStatuses = {},
+) => {
+  const tasks = [];
+  let order = 0;
+  for (const [itemIndex, item] of (timelineItems ?? []).entries()) {
+    if (item?.type !== 'assistant_run') {
+      continue;
+    }
+    for (const [childIndex, child] of visibleRunChildren(item).entries()) {
+      if (child?.type !== 'tool_call' || !isBackgroundSubAgentSpawn(child)) {
+        continue;
+      }
+      const dotStatus = subAgentDotStatus(child, subAgentStatuses);
+      tasks.push({
+        id: `${item.id ?? itemIndex}:${child.id ?? child.toolCallId ?? childIndex}`,
+        tool: child,
+        dotStatus,
+        agentId: subAgentAgentId(child),
+        preview: subAgentPreview(child),
+        target: subAgentNavigationTarget(child),
+        lastToolName:
+          dotStatus === 'running'
+            ? subAgentLastToolName(child, subAgentStatuses)
+            : '',
+        timeLabel: subAgentToolStatusLabel(child, dotStatus, subAgentStatuses),
+        order,
+      });
+      order += 1;
+    }
+  }
+
+  return tasks
+    .sort((left, right) => {
+      const activeDifference =
+        Number(right.dotStatus === 'running') -
+        Number(left.dotStatus === 'running');
+      return activeDifference || right.order - left.order;
+    })
+    .map(({ order: _order, ...task }) => task);
 };
 
 // Extracts one terminal sub-agent Run's final response. A visible Assistant turn
