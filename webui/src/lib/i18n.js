@@ -265,6 +265,8 @@ export const englishCatalog = Object.freeze({
   'chat.activity.active': 'Active',
   'chat.activity.finished': 'Finished',
   'chat.activity.taskAria': 'Open {agent} Session · {status}',
+  'chat.activity.bashTaskAria': 'Bash · {command} · {status}',
+  'chat.activity.bashFallback': 'Bash process',
   'chat.activity.status.running': 'Working',
   'chat.activity.status.completed': 'Completed',
   'chat.activity.status.failed': 'Failed',

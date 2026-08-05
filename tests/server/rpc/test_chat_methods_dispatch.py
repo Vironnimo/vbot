@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -31,6 +32,7 @@ from core.runs import (
     QueuedRunItem,
     Run,
 )
+from core.tools.tools import tool_success
 from server.events import ServerEventBus
 from server.rpc import chat_methods, event_bridge
 from server.rpc.methods import dispatch_rpc
@@ -243,6 +245,45 @@ async def test_chat_history_hides_internal_continuation_checkpoint(tmp_path: Pat
 
     assert response["ok"] is True
     assert "continuation" not in response["result"]
+
+
+@pytest.mark.asyncio
+async def test_chat_history_projects_durable_background_bash_statuses(tmp_path: Path) -> None:
+    state, chat_sessions = _history_state(tmp_path)
+    session = chat_sessions.create("parent", session_id="session-one")
+    session.append(
+        ChatMessage.tool(
+            tool_call_id="bash-one",
+            name="bash",
+            content=json.dumps(
+                tool_success(
+                    {
+                        "session_id": "process-one",
+                        "status": "running",
+                        "delivery": "automatic",
+                    }
+                )
+            ),
+        )
+    )
+    session.add_note(
+        "Automatic completion delivery\n\n"
+        "### Bash process — failed\n"
+        "Process Session: process-one\n"
+        "Command: npm test"
+    )
+
+    response = await dispatch_rpc(
+        state,
+        {
+            "method": "chat.history",
+            "params": {"agent_id": "parent", "session_id": "session-one"},
+        },
+    )
+
+    assert response["ok"] is True
+    assert response["result"]["background_bash_statuses"] == {"process-one": "failed"}
+    assert all(message["role"] != "note" for message in response["result"]["messages"])
 
 
 @pytest.mark.asyncio

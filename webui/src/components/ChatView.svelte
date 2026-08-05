@@ -2034,6 +2034,7 @@
       <ChatActivityPanel
         timelineItems={activeTimelineItems}
         subAgentStatuses={chatState.subAgentStatuses}
+        backgroundBashStatuses={activeSessionState?.backgroundBashStatuses}
         onNavigateToSubAgent={handleNavigateToSubAgentLink}
       />
     </div>

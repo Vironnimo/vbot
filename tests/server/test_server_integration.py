@@ -75,6 +75,7 @@ def test_bootstrap_agent_and_current_history(tmp_path: Path) -> None:
             "session_id": agent["current_session_id"],
             "messages": [],
             "has_more": False,
+            "background_bash_statuses": {},
             "session_usage": {
                 "measured_turns": 0,
                 "estimated_turns": 0,

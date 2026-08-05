@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import sys
@@ -14,6 +15,7 @@ import pytest
 import pytest_asyncio
 
 import core.tools.bash as bash_module
+from core.chat import ChatMessage
 from core.storage import TemporaryFileManager
 from core.tools.bash import (
     BASH_SUBAGENT_TOOL_DESCRIPTION,
@@ -22,6 +24,7 @@ from core.tools.bash import (
     BASH_TOOL_PARAMETERS,
     _resolve_workdir,
     _resolve_yield_after,
+    background_bash_statuses,
     bash_handler,
     project_bash_tool_definitions,
     register_bash_tool,
@@ -1825,7 +1828,7 @@ async def test_background_watcher_reports_aborted_by_user_when_session_is_user_c
     assert "aborted by the user" in message
     assert "Background process completed." not in message
     assert "Exit code:" not in message
-    assert session_id not in message  # we don't include the raw id, but ensure the marker is there
+    assert f"Process Session: {session_id}" in message
 
 
 @pytest.mark.asyncio
@@ -1880,6 +1883,64 @@ async def test_background_watcher_reports_natural_completion_status(
     assert "aborted by the user" not in message
     assert "Exit code: 0" in message
     assert "done" in message
+
+
+def test_background_bash_statuses_folds_handoffs_manual_results_and_completion_notes() -> None:
+    messages = [
+        ChatMessage.tool(
+            tool_call_id="bash-one",
+            name="bash",
+            content=json.dumps(
+                tool_success(
+                    {
+                        "session_id": "process-one",
+                        "status": "running",
+                        "delivery": "automatic",
+                    }
+                )
+            ),
+        ),
+        ChatMessage.tool(
+            tool_call_id="foreground",
+            name="bash",
+            content=json.dumps(tool_success({"session_id": "foreground", "status": "completed"})),
+        ),
+        ChatMessage.note(
+            "Automatic completion delivery\n\n"
+            "### Bash process — completed\n"
+            "Process Session: process-one\n"
+            "Command: npm test"
+        ),
+        ChatMessage.tool(
+            tool_call_id="bash-two",
+            name="bash",
+            content=json.dumps(
+                tool_success(
+                    {
+                        "session_id": "process-two",
+                        "status": "running",
+                        "delivery": "automatic",
+                    }
+                )
+            ),
+        ),
+        ChatMessage.tool(
+            tool_call_id="process-two",
+            name="process",
+            content=json.dumps(tool_success({"session_id": "process-two", "status": "killed"})),
+        ),
+        ChatMessage.note(
+            "### Bash process — aborted by user\n"
+            "Process Session: process-three\n"
+            "Command: dev server"
+        ),
+    ]
+
+    assert background_bash_statuses(messages) == {
+        "process-one": "completed",
+        "process-two": "killed",
+        "process-three": "cancelled",
+    }
 
 
 @pytest.mark.asyncio

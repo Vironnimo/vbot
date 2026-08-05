@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import {
-  backgroundSubAgentTasks,
+  backgroundTasks,
   compactToolValue,
   compactionSummaryText,
   errorMessagePresentation,
@@ -90,6 +90,27 @@ function queuedSubAgentTool(overrides = {}) {
         agent_id: 'worker',
         session_id: 'session-child',
         status: 'queued',
+        delivery: 'automatic',
+      },
+      artifacts: [],
+    },
+    ...overrides,
+  };
+}
+
+function backgroundBashTool(overrides = {}) {
+  return {
+    type: 'tool_call',
+    id: 'bash-background',
+    name: 'bash',
+    status: 'success',
+    resultEvent: { type: 'tool_call_result' },
+    arguments: { command: 'npm run dev', mode: 'background' },
+    result: {
+      ok: true,
+      data: {
+        session_id: 'process-one',
+        status: 'running',
         delivery: 'automatic',
       },
       artifacts: [],
@@ -449,7 +470,7 @@ describe('chatTimelinePresentation', () => {
     ).toBe(false);
   });
 
-  it('projects automatic background tasks with active work first', () => {
+  it('projects automatic Sub-Agent and Bash tasks with active work first', () => {
     const running = runningSubAgentTool({ type: 'tool_call' });
     const completed = runningSubAgentTool({
       type: 'tool_call',
@@ -504,23 +525,51 @@ describe('chatTimelinePresentation', () => {
       },
     });
 
-    const tasks = backgroundSubAgentTasks([
-      { id: 'run-old', type: 'assistant_run', items: [running] },
-      {
-        id: 'run-new',
-        type: 'assistant_run',
-        items: [completed, foreground],
+    const backgroundBash = backgroundBashTool();
+    const foregroundBash = backgroundBashTool({
+      id: 'bash-foreground',
+      arguments: { command: 'npm test', mode: 'foreground' },
+      result: {
+        ok: true,
+        data: { status: 'completed', mode: 'foreground' },
+        artifacts: [],
       },
-    ]);
+    });
+    const tasks = backgroundTasks(
+      [
+        { id: 'run-old', type: 'assistant_run', items: [running] },
+        {
+          id: 'run-new',
+          type: 'assistant_run',
+          items: [completed, foreground, foregroundBash, backgroundBash],
+        },
+      ],
+      {},
+      { 'process-one': 'failed' },
+    );
 
-    expect(tasks).toHaveLength(2);
+    expect(tasks).toHaveLength(3);
     expect(tasks.map((task) => task.tool.id)).toEqual([
       running.id,
+      backgroundBash.id,
       completed.id,
     ]);
-    expect(tasks.map((task) => task.dotStatus)).toEqual(['running', 'success']);
+    expect(tasks.map((task) => task.dotStatus)).toEqual([
+      'running',
+      'failed',
+      'success',
+    ]);
     expect(tasks[1]).toEqual(
       expect.objectContaining({
+        kind: 'bash',
+        command: 'npm run dev',
+        processSessionId: 'process-one',
+        target: null,
+      }),
+    );
+    expect(tasks[2]).toEqual(
+      expect.objectContaining({
+        kind: 'subagent',
         agentId: 'reviewer',
         preview: 'Review the implementation',
         target: {

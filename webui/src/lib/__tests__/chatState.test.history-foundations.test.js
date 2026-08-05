@@ -305,6 +305,34 @@ describe('chat state helpers', () => {
     ).not.toContain('Internal reminder');
   });
 
+  it('keeps durable Background Bash statuses separate from visible history', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-one',
+    );
+
+    loadHistory(
+      sessionState,
+      [
+        { id: 'message-one', role: 'user', content: 'Hi' },
+        { id: 'message-two', role: 'assistant', content: 'Hello' },
+      ],
+      {
+        backgroundBashStatuses: {
+          'process-running': 'running',
+          'process-finished': 'completed',
+        },
+      },
+    );
+
+    expect(sessionState.backgroundBashStatuses).toEqual({
+      'process-running': 'running',
+      'process-finished': 'completed',
+    });
+    expect(sessionState.messages).toHaveLength(2);
+  });
+
   it('splits consecutive assistant history messages into separate run blocks', () => {
     const sessionState = ensureSessionState(
       createChatState(),
