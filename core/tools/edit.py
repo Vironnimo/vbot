@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import nullcontext
 from pathlib import Path
 
 from core.tools.arguments import (
@@ -9,7 +10,7 @@ from core.tools.arguments import (
     looks_like_line_numbered_content,
     optional_bool,
 )
-from core.tools.file_state import FileReadState, stale_failure_text
+from core.tools.file_state import FileReadState, StaleReason, atomic_write_bytes
 from core.tools.fuzzy_match import AmbiguousFuzzyMatch, replace_fuzzy
 from core.tools.syntax_check import warning_for_edited_file
 from core.tools.tools import (
@@ -29,9 +30,8 @@ EDIT_TOOL_DESCRIPTION = (
     "tolerating minor differences in whitespace/indentation, line endings, and "
     "quote style; include enough unchanged surrounding text to identify one "
     "location unless replace_all is true. For repeated lines, include a neighboring "
-    "line or heading. Use this for precise, surgical edits. You must read the file "
-    "first; this tool fails if you did not, or if it changed on disk since you last "
-    "read it."
+    "line or heading. Use this for precise, surgical edits against the file's current "
+    "contents."
 )
 EDIT_TOOL_PARAMETERS: JsonObject = {
     "type": "object",
@@ -182,6 +182,7 @@ def _build_success_data(
     first_line_number: int,
     replaced_count: int,
     syntax_warning: str | None,
+    stale_warning: str | None,
 ) -> JsonObject:
     displayed_path = model_path(resolved)
     message = (
@@ -196,6 +197,8 @@ def _build_success_data(
     }
     if syntax_warning is not None:
         data["syntax_warning"] = syntax_warning
+    if stale_warning is not None:
+        data["stale_warning"] = stale_warning
     return data
 
 
@@ -204,10 +207,10 @@ def edit_handler(
 ) -> JsonObject:
     """Handle an edit tool call and return a stable vBot result envelope.
 
-    When ``file_state`` is supplied the read-before-write guard is active: the
-    edit is refused unless the file was read in this session and has not changed
-    on disk since. A successful edit restamps the file so the same session can
-    edit again without re-reading.
+    When ``file_state`` is supplied, mutations of the same path are serialized.
+    A prior read is not required: the unique ``old_string`` match against current
+    on-disk content is the edit's optimistic precondition. A successful edit
+    restamps the file for later full-file writes.
     """
     validated_arguments = _validate_edit_arguments(arguments)
     if isinstance(validated_arguments, dict):
@@ -221,51 +224,69 @@ def edit_handler(
         return tool_failure("invalid_path", str(error))
     displayed_path = model_path(resolved)
 
-    try:
-        if not resolved.exists():
-            return tool_failure("file_not_found", f"file not found: {displayed_path}")
-        if not resolved.is_file():
-            return tool_failure("not_a_file", f"path is not a file: {displayed_path}")
+    mutation_lock = file_state.lock_path(resolved) if file_state is not None else nullcontext()
+    with mutation_lock:
+        try:
+            if not resolved.exists():
+                return tool_failure("file_not_found", f"file not found: {displayed_path}")
+            if not resolved.is_file():
+                return tool_failure("not_a_file", f"path is not a file: {displayed_path}")
+            stale_reason = (
+                file_state.check_stale(context.session_id, resolved)
+                if file_state is not None
+                else None
+            )
+            content = resolved.read_bytes().decode("utf-8", errors="replace")
+        except OSError as error:
+            return tool_failure(
+                "file_read_error", f"failed to read file: {displayed_path}: {error}"
+            )
+
+        # The matcher tries exact, then newline/Unicode-normalized, then whitespace-
+        # tolerant line matching, always splicing the real original bytes.
+        result = replace_fuzzy(content, old_string, new_string, replace_all=replace_all)
+        if result is None:
+            return _text_not_found_failure(old_string)
+        if isinstance(result, AmbiguousFuzzyMatch):
+            return tool_failure(
+                "ambiguous_match",
+                _format_ambiguous_match_error(content, result.occurrences, result.line_numbers),
+            )
+
+        if result.new_content == content:
+            return tool_failure("no_changes", "replacement produced no changes")
+
+        try:
+            atomic_write_bytes(resolved, result.new_content.encode("utf-8"))
+        except OSError as error:
+            return tool_failure(
+                "file_write_error", f"failed to write file: {displayed_path}: {error}"
+            )
+
+        # The edit is an implicit read of the new content: restamp so later writes
+        # compare against this exact version.
         if file_state is not None:
-            reason = file_state.check_stale(context.session_id, resolved)
-            if reason is not None:
-                return tool_failure(*stale_failure_text(reason, resolved))
-        content = resolved.read_bytes().decode("utf-8", errors="replace")
-    except OSError as error:
-        return tool_failure("file_read_error", f"failed to read file: {displayed_path}: {error}")
+            file_state.record_read(context.session_id, resolved)
 
-    # The matcher tries exact, then newline/Unicode-normalized, then whitespace-
-    # tolerant line matching, always splicing the real original bytes.
-    result = replace_fuzzy(content, old_string, new_string, replace_all=replace_all)
-    if result is None:
-        return _text_not_found_failure(old_string)
-    if isinstance(result, AmbiguousFuzzyMatch):
-        return tool_failure(
-            "ambiguous_match",
-            _format_ambiguous_match_error(content, result.occurrences, result.line_numbers),
+        # Non-blocking: the edit is already written. The syntax warning reports
+        # only a break this edit introduced, never a pre-existing one.
+        syntax_warning = warning_for_edited_file(resolved, content, result.new_content)
+        stale_warning = None
+        if stale_reason is StaleReason.MODIFIED:
+            stale_warning = (
+                f"{displayed_path} changed since this Session last read it. "
+                "The edit was applied to the current on-disk content and preserved "
+                "all unmatched bytes."
+            )
+        return tool_success(
+            _build_success_data(
+                resolved,
+                result.first_changed_line,
+                result.replacements,
+                syntax_warning,
+                stale_warning,
+            )
         )
-
-    if result.new_content == content:
-        return tool_failure("no_changes", "replacement produced no changes")
-
-    try:
-        resolved.write_bytes(result.new_content.encode("utf-8"))
-    except OSError as error:
-        return tool_failure("file_write_error", f"failed to write file: {displayed_path}: {error}")
-
-    # The edit is an implicit read of the new content: restamp so the same session
-    # can edit again without re-reading, and so the next stale check is accurate.
-    if file_state is not None:
-        file_state.record_read(context.session_id, resolved)
-
-    # Non-blocking: the edit is already written. The warning reports only a syntax
-    # break this edit introduced, never a pre-existing one (see syntax_check).
-    syntax_warning = warning_for_edited_file(resolved, content, result.new_content)
-    return tool_success(
-        _build_success_data(
-            resolved, result.first_changed_line, result.replacements, syntax_warning
-        )
-    )
 
 
 def make_edit_handler(file_state: FileReadState) -> ToolHandler:

@@ -1,5 +1,6 @@
 """Tests for the built-in edit tool."""
 
+import threading
 from pathlib import Path
 
 import pytest
@@ -16,11 +17,15 @@ from core.utils.paths import model_path
 
 
 def make_context(
-    workspace: Path, tool_name: str = EDIT_TOOL_NAME, *, cwd: Path | None = None
+    workspace: Path,
+    tool_name: str = EDIT_TOOL_NAME,
+    *,
+    cwd: Path | None = None,
+    session_id: str = "session-1",
 ) -> ToolContext:
     return ToolContext(
         agent_id="agent-1",
-        session_id="session-1",
+        session_id=session_id,
         run_id="run-1",
         tool_call_id="call-1",
         tool_name=tool_name,
@@ -492,10 +497,10 @@ def test_edit_returns_failure_envelope_for_filesystem_write_error(
     target = workspace / "notes.txt"
     target.write_bytes(b"hello\n")
 
-    def raise_permission_error(self: Path, data: bytes) -> int:
+    def raise_permission_error(_source: Path, _target: Path) -> None:
         raise PermissionError("access denied while writing")
 
-    monkeypatch.setattr(Path, "write_bytes", raise_permission_error)
+    monkeypatch.setattr("core.tools.file_state.os.replace", raise_permission_error)
 
     result = edit_handler(
         make_context(workspace),
@@ -616,7 +621,7 @@ def test_edit_rejects_string_encoded_replace_all(tmp_path: Path) -> None:
     assert target.read_text(encoding="utf-8") == "x x x"
 
 
-def test_edit_guard_blocks_when_file_unread(tmp_path: Path) -> None:
+def test_edit_allows_unread_existing_file_when_match_is_unique(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     target = workspace / "notes.txt"
@@ -629,8 +634,8 @@ def test_edit_guard_blocks_when_file_unread(tmp_path: Path) -> None:
         file_state=file_state,
     )
 
-    assert_failure_envelope(result, "file_not_read")
-    assert target.read_text(encoding="utf-8") == "alpha beta\n"
+    assert_success_envelope(result)
+    assert target.read_text(encoding="utf-8") == "ALPHA beta\n"
 
 
 def test_edit_guard_allows_after_read(tmp_path: Path) -> None:
@@ -651,7 +656,7 @@ def test_edit_guard_allows_after_read(tmp_path: Path) -> None:
     assert target.read_text(encoding="utf-8") == "ALPHA beta\n"
 
 
-def test_edit_guard_blocks_when_file_changed_since_read(tmp_path: Path) -> None:
+def test_edit_uses_current_content_when_file_changed_since_read(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     target = workspace / "notes.txt"
@@ -668,8 +673,32 @@ def test_edit_guard_blocks_when_file_changed_since_read(tmp_path: Path) -> None:
         file_state=file_state,
     )
 
-    assert_failure_envelope(result, "file_modified_since_read")
-    assert target.read_text(encoding="utf-8") == "alpha beta gamma\n"
+    assert result["ok"] is True
+    data = result["data"]
+    assert isinstance(data, dict)
+    assert "changed since this Session last read it" in data["stale_warning"]
+    assert target.read_text(encoding="utf-8") == "ALPHA beta gamma\n"
+
+
+def test_edit_changed_file_still_fails_when_current_text_no_longer_matches(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    target = workspace / "notes.txt"
+    target.write_text("alpha beta\n", encoding="utf-8")
+    file_state = FileReadState()
+    file_state.record_read("session-1", target.resolve())
+    target.write_text("gamma beta\n", encoding="utf-8")
+
+    result = edit_handler(
+        make_context(workspace),
+        {"path": "notes.txt", "old_string": "alpha", "new_string": "ALPHA"},
+        file_state=file_state,
+    )
+
+    assert_failure_envelope(result, "text_not_found")
+    assert target.read_text(encoding="utf-8") == "gamma beta\n"
 
 
 def test_edit_guard_restamps_so_next_edit_needs_no_reread(tmp_path: Path) -> None:
@@ -693,4 +722,72 @@ def test_edit_guard_restamps_so_next_edit_needs_no_reread(tmp_path: Path) -> Non
 
     assert_success_envelope(first)
     assert_success_envelope(second)
+    assert target.read_text(encoding="utf-8") == "ALPHA BETA\n"
+
+
+def test_concurrent_session_edits_serialize_and_merge_current_content(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    target = workspace / "notes.txt"
+    target.write_text("alpha beta\n", encoding="utf-8")
+    file_state = FileReadState()
+    file_state.record_read("session-a", target.resolve())
+    file_state.record_read("session-b", target.resolve())
+
+    from core.tools.file_state import atomic_write_bytes as real_atomic_write_bytes
+
+    first_write_started = threading.Event()
+    release_first_write = threading.Event()
+    second_write_started = threading.Event()
+    call_count = 0
+    call_count_lock = threading.Lock()
+
+    def observed_atomic_write(path: Path, payload: bytes) -> None:
+        nonlocal call_count
+        with call_count_lock:
+            call_count += 1
+            current_call = call_count
+        if current_call == 1:
+            first_write_started.set()
+            release_first_write.wait(timeout=1)
+        else:
+            second_write_started.set()
+        real_atomic_write_bytes(path, payload)
+
+    monkeypatch.setattr("core.tools.edit.atomic_write_bytes", observed_atomic_write)
+    results: dict[str, dict[str, object]] = {}
+
+    def edit_alpha() -> None:
+        results["a"] = edit_handler(
+            make_context(workspace, session_id="session-a"),
+            {"path": "notes.txt", "old_string": "alpha", "new_string": "ALPHA"},
+            file_state=file_state,
+        )
+
+    def edit_beta() -> None:
+        results["b"] = edit_handler(
+            make_context(workspace, session_id="session-b"),
+            {"path": "notes.txt", "old_string": "beta", "new_string": "BETA"},
+            file_state=file_state,
+        )
+
+    first = threading.Thread(target=edit_alpha)
+    second = threading.Thread(target=edit_beta)
+    first.start()
+    assert first_write_started.wait(timeout=1)
+    second.start()
+    assert second_write_started.wait(timeout=0.05) is False
+    release_first_write.set()
+    first.join(timeout=1)
+    second.join(timeout=1)
+
+    assert first.is_alive() is False
+    assert second.is_alive() is False
+    assert results["a"]["ok"] is True
+    assert results["b"]["ok"] is True
+    second_data = results["b"]["data"]
+    assert isinstance(second_data, dict)
+    assert "stale_warning" in second_data
     assert target.read_text(encoding="utf-8") == "ALPHA BETA\n"

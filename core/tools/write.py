@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import nullcontext
 from pathlib import Path
 
 from core.tools.arguments import looks_like_line_numbered_content
-from core.tools.file_state import FileReadState, stale_failure_text
+from core.tools.file_state import FileReadState, atomic_write_bytes, stale_failure_text
 from core.tools.syntax_check import warning_for_written_file
 from core.tools.tools import (
     JsonObject,
@@ -98,28 +99,32 @@ def write_handler(
         return tool_failure("invalid_path", str(error))
     displayed_path = model_path(resolved)
 
-    # A new file is never stale; the guard only gates overwriting an existing one.
-    if file_state is not None and resolved.exists():
-        reason = file_state.check_stale(context.session_id, resolved)
-        if reason is not None:
-            return tool_failure(*stale_failure_text(reason, resolved))
+    mutation_lock = file_state.lock_path(resolved) if file_state is not None else nullcontext()
+    with mutation_lock:
+        # A new file is never stale; the guard only gates overwriting an existing one.
+        if file_state is not None and resolved.exists():
+            reason = file_state.check_stale(context.session_id, resolved)
+            if reason is not None:
+                return tool_failure(*stale_failure_text(reason, resolved))
 
-    try:
-        resolved.parent.mkdir(parents=True, exist_ok=True)
-        # Preserve a BOM the existing file already had, so a full-file rewrite of
-        # content the model read BOM-free does not silently drop the marker.
-        payload = content_argument
-        if _file_starts_with_bom(resolved) and not payload.startswith(_UTF8_BOM):
-            payload = _UTF8_BOM + payload
-        encoded = payload.encode("utf-8")
-        resolved.write_bytes(encoded)
-    except OSError as error:
-        return tool_failure("file_write_error", f"failed to write file: {displayed_path}: {error}")
+        try:
+            resolved.parent.mkdir(parents=True, exist_ok=True)
+            # Preserve a BOM the existing file already had, so a full-file rewrite of
+            # content the model read BOM-free does not silently drop the marker.
+            payload = content_argument
+            if _file_starts_with_bom(resolved) and not payload.startswith(_UTF8_BOM):
+                payload = _UTF8_BOM + payload
+            encoded = payload.encode("utf-8")
+            atomic_write_bytes(resolved, encoded)
+        except OSError as error:
+            return tool_failure(
+                "file_write_error", f"failed to write file: {displayed_path}: {error}"
+            )
 
-    # The write is an implicit read: restamp so the same session can write again
-    # without re-reading, and so the next stale check compares against this write.
-    if file_state is not None:
-        file_state.record_read(context.session_id, resolved)
+        # The write is an implicit read: restamp so the same session can write again
+        # without re-reading, and so the next stale check compares against this write.
+        if file_state is not None:
+            file_state.record_read(context.session_id, resolved)
 
     byte_count = len(encoded)
     message = f"OK: written {byte_count} bytes to {displayed_path}"
