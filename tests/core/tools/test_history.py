@@ -110,9 +110,16 @@ def test_registration_is_session_scoped_and_schema_is_flat(tmp_path: Path) -> No
             "query": "secret",
             "cursor": "opaque",
         },
+        result={
+            "ok": True,
+            "data": {"items": [{"id": "one"}], "has_more": True},
+            "error": None,
+            "artifacts": [],
+        },
     )
     assert display["summary"] == "search · all earlier history"
     assert display["hidden_argument_keys"] == ["cursor", "message_id", "query"]
+    assert display["facts"] == [{"kind": "count", "value": 1, "unit": "results", "at_least": True}]
 
 
 def test_checkpoint_grant_and_cursor_lifecycle_across_restart_move_takeover_and_fork(

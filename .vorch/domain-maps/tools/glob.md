@@ -8,7 +8,7 @@ Discovers filesystem paths by glob-style pattern.
 - Registration: `register_glob_tool(registry)` — registers an async wrapper that runs the sync `glob_handler` via `asyncio.to_thread`, so a large tree walk never blocks the kernel event loop.
 - Schema: required `pattern`; optional `path`, `limit` (default 100, min 1), `offset` (default 0), and `include_ignored` (default false). Defaults are handler-owned and stated only in descriptions; the model-facing schema omits `additionalProperties`, and the handler rejects unknown fields including legacy/camelCase spellings.
 - Success data returns textual matches under `data.content`.
-- Display: summary field `pattern`.
+- Display: the primary is the quoted `pattern`. Every successful page publishes its displayed path count as a presentation-only `results` fact; a limited or timed-out non-empty page sets `at_least: true`, while failures publish no count. The Agent-visible success envelope remains unchanged.
 
 ## Conventions
 

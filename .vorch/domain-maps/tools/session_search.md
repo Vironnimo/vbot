@@ -13,7 +13,7 @@ Discovers persisted Sessions through backend-native search and retrieves exact c
 
 ## Result Contract
 
-- Every success is a normal Tool envelope with `items`, `has_more`, and `formatted_bytes`; paginated pages add `next_cursor`. Results carry no public `action`.
+- Every success is a normal Tool envelope with `items`, `has_more`, and `formatted_bytes`; paginated pages add `next_cursor`. Results carry no public `action`. Both Tool rows derive a presentation-only `results` count from the returned `items`; `has_more: true` renders the page count as a lower bound, and failures publish no count.
 - Session-list items contain Agent/Session identity, creation/activity timestamps, and title. A period-filtered item also carries a directly callable `read_ref` spanning the matching conversation blocks, so fuzzy requests such as “what did we discuss last weekend?” can list by time and immediately read only the relevant range. Search data identifies the resolved backend, result unit (`message`, `passage`, or `backend_defined`), ranking, and candidate-Session count.
 - Every first-party search item has a global rank, canonical identifiers, one source-faithful adaptive `excerpt`, and a directly callable `session_read` `read_ref` containing `agent_id`, `session_id`, `start_message_id`, and `end_message_id`. The backend's Message or Passage boundaries seed the reference, then canonical Session data expands both ends from the nearest preceding User Message through the last Message before the next User Message so a multi-Message answer is read as one conversation block.
 - Search items do not repeat exact content in a second field. The whole result is capped at 50 KiB; excerpts expand as far as the page budget permits rather than using a fixed per-hit character cap.

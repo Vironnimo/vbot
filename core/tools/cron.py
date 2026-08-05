@@ -13,6 +13,7 @@ from core.tools.tools import (
     ToolDisplay,
     ToolDisplayPart,
     ToolRegistry,
+    result_count_fact_builder,
     tool_failure,
     tool_success,
 )
@@ -142,7 +143,10 @@ def register_cron_tool(registry: ToolRegistry, cron_service: CronService) -> Non
         handler,
         open_input_schema=True,
         result_schema={"type": "object"},
-        display=ToolDisplay(parts_builder=_cron_display_parts),
+        display=ToolDisplay(
+            parts_builder=_cron_display_parts,
+            fact_builder=result_count_fact_builder("jobs", when_arguments={"action": "list"}),
+        ),
     )
 
 

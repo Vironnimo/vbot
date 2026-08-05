@@ -178,6 +178,13 @@ def glob_handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
             content = f"No paths matched pattern: {normalized_pattern}"
         if budget.timed_out:
             content = f"{content}\n{SEARCH_TIMEOUT_MARKER}"
+    available_results = max(len(collected) - result_offset, 0)
+    displayed_results = len(page)
+    context.add_display_count(
+        displayed_results,
+        "results",
+        at_least=displayed_results > 0 and (budget.timed_out or available_results > match_limit),
+    )
     return tool_success({"content": content})
 
 

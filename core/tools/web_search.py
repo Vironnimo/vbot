@@ -28,6 +28,7 @@ from core.tools.tools import (
     ToolDisplay,
     ToolDisplayField,
     ToolRegistry,
+    result_count_fact_builder,
     tool_failure,
     tool_success,
 )
@@ -683,18 +684,6 @@ def _search_result_envelope(
     return tool_success(payload)
 
 
-def _web_search_display_facts(_arguments: JsonObject, result: JsonObject) -> list[JsonObject]:
-    if result.get("ok") is not True:
-        return []
-    data = result.get("data")
-    if not isinstance(data, dict):
-        return []
-    result_count = data.get("result_count")
-    if isinstance(result_count, bool) or not isinstance(result_count, int) or result_count < 0:
-        return []
-    return [{"kind": "count", "value": result_count, "unit": "results"}]
-
-
 def register_web_search_tool(
     registry: ToolRegistry,
     credential_resolver: Callable[[str], str],
@@ -722,7 +711,7 @@ def register_web_search_tool(
                 ToolDisplayField("description", kind="description", quote=True),
                 ToolDisplayField("query", kind="query", quote=True),
             ),
-            fact_builder=_web_search_display_facts,
+            fact_builder=result_count_fact_builder("result_count"),
         ),
         parallel_safe=True,
     )

@@ -125,6 +125,32 @@ async def test_registration_exposes_two_small_stable_tools(tmp_path: Path) -> No
         SESSION_SEARCH_TOOL_NAME,
         SESSION_READ_TOOL_NAME,
     } == RECALL_TOOL_RESULT_NAMES
+    search_display = registry.display_for_call(
+        SESSION_SEARCH_TOOL_NAME,
+        {"query": "release"},
+        result={
+            "ok": True,
+            "data": {"items": [{}, {}], "has_more": True},
+            "error": None,
+            "artifacts": [],
+        },
+    )
+    read_display = registry.display_for_call(
+        SESSION_READ_TOOL_NAME,
+        {"session_id": "session-one"},
+        result={
+            "ok": True,
+            "data": {"items": [{}], "has_more": False},
+            "error": None,
+            "artifacts": [],
+        },
+    )
+    assert search_display["facts"] == [
+        {"kind": "count", "value": 2, "unit": "results", "at_least": True}
+    ]
+    assert read_display["facts"] == [
+        {"kind": "count", "value": 1, "unit": "results", "at_least": False}
+    ]
 
     context = RecallBackendContext(data_dir=tmp_path, sessions=sessions)
     for backend in (

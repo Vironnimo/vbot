@@ -437,6 +437,8 @@ def test_skill_list_tool_returns_grouped_skills_with_session_grant(tmp_path: Pat
     }
     assert groups == {"agent": ["mine"], "global": ["debugging"]}
     assert data["count"] == 2
+    display = tools.display_for_call(SKILL_LIST_TOOL_NAME, {}, result=result)
+    assert display["facts"] == [{"kind": "count", "value": 2, "unit": "results", "at_least": False}]
     # Sort order: global before agent.
     origins_in_order = [group["origin"] for group in data["skill_groups"]]
     assert origins_in_order.index("global") < origins_in_order.index("agent")

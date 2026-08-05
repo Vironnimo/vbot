@@ -23,6 +23,7 @@ from core.tools.tools import (
     ToolDisplay,
     ToolDisplayField,
     ToolRegistry,
+    result_count_fact_builder,
     tool_failure,
     tool_success,
 )
@@ -265,7 +266,7 @@ def register_skill_tool(
         result_schema={"type": "object"},
         session_scoped=True,
         open_input_schema=True,
-        display=ToolDisplay(),
+        display=ToolDisplay(fact_builder=result_count_fact_builder("count")),
     )
 
 

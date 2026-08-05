@@ -15,6 +15,7 @@ from core.tools.tools import (
     ToolDisplay,
     ToolDisplayPart,
     ToolRegistry,
+    result_count_fact_builder,
     tool_failure,
     tool_success,
 )
@@ -299,6 +300,7 @@ def register_memory_tool(registry: ToolRegistry, memory_service: MemoryService) 
         result_schema={"type": "object", "required": ["content", "scope", "entries"]},
         display=ToolDisplay(
             parts_builder=_memory_display_parts,
+            fact_builder=result_count_fact_builder("entries", when_arguments={"action": "list"}),
             hidden_argument_keys=("content",),
         ),
     )

@@ -16,6 +16,7 @@ from core.tools.tools import (
     ToolDisplay,
     ToolDisplayField,
     ToolRegistry,
+    result_count_fact_builder,
     tool_failure,
     tool_success,
 )
@@ -322,6 +323,7 @@ def register_image_generation_tool(registry: ToolRegistry, image_service: Any) -
                 ToolDisplayField("aspect_ratio"),
                 ToolDisplayField("resolution"),
             ),
+            fact_builder=result_count_fact_builder("images"),
         ),
         definition_profile_resolver=_image_generation_profile_resolver(image_service),
     )

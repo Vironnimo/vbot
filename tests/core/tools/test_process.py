@@ -161,6 +161,10 @@ async def test_status_without_session_id_lists_owned_sessions_only(
             "log_file": None,
         }
     ]
+    registry = ToolRegistry()
+    register_process_tool(registry, manager)
+    display = registry.display_for_call(PROCESS_TOOL_NAME, {"action": "status"}, result=result)
+    assert display["facts"] == [{"kind": "count", "value": 1, "unit": "results", "at_least": False}]
 
 
 @pytest.mark.asyncio

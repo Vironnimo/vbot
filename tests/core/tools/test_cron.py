@@ -355,6 +355,8 @@ def test_list_action_returns_success_and_next_fire_at(tmp_path: Path) -> None:
     assert jobs[1]["next_fire_at"] == "2026-05-15T12:00:00+00:00"
     assert jobs[2]["next_fire_at"] is None
     cron_service.list_jobs.assert_called_once_with()
+    display = registry.display_for_call(CRON_TOOL_NAME, {"action": "list"}, result=result)
+    assert display["facts"] == [{"kind": "count", "value": 3, "unit": "results", "at_least": False}]
 
 
 def test_list_action_uses_canonical_service_projection(tmp_path: Path) -> None:
