@@ -291,10 +291,13 @@ def test_start_server_process_is_durable_and_windowless_on_windows(
         server_management.subprocess, "CREATE_NEW_PROCESS_GROUP", 0x00000200, raising=False
     )
     monkeypatch.setattr(server_management.subprocess, "CREATE_NO_WINDOW", 0x08000000, raising=False)
+    monkeypatch.setattr(
+        server_management.subprocess, "CREATE_BREAKAWAY_FROM_JOB", 0x01000000, raising=False
+    )
 
     start_server_process(instance)
 
-    assert calls[0]["kwargs"]["creationflags"] == 0x08000200
+    assert calls[0]["kwargs"]["creationflags"] == 0x09000200
 
 
 def test_resolve_instance_uses_daily_log_file_contract(tmp_path: Path) -> None:
@@ -713,6 +716,66 @@ def test_stop_server_terminates_confirmed_vbot(
     assert calls == ["terminate", ("wait", 2.0)]
 
 
+def test_stop_server_waits_for_cooperative_runtime_shutdown(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    instance = make_instance(tmp_path)
+    calls: list[Any] = []
+
+    class FakeProcess:
+        pid = 456
+
+        def terminate(self) -> None:
+            raise AssertionError("cooperative shutdown must not terminate the process")
+
+        def wait(self, *, timeout: float) -> None:
+            calls.append(("wait", timeout))
+
+    monkeypatch.setattr(
+        server_management,
+        "probe_health",
+        lambda instance: HealthProbeResult(reachable=True, is_vbot=True, status_code=200),
+    )
+    monkeypatch.setattr(server_management, "find_listening_process", lambda instance: FakeProcess())
+    monkeypatch.setattr(server_management, "_request_cooperative_shutdown", lambda *_args: True)
+
+    result = stop_server(instance, shutdown_timeout_seconds=2.0)
+
+    assert result.ok is True
+    assert result.forced is False
+    assert calls == [("wait", 2.0)]
+
+
+def test_cooperative_shutdown_requires_control_record_for_listener_pid(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    instance = make_instance(tmp_path)
+    process = SimpleNamespace(pid=456)
+    posts: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        server_management,
+        "read_server_control",
+        lambda *_args: SimpleNamespace(pid=456, token="secret"),
+    )
+
+    def post(url: str, **kwargs: Any) -> SimpleNamespace:
+        posts.append({"url": url, **kwargs})
+        return SimpleNamespace(status_code=202)
+
+    monkeypatch.setattr(server_management.httpx, "post", post)
+
+    assert server_management._request_cooperative_shutdown(instance, process) is True
+    assert posts[0]["headers"] == {"X-VBot-Control-Token": "secret"}
+
+    monkeypatch.setattr(
+        server_management,
+        "read_server_control",
+        lambda *_args: SimpleNamespace(pid=999, token="secret"),
+    )
+    assert server_management._request_cooperative_shutdown(instance, process) is False
+    assert len(posts) == 1
+
+
 def test_stop_server_kills_after_terminate_timeout(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -770,6 +833,124 @@ def test_get_status_reports_running_with_webui(
     assert result.ok is True
     assert result.message == "running"
     assert result.webui == WebUIProbeResult(True, 200)
+
+
+def test_schedule_server_restart_detaches_exact_target_and_strips_run_context(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    instance = make_instance(tmp_path, port=9001)
+    captured: dict[str, Any] = {}
+    monkeypatch.setenv("VBOT_RUN_AGENT_ID", "main")
+    monkeypatch.setenv("VBOT_RUN_SESSION_ID", "session-1")
+
+    def open_process(arguments: list[str], environment: dict[str, str]) -> SimpleNamespace:
+        captured["arguments"] = arguments
+        captured["environment"] = environment
+        return SimpleNamespace(pid=7654)
+
+    monkeypatch.setattr(server_management, "_open_scheduled_restart_process", open_process)
+
+    result = server_management.schedule_server_restart(
+        instance,
+        service_name="vbot-test",
+        wait_pid=4321,
+    )
+
+    assert result.ok is True
+    assert result.message == "restart scheduled by helper process 7654"
+    assert captured["arguments"] == [
+        server_management.sys.executable,
+        "-m",
+        "cli.server_management",
+        "--scheduled-restart",
+        "--wait-pid",
+        "4321",
+        "--host",
+        "127.0.0.1",
+        "--port",
+        "9001",
+        "--data-dir",
+        str(instance.data_dir),
+        "--service-name",
+        "vbot-test",
+    ]
+    assert not any(key.startswith("VBOT_RUN_") for key in captured["environment"])
+
+
+def test_vbot_run_context_requires_agent_and_session_identity() -> None:
+    assert server_management.has_vbot_run_context({}) is False
+    assert server_management.has_vbot_run_context({"VBOT_RUN_AGENT_ID": "main"}) is False
+    assert (
+        server_management.has_vbot_run_context(
+            {"VBOT_RUN_AGENT_ID": "main", "VBOT_RUN_SESSION_ID": "session-1"}
+        )
+        is True
+    )
+
+
+def test_scheduled_restart_waits_then_runs_once_and_logs_result(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    instance = make_instance(tmp_path, port=9001)
+    events: list[object] = []
+
+    class FakeCaller:
+        def wait(self, *, timeout: float) -> None:
+            events.append(("wait", timeout))
+
+    class FakeLogger:
+        def info(self, message: str, value: str) -> None:
+            events.append(("log", message, value))
+
+        def error(self, message: str, value: str) -> None:
+            events.append(("error", message, value))
+
+    class FakeManager:
+        def get_logger(self, _name: str) -> FakeLogger:
+            return FakeLogger()
+
+        def close(self) -> None:
+            events.append("close")
+
+    monkeypatch.setattr(server_management, "resolve_instance", lambda **_kwargs: instance)
+    monkeypatch.setattr(
+        server_management, "_create_cli_log_manager", lambda _instance: FakeManager()
+    )
+    monkeypatch.setattr(server_management.psutil, "Process", lambda _pid: FakeCaller())
+    monkeypatch.setattr(
+        server_management.time, "sleep", lambda seconds: events.append(("sleep", seconds))
+    )
+    monkeypatch.setattr(
+        server_management,
+        "restart_server",
+        lambda target, *, service_name: CommandResult(
+            ok=True, message=f"restarted {service_name}", instance=target
+        ),
+    )
+
+    result = server_management._run_scheduled_restart(
+        [
+            "--scheduled-restart",
+            "--wait-pid",
+            "4321",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            "9001",
+            "--data-dir",
+            str(instance.data_dir),
+            "--service-name",
+            "vbot-test",
+        ]
+    )
+
+    assert result == 0
+    assert events == [
+        ("wait", 60.0),
+        ("sleep", 0.5),
+        ("log", "Scheduled update restart result: %s", "restarted vbot-test"),
+        "close",
+    ]
 
 
 def test_get_status_reports_non_vbot_conflict(

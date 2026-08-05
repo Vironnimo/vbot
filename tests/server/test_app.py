@@ -17,6 +17,7 @@ from core.runs import ChatRunManager, RunKind, RunStatus
 from core.runtime import Runtime
 from core.sessions import ChatSessionManager
 from core.utils.config import Config
+from core.utils.server_control import CONTROL_SHUTDOWN_PATH, CONTROL_TOKEN_HEADER
 from server.app import (
     ServerEventBus,
     _active_runs_snapshot,
@@ -73,6 +74,27 @@ def test_create_app_wires_runtime_services_into_state(tmp_path: Path) -> None:
         assert runtime.trigger_service is not None
 
     assert runtime.logger is not None
+
+
+def test_control_shutdown_requires_secret_and_requests_uvicorn_exit(tmp_path: Path) -> None:
+    requested: list[str] = []
+    app = create_app(
+        runtime=Runtime(Config(data_dir=tmp_path / "data")),
+        shutdown_token="local-secret",
+        request_shutdown=lambda: requested.append("shutdown"),
+    )
+
+    with TestClient(app) as client:
+        rejected = client.post(CONTROL_SHUTDOWN_PATH)
+        accepted = client.post(
+            CONTROL_SHUTDOWN_PATH,
+            headers={CONTROL_TOKEN_HEADER: "local-secret"},
+        )
+
+    assert rejected.status_code == 404
+    assert accepted.status_code == 202
+    assert accepted.json() == {"status": "stopping"}
+    assert requested == ["shutdown"]
 
 
 @pytest.mark.asyncio

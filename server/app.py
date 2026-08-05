@@ -7,7 +7,7 @@ import json
 import logging
 import os
 from collections import OrderedDict
-from collections.abc import AsyncGenerator, AsyncIterator
+from collections.abc import AsyncGenerator, AsyncIterator, Callable
 from contextlib import aclosing, asynccontextmanager, suppress
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, TypedDict, cast
@@ -32,6 +32,11 @@ from core.settings import SettingsValidationError, load_runtime_settings_json
 from core.tools.terminal_manager import TerminalNotFoundError
 from core.utils.config import Config
 from core.utils.log_viewer import LogViewer
+from core.utils.server_control import (
+    CONTROL_SHUTDOWN_PATH,
+    CONTROL_TOKEN_HEADER,
+    is_authorized_control_token,
+)
 from server.clients import ClientRegistry
 from server.events import (
     RESOURCE_KIND_CLIENTS,
@@ -113,6 +118,8 @@ def create_app(
     runtime: Any | None = None,
     config: Config | None = None,
     server_bind: ServerBindState | None = None,
+    shutdown_token: str | None = None,
+    request_shutdown: Callable[[], None] | None = None,
 ) -> FastAPIType:
     """Create the FastAPI app and wire runtime services into app state."""
     if FastAPI is None:
@@ -174,6 +181,16 @@ def create_app(
     @app.get("/health")
     async def health() -> JsonObject:
         return {"status": "ok"}
+
+    @app.post(CONTROL_SHUTDOWN_PATH, status_code=202, include_in_schema=False)
+    async def shutdown(request: Request) -> JsonObject:
+        provided_token = request.headers.get(CONTROL_TOKEN_HEADER)
+        if not is_authorized_control_token(provided_token, shutdown_token):
+            raise HTTPException(status_code=404)
+        if request_shutdown is None:
+            raise HTTPException(status_code=503, detail="Server shutdown is unavailable")
+        request_shutdown()
+        return {"status": "stopping"}
 
     @app.post("/api/rpc")
     async def rpc(request: Request) -> JsonObject:

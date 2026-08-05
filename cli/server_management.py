@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import locale
 import os
 import re
@@ -9,7 +10,7 @@ import socket
 import subprocess
 import sys
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -17,12 +18,19 @@ from typing import Any
 import httpx
 import psutil  # type: ignore[import-untyped]
 
+from core.tools.process_manager import subprocess_creation_flags
 from core.utils.config import DEFAULT_HOST, Config, resolve_port
 from core.utils.logging import CONSOLE_LOGGING_ENV_VAR, LogManager, resolve_daily_log_path
+from core.utils.server_control import (
+    CONTROL_SHUTDOWN_PATH,
+    CONTROL_TOKEN_HEADER,
+    read_server_control,
+)
 
 DEFAULT_STARTUP_TIMEOUT_SECONDS = 10.0
 DEFAULT_PROBE_TIMEOUT_SECONDS = 0.5
 DEFAULT_SHUTDOWN_TIMEOUT_SECONDS = 5.0
+DEFAULT_CONTROL_REQUEST_TIMEOUT_SECONDS = 1.0
 HEALTH_PATH = "/health"
 WEBUI_PATH = "/"
 WILDCARD_HOSTS = {"", "*", "0.0.0.0", "::"}
@@ -42,6 +50,9 @@ _SYSTEMCTL_RESTART_TIMEOUT_SECONDS = 30.0
 _SYSTEMCTL_TIMEOUT_RETURN_CODE = 124
 _SYSTEMD_RESTART_READY_TIMEOUT_SECONDS = 10.0
 _SYSTEMD_RESTART_PROBE_INTERVAL_SECONDS = 0.2
+_SCHEDULED_RESTART_WAIT_TIMEOUT_SECONDS = 60.0
+_SCHEDULED_RESTART_SETTLE_SECONDS = 0.5
+_RUN_CONTEXT_ENV_PREFIX = "VBOT_RUN_"
 
 
 def is_valid_systemd_service_name(service_name: str) -> bool:
@@ -229,7 +240,7 @@ def start_server_process(instance: ServerInstance) -> subprocess.Popen[bytes]:
             # Keep the long-lived server independent from the invoking shell and
             # explicitly suppress a console. DETACHED_PROCESS alone can still
             # leave Python with a visible console host in installer launch paths.
-            creationflags=(subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW),
+            creationflags=subprocess_creation_flags(new_process_group=True, breakaway=True),
         )
     return _open_server_process(args, env=environment, start_new_session=True)
 
@@ -456,7 +467,7 @@ def stop_server(
     *,
     shutdown_timeout_seconds: float = DEFAULT_SHUTDOWN_TIMEOUT_SECONDS,
 ) -> CommandResult:
-    """Stop a confirmed local vBot server with terminate/kill fallback."""
+    """Request Runtime shutdown, with bounded terminate/kill fallback."""
 
     health = probe_health(instance)
     if not health.reachable:
@@ -478,9 +489,11 @@ def stop_server(
             health=health,
         )
 
+    cooperative = _request_cooperative_shutdown(instance, process)
     forced = False
     try:
-        process.terminate()
+        if not cooperative:
+            process.terminate()
         process.wait(timeout=shutdown_timeout_seconds)
     except psutil.TimeoutExpired:
         forced = True
@@ -497,6 +510,29 @@ def stop_server(
         process_id=process.pid,
         forced=forced,
     )
+
+
+def _request_cooperative_shutdown(
+    instance: ServerInstance,
+    process: psutil.Process | Any,
+    *,
+    timeout_seconds: float = DEFAULT_CONTROL_REQUEST_TIMEOUT_SECONDS,
+) -> bool:
+    """Ask the exact listener process to enter its application shutdown path."""
+
+    control = read_server_control(instance.data_dir, instance.port)
+    if control is None or control.pid != process.pid:
+        return False
+    try:
+        response = httpx.post(
+            _probe_url(instance, CONTROL_SHUTDOWN_PATH),
+            headers={CONTROL_TOKEN_HEADER: control.token},
+            timeout=timeout_seconds,
+            trust_env=False,
+        )
+    except httpx.RequestError:
+        return False
+    return response.status_code == httpx.codes.ACCEPTED
 
 
 @dataclass(frozen=True)
@@ -765,6 +801,138 @@ def restart_server(
     )
 
 
+def has_vbot_run_context(environment: Mapping[str, str] | None = None) -> bool:
+    """Return whether Bash supplied the exact local Agent Run identity fields."""
+
+    values = os.environ if environment is None else environment
+    return bool(values.get("VBOT_RUN_AGENT_ID") and values.get("VBOT_RUN_SESSION_ID"))
+
+
+def schedule_server_restart(
+    instance: ServerInstance,
+    *,
+    service_name: str = DEFAULT_SERVICE_NAME,
+    wait_pid: int | None = None,
+) -> CommandResult:
+    """Detach one private restart attempt from the current server-owned process tree."""
+
+    if not is_valid_systemd_service_name(service_name):
+        return CommandResult(ok=False, message="invalid systemd service name", instance=instance)
+    parent_pid = _restart_handoff_wait_pid(instance) if wait_pid is None else wait_pid
+    arguments = [
+        sys.executable,
+        "-m",
+        "cli.server_management",
+        "--scheduled-restart",
+        "--wait-pid",
+        str(parent_pid),
+        "--host",
+        instance.host,
+        "--port",
+        str(instance.port),
+        "--data-dir",
+        str(instance.data_dir),
+        "--service-name",
+        service_name,
+    ]
+    environment = {
+        key: value
+        for key, value in os.environ.items()
+        if not key.startswith(_RUN_CONTEXT_ENV_PREFIX)
+    }
+    try:
+        process = _open_scheduled_restart_process(arguments, environment)
+    except OSError as exc:
+        return CommandResult(
+            ok=False,
+            message=f"could not schedule server restart: {exc}",
+            instance=instance,
+        )
+    return CommandResult(
+        ok=True,
+        message=f"restart scheduled by helper process {process.pid}",
+        instance=instance,
+    )
+
+
+def _restart_handoff_wait_pid(instance: ServerInstance) -> int:
+    """Return the outer server-owned launcher so Tool output can finish first."""
+
+    control = read_server_control(instance.data_dir, instance.port)
+    server_pid = control.pid if control is not None else None
+    try:
+        descendant = psutil.Process()
+        parent = descendant.parent()
+        while parent is not None:
+            if parent.pid == server_pid:
+                return int(descendant.pid)
+            descendant = parent
+            parent = descendant.parent()
+    except (psutil.Error, OSError):
+        pass
+    return os.getppid()
+
+
+def _open_scheduled_restart_process(
+    arguments: list[str], environment: dict[str, str]
+) -> subprocess.Popen[bytes]:
+    """Spawn the sole process allowed to leave the old server's containment boundary."""
+
+    creationflags = subprocess_creation_flags(new_process_group=True, breakaway=True)
+    return subprocess.Popen(
+        arguments,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        close_fds=True,
+        env=environment,
+        creationflags=creationflags,
+        start_new_session=os.name != "nt",
+    )
+
+
+def _run_scheduled_restart(argv: list[str]) -> int:
+    """Private detached entrypoint used only by ``schedule_server_restart``."""
+
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument("--scheduled-restart", action="store_true", required=True)
+    parser.add_argument("--wait-pid", type=int, required=True)
+    parser.add_argument("--host", required=True)
+    parser.add_argument("--port", type=int, required=True)
+    parser.add_argument("--data-dir", required=True)
+    parser.add_argument("--service-name", required=True)
+    arguments = parser.parse_args(argv)
+    instance = resolve_instance(
+        host=arguments.host,
+        port=arguments.port,
+        data_dir=arguments.data_dir,
+    )
+    manager = _create_cli_log_manager(instance)
+    logger = manager.get_logger(CLI_SERVER_LOGGER_NAME)
+    try:
+        if arguments.wait_pid <= 0 or arguments.wait_pid == os.getpid():
+            logger.error("Scheduled restart rejected invalid wait PID %s", arguments.wait_pid)
+            return 1
+        try:
+            caller = psutil.Process(arguments.wait_pid)
+            caller.wait(timeout=_SCHEDULED_RESTART_WAIT_TIMEOUT_SECONDS)
+        except psutil.NoSuchProcess:
+            pass
+        except psutil.TimeoutExpired:
+            logger.error(
+                "Scheduled restart abandoned because update process %s did not exit in time",
+                arguments.wait_pid,
+            )
+            return 1
+        time.sleep(_SCHEDULED_RESTART_SETTLE_SECONDS)
+        result = restart_server(instance, service_name=arguments.service_name)
+        log = logger.info if result.ok else logger.error
+        log("Scheduled update restart result: %s", result.message)
+        return 0 if result.ok else 1
+    finally:
+        manager.close()
+
+
 def get_status(instance: ServerInstance) -> CommandResult:
     """Return current vBot/API and WebUI status for the instance."""
 
@@ -795,3 +963,7 @@ def get_status(instance: ServerInstance) -> CommandResult:
         webui=WebUIProbeResult(available=False),
         log_path=instance.log_path,
     )
+
+
+if __name__ == "__main__":
+    raise SystemExit(_run_scheduled_restart(sys.argv[1:]))

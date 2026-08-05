@@ -44,7 +44,9 @@ from cli.server_management import (
     CommandResult,
     ServerInstance,
     decode_command_output,
+    has_vbot_run_context,
     restart_server,
+    schedule_server_restart,
     start_server,
     stop_server,
 )
@@ -829,7 +831,10 @@ def _finish(
         lines.append("server: not restarted (--no-restart)")
         return CommandResult(ok=True, message="\n".join(lines), instance=instance)
 
-    restarted = restart_server(instance, service_name=service_name, stop=stop, start=start)
+    if has_vbot_run_context():
+        restarted = schedule_server_restart(instance, service_name=service_name)
+    else:
+        restarted = restart_server(instance, service_name=service_name, stop=stop, start=start)
     lines.append(f"server: {restarted.message}")
     return CommandResult(ok=restarted.ok, message="\n".join(lines), instance=instance)
 

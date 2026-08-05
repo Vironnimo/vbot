@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import subprocess
 import sys
 import time
@@ -13,6 +14,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
+import psutil  # type: ignore[import-untyped]
 import pytest
 import pytest_asyncio
 
@@ -23,6 +25,7 @@ from core.tools.process_manager import (
     ProcessManager,
     SessionInputClosedError,
     SessionNotFoundError,
+    guarded_process_launch,
     subprocess_creation_flags,
 )
 
@@ -650,8 +653,17 @@ def test_windows_subprocess_creation_flags_hide_console_and_keep_process_group(
 ) -> None:
     monkeypatch.setattr(subprocess, "CREATE_NO_WINDOW", 0x08000000, raising=False)
     monkeypatch.setattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0x00000200, raising=False)
+    monkeypatch.setattr(subprocess, "CREATE_BREAKAWAY_FROM_JOB", 0x01000000, raising=False)
 
     assert subprocess_creation_flags(platform_name="nt") == 0x08000000
+    assert (
+        subprocess_creation_flags(
+            new_process_group=True,
+            breakaway=True,
+            platform_name="nt",
+        )
+        == 0x09000200
+    )
     assert (
         subprocess_creation_flags(
             new_process_group=True,
@@ -666,6 +678,50 @@ def test_windows_subprocess_creation_flags_hide_console_and_keep_process_group(
         )
         == 0
     )
+
+
+def test_guarded_posix_launch_wraps_exact_argv_and_lifetime_descriptor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(process_manager_module, "_POSIX_LIFETIME_READ_FD", 41)
+
+    launch = guarded_process_launch(["bash", "-c", "echo exact"], platform_name="posix")
+
+    assert launch.argv == (
+        sys.executable,
+        "-m",
+        "core.tools.process_guardian",
+        "--lifetime-fd",
+        "41",
+        "--",
+        "bash",
+        "-c",
+        "echo exact",
+    )
+    assert launch.pass_fds == (41,)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows Job Object contract")
+def test_windows_job_kills_descendant_when_containment_owner_crashes(tmp_path: Path) -> None:
+    pid_path = tmp_path / "child.pid"
+    owner_code = (
+        "import os,pathlib,subprocess,sys,time; "
+        "from core.tools.process_manager import activate_process_containment; "
+        "activate_process_containment(); "
+        "child=subprocess.Popen([sys.executable,'-c','import time; time.sleep(60)']); "
+        "pathlib.Path(sys.argv[1]).write_text(str(child.pid)); "
+        "time.sleep(.25); os._exit(7)"
+    )
+    owner = subprocess.Popen([sys.executable, "-c", owner_code, str(pid_path)])
+
+    assert owner.wait(timeout=10) == 7
+    child_pid = int(pid_path.read_text(encoding="utf-8"))
+    for _ in range(50):
+        if not psutil.pid_exists(child_pid):
+            break
+        time.sleep(0.1)
+
+    assert not psutil.pid_exists(child_pid)
 
 
 def test_unix_process_tree_kill_uses_sigkill(monkeypatch: pytest.MonkeyPatch) -> None:

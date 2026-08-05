@@ -5,9 +5,11 @@ from __future__ import annotations
 import asyncio
 import codecs
 import contextlib
+import ctypes
 import os
 import signal
 import subprocess
+import sys
 import uuid
 from asyncio import StreamWriter
 from asyncio.subprocess import PIPE, Process
@@ -30,14 +32,154 @@ SWEEP_INTERVAL_SECONDS = 60.0
 INPUT_IDLE_SECONDS = 15.0
 SUBMIT_BYTES = b"\r\n" if os.name == "nt" else b"\n"
 HARD_KILL_SIGNAL = getattr(signal, "SIGKILL", 9)
+_JOB_OBJECT_LIMIT_BREAKAWAY_OK = 0x00000800
+_JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000
+_JOB_OBJECT_EXTENDED_LIMIT_INFORMATION_CLASS = 9
+_WINDOWS_SERVER_JOB_HANDLE: int | None = None
+_POSIX_LIFETIME_READ_FD: int | None = None
+_POSIX_LIFETIME_WRITE_FD: int | None = None
 
 ProcessStatus = Literal["running", "completed", "failed", "killed"]
 OutputStreamName = Literal["stdout", "stderr"]
 
 
+@dataclass(frozen=True, slots=True)
+class GuardedProcessLaunch:
+    """Exact argv plus inherited descriptors for a contained child launch."""
+
+    argv: tuple[str, ...]
+    pass_fds: tuple[int, ...] = ()
+
+
+def activate_process_containment(*, platform_name: str = os.name) -> None:
+    """Make this server process the OS-level lifetime owner of later children."""
+
+    if platform_name == "nt":
+        _activate_windows_process_job()
+        return
+    _activate_posix_lifetime_pipe()
+
+
+def guarded_process_launch(
+    argv: Sequence[str], *, platform_name: str = os.name
+) -> GuardedProcessLaunch:
+    """Wrap a POSIX child with the active server-lifetime guardian when enabled."""
+
+    if not argv:
+        raise ValueError("Process argv must not be empty")
+    if platform_name == "nt" or _POSIX_LIFETIME_READ_FD is None:
+        return GuardedProcessLaunch(tuple(argv))
+    return GuardedProcessLaunch(
+        (
+            sys.executable,
+            "-m",
+            "core.tools.process_guardian",
+            "--lifetime-fd",
+            str(_POSIX_LIFETIME_READ_FD),
+            "--",
+            *argv,
+        ),
+        (_POSIX_LIFETIME_READ_FD,),
+    )
+
+
+def _activate_posix_lifetime_pipe() -> None:
+    global _POSIX_LIFETIME_READ_FD, _POSIX_LIFETIME_WRITE_FD
+
+    if _POSIX_LIFETIME_READ_FD is not None:
+        return
+    read_fd, write_fd = os.pipe()
+    os.set_inheritable(read_fd, False)
+    os.set_inheritable(write_fd, False)
+    _POSIX_LIFETIME_READ_FD = read_fd
+    _POSIX_LIFETIME_WRITE_FD = write_fd
+
+
+def _activate_windows_process_job() -> None:
+    """Assign the server to a kill-on-close Windows Job Object."""
+
+    global _WINDOWS_SERVER_JOB_HANDLE
+
+    if _WINDOWS_SERVER_JOB_HANDLE is not None:
+        return
+    from ctypes import wintypes
+
+    class IoCounters(ctypes.Structure):
+        _fields_ = [
+            ("ReadOperationCount", ctypes.c_ulonglong),
+            ("WriteOperationCount", ctypes.c_ulonglong),
+            ("OtherOperationCount", ctypes.c_ulonglong),
+            ("ReadTransferCount", ctypes.c_ulonglong),
+            ("WriteTransferCount", ctypes.c_ulonglong),
+            ("OtherTransferCount", ctypes.c_ulonglong),
+        ]
+
+    class BasicLimitInformation(ctypes.Structure):
+        _fields_ = [
+            ("PerProcessUserTimeLimit", ctypes.c_longlong),
+            ("PerJobUserTimeLimit", ctypes.c_longlong),
+            ("LimitFlags", wintypes.DWORD),
+            ("MinimumWorkingSetSize", ctypes.c_size_t),
+            ("MaximumWorkingSetSize", ctypes.c_size_t),
+            ("ActiveProcessLimit", wintypes.DWORD),
+            ("Affinity", ctypes.c_size_t),
+            ("PriorityClass", wintypes.DWORD),
+            ("SchedulingClass", wintypes.DWORD),
+        ]
+
+    class ExtendedLimitInformation(ctypes.Structure):
+        _fields_ = [
+            ("BasicLimitInformation", BasicLimitInformation),
+            ("IoInfo", IoCounters),
+            ("ProcessMemoryLimit", ctypes.c_size_t),
+            ("JobMemoryLimit", ctypes.c_size_t),
+            ("PeakProcessMemoryUsed", ctypes.c_size_t),
+            ("PeakJobMemoryUsed", ctypes.c_size_t),
+        ]
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.CreateJobObjectW.argtypes = (ctypes.c_void_p, wintypes.LPCWSTR)
+    kernel32.CreateJobObjectW.restype = wintypes.HANDLE
+    kernel32.SetInformationJobObject.argtypes = (
+        wintypes.HANDLE,
+        ctypes.c_int,
+        ctypes.c_void_p,
+        wintypes.DWORD,
+    )
+    kernel32.SetInformationJobObject.restype = wintypes.BOOL
+    kernel32.AssignProcessToJobObject.argtypes = (wintypes.HANDLE, wintypes.HANDLE)
+    kernel32.AssignProcessToJobObject.restype = wintypes.BOOL
+    kernel32.GetCurrentProcess.restype = wintypes.HANDLE
+    kernel32.CloseHandle.argtypes = (wintypes.HANDLE,)
+    kernel32.CloseHandle.restype = wintypes.BOOL
+
+    job = kernel32.CreateJobObjectW(None, None)
+    if not job:
+        raise ctypes.WinError(ctypes.get_last_error())
+    information = ExtendedLimitInformation()
+    information.BasicLimitInformation.LimitFlags = (
+        _JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | _JOB_OBJECT_LIMIT_BREAKAWAY_OK
+    )
+    if not kernel32.SetInformationJobObject(
+        job,
+        _JOB_OBJECT_EXTENDED_LIMIT_INFORMATION_CLASS,
+        ctypes.byref(information),
+        ctypes.sizeof(information),
+    ):
+        error = ctypes.WinError(ctypes.get_last_error())
+        kernel32.CloseHandle(job)
+        raise error
+    if not kernel32.AssignProcessToJobObject(job, kernel32.GetCurrentProcess()):
+        error = ctypes.WinError(ctypes.get_last_error())
+        kernel32.CloseHandle(job)
+        raise error
+    _WINDOWS_SERVER_JOB_HANDLE = int(job)
+
+
 def subprocess_creation_flags(
     *,
     new_process_group: bool = False,
+    breakaway: bool = False,
     platform_name: str = os.name,
 ) -> int:
     """Return platform flags for a windowless child process."""
@@ -47,6 +189,8 @@ def subprocess_creation_flags(
     flags = int(cast(Any, subprocess).CREATE_NO_WINDOW)
     if new_process_group:
         flags |= int(cast(Any, subprocess).CREATE_NEW_PROCESS_GROUP)
+    if breakaway:
+        flags |= int(cast(Any, subprocess).CREATE_BREAKAWAY_FROM_JOB)
     return flags
 
 
@@ -200,11 +344,13 @@ class ProcessManager:
             process_env.update(env)
         process_env["PYTHONIOENCODING"] = "utf-8"
 
+        launch = guarded_process_launch(argv)
         creationflags = subprocess_creation_flags(new_process_group=True)
         start_new_session = os.name != "nt"
+        pass_fds = launch.pass_fds if os.name != "nt" else ()
 
         proc = await asyncio.create_subprocess_exec(
-            *argv,
+            *launch.argv,
             stdin=PIPE,
             stdout=PIPE,
             stderr=PIPE,
@@ -212,6 +358,7 @@ class ProcessManager:
             cwd=str(cwd) if cwd is not None else None,
             creationflags=creationflags,
             start_new_session=start_new_session,
+            pass_fds=pass_fds,
         )
         session_id = uuid.uuid4().hex
         session = ProcessSession(
@@ -817,6 +964,7 @@ def _utc_now() -> datetime:
 
 __all__ = [
     "FINISHED_SESSION_TTL",
+    "GuardedProcessLaunch",
     "INPUT_IDLE_SECONDS",
     "PROCESS_BUFFER_CAP_BYTES",
     "ProcessManager",
@@ -826,4 +974,7 @@ __all__ = [
     "SessionInputClosedError",
     "SessionNotFoundError",
     "SessionStillRunningError",
+    "activate_process_containment",
+    "guarded_process_launch",
+    "subprocess_creation_flags",
 ]

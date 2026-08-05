@@ -17,7 +17,7 @@ from typing import Any, Protocol
 
 import pyte
 
-from core.tools.process_manager import subprocess_creation_flags
+from core.tools.process_manager import guarded_process_launch, subprocess_creation_flags
 
 _HARD_KILL_SIGNAL = getattr(signal, "SIGKILL", 9)
 _ALTERNATE_SCREEN_MODES = frozenset({47, 1047, 1049})
@@ -354,7 +354,14 @@ def spawn_terminal_adapter(
 
     from ptyprocess import PtyProcess
 
-    process = PtyProcess.spawn(list(argv), cwd=str(cwd), env=dict(env), dimensions=(rows, columns))
+    launch = guarded_process_launch(argv)
+    process = PtyProcess.spawn(
+        list(launch.argv),
+        cwd=str(cwd),
+        env=dict(env),
+        dimensions=(rows, columns),
+        pass_fds=launch.pass_fds,
+    )
     return _PosixTerminalAdapter(process)
 
 
