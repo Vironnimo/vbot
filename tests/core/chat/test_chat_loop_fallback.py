@@ -187,6 +187,54 @@ async def test_fallback_model_activates_on_retryable_error(tmp_path: Path) -> No
 
 
 @pytest.mark.asyncio
+async def test_streaming_fallback_activates_after_same_model_recovery_is_exhausted(
+    tmp_path: Path,
+) -> None:
+    agent = StubAgent(
+        id="coder",
+        model="openai/gpt-5.2",
+        fallback_model="anthropic/claude-sonnet-4::api-key",
+        allowed_tools=["*"],
+    )
+    primary_adapter = StubAdapter(
+        [],
+        stream_responses=[ProviderRateLimitError("primary rate limited") for _ in range(3)],
+    )
+    fallback_adapter = StubAdapter(
+        [],
+        stream_responses=[
+            [
+                {"type": "content_delta", "text": "Recovered"},
+                {"type": "finish", "reason": "stop"},
+            ]
+        ],
+    )
+    runtime: Any = StubRuntime(
+        data_dir=tmp_path,
+        agent=agent,
+        adapter=primary_adapter,
+        adapters_by_connection={
+            "openai:api-key": primary_adapter,
+            "anthropic:api-key": fallback_adapter,
+        },
+        provider_ids={"openai", "anthropic"},
+    )
+
+    assistant = await build_chat_loop(runtime, streaming=True).send(
+        "coder", "Hi", session_id="session-one"
+    )
+
+    run = next(iter(runtime.chat_runs._runs.values()))
+    assert assistant.content == "Recovered"
+    assert len(primary_adapter.stream_requests) == 3
+    assert len(fallback_adapter.stream_requests) == 1
+    assert run.status == RunStatus.COMPLETED
+    assert [event.type for event in run.events if event.type == MODEL_FALLBACK_ACTIVATED_EVENT] == [
+        MODEL_FALLBACK_ACTIVATED_EVENT
+    ]
+
+
+@pytest.mark.asyncio
 async def test_fallback_adapter_construction_failure(tmp_path: Path) -> None:
     agent = StubAgent(
         id="coder",
