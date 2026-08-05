@@ -67,7 +67,6 @@ describe('ChatActivityPanel', () => {
 
   it('keeps a narrow rail collapsed and opens the current Session tasks', () => {
     const navigate = vi.fn();
-    const cancel = vi.fn();
     const running = subAgentTask({
       id: 'running',
       agentId: 'builder',
@@ -80,9 +79,21 @@ describe('ChatActivityPanel', () => {
       content: 'Review the layout',
       status: 'completed',
     });
+    const cancelled = subAgentTask({
+      id: 'cancelled',
+      agentId: 'writer',
+      content: 'Write the release notes',
+      status: 'cancelled',
+    });
+    const failed = subAgentTask({
+      id: 'failed',
+      agentId: 'tester',
+      content: 'Run the browser checks',
+      status: 'failed',
+    });
     const foreground = subAgentTask({
       id: 'foreground',
-      agentId: 'tester',
+      agentId: 'planner',
       content: 'Run foreground checks',
       status: 'completed',
       delivery: 'inline',
@@ -95,11 +106,10 @@ describe('ChatActivityPanel', () => {
           {
             id: 'assistant-run',
             type: 'assistant_run',
-            items: [completed, foreground, running],
+            items: [completed, cancelled, failed, foreground, running],
           },
         ],
         onNavigateToSubAgent: navigate,
-        onCancelSubAgent: cancel,
       },
     });
     flushSync();
@@ -113,20 +123,48 @@ describe('ChatActivityPanel', () => {
     flushSync();
 
     expect(rail.getAttribute('aria-expanded')).toBe('true');
-    const cards = [...document.querySelectorAll('.chat-activity__task')];
-    expect(cards).toHaveLength(2);
-    expect(cards[0].textContent).toContain('Implement the sidebar');
-    expect(cards[0].textContent).toContain('Running');
+    expect(document.querySelector('#chat-activity-title').textContent).toBe(
+      'Background tasks',
+    );
+    const rows = [...document.querySelectorAll('.chat-activity__task-row')];
+    expect(rows).toHaveLength(4);
+    expect(rows[0].textContent.trim()).toBe('builder');
+    expect(rows[0].getAttribute('aria-label')).toBe(
+      'Open builder Session · Working',
+    );
+    expect(rows[0].querySelector('[data-status="running"]')).not.toBeNull();
+    const completedRow = rows.find(
+      (row) => row.textContent.trim() === 'reviewer',
+    );
+    expect(completedRow.getAttribute('aria-label')).toBe(
+      'Open reviewer Session · Completed',
+    );
+    expect(
+      completedRow.querySelector('[data-status="success"]'),
+    ).not.toBeNull();
+    const cancelledRow = rows.find(
+      (row) => row.textContent.trim() === 'writer',
+    );
+    expect(cancelledRow.getAttribute('aria-label')).toBe(
+      'Open writer Session · Cancelled',
+    );
+    expect(
+      cancelledRow.querySelector('[data-status="cancelled"]'),
+    ).not.toBeNull();
+    const failedRow = rows.find((row) => row.textContent.trim() === 'tester');
+    expect(failedRow.getAttribute('aria-label')).toBe(
+      'Open tester Session · Failed',
+    );
+    expect(failedRow.querySelector('[data-status="failed"]')).not.toBeNull();
+    expect(document.body.textContent).not.toContain('Implement the sidebar');
+    expect(document.body.textContent).not.toContain('View session');
     expect(document.body.textContent).not.toContain('Run foreground checks');
 
-    cards[0].querySelector('.chat-activity__open-task').click();
+    rows[0].click();
     expect(navigate).toHaveBeenCalledWith({
       agentId: 'builder',
       sessionId: 'session-running',
     });
-
-    cards[0].querySelector('.chat-activity__cancel-task').click();
-    expect(cancel).toHaveBeenCalledWith({ tool: running });
 
     document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
     flushSync();
@@ -143,7 +181,9 @@ describe('ChatActivityPanel', () => {
     document.querySelector('.chat-activity__rail').click();
     flushSync();
 
-    expect(document.querySelector('.chat-activity__empty')).not.toBeNull();
+    expect(
+      document.querySelector('.chat-activity__empty').textContent.trim(),
+    ).toBe('No background tasks');
     expect(document.body.textContent).toContain('No background tasks');
   });
 });

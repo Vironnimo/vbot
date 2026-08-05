@@ -2035,7 +2035,6 @@
         timelineItems={activeTimelineItems}
         subAgentStatuses={chatState.subAgentStatuses}
         onNavigateToSubAgent={handleNavigateToSubAgentLink}
-        onCancelSubAgent={handleCancelSubAgent}
       />
     </div>
   {/if}
