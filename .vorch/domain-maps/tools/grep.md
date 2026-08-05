@@ -9,7 +9,7 @@ Searches file contents by regex or fixed string.
 - Schema: one flat model-facing object with required `pattern` and optional `path`, `glob`, `ignore_case`, `literal`, `multiline`, `context`, `limit`, `offset`, `include_ignored`, and `output_mode`. Omitted `output_mode` selects `content`; explicit `files_with_matches` and `count` select their result shapes. Descriptions state that `context` applies only to `content`; the handler rejects it for the other modes, rejects unknown/camelCase fields, and owns all omitted defaults. The schema omits `additionalProperties` and JSON Schema defaults.
 - `output_mode`: omitted or `content` returns content rows; `files_with_matches` returns paths; `count` returns per-file counts.
 - Success data returns textual output under `data.content`.
-- Display: summary fields `pattern` and `path`.
+- Display: the flexible primary is a future nonblank `description` when present, otherwise `pattern`; `path` deliberately stays out of the collapsed row and remains in Args. A successful call publishes its displayed match count as presentation-only metadata, with `at_least: true` when the bounded search proves only a lower bound; the Agent-visible success envelope remains unchanged.
 
 ## Conventions
 

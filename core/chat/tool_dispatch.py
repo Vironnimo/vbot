@@ -124,6 +124,7 @@ class _EmittingToolRegistry(ToolRegistry):
         self._denial_resolver = denial_resolver
         self._rejections = dict(rejections or {})
         self._tool_timings: dict[str, JsonObject] = {}
+        self._tool_displays: dict[str, JsonObject] = {}
         self._extension_hook_lock = asyncio.Lock()
 
     def _hook_context(self) -> HookContext:
@@ -175,6 +176,8 @@ class _EmittingToolRegistry(ToolRegistry):
                 timing = _timing_payload(started_at, started_perf)
                 self._tool_timings[context.tool_call_id] = timing
                 fingerprint = _tool_context_schema_fingerprint(self, context)
+                display = _empty_tool_display_payload()
+                self._tool_displays[context.tool_call_id] = display
                 self._run.emit(
                     TOOL_CALL_STARTED_EVENT,
                     {
@@ -184,7 +187,7 @@ class _EmittingToolRegistry(ToolRegistry):
                             "name": context.tool_name,
                             "arguments": deepcopy(arguments),
                         },
-                        "display": _empty_tool_display_payload(),
+                        "display": display,
                         "schema_fingerprint": fingerprint,
                     },
                 )
@@ -197,6 +200,7 @@ class _EmittingToolRegistry(ToolRegistry):
                             "name": context.tool_name,
                         },
                         "result": rejected_result,
+                        "display": display,
                         "timing": timing,
                         "schema_fingerprint": fingerprint,
                         "error_code": rejection.code,
@@ -212,6 +216,14 @@ class _EmittingToolRegistry(ToolRegistry):
                 denied_result = tool_failure("tool_not_allowed", denial_message)
                 timing = _timing_payload(started_at, started_perf)
                 self._tool_timings[context.tool_call_id] = timing
+                display = _tool_display_payload(
+                    self._registry,
+                    context.tool_name,
+                    arguments,
+                    context=context,
+                    result=denied_result,
+                )
+                self._tool_displays[context.tool_call_id] = display
                 self._run.emit(
                     TOOL_CALL_STARTED_EVENT,
                     {
@@ -221,11 +233,7 @@ class _EmittingToolRegistry(ToolRegistry):
                             "name": context.tool_name,
                             "arguments": deepcopy(arguments),
                         },
-                        "display": _tool_display_payload(
-                            self._registry,
-                            context.tool_name,
-                            arguments,
-                        ),
+                        "display": display,
                         "schema_fingerprint": _tool_context_schema_fingerprint(self, context),
                     },
                 )
@@ -238,6 +246,7 @@ class _EmittingToolRegistry(ToolRegistry):
                             "name": context.tool_name,
                         },
                         "result": denied_result,
+                        "display": display,
                         "timing": timing,
                         "schema_fingerprint": _tool_context_schema_fingerprint(self, context),
                         "error_code": "tool_not_allowed",
@@ -284,6 +293,12 @@ class _EmittingToolRegistry(ToolRegistry):
                     result = decision.replacement
 
             fingerprint = _tool_context_schema_fingerprint(self, context)
+            started_display = _tool_display_payload(
+                self._registry,
+                context.tool_name,
+                effective_arguments,
+                context=context,
+            )
             self._run.emit(
                 TOOL_CALL_STARTED_EVENT,
                 {
@@ -293,11 +308,7 @@ class _EmittingToolRegistry(ToolRegistry):
                         "name": context.tool_name,
                         "arguments": deepcopy(effective_arguments),
                     },
-                    "display": _tool_display_payload(
-                        self._registry,
-                        context.tool_name,
-                        effective_arguments,
-                    ),
+                    "display": started_display,
                     "schema_fingerprint": fingerprint,
                 },
             )
@@ -328,6 +339,14 @@ class _EmittingToolRegistry(ToolRegistry):
 
             timing = _timing_payload(started_at, started_perf)
             self._tool_timings[context.tool_call_id] = timing
+            completed_display = _tool_display_payload(
+                self._registry,
+                context.tool_name,
+                effective_arguments,
+                context=context,
+                result=result,
+            )
+            self._tool_displays[context.tool_call_id] = completed_display
             error = result.get("error")
             error_code = error.get("code") if isinstance(error, dict) else None
             _LOGGER.debug(
@@ -354,6 +373,7 @@ class _EmittingToolRegistry(ToolRegistry):
                         "name": context.tool_name,
                     },
                     "result": result,
+                    "display": completed_display,
                     "timing": timing,
                     "schema_fingerprint": fingerprint,
                     "error_code": error_code,
@@ -370,6 +390,11 @@ class _EmittingToolRegistry(ToolRegistry):
         """Return measured timing for a completed tool call."""
         timing = self._tool_timings.get(tool_call_id)
         return dict(timing) if timing is not None else None
+
+    def display_for_completed_call(self, tool_call_id: str) -> JsonObject | None:
+        """Return the final presentation snapshot for a completed Tool call."""
+        display = self._tool_displays.get(tool_call_id)
+        return deepcopy(display) if display is not None else None
 
     async def _dispatch_with_failure_envelope(
         self,
@@ -509,6 +534,7 @@ async def _dispatch_tool_calls(
                 name=tool_call.name,
                 content=json.dumps(result, ensure_ascii=False, separators=(",", ":")),
                 timing=emitting_registry.timing_for_call(tool_call.id),
+                tool_display=emitting_registry.display_for_completed_call(tool_call.id),
             )
         )
         media_outputs.extend(_read_media_outputs(result, tool_call_id=tool_call.id))
@@ -560,6 +586,11 @@ def _fail_tool_calls_without_dispatch(
             if contract is not None
             else _safe_schema_fingerprint(context.registry, tool_call.name)
         )
+        display = _tool_display_payload(
+            context.registry,
+            tool_call.name,
+            tool_call.arguments,
+        )
         context.run.emit(
             TOOL_CALL_STARTED_EVENT,
             {
@@ -569,11 +600,7 @@ def _fail_tool_calls_without_dispatch(
                     "name": tool_call.name,
                     "arguments": deepcopy(tool_call.arguments),
                 },
-                "display": _tool_display_payload(
-                    context.registry,
-                    tool_call.name,
-                    tool_call.arguments,
-                ),
+                "display": display,
                 "schema_fingerprint": fingerprint,
             },
         )
@@ -588,6 +615,7 @@ def _fail_tool_calls_without_dispatch(
                     "name": tool_call.name,
                 },
                 "result": result,
+                "display": display,
                 "timing": timing,
                 "schema_fingerprint": fingerprint,
                 "error_code": code,
@@ -599,6 +627,7 @@ def _fail_tool_calls_without_dispatch(
                 name=tool_call.name,
                 content=json.dumps(result, ensure_ascii=False, separators=(",", ":")),
                 timing=timing,
+                tool_display=display,
             )
         )
     return tool_messages
@@ -724,14 +753,21 @@ def _activate_triggered_skills(
             )
 
 
-def _tool_display_payload(registry: Any, tool_name: str, arguments: Any) -> JsonObject:
+def _tool_display_payload(
+    registry: Any,
+    tool_name: str,
+    arguments: Any,
+    *,
+    context: ToolContext | None = None,
+    result: JsonObject | None = None,
+) -> JsonObject:
     display_for_call = getattr(registry, "display_for_call", None)
     if not callable(display_for_call):
         return _empty_tool_display_payload()
 
     try:
-        payload = display_for_call(tool_name, arguments)
-    except ToolNotFoundError:
+        payload = display_for_call(tool_name, arguments, context=context, result=result)
+    except (ToolNotFoundError, TypeError, ValueError):
         return _empty_tool_display_payload()
 
     if not isinstance(payload, dict):
@@ -740,7 +776,13 @@ def _tool_display_payload(registry: Any, tool_name: str, arguments: Any) -> Json
 
 
 def _empty_tool_display_payload() -> JsonObject:
-    return {"summary": "", "hidden_argument_keys": []}
+    return {
+        "version": 1,
+        "summary": "",
+        "hidden_argument_keys": [],
+        "primary": [],
+        "facts": [],
+    }
 
 
 def _validated_tool_result(tool_name: str, result: Any) -> JsonObject:

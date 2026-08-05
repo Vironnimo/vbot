@@ -102,6 +102,21 @@ def test_register_web_search_tool_schema() -> None:
     assert parameters["required"] == ["query"]
     assert "additionalProperties" not in parameters
     assert tool.open_input_schema is True
+    display = registry.display_for_call(
+        "web_search",
+        {
+            "description": "Find the current release notes",
+            "query": "vBot release notes",
+        },
+        result={
+            "ok": True,
+            "error": None,
+            "data": {"result_count": 1},
+            "artifacts": [],
+        },
+    )
+    assert display["primary"][0]["value"] == "Find the current release notes"
+    assert display["facts"] == [{"kind": "count", "value": 1, "unit": "results", "at_least": False}]
 
     properties = parameters["properties"]
     assert "provider" not in properties

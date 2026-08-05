@@ -1531,6 +1531,11 @@ export function startRun(sessionState, run) {
     runId: run.run_id,
     sseUrl: run.sse_url,
     status: run.status ?? CHAT_STATUS_RUNNING,
+    startedAt:
+      run.started_at ??
+      (run.events ?? []).find((event) => event?.type === 'run_started')
+        ?.timestamp ??
+      null,
     iterationCount:
       Number.isInteger(run.iteration_count) && run.iteration_count >= 0
         ? run.iteration_count
@@ -1628,6 +1633,8 @@ function beginRunFromEvent(sessionState, event) {
     runId: event.run_id,
     sseUrl: currentSseUrl,
     status: CHAT_STATUS_RUNNING,
+    startedAt:
+      event.timestamp ?? (isSameRun ? currentRun?.startedAt : null) ?? null,
     iterationCount:
       isSameRun && Number.isInteger(currentRun?.iterationCount)
         ? currentRun.iterationCount

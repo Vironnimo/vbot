@@ -951,6 +951,7 @@ def _active_runs_snapshot(state: Any) -> list[JsonObject]:
             "session_id": run.session_id,
             "run_kind": run.run_kind.value,
             "status": RunStatus.RUNNING.value,
+            "started_at": run.created_at,
             "iteration_count": run.iteration_count,
             "sse_url": f"/api/runs/{run.id}/events",
         }

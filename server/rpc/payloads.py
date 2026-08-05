@@ -29,6 +29,7 @@ def _run_response(
         "session_id": run.session_id,
         "run_kind": run.run_kind.value,
         "status": run.status.value,
+        "started_at": run.created_at,
         "iteration_count": run.iteration_count,
         "events": [remove_opaque_provider_metadata(event.to_dict()) for event in run.events],
     }

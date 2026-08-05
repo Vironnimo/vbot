@@ -22,12 +22,14 @@ from core.chat.tool_dispatch import (
     _dispatch_tool_calls as _dispatch_resolved_tool_calls,
 )
 from core.extensions import Deny, ExtensionRegistry, HookContext, Modify, Replace
-from core.runs import TOOL_CALL_STARTED_EVENT, Run, RunStatus
+from core.runs import TOOL_CALL_RESULT_EVENT, TOOL_CALL_STARTED_EVENT, Run, RunStatus
 from core.sessions import ChatSessionManager
 from core.skills import SkillRegistry
 from core.tools import (
     ToolContext,
     ToolContract,
+    ToolDisplay,
+    ToolDisplayField,
     ToolRegistry,
     tool_failure,
     tool_success,
@@ -614,6 +616,60 @@ async def test_dispatch_validates_and_emits_exact_provider_cycle_contract(
     assert result["error"]["code"] == "invalid_arguments"
     assert handler_calls == []
     assert started.payload["schema_fingerprint"] == contracts["profiled"].schema_fingerprint
+
+
+@pytest.mark.asyncio
+async def test_dispatch_carries_final_ui_display_into_event_and_tool_message(
+    tmp_path: Path,
+) -> None:
+    def handler(context: ToolContext, _arguments: JsonObject) -> JsonObject:
+        context.add_display_count(10, "matches")
+        return tool_success({"content": "matches"})
+
+    tools = ToolRegistry()
+    tools.register(
+        "profiled",
+        "Profiled Tool.",
+        {"type": "object", "additionalProperties": True},
+        handler,
+        display=ToolDisplay(
+            primary_candidates=(
+                ToolDisplayField("description", kind="description", quote=True),
+                ToolDisplayField("query", kind="query", quote=True),
+            )
+        ),
+        open_input_schema=True,
+    )
+    runtime, agent = _build_runtime_and_agent(tmp_path, tools)
+    session = _build_session(tmp_path)
+    run = Run(run_id="run-display", agent_id=agent.id, session_id=session.id)
+
+    messages, _ = await _dispatch_tool_calls(
+        runtime,
+        agent,
+        [
+            ToolCall(
+                id="display-call",
+                name="profiled",
+                arguments={
+                    "description": "Find every version variable",
+                    "query": "VERSION_[A-Z_]+",
+                },
+            )
+        ],
+        session,
+        run,
+        nesting_depth=0,
+    )
+
+    started = next(event for event in run.events if event.type == TOOL_CALL_STARTED_EVENT)
+    completed = next(event for event in run.events if event.type == TOOL_CALL_RESULT_EVENT)
+    assert started.payload["display"]["primary"][0]["value"] == ("Find every version variable")
+    assert started.payload["display"]["facts"] == []
+    assert completed.payload["display"]["facts"] == [
+        {"kind": "count", "value": 10, "unit": "matches", "at_least": False}
+    ]
+    assert messages[0].tool_display == completed.payload["display"]
 
 
 class TestExtensionDecisionWiring:

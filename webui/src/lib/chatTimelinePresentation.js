@@ -22,7 +22,8 @@ const TOOL_DISPLAY_ARGS = {
   skill: ['name'],
 };
 const TOOL_NO_SUMMARY_NAMES = new Set(['status']);
-const MAX_TOOL_LABEL_LENGTH = 80;
+export const DEFAULT_TOOL_PRIMARY_MAX_CHARACTERS = 64;
+const TOOL_PATH_SEGMENT_LIMIT = 3;
 const MAX_SUBAGENT_PREVIEW_LENGTH = 96;
 const MAX_BACKGROUND_BASH_LABEL_LENGTH = 96;
 const SUBAGENT_TOOL_NAMES = new Set(['subagent']);
@@ -266,23 +267,26 @@ export const toolNameForEvent = (event) => {
 };
 
 export const toolArgumentForEvent = (event) => {
-  const toolCall = toolCallFromEvent(event);
-  if (!toolCall) {
-    return '';
-  }
-  const displaySummary = trimmedString(toolDisplayFromEvent(event)?.summary);
-  if (displaySummary) {
-    return displaySummary;
-  }
-  return humanReadableToolLabel(toolCall?.name ?? '', toolCall.arguments ?? {});
+  return toolArgumentSummary(toolRowFromEvent(event));
 };
 
-export const toolRowFromEvent = (event) => ({
-  name: toolNameForEvent(event),
-  toolCall: toolCallFromEvent(event),
-  display: toolDisplayFromEvent(event),
-  startedEvent: event,
-});
+export const toolRowFromEvent = (event) => {
+  const resultEvent = event?.type === 'tool_call_result' ? event : null;
+  return {
+    name: toolNameForEvent(event),
+    toolCall: toolCallFromEvent(event),
+    display: toolDisplayFromEvent(event),
+    startedEvent: resultEvent ? null : event,
+    resultEvent,
+    result: resultEvent?.payload?.result,
+    timing: resultEvent?.payload?.timing ?? null,
+    status: resultEvent
+      ? hasToolResultError(event)
+        ? 'failed'
+        : 'success'
+      : 'running',
+  };
+};
 
 export const visibleRunChildren = (assistantRun) =>
   (assistantRun.items ?? []).filter((child) => {
@@ -311,25 +315,16 @@ export function isRunChildWorking(assistantRun, child) {
   return childIndex >= 0 && childIndex === children.length - 1;
 }
 
-export const runMetaParts = (assistantRun) => {
+export const runMetaParts = (assistantRun, nowMs = Date.now()) => {
   const parts = [];
   const iterationLabel = labelForRunIterations(assistantRun);
   if (iterationLabel) {
     parts.push(iterationLabel);
   }
-  const duration = formatRunDuration(assistantRun);
-  if (
-    assistantRun.status === 'cancelled' ||
-    assistantRun.status === 'interrupted'
-  ) {
-    // Non-success terminal rows name the outcome before the runtime; the
-    // duration alone would read like a normal completed run.
-    parts.push(runStatusLabel(assistantRun.status));
-    if (duration) {
-      parts.push(duration);
-    }
-  } else {
-    parts.push(duration || runStatusLabel(assistantRun.status));
+  const duration = formatRunDuration(assistantRun, nowMs);
+  parts.push(runStatusLabel(assistantRun.status));
+  if (duration) {
+    parts.push(duration);
   }
   if (
     assistantRun.status === 'running' &&
@@ -367,12 +362,24 @@ export const toolStatus = (tool) => {
 // for ages. `mergeToolStarted` clears this to `running` the moment it dispatches.
 export const isToolPreparing = (tool) => tool?.status === 'preparing';
 
-export const toolStatusLabel = (tool) => {
+export const toolStatusLabel = (tool, nowMs = Date.now()) => {
   if (toolStatus(tool) === 'cancelled') {
-    return t('chat.toolCancelled', 'cancelled');
+    const duration = formatDurationMs(
+      toolDurationMs(tool),
+      'chat.toolDurationSeconds',
+    );
+    return [t('chat.toolCancelled', 'cancelled'), duration]
+      .filter(Boolean)
+      .join(' · ');
   }
   if (toolStatus(tool) === 'running') {
-    return '';
+    if (isToolPreparing(tool)) {
+      return '';
+    }
+    return formatDurationMs(
+      elapsedSinceTimestamp(toolStartedTimestamp(tool), nowMs),
+      'chat.toolDurationSeconds',
+    );
   }
   return formatDurationMs(toolDurationMs(tool), 'chat.toolDurationSeconds');
 };
@@ -400,6 +407,89 @@ export const subAgentRunDurationMs = (tool, subAgentStatuses = {}) => {
   }
 
   return null;
+};
+
+export const subAgentRunStartedAt = (tool, subAgentStatuses = {}) => {
+  const statuses = isPlainObject(subAgentStatuses) ? subAgentStatuses : {};
+  const runId = subAgentEffectiveRunId(tool, statuses);
+  if (runId) {
+    return trimmedString(statuses[`runStarted:${runId}`]);
+  }
+
+  const agentId = subAgentTargetAddress(tool);
+  const sessionId = subAgentSessionId(tool);
+  if (agentId && sessionId) {
+    return trimmedString(statuses[`sessionStarted:${agentId}::${sessionId}`]);
+  }
+  return '';
+};
+
+export const assistantRunNeedsLiveClock = (
+  assistantRun,
+  subAgentStatuses = {},
+) => {
+  if (
+    assistantRun?.status === 'running' &&
+    timestampToMs(assistantRun.startTimestamp ?? assistantRun.timestamp) !==
+      null
+  ) {
+    return true;
+  }
+  return (assistantRun?.items ?? []).some((tool) => {
+    if (tool?.type !== 'tool_call') {
+      return false;
+    }
+    if (isSubAgentSpawnTool(tool)) {
+      return (
+        subAgentDotStatus(tool, subAgentStatuses) === 'running' &&
+        timestampToMs(subAgentRunStartedAt(tool, subAgentStatuses)) !== null
+      );
+    }
+    return (
+      toolStatus(tool) === 'running' &&
+      !isToolPreparing(tool) &&
+      timestampToMs(toolStartedTimestamp(tool)) !== null
+    );
+  });
+};
+
+export const liveClockCadenceMs = (
+  timelineItems,
+  subAgentStatuses = {},
+  nowMs = Date.now(),
+) => {
+  const starts = [];
+  for (const assistantRun of timelineItems ?? []) {
+    if (assistantRun?.type !== 'assistant_run') {
+      continue;
+    }
+    if (assistantRun.status === 'running') {
+      starts.push(assistantRun.startTimestamp ?? assistantRun.timestamp);
+    }
+    for (const tool of assistantRun.items ?? []) {
+      if (tool?.type !== 'tool_call') {
+        continue;
+      }
+      if (isSubAgentSpawnTool(tool)) {
+        if (subAgentDotStatus(tool, subAgentStatuses) === 'running') {
+          starts.push(subAgentRunStartedAt(tool, subAgentStatuses));
+        }
+      } else if (toolStatus(tool) === 'running' && !isToolPreparing(tool)) {
+        starts.push(toolStartedTimestamp(tool));
+      }
+    }
+  }
+  const validStarts = starts
+    .map(timestampToMs)
+    .filter((value) => value !== null);
+  if (validStarts.length === 0) {
+    return 0;
+  }
+  return validStarts.some(
+    (startedAt) => Math.max(0, nowMs - startedAt) < 10_000,
+  )
+    ? 100
+    : 1000;
 };
 
 // Name of the most recent tool call the child run made, recorded from bridged
@@ -433,12 +523,25 @@ export const subAgentToolStatusLabel = (
   tool,
   dotStatus,
   subAgentStatuses = {},
+  nowMs = Date.now(),
 ) => {
   if (dotStatus === 'cancelled') {
-    return t('chat.toolCancelled', 'cancelled');
+    const duration = formatDurationMs(
+      subAgentRunDurationMs(tool, subAgentStatuses),
+      'chat.toolDurationSeconds',
+    );
+    return [t('chat.toolCancelled', 'cancelled'), duration]
+      .filter(Boolean)
+      .join(' · ');
   }
   if (dotStatus === 'running') {
-    return '';
+    return formatDurationMs(
+      elapsedSinceTimestamp(
+        subAgentRunStartedAt(tool, subAgentStatuses),
+        nowMs,
+      ),
+      'chat.toolDurationSeconds',
+    );
   }
 
   const childDurationMs = subAgentRunDurationMs(tool, subAgentStatuses);
@@ -483,17 +586,155 @@ export const toolArguments = (tool) =>
   tool.arguments ?? tool.toolCall?.arguments ?? streamingPreviewArguments(tool);
 
 export const toolArgumentSummary = (tool) => {
-  const displaySummary = trimmedString(toolDisplay(tool)?.summary);
-  if (displaySummary) {
-    return displaySummary;
-  }
+  return toolRowPresentation(tool)
+    .primary.map((part) => part.text)
+    .filter(Boolean)
+    .join(' · ');
+};
 
-  const argumentsValue = toolArguments(tool) ?? streamingPreviewArguments(tool);
-  if (argumentsValue === undefined || argumentsValue === null) {
+export const toolRowPresentation = (tool) => {
+  const display = toolDisplay(tool);
+  const structuredPrimary = Array.isArray(display?.primary)
+    ? display.primary.map(toolPrimaryPart).filter(Boolean).slice(0, 2)
+    : [];
+  const displaySummary = trimmedString(display?.summary);
+  const legacySummary =
+    displaySummary ||
+    humanReadableToolLabel(
+      toolNameForRunTool(tool),
+      toolArguments(tool) ?? streamingPreviewArguments(tool),
+    );
+  const primary =
+    structuredPrimary.length > 0
+      ? structuredPrimary
+      : legacySummary
+        ? [
+            toolPrimaryPart({
+              kind: 'text',
+              value: legacySummary,
+              full_value: legacySummary,
+              truncate: 'end',
+              tooltip: 'truncated',
+              max_characters: DEFAULT_TOOL_PRIMARY_MAX_CHARACTERS,
+            }),
+          ].filter(Boolean)
+        : [];
+  const facts = Array.isArray(display?.facts)
+    ? display.facts.map(toolFactPresentation).filter(Boolean)
+    : [];
+  return { primary, facts };
+};
+
+function toolPrimaryPart(part) {
+  if (!isPlainObject(part)) {
+    return null;
+  }
+  const fullText = trimmedString(part.full_value) || trimmedString(part.value);
+  if (!fullText) {
+    return null;
+  }
+  const kind = trimmedString(part.kind) || 'text';
+  const truncate = ['start', 'end', 'middle', 'never'].includes(part.truncate)
+    ? part.truncate
+    : 'end';
+  const maxCharacters =
+    Number.isInteger(part.max_characters) && part.max_characters > 0
+      ? part.max_characters
+      : DEFAULT_TOOL_PRIMARY_MAX_CHARACTERS;
+  const sourceValue =
+    kind === 'path' ? compactToolPath(trimmedString(part.value)) : fullText;
+  const text = truncateSemanticValue(sourceValue, truncate, maxCharacters);
+  const tooltipMode = ['always', 'none', 'truncated'].includes(part.tooltip)
+    ? part.tooltip
+    : 'truncated';
+  const showTooltip =
+    tooltipMode === 'always' ||
+    (tooltipMode === 'truncated' && text !== fullText);
+  return {
+    kind,
+    text,
+    fullText,
+    truncate,
+    quote: part.quote === true,
+    copyable: part.copyable === true,
+    tooltipText: showTooltip ? fullText : '',
+  };
+}
+
+function toolFactPresentation(fact) {
+  if (
+    !isPlainObject(fact) ||
+    fact.kind !== 'count' ||
+    !Number.isInteger(fact.value) ||
+    fact.value < 0 ||
+    !['matches', 'results'].includes(fact.unit)
+  ) {
+    return null;
+  }
+  const renderedCount = `${fact.value}${fact.at_least === true ? '+' : ''}`;
+  const singular = fact.value === 1 && fact.at_least !== true;
+  const label =
+    fact.unit === 'matches'
+      ? singular
+        ? t('chat.toolFact.match', '{count} match', { count: renderedCount })
+        : t('chat.toolFact.matches', '{count} matches', {
+            count: renderedCount,
+          })
+      : singular
+        ? t('chat.toolFact.result', '{count} result', {
+            count: renderedCount,
+          })
+        : t('chat.toolFact.results', '{count} results', {
+            count: renderedCount,
+          });
+  return { kind: 'count', text: label };
+}
+
+export function compactToolPath(value) {
+  const normalized = trimmedString(value).replaceAll('\\', '/');
+  if (!normalized) {
     return '';
   }
-  return humanReadableToolLabel(toolNameForRunTool(tool), argumentsValue);
-};
+  const absolute =
+    normalized.startsWith('/') || /^[A-Za-z]:\//.test(normalized);
+  const segments = normalized.split('/').filter(Boolean);
+  if (!absolute && segments.length <= TOOL_PATH_SEGMENT_LIMIT) {
+    return normalized;
+  }
+  if (segments.length <= TOOL_PATH_SEGMENT_LIMIT) {
+    return normalized;
+  }
+  return `…/${segments.slice(-TOOL_PATH_SEGMENT_LIMIT).join('/')}`;
+}
+
+export function truncateSemanticValue(
+  value,
+  mode,
+  maxCharacters = DEFAULT_TOOL_PRIMARY_MAX_CHARACTERS,
+) {
+  const text = typeof value === 'string' ? value : '';
+  if (
+    mode === 'never' ||
+    !Number.isInteger(maxCharacters) ||
+    maxCharacters < 1 ||
+    text.length <= maxCharacters
+  ) {
+    return text;
+  }
+  if (maxCharacters === 1) {
+    return '…';
+  }
+  if (mode === 'start') {
+    return `…${text.slice(-(maxCharacters - 1))}`;
+  }
+  if (mode === 'middle') {
+    const available = maxCharacters - 1;
+    const prefixLength = Math.ceil(available / 2);
+    const suffixLength = Math.floor(available / 2);
+    return `${text.slice(0, prefixLength)}…${text.slice(-suffixLength)}`;
+  }
+  return `${text.slice(0, maxCharacters - 1)}…`;
+}
 
 // While a tool call is still streaming, the completed top-level string fields
 // extracted from the partial arguments JSON stand in for the parsed arguments
@@ -1264,7 +1505,7 @@ function runStatusLabel(status) {
   return t('chat.runStatus.running', 'Running');
 }
 
-function formatRunDuration(assistantRun) {
+function formatRunDuration(assistantRun, nowMs = Date.now()) {
   const durationFromTiming = formatDurationMs(
     assistantRun.durationMs,
     'chat.runDurationSeconds',
@@ -1276,7 +1517,16 @@ function formatRunDuration(assistantRun) {
     assistantRun.startTimestamp ?? assistantRun.timestamp,
   );
   const end = timestampToMs(assistantRun.endTimestamp);
-  if (start === null || end === null || end < start) {
+  if (start === null) {
+    return '';
+  }
+  if (assistantRun.status === 'running') {
+    return formatDurationMs(
+      Math.max(0, nowMs - start),
+      'chat.runDurationSeconds',
+    );
+  }
+  if (end === null || end < start) {
     return '';
   }
   return formatDurationMs(end - start, 'chat.runDurationSeconds');
@@ -1321,10 +1571,24 @@ function toolDurationMs(tool) {
   return end - start;
 }
 
+function toolStartedTimestamp(tool) {
+  return tool?.timing?.started_at ?? tool?.startedEvent?.timestamp ?? '';
+}
+
+function elapsedSinceTimestamp(timestamp, nowMs) {
+  const start = timestampToMs(timestamp);
+  if (start === null || !Number.isFinite(nowMs)) {
+    return null;
+  }
+  return Math.max(0, nowMs - start);
+}
+
 function toolDisplay(tool) {
   const display =
     tool?.display ??
     tool?.toolCall?.display ??
+    tool?.resultEvent?.payload?.display ??
+    tool?.resultEvent?.payload?.message?.tool_display ??
     tool?.startedEvent?.payload?.display;
   return isPlainObject(display) ? display : null;
 }
@@ -1371,6 +1635,12 @@ function humanReadableToolLabel(toolName, argumentsValue) {
         .filter(Boolean)
         .join(' · ');
     }
+    const legacyOperation = isPlainObject(args.request)
+      ? trimmedString(args.request.operation)
+      : '';
+    if (legacyOperation) {
+      return legacyOperation;
+    }
   }
 
   const displayArgs = TOOL_DISPLAY_ARGS[toolName];
@@ -1383,24 +1653,10 @@ function humanReadableToolLabel(toolName, argumentsValue) {
     }
   }
 
-  const requestOperation = trimmedString(
-    isPlainObject(args.request) ? args.request.operation : null,
-  );
-  if (requestOperation) {
-    return requestOperation;
-  }
-
   if (toolNameHasHiddenArguments(toolName)) {
     return '';
   }
-
-  const firstStringEntry = Object.values(args).find(
-    (value) =>
-      typeof value === 'string' &&
-      value.length <= MAX_TOOL_LABEL_LENGTH &&
-      value.trim() !== '',
-  );
-  return firstStringEntry ?? '';
+  return '';
 }
 
 function searchToolLabel(args, includePath) {

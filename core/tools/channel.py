@@ -23,6 +23,7 @@ from core.tools.tools import (
     ToolDefinitionProfile,
     ToolDefinitionProfileContext,
     ToolDisplay,
+    ToolDisplayPart,
     ToolRegistry,
     tool_failure,
     tool_success,
@@ -219,13 +220,15 @@ def _channel_send_profile_resolver(channel_service: ChannelService):
     return resolve
 
 
-def _channel_send_display_summary(arguments: JsonObject) -> str:
-    parts: list[str] = []
-    for field_name in ("channel_id", "message"):
-        value = arguments.get(field_name)
-        if isinstance(value, str) and value.strip():
-            parts.append(value.strip())
-    return " · ".join(parts)
+def _channel_send_display_parts(arguments: JsonObject) -> tuple[ToolDisplayPart, ...]:
+    parts: list[ToolDisplayPart] = []
+    channel_id = arguments.get("channel_id")
+    if isinstance(channel_id, str) and channel_id.strip():
+        parts.append(ToolDisplayPart(channel_id.strip(), kind="identifier", truncate="middle"))
+    message = arguments.get("message")
+    if isinstance(message, str) and message.strip():
+        parts.append(ToolDisplayPart(message.strip()))
+    return tuple(parts)
 
 
 def register_channel_send_tool(
@@ -257,7 +260,7 @@ def register_channel_send_tool(
         handler,
         open_input_schema=True,
         result_schema={"type": "object", "required": ["channel_id", "platform_target"]},
-        display=ToolDisplay(summary_builder=_channel_send_display_summary),
+        display=ToolDisplay(parts_builder=_channel_send_display_parts),
         definition_profile_resolver=_channel_send_profile_resolver(channel_service),
     )
 

@@ -9,6 +9,7 @@ from core.subagents import SubAgentCoordinator, SubAgentPromptTarget
 from core.tools.tools import (
     JsonObject,
     ToolDisplay,
+    ToolDisplayPart,
     ToolPromptBlockRegistry,
     ToolRegistry,
 )
@@ -150,7 +151,7 @@ def register_subagent_tools(
         open_input_schema=True,
         result_schema={"type": "object"},
         display=ToolDisplay(
-            summary_builder=_subagent_display_summary,
+            parts_builder=_subagent_display_parts,
             hidden_argument_keys=("content",),
         ),
     )
@@ -161,20 +162,26 @@ def register_subagent_tools(
         )
 
 
-def _subagent_display_summary(arguments: JsonObject) -> str:
+def _subagent_display_parts(arguments: JsonObject) -> tuple[ToolDisplayPart, ...]:
     action = arguments.get("action")
     if action not in {"run", "status", "cancel"}:
-        return ""
-    parts = [action]
+        return ()
     agent_id = arguments.get("agent_id")
-    if isinstance(agent_id, str) and agent_id:
-        parts.append(agent_id)
-    for key in ("content", "id"):
-        value = arguments.get(key)
-        if isinstance(value, str) and value:
-            parts.append(value)
-            break
-    return " · ".join(parts)
+    if action == "run":
+        parts: list[ToolDisplayPart] = []
+        if isinstance(agent_id, str) and agent_id:
+            parts.append(ToolDisplayPart(agent_id, kind="identifier", truncate="middle"))
+        content = arguments.get("content")
+        if isinstance(content, str) and content:
+            parts.append(ToolDisplayPart(content))
+        if parts:
+            return tuple(parts)
+    parts = [ToolDisplayPart(action, truncate="never", tooltip="none")]
+    work_id = arguments.get("id")
+    target = work_id if isinstance(work_id, str) and work_id else agent_id
+    if isinstance(target, str) and target:
+        parts.append(ToolDisplayPart(target, kind="identifier", truncate="middle"))
+    return tuple(parts)
 
 
 def _render_subagent_prompt_block(context: Any, coordinator: SubAgentCoordinator) -> str:

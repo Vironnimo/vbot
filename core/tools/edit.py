@@ -17,6 +17,7 @@ from core.tools.tools import (
     JsonObject,
     ToolContext,
     ToolDisplay,
+    ToolDisplayField,
     ToolHandler,
     ToolRegistry,
     tool_failure,
@@ -311,7 +312,15 @@ def register_edit_tool(registry: ToolRegistry, *, file_state: FileReadState) -> 
             "required": ["message", "path", "first_changed_line", "replacements"],
         },
         display=ToolDisplay(
-            summary_fields=("path",),
+            primary_candidates=(
+                ToolDisplayField(
+                    "path",
+                    kind="path",
+                    truncate="start",
+                    tooltip="always",
+                    copyable=True,
+                ),
+            ),
             hidden_argument_keys=("newString", "new_string", "oldString", "old_string"),
         ),
     )

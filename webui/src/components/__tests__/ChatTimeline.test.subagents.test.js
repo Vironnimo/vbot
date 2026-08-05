@@ -210,7 +210,14 @@ describe('ChatTimeline', () => {
       '.subagent-tool-event .subagent-line',
     );
 
-    expect(subagentLine?.textContent).toContain('view session');
+    expect(
+      subagentLine?.querySelector('.subagent-session-action'),
+    ).not.toBeNull();
+    expect(
+      subagentLine
+        ?.querySelector('.subagent-session-action')
+        ?.getAttribute('aria-label'),
+    ).toBe('Open Sub-Agent Session');
     expect(subagentLine?.querySelector('.te-dot.running')).not.toBeNull();
     expect(subagentLine?.querySelector('.te-dot.done')).toBeNull();
   });
@@ -373,6 +380,82 @@ describe('ChatTimeline', () => {
     );
 
     expect(timeLabel?.textContent).toContain('4.2s');
+  });
+
+  it('shows the Child Run live runtime instead of the spawn Tool duration', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-08-05T18:00:06.000Z'));
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-subagent-live-runtime',
+    );
+    appendRunEvent(sessionState, {
+      type: 'tool_call_started',
+      run_id: 'run-parent-live-runtime',
+      sequence: 1,
+      timestamp: '2026-08-05T18:00:00.000Z',
+      payload: {
+        tool_call: {
+          id: 'call-subagent-live-runtime',
+          index: 0,
+          name: 'subagent',
+          arguments: {
+            action: 'run',
+            agent_id: 'beta',
+            content: 'Inspect in the background',
+            background: true,
+          },
+        },
+      },
+    });
+    appendRunEvent(sessionState, {
+      type: 'tool_call_result',
+      run_id: 'run-parent-live-runtime',
+      sequence: 2,
+      timestamp: '2026-08-05T18:00:00.050Z',
+      payload: {
+        tool_call: {
+          id: 'call-subagent-live-runtime',
+          index: 0,
+          name: 'subagent',
+        },
+        result: {
+          ok: true,
+          data: {
+            agent_id: 'beta',
+            session_id: 'sub-session-live-runtime',
+            run_id: 'sub-run-live-runtime',
+            status: 'running',
+            delivery: 'automatic',
+          },
+        },
+        timing: { duration_ms: 50 },
+      },
+    });
+
+    mountedComponent = mount(ChatTimeline, {
+      target: document.body,
+      props: {
+        sessionState,
+        agentName: 'Alpha',
+        subAgentStatuses: {
+          'run:sub-run-live-runtime': 'running',
+          'runStarted:sub-run-live-runtime': '2026-08-05T18:00:01.000Z',
+        },
+      },
+    });
+    flushSync();
+
+    const timeLabel = document.querySelector(
+      '.subagent-tool-event .subagent-line .te-time',
+    );
+    expect(timeLabel?.textContent).toBe('5.0s');
+
+    await vi.advanceTimersByTimeAsync(500);
+    flushSync();
+    expect(timeLabel?.textContent).toBe('5.5s');
+    expect(timeLabel?.textContent).not.toContain('0.1s');
   });
 
   it('shows no time on a completed non-blocking sub-agent without a tracked runtime', () => {

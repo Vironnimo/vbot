@@ -9,6 +9,7 @@ from core.tools.tools import (
     JsonObject,
     ToolContext,
     ToolDisplay,
+    ToolDisplayField,
     ToolRegistry,
     tool_failure,
     tool_success,
@@ -84,5 +85,7 @@ def register_text_to_speech_tool(registry: ToolRegistry, speech_service: Any) ->
         make_text_to_speech_handler(speech_service),
         open_input_schema=True,
         result_schema={"type": "object", "required": ["message", "artifact"]},
-        display=ToolDisplay(summary_fields=("text",)),
+        display=ToolDisplay(
+            primary_candidates=(ToolDisplayField("text", kind="text", quote=True),)
+        ),
     )

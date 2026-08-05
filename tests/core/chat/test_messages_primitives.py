@@ -16,6 +16,7 @@ from .messages_test_support import (
     TextBlock,
     ToolCall,
     _embed_notes_into_request,
+    _message_to_request_dict,
     datetime,
     pytest,
     reply_surface_from_note,
@@ -420,6 +421,34 @@ class TestChatMessageFactories:
 
         assert message.timing == FIXED_TIMING
         assert message.to_dict()["timing"] == FIXED_TIMING
+
+    def test_tool_message_persists_display_but_provider_projection_strips_it(self):
+        display = {
+            "version": 1,
+            "primary": [{"kind": "path", "value": "src/app.py"}],
+            "facts": [],
+        }
+        message = ChatMessage.tool(
+            tool_call_id="call_abc",
+            name="read",
+            content='{"ok":true}',
+            tool_display=display,
+            timestamp=FIXED_TIMESTAMP,
+        )
+
+        assert message.to_dict()["tool_display"] == display
+        assert ChatMessage.from_dict(message.to_dict()).tool_display == display
+        assert "tool_display" not in _message_to_request_dict(message)
+
+    def test_non_tool_message_rejects_tool_display(self):
+        with pytest.raises(ChatMessageValidationError, match="cannot include tool_display"):
+            ChatMessage(
+                id="user-1",
+                timestamp="2026-05-03T14:30:00+00:00",
+                role="user",
+                content="hello",
+                tool_display={"version": 1},
+            ).to_dict()
 
     def test_run_summary_contains_run_status_and_timing(self):
         message = ChatMessage.run_summary(

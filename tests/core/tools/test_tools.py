@@ -1,5 +1,6 @@
 """Tests for tool registry, envelopes, and execution scheduling."""
 
+import ast
 import asyncio
 import logging
 import threading
@@ -19,6 +20,8 @@ from core.tools import (
     ToolDefinitionProfile,
     ToolDefinitionProfileContext,
     ToolDisplay,
+    ToolDisplayField,
+    ToolDisplayPart,
     ToolExecutionConfig,
     ToolExecutor,
     ToolNoteHook,
@@ -407,18 +410,138 @@ class TestTool:
         payload = display.to_payload({"pattern": "TODO", "path": "src", "content": "large body"})
 
         assert payload == {
+            "version": 1,
             "summary": "TODO · src",
             "hidden_argument_keys": ["content"],
+            "primary": [
+                {
+                    "kind": "text",
+                    "value": "TODO · src",
+                    "full_value": "TODO · src",
+                    "truncate": "end",
+                    "tooltip": "truncated",
+                    "max_characters": 64,
+                    "quote": False,
+                    "copyable": False,
+                }
+            ],
+            "facts": [],
         }
 
     def test_display_omits_empty_argument_summary(self) -> None:
         display = ToolDisplay(summary_fields=("path",))
 
-        assert display.to_payload({}) == {"summary": "", "hidden_argument_keys": []}
+        assert display.to_payload({}) == {
+            "version": 1,
+            "summary": "",
+            "hidden_argument_keys": [],
+            "primary": [],
+            "facts": [],
+        }
+
+    def test_display_prefers_nonblank_structured_candidate(self) -> None:
+        display = ToolDisplay(
+            primary_candidates=(
+                ToolDisplayField("description", kind="description", quote=True),
+                ToolDisplayField("command", kind="command"),
+            )
+        )
+
+        described = display.to_payload(
+            {"description": "  run tests  ", "command": "python -m pytest"}
+        )
+        fallback = display.to_payload({"description": "  ", "command": "python -m pytest"})
+
+        assert described["primary"][0]["value"] == "run tests"
+        assert described["primary"][0]["kind"] == "description"
+        assert described["primary"][0]["quote"] is True
+        assert fallback["primary"][0]["value"] == "python -m pytest"
+        assert fallback["primary"][0]["kind"] == "command"
+
+    def test_display_builds_computed_semantic_parts(self) -> None:
+        display = ToolDisplay(
+            parts_builder=lambda _arguments: (
+                ToolDisplayPart("status", truncate="never", tooltip="none"),
+                ToolDisplayPart("process-session-one", kind="identifier", truncate="middle"),
+            )
+        )
+
+        payload = display.to_payload({"action": "status"})
+
+        assert payload["summary"] == "status · process-session-one"
+        assert payload["primary"][0]["truncate"] == "never"
+        assert payload["primary"][1]["kind"] == "identifier"
+        assert payload["primary"][1]["truncate"] == "middle"
+
+    def test_display_resolves_complete_path_against_call_cwd(self, tmp_path: Path) -> None:
+        context = ToolContext(
+            agent_id="agent-1",
+            session_id="session-1",
+            run_id="run-1",
+            tool_call_id="call-1",
+            tool_name="read",
+            tool_call_index=0,
+            workspace=tmp_path / "workspace",
+            cwd=tmp_path / "project",
+            vbot_root=tmp_path,
+            data_root=tmp_path / "data",
+        )
+        display = ToolDisplay(
+            primary_candidates=(
+                ToolDisplayField(
+                    "path",
+                    kind="path",
+                    truncate="start",
+                    tooltip="always",
+                    copyable=True,
+                ),
+            )
+        )
+
+        payload = display.to_payload({"path": "src/main.py"}, context=context)
+
+        assert payload["primary"][0] == {
+            "kind": "path",
+            "value": "src/main.py",
+            "full_value": (tmp_path / "project" / "src" / "main.py").as_posix(),
+            "truncate": "start",
+            "tooltip": "always",
+            "max_characters": 64,
+            "quote": False,
+            "copyable": True,
+        }
+
+    def test_context_records_validated_presentation_count(self) -> None:
+        context = make_context()
+
+        context.add_display_count(10, "matches", at_least=True)
+
+        assert context.presentation_facts == [
+            {"kind": "count", "value": 10, "unit": "matches", "at_least": True}
+        ]
 
     def test_display_rejects_bare_string_summary_fields(self) -> None:
         with pytest.raises(ValueError, match="summary_fields"):
             ToolDisplay(summary_fields="path")  # type: ignore[arg-type]
+
+    def test_every_builtin_registration_has_an_explicit_display_profile(self) -> None:
+        tools_dir = Path(__file__).parents[3] / "core" / "tools"
+        missing: list[str] = []
+        for source_path in tools_dir.glob("*.py"):
+            tree = ast.parse(source_path.read_text(encoding="utf-8"), filename=str(source_path))
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
+                    continue
+                if node.func.attr != "register" or not isinstance(node.func.value, ast.Name):
+                    continue
+                if node.func.value.id != "registry":
+                    continue
+                keyword_names = {keyword.arg for keyword in node.keywords}
+                is_tool_registration = len(node.args) >= 4 or "handler" in keyword_names
+                if is_tool_registration and "display" not in keyword_names:
+                    missing.append(f"{source_path.name}:{node.lineno}")
+
+        assert missing == []
 
     def test_frozen_raises_on_attribute_assignment(self) -> None:
         tool = Tool(
@@ -938,8 +1061,22 @@ class TestToolRegistryDispatch:
         )
 
         assert payload == {
+            "version": 1,
             "summary": "notes.md",
             "hidden_argument_keys": ["content"],
+            "primary": [
+                {
+                    "kind": "text",
+                    "value": "notes.md",
+                    "full_value": "notes.md",
+                    "truncate": "end",
+                    "tooltip": "truncated",
+                    "max_characters": 64,
+                    "quote": False,
+                    "copyable": False,
+                }
+            ],
+            "facts": [],
         }
 
     @pytest.mark.asyncio

@@ -182,6 +182,7 @@ def _inspect_subagent_work(
             project_id,
             run_id=active_run.id,
             status=active_run.status.value,
+            started_at=active_run.created_at,
             tool_name=_latest_tool_name_from_run(active_run),
         )
 
@@ -252,6 +253,7 @@ def _subagent_work_inspection(
     result: str | list[Any] | None = None,
     usage: JsonObject | None = None,
     timing: JsonObject | None = None,
+    started_at: str | None = None,
     tool_name: str | None = None,
 ) -> JsonObject:
     inspection: JsonObject = {
@@ -263,6 +265,7 @@ def _subagent_work_inspection(
         "result": result,
         "usage": usage,
         "timing": timing,
+        "started_at": started_at,
         "tool_name": tool_name,
     }
     return _with_target_project(inspection, project_id)

@@ -313,6 +313,8 @@ function selectTrackedRunTimelineSource(
   if (!liveAssistantRun) {
     return [...historyItems, ...liveItems];
   }
+  liveAssistantRun.startTimestamp =
+    sessionState.currentRun?.startedAt ?? liveAssistantRun.startTimestamp;
 
   const activeUserEvent = activeRunUserEvent(runEvents, activeRunId);
   if (!activeUserEvent?.payload?.message) {
@@ -1155,6 +1157,7 @@ function appendHistoryToolResult(assistantRun, message) {
       result: message.content,
       message,
       timing: message.timing,
+      display: message.tool_display,
     },
   });
   // A per-tool user cancel is not a run failure — the run continued past it.
@@ -1450,6 +1453,10 @@ function mergeToolResult(assistantRun, event) {
   tool.index = toolCall.index ?? tool.index;
   tool.name = toolCall.name ?? tool.name;
   tool.result = event.payload?.result ?? event.payload?.message?.content;
+  tool.display =
+    event.payload?.display ??
+    event.payload?.message?.tool_display ??
+    tool.display;
   tool.resultEvent = event;
   tool.timing =
     normalizedTiming(event.payload?.timing ?? event.payload?.message?.timing) ??

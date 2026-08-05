@@ -39,11 +39,11 @@
     takeoverSeparatorLabel,
     textFromEvent,
     textFromMessage,
-    toolArgumentForEvent,
     toolCallFromEvent,
     toolNameForEvent,
     toolResultValueForEvent,
     toolRowFromEvent,
+    toolRowPresentation,
     userContentBlocks,
   } from '$lib/chatTimelinePresentation.js';
 
@@ -143,10 +143,36 @@
   </summary>
 {/snippet}
 
-{#snippet toolArgumentLine(summary)}
-  <span class="te-arg">
+{#snippet toolArgumentLine(primary)}
+  <span class="te-arg te-primary">
     <span class="te-arg-mark">(</span>
-    <span class="te-arg-value">{summary}</span>
+    <span class="te-primary-values">
+      {#each primary as part, index (`${part.kind}:${index}`)}
+        {#if index > 0}<span class="te-primary-separator">·</span>{/if}
+        <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+        <span
+          class="te-arg-value te-primary-value te-primary-value--{part.truncate}"
+          tabindex={part.tooltipText ? 0 : undefined}
+          use:tooltip={part.copyable ? '' : part.tooltipText}
+        >
+          {#if part.quote}<span class="te-primary-quote">"</span
+            >{/if}{part.text}{#if part.quote}<span class="te-primary-quote"
+              >"</span
+            >{/if}{#if part.copyable && part.tooltipText}
+            <div class="tool-primary-hover-card" use:floatingHoverCard>
+              <span class="tool-primary-hover-card__value">{part.fullText}</span
+              >
+              <CopyButton
+                text={part.fullText}
+                class="tool-primary-hover-card__copy"
+                label={t('chat.copyToolValue', 'Copy full value')}
+                copiedLabel={t('chat.toolValueCopied', 'Full value copied')}
+              />
+            </div>
+          {/if}</span
+        >
+      {/each}
+    </span>
     <span class="te-arg-mark">)</span>
   </span>
 {/snippet}
@@ -374,6 +400,8 @@
   </div>
 {:else if item.type === 'event'}
   {#if isToolEvent(item.event)}
+    {@const eventToolRow = toolRowFromEvent(item.event)}
+    {@const eventPresentation = toolRowPresentation(eventToolRow)}
     <article class="msg assistant">
       <div class="msg-header">
         <div class="msg-avatar">{avatarForItem(item)}</div>
@@ -402,9 +430,12 @@
               class="te-dot">●</span
             >
             <span class="te-fn">{toolNameForEvent(item.event)}</span>
-            {#if toolArgumentForEvent(item.event)}
-              {@render toolArgumentLine(toolArgumentForEvent(item.event))}
+            {#if eventPresentation.primary.length > 0}
+              {@render toolArgumentLine(eventPresentation.primary)}
             {/if}
+            {#each eventPresentation.facts as fact, index (`${fact.kind}:${index}`)}
+              <span class="te-fact">{fact.text}</span>
+            {/each}
           </summary>
           <div class="tool-event-body">
             {@render toolDetailSection(
@@ -413,7 +444,7 @@
               false,
               false,
               toolNameForEvent(item.event),
-              toolRowFromEvent(item.event),
+              eventToolRow,
             )}
             {#if toolResultValueForEvent(item.event)}
               {@render toolDetailSection(
@@ -422,7 +453,7 @@
                 isFailedToolEvent(item.event),
                 true,
                 toolNameForEvent(item.event),
-                toolRowFromEvent(item.event),
+                eventToolRow,
               )}
             {/if}
           </div>

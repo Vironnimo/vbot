@@ -371,6 +371,7 @@ class ChatMessage:
     phase: str | None = None
     usage: JsonObject | None = None
     timing: JsonObject | None = None
+    tool_display: JsonObject | None = None
     tool_calls: list[ToolCall] | None = None
     tool_call_id: str | None = None
     name: str | None = None
@@ -490,6 +491,7 @@ class ChatMessage:
         name: str,
         content: str,
         timing: JsonObject | None = None,
+        tool_display: JsonObject | None = None,
         timestamp: datetime | None = None,
     ) -> ChatMessage:
         """Create a tool result message."""
@@ -501,6 +503,7 @@ class ChatMessage:
             tool_call_id=tool_call_id,
             name=name,
             timing=dict(timing) if timing is not None else None,
+            tool_display=dict(tool_display) if tool_display is not None else None,
         )
 
     @classmethod
@@ -638,6 +641,7 @@ class ChatMessage:
         _add_if_not_none(message, "phase", self.phase)
         _add_if_not_none(message, "usage", self.usage)
         _add_if_not_none(message, "timing", self.timing)
+        _add_if_not_none(message, "tool_display", self.tool_display)
         if self.tool_calls is not None:
             message["tool_calls"] = [tool_call.to_dict() for tool_call in self.tool_calls]
         _add_if_not_none(message, "tool_call_id", self.tool_call_id)
@@ -673,6 +677,9 @@ class ChatMessage:
         timing = data.get("timing")
         if timing is not None and not isinstance(timing, dict):
             raise ChatMessageValidationError("timing must be an object")
+        tool_display = data.get("tool_display")
+        if tool_display is not None and not isinstance(tool_display, dict):
+            raise ChatMessageValidationError("tool_display must be an object")
         sender_data = data.get("sender")
         if sender_data is not None and not isinstance(sender_data, dict):
             raise ChatMessageValidationError("sender must be an object")
@@ -707,6 +714,7 @@ class ChatMessage:
             phase=_optional_string(data, "phase"),
             usage=dict(usage) if usage is not None else None,
             timing=dict(timing) if timing is not None else None,
+            tool_display=dict(tool_display) if tool_display is not None else None,
             tool_calls=tool_calls,
             tool_call_id=_optional_string(data, "tool_call_id"),
             name=_optional_string(data, "name"),
@@ -899,6 +907,7 @@ def _message_to_request_dict(
         data.pop("interrupted", None)
         data.pop("interruption_cause", None)
     data.pop("timing", None)
+    data.pop("tool_display", None)
     # Sender attribution exists only in the provider request: persisted content stays
     # clean and the tag cannot be spoofed by typing a look-alike prefix in message text.
     data.pop("sender", None)
@@ -1008,6 +1017,7 @@ def _assistant_continuation_dict(
     data = message.to_dict()
     data.pop("usage", None)
     data.pop("timing", None)
+    data.pop("tool_display", None)
     data.pop("interrupted", None)
     data.pop("interruption_cause", None)
     data.pop("reasoning_scope", None)
@@ -1678,6 +1688,8 @@ def _validate_core_fields(message: ChatMessage) -> None:
         raise ChatMessageValidationError(f"{message.role} messages cannot include phase")
     if message.role != "assistant" and message.reasoning_scope is not None:
         raise ChatMessageValidationError(f"{message.role} messages cannot include reasoning_scope")
+    if message.role != "tool" and message.tool_display is not None:
+        raise ChatMessageValidationError(f"{message.role} messages cannot include tool_display")
     if message.role != "compaction_checkpoint":
         _reject_fields(
             message,
@@ -1830,6 +1842,8 @@ def _validate_tool_message(message: ChatMessage) -> None:
         raise ChatMessageValidationError("tool messages require tool_call_id")
     if message.name is None:
         raise ChatMessageValidationError("tool messages require name")
+    if message.tool_display is not None and not isinstance(message.tool_display, dict):
+        raise ChatMessageValidationError("tool_display must be an object")
     _reject_fields(
         message,
         "model",

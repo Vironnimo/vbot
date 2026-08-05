@@ -16,6 +16,7 @@ from core.tools.tools import (
     JsonObject,
     ToolContext,
     ToolDisplay,
+    ToolDisplayPart,
     ToolRegistry,
     tool_failure,
     tool_success,
@@ -243,7 +244,7 @@ def register_history_tool(registry: ToolRegistry, sessions: ChatSessionManager) 
         parallel_safe=True,
         open_input_schema=True,
         display=ToolDisplay(
-            summary_builder=_history_display_summary,
+            parts_builder=_history_display_parts,
             hidden_argument_keys=("query", "message_id", "cursor"),
         ),
     )
@@ -1114,20 +1115,24 @@ def _serialized_result_bytes(data: JsonObject) -> int:
     )
 
 
-def _history_display_summary(arguments: JsonObject) -> str:
+def _history_display_parts(arguments: JsonObject) -> tuple[ToolDisplayPart, ...]:
     action = arguments.get("action")
     if not isinstance(action, str) or action not in HISTORY_ACTIONS:
-        return ""
-    parts = [action]
+        return ()
+    parts = [ToolDisplayPart(action, truncate="never", tooltip="none")]
     checkpoint = arguments.get("checkpoint")
     if isinstance(checkpoint, int) and not isinstance(checkpoint, bool):
-        parts.append(f"checkpoint {checkpoint}")
+        detail = f"checkpoint {checkpoint}"
     elif action != "overview":
-        parts.append("all earlier history")
+        detail = "all earlier history"
+    else:
+        detail = ""
     direction = arguments.get("direction")
     if isinstance(direction, str) and direction:
-        parts.append(direction)
-    return " · ".join(parts)
+        detail = " · ".join(value for value in (detail, direction) if value)
+    if detail:
+        parts.append(ToolDisplayPart(detail))
+    return tuple(parts)
 
 
 def _log_history(

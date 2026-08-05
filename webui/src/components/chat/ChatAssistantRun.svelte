@@ -1,8 +1,10 @@
 <script>
   import Banner from '../ui/Banner.svelte';
+  import Button from '../ui/Button.svelte';
   import CopyButton from '../ui/CopyButton.svelte';
   import { t } from '$lib/i18n.js';
   import { reasoningMarkdownSource } from '$lib/markdown.js';
+  import { floatingHoverCard, tooltip } from '$lib/tooltip.js';
   import {
     avatarForItem,
     compactToolValue,
@@ -24,7 +26,7 @@
     subAgentResultKey,
     subAgentToolStatusLabel,
     timestampForItem,
-    toolArgumentSummary,
+    toolRowPresentation,
     toolArguments,
     toolNameForRunTool,
     toolStatus,
@@ -45,7 +47,10 @@
     onNavigateToSubAgent = () => {},
     onCancelToolCall = () => {},
     onCancelSubAgent = () => {},
+    nowMs = Date.now(),
   } = $props();
+
+  let pendingActions = $state({});
 
   let answerCopyText = $derived(
     visibleRunChildren(item)
@@ -57,17 +62,17 @@
       .join('\n\n'),
   );
 
-  function handleSubAgentNavigate(event, tool) {
+  async function handleSubAgentNavigate(event, tool) {
     event.preventDefault();
     event.stopPropagation();
 
     const target = subAgentNavigationTarget(tool);
     if (target) {
-      onNavigateToSubAgent(target);
+      await onNavigateToSubAgent(target);
     }
   }
 
-  function handleCancelToolCall(event, tool) {
+  async function handleCancelToolCall(event, tool) {
     // The cancel button lives inside <details><summary> — keep the disclosure
     // closed/toggled state untouched so the rest of the row keeps its layout.
     event.preventDefault();
@@ -78,14 +83,26 @@
     if (!runId || !toolCallId) {
       return;
     }
-    onCancelToolCall({ runId, toolCallId });
+    const actionKey = `tool:${toolCallId}`;
+    pendingActions[actionKey] = true;
+    try {
+      await onCancelToolCall({ runId, toolCallId });
+    } finally {
+      pendingActions[actionKey] = false;
+    }
   }
 
-  function handleCancelSubAgent(event, tool) {
+  async function handleCancelSubAgent(event, tool) {
     event.preventDefault();
     event.stopPropagation();
 
-    onCancelSubAgent({ tool });
+    const actionKey = `subagent:${tool?.toolCallId ?? tool?.id ?? ''}`;
+    pendingActions[actionKey] = true;
+    try {
+      await onCancelSubAgent({ tool });
+    } finally {
+      pendingActions[actionKey] = false;
+    }
   }
 </script>
 
@@ -140,12 +157,47 @@
   </summary>
 {/snippet}
 
-{#snippet toolArgumentLine(summary)}
-  <span class="te-arg">
+{#snippet toolPrimaryLine(primary)}
+  <span class="te-arg te-primary">
     <span class="te-arg-mark">(</span>
-    <span class="te-arg-value">{summary}</span>
+    <span class="te-primary-values">
+      {#each primary as part, index (`${part.kind}:${index}`)}
+        {#if index > 0}<span class="te-primary-separator">·</span>{/if}
+        <!-- The truncated value itself must receive focus so the shared
+             tooltip exposes its complete plain-text value to keyboard users. -->
+        <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+        <span
+          class="te-arg-value te-primary-value te-primary-value--{part.truncate}"
+          class:te-primary-value--quoted={part.quote}
+          tabindex={part.tooltipText ? 0 : undefined}
+          use:tooltip={part.copyable ? '' : part.tooltipText}
+        >
+          {#if part.quote}<span class="te-primary-quote">"</span
+            >{/if}{part.text}{#if part.quote}<span class="te-primary-quote"
+              >"</span
+            >{/if}{#if part.copyable && part.tooltipText}
+            <div class="tool-primary-hover-card" use:floatingHoverCard>
+              <span class="tool-primary-hover-card__value">{part.fullText}</span
+              >
+              <CopyButton
+                text={part.fullText}
+                class="tool-primary-hover-card__copy"
+                label={t('chat.copyToolValue', 'Copy full value')}
+                copiedLabel={t('chat.toolValueCopied', 'Full value copied')}
+              />
+            </div>
+          {/if}</span
+        >
+      {/each}
+    </span>
     <span class="te-arg-mark">)</span>
   </span>
+{/snippet}
+
+{#snippet toolFacts(facts)}
+  {#each facts as fact, index (`${fact.kind}:${index}`)}
+    <span class="te-fact">{fact.text}</span>
+  {/each}
 {/snippet}
 
 <article class="msg assistant assistant-run">
@@ -157,7 +209,7 @@
     {#if formatTime(timestampForItem(item))}
       <span class="msg-timestamp">{formatTime(timestampForItem(item))}</span>
     {/if}
-    {#each runMetaParts(item) as metaPart (metaPart)}
+    {#each runMetaParts(item, nowMs) as metaPart (metaPart)}
       <span class="msg-meta-extra">· {metaPart}</span>
     {/each}
     {#if answerCopyText}
@@ -206,6 +258,7 @@
             child,
             dotStatus,
             subAgentStatuses,
+            nowMs,
           )}
           {@const lastToolName =
             dotStatus === 'running'
@@ -236,13 +289,30 @@
                 </span>
               {/if}
               {#if subAgentNavigationTarget(child)}
-                <button
-                  type="button"
-                  class="subagent-link"
-                  onclick={(event) => handleSubAgentNavigate(event, child)}
+                <Button
+                  variant="tertiary"
+                  icon
+                  class="tool-row-action subagent-session-action subagent-link"
+                  tooltip={t(
+                    'chat.subagent.openSession',
+                    'Open Sub-Agent Session',
+                  )}
+                  ariaLabel={t(
+                    'chat.subagent.openSession',
+                    'Open Sub-Agent Session',
+                  )}
+                  onClick={(event) => handleSubAgentNavigate(event, child)}
                 >
-                  {t('chat.subagent.viewSession', 'view session')}
-                </button>
+                  <svg
+                    viewBox="0 0 16 16"
+                    width="14"
+                    height="14"
+                    aria-hidden="true"
+                  >
+                    <path d="M2.5 3.5h7v6h-4l-2.5 2v-2h-.5z" />
+                    <path d="M9 6h4.5v4.5M13.5 6 8 11.5" />
+                  </svg>
+                </Button>
               {:else if dotStatus === 'running' && isStartingForegroundSubAgent(child)}
                 <span class="subagent-state">
                   {t('chat.subagent.starting', 'starting')}
@@ -262,18 +332,35 @@
                 </span>
               {/if}
               {#if isRowCancellable({ kind: 'sub_agent', dotStatus })}
-                <button
-                  type="button"
-                  class="row-cancel"
+                <Button
+                  variant="danger"
+                  icon
+                  class="tool-row-action row-cancel"
                   data-cancel="subagent"
-                  onclick={(event) => handleCancelSubAgent(event, child)}
-                  aria-label={t(
+                  loading={Boolean(
+                    pendingActions[
+                      `subagent:${child?.toolCallId ?? child?.id ?? ''}`
+                    ],
+                  )}
+                  tooltip={t(
                     'chat.cancelSubAgentAria',
                     'Cancel running sub-agent',
                   )}
+                  ariaLabel={t(
+                    'chat.cancelSubAgentAria',
+                    'Cancel running sub-agent',
+                  )}
+                  onClick={(event) => handleCancelSubAgent(event, child)}
                 >
-                  {t('chat.cancelSubAgent', 'Cancel')}
-                </button>
+                  <svg
+                    viewBox="0 0 16 16"
+                    width="13"
+                    height="13"
+                    aria-hidden="true"
+                  >
+                    <path d="m4 4 8 8M12 4l-8 8" />
+                  </svg>
+                </Button>
               {/if}
             </summary>
             <div class="tool-event-body">
@@ -316,6 +403,7 @@
             streaming: Boolean(child.streaming),
           })}
           {@const preparing = isToolPreparing(child)}
+          {@const rowPresentation = toolRowPresentation(child)}
           <details class="tool-event run-tool-event">
             <summary class="tool-event-line">
               <span
@@ -327,30 +415,46 @@
                 class="te-dot">●</span
               >
               <span class="te-fn">{toolNameForRunTool(child)}</span>
-              {#if toolArgumentSummary(child)}
-                {@render toolArgumentLine(toolArgumentSummary(child))}
+              {#if rowPresentation.primary.length > 0}
+                {@render toolPrimaryLine(rowPresentation.primary)}
               {/if}
-              {#if toolStatusLabel(child)}
+              {@render toolFacts(rowPresentation.facts)}
+              {#if toolStatusLabel(child, nowMs)}
                 <span
                   class="te-time"
                   class:cancelled={toolStatus(child) === 'cancelled'}
                 >
-                  {toolStatusLabel(child)}
+                  {toolStatusLabel(child, nowMs)}
                 </span>
               {/if}
               {#if isToolCancellable}
-                <button
-                  type="button"
-                  class="row-cancel"
+                <Button
+                  variant="danger"
+                  icon
+                  class="tool-row-action row-cancel"
                   data-cancel="tool"
-                  onclick={(event) => handleCancelToolCall(event, child)}
-                  aria-label={t(
+                  loading={Boolean(
+                    pendingActions[`tool:${child?.toolCallId ?? ''}`],
+                  )}
+                  tooltip={t(
                     'chat.cancelToolCallAria',
                     'Cancel running tool call',
                   )}
+                  ariaLabel={t(
+                    'chat.cancelToolCallAria',
+                    'Cancel running tool call',
+                  )}
+                  onClick={(event) => handleCancelToolCall(event, child)}
                 >
-                  {t('chat.cancelToolCall', 'Cancel')}
-                </button>
+                  <svg
+                    viewBox="0 0 16 16"
+                    width="13"
+                    height="13"
+                    aria-hidden="true"
+                  >
+                    <path d="m4 4 8 8M12 4l-8 8" />
+                  </svg>
+                </Button>
               {/if}
             </summary>
             <div class="tool-event-body">

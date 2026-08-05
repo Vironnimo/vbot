@@ -58,6 +58,7 @@ class _FakeRun:
         # with no events is enough for these address-threading assertions.
         self.status = SimpleNamespace(value="completed")
         self.run_kind = RunKind.USER
+        self.created_at = "2026-08-05T18:00:00+00:00"
         self.iteration_count = 1
         self.events: list[Any] = []
 

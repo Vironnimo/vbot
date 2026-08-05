@@ -194,8 +194,22 @@ async def test_streaming_mode_persists_only_final_messages_and_continues_tool_lo
     tool_started = next(event for event in run.events if event.type == TOOL_CALL_STARTED_EVENT)
     assert tool_started.payload["tool_call"]["arguments"] == {"city": "Berlin"}
     assert tool_started.payload["display"] == {
+        "version": 1,
         "summary": "Berlin",
         "hidden_argument_keys": [],
+        "primary": [
+            {
+                "kind": "text",
+                "value": "Berlin",
+                "full_value": "Berlin",
+                "truncate": "end",
+                "tooltip": "truncated",
+                "max_characters": 64,
+                "quote": False,
+                "copyable": False,
+            }
+        ],
+        "facts": [],
     }
     assert tool_started.payload["tool_call"] == {
         "id": "call_abc",

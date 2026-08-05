@@ -1016,6 +1016,7 @@ class StubDelegateRun:
         status: str,
         final_message: ChatMessage | None = None,
         iteration_count: int = 0,
+        created_at: str = "2026-05-03T14:30:01+00:00",
     ) -> None:
         self.id = run_id
         self.agent_id = agent_id
@@ -1023,6 +1024,7 @@ class StubDelegateRun:
         self.status = SimpleNamespace(value=status)
         self.run_kind = RunKind.USER
         self.iteration_count = iteration_count
+        self.created_at = created_at
         self.events: list[Any] = []
         self._final_message = final_message or ChatMessage.assistant(
             model="openai/gpt-5.2",

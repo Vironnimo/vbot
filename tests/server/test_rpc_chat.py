@@ -982,16 +982,33 @@ async def test_chat_send_collected_timeline_includes_read_tool_result_envelope(
     tool_started = next(event for event in result["events"] if event["type"] == "tool_call_started")
     tool_result = next(event for event in result["events"] if event["type"] == "tool_call_result")
     fingerprint = state.runtime.tools.schema_fingerprint("read")
-    assert tool_started["payload"] == {
+    started_payload = dict(tool_started["payload"])
+    display = started_payload.pop("display")
+    assert started_payload == {
         "tool_call": {
             "id": "call_read",
             "index": 0,
             "name": "read",
             "arguments": {"path": "note.txt"},
         },
-        "display": {"summary": "note.txt", "hidden_argument_keys": []},
         "schema_fingerprint": fingerprint,
     }
+    assert display["version"] == 1
+    assert display["summary"] == "note.txt"
+    assert display["hidden_argument_keys"] == []
+    assert display["facts"] == []
+    assert display["primary"] == [
+        {
+            "kind": "path",
+            "value": "note.txt",
+            "full_value": str(workspace.joinpath("note.txt")).replace("\\", "/"),
+            "truncate": "start",
+            "tooltip": "always",
+            "max_characters": 64,
+            "quote": False,
+            "copyable": True,
+        }
+    ]
     assert tool_result["payload"]["tool_call"] == {
         "id": "call_read",
         "index": 0,

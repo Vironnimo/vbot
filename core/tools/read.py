@@ -23,6 +23,7 @@ from core.tools.tools import (
     JsonObject,
     ToolContext,
     ToolDisplay,
+    ToolDisplayField,
     ToolHandler,
     ToolRegistry,
     read_media_artifact,
@@ -801,7 +802,17 @@ def register_read_tool(
             speech_max_size_bytes=speech_max_size_bytes,
         ),
         result_schema={"type": "object", "required": ["content"]},
-        display=ToolDisplay(summary_fields=("path",)),
+        display=ToolDisplay(
+            primary_candidates=(
+                ToolDisplayField(
+                    "path",
+                    kind="path",
+                    truncate="start",
+                    tooltip="always",
+                    copyable=True,
+                ),
+            )
+        ),
         parallel_safe=True,
         open_input_schema=True,
     )

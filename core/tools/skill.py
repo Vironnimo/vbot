@@ -21,6 +21,7 @@ from core.tools.tools import (
     JsonObject,
     ToolContext,
     ToolDisplay,
+    ToolDisplayField,
     ToolRegistry,
     tool_failure,
     tool_success,
@@ -242,7 +243,18 @@ def register_skill_tool(
         SKILL_TOOL_PARAMETERS,
         make_skill_handler(resolve_registry, refresh_skills),
         result_schema={"type": "object"},
-        display=ToolDisplay(summary_fields=("name", "file_path")),
+        display=ToolDisplay(
+            primary_candidates=(
+                ToolDisplayField("name"),
+                ToolDisplayField(
+                    "file_path",
+                    kind="path",
+                    truncate="start",
+                    tooltip="always",
+                    copyable=True,
+                ),
+            )
+        ),
         open_input_schema=True,
     )
     registry.register(
@@ -253,6 +265,7 @@ def register_skill_tool(
         result_schema={"type": "object"},
         session_scoped=True,
         open_input_schema=True,
+        display=ToolDisplay(),
     )
 
 

@@ -1564,6 +1564,16 @@ def test_register_bash_tool() -> None:
         "minItems": 1,
         "uniqueItems": True,
     }
+    display = registry.display_for_call(
+        "bash",
+        {
+            "description": "Run the frontend tests",
+            "command": "npm test -- --run",
+            "mode": "foreground",
+        },
+    )
+    assert display["primary"][0]["value"] == "Run the frontend tests"
+    assert display["primary"][0]["kind"] == "description"
     assert tool.parameters["properties"]["yield_after"]["default"] == 30
     assert "does not extend yield_after" in tool.parameters["properties"]["timeout"]["description"]
     assert "complete combined stdout/stderr stream through exit" in tool.description

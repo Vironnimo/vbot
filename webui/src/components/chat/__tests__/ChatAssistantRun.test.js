@@ -173,7 +173,8 @@ describe('ChatAssistantRun cancel buttons', () => {
 
     const button = findRowCancel('tool');
     expect(button).toBeTruthy();
-    expect(button.textContent.trim()).toBe('Cancel');
+    expect(button.textContent.trim()).toBe('');
+    expect(button.querySelector('svg')).toBeTruthy();
     expect(button.getAttribute('aria-label')).toBe('Cancel running tool call');
   });
 
@@ -217,7 +218,8 @@ describe('ChatAssistantRun cancel buttons', () => {
 
     const button = findRowCancel('subagent');
     expect(button).toBeTruthy();
-    expect(button.textContent.trim()).toBe('Cancel');
+    expect(button.textContent.trim()).toBe('');
+    expect(button.querySelector('svg')).toBeTruthy();
     expect(button.getAttribute('aria-label')).toBe('Cancel running sub-agent');
   });
 

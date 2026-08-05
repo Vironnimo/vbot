@@ -88,10 +88,17 @@ function hideTooltip() {
   }
   window.removeEventListener('keydown', onWindowKeydown, true);
   window.removeEventListener('scroll', hideTooltip, true);
+  document.removeEventListener('pointerdown', onDocumentPointerDown, true);
 }
 
 function onWindowKeydown(event) {
   if (event.key === 'Escape') {
+    hideTooltip();
+  }
+}
+
+function onDocumentPointerDown(event) {
+  if (activeAnchor && !activeAnchor.contains(event.target)) {
     hideTooltip();
   }
 }
@@ -105,6 +112,7 @@ function showTooltip(anchor, text) {
   anchor.setAttribute('aria-describedby', TOOLTIP_ID);
   window.addEventListener('keydown', onWindowKeydown, true);
   window.addEventListener('scroll', hideTooltip, true);
+  document.addEventListener('pointerdown', onDocumentPointerDown, true);
 }
 
 /**
@@ -119,7 +127,7 @@ export function tooltip(node, text = '') {
   }
 
   function scheduleShow() {
-    if (!currentText) {
+    if (!currentText || activeAnchor === node) {
       return;
     }
     if (showTimer !== null) {
@@ -137,9 +145,25 @@ export function tooltip(node, text = '') {
     }
   }
 
+  function handlePointerDown(event) {
+    if (event.pointerType !== 'touch') {
+      cancelOrHide();
+      return;
+    }
+    if (!currentText || activeAnchor === node) {
+      hideTooltip();
+      return;
+    }
+    if (showTimer !== null) {
+      clearTimeout(showTimer);
+      showTimer = null;
+    }
+    showTooltip(node, currentText);
+  }
+
   node.addEventListener('pointerenter', scheduleShow);
   node.addEventListener('pointerleave', cancelOrHide);
-  node.addEventListener('pointerdown', cancelOrHide);
+  node.addEventListener('pointerdown', handlePointerDown);
   node.addEventListener('focus', scheduleShow);
   node.addEventListener('blur', cancelOrHide);
 
@@ -157,7 +181,7 @@ export function tooltip(node, text = '') {
       cancelOrHide();
       node.removeEventListener('pointerenter', scheduleShow);
       node.removeEventListener('pointerleave', cancelOrHide);
-      node.removeEventListener('pointerdown', cancelOrHide);
+      node.removeEventListener('pointerdown', handlePointerDown);
       node.removeEventListener('focus', scheduleShow);
       node.removeEventListener('blur', cancelOrHide);
     },
@@ -237,6 +261,7 @@ export function floatingHoverCard(node, options = {}) {
     window.removeEventListener('keydown', onWindowKeydown, true);
     window.removeEventListener('resize', hide, true);
     window.removeEventListener('scroll', onWindowScroll, true);
+    document.removeEventListener('pointerdown', onDocumentPointerDown, true);
   }
 
   function hide() {
@@ -274,6 +299,7 @@ export function floatingHoverCard(node, options = {}) {
     window.addEventListener('keydown', onWindowKeydown, true);
     window.addEventListener('resize', hide, true);
     window.addEventListener('scroll', onWindowScroll, true);
+    document.addEventListener('pointerdown', onDocumentPointerDown, true);
   }
 
   function scheduleClose() {
@@ -295,8 +321,34 @@ export function floatingHoverCard(node, options = {}) {
     hide();
   }
 
-  anchor.addEventListener('pointerenter', show);
+  function onDocumentPointerDown(event) {
+    const target = event.target instanceof Node ? event.target : null;
+    if (!target || anchor.contains(target) || node.contains(target)) {
+      return;
+    }
+    hide();
+  }
+
+  function onAnchorPointerEnter(event) {
+    if (event.pointerType !== 'touch') {
+      show(event);
+    }
+  }
+
+  function onAnchorPointerDown(event) {
+    if (event.pointerType !== 'touch') {
+      return;
+    }
+    if (open) {
+      hide();
+    } else {
+      show(event);
+    }
+  }
+
+  anchor.addEventListener('pointerenter', onAnchorPointerEnter);
   anchor.addEventListener('pointerleave', scheduleClose);
+  anchor.addEventListener('pointerdown', onAnchorPointerDown);
   anchor.addEventListener('focusin', show);
   anchor.addEventListener('focusout', scheduleClose);
   node.addEventListener('pointerenter', cancelScheduledClose);
@@ -320,8 +372,9 @@ export function floatingHoverCard(node, options = {}) {
     },
     destroy() {
       hide();
-      anchor.removeEventListener('pointerenter', show);
+      anchor.removeEventListener('pointerenter', onAnchorPointerEnter);
       anchor.removeEventListener('pointerleave', scheduleClose);
+      anchor.removeEventListener('pointerdown', onAnchorPointerDown);
       anchor.removeEventListener('focusin', show);
       anchor.removeEventListener('focusout', scheduleClose);
       node.removeEventListener('pointerenter', cancelScheduledClose);
