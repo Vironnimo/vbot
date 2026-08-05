@@ -858,6 +858,18 @@ async def test_decide_recovery_restartable_before_visible_interrupts_when_budget
     assert action is StreamRecoveryAction.INTERRUPT
 
 
+async def test_decide_recovery_retryable_provider_error_fails_when_restart_budget_exhausted() -> (
+    None
+):
+    action = decide_stream_recovery(
+        ProviderError("overloaded", retryable=True),
+        can_restart=False,
+        has_partial_content=False,
+    )
+
+    assert action is StreamRecoveryAction.FAIL
+
+
 async def test_decide_recovery_non_restartable_before_visible_fails() -> None:
     action = decide_stream_recovery(
         ProviderError("fatal", retryable=False),

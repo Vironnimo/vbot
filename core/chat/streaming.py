@@ -99,6 +99,12 @@ def decide_stream_recovery(
         if _is_stream_restartable_error(error):
             if can_restart:
                 return StreamRecoveryAction.RESTART
+            # A retryable Provider failure still belongs to the Run-local Model
+            # fallback policy once same-Model recovery is exhausted. Transport
+            # and timeout failures have no useful alternate Model route and
+            # therefore remain explicit interruptions.
+            if _is_model_fallback_trigger(error):
+                return StreamRecoveryAction.FAIL
             return StreamRecoveryAction.INTERRUPT
         return StreamRecoveryAction.FAIL
     return StreamRecoveryAction.PRESERVE_PARTIAL
