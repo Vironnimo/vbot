@@ -414,6 +414,234 @@ describe('ChatTimeline', () => {
     );
   });
 
+  it('renders structured description and fixed result fact independently', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-structured-description',
+    );
+    appendRunEvent(sessionState, {
+      type: 'tool_call_started',
+      run_id: 'run-structured-description',
+      sequence: 1,
+      payload: {
+        tool_call: {
+          id: 'call-structured-description',
+          index: 0,
+          name: 'grep',
+          arguments: {
+            pattern: 'VERSION_[A-Z_]+',
+            path: 'src',
+            description: 'search for all version variables',
+          },
+        },
+        display: {
+          version: 1,
+          summary: 'search for all version variables',
+          hidden_argument_keys: [],
+          primary: [
+            {
+              kind: 'description',
+              value: 'search for all version variables',
+              full_value: 'search for all version variables',
+              truncate: 'end',
+              tooltip: 'truncated',
+              max_characters: 64,
+              quote: true,
+            },
+          ],
+          facts: [],
+        },
+      },
+    });
+    appendRunEvent(sessionState, {
+      type: 'tool_call_result',
+      run_id: 'run-structured-description',
+      sequence: 2,
+      payload: {
+        tool_call: {
+          id: 'call-structured-description',
+          index: 0,
+          name: 'grep',
+        },
+        result: { ok: true, data: { content: 'src/version.py:1' } },
+        display: {
+          version: 1,
+          summary: 'search for all version variables',
+          hidden_argument_keys: [],
+          primary: [
+            {
+              kind: 'description',
+              value: 'search for all version variables',
+              full_value: 'search for all version variables',
+              truncate: 'end',
+              tooltip: 'truncated',
+              max_characters: 64,
+              quote: true,
+            },
+          ],
+          facts: [
+            {
+              kind: 'count',
+              value: 10,
+              unit: 'matches',
+              at_least: false,
+            },
+          ],
+        },
+      },
+    });
+
+    mountedComponent = mount(ChatTimeline, {
+      target: document.body,
+      props: { sessionState, agentName: 'Alpha' },
+    });
+    flushSync();
+
+    const summaryLine = document.querySelector('.tool-event-line');
+    expect(summaryLine.querySelector('.te-primary-value').textContent).toBe(
+      '"search for all version variables"',
+    );
+    expect(summaryLine.querySelector('.te-fact').textContent).toBe(
+      '10 matches',
+    );
+    expect(summaryLine.textContent).not.toContain('VERSION_[A-Z_]+');
+    expect(summaryLine.textContent).not.toContain('src');
+  });
+
+  it('compacts a structured read path and exposes a focus/touch copy card', async () => {
+    vi.useFakeTimers();
+    const writeText = vi.fn(async () => {});
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText },
+    });
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-structured-read-path',
+    );
+    const fullPath =
+      'C:/Development/projects/vBot/webui/src/components/chat/ChatAssistantRun.svelte';
+    appendRunEvent(sessionState, {
+      type: 'tool_call_started',
+      run_id: 'run-structured-read-path',
+      sequence: 1,
+      payload: {
+        tool_call: {
+          id: 'call-structured-read-path',
+          index: 0,
+          name: 'read',
+          arguments: { path: fullPath },
+        },
+        display: {
+          version: 1,
+          summary: fullPath,
+          hidden_argument_keys: [],
+          primary: [
+            {
+              kind: 'path',
+              value: fullPath,
+              full_value: fullPath,
+              truncate: 'start',
+              tooltip: 'always',
+              max_characters: 64,
+              copyable: true,
+            },
+          ],
+          facts: [],
+        },
+      },
+    });
+
+    mountedComponent = mount(ChatTimeline, {
+      target: document.body,
+      props: { sessionState, agentName: 'Alpha' },
+    });
+    flushSync();
+
+    const value = document.querySelector('.te-primary-value');
+    expect(value.textContent).toBe('…/components/chat/ChatAssistantRun.svelte');
+    expect(value.getAttribute('tabindex')).toBe('0');
+    expect(value.hasAttribute('title')).toBe(false);
+    value.focus();
+    const card = document.querySelector('.tool-primary-hover-card');
+    expect(card.dataset.floatingOpen).toBe('true');
+    expect(card.textContent).toContain(fullPath);
+    const copyButton = card.querySelector('button');
+    expect(copyButton.getAttribute('aria-label')).toBe('Copy full value');
+    copyButton.click();
+    await Promise.resolve();
+    expect(writeText).toHaveBeenCalledWith(fullPath);
+
+    value.blur();
+    await vi.advanceTimersByTimeAsync(150);
+    const touch = new Event('pointerdown', { bubbles: true });
+    Object.defineProperty(touch, 'pointerType', { value: 'touch' });
+    value.dispatchEvent(touch);
+    expect(card.dataset.floatingOpen).toBe('true');
+    const secondTouch = new Event('pointerdown', { bubbles: true });
+    Object.defineProperty(secondTouch, 'pointerType', { value: 'touch' });
+    value.dispatchEvent(secondTouch);
+    expect(card.dataset.floatingOpen).toBe('false');
+  });
+
+  it('loads the final structured presentation snapshot from History', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-structured-history',
+    );
+    sessionState.messages = [
+      { id: 'user-history', role: 'user', content: 'Search versions' },
+      {
+        id: 'assistant-history',
+        role: 'assistant',
+        tool_calls: [
+          {
+            id: 'call-history',
+            name: 'grep',
+            arguments: { pattern: 'VERSION', path: 'src' },
+          },
+        ],
+      },
+      {
+        id: 'tool-history',
+        role: 'tool',
+        tool_call_id: 'call-history',
+        name: 'grep',
+        content: '{"ok":true,"data":{"content":"src/a.py:1"}}',
+        tool_display: {
+          version: 1,
+          summary: 'version variables',
+          hidden_argument_keys: [],
+          primary: [
+            {
+              kind: 'description',
+              value: 'version variables',
+              full_value: 'version variables',
+              truncate: 'end',
+              max_characters: 64,
+              quote: true,
+            },
+          ],
+          facts: [{ kind: 'count', value: 3, unit: 'matches', at_least: true }],
+        },
+      },
+    ];
+
+    mountedComponent = mount(ChatTimeline, {
+      target: document.body,
+      props: { sessionState, agentName: 'Alpha' },
+    });
+    flushSync();
+
+    const summaryLine = document.querySelector('.tool-event-line');
+    expect(summaryLine.textContent).toContain('version variables');
+    expect(summaryLine.textContent).toContain('3+ matches');
+    expect(summaryLine.textContent).not.toContain('VERSION');
+  });
+
   it('falls back to bash command and ignores unsupported description arguments', () => {
     const sessionState = ensureSessionState(
       createChatState(),
@@ -515,7 +743,8 @@ describe('ChatTimeline', () => {
     const argumentValue = summaryLine.querySelector('.te-arg-value');
     const argumentMarkers = summaryLine.querySelectorAll('.te-arg-mark');
 
-    expect(argumentValue.textContent).toBe(command);
+    expect(argumentValue.textContent).toBe(`${command.slice(0, 63)}…`);
+    expect(argumentValue.textContent.length).toBe(64);
     expect(argumentMarkers[0].textContent).toBe('(');
     expect(argumentMarkers[1].textContent).toBe(')');
     expect(summaryLine.querySelector('.te-time').textContent).toContain('1.2s');

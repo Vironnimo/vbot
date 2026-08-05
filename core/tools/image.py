@@ -14,6 +14,7 @@ from core.tools.tools import (
     ToolDefinitionProfile,
     ToolDefinitionProfileContext,
     ToolDisplay,
+    ToolDisplayField,
     ToolRegistry,
     tool_failure,
     tool_success,
@@ -227,7 +228,9 @@ def register_analyze_image_tool(registry: ToolRegistry, image_service: Any) -> N
         make_analyze_image_handler(image_service),
         open_input_schema=True,
         result_schema={"type": "object"},
-        display=ToolDisplay(summary_fields=("prompt", "images")),
+        display=ToolDisplay(
+            primary_candidates=(ToolDisplayField("prompt", kind="text", quote=True),)
+        ),
     )
 
 
@@ -314,7 +317,11 @@ def register_image_generation_tool(registry: ToolRegistry, image_service: Any) -
         open_input_schema=True,
         result_schema={"type": "object", "required": ["message", "images"]},
         display=ToolDisplay(
-            summary_fields=("prompt", "source_images", "aspect_ratio", "resolution")
+            primary_candidates=(ToolDisplayField("prompt", kind="text", quote=True),),
+            secondary_fields=(
+                ToolDisplayField("aspect_ratio"),
+                ToolDisplayField("resolution"),
+            ),
         ),
         definition_profile_resolver=_image_generation_profile_resolver(image_service),
     )

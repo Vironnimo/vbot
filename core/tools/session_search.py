@@ -35,6 +35,7 @@ from core.tools.tools import (
     JsonObject,
     ToolContext,
     ToolDisplay,
+    ToolDisplayPart,
     ToolRegistry,
     tool_failure,
     tool_success,
@@ -327,7 +328,7 @@ def register_session_search_tool(
         },
         parallel_safe=True,
         display=ToolDisplay(
-            summary_builder=_display_search_summary,
+            parts_builder=_display_search_parts,
             hidden_argument_keys=("query", "cursor"),
         ),
     )
@@ -343,7 +344,7 @@ def register_session_search_tool(
         },
         parallel_safe=True,
         display=ToolDisplay(
-            summary_builder=_display_read_summary,
+            parts_builder=_display_read_parts,
             hidden_argument_keys=("start_message_id", "end_message_id", "cursor"),
         ),
     )
@@ -1384,17 +1385,23 @@ def _parse_period(value: Any) -> tuple[datetime | None, datetime | None]:
     return since, until
 
 
-def _display_search_summary(arguments: JsonObject) -> str:
+def _display_search_parts(arguments: JsonObject) -> tuple[ToolDisplayPart, ...]:
     if "cursor" in arguments:
-        return "continue"
+        return (ToolDisplayPart("continue", truncate="never", tooltip="none"),)
     session_id = _optional_string(arguments.get("session_id"))
-    return f"find {session_id}" if session_id else "find"
+    parts = [ToolDisplayPart("find", truncate="never", tooltip="none")]
+    if session_id:
+        parts.append(ToolDisplayPart(session_id, kind="identifier", truncate="middle"))
+    return tuple(parts)
 
 
-def _display_read_summary(arguments: JsonObject) -> str:
+def _display_read_parts(arguments: JsonObject) -> tuple[ToolDisplayPart, ...]:
     if "cursor" in arguments:
-        return "continue"
-    return _optional_string(arguments.get("session_id")) or ""
+        return (ToolDisplayPart("continue", truncate="never", tooltip="none"),)
+    session_id = _optional_string(arguments.get("session_id"))
+    if not session_id:
+        return ()
+    return (ToolDisplayPart(session_id, kind="identifier", truncate="middle"),)
 
 
 __all__ = [

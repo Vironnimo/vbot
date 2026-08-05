@@ -13,6 +13,7 @@ from core.tools.tools import (
     JsonObject,
     ToolContext,
     ToolDisplay,
+    ToolDisplayField,
     ToolHandler,
     ToolRegistry,
     tool_failure,
@@ -158,7 +159,18 @@ def register_write_tool(registry: ToolRegistry, *, file_state: FileReadState) ->
         WRITE_TOOL_PARAMETERS,
         make_write_handler(file_state),
         result_schema={"type": "object", "required": ["path", "bytes", "message"]},
-        display=ToolDisplay(summary_fields=("path",), hidden_argument_keys=("content",)),
+        display=ToolDisplay(
+            primary_candidates=(
+                ToolDisplayField(
+                    "path",
+                    kind="path",
+                    truncate="start",
+                    tooltip="always",
+                    copyable=True,
+                ),
+            ),
+            hidden_argument_keys=("content",),
+        ),
         open_input_schema=True,
     )
 

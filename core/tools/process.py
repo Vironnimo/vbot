@@ -16,6 +16,7 @@ from core.tools.tools import (
     JsonObject,
     ToolContext,
     ToolDisplay,
+    ToolDisplayPart,
     ToolRegistry,
     tool_failure,
     tool_success,
@@ -273,17 +274,20 @@ def register_process_tool(registry: ToolRegistry, process_manager: ProcessManage
         PROCESS_TOOL_PARAMETERS,
         make_process_handler(process_manager),
         result_schema={"type": "object"},
-        display=ToolDisplay(summary_builder=_process_display_summary),
+        display=ToolDisplay(parts_builder=_process_display_parts),
         open_input_schema=True,
     )
 
 
-def _process_display_summary(arguments: JsonObject) -> str:
+def _process_display_parts(arguments: JsonObject) -> tuple[ToolDisplayPart, ...]:
     action = arguments.get("action")
     if not isinstance(action, str) or action not in PROCESS_ACTIONS:
-        return ""
+        return ()
+    parts = [ToolDisplayPart(action, truncate="never", tooltip="none")]
     session_id = arguments.get("session_id")
-    return f"{action} · {session_id}" if isinstance(session_id, str) and session_id else action
+    if isinstance(session_id, str) and session_id:
+        parts.append(ToolDisplayPart(session_id, kind="identifier", truncate="middle"))
+    return tuple(parts)
 
 
 __all__ = [

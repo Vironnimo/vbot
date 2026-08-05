@@ -157,9 +157,11 @@ describe('chat state helpers', () => {
       run_id: 'run-one',
       sse_url: '/api/runs/run-one/events',
       status: CHAT_STATUS_RUNNING,
+      started_at: '2026-08-05T18:00:00.000Z',
     });
 
     expect(canCreateNewSession(sessionState)).toBe(false);
+    expect(sessionState.currentRun?.startedAt).toBe('2026-08-05T18:00:00.000Z');
 
     appendRunEvent(sessionState, {
       type: 'run_completed',
@@ -306,6 +308,7 @@ describe('chat state helpers', () => {
       type: 'run_started',
       run_id: 'run-from-ws',
       sequence: 1,
+      timestamp: '2026-08-05T18:04:00.000Z',
       payload: {},
     });
 
@@ -315,6 +318,7 @@ describe('chat state helpers', () => {
       runId: 'run-from-ws',
       sseUrl: '',
       status: CHAT_STATUS_RUNNING,
+      startedAt: '2026-08-05T18:04:00.000Z',
       iterationCount: 0,
     });
   });

@@ -630,6 +630,90 @@ describe('ChatTimeline', () => {
     expect(toolLine?.querySelector('.te-dot.cancelled')).not.toBeNull();
   });
 
+  it('shows live elapsed Run and Tool time and advances from absolute timestamps', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-08-05T18:00:05.000Z'));
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-live-elapsed',
+    );
+    startRun(sessionState, {
+      run_id: 'run-live-elapsed',
+      status: 'running',
+      started_at: '2026-08-05T18:00:00.000Z',
+      events: [],
+    });
+    appendRunEvent(sessionState, {
+      type: 'tool_call_started',
+      run_id: 'run-live-elapsed',
+      sequence: 1,
+      timestamp: '2026-08-05T18:00:02.500Z',
+      payload: {
+        tool_call: {
+          id: 'call-live-elapsed',
+          index: 0,
+          name: 'read',
+          arguments: { path: 'README.md' },
+        },
+      },
+    });
+
+    mountedComponent = mount(ChatTimeline, {
+      target: document.body,
+      props: { sessionState, agentName: 'Alpha' },
+    });
+    flushSync();
+
+    expect(document.querySelector('.msg-header').textContent).toContain(
+      'Running',
+    );
+    expect(document.querySelector('.msg-header').textContent).toContain('5.0s');
+    expect(
+      document.querySelector('.tool-event-line .te-time').textContent,
+    ).toBe('2.5s');
+
+    await vi.advanceTimersByTimeAsync(500);
+    flushSync();
+
+    expect(document.querySelector('.msg-header').textContent).toContain('5.5s');
+    expect(
+      document.querySelector('.tool-event-line .te-time').textContent,
+    ).toBe('3.0s');
+  });
+
+  it('shows no duration while a streamed Tool call is still preparing', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-08-05T18:00:05.000Z'));
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-preparing-no-time',
+    );
+    appendRunEvent(sessionState, {
+      type: 'tool_call_delta',
+      run_id: 'run-preparing-no-time',
+      sequence: 1,
+      timestamp: '2026-08-05T18:00:00.000Z',
+      payload: {
+        tool_call_id: 'call-preparing-no-time',
+        name_delta: 'read',
+        arguments_delta: '{"path":"README.md"}',
+        preview_arguments: { path: 'README.md' },
+      },
+    });
+
+    mountedComponent = mount(ChatTimeline, {
+      target: document.body,
+      props: { sessionState, agentName: 'Alpha' },
+    });
+    flushSync();
+
+    const toolLine = document.querySelector('.tool-event-line');
+    expect(toolLine.querySelector('.te-dot.preparing')).not.toBeNull();
+    expect(toolLine.querySelector('.te-time')).toBeNull();
+  });
+
   it('renders one assistant block when terminal events arrive after overlapping history refresh', () => {
     const sessionState = ensureSessionState(
       createChatState(),

@@ -2518,6 +2518,55 @@ textarea::placeholder {
   white-space: nowrap;
 }
 
+.te-primary {
+  flex: 1 1 auto;
+  max-width: min(42rem, max(8rem, calc(100vw - 430px)));
+}
+
+.te-primary-values {
+  display: inline-flex;
+  min-width: 0;
+  overflow: hidden;
+  gap: 5px;
+}
+
+.te-primary-value {
+  display: inline-block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.te-primary-value:focus-visible {
+  border-radius: 2px;
+  outline: 1px solid var(--accent-40);
+  outline-offset: 2px;
+}
+
+.te-primary-value--start {
+  direction: rtl;
+  text-align: left;
+  unicode-bidi: plaintext;
+}
+
+.te-primary-value--middle {
+  text-overflow: clip;
+}
+
+.te-primary-separator,
+.te-primary-quote {
+  flex-shrink: 0;
+}
+
+.te-fact {
+  flex-shrink: 0;
+  color: var(--text-med);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  white-space: nowrap;
+}
+
 .te-arg.subagent-preview {
   display: inline-block;
 }
@@ -2884,6 +2933,60 @@ kbd {
 
 .app-tooltip--visible {
   display: block;
+}
+
+/* Copyable Tool values use the shared rich hover-card layer: the complete
+   plain-text value stays readable while the existing CopyButton remains
+   keyboard- and touch-accessible. */
+.tool-primary-hover-card {
+  position: fixed;
+  z-index: var(--z-floating);
+  display: flex;
+  align-items: flex-start;
+  width: max-content;
+  max-width: min(460px, calc(100vw - 24px));
+  max-height: min(340px, 50vh);
+  padding: 7px 7px 7px 10px;
+  overflow: hidden;
+  gap: 8px;
+  border: 1px solid var(--border-2);
+  border-radius: var(--r-sm);
+  color: var(--text-hi);
+  background: var(--surface-3);
+  box-shadow: var(--dropdown-elevation);
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(2px);
+  visibility: hidden;
+  transition:
+    opacity 120ms ease,
+    transform 120ms ease,
+    visibility 120ms ease;
+}
+
+.tool-primary-hover-card[data-floating-open='true'] {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateY(0);
+  visibility: visible;
+}
+
+.tool-primary-hover-card__value {
+  min-width: 0;
+  overflow: auto;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.tool-primary-hover-card .tool-primary-hover-card__copy {
+  flex: 0 0 auto;
+  width: 24px;
+  height: 24px;
+  min-height: 24px;
+  padding: 0;
 }
 
 /* Hover proxy for tooltips on disabled controls — browsers do not dispatch

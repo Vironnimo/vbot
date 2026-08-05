@@ -188,6 +188,17 @@ def test_register_grep_tool_exposes_provider_schema() -> None:
     ]
     assert "only for content" in parameters["properties"]["output_mode"]["description"]
     assert "default 0" in parameters["properties"]["context"]["description"]
+    display = registry.display_for_call(
+        "grep",
+        {
+            "description": "Find every version variable",
+            "pattern": "VERSION_[A-Z_]+",
+            "path": "src",
+        },
+    )
+    assert display["primary"][0]["value"] == "Find every version variable"
+    assert display["primary"][0]["kind"] == "description"
+    assert display["summary"] == "Find every version variable"
     assert "description" not in parameters["properties"]
 
 
@@ -429,11 +440,15 @@ def test_grep_adds_limit_marker(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
     workspace.mkdir()
     workspace.joinpath("notes.txt").write_text("hit\nhit\nhit\n", encoding="utf-8")
 
-    result = grep_handler(make_context(workspace), {"pattern": "hit", "limit": 2})
+    context = make_context(workspace)
+    result = grep_handler(context, {"pattern": "hit", "limit": 2})
     data = assert_success_envelope(result)
     assert data["content"] == (
         "notes.txt:1: hit\nnotes.txt:2: hit\n[Results limited to 2 matches.]"
     )
+    assert context.presentation_facts == [
+        {"kind": "count", "value": 2, "unit": "matches", "at_least": True}
+    ]
 
 
 def test_grep_truncates_long_lines(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -39,6 +39,7 @@ from core.tools.tools import (
     JsonObject,
     ToolContext,
     ToolDisplay,
+    ToolDisplayField,
     ToolRegistry,
     tool_failure,
     tool_success,
@@ -680,6 +681,14 @@ def grep_handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
             content = _empty_result_content(
                 pattern_argument, budget, offset=result_offset, total_results=total_results
             )
+        available_results = max(outcome.total_results - result_offset, 0)
+        displayed_results = min(available_results, match_limit)
+        context.add_display_count(
+            displayed_results,
+            "matches",
+            at_least=displayed_results > 0
+            and (not outcome.counted_all or available_results > match_limit),
+        )
         return tool_success({"content": content})
 
     if compiled_pattern is None:
@@ -733,6 +742,13 @@ def grep_handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
         content = _empty_result_content(
             pattern_argument, budget, offset=result_offset, total_results=raw_count
         )
+    available_results = max(raw_count - result_offset, 0)
+    displayed_results = min(available_results, match_limit)
+    context.add_display_count(
+        displayed_results,
+        "matches",
+        at_least=displayed_results > 0 and (budget.timed_out or available_results > match_limit),
+    )
     return tool_success({"content": content})
 
 
@@ -769,7 +785,12 @@ def register_grep_tool(registry: ToolRegistry) -> None:
         GREP_TOOL_PARAMETERS,
         _grep_handler_async,
         result_schema={"type": "object", "required": ["content"]},
-        display=ToolDisplay(summary_fields=("pattern", "path")),
+        display=ToolDisplay(
+            primary_candidates=(
+                ToolDisplayField("description", kind="description", quote=True),
+                ToolDisplayField("pattern", kind="query", quote=True),
+            )
+        ),
         parallel_safe=True,
         open_input_schema=True,
     )

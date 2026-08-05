@@ -89,16 +89,33 @@ def test_chat_stream_returns_sse_url_and_endpoint_replays_visible_timeline(tmp_p
     assert reasoning_delta_data["payload"]["reasoning_delta"] == "Thinking clearly"
     assert tool_delta_data["payload"]["name_delta"] == "read"
     assert reasoning_data["payload"]["message"]["reasoning"] == "Thinking clearly"
-    assert tool_started_data["payload"] == {
+    started_payload = dict(tool_started_data["payload"])
+    display = started_payload.pop("display")
+    assert started_payload == {
         "tool_call": {
             "id": "call-one",
             "index": 0,
             "name": "read",
             "arguments": {"path": "note.txt"},
         },
-        "display": {"summary": "note.txt", "hidden_argument_keys": []},
         "schema_fingerprint": fingerprint,
     }
+    assert display["version"] == 1
+    assert display["summary"] == "note.txt"
+    assert display["hidden_argument_keys"] == []
+    assert display["facts"] == []
+    assert display["primary"] == [
+        {
+            "kind": "path",
+            "value": "note.txt",
+            "full_value": str(workspace.joinpath("note.txt")).replace("\\", "/"),
+            "truncate": "start",
+            "tooltip": "always",
+            "max_characters": 64,
+            "quote": False,
+            "copyable": True,
+        }
+    ]
     assert tool_result_data["payload"]["tool_call"] == {
         "id": "call-one",
         "index": 0,

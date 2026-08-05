@@ -669,6 +669,7 @@ describe('chat state helpers', () => {
       runId: 'run-stale',
       sseUrl: '/api/runs/run-stale/events',
       status: CHAT_STATUS_RUNNING,
+      startedAt: null,
       iterationCount: 0,
     });
     expect(sessionState.streamingRunEvents).not.toHaveLength(0);

@@ -4,6 +4,7 @@
   import {
     dateKeyForTimestamp,
     formatDate,
+    liveClockCadenceMs,
     timestampForItem,
   } from '$lib/chatTimelinePresentation.js';
   import { t } from '$lib/i18n.js';
@@ -56,6 +57,7 @@
   const USER_SCROLL_INTENT_WINDOW_MS = 750;
 
   let timelineItems = $derived(visibleTimelineItemsForRender(sessionState));
+  let nowMs = $state(Date.now());
   // Transient cards interleaved with the timeline: each renders after the
   // item it was anchored to (`leading` for cards created on an empty timeline,
   // `trailing` for cards whose anchor item is gone after a history reload).
@@ -95,6 +97,55 @@
   let userScrollIntentUntil = 0;
   // eslint-disable-next-line svelte/prefer-svelte-reactivity
   const sessionViewports = new Map();
+
+  $effect(() => {
+    const visibleItems = timelineItems;
+    const statuses = subAgentStatuses;
+    if (liveClockCadenceMs(visibleItems, statuses, Date.now()) === 0) {
+      return undefined;
+    }
+
+    let timeoutId = null;
+    let disposed = false;
+    const clearClock = () => {
+      if (timeoutId !== null) {
+        clearTimeout(timeoutId);
+        timeoutId = null;
+      }
+    };
+    const scheduleClock = () => {
+      clearClock();
+      if (disposed || document.hidden) {
+        return;
+      }
+      const delay = liveClockCadenceMs(visibleItems, statuses, Date.now());
+      if (delay === 0) {
+        return;
+      }
+      timeoutId = setTimeout(() => {
+        timeoutId = null;
+        nowMs = Date.now();
+        scheduleClock();
+      }, delay);
+    };
+    const handleVisibilityChange = () => {
+      if (document.hidden) {
+        clearClock();
+        return;
+      }
+      nowMs = Date.now();
+      scheduleClock();
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    nowMs = Date.now();
+    scheduleClock();
+    return () => {
+      disposed = true;
+      clearClock();
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  });
 
   $effect(() => {
     const requestId = followSessionRequest?.requestId ?? 0;
@@ -767,6 +818,7 @@
                 {agentName}
                 {subAgentStatuses}
                 {subAgentResults}
+                {nowMs}
                 {isReasoningOpen}
                 onReasoningOpenChange={setReasoningOpen}
                 {onNavigateToSubAgent}

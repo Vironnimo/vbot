@@ -489,6 +489,7 @@ async def test_inspect_prefers_matching_live_work_in_child_session(tmp_path: Pat
     assert result["id"] == "sub_live"
     assert result["run_id"] == "live-run"
     assert result["status"] == "running"
+    assert result["started_at"] == active.created_at
     assert result["result"] is None
 
 

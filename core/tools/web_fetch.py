@@ -28,6 +28,7 @@ from core.tools.tools import (
     JsonObject,
     ToolContext,
     ToolDisplay,
+    ToolDisplayField,
     ToolHandler,
     ToolRegistry,
     read_media_artifact,
@@ -1147,7 +1148,9 @@ def register_web_fetch_tool(registry: ToolRegistry, *, attachment_store: Any) ->
         WEB_FETCH_TOOL_PARAMETERS,
         make_web_fetch_handler(attachment_store),
         result_schema={"type": "object", "required": ["content"]},
-        display=ToolDisplay(summary_fields=("url",)),
+        display=ToolDisplay(
+            primary_candidates=(ToolDisplayField("url", kind="url", truncate="middle"),)
+        ),
         parallel_safe=True,
         open_input_schema=True,
     )

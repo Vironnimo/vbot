@@ -11,6 +11,7 @@ from core.tools.tools import (
     JsonObject,
     ToolContext,
     ToolDisplay,
+    ToolDisplayPart,
     ToolRegistry,
     tool_failure,
     tool_success,
@@ -141,7 +142,7 @@ def register_cron_tool(registry: ToolRegistry, cron_service: CronService) -> Non
         handler,
         open_input_schema=True,
         result_schema={"type": "object"},
-        display=ToolDisplay(summary_builder=_cron_display_summary),
+        display=ToolDisplay(parts_builder=_cron_display_parts),
     )
 
 
@@ -321,16 +322,19 @@ def _with_action_recommendation(action: str, message: str) -> str:
     return f"{message.rstrip('. ')}. {recommendation}"
 
 
-def _cron_display_summary(arguments: JsonObject) -> str:
+def _cron_display_parts(arguments: JsonObject) -> tuple[ToolDisplayPart, ...]:
     action = arguments.get("action")
     if not isinstance(action, str) or action not in CRON_ACTIONS:
-        return ""
-    parts = [action]
+        return ()
+    parts = [ToolDisplayPart(action, truncate="never", tooltip="none")]
     for field_name in ("name", "id", "target", "schedule"):
         value = arguments.get(field_name)
         if isinstance(value, str) and value.strip():
-            parts.append(value.strip())
-    return " · ".join(parts)
+            kind = "identifier" if field_name in {"id", "target"} else "text"
+            truncate = "middle" if kind == "identifier" else "end"
+            parts.append(ToolDisplayPart(value.strip(), kind=kind, truncate=truncate))
+            break
+    return tuple(parts)
 
 
 def _optional_positive_integer(value: object, *, field_name: str) -> int | None:

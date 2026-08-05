@@ -98,6 +98,7 @@ describe('createChatRunStream().applyConnectionSnapshot()', () => {
           agent_id: DISPLAYED_AGENT_ID,
           session_id: DISPLAYED_SESSION_ID,
           status: 'running',
+          started_at: '2026-08-05T18:00:00.000Z',
           sse_url: '/api/runs/run-snapshot-1/events',
         },
       ],
@@ -125,6 +126,7 @@ describe('createChatRunStream().applyConnectionSnapshot()', () => {
     expect(sessionState.currentRun?.sseUrl).toBe(
       '/api/runs/run-snapshot-1/events',
     );
+    expect(sessionState.currentRun?.startedAt).toBe('2026-08-05T18:00:00.000Z');
   });
 
   it('reattaches an excluded active Run without projecting Agent activity', () => {
@@ -181,6 +183,7 @@ describe('createChatRunStream().applyConnectionSnapshot()', () => {
           agent_id: 'beta',
           session_id: 'session-child-1',
           status: 'running',
+          started_at: '2026-08-05T18:01:00.000Z',
           sse_url: '/api/runs/run-child-1/events',
         },
         {
@@ -188,6 +191,7 @@ describe('createChatRunStream().applyConnectionSnapshot()', () => {
           agent_id: 'gamma',
           session_id: 'session-child-2',
           status: 'running',
+          started_at: '2026-08-05T18:02:00.000Z',
           sse_url: '/api/runs/run-child-2/events',
         },
       ],
@@ -198,9 +202,13 @@ describe('createChatRunStream().applyConnectionSnapshot()', () => {
     expect(subscribeRunEvents).not.toHaveBeenCalled();
     expect(harness.subAgentRunStatuses).toEqual({
       'run:run-child-1': 'running',
+      'runStarted:run-child-1': '2026-08-05T18:01:00.000Z',
       'session:beta::session-child-1': 'running',
+      'sessionStarted:beta::session-child-1': '2026-08-05T18:01:00.000Z',
       'run:run-child-2': 'running',
+      'runStarted:run-child-2': '2026-08-05T18:02:00.000Z',
       'session:gamma::session-child-2': 'running',
+      'sessionStarted:gamma::session-child-2': '2026-08-05T18:02:00.000Z',
     });
     expect(harness.isDisplayedSession).toHaveBeenCalledWith(
       'beta',
@@ -551,6 +559,7 @@ describe('createChatRunStream().applyConnectionSnapshot()', () => {
         ...basePayload,
         run_event_type: 'run_started',
         run_event_sequence: 1,
+        run_event_timestamp: '2026-08-05T18:03:00.000Z',
         status: 'running',
       },
     });
@@ -586,7 +595,9 @@ describe('createChatRunStream().applyConnectionSnapshot()', () => {
     ]);
     expect(harness.subAgentRunStatuses).toMatchObject({
       'run:child-run': 'completed',
+      'runStarted:child-run': '2026-08-05T18:03:00.000Z',
       'session:worker::child-session': 'completed',
+      'sessionStarted:worker::child-session': '2026-08-05T18:03:00.000Z',
     });
   });
 

@@ -255,11 +255,16 @@ describe('ChatView', () => {
     flushSync();
 
     await waitForCondition(
-      () => Boolean(findButtonByText('view session')),
+      () =>
+        Boolean(
+          document.querySelector('button[aria-label="Open Sub-Agent Session"]'),
+        ),
       100,
     );
 
-    findButtonByText('view session').click();
+    document
+      .querySelector('button[aria-label="Open Sub-Agent Session"]')
+      .click();
     flushSync();
 
     // The persisted descriptor carries the bare child id; the navigation must

@@ -352,9 +352,7 @@ export function activeAgentTab() {
 }
 
 export function viewSessionButton() {
-  return Array.from(document.querySelectorAll('button')).find(
-    (button) => button.textContent?.trim() === 'view session',
-  );
+  return document.querySelector('button[aria-label="Open Sub-Agent Session"]');
 }
 
 export function returnToCurrentSessionButton() {

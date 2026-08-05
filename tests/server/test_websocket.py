@@ -1059,6 +1059,7 @@ def test_websocket_handshake_active_runs_lists_running_with_sse_url_and_omits_te
                 "session_id": "session-running",
                 "run_kind": RunKind.USER,
                 "status": RunStatus.RUNNING,
+                "created_at": "2026-05-03T14:30:01+00:00",
                 "iteration_count": 3,
             },
         )(),
@@ -1096,6 +1097,7 @@ def test_websocket_handshake_active_runs_lists_running_with_sse_url_and_omits_te
             "session_id": "session-running",
             "run_kind": "user",
             "status": "running",
+            "started_at": "2026-05-03T14:30:01+00:00",
             "iteration_count": 3,
             "sse_url": "/api/runs/run-running/events",
         }

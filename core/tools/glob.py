@@ -23,6 +23,7 @@ from core.tools.tools import (
     JsonObject,
     ToolContext,
     ToolDisplay,
+    ToolDisplayField,
     ToolRegistry,
     tool_failure,
     tool_success,
@@ -192,7 +193,9 @@ def register_glob_tool(registry: ToolRegistry) -> None:
         GLOB_TOOL_PARAMETERS,
         _glob_handler_async,
         result_schema={"type": "object", "required": ["content"]},
-        display=ToolDisplay(summary_fields=("pattern",)),
+        display=ToolDisplay(
+            primary_candidates=(ToolDisplayField("pattern", kind="query", quote=True),)
+        ),
         parallel_safe=True,
         open_input_schema=True,
     )

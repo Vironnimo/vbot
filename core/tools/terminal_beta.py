@@ -37,6 +37,7 @@ from core.tools.tools import (
     JsonObject,
     ToolContext,
     ToolDisplay,
+    ToolDisplayPart,
     ToolRegistry,
     tool_failure,
     tool_success,
@@ -656,21 +657,26 @@ def register_terminal_beta_tool(
         make_terminal_beta_handler(terminal_manager, projects),
         open_input_schema=True,
         result_schema={"type": "object"},
-        display=ToolDisplay(summary_builder=_terminal_display_summary),
+        display=ToolDisplay(parts_builder=_terminal_display_parts),
     )
 
 
-def _terminal_display_summary(arguments: JsonObject) -> str:
+def _terminal_display_parts(arguments: JsonObject) -> tuple[ToolDisplayPart, ...]:
     action = arguments.get("action")
     if not isinstance(action, str) or action not in TERMINAL_BETA_ACTIONS:
-        return ""
+        return ()
+    parts = [ToolDisplayPart(action, truncate="never", tooltip="none")]
     terminal_id = arguments.get("terminal_id")
     if isinstance(terminal_id, str) and terminal_id:
-        return f"{action} · {terminal_id}"
+        parts.append(ToolDisplayPart(terminal_id, kind="identifier", truncate="middle"))
+        return tuple(parts)
     command = arguments.get("command")
     if action == "start":
-        return f"start · {command or TERMINAL_BETA_DEFAULT_COMMAND}"
-    return action
+        command_label = (
+            command if isinstance(command, str) and command else TERMINAL_BETA_DEFAULT_COMMAND
+        )
+        parts.append(ToolDisplayPart(command_label, kind="command"))
+    return tuple(parts)
 
 
 __all__ = [

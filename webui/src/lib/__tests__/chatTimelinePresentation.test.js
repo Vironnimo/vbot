@@ -28,6 +28,7 @@ import {
   subAgentToolStatusLabel,
   takeoverSeparatorLabel,
   toolArgumentSummary,
+  toolRowPresentation,
   visibleRunChildren,
 } from '../chatTimelinePresentation.js';
 import { init } from '../i18n.js';
@@ -198,6 +199,120 @@ describe('chatTimelinePresentation', () => {
     });
 
     expect(summary).toBe('');
+  });
+
+  it('keeps structured facts intact while truncating a long description', () => {
+    const presentation = toolRowPresentation({
+      name: 'grep',
+      display: {
+        version: 1,
+        primary: [
+          {
+            kind: 'description',
+            value:
+              'Find every version variable and every derived alias across all runtime packages',
+            truncate: 'end',
+            tooltip: 'truncated',
+            max_characters: 64,
+            quote: true,
+          },
+        ],
+        facts: [{ kind: 'count', value: 10, unit: 'matches', at_least: false }],
+      },
+    });
+
+    expect(presentation.primary[0].text).toHaveLength(64);
+    expect(presentation.primary[0].text.endsWith('…')).toBe(true);
+    expect(presentation.primary[0].tooltipText).toContain(
+      'across all runtime packages',
+    );
+    expect(presentation.facts[0].text).toBe('10 matches');
+  });
+
+  it('compacts a deep read path from the start and keeps its full tooltip', () => {
+    const presentation = toolRowPresentation({
+      name: 'read',
+      display: {
+        version: 1,
+        primary: [
+          {
+            kind: 'path',
+            value: 'C:/workspace/packages/chat/components/ToolRow.svelte',
+            full_value: 'C:/workspace/packages/chat/components/ToolRow.svelte',
+            truncate: 'start',
+            tooltip: 'always',
+            max_characters: 64,
+            copyable: true,
+          },
+        ],
+        facts: [],
+      },
+    });
+
+    expect(presentation.primary[0]).toMatchObject({
+      text: '…/chat/components/ToolRow.svelte',
+      fullText: 'C:/workspace/packages/chat/components/ToolRow.svelte',
+      copyable: true,
+    });
+  });
+
+  it('preserves filename-only read labels', () => {
+    const presentation = toolRowPresentation({
+      name: 'read',
+      display: {
+        primary: [
+          {
+            kind: 'path',
+            value: 'ToolRow.svelte',
+            full_value: 'C:/workspace/ToolRow.svelte',
+            truncate: 'start',
+            tooltip: 'always',
+          },
+        ],
+      },
+    });
+
+    expect(presentation.primary[0].text).toBe('ToolRow.svelte');
+    expect(presentation.primary[0].tooltipText).toBe(
+      'C:/workspace/ToolRow.svelte',
+    );
+  });
+
+  it('middle-truncates URLs and localizes singular and lower-bound counts', () => {
+    const presentation = toolRowPresentation({
+      name: 'web_search',
+      display: {
+        primary: [
+          {
+            kind: 'url',
+            value:
+              'https://example.com/a/very/long/path/to/a/result?query=versions',
+            truncate: 'middle',
+            max_characters: 24,
+          },
+        ],
+        facts: [
+          { kind: 'count', value: 1, unit: 'results', at_least: false },
+          { kind: 'count', value: 10, unit: 'matches', at_least: true },
+        ],
+      },
+    });
+
+    expect(presentation.primary[0].text).toHaveLength(24);
+    expect(presentation.primary[0].text).toContain('…');
+    expect(presentation.facts.map((fact) => fact.text)).toEqual([
+      '1 result',
+      '10+ matches',
+    ]);
+  });
+
+  it('does not expose arbitrary arguments for an unknown Tool', () => {
+    const presentation = toolRowPresentation({
+      name: 'extension_private_probe',
+      arguments: { token: 'do-not-render', operation: 'inspect' },
+    });
+
+    expect(presentation).toEqual({ primary: [], facts: [] });
   });
 
   it('projects an externally completed sub-agent run as successful', () => {
@@ -1191,7 +1306,7 @@ describe('runMetaParts', () => {
     expect(parts).toContain('Cancelled');
   });
 
-  it('keeps the duration-or-status fallback for completed runs', () => {
+  it('shows terminal status and canonical duration for completed runs', () => {
     const parts = runMetaParts({
       status: 'completed',
       durationMs: 8000,
@@ -1199,7 +1314,23 @@ describe('runMetaParts', () => {
       tools: [],
     });
 
-    expect(parts.join(' ')).not.toContain('Completed');
+    expect(parts).toContain('Completed');
+    expect(parts).toContain('8.0s');
+  });
+
+  it('computes a live Run duration from its start timestamp', () => {
+    const parts = runMetaParts(
+      {
+        status: 'running',
+        durationMs: null,
+        startTimestamp: '2026-08-05T18:00:00.000Z',
+        iterationCount: 0,
+      },
+      Date.parse('2026-08-05T18:00:05.250Z'),
+    );
+
+    expect(parts).toContain('Running');
+    expect(parts).toContain('5.3s');
   });
 
   it('shows live Provider liveness without calling it model output', () => {

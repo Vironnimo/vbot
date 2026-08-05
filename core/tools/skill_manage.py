@@ -25,6 +25,7 @@ from core.tools.tools import (
     JsonObject,
     ToolContext,
     ToolDisplay,
+    ToolDisplayPart,
     ToolRegistry,
     tool_failure,
     tool_success,
@@ -296,17 +297,21 @@ def register_skill_manage_tool(
         ),
         open_input_schema=True,
         result_schema={"type": "object", "required": ["scope"]},
-        display=ToolDisplay(summary_builder=_skill_manage_display_summary),
+        display=ToolDisplay(parts_builder=_skill_manage_display_parts),
     )
 
 
-def _skill_manage_display_summary(arguments: JsonObject) -> str | None:
-    parts: list[str] = []
-    for field in ("action", "name", "scope"):
+def _skill_manage_display_parts(arguments: JsonObject) -> tuple[ToolDisplayPart, ...]:
+    action = arguments.get("action")
+    if not isinstance(action, str) or not action.strip():
+        return ()
+    parts = [ToolDisplayPart(action.strip(), truncate="never", tooltip="none")]
+    for field in ("name", "scope"):
         value = arguments.get(field)
         if isinstance(value, str) and value.strip():
-            parts.append(value)
-    return " · ".join(parts) or None
+            parts.append(ToolDisplayPart(value.strip()))
+            break
+    return tuple(parts)
 
 
 __all__ = [

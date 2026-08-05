@@ -20,6 +20,7 @@ from core.tools.tools import (
     JsonObject,
     ToolContext,
     ToolDisplay,
+    ToolDisplayField,
     ToolPromptBlockRegistry,
     ToolRegistry,
     tool_failure,
@@ -203,7 +204,11 @@ def register_project_tool(
             "type": "object",
             "required": ["status", "project_id", "display_name", "cwd", "content"],
         },
-        display=ToolDisplay(summary_fields=("project_id",)),
+        display=ToolDisplay(
+            primary_candidates=(
+                ToolDisplayField("project_id", kind="identifier", truncate="middle"),
+            )
+        ),
         parallel_safe=True,
     )
     if prompt_blocks is not None:

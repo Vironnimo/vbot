@@ -26,6 +26,7 @@ from core.tools.tools import (
     JsonObject,
     ToolContext,
     ToolDisplay,
+    ToolDisplayField,
     ToolPromptBlockRegistry,
     ToolRegistry,
     tool_failure,
@@ -418,7 +419,12 @@ def register_bash_tool(
         handler,
         open_input_schema=True,
         result_schema={"type": "object", "required": ["status"]},
-        display=ToolDisplay(summary_fields=("command",)),
+        display=ToolDisplay(
+            primary_candidates=(
+                ToolDisplayField("description", kind="description", quote=True),
+                ToolDisplayField("command", kind="command"),
+            )
+        ),
     )
     if prompt_blocks is not None:
         prompt_blocks.register(

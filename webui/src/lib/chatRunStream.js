@@ -154,6 +154,7 @@ export function createChatRunStream({
     } else {
       currentRun.status = run.status ?? currentRun.status;
       currentRun.sseUrl = sseUrl;
+      currentRun.startedAt = run.started_at ?? currentRun.startedAt ?? null;
       if (Number.isInteger(run.iteration_count) && run.iteration_count >= 0) {
         currentRun.iterationCount = run.iteration_count;
       }
@@ -398,6 +399,15 @@ export function createChatRunStream({
       if (event.type === 'run_started' && statusAgentId && event.session_id) {
         updates[`sessionTool:${statusAgentId}::${event.session_id}`] = '';
       }
+      if (event.type === 'run_started' && event.timestamp) {
+        if (event.run_id) {
+          updates[`runStarted:${event.run_id}`] = event.timestamp;
+        }
+        if (statusAgentId && event.session_id) {
+          updates[`sessionStarted:${statusAgentId}::${event.session_id}`] =
+            event.timestamp;
+        }
+      }
 
       // A queued sub-agent spawn's persisted descriptor only knows its
       // queue_item_id. Recording the queue→run mapping when the queued run
@@ -465,6 +475,19 @@ export function createChatRunStream({
       typeof data?.run_id === 'string' ? data.run_id.trim() : '';
     if (childRunId) {
       updates[`run:${childRunId}`] = childStatus;
+    }
+    const childStartedAt =
+      typeof data?.started_at === 'string' ? data.started_at.trim() : '';
+    if (childStartedAt) {
+      if (childRunId) {
+        updates[`runStarted:${childRunId}`] = childStartedAt;
+      }
+      for (const childAddress of childAddresses) {
+        if (childAddress) {
+          updates[`sessionStarted:${childAddress}::${childSessionId}`] =
+            childStartedAt;
+        }
+      }
     }
     const queueItemId =
       typeof data?.queue_item_id === 'string' ? data.queue_item_id.trim() : '';
@@ -903,12 +926,21 @@ export function createChatRunStream({
         continue;
       }
       subAgentUpdates[`run:${activeRun.run_id}`] = 'running';
+      if (activeRun.started_at) {
+        subAgentUpdates[`runStarted:${activeRun.run_id}`] =
+          activeRun.started_at;
+      }
       // Status keys stay bare (the snapshot's agent_id already is) so they meet
       // the descriptor-derived reads; only session STATE below keys by address.
       if (activeRun.agent_id && activeRun.session_id) {
         subAgentUpdates[
           `session:${activeRun.agent_id}::${activeRun.session_id}`
         ] = 'running';
+        if (activeRun.started_at) {
+          subAgentUpdates[
+            `sessionStarted:${activeRun.agent_id}::${activeRun.session_id}`
+          ] = activeRun.started_at;
+        }
       }
     }
     updateSubAgentRunStatuses(subAgentUpdates, { replaceActive: true });
@@ -930,6 +962,7 @@ export function createChatRunStream({
         startRun(sessionState, {
           run_id: activeRun.run_id,
           status: 'running',
+          started_at: activeRun.started_at,
           sse_url: activeRun.sse_url,
           iteration_count: activeRun.iteration_count,
           ...(activeRun.contributes_to_agent_activity === false
@@ -944,6 +977,7 @@ export function createChatRunStream({
       attachRunStream(sessionState, {
         run_id: activeRun.run_id,
         status: 'running',
+        started_at: activeRun.started_at,
         sse_url: activeRun.sse_url,
         iteration_count: activeRun.iteration_count,
         ...(activeRun.contributes_to_agent_activity === false

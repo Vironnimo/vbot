@@ -13,6 +13,7 @@ from core.tools.tools import (
     JsonObject,
     ToolContext,
     ToolDisplay,
+    ToolDisplayPart,
     ToolRegistry,
     tool_failure,
     tool_success,
@@ -297,24 +298,27 @@ def register_memory_tool(registry: ToolRegistry, memory_service: MemoryService) 
         open_input_schema=True,
         result_schema={"type": "object", "required": ["content", "scope", "entries"]},
         display=ToolDisplay(
-            summary_builder=_memory_display_summary,
+            parts_builder=_memory_display_parts,
             hidden_argument_keys=("content",),
         ),
     )
 
 
-def _memory_display_summary(arguments: JsonObject) -> str:
+def _memory_display_parts(arguments: JsonObject) -> tuple[ToolDisplayPart, ...]:
     action = arguments.get("action")
     if not isinstance(action, str) or action not in MEMORY_ACTIONS:
-        return ""
-    parts = [action]
+        return ()
+    parts = [ToolDisplayPart(action, truncate="never", tooltip="none")]
+    details: list[str] = []
     scope = arguments.get("scope")
     if isinstance(scope, str) and scope:
-        parts.append(scope)
+        details.append(scope)
     entry_id = arguments.get("entry_id")
     if isinstance(entry_id, int) and not isinstance(entry_id, bool):
-        parts.append(str(entry_id))
-    return " · ".join(parts)
+        details.append(str(entry_id))
+    if details:
+        parts.append(ToolDisplayPart(" · ".join(details)))
+    return tuple(parts)
 
 
 __all__ = [
