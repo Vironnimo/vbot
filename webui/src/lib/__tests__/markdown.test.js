@@ -2,6 +2,7 @@ import MarkdownIt from 'markdown-it';
 import { describe, expect, it, vi } from 'vitest';
 
 import {
+  linkifiedTextSegments,
   reasoningMarkdownSource,
   renderMarkdown,
   renderMarkdownDocument,
@@ -60,6 +61,27 @@ describe('renderMarkdown()', () => {
     expect(html).toContain('href="https://example.com"');
     expect(html).toContain('target="_blank"');
     expect(html).toContain('rel="noopener noreferrer"');
+  });
+
+  it('autolinks literal http and https URLs without trailing punctuation', () => {
+    const html = renderMarkdown(
+      'Open http://localhost:8421/test or https://example.com/docs.',
+    );
+
+    expect(html).toContain('href="http://localhost:8421/test"');
+    expect(html).toContain('href="https://example.com/docs"');
+    expect(html).not.toContain('href="https://example.com/docs."');
+    expect(html).toContain('target="_blank"');
+    expect(html).toContain('rel="noopener noreferrer"');
+  });
+
+  it('does not autolink unsupported schemes, bare domains, or code', () => {
+    const html = renderMarkdown(
+      'example.com ftp://example.com file:///tmp/x `https://example.com/code`',
+    );
+
+    expect(html).not.toContain('<a');
+    expect(html).toContain('<code>https://example.com/code</code>');
   });
 
   it('does not create a live javascript link', () => {
@@ -164,6 +186,54 @@ describe('renderMarkdown()', () => {
     const html = renderMarkdown('# After eviction');
 
     expect(html).toContain('<h1>After eviction</h1>');
+  });
+});
+
+describe('linkifiedTextSegments()', () => {
+  it('splits plain text around safe HTTP(S) URLs', () => {
+    expect(
+      linkifiedTextSegments(
+        '**literal** https://example.com/docs, then http://localhost:8421.',
+      ),
+    ).toEqual([
+      { text: '**literal** ', href: null },
+      {
+        text: 'https://example.com/docs',
+        href: 'https://example.com/docs',
+      },
+      { text: ', then ', href: null },
+      {
+        text: 'http://localhost:8421',
+        href: 'http://localhost:8421',
+      },
+      { text: '.', href: null },
+    ]);
+  });
+
+  it('leaves unsupported schemes and path-like text inert', () => {
+    const source =
+      'ftp://example.com mailto:a@example.com file:///tmp/x C:/tmp/x';
+
+    expect(linkifiedTextSegments(source)).toEqual([
+      { text: source, href: null },
+    ]);
+  });
+
+  it('leaves URLs inside plain-text code markers inert', () => {
+    expect(
+      linkifiedTextSegments(
+        '`https://example.com/inline`\n```\nhttps://example.com/fenced\n```\nhttps://example.com/live',
+      ),
+    ).toEqual([
+      {
+        text: '`https://example.com/inline`\n```\nhttps://example.com/fenced\n```\n',
+        href: null,
+      },
+      {
+        text: 'https://example.com/live',
+        href: 'https://example.com/live',
+      },
+    ]);
   });
 });
 

@@ -1,7 +1,10 @@
 <script>
   import { t } from '$lib/i18n.js';
   import { floatingHoverCard, tooltip } from '$lib/tooltip.js';
-  import { reasoningMarkdownSource } from '$lib/markdown.js';
+  import {
+    linkifiedTextSegments,
+    reasoningMarkdownSource,
+  } from '$lib/markdown.js';
   import {
     attachmentFilename,
     attachmentPreviewLabel,
@@ -148,9 +151,23 @@
   </span>
 {/snippet}
 
+{#snippet linkifiedText(text)}
+  {#each linkifiedTextSegments(text) as segment, segmentIndex (segmentIndex)}
+    {#if segment.href}
+      <a href={segment.href} target="_blank" rel="noopener noreferrer"
+        >{segment.text}</a
+      >
+    {:else}
+      {segment.text}
+    {/if}
+  {/each}
+{/snippet}
+
 {#snippet userContentBlock(block)}
   {#if isTextContentBlock(block)}
-    <p class="msg-body-text msg-body-text--user">{block.text}</p>
+    <p class="msg-body-text msg-body-text--user">
+      {@render linkifiedText(block.text)}
+    </p>
   {:else if isImageMediaContentBlock(block)}
     {@const mediaUrl = attachmentUrlForBlock(block)}
     {#if mediaUrl}
@@ -343,7 +360,7 @@
             class="msg-body-text"
             class:msg-body-text--user={item.message.role === 'user'}
           >
-            {textFromMessage(item.message)}
+            {@render linkifiedText(textFromMessage(item.message))}
           </p>
         {/if}
       {/if}
@@ -479,7 +496,7 @@
           </div>
         {:else}
           <p class="msg-body-text" class:msg-body-text--user={isUserItem(item)}>
-            {textFromEvent(item.event)}
+            {@render linkifiedText(textFromEvent(item.event))}
           </p>
         {/if}
       </div>

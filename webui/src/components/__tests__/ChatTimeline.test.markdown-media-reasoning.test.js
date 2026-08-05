@@ -386,6 +386,77 @@ describe('ChatTimeline', () => {
     expect(document.querySelector('.msg.user strong')).toBeNull();
   });
 
+  it('autolinks safe URLs in plain user text without enabling Markdown', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-user-literal-link',
+    );
+    sessionState.messages = [
+      {
+        id: 'user-literal-link',
+        role: 'user',
+        content: '**literal** https://example.com/docs.',
+        timestamp: '2026-05-10T12:00:00Z',
+      },
+    ];
+
+    mountedComponent = mount(ChatTimeline, {
+      target: document.body,
+      props: {
+        sessionState,
+        agentName: 'Alpha',
+      },
+    });
+    flushSync();
+
+    const userBodyText = document.querySelector('.msg.user .msg-body-text');
+    const link = userBodyText.querySelector('a');
+    expect(userBodyText.textContent).toBe(
+      '**literal** https://example.com/docs.',
+    );
+    expect(userBodyText.querySelector('strong')).toBeNull();
+    expect(link.textContent).toBe('https://example.com/docs');
+    expect(link.getAttribute('href')).toBe('https://example.com/docs');
+    expect(link.getAttribute('target')).toBe('_blank');
+    expect(link.getAttribute('rel')).toBe('noopener noreferrer');
+  });
+
+  it('autolinks literal URLs in assistant output', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-assistant-literal-link',
+    );
+
+    appendRunEvent(sessionState, {
+      type: 'assistant_output',
+      run_id: 'run-assistant-literal-link',
+      sequence: 1,
+      payload: {
+        message: {
+          role: 'assistant',
+          content: 'Open https://example.com/docs.',
+        },
+      },
+    });
+
+    mountedComponent = mount(ChatTimeline, {
+      target: document.body,
+      props: {
+        sessionState,
+        agentName: 'Alpha',
+      },
+    });
+    flushSync();
+
+    const link = document.querySelector('.assistant-run .msg-markdown a');
+    expect(link.textContent).toBe('https://example.com/docs');
+    expect(link.getAttribute('href')).toBe('https://example.com/docs');
+    expect(link.getAttribute('target')).toBe('_blank');
+    expect(link.getAttribute('rel')).toBe('noopener noreferrer');
+  });
+
   it('renders markdown while assistant output is streaming', () => {
     const sessionState = ensureSessionState(
       createChatState(),
