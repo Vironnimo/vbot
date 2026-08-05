@@ -11,8 +11,11 @@ export function getAgentTab(container, agentName) {
 }
 
 export async function ensureEmptyChat(chat) {
-  await chat.getByRole("button", { exact: true, name: "Sessions" }).click();
   const sessionDrawer = chat.getByRole("complementary", { name: "Sessions" });
+  if (!(await sessionDrawer.isVisible())) {
+    await chat.getByRole("button", { exact: true, name: "Sessions" }).click();
+  }
+  await expect(sessionDrawer).toBeVisible();
   const sessionItems = sessionDrawer.getByRole("listitem");
   const emptySessions = sessionDrawer.getByText("No sessions yet", {
     exact: true,

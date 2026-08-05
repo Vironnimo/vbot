@@ -16,6 +16,8 @@ const projectPath = path.resolve(
   "mixed-project",
 );
 const PROJECT_NAME = "Mixed Source E2E Project";
+const PROJECT_PICKER_ACTION_TIMEOUT_MS = 1_000;
+const PROJECT_PICKER_RECONCILIATION_TIMEOUT_MS = 7_500;
 
 async function removeProject(page) {
   await page.goto("/#projects");
@@ -33,11 +35,27 @@ async function removeProject(page) {
   await expect(projects.getByText(/^Project removed\./)).toBeVisible();
 }
 
+async function selectProjectOption(page, projectPicker, optionName) {
+  const option = page.getByRole("option", { exact: true, name: optionName });
+  await expect(async () => {
+    if (!(await option.isVisible())) {
+      await projectPicker.click({ timeout: PROJECT_PICKER_ACTION_TIMEOUT_MS });
+    }
+    await option.click({ timeout: PROJECT_PICKER_ACTION_TIMEOUT_MS });
+    await expect(
+      projectPicker.getByText(optionName, { exact: true }),
+    ).toBeVisible({ timeout: PROJECT_PICKER_ACTION_TIMEOUT_MS });
+  }).toPass({ timeout: PROJECT_PICKER_RECONCILIATION_TIMEOUT_MS });
+}
+
 async function startProjectChat(page, agentName) {
   await page.goto("/#chat");
   const chat = page.getByRole("region", { name: "Chat" });
-  await chat.getByRole("button", { name: "Select project" }).click();
-  await page.getByRole("option", { exact: true, name: PROJECT_NAME }).click();
+  const projectPicker = chat.getByRole("button", { name: "Select project" });
+  if (await projectPicker.getByText(PROJECT_NAME, { exact: true }).isVisible()) {
+    await selectProjectOption(page, projectPicker, "No project selected");
+  }
+  await selectProjectOption(page, projectPicker, PROJECT_NAME);
 
   const team = chat.locator(
     '.chat-view__project-team[aria-label="Project team"]',
