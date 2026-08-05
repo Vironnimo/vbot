@@ -37,7 +37,12 @@ from core.memory import MemoryService
 from core.model_tasks import EmbeddingService, ImageService, SpeechService, TaskModelService
 from core.models.database import begin_runtime_model_database_refresh
 from core.models.models import Model, ModelRegistry
-from core.projects import AgentResolver, ProjectStore, build_agent_resolver
+from core.projects import (
+    AgentResolver,
+    ProjectStore,
+    build_agent_resolver,
+    effective_project_allowed_skills,
+)
 from core.prompts import (
     AGENT_SCOPE_KEY_PREFIX,
     DEFAULT_SCOPE_KEY,
@@ -628,7 +633,7 @@ class Runtime:
             self._tools,
             self._projects,
             lambda: self.system_prompts,
-            self.project_own_skills,
+            self.project_context_skills,
             self._file_state,
             self._tool_prompt_blocks,
         )
@@ -1265,11 +1270,12 @@ class Runtime:
         run) returns the global registry byte-for-byte. A set ``project_id`` returns
         the project's merged registry — the project's own skill directory (its
         declared source format's location) first,
-        then the bundled pool. When ``identity_agent_id`` names an **identity** agent
-        that has its own private skills home, that home is layered on top (agent >
-        project > global > bundled) and the agent's own skills are always-allowed for
-        it; an agent with no private skills falls through to the project/global path
-        unchanged. This is the single seam every run-time skill consumer (prompt
+        then the bundled pool. When ``identity_agent_id`` names an **identity** agent,
+        its private home is layered on top when present (agent > project > global >
+        bundled). The agent's own Skills and the effective Skill set of a selected
+        Project are always allowed in that scoped registry: Project Context therefore
+        grants what the Project uses without mutating the Agent's configured personal
+        allowlist. This is the single seam every run-time skill consumer (prompt
         assembly, triggers, the ``skill`` tool, autocomplete) resolves through, so
         scoping lives in exactly one place.
 
@@ -1287,7 +1293,7 @@ class Runtime:
         if (
             identity_agent_id is not None
             and self.agents.exists(identity_agent_id)
-            and self.agent_skills_dir(identity_agent_id).is_dir()
+            and (project_id is not None or self.agent_skills_dir(identity_agent_id).is_dir())
         ):
             return self._agent_skill_registry(project_id, identity_agent_id)
         if project_id is None:
@@ -1324,6 +1330,20 @@ class Runtime:
             environment=environment,
         )
         return registry.list_all()
+
+    def project_context_skills(self, project_id: str) -> list[SkillMetadata]:
+        """Return the complete effective Skill set carried by Project Context.
+
+        Project-owned Skills are active by default except explicit Project
+        disables; bundled and global Skills join only through the Project's opt-in
+        lists. This is the same Project policy used for Config Agents and the
+        temporary Project grant applied to Identity Runs.
+        """
+        self._ensure_started()
+        project = self.projects.get(project_id)
+        bundle = self._project_skill_bundle(project_id)
+        allowed_names = set(effective_project_allowed_skills(project, bundle.names))
+        return [skill for skill in bundle.registry.list_all() if skill.name in allowed_names]
 
     def project_skill_names(self, project_id: str | None) -> frozenset[str]:
         """Return the names of a project's own scanned skills (empty for identity).
@@ -1383,22 +1403,32 @@ class Runtime:
         scan_roots = self._skill_scan_roots(settings, self._resolve_resources_path())
         roots: list[Path] = [agent_root]
         origins: list[str | None] = [SKILL_ORIGIN_AGENT]
+        project_allowed_names: set[str] = set()
         if project_id is not None:
             project = self.projects.get(project_id)
             roots.append(project_skills_dir(Path(project.cwd), project.source_format))
             origins.append(project_skill_origin(project.display_name))
+            project_allowed_names.update(
+                effective_project_allowed_skills(
+                    project,
+                    self._project_skill_bundle(project_id).names,
+                )
+            )
         roots.extend(scan_roots)
         origins.extend(self._bundled_skill_origins(scan_roots))
         # First-found-wins ordering makes agent skills win over project, project over
         # bundled. The agent's own skills are always-allowed for it, so they bypass
         # the owner's ``allowed_skills`` filter without leaking to other agents
-        # (whose registries never scan this home).
+        # (whose registries never scan this home). Project Context is itself the
+        # authorization to use that Project's effective Skill set: those exact
+        # Project-granted names also bypass the Identity Agent's unrelated personal
+        # allowlist while this project-scoped registry is active.
         agent_own_names = scan_skill_names(agent_root, environment)
         return SkillRegistry.load(
             roots[0],
             extra_dirs=roots[1:],
             environment=environment,
-            always_allowed=agent_own_names,
+            always_allowed=agent_own_names | project_allowed_names,
             origins=origins,
         )
 

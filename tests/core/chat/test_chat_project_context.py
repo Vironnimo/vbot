@@ -103,14 +103,20 @@ async def test_absolute_file_access_does_not_auto_load_project_context(tmp_path:
 
 
 @pytest.mark.asyncio
-async def test_project_tool_makes_project_skill_loadable_in_same_run_without_prompt_change(
+@pytest.mark.parametrize("nesting_depth", [0, 1])
+async def test_project_tool_grants_project_skill_in_current_run_without_prompt_change(
     tmp_path: Path,
+    nesting_depth: int,
 ) -> None:
     global_skill_root = tmp_path / "global-skills"
     project_skill_root = tmp_path / "project-skills"
     _write_skill(project_skill_root, "deploy")
     global_skills = SkillRegistry.load(global_skill_root, environment={})
-    project_skills = SkillRegistry.load(project_skill_root, environment={})
+    project_skills = SkillRegistry.load(
+        project_skill_root,
+        environment={},
+        always_allowed=frozenset({"deploy"}),
+    )
     skill_resolutions: list[tuple[str | None, str | None]] = []
 
     def resolve_skills(project_id: str | None, agent_id: str | None) -> SkillRegistry:
@@ -165,7 +171,7 @@ async def test_project_tool_makes_project_skill_loadable_in_same_run_without_pro
         id="coder",
         model="openai/gpt-5.2",
         allowed_tools=["project", "skill"],
-        allowed_skills=["*"],
+        allowed_skills=[],
     )
     runtime: Any = StubRuntime(
         data_dir=tmp_path,
@@ -176,7 +182,10 @@ async def test_project_tool_makes_project_skill_loadable_in_same_run_without_pro
     runtime.skills_for = resolve_skills
     runtime.chat_sessions.create("coder", session_id="s1")
 
-    await build_chat_loop(runtime).send("coder", "Deploy the Project", session_id="s1")
+    loop = build_chat_loop(runtime)
+    if nesting_depth > 0:
+        loop = loop.child_loop(nesting_depth=nesting_depth)
+    await loop.send("coder", "Deploy the Project", session_id="s1")
 
     messages = runtime.chat_sessions.get("coder", "s1").load()
     loaded = [
@@ -190,6 +199,73 @@ async def test_project_tool_makes_project_skill_loadable_in_same_run_without_pro
     assert ("vbot", "coder") in skill_resolutions
     system_prompts = [str(request["messages"][0]["content"]) for request in adapter.requests]
     assert system_prompts[0] == system_prompts[1] == system_prompts[2]
+
+
+@pytest.mark.asyncio
+async def test_loaded_project_skill_grant_is_recovered_in_later_run(tmp_path: Path) -> None:
+    global_skills = SkillRegistry.load(tmp_path / "global-skills", environment={})
+    project_skill_root = tmp_path / "project-skills"
+    _write_skill(project_skill_root, "deploy")
+    project_skills = SkillRegistry.load(
+        project_skill_root,
+        environment={},
+        always_allowed=frozenset({"deploy"}),
+    )
+
+    def resolve_skills(project_id: str | None, _agent_id: str | None) -> SkillRegistry:
+        return project_skills if project_id == "vbot" else global_skills
+
+    tools = ToolRegistry()
+    register_skill_tool(tools, resolve_skills, lambda: None)
+    adapter = StubAdapter(
+        [
+            {
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "call-skill",
+                        "name": "skill",
+                        "arguments": {"name": "deploy"},
+                    }
+                ],
+            },
+            {"content": "Done", "tool_calls": None},
+        ]
+    )
+    agent = StubAgent(
+        id="coder",
+        model="openai/gpt-5.2",
+        allowed_tools=["skill"],
+        allowed_skills=[],
+    )
+    runtime: Any = StubRuntime(
+        data_dir=tmp_path,
+        agent=agent,
+        adapter=adapter,
+        tools=tools,
+    )
+    runtime.skills_for = resolve_skills
+    session = runtime.chat_sessions.create("coder", session_id="s1")
+    session.append(
+        ChatMessage.tool(
+            tool_call_id="call-project",
+            name="project",
+            content=json.dumps(tool_success({"status": "loaded", "project_id": "vbot"})),
+        )
+    )
+
+    await (
+        build_chat_loop(runtime)
+        .child_loop(nesting_depth=1)
+        .send("coder", "Continue Project work", session_id="s1")
+    )
+
+    activations = [
+        activation
+        for message in session.load()
+        if (activation := skill_tool_activation(message)) is not None
+    ]
+    assert [activation[0] for activation in activations] == ["deploy"]
 
 
 @pytest.mark.asyncio

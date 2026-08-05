@@ -1069,6 +1069,55 @@ def test_skills_for_project_skill_wins_name_collision(config: Config, tmp_path: 
     assert registry.get(bundled_name).description == "Project override of a bundled skill."
 
 
+def test_identity_project_context_grants_effective_project_skills(
+    config: Config, tmp_path: Path
+) -> None:
+    logging.getLogger("vbot").handlers = []
+    runtime = Runtime(config)
+    runtime.start()
+    bundled_name = runtime.skills.list_all()[0].name
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _write_project_skill(repo, "active-project-skill", "Active Project workflow.")
+    _write_project_skill(repo, "disabled-project-skill", "Disabled Project workflow.")
+    runtime.projects.create("p", "P", repo)
+    project = runtime.projects.update(
+        "p",
+        skills_project_disabled=["disabled-project-skill"],
+        skills_bundled_enabled=[bundled_name],
+    )
+
+    registry = runtime.skills_for(project.project_id, "main")
+    allowed_with_empty_identity_list = {skill.name for skill in registry.filter_allowed([])}
+
+    assert "active-project-skill" in allowed_with_empty_identity_list
+    assert bundled_name in allowed_with_empty_identity_list
+    assert "disabled-project-skill" not in allowed_with_empty_identity_list
+
+
+def test_project_context_skills_returns_complete_effective_set(
+    config: Config, tmp_path: Path
+) -> None:
+    logging.getLogger("vbot").handlers = []
+    runtime = Runtime(config)
+    runtime.start()
+    bundled_name = runtime.skills.list_all()[0].name
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _write_project_skill(repo, "active-project-skill", "Active Project workflow.")
+    _write_project_skill(repo, "disabled-project-skill", "Disabled Project workflow.")
+    runtime.projects.create("p", "P", repo)
+    project = runtime.projects.update(
+        "p",
+        skills_project_disabled=["disabled-project-skill"],
+        skills_bundled_enabled=[bundled_name],
+    )
+
+    names = {skill.name for skill in runtime.project_context_skills(project.project_id)}
+
+    assert names == {"active-project-skill", bundled_name}
+
+
 def test_project_skill_names_returns_project_owned_only(config: Config, tmp_path: Path) -> None:
     logging.getLogger("vbot").handlers = []
     runtime = Runtime(config)
