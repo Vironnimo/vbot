@@ -24,6 +24,7 @@ const TOOL_DISPLAY_ARGS = {
 const TOOL_NO_SUMMARY_NAMES = new Set(['status']);
 const MAX_TOOL_LABEL_LENGTH = 80;
 const MAX_SUBAGENT_PREVIEW_LENGTH = 96;
+const MAX_BACKGROUND_BASH_LABEL_LENGTH = 96;
 const SUBAGENT_TOOL_NAMES = new Set(['subagent']);
 
 export { compactToolValue };
@@ -800,9 +801,10 @@ export const subAgentDisplayResult = (tool, fetchedResult = null) => {
   return { ok: true, error: null, data: payload, artifacts: [] };
 };
 
-export const backgroundSubAgentTasks = (
+export const backgroundTasks = (
   timelineItems,
   subAgentStatuses = {},
+  backgroundBashStatuses = {},
 ) => {
   const tasks = [];
   let order = 0;
@@ -811,22 +813,47 @@ export const backgroundSubAgentTasks = (
       continue;
     }
     for (const [childIndex, child] of visibleRunChildren(item).entries()) {
-      if (child?.type !== 'tool_call' || !isBackgroundSubAgentSpawn(child)) {
+      if (child?.type !== 'tool_call') {
         continue;
       }
-      const dotStatus = subAgentDotStatus(child, subAgentStatuses);
+      if (isBackgroundSubAgentSpawn(child)) {
+        const dotStatus = subAgentDotStatus(child, subAgentStatuses);
+        tasks.push({
+          id: `${item.id ?? itemIndex}:${child.id ?? child.toolCallId ?? childIndex}`,
+          kind: 'subagent',
+          tool: child,
+          dotStatus,
+          label: subAgentAgentId(child),
+          agentId: subAgentAgentId(child),
+          preview: subAgentPreview(child),
+          target: subAgentNavigationTarget(child),
+          lastToolName:
+            dotStatus === 'running'
+              ? subAgentLastToolName(child, subAgentStatuses)
+              : '',
+          timeLabel: subAgentToolStatusLabel(
+            child,
+            dotStatus,
+            subAgentStatuses,
+          ),
+          order,
+        });
+        order += 1;
+        continue;
+      }
+      const bashTask = backgroundBashTask(child, backgroundBashStatuses);
+      if (!bashTask) {
+        continue;
+      }
       tasks.push({
-        id: `${item.id ?? itemIndex}:${child.id ?? child.toolCallId ?? childIndex}`,
+        id: `bash:${bashTask.processSessionId}`,
+        kind: 'bash',
         tool: child,
-        dotStatus,
-        agentId: subAgentAgentId(child),
-        preview: subAgentPreview(child),
-        target: subAgentNavigationTarget(child),
-        lastToolName:
-          dotStatus === 'running'
-            ? subAgentLastToolName(child, subAgentStatuses)
-            : '',
-        timeLabel: subAgentToolStatusLabel(child, dotStatus, subAgentStatuses),
+        dotStatus: bashTask.dotStatus,
+        label: bashTask.command,
+        command: bashTask.command,
+        processSessionId: bashTask.processSessionId,
+        target: null,
         order,
       });
       order += 1;
@@ -842,6 +869,44 @@ export const backgroundSubAgentTasks = (
     })
     .map(({ order: _order, ...task }) => task);
 };
+
+function backgroundBashTask(tool, backgroundBashStatuses) {
+  if (toolNameForRunTool(tool) !== 'bash') {
+    return null;
+  }
+  const envelope = parseJsonValue(tool.result);
+  const data = isPlainObject(envelope?.data) ? envelope.data : {};
+  const processSessionId = trimmedString(data.session_id);
+  if (data.delivery !== 'automatic' || !processSessionId) {
+    return null;
+  }
+  const args = parseJsonValue(toolArguments(tool));
+  const command = truncateToolLabel(
+    trimmedString(isPlainObject(args) ? args.command : '').replace(/\s+/g, ' '),
+    MAX_BACKGROUND_BASH_LABEL_LENGTH,
+  );
+  const durableStatus = isPlainObject(backgroundBashStatuses)
+    ? backgroundBashStatuses[processSessionId]
+    : '';
+  return {
+    command: command || t('chat.activity.bashFallback', 'Bash process'),
+    processSessionId,
+    dotStatus: backgroundBashDotStatus(durableStatus || data.status),
+  };
+}
+
+function backgroundBashDotStatus(status) {
+  if (status === 'completed' || status === 'success') {
+    return 'success';
+  }
+  if (status === 'failed') {
+    return 'failed';
+  }
+  if (status === 'killed' || status === 'cancelled') {
+    return 'cancelled';
+  }
+  return 'running';
+}
 
 // Extracts one terminal sub-agent Run's final response. A visible Assistant turn
 // is not final until its exact Run Summary follows it.

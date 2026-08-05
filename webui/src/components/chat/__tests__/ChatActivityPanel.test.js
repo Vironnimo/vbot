@@ -48,6 +48,27 @@ function subAgentTask({
   };
 }
 
+function backgroundBashTask({ id, command, status = 'running' }) {
+  return {
+    type: 'tool_call',
+    id,
+    name: 'bash',
+    status: 'success',
+    resultEvent: { type: 'tool_call_result' },
+    arguments: { command, mode: 'background' },
+    result: {
+      ok: true,
+      error: null,
+      data: {
+        session_id: `process-${id}`,
+        status,
+        delivery: 'automatic',
+      },
+      artifacts: [],
+    },
+  };
+}
+
 describe('ChatActivityPanel', () => {
   let mountedComponent;
 
@@ -98,6 +119,14 @@ describe('ChatActivityPanel', () => {
       status: 'completed',
       delivery: 'inline',
     });
+    const runningBash = backgroundBashTask({
+      id: 'bash-running',
+      command: 'npm run dev',
+    });
+    const failedBash = backgroundBashTask({
+      id: 'bash-failed',
+      command: 'npm test',
+    });
 
     mountedComponent = mount(ChatActivityPanel, {
       target: document.body,
@@ -106,9 +135,18 @@ describe('ChatActivityPanel', () => {
           {
             id: 'assistant-run',
             type: 'assistant_run',
-            items: [completed, cancelled, failed, foreground, running],
+            items: [
+              completed,
+              cancelled,
+              failed,
+              foreground,
+              running,
+              failedBash,
+              runningBash,
+            ],
           },
         ],
+        backgroundBashStatuses: { 'process-bash-failed': 'failed' },
         onNavigateToSubAgent: navigate,
       },
     });
@@ -127,7 +165,7 @@ describe('ChatActivityPanel', () => {
       'Background tasks',
     );
     const rows = [...document.querySelectorAll('.chat-activity__task-row')];
-    expect(rows).toHaveLength(4);
+    expect(rows).toHaveLength(6);
     const activeGroup = document.querySelector('.chat-activity__group--active');
     const finishedGroup = document.querySelector(
       '.chat-activity__group--finished',
@@ -135,18 +173,22 @@ describe('ChatActivityPanel', () => {
     expect(activeGroup.querySelector('h3').textContent.trim()).toBe('Active');
     expect(
       activeGroup.querySelectorAll('.chat-activity__task-row'),
-    ).toHaveLength(1);
+    ).toHaveLength(2);
     expect(finishedGroup.querySelector('h3').textContent.trim()).toBe(
       'Finished',
     );
     expect(
       finishedGroup.querySelectorAll('.chat-activity__task-row'),
-    ).toHaveLength(3);
-    expect(rows[0].textContent.trim()).toBe('builder');
-    expect(rows[0].getAttribute('aria-label')).toBe(
+    ).toHaveLength(4);
+    const runningSubAgentRow = rows.find(
+      (row) => row.textContent.trim() === 'builder',
+    );
+    expect(runningSubAgentRow.getAttribute('aria-label')).toBe(
       'Open builder Session · Working',
     );
-    expect(rows[0].querySelector('[data-status="running"]')).not.toBeNull();
+    expect(
+      runningSubAgentRow.querySelector('[data-status="running"]'),
+    ).not.toBeNull();
     const completedRow = rows.find(
       (row) => row.textContent.trim() === 'reviewer',
     );
@@ -170,11 +212,35 @@ describe('ChatActivityPanel', () => {
       'Open tester Session · Failed',
     );
     expect(failedRow.querySelector('[data-status="failed"]')).not.toBeNull();
+    const runningBashRow = rows.find((row) =>
+      row.textContent.includes('npm run dev'),
+    );
+    expect(runningBashRow.tagName).toBe('DIV');
+    expect(runningBashRow.textContent.replace(/\s+/g, '')).toBe('$npmrundev');
+    expect(runningBashRow.getAttribute('aria-label')).toBe(
+      'Bash · npm run dev · Working',
+    );
+    expect(
+      runningBashRow.querySelector('[data-status="running"]'),
+    ).not.toBeNull();
+    const failedBashRow = rows.find((row) =>
+      row.textContent.includes('npm test'),
+    );
+    expect(failedBashRow.tagName).toBe('DIV');
+    expect(failedBashRow.getAttribute('aria-label')).toBe(
+      'Bash · npm test · Failed',
+    );
+    expect(
+      failedBashRow.querySelector('[data-status="failed"]'),
+    ).not.toBeNull();
     expect(document.body.textContent).not.toContain('Implement the sidebar');
     expect(document.body.textContent).not.toContain('View session');
     expect(document.body.textContent).not.toContain('Run foreground checks');
 
-    rows[0].click();
+    runningBashRow.click();
+    expect(navigate).not.toHaveBeenCalled();
+
+    runningSubAgentRow.click();
     expect(navigate).toHaveBeenCalledWith({
       agentId: 'builder',
       sessionId: 'session-running',

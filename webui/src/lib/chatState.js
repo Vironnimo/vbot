@@ -81,6 +81,9 @@ const SUBAGENT_RESULT_CACHE_LIMIT = 100;
 const RPC_ERROR_QUEUE_ITEM_NOT_FOUND = 'queue_item_not_found';
 const RPC_ERROR_RUN_NOT_FOUND = 'run_not_found';
 
+const isRecord = (value) =>
+  value !== null && typeof value === 'object' && !Array.isArray(value);
+
 export function createChatState() {
   return {
     agents: [],
@@ -668,6 +671,7 @@ export function createChatController({
         hasMore: history?.has_more === true,
         sessionUsage: history?.session_usage,
         contextUsage: history?.context_usage,
+        backgroundBashStatuses: history?.background_bash_statuses,
       });
       sessionState.markReadFailedRunId = '';
       if (
@@ -723,6 +727,7 @@ export function createChatController({
         hasMore: history?.has_more === true,
         sessionUsage: history?.session_usage,
         contextUsage: history?.context_usage,
+        backgroundBashStatuses: history?.background_bash_statuses,
       });
       sessionState.markReadFailedRunId = '';
       if (history?.active_run) {
@@ -771,6 +776,7 @@ export function createChatController({
       });
       prependHistory(sessionState, history?.messages ?? [], {
         hasMore: history?.has_more === true,
+        backgroundBashStatuses: history?.background_bash_statuses,
       });
       return true;
     } catch (error) {
@@ -1225,6 +1231,7 @@ export function ensureSessionState(state, agentId, sessionId) {
       usage: null,
       sessionUsage: null,
       contextUsage: null,
+      backgroundBashStatuses: {},
       hasOlderHistory: false,
       loadingOlderHistory: false,
       hasUnreadCompletion: false,
@@ -1446,6 +1453,9 @@ export function loadHistory(sessionState, messages, options = {}) {
   if (Object.hasOwn(options, 'contextUsage')) {
     sessionState.contextUsage = options.contextUsage ?? null;
   }
+  sessionState.backgroundBashStatuses = isRecord(options.backgroundBashStatuses)
+    ? { ...options.backgroundBashStatuses }
+    : {};
   return sessionState;
 }
 
@@ -1463,6 +1473,11 @@ export function prependHistory(sessionState, messages, options = {}) {
 
   sessionState.messages = [...olderMessages, ...(sessionState.messages ?? [])];
   sessionState.hasOlderHistory = options.hasMore === true;
+  if (isRecord(options.backgroundBashStatuses)) {
+    sessionState.backgroundBashStatuses = {
+      ...options.backgroundBashStatuses,
+    };
+  }
   return sessionState;
 }
 

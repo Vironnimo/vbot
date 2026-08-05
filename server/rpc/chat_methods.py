@@ -19,6 +19,7 @@ from core.chat.content_blocks import ContentBlock
 from core.chat.file_mentions import expand_file_mentions, resolve_mention_root
 from core.projects import format_agent_address
 from core.runs import ActiveRunError, ChatRunManager, QueuedRunItem, Run
+from core.tools.bash import background_bash_statuses
 from server.events import RESOURCE_KIND_QUEUE
 from server.rpc.dispatcher import RpcMethodHandler
 from server.rpc.error_mapping import _map_expected_error
@@ -116,6 +117,7 @@ def _chat_history(state: Any, params: JsonObject) -> JsonObject:
         "session_id": active_session_id,
         "messages": messages,
         "has_more": has_more,
+        "background_bash_statuses": background_bash_statuses(loaded_messages),
         # Whole-session usage totals (measured turns only) — the page above may
         # be a slice, but these always cover the full transcript.
         "session_usage": aggregate_session_usage(loaded_messages),

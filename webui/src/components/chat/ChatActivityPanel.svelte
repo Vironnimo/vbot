@@ -1,7 +1,7 @@
 <script>
   import { onDestroy, onMount } from 'svelte';
 
-  import { backgroundSubAgentTasks } from '$lib/chatTimelinePresentation.js';
+  import { backgroundTasks } from '$lib/chatTimelinePresentation.js';
   import { t } from '$lib/i18n.js';
 
   import Button from '../ui/Button.svelte';
@@ -9,12 +9,13 @@
   let {
     timelineItems = [],
     subAgentStatuses = {},
+    backgroundBashStatuses = {},
     onNavigateToSubAgent = () => {},
   } = $props();
 
   let open = $state(false);
   let tasks = $derived(
-    backgroundSubAgentTasks(timelineItems, subAgentStatuses),
+    backgroundTasks(timelineItems, subAgentStatuses, backgroundBashStatuses),
   );
   let activeTasks = $derived(
     tasks.filter((task) => task.dotStatus === 'running'),
@@ -67,6 +68,12 @@
   };
 
   const taskLabel = (task) => {
+    if (task.kind === 'bash') {
+      return t('chat.activity.bashTaskAria', 'Bash · {command} · {status}', {
+        command: task.command,
+        status: statusLabel(task.dotStatus),
+      });
+    }
     return t('chat.activity.taskAria', 'Open {agent} Session · {status}', {
       agent: task.agentId,
       status: statusLabel(task.dotStatus),
@@ -91,49 +98,64 @@
   );
 </script>
 
-{#snippet taskRow(task)}
-  <Button
-    variant="tertiary"
-    class="chat-activity__task-row"
-    ariaLabel={taskLabel(task)}
-    disabled={!task.target}
-    onClick={() => task.target && onNavigateToSubAgent(task.target)}
+{#snippet statusIcon(task)}
+  <span
+    class="chat-activity__status"
+    class:chat-activity__status--running={task.dotStatus === 'running'}
+    class:chat-activity__status--success={task.dotStatus === 'success'}
+    class:chat-activity__status--failed={task.dotStatus === 'failed'}
+    class:chat-activity__status--cancelled={task.dotStatus === 'cancelled'}
+    data-status={task.dotStatus}
+    aria-hidden="true"
   >
-    <span class="chat-activity__agent">{task.agentId}</span>
-    <span
-      class="chat-activity__status"
-      class:chat-activity__status--running={task.dotStatus === 'running'}
-      class:chat-activity__status--success={task.dotStatus === 'success'}
-      class:chat-activity__status--failed={task.dotStatus === 'failed'}
-      class:chat-activity__status--cancelled={task.dotStatus === 'cancelled'}
-      data-status={task.dotStatus}
-      aria-hidden="true"
+    {#if task.dotStatus === 'running'}
+      <svg viewBox="0 0 16 16" width="14" height="14">
+        <circle cx="8" cy="8" r="5" />
+        <path d="M8 3a5 5 0 0 1 5 5" />
+      </svg>
+    {:else if task.dotStatus === 'success'}
+      <svg viewBox="0 0 16 16" width="14" height="14">
+        <path d="m3.5 8.2 2.8 2.8 6.2-6.2" />
+      </svg>
+    {:else if task.dotStatus === 'cancelled'}
+      <svg viewBox="0 0 16 16" width="14" height="14">
+        <path d="m4.5 4.5 7 7m0-7-7 7" />
+      </svg>
+    {:else if task.dotStatus === 'failed'}
+      <svg viewBox="0 0 16 16" width="14" height="14">
+        <path d="M8 3.2 13 12H3L8 3.2Z" />
+        <path d="M8 6.3v2.8m0 1.6v.1" />
+      </svg>
+    {:else}
+      <svg viewBox="0 0 16 16" width="14" height="14">
+        <circle cx="8" cy="8" r="2" />
+      </svg>
+    {/if}
+  </span>
+{/snippet}
+
+{#snippet taskRow(task)}
+  {#if task.kind === 'bash'}
+    <div
+      class="chat-activity__task-row chat-activity__task-row--bash"
+      aria-label={taskLabel(task)}
     >
-      {#if task.dotStatus === 'running'}
-        <svg viewBox="0 0 16 16" width="14" height="14">
-          <circle cx="8" cy="8" r="5" />
-          <path d="M8 3a5 5 0 0 1 5 5" />
-        </svg>
-      {:else if task.dotStatus === 'success'}
-        <svg viewBox="0 0 16 16" width="14" height="14">
-          <path d="m3.5 8.2 2.8 2.8 6.2-6.2" />
-        </svg>
-      {:else if task.dotStatus === 'cancelled'}
-        <svg viewBox="0 0 16 16" width="14" height="14">
-          <path d="m4.5 4.5 7 7m0-7-7 7" />
-        </svg>
-      {:else if task.dotStatus === 'failed'}
-        <svg viewBox="0 0 16 16" width="14" height="14">
-          <path d="M8 3.2 13 12H3L8 3.2Z" />
-          <path d="M8 6.3v2.8m0 1.6v.1" />
-        </svg>
-      {:else}
-        <svg viewBox="0 0 16 16" width="14" height="14">
-          <circle cx="8" cy="8" r="2" />
-        </svg>
-      {/if}
-    </span>
-  </Button>
+      <span class="chat-activity__bash-mark" aria-hidden="true">$</span>
+      <span class="chat-activity__task-name">{task.command}</span>
+      {@render statusIcon(task)}
+    </div>
+  {:else}
+    <Button
+      variant="tertiary"
+      class="chat-activity__task-row"
+      ariaLabel={taskLabel(task)}
+      disabled={!task.target}
+      onClick={() => task.target && onNavigateToSubAgent(task.target)}
+    >
+      <span class="chat-activity__task-name">{task.agentId}</span>
+      {@render statusIcon(task)}
+    </Button>
+  {/if}
 {/snippet}
 
 <div class:chat-activity--open={open} class="chat-activity">
@@ -370,6 +392,7 @@
     border-top: 1px solid var(--border);
   }
 
+  .chat-activity__task-row--bash,
   :global(.chat-activity__task-row.btn-tertiary) {
     display: flex;
     width: 100%;
@@ -393,7 +416,19 @@
     box-shadow: inset 0 0 0 1px var(--accent);
   }
 
-  .chat-activity__agent {
+  .chat-activity__task-row--bash {
+    cursor: default;
+  }
+
+  .chat-activity__bash-mark {
+    width: 10px;
+    flex: 0 0 10px;
+    color: var(--text-lo);
+    font-family: var(--font-mono);
+    font-size: var(--fs-mono-sm);
+  }
+
+  .chat-activity__task-name {
     flex: 1;
     min-width: 0;
     overflow: hidden;

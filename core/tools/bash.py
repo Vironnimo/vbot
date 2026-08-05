@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import os
 import signal
 import subprocess
@@ -34,6 +35,8 @@ from core.utils.logging import get_logger
 from core.utils.paths import model_path
 
 BASH_TOOL_NAME = "bash"
+BASH_COMPLETION_STATUS_PREFIX = "### Bash process — "
+BASH_COMPLETION_SESSION_PREFIX = "Process Session: "
 CredentialResolver = Callable[[str], str]
 
 # Model-facing output cap. The complete output always lands in the process log
@@ -521,7 +524,8 @@ async def _watch_background_process(
 
     if user_cancelled:
         body = (
-            "### Bash process — aborted by user\n"
+            f"{BASH_COMPLETION_STATUS_PREFIX}aborted by user\n"
+            f"{BASH_COMPLETION_SESSION_PREFIX}{process_session_id}\n"
             f"{BACKGROUND_USER_CANCELLED_MESSAGE}\n"
             f"Command: {command}\n"
             "Output:\n"
@@ -530,7 +534,8 @@ async def _watch_background_process(
         _user_cancelled_session_ids.discard(process_session_id)
     else:
         body = (
-            f"### Bash process — {session.status}\n"
+            f"{BASH_COMPLETION_STATUS_PREFIX}{session.status}\n"
+            f"{BASH_COMPLETION_SESSION_PREFIX}{process_session_id}\n"
             f"Command: {command}\n"
             f"Exit code: {session.exit_code}\n"
             "Output:\n"
@@ -955,6 +960,99 @@ async def _background_result(
     result["handoff_note"] = _handoff_note(mode, handoff_after)
     result["process_note"] = BASH_HANDOFF_PROCESS_NOTE
     return tool_success(result)
+
+
+def background_bash_statuses(messages: Sequence[Any]) -> JsonObject:
+    """Fold durable Bash and Process results into Process Session statuses.
+
+    Background Bash results are immutable handoff records, so their terminal
+    state arrives later in either an automatic completion note or a manually
+    persisted Process Tool Result. The WebUI history response uses this folded
+    projection without exposing internal notes themselves.
+    """
+    statuses: JsonObject = {}
+    for message in messages:
+        role = getattr(message, "role", None)
+        content = getattr(message, "content", None)
+        if role == "tool" and isinstance(content, str):
+            _fold_background_tool_status(
+                statuses,
+                getattr(message, "name", None),
+                content,
+            )
+        elif role == "note" and isinstance(content, str):
+            _fold_background_completion_note(statuses, content)
+    return statuses
+
+
+def _fold_background_tool_status(statuses: JsonObject, tool_name: Any, content: str) -> None:
+    try:
+        envelope = json.loads(content)
+    except json.JSONDecodeError:
+        return
+    if not isinstance(envelope, dict) or envelope.get("ok") is not True:
+        return
+    data = envelope.get("data")
+    if not isinstance(data, dict):
+        return
+
+    if tool_name == BASH_TOOL_NAME:
+        if data.get("delivery") != "automatic":
+            return
+        _record_background_status(statuses, data)
+        return
+    if tool_name != "process":
+        return
+
+    _record_background_status(statuses, data)
+    sessions = data.get("sessions")
+    if isinstance(sessions, list):
+        for session in sessions:
+            if isinstance(session, dict):
+                _record_background_status(statuses, session)
+
+
+def _record_background_status(statuses: JsonObject, data: JsonObject) -> None:
+    session_id = data.get("session_id")
+    status = data.get("status")
+    if (
+        isinstance(session_id, str)
+        and session_id
+        and status
+        in {
+            "running",
+            "completed",
+            "failed",
+            "killed",
+            "cancelled",
+        }
+    ):
+        statuses[session_id] = status
+
+
+def _fold_background_completion_note(statuses: JsonObject, content: str) -> None:
+    pending_status: str | None = None
+    for line in content.splitlines():
+        if line.startswith(BASH_COMPLETION_STATUS_PREFIX):
+            pending_status = _completion_process_status(
+                line.removeprefix(BASH_COMPLETION_STATUS_PREFIX)
+            )
+            continue
+        if pending_status is None or not line.startswith(BASH_COMPLETION_SESSION_PREFIX):
+            continue
+        session_id = line.removeprefix(BASH_COMPLETION_SESSION_PREFIX).strip()
+        if session_id:
+            statuses[session_id] = pending_status
+        pending_status = None
+
+
+def _completion_process_status(status: str) -> str | None:
+    normalized = status.strip().lower()
+    if normalized == "aborted by user":
+        return "cancelled"
+    if normalized in {"completed", "failed", "killed"}:
+        return normalized
+    return None
 
 
 async def _completion_result(
