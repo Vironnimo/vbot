@@ -115,7 +115,7 @@ Worker states (exposed in `getWakewordStatus().state`): `off` → `starting` →
 - Desktop inherits the WebUI 1:1, including the Projects tab. There is still **no native folder picker**: the bridge exposes no file/folder dialog, so adding a project uses the same hand-typed server-path input as the browser. This is deliberate — the server can be remote (e.g. a Pi), where a local picker would browse the wrong filesystem.
 - The Desktop window title is `vBot`.
 - The Desktop window enables pywebview document text selection so normal WebUI text can be selected inside the native shell.
-- `desktop/icon.png` is the canonical native-window icon and mirrors the WebUI's square vBot icon treatment; `desktop/main.py` passes it to pywebview when present, while unusual source runs that omit the file still fall back to pywebview's platform default.
+- `desktop/icon.ico` (Windows) and `desktop/icon.png` (other platforms) are the native-window derivatives of the WebUI's square vBot icon treatment; `desktop/main.py` selects the platform-native format and passes it to pywebview when present, while unusual source runs that omit the selected file still fall back to pywebview's platform default. Windows must receive the ICO because pywebview's WinForms backend loads the path through `System.Drawing.Icon`, which rejects PNG input.
 - Closing the window ends only the Desktop process, never the target server.
 - The Python↔JS bridge is a pywebview `js_api` object. Bridge methods execute in separate threads — implementations must be thread-safe.
 - If the server is unreachable, is not a vBot server, or has no WebUI, Desktop stays open and shows the interactive connection screen (with the failed host/port prefilled and an inline error) instead of crashing or dead-ending.

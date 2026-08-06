@@ -21,6 +21,7 @@ import argparse
 import importlib
 import logging
 import os
+import sys
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date
@@ -44,7 +45,8 @@ logger = logging.getLogger("vbot.desktop")
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8420
 WINDOW_TITLE = "vBot"
-ICON_FILE_NAME = "icon.png"
+DEFAULT_ICON_FILE_NAME = "icon.png"
+WINDOWS_ICON_FILE_NAME = "icon.ico"
 FALLBACK_SCREEN_WIDTH = 1600
 FALLBACK_SCREEN_HEIGHT = 1000
 DEFAULT_WINDOW_SCREEN_RATIO = 0.8
@@ -251,10 +253,11 @@ def desktop_dir() -> Path:
     return Path(__file__).resolve().parent
 
 
-def icon_path(base_dir: Path | None = None) -> Path:
-    """Return the optional source-run Desktop icon path."""
+def icon_path(base_dir: Path | None = None, *, platform: str = sys.platform) -> Path:
+    """Return the platform-native optional Desktop icon path."""
 
-    return (base_dir if base_dir is not None else desktop_dir()) / ICON_FILE_NAME
+    file_name = WINDOWS_ICON_FILE_NAME if platform == "win32" else DEFAULT_ICON_FILE_NAME
+    return (base_dir if base_dir is not None else desktop_dir()) / file_name
 
 
 def build_target_url(host: str, port: int) -> str:
