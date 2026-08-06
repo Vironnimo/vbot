@@ -11,9 +11,12 @@ from typing import Any, cast
 import pytest
 from fastapi.testclient import TestClient  # type: ignore[import-not-found]
 
-from core.runs import Run
+from core.chat import ChatMessage
+from core.chat.output_files import AssistantFileReference
+from core.runs import ASSISTANT_OUTPUT_EVENT, Run
 from core.tools import FileReadState, register_read_tool
 from server.app import _sse_run_events, create_app
+from server.file_delivery import FileDelivery
 from tests.server.test_rpc import StubAdapter, StubRuntime
 
 EXPECTED_SSE_EVENT_NAMES = [
@@ -144,6 +147,58 @@ def test_sse_endpoint_returns_not_found_for_unknown_run(tmp_path: Path) -> None:
     assert response.status_code == 404
 
 
+def test_streaming_chat_projects_completed_path_line_in_stable_event(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    image = workspace / "streamed.png"
+    image.write_bytes(b"\x89PNG\r\n\x1a\nstreamed")
+    adapter = StubAdapter(
+        stream_deltas=[
+            {"type": "content_delta", "text": str(image)},
+            {"type": "finish", "reason": "stop"},
+        ]
+    )
+    runtime = StubRuntime(tmp_path, adapter)
+    runtime.agents.update(
+        "coder",
+        model="openai/gpt-5.2::api-key",
+        workspace=str(workspace),
+    )
+    app = create_app(runtime=cast(Any, runtime))
+
+    with TestClient(app) as client:
+        client.post(
+            "/api/rpc",
+            json={
+                "method": "session.create",
+                "params": {"agent_id": "coder", "session_id": "session-file"},
+            },
+        )
+        stream_response = client.post(
+            "/api/rpc",
+            json={
+                "method": "chat.stream",
+                "params": {
+                    "agent_id": "coder",
+                    "session_id": "session-file",
+                    "content": "Show it",
+                },
+            },
+        )
+        response = client.get(stream_response.json()["result"]["sse_url"])
+
+    assistant_event = next(
+        event for event in _parse_sse(response.text) if event["event"] == ASSISTANT_OUTPUT_EVENT
+    )
+    assistant_content = assistant_event["data"]["payload"]["message"]["content"]
+    assert assistant_content.startswith("![streamed.png](/api/files/")
+    assert str(image) not in assistant_content
+    canonical = runtime.chat_sessions.get("coder", "session-file").load()[-2]
+    assert canonical.output_files == [
+        AssistantFileReference(line_index=0, path=str(image.resolve()))
+    ]
+
+
 def test_sse_endpoint_replays_after_explicit_sequence(tmp_path: Path) -> None:
     response = _stream_test_run(tmp_path, sse_url_suffix="?after_sequence=3")
 
@@ -248,6 +303,27 @@ async def test_sse_stream_emits_heartbeat_while_run_is_quiet() -> None:
     assert run.subscriber_count == 1
 
     await stream.aclose()
+
+
+@pytest.mark.asyncio
+async def test_sse_projects_assistant_file_references_to_signed_urls(tmp_path: Path) -> None:
+    image = tmp_path / "sse.png"
+    image.write_bytes(b"\x89PNG\r\n\x1a\nimage")
+    message = ChatMessage.assistant(
+        model="provider/model",
+        content=str(image),
+        output_files=[AssistantFileReference(line_index=0, path=str(image.resolve()))],
+    )
+    run = Run(run_id="run-file", agent_id="coder", session_id="session-one")
+    run.emit(ASSISTANT_OUTPUT_EVENT, {"message": message.to_dict()})
+    stream = _sse_run_events(run, file_delivery=FileDelivery(secret=b"sse-secret"))
+
+    event = await anext(stream)
+    await stream.aclose()
+
+    assert "output_files" not in event
+    assert str(image) not in event
+    assert "![sse.png](/api/files/" in event
 
     assert run.subscriber_count == 0
 

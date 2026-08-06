@@ -382,6 +382,37 @@ async def test_project_session_tool_resolves_relative_path_against_project_cwd(
 
 
 @pytest.mark.asyncio
+async def test_project_run_persists_relative_assistant_output_file_reference(
+    tmp_path: Path,
+) -> None:
+    from tests.core.chat.test_chat_loop import StubAdapter, StubAgent
+
+    repo_dir = tmp_path / "repo"
+    repo_dir.mkdir()
+    image = repo_dir / "result.png"
+    image.write_bytes(b"\x89PNG\r\n\x1a\nimage")
+    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
+    adapter = StubAdapter([{"content": "Done:\nresult.png", "tool_calls": None}])
+    runtime = _project_runtime(tmp_path, agent=agent, adapter=adapter, tools=ToolRegistry())
+    runtime.projects.create("acme", "Acme", repo_dir)
+
+    result = await build_chat_loop(runtime).send(
+        "coder",
+        "Show the image",
+        session_id="session-one",
+        project_id="acme",
+    )
+
+    assert result.output_files is not None
+    assert [reference.to_dict() for reference in result.output_files] == [
+        {"line_index": 1, "path": str(image.resolve())}
+    ]
+    persisted = runtime.chat_sessions.get("coder", "session-one", "acme").load()
+    assistant = next(message for message in persisted if message.role == "assistant")
+    assert assistant.output_files == result.output_files
+
+
+@pytest.mark.asyncio
 async def test_identity_session_unchanged_path_and_workspace_cwd(tmp_path: Path) -> None:
     # With project_id=None the session keeps the global identity layout and the
     # tool cwd stays the agent workspace — today's behavior, exactly unchanged.

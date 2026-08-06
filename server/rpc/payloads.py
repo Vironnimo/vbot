@@ -22,6 +22,7 @@ def _run_response(
     *,
     final_message: ChatMessage | None = None,
     sse_url: str | None = None,
+    file_delivery: Any | None = None,
 ) -> JsonObject:
     response: JsonObject = {
         "run_id": run.id,
@@ -31,10 +32,13 @@ def _run_response(
         "status": run.status.value,
         "started_at": run.created_at,
         "iteration_count": run.iteration_count,
-        "events": [remove_opaque_provider_metadata(event.to_dict()) for event in run.events],
+        "events": [
+            remove_opaque_provider_metadata(event.to_dict(), file_delivery=file_delivery)
+            for event in run.events
+        ],
     }
     if final_message is not None:
-        response["message"] = _visible_message(final_message)
+        response["message"] = _visible_message(final_message, file_delivery=file_delivery)
     if sse_url is not None:
         response["sse_url"] = sse_url
     return response
@@ -47,8 +51,11 @@ def _queued_response(item: QueuedRunItem) -> JsonObject:
     }
 
 
-def _visible_message(message: ChatMessage) -> JsonObject:
-    return cast(JsonObject, remove_opaque_provider_metadata(message.to_dict()))
+def _visible_message(message: ChatMessage, *, file_delivery: Any | None = None) -> JsonObject:
+    return cast(
+        JsonObject,
+        remove_opaque_provider_metadata(message.to_dict(), file_delivery=file_delivery),
+    )
 
 
 def _is_visible_history_message(message: ChatMessage) -> bool:
@@ -321,20 +328,25 @@ def _invalid_skill_response(diagnostic: Any) -> JsonObject:
     }
 
 
-def remove_opaque_provider_metadata(value: Any) -> Any:
-    """Recursively strip internal Provider reasoning state from an outbound payload.
+def remove_opaque_provider_metadata(value: Any, *, file_delivery: Any | None = None) -> Any:
+    """Project one internal value into the shared client-visible payload form.
 
     Opaque reasoning metadata and its Provider/Model/Connection/Account scope are
-    adapter round-trip state, never something a client should receive. Shared by
-    the RPC response mappers, the SSE stream (``app.py``), and the event bridge so
-    all client-facing paths scrub them the same way.
+    adapter round-trip state, and Assistant output-file references contain raw
+    server paths. Neither may reach a client as metadata. When the server's file
+    delivery service is available it consumes those references to rewrite the
+    corresponding content lines to signed URLs; without it, they are simply
+    removed. Shared by RPC, SSE, and the event bridge so transports cannot drift.
     """
     if isinstance(value, dict):
+        source = file_delivery.project_message(value) if file_delivery is not None else value
         return {
-            key: remove_opaque_provider_metadata(item)
-            for key, item in value.items()
-            if key not in {"reasoning_meta", "reasoning_scope"}
+            key: remove_opaque_provider_metadata(item, file_delivery=file_delivery)
+            for key, item in source.items()
+            if key not in {"output_files", "reasoning_meta", "reasoning_scope"}
         }
     if isinstance(value, list):
-        return [remove_opaque_provider_metadata(item) for item in value]
+        return [
+            remove_opaque_provider_metadata(item, file_delivery=file_delivery) for item in value
+        ]
     return value

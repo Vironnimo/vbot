@@ -67,7 +67,13 @@ def _bridge_run_to_event_bus(state: Any, run: Run) -> None:
     bridged_run_ids = getattr(state, "run_event_bridge_run_ids", None)
     if _run_was_already_bridged(state, bridged_run_ids, run.id):
         return
-    task = asyncio.create_task(_publish_run_events(event_bus, run))
+    task = asyncio.create_task(
+        _publish_run_events(
+            event_bus,
+            run,
+            file_delivery=getattr(state, "file_delivery", None),
+        )
+    )
     task.add_done_callback(_on_run_event_bridge_done)
 
 
@@ -178,11 +184,16 @@ def publish_resource_changed(
     event_bus.publish(RESOURCE_CHANGED_EVENT, payload)
 
 
-async def _publish_run_events(event_bus: Any, run: Run) -> None:
+async def _publish_run_events(
+    event_bus: Any,
+    run: Run,
+    *,
+    file_delivery: Any | None = None,
+) -> None:
     async for event in run.subscribe():
         if event.type in RUN_DELTA_EVENT_TYPES:
             continue
-        summary = _server_event_from_run_event(event)
+        summary = _server_event_from_run_event(event, file_delivery=file_delivery)
         event_bus.publish(summary["type"], summary["payload"])
         if event.type in RUN_TERMINAL_EVENT_TYPES:
             event_bus.publish(
@@ -198,7 +209,11 @@ async def _publish_run_events(event_bus: Any, run: Run) -> None:
             )
 
 
-def _server_event_from_run_event(event: RunEvent) -> JsonObject:
+def _server_event_from_run_event(
+    event: RunEvent,
+    *,
+    file_delivery: Any | None = None,
+) -> JsonObject:
     payload: JsonObject = {
         "run_id": event.run_id,
         "agent_id": event.agent_id,
@@ -214,7 +229,10 @@ def _server_event_from_run_event(event: RunEvent) -> JsonObject:
     if not event.contributes_to_agent_activity:
         payload[RUN_AGENT_ACTIVITY_FIELD] = False
     if event.type in RUN_OUTPUT_EVENT_TYPES or event.type == RUN_STARTED_EVENT:
-        payload["output"] = remove_opaque_provider_metadata(event.payload)
+        payload["output"] = remove_opaque_provider_metadata(
+            event.payload,
+            file_delivery=file_delivery,
+        )
     if event.type in RUN_TERMINAL_EVENT_TYPES:
         payload["status"] = event.payload.get("status")
         if "timing" in event.payload:
