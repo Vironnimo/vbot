@@ -96,7 +96,7 @@ async def test_image_generation_text_only_profile_rejects_source_images_in_handl
 
 
 @pytest.mark.asyncio
-async def test_image_generation_tool_returns_artifact_payloads(tmp_path: Path) -> None:
+async def test_image_generation_tool_returns_model_file_facts(tmp_path: Path) -> None:
     image_path = tmp_path / "artifact-1.png"
     registry = ToolRegistry()
     register_image_generation_tool(registry, _ImageService(image_path))
@@ -109,12 +109,19 @@ async def test_image_generation_tool_returns_artifact_payloads(tmp_path: Path) -
     result = await registry.dispatch(context, {"prompt": "a red fox"})
 
     assert result["ok"] is True
-    # The structured artifact payload stays unchanged for non-chat consumers.
-    assert result["artifacts"] == [_ARTIFACT_PAYLOAD]
+    assert result["artifacts"] == []
     data = result["data"]
     assert isinstance(data, dict)
-    # Model-facing data carries only the absolute path needed for the next action.
-    assert data == {"images": [{"path": model_path(image_path)}]}
+    # Model-facing data carries the path and useful file facts, without transport identity.
+    assert data == {
+        "images": [
+            {
+                "path": model_path(image_path),
+                "media_type": "image/png",
+                "size_bytes": 5,
+            }
+        ]
+    }
     assert "configured external provider" in IMAGE_GENERATION_TOOL_DESCRIPTION
     assert "chat display links" not in IMAGE_GENERATION_TOOL_DESCRIPTION
     assert "chat display links" not in IMAGE_GENERATION_TEXT_ONLY_TOOL_DESCRIPTION
@@ -377,17 +384,6 @@ def _make_context(
     )
 
 
-_ARTIFACT_PAYLOAD = {
-    "id": "artifact-1",
-    "kind": "image",
-    "filename": "artifact-1.png",
-    "media_type": "image/png",
-    "size_bytes": 5,
-    "url": "/api/images/artifacts/artifact-1",
-    "index": 0,
-}
-
-
 class _ImageService:
     def __init__(
         self,
@@ -425,7 +421,8 @@ class _ImageService:
         return (
             SimpleNamespace(
                 file_path=self._file_path,
-                to_dict=lambda: dict(_ARTIFACT_PAYLOAD),
+                media_type="image/png",
+                size_bytes=5,
             ),
         )
 

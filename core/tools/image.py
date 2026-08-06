@@ -270,14 +270,16 @@ def make_image_generation_handler(image_service: Any):
         except ImageError as exc:
             return tool_failure("image_error", str(exc))
 
-        # Model-facing data needs only each image's absolute path. The separate
-        # artifact envelope retains transport metadata for non-Model consumers.
-        artifact_payloads = [a.to_dict() for a in artifacts]
-        image_payloads = [{"path": model_path(artifact.file_path)} for artifact in artifacts]
-        return tool_success(
-            {"images": image_payloads},
-            artifacts=artifact_payloads,
-        )
+        image_payloads: list[JsonObject] = []
+        for artifact in artifacts:
+            image_payloads.append(
+                {
+                    "path": model_path(artifact.file_path),
+                    "media_type": artifact.media_type,
+                    "size_bytes": artifact.size_bytes,
+                }
+            )
+        return tool_success({"images": image_payloads})
 
     return handler
 
