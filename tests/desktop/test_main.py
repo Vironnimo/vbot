@@ -183,6 +183,19 @@ def test_desktop_main_does_not_import_cli_server_management() -> None:
     assert "import cli" not in source
 
 
+def test_icon_path_selects_the_platform_native_asset(tmp_path: Path) -> None:
+    assert desktop_main.icon_path(tmp_path, platform="win32") == tmp_path / "icon.ico"
+    assert desktop_main.icon_path(tmp_path, platform="linux") == tmp_path / "icon.png"
+    assert desktop_main.icon_path(tmp_path, platform="darwin") == tmp_path / "icon.png"
+
+
+def test_bundled_windows_icon_is_a_multiresolution_ico() -> None:
+    icon_data = desktop_main.icon_path(platform="win32").read_bytes()
+
+    assert icon_data[:4] == b"\x00\x00\x01\x00"
+    assert int.from_bytes(icon_data[4:6], byteorder="little") > 1
+
+
 def test_desktop_main_keeps_out_of_server_lifecycle_management() -> None:
     source = Path(desktop_main.__file__).read_text(encoding="utf-8")
 
@@ -659,7 +672,7 @@ def test_launch_starts_without_native_menu(tmp_path: Path) -> None:
 
 def test_launch_passes_icon_only_when_icon_exists(tmp_path: Path) -> None:
     fake_webview = FakeWebview()
-    icon_file = tmp_path / "icon.png"
+    icon_file = tmp_path / "icon.ico"
     icon_file.write_bytes(b"fake-icon")
 
     desktop_main.launch_desktop(
