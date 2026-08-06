@@ -113,10 +113,11 @@ async def test_image_generation_tool_returns_artifact_payloads(tmp_path: Path) -
     assert result["artifacts"] == [_ARTIFACT_PAYLOAD]
     data = result["data"]
     assert isinstance(data, dict)
-    # The model-facing copies carry the absolute file path for out-of-chat use.
-    assert data["images"] == [{**_ARTIFACT_PAYLOAD, "path": model_path(image_path)}]
+    # Model-facing data carries only the absolute path needed for the next action.
+    assert data == {"images": [{"path": model_path(image_path)}]}
     assert "configured external provider" in IMAGE_GENERATION_TOOL_DESCRIPTION
-    assert data["message"] == "Image generation complete."
+    assert "chat display links" not in IMAGE_GENERATION_TOOL_DESCRIPTION
+    assert "chat display links" not in IMAGE_GENERATION_TEXT_ONLY_TOOL_DESCRIPTION
     display = registry.display_for_call(
         IMAGE_GENERATION_TOOL_NAME,
         {"prompt": "a red fox"},
