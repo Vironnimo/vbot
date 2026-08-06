@@ -1,10 +1,30 @@
-# Usage
+# vBot User Guide
 
-This guide covers installing, configuring, operating, and integrating vBot. For the short product overview and quickest installation path, start with [README.md](README.md).
+This guide covers installing, configuring, using, operating, and integrating vBot. If you only want the shortest path to a running installation, start with the [README](README.md#get-started).
+
+## Start here
+
+A new installation takes three steps:
+
+1. Run the standard Installer for your operating system.
+2. Open `http://127.0.0.1:8420/` after the Installer reports that the server is running.
+3. Use the setup guide to connect a Provider or OAuth subscription, choose a Model, and send the first message in the Session vBot created for you.
+
+| I want to… | Go to |
+|---|---|
+| Install vBot or choose a Desktop/remote-client shape | [Installation](#installation) |
+| Connect a Provider and start chatting | [First-run setup](#first-run-setup) |
+| Understand Agents, Projects, and Sessions | [Agents, Projects, and Sessions](#agents-projects-and-sessions) |
+| Reach an Agent through Telegram or Discord | [Channels](#channels) |
+| Schedule work | [Cron](#cron) and [Bootstrap](#bootstrap) |
+| Diagnose or automate vBot | [CLI reference](#cli-reference), [Server API](#server-api), and [Operational notes](#operational-notes) |
+| Develop vBot itself | [Development and verification](#development-and-verification) |
 
 ## Contents
 
+- [Start here](#start-here)
 - [Installation](#installation)
+- [Requirements](#requirements)
 - [Updating and uninstalling](#updating-and-uninstalling)
 - [First-run setup](#first-run-setup)
 - [Data directory and configuration](#data-directory-and-configuration)
@@ -16,89 +36,110 @@ This guide covers installing, configuring, operating, and integrating vBot. For 
 - [Settings and specialized Models](#settings-and-specialized-models)
 - [Channels](#channels)
 - [Cron](#cron)
+- [Bootstrap](#bootstrap)
 - [Extensions and Home Assistant](#extensions-and-home-assistant)
 - [CLI reference](#cli-reference)
 - [Server API](#server-api)
 - [Development and verification](#development-and-verification)
 - [Operational notes](#operational-notes)
 
-## Requirements
-
-- Python 3.11 or newer
-- Git for installs and updates
-- Node.js and npm only for a development install or a current-checkout WebUI build; release installs download a prebuilt WebUI
-- At least one usable Provider Connection and Model before an Agent can run
-
 ## Installation
 
-### Public Installer contract
-
-The complete public installers are `scripts/install.sh` for Linux and `scripts/install.ps1` for Windows. A default install selects the latest release, clones it into `~/vbot`, creates `~/vbot/.venv`, downloads the matching WebUI, installs vBot into that isolated environment, exposes the `vbot` command, enables autostart, and starts the server. Runtime state remains separate under `~/.vbot`.
-
-When the same Installer is executed from a vBot checkout without an explicit installation directory or version, it installs that checkout into `<checkout>/.venv` and builds the WebUI locally. It never requires or modifies the system Python environment. An internal `scripts/setup.*` helper performs checkout-local package configuration after the public Installer has established the checkout and environment; it is not an end-user installation entrypoint.
-
-### Fresh Debian-like Linux install
-
-The Linux Installer automates prerequisite installation through `apt` on Debian-like systems, including Raspberry Pi OS:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/Vironnimo/vbot/main/scripts/install.sh | bash
-```
-
-Installer options are:
-
-| Option | Meaning |
-|---|---|
-| `--dir <path>` | Installation directory; default `~/vbot` or `$VBOT_DIR`, or the current checkout when invoked there |
-| `--version <tag>` | Install a specific release, for example `v0.1.11`; cannot be combined with `--dev` |
-| `--dev` | Fresh install: track `main`; current checkout: add development dependencies; either path builds the WebUI locally and requires Node.js |
-| `--data-dir <path>` | Runtime data directory; default `~/.vbot` |
-| `--host <host>` | Server bind host; default `127.0.0.1` |
-| `--port <port>` | Server port; default `8420`, or the existing Settings value when not explicitly overridden |
-| `--desktop` | Add the Desktop accessor to a server install |
-| `--desktop-client` | Install only CLI and Desktop for a remote-server client machine |
-| `--no-autostart` | Do not create or start the systemd user unit |
-| `--skip-webui-build` | Require and reuse an existing `webui/dist`; release installs do this automatically after downloading the asset |
-| `--service-name <name>` | Custom systemd user unit name without `.service`; default `vbot` |
-| `-h`, `--help` | Show Installer help |
-
-Pass every option directly after `bash -s --`:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/Vironnimo/vbot/main/scripts/install.sh | bash -s -- --version v0.1.11
-curl -fsSL https://raw.githubusercontent.com/Vironnimo/vbot/main/scripts/install.sh | bash -s -- --dev
-curl -fsSL https://raw.githubusercontent.com/Vironnimo/vbot/main/scripts/install.sh | bash -s -- --dir ~/apps/vbot
-curl -fsSL https://raw.githubusercontent.com/Vironnimo/vbot/main/scripts/install.sh | bash -s -- --no-autostart --port 9000
-curl -fsSL https://raw.githubusercontent.com/Vironnimo/vbot/main/scripts/install.sh | bash -s -- --desktop
-curl -fsSL https://raw.githubusercontent.com/Vironnimo/vbot/main/scripts/install.sh | bash -s -- --desktop-client
-```
+A standard installation is one command. Use the advanced options only when you want a non-default install directory, port, source track, Desktop shape, or Autostart policy.
 
 ### Fresh Windows install
 
-Run the default install in a normal, non-elevated PowerShell. The installer refuses an elevated shell so the checkout, virtual environment, runtime data, and server process stay owned by the user; Windows Autostart is registered as a low-privilege per-user Task Scheduler entry and needs no UAC prompt:
+Open a normal, non-elevated PowerShell and run:
 
 ```powershell
 irm https://raw.githubusercontent.com/Vironnimo/vbot/main/scripts/install.ps1 | iex
 ```
 
-Use a ScriptBlock when passing options:
+The Installer refuses a normal persistent installation from an elevated shell so the checkout, isolated environment, runtime data, Autostart task, and server process remain owned by your user account. It registers Windows Autostart as a low-privilege per-user Task Scheduler entry and does not require a UAC prompt.
 
-```powershell
-& ([scriptblock]::Create((irm https://raw.githubusercontent.com/Vironnimo/vbot/main/scripts/install.ps1))) -Version v0.1.11
-& ([scriptblock]::Create((irm https://raw.githubusercontent.com/Vironnimo/vbot/main/scripts/install.ps1))) -Dev
-& ([scriptblock]::Create((irm https://raw.githubusercontent.com/Vironnimo/vbot/main/scripts/install.ps1))) -InstallDir D:\Apps\vbot
-& ([scriptblock]::Create((irm https://raw.githubusercontent.com/Vironnimo/vbot/main/scripts/install.ps1))) -NoAutostart -Port 9000
-& ([scriptblock]::Create((irm https://raw.githubusercontent.com/Vironnimo/vbot/main/scripts/install.ps1))) -Desktop
-& ([scriptblock]::Create((irm https://raw.githubusercontent.com/Vironnimo/vbot/main/scripts/install.ps1))) -DesktopClient
+### Fresh Debian-like Linux install
+
+On Debian-like systems, including Raspberry Pi OS, run:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Vironnimo/vbot/main/scripts/install.sh | bash
 ```
 
-Windows accepts `-InstallDir`, `-Version`, `-Dev`, `-DataDir`, `-HostName`, `-Port`, `-Desktop`, `-DesktopClient`, `-NoAutostart`, `-SkipWebuiBuild`, and `-TaskName` directly. `-AllowElevatedInstall` is an explicit escape hatch for disposable automation only; never use it for a persistent installation. The immediate background server, per-user Task Scheduler action, and installed `vBot Desktop` Start-menu shortcut all use windowless launch paths, so installation, sign-in, and normal app launch leave no Python console open; the normal `vbot` command remains a console application. The final summary verifies Autostart and the actual server health independently. If per-user Task Scheduler registration fails, the package install and immediate server start still complete, while the summary reports `complete with problems` and prints the exact normal-user recovery command; a live `Server URL` is shown only when the server is running.
+The Installer can add missing prerequisites through `apt`, configures a systemd user unit, and starts the server.
 
-As with any `curl | bash` or `irm | iex` command, download and inspect the script first if you do not want to execute network content directly.
+After either standard installation, wait for the final summary to confirm that the server is running, then open `http://127.0.0.1:8420/`. The first-run setup is described in [First-run setup](#first-run-setup).
+
+As with any `curl | bash` or `irm | iex` command, inspect [install.sh](scripts/install.sh) or [install.ps1](scripts/install.ps1) and run the downloaded file locally if you do not want to execute network content directly.
+
+### Public Installer contract
+
+The complete public installers are `scripts/install.sh` for Linux and `scripts/install.ps1` for Windows. A default install selects the latest release, clones it into `~/vbot`, creates `~/vbot/.venv`, downloads the matching WebUI, installs vBot into that isolated environment, exposes the `vbot` command, enables Autostart, and starts the server. Runtime state remains separate under `~/.vbot`.
+
+When the same Installer runs from inside a vBot checkout without an explicit installation directory or version, it installs that checkout into `<checkout>/.venv` and builds the WebUI locally. It never installs vBot into the system Python environment. The internal `scripts/setup.*` helpers configure a checkout only after the public Installer has established the checkout and environment; they are not end-user installation entrypoints.
+
+### Install shapes
+
+Choose an install shape by what you want to use:
+
+| I want to… | Shape | Local server/WebUI | Desktop | Autostart |
+|---|---|---|---|---|
+| Run vBot and use it in a browser | Default server | Yes | No | Yes unless disabled |
+| Run vBot and also use the Desktop app | Server + Desktop | Yes | Yes | Yes unless disabled |
+| Connect this computer to an existing vBot server | Desktop Client | No | Yes | Never |
+| Work on vBot itself | Development | Yes | Optional | Yes unless disabled |
+
+`--desktop`/`-Desktop` adds Desktop to a full local server installation. `--desktop-client`/`-DesktopClient` installs only the CLI and Desktop clients for an existing remote server; it is mutually exclusive with local Desktop server mode and development mode.
+
+### Advanced Installer options
+
+Linux options are passed after `bash -s --`:
+
+| Option | Meaning |
+|---|---|
+| `--dir <path>` | Installation directory; default `~/vbot` or `$VBOT_DIR`, or the current checkout when invoked there |
+| `--version <tag>` | Install a specific release tag; cannot be combined with `--dev` |
+| `--dev` | Fresh install: track `main`; current checkout: add development dependencies; either path builds the WebUI locally and requires Node.js |
+| `--data-dir <path>` | Runtime data directory; default `~/.vbot` |
+| `--host <host>` | Server bind host; default `127.0.0.1` |
+| `--port <port>` | Server port; default `8420`, or the existing Settings value when not explicitly overridden |
+| `--desktop` | Add Desktop to a server installation |
+| `--desktop-client` | Install only CLI and Desktop for an existing remote server |
+| `--no-autostart` | Do not create or start the systemd user unit |
+| `--skip-webui-build` | Require and reuse an existing `webui/dist`; release installs do this automatically after downloading the asset |
+| `--service-name <name>` | Custom systemd user unit name without `.service`; default `vbot` |
+| `-h`, `--help` | Show Installer help |
+
+<details>
+<summary>Linux examples</summary>
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Vironnimo/vbot/main/scripts/install.sh | bash -s -- --desktop
+curl -fsSL https://raw.githubusercontent.com/Vironnimo/vbot/main/scripts/install.sh | bash -s -- --desktop-client
+curl -fsSL https://raw.githubusercontent.com/Vironnimo/vbot/main/scripts/install.sh | bash -s -- --no-autostart --port 9000
+curl -fsSL https://raw.githubusercontent.com/Vironnimo/vbot/main/scripts/install.sh | bash -s -- --dev
+```
+
+</details>
+
+Windows accepts `-InstallDir`, `-Version`, `-Dev`, `-DataDir`, `-HostName`, `-Port`, `-Desktop`, `-DesktopClient`, `-NoAutostart`, `-SkipWebuiBuild`, and `-TaskName`. Use the ScriptBlock form to pass them. `-AllowElevatedInstall` is an explicit escape hatch for disposable automation only; never use it for a persistent installation.
+
+<details>
+<summary>Windows examples</summary>
+
+```powershell
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/Vironnimo/vbot/main/scripts/install.ps1))) -Desktop
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/Vironnimo/vbot/main/scripts/install.ps1))) -DesktopClient
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/Vironnimo/vbot/main/scripts/install.ps1))) -NoAutostart -Port 9000
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/Vironnimo/vbot/main/scripts/install.ps1))) -Dev
+```
+
+</details>
+
+The immediate Windows background server, Task Scheduler action, and optional `vBot Desktop` Start-menu entry use windowless launch paths. The final summary verifies Autostart and server health independently. If Autostart registration fails, the package installation and immediate server start still complete; the summary reports `complete with problems` and prints the exact normal-user recovery command. A live `Server URL` appears only when the server is running.
 
 ### Install the current checkout
 
-Run the same public Installer from the repository root. It detects its checkout, creates or reuses `<checkout>/.venv`, builds the WebUI unless a matching `webui/dist` is explicitly reused, records `.vbot-install.json`, and installs the selected server or Desktop shape. This path is safe on PEP 668 systems because it never installs into the system interpreter.
+Run the public Installer from the repository root. It detects the checkout, creates or reuses `<checkout>/.venv`, builds the WebUI unless a matching `webui/dist` is explicitly reused, records `.vbot-install.json`, and installs the selected server or Desktop shape. This path is safe on PEP 668 systems because it never installs into the system interpreter.
 
 Windows:
 
@@ -118,52 +159,65 @@ scripts/install.sh --desktop-client
 scripts/install.sh --no-autostart
 ```
 
-### Install shapes
+## Requirements
 
-| Shape | Installed groups | Local server/WebUI | Desktop | Autostart |
-|---|---|---|---|---|
-| Default server | `server`, `cli` | Yes | No | Yes unless disabled |
-| Server + Desktop | `server`, `cli`, `desktop` | Yes | Yes | Yes unless disabled |
-| Desktop Client | `cli`, `desktop` | No | Yes | Never |
-| Development | `dev`, optionally `desktop` | Yes | Optional | Yes unless disabled |
+For a standard release installation on supported Windows and Debian-like Linux systems, the Installer handles the application environment and attempts to install missing prerequisites through `winget` or `apt`:
 
-`--desktop`/`-Desktop` adds Desktop to a full local server install. `--desktop-client`/`-DesktopClient` is a server-less accessor install intended to connect to a remote vBot server; it is mutually exclusive with Desktop server mode and development mode.
+- Python 3.11 or newer and Git are required, but the Installer provisions them where the supported package manager is available.
+- Node.js and npm are required only for a development installation or a current-checkout WebUI build; release installs download a prebuilt WebUI.
+- A Provider Connection and Model are required before an Agent can complete a Run, but you configure them after installation in the WebUI setup guide.
+
+If automatic prerequisite installation is unavailable, the Installer stops with the exact missing dependency instead of partially configuring vBot.
 
 ## Updating and uninstalling
 
 ### Updating
 
+Close every vBot Desktop window on Windows, then run:
+
 ```bash
 vbot update
 ```
 
-The updater reads `.vbot-install.json` from the checkout and preserves the recorded install shape, Python executable, dependency groups, source track, server target, and WebUI revision policy. Release installs move to the newest release with a matching WebUI asset; development installs update `main` and rebuild when needed. The Windows public Installer's `vbot` command invokes the recorded Python module instead of pip's replaceable `vbot.exe`, so the running command does not lock its own launcher during dependency updates. An older Windows shim that still starts `vbot.exe` is refused before checkout mutation with a one-time source-based resume command; completing that recovery migrates the shim for future updates. On Windows, close every vBot Desktop window before updating: the updater refuses to change the checkout while this installation's exact `vbot-desktop.exe` is running and checks again immediately before pip changes the environment. A Desktop install also refreshes its installer-owned Start-menu shortcut to the current windowless GUI launcher. If pip still fails after a checkout advance, the failure output includes the same source-based resume command through the recorded Python executable, which remains usable even if pip removed the normal `vbot` launcher. Runtime data is not modified.
+The updater preserves the recorded install shape, Python interpreter, dependency groups, source track, server target, and WebUI policy. Release installations move to the newest release with a matching WebUI asset; development installations update `main` and rebuild when needed. Runtime data under `~/.vbot` or the configured data directory is not modified.
 
-Local changes to tracked checkout files require an explicit policy:
+Use an explicit policy when the tracked checkout contains local changes or when the server should not restart:
 
 ```bash
-vbot update --stash
-vbot update --discard
-vbot update --no-restart
+vbot update --stash       # reapply tracked local changes after updating
+vbot update --discard     # permanently discard tracked local changes
+vbot update --no-restart  # leave the server state unchanged
 ```
 
-`--stash` reapplies the changes after updating. `--discard` permanently discards tracked local changes. `--no-restart` leaves the updated server stopped or running as-is.
+<details>
+<summary>Windows update recovery details</summary>
+
+The Windows public Installer's `vbot` command invokes the recorded Python module instead of pip's replaceable `vbot.exe`, so the running command does not lock its own launcher during dependency updates. The updater refuses to change the checkout while that installation's exact `vbot-desktop.exe` is running and checks again immediately before pip changes the environment. A Desktop installation also refreshes its Installer-owned Start-menu shortcut.
+
+An older Windows shim that still starts `vbot.exe` is refused before checkout mutation with a one-time source-based resume command; completing that recovery migrates the shim for future updates. If pip fails after a checkout advance, the failure output includes the same source-based resume command through the recorded Python executable, which remains usable even if pip removed the normal launcher.
+
+</details>
 
 ### Uninstalling
+
+Start the guided removal or reset flow:
 
 ```bash
 vbot uninstall
 ```
 
-The interactive command reports the Installer-recorded target and offers:
+The command shows the Installer-recorded target before offering three explicit scopes:
 
-- application only — removes Autostart, launchers, and the managed application while preserving the data directory
-- data only — permanently deletes the exact data directory while preserving the application
-- application and data — removes both
+| Scope | Application | Runtime data |
+|---|---|---|
+| Application only | Removed | Preserved |
+| Data only / reset | Preserved | Permanently deleted |
+| Application and data | Removed | Permanently deleted |
 
-Data-removing scopes display the resolved data path and require typing `DELETE`. A data-only reset stops the target server before deletion. If it was running, it restarts with fresh data afterward; if it was stopped, it remains stopped. A systemd-owned server is stopped and started through its existing unit so Autostart ownership is preserved.
+Any data-removing scope displays the resolved directory and requires typing `DELETE`. A data-only reset preserves the previous server state: a running server restarts with fresh data, while a stopped server remains stopped. A systemd-owned server is controlled through its existing unit so Autostart ownership is preserved.
 
-Non-interactive callers must supply one scope and `--yes`:
+<details>
+<summary>Non-interactive Uninstall commands</summary>
 
 ```bash
 vbot uninstall --app-only --yes
@@ -171,17 +225,38 @@ vbot uninstall --data-only --yes
 vbot uninstall --all --yes
 ```
 
-For a Desktop Client, `--app-only` and targetless `--all` remove only the local CLI/Desktop installation; they never resolve, probe, stop, or delete a default local server. A targetless `--data-only` is rejected because this install shape owns no server data. To deliberately reset a server data directory from a Desktop Client, provide `--host`, `--port`, and `--data-dir` together.
+Automation must choose exactly one scope and confirm it with `--yes`. Use `--host`, `--port`, and `--data-dir` to override the recorded target. Custom Autostart names can be supplied with `--task-name` on Windows or `--service-name` on Linux.
 
-Use `--host`, `--port`, and `--data-dir` to override the recorded target. Custom Autostart names can be supplied with `--task-name` on Windows or `--service-name` on Linux. The command refuses protected roots, the home directory, any data target containing the application installation, a data target containing the caller's current directory, and application removal while the caller is inside the installation directory.
+</details>
 
-Application-removing scopes for server-owning installations first stop the exact selected server; if that stop fails, removal aborts and reports the preserved application directory. They then delegate to the bundled platform Uninstaller, which verifies the stop again before removing anything. A manifest-backed Desktop Client skips both server-stop stages unless explicit data removal selected a complete target. A fresh managed install is removed wholesale; an install performed in an existing checkout removes the installer-owned `.venv` and launcher but preserves the checkout. Desktop Start-menu/application-menu entries are removed only when the recorded install shape owns the Desktop accessor; uninstalling a server-only shape preserves any Desktop entry owned by another installation. Windows requests elevation and launches a helper that waits for the calling `vbot.exe` to exit before deleting its environment. The caller reports the absolute application directory and says explicitly that helper launch is not completed removal; the elevated window reports final completion or failure. Cancelling UAC leaves the installation and selected data in place, although a server stopped during preflight remains stopped. The underlying `scripts/uninstall.ps1` and `scripts/uninstall.sh` retain the same mandatory-stop contract for server-owning recovery and direct-setup entrypoints.
+<details>
+<summary>Uninstall safety and Desktop Client behavior</summary>
+
+The command refuses protected roots, the home directory, any data target containing the application installation, a data target containing the caller's current directory, and application removal while the caller is inside the installation directory.
+
+For a Desktop Client, `--app-only` and targetless `--all` remove only the local CLI/Desktop installation; they never resolve, probe, stop, or delete a default local server. A targetless `--data-only` is rejected because this install shape owns no server data. Deliberately resetting a server data directory from a Desktop Client requires `--host`, `--port`, and `--data-dir` together.
+
+Application-removing scopes for server-owning installations first stop the exact selected server. If that stop fails, removal aborts and reports the preserved application directory. The bundled platform Uninstaller verifies the stop again before removing anything. A manifest-backed Desktop Client skips both server-stop stages unless explicit data removal selected a complete target.
+
+A fresh managed installation is removed wholesale. An installation performed in an existing checkout removes the Installer-owned `.venv` and launcher but preserves the checkout. Desktop Start-menu or application-menu entries are removed only when the recorded install shape owns Desktop, so uninstalling a server-only shape preserves a Desktop entry owned by another installation.
+
+On Windows, removal requests elevation and launches a helper that waits for the calling `vbot.exe` to exit before deleting its environment. Helper launch is not completed removal; the elevated window reports final completion or failure. Cancelling UAC leaves the installation and selected data in place, although a server stopped during preflight remains stopped. The underlying `scripts/uninstall.ps1` and `scripts/uninstall.sh` retain the same mandatory-stop contract for server-owning recovery and direct-setup entrypoints.
+
+</details>
 
 ## First-run setup
 
-Open `http://127.0.0.1:8420/`. Runtime creates an initial Identity Agent and its first Session automatically. A fresh server installation seeds the global Agent defaults with temperature `0.1` and thinking effort `high`; the initial Agent and later Agents inherit them unless configured more specifically. Existing `settings.json` files are preserved during installation and updates, so this fresh-install policy does not change an existing instance. The setup guide connects a Provider or OAuth subscription and selects a Model; creating another Agent is optional.
+Open `http://127.0.0.1:8420/`. vBot has already created an initial Identity Agent and its first Session, so you do not need to create an Agent before getting started.
 
-The WebUI is the easiest place to manage Connections and Accounts. Equivalent CLI examples are:
+1. Follow the setup guide to choose a Provider.
+2. Connect an API key, an OAuth subscription, or a keyless local Connection such as Ollama.
+3. Select the Agent's chat Model.
+4. Return to Chat and send a message. A successful response confirms the complete path from the WebUI through vBot to the selected Provider and Model.
+
+The WebUI is the recommended place to manage Connections and Accounts because it keeps credentials out of command history. A fresh server installation seeds global Agent defaults with temperature `0.1` and thinking effort `high`; the initial Agent and later Agents inherit them unless configured more specifically. Installation and updates preserve an existing `settings.json`, so these fresh-install defaults never replace an existing instance's choices.
+
+<details>
+<summary>Equivalent Provider CLI examples</summary>
 
 ```bash
 vbot provider set-key openrouter YOUR_KEY --refresh-models
@@ -192,6 +267,8 @@ vbot model refresh openrouter
 ```
 
 A key passed to `provider set-key` may be retained by shell history. Prefer the WebUI, a protected environment variable, or a shell-specific history-safe workflow when entering a real secret.
+
+</details>
 
 A Provider describes an external model service and Adapter behavior. A Connection describes one authentication and endpoint mode under that Provider. An Account is a credential slot on a Connection; the default slot is named `default`, and additional named Accounts can coexist.
 
@@ -383,7 +460,7 @@ The expected body is exactly `{"status":"ok"}`.
 
 ## WebUI and Desktop
 
-The WebUI at `http://127.0.0.1:8420/` provides Chat, Agent and Project management, Cron, System Prompt editing, Settings, Logs, Statistics, and Debug views. It is an Accessor over the server-owned runtime; closing the browser does not stop a Run.
+The WebUI at `http://127.0.0.1:8420/` provides Chat, Agent and Project management, Cron, System Prompt editing, Settings, Logs, Statistics, and Debug views. It connects to the server-owned runtime, so closing the browser does not stop a Run.
 
 Launch the optional Desktop accessor with:
 
