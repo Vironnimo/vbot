@@ -55,12 +55,12 @@ ANALYZE_IMAGE_TOOL_PARAMETERS: JsonObject = {
 }
 IMAGE_GENERATION_TOOL_DESCRIPTION = (
     "Generate new images or edit local source images using the configured model. Source "
-    "files are uploaded to the configured external provider. Returns image artifacts with "
-    "local paths and chat display links."
+    "files are uploaded to the configured external provider. Returns local paths for "
+    "generated image artifacts."
 )
 IMAGE_GENERATION_TEXT_ONLY_TOOL_DESCRIPTION = (
-    "Generate new images from text using the configured model. Returns image artifacts "
-    "with local paths and chat display links."
+    "Generate new images from text using the configured model. Returns local paths for "
+    "generated image artifacts."
 )
 IMAGE_GENERATION_TOOL_PARAMETERS: JsonObject = {
     "type": "object",
@@ -270,19 +270,12 @@ def make_image_generation_handler(image_service: Any):
         except ImageError as exc:
             return tool_failure("image_error", str(exc))
 
-        # The model-facing copies carry each image file's absolute path so the
-        # agent can use the file outside the chat; the UI-facing artifacts
-        # payload stays path-free — the WebUI renders from `url`.
+        # Model-facing data needs only each image's absolute path. The separate
+        # artifact envelope retains transport metadata for non-Model consumers.
         artifact_payloads = [a.to_dict() for a in artifacts]
-        image_payloads = [
-            {**payload, "path": model_path(artifact.file_path)}
-            for artifact, payload in zip(artifacts, artifact_payloads, strict=True)
-        ]
+        image_payloads = [{"path": model_path(artifact.file_path)} for artifact in artifacts]
         return tool_success(
-            {
-                "message": "Image generation complete.",
-                "images": image_payloads,
-            },
+            {"images": image_payloads},
             artifacts=artifact_payloads,
         )
 
@@ -298,7 +291,7 @@ def register_image_generation_tool(registry: ToolRegistry, image_service: Any) -
         IMAGE_GENERATION_TOOL_PARAMETERS,
         make_image_generation_handler(image_service),
         open_input_schema=True,
-        result_schema={"type": "object", "required": ["message", "images"]},
+        result_schema={"type": "object", "required": ["images"]},
         display=ToolDisplay(
             primary_candidates=(ToolDisplayField("prompt", kind="text", quote=True),),
             secondary_fields=(
