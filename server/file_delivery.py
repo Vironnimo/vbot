@@ -45,7 +45,7 @@ class FileDelivery:
             raise ValueError("file delivery secret must not be empty")
 
     def project_message(self, message: JsonObject) -> JsonObject:
-        """Replace recognized Assistant path lines with fresh public Markdown URLs."""
+        """Replace recognized Assistant file markers with fresh public Markdown URLs."""
         projected = dict(message)
         content = projected.get("content")
         references = projected.pop("output_files", None)
@@ -57,11 +57,14 @@ class FileDelivery:
             return projected
 
         lines = content.splitlines(keepends=True)
+        replacements_by_line: dict[int, list[tuple[int | None, int | None, str]]] = {}
         for reference in references:
             if not isinstance(reference, dict):
                 continue
             line_index = reference.get("line_index")
             path_value = reference.get("path")
+            start_index = reference.get("start_index")
+            end_index = reference.get("end_index")
             if (
                 isinstance(line_index, bool)
                 or not isinstance(line_index, int)
@@ -73,6 +76,17 @@ class FileDelivery:
             presentation = self._presentation_for_path(path_value)
             if presentation is None:
                 continue
+            if start_index is None and end_index is None:
+                span: tuple[int | None, int | None] = (None, None)
+            elif (
+                isinstance(start_index, int)
+                and not isinstance(start_index, bool)
+                and isinstance(end_index, int)
+                and not isinstance(end_index, bool)
+            ):
+                span = (start_index, end_index)
+            else:
+                continue
             token = self._mint_token(presentation.path)
             label = _escape_markdown_label(presentation.path.name)
             markdown = (
@@ -80,7 +94,15 @@ class FileDelivery:
                 if presentation.inline
                 else f"[{label}]({FILE_URL_PREFIX}{token})"
             )
-            lines[line_index] = markdown + _line_ending(lines[line_index])
+            replacements_by_line.setdefault(line_index, []).append(
+                (
+                    span[0],
+                    span[1],
+                    markdown,
+                )
+            )
+        for line_index, replacements in replacements_by_line.items():
+            lines[line_index] = _apply_line_replacements(lines[line_index], replacements)
         projected["content"] = "".join(lines)
         return projected
 
@@ -157,3 +179,30 @@ def _line_ending(value: str) -> str:
     if value.endswith(("\r", "\n")):
         return value[-1]
     return ""
+
+
+def _apply_line_replacements(
+    line: str,
+    replacements: list[tuple[int | None, int | None, str]],
+) -> str:
+    ending = _line_ending(line)
+    body = line[: -len(ending)] if ending else line
+    legacy = [replacement for replacement in replacements if replacement[0] is None]
+    if legacy:
+        return legacy[-1][2] + ending
+
+    for start_index, end_index, markdown in sorted(
+        replacements,
+        key=lambda replacement: int(replacement[0] or 0),
+        reverse=True,
+    ):
+        if (
+            start_index is None
+            or end_index is None
+            or start_index < 0
+            or end_index <= start_index
+            or end_index > len(body)
+        ):
+            continue
+        body = body[:start_index] + markdown + body[end_index:]
+    return body + ending

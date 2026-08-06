@@ -118,8 +118,8 @@ async def test_image_generation_tool_returns_artifact_payloads(tmp_path: Path) -
     assert "configured external provider" in IMAGE_GENERATION_TOOL_DESCRIPTION
     assert data["message"] == (
         "Image generation complete.\n\n"
-        "WebUI/Desktop: put each image filesystem path on its own line in your reply; "
-        f"vBot will render it automatically:\n{model_path(image_path)}\n\n"
+        "WebUI/Desktop: include each marked image path in your reply; "
+        f"vBot will render it automatically:\nfile:{model_path(image_path)}\n\n"
         "Channel: call `channel_send` with the image `path` in `file_paths`. "
         "Never send a bare path to a channel."
     )

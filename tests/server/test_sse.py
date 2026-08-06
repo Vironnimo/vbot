@@ -154,7 +154,7 @@ def test_streaming_chat_projects_completed_path_line_in_stable_event(tmp_path: P
     image.write_bytes(b"\x89PNG\r\n\x1a\nstreamed")
     adapter = StubAdapter(
         stream_deltas=[
-            {"type": "content_delta", "text": str(image)},
+            {"type": "content_delta", "text": f"Here: file:{image}"},
             {"type": "finish", "reason": "stop"},
         ]
     )
@@ -191,11 +191,16 @@ def test_streaming_chat_projects_completed_path_line_in_stable_event(tmp_path: P
         event for event in _parse_sse(response.text) if event["event"] == ASSISTANT_OUTPUT_EVENT
     )
     assistant_content = assistant_event["data"]["payload"]["message"]["content"]
-    assert assistant_content.startswith("![streamed.png](/api/files/")
+    assert assistant_content.startswith("Here: ![streamed.png](/api/files/")
     assert str(image) not in assistant_content
     canonical = runtime.chat_sessions.get("coder", "session-file").load()[-2]
     assert canonical.output_files == [
-        AssistantFileReference(line_index=0, path=str(image.resolve()))
+        AssistantFileReference(
+            line_index=0,
+            path=str(image.resolve()),
+            start_index=6,
+            end_index=11 + len(str(image)),
+        )
     ]
 
 

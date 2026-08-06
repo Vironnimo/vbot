@@ -91,10 +91,8 @@ PORTABLE_REASONING_NOTE_HEADER = (
 )
 
 WEBUI_REPLY_SURFACE_REMINDER = (
-    "Your reply to the following request will be shown in the WebUI. "
-    "The Desktop app uses the WebUI for this purpose. To show an existing server-side file, "
-    "put its filesystem path on a line by itself in your reply. vBot will render images and "
-    "link other files automatically; do not use a Tool or construct a URL."
+    "To show the user an image or provide a file download, include "
+    "file:<filesystem-path> in your reply; vBot renders it automatically."
 )
 
 # Header for passively observed, unaddressed group messages. They are useful
@@ -1862,14 +1860,50 @@ def _validate_assistant_message(message: ChatMessage) -> None:
             raise ChatMessageValidationError(
                 "assistant output_files must contain AssistantFileReference values"
             )
-        line_count = len(message.content.splitlines()) if isinstance(message.content, str) else 0
-        line_indices = [reference.line_index for reference in message.output_files]
-        if len(line_indices) != len(set(line_indices)):
-            raise ChatMessageValidationError("assistant output_files line indexes must be unique")
-        if any(line_index >= line_count for line_index in line_indices):
+        content_lines = message.content.splitlines() if isinstance(message.content, str) else []
+        if any(
+            reference.line_index < 0 or reference.line_index >= len(content_lines)
+            for reference in message.output_files
+        ):
             raise ChatMessageValidationError(
                 "assistant output_files line indexes must identify content lines"
             )
+        spans_by_line: dict[int, list[tuple[int, int]]] = {}
+        legacy_lines: set[int] = set()
+        for reference in message.output_files:
+            if reference.start_index is None or reference.end_index is None:
+                if reference.start_index is not None or reference.end_index is not None:
+                    raise ChatMessageValidationError(
+                        "assistant output_files spans must be provided together"
+                    )
+                legacy_lines.add(reference.line_index)
+                continue
+            if (
+                isinstance(reference.start_index, bool)
+                or isinstance(reference.end_index, bool)
+                or reference.start_index < 0
+                or reference.end_index <= reference.start_index
+                or reference.end_index > len(content_lines[reference.line_index])
+            ):
+                raise ChatMessageValidationError(
+                    "assistant output_files spans must identify content text"
+                )
+            spans_by_line.setdefault(reference.line_index, []).append(
+                (reference.start_index, reference.end_index)
+            )
+        if any(line_index in spans_by_line for line_index in legacy_lines) or len(
+            legacy_lines
+        ) != sum(reference.start_index is None for reference in message.output_files):
+            raise ChatMessageValidationError(
+                "assistant output_files legacy references must be unique per line"
+            )
+        for spans in spans_by_line.values():
+            ordered = sorted(spans)
+            if any(
+                current[0] < previous[1]
+                for previous, current in zip(ordered, ordered[1:], strict=False)
+            ):
+                raise ChatMessageValidationError("assistant output_files spans must not overlap")
 
 
 def _validate_tool_message(message: ChatMessage) -> None:

@@ -123,21 +123,23 @@ class TestReplySurface:
                 "role": "user",
                 "content": (
                     "<system-reminder>\n"
-                    "Your reply to the following request will be shown in the WebUI. "
-                    "The Desktop app uses the WebUI for this purpose. To show an existing "
-                    "server-side file, put its filesystem path on a line by itself in your "
-                    "reply. vBot will render images and link other files automatically; do "
-                    "not use a Tool or construct a URL.\n"
+                    "To show the user an image or provide a file download, include "
+                    "file:<filesystem-path> in your reply; vBot renders it automatically.\n"
                     "</system-reminder>"
                 ),
             }
         ]
 
     def test_assistant_output_files_round_trip_but_never_reach_provider_requests(self):
-        reference = AssistantFileReference(line_index=1, path="C:\\work\\chart.png")
+        reference = AssistantFileReference(
+            line_index=0,
+            path="C:\\work\\chart.png",
+            start_index=7,
+            end_index=29,
+        )
         message = ChatMessage.assistant(
             model="openai/gpt-5.2",
-            content="Chart:\nC:\\work\\chart.png",
+            content="Chart: file:C:\\work\\chart.png",
             output_files=[reference],
         )
 

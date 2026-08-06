@@ -100,7 +100,7 @@ def test_rpc_final_message_and_history_share_signed_original_file_projection(
     report = workspace / "report.txt"
     image.write_bytes(b"\x89PNG\r\n\x1a\nchart-one")
     report.write_text("report-one", encoding="utf-8")
-    content = f"Files:\n{image}\n{report}"
+    content = f"Files: file:{image} and file:{report}"
     runtime = StubRuntime(
         tmp_path / "data",
         StubAdapter([{"content": content, "tool_calls": None}]),
@@ -154,8 +154,8 @@ def test_rpc_final_message_and_history_share_signed_original_file_projection(
     assert "output_files" not in sent.text
     assert str(image) not in sent_content
     assert sent_content == history_content
-    assert sent_content.startswith("Files:\n![chart.png]")
-    assert "[report.txt]" in sent_content
+    assert sent_content.startswith("Files: ![chart.png]")
+    assert " and [report.txt]" in sent_content
     assert image_response.content == b"\x89PNG\r\n\x1a\nchart-one"
     assert report_response.text == "report-one"
     canonical = runtime.chat_sessions.get("coder", "session-one").load()[-2]
