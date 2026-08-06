@@ -235,23 +235,6 @@ def register_analyze_image_tool(registry: ToolRegistry, image_service: Any) -> N
     )
 
 
-def _image_display_message(artifacts: list[JsonObject]) -> str:
-    """Tell the agent how to surface generated images in the chat.
-
-    WebUI/Desktop resolves explicit ``file:`` path markers automatically. Channels still
-    need an explicit outbound file send because the platform owns delivery.
-    """
-
-    paths = "\n".join(f"file:{artifact['path']}" for artifact in artifacts)
-    return (
-        "Image generation complete.\n\n"
-        "WebUI/Desktop: include each marked image path in your reply; "
-        f"vBot will render it automatically:\n{paths}\n\n"
-        "Channel: call `channel_send` with the image `path` in `file_paths`. "
-        "Never send a bare path to a channel."
-    )
-
-
 def make_image_generation_handler(image_service: Any):
     """Create an image generation tool handler bound to the runtime image service."""
 
@@ -297,7 +280,7 @@ def make_image_generation_handler(image_service: Any):
         ]
         return tool_success(
             {
-                "message": _image_display_message(image_payloads),
+                "message": "Image generation complete.",
                 "images": image_payloads,
             },
             artifacts=artifact_payloads,

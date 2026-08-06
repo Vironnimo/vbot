@@ -116,13 +116,7 @@ async def test_image_generation_tool_returns_artifact_payloads(tmp_path: Path) -
     # The model-facing copies carry the absolute file path for out-of-chat use.
     assert data["images"] == [{**_ARTIFACT_PAYLOAD, "path": model_path(image_path)}]
     assert "configured external provider" in IMAGE_GENERATION_TOOL_DESCRIPTION
-    assert data["message"] == (
-        "Image generation complete.\n\n"
-        "WebUI/Desktop: include each marked image path in your reply; "
-        f"vBot will render it automatically:\nfile:{model_path(image_path)}\n\n"
-        "Channel: call `channel_send` with the image `path` in `file_paths`. "
-        "Never send a bare path to a channel."
-    )
+    assert data["message"] == "Image generation complete."
     display = registry.display_for_call(
         IMAGE_GENERATION_TOOL_NAME,
         {"prompt": "a red fox"},
