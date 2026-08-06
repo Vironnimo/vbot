@@ -1,0 +1,159 @@
+"""Signed, stateless delivery of original server-local Assistant output files."""
+
+from __future__ import annotations
+
+import base64
+import hashlib
+import hmac
+import secrets
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+from core.attachments import sniff_media_type
+
+JsonObject = dict[str, Any]
+
+FILE_URL_PREFIX = "/api/files/"
+FILE_SNIFF_BYTES = 65_536
+MAX_FILE_TOKEN_LENGTH = 16_384
+SAFE_INLINE_MEDIA_TYPES = frozenset(
+    {
+        "image/gif",
+        "image/jpeg",
+        "image/png",
+        "image/webp",
+    }
+)
+
+
+@dataclass(frozen=True)
+class DeliveredFile:
+    """Validated current presentation facts for one original file."""
+
+    path: Path
+    media_type: str
+    inline: bool
+
+
+class FileDelivery:
+    """Mint and verify filesystem capability URLs without storing file bytes or IDs."""
+
+    def __init__(self, *, secret: bytes | None = None) -> None:
+        self._secret = secret if secret is not None else secrets.token_bytes(32)
+        if not self._secret:
+            raise ValueError("file delivery secret must not be empty")
+
+    def project_message(self, message: JsonObject) -> JsonObject:
+        """Replace recognized Assistant path lines with fresh public Markdown URLs."""
+        projected = dict(message)
+        content = projected.get("content")
+        references = projected.pop("output_files", None)
+        if (
+            projected.get("role") != "assistant"
+            or not isinstance(content, str)
+            or not isinstance(references, list)
+        ):
+            return projected
+
+        lines = content.splitlines(keepends=True)
+        for reference in references:
+            if not isinstance(reference, dict):
+                continue
+            line_index = reference.get("line_index")
+            path_value = reference.get("path")
+            if (
+                isinstance(line_index, bool)
+                or not isinstance(line_index, int)
+                or line_index < 0
+                or line_index >= len(lines)
+                or not isinstance(path_value, str)
+            ):
+                continue
+            presentation = self._presentation_for_path(path_value)
+            if presentation is None:
+                continue
+            token = self._mint_token(presentation.path)
+            label = _escape_markdown_label(presentation.path.name)
+            markdown = (
+                f"![{label}]({FILE_URL_PREFIX}{token})"
+                if presentation.inline
+                else f"[{label}]({FILE_URL_PREFIX}{token})"
+            )
+            lines[line_index] = markdown + _line_ending(lines[line_index])
+        projected["content"] = "".join(lines)
+        return projected
+
+    def resolve_token(self, token: str) -> DeliveredFile | None:
+        """Verify one capability and return the original file's current facts."""
+        if not token or len(token) > MAX_FILE_TOKEN_LENGTH:
+            return None
+        payload, separator, signature = token.partition(".")
+        if not separator or not payload or not signature:
+            return None
+        try:
+            payload_bytes = payload.encode("ascii")
+        except UnicodeEncodeError:
+            return None
+        expected_signature = _urlsafe_encode(
+            hmac.digest(self._secret, payload_bytes, hashlib.sha256)
+        )
+        if not hmac.compare_digest(signature, expected_signature):
+            return None
+        try:
+            path_text = _urlsafe_decode(payload).decode("utf-8")
+            path = Path(path_text)
+            if not path.is_absolute():
+                return None
+            resolved = path.resolve(strict=True)
+        except (OSError, RuntimeError, UnicodeDecodeError, ValueError):
+            return None
+        return self._presentation_for_path(str(resolved))
+
+    def _mint_token(self, path: Path) -> str:
+        payload = _urlsafe_encode(str(path).encode("utf-8"))
+        signature = _urlsafe_encode(
+            hmac.digest(self._secret, payload.encode("ascii"), hashlib.sha256)
+        )
+        return f"{payload}.{signature}"
+
+    @staticmethod
+    def _presentation_for_path(path_value: str) -> DeliveredFile | None:
+        try:
+            path = Path(path_value)
+            if not path.is_absolute():
+                return None
+            resolved = path.resolve(strict=True)
+            if not resolved.is_file():
+                return None
+            with resolved.open("rb") as file_handle:
+                probe = file_handle.read(FILE_SNIFF_BYTES)
+        except (OSError, RuntimeError, ValueError):
+            return None
+        media_type = sniff_media_type(probe, resolved.name)
+        return DeliveredFile(
+            path=resolved,
+            media_type=media_type,
+            inline=media_type in SAFE_INLINE_MEDIA_TYPES,
+        )
+
+
+def _urlsafe_encode(value: bytes) -> str:
+    return base64.urlsafe_b64encode(value).decode("ascii").rstrip("=")
+
+
+def _urlsafe_decode(value: str) -> bytes:
+    padding = "=" * (-len(value) % 4)
+    return base64.b64decode(value + padding, altchars=b"-_", validate=True)
+
+
+def _escape_markdown_label(value: str) -> str:
+    return value.replace("\\", "\\\\").replace("[", "\\[").replace("]", "\\]")
+
+
+def _line_ending(value: str) -> str:
+    if value.endswith("\r\n"):
+        return "\r\n"
+    if value.endswith(("\r", "\n")):
+        return value[-1]
+    return ""

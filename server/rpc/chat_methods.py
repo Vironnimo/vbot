@@ -92,7 +92,7 @@ def _chat_history(state: Any, params: JsonObject) -> JsonObject:
         session = state.runtime.chat_sessions.get(agent_id, active_session_id, project_id)
         loaded_messages = session.load()
         visible_messages = [
-            _visible_message(message)
+            _visible_message(message, file_delivery=getattr(state, "file_delivery", None))
             for message in loaded_messages
             if _is_visible_history_message(message)
         ]
@@ -106,6 +106,7 @@ def _chat_history(state: Any, params: JsonObject) -> JsonObject:
             _run_response(
                 active_run_object,
                 sse_url=f"/api/runs/{active_run_object.id}/events",
+                file_delivery=getattr(state, "file_delivery", None),
             )
             if active_run_object is not None
             else None
@@ -424,7 +425,11 @@ async def _send_chat(state: Any, params: JsonObject) -> JsonObject:
         assistant_message = await submission.wait()
     except Exception as exc:
         raise _map_expected_error(exc) from exc
-    return _run_response(submission, final_message=assistant_message)
+    return _run_response(
+        submission,
+        final_message=assistant_message,
+        file_delivery=getattr(state, "file_delivery", None),
+    )
 
 
 async def _stream_chat(state: Any, params: JsonObject) -> JsonObject:
@@ -436,7 +441,11 @@ async def _stream_chat(state: Any, params: JsonObject) -> JsonObject:
         _bridge_run_to_event_bus(state, submission)
     except Exception as exc:
         raise _map_expected_error(exc) from exc
-    return _run_response(submission, sse_url=f"/api/runs/{submission.id}/events")
+    return _run_response(
+        submission,
+        sse_url=f"/api/runs/{submission.id}/events",
+        file_delivery=getattr(state, "file_delivery", None),
+    )
 
 
 def _run_started_during_enqueue(item: QueuedRunItem) -> Run | None:
@@ -455,7 +464,7 @@ async def _cancel_chat(state: Any, params: JsonObject) -> JsonObject:
         run = await state.chat_runs.cancel(run_id, reason=reason)
     except Exception as exc:
         raise _map_expected_error(exc) from exc
-    return _run_response(run)
+    return _run_response(run, file_delivery=getattr(state, "file_delivery", None))
 
 
 async def _cancel_tool_call_chat(state: Any, params: JsonObject) -> JsonObject:
@@ -607,7 +616,11 @@ def _active_run_response(
     )
     if run is None:
         return None
-    return _run_response(run, sse_url=f"/api/runs/{run.id}/events")
+    return _run_response(
+        run,
+        sse_url=f"/api/runs/{run.id}/events",
+        file_delivery=getattr(state, "file_delivery", None),
+    )
 
 
 def _public_queue_item(

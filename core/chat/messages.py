@@ -19,6 +19,7 @@ from core.chat.content_blocks import (
     content_block_to_dict,
 )
 from core.chat.errors import ChatError, ChatMessageValidationError
+from core.chat.output_files import AssistantFileReference
 from core.providers.adapter import (
     TOOL_CALL_REJECTION_FIELD,
     normalize_tool_call_candidate,
@@ -91,7 +92,9 @@ PORTABLE_REASONING_NOTE_HEADER = (
 
 WEBUI_REPLY_SURFACE_REMINDER = (
     "Your reply to the following request will be shown in the WebUI. "
-    "The Desktop app uses the WebUI for this purpose."
+    "The Desktop app uses the WebUI for this purpose. To show an existing server-side file, "
+    "put its filesystem path on a line by itself in your reply. vBot will render images and "
+    "link other files automatically; do not use a Tool or construct a URL."
 )
 
 # Header for passively observed, unaddressed group messages. They are useful
@@ -387,6 +390,7 @@ class ChatMessage:
     sender: MessageSender | None = None
     interrupted: bool = False
     interruption_cause: str | None = None
+    output_files: list[AssistantFileReference] | None = None
 
     @classmethod
     def system(cls, content: str, model: str, *, timestamp: datetime | None = None) -> ChatMessage:
@@ -457,6 +461,7 @@ class ChatMessage:
         tool_calls: list[ToolCall] | None = None,
         interrupted: bool = False,
         interruption_cause: str | None = None,
+        output_files: list[AssistantFileReference] | None = None,
         timestamp: datetime | None = None,
     ) -> ChatMessage:
         """Create an assistant message.
@@ -481,6 +486,7 @@ class ChatMessage:
             tool_calls=list(tool_calls) if tool_calls is not None else None,
             interrupted=interrupted,
             interruption_cause=interruption_cause,
+            output_files=list(output_files) if output_files is not None else None,
         )
 
     @classmethod
@@ -661,6 +667,8 @@ class ChatMessage:
         if self.interrupted:
             message["interrupted"] = True
         _add_if_not_none(message, "interruption_cause", self.interruption_cause)
+        if self.output_files is not None:
+            message["output_files"] = [reference.to_dict() for reference in self.output_files]
         return message
 
     @classmethod
@@ -702,6 +710,15 @@ class ChatMessage:
             if not all(isinstance(entry, dict) for entry in projection_data):
                 raise ChatMessageValidationError("projection entries must be objects")
 
+        output_files_data = data.get("output_files")
+        if output_files_data is not None and not isinstance(output_files_data, list):
+            raise ChatMessageValidationError("output_files must be an array")
+        output_files = (
+            [AssistantFileReference.from_dict(entry) for entry in output_files_data]
+            if output_files_data is not None
+            else None
+        )
+
         message = cls(
             id=_require_string(data, "id"),
             timestamp=_require_string(data, "timestamp"),
@@ -732,6 +749,7 @@ class ChatMessage:
             sender=MessageSender.from_dict(sender_data) if sender_data is not None else None,
             interrupted=interrupted,
             interruption_cause=interruption_cause,
+            output_files=output_files,
         )
         message.validate()
         return message
@@ -906,6 +924,7 @@ def _message_to_request_dict(
         # ``interrupted`` is a vBot-internal turn annotation, never a wire field.
         data.pop("interrupted", None)
         data.pop("interruption_cause", None)
+        data.pop("output_files", None)
     data.pop("timing", None)
     data.pop("tool_display", None)
     # Sender attribution exists only in the provider request: persisted content stays
@@ -1020,6 +1039,7 @@ def _assistant_continuation_dict(
     data.pop("tool_display", None)
     data.pop("interrupted", None)
     data.pop("interruption_cause", None)
+    data.pop("output_files", None)
     data.pop("reasoning_scope", None)
     if replay_policy == REASONING_REPLAY_NONE:
         data.pop("reasoning", None)
@@ -1690,6 +1710,8 @@ def _validate_core_fields(message: ChatMessage) -> None:
         raise ChatMessageValidationError(f"{message.role} messages cannot include reasoning_scope")
     if message.role != "tool" and message.tool_display is not None:
         raise ChatMessageValidationError(f"{message.role} messages cannot include tool_display")
+    if message.role != "assistant" and message.output_files is not None:
+        raise ChatMessageValidationError(f"{message.role} messages cannot include output_files")
     if message.role != "compaction_checkpoint":
         _reject_fields(
             message,
@@ -1831,6 +1853,23 @@ def _validate_assistant_message(message: ChatMessage) -> None:
         raise ChatMessageValidationError("assistant phase must be a non-empty string")
     if message.usage is not None and not isinstance(message.usage, dict):
         raise ChatMessageValidationError("usage must be an object")
+    if message.output_files is not None:
+        if not message.output_files:
+            raise ChatMessageValidationError("assistant output_files must not be empty")
+        if not all(
+            isinstance(reference, AssistantFileReference) for reference in message.output_files
+        ):
+            raise ChatMessageValidationError(
+                "assistant output_files must contain AssistantFileReference values"
+            )
+        line_count = len(message.content.splitlines()) if isinstance(message.content, str) else 0
+        line_indices = [reference.line_index for reference in message.output_files]
+        if len(line_indices) != len(set(line_indices)):
+            raise ChatMessageValidationError("assistant output_files line indexes must be unique")
+        if any(line_index >= line_count for line_index in line_indices):
+            raise ChatMessageValidationError(
+                "assistant output_files line indexes must identify content lines"
+            )
 
 
 def _validate_tool_message(message: ChatMessage) -> None:

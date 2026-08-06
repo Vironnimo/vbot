@@ -1,6 +1,7 @@
 """Tool call, sender, reply-surface, factory, and parsing tests."""
 
 from core.chat.messages import ToolCallRejection
+from core.chat.output_files import AssistantFileReference
 
 from .messages_test_support import (
     ERROR_KIND_RATE_LIMIT,
@@ -15,6 +16,7 @@ from .messages_test_support import (
     ReplySurface,
     TextBlock,
     ToolCall,
+    _assistant_continuation_dict,
     _embed_notes_into_request,
     _message_to_request_dict,
     datetime,
@@ -122,11 +124,26 @@ class TestReplySurface:
                 "content": (
                     "<system-reminder>\n"
                     "Your reply to the following request will be shown in the WebUI. "
-                    "The Desktop app uses the WebUI for this purpose.\n"
+                    "The Desktop app uses the WebUI for this purpose. To show an existing "
+                    "server-side file, put its filesystem path on a line by itself in your "
+                    "reply. vBot will render images and link other files automatically; do "
+                    "not use a Tool or construct a URL.\n"
                     "</system-reminder>"
                 ),
             }
         ]
+
+    def test_assistant_output_files_round_trip_but_never_reach_provider_requests(self):
+        reference = AssistantFileReference(line_index=1, path="C:\\work\\chart.png")
+        message = ChatMessage.assistant(
+            model="openai/gpt-5.2",
+            content="Chart:\nC:\\work\\chart.png",
+            output_files=[reference],
+        )
+
+        assert ChatMessage.from_dict(message.to_dict()) == message
+        assert "output_files" not in _message_to_request_dict(message)
+        assert "output_files" not in _assistant_continuation_dict(message)
 
     def test_channel_note_round_trips_and_renders_exact_reminder(self):
         surface = ReplySurface.channel(

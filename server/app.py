@@ -45,6 +45,7 @@ from server.events import (
     RESOURCE_KIND_TERMINALS,
     ServerEventBus,
 )
+from server.file_delivery import FileDelivery
 from server.rpc.errors import RPC_ERROR_INVALID_REQUEST
 from server.rpc.event_bridge import bridge_run_to_event_bus, publish_resource_changed
 from server.rpc.methods import dispatch_rpc
@@ -313,6 +314,22 @@ def create_app(
             filename=artifact.filename,
         )
 
+    @app.get("/api/files/{token}")
+    async def get_assistant_file(request: Request, token: str) -> FileResponse:
+        delivered = request.app.state.file_delivery.resolve_token(token)
+        if delivered is None:
+            raise HTTPException(status_code=404)
+        return FileResponse(
+            delivered.path,
+            media_type=delivered.media_type,
+            filename=delivered.path.name,
+            content_disposition_type="inline" if delivered.inline else "attachment",
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Content-Type-Options": "nosniff",
+            },
+        )
+
     @app.get("/api/runs/{run_id}/events")
     async def run_events(request: Request, run_id: str) -> StreamingResponse:
         chat_runs = _app_chat_runs(request.app.state)
@@ -322,7 +339,11 @@ def create_app(
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         after_sequence = _replay_after_sequence(request)
         return StreamingResponse(
-            _sse_run_events(run, after_sequence=after_sequence),
+            _sse_run_events(
+                run,
+                after_sequence=after_sequence,
+                file_delivery=request.app.state.file_delivery,
+            ),
             media_type="text/event-stream",
             headers={"Cache-Control": "no-cache"},
         )
@@ -419,6 +440,7 @@ def _initialize_app_state(
     app.state.chat_runs = runtime.chat_run_manager
     app.state.event_bus = ServerEventBus()
     app.state.client_registry = ClientRegistry()
+    app.state.file_delivery = FileDelivery()
     app.state.run_event_bridge_run_ids = OrderedDict()
     app.state.run_event_bridge_unsubscribe = _register_run_event_bridge(app.state)
     app.state.session_title_bridge_unsubscribe = _register_session_title_bridge(app.state)
@@ -1016,6 +1038,7 @@ async def _sse_run_events(
     *,
     after_sequence: int = 0,
     heartbeat_interval_seconds: float = SSE_HEARTBEAT_INTERVAL_SECONDS,
+    file_delivery: FileDelivery | None = None,
 ) -> AsyncGenerator[str, None]:
     async with aclosing(run.subscribe(after_sequence=after_sequence)) as events:
         event_iterator = events.__aiter__()
@@ -1040,7 +1063,10 @@ async def _sse_run_events(
                 except StopAsyncIteration:
                     break
                 event_task = None
-                data = remove_opaque_provider_metadata(event.to_dict())
+                data = remove_opaque_provider_metadata(
+                    event.to_dict(),
+                    file_delivery=file_delivery,
+                )
                 yield (
                     f"id: {event.sequence}\n"
                     f"event: {event.type}\n"

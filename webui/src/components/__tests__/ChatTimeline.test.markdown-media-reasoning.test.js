@@ -151,6 +151,49 @@ describe('ChatTimeline', () => {
     expect(document.querySelector('.image-lightbox')).toBeNull();
   });
 
+  it('renders signed server file URLs as an image lightbox and download link', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-assistant-server-files',
+    );
+
+    appendRunEvent(sessionState, {
+      type: 'assistant_output',
+      run_id: 'run-assistant-server-files',
+      sequence: 1,
+      payload: {
+        message: {
+          role: 'assistant',
+          content:
+            '![chart.png](/api/files/image-token)\n\n[report.txt](/api/files/file-token)',
+        },
+      },
+    });
+
+    mountedComponent = mount(ChatTimeline, {
+      target: document.body,
+      props: {
+        sessionState,
+        agentName: 'Alpha',
+      },
+    });
+    flushSync();
+
+    const image = document.querySelector('.assistant-run .msg-markdown img');
+    const link = document.querySelector('.assistant-run .msg-markdown a');
+    expect(image.getAttribute('src')).toBe('/api/files/image-token');
+    expect(link.textContent).toBe('report.txt');
+    expect(link.getAttribute('href')).toBe('/api/files/file-token');
+
+    image.click();
+    flushSync();
+
+    expect(
+      document.querySelector('.image-lightbox__image').getAttribute('src'),
+    ).toBe(new URL('/api/files/image-token', document.baseURI).href);
+  });
+
   it('opens the lightbox when a user attachment thumbnail is clicked', () => {
     const sessionState = ensureSessionState(
       createChatState(),

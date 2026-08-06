@@ -109,7 +109,7 @@ async def test_image_generation_tool_returns_artifact_payloads(tmp_path: Path) -
     result = await registry.dispatch(context, {"prompt": "a red fox"})
 
     assert result["ok"] is True
-    # The UI-facing artifacts payload stays path-free; the WebUI renders from url.
+    # The structured artifact payload stays unchanged for non-chat consumers.
     assert result["artifacts"] == [_ARTIFACT_PAYLOAD]
     data = result["data"]
     assert isinstance(data, dict)
@@ -118,10 +118,10 @@ async def test_image_generation_tool_returns_artifact_payloads(tmp_path: Path) -
     assert "configured external provider" in IMAGE_GENERATION_TOOL_DESCRIPTION
     assert data["message"] == (
         "Image generation complete.\n\n"
-        "WebUI/Desktop: embed this Markdown in your reply:\n"
-        f"![generated image]({_ARTIFACT_PAYLOAD['url']})\n\n"
+        "WebUI/Desktop: put each image filesystem path on its own line in your reply; "
+        f"vBot will render it automatically:\n{model_path(image_path)}\n\n"
         "Channel: call `channel_send` with the image `path` in `file_paths`. "
-        "Never send the Markdown to a channel."
+        "Never send a bare path to a channel."
     )
     display = registry.display_for_call(
         IMAGE_GENERATION_TOOL_NAME,

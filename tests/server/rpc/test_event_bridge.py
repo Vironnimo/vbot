@@ -10,12 +10,16 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections import OrderedDict
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
 
+from core.chat import ChatMessage
+from core.chat.output_files import AssistantFileReference
 from core.runs import (
+    ASSISTANT_OUTPUT_EVENT,
     COMPACTION_ABORTED_EVENT,
     COMPACTION_COMPLETED_EVENT,
     COMPACTION_STARTED_EVENT,
@@ -30,6 +34,7 @@ from core.runs import (
     RunEvent,
 )
 from server.events import ALLOWED_SERVER_EVENT_TYPES, ServerEventBus
+from server.file_delivery import FileDelivery
 from server.rpc import event_bridge
 from server.rpc.event_bridge import (
     RUN_DELTA_EVENT_TYPES,
@@ -158,6 +163,34 @@ def test_server_event_forwards_session_usage_on_terminal_events() -> None:
 
     assert summary["payload"]["session_usage"] == session_usage
     assert summary["payload"]["context_usage"] == context_usage
+
+
+def test_server_event_projects_assistant_file_reference(tmp_path: Path) -> None:
+    image = tmp_path / "bridge.png"
+    image.write_bytes(b"\x89PNG\r\n\x1a\nimage")
+    message = ChatMessage.assistant(
+        model="provider/model",
+        content=str(image),
+        output_files=[AssistantFileReference(line_index=0, path=str(image.resolve()))],
+    )
+    event = RunEvent(
+        sequence=2,
+        run_id="run-file",
+        agent_id="builder",
+        session_id="sess-file",
+        type=ASSISTANT_OUTPUT_EVENT,
+        payload={"message": message.to_dict()},
+    )
+
+    summary = _server_event_from_run_event(
+        event,
+        file_delivery=FileDelivery(secret=b"bridge-secret"),
+    )
+
+    serialized = str(summary)
+    assert "output_files" not in serialized
+    assert str(image) not in serialized
+    assert "![bridge.png](/api/files/" in summary["payload"]["output"]["message"]["content"]
 
 
 def test_server_event_omits_session_usage_when_absent() -> None:

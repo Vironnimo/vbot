@@ -6,7 +6,7 @@ import asyncio
 import json
 import time
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, Protocol, cast
@@ -130,6 +130,7 @@ from core.chat.model_resolution import (
 from core.chat.model_resolution import (
     parse_model_with_connection as parse_model_with_connection,
 )
+from core.chat.output_files import resolve_assistant_file_references
 from core.chat.streaming import (
     STREAM_CHUNK_TIMEOUT_SECONDS,
     STREAM_PROGRESS_TIMEOUT_SECONDS,
@@ -378,7 +379,11 @@ def _terminal_outcome_error(
     )
 
 
-def _combined_interrupted_result(messages: list[ChatMessage]) -> ChatMessage:
+def _combined_interrupted_result(
+    messages: list[ChatMessage],
+    *,
+    output_cwd: Path | None,
+) -> ChatMessage:
     """Return one consumer-facing view of every visible recovery fragment."""
     if not messages:
         raise AssertionError("interrupted result requires at least one Assistant message")
@@ -390,7 +395,7 @@ def _combined_interrupted_result(messages: list[ChatMessage]) -> ChatMessage:
         raise AssertionError("interrupted Assistant result requires a model")
     content = "".join(message.content for message in messages if isinstance(message.content, str))
     reasoning = "".join(message.reasoning for message in messages if message.reasoning)
-    return ChatMessage.assistant(
+    message = ChatMessage.assistant(
         model=latest.model,
         content=content or None,
         reasoning=reasoning or None,
@@ -400,6 +405,7 @@ def _combined_interrupted_result(messages: list[ChatMessage]) -> ChatMessage:
         interrupted=True,
         interruption_cause=latest.interruption_cause,
     )
+    return _with_assistant_output_files(message, cwd=output_cwd)
 
 
 def _terminal_tool_failure(
@@ -547,6 +553,18 @@ STREAM_RECOVERY_NOTE = (
     "text. No Tool Call from the interrupted Model step was executed; if tools are still "
     "needed, emit every intended Tool Call again as a complete call."
 )
+
+
+def _with_assistant_output_files(
+    message: ChatMessage,
+    *,
+    cwd: Path | None,
+) -> ChatMessage:
+    """Attach resolved output files once at the canonical Assistant boundary."""
+    if message.output_files is not None or not isinstance(message.content, str):
+        return message
+    output_files = resolve_assistant_file_references(message.content, cwd=cwd)
+    return replace(message, output_files=output_files) if output_files is not None else message
 
 
 class _StreamRestartNeeded(Exception):  # noqa: N818 — control-flow signal, not an error
@@ -2524,6 +2542,14 @@ class ChatLoop:
                 len(messages_for_request),
             )
             step_started_perf = time.perf_counter()
+            workspace = getattr(agent, "workspace", None)
+            output_cwd = (
+                context.project_cwd
+                if context.project_cwd is not None
+                else Path(workspace)
+                if workspace
+                else None
+            )
             assistant_step = await self._send_assistant_request(
                 agent,
                 target.adapter,
@@ -2535,6 +2561,7 @@ class ChatLoop:
                 prompt_cache_affinity_id=context.prompt_cache_affinity_id,
                 chunk_timeout_seconds=target.chunk_timeout_seconds,
                 continuation_tracker=context.continuation_tracker,
+                output_cwd=output_cwd,
             )
             # This is the sole mutation point for the Iteration count: one
             # completed request/response pair, independent of how many Tool
@@ -2552,6 +2579,7 @@ class ChatLoop:
                 run.raise_if_cancelled()
             if assistant_message.usage is None:
                 assistant_message = _apply_usage_estimation(assistant_message, messages)
+            assistant_message = _with_assistant_output_files(assistant_message, cwd=output_cwd)
             run.input_token_total += _usage_token_count(assistant_message.usage, "input_tokens")
             run.output_token_total += _usage_token_count(assistant_message.usage, "output_tokens")
             _LOGGER.debug(
@@ -2626,13 +2654,19 @@ class ChatLoop:
                     if recovery == "interrupt":
                         raise RunInterruptedError(
                             assistant_message.interruption_cause or "internal",
-                            result=_combined_interrupted_result(interruption_chain),
+                            result=_combined_interrupted_result(
+                                interruption_chain,
+                                output_cwd=output_cwd,
+                            ),
                         )
                     if recovery == "continue":
                         if stream_continuation_count >= MAX_STREAM_CONTINUATIONS:
                             raise RunInterruptedError(
                                 assistant_message.interruption_cause or "internal",
-                                result=_combined_interrupted_result(interruption_chain),
+                                result=_combined_interrupted_result(
+                                    interruption_chain,
+                                    output_cwd=output_cwd,
+                                ),
                             )
                         session.add_note(STREAM_RECOVERY_NOTE)
                         stream_continuation_count += 1
@@ -3309,6 +3343,7 @@ class ChatLoop:
         tools: list[JsonObject],
         run: Run,
         prompt_cache_affinity_id: str,
+        output_cwd: Path | None,
         chunk_timeout_seconds: float | None = STREAM_CHUNK_TIMEOUT_SECONDS,
         continuation_tracker: ContinuationTracker | None = None,
     ) -> _AssistantStep:
@@ -3329,6 +3364,7 @@ class ChatLoop:
                 chunk_timeout_seconds=chunk_timeout_seconds,
                 request_context=request_context,
                 continuation_tracker=continuation_tracker,
+                output_cwd=output_cwd,
             )
 
         return await self._send_non_streaming_assistant_request(
@@ -3379,6 +3415,7 @@ class ChatLoop:
         messages: list[JsonObject],
         tools: list[JsonObject],
         run: Run,
+        output_cwd: Path | None,
         chunk_timeout_seconds: float | None = STREAM_CHUNK_TIMEOUT_SECONDS,
         request_context: dict[str, Any] | None = None,
         continuation_tracker: ContinuationTracker | None = None,
@@ -3401,6 +3438,7 @@ class ChatLoop:
                     chunk_timeout_seconds=chunk_timeout_seconds,
                     request_context=request_context or {},
                     continuation_tracker=continuation_tracker,
+                    output_cwd=output_cwd,
                 )
             except _StreamRestartNeeded as restart:
                 _LOGGER.warning(
@@ -3426,6 +3464,7 @@ class ChatLoop:
         run: Run,
         *,
         can_restart: bool,
+        output_cwd: Path | None,
         chunk_timeout_seconds: float | None = STREAM_CHUNK_TIMEOUT_SECONDS,
         request_context: dict[str, Any] | None = None,
         continuation_tracker: ContinuationTracker | None = None,
@@ -3504,6 +3543,13 @@ class ChatLoop:
                     tools,
                     request_context=request_context or {},
                 )
+                assistant_step = replace(
+                    assistant_step,
+                    message=_with_assistant_output_files(
+                        assistant_step.message,
+                        cwd=output_cwd,
+                    ),
+                )
                 _emit_assistant_events(run, assistant_step.message)
                 return assistant_step
             elif action is StreamRecoveryAction.RESTART:
@@ -3530,6 +3576,7 @@ class ChatLoop:
                     run,
                     interruption_cause=interruption_cause,
                     recovery="continue",
+                    output_cwd=output_cwd,
                 )
             elif action is StreamRecoveryAction.INTERRUPT:
                 interruption_cause = normalize_interruption_cause(exc)
@@ -3551,6 +3598,7 @@ class ChatLoop:
                         run,
                         interruption_cause=interruption_cause,
                         recovery="interrupt",
+                        output_cwd=output_cwd,
                     )
                 raise RunInterruptedError(interruption_cause) from exc
             else:
@@ -3572,6 +3620,7 @@ class ChatLoop:
                     accumulator,
                     run,
                     interruption_cause=("user" if run.cancel_reason == "user" else "internal"),
+                    output_cwd=output_cwd,
                 )
             raise
 
@@ -3580,6 +3629,7 @@ class ChatLoop:
             assistant_fields.to_response_dict(),
             reasoning_scope=response_model,
         )
+        assistant_message = _with_assistant_output_files(assistant_message, cwd=output_cwd)
         _emit_streaming_assistant_events(run, assistant_message)
         return _AssistantStep(
             message=assistant_message,
@@ -3594,6 +3644,7 @@ class ChatLoop:
         run: Run,
         *,
         interruption_cause: ContinuationCause,
+        output_cwd: Path | None,
         recovery: Literal["none", "continue", "interrupt"] = "none",
     ) -> _AssistantStep:
         """Preserve a stream broken after visible output as an interrupted turn.
@@ -3618,6 +3669,7 @@ class ChatLoop:
             interrupted=True,
             interruption_cause=interruption_cause,
         )
+        assistant_message = _with_assistant_output_files(assistant_message, cwd=output_cwd)
         _emit_streaming_assistant_events(run, assistant_message, allow_after_cancel=True)
         return _AssistantStep(
             message=assistant_message,
