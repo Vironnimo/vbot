@@ -218,7 +218,7 @@ async def test_reply_surface_note_follows_speech_note_and_precedes_user_turn(
     assert messages[2].content == "helo wrld"
     reminder_text = adapter.requests[0]["messages"][1]["content"]
     assert reminder_text.index("speech-to-text transcription") < reminder_text.index(
-        "shown in the WebUI"
+        "file:<filesystem-path>"
     )
 
 

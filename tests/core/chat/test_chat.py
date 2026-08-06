@@ -392,7 +392,7 @@ async def test_project_run_persists_relative_assistant_output_file_reference(
     image = repo_dir / "result.png"
     image.write_bytes(b"\x89PNG\r\n\x1a\nimage")
     agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
-    adapter = StubAdapter([{"content": "Done:\nresult.png", "tool_calls": None}])
+    adapter = StubAdapter([{"content": "Done: file:result.png", "tool_calls": None}])
     runtime = _project_runtime(tmp_path, agent=agent, adapter=adapter, tools=ToolRegistry())
     runtime.projects.create("acme", "Acme", repo_dir)
 
@@ -405,7 +405,12 @@ async def test_project_run_persists_relative_assistant_output_file_reference(
 
     assert result.output_files is not None
     assert [reference.to_dict() for reference in result.output_files] == [
-        {"line_index": 1, "path": str(image.resolve())}
+        {
+            "line_index": 0,
+            "path": str(image.resolve()),
+            "start_index": 6,
+            "end_index": 21,
+        }
     ]
     persisted = runtime.chat_sessions.get("coder", "session-one", "acme").load()
     assistant = next(message for message in persisted if message.role == "assistant")

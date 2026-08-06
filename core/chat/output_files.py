@@ -12,18 +12,25 @@ from core.chat.errors import ChatMessageValidationError
 JsonObject = dict[str, Any]
 
 _FENCE_PATTERN = re.compile(r"^[ \t]{0,3}(`{3,}|~{3,})(.*)$")
-_URL_SCHEME_PATTERN = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*://")
+_FILE_MARKER_PATTERN = re.compile(r"(?<![A-Za-z0-9_-])file:(\S+)")
+_TRAILING_PROSE_DELIMITERS = frozenset('.,;!?)]}"`')
 
 
 @dataclass(frozen=True)
 class AssistantFileReference:
-    """One resolved regular file named on a standalone Assistant-content line."""
+    """One resolved regular file marked inside an Assistant-content line."""
 
     line_index: int
     path: str
+    start_index: int | None = None
+    end_index: int | None = None
 
     def to_dict(self) -> JsonObject:
-        return {"line_index": self.line_index, "path": self.path}
+        payload: JsonObject = {"line_index": self.line_index, "path": self.path}
+        if self.start_index is not None:
+            payload["start_index"] = self.start_index
+            payload["end_index"] = self.end_index
+        return payload
 
     @classmethod
     def from_dict(cls, data: Any) -> AssistantFileReference:
@@ -37,7 +44,29 @@ class AssistantFileReference:
         path = data.get("path")
         if not isinstance(path, str) or not path:
             raise ChatMessageValidationError("output_files path must be a non-empty string")
-        return cls(line_index=line_index, path=path)
+        start_index = data.get("start_index")
+        end_index = data.get("end_index")
+        if (start_index is None) != (end_index is None):
+            raise ChatMessageValidationError(
+                "output_files start_index and end_index must be provided together"
+            )
+        if start_index is not None and (
+            isinstance(start_index, bool)
+            or not isinstance(start_index, int)
+            or start_index < 0
+            or isinstance(end_index, bool)
+            or not isinstance(end_index, int)
+            or end_index <= start_index
+        ):
+            raise ChatMessageValidationError(
+                "output_files spans must be increasing non-negative integers"
+            )
+        return cls(
+            line_index=line_index,
+            path=path,
+            start_index=start_index,
+            end_index=end_index,
+        )
 
 
 def resolve_assistant_file_references(
@@ -45,7 +74,7 @@ def resolve_assistant_file_references(
     *,
     cwd: Path | None,
 ) -> list[AssistantFileReference] | None:
-    """Resolve explicit standalone path lines without reading or copying file bytes."""
+    """Resolve explicit ``file:<path>`` tokens without reading or copying file bytes."""
     if not content:
         return None
 
@@ -66,28 +95,45 @@ def resolve_assistant_file_references(
             continue
         if open_fence is not None:
             continue
-
-        candidate = _standalone_path_candidate(line)
-        if candidate is None:
+        if line.startswith(("\t", "    ")):
             continue
-        resolved = _resolve_regular_file(candidate, cwd=cwd)
-        if resolved is None:
-            continue
-        references.append(AssistantFileReference(line_index=line_index, path=str(resolved)))
+        for match in _FILE_MARKER_PATTERN.finditer(line):
+            resolved_marker = _resolve_marked_path(match.group(1), cwd=cwd)
+            if resolved_marker is None:
+                continue
+            resolved, path_length = resolved_marker
+            start_index = match.start()
+            end_index = match.start(1) + path_length
+            if (
+                start_index > 0
+                and line[start_index - 1] == "`"
+                and end_index < len(line)
+                and line[end_index] == "`"
+            ):
+                start_index -= 1
+                end_index += 1
+            references.append(
+                AssistantFileReference(
+                    line_index=line_index,
+                    path=str(resolved),
+                    start_index=start_index,
+                    end_index=end_index,
+                )
+            )
     return references or None
 
 
-def _standalone_path_candidate(line: str) -> str | None:
-    if line.startswith(("\t", "    ")):
-        return None
-    candidate = line.strip()
-    if not candidate or "\x00" in candidate or _URL_SCHEME_PATTERN.match(candidate):
-        return None
-    if len(candidate) >= 2 and candidate.startswith("`") and candidate.endswith("`"):
-        candidate = candidate[1:-1].strip()
-    if not candidate or "\x00" in candidate:
-        return None
-    return candidate
+def _resolve_marked_path(candidate: str, *, cwd: Path | None) -> tuple[Path, int] | None:
+    """Resolve one whitespace-bounded token while preserving adjacent prose punctuation."""
+    end_index = len(candidate)
+    while end_index:
+        resolved = _resolve_regular_file(candidate[:end_index], cwd=cwd)
+        if resolved is not None:
+            return resolved, end_index
+        if candidate[end_index - 1] not in _TRAILING_PROSE_DELIMITERS:
+            return None
+        end_index -= 1
+    return None
 
 
 def _resolve_regular_file(candidate: str, *, cwd: Path | None) -> Path | None:
