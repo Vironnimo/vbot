@@ -790,7 +790,14 @@ async def test_auto_handoff_includes_capped_output_and_usable_process_session(
         assert data["delivery"] == "automatic"
         assert data["process_note"] == bash_module.BASH_HANDOFF_PROCESS_NOTE
         assert "Use session_id with the process Tool" in data["process_note"]
-        assert "complete combined stdout/stderr stream live" in data["process_note"]
+        assert (
+            data["process_note"]
+            == "Use session_id with the process Tool for status, raw stdin input, or kill. "
+            "Process input writes to a pipe; it does not provide a terminal or TTY. output is "
+            "the newest capped snapshot collected before handoff. The result's log_file field "
+            "carries the path to the complete combined stdout/stderr stream, written live from "
+            "command start through exit."
+        )
         process_session_id = data["session_id"]
         assert isinstance(process_session_id, str) and process_session_id
         assert data["truncated"] is True
@@ -1575,8 +1582,21 @@ def test_register_bash_tool() -> None:
     assert display["primary"][0]["value"] == "Run the frontend tests"
     assert display["primary"][0]["kind"] == "description"
     assert tool.parameters["properties"]["yield_after"]["default"] == 30
+    assert tool.parameters["properties"]["mode"]["description"] == (
+        "Execution behavior: foreground waits for completion; auto waits up to yield_after "
+        "(default 30s), then hands a still-running command off to vBot; background hands off "
+        "immediately — yield_after applies only to auto."
+    )
+    assert tool.parameters["properties"]["yield_after"]["description"] == (
+        'Only valid when mode is "auto". Seconds auto waits before a still-running command is '
+        "handed to vBot. Omit for the default (30 seconds); independent of timeout."
+    )
     assert "does not extend yield_after" in tool.parameters["properties"]["timeout"]["description"]
-    assert "complete combined stdout/stderr stream through exit" in tool.description
+    assert (
+        "the complete combined stdout/stderr stream is written to a log file, and the result "
+        "includes its path in the log_file field — read or grep it for the full output."
+        in tool.description
+    )
     assert tool.parallel_safe is True
 
 
@@ -1606,8 +1626,21 @@ def test_subagent_projection_exposes_only_non_handoff_bash_modes() -> None:
     assert "additionalProperties" not in parameters
     assert parameters["properties"]["mode"]["enum"] == ["foreground", "auto"]
     assert parameters["properties"]["yield_after"]["default"] == 1800
-    assert "handoff is unavailable" in parameters["properties"]["mode"]["description"]
+    assert parameters["properties"]["mode"]["description"] == (
+        "Execution behavior: foreground waits for completion; auto waits until yield_after, "
+        "then kills a still-running command because handoff is unavailable — yield_after "
+        "applies only to auto."
+    )
+    assert parameters["properties"]["yield_after"]["description"] == (
+        'Only valid when mode is "auto". Seconds auto waits before the command is killed '
+        "because process handoff is unavailable. Omit for the default (30 minutes); independent "
+        "of timeout."
+    )
     assert "process handoff is unavailable" in bash_definition["description"]
+    assert (
+        "the complete combined stdout/stderr stream is written to a log file, and the result "
+        "includes its path in the log_file field." in bash_definition["description"]
+    )
     assert projected[1] is definitions[1]
     assert definitions[0]["description"] == BASH_TOOL_DESCRIPTION
     assert definitions[0]["parameters"] == BASH_TOOL_PARAMETERS
@@ -2041,7 +2074,7 @@ async def test_output_cap_keeps_tail_and_names_log_file(
 
 
 @pytest.mark.asyncio
-async def test_small_output_is_not_truncated_and_names_no_log_file(
+async def test_small_output_is_not_truncated_and_names_complete_log_file(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2059,8 +2092,10 @@ async def test_small_output_is_not_truncated_and_names_no_log_file(
         assert result["ok"] is True
         data = result["data"]
         assert data["truncated"] is False
-        assert "log_file" not in data
         assert "[earlier output truncated" not in data["output"]
+        log_file = Path(data["log_file"])
+        assert log_file.exists()
+        assert "tiny" in log_file.read_text(encoding="utf-8")
     finally:
         await spool_manager.aclose()
 

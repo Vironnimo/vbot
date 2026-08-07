@@ -50,8 +50,8 @@ FAILURE_OUTPUT_TAIL_CHARS = 10_000
 BASH_HANDOFF_PROCESS_NOTE = (
     "Use session_id with the process Tool for status, raw stdin input, or kill. Process input "
     "writes to a pipe; it does not provide a terminal or TTY. output is the newest capped "
-    "snapshot collected before handoff. When present, log_file receives the complete combined "
-    "stdout/stderr stream live from command start through exit."
+    "snapshot collected before handoff. The result's log_file field carries the path to the "
+    "complete combined stdout/stderr stream, written live from command start through exit."
 )
 DEFAULT_YIELD_AFTER_SECONDS = 30.0
 # Inside a Sub-Agent auto mode cannot hand off, so its yield_after threshold
@@ -84,16 +84,17 @@ BASH_TOOL_DESCRIPTION = (
     "commands. Handed-off commands are monitored automatically: continue independent work "
     "or end the Run instead of polling or starting another copy. Never manually detach or "
     "daemonize a command because that bypasses vBot's process ownership. Result output keeps "
-    f"the newest {BASH_MODEL_OUTPUT_CAP_CHARS} characters; log_file, when present, receives "
-    "the complete combined stdout/stderr stream through exit." + _shell_syntax_notes()
+    f"the newest {BASH_MODEL_OUTPUT_CAP_CHARS} characters; the complete combined stdout/stderr "
+    "stream is written to a log file, and the result includes its path in the log_file field "
+    "— read or grep it for the full output." + _shell_syntax_notes()
 )
 BASH_SUBAGENT_TOOL_DESCRIPTION = (
     "Run a shell command inside this Sub-Agent, where process handoff is unavailable. Use "
     "foreground to wait for completion and auto only for bounded work; auto kills a command "
     "still running after yield_after. Never manually detach or daemonize a command. Result "
-    f"output keeps the newest {BASH_MODEL_OUTPUT_CAP_CHARS} characters; log_file, when "
-    "present, receives the complete combined stdout/stderr stream through exit."
-    + _shell_syntax_notes()
+    f"output keeps the newest {BASH_MODEL_OUTPUT_CAP_CHARS} characters; the complete combined "
+    "stdout/stderr stream is written to a log file, and the result includes its path in the "
+    "log_file field." + _shell_syntax_notes()
 )
 BASH_EXECUTION_MODES = ("foreground", "auto", "background")
 VBOT_RUN_AGENT_ID_ENV = "VBOT_RUN_AGENT_ID"
@@ -134,17 +135,22 @@ def _bash_tool_parameters(*, subagent: bool) -> JsonObject:
     yield_after_default = (
         DEFAULT_SUBAGENT_YIELD_AFTER_SECONDS if subagent else DEFAULT_YIELD_AFTER_SECONDS
     )
-    yield_after_effect = (
-        "the command is killed because process handoff is unavailable"
-        if subagent
-        else "a still-running command is handed to vBot"
-    )
     mode_description = (
         "Execution behavior: foreground waits for completion; auto waits until yield_after, "
-        "then kills a still-running command because handoff is unavailable."
+        "then kills a still-running command because handoff is unavailable — yield_after "
+        "applies only to auto."
         if subagent
-        else "Execution behavior: foreground waits for completion; auto waits until "
-        "yield_after before handing off; background hands off immediately."
+        else "Execution behavior: foreground waits for completion; auto waits up to "
+        "yield_after (default 30s), then hands a still-running command off to vBot; background "
+        "hands off immediately — yield_after applies only to auto."
+    )
+    yield_after_description = (
+        'Only valid when mode is "auto". Seconds auto waits before the command is killed '
+        "because process handoff is unavailable. Omit for the default (30 minutes); "
+        "independent of timeout."
+        if subagent
+        else 'Only valid when mode is "auto". Seconds auto waits before a still-running '
+        "command is handed to vBot. Omit for the default (30 seconds); independent of timeout."
     )
     modes = BASH_EXECUTION_MODES[:2] if subagent else BASH_EXECUTION_MODES
     return {
@@ -160,10 +166,7 @@ def _bash_tool_parameters(*, subagent: bool) -> JsonObject:
             "yield_after": {
                 "type": "number",
                 "minimum": 0,
-                "description": (
-                    f"Seconds auto waits before {yield_after_effect}. Omit to wait "
-                    f"{yield_after_default:g} seconds; independent of timeout."
-                ),
+                "description": yield_after_description,
                 "default": yield_after_default,
             },
             "timeout": _BASH_TIMEOUT_PARAMETER,
@@ -948,10 +951,6 @@ async def _background_result(
     session = process_manager.get_session(session_id, context.agent_id)
     output = await _combined_output(process_manager, context, session_id)
     fields = _shape_output_fields(session, output)
-    if session.log_file is not None:
-        # A background process keeps writing after this result; always hand the
-        # model the log path so it can grep progress without polling.
-        fields["log_file"] = model_path(session.log_file)
     result: JsonObject = {
         "status": "running",
         "session_id": session_id,
@@ -1109,7 +1108,7 @@ def _shape_output_fields(session: ProcessSession, output: str) -> JsonObject:
         output = _truncation_marker(log_file) + output
 
     fields: JsonObject = {"output": output, "truncated": truncated}
-    if truncated and log_file is not None:
+    if log_file is not None:
         fields["log_file"] = log_file
     return fields
 
