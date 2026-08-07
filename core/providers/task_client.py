@@ -336,6 +336,7 @@ def classify_task_response(
     detail = response.text if response.status_code >= 400 else ""
     classify_http_status(
         response.status_code,
+        idempotent=False,
         extra_retryable=set(extra_retryable_status_codes),
         detail=f"{response.status_code} {detail}".strip() if detail else str(response.status_code),
         response_headers=response.headers,

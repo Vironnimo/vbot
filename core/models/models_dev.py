@@ -208,9 +208,9 @@ async def fetch_catalog(
 
     Reuses the project's HTTP + retry conventions: the GET runs inside
     ``retry_async`` with ``wrap_network_error`` / ``classify_http_status`` so
-    transport/timeout errors and retryable statuses (429/502/503/504, honoring
-    ``Retry-After``) are re-issued with backoff while fatal statuses abort. No
-    auth header — the catalog is a public endpoint.
+    transport/timeout errors and retryable statuses (429/500/502/503/504,
+    honoring ``Retry-After``) are re-issued with backoff while fatal statuses
+    abort. No auth header — the catalog is a public endpoint.
 
     Args:
         url: The catalog endpoint (defaults to :data:`MODELS_DEV_CATALOG_URL`).
@@ -240,6 +240,7 @@ async def fetch_catalog(
                 )
                 classify_http_status(
                     response.status_code,
+                    idempotent=True,
                     detail=detail,
                     response_headers=response.headers,
                 )

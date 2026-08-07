@@ -274,6 +274,7 @@ class OpenRouterAdapter(OpenAICompatibleAdapter):
                 raise wrap_network_error(exc) from exc
             classify_http_status(
                 response.status_code,
+                idempotent=False,
                 detail=_openrouter_http_error_detail(response),
                 response_headers=response.headers,
             )
@@ -335,6 +336,7 @@ class OpenRouterAdapter(OpenAICompatibleAdapter):
                 await response.aclose()
                 classify_http_status(
                     response.status_code,
+                    idempotent=False,
                     detail=_openrouter_http_error_detail(response, body),
                     response_headers=response.headers,
                 )
@@ -378,6 +380,7 @@ class OpenRouterAdapter(OpenAICompatibleAdapter):
             detail = f"{response.status_code} {response.text}".strip()
             classify_http_status(
                 response.status_code,
+                idempotent=True,
                 detail=detail,
                 response_headers=response.headers,
             )

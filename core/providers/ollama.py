@@ -488,6 +488,7 @@ class OllamaAdapter(ProviderAdapter):
                 detail = _build_error_detail(response.status_code, response.text)
                 classify_http_status(
                     response.status_code,
+                    idempotent=False,
                     detail=detail,
                     response_headers=response.headers,
                 )
@@ -536,6 +537,7 @@ class OllamaAdapter(ProviderAdapter):
                 detail = _build_error_detail(response.status_code, error_body)
                 classify_http_status(
                     response.status_code,
+                    idempotent=False,
                     detail=detail,
                     response_headers=response.headers,
                 )

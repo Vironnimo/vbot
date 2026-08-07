@@ -550,10 +550,10 @@ async def _fetch_raw_models(
 async def _fetch_json_payload(url: str, headers: dict[str, str]) -> Any:
     """GET *url* and return the parsed JSON body with retry semantics.
 
-    Catalog fetches share the provider chat path's transient-failure handling:
-    transport/timeout errors and retryable statuses (429/502/503/504) are
-    re-issued with backoff + Retry-After; a fatal status (401/403/404/500)
-    raises a non-retryable error that aborts immediately.
+    Catalog fetches share the provider path's transient-failure handling:
+    transport/timeout errors and retryable statuses (429/500/502/503/504) are
+    re-issued with backoff + Retry-After; auth and other fatal statuses raise a
+    non-retryable error that aborts immediately.
     """
 
     async def _request() -> Any:
@@ -571,6 +571,7 @@ async def _fetch_json_payload(url: str, headers: dict[str, str]) -> Any:
                 )
                 classify_http_status(
                     response.status_code,
+                    idempotent=True,
                     detail=detail,
                     response_headers=response.headers,
                 )
@@ -584,7 +585,8 @@ async def _post_json_payload(url: str, headers: dict[str, str], payload: dict[st
 
     The POST twin of :func:`_fetch_json_payload`, used by adapter enrichment
     hooks whose detail endpoints are POST-only (e.g. Ollama's ``/api/show``).
-    Same transient-failure handling as the catalog GET.
+    HTTP 500 remains fatal because repeating a non-idempotent POST may duplicate
+    work; the method-agnostic transient statuses retain their shared behavior.
     """
 
     async def _request() -> Any:
@@ -602,6 +604,7 @@ async def _post_json_payload(url: str, headers: dict[str, str], payload: dict[st
                 )
                 classify_http_status(
                     response.status_code,
+                    idempotent=False,
                     detail=detail,
                     response_headers=response.headers,
                 )

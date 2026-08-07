@@ -1200,9 +1200,14 @@ class TestRefreshModels:
         tmp_path: Path,
         openrouter_config: ProviderConfig,
         caplog: Any,
+        monkeypatch: pytest.MonkeyPatch,
     ):
         """A primary catalog-refresh failure logs a warning (no traceback) before raising."""
 
+        async def _no_sleep(_delay: float) -> None:
+            return None
+
+        monkeypatch.setattr("core.utils.retry.asyncio.sleep", _no_sleep)
         respx.get(OPENROUTER_MODELS_URL).mock(
             return_value=httpx.Response(500, text="Internal Server Error")
         )
@@ -1222,12 +1227,14 @@ class TestRefreshModels:
 
     @respx.mock
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("status_code", [500, 503])
     async def test_refresh_models_retries_transient_status_then_succeeds(
         self,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
+        status_code: int,
     ):
-        """A retryable status (503) is re-issued with backoff before succeeding."""
+        """A retryable GET status is re-issued with backoff before succeeding."""
 
         # Skip the real backoff sleep so the retry path stays fast.
         async def _no_sleep(_delay: float) -> None:
@@ -1236,7 +1243,7 @@ class TestRefreshModels:
         monkeypatch.setattr("core.utils.retry.asyncio.sleep", _no_sleep)
 
         responses = [
-            httpx.Response(503, text="Service Unavailable"),
+            httpx.Response(status_code, text="Transient provider failure"),
             httpx.Response(200, json={"data": [{"id": "model-a", "name": "Model A"}]}),
         ]
         route = respx.get(_SIMPLE_MODELS_URL).mock(side_effect=responses)
