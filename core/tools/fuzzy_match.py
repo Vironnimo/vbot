@@ -5,7 +5,7 @@ straight quotes where the file has curly ones, a bare ``\\n`` where the file use
 ``\\r\\n``, or a different indentation than the file actually has. A literal match
 then fails and the edit is rejected even though the intended target is
 unambiguous. This module tries a short chain of increasingly tolerant — but never
-*guessing* — strategies and always replaces the real original bytes at the
+*guessing* — strategies and always replaces the real original characters at the
 matched span.
 
 Strategies, in order; the first that finds any match wins (its own ambiguity is
@@ -24,7 +24,7 @@ terminal — it does not fall through to a looser strategy):
    line boundaries. The replacement is re-indented like a line-trimmed match.
 
 All non-exact strategies search a normalized copy of the content and map the
-match back to the original bytes through a per-character span map, so CRLF line
+match back to the original characters through a per-character span map, so CRLF line
 endings and the exact original characters are always preserved. Deliberately
 excluded: similarity / anchor matching (replacing text that is merely *similar*).
 For a destructive operation, failing so the model retries with a better target is
@@ -257,7 +257,7 @@ def _normalize_with_spans(text: str) -> tuple[str, list[tuple[int, int]]]:
 
     ``spans[k]`` is the ``(start, end)`` range in ``text`` that produced the k-th
     normalized character, so a match found in the normalized string maps back to
-    the exact original bytes. Every mapping is K-original-chars -> 1-normalized
+    the exact original characters. Every mapping is K-original-chars -> 1-normalized
     (CRLF -> LF is 2->1; everything else is 1->1), so the lists stay aligned.
     """
     chars: list[str] = []
@@ -312,7 +312,7 @@ def _match_normalized(content: str, pattern: str) -> list[tuple[int, int]]:
 
 def _match_line_trimmed(content: str, pattern: str) -> list[tuple[int, int]]:
     # Work on the normalized content (LF, Unicode-folded) with its span map, so a
-    # match maps back to the exact original bytes and CRLF endings are preserved.
+    # match maps back to the exact original characters and CRLF endings are preserved.
     normalized_content, spans = _normalize_with_spans(content)
     content_lines = normalized_content.split("\n")
     pattern_lines = _normalize_text(pattern).split("\n")
