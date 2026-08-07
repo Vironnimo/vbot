@@ -18,6 +18,7 @@ from pathlib import Path
 
 import pytest
 
+import core.extensions.extensions as extensions_module
 from core.extensions import API_VERSION, ExtensionRegistry, HookContext
 from core.extensions.extensions import ExtensionAPI, ExtensionDeclarations
 
@@ -284,6 +285,82 @@ async def test_async_register_awaited_before_apply_within_running_loop(tmp_path:
     ctx = HookContext(session_id="s", agent_id="a", run_id="r")
     await registry.dispatch_run_start(ctx, session_id="s", agent_id="a")
     assert marker.read_text(encoding="utf-8") == "fired"
+
+
+def test_async_register_timeout_without_running_loop_is_isolated(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = tmp_path / "extensions"
+    marker = tmp_path / "marker.txt"
+    monkeypatch.setattr(extensions_module, "_ASYNC_REGISTER_TIMEOUT_SECONDS", 0.05)
+    _write_single_file(
+        root,
+        "hanging",
+        "import asyncio\n"
+        "import threading\n"
+        "finished = threading.Event()\n"
+        "async def register(api):\n"
+        "    try:\n"
+        "        await asyncio.Event().wait()\n"
+        "    finally:\n"
+        "        finished.set()\n",
+    )
+    _write_single_file(
+        root,
+        "healthy",
+        "import pathlib\n"
+        f"_MARKER = pathlib.Path({str(marker)!r})\n"
+        "def register(api):\n"
+        "    def handler(ctx, **payload):\n"
+        "        _MARKER.write_text('fired', encoding='utf-8')\n"
+        "    api.on('run_start', handler)\n",
+    )
+
+    registry = ExtensionRegistry.load(root)
+
+    hanging = _record(registry, "hanging")
+    assert hanging.status == "failed"
+    assert hanging.error == "async register() timed out after 0.05 seconds"
+    assert sys.modules["vbot_ext.hanging"].finished.wait(timeout=1)
+    ctx = HookContext(session_id="s", agent_id="a", run_id="r")
+    asyncio.run(registry.dispatch_run_start(ctx, session_id="s", agent_id="a"))
+    assert marker.read_text(encoding="utf-8") == "fired"
+
+
+@pytest.mark.asyncio
+async def test_async_register_timeout_within_running_loop_ignores_cancellation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = tmp_path / "extensions"
+    monkeypatch.setattr(extensions_module, "_ASYNC_REGISTER_TIMEOUT_SECONDS", 0.05)
+    _write_single_file(
+        root,
+        "hanging",
+        "import asyncio\n"
+        "import threading\n"
+        "release = threading.Event()\n"
+        "finished = threading.Event()\n"
+        "async def register(api):\n"
+        "    try:\n"
+        "        while not release.is_set():\n"
+        "            try:\n"
+        "                await asyncio.sleep(0.01)\n"
+        "            except asyncio.CancelledError:\n"
+        "                continue\n"
+        "    finally:\n"
+        "        finished.set()\n",
+    )
+
+    registry = ExtensionRegistry.load(root)
+
+    hanging = _record(registry, "hanging")
+    assert hanging.status == "failed"
+    assert "timed out" in (hanging.error or "")
+    module = sys.modules["vbot_ext.hanging"]
+    module.release.set()
+    assert await asyncio.to_thread(module.finished.wait, 1)
 
 
 def test_startup_and_shutdown_fire_in_load_order(tmp_path: Path) -> None:

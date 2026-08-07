@@ -38,8 +38,7 @@ enabled and the layer reloads.
 
 ## The entry point: `register(api)`
 
-Every extension exposes one function. It may be sync or async (async
-`register()` is awaited before any declaration goes live):
+Every extension exposes one function. It may be sync or async (async `register()` is awaited before any declaration goes live, with a hard 10-second deadline so a broken Extension cannot block server start or Extension reload indefinitely):
 
 ```python
 def register(api):
