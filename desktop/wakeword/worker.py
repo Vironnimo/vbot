@@ -241,6 +241,7 @@ class WakewordWorker:
         self._calibration_checker = calibration_checker or (lambda: False)
         self._thread: threading.Thread | None = None
         self._running = threading.Event()
+        self._state_publish_lock = threading.Lock()
         self._stream: Any = None
 
     # -- Lifecycle -----------------------------------------------------------
@@ -249,14 +250,16 @@ class WakewordWorker:
         """Launch startup and detection work without blocking the Desktop bridge."""
         if self._thread is not None and self._thread.is_alive():
             return
-        self._running.set()
-        self._bridge.publish_state("starting")
+        with self._state_publish_lock:
+            self._running.set()
+            self._bridge.publish_state("starting")
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
 
     def stop(self) -> None:
         """Signal the detection loop to stop and release resources."""
-        self._running.clear()
+        with self._state_publish_lock:
+            self._running.clear()
         if self._thread is not None:
             self._thread.join(timeout=3.0)
             self._thread = None
@@ -312,7 +315,10 @@ class WakewordWorker:
             self._fail("microphone_unavailable")
             return
 
-        self._bridge.publish_state("listening")
+        if not self._publish_state_if_running("listening"):
+            self._close_stream()
+            self._stop_engine()
+            return
         consecutive_read_errors = 0
         detection_pre_roll: deque[CapturedAudioFrame] = deque(maxlen=_DETECTION_PRE_ROLL_CHUNKS)
 
@@ -330,7 +336,8 @@ class WakewordWorker:
                         detection_pre_roll.clear()
                         continue
                     if self._restart_stream():
-                        self._bridge.publish_state("listening")
+                        if not self._publish_state_if_running("listening"):
+                            break
                         continue
                     if not self._recover_microphone("microphone_read_failed"):
                         break
@@ -358,7 +365,8 @@ class WakewordWorker:
                         match.score,
                         match.threshold,
                     )
-                    self._bridge.publish_state("wakeword_detected")
+                    if not self._publish_state_if_running("wakeword_detected"):
+                        break
                     outcome = self._handle_detection(tuple(detection_pre_roll))
                     detection_pre_roll.clear()
                     if not self._running.is_set():
@@ -399,7 +407,7 @@ class WakewordWorker:
             )
             self._stream = ResamplingInputStream(native_stream, capture_format)
             self._stream.start()
-        self._bridge.publish_runtime_details(
+        self._publish_runtime_details_if_running(
             active_microphone={
                 "index": capture_format.device,
                 "name": capture_format.name,
@@ -431,11 +439,34 @@ class WakewordWorker:
         """Expose the completed outcome briefly, then return to listening."""
         self._close_stream()
         if outcome:
-            self._bridge.publish_state(outcome)
-            _sleep_while_running(self._running, _POST_DETECTION_LISTENING_HOLD_SECONDS)
-            if not self._running.is_set():
+            if not self._publish_state_if_running(outcome):
                 return
-        self._bridge.publish_state("listening")
+            _sleep_while_running(self._running, _POST_DETECTION_LISTENING_HOLD_SECONDS)
+        self._publish_state_if_running("listening")
+
+    def _publish_state_if_running(
+        self,
+        state: str,
+        error_code: str | None = None,
+    ) -> bool:
+        """Publish a state only while this worker still owns the Voice lifecycle."""
+        with self._state_publish_lock:
+            if not self._running.is_set():
+                return False
+            self._bridge.publish_state(state, error_code)
+            return True
+
+    def _publish_runtime_details_if_running(
+        self,
+        *,
+        active_microphone: dict[str, object] | None,
+    ) -> bool:
+        """Publish runtime details only while this worker remains active."""
+        with self._state_publish_lock:
+            if not self._running.is_set():
+                return False
+            self._bridge.publish_runtime_details(active_microphone=active_microphone)
+            return True
 
     # -- Post-detection pipeline ---------------------------------------------
 
@@ -451,18 +482,25 @@ class WakewordWorker:
             self._fail("missing_target_agent")
             return None
 
-        self._bridge.publish_state("recording")
+        if not self._publish_state_if_running("recording"):
+            return None
         audio_data = self._record_until_silence(pre_roll_audio)
-        if audio_data is None:
-            return _OUTCOME_NO_SPEECH
         if not self._running.is_set():
             # Stopped (disabled/reconfigured) during recording — skip the network
             # round-trip entirely, no transcription and no send.
             return None
+        if audio_data is None:
+            return _OUTCOME_NO_SPEECH
 
-        self._bridge.publish_state("transcribing")
+        if not self._publish_state_if_running("transcribing"):
+            return None
         self._close_stream()
         transcript = self._transcribe(audio_data)
+        if not self._running.is_set():
+            # Stopped during transcription — discard every result shape, including
+            # failed or empty outcomes, so deliberate disable remains authoritative.
+            logger.info("Wakeword worker stopped during transcription; discarding result")
+            return None
         if transcript is None:
             logger.warning("Wakeword transcription failed; returning to listening")
             return _OUTCOME_TRANSCRIPTION_FAILED
@@ -470,26 +508,27 @@ class WakewordWorker:
         if not transcript:
             logger.info("Wakeword recording produced no transcript; returning to listening")
             return _OUTCOME_NO_SPEECH
-        if not self._running.is_set():
-            # Stopped during transcription — do not send a now-stale command.
-            logger.info("Wakeword worker stopped during transcription; discarding transcript")
-            return None
-
         if _is_voice_cancel_phrase(transcript):
             logger.info("Wakeword command discarded by voice cancel phrase")
             return _OUTCOME_CANCELLED
 
-        self._bridge.publish_state("sending")
+        if not self._publish_state_if_running("sending"):
+            return None
         session_behavior = config.get("session_behavior", "active")
 
         session_id = self._resolve_session(agent_id, session_behavior)
+        if not self._running.is_set():
+            return None
         if not session_id:
             # A stop mid-resolve empties the result; that is not an error, so only
             # surface "error" when the worker is still meant to be running.
             if self._running.is_set():
                 self._fail("session_resolution_failed")
             return None
-        if not self._send_transcript(transcript, agent_id, session_id):
+        sent = self._send_transcript(transcript, agent_id, session_id)
+        if not self._running.is_set():
+            return None
+        if not sent:
             if self._running.is_set():
                 self._fail("send_failed")
             return None
@@ -522,16 +561,21 @@ class WakewordWorker:
 
     def _fail(self, error_code: str) -> None:
         """Stop the worker and expose one actionable stable failure reason."""
-        logger.warning("Wakeword worker stopped (reason=%s)", error_code)
-        self._running.clear()
-        self._bridge.publish_state("error", error_code)
+        with self._state_publish_lock:
+            if not self._running.is_set():
+                return
+            logger.warning("Wakeword worker stopped (reason=%s)", error_code)
+            self._running.clear()
+            self._bridge.publish_state("error", error_code)
 
     def _recover_microphone(self, reason_code: str) -> bool:
         """Wait for a disconnected runtime microphone and reopen it when available."""
         logger.warning("Wakeword microphone disconnected (reason=%s)", reason_code)
         self._close_stream()
-        self._bridge.publish_runtime_details(active_microphone=None)
-        self._bridge.publish_state("microphone_disconnected", reason_code)
+        if not self._publish_runtime_details_if_running(active_microphone=None):
+            return False
+        if not self._publish_state_if_running("microphone_disconnected", reason_code):
+            return False
         while self._running.is_set():
             _sleep_while_running(
                 self._running,
@@ -549,8 +593,7 @@ class WakewordWorker:
                 self._close_stream()
                 return False
             logger.info("Wakeword microphone reconnected")
-            self._bridge.publish_state("listening")
-            return True
+            return self._publish_state_if_running("listening")
         return False
 
     # -- Audio recording -----------------------------------------------------
