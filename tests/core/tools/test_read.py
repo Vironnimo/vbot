@@ -277,6 +277,44 @@ async def test_read_returns_failure_envelope_for_missing_file(tmp_path: Path) ->
 
 
 @pytest.mark.asyncio
+async def test_read_suggests_ranked_similar_files_for_missing_path(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    same_stem = workspace / "settings.yaml"
+    same_stem.write_text("yaml", encoding="utf-8")
+    typo = workspace / "settngs.txt"
+    typo.write_text("typo", encoding="utf-8")
+    unrelated = workspace / "release-notes.md"
+    unrelated.write_text("notes", encoding="utf-8")
+    workspace.joinpath("settings.txt.backup").mkdir()
+
+    result = await make_handler()(make_context(workspace), {"path": "settings.txt"})
+
+    error = assert_failure_envelope(result, "file_not_found")
+    message = error["message"]
+    assert "Similar files:" in message
+    assert model_path(same_stem) in message
+    assert model_path(typo) in message
+    assert model_path(unrelated) not in message
+    assert "settings.txt.backup" not in message
+    assert message.index(model_path(same_stem)) < message.index(model_path(typo))
+
+
+@pytest.mark.asyncio
+async def test_read_bounds_similar_file_suggestions(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    for index in range(8):
+        workspace.joinpath(f"settings-{index}.txt").write_text("candidate", encoding="utf-8")
+
+    result = await make_handler()(make_context(workspace), {"path": "settings.txt"})
+
+    error = assert_failure_envelope(result, "file_not_found")
+    suggestions = [line for line in error["message"].splitlines() if line.startswith("- ")]
+    assert len(suggestions) == 5
+
+
+@pytest.mark.asyncio
 async def test_read_returns_failure_envelope_for_directory_path(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()

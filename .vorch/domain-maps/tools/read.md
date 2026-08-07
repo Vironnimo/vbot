@@ -13,6 +13,7 @@ Reads a file from the working directory or an absolute path. Text files return t
 ## Conventions
 
 - Relative paths resolve from `ToolContext.effective_cwd` (the working directory); absolute paths are allowed.
+- A missing path remains a `file_not_found` failure but appends up to five directly reusable similar-file paths from the same target directory. Candidate discovery is native filesystem I/O, examines at most 50 directory entries, excludes directories, and ranks exact case-insensitive names, equal stems, prefix/substring relationships, then bounded filename similarity.
 - `read` is the authoritative read-like tool and must not include a provider/tool parameter named `description`.
 - Successful results do not include `data.path`; the agent already knows the requested path from arguments.
 - After the path is confirmed to be a file, the handler reads only a bounded leading probe and classifies it with `sniff_media_type` (see `attachments.md`). The branch is chosen by the sniffed media type, not the file extension — **except** the document-extraction branch, which is chosen by `detect_extractable_document(name, media_type)` (sniffed type first, extension fallback; see below). Only a size-approved image, audio file, or extractable document is then materialized, through a reader capped at one byte beyond that branch's limit so a concurrent file growth cannot create an unbounded allocation.
@@ -29,7 +30,7 @@ Reads a file from the working directory or an absolute path. Text files return t
 
 ## Constraints & Gotchas
 
-- Expected file, argument, and read-time filesystem errors return failure envelopes (`invalid_arguments`, `file_not_found`, `not_a_file`, `file_read_error`).
+- Expected file, argument, and read-time filesystem errors return failure envelopes (`invalid_arguments`, `file_not_found`, `not_a_file`, `file_read_error`). Similar-file discovery is best-effort: an unreadable/missing parent or no relevant candidates preserves the ordinary not-found message.
 - Image promotion failures (oversize or disallowed type from the attachment store) map to an `attachment_error` failure envelope, never a crash.
 - Oversize audio maps to `audio_too_large`; STT failures and empty/whitespace transcriptions map to `transcription_failed`. Neither aborts the Run.
 - Each image read creates one attachment with no garbage collection, matching the existing attachment policy (GC is out of scope — see `attachments.md`).
