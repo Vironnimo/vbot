@@ -6,6 +6,7 @@ import pytest
 
 from core.tools.arguments import (
     ToolArgumentError,
+    line_number_gutter_candidates,
     looks_like_line_numbered_content,
     optional_bool,
     optional_int,
@@ -158,3 +159,26 @@ class TestLooksLikeLineNumberedContent:
 
     def test_non_string_is_false(self) -> None:
         assert looks_like_line_numbered_content(None) is False  # type: ignore[arg-type]
+
+
+class TestLineNumberGutterCandidates:
+    def test_strips_current_gutter_and_preserves_source_indentation(self) -> None:
+        assert line_number_gutter_candidates("10| def f():\r\n11|     return 1\r\n") == (
+            "def f():\r\n    return 1\r\n",
+            " def f():\r\n     return 1\r\n",
+        )
+
+    def test_strips_compact_and_continuation_gutters(self) -> None:
+        assert line_number_gutter_candidates("50:50001|fragment\n51|next") == ("fragment\nnext",)
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "1|only one line",
+            "1|first\n3|third",
+            "1|first\nordinary second line",
+            "| name | id |\n| --- | --- |",
+        ],
+    )
+    def test_rejects_incomplete_or_ordinary_blocks(self, text: str) -> None:
+        assert line_number_gutter_candidates(text) == ()

@@ -7,11 +7,12 @@ from pathlib import Path
 
 from core.tools.arguments import (
     ToolArgumentError,
+    line_number_gutter_candidates,
     looks_like_line_numbered_content,
     optional_bool,
 )
 from core.tools.file_state import FileReadState, StaleReason, atomic_write_bytes
-from core.tools.fuzzy_match import AmbiguousFuzzyMatch, replace_fuzzy
+from core.tools.fuzzy_match import AmbiguousFuzzyMatch, FuzzyReplacement, replace_fuzzy
 from core.tools.syntax_check import warning_for_edited_file
 from core.tools.tools import (
     JsonObject,
@@ -29,7 +30,8 @@ EDIT_TOOL_NAME = "edit"
 EDIT_TOOL_DESCRIPTION = (
     "Edit a file by replacing text. old_string is matched against the file, "
     "tolerating minor differences in whitespace/indentation (including internal "
-    "space/tab runs), line endings, and quote style; include enough unchanged "
+    "space/tab runs), line endings, and quote style. A complete `N| ` gutter block "
+    "copied from read in old_string is used automatically; include enough unchanged "
     "surrounding text to identify one "
     "location unless replace_all is true. For repeated lines, include a neighboring "
     "line or heading. Use this for precise, surgical edits against the file's current "
@@ -134,6 +136,21 @@ def _text_not_found_failure(old_string: str) -> JsonObject:
         "text_not_found",
         "old_string not found in file. Check whitespace, indentation, or line endings.",
     )
+
+
+def _replace_with_gutter_fallback(
+    content: str, old_string: str, new_string: str, *, replace_all: bool
+) -> FuzzyReplacement | AmbiguousFuzzyMatch | None:
+    """Match raw ``old_string`` first, then complete pasted read-gutter variants."""
+    result = replace_fuzzy(content, old_string, new_string, replace_all=replace_all)
+    if result is not None:
+        return result
+
+    for candidate in line_number_gutter_candidates(old_string):
+        result = replace_fuzzy(content, candidate, new_string, replace_all=replace_all)
+        if result is not None:
+            return result
+    return None
 
 
 def _validate_edit_arguments(arguments: JsonObject) -> tuple[str, str, str, bool] | JsonObject:
@@ -247,7 +264,9 @@ def edit_handler(
         # The matcher progresses from exact through deterministic newline, Unicode,
         # line-boundary, and horizontal-whitespace normalization, always splicing
         # the real original bytes.
-        result = replace_fuzzy(content, old_string, new_string, replace_all=replace_all)
+        result = _replace_with_gutter_fallback(
+            content, old_string, new_string, replace_all=replace_all
+        )
         if result is None:
             return _text_not_found_failure(old_string)
         if isinstance(result, AmbiguousFuzzyMatch):

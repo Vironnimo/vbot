@@ -16,6 +16,19 @@ _LINE_NUMBER_GUTTER_DOMINANCE = 0.6
 # Two consecutive numbered lines is the minimum signal: a lone ``1|value`` line
 # or a sparse pipe table must still pass through.
 _LINE_NUMBER_GUTTER_MIN_LINES = 2
+_SUPPORTED_LINE_ENDINGS = (
+    "\r\n",
+    "\n",
+    "\v",
+    "\f",
+    "\x1c",
+    "\x1d",
+    "\x1e",
+    "\x85",
+    "\u2028",
+    "\u2029",
+    "\r",
+)
 
 
 class ToolArgumentError(ValueError):
@@ -186,6 +199,60 @@ def looks_like_line_numbered_content(text: str) -> bool:
     return consecutive >= len(numbers) - 1
 
 
+def _split_supported_line_ending(line: str) -> tuple[str, str]:
+    for ending in _SUPPORTED_LINE_ENDINGS:
+        if line.endswith(ending):
+            return line[: -len(ending)], ending
+    return line, ""
+
+
+def line_number_gutter_candidates(text: str) -> tuple[str, ...]:
+    """Return raw-text candidates for a complete pasted ``read`` gutter block.
+
+    Auto-recovery is intentionally stricter than the write-corruption detector:
+    every physical line must carry a consecutive ``N|``/``N:C|`` gutter. The
+    first candidate removes the current display separator space; the second
+    preserves post-pipe whitespace for compact gutters reproduced without that
+    separator. Returning both lets the edit matcher resolve the otherwise
+    ambiguous boundary through the actual file content.
+    """
+    if not isinstance(text, str):
+        return ()
+
+    lines = text.splitlines(keepends=True)
+    if len(lines) < _LINE_NUMBER_GUTTER_MIN_LINES:
+        return ()
+
+    numbers: list[int] = []
+    separated_lines: list[str] = []
+    compact_lines: list[str] = []
+    for physical_line in lines:
+        body, ending = _split_supported_line_ending(physical_line)
+        prefix, separator, rest = body.lstrip().partition(LINE_NUMBER_GUTTER_SEPARATOR)
+        line_number, colon, character = prefix.partition(":")
+        if (
+            not separator
+            or not line_number.isdigit()
+            or int(line_number) < 1
+            or (colon and (not character.isdigit() or int(character) < 1))
+        ):
+            return ()
+        numbers.append(int(line_number))
+        separated_lines.append((rest[1:] if rest.startswith(" ") else rest) + ending)
+        compact_lines.append(rest + ending)
+
+    if any(
+        current != previous + 1 for previous, current in zip(numbers, numbers[1:], strict=False)
+    ):
+        return ()
+
+    separated = "".join(separated_lines)
+    compact = "".join(compact_lines)
+    if compact == separated:
+        return (separated,)
+    return separated, compact
+
+
 def _to_int(value: object, field_name: str) -> int:
     if isinstance(value, bool) or not isinstance(value, int):
         raise ToolArgumentError(f"{field_name} must be an integer")
@@ -229,6 +296,7 @@ def _check_float_minimum(
 __all__ = [
     "LINE_NUMBER_GUTTER_SEPARATOR",
     "ToolArgumentError",
+    "line_number_gutter_candidates",
     "looks_like_line_numbered_content",
     "optional_bool",
     "optional_int",
