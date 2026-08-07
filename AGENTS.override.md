@@ -17,6 +17,10 @@ They hold the project's rules and conventions — **follow them.** Read more as 
 
 Use vBot's established terms exactly as the glossary and domain maps define them. Say Tools, Run, Session, Queue, Skill, Provider — not translated alternatives.
 
+## Agent-facing text review
+
+Before creating agent-facing text in this repository, show the user its complete proposed wording verbatim. Before changing existing agent-facing text, show the exact original text, then the complete proposed version with every changed or added passage in bold, and also provide the clean final wording verbatim so review markup cannot be confused with file content. Do not substitute a summary or description of the text. Agent-facing text includes this file, System Prompts, Tool descriptions, Skill instructions, domain maps, glossary entries, handoffs, orchestration prompts, and any other text intended primarily to guide an Agent or Model.
+
 ## Architecture & code
 
 **Few, deep modules** — small interfaces, implementation hidden inside. Module count is a budget; the system must stay small enough to hold in your head. Deep over wide: one module owning a capability end-to-end beats several shallow ones passing data around. Expose what callers need, hide the rest. **Default to extending an existing module — before adding a new module, file, layer, or abstraction, name the existing module that could own the capability and why it can't; "no existing owner fits" is a valid answer, "didn't look" is not, and an unjustified new module is a defect, not a style nit.** A module is too shallow when its interface is nearly as large as its implementation, when it's mostly pass-through, when it wraps something without adding an abstraction, or when callers must know its internals — fold it back or deepen it.
