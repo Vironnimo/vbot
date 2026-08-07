@@ -34,6 +34,8 @@ Successful snapshots cache per exact Connection+Account target for 10 seconds; e
 
 Every fetch acquires fresh auth through Runtime token getters or reads narrowly required token-store extras. Logs include no token data. Provider-specific endpoint/header/shape facts remain in each Provider's map.
 
+The hourly sampler isolates each automatic attempt. An unexpected collection failure is logged at error level, then the same sampler waits for the normal interval and tries again; it does not silently terminate or spin in an immediate restart loop. An unexpected initial freshness-check failure is logged and degrades to sampling immediately.
+
 ## Supported Connections
 
 - `openai:subscription`: ChatGPT usage windows/credits and account-scoped Codex headers; verified endpoint details in `providers/openai.md`.

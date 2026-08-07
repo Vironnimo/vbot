@@ -432,12 +432,19 @@ class ProviderUsageService:
             if delay > 0:
                 await asyncio.sleep(delay)
             while self._history_started:
-                await self.collect_history_sample()
-                await asyncio.sleep(self._history_interval)
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:  # noqa: BLE001 — background sampling must fail soft
-            _LOGGER.warning("Provider usage history sampler stopped unexpectedly: %s", exc)
+                try:
+                    await self.collect_history_sample()
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:  # noqa: BLE001 — each background sample fails soft
+                    _LOGGER.error(
+                        "Provider usage history sample failed unexpectedly; "
+                        "retrying at the next interval: %s",
+                        exc,
+                        exc_info=True,
+                    )
+                if self._history_started:
+                    await asyncio.sleep(self._history_interval)
         finally:
             self._history_started = False
             self._history_task = None
@@ -449,6 +456,14 @@ class ProviderUsageService:
             latest = self._history.latest_sampled_at()
         except UsageHistoryError as exc:
             _LOGGER.warning("Provider usage history freshness could not be read: %s", exc)
+            return 0.0
+        except Exception as exc:  # noqa: BLE001 — background sampling must fail soft
+            _LOGGER.error(
+                "Provider usage history freshness check failed unexpectedly; "
+                "sampling immediately: %s",
+                exc,
+                exc_info=True,
+            )
             return 0.0
         if latest is None:
             return 0.0
