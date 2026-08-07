@@ -2,6 +2,8 @@ import importlib.util
 import subprocess
 from pathlib import Path
 
+import pytest
+
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 MODULE_PATH = PROJECT_ROOT / "scripts" / "quality-frontend.py"
 
@@ -208,6 +210,56 @@ def test_main_runs_vitest_with_verbose_reporter(monkeypatch, capsys):
         "src/components/__tests__/AgentsView.test.models-and-catalog.test.js",
         "src/components/__tests__/AgentsView.test.persistence.test.js",
     ]
+
+
+def test_help_explains_complete_interface_without_prerequisites(monkeypatch, capsys):
+    module = _load_quality_frontend_module()
+    monkeypatch.setattr(module.sys, "argv", ["quality-frontend.py", "--help"])
+
+    def fail_which(*args, **kwargs):
+        raise AssertionError("help must not require frontend tools")
+
+    monkeypatch.setattr(module.shutil, "which", fail_which)
+
+    with pytest.raises(SystemExit) as exit_info:
+        module.main()
+
+    assert exit_info.value.code == 0
+    captured = capsys.readouterr()
+    assert "-h, --help" in captured.out
+    assert "--check" in captured.out
+    assert "prettier -> eslint -> vitest -> build" in captured.out
+    assert "Exit codes:" in captured.out
+
+
+def test_check_mode_validates_without_fix_commands(monkeypatch, capsys):
+    module = _load_quality_frontend_module()
+    commands: list[list[str]] = []
+    monkeypatch.setattr(module.shutil, "which", lambda name: name)
+    monkeypatch.setattr(
+        module.sys,
+        "argv",
+        ["quality-frontend.py", "--check", "webui/src/components/AgentsView.svelte"],
+    )
+
+    def fail_snapshot(*args, **kwargs):
+        raise AssertionError("check mode must not snapshot for source mutations")
+
+    def fake_run(cmd, capture_output, text, cwd, encoding, errors):
+        commands.append(cmd)
+        returncode = 1 if cmd[1:3] == ["prettier", "--check"] else 0
+        stdout = "Tests  1 passed (1)\n" if cmd[1] == "vitest" else ""
+        return module.subprocess.CompletedProcess(cmd, returncode, stdout=stdout, stderr="")
+
+    monkeypatch.setattr(module, "snapshot_target_files", fail_snapshot)
+    monkeypatch.setattr(module.subprocess, "run", fake_run)
+
+    assert module.main() == 1
+
+    captured = capsys.readouterr()
+    assert "prettier      .... FAIL" in captured.out
+    assert ["npx", "prettier", "--check", "src/components/AgentsView.svelte"] in commands
+    assert not any("--write" in command or "--fix" in command for command in commands)
 
 
 def test_main_reports_no_tests_instead_of_pass(monkeypatch, capsys):

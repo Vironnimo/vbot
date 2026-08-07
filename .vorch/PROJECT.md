@@ -137,10 +137,10 @@ cd webui && npm ci && npm run build   # Svelte → static JS/CSS
 
 **Pattern:** AAA. Independent, deterministic, no shared state.
 
-**Quality gates:** Two scripts with the same interface — `quality.py` (backend) and `quality-frontend.py` (frontend) — each runs format → lint → type-check → test (→ build for frontend) over the paths you pass, or the whole repo with no args. They auto-fix what they can, map each source file to its mirrored test file(s), and filter tool noise down to an agent-readable verdict (auto-fixed files per step, forwarded failure output, a final verdict line). **These gates are the contract — prefer them over invoking `pytest`/`ruff`/`vitest`/etc. by hand.** Reach for a raw tool only when you genuinely suspect the gate withheld something you need (a filtered-away failure, a test that didn't get mapped); when that happens, append a note to `.vorch/FLAGGED.md` so the gate can be improved to surface it, rather than letting hand-invocation become the habit. Full mechanics — the pipeline, the source→test mapping rules, the output contract, and where to fix a gate gap — live in `scripts/README-quality.md`.
+**Quality gates:** Two scripts with the same interface — `quality.py` (backend) and `quality-frontend.py` (frontend) — each runs format → lint → type-check → test (→ build for frontend) over the paths you pass, or the whole repo with no args. The default mode auto-fixes what it can; `--check` validates without changing source files, and `-h` / `--help` describes the complete command contract. Both modes map each source file to its mirrored test file(s) and filter tool noise down to an agent-readable verdict (auto-fixed files per step in the default mode, forwarded failure output, a final verdict line). **These gates are the contract — prefer them over invoking `pytest`/`ruff`/`vitest`/etc. by hand.** Reach for a raw tool only when you genuinely suspect the gate withheld something you need (a filtered-away failure, a test that didn't get mapped); when that happens, append a note to `.vorch/FLAGGED.md` so the gate can be improved to surface it, rather than letting hand-invocation become the habit. Full mechanics — the pipeline, the source→test mapping rules, the output contract, and where to fix a gate gap — live in `scripts/README-quality.md`.
 ```bash
-python scripts/quality.py [paths...]           # Backend
-python scripts/quality-frontend.py [paths...]  # Frontend
+python scripts/quality.py [--check] [paths...]           # Backend
+python scripts/quality-frontend.py [--check] [paths...]  # Frontend
 ```
 ```bash
 python scripts/quality.py                          # full backend

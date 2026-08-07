@@ -7,6 +7,7 @@ The short version:
 - Run the gate, not the raw tool: `python scripts/quality.py [paths...]` and `python scripts/quality-frontend.py [paths...]`.
 - No arguments checks the whole repo; one or more file/dir paths check just those targets (plus their mirrored tests).
 - The gate auto-fixes what it can, maps each source file to its tests, filters tool noise, and prints one verdict.
+- Add `--check` to validate without changing source files; run either script with `--help` for its complete command reference.
 - Reach for raw `pytest`/`ruff`/`mypy`/`vitest`/`eslint`/`prettier` only when you genuinely suspect the gate withheld detail you need — and when it did, improve the gate (see [Improving the gate](#improving-the-gate)) instead of making hand-invocation the habit.
 
 ## What the gates are
@@ -19,6 +20,7 @@ The output is the agent contract. It is meant to be read by an agent deciding wh
 
 ```bash
 python scripts/quality.py                          # full backend scan
+python scripts/quality.py --check                  # full backend scan, no source fixes
 python scripts/quality.py core/runtime/            # one module
 python scripts/quality.py core/utils/config.py     # single file (+ its mirrored tests)
 python scripts/quality.py core/utils/config.py core/utils/errors.py   # several targets
@@ -26,12 +28,17 @@ python scripts/quality.py core/utils/config.py core/utils/errors.py   # several 
 
 ```bash
 python scripts/quality-frontend.py                             # full frontend scan
+python scripts/quality-frontend.py --check                     # full frontend scan, no source fixes
 python scripts/quality-frontend.py webui/src/lib/             # one directory
 python scripts/quality-frontend.py webui/src/lib/i18n.js      # single file (tests in its dir)
 python scripts/quality-frontend.py webui/src/lib/__tests__/i18n.test.js   # one test file
 ```
 
-Paths are project-root-relative and may be files or directories. Both runners normalize input first (backslash → forward slash, trailing slash stripped) and deduplicate: a file already covered by a directory you also passed is dropped, so `core/utils/ core/utils/config.py` runs `core/utils/` once. The backend runner routes direct files by registered capability: Ruff and mypy own `.py`/`.pyi`, while `pyproject.toml` configures and therefore triggers the full Python pipeline without being passed to a Python source formatter. A direct file with no registered capability aborts before any tool runs. Directories remain mixed scopes whose contents each tool filters itself; a future native module adds its suffixes and tool steps rather than widening Ruff's inputs.
+Paths may be files or directories. Backend paths are project-root-relative; frontend paths may be project-root-relative with the `webui/` prefix or relative to `webui/` itself. Both runners normalize input first (backslash → forward slash, trailing slash stripped) and deduplicate: a file already covered by a directory you also passed is dropped, so `core/utils/ core/utils/config.py` runs `core/utils/` once. The backend runner routes direct files by registered capability: Ruff and mypy own `.py`/`.pyi`, while `pyproject.toml` configures and therefore triggers the full Python pipeline without being passed to a Python source formatter. A direct file with no registered capability aborts before any tool runs. Directories remain mixed scopes whose contents each tool filters itself; a future native module adds its suffixes and tool steps rather than widening Ruff's inputs.
+
+Both scripts support `-h` / `--help`. Their help is the command-level reference for modes, path behavior, pipeline stages, prerequisites, examples, and exit codes.
+
+The default mode is intentionally mutating: it keeps and reports formatter and linter fixes. `--check` replaces the formatting write with `ruff format --check` or `prettier --check`, omits the Ruff/ESLint fix pass, and then runs the same validation, type-check, and test stages. A complete frontend `--check` run still builds the WebUI. The mode does not change source files, but underlying tools may write caches and the frontend build may write generated artifacts.
 
 Use the current Python interpreter directly — no virtual environment is assumed. The frontend runner additionally needs `npx` and `npm` on `PATH`; it exits early if they are missing.
 
@@ -44,9 +51,9 @@ Every step is one external tool run. Steps are one of four kinds, which decides 
 - **test** — the test runner, with a `passed/total` count in the status, or `NO TESTS` when the selected scope has none (never a `PASS` — a run that tested nothing does not read as passed).
 - **build** — frontend full-project build; see below.
 
-Backend (`quality.py`), in order: `ruff format` (fix) → `ruff check --fix` (fix) → `ruff check` (gate) → `mypy --pretty` (gate) → `pytest -v --tb=short --timeout=30` (test).
+Backend (`quality.py`), in order: `ruff format` (fix) → `ruff check --fix` (fix) → `ruff check` (gate) → `mypy --pretty` (gate) → `pytest -v --tb=short --timeout=30` (test). In `--check` mode the first two steps become one `ruff format --check` gate.
 
-Frontend (`quality-frontend.py`), in order: `prettier --write` (fix) → `eslint --fix` (fix) → `eslint` (gate) → `vitest run --reporter=verbose --passWithNoTests` (test) → `npm run build` (build). All npm commands run with `cwd=webui/`.
+Frontend (`quality-frontend.py`), in order: `prettier --write` (fix) → `eslint --fix` (fix) → `eslint` (gate) → `vitest run --reporter=verbose --passWithNoTests` (test) → `npm run build` (build). In `--check` mode the first two steps become one `prettier --check` gate. All npm commands run with `cwd=webui/`.
 
 On a **full scan** (no paths), the tools target fixed defaults rather than the whole tree indiscriminately:
 
@@ -113,7 +120,7 @@ This is why the changed-file list is reliable even across tools that print nothi
 
 - `0` — all gates passed.
 - `1` — at least one gate failed (or, frontend only, `npx`/`npm` was not found on `PATH`).
-- `2` — an input path did not exist or a direct file had no registered quality capability; the run aborted before any tool ran.
+- `2` — command-line usage was invalid, an input path did not exist, or a direct file had no registered quality capability; the run aborted before any quality tool ran.
 
 ## Improving the gate
 

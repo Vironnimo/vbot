@@ -1,6 +1,8 @@
 import importlib.util
 from pathlib import Path
 
+import pytest
+
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 MODULE_PATH = PROJECT_ROOT / "scripts" / "quality.py"
 
@@ -103,6 +105,51 @@ def test_main_runs_pytest_verbose(monkeypatch, capsys):
     capsys.readouterr()
     pytest_command = next(cmd for cmd in commands if cmd[2] == "pytest")
     assert pytest_command[:5] == [module.sys.executable, "-m", "pytest", "-v", "--tb=short"]
+
+
+def test_help_explains_complete_interface_without_running_tools(monkeypatch, capsys):
+    module = _load_quality_module()
+    monkeypatch.setattr(module.sys, "argv", ["quality.py", "--help"])
+
+    def fail_run(*args, **kwargs):
+        raise AssertionError("help must not run quality tools")
+
+    monkeypatch.setattr(module.subprocess, "run", fail_run)
+
+    with pytest.raises(SystemExit) as exit_info:
+        module.main()
+
+    assert exit_info.value.code == 0
+    captured = capsys.readouterr()
+    assert "-h, --help" in captured.out
+    assert "--check" in captured.out
+    assert "ruff format -> ruff check -> mypy -> pytest" in captured.out
+    assert "Exit codes:" in captured.out
+
+
+def test_check_mode_validates_without_fix_commands(monkeypatch, capsys):
+    module = _load_quality_module()
+    commands: list[list[str]] = []
+    monkeypatch.setattr(module.sys, "argv", ["quality.py", "--check", "core/runtime/"])
+
+    def fail_snapshot(*args, **kwargs):
+        raise AssertionError("check mode must not snapshot for source mutations")
+
+    def fake_run(cmd, capture_output, text, cwd, encoding, errors):
+        commands.append(cmd)
+        returncode = 1 if cmd[2:5] == ["ruff", "format", "--check"] else 0
+        stdout = "1 passed in 0.01s\n" if cmd[2] == "pytest" else ""
+        return module.subprocess.CompletedProcess(cmd, returncode, stdout=stdout, stderr="")
+
+    monkeypatch.setattr(module, "snapshot_target_files", fail_snapshot)
+    monkeypatch.setattr(module.subprocess, "run", fake_run)
+
+    assert module.main() == 1
+
+    captured = capsys.readouterr()
+    assert "ruff format   .... FAIL" in captured.out
+    assert [module.sys.executable, "-m", "ruff", "format", "--check", "core/runtime"] in commands
+    assert not any("--fix" in command for command in commands)
 
 
 def test_main_filters_pytest_failure_output(monkeypatch, capsys):
