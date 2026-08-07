@@ -284,7 +284,13 @@ class SubAgentBatchTracker:
         if not delivery.cancelled() and delivery.exception() is not None:
             batch = self._batches.get(parent_key)
             if batch is not None and batch.entries.get(work_id) is delivered_entry:
-                delivered_entry.completion_notice_id = None
+                # A failed Future is terminal: transient start/write failures
+                # remain pending inside completion delivery. If the Parent
+                # Session no longer exists, release this process-local ownership
+                # without marking the undelivered Child result as read.
+                batch.entries.pop(work_id, None)
+                self._prune_if_empty(parent_key, batch)
+                self._prune_if_finished(parent_key, batch)
         _log_background_task_result(delivery, failure_message)
 
     def _acknowledge_delivered_entry(

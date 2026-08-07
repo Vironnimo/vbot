@@ -280,6 +280,7 @@ async def test_background_delivery_failure_leaves_child_unread(tmp_path) -> None
     await asyncio.sleep(0)
 
     assert sessions.list_with_metadata("worker")[0]["has_unread_completion"] is True
+    assert parent_key not in tracker._batches  # noqa: SLF001 - terminal leak regression.
 
 
 async def test_completion_trigger_carries_parent_project_id() -> None:
