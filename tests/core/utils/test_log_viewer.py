@@ -17,6 +17,7 @@ from core.utils.log_viewer import (
     _cancel_watcher_task,
     _log_watcher_task_result,
     _LogSnapshot,
+    _WatcherState,
     parse_log_entries,
 )
 
@@ -380,7 +381,7 @@ async def test_subscribe_pushes_catalog_changes_for_other_log_files(
             "2026-05-12 00:00:00 [INFO] vbot.core - New day\n",
             encoding="utf-8",
         )
-        yield {(1, str(next_file))}
+        yield set()
         await asyncio.Event().wait()
 
     monkeypatch.setattr(log_viewer_module, "awatch", fake_awatch)
@@ -394,6 +395,82 @@ async def test_subscribe_pushes_catalog_changes_for_other_log_files(
         "file": selected_file.name,
         "files": [next_file.name, selected_file.name],
         "default_file": next_file.name,
+    }
+
+
+@pytest.mark.asyncio
+async def test_watch_file_skips_unchanged_timeouts_and_reconciles_metadata_changes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    logs_dir = tmp_path / "logs"
+    logs_dir.mkdir()
+    selected_file = logs_dir / "2026-05-11"
+    selected_file.write_text(
+        "2026-05-11 09:00:00 [INFO] vbot.core - Ready\n",
+        encoding="utf-8",
+    )
+    viewer = LogViewer(tmp_path)
+    subscriber: asyncio.Queue[dict[str, object]] = asyncio.Queue()
+    watcher = _WatcherState(
+        file_name=selected_file.name,
+        snapshot=viewer._read_snapshot(selected_file),
+        catalog=(selected_file.name,),
+        directory_modified_ns=logs_dir.stat().st_mtime_ns,
+        subscribers=[subscriber],
+    )
+    snapshot_reads = 0
+    catalog_reads = 0
+    original_read_snapshot = viewer._read_snapshot
+    original_list_files = viewer.list_files
+    awatch_kwargs: dict[str, object] = {}
+
+    def count_snapshot_reads(file_path: Path) -> _LogSnapshot:
+        nonlocal snapshot_reads
+        snapshot_reads += 1
+        return original_read_snapshot(file_path)
+
+    def count_catalog_reads() -> dict[str, object]:
+        nonlocal catalog_reads
+        catalog_reads += 1
+        return original_list_files()
+
+    async def fake_awatch(*_args: object, **kwargs: object):
+        awatch_kwargs.update(kwargs)
+        yield set()
+        selected_file.write_text(
+            "".join(
+                [
+                    "2026-05-11 09:00:00 [INFO] vbot.core - Ready\n",
+                    "2026-05-11 09:00:01 [INFO] vbot.core - Updated\n",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        yield set()
+
+    monkeypatch.setattr(viewer, "_read_snapshot", count_snapshot_reads)
+    monkeypatch.setattr(viewer, "list_files", count_catalog_reads)
+    monkeypatch.setattr(log_viewer_module, "awatch", fake_awatch)
+
+    await viewer._watch_file(watcher)
+
+    assert awatch_kwargs["yield_on_timeout"] is True
+    assert snapshot_reads == 1
+    assert catalog_reads == 0
+    assert subscriber.get_nowait() == {
+        "type": "append",
+        "file": selected_file.name,
+        "entries": [
+            {
+                "timestamp": "2026-05-11 09:00:01",
+                "level": "info",
+                "logger_name": "vbot.core",
+                "message": "Updated",
+                "continuation": "",
+                "raw": "2026-05-11 09:00:01 [INFO] vbot.core - Updated",
+            }
+        ],
     }
 
 
