@@ -14,7 +14,6 @@
     activeSessionState = null,
     showSessionDrawer = false,
     creatingSession = false,
-    newSessionBlocked = false,
     newSessionLoading = false,
     // Project context for the compact project picker that lives in the header
     // (left of the Sessions button). "No project" is Personal/identity chat.
@@ -291,33 +290,18 @@
         ? t('sessions.hide', 'Hide sessions')
         : t('sessions.title', 'Sessions')}
     </Button>
-    <!-- The blocked hint must show on the *disabled* button, which receives no
-         pointer events — so the tooltip listens on this wrapper span. -->
-    <span
-      class="tooltip-anchor"
-      use:tooltip={newSessionBlocked
-        ? t(
-            'chat.newSessionBlocked',
-            'A new session can be started after the current run finishes.',
-          )
-        : ''}
+    <Button
+      variant="primary"
+      disabled={!activeAgent || newSessionLoading || creatingSession}
+      onClick={onNewSession}
     >
-      <Button
-        variant="primary"
-        disabled={!activeAgent ||
-          newSessionBlocked ||
-          newSessionLoading ||
-          creatingSession}
-        onClick={onNewSession}
-      >
-        <svg viewBox="0 0 14 14" width="12" height="12" aria-hidden="true">
-          <path d="M7 1v12M1 7h12" />
-        </svg>
-        {creatingSession
-          ? t('common.loading', 'Loading…')
-          : t('chat.newSession', 'New session')}
-      </Button>
-    </span>
+      <svg viewBox="0 0 14 14" width="12" height="12" aria-hidden="true">
+        <path d="M7 1v12M1 7h12" />
+      </svg>
+      {creatingSession
+        ? t('common.loading', 'Loading…')
+        : t('chat.newSession', 'New session')}
+    </Button>
   </div>
 </header>
 

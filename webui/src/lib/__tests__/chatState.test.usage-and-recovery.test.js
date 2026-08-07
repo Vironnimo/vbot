@@ -11,7 +11,6 @@ import {
   agentActivityStatus,
   applySessionCompletionActivity,
   appendRunEvent,
-  canCreateNewSession,
   createChatState,
   ensureSessionState,
   isRunActive,
@@ -692,8 +691,6 @@ describe('chat state helpers', () => {
     // appended behind it after the stale Run marker is removed.
     expect(sessionState.runEvents).toEqual([]);
 
-    // canCreateNewSession now allows a new session because no run is active
-    expect(canCreateNewSession(sessionState)).toBe(true);
     expect(isRunActive(sessionState)).toBe(false);
   });
 

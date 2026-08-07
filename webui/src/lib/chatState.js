@@ -1873,10 +1873,6 @@ export function removeQueuedMessage(sessionState, queuedMessageId) {
   return sessionState.queue.length !== originalLength;
 }
 
-export function canCreateNewSession(sessionState) {
-  return !sessionState || !isRunActive(sessionState);
-}
-
 export function isSessionEmpty(sessionState) {
   return Boolean(
     sessionState?.historyLoaded &&
