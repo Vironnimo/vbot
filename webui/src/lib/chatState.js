@@ -922,6 +922,7 @@ export function createChatController({
     try {
       const run = await operations.cancelRun(runId, { reason: 'user' });
       runStream.mergeRunResponse(sessionState, run);
+      await reconcileRunSession(sessionState, runId);
     } catch (error) {
       sessionState.actionError = `${translate('chat.cancelError', 'Run could not be cancelled.')} ${errorMessage(error)}`;
     } finally {
@@ -1672,6 +1673,18 @@ export function finishRun(sessionState, event) {
   sessionState.status = status ?? terminalStatus(type);
   sessionState.streamStatus = CHAT_STATUS_IDLE;
   sessionState.streamError = '';
+  const cancelledToolPreviews =
+    type === 'run_cancelled'
+      ? sessionState.streamingRunEvents.filter(
+          (streamingEvent) => streamingEvent.type === RUN_EVENT_TOOL_CALL_DELTA,
+        )
+      : [];
+  if (cancelledToolPreviews.length > 0) {
+    sessionState.runEvents = [
+      ...sessionState.runEvents,
+      ...cancelledToolPreviews,
+    ];
+  }
   sessionState.streamingRunEvents = sessionState.streamingRunEvents.filter(
     (streamingEvent) =>
       TERMINAL_VISIBLE_DRAFT_EVENT_TYPES.has(streamingEvent.type),
@@ -1679,8 +1692,11 @@ export function finishRun(sessionState, event) {
   // The terminal lifecycle summary can arrive over WebSocket before the
   // canonical Assistant output reaches this client over SSE. Keep the
   // compressed text deltas as the visible fallback until stable output,
-  // History, or the next Run replaces them; clearing them here makes a
-  // completed answer disappear even though it is durable on the server.
+  // History, or the next Run replaces them. A cancelled Run promotes Tool
+  // previews into the stable projection: sibling calls can be persisted before
+  // the execution limit has dispatched each one, so dropping those previews
+  // makes known calls vanish until History is reloaded. Promotion also keeps
+  // them visible if a queued follow-up Run starts before that reconciliation.
   if (type === 'run_failed') {
     sessionState.error = event?.payload?.error ?? 'Run failed';
   }

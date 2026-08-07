@@ -211,6 +211,78 @@ describe('chat state helpers', () => {
     ]);
   });
 
+  it('keeps every known sibling Tool call visible when the Run is cancelled', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-cancelled-siblings',
+    );
+    startRun(sessionState, {
+      run_id: 'run-cancelled-siblings',
+      sse_url: '/api/runs/run-cancelled-siblings/events',
+      status: CHAT_STATUS_RUNNING,
+    });
+
+    for (let index = 0; index < 12; index += 1) {
+      appendRunEvent(sessionState, {
+        type: 'tool_call_delta',
+        run_id: 'run-cancelled-siblings',
+        sequence: index + 1,
+        payload: {
+          tool_call_id: `call-${index}`,
+          name_delta: 'bash',
+          arguments_delta: `{"command":"command ${index}"}`,
+        },
+      });
+    }
+    for (let index = 0; index < 4; index += 1) {
+      appendRunEvent(sessionState, {
+        type: 'tool_call_started',
+        run_id: 'run-cancelled-siblings',
+        sequence: 13 + index,
+        payload: {
+          tool_call: {
+            id: `call-${index}`,
+            index,
+            name: 'bash',
+            arguments: { command: `command ${index}` },
+          },
+        },
+      });
+    }
+    for (let index = 0; index < 2; index += 1) {
+      appendRunEvent(sessionState, {
+        type: 'tool_call_result',
+        run_id: 'run-cancelled-siblings',
+        sequence: 17 + index,
+        payload: {
+          tool_call: { id: `call-${index}`, index, name: 'bash' },
+          result: { ok: false, error: 'Command failed' },
+        },
+      });
+    }
+
+    appendRunEvent(sessionState, {
+      type: 'run_cancelled',
+      run_id: 'run-cancelled-siblings',
+      sequence: 19,
+      timestamp: '2026-08-07T12:00:00.000Z',
+      payload: { status: 'cancelled' },
+    });
+
+    const [assistantRun] = visibleTimelineItemsForRender(sessionState);
+
+    expect(assistantRun.tools).toHaveLength(12);
+    expect(assistantRun.tools.map((tool) => tool.toolCallId)).toEqual(
+      Array.from({ length: 12 }, (_value, index) => `call-${index}`),
+    );
+    expect(assistantRun.tools.map((tool) => tool.status)).toEqual([
+      'failed',
+      'failed',
+      ...Array.from({ length: 10 }, () => 'cancelled'),
+    ]);
+  });
+
   it('surfaces preview arguments on a preparing tool row before the value stream ends', () => {
     const sessionState = ensureSessionState(
       createChatState(),
