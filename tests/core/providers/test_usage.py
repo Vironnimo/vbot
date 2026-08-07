@@ -7,6 +7,7 @@ and a fake transport so nothing touches the live network.
 from __future__ import annotations
 
 import asyncio
+import logging
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -477,6 +478,40 @@ def test_history_sampler_delays_until_one_hour_after_latest_sample(tmp_path: Any
     )
 
     assert service._initial_history_delay() == 45 * 60  # noqa: SLF001
+
+
+@pytest.mark.asyncio
+async def test_history_sampler_continues_after_unexpected_sample_failure(
+    tmp_path: Any,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    continued = asyncio.Event()
+    attempts = 0
+    service = ProviderUsageService(
+        _openai_runtime(),
+        data_root=tmp_path,
+        history_interval=0,
+    )
+
+    async def collect_with_one_failure() -> bool:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise RuntimeError("boom")
+        continued.set()
+        return True
+
+    monkeypatch.setattr(service, "collect_history_sample", collect_with_one_failure)
+
+    with caplog.at_level(logging.ERROR, logger="vbot.providers.usage"):
+        service.start()
+        await asyncio.wait_for(continued.wait(), timeout=1)
+        await service.aclose()
+
+    assert attempts >= 2
+    assert service._history_started is False  # noqa: SLF001
+    assert "retrying at the next interval" in caplog.text
 
 
 # ---------------------------------------------------------------------------
