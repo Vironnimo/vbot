@@ -34,11 +34,11 @@ test("speech and image Tools persist and serve fake Provider artifacts", async (
   await expect(generation).toContainText(
     "A deterministic blue square on a white background",
   );
-  const image = chat.getByRole("img", { name: "E2E generated image" });
+  const image = chat.getByRole("img", { name: /^[a-f0-9]{32}\.png$/ });
   await expect(image).toBeVisible();
   await expect.poll(() => image.evaluate((node) => node.naturalWidth)).toBe(1);
   const imageUrl = await image.getAttribute("src");
-  expect(imageUrl).toMatch(/^\/api\/images\/artifacts\/[a-f0-9]{32}$/);
+  expect(imageUrl).toMatch(/^\/api\/files\/[^\s]+$/);
   const imageResponse = await page.request.get(imageUrl);
   expect(imageResponse.ok()).toBe(true);
   expect(imageResponse.headers()["content-type"]).toContain("image/png");
