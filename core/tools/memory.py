@@ -24,8 +24,9 @@ MEMORY_TOOL_DESCRIPTION = (
     "Manage compact pinned memory injected into future turns. Use user scope for durable "
     "preferences, corrections, and personal details; use agent scope for stable environment "
     "facts and conventions. Skip task progress, logs, transient identifiers, and easily "
-    "rediscovered facts. List before replace or remove because ids shift. If add is full, "
-    "remove or shorten a stale entry and retry."
+    "rediscovered facts. Run list to obtain entry_id before replace or remove — ids shift as "
+    "entries change. If add is full, remove or shorten a stale entry and retry. Every result "
+    "includes the current entries list."
 )
 MEMORY_ACTIONS = ("list", "add", "replace", "remove")
 MEMORY_SCOPES = ("user", "agent")
@@ -51,7 +52,7 @@ MEMORY_TOOL_PARAMETERS: JsonObject = {
         "action": {
             "type": "string",
             "enum": list(MEMORY_ACTIONS),
-            "description": "Memory action to perform.",
+            "description": "Memory action: list, add, replace, or remove.",
         },
         "scope": _MEMORY_SCOPE_PARAMETER,
         "content": _MEMORY_CONTENT_PARAMETER,
