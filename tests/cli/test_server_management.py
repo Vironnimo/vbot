@@ -542,6 +542,43 @@ def test_start_server_kills_spawned_process_when_cleanup_terminate_times_out(
     assert calls == ["terminate", "wait:0.5", "kill", "wait:0.5"]
 
 
+def test_start_server_preserves_failure_when_cleanup_kill_times_out(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    instance = make_instance(tmp_path)
+    calls: list[str] = []
+
+    class FakeProcess:
+        pid = 654
+
+        def poll(self) -> None:
+            return None
+
+        def terminate(self) -> None:
+            calls.append("terminate")
+
+        def kill(self) -> None:
+            calls.append("kill")
+
+        def wait(self, *, timeout: float) -> None:
+            calls.append(f"wait:{timeout}")
+            raise subprocess.TimeoutExpired("server", timeout)
+
+    monkeypatch.setattr(
+        server_management,
+        "probe_health",
+        lambda instance: HealthProbeResult(reachable=False, is_vbot=False, error="ConnectError"),
+    )
+    monkeypatch.setattr(server_management, "start_server_process", lambda instance: FakeProcess())
+
+    result = start_server(instance, startup_timeout_seconds=0.0, probe_interval_seconds=0.0)
+
+    assert result.ok is False
+    assert result.message == "server readiness timed out"
+    assert calls == ["terminate", "wait:0.5", "kill", "wait:0.5"]
+
+
 def test_start_server_cleans_up_spawned_process_when_non_vbot_appears(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -812,6 +849,43 @@ def test_stop_server_kills_after_terminate_timeout(
 
     assert result.ok is True
     assert result.forced is True
+    assert calls == ["terminate", ("wait", 2.0), "kill", ("wait", 2.0)]
+
+
+def test_stop_server_returns_failure_when_kill_wait_times_out(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    instance = make_instance(tmp_path)
+    calls: list[Any] = []
+
+    class FakeProcess:
+        pid = 789
+
+        def terminate(self) -> None:
+            calls.append("terminate")
+
+        def kill(self) -> None:
+            calls.append("kill")
+
+        def wait(self, *, timeout: float) -> None:
+            calls.append(("wait", timeout))
+            raise server_management.psutil.TimeoutExpired(timeout, self.pid)
+
+    health = HealthProbeResult(reachable=True, is_vbot=True, status_code=200)
+    monkeypatch.setattr(server_management, "probe_health", lambda instance: health)
+    monkeypatch.setattr(server_management, "find_listening_process", lambda instance: FakeProcess())
+
+    result = stop_server(instance, shutdown_timeout_seconds=2.0)
+
+    assert result == CommandResult(
+        ok=False,
+        message="forced termination timed out",
+        instance=instance,
+        health=health,
+        process_id=789,
+        forced=True,
+    )
     assert calls == ["terminate", ("wait", 2.0), "kill", ("wait", 2.0)]
 
 
