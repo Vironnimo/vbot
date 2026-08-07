@@ -427,6 +427,11 @@ def _grep_with_rg(
 ) -> _RipgrepOutcome:
     if context_lines > 0:
         return _RipgrepOutcome(handled=False)
+    # ripgrep's positive --glob rules override every ignore source, including
+    # .gitignore. Use the shared walker when both features are active so the
+    # file filter cannot silently re-include ignored dependency trees.
+    if glob_pattern is not None and apply_ignore_rules:
+        return _RipgrepOutcome(handled=False)
     rg_path = shutil.which("rg")
     if not rg_path:
         return _RipgrepOutcome(handled=False)

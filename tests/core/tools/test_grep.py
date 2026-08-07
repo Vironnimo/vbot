@@ -678,6 +678,33 @@ def test_grep_skips_gitignored_files_by_default(
     assert "node_modules/lib.js:1: needle" in opted_in_content
 
 
+def test_grep_absolute_repo_path_glob_does_not_override_gitignore(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    repo.joinpath(".git").mkdir()
+    repo.joinpath(".gitignore").write_text(".opencode/\n", encoding="utf-8")
+    ignored = repo / ".opencode" / "node_modules"
+    ignored.mkdir(parents=True)
+    ignored.joinpath("lib.js").write_text("needle\n", encoding="utf-8")
+    repo.joinpath("app.js").write_text("needle\n", encoding="utf-8")
+    created = install_fake_rg(
+        monkeypatch,
+        stdout_text=".opencode/node_modules/lib.js:1:needle\n",
+    )
+
+    result = grep_handler(
+        make_context(workspace),
+        {"pattern": "needle", "path": str(repo), "glob": "**/*"},
+    )
+
+    assert get_success_content(result) == f"{(repo / 'app.js').resolve().as_posix()}:1: needle"
+    assert created == []
+
+
 def test_grep_honors_nested_gitignore_negation(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -768,11 +795,15 @@ def test_grep_rg_command_disables_ignore_rules_on_opt_in(
     workspace.mkdir()
     created = install_fake_rg(monkeypatch)
 
-    grep_handler(make_context(workspace), {"pattern": "needle", "include_ignored": True})
+    grep_handler(
+        make_context(workspace),
+        {"pattern": "needle", "glob": "**/*", "include_ignored": True},
+    )
 
     command = created[0].command
     assert "--no-ignore" in command
     assert "!**/.git" in command
+    assert "**/*" in command
 
 
 def test_grep_rg_command_enables_multiline_flags(
