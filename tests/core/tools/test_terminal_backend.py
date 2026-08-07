@@ -55,6 +55,7 @@ def test_posix_default_terminal_uses_environment_then_login_shell_then_sh() -> N
 
 def test_posix_terminal_spawn_uses_shared_server_lifetime_guardian(monkeypatch) -> None:
     spawned: dict[str, object] = {}
+    workdir = Path("/work")
 
     class FakePtyProcess:
         @staticmethod
@@ -63,7 +64,6 @@ def test_posix_terminal_spawn_uses_shared_server_lifetime_guardian(monkeypatch) 
             spawned["kwargs"] = kwargs
             return SimpleNamespace(pid=123)
 
-    monkeypatch.setattr(terminal_backend.os, "name", "posix")
     monkeypatch.setattr(
         terminal_backend,
         "guarded_process_launch",
@@ -72,14 +72,19 @@ def test_posix_terminal_spawn_uses_shared_server_lifetime_guardian(monkeypatch) 
     monkeypatch.setitem(sys.modules, "ptyprocess", SimpleNamespace(PtyProcess=FakePtyProcess))
 
     adapter = terminal_backend.spawn_terminal_adapter(
-        ["tool"], Path("/work"), {"PATH": "/bin"}, 32, 120
+        ["tool"],
+        workdir,
+        {"PATH": "/bin"},
+        32,
+        120,
+        platform_name="posix",
     )
 
     assert adapter.pid == 123
     assert spawned == {
         "argv": ["guardian", "--", "tool"],
         "kwargs": {
-            "cwd": "/work",
+            "cwd": str(workdir),
             "env": {"PATH": "/bin"},
             "dimensions": (32, 120),
             "pass_fds": (41,),

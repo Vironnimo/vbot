@@ -339,9 +339,15 @@ class _PosixTerminalAdapter:
 
 
 def spawn_terminal_adapter(
-    argv: Sequence[str], cwd: Path, env: Mapping[str, str], rows: int, columns: int
+    argv: Sequence[str],
+    cwd: Path,
+    env: Mapping[str, str],
+    rows: int,
+    columns: int,
+    *,
+    platform_name: str = os.name,
 ) -> TerminalAdapter:
-    if os.name == "nt":
+    if platform_name == "nt":
         from winpty import PtyProcess
 
         process = PtyProcess.spawn(
