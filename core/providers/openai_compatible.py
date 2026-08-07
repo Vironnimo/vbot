@@ -561,6 +561,7 @@ class OpenAICompatibleAdapter(ProviderAdapter):
 
         classify_http_status(
             status_code,
+            idempotent=False,
             detail=detail,
             response_headers=response_headers,
         )

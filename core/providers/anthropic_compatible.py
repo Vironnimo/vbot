@@ -663,6 +663,7 @@ class AnthropicCompatibleAdapter(ProviderAdapter):
 
         classify_http_status(
             status_code,
+            idempotent=False,
             extra_retryable=self._extra_retryable_statuses,
             detail=detail,
             response_headers=response_headers,

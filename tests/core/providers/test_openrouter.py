@@ -698,6 +698,29 @@ async def test_openrouter_routing_options_normalize_global_and_model_catalogs(
     ]
 
 
+@respx.mock
+@pytest.mark.asyncio
+async def test_openrouter_routing_options_retry_http_500(
+    openrouter_config: ProviderConfig,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def _no_sleep(_delay: float) -> None:
+        return None
+
+    monkeypatch.setattr("core.utils.retry.asyncio.sleep", _no_sleep)
+    adapter = OpenRouterAdapter(openrouter_config, API_KEY)
+    route = respx.get("https://openrouter.ai/api/v1/providers")
+    route.side_effect = [
+        httpx.Response(500, text="Internal Server Error"),
+        httpx.Response(200, json={"data": [{"name": "Anthropic", "slug": "anthropic"}]}),
+    ]
+
+    options = await adapter.routing_provider_options()
+
+    assert options == [{"slug": "anthropic", "name": "Anthropic"}]
+    assert route.call_count == 2
+
+
 def test_reasoning_replay_policy_is_model_specific(
     openrouter_config: ProviderConfig,
 ) -> None:

@@ -153,7 +153,7 @@ class LMStudioAdapter(OpenAICompatibleAdapter):
                 )
             except httpx.TransportError as exc:
                 raise wrap_network_error(exc) from exc
-            _classify_lmstudio_response(response)
+            _classify_lmstudio_response(response, idempotent=True)
             payload = decode_response_json(response, "LM Studio")
             models = payload.get("models")
             if not isinstance(models, list):
@@ -176,14 +176,15 @@ class LMStudioAdapter(OpenAICompatibleAdapter):
             )
         except httpx.TransportError as exc:
             raise wrap_network_error(exc) from exc
-        _classify_lmstudio_response(response)
+        _classify_lmstudio_response(response, idempotent=False)
         decode_response_json(response, "LM Studio")
 
 
-def _classify_lmstudio_response(response: httpx.Response) -> None:
+def _classify_lmstudio_response(response: httpx.Response, *, idempotent: bool) -> None:
     detail = f"{response.status_code} {response.text}".strip()
     classify_http_status(
         response.status_code,
+        idempotent=idempotent,
         detail=detail,
         response_headers=response.headers,
     )

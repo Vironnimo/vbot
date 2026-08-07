@@ -332,6 +332,7 @@ class GitHubCopilotAdapter(OpenAICompatibleAdapter):
 
             classify_http_status(
                 response.status_code,
+                idempotent=False,
                 detail=_http_error_detail(response),
                 response_headers=response.headers,
             )
@@ -366,7 +367,10 @@ class GitHubCopilotAdapter(OpenAICompatibleAdapter):
                 await response.aclose()
                 detail = _http_error_detail(response, error_body)
                 classify_http_status(
-                    response.status_code, detail=detail, response_headers=response.headers
+                    response.status_code,
+                    idempotent=False,
+                    detail=detail,
+                    response_headers=response.headers,
                 )
                 raise ProviderError(f"Provider error: {response.status_code}", retryable=False)
 

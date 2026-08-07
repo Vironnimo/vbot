@@ -327,7 +327,10 @@ class DeviceFlowEngine:
             raise wrap_network_error(error) from error
 
         classify_http_status(
-            response.status_code, detail=response.text, response_headers=response.headers
+            response.status_code,
+            idempotent=False,
+            detail=response.text,
+            response_headers=response.headers,
         )
         return response
 
@@ -346,7 +349,10 @@ class DeviceFlowEngine:
             raise wrap_network_error(error) from error
 
         classify_http_status(
-            response.status_code, detail=response.text, response_headers=response.headers
+            response.status_code,
+            idempotent=False,
+            detail=response.text,
+            response_headers=response.headers,
         )
         return response
 
@@ -378,7 +384,10 @@ class DeviceFlowEngine:
             raise wrap_network_error(error) from error
 
         classify_http_status(
-            response.status_code, detail=response.text, response_headers=response.headers
+            response.status_code,
+            idempotent=False,
+            detail=response.text,
+            response_headers=response.headers,
         )
         return response
 
@@ -397,7 +406,10 @@ class DeviceFlowEngine:
             raise wrap_network_error(error) from error
 
         classify_http_status(
-            response.status_code, detail=response.text, response_headers=response.headers
+            response.status_code,
+            idempotent=False,
+            detail=response.text,
+            response_headers=response.headers,
         )
         return response
 
@@ -549,7 +561,10 @@ class DeviceFlowEngine:
         ) and _is_standard_device_flow_error(response):
             return response
         classify_http_status(
-            response.status_code, detail=response.text, response_headers=response.headers
+            response.status_code,
+            idempotent=False,
+            detail=response.text,
+            response_headers=response.headers,
         )
         return response
 
@@ -575,7 +590,10 @@ class DeviceFlowEngine:
         if _is_standard_device_flow_error(response):
             return response
         classify_http_status(
-            response.status_code, detail=response.text, response_headers=response.headers
+            response.status_code,
+            idempotent=False,
+            detail=response.text,
+            response_headers=response.headers,
         )
         return response
 
@@ -604,7 +622,10 @@ class DeviceFlowEngine:
             raise wrap_network_error(error) from error
 
         classify_http_status(
-            response.status_code, detail=response.text, response_headers=response.headers
+            response.status_code,
+            idempotent=False,
+            detail=response.text,
+            response_headers=response.headers,
         )
         return response
 
@@ -630,7 +651,10 @@ class DeviceFlowEngine:
         if response.status_code in OPENAI_DEVICE_PENDING_STATUS_CODES:
             return response
         classify_http_status(
-            response.status_code, detail=response.text, response_headers=response.headers
+            response.status_code,
+            idempotent=False,
+            detail=response.text,
+            response_headers=response.headers,
         )
         return response
 
@@ -723,7 +747,10 @@ class DeviceFlowEngine:
             raise wrap_network_error(error) from error
 
         classify_http_status(
-            response.status_code, detail=response.text, response_headers=response.headers
+            response.status_code,
+            idempotent=False,
+            detail=response.text,
+            response_headers=response.headers,
         )
         return response
 
@@ -775,7 +802,10 @@ class DeviceFlowEngine:
             raise wrap_network_error(error) from error
 
         classify_http_status(
-            response.status_code, detail=response.text, response_headers=response.headers
+            response.status_code,
+            idempotent=True,
+            detail=response.text,
+            response_headers=response.headers,
         )
         return response
 

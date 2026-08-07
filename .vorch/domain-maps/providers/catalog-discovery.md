@@ -33,7 +33,7 @@ Provider-generated data can be enriched from that Provider's own models.dev sect
 
 ## Retry and failure behavior
 
-Catalog requests run inside `retry_async` with the shared transport/status classification. Timeouts and transport errors, plus 429/502/503/504, retry with exponential backoff; `Retry-After` is honored as a capped floor. Auth/fatal statuses, HTTP 500 on this path, and malformed required bodies abort the Connection refresh as `ModelDiscoveryError`.
+Catalog GET requests run inside `retry_async` with the shared transport/status classification. Timeouts and transport errors, plus 429/500/502/503/504, retry with exponential backoff; `Retry-After` is honored as a capped floor. Auth/other fatal statuses and malformed required bodies abort the Connection refresh as `ModelDiscoveryError`. POST-only enrichment uses the same classifier with non-idempotent policy, so HTTP 500 remains fatal there.
 
 A supplementary request failure is logged and skipped. Provider enrichment and task hooks define their own documented fail-soft granularity. One failed Connection must not erase the last known generated Models for unrelated Connections.
 

@@ -175,9 +175,9 @@ class TestRefreshModels:
         def openrouter_handler(request: httpx.Request) -> httpx.Response:
             url = str(request.url)
             if "output_modalities=transcription" in url:
-                return httpx.Response(500, text="Internal Server Error")
+                return httpx.Response(400, text="Invalid supplementary request")
             if "output_modalities=speech" in url:
-                return httpx.Response(500, text="Internal Server Error")
+                return httpx.Response(400, text="Invalid supplementary request")
             return httpx.Response(200, json=main_models)
 
         respx.get(OPENROUTER_MODELS_URL).mock(side_effect=openrouter_handler)
@@ -300,7 +300,7 @@ class TestRefreshModels:
             )
         )
         respx.get(OPENROUTER_IMAGE_MODELS_URL).mock(
-            return_value=httpx.Response(500, text="Internal Server Error")
+            return_value=httpx.Response(400, text="Invalid task-catalog request")
         )
 
         result = await refresh_models(openrouter_config, API_KEY, resources_dir)

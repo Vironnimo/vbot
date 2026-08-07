@@ -296,7 +296,11 @@ def test_classify_http_status_attaches_retry_after_to_rate_limit() -> None:
     """A 429 carries the parsed ``Retry-After`` onto the rate-limit error."""
 
     with pytest.raises(ProviderRateLimitError) as exc_info:
-        classify_http_status(429, response_headers=httpx.Headers({"Retry-After": "7"}))
+        classify_http_status(
+            429,
+            idempotent=False,
+            response_headers=httpx.Headers({"Retry-After": "7"}),
+        )
 
     assert exc_info.value.retry_after == 7.0
 
@@ -305,7 +309,11 @@ def test_classify_http_status_attaches_retry_after_to_retryable_error() -> None:
     """A retryable 503 carries the parsed ``Retry-After`` onto the error."""
 
     with pytest.raises(ProviderError) as exc_info:
-        classify_http_status(503, response_headers=httpx.Headers({"retry-after-ms": "2000"}))
+        classify_http_status(
+            503,
+            idempotent=False,
+            response_headers=httpx.Headers({"retry-after-ms": "2000"}),
+        )
 
     assert exc_info.value.retryable is True
     assert exc_info.value.retry_after == 2.0
@@ -315,7 +323,7 @@ def test_classify_http_status_504_is_retryable_in_provider_path() -> None:
     """A 504 Gateway Timeout is retryable on the (non-idempotent) provider path."""
 
     with pytest.raises(ProviderError) as exc_info:
-        classify_http_status(504)
+        classify_http_status(504, idempotent=False)
 
     assert exc_info.value.retryable is True
 
@@ -324,16 +332,25 @@ def test_classify_http_status_500_is_not_retryable_in_provider_path() -> None:
     """A 500 is not retryable on the non-idempotent provider path."""
 
     with pytest.raises(ProviderError) as exc_info:
-        classify_http_status(500)
+        classify_http_status(500, idempotent=False)
 
     assert exc_info.value.retryable is False
+
+
+def test_classify_http_status_500_is_retryable_for_idempotent_request() -> None:
+    """A 500 is retryable when the caller declares the request replay-safe."""
+
+    with pytest.raises(ProviderError) as exc_info:
+        classify_http_status(500, idempotent=True)
+
+    assert exc_info.value.retryable is True
 
 
 def test_classify_http_status_rate_limit_without_headers_has_no_hint() -> None:
     """With no headers passed, ``retry_after`` stays ``None``."""
 
     with pytest.raises(ProviderRateLimitError) as exc_info:
-        classify_http_status(429)
+        classify_http_status(429, idempotent=False)
 
     assert exc_info.value.retry_after is None
 
@@ -342,7 +359,11 @@ def test_classify_http_status_does_not_attach_to_non_retryable_error() -> None:
     """A non-retryable 4xx never carries a retry hint even if the header is present."""
 
     with pytest.raises(ProviderError) as exc_info:
-        classify_http_status(400, response_headers=httpx.Headers({"Retry-After": "9"}))
+        classify_http_status(
+            400,
+            idempotent=False,
+            response_headers=httpx.Headers({"Retry-After": "9"}),
+        )
 
     assert exc_info.value.retryable is False
     assert exc_info.value.retry_after is None
@@ -352,6 +373,10 @@ def test_classify_http_status_auth_error_ignores_retry_after() -> None:
     """A 401 raises an auth error (not retryable); its hint stays the default ``None``."""
 
     with pytest.raises(ProviderAuthError) as exc_info:
-        classify_http_status(401, response_headers=httpx.Headers({"Retry-After": "9"}))
+        classify_http_status(
+            401,
+            idempotent=False,
+            response_headers=httpx.Headers({"Retry-After": "9"}),
+        )
 
     assert exc_info.value.retry_after is None
