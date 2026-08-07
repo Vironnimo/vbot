@@ -241,7 +241,11 @@ def start_server_process(instance: ServerInstance) -> subprocess.Popen[bytes]:
             # Keep the long-lived server independent from the invoking shell and
             # explicitly suppress a console. DETACHED_PROCESS alone can still
             # leave Python with a visible console host in installer launch paths.
-            creationflags=subprocess_creation_flags(new_process_group=True, breakaway=True),
+            creationflags=subprocess_creation_flags(
+                new_process_group=True,
+                breakaway=True,
+                platform_name="nt",
+            ),
         )
     return _open_server_process(args, env=environment, start_new_session=True)
 
