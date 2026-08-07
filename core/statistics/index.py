@@ -554,7 +554,7 @@ def _project_usage(usage: JsonObject, *, assistant: bool) -> JsonObject:
 def _project_timing(timing: JsonObject | None) -> JsonObject | None:
     if timing is None:
         return None
-    projected = {
+    projected: JsonObject = {
         key: timing[key] for key in ("started_at", "completed_at", "duration_ms") if key in timing
     }
     return projected or None
