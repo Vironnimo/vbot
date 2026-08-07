@@ -1593,9 +1593,9 @@ def test_register_bash_tool() -> None:
     )
     assert "does not extend yield_after" in tool.parameters["properties"]["timeout"]["description"]
     assert (
-        "the complete combined stdout/stderr stream is written to a log file, and the result "
-        "includes its path in the log_file field — read or grep it for the full output."
-        in tool.description
+        "when output is truncated or a command is handed off, the result includes a log_file "
+        "path to the complete combined stdout/stderr stream — read or grep it for the full "
+        "output." in tool.description
     )
     assert tool.parallel_safe is True
 
@@ -1638,8 +1638,8 @@ def test_subagent_projection_exposes_only_non_handoff_bash_modes() -> None:
     )
     assert "process handoff is unavailable" in bash_definition["description"]
     assert (
-        "the complete combined stdout/stderr stream is written to a log file, and the result "
-        "includes its path in the log_file field." in bash_definition["description"]
+        "when output is truncated, the result includes a log_file path to the complete combined "
+        "stdout/stderr stream." in bash_definition["description"]
     )
     assert projected[1] is definitions[1]
     assert definitions[0]["description"] == BASH_TOOL_DESCRIPTION
@@ -2074,7 +2074,7 @@ async def test_output_cap_keeps_tail_and_names_log_file(
 
 
 @pytest.mark.asyncio
-async def test_small_output_is_not_truncated_and_names_complete_log_file(
+async def test_small_output_is_not_truncated_and_names_no_log_file(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2092,10 +2092,8 @@ async def test_small_output_is_not_truncated_and_names_complete_log_file(
         assert result["ok"] is True
         data = result["data"]
         assert data["truncated"] is False
+        assert "log_file" not in data
         assert "[earlier output truncated" not in data["output"]
-        log_file = Path(data["log_file"])
-        assert log_file.exists()
-        assert "tiny" in log_file.read_text(encoding="utf-8")
     finally:
         await spool_manager.aclose()
 
