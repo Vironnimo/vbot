@@ -151,7 +151,9 @@ def test_register_web_search_tool_schema() -> None:
     assert page_schema["maximum"] == 10
     assert page_schema["default"] == 1
     assert properties["recency"]["enum"] == ["day", "month", "year"]
-    assert "Omit" in properties["recency"]["description"]
+    assert properties["recency"]["description"] == (
+        "Maximum result age: day, month, or year. Omit for no recency restriction."
+    )
     assert all("default" not in schema for name, schema in properties.items() if name != "page")
 
 

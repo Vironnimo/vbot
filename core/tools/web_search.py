@@ -119,7 +119,9 @@ WEB_SEARCH_TOOL_PARAMETERS: JsonObject = {
         "recency": {
             "type": "string",
             "enum": list(_RECENCY_VALUES),
-            "description": "Maximum result age. Omit for no recency restriction.",
+            "description": (
+                "Maximum result age: day, month, or year. Omit for no recency restriction."
+            ),
         },
     },
     "required": ["query"],

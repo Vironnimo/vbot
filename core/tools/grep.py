@@ -89,7 +89,9 @@ _GREP_COMMON_PARAMETERS: JsonObject = {
     },
     "glob": {
         "type": "string",
-        "description": "Optional search-root-relative file glob filter for candidate files.",
+        "description": (
+            "Optional file glob filter for candidate files, relative to the search path."
+        ),
     },
     "ignore_case": {
         "type": "boolean",

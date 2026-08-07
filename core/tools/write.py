@@ -33,7 +33,8 @@ WRITE_TOOL_DESCRIPTION = (
     "exist, and replaces the entire file if it does. Not for partial "
     "edits or appending. Automatically creates parent directories. If the "
     "file already exists you must read it first; this tool fails if you did "
-    "not, or if it changed on disk since you last read it."
+    "not, or if it changed on disk since you last read it. Content is written "
+    "verbatim - never include the N| line-number prefix from read output."
 )
 WRITE_TOOL_PARAMETERS: JsonObject = {
     "type": "object",

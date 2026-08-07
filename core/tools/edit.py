@@ -34,14 +34,11 @@ from core.utils.paths import model_path
 
 EDIT_TOOL_NAME = "edit"
 EDIT_TOOL_DESCRIPTION = (
-    "Edit a file by replacing text. old_string is matched against the file, "
-    "tolerating minor differences in whitespace/indentation (including internal "
-    "space/tab runs), line endings, and quote style. A complete `N| ` gutter block "
-    "copied from read in old_string is used automatically; include enough unchanged "
-    "surrounding text to identify one "
-    "location unless replace_all is true. For repeated lines, include a neighboring "
-    "line or heading. A genuine no-match returns bounded raw candidate excerpts for "
-    "retry. Use this for precise, surgical edits against the file's current contents."
+    "Edit a file by replacing text. old_string is matched against the file's current "
+    "contents, tolerating minor differences in whitespace/indentation (including internal "
+    "space/tab runs), line endings, and quote style. Include enough surrounding text to "
+    "identify one location unless replace_all is true. Never include the N| line-number "
+    "prefix from read output."
 )
 EDIT_TOOL_PARAMETERS: JsonObject = {
     "type": "object",
