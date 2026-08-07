@@ -84,17 +84,17 @@ BASH_TOOL_DESCRIPTION = (
     "commands. Handed-off commands are monitored automatically: continue independent work "
     "or end the Run instead of polling or starting another copy. Never manually detach or "
     "daemonize a command because that bypasses vBot's process ownership. Result output keeps "
-    f"the newest {BASH_MODEL_OUTPUT_CAP_CHARS} characters; the complete combined stdout/stderr "
-    "stream is written to a log file, and the result includes its path in the log_file field "
-    "— read or grep it for the full output." + _shell_syntax_notes()
+    f"the newest {BASH_MODEL_OUTPUT_CAP_CHARS} characters; when output is truncated or a command "
+    "is handed off, the result includes a log_file path to the complete combined stdout/stderr "
+    "stream — read or grep it for the full output." + _shell_syntax_notes()
 )
 BASH_SUBAGENT_TOOL_DESCRIPTION = (
     "Run a shell command inside this Sub-Agent, where process handoff is unavailable. Use "
     "foreground to wait for completion and auto only for bounded work; auto kills a command "
     "still running after yield_after. Never manually detach or daemonize a command. Result "
-    f"output keeps the newest {BASH_MODEL_OUTPUT_CAP_CHARS} characters; the complete combined "
-    "stdout/stderr stream is written to a log file, and the result includes its path in the "
-    "log_file field." + _shell_syntax_notes()
+    f"output keeps the newest {BASH_MODEL_OUTPUT_CAP_CHARS} characters; when output is truncated, "
+    "the result includes a log_file path to the complete combined stdout/stderr stream."
+    + _shell_syntax_notes()
 )
 BASH_EXECUTION_MODES = ("foreground", "auto", "background")
 VBOT_RUN_AGENT_ID_ENV = "VBOT_RUN_AGENT_ID"
@@ -951,6 +951,10 @@ async def _background_result(
     session = process_manager.get_session(session_id, context.agent_id)
     output = await _combined_output(process_manager, context, session_id)
     fields = _shape_output_fields(session, output)
+    if session.log_file is not None:
+        # A background process keeps writing after this result; always hand the
+        # model the log path so it can grep progress without polling.
+        fields["log_file"] = model_path(session.log_file)
     result: JsonObject = {
         "status": "running",
         "session_id": session_id,
@@ -1108,7 +1112,7 @@ def _shape_output_fields(session: ProcessSession, output: str) -> JsonObject:
         output = _truncation_marker(log_file) + output
 
     fields: JsonObject = {"output": output, "truncated": truncated}
-    if log_file is not None:
+    if truncated and log_file is not None:
         fields["log_file"] = log_file
     return fields
 
