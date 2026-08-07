@@ -143,8 +143,8 @@ describe('chatTimelinePresentation', () => {
       name: 'edit',
       arguments: {
         path: 'notes/plan.md',
-        oldString: 'before',
-        newString: 'after',
+        old_string: 'before',
+        new_string: 'after',
       },
     });
 

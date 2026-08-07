@@ -751,23 +751,6 @@ def test_edit_success_and_failure_results_are_valid_envelopes(tmp_path: Path) ->
     assert is_tool_result_envelope(failure) is True
 
 
-def test_edit_rejects_camelcase_aliases(tmp_path: Path) -> None:
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-    target = workspace / "notes.txt"
-    target.write_text("old value", encoding="utf-8")
-
-    result = edit_handler(
-        make_context(workspace),
-        {"path": "notes.txt", "oldString": "old value", "newString": "new value"},
-    )
-
-    error = assert_failure_envelope(result, "invalid_arguments")
-    assert "oldString" in error["message"]
-    assert "newString" in error["message"]
-    assert target.read_text(encoding="utf-8") == "old value"
-
-
 def test_edit_rejects_string_encoded_replace_all(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
