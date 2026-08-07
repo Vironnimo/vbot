@@ -5,7 +5,8 @@ from __future__ import annotations
 import asyncio
 import json
 import time
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import AsyncIterator, Callable, Mapping, Sequence
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -2473,6 +2474,37 @@ class ChatLoop:
             session.append(checkpoint)
             return True
 
+    @asynccontextmanager
+    async def _assistant_persistence_boundary(
+        self,
+        run: Run,
+        *,
+        project_id: str | None,
+        preserve_after_cancel: bool,
+    ) -> AsyncIterator[None]:
+        """Acquire the Session lock without losing already streamed readable output."""
+        write_lock = self._dependencies.sessions.write_lock(
+            run.agent_id,
+            run.session_id,
+            project_id,
+        )
+        while True:
+            try:
+                await write_lock.__aenter__()
+                break
+            except asyncio.CancelledError:
+                if not (preserve_after_cancel and run.cancel_requested):
+                    raise
+                # Run cancellation is forceful, but this completed readable
+                # stream is already visible. Defer that cancellation only until
+                # the competing writer releases the append boundary.
+        try:
+            yield
+        finally:
+            # The concrete Session lock never suppresses body exceptions and
+            # needs no exception details to release its ContextVar ownership.
+            await write_lock.__aexit__(None, None, None)
+
     def _route_tool_definitions(
         self,
         tools: list[JsonObject],
@@ -2606,12 +2638,22 @@ class ChatLoop:
             assistant_message = assistant_step.message
             terminal_outcome = assistant_step.terminal_outcome
             recovery = assistant_step.recovery
-            # A user cancel after visible streamed output returns the preserved
-            # partial as an interrupted turn — it must reach the persist block
-            # below before the cancel is honored, or the answer the user
-            # already saw would vanish from history.
-            preserve_cancelled_partial = run.cancel_requested and assistant_message.interrupted
-            if not preserve_cancelled_partial:
+            # Both an interrupted partial and a finished readable stream may
+            # already be visible when Cancel arrives. The latter can race only
+            # while acquiring the append lock; neither may vanish from History.
+            preserve_after_cancel = assistant_message.interrupted or (
+                self._streaming
+                and not assistant_message.tool_calls
+                and (
+                    (
+                        bool(assistant_message.content)
+                        if isinstance(assistant_message.content, str)
+                        else False
+                    )
+                    or bool(assistant_message.reasoning)
+                )
+            )
+            if not preserve_after_cancel:
                 run.raise_if_cancelled()
             if assistant_message.usage is None:
                 assistant_message = _apply_usage_estimation(assistant_message, messages)
@@ -2633,9 +2675,12 @@ class ChatLoop:
             # (a channel observed note, session.link_channel) cannot land between
             # them and break the tool-cycle ordering invariant.
             repeated_failed_tool: str | None = None
-            async with self._dependencies.sessions.write_lock(
-                run.agent_id, run.session_id, project_id
+            async with self._assistant_persistence_boundary(
+                run,
+                project_id=project_id,
+                preserve_after_cancel=preserve_after_cancel,
             ):
+                preserved_cancelled_output = run.cancel_requested and preserve_after_cancel
                 session.append(assistant_message)
                 assert isinstance(assistant_message.usage, dict)
                 assistant_request_message = _assistant_continuation_dict(
@@ -2657,7 +2702,7 @@ class ChatLoop:
                         "context_usage": dict(assistant_context_usage),
                         "iteration_count": run.iteration_count,
                     },
-                    allow_after_cancel=preserve_cancelled_partial,
+                    allow_after_cancel=preserved_cancelled_output,
                 )
                 if context.continuation_tracker is not None:
                     context.continuation_tracker.record_assistant_boundary(
@@ -2681,11 +2726,10 @@ class ChatLoop:
                     interruption_chain.append(assistant_message)
 
                 if not assistant_message.tool_calls:
-                    if preserve_cancelled_partial:
-                        # The preserved partial is persisted; end the turn
-                        # without new provider work (no auto-compaction). The
-                        # run manager sees ``cancel_requested`` and marks the
-                        # Run cancelled despite the normal return.
+                    if preserved_cancelled_output:
+                        # The already visible response is durable; end the turn
+                        # without new provider work (no auto-compaction). The Run
+                        # manager sees ``cancel_requested`` and marks it cancelled.
                         return assistant_message
                     if recovery == "interrupt":
                         raise RunInterruptedError(
