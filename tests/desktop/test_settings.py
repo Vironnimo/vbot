@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import threading
 from pathlib import Path, PurePosixPath, PureWindowsPath
 
@@ -112,6 +113,64 @@ def test_write_settings_creates_config_dir_and_round_trips(tmp_path: Path) -> No
         "servers": [],
         "last_used": None,
     }
+
+
+def test_write_settings_retries_transient_replace_errors(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings_file = tmp_path / "settings.json"
+    original_replace = Path.replace
+    replace_attempts = 0
+    retry_delays: list[float] = []
+
+    def flaky_replace(path: Path, target: Path) -> Path:
+        nonlocal replace_attempts
+        replace_attempts += 1
+        if replace_attempts < desktop_settings._IO_RETRY_ATTEMPTS:
+            raise PermissionError("settings file is temporarily locked")
+        return original_replace(path, target)
+
+    monkeypatch.setattr(Path, "replace", flaky_replace)
+    monkeypatch.setattr(desktop_settings.time, "sleep", retry_delays.append)
+
+    desktop_settings.write_settings({"servers": []}, settings_file)
+
+    assert replace_attempts == desktop_settings._IO_RETRY_ATTEMPTS
+    assert retry_delays == pytest.approx([0.05, 0.1])
+    assert json.loads(settings_file.read_text(encoding="utf-8")) == {"servers": []}
+    assert list(tmp_path.glob(".settings.json.*.tmp")) == []
+
+
+@pytest.mark.parametrize("error_type", [PermissionError, OSError])
+def test_write_settings_raises_and_logs_persistent_write_errors(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    error_type: type[OSError],
+) -> None:
+    settings_file = tmp_path / "settings.json"
+    replace_attempts = 0
+
+    def failing_replace(path: Path, target: Path) -> Path:
+        del path, target
+        nonlocal replace_attempts
+        replace_attempts += 1
+        raise error_type("settings file remains locked")
+
+    monkeypatch.setattr(Path, "replace", failing_replace)
+    monkeypatch.setattr(desktop_settings.time, "sleep", lambda _delay: None)
+
+    with (
+        caplog.at_level(logging.ERROR, logger="vbot.desktop.settings"),
+        pytest.raises(error_type, match="settings file remains locked"),
+    ):
+        desktop_settings.write_settings({"servers": []}, settings_file)
+
+    assert replace_attempts == desktop_settings._IO_RETRY_ATTEMPTS
+    assert "Desktop settings could not be persisted after 3 attempts" in caplog.text
+    assert not settings_file.exists()
+    assert list(tmp_path.glob(".settings.json.*.tmp")) == []
 
 
 # -- Remembered servers ------------------------------------------------------
