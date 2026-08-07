@@ -11,9 +11,10 @@ The reflection service owns two halves of one capability:
 2. The cadence policy behind the background trigger: per-session counters in
    the session metadata sidecar (user turns since the last memory review,
    Iterations since the last skill review), incremented at the end of every
-   successful visible run of an identity agent. When a threshold is reached,
-   one review run fires in the background. A successful review consumes the
-   due counts it covered; a failed review leaves them due for the next run.
+   completed visible run and every user-cancelled visible run that completed a
+   Model step. When a threshold is reached, one review run fires in the
+   background. A successful review consumes the due counts it covered; a failed
+   review leaves them due for the next run.
 
 The chat loop notifies this service at run end through the small
 ``ReflectionNotifier`` protocol it owns; everything with I/O happens in a
@@ -99,16 +100,20 @@ class ReflectionService:
     def notify_run_end(self, run: Run, agent: Any, *, internal: bool, outcome: str) -> None:
         """Account a finished run and maybe fire a background review.
 
-        Called by the chat loop at the end of every run. Only successful,
-        visible runs of identity agents count: internal runs (handoff, learn,
-        the review run itself) and config agents are gated out here; sub-agent
-        sessions are gated in the task once session metadata is loaded. The
-        review runs in a fork, so the session this run belongs to stays free.
+        Called by the chat loop at the end of every run. Completed visible Runs
+        and user-cancelled visible Runs with at least one completed Model step
+        count. Internal runs (handoff, learn, the review run itself) and config
+        agents are gated out here; sub-agent sessions are gated in the task once
+        session metadata is loaded. The review runs in a fork, so the session
+        this run belongs to stays free.
         """
         if internal or not agent.workspace or not memory_tool_enabled(agent.memory_prompt_mode):
             return
         memory_tool_called = MEMORY_TOOL_NAME in run.tool_call_names
-        count_run = outcome == "success"
+        user_cancelled_after_model_step = (
+            outcome == "cancelled" and run.cancel_reason == "user" and run.iteration_count > 0
+        )
+        count_run = outcome == "success" or user_cancelled_after_model_step
         if not count_run and not memory_tool_called:
             return
         task = asyncio.create_task(

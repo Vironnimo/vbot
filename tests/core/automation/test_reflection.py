@@ -38,6 +38,7 @@ class _FakeRun:
         session_id: str = "s1",
         project_id: str | None = None,
         iteration_count: int = 0,
+        cancel_reason: str | None = None,
         tool_call_names: set[str] | None = None,
         final_content: str = "Saved a memory about the user.",
     ) -> None:
@@ -45,6 +46,7 @@ class _FakeRun:
         self.session_id = session_id
         self.project_id = project_id
         self.iteration_count = iteration_count
+        self.cancel_reason = cancel_reason
         self.tool_call_names = set(tool_call_names or ())
         self._final_content = final_content
         self.wait_gate: asyncio.Event | None = None
@@ -188,17 +190,63 @@ async def test_internal_runs_never_count() -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("outcome", ["error", "cancelled"])
-async def test_unsuccessful_runs_never_count(outcome: str) -> None:
+@pytest.mark.parametrize(
+    ("outcome", "cancel_reason", "iteration_count"),
+    [
+        ("error", None, 3),
+        ("cancelled", None, 3),
+        ("cancelled", "shutdown", 3),
+        ("cancelled", "user", 0),
+    ],
+)
+async def test_failed_internal_and_immediate_user_cancelled_runs_never_count(
+    outcome: str, cancel_reason: str | None, iteration_count: int
+) -> None:
     service, sessions, loop = _make_service()
 
     service.notify_run_end(
-        cast("Any", _FakeRun()), _identity_agent(), internal=False, outcome=outcome
+        cast(
+            "Any",
+            _FakeRun(cancel_reason=cancel_reason, iteration_count=iteration_count),
+        ),
+        _identity_agent(),
+        internal=False,
+        outcome=outcome,
     )
     await _drain(service)
 
     assert sessions.metadata == {}
     assert loop.started == []
+
+
+@pytest.mark.asyncio
+async def test_user_cancelled_run_with_model_activity_counts_and_triggers_review() -> None:
+    service, sessions, loop = _make_service(memory_turn_interval=2, skill_model_step_interval=5)
+    sessions.metadata["s1"] = {
+        REFLECTION_COUNTERS_META_KEY: {
+            "turns_since_memory_review": 1,
+            "iterations_since_skill_review": 3,
+        }
+    }
+
+    service.notify_run_end(
+        cast(
+            "Any",
+            _FakeRun(cancel_reason="user", iteration_count=2),
+        ),
+        _identity_agent(),
+        internal=False,
+        outcome="cancelled",
+    )
+    await _drain(service)
+
+    assert _counters(sessions) == {
+        "turns_since_memory_review": 0,
+        "iterations_since_skill_review": 0,
+    }
+    assert len(loop.started) == 1
+    assert loop.started[0]["message"] == REFLECT_BRIEFS["reflect.md"]
+    assert loop.started[0]["tool_restriction"] == REFLECTION_TOOL_RESTRICTION
 
 
 @pytest.mark.asyncio
