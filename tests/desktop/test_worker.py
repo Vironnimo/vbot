@@ -786,6 +786,61 @@ def test_handle_detection_transcription_failure_returns_to_listening(
     assert worker._running.is_set()
 
 
+@pytest.mark.parametrize("transcript", [None, "   "])
+def test_handle_detection_discards_failed_outcome_when_stopped_during_transcription(
+    fake_bridge: FakeBridge,
+    transcript: str | None,
+) -> None:
+    from desktop.wakeword.worker import WakewordWorker
+
+    worker = WakewordWorker(
+        engine=MockWakewordEngine(),
+        bridge=fake_bridge,
+        server_url="http://127.0.0.1:8420",
+    )
+    worker._stream = FakeSounddeviceStream([_make_speech_chunk()])
+    worker._running.set()
+    worker._read_config = lambda: {  # type: ignore[method-assign]
+        "target_agent_id": "main",
+        "session_behavior": "active",
+    }
+    worker._record_until_silence = lambda _pre_roll=b"": b"audio"  # type: ignore[assignment,method-assign]
+
+    def transcribe_then_stop(_audio_data: bytes) -> str | None:
+        worker._running.clear()
+        return transcript
+
+    worker._transcribe = transcribe_then_stop  # type: ignore[assignment,method-assign]
+    worker._resolve_session = MagicMock()  # type: ignore[method-assign]
+    worker._send_transcript = MagicMock()  # type: ignore[method-assign]
+
+    outcome = worker._handle_detection()
+
+    assert outcome is None
+    worker._resolve_session.assert_not_called()
+    worker._send_transcript.assert_not_called()
+    assert fake_bridge.states == ["recording", "transcribing"]
+
+
+@pytest.mark.parametrize("outcome", [None, "transcription_failed"])
+def test_prepare_next_listen_publishes_nothing_after_stop(
+    fake_bridge: FakeBridge,
+    outcome: str | None,
+) -> None:
+    from desktop.wakeword.worker import WakewordWorker
+
+    worker = WakewordWorker(
+        engine=MockWakewordEngine(),
+        bridge=fake_bridge,
+        server_url="http://127.0.0.1:8420",
+    )
+    fake_bridge.publish_state("off")
+
+    worker._prepare_next_listen(outcome)
+
+    assert fake_bridge.states == ["off"]
+
+
 def test_handle_detection_skips_network_when_stopped_during_recording(
     fake_bridge: FakeBridge,
 ) -> None:
