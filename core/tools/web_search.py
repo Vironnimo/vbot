@@ -41,6 +41,8 @@ _LOGGER = get_logger("tools.web_search")
 _BRAVE_ENDPOINT = "https://api.search.brave.com/res/v1/web/search"
 
 _REQUEST_TIMEOUT = httpx.Timeout(30.0, connect=5.0)
+_MAX_RESPONSE_BYTES = 5 * 1024 * 1024
+_MAX_RESPONSE_SIZE_LABEL = "5 MB"
 
 _HTML_TAG_PATTERN = re.compile(r"<[^>]+>")
 _DOMAIN_LABEL_PATTERN = re.compile(r"(?!-)[a-z0-9-]{1,63}(?<!-)\Z")
@@ -61,7 +63,7 @@ _BROWSER_HEADERS: dict[str, str] = {
     ),
     "Accept": "application/json",
     "Accept-Language": "en-US,en;q=0.9",
-    "Accept-Encoding": "gzip, deflate",
+    "Accept-Encoding": "identity",
     "Cache-Control": "no-cache",
     "Pragma": "no-cache",
 }
@@ -122,6 +124,54 @@ WEB_SEARCH_TOOL_PARAMETERS: JsonObject = {
     },
     "required": ["query"],
 }
+
+
+class _ResponseTooLargeError(Exception):
+    """Raised before a search response can exceed its in-memory limit."""
+
+
+def _declared_response_size(headers: Mapping[str, str]) -> int | None:
+    """Return a valid declared body size, when the provider sent one."""
+    value = headers.get("content-length")
+    if value is None:
+        return None
+    try:
+        size = int(value)
+    except ValueError:
+        return None
+    return size if size >= 0 else None
+
+
+async def _bounded_get(
+    client: httpx.AsyncClient,
+    url: str,
+    *,
+    params: Mapping[str, Any],
+    headers: Mapping[str, str] | None = None,
+) -> httpx.Response:
+    """Stream one GET into a bounded buffer before exposing JSON helpers."""
+    async with client.stream("GET", url, params=params, headers=headers) as response:
+        declared_size = _declared_response_size(response.headers)
+        if declared_size is not None and declared_size > _MAX_RESPONSE_BYTES:
+            raise _ResponseTooLargeError(
+                f"provider response exceeds the {_MAX_RESPONSE_SIZE_LABEL} limit"
+            )
+
+        body = bytearray()
+        async for chunk in response.aiter_bytes():
+            if len(body) + len(chunk) > _MAX_RESPONSE_BYTES:
+                raise _ResponseTooLargeError(
+                    f"provider response exceeds the {_MAX_RESPONSE_SIZE_LABEL} limit"
+                )
+            body.extend(chunk)
+
+        return httpx.Response(
+            response.status_code,
+            headers=response.headers,
+            content=bytes(body),
+            request=response.request,
+            extensions=response.extensions,
+        )
 
 
 def _normalize_text(raw: Any) -> str:
@@ -342,7 +392,8 @@ async def _search_brave(
     async with httpx.AsyncClient(headers=_BROWSER_HEADERS, timeout=_REQUEST_TIMEOUT) as client:
         for attempt in range(MAX_RETRIES + 1):
             try:
-                response = await client.get(
+                response = await _bounded_get(
+                    client,
                     _BRAVE_ENDPOINT,
                     params=params,
                     headers={"X-Subscription-Token": api_key},
@@ -459,7 +510,7 @@ async def _search_searxng(
     async with httpx.AsyncClient(headers=_BROWSER_HEADERS, timeout=_REQUEST_TIMEOUT) as client:
         for attempt in range(MAX_RETRIES + 1):
             try:
-                response = await client.get(endpoint, params=params)
+                response = await _bounded_get(client, endpoint, params=params)
             except httpx.RequestError as error:
                 if attempt >= MAX_RETRIES:
                     _LOGGER.warning("SearXNG web search request failed: %s", error)
@@ -637,33 +688,36 @@ async def web_search_handler(
         return tool_failure("validation_error", recency_error, retryable=False)
 
     provider = settings["provider"]
-    if provider == WEB_SEARCH_PROVIDER_SEARXNG:
-        payload, search_failure = await _search_searxng(
-            base_url=settings["searxng"]["base_url"],
-            query=query,
-            domains=domains,
-            count=count,
-            page=page,
-            recency=recency,
-        )
-        return _search_result_envelope(payload, search_failure)
+    try:
+        if provider == WEB_SEARCH_PROVIDER_SEARXNG:
+            payload, search_failure = await _search_searxng(
+                base_url=settings["searxng"]["base_url"],
+                query=query,
+                domains=domains,
+                count=count,
+                page=page,
+                recency=recency,
+            )
+        else:
+            api_key = _normalize_text(credential_resolver("BRAVE_API_KEY"))
+            if not api_key:
+                return tool_failure(
+                    "missing_api_key",
+                    "web_search requires BRAVE_API_KEY to be configured",
+                    retryable=False,
+                )
 
-    api_key = _normalize_text(credential_resolver("BRAVE_API_KEY"))
-    if not api_key:
-        return tool_failure(
-            "missing_api_key",
-            "web_search requires BRAVE_API_KEY to be configured",
-            retryable=False,
-        )
+            payload, search_failure = await _search_brave(
+                api_key=api_key,
+                query=query,
+                domains=domains,
+                count=count,
+                page=page,
+                recency=recency,
+            )
+    except _ResponseTooLargeError as error:
+        return tool_failure("response_too_large", str(error), retryable=False)
 
-    payload, search_failure = await _search_brave(
-        api_key=api_key,
-        query=query,
-        domains=domains,
-        count=count,
-        page=page,
-        recency=recency,
-    )
     return _search_result_envelope(payload, search_failure)
 
 

@@ -26,6 +26,7 @@ Searches the public web through the configured first-party search provider and r
 - Settings are resolved at call time (before argument-count parsing, since the default comes from them); an invalid `web_search` settings section returns `configuration_error`.
 - Invalid `recency` values return `validation_error`; the retired `freshness`, `date_after`, and `date_before` fields are rejected as unknown arguments.
 - Provider/network failures map to `provider_request_failed`.
+- Provider response bodies are streamed into a 5 MB bounded buffer before status details or success JSON are decoded. A valid `Content-Length` over the limit is rejected before reading, while the byte counter catches missing or dishonest declarations; oversized responses return non-retryable `response_too_large`.
 - Transient-status retries honor a server `Retry-After` hint as a floor (parsed via `core/utils/http_status.parse_retry_after`, delay math via `core/utils/retry.compute_retry_delay`).
 - `recency` is the provider-adapter invariant for current and future providers: every adapter must translate `day`, `month`, and `year` into a real upstream request parameter and echo the canonical value on success. An adapter must never silently omit a requested window.
 - Result content is marked as untrusted web content.
