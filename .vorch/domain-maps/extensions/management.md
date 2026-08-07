@@ -6,6 +6,8 @@ Read this reference only for Extension discovery, manifests, records, settings s
 
 Each scan root accepts immediate `.py` files and directories with an Extension entry point. Import names live under the synthetic `vbot_ext` package so package-relative imports work. Identity is the file stem or directory name; the optional directory manifest enriches display metadata but never replaces filesystem identity.
 
+Async `register(api)` calls run one at a time on private event loops with a hard 10-second deadline. A timeout marks only that Extension as failed, requests task cancellation, and continues loading; the worker is a daemon so even Extension code that suppresses cancellation cannot keep server start or Extension Reload blocked.
+
 `settings.extension_directories` is the only configurable extra-root list; the bundled root is fixed separately and cannot be removed through that setting. Runtime ignores a non-list value with a warning, skips non-string or empty entries, expands `~`, and preserves configured order before the final bundled root.
 
 `ExtensionRecord` retains every discovered result in load order: identity and paths, `status`, load `error`, optional manifest, collected declarations, non-fatal `capability_errors`, and `overridden_by` for shadowed copies. `records()` includes all statuses; `diagnostics()` includes only failed records.

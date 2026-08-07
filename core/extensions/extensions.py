@@ -39,6 +39,7 @@ if TYPE_CHECKING:
 _LOGGER = get_logger("extensions")
 _EXTENSION_PARENT_PACKAGE = "vbot_ext"
 _MANIFEST_FILENAME = "extension.json"
+_ASYNC_REGISTER_TIMEOUT_SECONDS = 10.0
 
 # Public extension API version. Bumped when the extension contract changes in a
 # way third-party extensions can detect via their manifest ``api_version``.
@@ -262,6 +263,13 @@ class ExtensionRecord:
 
 class _ManifestError(Exception):
     """Raised when an ``extension.json`` manifest is missing required shape."""
+
+
+class _AsyncRegisterTimeoutError(TimeoutError):
+    """Raised when an async Extension registration exceeds its hard deadline."""
+
+    def __init__(self, timeout_seconds: float) -> None:
+        super().__init__(f"async register() timed out after {timeout_seconds:g} seconds")
 
 
 class ExtensionAPI:
@@ -1380,7 +1388,11 @@ def _await_pending_registers(pending: list[tuple[ExtensionRecord, Any]]) -> None
     """Drive every async ``register()`` coroutine to completion, fail-open."""
     for record, coro in pending:
         try:
-            _run_coroutine_to_completion(coro)
+            _run_coroutine_to_completion(coro, _ASYNC_REGISTER_TIMEOUT_SECONDS)
+        except _AsyncRegisterTimeoutError as exc:
+            _LOGGER.error("Extension %r %s", record.name, exc)
+            record.status = "failed"
+            record.error = str(exc)
         except Exception as exc:
             _LOGGER.error(
                 "Extension %r async register() raised: %s", record.name, exc, exc_info=True
@@ -1389,31 +1401,59 @@ def _await_pending_registers(pending: list[tuple[ExtensionRecord, Any]]) -> None
             record.error = f"async register() raised: {exc}"
 
 
-def _run_coroutine_to_completion(coro: Any) -> None:
-    """Run *coro* to completion whether or not a loop runs in this thread.
+def _run_coroutine_to_completion(coro: Any, timeout_seconds: float | None = None) -> None:
+    """Run *coro* on a private loop, enforcing a hard deadline when supplied.
 
-    With no running loop we drive it directly. Inside a running loop (e.g.
-    ``Runtime.start()`` called from the server's async lifespan) we cannot block
-    on the loop, so we run the coroutine on a private loop in a worker thread and
-    join — keeping load/shutdown deterministic in both situations.
+    A timed daemon worker is required even when this thread has no running loop:
+    an asyncio timeout still waits for cancellation, which uncooperative
+    Extension code can suppress. The loader instead stops waiting at the hard
+    deadline and requests cancellation as best effort; a coroutine that ignores
+    it may keep its daemon worker alive, but cannot hold server start or reload
+    hostage. Callers without a deadline retain deterministic blocking behavior.
     """
-    try:
-        asyncio.get_running_loop()
-    except RuntimeError:
-        asyncio.run(coro)
-        return
+    if timeout_seconds is None:
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            asyncio.run(coro)
+            return
 
     error: list[BaseException] = []
+    worker_state: list[tuple[asyncio.AbstractEventLoop, asyncio.Task[Any]]] = []
+    worker_state_lock = threading.Lock()
+
+    async def _drive_coroutine() -> None:
+        loop = asyncio.get_running_loop()
+        task = loop.create_task(coro)
+        with worker_state_lock:
+            worker_state.append((loop, task))
+        await task
 
     def _runner() -> None:
         try:
-            asyncio.run(coro)
+            asyncio.run(_drive_coroutine())
         except BaseException as exc:  # surfaced to the caller's thread
             error.append(exc)
 
-    thread = threading.Thread(target=_runner, name="vbot-extension-async")
+    thread = threading.Thread(
+        target=_runner,
+        name="vbot-extension-async",
+        daemon=timeout_seconds is not None,
+    )
     thread.start()
-    thread.join()
+    thread.join(timeout_seconds)
+    if thread.is_alive():
+        with worker_state_lock:
+            state = worker_state[0] if worker_state else None
+        if state is not None:
+            loop, task = state
+            try:
+                loop.call_soon_threadsafe(task.cancel)
+            except RuntimeError:
+                _LOGGER.debug("Async Extension registration loop closed at its timeout boundary")
+        if timeout_seconds is None:  # defensive: an unbounded join cannot time out
+            raise RuntimeError("Coroutine worker remained alive after an unbounded join")
+        raise _AsyncRegisterTimeoutError(timeout_seconds)
     if error:
         raise error[0]
 
