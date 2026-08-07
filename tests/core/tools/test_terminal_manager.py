@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import queue
 from collections.abc import AsyncIterator, Mapping, Sequence
+from datetime import timedelta
 from pathlib import Path
 from typing import Any
 
@@ -401,7 +402,9 @@ async def test_finished_operator_history_expires_with_a_catalog_change(
     manager.add_changed_callback(changed.append)
     session = await spawn(manager, tmp_path)
     await manager.kill_for_operator(session.terminal_id)
-    session.finished_at = terminal_module._utc_now() - terminal_module.TERMINAL_FINISHED_TTL
+    session.finished_at = (
+        terminal_module._utc_now() - terminal_module.TERMINAL_FINISHED_TTL - timedelta(seconds=1)
+    )
     changed.clear()
 
     await manager.sweep_finished()

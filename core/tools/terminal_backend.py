@@ -363,9 +363,7 @@ def spawn_terminal_adapter(
 
     launch = guarded_process_launch(argv)
     preexec_fn = (
-        partial(_make_file_descriptors_inheritable, launch.pass_fds)
-        if launch.pass_fds
-        else None
+        partial(_make_file_descriptors_inheritable, launch.pass_fds) if launch.pass_fds else None
     )
     process = PtyProcess.spawn(
         list(launch.argv),
