@@ -434,11 +434,9 @@ function plannedToolResponse(prompt, results, offeredTools) {
         ],
       };
     }
-    const imageUrl = imageResults[0]?.envelope?.data?.images?.[0]?.url ?? "";
+    const imagePath = imageResults[0]?.envelope?.data?.images?.[0]?.path ?? "";
     return {
-      text:
-        `Generated media tools completed.\n\n` +
-        `![E2E generated image](${imageUrl})`,
+      text: `Generated media tools completed.\n\nfile:${imagePath}`,
     };
   }
 

@@ -12,6 +12,7 @@ import subprocess
 from collections import deque
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
+from functools import partial
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -361,14 +362,27 @@ def spawn_terminal_adapter(
     from ptyprocess import PtyProcess
 
     launch = guarded_process_launch(argv)
+    preexec_fn = (
+        partial(_make_file_descriptors_inheritable, launch.pass_fds)
+        if launch.pass_fds
+        else None
+    )
     process = PtyProcess.spawn(
         list(launch.argv),
         cwd=str(cwd),
         env=dict(env),
         dimensions=(rows, columns),
         pass_fds=launch.pass_fds,
+        preexec_fn=preexec_fn,
     )
     return _PosixTerminalAdapter(process)
+
+
+def _make_file_descriptors_inheritable(file_descriptors: Sequence[int]) -> None:
+    """Clear close-on-exec for descriptors explicitly retained by ptyprocess."""
+
+    for file_descriptor in file_descriptors:
+        os.set_inheritable(file_descriptor, True)
 
 
 def terminate_process_tree(adapter: TerminalAdapter) -> None:

@@ -54,6 +54,7 @@ def test_posix_default_terminal_uses_environment_then_login_shell_then_sh() -> N
 
 
 def test_posix_terminal_spawn_uses_shared_server_lifetime_guardian(monkeypatch) -> None:
+    inherited: list[int] = []
     spawned: dict[str, object] = {}
     workdir = Path("/work")
 
@@ -69,6 +70,11 @@ def test_posix_terminal_spawn_uses_shared_server_lifetime_guardian(monkeypatch) 
         "guarded_process_launch",
         lambda _argv: SimpleNamespace(argv=("guardian", "--", "tool"), pass_fds=(41,)),
     )
+    monkeypatch.setattr(
+        terminal_backend,
+        "_make_file_descriptors_inheritable",
+        lambda file_descriptors: inherited.extend(file_descriptors),
+    )
     monkeypatch.setitem(sys.modules, "ptyprocess", SimpleNamespace(PtyProcess=FakePtyProcess))
 
     adapter = terminal_backend.spawn_terminal_adapter(
@@ -81,6 +87,12 @@ def test_posix_terminal_spawn_uses_shared_server_lifetime_guardian(monkeypatch) 
     )
 
     assert adapter.pid == 123
+    spawn_kwargs = spawned["kwargs"]
+    assert isinstance(spawn_kwargs, dict)
+    preexec_fn = spawn_kwargs.pop("preexec_fn")
+    assert callable(preexec_fn)
+    preexec_fn()
+    assert inherited == [41]
     assert spawned == {
         "argv": ["guardian", "--", "tool"],
         "kwargs": {
