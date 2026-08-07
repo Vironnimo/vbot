@@ -1,6 +1,6 @@
 # Edit Tool
 
-Replaces text inside an existing file, matching `old_string` with controlled fuzziness against the current on-disk content while always splicing the file's real original bytes.
+Replaces text inside an existing UTF-8 text file, matching `old_string` with controlled fuzziness against the current on-disk content while preserving every unmatched byte.
 
 ## Interfaces
 
@@ -20,11 +20,12 @@ Replaces text inside an existing file, matching `old_string` with controlled fuz
 
 - Matching lives in `core/tools/fuzzy_match.py` (`replace_fuzzy`), a chain tried in order; the first strategy that finds any match wins: **exact** (literal substring) → **normalized** (CR/CRLF→LF plus a small 1:1 Unicode fold — curly quotes, non-breaking space, en-dash → ASCII; character-level, so it matches within a line) → **line_trimmed** (whole-line match after stripping each line's leading/trailing whitespace) → **whitespace_normalized** (character-level match after collapsing each horizontal Space/Tab run while preserving line boundaries). The final two strategies re-indent the replacement to the file's actual indentation so a whitespace-only match never corrupts indentation.
 - `old_string` first runs through that chain exactly as supplied. Only after a complete miss, `line_number_gutter_candidates` may derive current-spaced and reproduced-compact raw candidates from a block whose every physical line carries a positive, consecutive `N|`/`N:C|` gutter; each candidate then runs through the same chain in order. The first candidate with any match is terminal, so ambiguity and `replace_all` retain the normal matcher semantics. Raw-first ordering preserves literal edits of files that genuinely contain gutter-shaped text.
-- Non-exact strategies search a normalized copy and map the match back to the original bytes via a per-character span map, so the file's exact characters and CRLF endings are preserved. Line-ending style is applied to `new_string` on every strategy (including exact).
+- Non-exact strategies search a normalized copy and map the match back to the original content via a per-character span map, so the file's exact characters and CRLF endings are preserved. Line-ending style is applied to `new_string` on every strategy (including exact).
 - **Similarity / anchor matching is deliberately excluded from writing** — the Tool never replaces text that is merely *similar*. Similarity exists only in `find_closest_candidates` after every destructive strategy and gutter candidate has missed; it returns diagnostics, never replacement spans.
 
 ## Constraints & Gotchas
 
+- **Fail-closed text boundary:** under the path's mutation lock, `edit` reads the complete byte payload, rejects any NUL byte as `binary_file`, and then decodes strictly as UTF-8. Invalid UTF-8 returns `unsupported_encoding`. Both failures occur before matching or atomic replacement and leave the original bytes untouched; tolerant decoding must never be used on this write path.
 - **Current-content optimistic edit:** `edit` does not require a prior `read` and does not block when the file changed since the Session last read it. Under the path's mutation lock it reads the current bytes, applies the unique `old_string` match to those bytes, and preserves every unmatched byte; a changed file whose target no longer matches still fails without writing through the normal `text_not_found` / `ambiguous_match` boundary. A successful edit restamps the file for later full-file `write` checks, and a successful edit after detected metadata drift includes `data.stale_warning` explaining that it merged against newer on-disk content.
 - **Serialized atomic mutation** (shared with `write`, see `file_state.md`): one Runtime serializes mutations of the same resolved path while different paths remain independent. The replacement is written to a same-directory temporary file, flushed, permission-matched to an existing target, and installed with atomic `os.replace`; a failed write removes the temporary file and leaves the original intact.
 - Missing text, ambiguous matches, validation failures, and expected filesystem errors return failure envelopes.

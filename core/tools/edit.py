@@ -282,15 +282,31 @@ def edit_handler(
                 if file_state is not None
                 else None
             )
-            content = resolved.read_bytes().decode("utf-8", errors="replace")
+            raw_content = resolved.read_bytes()
         except OSError as error:
             return tool_failure(
                 "file_read_error", f"failed to read file: {displayed_path}: {error}"
             )
 
+        if b"\x00" in raw_content:
+            return tool_failure(
+                "binary_file",
+                f"Cannot edit binary file: {displayed_path}. "
+                "The edit tool only supports UTF-8 text files.",
+            )
+
+        try:
+            content = raw_content.decode("utf-8")
+        except UnicodeDecodeError:
+            return tool_failure(
+                "unsupported_encoding",
+                f"Cannot edit file because it is not valid UTF-8: {displayed_path}. "
+                "Convert it to UTF-8 before using edit.",
+            )
+
         # The matcher progresses from exact through deterministic newline, Unicode,
         # line-boundary, and horizontal-whitespace normalization, always splicing
-        # the real original bytes.
+        # the real original content.
         result = _replace_with_gutter_fallback(
             content, old_string, new_string, replace_all=replace_all
         )

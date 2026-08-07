@@ -627,6 +627,62 @@ def test_edit_preserves_utf8_bom(tmp_path: Path) -> None:
     assert target.read_bytes() == b"\xef\xbb\xbfvalue = 2\n"
 
 
+def test_edit_rejects_binary_file_without_writing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    target = workspace / "data.bin"
+    original = b"value = old\x00\xffpayload"
+    target.write_bytes(original)
+
+    def fail_if_called(_resolved: Path, _payload: bytes) -> None:
+        pytest.fail("binary file must be rejected before writing")
+
+    monkeypatch.setattr("core.tools.edit.atomic_write_bytes", fail_if_called)
+
+    result = edit_handler(
+        make_context(workspace),
+        {"path": "data.bin", "old_string": "value = old", "new_string": "value = new"},
+    )
+
+    error = assert_failure_envelope(result, "binary_file")
+    assert error["message"] == (
+        f"Cannot edit binary file: {model_path(target.resolve())}. "
+        "The edit tool only supports UTF-8 text files."
+    )
+    assert target.read_bytes() == original
+
+
+def test_edit_rejects_non_utf8_file_without_writing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    target = workspace / "legacy.txt"
+    original = b"value = old\ncaf\xe9\n"
+    target.write_bytes(original)
+
+    def fail_if_called(_resolved: Path, _payload: bytes) -> None:
+        pytest.fail("non-UTF-8 file must be rejected before writing")
+
+    monkeypatch.setattr("core.tools.edit.atomic_write_bytes", fail_if_called)
+
+    result = edit_handler(
+        make_context(workspace),
+        {"path": "legacy.txt", "old_string": "value = old", "new_string": "value = new"},
+    )
+
+    error = assert_failure_envelope(result, "unsupported_encoding")
+    assert error["message"] == (
+        f"Cannot edit file because it is not valid UTF-8: {model_path(target.resolve())}. "
+        "Convert it to UTF-8 before using edit."
+    )
+    assert target.read_bytes() == original
+
+
 def test_edit_returns_failure_envelope_for_filesystem_read_error(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
