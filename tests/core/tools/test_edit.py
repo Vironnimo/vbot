@@ -448,6 +448,22 @@ def test_edit_matches_different_indentation_fuzzily(tmp_path: Path) -> None:
     assert data["first_changed_line"] == 2
 
 
+def test_edit_matches_internal_horizontal_whitespace_fuzzily(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    target = workspace / "module.py"
+    target.write_text("def f():\n    value  =\t1\n", encoding="utf-8")
+
+    result = edit_handler(
+        make_context(workspace),
+        {"path": "module.py", "old_string": "  value = 1", "new_string": "  value = 2"},
+    )
+
+    data = assert_success_envelope(result)
+    assert data["first_changed_line"] == 2
+    assert target.read_text(encoding="utf-8") == "def f():\n    value = 2\n"
+
+
 def test_edit_preserves_utf8_bom(tmp_path: Path) -> None:
     # Editing a BOM-prefixed file must keep the BOM intact on the round-trip.
     workspace = tmp_path / "workspace"

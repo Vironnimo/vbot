@@ -20,8 +20,10 @@ terminal — it does not fall through to a looser strategy):
    trailing whitespace (plus the same Unicode mapping). The replacement is
    re-indented to the file's actual indentation, so a whitespace-only match never
    corrupts indentation.
+4. ``whitespace_normalized`` — collapse horizontal space/tab runs while preserving
+   line boundaries. The replacement is re-indented like a line-trimmed match.
 
-Both non-exact strategies search a normalized copy of the content and map the
+All non-exact strategies search a normalized copy of the content and map the
 match back to the original bytes through a per-character span map, so CRLF line
 endings and the exact original characters are always preserved. Deliberately
 excluded: similarity / anchor matching (replacing text that is merely *similar*).
@@ -222,6 +224,46 @@ def _match_line_trimmed(content: str, pattern: str) -> list[tuple[int, int]]:
     return matches
 
 
+def _collapse_horizontal_whitespace_with_spans(
+    text: str,
+) -> tuple[str, list[tuple[int, int]]]:
+    """Normalize text and collapse each horizontal whitespace run to one space."""
+    normalized, source_spans = _normalize_with_spans(text)
+    chars: list[str] = []
+    spans: list[tuple[int, int]] = []
+
+    for char, source_span in zip(normalized, source_spans, strict=True):
+        if char in (" ", "\t"):
+            if chars and chars[-1] == " ":
+                spans[-1] = (spans[-1][0], source_span[1])
+            else:
+                chars.append(" ")
+                spans.append(source_span)
+            continue
+        chars.append(char)
+        spans.append(source_span)
+
+    return "".join(chars), spans
+
+
+def _match_whitespace_normalized(content: str, pattern: str) -> list[tuple[int, int]]:
+    normalized_pattern = _collapse_horizontal_whitespace_with_spans(pattern)[0]
+    if not normalized_pattern:
+        return []
+    normalized_content, spans = _collapse_horizontal_whitespace_with_spans(content)
+
+    matches: list[tuple[int, int]] = []
+    pattern_length = len(normalized_pattern)
+    start = 0
+    while True:
+        position = normalized_content.find(normalized_pattern, start)
+        if position < 0:
+            break
+        matches.append((spans[position][0], spans[position + pattern_length - 1][1]))
+        start = position + pattern_length
+    return matches
+
+
 def _find_non_overlapping(haystack: str, needle: str) -> list[tuple[int, int]]:
     if not needle:
         return []
@@ -310,6 +352,7 @@ _STRATEGIES = (
     ("exact", _match_exact, False),
     ("normalized", _match_normalized, False),
     ("line_trimmed", _match_line_trimmed, True),
+    ("whitespace_normalized", _match_whitespace_normalized, True),
 )
 
 

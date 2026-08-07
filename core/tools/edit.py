@@ -28,8 +28,9 @@ from core.utils.paths import model_path
 EDIT_TOOL_NAME = "edit"
 EDIT_TOOL_DESCRIPTION = (
     "Edit a file by replacing text. old_string is matched against the file, "
-    "tolerating minor differences in whitespace/indentation, line endings, and "
-    "quote style; include enough unchanged surrounding text to identify one "
+    "tolerating minor differences in whitespace/indentation (including internal "
+    "space/tab runs), line endings, and quote style; include enough unchanged "
+    "surrounding text to identify one "
     "location unless replace_all is true. For repeated lines, include a neighboring "
     "line or heading. Use this for precise, surgical edits against the file's current "
     "contents."
@@ -243,8 +244,9 @@ def edit_handler(
                 "file_read_error", f"failed to read file: {displayed_path}: {error}"
             )
 
-        # The matcher tries exact, then newline/Unicode-normalized, then whitespace-
-        # tolerant line matching, always splicing the real original bytes.
+        # The matcher progresses from exact through deterministic newline, Unicode,
+        # line-boundary, and horizontal-whitespace normalization, always splicing
+        # the real original bytes.
         result = replace_fuzzy(content, old_string, new_string, replace_all=replace_all)
         if result is None:
             return _text_not_found_failure(old_string)

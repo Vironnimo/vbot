@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from difflib import SequenceMatcher
+from itertools import islice
 from pathlib import Path
 from typing import Any
 
@@ -43,10 +45,14 @@ _BINARY_DETECTION_BYTES = 8192
 _FILE_PROBE_BYTES = 64 * 1024
 _TEXT_STREAM_CHUNK_CHARACTERS = 64 * 1024
 _LINE_BREAK_PATTERN = re.compile(r"\r\n|[\n\v\f\x1c-\x1e\x85\u2028\u2029\r]")
+_SIMILAR_FILE_SCAN_LIMIT = 50
+_SIMILAR_FILE_RESULT_LIMIT = 5
+_SIMILAR_FILE_MIN_RATIO = 0.55
 
 READ_TOOL_NAME = "read"
 READ_TOOL_DESCRIPTION = (
-    "Read a file. Text files return their contents with every line prefixed by "
+    "Read a file. Missing paths suggest similar files from the target directory. "
+    "Text files return their contents with every line prefixed by "
     "its number as `N| ` — a reference gutter plus separator space; neither is "
     "file content, so never reproduce them when "
     "writing or editing. Output is truncated to 2000 lines or 50 KB; use "
@@ -99,6 +105,62 @@ class _FileInputTooLargeError(Exception):
     def __init__(self, max_bytes: int) -> None:
         self.max_bytes = max_bytes
         super().__init__(f"file exceeds input limit {max_bytes}")
+
+
+def _similar_file_score(requested: Path, candidate: Path) -> tuple[int, float] | None:
+    """Rank a same-directory file by name similarity to a missing target."""
+    requested_name = requested.name.casefold()
+    candidate_name = candidate.name.casefold()
+    requested_stem = requested.stem.casefold()
+    candidate_stem = candidate.stem.casefold()
+
+    if candidate_name == requested_name:
+        return 5, 1.0
+    if candidate_stem == requested_stem:
+        return 4, 1.0
+
+    name_ratio = SequenceMatcher(None, requested_name, candidate_name).ratio()
+    stem_ratio = SequenceMatcher(None, requested_stem, candidate_stem).ratio()
+    ratio = max(name_ratio, stem_ratio)
+    if requested_name.startswith(candidate_name) or candidate_name.startswith(requested_name):
+        return 3, ratio
+    if requested_name in candidate_name or candidate_name in requested_name:
+        return 2, ratio
+    if ratio >= _SIMILAR_FILE_MIN_RATIO:
+        return 1, ratio
+    return None
+
+
+def _suggest_similar_files(missing: Path) -> list[Path]:
+    """Return a bounded, ranked list of files beside a missing target."""
+    directory = missing.parent
+    try:
+        entries = islice(directory.iterdir(), _SIMILAR_FILE_SCAN_LIMIT)
+        candidates: list[tuple[tuple[int, float], str, Path]] = []
+        for entry in entries:
+            try:
+                if not entry.is_file():
+                    continue
+            except OSError:
+                continue
+            score = _similar_file_score(missing, entry)
+            if score is not None:
+                candidates.append((score, entry.name.casefold(), entry))
+    except OSError:
+        return []
+
+    candidates.sort(key=lambda item: (-item[0][0], -item[0][1], item[1]))
+    return [entry for _, _, entry in candidates[:_SIMILAR_FILE_RESULT_LIMIT]]
+
+
+def _missing_file_message(resolved: Path) -> str:
+    """Build a not-found error with directly reusable candidate paths."""
+    message = f"file not found: {model_path(resolved)}"
+    suggestions = _suggest_similar_files(resolved)
+    if not suggestions:
+        return message
+    rendered = "\n".join(f"- {model_path(candidate)}" for candidate in suggestions)
+    return f"{message}\nSimilar files:\n{rendered}"
 
 
 def _truncate_utf8(text: str, max_bytes: int) -> str:
@@ -566,7 +628,7 @@ def make_read_handler(
         displayed_path = model_path(resolved)
 
         if not resolved.exists():
-            return tool_failure("file_not_found", f"file not found: {displayed_path}")
+            return tool_failure("file_not_found", _missing_file_message(resolved))
         if not resolved.is_file():
             return tool_failure("not_a_file", f"path is not a file: {displayed_path}")
 

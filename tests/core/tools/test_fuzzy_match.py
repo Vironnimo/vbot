@@ -86,6 +86,42 @@ def test_line_trimmed_does_not_match_genuinely_different_text() -> None:
     assert replace_fuzzy(content, "  a = 9\n  b = 9", "x", replace_all=False) is None
 
 
+def test_whitespace_normalized_matches_internal_space_and_tab_runs() -> None:
+    content = "def f():\n    value  =\t1\n"
+
+    result = replace_fuzzy(content, "  value = 1", "  value = 2", replace_all=False)
+
+    assert isinstance(result, FuzzyReplacement)
+    assert result.strategy == "whitespace_normalized"
+    assert result.new_content == "def f():\n    value = 2\n"
+    assert result.first_changed_line == 2
+
+
+def test_whitespace_normalized_preserves_crlf_endings() -> None:
+    content = "alpha  = 1\r\nbeta\r\n"
+
+    result = replace_fuzzy(content, "alpha = 1", "one = 1\ntwo = 2", replace_all=False)
+
+    assert isinstance(result, FuzzyReplacement)
+    assert result.strategy == "whitespace_normalized"
+    assert result.new_content == "one = 1\r\ntwo = 2\r\nbeta\r\n"
+
+
+def test_whitespace_normalized_keeps_ambiguity_and_replace_all_semantics() -> None:
+    content = "value  = 1\nvalue\t= 1\n"
+
+    ambiguous = replace_fuzzy(content, "value = 1", "value = 2", replace_all=False)
+    replaced = replace_fuzzy(content, "value = 1", "value = 2", replace_all=True)
+
+    assert isinstance(ambiguous, AmbiguousFuzzyMatch)
+    assert ambiguous.occurrences == 2
+    assert ambiguous.line_numbers == [1, 2]
+    assert isinstance(replaced, FuzzyReplacement)
+    assert replaced.strategy == "whitespace_normalized"
+    assert replaced.new_content == "value = 2\nvalue = 2\n"
+    assert replaced.replacements == 2
+
+
 def test_ambiguous_returns_match_with_line_numbers() -> None:
     result = replace_fuzzy("x\ny\nx\n", "x", "z", replace_all=False)
 
