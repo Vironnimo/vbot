@@ -54,6 +54,28 @@ from tests.core.chat.chat_loop_support import (
 JsonObject = dict[str, Any]
 
 
+class CompletedStreamingStubAdapter(StubAdapter):
+    """Finish a visible stream, then let the test arrange the persist-lock race."""
+
+    def __init__(self) -> None:
+        super().__init__([])
+        self.finish_emitted = asyncio.Event()
+        self.release_stream = asyncio.Event()
+
+    async def stream(
+        self,
+        messages: list[JsonObject],
+        *,
+        model_id: str,
+        **kwargs: Any,
+    ) -> Any:
+        del messages, model_id, kwargs
+        yield {"type": "content_delta", "text": "Complete answer"}
+        yield {"type": "finish", "reason": "stop"}
+        self.finish_emitted.set()
+        await self.release_stream.wait()
+
+
 @pytest.mark.asyncio
 @pytest.mark.asyncio
 async def test_streaming_mode_falls_back_before_usable_streamed_output(tmp_path: Path) -> None:
@@ -908,6 +930,64 @@ async def test_user_cancel_after_visible_stream_preserves_partial_and_stays_canc
     assert messages[1].content == "before"
     assert messages[1].interrupted is True
     assert not any(message.error_kind for message in messages if message.role == "error")
+
+
+@pytest.mark.asyncio
+async def test_user_cancel_while_complete_stream_waits_to_persist_preserves_answer(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
+    adapter = CompletedStreamingStubAdapter()
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+    runtime.chat_sessions.create("coder", session_id="session-one")
+
+    run = await build_chat_loop(runtime, streaming=True).start_run(
+        "coder", "Hi", session_id="session-one"
+    )
+    await adapter.finish_emitted.wait()
+
+    target_lock = runtime.chat_sessions.write_lock("coder", "session-one")
+    holder_acquired = asyncio.Event()
+    release_holder = asyncio.Event()
+    persist_wait_started = asyncio.Event()
+
+    async def hold_write_lock() -> None:
+        async with target_lock:
+            holder_acquired.set()
+            await release_holder.wait()
+
+    class SignallingWriteLock:
+        async def __aenter__(self) -> Any:
+            persist_wait_started.set()
+            return await target_lock.__aenter__()
+
+        async def __aexit__(self, *exc_info: object) -> None:
+            await target_lock.__aexit__(*exc_info)
+
+    holder_task = asyncio.create_task(hold_write_lock())
+    await holder_acquired.wait()
+    monkeypatch.setattr(
+        runtime.chat_sessions,
+        "write_lock",
+        lambda *_args, **_kwargs: SignallingWriteLock(),
+    )
+    adapter.release_stream.set()
+    await persist_wait_started.wait()
+
+    run.request_cancel(reason="user")
+    await asyncio.sleep(0)
+    release_holder.set()
+    await holder_task
+
+    with pytest.raises(RunCancelledError):
+        await run.wait()
+
+    messages = runtime.chat_sessions.get("coder", "session-one").load()
+    assert run.status == RunStatus.CANCELLED
+    assert [message.role for message in messages] == ["user", "assistant", "run_summary"]
+    assert messages[1].content == "Complete answer"
+    assert messages[1].interrupted is False
 
 
 @pytest.mark.asyncio
