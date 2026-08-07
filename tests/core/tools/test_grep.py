@@ -186,6 +186,9 @@ def test_register_grep_tool_exposes_provider_schema() -> None:
         "files_with_matches",
         "count",
     ]
+    assert parameters["properties"]["glob"]["description"] == (
+        "Optional file glob filter for candidate files, relative to the search path."
+    )
     assert "only for content" in parameters["properties"]["output_mode"]["description"]
     assert "default 0" in parameters["properties"]["context"]["description"]
     display = registry.display_for_call(

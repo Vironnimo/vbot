@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from core.tools.edit import (
+    EDIT_TOOL_DESCRIPTION,
     EDIT_TOOL_NAME,
     EDIT_TOOL_PARAMETERS,
     edit_handler,
@@ -90,6 +91,14 @@ def test_register_edit_tool_exposes_provider_schema() -> None:
 
     tool = registry.get("edit")
     assert tool.name == EDIT_TOOL_NAME == "edit"
+    assert tool.description == (
+        "Edit a file by replacing text. old_string is matched against the file's current "
+        "contents, tolerating minor differences in whitespace/indentation (including internal "
+        "space/tab runs), line endings, and quote style. Include enough surrounding text to "
+        "identify one location unless replace_all is true. Never include the N| line-number "
+        "prefix from read output."
+    )
+    assert tool.description == EDIT_TOOL_DESCRIPTION
     assert tool.parameters == EDIT_TOOL_PARAMETERS
 
     definitions = registry.provider_definitions(["edit"])

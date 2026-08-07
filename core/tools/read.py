@@ -79,7 +79,10 @@ READ_TOOL_PARAMETERS: JsonObject = {
                     "pattern": r"^[1-9][0-9]*:[1-9][0-9]*$",
                 },
             ],
-            "description": "1-indexed start line or line:character continuation address.",
+            "description": (
+                "1-indexed start line, or a line:character address such as 12:34 to resume "
+                "at an exact position within the file."
+            ),
         },
         "limit": {
             "type": "integer",

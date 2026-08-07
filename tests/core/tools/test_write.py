@@ -10,6 +10,7 @@ import pytest
 from core.tools.file_state import FileReadState
 from core.tools.tools import ToolContext, ToolRegistry, is_tool_result_envelope
 from core.tools.write import (
+    WRITE_TOOL_DESCRIPTION,
     WRITE_TOOL_NAME,
     WRITE_TOOL_PARAMETERS,
     register_write_tool,
@@ -73,6 +74,15 @@ def test_register_write_tool_exposes_provider_schema() -> None:
 
     tool = registry.get("write")
     assert tool.name == WRITE_TOOL_NAME == "write"
+    assert tool.description == (
+        "Write the full contents of a file. Creates the file if it does not exist, and "
+        "replaces the entire file if it does. Not for partial edits or appending. "
+        "Automatically creates parent directories. If the file already exists you must read "
+        "it first; this tool fails if you did not, or if it changed on disk since you last "
+        "read it. Content is written verbatim - never include the N| line-number prefix from "
+        "read output."
+    )
+    assert tool.description == WRITE_TOOL_DESCRIPTION
     assert tool.parameters == WRITE_TOOL_PARAMETERS
 
     definitions = registry.provider_definitions(["write"])
