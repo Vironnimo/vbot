@@ -21,7 +21,7 @@ from uuid import uuid4
 
 import httpx
 
-from core.debug import DebugTraceStore
+from core.debug import DebugTraceStore, InvalidTraceIdError
 from core.debug.redaction import redact_headers, redact_url
 from server.events import RESOURCE_KIND_DEBUG_TRACES
 from server.rpc.dispatcher import RpcMethodHandler
@@ -234,6 +234,8 @@ def _debug_trace_get(state: Any, params: JsonObject) -> JsonObject:
         store = _make_debug_store(runtime)
         trace = store.get_trace(trace_id)
         return {"trace": trace}
+    except InvalidTraceIdError as exc:
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, str(exc)) from exc
     except FileNotFoundError as exc:
         raise RpcError(RPC_ERROR_DOMAIN, str(exc)) from exc
     except Exception as exc:

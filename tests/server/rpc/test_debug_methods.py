@@ -29,6 +29,10 @@ from tests.server.test_rpc import (
 )
 
 JsonObject = dict[str, Any]
+TRACE_ID_1 = "00000000000040008000000000000001"
+TRACE_ID_2 = "00000000000040008000000000000002"
+TRACE_ID_3 = "00000000000040008000000000000003"
+TRACE_ID_MISSING = "00000000000040008000000000000004"
 
 # ---------------------------------------------------------------------------
 # Test helpers
@@ -121,9 +125,9 @@ def _make_probe_provider(
 def _seed_traces(tmp_path: Path, *, trace_limit: int = 50) -> DebugTraceStore:
     """Write three test traces to disk and return the store."""
     store = DebugTraceStore(tmp_path, trace_limit=trace_limit)
-    store.save_trace("a-1", _trace_data("a-1", "2026-06-01T10:00:00Z"))
-    store.save_trace("a-2", _trace_data("a-2", "2026-06-01T12:00:00Z"))
-    store.save_trace("a-3", _trace_data("a-3", "2026-06-01T11:00:00Z"))
+    store.save_trace(TRACE_ID_1, _trace_data(TRACE_ID_1, "2026-06-01T10:00:00Z"))
+    store.save_trace(TRACE_ID_2, _trace_data(TRACE_ID_2, "2026-06-01T12:00:00Z"))
+    store.save_trace(TRACE_ID_3, _trace_data(TRACE_ID_3, "2026-06-01T11:00:00Z"))
     return store
 
 
@@ -205,7 +209,11 @@ class TestDebugTraceList:
         assert response["ok"] is True
         traces = response["result"]["traces"]
         assert len(traces) == 3
-        assert [entry["trace_id"] for entry in traces] == ["a-2", "a-3", "a-1"]
+        assert [entry["trace_id"] for entry in traces] == [
+            TRACE_ID_2,
+            TRACE_ID_3,
+            TRACE_ID_1,
+        ]
 
     @pytest.mark.asyncio
     async def test_returns_empty_when_no_traces(self, tmp_path: Path) -> None:
@@ -260,7 +268,7 @@ class TestDebugTraceGet:
 
         response = await dispatch_rpc(
             state,
-            {"method": "debug.trace_get", "params": {"trace_id": "a-1"}},
+            {"method": "debug.trace_get", "params": {"trace_id": TRACE_ID_1}},
         )
 
         assert response["ok"] is False
@@ -275,12 +283,12 @@ class TestDebugTraceGet:
 
         response = await dispatch_rpc(
             state,
-            {"method": "debug.trace_get", "params": {"trace_id": "a-1"}},
+            {"method": "debug.trace_get", "params": {"trace_id": TRACE_ID_1}},
         )
 
         assert response["ok"] is True
         trace = response["result"]["trace"]
-        assert trace["trace_id"] == "a-1"
+        assert trace["trace_id"] == TRACE_ID_1
         assert "request" in trace
         assert "response" in trace
         assert trace["response"]["body"]["choices"][0]["message"]["content"] == "hello back"
@@ -292,7 +300,7 @@ class TestDebugTraceGet:
 
         response = await dispatch_rpc(
             state,
-            {"method": "debug.trace_get", "params": {"trace_id": "nonexistent"}},
+            {"method": "debug.trace_get", "params": {"trace_id": TRACE_ID_MISSING}},
         )
 
         assert response["ok"] is False
@@ -311,6 +319,27 @@ class TestDebugTraceGet:
         assert "trace_id" in response["error"]["message"].lower()
 
     @pytest.mark.asyncio
+    async def test_rejects_path_traversal_trace_id(self, tmp_path: Path) -> None:
+        """``debug.trace_get`` cannot read JSON outside the trace directory."""
+        _seed_traces(tmp_path)
+        channel_path = tmp_path / "channels" / "telegram" / "channel.json"
+        channel_path.parent.mkdir(parents=True)
+        channel_path.write_text('{"bot_token": "secret"}', encoding="utf-8")
+        state = _make_debug_state(tmp_path, debug_enabled=True)
+
+        response = await dispatch_rpc(
+            state,
+            {
+                "method": "debug.trace_get",
+                "params": {"trace_id": "../../../channels/telegram/channel"},
+            },
+        )
+
+        assert response["ok"] is False
+        assert response["error"]["code"] == RPC_ERROR_INVALID_REQUEST
+        assert response["error"]["message"] == "Invalid debug trace id"
+
+    @pytest.mark.asyncio
     async def test_rejects_unsupported_fields(self, tmp_path: Path) -> None:
         """``debug.trace_get`` rejects params beyond ``trace_id``."""
         state = _make_debug_state(tmp_path, debug_enabled=True)
@@ -319,7 +348,7 @@ class TestDebugTraceGet:
             state,
             {
                 "method": "debug.trace_get",
-                "params": {"trace_id": "a-1", "extra": True},
+                "params": {"trace_id": TRACE_ID_1, "extra": True},
             },
         )
 
