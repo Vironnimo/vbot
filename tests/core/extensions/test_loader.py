@@ -95,6 +95,46 @@ def test_loads_package_extension(tmp_path: Path) -> None:
     assert _marker_names(marker) == ["package_ext"]
 
 
+def test_non_utf8_manifest_fails_only_its_extension(tmp_path: Path) -> None:
+    root = tmp_path / "extensions"
+    marker = tmp_path / "marker.txt"
+    _write_package(root, "broken_manifest", marker)
+    (root / "broken_manifest" / "extension.json").write_bytes(b"\xff")
+    _write_single_file(root, "healthy", marker)
+
+    registry = ExtensionRegistry.load(root)
+    _fire_run_start(registry)
+
+    assert _marker_names(marker) == ["healthy"]
+    broken = _record_by_name(registry, "broken_manifest")
+    assert broken.status == "failed"
+    assert broken.error is not None
+    assert "not valid UTF-8" in broken.error
+
+
+def test_unreadable_extension_root_is_skipped(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    root = tmp_path / "extensions"
+    root.mkdir()
+    original_iterdir = Path.iterdir
+
+    def fail_target_iterdir(path: Path):
+        if path == root:
+            raise PermissionError("denied")
+        return original_iterdir(path)
+
+    monkeypatch.setattr(Path, "iterdir", fail_target_iterdir)
+
+    registry = ExtensionRegistry.load(root)
+
+    assert registry.records() == []
+    assert str(root) in caplog.text
+    assert "Skipping unreadable Extension directory" in caplog.text
+
+
 def test_loads_directory_fallback_extension(tmp_path: Path) -> None:
     root = tmp_path / "extensions"
     marker = tmp_path / "marker.txt"

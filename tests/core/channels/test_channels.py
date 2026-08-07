@@ -1043,6 +1043,30 @@ async def test_channel_service_adapter_crash_does_not_change_tool_registration(
 
 
 @pytest.mark.asyncio
+async def test_channel_service_start_isolates_unexpected_adapter_construction_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    storage = ChannelStorage(tmp_path)
+    config = make_config(enabled=True)
+    storage.save(config)
+    service = make_service(tmp_path)
+
+    def fail_adapter_construction(_config: ChannelConfig) -> ChannelAdapter:
+        raise RuntimeError("adapter dependency is broken")
+
+    monkeypatch.setattr(service, "_create_adapter", fail_adapter_construction)
+
+    with caplog.at_level(logging.ERROR, logger="vbot.channels"):
+        service.start()
+
+    assert config.id in service._failed_channels
+    assert service._failure_reasons[config.id] == "adapter dependency is broken"
+    assert "Cannot start channel adapter during service startup" in caplog.text
+
+
+@pytest.mark.asyncio
 async def test_channel_service_ignores_stale_adapter_task_done_callback(
     tmp_path: Path,
 ) -> None:

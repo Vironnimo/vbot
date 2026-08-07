@@ -1228,7 +1228,13 @@ def _discover_extension_paths(extensions_dir: Path) -> list[_DiscoveredExtension
         return []
 
     discovered: list[_DiscoveredExtension] = []
-    for entry in extensions_dir.iterdir():
+    try:
+        entries = list(extensions_dir.iterdir())
+    except OSError as exc:
+        _LOGGER.warning("Skipping unreadable Extension directory %s: %s", extensions_dir, exc)
+        return []
+
+    for entry in entries:
         if entry.is_file() and entry.suffix == ".py" and entry.stem != "__init__":
             discovered.append(_DiscoveredExtension(entry.stem, entry, entry))
             continue
@@ -1420,6 +1426,8 @@ def _load_manifest(directory: Path) -> ExtensionManifest | None:
 
     try:
         raw = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except UnicodeError as exc:
+        raise _ManifestError(f"{_MANIFEST_FILENAME} is not valid UTF-8: {exc}") from exc
     except json.JSONDecodeError as exc:
         raise _ManifestError(f"invalid JSON in {_MANIFEST_FILENAME}: {exc.msg}") from exc
     except OSError as exc:

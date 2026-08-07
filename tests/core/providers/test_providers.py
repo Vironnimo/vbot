@@ -6,6 +6,7 @@ fields, extra_headers, defaults, and models_endpoint.
 """
 
 import json
+import logging
 from collections.abc import Generator
 from dataclasses import FrozenInstanceError, fields
 from pathlib import Path
@@ -472,6 +473,61 @@ class TestOptionalFields:
 
 class TestProviderRegistryLoad:
     """Tests for ProviderRegistry.load() and provider lookup."""
+
+    def test_tolerant_load_skips_corrupt_provider_and_keeps_valid_sibling(
+        self,
+        tmp_path: Path,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        providers_dir = tmp_path / "providers"
+        providers_dir.mkdir()
+        providers_dir.joinpath("healthy.json").write_text(
+            json.dumps(OPENAI_DATA),
+            encoding="utf-8",
+        )
+        corrupt_path = providers_dir / "corrupt.json"
+        corrupt_path.write_text('{"id":', encoding="utf-8")
+
+        with caplog.at_level(logging.WARNING, logger="vbot.providers"):
+            registry = ProviderRegistry.load(tmp_path, tolerate_invalid=True)
+
+        assert registry.list_ids() == ["openai"]
+        assert str(corrupt_path) in caplog.text
+        assert "Ignoring invalid Provider config" in caplog.text
+
+    def test_tolerant_load_survives_provider_directory_scan_failure(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        providers_dir = tmp_path / "providers"
+        providers_dir.mkdir()
+
+        def fail_scan(*_args: object, **_kwargs: object) -> list[Path]:
+            raise OSError("scan failed")
+
+        monkeypatch.setattr(Path, "glob", fail_scan)
+
+        with caplog.at_level(logging.WARNING, logger="vbot.providers"):
+            registry = ProviderRegistry.load(
+                tmp_path,
+                custom_providers={},
+                tolerate_invalid=True,
+            )
+
+        assert registry.list_ids() == []
+        assert str(providers_dir) in caplog.text
+        assert "Could not scan Provider configs" in caplog.text
+
+    def test_tolerant_load_does_not_populate_strict_registry_cache(self, tmp_path: Path) -> None:
+        providers_dir = tmp_path / "providers"
+        providers_dir.mkdir()
+        providers_dir.joinpath("corrupt.json").write_text('{"id":', encoding="utf-8")
+
+        assert ProviderRegistry.load(tmp_path, tolerate_invalid=True).list_ids() == []
+        with pytest.raises(json.JSONDecodeError):
+            ProviderRegistry.load(tmp_path)
 
     def test_load_creates_registry_with_all_providers(self, providers_dir: Path) -> None:
         """Loading populates the registry with all JSON provider files."""

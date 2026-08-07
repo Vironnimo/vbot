@@ -12,6 +12,7 @@ from core.utils.config import (
     _read_worktree_data_dir,
     _resolve_default_data_dir,
     parse_env_lines,
+    read_env_file,
 )
 
 
@@ -31,6 +32,21 @@ def test_parse_env_lines_keeps_values_conservative() -> None:
         "OPENROUTER_API_KEY": "sk-or-test=value",
         "QUOTED": "quoted value",
     }
+
+
+def test_unreadable_utf8_env_file_is_ignored(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    env_path = tmp_path / ".env"
+    env_path.write_bytes(b"VALID=value\n\xff")
+
+    with caplog.at_level("WARNING", logger="vbot.config"):
+        values = read_env_file(env_path)
+
+    assert values == {}
+    assert str(env_path) in caplog.text
+    assert "Ignoring unreadable environment file" in caplog.text
 
 
 def test_default_data_dir_is_home_vbot(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -144,12 +160,27 @@ def test_env_var_wins_over_worktree_file(tmp_path: Path, monkeypatch: pytest.Mon
 def test_malformed_json_in_worktree_file_falls_to_default(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Malformed JSON in .vbot-worktree -> silently falls through to default."""
+    """Malformed JSON in .vbot-worktree falls through to the default."""
     monkeypatch.delenv("VBOT_DATA_DIR", raising=False)
     worktree_file = tmp_path / ".vbot-worktree"
     worktree_file.write_text("not valid json", encoding="utf-8")
     result = _read_worktree_data_dir(worktree_file)
     assert result is None
+
+
+def test_non_utf8_worktree_file_falls_to_default(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    worktree_file = tmp_path / ".vbot-worktree"
+    worktree_file.write_bytes(b"\xff\xfe")
+
+    with caplog.at_level("WARNING", logger="vbot.config"):
+        result = _read_worktree_data_dir(worktree_file)
+
+    assert result is None
+    assert str(worktree_file) in caplog.text
+    assert "Ignoring invalid worktree marker" in caplog.text
 
 
 def test_non_object_json_in_worktree_file_falls_to_default(tmp_path: Path) -> None:

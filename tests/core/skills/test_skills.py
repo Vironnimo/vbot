@@ -305,6 +305,28 @@ metadata:
         assert registry.list_all() == []
         assert registry.diagnostics() == []
 
+    def test_unreadable_skill_root_is_isolated(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        skills_dir = tmp_path / "skills"
+        skills_dir.mkdir()
+        original_iterdir = Path.iterdir
+
+        def fail_target_iterdir(path: Path):
+            if path == skills_dir:
+                raise PermissionError("denied")
+            return original_iterdir(path)
+
+        monkeypatch.setattr(Path, "iterdir", fail_target_iterdir)
+
+        registry = SkillRegistry.load(skills_dir)
+
+        assert registry.list_all() == []
+        assert len(registry.invalid_diagnostics()) == 1
+        assert "Cannot scan skill directory" in registry.invalid_diagnostics()[0].warnings[0]
+
     def test_ignores_non_skill_directories_and_files(self, tmp_path: Path) -> None:
         skills_dir = tmp_path / "skills"
         skills_dir.mkdir()

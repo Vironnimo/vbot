@@ -17,7 +17,7 @@ from core.channels import ChannelService
 from core.prompts import LayoutEntry, SystemPromptManager
 from core.providers.credentials import ProviderCredentialResolver
 from core.providers.providers import ProviderRegistry
-from core.recall import JsonlSessionRecallBackend, SqliteFtsRecallBackend
+from core.recall import JsonlSessionRecallBackend, RecallBackendRegistry, SqliteFtsRecallBackend
 from core.runs import ChatRunManager, RunCancelledError
 from core.runtime.runtime import _VBOT_ROOT, Runtime, _detect_vbot_version
 from core.sessions import ChatSessionManager
@@ -158,6 +158,50 @@ def test_runtime_start_no_error(tmp_path: Path):
 
     # Assert
     assert runtime.logger is not None
+
+
+def test_runtime_start_survives_corrupt_optional_configuration(tmp_path: Path) -> None:
+    resources_dir = tmp_path / "resources"
+    providers_dir = resources_dir / "providers"
+    models_dir = resources_dir / "models"
+    providers_dir.mkdir(parents=True)
+    models_dir.mkdir(parents=True)
+    providers_dir.joinpath("broken.json").write_text('{"id":', encoding="utf-8")
+    models_dir.joinpath("broken.json").write_text('{"provider_id":', encoding="utf-8")
+    models_dir.joinpath("healthy.json").write_text(
+        json.dumps(
+            {
+                "provider_id": "healthy",
+                "models": {
+                    "model-a": {
+                        "name": "Healthy Model",
+                        "capabilities": {
+                            "vision": False,
+                            "tools": True,
+                            "json_mode": False,
+                            "reasoning": {"supported": False},
+                        },
+                        "context_window": 32000,
+                        "max_output_tokens": 4096,
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    data_dir.joinpath(".env").write_bytes(b"\xff")
+    config = Config(data_dir=data_dir)
+    config._data["RESOURCES_PATH"] = str(resources_dir)
+    runtime = Runtime(config)
+
+    runtime.start()
+
+    assert runtime.models.get("healthy", "model-a").name == "Healthy Model"
+    assert runtime.providers.list_ids() == []
+    assert runtime.agents.list()
+    runtime.stop()
 
 
 def test_runtime_loads_and_reloads_custom_provider_settings_in_place(
@@ -399,6 +443,38 @@ def test_runtime_unknown_recall_backend_falls_back_to_jsonl(config: Config) -> N
     config.data_dir.joinpath("settings.json").write_text(
         json.dumps({"recall": {"backend": "team_backend"}}),
         encoding="utf-8",
+    )
+    runtime = Runtime(config)
+
+    runtime.start()
+
+    assert isinstance(runtime.recall_backend, JsonlSessionRecallBackend)
+
+
+def test_runtime_failing_recall_backend_factory_falls_back_to_jsonl(
+    config: Config,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    logging.getLogger("vbot").handlers = []
+    config.data_dir.mkdir(parents=True, exist_ok=True)
+    config.data_dir.joinpath("settings.json").write_text(
+        json.dumps({"recall": {"backend": "broken_backend"}}),
+        encoding="utf-8",
+    )
+    registry = RecallBackendRegistry()
+    registry.register(
+        "jsonl_scan",
+        lambda context: JsonlSessionRecallBackend(context.sessions),
+    )
+
+    def create_broken_backend(_context: Any) -> Any:
+        raise RuntimeError("broken derived index")
+
+    registry.register("broken_backend", create_broken_backend)
+    monkeypatch.setattr(
+        RecallBackendRegistry,
+        "with_builtins",
+        classmethod(lambda _cls: registry),
     )
     runtime = Runtime(config)
 

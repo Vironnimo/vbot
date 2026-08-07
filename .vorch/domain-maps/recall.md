@@ -6,7 +6,7 @@ Recall is the backend-selected read model for discovering content in persisted c
 
 Session Recall has two Agent-facing Tools in one deep module. `session_search` owns backend-independent Session listing plus backend-native query discovery; `session_read` retrieves exact canonical Message ranges only through `ChatSessionManager`. This split keeps discovery compact and prevents an index or ranking backend from becoming a second source of truth for Messages.
 
-The selected backend is fixed for a Tool registration. `Runtime.reload_recall_backend()` rebuilds the registry, resolves `settings.json` `recall.backend`, and re-registers both Session Recall Tools with the resolved backend name and canonical `ChatSessionManager`. An unknown selected name falls back to `jsonl_scan` and records that resolved name, so the description, cursor identity, and behavior stay aligned.
+The selected backend is fixed for a Tool registration. `Runtime.reload_recall_backend()` rebuilds the registry, resolves `settings.json` `recall.backend`, and re-registers both Session Recall Tools with the resolved backend name and canonical `ChatSessionManager`. An unknown selected name or a construction failure in a selected non-default backend falls back to `jsonl_scan` and records that resolved name, so the description, cursor identity, and behavior stay aligned. Failure to construct `jsonl_scan` itself remains fatal because no canonical fallback remains.
 
 ## Terms
 

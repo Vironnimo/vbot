@@ -101,6 +101,43 @@ def test_create_writes_agent_json_sessions_and_workspace(store: AgentStore) -> N
         assert (workspace_path / filename).read_text(encoding="utf-8") == f"# {filename}\n"
 
 
+def test_missing_workspace_template_does_not_block_agent_creation(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    missing_templates = tmp_path / "missing-templates"
+    store = AgentStore(tmp_path / "data", template_dir=missing_templates)
+
+    with caplog.at_level("WARNING", logger="vbot.agents"):
+        agent = store.create("repair-agent")
+
+    assert store.get("repair-agent").id == agent.id
+    assert not (Path(agent.workspace) / "SOUL.md").exists()
+    assert str(missing_templates / "SOUL.md") in caplog.text
+    assert "Skipping unreadable Workspace template" in caplog.text
+
+
+def test_agent_roster_scan_failure_returns_empty_roster(
+    store: AgentStore,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    agents_dir = store.data_dir / "agents"
+    agents_dir.mkdir(parents=True)
+
+    def fail_scan(*_args: object, **_kwargs: object) -> list[Path]:
+        raise OSError("scan failed")
+
+    monkeypatch.setattr(Path, "glob", fail_scan)
+
+    with caplog.at_level("WARNING", logger="vbot.agents"):
+        result = store.list_with_order()
+
+    assert result.agents == ()
+    assert str(agents_dir) in caplog.text
+    assert "Could not scan Agent configs" in caplog.text
+
+
 def test_create_requires_only_agent_id(store: AgentStore) -> None:
     agent = store.create("minimal")
 

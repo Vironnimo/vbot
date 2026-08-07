@@ -843,6 +843,34 @@ def test_start_degrades_cron_when_once_fire_claim_is_invalid(
     assert claim_path.read_text(encoding="utf-8") == "{"
 
 
+def test_start_degrades_cron_when_once_fire_claim_is_not_utf8(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    service, _trigger_service = make_service(tmp_path)
+    once = service.create_job(
+        agent_id="agent-one",
+        prompt="Once prompt",
+        schedule_type="once",
+        run_at=(datetime.now(UTC) + timedelta(minutes=15)).isoformat(),
+    )
+    claim_path = service._once_fire_claim_path(once.id)
+    claim_path.parent.mkdir(parents=True, exist_ok=True)
+    claim_path.write_bytes(b"\xff")
+    restarted_service, _restarted_trigger_service = make_service(tmp_path)
+    start_job_task = Mock()
+    monkeypatch.setattr(restarted_service, "_start_job_task", start_job_task)
+
+    with caplog.at_level(logging.ERROR, logger="vbot.automation.cron"):
+        restarted_service.start()
+
+    assert restarted_service.list_jobs() == []
+    start_job_task.assert_not_called()
+    assert "Cron storage is invalid; scheduling is disabled" in caplog.text
+    assert claim_path.read_bytes() == b"\xff"
+
+
 @pytest.mark.asyncio
 async def test_run_cron_job_fires_and_updates_last_fired_at(
     tmp_path: Path,
