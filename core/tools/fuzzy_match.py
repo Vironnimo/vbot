@@ -34,6 +34,18 @@ safer than silently editing the wrong block.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from difflib import SequenceMatcher
+from heapq import heappush, heapreplace
+
+_CANDIDATE_ANCHOR_COUNT = 3
+_CANDIDATE_ANCHOR_POOL_SIZE = 20
+_CANDIDATE_SCAN_LINE_LIMIT = 50_000
+_CANDIDATE_SCORE_LINE_MAX_CHARS = 240
+_CANDIDATE_SCORE_MAX_CHARS = 4_000
+_CANDIDATE_MIN_SIMILARITY = 0.60
+_CANDIDATE_RESULT_LIMIT = 3
+_CANDIDATE_OUTPUT_MAX_LINES = 8
+_CANDIDATE_OUTPUT_MAX_CHARS = 1_200
 
 # Visually-equivalent characters models emit in place of their ASCII forms, keyed
 # by code point so the source stays pure ASCII and the entries are unambiguous.
@@ -66,6 +78,15 @@ class AmbiguousFuzzyMatch:
 
     occurrences: int
     line_numbers: list[int]
+
+
+@dataclass(frozen=True)
+class ClosestFuzzyCandidate:
+    """A bounded raw excerpt similar to an unmatched edit locator."""
+
+    line_number: int
+    text: str
+    truncated: bool
 
 
 def replace_fuzzy(
@@ -106,6 +127,107 @@ def replace_fuzzy(
         return FuzzyReplacement(new_content, first_line, len(selected), name)
 
     return None
+
+
+def _candidate_normalize_line(line: str) -> str:
+    normalized = _collapse_horizontal_whitespace_with_spans(line)[0].strip()
+    return normalized[:_CANDIDATE_SCORE_LINE_MAX_CHARS]
+
+
+def _top_anchor_starts(
+    content_lines: list[str], anchor_index: int, anchor: str, window_size: int
+) -> list[int]:
+    """Return a bounded pool of block starts whose aligned line resembles an anchor."""
+    heap: list[tuple[float, int]] = []
+    scan_limit = min(len(content_lines), _CANDIDATE_SCAN_LINE_LIMIT)
+    for content_index in range(scan_limit):
+        start = content_index - anchor_index
+        if start < 0 or start + window_size > len(content_lines):
+            continue
+        candidate_line = _candidate_normalize_line(content_lines[content_index])
+        if not candidate_line:
+            continue
+        score = SequenceMatcher(None, anchor, candidate_line).ratio()
+        item = (score, -start)
+        if len(heap) < _CANDIDATE_ANCHOR_POOL_SIZE:
+            heappush(heap, item)
+        elif item > heap[0]:
+            heapreplace(heap, item)
+    return [-negative_start for _, negative_start in heap]
+
+
+def find_closest_candidates(content: str, pattern: str) -> list[ClosestFuzzyCandidate]:
+    """Return bounded diagnostic candidates without authorizing replacement.
+
+    Similarity is used only to rank raw excerpts for a failed Tool result. This
+    function never returns replacement spans and is not part of ``replace_fuzzy``'s
+    destructive strategy chain.
+    """
+    if not content or not pattern:
+        return []
+
+    pattern_lines = pattern.splitlines()
+    while pattern_lines and not pattern_lines[0].strip():
+        pattern_lines.pop(0)
+    while pattern_lines and not pattern_lines[-1].strip():
+        pattern_lines.pop()
+    if not pattern_lines:
+        return []
+
+    content_lines = content.splitlines()
+    window_size = len(pattern_lines)
+    if not content_lines or window_size > len(content_lines):
+        return []
+
+    normalized_pattern_lines = [_candidate_normalize_line(line) for line in pattern_lines]
+    anchors = sorted(
+        (
+            (len(line), -index, index, line)
+            for index, line in enumerate(normalized_pattern_lines)
+            if line
+        ),
+        reverse=True,
+    )[:_CANDIDATE_ANCHOR_COUNT]
+    if not anchors:
+        return []
+
+    possible_starts: set[int] = set()
+    for _, _, anchor_index, anchor in anchors:
+        possible_starts.update(_top_anchor_starts(content_lines, anchor_index, anchor, window_size))
+
+    pattern_score_text = "\n".join(normalized_pattern_lines)[:_CANDIDATE_SCORE_MAX_CHARS]
+    scored: list[tuple[float, int]] = []
+    for start in possible_starts:
+        candidate_score_text = "\n".join(
+            _candidate_normalize_line(line) for line in content_lines[start : start + window_size]
+        )[:_CANDIDATE_SCORE_MAX_CHARS]
+        similarity = SequenceMatcher(None, pattern_score_text, candidate_score_text).ratio()
+        if similarity >= _CANDIDATE_MIN_SIMILARITY:
+            scored.append((similarity, start))
+    scored.sort(key=lambda item: (-item[0], item[1]))
+
+    candidates: list[ClosestFuzzyCandidate] = []
+    seen_text: set[str] = set()
+    output_line_count = min(window_size, _CANDIDATE_OUTPUT_MAX_LINES)
+    for _, start in scored:
+        full_excerpt = "\n".join(content_lines[start : start + output_line_count])
+        excerpt = full_excerpt[:_CANDIDATE_OUTPUT_MAX_CHARS]
+        if not excerpt or excerpt in seen_text:
+            continue
+        seen_text.add(excerpt)
+        candidates.append(
+            ClosestFuzzyCandidate(
+                line_number=start + 1,
+                text=excerpt,
+                truncated=(
+                    output_line_count < window_size
+                    or len(full_excerpt) > _CANDIDATE_OUTPUT_MAX_CHARS
+                ),
+            )
+        )
+        if len(candidates) >= _CANDIDATE_RESULT_LIMIT:
+            break
+    return candidates
 
 
 def _normalize_newlines(text: str) -> str:
@@ -356,4 +478,10 @@ _STRATEGIES = (
 )
 
 
-__all__ = ["AmbiguousFuzzyMatch", "FuzzyReplacement", "replace_fuzzy"]
+__all__ = [
+    "AmbiguousFuzzyMatch",
+    "ClosestFuzzyCandidate",
+    "FuzzyReplacement",
+    "find_closest_candidates",
+    "replace_fuzzy",
+]
