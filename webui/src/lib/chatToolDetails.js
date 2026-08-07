@@ -2,7 +2,7 @@ import { t } from '$lib/i18n.js';
 
 const TOOL_DETAIL_HIDDEN_KEYS = ['artifacts', 'description'];
 const TOOL_ARGUMENT_HIDDEN_KEYS = {
-  edit: ['newString', 'new_string', 'oldString', 'old_string'],
+  edit: ['new_string', 'old_string'],
   write: ['content'],
 };
 const TOOL_ERROR_DETAIL_KEYS = [

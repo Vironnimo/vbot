@@ -105,8 +105,8 @@ describe('ChatTimeline', () => {
           index: 0,
           name: 'edit',
           arguments: {
-            oldString: 'before',
-            newString: 'after',
+            old_string: 'before',
+            new_string: 'after',
             path: 'notes/plan.md',
           },
         },
@@ -142,8 +142,8 @@ describe('ChatTimeline', () => {
     expect(summaryLine.textContent).toContain('edit');
     expect(summaryLine.textContent).toContain('notes/plan.md');
     expect(summaryLine.textContent).not.toContain('before');
-    expect(summaryLine.textContent).not.toContain('oldString');
-    expect(summaryLine.textContent).not.toContain('{"oldString":"before"');
+    expect(summaryLine.textContent).not.toContain('old_string');
+    expect(summaryLine.textContent).not.toContain('{"old_string":"before"');
   });
 
   it('uses path label instead of raw JSON for write tool summary', () => {
@@ -300,8 +300,8 @@ describe('ChatTimeline', () => {
       'alpha',
       'session-edit-large-replacement',
     );
-    const oldString = 'old generated block\n'.repeat(2000);
-    const newString = 'new generated block\n'.repeat(2000);
+    const oldContent = 'old generated block\n'.repeat(2000);
+    const newContent = 'new generated block\n'.repeat(2000);
 
     appendRunEvent(sessionState, {
       type: 'tool_call_started',
@@ -313,8 +313,8 @@ describe('ChatTimeline', () => {
           index: 0,
           name: 'edit',
           arguments: {
-            new_string: newString,
-            old_string: oldString,
+            new_string: newContent,
+            old_string: oldContent,
             path: 'todo-app/app.js',
             replace_all: true,
           },
@@ -344,8 +344,8 @@ describe('ChatTimeline', () => {
     expect(argsText).toContain('replace_all');
     expect(argsText).not.toContain('old_string');
     expect(argsText).not.toContain('new_string');
-    expect(document.body.textContent).not.toContain(oldString);
-    expect(document.body.textContent).not.toContain(newString);
+    expect(document.body.textContent).not.toContain(oldContent);
+    expect(document.body.textContent).not.toContain(newContent);
   });
 
   it('prefers backend display summary over command arguments', () => {

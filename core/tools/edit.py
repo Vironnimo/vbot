@@ -369,7 +369,7 @@ def register_edit_tool(registry: ToolRegistry, *, file_state: FileReadState) -> 
                     copyable=True,
                 ),
             ),
-            hidden_argument_keys=("newString", "new_string", "oldString", "old_string"),
+            hidden_argument_keys=("new_string", "old_string"),
         ),
     )
 
