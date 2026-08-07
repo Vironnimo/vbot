@@ -11,6 +11,7 @@ import subprocess
 import sys
 import time
 from collections.abc import Callable, Mapping
+from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -388,7 +389,9 @@ def _cleanup_spawned_process(
         process.wait(timeout=timeout_seconds)
     except subprocess.TimeoutExpired:
         process.kill()
-        process.wait(timeout=timeout_seconds)
+        # Preserve the authoritative startup failure even when the child ignores kill.
+        with suppress(subprocess.TimeoutExpired):
+            process.wait(timeout=timeout_seconds)
         return True
     return False
 
@@ -497,8 +500,20 @@ def stop_server(
         process.wait(timeout=shutdown_timeout_seconds)
     except psutil.TimeoutExpired:
         forced = True
-        process.kill()
-        process.wait(timeout=shutdown_timeout_seconds)
+        try:
+            process.kill()
+            process.wait(timeout=shutdown_timeout_seconds)
+        except psutil.TimeoutExpired:
+            return CommandResult(
+                ok=False,
+                message="forced termination timed out",
+                instance=instance,
+                health=health,
+                process_id=process.pid,
+                forced=True,
+            )
+        except psutil.NoSuchProcess:
+            pass
     except psutil.NoSuchProcess:
         pass
 
