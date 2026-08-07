@@ -6,15 +6,18 @@ from pathlib import Path
 
 import pytest
 
+import core.tools.glob as glob_module
 import core.tools.search as search_module
 from core.tools.glob import (
     DEFAULT_GLOB_LIMIT,
     GLOB_TOOL_NAME,
     GLOB_TOOL_PARAMETERS,
+    MAX_GLOB_LIMIT,
+    MAX_GLOB_OFFSET,
     glob_handler,
     register_glob_tool,
 )
-from core.tools.search import RESULTS_LIMITED_MARKER, SEARCH_TIMEOUT_MARKER
+from core.tools.search import RESULTS_LIMITED_MARKER, SEARCH_TIMEOUT_MARKER, SearchBudget
 from core.tools.tools import ToolContext, ToolRegistry, is_tool_result_envelope
 
 BASE_MTIME = 1_700_000_000
@@ -123,6 +126,8 @@ def test_register_glob_tool_exposes_provider_schema() -> None:
         "include_ignored",
     }
     assert "description" not in parameters["properties"]
+    assert parameters["properties"]["limit"]["maximum"] == MAX_GLOB_LIMIT
+    assert parameters["properties"]["offset"]["maximum"] == MAX_GLOB_OFFSET
 
 
 def test_glob_renders_relative_path_argument_results_from_cwd(tmp_path: Path) -> None:
@@ -208,7 +213,32 @@ def test_glob_returns_failure_for_invalid_limit(tmp_path: Path) -> None:
 
     result = glob_handler(make_context(workspace), {"pattern": "*.py", "limit": 0})
     error = assert_failure_envelope(result, "invalid_arguments")
-    assert error["message"] == "limit must be >= 1"
+    assert error["message"] == "limit must be between 1 and 1000"
+
+
+@pytest.mark.parametrize(
+    ("arguments", "expected_message"),
+    [
+        (
+            {"pattern": "*.py", "limit": MAX_GLOB_LIMIT + 1},
+            "limit must be between 1 and 1000",
+        ),
+        (
+            {"pattern": "*.py", "offset": MAX_GLOB_OFFSET + 1},
+            "offset must be between 0 and 10000",
+        ),
+    ],
+)
+def test_glob_rejects_unbounded_result_windows(
+    tmp_path: Path, arguments: dict[str, object], expected_message: str
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    result = glob_handler(make_context(workspace), arguments)
+
+    error = assert_failure_envelope(result, "invalid_arguments")
+    assert error["message"] == expected_message
 
 
 def test_glob_suffixes_directories_and_special_cases_double_star(tmp_path: Path) -> None:
@@ -296,6 +326,28 @@ def test_glob_applies_explicit_limit_keeping_newest_matches(tmp_path: Path) -> N
         result=result,
     )
     assert display["facts"] == [{"kind": "count", "value": 2, "unit": "results", "at_least": True}]
+
+
+def test_glob_collection_retains_only_requested_newest_window(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    for offset, name in enumerate(("old.txt", "middle.txt", "newer.txt", "newest.txt")):
+        file_path = workspace / name
+        file_path.write_text("x\n", encoding="utf-8")
+        set_mtime(file_path, offset * 10)
+
+    matches, observed_results = glob_module._collect_glob_matches(
+        workspace,
+        "*.txt",
+        cwd=workspace,
+        budget=SearchBudget(make_context(workspace)),
+        apply_ignore_rules=False,
+        result_window=2,
+    )
+
+    assert observed_results == 4
+    assert len(matches) == 2
+    assert [display for _, display, _ in matches] == ["newest.txt", "newer.txt"]
 
 
 def test_glob_returns_cancelled_failure_when_user_cancels(tmp_path: Path) -> None:

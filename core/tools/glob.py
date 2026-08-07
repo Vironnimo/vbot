@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from heapq import nsmallest
 from pathlib import Path
 
 from core.tools.arguments import optional_bool, optional_int, optional_string
@@ -30,6 +31,8 @@ from core.tools.tools import (
 )
 
 DEFAULT_GLOB_LIMIT = 100
+MAX_GLOB_LIMIT = 1_000
+MAX_GLOB_OFFSET = 10_000
 
 GLOB_TOOL_NAME = "glob"
 GLOB_TOOL_DESCRIPTION = (
@@ -55,12 +58,20 @@ GLOB_TOOL_PARAMETERS: JsonObject = {
         "limit": {
             "type": "integer",
             "minimum": 1,
-            "description": "Maximum results (default: 100). Excess matches are cut and marked.",
+            "maximum": MAX_GLOB_LIMIT,
+            "description": (
+                f"Maximum results (default: {DEFAULT_GLOB_LIMIT}, maximum: {MAX_GLOB_LIMIT}). "
+                "Excess matches are cut and marked."
+            ),
         },
         "offset": {
             "type": "integer",
             "minimum": 0,
-            "description": "Skip the first N results before applying limit (default: 0).",
+            "maximum": MAX_GLOB_OFFSET,
+            "description": (
+                "Skip the first N results before applying limit "
+                f"(default: 0, maximum: {MAX_GLOB_OFFSET})."
+            ),
         },
         "include_ignored": {
             "type": "boolean",
@@ -81,32 +92,42 @@ def _collect_glob_matches(
     cwd: Path,
     budget: SearchBudget,
     apply_ignore_rules: bool,
-) -> list[tuple[float, str, bool]]:
-    """Collect ``(mtime, display_path, is_directory)`` for every pattern match.
+    result_window: int,
+) -> tuple[list[tuple[float, str, bool]], int]:
+    """Return the newest bounded result window and total observed matches.
 
-    All matches must be collected before sorting by modification time, so the
-    budget bounds a huge tree walk, not the limit.
+    Exact newest-first ordering still requires inspecting every match, but
+    ``nsmallest`` retains at most ``result_window`` entries while consuming the
+    walk. The handler caps that window independently of the tree size.
     """
-    collected: list[tuple[float, str, bool]] = []
+    observed_results = 0
 
-    for matched_path, is_directory in iter_search_entries(
-        search_root,
-        budget=budget,
-        apply_ignore_rules=apply_ignore_rules,
-        include_directories=True,
-    ):
-        relative_match = matched_path.relative_to(search_root).as_posix()
-        if not glob_path_matches(relative_match, pattern):
-            continue
-        display = display_search_path(matched_path, cwd=cwd)
-        try:
-            modified_at = matched_path.stat().st_mtime
-        except OSError:
-            # Broken symlink or vanished entry: keep it visible, oldest-ranked.
-            modified_at = 0.0
-        collected.append((modified_at, display, is_directory))
+    def matching_entries():
+        nonlocal observed_results
+        for matched_path, is_directory in iter_search_entries(
+            search_root,
+            budget=budget,
+            apply_ignore_rules=apply_ignore_rules,
+            include_directories=True,
+        ):
+            relative_match = matched_path.relative_to(search_root).as_posix()
+            if not glob_path_matches(relative_match, pattern):
+                continue
+            display = display_search_path(matched_path, cwd=cwd)
+            try:
+                modified_at = matched_path.stat().st_mtime
+            except OSError:
+                # Broken symlink or vanished entry: keep it visible, oldest-ranked.
+                modified_at = 0.0
+            observed_results += 1
+            yield modified_at, display, is_directory
 
-    return collected
+    ranked_matches = nsmallest(
+        result_window,
+        matching_entries(),
+        key=lambda entry: (-entry[0], entry[1]),
+    )
+    return ranked_matches, observed_results
 
 
 def glob_handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
@@ -129,10 +150,18 @@ def glob_handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
         search_root = resolve_search_path(context, path_argument)
         normalized_pattern = normalize_file_filter_pattern(pattern_argument, field_name="pattern")
         match_limit = optional_int(
-            arguments.get("limit"), field_name="limit", default=DEFAULT_GLOB_LIMIT, minimum=1
+            arguments.get("limit"),
+            field_name="limit",
+            default=DEFAULT_GLOB_LIMIT,
+            minimum=1,
+            maximum=MAX_GLOB_LIMIT,
         )
         result_offset = optional_int(
-            arguments.get("offset"), field_name="offset", default=0, minimum=0
+            arguments.get("offset"),
+            field_name="offset",
+            default=0,
+            minimum=0,
+            maximum=MAX_GLOB_OFFSET,
         )
         include_ignored = optional_bool(
             arguments.get("include_ignored"), field_name="include_ignored", default=False
@@ -148,12 +177,13 @@ def glob_handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
     cwd_root = context.effective_cwd.expanduser().resolve()
     budget = SearchBudget(context)
     try:
-        collected = _collect_glob_matches(
+        ranked_matches, observed_results = _collect_glob_matches(
             search_root,
             normalized_pattern,
             cwd=cwd_root,
             budget=budget,
             apply_ignore_rules=ignore_rules_apply(search_root, include_ignored=include_ignored),
+            result_window=result_offset + match_limit,
         )
     except OSError as error:
         return tool_failure("filesystem_error", f"failed to search paths: {search_root}: {error}")
@@ -161,24 +191,23 @@ def glob_handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
     if budget.cancelled_by_user:
         return tool_failure(SEARCH_CANCELLED_FAILURE_CODE, SEARCH_CANCELLED_FAILURE_MESSAGE)
 
-    collected.sort(key=lambda entry: (-entry[0], entry[1]))
-    page = collected[result_offset : result_offset + match_limit]
+    page = ranked_matches[result_offset:]
     rendered = [f"{display}/" if is_directory else display for _, display, is_directory in page]
 
     content = render_limited_results(
         rendered,
-        observed_results=max(len(collected) - result_offset, 0),
+        observed_results=max(observed_results - result_offset, 0),
         limit=match_limit,
         timed_out=budget.timed_out,
     )
     if not content:
-        if result_offset > 0 and collected:
-            content = f"No results at offset {result_offset}; {len(collected)} matches total."
+        if result_offset > 0 and observed_results:
+            content = f"No results at offset {result_offset}; {observed_results} matches total."
         else:
             content = f"No paths matched pattern: {normalized_pattern}"
         if budget.timed_out:
             content = f"{content}\n{SEARCH_TIMEOUT_MARKER}"
-    available_results = max(len(collected) - result_offset, 0)
+    available_results = max(observed_results - result_offset, 0)
     displayed_results = len(page)
     context.add_display_count(
         displayed_results,
@@ -213,6 +242,8 @@ __all__ = [
     "GLOB_TOOL_DESCRIPTION",
     "GLOB_TOOL_NAME",
     "GLOB_TOOL_PARAMETERS",
+    "MAX_GLOB_LIMIT",
+    "MAX_GLOB_OFFSET",
     "glob_handler",
     "register_glob_tool",
 ]
