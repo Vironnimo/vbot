@@ -33,6 +33,8 @@ AUTOMATIC_COMPLETION_GUIDANCE = (
     "and current system state before taking further action."
 )
 _SUPPRESSED_ORIGIN_LIMIT = 256
+_COMPLETION_PERSIST_RETRY_INITIAL_SECONDS = 0.25
+_COMPLETION_PERSIST_RETRY_MAX_SECONDS = 30.0
 
 CompletionSessionKey = tuple[str | None, str, str]
 
@@ -149,8 +151,17 @@ class _CompletionDeliveryCoordinator:
 
         try:
             session.add_note(_completion_message(pending))
-        except Exception as error:
-            self._fail(bucket, pending, error)
+        except Exception:
+            # The delivery task still owns these notices. Leaving them pending
+            # lets another Model-request boundary retry the append, or the
+            # post-Run fallback persist them after this Run reaches terminal.
+            _LOGGER.warning(
+                "Completion persistence failed at a request boundary "
+                "(agent=%s session=%s); keeping notices pending",
+                key[1],
+                key[2],
+                exc_info=True,
+            )
             return False
         self._acknowledge(key, bucket, pending)
         return True
@@ -227,8 +238,21 @@ class _CompletionDeliveryCoordinator:
                     else:
                         await asyncio.sleep(0)
                     continue
-                except Exception as error:
-                    self._fail(bucket, pending, error)
+                except Exception:
+                    # Starting a follow-up Run is only the wake-up mechanism.
+                    # The durable delivery boundary is the Session note, so a
+                    # start failure degrades to a non-waking System Reminder.
+                    _LOGGER.warning(
+                        "Completion Run start failed (agent=%s session=%s); "
+                        "persisting without a Run",
+                        key[1],
+                        key[2],
+                        exc_info=True,
+                    )
+                    for notice in pending:
+                        if bucket.notices.get(notice.id) is notice:
+                            notice.boundary_run = None
+                    await self._persist_without_run(key, bucket, pending)
                     continue
 
                 await _wait_for_terminal_run(run)
@@ -273,7 +297,7 @@ class _CompletionDeliveryCoordinator:
         bucket: _CompletionBucket,
         notices: list[_CompletionNotice],
     ) -> None:
-        """Persist cancelled-chain results as notes without waking the Agent."""
+        """Persist results as a System Reminder without waking the Agent."""
         if self._sessions is None:
             self._fail(
                 bucket,
@@ -281,14 +305,52 @@ class _CompletionDeliveryCoordinator:
                 RuntimeError("completion delivery Session service is unavailable"),
             )
             return
-        try:
+
+        retry_delay = _COMPLETION_PERSIST_RETRY_INITIAL_SECONDS
+        while True:
+            pending = self._still_pending(bucket, notices)
+            if not pending:
+                return
+
             async with self._sessions.write_lock(key[1], key[2], key[0]):
-                session = self._sessions.get(key[1], key[2], key[0])
-                session.add_note(_completion_message(notices))
-        except Exception as error:
-            self._fail(bucket, notices, error)
-            return
-        self._acknowledge(key, bucket, notices)
+                pending = self._still_pending(bucket, notices)
+                if not pending:
+                    return
+                try:
+                    session = self._sessions.get(key[1], key[2], key[0])
+                except Exception as error:
+                    # There is no durable target left. A terminal delivery
+                    # failure lets producers release their process-local state.
+                    self._fail(bucket, pending, error)
+                    return
+                try:
+                    session.add_note(_completion_message(pending))
+                except Exception:
+                    _LOGGER.warning(
+                        "Completion persistence failed (agent=%s session=%s); "
+                        "retrying in %.2f seconds",
+                        key[1],
+                        key[2],
+                        retry_delay,
+                        exc_info=True,
+                    )
+                else:
+                    self._acknowledge(key, bucket, pending)
+                    return
+
+            await asyncio.sleep(retry_delay)
+            retry_delay = min(
+                retry_delay * 2,
+                _COMPLETION_PERSIST_RETRY_MAX_SECONDS,
+            )
+
+    @staticmethod
+    def _still_pending(
+        bucket: _CompletionBucket,
+        notices: list[_CompletionNotice],
+    ) -> list[_CompletionNotice]:
+        """Return only notices that still belong to this delivery attempt."""
+        return [notice for notice in notices if bucket.notices.get(notice.id) is notice]
 
     def _acknowledge(
         self,

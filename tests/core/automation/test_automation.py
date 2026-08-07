@@ -11,9 +11,11 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 
+import core.automation.automation as automation_module
 from core.automation import TriggerService
-from core.chat import ChatSessionManager, MessageSender, ReplySurface
+from core.chat import ChatSession, ChatSessionError, ChatSessionManager, MessageSender, ReplySurface
 from core.runs import ActiveRunError, ChatRunManager, Run, RunKind
+from core.subagents import SubAgentBatchTracker
 
 pytestmark = pytest.mark.asyncio
 
@@ -621,6 +623,132 @@ class _CompletionChatLoop:
             project_id=project_id,
             run_kind=run_kind,
         )
+
+
+async def test_completion_start_failure_persists_system_reminder_without_run(
+    tmp_path: Path,
+) -> None:
+    run_manager = ChatRunManager()
+    sessions = ChatSessionManager(tmp_path)
+    sessions.create("coder", session_id="session-one")
+    completion_loop = SimpleNamespace(
+        start_run=AsyncMock(side_effect=RuntimeError("provider unavailable"))
+    )
+    persisted = Mock()
+    trigger_service = TriggerService(
+        cast(Any, completion_loop),
+        run_manager,
+        cast(Any, Mock()),
+        trigger_chat_loop=cast(Any, completion_loop),
+        sessions=sessions,
+    )
+
+    delivery = trigger_service.submit_completion(
+        "coder",
+        "session-one",
+        notice_id="bash:fallback",
+        origin_run_id="origin-run",
+        body="background command finished",
+        on_persisted=persisted,
+    )
+    await asyncio.wait_for(delivery, timeout=1)
+
+    completion_loop.start_run.assert_awaited_once()
+    persisted.assert_called_once_with()
+    notes = [
+        message.content
+        for message in sessions.get("coder", "session-one").load()
+        if message.role == "note" and isinstance(message.content, str)
+    ]
+    assert len(notes) == 1
+    assert "background command finished" in notes[0]
+
+
+async def test_completion_fallback_retries_transient_persistence_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run_manager = ChatRunManager()
+    sessions = ChatSessionManager(tmp_path)
+    sessions.create("coder", session_id="session-one")
+    completion_loop = SimpleNamespace(
+        start_run=AsyncMock(side_effect=RuntimeError("provider unavailable"))
+    )
+    trigger_service = TriggerService(
+        cast(Any, completion_loop),
+        run_manager,
+        cast(Any, Mock()),
+        trigger_chat_loop=cast(Any, completion_loop),
+        sessions=sessions,
+    )
+    original_add_note = ChatSession.add_note
+    attempts = 0
+
+    def add_note_with_transient_failure(session: ChatSession, content: str) -> None:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise ChatSessionError("temporary append failure")
+        original_add_note(session, content)
+
+    monkeypatch.setattr(ChatSession, "add_note", add_note_with_transient_failure)
+    monkeypatch.setattr(
+        automation_module,
+        "_COMPLETION_PERSIST_RETRY_INITIAL_SECONDS",
+        0.0,
+    )
+
+    delivery = trigger_service.submit_completion(
+        "coder",
+        "session-one",
+        notice_id="bash:retry",
+        origin_run_id="origin-run",
+        body="retry this result",
+    )
+    await asyncio.wait_for(delivery, timeout=1)
+
+    assert attempts == 2
+    notes = [
+        message.content
+        for message in sessions.get("coder", "session-one").load()
+        if message.role == "note" and isinstance(message.content, str)
+    ]
+    assert len(notes) == 1
+    assert "retry this result" in notes[0]
+
+
+async def test_completion_fallback_prunes_persisted_subagent_batch(tmp_path: Path) -> None:
+    run_manager = ChatRunManager()
+    sessions = ChatSessionManager(tmp_path)
+    sessions.create("parent", session_id="parent-session")
+    completion_loop = SimpleNamespace(
+        start_run=AsyncMock(side_effect=RuntimeError("provider unavailable"))
+    )
+    trigger_service = TriggerService(
+        cast(Any, completion_loop),
+        run_manager,
+        cast(Any, Mock()),
+        trigger_chat_loop=cast(Any, completion_loop),
+        sessions=sessions,
+    )
+    tracker = SubAgentBatchTracker(trigger_service)
+    parent_key = ("parent", "parent-session", "parent-run")
+    tracker.register(parent_key, "worker", "child-session", "child-run")
+
+    tracker.on_sub_agent_complete(parent_key, "child-run", {"result": "finished work"})
+    for _ in range(10):
+        if not tracker.references_identity_agent("parent"):
+            break
+        await asyncio.sleep(0)
+
+    assert tracker.references_identity_agent("parent") is False
+    notes = [
+        message.content
+        for message in sessions.get("parent", "parent-session").load()
+        if message.role == "note" and isinstance(message.content, str)
+    ]
+    assert len(notes) == 1
+    assert "finished work" in notes[0]
 
 
 async def test_completion_delivery_coalesces_every_result_ready_before_run_end(
