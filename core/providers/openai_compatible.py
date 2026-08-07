@@ -21,6 +21,7 @@ if TYPE_CHECKING:
 from core.models.models import Capabilities, Model, ReasoningCapabilities
 from core.providers._http_shared import (
     build_async_client,
+    build_streaming_request,
     classify_http_status,
     decode_response_json,
     iter_sse_events,
@@ -696,7 +697,8 @@ class OpenAICompatibleAdapter(ProviderAdapter):
             # Rebuild headers per attempt: an OAuth token may refresh during a
             # retry backoff, and the getter must be re-consulted each time.
             headers = await self._build_request_headers(messages, payload)
-            request = self._client.build_request(
+            request = build_streaming_request(
+                self._client,
                 "POST",
                 CHAT_COMPLETIONS_ENDPOINT,
                 json=payload,

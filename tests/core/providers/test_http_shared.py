@@ -16,9 +16,14 @@ import httpx
 import pytest
 
 from core.providers._http_shared import (
+    PROVIDER_NON_STREAMING_READ_TIMEOUT_SECONDS,
+    build_async_client,
+    build_streaming_request,
     classify_http_status,
     decode_response_json,
     parse_sse_json_data,
+    provider_chat_timeout,
+    provider_streaming_timeout,
     wrap_network_error,
 )
 from core.providers.errors import (
@@ -28,6 +33,44 @@ from core.providers.errors import (
     ProviderRateLimitError,
     ProviderTimeoutError,
 )
+
+
+def test_provider_chat_timeout_bounds_every_non_streaming_phase() -> None:
+    """The shared client default cannot wait forever for response bytes."""
+
+    timeout = provider_chat_timeout()
+
+    assert timeout.connect == 60.0
+    assert timeout.read == PROVIDER_NON_STREAMING_READ_TIMEOUT_SECONDS == 180.0
+    assert timeout.write == 60.0
+    assert timeout.pool == 60.0
+
+
+def test_provider_streaming_timeout_disables_only_the_read_timeout() -> None:
+    """Open streams leave reads to higher-level stream liveness clocks."""
+
+    timeout = provider_streaming_timeout()
+
+    assert timeout.connect == 60.0
+    assert timeout.read is None
+    assert timeout.write == 60.0
+    assert timeout.pool == 60.0
+
+
+@pytest.mark.asyncio
+async def test_streaming_requests_override_the_bounded_client_default() -> None:
+    """The shared stream builder opts out of the client's finite read timeout."""
+
+    client = build_async_client(base_url="https://example.com")
+    try:
+        non_streaming = client.build_request("POST", "/response")
+        streaming = build_streaming_request(client, "POST", "/stream")
+    finally:
+        await client.aclose()
+
+    assert non_streaming.extensions["timeout"]["read"] == 180.0
+    assert streaming.extensions["timeout"]["read"] is None
+
 
 # ---------------------------------------------------------------------------
 # wrap_network_error — exhaustive mapping table

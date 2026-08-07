@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 
+from core.providers._http_shared import PROVIDER_NON_STREAMING_READ_TIMEOUT_SECONDS
 from core.providers.adapter import TOOL_RESULT_CONTENT_BLOCKS_FIELD
 from core.providers.tool_schema import render_tool_definitions
 
@@ -85,11 +86,11 @@ async def test_compatible_borrows_transport_and_allows_version_header_opt_out() 
     borrowed_client.aclose.assert_not_awaited()
 
 
-def test_client_timeout_allows_long_generation_reads(anthropic_adapter):
+def test_client_timeout_bounds_non_streaming_generation_reads(anthropic_adapter):
     timeout = anthropic_adapter._client.timeout  # noqa: SLF001 - verify adapter wiring.
 
     assert timeout.connect == 60.0
-    assert timeout.read is None
+    assert timeout.read == PROVIDER_NON_STREAMING_READ_TIMEOUT_SECONDS
     assert timeout.write == 60.0
     assert timeout.pool == 60.0
 

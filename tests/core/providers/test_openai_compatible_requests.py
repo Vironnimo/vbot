@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from core.providers._http_shared import PROVIDER_NON_STREAMING_READ_TIMEOUT_SECONDS
 from core.providers.adapter import TOOL_RESULT_CONTENT_BLOCKS_FIELD
 from core.providers.providers import resolve_request_output_limit
 from core.providers.tool_schema import render_tool_definitions
@@ -43,11 +44,11 @@ from .openai_compatible_test_support import openai_adapter as openai_adapter
 from .openai_compatible_test_support import openrouter_adapter as openrouter_adapter
 
 
-def test_client_timeout_allows_long_generation_reads(openai_adapter):
+def test_client_timeout_bounds_non_streaming_generation_reads(openai_adapter):
     timeout = openai_adapter._client.timeout  # noqa: SLF001 - verify adapter wiring.
 
     assert timeout.connect == 60.0
-    assert timeout.read is None
+    assert timeout.read == PROVIDER_NON_STREAMING_READ_TIMEOUT_SECONDS
     assert timeout.write == 60.0
     assert timeout.pool == 60.0
 

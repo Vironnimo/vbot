@@ -12,7 +12,7 @@ import copy
 import inspect
 import json
 import re
-from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
+from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal, cast
 
@@ -24,11 +24,18 @@ if TYPE_CHECKING:
 
 from core.models.models import Capabilities, Model, ReasoningCapabilities
 from core.providers._http_shared import (
+    PROVIDER_NON_STREAMING_READ_TIMEOUT_SECONDS,
+    build_streaming_request,
     decode_response_json,
     wrap_network_error,
 )
 from core.providers.adapter import IMAGE_WIRE_MEDIA_TYPES, ModelLookup
-from core.providers.errors import NetworkError, ProviderAuthError, ProviderError
+from core.providers.errors import (
+    NetworkError,
+    ProviderAuthError,
+    ProviderError,
+    ProviderTimeoutError,
+)
 from core.providers.github_copilot_responses import (
     ResponsesStreamState,
     build_responses_payload,
@@ -397,14 +404,31 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
                 **self._request_kwargs_with_defaults(kwargs),
             )
             state = ResponsesStreamState()
-            async for _delta in self._stream_responses(
-                payload,
-                endpoint_path=CODEX_RESPONSES_ENDPOINT,
-                cache_scope_id=prompt_cache_affinity_id,
-                conversation_id=conversation_id,
-                state=state,
-            ):
-                pass
+            response_events = cast(
+                AsyncGenerator[dict[str, Any], None],
+                self._stream_responses(
+                    payload,
+                    endpoint_path=CODEX_RESPONSES_ENDPOINT,
+                    cache_scope_id=prompt_cache_affinity_id,
+                    conversation_id=conversation_id,
+                    state=state,
+                ),
+            )
+            try:
+                while True:
+                    try:
+                        await asyncio.wait_for(
+                            anext(response_events),
+                            timeout=PROVIDER_NON_STREAMING_READ_TIMEOUT_SECONDS,
+                        )
+                    except StopAsyncIteration:
+                        break
+            except TimeoutError as exc:
+                raise ProviderTimeoutError(
+                    "Non-streaming Provider request timed out waiting for response data"
+                ) from exc
+            finally:
+                await response_events.aclose()
             if state.completed_response is None:
                 raise NetworkError("Stream ended without a completed Responses object")
             return {_NORMALIZED_CODEX_STREAM_RESPONSE_KEY: state.normalized_response()}
@@ -640,7 +664,8 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
             # Rebuild headers per attempt: an OAuth token may refresh during a
             # retry backoff, and the getter must be re-consulted each time.
             headers = await self._build_headers(cache_scope_id)
-            request = self._client.build_request(
+            request = build_streaming_request(
+                self._client,
                 "POST",
                 endpoint_path,
                 json=payload,

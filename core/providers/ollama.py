@@ -48,6 +48,7 @@ from core.models.models import (
 )
 from core.providers._http_shared import (
     build_async_client,
+    build_streaming_request,
     classify_http_status,
     decode_response_json,
     parse_sse_json_data,
@@ -518,7 +519,8 @@ class OllamaAdapter(ProviderAdapter):
         async def _connect_stream() -> httpx.Response:
             # Rebuild headers per attempt (parity with the other adapters).
             headers = await self._build_headers()
-            request = self._client.build_request(
+            request = build_streaming_request(
+                self._client,
                 "POST",
                 CHAT_ENDPOINT,
                 json=payload,

@@ -7,6 +7,7 @@ and the Codex Responses mode (``subscription`` connection with
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 from collections import deque
@@ -24,7 +25,7 @@ from core.debug.recorder import DebugContext, ProviderDebugRecorder
 from core.debug.store import DebugTraceStore
 from core.models.models import Capabilities, Model, ReasoningCapabilities
 from core.providers.adapter import IMAGE_WIRE_MEDIA_TYPES
-from core.providers.errors import NetworkError, ProviderAuthError
+from core.providers.errors import NetworkError, ProviderAuthError, ProviderTimeoutError
 from core.providers.openai import (
     CODEX_EXTRA_HEADERS,
     CODEX_RESPONSES_ENDPOINT,
@@ -450,6 +451,33 @@ async def test_codex_send_collects_text_deltas_when_completed_output_is_empty() 
         "usage": {"input_tokens": 2, "output_tokens": 2},
         "terminal_outcome": "stop",
     }
+
+
+@pytest.mark.asyncio
+async def test_codex_send_times_out_when_its_internal_stream_stalls(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Non-streaming adapter semantics bound the internally streamed Codex wire."""
+
+    adapter = OpenAIAdapter(
+        _subscription_config(),
+        _jwt_with_account(),
+        connection_mode=CODEX_RESPONSES_MODE,
+    )
+
+    async def _stalled_stream(*args: Any, **kwargs: Any):
+        del args, kwargs
+        await asyncio.Future()
+        yield {}
+
+    monkeypatch.setattr(adapter, "_stream_responses", _stalled_stream)
+    monkeypatch.setattr(
+        "core.providers.openai.PROVIDER_NON_STREAMING_READ_TIMEOUT_SECONDS",
+        0.01,
+    )
+
+    with pytest.raises(ProviderTimeoutError, match="timed out waiting for response data"):
+        await adapter.send(SAMPLE_MESSAGES, model_id="gpt-5.5")
 
 
 def test_request_context_kwargs_separates_conversation_and_cache_affinity() -> None:
