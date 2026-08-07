@@ -177,7 +177,7 @@ describe('chat controller', () => {
     expect(sessionState.actionError).toContain('offline');
   });
 
-  it('merges the terminal cancel response into the active Run projection', async () => {
+  it('merges a terminal cancel response and reconciles durable Tool history', async () => {
     const cancelledRun = {
       run_id: 'run-cancelled',
       status: 'cancelled',
@@ -191,8 +191,42 @@ describe('chat controller', () => {
       ],
     };
     const cancelRun = vi.fn().mockResolvedValue(cancelledRun);
+    const loadChatHistory = vi.fn().mockResolvedValue({
+      active_run: null,
+      messages: [
+        {
+          id: 'assistant-tools',
+          role: 'assistant',
+          run_id: 'run-cancelled',
+          tool_calls: [
+            {
+              id: 'call-one',
+              name: 'bash',
+              arguments: { command: 'first command' },
+            },
+            {
+              id: 'call-two',
+              name: 'bash',
+              arguments: { command: 'second command' },
+            },
+          ],
+        },
+        {
+          id: 'run-summary',
+          role: 'run_summary',
+          run_id: 'run-cancelled',
+          status: 'cancelled',
+        },
+      ],
+    });
     const { chatState, controller, runStream } = setup({
-      operationOverrides: { cancelRun },
+      operationOverrides: { cancelRun, loadChatHistory },
+    });
+    runStream.mergeRunResponse.mockImplementation((state, run) => {
+      for (const event of run.events) {
+        appendRunEvent(state, event);
+      }
+      return true;
     });
     const sessionState = ensureSessionState(chatState, 'alpha', 'session-one');
     startRun(sessionState, {
@@ -210,6 +244,22 @@ describe('chat controller', () => {
       sessionState,
       cancelledRun,
     );
+    expect(loadChatHistory).toHaveBeenCalledWith({
+      agent_id: 'alpha',
+      session_id: 'session-one',
+      limit: 100,
+    });
+    expect(sessionState.currentRun).toBeNull();
+    expect(visibleTimelineItemsForRender(sessionState)[0].tools).toEqual([
+      expect.objectContaining({
+        toolCallId: 'call-one',
+        status: 'cancelled',
+      }),
+      expect.objectContaining({
+        toolCallId: 'call-two',
+        status: 'cancelled',
+      }),
+    ]);
     expect(chatState.cancellingRun).toBe(false);
   });
 
