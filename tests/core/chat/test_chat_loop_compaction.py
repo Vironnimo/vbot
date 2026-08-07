@@ -41,7 +41,9 @@ from core.runs import (
 )
 from core.tools import (
     HISTORY_TOOL_NAME,
+    ToolRegistry,
     register_history_tool,
+    tool_success,
 )
 from core.utils.tokens import estimate_request_input_tokens
 from tests.core.chat.chat_loop_support import (
@@ -62,6 +64,44 @@ from tests.core.chat.chat_loop_support import (
 )
 
 JsonObject = dict[str, Any]
+
+
+class _BlockingOnceCompactionService:
+    """Pause one successful Compaction so a concurrent Session append can race it."""
+
+    def __init__(self) -> None:
+        self.started = asyncio.Event()
+        self.release = asyncio.Event()
+        self.attempted = False
+
+    def has_new_compactable_context(
+        self,
+        _messages: list[ChatMessage],
+        _settings: Any,
+    ) -> bool:
+        return True
+
+    def should_auto_compact(
+        self,
+        _input_tokens: int,
+        _context_window: int,
+        _threshold: float,
+    ) -> bool:
+        return not self.attempted
+
+    async def compact(
+        self,
+        messages: list[ChatMessage],
+        **_kwargs: Any,
+    ) -> ChatMessage:
+        self.attempted = True
+        self.started.set()
+        await self.release.wait()
+        return ChatMessage.compaction_checkpoint(
+            summary="Compacted snapshot.",
+            projection=messages,
+            compacted_token_count=20,
+        )
 
 
 async def _maybe_auto_compact(
@@ -730,6 +770,133 @@ async def test_final_assistant_compaction_activates_history_on_next_run(tmp_path
     second_names = [tool["name"] for tool in adapter.requests[1]["kwargs"]["tools"]]
     assert HISTORY_TOOL_NAME not in first_names
     assert second_names == [HISTORY_TOOL_NAME]
+
+
+@pytest.mark.asyncio
+async def test_final_assistant_compaction_releases_session_lock_during_model_call(
+    tmp_path: Path,
+) -> None:
+    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=[])
+    adapter = StubAdapter(
+        [
+            {
+                "content": "Finished",
+                "tool_calls": None,
+                "usage": {"input_tokens": 90, "output_tokens": 5},
+            }
+        ]
+    )
+    compaction_service = _BlockingOnceCompactionService()
+    runtime: Any = StubRuntime(
+        data_dir=tmp_path,
+        agent=agent,
+        adapter=adapter,
+        storage=StubStorage(
+            {"auto": True, "threshold": 0.8, "tail_tokens": 15_000, "summary_model": None}
+        ),
+        models=StubModels({("openai", "gpt-5.2"): 100}),
+    )
+    runtime.chat_sessions.create("coder", session_id="session-one")
+    loop = build_chat_loop(runtime, compaction_service=cast(Any, compaction_service))
+
+    run = await loop.start_run("coder", "Finish", session_id="session-one")
+    await asyncio.wait_for(compaction_service.started.wait(), timeout=1.0)
+
+    async def append_background_note() -> None:
+        async with runtime.chat_sessions.write_lock("coder", "session-one"):
+            runtime.chat_sessions.get("coder", "session-one").add_note("Background completed")
+
+    note_task = asyncio.create_task(append_background_note())
+    try:
+        await asyncio.wait_for(note_task, timeout=1.0)
+    finally:
+        compaction_service.release.set()
+
+    result = await run.wait()
+    messages = runtime.chat_sessions.get("coder", "session-one").load()
+
+    assert result.content == "Finished"
+    assert persisted_roles(messages) == ["user", "assistant", "note"]
+    assert messages[-2].content == "Background completed"
+    compaction_events = [
+        event
+        for event in run.events
+        if event.type in {COMPACTION_STARTED_EVENT, COMPACTION_ABORTED_EVENT}
+    ]
+    assert [event.type for event in compaction_events] == [
+        COMPACTION_STARTED_EVENT,
+        COMPACTION_ABORTED_EVENT,
+    ]
+    assert compaction_events[-1].payload == {"reason": "stale_context"}
+
+
+@pytest.mark.asyncio
+async def test_mid_tool_stale_compaction_rebuilds_request_with_concurrent_note(
+    tmp_path: Path,
+) -> None:
+    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["get_weather"])
+    adapter = StubAdapter(
+        [
+            {
+                "content": None,
+                "tool_calls": [{"id": "call-weather", "name": "get_weather", "arguments": {}}],
+                "usage": {"input_tokens": 90, "output_tokens": 5},
+            },
+            {
+                "content": "Sunny",
+                "tool_calls": None,
+                "usage": {"input_tokens": 20, "output_tokens": 5},
+            },
+        ]
+    )
+    tools = ToolRegistry()
+    tools.register(
+        "get_weather",
+        "Get weather.",
+        {"type": "object"},
+        lambda _context, _arguments: tool_success({"weather": "sunny"}),
+    )
+    compaction_service = _BlockingOnceCompactionService()
+    runtime: Any = StubRuntime(
+        data_dir=tmp_path,
+        agent=agent,
+        adapter=adapter,
+        tools=tools,
+        storage=StubStorage(
+            {"auto": True, "threshold": 0.8, "tail_tokens": 15_000, "summary_model": None}
+        ),
+        models=StubModels({("openai", "gpt-5.2"): 100}),
+    )
+    runtime.chat_sessions.create("coder", session_id="session-one")
+    loop = build_chat_loop(runtime, compaction_service=cast(Any, compaction_service))
+
+    run = await loop.start_run("coder", "Weather?", session_id="session-one")
+    await asyncio.wait_for(compaction_service.started.wait(), timeout=1.0)
+
+    async def append_background_note() -> None:
+        async with runtime.chat_sessions.write_lock("coder", "session-one"):
+            runtime.chat_sessions.get("coder", "session-one").add_note("Background completed")
+
+    note_task = asyncio.create_task(append_background_note())
+    try:
+        await asyncio.wait_for(note_task, timeout=1.0)
+    finally:
+        compaction_service.release.set()
+
+    result = await run.wait()
+    messages = runtime.chat_sessions.get("coder", "session-one").load()
+    second_request_text = "\n".join(
+        str(message.get("content", "")) for message in adapter.requests[1]["messages"]
+    )
+
+    assert result.content == "Sunny"
+    assert persisted_roles(messages) == ["user", "assistant", "tool", "note", "assistant"]
+    assert "<system-reminder>\nBackground completed\n</system-reminder>" in second_request_text
+    assert [
+        event.type
+        for event in run.events
+        if event.type in {COMPACTION_STARTED_EVENT, COMPACTION_ABORTED_EVENT}
+    ] == [COMPACTION_STARTED_EVENT, COMPACTION_ABORTED_EVENT]
 
 
 @pytest.mark.asyncio
