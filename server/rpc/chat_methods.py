@@ -18,7 +18,7 @@ from core.chat import (
 from core.chat.content_blocks import ContentBlock
 from core.chat.file_mentions import expand_file_mentions, resolve_mention_root
 from core.projects import format_agent_address
-from core.runs import ActiveRunError, ChatRunManager, QueuedRunItem, Run
+from core.runs import ActiveRunError, ChatRunManager, QueuedRunItem, Run, RunCancelledError
 from core.tools.bash import background_bash_statuses
 from server.events import RESOURCE_KIND_QUEUE
 from server.rpc.dispatcher import RpcMethodHandler
@@ -401,9 +401,9 @@ async def _submit_chat(
                     reply_surface=WEBUI_REPLY_SURFACE,
                     project_id=project_id,
                 )
+            started_run = _run_started_during_enqueue(queued_item)
         except Exception as exc:
             raise _map_expected_error(exc) from exc
-        started_run = _run_started_during_enqueue(queued_item)
         if started_run is None:
             _bridge_queued_item_to_event_bus(state, queued_item)
             _publish_queue_changed(state, agent_id, session_id)
@@ -452,6 +452,8 @@ def _run_started_during_enqueue(item: QueuedRunItem) -> Run | None:
     """Return the Run when enqueue won a busy-to-idle race, else None."""
     if not item.future.done():
         return None
+    if item.future.cancelled():
+        raise RunCancelledError(f"queued run cancelled: {item.item_id}")
     return item.future.result()
 
 

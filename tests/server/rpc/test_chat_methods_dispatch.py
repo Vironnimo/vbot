@@ -796,6 +796,47 @@ async def test_chat_stream_returns_queued_response_when_session_is_busy() -> Non
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("method", "loop_attribute"),
+    (("chat.send", "chat_loop"), ("chat.stream", "streaming_chat_loop")),
+)
+async def test_chat_enqueue_cancellation_returns_error_envelope(
+    method: str,
+    loop_attribute: str,
+) -> None:
+    queued_item = _make_queued_item(item_id="queue-cancelled", content="Cancelled message")
+    queued_item.future.cancel()
+    chat_loop = SimpleNamespace(
+        start_run=AsyncMock(side_effect=ActiveRunError("session already has an active run")),
+        queue_run=AsyncMock(return_value=queued_item),
+    )
+    state = SimpleNamespace(
+        command_dispatcher=CommandDispatcher(ChatRunManager()),
+        **{loop_attribute: chat_loop},
+    )
+
+    response = await dispatch_rpc(
+        state,
+        {
+            "method": method,
+            "params": {
+                "agent_id": "agent-1",
+                "session_id": "session-1",
+                "content": "Cancelled message",
+            },
+        },
+    )
+
+    assert response == {
+        "ok": False,
+        "error": {
+            "code": "run_cancelled",
+            "message": "queued run cancelled: queue-cancelled",
+        },
+    }
+
+
+@pytest.mark.asyncio
 async def test_chat_send_busy_queue_bridges_started_run_to_event_bus(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
