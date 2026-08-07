@@ -1195,46 +1195,55 @@ class ChatSessionManager:
             fork_session = ChatSession.create(destination_dir)
 
             try:
-                transcript_bytes = source.path.read_bytes()
-                fork_session.path.write_bytes(transcript_bytes)
-            except OSError as exc:
-                fork_session.delete()
-                raise ChatSessionError(f"failed to copy session transcript: {session_id}") from exc
-            message_count = transcript_bytes.count(SESSION_LINE_ENDING_BYTES)
-
-            source_metadata = self._load_sidecar(source)
-            forked_metadata = {
-                key: value for key, value in source_metadata.items() if key not in strip_meta_keys
-            }
-            same_prompt_scope = (
-                destination_agent_id == source_agent_id and target_project_id == source_project_id
-            )
-            if same_prompt_scope:
-                stored_affinity = source_metadata.get(PROMPT_CACHE_AFFINITY_META_KEY)
-                if stored_affinity is None:
-                    stored_affinity = _default_prompt_cache_affinity_id(
-                        source_agent_id,
-                        session_id,
-                        source_project_id,
-                    )
-                elif not _is_prompt_cache_affinity_id(stored_affinity):
-                    fork_session.delete()
+                try:
+                    transcript_bytes = source.path.read_bytes()
+                    fork_session.path.write_bytes(transcript_bytes)
+                except OSError as exc:
                     raise ChatSessionError(
-                        f"invalid prompt cache affinity id for session: {session_id}"
+                        f"failed to copy session transcript: {session_id}"
+                    ) from exc
+                message_count = transcript_bytes.count(SESSION_LINE_ENDING_BYTES)
+
+                source_metadata = self._load_sidecar(source)
+                forked_metadata = {
+                    key: value
+                    for key, value in source_metadata.items()
+                    if key not in strip_meta_keys
+                }
+                same_prompt_scope = (
+                    destination_agent_id == source_agent_id
+                    and target_project_id == source_project_id
+                )
+                if same_prompt_scope:
+                    stored_affinity = source_metadata.get(PROMPT_CACHE_AFFINITY_META_KEY)
+                    if stored_affinity is None:
+                        stored_affinity = _default_prompt_cache_affinity_id(
+                            source_agent_id,
+                            session_id,
+                            source_project_id,
+                        )
+                    elif not _is_prompt_cache_affinity_id(stored_affinity):
+                        raise ChatSessionError(
+                            f"invalid prompt cache affinity id for session: {session_id}"
+                        )
+                    forked_metadata[PROMPT_CACHE_AFFINITY_META_KEY] = stored_affinity
+                else:
+                    forked_metadata[PROMPT_CACHE_AFFINITY_META_KEY] = (
+                        _new_prompt_cache_affinity_id()
                     )
-                forked_metadata[PROMPT_CACHE_AFFINITY_META_KEY] = stored_affinity
-            else:
-                forked_metadata[PROMPT_CACHE_AFFINITY_META_KEY] = _new_prompt_cache_affinity_id()
-            forked_metadata[FORK_SOURCE_META_KEY] = {
-                "agent_id": source_agent_id,
-                "session_id": session_id,
-                "project_id": source_project_id,
-                "forked_at": _format_timestamp(datetime.now(UTC)),
-                "message_count": message_count,
-            }
-            self.set_metadata(
-                destination_agent_id, fork_session.id, forked_metadata, target_project_id
-            )
+                forked_metadata[FORK_SOURCE_META_KEY] = {
+                    "agent_id": source_agent_id,
+                    "session_id": session_id,
+                    "project_id": source_project_id,
+                    "forked_at": _format_timestamp(datetime.now(UTC)),
+                    "message_count": message_count,
+                }
+                self.set_metadata(
+                    destination_agent_id, fork_session.id, forked_metadata, target_project_id
+                )
+            except Exception:
+                fork_session.delete()
+                raise
             return fork_session
 
     def list(self, agent_id: str, project_id: str | None = None) -> list[ChatSession]:

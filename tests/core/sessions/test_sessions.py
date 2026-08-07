@@ -1653,6 +1653,33 @@ class TestChatSessionManagerFork:
             FORK_SOURCE_META_KEY,
         ]
 
+    def test_fork_metadata_failure_removes_destination_before_retry(self, tmp_path, monkeypatch):
+        manager = ChatSessionManager(tmp_path)
+        source = self._populate(manager, "alpha", "sess")
+        source_bytes = source.path.read_bytes()
+        original_set_metadata = manager.set_metadata
+        metadata_write_attempts = 0
+
+        def fail_first_metadata_write(agent_id, session_id, data, project_id=None):
+            nonlocal metadata_write_attempts
+            metadata_write_attempts += 1
+            if metadata_write_attempts == 1:
+                raise ChatSessionError("simulated metadata write failure")
+            original_set_metadata(agent_id, session_id, data, project_id)
+
+        monkeypatch.setattr(manager, "set_metadata", fail_first_metadata_write)
+
+        with pytest.raises(ChatSessionError, match="simulated metadata write failure"):
+            asyncio.run(manager.fork("alpha", "sess"))
+
+        assert [session.id for session in manager.list("alpha")] == ["sess"]
+        assert source.path.read_bytes() == source_bytes
+
+        fork = asyncio.run(manager.fork("alpha", "sess"))
+
+        assert {session.id for session in manager.list("alpha")} == {"sess", fork.id}
+        assert manager.get_metadata("alpha", fork.id)[FORK_SOURCE_META_KEY]["session_id"] == "sess"
+
     def test_fork_of_unknown_session_raises(self, tmp_path):
         manager = ChatSessionManager(tmp_path)
 
