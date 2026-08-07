@@ -13,6 +13,7 @@ to the nearest ancestor directory that holds tests when it has no dedicated one.
 All npm commands run with ``cwd="webui"``.
 """
 
+import argparse
 import re
 import shutil
 import subprocess
@@ -264,7 +265,58 @@ def filter_vitest_failure_output(output: str) -> str:
 # ---------- main ----------
 
 
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description=("Run the frontend quality pipeline over the whole WebUI or selected paths."),
+        epilog="""Modes:
+  default       Auto-format and auto-fix before validating.
+  --check       Validate without changing source files. Formatting differences fail.
+
+Pipeline:
+  prettier -> eslint -> vitest -> build (complete gate only)
+  The default mode adds Prettier writes and ESLint fixes. --check uses
+  `prettier --check` and omits every fix pass.
+
+Path behavior:
+  With no PATH, run the complete frontend gate and build. PATH values may be
+  project-root-relative (`webui/src/...`) or WebUI-relative (`src/...`) files or
+  directories. Source paths select their nearest mirrored Vitest coverage. A scoped
+  run omits the build. Missing paths abort before any quality tool runs.
+
+Notes:
+  npx and npm must be on PATH. The default mode keeps and reports every source-file
+  change made by Prettier or ESLint. --check does not modify source files, although
+  tests and builds may still write caches or generated build artifacts.
+
+Exit codes:
+  0  All gates passed.
+  1  A prerequisite was missing or one or more gates failed.
+  2  Invalid arguments or paths.
+
+Examples:
+  python scripts/quality-frontend.py
+  python scripts/quality-frontend.py --check
+  python scripts/quality-frontend.py webui/src/lib/
+  python scripts/quality-frontend.py --check src/components/App.svelte""",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument(
+        "--check",
+        action="store_true",
+        help="validate without applying formatter or linter fixes",
+    )
+    parser.add_argument(
+        "paths",
+        nargs="*",
+        metavar="PATH",
+        help="project-root- or WebUI-relative file or directory; omit for the complete gate",
+    )
+    return parser.parse_args(argv)
+
+
 def main() -> int:
+    args = parse_args()
+
     # Resolve full executable paths so subprocess.run works on Windows
     # (CreateProcess cannot find .cmd executables without shell resolution).
     npx_exe = shutil.which("npx")
@@ -273,7 +325,7 @@ def main() -> int:
         print("ERROR: npx and/or npm not found on PATH.", file=sys.stderr)
         return 1
 
-    raw_paths: list[str] = sys.argv[1:]
+    raw_paths: list[str] = args.paths
 
     # Normalize: backslash → forward slash, strip trailing slash.
     normalized = [p.replace("\\", "/").rstrip("/") for p in raw_paths]
@@ -309,29 +361,45 @@ def main() -> int:
     # kind: "fix" = auto-fix (shows FIXED), "gate" = validation (PASS/FAIL),
     #       "test" = test runner with count display,
     #       "build" = full build; surfaces stderr warnings on success without failing
-    steps: list[tuple[str, list[str], str, list[str] | None]] = [
-        (
-            "prettier",
-            [npx_exe, "prettier", "--write"] + prettier_paths,
-            "fix",
-            prettier_paths,
-        ),
-        (
-            "eslint fix",
-            [npx_exe, "eslint", "--fix"] + eslint_fix_paths,
-            "fix",
-            eslint_fix_paths,
-        ),
-        ("eslint", [npx_exe, "eslint"] + eslint_check_paths, "gate", None),
-        (
-            "vitest",
-            # --passWithNoTests: a path filter without nearby tests must not
-            # fail the gate (vitest exits 1 on "No test files found").
-            [npx_exe, "vitest", "run", "--reporter=verbose", "--passWithNoTests"] + vitest_paths,
-            "test",
-            None,
-        ),
-    ]
+    steps: list[tuple[str, list[str], str, list[str] | None]]
+    if args.check:
+        steps = [
+            (
+                "prettier",
+                [npx_exe, "prettier", "--check"] + prettier_paths,
+                "gate",
+                None,
+            )
+        ]
+    else:
+        steps = [
+            (
+                "prettier",
+                [npx_exe, "prettier", "--write"] + prettier_paths,
+                "fix",
+                prettier_paths,
+            ),
+            (
+                "eslint fix",
+                [npx_exe, "eslint", "--fix"] + eslint_fix_paths,
+                "fix",
+                eslint_fix_paths,
+            ),
+        ]
+    steps.extend(
+        [
+            ("eslint", [npx_exe, "eslint"] + eslint_check_paths, "gate", None),
+            (
+                "vitest",
+                # --passWithNoTests: a path filter without nearby tests must not
+                # fail the gate (vitest exits 1 on "No test files found").
+                [npx_exe, "vitest", "run", "--reporter=verbose", "--passWithNoTests"]
+                + vitest_paths,
+                "test",
+                None,
+            ),
+        ]
+    )
 
     # Build is always full-project — only run when no paths were given.
     if is_full_scan:

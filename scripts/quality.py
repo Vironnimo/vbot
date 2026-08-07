@@ -11,6 +11,7 @@ format; directories remain mixed scopes. Python files (e.g.
 (``tests/core/utils/test_config.py``) for pytest.
 """
 
+import argparse
 import re
 import subprocess
 import sys
@@ -253,8 +254,56 @@ def filter_pytest_failure_output(output: str) -> str:
     return filtered_output or output.strip()
 
 
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description=("Run the backend quality pipeline over the whole project or selected paths."),
+        epilog="""Modes:
+  default       Auto-format and auto-fix before validating.
+  --check       Validate without changing source files. Formatting differences fail.
+
+Pipeline:
+  ruff format -> ruff check -> mypy -> pytest
+  The default mode adds Ruff's auto-fix pass. --check uses `ruff format --check`.
+
+Path behavior:
+  With no PATH, run the complete backend gate. PATH values are project-root-relative
+  files or directories and are deduplicated. Python source paths select their mirrored
+  pytest tests; pyproject.toml selects the complete Python pipeline. Missing paths and
+  direct files without a registered quality capability abort before any tool runs.
+
+Notes:
+  The default mode keeps and reports every source-file change made by Ruff. --check
+  does not modify source files, although underlying tools may still write caches.
+
+Exit codes:
+  0  All gates passed.
+  1  One or more gates failed.
+  2  Invalid arguments, paths, or unsupported direct files.
+
+Examples:
+  python scripts/quality.py
+  python scripts/quality.py --check
+  python scripts/quality.py core/runtime/
+  python scripts/quality.py --check core/utils/config.py tests/core/utils/""",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument(
+        "--check",
+        action="store_true",
+        help="validate without applying formatter or linter fixes",
+    )
+    parser.add_argument(
+        "paths",
+        nargs="*",
+        metavar="PATH",
+        help="project-root-relative file or directory; omit for the complete gate",
+    )
+    return parser.parse_args(argv)
+
+
 def main() -> int:
-    raw_paths: list[str] = sys.argv[1:]
+    args = parse_args()
+    raw_paths: list[str] = args.paths
 
     # Normalize: backslash → forward slash, strip trailing slash.
     normalized = [p.replace("\\", "/").rstrip("/") for p in raw_paths]
@@ -303,28 +352,48 @@ def main() -> int:
     # Each step: (label, command, kind)
     # kind: "fix" = auto-fix (shows FIXED), "gate" = validation (PASS/FAIL),
     #       "pytest" = test runner with count display
-    steps: list[tuple[str, list[str], str, list[str] | None]] = [
-        (
-            "ruff format",
-            [sys.executable, "-m", "ruff", "format"] + ruff_fmt_paths,
-            "fix",
-            ruff_fmt_paths,
-        ),
-        (
-            "ruff fix",
-            [sys.executable, "-m", "ruff", "check", "--fix"] + ruff_fix_paths,
-            "fix",
-            ruff_fix_paths,
-        ),
-        ("ruff check", [sys.executable, "-m", "ruff", "check"] + ruff_check_paths, "gate", None),
-        ("mypy", [sys.executable, "-m", "mypy", "--pretty"] + mypy_paths, "gate", None),
-        (
-            "pytest",
-            [sys.executable, "-m", "pytest", "-v", "--tb=short", "--timeout=30"] + test_paths,
-            "pytest",
-            None,
-        ),
-    ]
+    steps: list[tuple[str, list[str], str, list[str] | None]]
+    if args.check:
+        steps = [
+            (
+                "ruff format",
+                [sys.executable, "-m", "ruff", "format", "--check"] + ruff_fmt_paths,
+                "gate",
+                None,
+            )
+        ]
+    else:
+        steps = [
+            (
+                "ruff format",
+                [sys.executable, "-m", "ruff", "format"] + ruff_fmt_paths,
+                "fix",
+                ruff_fmt_paths,
+            ),
+            (
+                "ruff fix",
+                [sys.executable, "-m", "ruff", "check", "--fix"] + ruff_fix_paths,
+                "fix",
+                ruff_fix_paths,
+            ),
+        ]
+    steps.extend(
+        [
+            (
+                "ruff check",
+                [sys.executable, "-m", "ruff", "check"] + ruff_check_paths,
+                "gate",
+                None,
+            ),
+            ("mypy", [sys.executable, "-m", "mypy", "--pretty"] + mypy_paths, "gate", None),
+            (
+                "pytest",
+                [sys.executable, "-m", "pytest", "-v", "--tb=short", "--timeout=30"] + test_paths,
+                "pytest",
+                None,
+            ),
+        ]
+    )
 
     print("Quality Gates")
     print("=============")
