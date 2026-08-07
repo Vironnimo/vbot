@@ -19,7 +19,7 @@ Use vBot's established terms exactly as the glossary and domain maps define them
 
 ## Agent-facing text review
 
-Before creating agent-facing text in this repository, show the user its complete proposed wording verbatim. Before changing existing agent-facing text, show the exact original text, then the complete proposed version with every changed or added passage in bold, and also provide the clean final wording verbatim so review markup cannot be confused with file content. Do not substitute a summary or description of the text. Agent-facing text includes this file, System Prompts, Tool descriptions, Skill instructions, domain maps, glossary entries, handoffs, orchestration prompts, and any other text intended primarily to guide an Agent or Model.
+Before creating runtime Agent-facing text in this repository, show the user its complete proposed wording verbatim with all new text in bold. Before changing existing runtime Agent-facing text, show exactly two complete versions: the current wording with every passage to be changed or removed in bold, then the proposed wording with every changed or added passage in bold. Do not substitute a summary or description of the text. Runtime Agent-facing text means text that vBot supplies to an Agent or Model as part of its runtime context or interaction, including System Prompt blocks, Tool descriptions, Skill instructions, handoffs, System Reminders, and orchestration prompts. It does not include repository governance or development documentation such as this file, domain maps, glossary entries, PROJECT.md, DESIGN.md, or code documentation.
 
 ## Architecture & code
 
