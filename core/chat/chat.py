@@ -203,6 +203,7 @@ from core.runs import (
 from core.sessions import (
     SKILL_AVAILABLE_NOTE_PREFIX,
     ChatSession,
+    SessionReadCursor,
     latest_project_tool_context_id,
     project_tool_context_id,
     skill_activation_contents,
@@ -2437,6 +2438,41 @@ class ChatLoop:
             projected_state.tool_contracts,
         )
 
+    async def _load_compaction_snapshot(
+        self,
+        run: Run,
+        session: ChatSession,
+    ) -> tuple[list[ChatMessage], SessionReadCursor]:
+        """Load one complete Session snapshot without racing an append."""
+        async with self._dependencies.sessions.write_lock(
+            run.agent_id,
+            run.session_id,
+            run.project_id,
+        ):
+            snapshot = session.load_since()
+        if snapshot is None:
+            raise AssertionError("A full Session snapshot must always produce a cursor")
+        return list(snapshot.messages), snapshot.cursor
+
+    async def _append_compaction_checkpoint_if_current(
+        self,
+        run: Run,
+        session: ChatSession,
+        checkpoint: ChatMessage,
+        snapshot_cursor: SessionReadCursor,
+    ) -> bool:
+        """Append *checkpoint* only while its Session snapshot is still current."""
+        async with self._dependencies.sessions.write_lock(
+            run.agent_id,
+            run.session_id,
+            run.project_id,
+        ):
+            appended = session.load_since(snapshot_cursor)
+            if appended is None or appended.messages:
+                return False
+            session.append(checkpoint)
+            return True
+
     def _route_tool_definitions(
         self,
         tools: list[JsonObject],
@@ -2677,20 +2713,7 @@ class ChatLoop:
                     )
                     if terminal_error is not None:
                         raise terminal_error
-                    if self._compaction_service is not None:
-                        await self._maybe_auto_compact_state(
-                            context,
-                            target,
-                            usage=assistant_message.usage,
-                            continuation_request_messages=[
-                                *messages_for_request,
-                                assistant_request_message,
-                            ],
-                            context_usage=assistant_context_usage,
-                            allow_continuation=True,
-                            continue_same_run=False,
-                        )
-                    return assistant_message
+                    break
 
                 stream_continuation_count = 0
                 finalization_violation = tool_finalization_reason is not None
@@ -2858,6 +2881,21 @@ class ChatLoop:
                 messages = compacted_state.messages
                 tools = compacted_state.tools
 
+        if self._compaction_service is not None:
+            await self._maybe_auto_compact_state(
+                context,
+                target,
+                usage=assistant_message.usage,
+                continuation_request_messages=[
+                    *messages_for_request,
+                    assistant_request_message,
+                ],
+                context_usage=assistant_context_usage,
+                allow_continuation=True,
+                continue_same_run=False,
+            )
+        return assistant_message
+
     async def _attach_tool_result_content(
         self,
         tool_messages: list[JsonObject],
@@ -2954,7 +2992,6 @@ class ChatLoop:
             CompactionInsufficientReclaimError,
         )
 
-        session_messages = session.load()
         context_window = self._resolve_context_window(agent)
         if context_window is None:
             return current_state
@@ -2985,6 +3022,7 @@ class ChatLoop:
             )
         if not should_compact:
             return current_state
+        session_messages, snapshot_cursor = await self._load_compaction_snapshot(run, session)
         if not self._compaction_service.has_new_compactable_context(
             session_messages,
             settings,
@@ -3053,7 +3091,6 @@ class ChatLoop:
             if close_summary_adapter:
                 await _close_adapter(summary_adapter)
 
-        session_messages = session.load()
         ordinal = (
             len(
                 [message for message in session_messages if message.role == "compaction_checkpoint"]
@@ -3146,7 +3183,62 @@ class ChatLoop:
             )
             return current_state
 
-        session.append(checkpoint)
+        checkpoint_committed = await self._append_compaction_checkpoint_if_current(
+            run,
+            session,
+            checkpoint,
+            snapshot_cursor,
+        )
+        if not checkpoint_committed:
+            run.emit(COMPACTION_ABORTED_EVENT, {"reason": "stale_context"})
+            _LOGGER.info(
+                "Auto-compaction discarded because the Session changed during its Model call "
+                "(run=%s session=%s)",
+                run.id,
+                run.session_id,
+            )
+            if continue_same_run:
+                try:
+                    refreshed_state = await self._build_request_state(
+                        agent,
+                        session,
+                        replay_policy=target.replay_policy,
+                        reasoning_scope_model=target.model_reference,
+                        input_modalities=target.input_modalities,
+                        wire_media_types=target.wire_media_types,
+                        agent_body=context.agent_body,
+                        project_context=context.project_prompt_context,
+                        working_project_context=context.working_project_context,
+                        agent_project_id=context.project_id,
+                        skill_registry=context.skill_registry,
+                        skill_catalog=context.skill_catalog,
+                    )
+                    refreshed_messages = _restore_in_run_tool_result_content(
+                        _restore_in_run_assistant_reasoning(
+                            refreshed_state.messages,
+                            messages,
+                        ),
+                        messages,
+                    )
+                    if context.continuation_reminder is not None:
+                        refreshed_messages = inject_continuation_reminder(
+                            refreshed_messages,
+                            context.continuation_reminder,
+                        )
+                    return _RequestState(
+                        refreshed_messages,
+                        refreshed_state.tools,
+                        refreshed_state.allowed_tool_names,
+                        refreshed_state.session_tool_grants,
+                        refreshed_state.tool_contracts,
+                    )
+                except Exception:
+                    _LOGGER.warning(
+                        "Request rebuild after stale auto-compaction failed; continuing with "
+                        "the existing request state",
+                        exc_info=True,
+                    )
+            return current_state
         context.prompt_cache_affinity_id = (
             self._dependencies.sessions.rotate_prompt_cache_affinity_id(
                 run.agent_id,
