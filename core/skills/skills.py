@@ -349,7 +349,23 @@ def _load_skill_root(
     if not skills_dir.is_dir():
         return
 
-    for skill_dir in sorted(skills_dir.iterdir(), key=lambda path: path.name):
+    try:
+        skill_directories = sorted(skills_dir.iterdir(), key=lambda path: path.name)
+    except OSError as exc:
+        warnings = [f"Cannot scan skill directory {skills_dir}: {exc}"]
+        diagnostics.append(
+            SkillDiagnostic(
+                name=skills_dir.name,
+                path=skills_dir,
+                valid=False,
+                warnings=warnings,
+                loadable=False,
+            )
+        )
+        _log_validation_warnings(skills_dir.name, skills_dir, warnings)
+        return
+
+    for skill_dir in skill_directories:
         if not skill_dir.is_dir():
             continue
 

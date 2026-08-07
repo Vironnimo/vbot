@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import argparse
-import shutil
+import logging
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+
+_LOGGER = logging.getLogger("vbot.storage")
 
 DATA_DIRECTORY_RELATIVE_PATHS = (
     Path("artifacts"),
@@ -191,10 +193,6 @@ def initialize_data_directory(
         else Path(__file__).resolve().parents[2] / "resources"
     )
     environment_template = resources_root / ENVIRONMENT_TEMPLATE_RELATIVE_PATH
-    if not layout.environment_file.exists() and not environment_template.is_file():
-        raise FileNotFoundError(
-            f"Data-directory environment template not found: {environment_template}"
-        )
 
     created_directories: list[Path] = []
     if not layout.root.exists():
@@ -214,12 +212,21 @@ def initialize_data_directory(
         created_directories.append(directory)
 
     created_files: list[Path] = []
+    environment_template_bytes = b""
+    if not layout.environment_file.exists():
+        try:
+            environment_template_bytes = environment_template.read_bytes()
+        except OSError as error:
+            _LOGGER.warning(
+                "Could not read data-directory environment template '%s'; creating an empty "
+                ".env file: %s",
+                environment_template,
+                error,
+            )
+
     try:
-        with (
-            layout.environment_file.open("xb") as target,
-            environment_template.open("rb") as source,
-        ):
-            shutil.copyfileobj(source, target)
+        with layout.environment_file.open("xb") as target:
+            target.write(environment_template_bytes)
         created_files.append(layout.environment_file)
     except FileExistsError:
         pass

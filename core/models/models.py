@@ -13,6 +13,7 @@ lookup.
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -32,6 +33,9 @@ from core.models.database import (
 
 if TYPE_CHECKING:
     from core.models.query import ModelQuery
+
+_LOGGER = logging.getLogger("vbot.models")
+_MODEL_DATA_ERRORS = (AttributeError, KeyError, OSError, TypeError, UnicodeError, ValueError)
 
 # Provider-layer files under ``models/`` are ``<provider>.json``; these siblings
 # are never provider files and are excluded from the provider-file glob loop.
@@ -414,62 +418,126 @@ class ModelRegistry:
         canonical_layer = load_canonical_layer(models_dir)
         models: dict[tuple[str, str], Model] = {}
         provider_layers: dict[str, dict[str, Any]] = {}
+        provider_sources: dict[str, Path] = {}
+        override_layers: dict[str, dict[str, Any]] = {}
+        override_sources: dict[str, Path] = {}
 
-        for json_file in sorted(models_dir.glob("*.json")):
+        try:
+            provider_files = sorted(models_dir.glob("*.json"))
+        except OSError as exc:
+            _LOGGER.warning("Could not scan Model DB provider files in '%s': %s", models_dir, exc)
+            provider_files = []
+
+        for json_file in provider_files:
             if not is_provider_file(json_file.name):
                 continue
 
-            data = json.loads(json_file.read_text(encoding="utf-8"))
-            provider_id = data["provider_id"]
-            provider_layers[provider_id] = data["models"]
+            try:
+                provider_id, provider_models = cls._read_provider_file(json_file)
+            except _MODEL_DATA_ERRORS as exc:
+                _LOGGER.warning(
+                    "Ignoring invalid Model DB provider file '%s': %s",
+                    json_file,
+                    exc,
+                )
+                continue
+            provider_layers[provider_id] = provider_models
+            provider_sources[provider_id] = json_file
 
         # A provider with no refreshable/static catalog can still be defined by
         # its hand layer alone. Include those provider ids without manufacturing
         # an empty generated ``<provider>.json`` file just to make the override
         # discoverable.
-        for overrides_file in sorted(models_dir.glob(f"*{OVERRIDES_FILE_SUFFIX}")):
+        try:
+            override_files = sorted(models_dir.glob(f"*{OVERRIDES_FILE_SUFFIX}"))
+        except OSError as exc:
+            _LOGGER.warning("Could not scan Model DB override files in '%s': %s", models_dir, exc)
+            override_files = []
+
+        for overrides_file in override_files:
             if overrides_file.name == CANONICAL_OVERRIDES_FILE_NAME:
                 continue
-            override_data = json.loads(overrides_file.read_text(encoding="utf-8"))
-            provider_id = override_data.get("provider_id") or overrides_file.name.removesuffix(
-                OVERRIDES_FILE_SUFFIX
-            )
-            if not isinstance(provider_id, str) or not provider_id:
-                raise ValueError(f"Override file '{overrides_file}' has an invalid provider_id")
+            try:
+                provider_id, override_models = cls._read_override_file(overrides_file)
+            except _MODEL_DATA_ERRORS as exc:
+                _LOGGER.warning(
+                    "Ignoring invalid Model DB override file '%s': %s",
+                    overrides_file,
+                    exc,
+                )
+                continue
+            override_layers[provider_id] = override_models
+            override_sources[provider_id] = overrides_file
             provider_layers.setdefault(provider_id, {})
 
         for provider_id, provider_models in sorted(provider_layers.items()):
-            override_models = cls._read_override_models(models_dir, provider_id)
-
-            for wire_id, provider_model in provider_models.items():
-                record = assemble_provider_model(
-                    wire_id,
-                    provider_model,
-                    override_models.get(wire_id),
-                    canonical_layer,
-                )
-                models[(provider_id, wire_id)] = _model_from_record(wire_id, record)
-
-            # An override file may carry a wire-id absent from the provider file
-            # (a manual override-only model). Assemble those too, since the old
-            # refresh-time path also supported override-only models.
-            for wire_id, override_model in override_models.items():
-                if wire_id in provider_models:
+            override_models = override_layers.get(provider_id, {})
+            wire_ids = sorted(set(provider_models) | set(override_models))
+            for wire_id in wire_ids:
+                provider_entry_present = wire_id in provider_models
+                provider_model = provider_models.get(wire_id, {})
+                override_model = override_models.get(wire_id)
+                if provider_entry_present and not isinstance(provider_model, Mapping):
+                    _LOGGER.warning(
+                        "Ignoring invalid Model DB provider entry '%s/%s' in '%s': "
+                        "record must be an object",
+                        provider_id,
+                        wire_id,
+                        provider_sources.get(provider_id, models_dir),
+                    )
+                    provider_entry_present = False
+                    provider_model = {}
+                if override_model is not None and not isinstance(override_model, Mapping):
+                    _LOGGER.warning(
+                        "Ignoring invalid Model DB override entry '%s/%s' in '%s': "
+                        "record must be an object",
+                        provider_id,
+                        wire_id,
+                        override_sources.get(provider_id, models_dir),
+                    )
+                    override_model = None
+                if not provider_entry_present and override_model is None:
                     continue
-                record = assemble_provider_model(
-                    wire_id,
-                    {},
-                    override_model,
-                    canonical_layer,
-                )
-                models[(provider_id, wire_id)] = _model_from_record(wire_id, record)
+
+                try:
+                    record = assemble_provider_model(
+                        wire_id,
+                        provider_model,
+                        override_model,
+                        canonical_layer,
+                    )
+                    models[(provider_id, wire_id)] = _model_from_record(wire_id, record)
+                except _MODEL_DATA_ERRORS as exc:
+                    sources = [
+                        str(source)
+                        for source in (
+                            provider_sources.get(provider_id),
+                            override_sources.get(provider_id),
+                        )
+                        if source is not None
+                    ]
+                    _LOGGER.warning(
+                        "Ignoring invalid Model DB model '%s/%s' from '%s': %s",
+                        provider_id,
+                        wire_id,
+                        "', '".join(sources),
+                        exc,
+                    )
 
         for provider_id, provider in custom_providers.items():
             for model_id, custom_model in provider.get("models", {}).items():
-                models[(provider_id, model_id)] = _model_from_record(
-                    model_id,
-                    cls._custom_model_record(custom_model),
-                )
+                try:
+                    models[(provider_id, model_id)] = _model_from_record(
+                        model_id,
+                        cls._custom_model_record(custom_model),
+                    )
+                except _MODEL_DATA_ERRORS as exc:
+                    _LOGGER.warning(
+                        "Ignoring invalid custom Model '%s/%s' from Settings: %s",
+                        provider_id,
+                        model_id,
+                        exc,
+                    )
 
         return models
 
@@ -498,22 +566,34 @@ class ModelRegistry:
         }
 
     @staticmethod
-    def _read_override_models(models_dir: Path, provider_id: str) -> dict[str, Any]:
-        """Return the ``models`` map of ``<provider>.overrides.json``, or ``{}``.
+    def _read_provider_file(path: Path) -> tuple[str, dict[str, Any]]:
+        """Read and validate one generated Provider layer."""
 
-        The override file may omit ``provider_id`` — the provider id is derived
-        from the filename — so it is keyed only by wire-id here. An absent file
-        contributes no overrides.
-        """
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(data, Mapping):
+            raise ValueError("the root must be an object")
+        provider_id = data.get("provider_id")
+        if not isinstance(provider_id, str) or not provider_id:
+            raise ValueError("'provider_id' must be a non-empty string")
+        provider_models = data.get("models")
+        if not isinstance(provider_models, dict):
+            raise ValueError("'models' must be an object")
+        return provider_id, provider_models
 
-        overrides_path = models_dir / f"{provider_id}{OVERRIDES_FILE_SUFFIX}"
-        if not overrides_path.exists():
-            return {}
-        data = json.loads(overrides_path.read_text(encoding="utf-8"))
+    @staticmethod
+    def _read_override_file(path: Path) -> tuple[str, dict[str, Any]]:
+        """Read and validate one optional Provider override layer."""
+
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(data, Mapping):
+            raise ValueError("the root must be an object")
+        provider_id = data.get("provider_id") or path.name.removesuffix(OVERRIDES_FILE_SUFFIX)
+        if not isinstance(provider_id, str) or not provider_id:
+            raise ValueError("'provider_id' must be a non-empty string")
         override_models = data.get("models", {})
         if not isinstance(override_models, dict):
-            raise ValueError(f"Override file '{overrides_path}' must contain a 'models' object")
-        return override_models
+            raise ValueError("'models' must be an object")
+        return provider_id, override_models
 
     @classmethod
     def invalidate(

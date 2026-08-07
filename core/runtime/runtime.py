@@ -499,6 +499,7 @@ class Runtime:
         self._providers = ProviderRegistry.load(
             resources_path,
             custom_providers=custom_providers,
+            tolerate_invalid=True,
         )
         self._token_store = TokenStore(self._storage.data_dir)
         self._provider_credentials = ProviderCredentialResolver(
@@ -1528,6 +1529,18 @@ class Runtime:
                 )
             self._recall_backend_name = DEFAULT_RECALL_BACKEND
             return registry.create(DEFAULT_RECALL_BACKEND, context)
+        except Exception as error:
+            if backend_name == DEFAULT_RECALL_BACKEND:
+                raise
+            if self.logger is not None:
+                self.logger.warning(
+                    "Recall backend %r could not start; using %s: %s",
+                    backend_name,
+                    DEFAULT_RECALL_BACKEND,
+                    error,
+                )
+            self._recall_backend_name = DEFAULT_RECALL_BACKEND
+            return registry.create(DEFAULT_RECALL_BACKEND, context)
 
     def reload_channel_tool(self) -> None:
         """Re-register channel_send based on persisted enabled Channel configs."""
@@ -1877,6 +1890,7 @@ class Runtime:
         self.providers.reload(
             resources_path,
             custom_providers=custom_providers,
+            tolerate_invalid=True,
         )
         self.models.reload(
             resources_path,

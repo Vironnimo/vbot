@@ -557,7 +557,13 @@ class AgentStore:
 
         defaults = self._agent_defaults()
         agents: list[Agent] = []
-        for agent_path in sorted(agents_dir.glob("*/agent.json")):
+        try:
+            agent_paths = sorted(agents_dir.glob("*/agent.json"))
+        except OSError as error:
+            _LOGGER.warning("Could not scan Agent configs in %s: %s", agents_dir, error)
+            agent_paths = []
+
+        for agent_path in agent_paths:
             try:
                 raw_agent = self._load_raw_agent(agent_path)
                 agents.append(self._apply_defaults(raw_agent, defaults))
@@ -1224,7 +1230,12 @@ class AgentStore:
             if target.exists():
                 continue
             template = self._template_dir / filename
-            target.write_text(template.read_text(encoding="utf-8"), encoding="utf-8")
+            try:
+                template_content = template.read_text(encoding="utf-8")
+            except (OSError, UnicodeError) as error:
+                _LOGGER.warning("Skipping unreadable Workspace template %s: %s", template, error)
+                continue
+            target.write_text(template_content, encoding="utf-8")
 
     @staticmethod
     def _validate_agent_id(agent_id: str) -> None:

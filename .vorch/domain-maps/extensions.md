@@ -30,10 +30,10 @@ Core cross-cutting terms live in `.vorch/GLOSSARY.md`; these terms are specific 
 
 ## Loading and identity invariants
 
-- `ExtensionRegistry.load()` scans immediate children in deterministic root order: `<data_dir>/extensions/`, configured `extension_directories`, then bundled `resources/extensions/` last.
+- `ExtensionRegistry.load()` scans immediate children in deterministic root order: `<data_dir>/extensions/`, configured `extension_directories`, then bundled `resources/extensions/` last. Failure to enumerate one root is logged and contributes no Extensions from that root; the remaining roots still load and Runtime startup continues.
 - Filesystem name is Extension identity. Cross-root conflicts are first-wins: the first occurrence claims the name; later copies become visible `overridden` records and are never imported or registered. A disabled earlier copy still claims the name, so disabling cannot silently activate a later copy.
 - Loading is two-phase. `register(api)` only collects declarations into an `ExtensionRecord`; async registrations finish deterministically before loaded records are applied in load order. Extension code never writes live registry tables directly.
-- Record status is one of `loaded`, `failed`, `disabled`, or `overridden`. Import, manifest, or registration failure isolates that Extension; a collision or apply error for one capability stays a non-fatal `capability_errors` diagnostic while the record remains loaded.
+- Record status is one of `loaded`, `failed`, `disabled`, or `overridden`. Import, manifest (including I/O, malformed JSON, or UTF-8 decoding), or registration failure isolates that Extension; a collision or apply error for one capability stays a non-fatal `capability_errors` diagnostic while the record remains loaded.
 - `API_VERSION` is the public contract version and is currently 2; API v2 adds Slash Command declarations. An optional directory-form `extension.json` may add display metadata and an `api_version`; a manifest requiring a newer version fails that Extension.
 
 ## Cross-task contracts

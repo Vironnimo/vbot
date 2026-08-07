@@ -117,9 +117,12 @@ fields (``name``, ``capabilities`` incl. ``reasoning.supported``,
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
+
+_LOGGER = logging.getLogger("vbot.models")
 
 # The JSON key that points a provider/override model entry at its canonical id.
 # Internal join key only — stripped from the assembled record, never a Model
@@ -303,11 +306,28 @@ def _read_models_map(path: Path) -> dict[str, Any]:
 
     if not path.exists():
         return {}
-    data = json.loads(path.read_text(encoding="utf-8"))
-    models = data.get("models", {})
-    if not isinstance(models, dict):
-        raise ValueError(f"Canonical file '{path}' must contain a 'models' object")
-    return models
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(data, Mapping):
+            raise ValueError("the root must be an object")
+        models = data.get("models", {})
+        if not isinstance(models, dict):
+            raise ValueError("'models' must be an object")
+    except (OSError, UnicodeError, ValueError) as exc:
+        _LOGGER.warning("Ignoring invalid Model DB canonical file '%s': %s", path, exc)
+        return {}
+
+    valid_models: dict[str, Any] = {}
+    for canonical_id, record in models.items():
+        if isinstance(record, Mapping):
+            valid_models[canonical_id] = record
+            continue
+        _LOGGER.warning(
+            "Ignoring invalid Model DB canonical entry '%s' in '%s': record must be an object",
+            canonical_id,
+            path,
+        )
+    return valid_models
 
 
 def _plain(value: Any) -> Any:

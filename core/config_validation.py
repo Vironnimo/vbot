@@ -245,6 +245,14 @@ def _load_and_validate_json_file(
 
     try:
         data = json.loads(file_path.read_text(encoding="utf-8"))
+    except UnicodeError as exc:
+        return _ValidatedDocument(
+            report=JsonValidationReport(
+                file_path=file_path,
+                exists=True,
+                diagnostics=(error_diagnostic("$", f"File is not valid UTF-8: {exc}"),),
+            )
+        )
     except json.JSONDecodeError as exc:
         return _ValidatedDocument(
             report=JsonValidationReport(

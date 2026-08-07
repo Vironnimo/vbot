@@ -1449,6 +1449,10 @@ class CronService:
 
         try:
             payload = json.loads(claim_path.read_text(encoding="utf-8"))
+        except UnicodeError as error:
+            raise CronStorageError(
+                f"Invalid UTF-8 in once fire claim {claim_path}: {error}"
+            ) from error
         except OSError as error:
             raise CronStorageError(f"Cannot read {claim_path}: {error}") from error
         except json.JSONDecodeError as error:

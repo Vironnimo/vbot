@@ -59,6 +59,19 @@ def test_validate_data_dir_config_delegates_bootstrap_jobs(tmp_path: Path) -> No
     assert bootstrap_reports[0].ok is False
 
 
+def test_validate_data_dir_config_reports_non_utf8_json_without_raising(tmp_path: Path) -> None:
+    agent_path = tmp_path / "agents" / "main" / "agent.json"
+    agent_path.parent.mkdir(parents=True)
+    agent_path.write_bytes(b'{"id":"main","name":"\xff"}')
+
+    reports = validate_data_dir_config(tmp_path)
+
+    agent_report = next(report for report in reports if report.file_path == agent_path)
+    assert agent_report.ok is False
+    assert agent_report.diagnostics[0].path == "$"
+    assert "not valid UTF-8" in agent_report.diagnostics[0].message
+
+
 def test_validate_custom_provider_accepts_secret_free_model_facts() -> None:
     diagnostics = validate_settings_data(
         {

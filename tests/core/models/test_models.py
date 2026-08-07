@@ -1,6 +1,7 @@
 """Tests for Model dataclass and ModelRegistry."""
 
 import json
+import logging
 from dataclasses import FrozenInstanceError
 from pathlib import Path
 
@@ -18,6 +19,33 @@ from core.providers.reasoning import resolve_reasoning_intent
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 PROJECT_ROOT = Path(__file__).parent.parent.parent.parent
 RESOURCES_DIR = PROJECT_ROOT / "resources"
+
+
+def _model_record(name: str) -> dict[str, object]:
+    return {
+        "name": name,
+        "capabilities": {
+            "vision": False,
+            "tools": True,
+            "json_mode": False,
+            "reasoning": {"supported": False},
+        },
+        "context_window": 32000,
+        "max_output_tokens": 4096,
+    }
+
+
+def _write_provider_catalog(
+    models_dir: Path,
+    provider_id: str,
+    models: dict[str, object],
+) -> Path:
+    path = models_dir / f"{provider_id}.json"
+    path.write_text(
+        json.dumps({"provider_id": provider_id, "models": models}),
+        encoding="utf-8",
+    )
+    return path
 
 
 # ---------------------------------------------------------------------------
@@ -413,6 +441,142 @@ class TestModelRegistryLoad:
         assert gamma.name == "Model Gamma"
         assert gamma.capabilities.vision is False
         assert gamma.capabilities.reasoning.supported is False
+
+    def test_corrupt_provider_file_does_not_block_valid_providers(
+        self,
+        tmp_path: Path,
+        caplog: pytest.LogCaptureFixture,
+    ):
+        models_dir = tmp_path / "models"
+        models_dir.mkdir()
+        _write_provider_catalog(models_dir, "healthy", {"model-a": _model_record("Healthy")})
+        corrupt_path = models_dir / "corrupt.json"
+        corrupt_path.write_text('{"provider_id": "corrupt", "models":', encoding="utf-8")
+
+        with caplog.at_level(logging.WARNING, logger="vbot.models"):
+            registry = ModelRegistry.load(tmp_path)
+
+        assert registry.get("healthy", "model-a").name == "Healthy"
+        assert registry.list_for_provider("corrupt") == []
+        assert str(corrupt_path) in caplog.text
+        assert "Ignoring invalid Model DB provider file" in caplog.text
+
+    def test_structurally_invalid_provider_file_does_not_block_load(
+        self,
+        tmp_path: Path,
+        caplog: pytest.LogCaptureFixture,
+    ):
+        models_dir = tmp_path / "models"
+        models_dir.mkdir()
+        _write_provider_catalog(models_dir, "healthy", {"model-a": _model_record("Healthy")})
+        invalid_path = models_dir / "invalid.json"
+        invalid_path.write_text(
+            json.dumps({"provider_id": "invalid", "models": []}),
+            encoding="utf-8",
+        )
+
+        with caplog.at_level(logging.WARNING, logger="vbot.models"):
+            registry = ModelRegistry.load(tmp_path)
+
+        assert registry.get("healthy", "model-a").name == "Healthy"
+        assert registry.list_for_provider("invalid") == []
+        assert str(invalid_path) in caplog.text
+        assert "'models' must be an object" in caplog.text
+
+    def test_invalid_model_entry_does_not_hide_valid_sibling(
+        self,
+        tmp_path: Path,
+        caplog: pytest.LogCaptureFixture,
+    ):
+        models_dir = tmp_path / "models"
+        models_dir.mkdir()
+        provider_path = _write_provider_catalog(
+            models_dir,
+            "mixed",
+            {
+                "healthy": _model_record("Healthy"),
+                "broken": ["not", "an", "object"],
+            },
+        )
+
+        with caplog.at_level(logging.WARNING, logger="vbot.models"):
+            registry = ModelRegistry.load(tmp_path)
+
+        assert registry.get("mixed", "healthy").name == "Healthy"
+        assert registry.list_for_provider("mixed") == [registry.get("mixed", "healthy")]
+        assert str(provider_path) in caplog.text
+        assert "mixed/broken" in caplog.text
+
+    def test_corrupt_override_is_ignored_without_hiding_generated_model(
+        self,
+        tmp_path: Path,
+        caplog: pytest.LogCaptureFixture,
+    ):
+        models_dir = tmp_path / "models"
+        models_dir.mkdir()
+        _write_provider_catalog(models_dir, "healthy", {"model-a": _model_record("Generated")})
+        override_path = models_dir / "healthy.overrides.json"
+        override_path.write_text('{"models": {"model-a":', encoding="utf-8")
+
+        with caplog.at_level(logging.WARNING, logger="vbot.models"):
+            registry = ModelRegistry.load(tmp_path)
+
+        assert registry.get("healthy", "model-a").name == "Generated"
+        assert str(override_path) in caplog.text
+        assert "Ignoring invalid Model DB override file" in caplog.text
+
+    def test_corrupt_canonical_file_is_ignored_without_hiding_provider_model(
+        self,
+        tmp_path: Path,
+        caplog: pytest.LogCaptureFixture,
+    ):
+        models_dir = tmp_path / "models"
+        models_dir.mkdir()
+        _write_provider_catalog(models_dir, "healthy", {"model-a": _model_record("Provider")})
+        canonical_path = models_dir / "models.json"
+        canonical_path.write_text('{"models":', encoding="utf-8")
+
+        with caplog.at_level(logging.WARNING, logger="vbot.models"):
+            registry = ModelRegistry.load(tmp_path)
+
+        assert registry.get("healthy", "model-a").name == "Provider"
+        assert str(canonical_path) in caplog.text
+        assert "Ignoring invalid Model DB canonical file" in caplog.text
+
+    def test_empty_provider_record_can_inherit_complete_canonical_model(self, tmp_path: Path):
+        models_dir = tmp_path / "models"
+        models_dir.mkdir()
+        _write_provider_catalog(models_dir, "thin", {"model-a": {}})
+        models_dir.joinpath("models.json").write_text(
+            json.dumps({"models": {"model-a": _model_record("Canonical")}}),
+            encoding="utf-8",
+        )
+
+        registry = ModelRegistry.load(tmp_path)
+
+        assert registry.get("thin", "model-a").name == "Canonical"
+
+    def test_model_directory_scan_failure_does_not_raise(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        models_dir = tmp_path / "models"
+        models_dir.mkdir()
+
+        def fail_scan(*_args: object, **_kwargs: object) -> list[Path]:
+            raise OSError("scan failed")
+
+        monkeypatch.setattr(Path, "glob", fail_scan)
+
+        with caplog.at_level(logging.WARNING, logger="vbot.models"):
+            registry = ModelRegistry.load(tmp_path)
+
+        assert registry.list_for_provider("unavailable") == []
+        assert str(models_dir) in caplog.text
+        assert "Could not scan Model DB provider files" in caplog.text
+        assert "Could not scan Model DB override files" in caplog.text
 
     def test_load_reads_optional_metadata(self, tmp_path: Path):
         models_dir = tmp_path / "models"

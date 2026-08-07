@@ -94,14 +94,24 @@ def test_initialize_preserves_existing_configuration_bytes(tmp_path: Path) -> No
     assert second.created_files == ()
 
 
-def test_initialize_fails_when_missing_environment_template_is_needed(tmp_path: Path) -> None:
-    with pytest.raises(FileNotFoundError, match="environment template"):
-        initialize_data_directory(
-            tmp_path / "data",
+def test_initialize_uses_empty_environment_when_template_is_unavailable(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    data_dir = tmp_path / "data"
+    template_path = tmp_path / "missing-resources" / "data-dir" / ".env.example"
+
+    with caplog.at_level("WARNING", logger="vbot.storage"):
+        result = initialize_data_directory(
+            data_dir,
             resources_dir=tmp_path / "missing-resources",
         )
 
-    assert not (tmp_path / "data").exists()
+    assert (data_dir / ".env").read_bytes() == b""
+    assert (data_dir / "settings.json").read_bytes() == b"{}\n"
+    assert result.created_files == (data_dir / ".env", data_dir / "settings.json")
+    assert str(template_path) in caplog.text
+    assert "creating an empty .env file" in caplog.text
 
 
 def test_layout_cli_initializes_data_directory(tmp_path: Path) -> None:

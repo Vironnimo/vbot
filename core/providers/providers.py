@@ -14,6 +14,7 @@ registry instance without re-reading disk.
 from __future__ import annotations
 
 import json
+import logging
 import math
 from collections.abc import Mapping
 from dataclasses import dataclass, field
@@ -22,6 +23,16 @@ from pathlib import Path
 from typing import Any
 
 from core.utils.errors import ConfigError, ProviderError
+
+_LOGGER = logging.getLogger("vbot.providers")
+_PROVIDER_CONFIG_ERRORS = (
+    ConfigError,
+    KeyError,
+    OSError,
+    TypeError,
+    UnicodeError,
+    ValueError,
+)
 
 # Last-resort context-window floor, used when neither the model nor the
 # provider config supplies a window (e.g. custom models and thin providers
@@ -454,6 +465,7 @@ class ProviderRegistry:
         resources_dir: Path,
         *,
         custom_providers: Mapping[str, Mapping[str, Any]] | None = None,
+        tolerate_invalid: bool = False,
     ) -> ProviderRegistry:
         """Read bundled Provider JSON and overlay optional Custom Providers.
 
@@ -473,14 +485,24 @@ class ProviderRegistry:
         Raises:
             KeyError: If two provider configs share the same ``id``.
         """
-        if custom_providers is not None:
-            return cls(cls._assemble_configs(resources_dir, custom_providers))
+        if custom_providers is not None or tolerate_invalid:
+            return cls(
+                cls._assemble_configs(
+                    resources_dir,
+                    custom_providers or {},
+                    tolerate_invalid=tolerate_invalid,
+                )
+            )
 
         cache_key = resources_dir.resolve()
         if cache_key in _registry_cache:
             return _registry_cache[cache_key]
 
-        configs = cls._assemble_configs(resources_dir, {})
+        configs = cls._assemble_configs(
+            resources_dir,
+            {},
+            tolerate_invalid=tolerate_invalid,
+        )
         registry = cls(configs)
         _registry_cache[cache_key] = registry
         return registry
@@ -518,12 +540,17 @@ class ProviderRegistry:
         resources_dir: Path,
         *,
         custom_providers: Mapping[str, Mapping[str, Any]] | None = None,
+        tolerate_invalid: bool = False,
     ) -> None:
         """Reload bundled and Custom Provider configs in place."""
 
         resolved = resources_dir.resolve()
-        self._configs = self._assemble_configs(resources_dir, custom_providers or {})
-        if custom_providers is None:
+        self._configs = self._assemble_configs(
+            resources_dir,
+            custom_providers or {},
+            tolerate_invalid=tolerate_invalid,
+        )
+        if custom_providers is None and not tolerate_invalid:
             _registry_cache[resolved] = self
 
     @classmethod
@@ -531,29 +558,54 @@ class ProviderRegistry:
         cls,
         resources_dir: Path,
         custom_providers: Mapping[str, Mapping[str, Any]],
+        *,
+        tolerate_invalid: bool = False,
     ) -> dict[str, ProviderConfig]:
         providers_dir = resources_dir / "providers"
         configs: dict[str, ProviderConfig] = {}
 
         if providers_dir.is_dir():
-            for json_file in sorted(providers_dir.glob("*.json")):
-                data = json.loads(json_file.read_text(encoding="utf-8"))
-                config = cls._parse_config(data)
-                if config.id in configs:
-                    raise KeyError(
-                        f"Duplicate provider id '{config.id}' (from {json_file} and another file)"
-                    )
+            try:
+                provider_files = sorted(providers_dir.glob("*.json"))
+            except OSError as exc:
+                if not tolerate_invalid:
+                    raise
+                _LOGGER.warning("Could not scan Provider configs in '%s': %s", providers_dir, exc)
+                provider_files = []
+
+            for json_file in provider_files:
+                try:
+                    data = json.loads(json_file.read_text(encoding="utf-8"))
+                    if not isinstance(data, dict):
+                        raise ConfigError("Provider config root must be an object")
+                    config = cls._parse_config(data)
+                    if config.id in configs:
+                        raise KeyError(
+                            f"Duplicate provider id '{config.id}' "
+                            f"(from {json_file} and another file)"
+                        )
+                except _PROVIDER_CONFIG_ERRORS as exc:
+                    if not tolerate_invalid:
+                        raise
+                    _LOGGER.warning("Ignoring invalid Provider config '%s': %s", json_file, exc)
+                    continue
                 configs[config.id] = config
 
         for provider_id, custom_provider in sorted(custom_providers.items()):
-            if provider_id in configs:
-                raise ConfigError(
-                    f"Custom Provider id '{provider_id}' conflicts with a bundled Provider"
+            try:
+                if provider_id in configs:
+                    raise ConfigError(
+                        f"Custom Provider id '{provider_id}' conflicts with a bundled Provider"
+                    )
+                config = cls._parse_config(
+                    cls._custom_config_data(provider_id, custom_provider),
+                    custom=True,
                 )
-            config = cls._parse_config(
-                cls._custom_config_data(provider_id, custom_provider),
-                custom=True,
-            )
+            except _PROVIDER_CONFIG_ERRORS as exc:
+                if not tolerate_invalid:
+                    raise
+                _LOGGER.warning("Ignoring invalid Custom Provider '%s': %s", provider_id, exc)
+                continue
             configs[config.id] = config
         return configs
 

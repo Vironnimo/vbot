@@ -13,7 +13,6 @@ from pathlib import Path
 from typing import Any, TypedDict
 
 from core.settings import SettingsValidationError, load_runtime_settings_json
-from core.utils.errors import ConfigError
 
 VBOT_ROOT = Path(__file__).resolve().parents[2]
 _WORKTREE_FILE = VBOT_ROOT / ".vbot-worktree"
@@ -41,7 +40,8 @@ def _read_worktree_data_dir(
 
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+        _LOGGER.warning("Ignoring invalid worktree marker '%s': %s", path, error)
         return None
 
     if not isinstance(data, dict):
@@ -125,8 +125,9 @@ def read_env_file(env_path: str | Path) -> dict[str, str]:
 
     try:
         raw = path.read_text(encoding="utf-8")
-    except OSError as exc:
-        raise ConfigError(f"Cannot read {path}: {exc}") from exc
+    except (OSError, UnicodeError) as exc:
+        _LOGGER.warning("Ignoring unreadable environment file %s: %s", path, exc)
+        return {}
 
     return parse_env_lines(raw.splitlines())
 

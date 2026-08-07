@@ -352,7 +352,16 @@ class ChannelStorage:
             return []
 
         configs: list[ChannelConfig] = []
-        for channel_dir in sorted(self._channels_dir.iterdir(), key=lambda path: path.name):
+        try:
+            channel_directories = sorted(
+                self._channels_dir.iterdir(),
+                key=lambda path: path.name,
+            )
+        except OSError as error:
+            _LOGGER.warning("Cannot scan Channel configs in %s: %s", self._channels_dir, error)
+            return []
+
+        for channel_dir in channel_directories:
             if not channel_dir.is_dir():
                 continue
             config_path = channel_dir / _CHANNEL_CONFIG_FILENAME
@@ -850,8 +859,9 @@ class ChannelService:
             if config.enabled:
                 try:
                     self.start_channel(config.id)
-                except ChannelError as error:
-                    self._mark_channel_failed(config.id, str(error))
+                except Exception as error:
+                    reason = str(error) or type(error).__name__
+                    self._mark_channel_failed(config.id, reason)
                     _LOGGER.error(
                         "Cannot start channel adapter during service startup (channel=%s): %s",
                         config.id,
