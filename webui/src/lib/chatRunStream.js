@@ -162,9 +162,7 @@ export function createChatRunStream({
         currentRun.contributesToAgentActivity = false;
       }
     }
-    mergeRetainedRunEvents(sessionState, run.events, {
-      fromServerEvent: true,
-    });
+    mergeRetainedRunEvents(sessionState, run.events);
 
     if (!alreadySubscribed) {
       subscribeToRun(sessionState, sseUrl, {
@@ -177,13 +175,13 @@ export function createChatRunStream({
     return true;
   }
 
-  function mergeRetainedRunEvents(sessionState, events, options = {}) {
+  function mergeRetainedRunEvents(sessionState, events) {
     if (!Array.isArray(events) || events.length === 0) {
       return;
     }
     for (const eventData of events) {
       const event = appendRunEvent(sessionState, eventData);
-      handleAppendedRunEvent(sessionState, event, options);
+      handleAppendedRunEvent(sessionState, event);
     }
   }
 
@@ -333,7 +331,7 @@ export function createChatRunStream({
     return terminalEvent;
   }
 
-  function handleAppendedRunEvent(sessionState, event, options = {}) {
+  function handleAppendedRunEvent(sessionState, event) {
     if (!event) {
       return;
     }
@@ -358,9 +356,7 @@ export function createChatRunStream({
       delete orderedRunEventBuffers[sessionState.key];
       clearPendingReconnect(sessionState.key);
       clearPendingRecoveryRetry(sessionState.key);
-      if (!options.fromServerEvent || !activeSubscriptions[sessionState.key]) {
-        closeRunSubscription(sessionState.key);
-      }
+      closeRunSubscription(sessionState.key);
       sessionState.streamError = '';
       void syncSessionQueue(sessionState);
     }
@@ -687,14 +683,12 @@ export function createChatRunStream({
       displayed
     ) {
       for (const appendedEvent of appendOrderedRunEvent(sessionState, event)) {
-        handleAppendedRunEvent(sessionState, appendedEvent, {
-          fromServerEvent: true,
-        });
+        handleAppendedRunEvent(sessionState, appendedEvent);
       }
       return;
     }
     const appended = appendRunEvent(sessionState, event);
-    handleAppendedRunEvent(sessionState, appended, { fromServerEvent: true });
+    handleAppendedRunEvent(sessionState, appended);
     if (event.type === 'run_started' && displayed) {
       attachRunStream(
         sessionState,

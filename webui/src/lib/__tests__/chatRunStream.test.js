@@ -974,6 +974,30 @@ describe('createChatRunStream() SSE reconnect budget (regression for B2)', () =>
     expect(subscriptions[0].close).toHaveBeenCalledOnce();
   });
 
+  it('closes the SSE subscription when a contiguous terminal event arrives over WebSocket', () => {
+    const { subscriptions, harness, sessionState } = setupRunningStream();
+
+    harness.stream.handleServerEvents({
+      type: 'run_completed',
+      payload: {
+        run_id: RUN_ID,
+        agent_id: DISPLAYED_AGENT_ID,
+        session_id: DISPLAYED_SESSION_ID,
+        run_event_type: 'run_completed',
+        run_event_sequence: 1,
+        status: 'completed',
+      },
+    });
+
+    expect(sessionState.status).toBe('completed');
+    expect(subscriptions[0].close).toHaveBeenCalledOnce();
+
+    vi.advanceTimersByTime(25_000);
+    subscriptions[0].handlers.onError(new Error('late EventSource error'));
+    vi.advanceTimersByTime(500);
+    expect(subscriptions).toHaveLength(1);
+  });
+
   it('falls back to durable history after consecutive failed reconnects, with exponential backoff between attempts', async () => {
     const reconcileRunSession = vi.fn(async () => true);
     const { subscriptions, sessionState } = setupRunningStream({
