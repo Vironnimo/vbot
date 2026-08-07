@@ -3,8 +3,17 @@
 from __future__ import annotations
 
 import logging
+import os
 
 import pytest
+
+
+@pytest.fixture(autouse=True)
+def _remove_inherited_vbot_run_context(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Require tests to opt into vBot Run context explicitly."""
+    for name in tuple(os.environ):
+        if name.startswith("VBOT_RUN_"):
+            monkeypatch.delenv(name)
 
 
 @pytest.fixture(autouse=True)
