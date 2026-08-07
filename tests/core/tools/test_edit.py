@@ -233,21 +233,99 @@ def test_edit_rejects_line_numbered_new_string(tmp_path: Path) -> None:
     assert target.read_text(encoding="utf-8") == "alpha\nbeta\n"
 
 
-def test_edit_hints_gutter_when_old_string_is_line_numbered(tmp_path: Path) -> None:
-    # A gutter'd old_string never matches the raw file; the error should point at
-    # the gutter instead of generic whitespace advice.
+def test_edit_uses_current_read_gutter_in_old_string(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
-    workspace.joinpath("notes.txt").write_text("hello\nworld\n", encoding="utf-8")
+    target = workspace / "notes.txt"
+    target.write_text("hello\nworld\n", encoding="utf-8")
 
     result = edit_handler(
         make_context(workspace),
-        {"path": "notes.txt", "old_string": "1| hello\n2| world", "new_string": "x"},
+        {"path": "notes.txt", "old_string": "1| hello\n2| world", "new_string": "hi"},
     )
 
-    error = assert_failure_envelope(result, "text_not_found")
-    assert "old_string not found" in error["message"]
-    assert "line-number" in error["message"]
+    data = assert_success_envelope(result)
+    assert data["replacements"] == 1
+    assert target.read_text(encoding="utf-8") == "hi\n"
+
+
+def test_edit_uses_compact_read_gutter_in_old_string(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    target = workspace / "notes.txt"
+    target.write_text("alpha\nbeta\n", encoding="utf-8")
+
+    result = edit_handler(
+        make_context(workspace),
+        {"path": "notes.txt", "old_string": "5|alpha\n6|beta", "new_string": "updated"},
+    )
+
+    assert_success_envelope(result)
+    assert target.read_text(encoding="utf-8") == "updated\n"
+
+
+def test_edit_uses_continuation_read_gutter_in_old_string(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    target = workspace / "notes.txt"
+    target.write_text("fragment\nnext\n", encoding="utf-8")
+
+    result = edit_handler(
+        make_context(workspace),
+        {
+            "path": "notes.txt",
+            "old_string": "50:50001| fragment\n51| next",
+            "new_string": "replacement",
+        },
+    )
+
+    assert_success_envelope(result)
+    assert target.read_text(encoding="utf-8") == "replacement\n"
+
+
+def test_edit_keeps_ambiguity_after_stripping_old_string_gutter(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    target = workspace / "notes.txt"
+    target.write_text("alpha\nbeta\nalpha\nbeta\n", encoding="utf-8")
+
+    result = edit_handler(
+        make_context(workspace),
+        {"path": "notes.txt", "old_string": "1| alpha\n2| beta", "new_string": "updated"},
+    )
+
+    error = assert_failure_envelope(result, "ambiguous_match")
+    assert "Found 2 occurrences" in error["message"]
+    assert target.read_text(encoding="utf-8") == "alpha\nbeta\nalpha\nbeta\n"
+
+    replace_all_result = edit_handler(
+        make_context(workspace),
+        {
+            "path": "notes.txt",
+            "old_string": "1| alpha\n2| beta",
+            "new_string": "updated",
+            "replace_all": True,
+        },
+    )
+
+    replace_all_data = assert_success_envelope(replace_all_result)
+    assert replace_all_data["replacements"] == 2
+    assert target.read_text(encoding="utf-8") == "updated\nupdated\n"
+
+
+def test_edit_prefers_raw_match_for_real_gutter_shaped_file_content(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    target = workspace / "notes.txt"
+    target.write_text("1| alpha\n2| beta\n", encoding="utf-8")
+
+    result = edit_handler(
+        make_context(workspace),
+        {"path": "notes.txt", "old_string": "1| alpha\n2| beta", "new_string": "updated"},
+    )
+
+    assert_success_envelope(result)
+    assert target.read_text(encoding="utf-8") == "updated\n"
 
 
 def test_edit_warns_when_edit_breaks_syntax_without_blocking(tmp_path: Path) -> None:
