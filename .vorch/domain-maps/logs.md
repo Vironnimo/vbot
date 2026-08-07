@@ -50,7 +50,7 @@ The logs subsystem exposes application log files from `<data_dir>/logs/` for ins
 
 ## External Dependencies
 
-- `watchfiles` — `awatch` watches the whole logs *directory* (`recursive=False`) in forced-polling mode (`force_polling=True`, `poll_delay_ms=50`, `debounce=100`), not the single selected file. Live append/reset events are derived from re-read file snapshots, while a changed sorted filename tuple emits a catalog event even when the selected file did not change — this polling setup is deliberate for reliable Windows behavior and naturally covers daily rollover.
+- `watchfiles` — `awatch` watches the whole logs *directory* (`recursive=False`) in forced-polling mode (`force_polling=True`, `poll_delay_ms=50`, `debounce=100`), not the single selected file. Timeouts are yielded for reliable watcher teardown. Empty batches compare only selected-file and log-directory metadata before lock acquisition; unchanged metadata stops there, while changed metadata triggers targeted snapshot or catalog reconciliation. Live append/reset events are derived from re-read file snapshots, while a changed sorted filename tuple emits a catalog event even when the selected file did not change — this polling setup is deliberate for reliable Windows behavior and naturally covers daily rollover.
 
 ## Constraints & Gotchas
 
