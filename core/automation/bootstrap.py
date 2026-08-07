@@ -287,8 +287,7 @@ class BootstrapService:
     def list_jobs(self) -> list[BootstrapJob]:
         self._ensure_loaded(allow_degraded=True)
         return [
-            replace(job)
-            for job in sorted(self._jobs.values(), key=lambda item: (item.created_at, item.id))
+            replace(job) for job in sorted(self._jobs.values(), key=lambda item: item.created_at)
         ]
 
     def get_job(self, job_id: str) -> BootstrapJob:
@@ -422,7 +421,7 @@ class BootstrapService:
         self._reconcile_once_jobs()
         eligible = [job for job in self._jobs.values() if self._eligible(job)]
         groups: dict[tuple[str, ...], list[str]] = {}
-        for job in sorted(eligible, key=lambda item: (item.created_at, item.id)):
+        for job in sorted(eligible, key=lambda item: item.created_at):
             key = (
                 (
                     (job.project_id or ""),
@@ -634,8 +633,7 @@ class BootstrapService:
     def _save(self) -> None:
         self._jobs_path.parent.mkdir(parents=True, exist_ok=True)
         payload = [
-            job.to_dict()
-            for job in sorted(self._jobs.values(), key=lambda item: (item.created_at, item.id))
+            job.to_dict() for job in sorted(self._jobs.values(), key=lambda item: item.created_at)
         ] + list(self._invalid_entries)
         try:
             atomic_write_text(
