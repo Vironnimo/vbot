@@ -111,18 +111,8 @@ function expectedDefaultShell() {
   return process.env.COMSPEC || "cmd.exe";
 }
 
-function expectedDefaultShellTitle(command) {
-  const executable = command.split(/[\\/]/).pop().toLowerCase();
-  if (executable === "pwsh.exe" || executable === "pwsh") {
-    return "PowerShell";
-  }
-  if (executable === "powershell.exe" || executable === "powershell") {
-    return "Windows PowerShell";
-  }
-  if (executable === "cmd.exe" || executable === "cmd") {
-    return "Command Prompt";
-  }
-  return command;
+function executableName(command) {
+  return command.split(/[\\/]/).pop();
 }
 
 function defaultShellProbe(command) {
@@ -149,9 +139,9 @@ test("the platform default shell starts as a native interactive terminal", async
   await startTerminal(page);
 
   const expectedCommand = expectedDefaultShell();
-  await expect(page.locator(".terminals-view__identity-primary")).toContainText(
-    expectedDefaultShellTitle(expectedCommand),
-  );
+  await expect(
+    page.locator(".terminals-view__identity-meta span").first(),
+  ).toHaveText(executableName(expectedCommand));
   await sendToSelectedTerminal(page, defaultShellProbe(expectedCommand));
   await expect(terminalOutput(page)).toContainText(DEFAULT_SHELL_MARKER);
 });
