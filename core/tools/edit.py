@@ -12,7 +12,13 @@ from core.tools.arguments import (
     optional_bool,
 )
 from core.tools.file_state import FileReadState, StaleReason, atomic_write_bytes
-from core.tools.fuzzy_match import AmbiguousFuzzyMatch, FuzzyReplacement, replace_fuzzy
+from core.tools.fuzzy_match import (
+    AmbiguousFuzzyMatch,
+    ClosestFuzzyCandidate,
+    FuzzyReplacement,
+    find_closest_candidates,
+    replace_fuzzy,
+)
 from core.tools.syntax_check import warning_for_edited_file
 from core.tools.tools import (
     JsonObject,
@@ -34,8 +40,8 @@ EDIT_TOOL_DESCRIPTION = (
     "copied from read in old_string is used automatically; include enough unchanged "
     "surrounding text to identify one "
     "location unless replace_all is true. For repeated lines, include a neighboring "
-    "line or heading. Use this for precise, surgical edits against the file's current "
-    "contents."
+    "line or heading. A genuine no-match returns bounded raw candidate excerpts for "
+    "retry. Use this for precise, surgical edits against the file's current contents."
 )
 EDIT_TOOL_PARAMETERS: JsonObject = {
     "type": "object",
@@ -125,17 +131,41 @@ def _format_ambiguous_match_error(
     )
 
 
-def _text_not_found_failure(old_string: str) -> JsonObject:
-    if looks_like_line_numbered_content(old_string):
-        return tool_failure(
-            "text_not_found",
-            "old_string not found — it carries read's `N| ` line-number gutter. "
-            "Match against the raw file text, without the leading line numbers.",
+def _format_no_match_candidates(candidates: list[ClosestFuzzyCandidate]) -> str:
+    if not candidates:
+        return ""
+    blocks = []
+    for index, candidate in enumerate(candidates, start=1):
+        excerpt_kind = "bounded raw prefix" if candidate.truncated else "raw text"
+        blocks.append(
+            f"Candidate {index} (starting line {candidate.line_number}; {excerpt_kind}):\n"
+            f"{candidate.text}"
         )
-    return tool_failure(
-        "text_not_found",
-        "old_string not found in file. Check whitespace, indentation, or line endings.",
+    return (
+        "\nClosest raw candidates (without read's line-number gutter):\n"
+        + "\n\n".join(blocks)
+        + "\nRetry with the intended candidate text as old_string and add raw surrounding "
+        "context if it is not unique."
     )
+
+
+def _text_not_found_failure(content: str, old_string: str) -> JsonObject:
+    gutter_candidates = line_number_gutter_candidates(old_string)
+    if gutter_candidates:
+        message = "old_string not found after removing read's line-number gutter."
+        diagnostic_pattern = gutter_candidates[0]
+    elif looks_like_line_numbered_content(old_string):
+        message = (
+            "old_string not found — it appears to contain an incomplete or damaged "
+            "read line-number gutter that could not be recovered safely."
+        )
+        diagnostic_pattern = old_string
+    else:
+        message = "old_string not found in file. Check whitespace, indentation, or line endings."
+        diagnostic_pattern = old_string
+
+    candidates = find_closest_candidates(content, diagnostic_pattern)
+    return tool_failure("text_not_found", message + _format_no_match_candidates(candidates))
 
 
 def _replace_with_gutter_fallback(
@@ -268,7 +298,7 @@ def edit_handler(
             content, old_string, new_string, replace_all=replace_all
         )
         if result is None:
-            return _text_not_found_failure(old_string)
+            return _text_not_found_failure(content, old_string)
         if isinstance(result, AmbiguousFuzzyMatch):
             return tool_failure(
                 "ambiguous_match",

@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
-from core.tools.fuzzy_match import AmbiguousFuzzyMatch, FuzzyReplacement, replace_fuzzy
+from core.tools.fuzzy_match import (
+    AmbiguousFuzzyMatch,
+    FuzzyReplacement,
+    find_closest_candidates,
+    replace_fuzzy,
+)
 
 
 def test_exact_match_replaces_and_reports_strategy() -> None:
@@ -141,6 +146,45 @@ def test_replace_all_replaces_every_occurrence() -> None:
 
 def test_no_match_returns_none() -> None:
     assert replace_fuzzy("hello\nworld\n", "missing", "x", replace_all=False) is None
+
+
+def test_closest_candidates_rank_same_sized_raw_block() -> None:
+    content = (
+        "def unrelated():\n    return None\n\ndef deploy():\n    timeout = 30\n    retries = 5\n"
+    )
+
+    candidates = find_closest_candidates(
+        content,
+        "def deploy():\n    timeout = 20\n    retries = 5",
+    )
+
+    assert candidates
+    assert candidates[0].line_number == 4
+    assert candidates[0].text == "def deploy():\n    timeout = 30\n    retries = 5"
+    assert candidates[0].truncated is False
+
+
+def test_closest_candidates_suppress_weak_noise() -> None:
+    assert find_closest_candidates("alpha\nbeta\ngamma\n", "totally unrelated locator") == []
+
+
+def test_closest_candidates_bound_count_and_raw_excerpt() -> None:
+    content = "\n".join(f"target value {index}" for index in range(10))
+
+    candidates = find_closest_candidates(content, "target value x")
+
+    assert len(candidates) == 3
+    assert all(len(candidate.text) <= 1_200 for candidate in candidates)
+
+
+def test_closest_candidates_return_bounded_prefix_for_long_raw_line() -> None:
+    raw_line = "target = " + "x" * 2_000
+
+    candidates = find_closest_candidates(raw_line, "target = " + "x" * 1_999 + "y")
+
+    assert len(candidates) == 1
+    assert candidates[0].text == raw_line[:1_200]
+    assert candidates[0].truncated is True
 
 
 def test_exact_wins_over_looser_strategies() -> None:

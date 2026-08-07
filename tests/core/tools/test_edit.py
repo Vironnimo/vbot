@@ -215,6 +215,66 @@ def test_edit_returns_failure_for_not_found_text(tmp_path: Path) -> None:
     assert "old_string not found" in error["message"]
 
 
+def test_edit_no_match_returns_bounded_raw_candidates_without_writing(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    target = workspace / "module.py"
+    original = (
+        "def unrelated():\n    return None\n\ndef deploy():\n    timeout = 30\n    retries = 5\n"
+    )
+    target.write_text(original, encoding="utf-8")
+
+    result = edit_handler(
+        make_context(workspace),
+        {
+            "path": "module.py",
+            "old_string": "def deploy():\n    timeout = 20\n    retries = 5",
+            "new_string": "def deploy():\n    timeout = 60\n    retries = 5",
+        },
+    )
+
+    error = assert_failure_envelope(result, "text_not_found")
+    assert "Closest raw candidates" in error["message"]
+    assert "Candidate 1 (starting line 4; raw text):" in error["message"]
+    assert "def deploy():\n    timeout = 30\n    retries = 5" in error["message"]
+    assert "4|" not in error["message"]
+    assert target.read_text(encoding="utf-8") == original
+
+
+def test_edit_no_match_omits_weak_candidates(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    target = workspace / "notes.txt"
+    target.write_text("alpha\nbeta\ngamma\n", encoding="utf-8")
+
+    result = edit_handler(
+        make_context(workspace),
+        {"path": "notes.txt", "old_string": "totally unrelated locator", "new_string": "x"},
+    )
+
+    error = assert_failure_envelope(result, "text_not_found")
+    assert "Closest raw candidates" not in error["message"]
+    assert target.read_text(encoding="utf-8") == "alpha\nbeta\ngamma\n"
+
+
+def test_edit_no_match_candidates_use_recovered_gutterfree_pattern(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    target = workspace / "notes.txt"
+    target.write_text("alpha = 2\nbeta\n", encoding="utf-8")
+
+    result = edit_handler(
+        make_context(workspace),
+        {"path": "notes.txt", "old_string": "1| alpha = 1\n2| beta", "new_string": "x"},
+    )
+
+    error = assert_failure_envelope(result, "text_not_found")
+    assert "after removing read's line-number gutter" in error["message"]
+    assert "alpha = 2\nbeta" in error["message"]
+    assert "1|" not in error["message"]
+    assert target.read_text(encoding="utf-8") == "alpha = 2\nbeta\n"
+
+
 def test_edit_rejects_line_numbered_new_string(tmp_path: Path) -> None:
     # A model that pastes read's ``N| `` gutter into the replacement must be
     # stopped before it writes line-number prefixes into the file.
