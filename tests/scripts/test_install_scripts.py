@@ -572,28 +572,61 @@ def test_windows_installer_refuses_accidental_elevation_before_install_mutation(
     guard = script.index("if ((Test-IsElevated) -and -not $AllowElevatedInstall)")
     assert "normal PowerShell" in script[guard:]
     assert guard < script.index("Confirm-Git", guard)
-    assert guard < script.index('Write-Step "Cloning', guard)
+    assert guard < script.index('Write-Step "Downloading', guard)
 
 
 def test_windows_public_installer_ends_with_verified_lifecycle_summary() -> None:
     script = (PROJECT_ROOT / "scripts" / "install.ps1").read_text(encoding="utf-8")
 
-    summary_start = script.index('Write-Step "Final installation summary"')
+    summary_start = script.index('Write-Step "Verifying the installation"')
     summary = script[summary_start:]
 
     assert ".vbot-install.json" in summary
     assert "server status --host $summaryHost --port $summaryPort" in summary
     assert "autostart status --host $summaryHost --port $summaryPort" in summary
     assert "$setupReportedProblems" in summary
-    assert 'Write-Host "Server: running"' in summary
-    assert 'Write-Host "Server: NOT RUNNING"' in summary
-    assert 'Write-Host "Problems:"' in summary
-    assert "Required next step: run this from a normal PowerShell" in summary
+    assert 'Write-Host "vBot is ready."' in summary
+    assert 'Write-Host "vBot was installed, but it needs attention."' in summary
+    assert 'Write-Host "Technical details: $InstallLogPath"' in summary
     assert "open PowerShell as Administrator" not in summary
-    assert 'Write-Host "Server URL: http://${summaryHost}:$summaryPort"' in summary
-    assert summary.index("if ($serverRunning)") < summary.index(
-        'Write-Host "Server URL: http://${summaryHost}:$summaryPort"'
+    assert 'Write-Host "Open: http://${summaryHost}:$summaryPort/"' in summary
+    assert summary.index("if ($problems.Count -eq 0 -and $serverRunning)") < summary.index(
+        'Write-Host "Open: http://${summaryHost}:$summaryPort/"'
     )
+
+
+@pytest.mark.parametrize("script_name", ["install.sh", "install.ps1"])
+def test_public_installer_hides_setup_details_and_keeps_a_failure_log(
+    script_name: str,
+) -> None:
+    script = (PROJECT_ROOT / "scripts" / script_name).read_text(encoding="utf-8")
+
+    assert "vBot is ready." in script
+    assert "Technical details:" in script
+    assert "Configuring checkout:" not in script
+    assert "Creating virtual environment at" not in script
+    if script_name.endswith(".sh"):
+        assert "--verbose" in script
+        assert "read -p" not in script
+        assert '>> "$INSTALL_LOG" 2>&1' in script
+        assert 'tee -a "$INSTALL_LOG"' in script
+    else:
+        assert "Read-Host" not in script
+        assert '$VerbosePreference -eq "Continue"' in script
+        assert "Add-Content -LiteralPath $InstallLogPath" in script
+        assert "Write-Host $line" in script
+
+
+def test_linux_public_installer_verifies_server_and_autostart_before_ready() -> None:
+    script = (PROJECT_ROOT / "scripts" / "install.sh").read_text(encoding="utf-8")
+    summary_start = script.index("finish_with_summary()")
+    summary = script[summary_start:]
+
+    assert 'capture_command "$vbot_path" server status' in summary
+    assert 'capture_command "$vbot_path" autostart status' in summary
+    assert 'echo "vBot is ready."' in summary
+    ready_guard = summary.index('if [ "$server_running" -eq 1 ]')
+    assert ready_guard < summary.index('echo "vBot is ready."', ready_guard)
 
 
 def test_windows_checkout_setup_does_not_claim_an_unverified_server_url() -> None:

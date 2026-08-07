@@ -107,6 +107,7 @@ Linux options are passed after `bash -s --`:
 | `--no-autostart` | Do not create or start the systemd user unit |
 | `--skip-webui-build` | Require and reuse an existing `webui/dist`; release installs do this automatically after downloading the asset |
 | `--service-name <name>` | Custom systemd user unit name without `.service`; default `vbot` |
+| `--verbose` | Show technical setup output live; by default it is kept out of the terminal and retained in a temporary log only when attention is required |
 | `-h`, `--help` | Show Installer help |
 
 <details>
@@ -121,7 +122,7 @@ curl -fsSL https://raw.githubusercontent.com/Vironnimo/vbot/main/scripts/install
 
 </details>
 
-Windows accepts `-InstallDir`, `-Version`, `-Dev`, `-DataDir`, `-HostName`, `-Port`, `-Desktop`, `-DesktopClient`, `-NoAutostart`, `-SkipWebuiBuild`, and `-TaskName`. Use the ScriptBlock form to pass them. `-AllowElevatedInstall` is an explicit escape hatch for disposable automation only; never use it for a persistent installation.
+Windows accepts `-InstallDir`, `-Version`, `-Dev`, `-DataDir`, `-HostName`, `-Port`, `-Desktop`, `-DesktopClient`, `-NoAutostart`, `-SkipWebuiBuild`, and `-TaskName`. The standard PowerShell `-Verbose` switch shows technical setup output live. Use the ScriptBlock form to pass options. `-AllowElevatedInstall` is an explicit escape hatch for disposable automation only; never use it for a persistent installation.
 
 <details>
 <summary>Windows examples</summary>
@@ -135,7 +136,7 @@ Windows accepts `-InstallDir`, `-Version`, `-Dev`, `-DataDir`, `-HostName`, `-Po
 
 </details>
 
-The immediate Windows background server, Task Scheduler action, and optional `vBot Desktop` Start-menu entry use windowless launch paths. The final summary verifies Autostart and server health independently. If Autostart registration fails, the package installation and immediate server start still complete; the summary reports `complete with problems` and prints the exact normal-user recovery command. A live `Server URL` appears only when the server is running.
+The public Installers show only high-level progress during a normal installation. Technical setup output is written to a temporary log and discarded after a clean installation; when installation or verification needs attention, the log is preserved and its exact path is printed. The immediate Windows background server, Task Scheduler action, and optional `vBot Desktop` Start-menu entry use windowless launch paths. For server installations, both public Installers verify Autostart and server health before printing `vBot is ready`; a live URL appears only when the server is running. If Autostart registration fails, the application remains installed and the summary prints the exact normal-user recovery command.
 
 ### Install the current checkout
 

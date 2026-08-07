@@ -46,7 +46,7 @@ curl -fsSL https://raw.githubusercontent.com/Vironnimo/vbot/main/scripts/install
 
 ### First Run
 
-1. Wait for the Installer to report that the server is running.
+1. Wait for the Installer to report that vBot is ready.
 2. Open [http://127.0.0.1:8420/](http://127.0.0.1:8420/).
 3. Follow the setup guide to connect a Provider or OAuth subscription and choose a Model, then send the first message in the Session that vBot created for you.
 
