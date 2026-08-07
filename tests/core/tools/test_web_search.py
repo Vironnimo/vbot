@@ -10,6 +10,7 @@ import httpx
 import pytest
 import respx
 
+import core.tools.web_search as web_search_module
 from core.tools.tools import ToolContext, ToolRegistry, is_tool_result_envelope
 from core.tools.web_search import (
     WEB_SEARCH_TOOL_DESCRIPTION,
@@ -23,6 +24,12 @@ from core.utils.retry import MAX_RETRIES
 
 _BRAVE_ENDPOINT = "https://api.search.brave.com/res/v1/web/search"
 _SEARXNG_ENDPOINT = "http://localhost:8888/search"
+
+
+class _FailIfReadStream(httpx.AsyncByteStream):
+    async def __aiter__(self):
+        raise AssertionError("oversized declared response body must not be read")
+        yield b""  # pragma: no cover
 
 
 def make_context(workspace: Path, tool_name: str = WEB_SEARCH_TOOL_NAME) -> ToolContext:
@@ -311,6 +318,87 @@ async def test_web_search_handler_brave_success(tmp_path: Path) -> None:
     assert first["url"] == "https://example.com/vbot"
     assert first["description"] == "vBot documentation"
     assert first["content_trust"] == "untrusted_web_content"
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_web_search_rejects_declared_oversize_before_reading_body(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    monkeypatch.setattr(web_search_module, "_MAX_RESPONSE_BYTES", 5)
+    respx.get(_BRAVE_ENDPOINT).mock(
+        return_value=httpx.Response(
+            200,
+            headers={"content-length": "6"},
+            stream=_FailIfReadStream(),
+        )
+    )
+
+    result = await web_search_handler(
+        make_context(workspace),
+        {"query": "vbot"},
+        _fake_credential_resolver,
+    )
+
+    error = assert_failure_envelope(result, "response_too_large")
+    assert error["retryable"] is False
+    assert error["message"] == "provider response exceeds the 5 MB limit"
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_web_search_rejects_searxng_body_larger_than_declared(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    monkeypatch.setattr(web_search_module, "_MAX_RESPONSE_BYTES", 5)
+    respx.get(_SEARXNG_ENDPOINT).mock(
+        return_value=httpx.Response(
+            200,
+            headers={"content-length": "1"},
+            content=b"123456",
+        )
+    )
+
+    result = await web_search_handler(
+        make_context(workspace),
+        {"query": "vbot"},
+        _fake_credential_resolver,
+        lambda: {
+            "provider": "searxng",
+            "searxng": {"base_url": "http://localhost:8888"},
+        },
+    )
+
+    error = assert_failure_envelope(result, "response_too_large")
+    assert error["retryable"] is False
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_web_search_accepts_response_at_exact_limit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    body = b'{"web":{"results":[]}}'
+    monkeypatch.setattr(web_search_module, "_MAX_RESPONSE_BYTES", len(body))
+    respx.get(_BRAVE_ENDPOINT).mock(return_value=httpx.Response(200, content=body))
+
+    result = await web_search_handler(
+        make_context(workspace),
+        {"query": "vbot"},
+        _fake_credential_resolver,
+    )
+
+    data = assert_success_envelope(result)
+    assert data["result_count"] == 0
 
 
 @respx.mock
