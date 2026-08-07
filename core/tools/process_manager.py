@@ -104,6 +104,8 @@ def _activate_windows_process_job() -> None:
         return
     from ctypes import wintypes
 
+    windows_ctypes = cast(Any, ctypes)
+
     class IoCounters(ctypes.Structure):
         _fields_ = [
             ("ReadOperationCount", ctypes.c_ulonglong),
@@ -137,7 +139,7 @@ def _activate_windows_process_job() -> None:
             ("PeakJobMemoryUsed", ctypes.c_size_t),
         ]
 
-    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32 = windows_ctypes.WinDLL("kernel32", use_last_error=True)
     kernel32.CreateJobObjectW.argtypes = (ctypes.c_void_p, wintypes.LPCWSTR)
     kernel32.CreateJobObjectW.restype = wintypes.HANDLE
     kernel32.SetInformationJobObject.argtypes = (
@@ -155,7 +157,7 @@ def _activate_windows_process_job() -> None:
 
     job = kernel32.CreateJobObjectW(None, None)
     if not job:
-        raise ctypes.WinError(ctypes.get_last_error())
+        raise windows_ctypes.WinError(windows_ctypes.get_last_error())
     information = ExtendedLimitInformation()
     information.BasicLimitInformation.LimitFlags = (
         _JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | _JOB_OBJECT_LIMIT_BREAKAWAY_OK
@@ -166,11 +168,11 @@ def _activate_windows_process_job() -> None:
         ctypes.byref(information),
         ctypes.sizeof(information),
     ):
-        error = ctypes.WinError(ctypes.get_last_error())
+        error = windows_ctypes.WinError(windows_ctypes.get_last_error())
         kernel32.CloseHandle(job)
         raise error
     if not kernel32.AssignProcessToJobObject(job, kernel32.GetCurrentProcess()):
-        error = ctypes.WinError(ctypes.get_last_error())
+        error = windows_ctypes.WinError(windows_ctypes.get_last_error())
         kernel32.CloseHandle(job)
         raise error
     _WINDOWS_SERVER_JOB_HANDLE = int(job)
