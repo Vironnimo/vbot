@@ -8,6 +8,7 @@ metadata-only ``index.json`` for fast listing and retention pruning.
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
@@ -19,6 +20,11 @@ _logger = get_logger("debug")
 
 _TRACES_DIR_NAME = "traces"
 _INDEX_FILE_NAME = "index.json"
+_TRACE_ID_PATTERN = re.compile(r"^[0-9a-f]{12}4[0-9a-f]{3}[89ab][0-9a-f]{15}$")
+
+
+class InvalidTraceIdError(ValueError):
+    """Raised when a trace id is not a canonical UUID4 hex value."""
 
 
 @dataclass
@@ -83,9 +89,8 @@ class DebugTraceStore:
                 ``.vorch/domain-maps/debug.md``. Metadata is extracted from the
                 nested ``request`` / ``response`` objects for the index entry.
         """
+        trace_path = self._trace_path(trace_id)
         self._ensure_directories()
-
-        trace_path = self._traces_dir / f"{trace_id}.json"
         with open(trace_path, "w", encoding="utf-8") as file:
             json.dump(trace_data, file, ensure_ascii=False, indent=2)
 
@@ -134,9 +139,10 @@ class DebugTraceStore:
             The complete trace data dictionary.
 
         Raises:
+            InvalidTraceIdError: *trace_id* is not a canonical UUID4 hex value.
             FileNotFoundError: No trace file exists for *trace_id*.
         """
-        trace_path = self._traces_dir / f"{trace_id}.json"
+        trace_path = self._trace_path(trace_id)
         if not trace_path.is_file():
             raise FileNotFoundError(f"Debug trace not found: {trace_id}")
         with open(trace_path, encoding="utf-8") as file:
@@ -162,6 +168,12 @@ class DebugTraceStore:
     def _ensure_directories(self) -> None:
         """Create the debug and traces directories if they do not exist."""
         self._traces_dir.mkdir(parents=True, exist_ok=True)
+
+    def _trace_path(self, trace_id: str) -> Path:
+        """Return the trace path after validating its canonical UUID4 hex id."""
+        if not isinstance(trace_id, str) or _TRACE_ID_PATTERN.fullmatch(trace_id) is None:
+            raise InvalidTraceIdError("Invalid debug trace id")
+        return self._traces_dir / f"{trace_id}.json"
 
     def _read_index(self) -> list[dict[str, Any]]:
         """Read and return the index entries, or an empty list on failure."""
@@ -208,5 +220,5 @@ class DebugTraceStore:
 
     def _delete_trace_file(self, trace_id: str) -> None:
         """Delete a single trace file, silently ignoring a missing file."""
-        trace_path = self._traces_dir / f"{trace_id}.json"
+        trace_path = self._trace_path(trace_id)
         trace_path.unlink(missing_ok=True)

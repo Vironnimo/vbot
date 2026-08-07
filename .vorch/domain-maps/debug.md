@@ -79,7 +79,7 @@ Exports `DebugTraceStore`, `ProviderDebugRecorder`, `DebugContext`, `redact_head
 - `DebugTraceStore(data_dir, trace_limit)`
   - `save_trace(trace_id, data: dict)` — write file, update index, prune oldest. The index entry reads `method`/`url` from `data["request"]` and `status_code` from `data["response"]`, so a writer that flattens those fields produces a broken index.
   - `get_traces() -> list[dict]` — index entries, newest first.
-  - `get_trace(trace_id) -> dict` — full trace; raises `FileNotFoundError`.
+  - `get_trace(trace_id) -> dict` — full trace; accepts only canonical lowercase `uuid4().hex` ids and raises `InvalidTraceIdError` before filesystem access for any other value, or `FileNotFoundError` when a valid id is absent.
   - `clear_all()` — delete all traces and the index.
   - `get_data_dir() -> Path` — the `<data_dir>/artifacts/debug/` directory.
 - `ProviderDebugRecorder(store)` — holds one shared `DebugContext` and is the entry point each wire transport drives; it keeps **no** per-request state.
@@ -113,6 +113,7 @@ See `.vorch/domain-maps/server.md` for the envelope. All gated on `debug.enabled
 ## Conventions
 
 - Settings are read live from storage per request; debug state is never cached across the enable/disable toggle.
+- `DebugTraceStore` validates every trace id at the shared path-construction boundary before save, read, or retention deletion; only the canonical lowercase 32-character `uuid4().hex` form emitted by Debug writers may become a filename.
 - Capture is best-effort and must never affect provider results: a failure in redaction, persistence, or the capture transport is logged `warn` and swallowed so the provider call still returns.
 - Debug context is stored separately from provider payloads. It must never enter `**kwargs`, `_build_payload()`, or any provider-bound request body.
 - Trace data never crosses the chat/SSE/WebSocket boundary. It is reachable only through `debug.*` RPCs.
