@@ -149,9 +149,19 @@ def test_schema_exposes_flat_action_contract() -> None:
         "Self-contained instruction for each fresh Session. Required on create; omit on update "
         "to keep the existing prompt."
     )
+    assert properties["schedule"]["description"] == (
+        "Schedule for create or update: ISO 8601 timestamp, 'in <duration>', "
+        "'every <duration>', or exactly five cron fields. Durations use a positive whole "
+        "number plus m, h, or d. Bare durations, fuzzy dates, and six-field cron are invalid. "
+        "Examples: 'every 2h', 'in 30m', '0 9 * * *', "
+        "'2026-08-07T09:00:00+02:00'. Omit on update to keep the existing schedule."
+    )
     assert properties["repeat"]["type"] == ["integer", "null"]
-    assert "Omit on create for unlimited recurrence" in properties["repeat"]["description"]
-    assert "use null on update" in properties["repeat"]["description"]
+    assert properties["repeat"]["description"] == (
+        "Number of future fires, including the next one. Use a positive integer; use null on "
+        "update to make a recurring job unlimited. Omit on create for unlimited recurrence or "
+        "on update to keep the current count. One-time schedules accept only 1, never null."
+    )
 
 
 def test_nested_create_operation_is_rejected(tmp_path: Path) -> None:

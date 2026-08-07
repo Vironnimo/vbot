@@ -70,6 +70,9 @@ async def test_register_subagent_tools_registers_one_flat_public_tool() -> None:
     }
     assert subagent.parameters["required"] == ["action"]
     assert properties["action"]["enum"] == ["run", "status", "cancel"]
+    assert properties["action"]["description"] == (
+        "Lifecycle action: run starts or continues work, status inspects it, cancel stops it."
+    )
     assert properties["id"]["description"] == (
         "Stable id returned by run. Required for status and cancel."
     )

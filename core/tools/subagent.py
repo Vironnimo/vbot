@@ -124,7 +124,10 @@ SUBAGENT_TOOL_PARAMETERS: JsonObject = {
         "action": {
             "type": "string",
             "enum": ["run", "status", "cancel"],
-            "description": "Lifecycle action to perform.",
+            "description": (
+                "Lifecycle action: run starts or continues work, status inspects it, "
+                "cancel stops it."
+            ),
         },
         "content": _SUBAGENT_CONTENT_PARAMETER,
         "agent_id": _SUBAGENT_AGENT_ID_PARAMETER,

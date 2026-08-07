@@ -96,16 +96,17 @@ _CRON_SCHEDULE_PARAMETER: JsonObject = {
         "Schedule for create or update: ISO 8601 timestamp, 'in <duration>', "
         "'every <duration>', or exactly five cron fields. Durations use a positive whole "
         "number plus m, h, or d. Bare durations, fuzzy dates, and six-field cron are invalid. "
-        "Omit on update to keep the existing schedule."
+        "Examples: 'every 2h', 'in 30m', '0 9 * * *', "
+        "'2026-08-07T09:00:00+02:00'. Omit on update to keep the existing schedule."
     ),
 }
 _CRON_REPEAT_PARAMETER: JsonObject = {
     "type": ["integer", "null"],
     "minimum": 1,
     "description": (
-        "Future fires including the next. Use a positive integer; use null on update to make a "
-        "recurring job unlimited. Omit on create for unlimited recurrence or on update to keep "
-        "the current count. One-time schedules accept only 1, never null."
+        "Number of future fires, including the next one. Use a positive integer; use null on "
+        "update to make a recurring job unlimited. Omit on create for unlimited recurrence or "
+        "on update to keep the current count. One-time schedules accept only 1, never null."
     ),
 }
 

@@ -75,6 +75,14 @@ def test_register_memory_tool_exposes_provider_schema(tmp_path: Path) -> None:
 
     tool = registry.get(MEMORY_TOOL_NAME)
     assert tool.name == "memory"
+    assert tool.description == (
+        "Manage compact pinned memory injected into future turns. Use user scope for durable "
+        "preferences, corrections, and personal details; use agent scope for stable environment "
+        "facts and conventions. Skip task progress, logs, transient identifiers, and easily "
+        "rediscovered facts. Run list to obtain entry_id before replace or remove — ids shift as "
+        "entries change. If add is full, remove or shorten a stale entry and retry. Every result "
+        "includes the current entries list."
+    )
     assert tool.description == MEMORY_TOOL_DESCRIPTION
     assert tool.parameters == MEMORY_TOOL_PARAMETERS
     definition = registry.provider_definitions(["memory"])[0]
@@ -82,6 +90,9 @@ def test_register_memory_tool_exposes_provider_schema(tmp_path: Path) -> None:
     parameters = definition["parameters"]
     assert set(parameters["properties"]) == {"action", "scope", "content", "entry_id"}
     assert parameters["properties"]["action"]["enum"] == ["list", "add", "replace", "remove"]
+    assert parameters["properties"]["action"]["description"] == (
+        "Memory action: list, add, replace, or remove."
+    )
     assert parameters["required"] == ["action", "scope"]
     assert "oneOf" not in parameters
     assert "additionalProperties" not in parameters
