@@ -8,6 +8,7 @@ from contextlib import aclosing, suppress
 from pathlib import Path
 
 import pytest
+from watchfiles import Change
 
 from core.utils import log_viewer as log_viewer_module
 from core.utils.log_viewer import (
@@ -381,7 +382,7 @@ async def test_subscribe_pushes_catalog_changes_for_other_log_files(
             "2026-05-12 00:00:00 [INFO] vbot.core - New day\n",
             encoding="utf-8",
         )
-        yield set()
+        yield {(Change.added, str(next_file))}
         await asyncio.Event().wait()
 
     monkeypatch.setattr(log_viewer_module, "awatch", fake_awatch)

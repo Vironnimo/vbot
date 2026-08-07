@@ -6,9 +6,11 @@ import asyncio
 import json
 from pathlib import Path
 from typing import Any, cast
+from uuid import UUID
 
 import pytest
 
+from core.automation import bootstrap as bootstrap_module
 from core.automation.bootstrap import (
     BootstrapJobValidationError,
     BootstrapService,
@@ -152,7 +154,16 @@ async def test_shutdown_cancellation_leaves_once_job_retryable(tmp_path: Path) -
 
 
 @pytest.mark.asyncio
-async def test_same_session_jobs_run_sequentially(tmp_path: Path) -> None:
+async def test_same_session_jobs_run_sequentially(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    job_ids = iter((UUID(int=2), UUID(int=1)))
+    monkeypatch.setattr(bootstrap_module, "uuid4", lambda: next(job_ids))
+    monkeypatch.setattr(
+        bootstrap_module,
+        "_utc_now_iso",
+        lambda: "2026-08-07T12:00:00+00:00",
+    )
     creator = make_service(StubTriggerService(), tmp_path, "creator")
     for prompt in ("first", "second"):
         creator.create_job(agent_id="main", prompt=prompt, mode="once", session_id="session-one")
