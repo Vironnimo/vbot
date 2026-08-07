@@ -5,13 +5,13 @@ from __future__ import annotations
 import math
 from typing import overload
 
-# The read tool prefixes every line with a compact ``N|`` reference gutter. This
+# The read tool prefixes every line with an unpadded ``N| `` reference gutter. This
 # separator is the single source of truth shared by the read builder and the
 # detector below, so the two never drift apart.
 LINE_NUMBER_GUTTER_SEPARATOR = "|"
 # A block is treated as the gutter (not ordinary content that merely contains a
 # pipe) only when at least this share of its non-blank lines carry a consecutive
-# ``N|`` prefix.
+# ``N|`` prefix (with or without its separator space after model reproduction).
 _LINE_NUMBER_GUTTER_DOMINANCE = 0.6
 # Two consecutive numbered lines is the minimum signal: a lone ``1|value`` line
 # or a sparse pipe table must still pass through.
@@ -151,8 +151,8 @@ def optional_bool(value: object, *, field_name: str, default: bool) -> bool:
 def looks_like_line_numbered_content(text: str) -> bool:
     """Return whether ``text`` is dominated by the read tool's reference gutter.
 
-    The read tool prefixes each line with ``N|`` and an in-line continuation with
-    ``N:C|``. If a model echoes either display format back into a write or edit,
+    The read tool prefixes each line with ``N| `` and an in-line continuation with
+    ``N:C| ``. If a model echoes either display format back into a write or edit,
     the file is silently corrupted with reference gutters. This detects that case
     so the write path can reject it, while still letting sparse literal-pipe content
     through (a lone ``1|value`` line, a Markdown table). The signal is deliberately

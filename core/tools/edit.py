@@ -126,7 +126,7 @@ def _text_not_found_failure(old_string: str) -> JsonObject:
     if looks_like_line_numbered_content(old_string):
         return tool_failure(
             "text_not_found",
-            "old_string not found — it carries read's `N|` line-number gutter. "
+            "old_string not found — it carries read's `N| ` line-number gutter. "
             "Match against the raw file text, without the leading line numbers.",
         )
     return tool_failure(
@@ -158,7 +158,7 @@ def _validate_edit_arguments(arguments: JsonObject) -> tuple[str, str, str, bool
     if looks_like_line_numbered_content(new_string):
         return tool_failure(
             "line_numbered_content",
-            "new_string looks like read's `N|` line-number gutter pasted back in. "
+            "new_string looks like read's `N| ` line-number gutter pasted back in. "
             "Use the raw replacement text without the leading line numbers.",
         )
 

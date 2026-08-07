@@ -192,7 +192,7 @@ async def test_read_reads_relative_workspace_path(tmp_path: Path) -> None:
     result = await make_handler()(make_context(workspace), {"path": "notes.txt"})
 
     data = assert_success_envelope(result)
-    assert data["content"] == "1|hello\n2|workspace\n"
+    assert data["content"] == "1| hello\n2| workspace\n"
 
 
 @pytest.mark.asyncio
@@ -209,7 +209,7 @@ async def test_read_resolves_relative_path_against_cwd_not_workspace(tmp_path: P
     result = await make_handler()(make_context(workspace, cwd=repo), {"path": "notes.txt"})
 
     data = assert_success_envelope(result)
-    assert data["content"] == "1|repo copy\n"
+    assert data["content"] == "1| repo copy\n"
 
 
 @pytest.mark.asyncio
@@ -222,7 +222,7 @@ async def test_read_reads_absolute_path(tmp_path: Path) -> None:
     result = await make_handler()(make_context(workspace), {"path": str(target)})
 
     data = assert_success_envelope(result)
-    assert data["content"] == "1|absolute\n2|path\n"
+    assert data["content"] == "1| absolute\n2| path\n"
 
 
 @pytest.mark.asyncio
@@ -235,7 +235,7 @@ async def test_read_text_file_does_not_create_attachment(tmp_path: Path) -> None
     result = await make_handler(store=store)(make_context(workspace), {"path": "notes.txt"})
 
     data = assert_success_envelope(result)
-    assert data["content"] == "1|plain text\n"
+    assert data["content"] == "1| plain text\n"
     assert store.stored == []
 
 
@@ -321,15 +321,16 @@ async def test_read_applies_line_offset_and_limit(tmp_path: Path) -> None:
     )
 
     data = assert_success_envelope(result)
-    assert data["content"] == "2|two\n3|three\n[Showing lines 2-3. Use offset=4 to continue.]"
+    assert data["content"] == "2| two\n3| three\n[Showing lines 2-3. Use offset=4 to continue.]"
 
 
 @pytest.mark.asyncio
 async def test_read_numbers_lines_compactly_including_blanks_and_multi_digit(
     tmp_path: Path,
 ) -> None:
-    # The gutter is unpadded ``N|``, numbers every line (blanks included), and
-    # rolls cleanly from single- to multi-digit.
+    # The gutter is unpadded ``N| ``, numbers every line (blanks included), and
+    # rolls cleanly from single- to multi-digit. Its separator space makes source
+    # punctuation visually distinct from the gutter.
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     body = "".join(f"line{i}\n" for i in range(1, 12))  # 11 lines, no trailing blank
@@ -342,10 +343,24 @@ async def test_read_numbers_lines_compactly_including_blanks_and_multi_digit(
     content = data["content"]
     assert isinstance(content, str)
     lines = content.split("\n")
-    assert lines[0] == "1|start"
-    assert lines[1] == "2|"  # a blank source line keeps its number, no padding
-    assert lines[2] == "3|line1"
-    assert "13|line11" in lines  # single- to multi-digit transition is seamless
+    assert lines[0] == "1| start"
+    assert lines[1] == "2| "  # a blank source line keeps its number and separator
+    assert lines[2] == "3| line1"
+    assert "13| line11" in lines  # single- to multi-digit transition is seamless
+
+
+@pytest.mark.asyncio
+async def test_read_separator_distinguishes_gutter_from_leading_pipe(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    workspace.joinpath("table.md").write_bytes(
+        b"| Variant | Focus |\n|---|---|\n| lite | iteration |\n"
+    )
+
+    result = await make_handler()(make_context(workspace), {"path": "table.md"})
+
+    data = assert_success_envelope(result)
+    assert data["content"] == ("1| | Variant | Focus |\n2| |---|---|\n3| | lite | iteration |\n")
 
 
 @pytest.mark.asyncio
@@ -362,7 +377,7 @@ async def test_read_line_gutter_uses_file_absolute_numbers_with_offset(tmp_path:
     content = data["content"]
     assert isinstance(content, str)
     # Numbering reflects the true file position, not the page position.
-    assert content.startswith("3|c\n4|d\n")
+    assert content.startswith("3| c\n4| d\n")
 
 
 @pytest.mark.asyncio
@@ -376,7 +391,7 @@ async def test_read_accepts_in_line_offset_without_advertising_another_parameter
     result = await make_handler()(make_context(workspace), {"path": "notes.txt", "offset": "2:3"})
 
     data = assert_success_envelope(result)
-    assert data["content"] == "2:3|cond\n3|third\n"
+    assert data["content"] == "2:3| cond\n3| third\n"
 
 
 @pytest.mark.asyncio
@@ -397,7 +412,7 @@ async def test_read_emits_and_accepts_in_line_continuation_after_byte_truncation
     continuation_offset = match.group(1)
     continuation_character = int(continuation_offset.split(":", maxsplit=1)[1])
     first_visible = first_content.split("\n\n[Showing", maxsplit=1)[0]
-    assert first_visible == f"1|{source[: continuation_character - 1]}"
+    assert first_visible == f"1| {source[: continuation_character - 1]}"
 
     continued = await handler(
         make_context(workspace),
@@ -406,7 +421,7 @@ async def test_read_emits_and_accepts_in_line_continuation_after_byte_truncation
     continued_content = assert_success_envelope(continued)["content"]
     assert isinstance(continued_content, str)
     remaining_first_line = source[continuation_character - 1 : source.index("\n")]
-    assert continued_content == f"{continuation_offset}|{remaining_first_line}\n2|second\n"
+    assert continued_content == f"{continuation_offset}| {remaining_first_line}\n2| second\n"
 
 
 @pytest.mark.asyncio
@@ -528,7 +543,7 @@ async def test_read_invalid_utf8_uses_replacement_character(tmp_path: Path) -> N
     result = await make_handler()(make_context(workspace), {"path": "invalid.txt"})
 
     data = assert_success_envelope(result)
-    assert data["content"] == "1|valid�text"
+    assert data["content"] == "1| valid�text"
 
 
 @pytest.mark.asyncio
@@ -541,7 +556,7 @@ async def test_read_strips_utf8_bom(tmp_path: Path) -> None:
 
     data = assert_success_envelope(result)
     # The BOM is stripped, so line 1 has no phantom leading character.
-    assert data["content"] == "1|hello\n2|world\n"
+    assert data["content"] == "1| hello\n2| world\n"
 
 
 @pytest.mark.asyncio
@@ -600,7 +615,7 @@ async def test_read_text_binary_and_video_paths_never_use_full_file_reader(
     video_result = await handler(make_context(workspace), {"path": "clip.mp4"})
 
     text_content = str(assert_success_envelope(text_result)["content"])
-    assert text_content.startswith("1|first")
+    assert text_content.startswith("1| first")
     assert text_content.endswith("[Showing lines 1-1. Use offset=2 to continue.]")
     assert "Binary file" in str(assert_success_envelope(binary_result)["content"])
     assert "Video: clip.mp4" in str(assert_success_envelope(video_result)["content"])

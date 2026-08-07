@@ -239,14 +239,14 @@ def test_write_preserves_exact_supplied_content_at_byte_level(tmp_path: Path) ->
 
 
 def test_write_rejects_pasted_line_number_gutter(tmp_path: Path) -> None:
-    # A model that pastes read's ``N|`` gutter back must be stopped before it
+    # A model that pastes read's ``N| `` gutter back must be stopped before it
     # corrupts the file with line-number prefixes.
     workspace = tmp_path / "workspace"
     workspace.mkdir()
 
     result = write_handler(
         make_context(workspace),
-        {"path": "config.py", "content": "1|import os\n2|import sys\n3|\n"},
+        {"path": "config.py", "content": "1| import os\n2| import sys\n3| \n"},
     )
 
     error = assert_failure_envelope(result, "line_numbered_content")

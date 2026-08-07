@@ -216,7 +216,7 @@ def test_edit_returns_failure_for_not_found_text(tmp_path: Path) -> None:
 
 
 def test_edit_rejects_line_numbered_new_string(tmp_path: Path) -> None:
-    # A model that pastes read's ``N|`` gutter into the replacement must be
+    # A model that pastes read's ``N| `` gutter into the replacement must be
     # stopped before it writes line-number prefixes into the file.
     workspace = tmp_path / "workspace"
     workspace.mkdir()
@@ -225,7 +225,7 @@ def test_edit_rejects_line_numbered_new_string(tmp_path: Path) -> None:
 
     result = edit_handler(
         make_context(workspace),
-        {"path": "notes.txt", "old_string": "alpha\nbeta", "new_string": "1|one\n2|two"},
+        {"path": "notes.txt", "old_string": "alpha\nbeta", "new_string": "1| one\n2| two"},
     )
 
     error = assert_failure_envelope(result, "line_numbered_content")
@@ -242,7 +242,7 @@ def test_edit_hints_gutter_when_old_string_is_line_numbered(tmp_path: Path) -> N
 
     result = edit_handler(
         make_context(workspace),
-        {"path": "notes.txt", "old_string": "1|hello\n2|world", "new_string": "x"},
+        {"path": "notes.txt", "old_string": "1| hello\n2| world", "new_string": "x"},
     )
 
     error = assert_failure_envelope(result, "text_not_found")
