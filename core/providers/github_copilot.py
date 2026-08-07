@@ -9,6 +9,7 @@ import httpx
 
 from core.models.models import Capabilities, Model, ReasoningCapabilities
 from core.providers._http_shared import (
+    build_streaming_request,
     classify_http_status,
     decode_response_json,
     iter_sse_data,
@@ -348,7 +349,8 @@ class GitHubCopilotAdapter(OpenAICompatibleAdapter):
             # Rebuild headers per attempt: the Copilot session token may refresh
             # during a retry backoff, and the getter must be re-consulted each time.
             headers = await self._build_request_headers(messages, payload)
-            request = self._client.build_request(
+            request = build_streaming_request(
+                self._client,
                 "POST",
                 endpoint_path,
                 json=payload,

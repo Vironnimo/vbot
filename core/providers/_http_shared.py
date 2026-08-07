@@ -34,6 +34,7 @@ if TYPE_CHECKING:
 # Auth-related HTTP status codes — not retryable.
 _AUTH_ERROR_STATUS_CODES: frozenset[int] = frozenset({401, 403})
 _PROVIDER_HTTP_TIMEOUT_SECONDS = 60.0
+PROVIDER_NON_STREAMING_READ_TIMEOUT_SECONDS = 180.0
 
 
 @dataclass(frozen=True)
@@ -45,7 +46,17 @@ class SSEEvent:
 
 
 def provider_chat_timeout() -> httpx.Timeout:
-    """Return timeout settings for long-running provider generation requests."""
+    """Return the bounded default for non-streaming Provider requests."""
+    return httpx.Timeout(
+        connect=_PROVIDER_HTTP_TIMEOUT_SECONDS,
+        read=PROVIDER_NON_STREAMING_READ_TIMEOUT_SECONDS,
+        write=_PROVIDER_HTTP_TIMEOUT_SECONDS,
+        pool=_PROVIDER_HTTP_TIMEOUT_SECONDS,
+    )
+
+
+def provider_streaming_timeout() -> httpx.Timeout:
+    """Return the Provider timeout with stream reads owned by Chat clocks."""
     return httpx.Timeout(
         connect=_PROVIDER_HTTP_TIMEOUT_SECONDS,
         read=None,
@@ -85,6 +96,21 @@ def build_async_client(
         base_url=base_url,
         timeout=effective_timeout,
         transport=transport,
+    )
+
+
+def build_streaming_request(
+    client: httpx.AsyncClient,
+    method: str,
+    url: str,
+    **kwargs: Any,
+) -> httpx.Request:
+    """Build a request whose read stalls are governed by Chat streaming clocks."""
+    return client.build_request(
+        method,
+        url,
+        timeout=provider_streaming_timeout(),
+        **kwargs,
     )
 
 

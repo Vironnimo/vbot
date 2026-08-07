@@ -15,6 +15,7 @@ if TYPE_CHECKING:
 
 from core.models.models import Model
 from core.providers._http_shared import (
+    build_streaming_request,
     classify_http_status,
     decode_response_json,
     iter_sse_events,
@@ -532,7 +533,8 @@ class OpenCodeZenAdapter(OpenAIAdapter):
 
         async def _connect() -> httpx.Response:
             headers = await self._gemini_headers()
-            request = self._client.build_request(
+            request = build_streaming_request(
+                self._client,
                 "POST",
                 f"/models/{model_id}:streamGenerateContent?alt=sse",
                 json=payload,
