@@ -50,6 +50,23 @@ $AssetPollSeconds = 10
 $RootMarkerName = ".vbot-install-root"
 $VenvMarkerName = ".vbot-install-venv"
 $LegacyRootMarkerName = ".vbot-bootstrap"
+$InstallLogPath = Join-Path ([System.IO.Path]::GetTempPath()) ("vbot-install-{0:yyyyMMdd-HHmmss}-{1}.log" -f (Get-Date), $PID)
+$PreserveInstallLog = $false
+[System.IO.File]::WriteAllText($InstallLogPath, "vBot installation log`r`n", (New-Object System.Text.UTF8Encoding($false)))
+
+trap {
+    $message = $_.Exception.Message
+    try {
+        Add-Content -LiteralPath $InstallLogPath -Value "Error: $message" -Encoding UTF8
+    }
+    catch {
+        # The original failure is more useful than a secondary logging failure.
+    }
+    [Console]::Error.WriteLine("")
+    [Console]::Error.WriteLine("vBot installation failed: $message")
+    [Console]::Error.WriteLine("Technical details: $InstallLogPath")
+    exit 1
+}
 
 function Write-Step { param([string]$Message) Write-Host "==> $Message" }
 
@@ -78,7 +95,7 @@ function Install-WithWinget {
     if (-not (Test-Have "winget")) {
         throw "$Label is required but not found, and winget is unavailable to install it automatically. Install $Label manually and re-run."
     }
-    Write-Step "Installing $Label via winget ($Id)"
+    Write-Step "Installing required component: $Label"
     winget install --id $Id --exact --silent --accept-package-agreements --accept-source-agreements
     Update-SessionPath
 }
@@ -183,7 +200,7 @@ function Add-ToUserPath {
         "$userPath$([System.IO.Path]::PathSeparator)$PathToAdd"
     }
     [System.Environment]::SetEnvironmentVariable("Path", $updated, "User")
-    Write-Host "Added $PathToAdd to your user PATH. Open a new terminal to use 'vbot'."
+    Write-Host "The vBot command will be available in new terminal windows."
 }
 
 function Add-VbotShim {
@@ -199,7 +216,7 @@ function Add-VbotShim {
     $escapedPythonExe = $pythonExe.Replace("%", "%%")
     $content = "@echo off`r`n`"$escapedPythonExe`" -m cli.main %*`r`n"
     [System.IO.File]::WriteAllText($shim, $content, (New-Object System.Text.UTF8Encoding($false)))
-    Write-Step "Exposing 'vbot' via $shim"
+    Write-Step "Making the vBot command available"
     Add-ToUserPath -PathToAdd $binDir
 }
 
@@ -320,6 +337,7 @@ if ((Test-IsElevated) -and -not $AllowElevatedInstall) {
     throw "Refusing to install from an elevated PowerShell because the checkout, virtual environment, and runtime files must belong to the normal user. Close this Administrator window and run the installer from a normal PowerShell. -AllowElevatedInstall is reserved for disposable automation."
 }
 
+Write-Step "Checking system requirements"
 if (-not $useExistingCheckout) {
     Confirm-Git
 }
@@ -337,10 +355,14 @@ if ($useExistingCheckout) {
     }
 }
 elseif ($Dev) {
-    Write-Step "Cloning $RepoUrl (main) into $InstallDir"
-    git clone --depth 1 $RepoUrl $InstallDir
-    if ($LASTEXITCODE -ne 0) {
-        throw "git clone failed."
+    Write-Step "Downloading vBot from main"
+    $cloneOutput = @(git clone --quiet --depth 1 $RepoUrl $InstallDir 2>&1)
+    $cloneExitCode = $LASTEXITCODE
+    if ($cloneOutput.Count -gt 0) {
+        Add-Content -LiteralPath $InstallLogPath -Value $cloneOutput -Encoding UTF8
+    }
+    if ($cloneExitCode -ne 0) {
+        throw "Could not download vBot from main."
     }
     Write-ManagedRootMarker -InstallDir $InstallDir
 }
@@ -356,27 +378,33 @@ else {
     }
     $assetUrl = $null
     if (-not $DesktopClient) {
-        Write-Step "Waiting for the prebuilt WebUI for $tag"
+        Write-Step "Preparing vBot $tag"
         $assetUrl = Wait-WebuiAssetUrl -Tag $tag
     }
 
-    Write-Step "Cloning $RepoUrl ($tag) into $InstallDir"
-    git clone --depth 1 --branch $tag $RepoUrl $InstallDir
-    if ($LASTEXITCODE -ne 0) {
-        throw "git clone failed."
+    Write-Step "Downloading vBot $tag"
+    $cloneOutput = @(git clone --quiet --depth 1 --branch $tag $RepoUrl $InstallDir 2>&1)
+    $cloneExitCode = $LASTEXITCODE
+    if ($cloneOutput.Count -gt 0) {
+        Add-Content -LiteralPath $InstallLogPath -Value $cloneOutput -Encoding UTF8
+    }
+    if ($cloneExitCode -ne 0) {
+        throw "Could not download vBot $tag."
     }
     Write-ManagedRootMarker -InstallDir $InstallDir
 
     if (-not $DesktopClient) {
-        Write-Step "Fetching prebuilt WebUI for $tag"
         $webuiDir = Join-Path $InstallDir "webui"
         New-Item -ItemType Directory -Path $webuiDir -Force | Out-Null
         $archive = Join-Path $InstallDir "webui-dist.tar.gz"
-        Invoke-WebRequest -Uri $assetUrl -OutFile $archive -Headers $ApiHeaders
+        $previousProgressPreference = $ProgressPreference
+        $ProgressPreference = "SilentlyContinue"
         try {
+            Invoke-WebRequest -Uri $assetUrl -OutFile $archive -Headers $ApiHeaders
             Expand-WebuiArchive -Archive $archive -Destination $webuiDir
         }
         finally {
+            $ProgressPreference = $previousProgressPreference
             Remove-Item $archive -Force
         }
         if (-not (Test-Path (Join-Path $webuiDir "dist\index.html"))) {
@@ -385,11 +413,15 @@ else {
     }
 }
 
-Write-Step "Creating virtual environment at $InstallDir\.venv"
+Write-Step "Installing and configuring vBot"
 $venvDir = Join-Path $InstallDir ".venv"
-& python -m venv $venvDir
-if ($LASTEXITCODE -ne 0) {
-    throw "Creating the virtual environment failed."
+$venvOutput = @(& python -m venv $venvDir 2>&1)
+$venvExitCode = $LASTEXITCODE
+if ($venvOutput.Count -gt 0) {
+    Add-Content -LiteralPath $InstallLogPath -Value $venvOutput -Encoding UTF8
+}
+if ($venvExitCode -ne 0) {
+    throw "Could not create vBot's private Python environment."
 }
 # Put the venv first on PATH so the installer installs into it (mirrors `source activate`).
 $env:VIRTUAL_ENV = $venvDir
@@ -439,8 +471,6 @@ if ($PSBoundParameters.ContainsKey("TaskName")) {
     $setupArgList += @("-TaskName", $TaskName)
 }
 
-$setupLabel = "scripts\$(Split-Path -Leaf $setup)"
-Write-Step "Configuring checkout: $setupLabel $($setupArgList -join ' ')"
 $setupSupportsRecoverableProblems = (Get-Content -Raw -LiteralPath $setup) -match '\$RecoverableProblemExitCode'
 $powerShellExecutable = if ($PSVersionTable.PSEdition -eq "Core") {
     Join-Path $PSHOME "pwsh.exe"
@@ -451,7 +481,14 @@ else {
 # Array splatting into another PowerShell script binds entries positionally, so
 # option names such as -SkipPathUpdate can become values for unrelated parameters.
 # A child PowerShell process parses the forwarded tokens as real named arguments.
-& $powerShellExecutable -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $setup @setupArgList
+& $powerShellExecutable -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $setup @setupArgList 2>&1 |
+    ForEach-Object {
+        $line = $_.ToString()
+        Add-Content -LiteralPath $InstallLogPath -Value $line -Encoding UTF8
+        if ($VerbosePreference -eq "Continue") {
+            Write-Host $line
+        }
+    }
 $setupExitCode = $LASTEXITCODE
 $setupReportedProblems = $setupSupportsRecoverableProblems -and $setupExitCode -eq 2
 if ($setupExitCode -ne 0 -and -not $setupReportedProblems) {
@@ -460,14 +497,12 @@ if ($setupExitCode -ne 0 -and -not $setupReportedProblems) {
 
 Add-VbotShim -InstallDir $InstallDir -VenvDir $venvDir
 
-Write-Step "Final installation summary"
+Write-Step "Verifying the installation"
 $vbotExe = Join-Path $venvDir "Scripts\vbot.exe"
 if ($DesktopClient) {
-    Write-Host "Installation: complete"
-    Write-Host "Installed at: $InstallDir (virtual environment in .venv)"
-    Write-Host "Local server: not installed (Desktop Client)"
-    Write-Host "Autostart: not applicable"
-    Write-Host "Open a new terminal, then run: vbot desktop"
+    Write-Host ""
+    Write-Host "vBot is ready."
+    Write-Host "Open vBot Desktop from the Start menu, or open a new terminal and run: vbot desktop"
 }
 else {
     # The setup manifest is the source of truth for the effective target. In
@@ -496,6 +531,7 @@ else {
     $serverStatusOutput = @(& $vbotExe server status --host $summaryHost --port $summaryPort --data-dir $summaryDataDir 2>&1)
     $serverStatusExitCode = $LASTEXITCODE
     $serverStatusText = ($serverStatusOutput | ForEach-Object { $_.ToString() }) -join [Environment]::NewLine
+    Add-Content -LiteralPath $InstallLogPath -Value $serverStatusText -Encoding UTF8
     $serverRunning = $serverStatusText -match '(?m)^running: yes\s*$'
     $portConflict = $serverStatusText -match '(?m)^conflict: port occupied by non-vBot process\s*$'
 
@@ -505,6 +541,7 @@ else {
         $autostartStatusOutput = @(& $vbotExe autostart status --host $summaryHost --port $summaryPort --data-dir $summaryDataDir --task-name $TaskName 2>&1)
         $autostartStatusExitCode = $LASTEXITCODE
         $autostartStatusText = ($autostartStatusOutput | ForEach-Object { $_.ToString() }) -join [Environment]::NewLine
+        Add-Content -LiteralPath $InstallLogPath -Value $autostartStatusText -Encoding UTF8
         $autostartEnabled = $autostartStatusExitCode -eq 0 -and $autostartStatusText -match '(?m)^autostart: enabled\b'
         $autostartStatusKnown = $autostartStatusExitCode -eq 0
     }
@@ -532,59 +569,41 @@ else {
         $problems.Add($serverProblem) | Out-Null
     }
 
-    $installationState = if ($problems.Count -eq 0) { "complete" } else { "complete with problems" }
-    Write-Host "Installation: $installationState"
-    Write-Host "Installed at: $InstallDir (virtual environment in .venv)"
-    Write-Host "vBot command: $vbotExe"
-    Write-Host "Data directory: $summaryDataDir"
-    if ($NoAutostart) {
-        Write-Host "Autostart: not requested (-NoAutostart)"
-    }
-    elseif ($setupReportedProblems) {
-        Write-Host "Autostart: SETUP FAILED"
-    }
-    elseif ($autostartEnabled) {
-        Write-Host "Autostart: enabled"
-    }
-    elseif ($autostartStatusKnown) {
-        Write-Host "Autostart: NOT ENABLED"
-    }
-    else {
-        Write-Host "Autostart: status could not be verified"
-    }
-
-    if ($serverRunning) {
-        Write-Host "Server: running"
-        Write-Host "Server URL: http://${summaryHost}:$summaryPort"
-    }
-    elseif ($portConflict) {
-        Write-Host "Server: NOT RUNNING (port $summaryPort is occupied by another process)"
-    }
-    elseif ($serverStatusExitCode -eq 0) {
-        Write-Host "Server: NOT RUNNING"
-    }
-    else {
-        Write-Host "Server: status could not be verified"
-    }
-
-    if ($problems.Count -gt 0) {
-        Write-Host "Problems:"
-        foreach ($problem in $problems) {
-            Write-Host "  - $problem"
+    Write-Host ""
+    if ($problems.Count -eq 0 -and $serverRunning) {
+        Write-Host "vBot is ready."
+        Write-Host "Open: http://${summaryHost}:$summaryPort/"
+        if ($Desktop) {
+            Write-Host "Desktop: open vBot Desktop from the Start menu."
         }
     }
-
-    if (-not $NoAutostart -and ($setupReportedProblems -or -not $autostartEnabled)) {
-        Write-Host "Required next step: run this from a normal PowerShell:"
-        Write-Host "  & `"$vbotExe`" autostart enable --host $summaryHost --port $summaryPort --data-dir `"$summaryDataDir`" --task-name `"$TaskName`""
-        Write-Host "This registers autostart and starts the server. Then verify with:"
-        Write-Host "  & `"$vbotExe`" server status --host $summaryHost --port $summaryPort --data-dir `"$summaryDataDir`""
-    }
-    elseif (-not $serverRunning) {
-        Write-Host "Start the server manually with:"
+    elseif ($problems.Count -eq 0 -and $NoAutostart -and -not $serverRunning) {
+        Write-Host "vBot is installed."
+        Write-Host "Autostart was not requested, so the server was not started."
+        Write-Host "Start it with:"
         Write-Host "  & `"$vbotExe`" server start --host $summaryHost --port $summaryPort --data-dir `"$summaryDataDir`""
     }
     else {
-        Write-Host "Open a new terminal to use 'vbot'."
+        $PreserveInstallLog = $true
+        Write-Host "vBot was installed, but it needs attention."
+        foreach ($problem in $problems) {
+            Write-Host "- $problem"
+        }
+        if ($serverRunning) {
+            Write-Host "Open: http://${summaryHost}:$summaryPort/"
+        }
+        if (-not $NoAutostart -and ($setupReportedProblems -or -not $autostartEnabled)) {
+            Write-Host "Enable Autostart and start vBot with:"
+            Write-Host "  & `"$vbotExe`" autostart enable --host $summaryHost --port $summaryPort --data-dir `"$summaryDataDir`" --task-name `"$TaskName`""
+        }
+        elseif (-not $serverRunning) {
+            Write-Host "Start the server with:"
+            Write-Host "  & `"$vbotExe`" server start --host $summaryHost --port $summaryPort --data-dir `"$summaryDataDir`""
+        }
+        Write-Host "Technical details: $InstallLogPath"
     }
+}
+
+if (-not $PreserveInstallLog) {
+    Remove-Item -LiteralPath $InstallLogPath -Force -ErrorAction SilentlyContinue
 }

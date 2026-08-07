@@ -22,6 +22,9 @@ SETUP_ARGS=()
 DESKTOP=0
 DESKTOP_CLIENT=0
 SKIP_WEBUI_BUILD=0
+NO_AUTOSTART=0
+SERVICE_NAME="vbot"
+VERBOSE=0
 USE_EXISTING_CHECKOUT=0
 LOCAL_CHECKOUT=""
 WEBUI_ASSET_URL=""
@@ -57,12 +60,46 @@ Options:
   --no-autostart        Do not enable autostart or start the server
   --skip-webui-build    Reuse an existing webui/dist (automatic for releases)
   --service-name <name> systemd user unit name (default: vbot)
+  --verbose             Show technical setup output instead of logging it only
   -h, --help            Show this help
 USAGE
 }
 
 step() { echo "==> $1"; }
-fail() { echo "Error: $1" >&2; exit 1; }
+INSTALL_LOG=""
+PRESERVE_INSTALL_LOG=0
+FAILURE_REPORTED=0
+
+fail() {
+    local message="$1"
+    echo "Error: ${message}" >&2
+    if [ -n "$INSTALL_LOG" ]; then
+        printf 'Error: %s\n' "$message" >> "$INSTALL_LOG"
+        PRESERVE_INSTALL_LOG=1
+        FAILURE_REPORTED=1
+        echo "Technical details: ${INSTALL_LOG}" >&2
+    fi
+    exit 1
+}
+
+finish_install() {
+    local status="$1"
+    if [ "$status" -ne 0 ] && [ "$FAILURE_REPORTED" -eq 0 ] && [ -n "$INSTALL_LOG" ]; then
+        PRESERVE_INSTALL_LOG=1
+        echo "vBot installation failed." >&2
+        echo "Technical details: ${INSTALL_LOG}" >&2
+    fi
+    if [ "$status" -eq 0 ] && [ "$PRESERVE_INSTALL_LOG" -eq 0 ] && [ -n "$INSTALL_LOG" ]; then
+        rm -f "$INSTALL_LOG"
+    fi
+}
+
+start_install_log() {
+    INSTALL_LOG="$(mktemp "${TMPDIR:-/tmp}/vbot-install.XXXXXX.log")"
+    printf 'vBot installation log\n' > "$INSTALL_LOG"
+    trap 'finish_install "$?"' EXIT
+}
+
 have() { command -v "$1" >/dev/null 2>&1; }
 require_value() {
     [ "$#" -ge 2 ] && [ -n "$2" ] || fail "$1 requires a value."
@@ -73,15 +110,22 @@ while [ $# -gt 0 ]; do
         --dir) require_value "$@"; INSTALL_DIR="$2"; INSTALL_DIR_PROVIDED=1; shift 2 ;;
         --dev) DEV=1; shift ;;
         --version) require_value "$@"; VERSION="$2"; shift 2 ;;
-        --data-dir|--host|--port|--service-name)
+        --data-dir|--host|--port)
             require_value "$@"
+            SETUP_ARGS+=("$1" "$2")
+            shift 2
+            ;;
+        --service-name)
+            require_value "$@"
+            SERVICE_NAME="$2"
             SETUP_ARGS+=("$1" "$2")
             shift 2
             ;;
         --desktop) DESKTOP=1; SETUP_ARGS+=("$1"); shift ;;
         --desktop-client) DESKTOP_CLIENT=1; SETUP_ARGS+=("$1"); shift ;;
-        --no-autostart) SETUP_ARGS+=("$1"); shift ;;
+        --no-autostart) NO_AUTOSTART=1; SETUP_ARGS+=("$1"); shift ;;
         --skip-webui-build) SKIP_WEBUI_BUILD=1; SETUP_ARGS+=("$1"); shift ;;
+        --verbose) VERBOSE=1; shift ;;
         -h|--help) usage; exit 0 ;;
         *) usage >&2; fail "Unknown option: $1" ;;
     esac
@@ -121,6 +165,9 @@ case "$VERSION" in
     "" | v*) ;;
     *) VERSION="v${VERSION}" ;;
 esac
+
+start_install_log
+step "Checking system requirements"
 
 # --- prerequisites -----------------------------------------------------------
 
@@ -187,22 +234,15 @@ latest_release_tag() {
 clone_repo() {
     [ -e "$INSTALL_DIR" ] && fail "$INSTALL_DIR already exists. To update an existing install run 'vbot update'; otherwise remove it or pass --dir to choose another location."
     if [ "$DEV" -eq 1 ]; then
-        step "Cloning ${REPO_URL} (main) into ${INSTALL_DIR}"
-        git clone --depth 1 "$REPO_URL" "$INSTALL_DIR"
+        step "Downloading vBot from main"
+        git clone --quiet --depth 1 "$REPO_URL" "$INSTALL_DIR" >> "$INSTALL_LOG" 2>&1 \
+            || fail "Could not download vBot from main."
     else
-        step "Cloning ${REPO_URL} (${TAG}) into ${INSTALL_DIR}"
-        git clone --depth 1 --branch "$TAG" "$REPO_URL" "$INSTALL_DIR"
+        step "Downloading vBot ${TAG}"
+        git clone --quiet --depth 1 --branch "$TAG" "$REPO_URL" "$INSTALL_DIR" >> "$INSTALL_LOG" 2>&1 \
+            || fail "Could not download vBot ${TAG}."
     fi
     INSTALL_DIR="$(cd "$INSTALL_DIR" && pwd)"
-}
-
-setup_has_argument() {
-    local expected="$1"
-    local argument
-    for argument in "${SETUP_ARGS[@]}"; do
-        [ "$argument" = "$expected" ] && return 0
-    done
-    return 1
 }
 
 release_asset_url() {
@@ -219,7 +259,7 @@ for asset in payload.get("assets", []):
 }
 
 wait_for_webui_asset() {
-    step "Waiting for the prebuilt WebUI for ${TAG}"
+    step "Preparing vBot ${TAG}"
     local waited=0
     while [ "$waited" -lt "$ASSET_WAIT_SECONDS" ]; do
         if ! WEBUI_ASSET_URL="$(release_asset_url 2>/dev/null)"; then
@@ -233,11 +273,11 @@ wait_for_webui_asset() {
 }
 
 fetch_prebuilt_webui() {
-    step "Fetching prebuilt WebUI for ${TAG}"
     [ -n "$WEBUI_ASSET_URL" ] || fail "No preflighted WebUI asset URL is available."
     mkdir -p "${INSTALL_DIR}/webui"
     local archive="${INSTALL_DIR}/webui-dist.tar.gz"
-    curl -fsSL "$WEBUI_ASSET_URL" -o "$archive"
+    curl -fsSL "$WEBUI_ASSET_URL" -o "$archive" >> "$INSTALL_LOG" 2>&1 \
+        || fail "Could not download the WebUI for ${TAG}."
     if ! python3 - "$archive" "${INSTALL_DIR}/webui" <<'PY'
 import sys
 import tarfile
@@ -264,8 +304,9 @@ PY
 }
 
 run_setup() {
-    step "Creating virtual environment at ${INSTALL_DIR}/.venv"
-    python3 -m venv "${INSTALL_DIR}/.venv"
+    step "Installing and configuring vBot"
+    python3 -m venv "${INSTALL_DIR}/.venv" >> "$INSTALL_LOG" 2>&1 \
+        || fail "Could not create vBot's private Python environment."
     # shellcheck disable=SC1091
     . "${INSTALL_DIR}/.venv/bin/activate"
 
@@ -289,12 +330,27 @@ run_setup() {
         fi
     fi
 
-    step "Configuring checkout: ${setup_script#"${INSTALL_DIR}/"} ${args[*]:-}"
-    if [ "${#args[@]}" -gt 0 ]; then
-        bash "$setup_script" "${args[@]}"
+    local setup_exit=0
+    if [ "$VERBOSE" -eq 1 ]; then
+        set +e
+        if [ "${#args[@]}" -gt 0 ]; then
+            bash "$setup_script" "${args[@]}" 2>&1 | tee -a "$INSTALL_LOG"
+        else
+            bash "$setup_script" 2>&1 | tee -a "$INSTALL_LOG"
+        fi
+        setup_exit=${PIPESTATUS[0]}
+        set -e
     else
-        bash "$setup_script"
+        set +e
+        if [ "${#args[@]}" -gt 0 ]; then
+            bash "$setup_script" "${args[@]}" >> "$INSTALL_LOG" 2>&1
+        else
+            bash "$setup_script" >> "$INSTALL_LOG" 2>&1
+        fi
+        setup_exit=$?
+        set -e
     fi
+    [ "$setup_exit" -eq 0 ] || fail "vBot setup did not complete successfully."
 }
 
 link_vbot() {
@@ -302,7 +358,6 @@ link_vbot() {
     [ -x "$target" ] || return 0
     mkdir -p "${HOME}/.local/bin"
     ln -sf "$target" "${HOME}/.local/bin/vbot"
-    step "Linked vbot into ${HOME}/.local/bin"
 }
 
 # A fresh installer-owned clone can be removed wholesale by uninstall.sh.
@@ -334,6 +389,112 @@ write_venv_marker() {
 # scripts/install.sh created .venv in this existing checkout. Uninstall removes
 # the managed environment and launcher but preserves the checkout and data.
 MARKER
+}
+
+manifest_field() {
+    local field="$1"
+    "${INSTALL_DIR}/.venv/bin/python" - "${INSTALL_DIR}/.vbot-install.json" "$field" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+manifest = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+value = manifest.get(sys.argv[2])
+if value is None:
+    raise SystemExit(f"installation manifest has no {sys.argv[2]}")
+print(value)
+PY
+}
+
+CAPTURED_OUTPUT=""
+CAPTURED_STATUS=0
+
+capture_command() {
+    set +e
+    CAPTURED_OUTPUT="$("$@" 2>&1)"
+    CAPTURED_STATUS=$?
+    set -e
+    if [ -n "$CAPTURED_OUTPUT" ]; then
+        printf '%s\n' "$CAPTURED_OUTPUT" >> "$INSTALL_LOG"
+        if [ "$VERBOSE" -eq 1 ]; then
+            printf '%s\n' "$CAPTURED_OUTPUT"
+        fi
+    fi
+}
+
+finish_with_summary() {
+    local vbot_path="${INSTALL_DIR}/.venv/bin/vbot"
+    local vbot_command="$vbot_path"
+    case ":${PATH}:" in
+        *":${HOME}/.local/bin:"*) vbot_command="vbot" ;;
+    esac
+
+    step "Verifying the installation"
+    if [ "$DESKTOP_CLIENT" -eq 1 ]; then
+        echo
+        echo "vBot is ready."
+        echo "Open vBot Desktop from the application menu, or run: ${vbot_command} desktop"
+        return
+    fi
+
+    local summary_host summary_port summary_data_dir
+    summary_host="$(manifest_field server_host)" || fail "Could not read the installed server address."
+    summary_port="$(manifest_field server_port)" || fail "Could not read the installed server port."
+    summary_data_dir="$(manifest_field server_data_directory)" || fail "Could not read the installed data directory."
+
+    capture_command "$vbot_path" server status \
+        --host "$summary_host" --port "$summary_port" --data-dir "$summary_data_dir"
+    local server_status=$CAPTURED_STATUS
+    local server_output="$CAPTURED_OUTPUT"
+    local server_running=0
+    local port_conflict=0
+    grep -q '^running: yes[[:space:]]*$' <<< "$server_output" && server_running=1
+    grep -q '^conflict: port occupied by non-vBot process[[:space:]]*$' <<< "$server_output" && port_conflict=1
+
+    local autostart_enabled=0
+    local autostart_known=1
+    if [ "$NO_AUTOSTART" -eq 0 ]; then
+        capture_command "$vbot_path" autostart status \
+            --host "$summary_host" --port "$summary_port" --data-dir "$summary_data_dir" \
+            --service-name "$SERVICE_NAME"
+        [ "$CAPTURED_STATUS" -eq 0 ] || autostart_known=0
+        grep -q '^autostart: enabled\b' <<< "$CAPTURED_OUTPUT" && autostart_enabled=1
+    fi
+
+    echo
+    if [ "$server_running" -eq 1 ] && { [ "$NO_AUTOSTART" -eq 1 ] || [ "$autostart_enabled" -eq 1 ]; }; then
+        echo "vBot is ready."
+        echo "Open: http://${summary_host}:${summary_port}/"
+        [ "$DESKTOP" -eq 0 ] || echo "Desktop: ${vbot_command} desktop"
+        return
+    fi
+
+    if [ "$NO_AUTOSTART" -eq 1 ] && [ "$server_running" -eq 0 ]; then
+        echo "vBot is installed."
+        echo "Autostart was not requested, so the server was not started."
+        echo "Start it with: ${vbot_command} server start --host ${summary_host} --port ${summary_port} --data-dir \"${summary_data_dir}\""
+        return
+    fi
+
+    PRESERVE_INSTALL_LOG=1
+    echo "vBot was installed, but it needs attention."
+    if [ "$server_running" -eq 1 ]; then
+        echo "The server is running, but Autostart is not enabled."
+        echo "Open: http://${summary_host}:${summary_port}/"
+    elif [ "$port_conflict" -eq 1 ]; then
+        echo "The server could not start because port ${summary_port} is used by another process."
+    elif [ "$server_status" -ne 0 ]; then
+        echo "The final server check did not complete successfully."
+    else
+        echo "The server is not running yet."
+    fi
+    if [ "$autostart_known" -eq 0 ]; then
+        echo "Autostart status could not be verified."
+    elif [ "$autostart_enabled" -eq 0 ]; then
+        echo "Enable Autostart and start vBot with:"
+        echo "  ${vbot_command} autostart enable --host ${summary_host} --port ${summary_port} --data-dir \"${summary_data_dir}\" --service-name ${SERVICE_NAME}"
+    fi
+    echo "Technical details: ${INSTALL_LOG}"
 }
 
 [ "$USE_EXISTING_CHECKOUT" -eq 0 ] && ensure_git
@@ -371,15 +532,4 @@ fi
 run_setup
 link_vbot
 
-step "vBot installation complete"
-echo "Installed at: ${INSTALL_DIR}"
-echo "The installer output above shows the configured data directory (Desktop Client has none)."
-if setup_has_argument "--desktop-client"; then
-    NEXT_COMMAND="desktop"
-else
-    NEXT_COMMAND="server status"
-fi
-case ":${PATH}:" in
-    *":${HOME}/.local/bin:"*) echo "Run: vbot ${NEXT_COMMAND}" ;;
-    *) echo "Add ${HOME}/.local/bin to your PATH, or run: ${INSTALL_DIR}/.venv/bin/vbot ${NEXT_COMMAND}" ;;
-esac
+finish_with_summary
