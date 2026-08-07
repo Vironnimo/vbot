@@ -194,7 +194,7 @@ async def test_read_tool_success_persists_result_and_final_response_uses_content
         assert messages[-1].iteration_count == 2
         assert tool_result["ok"] is True
         assert tool_result["error"] is None
-        assert tool_result["data"] == {"content": "1|file content"}
+        assert tool_result["data"] == {"content": "1| file content"}
         assert tool_result["artifacts"] == []
         assert adapter.requests[1].messages[3]["content"] == messages[2].content
     finally:

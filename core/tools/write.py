@@ -90,7 +90,7 @@ def write_handler(
     if looks_like_line_numbered_content(content_argument):
         return tool_failure(
             "line_numbered_content",
-            "content looks like read's `N|` line-number gutter pasted back in. "
+            "content looks like read's `N| ` line-number gutter pasted back in. "
             "Write the raw file text without the leading line numbers.",
         )
 

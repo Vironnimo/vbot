@@ -132,8 +132,9 @@ class TestLooksLikeLineNumberedContent:
     @pytest.mark.parametrize(
         "text",
         [
-            "1|import os\n2|import sys\n3|\n",  # consecutive, blank gutter line included
-            "50:50001|continuing line\n51|next line",  # continuation gutter then next line
+            "1| import os\n2| import sys\n3| \n",  # current read output, including blank
+            "50:50001| continuing line\n51| next line",  # continuation then next line
+            "1|import os\n2|import sys\n3|\n",  # compact pasted gutters remain detectable
             "  10|alpha\n  11|beta\n  12|gamma",  # indented gutter, multi-digit
             "5|a\n6|b",  # the minimum: two consecutive numbered lines
         ],

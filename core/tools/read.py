@@ -47,7 +47,8 @@ _LINE_BREAK_PATTERN = re.compile(r"\r\n|[\n\v\f\x1c-\x1e\x85\u2028\u2029\r]")
 READ_TOOL_NAME = "read"
 READ_TOOL_DESCRIPTION = (
     "Read a file. Text files return their contents with every line prefixed by "
-    "its number as `N|` — a reference gutter only; never reproduce it when "
+    "its number as `N| ` — a reference gutter plus separator space; neither is "
+    "file content, so never reproduce them when "
     "writing or editing. Output is truncated to 2000 lines or 50 KB; use "
     "offset/limit for large files. Image files are shown to the model directly "
     "when it supports vision; audio files are transcribed to text; "
@@ -151,17 +152,19 @@ def _build_read_hint(
 def _line_gutter(line: int, character: int = 1) -> str:
     """Return a display gutter for a full line or an in-line continuation."""
     if character == 1:
-        return f"{line}{LINE_NUMBER_GUTTER_SEPARATOR}"
-    return f"{line}:{character}{LINE_NUMBER_GUTTER_SEPARATOR}"
+        return f"{line}{LINE_NUMBER_GUTTER_SEPARATOR} "
+    return f"{line}:{character}{LINE_NUMBER_GUTTER_SEPARATOR} "
 
 
 def _add_line_numbers(lines: list[str], start_line: int, start_character: int = 1) -> list[str]:
-    """Prefix each line with a compact ``N|`` reference gutter.
+    """Prefix each line with an unpadded ``N| `` reference gutter.
 
     The gutter is deliberately unpadded: padding to a fixed width is pure token
     overhead on dense source, while dropping the numbers entirely makes the model
-    hand-count lines and miss by one. Each input line keeps its trailing newline
-    (``keepends``); the number goes in front, file-absolute from ``start_line``.
+    hand-count lines and miss by one. One separator space keeps the gutter visually
+    distinct from source that begins with ``|`` or another punctuation character.
+    Each input line keeps its trailing newline (``keepends``); the number and
+    separator go in front, file-absolute from ``start_line``.
     """
     return [
         f"{_line_gutter(start_line + index, start_character if index == 0 else 1)}{line}"
@@ -223,7 +226,7 @@ def _render_text(
 ) -> str:
     """Apply offset/limit, optional line numbering, and truncation safeguards.
 
-    Shared by the literal-file path (``number=True`` adds the ``N|`` gutter) and
+    Shared by the literal-file path (``number=True`` adds the ``N| `` gutter) and
     the extracted-document path (``number=False`` — a rendering of an Office or
     notebook file is not editable source, so the gutter would only mislead).
     """
