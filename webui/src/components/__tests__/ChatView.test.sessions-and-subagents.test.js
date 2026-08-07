@@ -157,6 +157,66 @@ describe('ChatView', () => {
     ).toHaveLength(1);
   });
 
+  it('starts a Run in a new Session while the previous Session Run remains active', async () => {
+    rpcMock.mockImplementation(
+      createChatRpcMock({
+        sessionMessages: { 'created-alpha': [] },
+        activeRuns: {
+          'session-1': {
+            run_id: 'run-one',
+            sse_url: '/api/runs/run-one/events',
+            status: 'running',
+            events: [],
+          },
+        },
+        streamHandler: (params) => ({
+          run_id: 'run-two',
+          session_id: params.session_id,
+          sse_url: '/api/runs/run-two/events',
+          status: 'running',
+          events: [],
+        }),
+      }),
+    );
+
+    chatViewTest.mount({ target: document.body });
+    flushSync();
+
+    await waitForCondition(() => Boolean(findCancelRunButton()), 100);
+
+    const newSessionButton = findButtonByText('New session');
+    expect(newSessionButton).toBeTruthy();
+    expect(newSessionButton.disabled).toBe(false);
+    newSessionButton.click();
+
+    await waitForCondition(
+      () =>
+        rpcMock.mock.calls.some(
+          ([method, params]) =>
+            method === 'chat.history' && params?.session_id === 'created-alpha',
+        ),
+      100,
+    );
+
+    sendComposerMessage('Run in parallel');
+    await waitForCondition(
+      () =>
+        rpcMock.mock.calls.some(
+          ([method, params]) =>
+            method === 'chat.stream' && params?.session_id === 'created-alpha',
+        ),
+      100,
+    );
+
+    const sessionStates = testChatStateRefs[0].sessions;
+    expect(sessionStates['alpha::session-1'].status).toBe('running');
+    expect(sessionStates['alpha::session-1'].currentRun?.runId).toBe('run-one');
+    expect(sessionStates['alpha::created-alpha'].status).toBe('running');
+    expect(sessionStates['alpha::created-alpha'].currentRun?.runId).toBe(
+      'run-two',
+    );
+  });
+
   it('focuses the composer after a user selects another session', async () => {
     rpcMock.mockImplementation(
       createChatRpcMock({
@@ -658,9 +718,8 @@ describe('ChatView', () => {
     );
     findButtonByText('session-1')?.click();
 
-    // Reconcile: the "Cancel run" button disappears, "New session" is no
-    // longer disabled (so `canCreateNewSession(...)` is now true), and the
-    // run stream's `closeSubscriptionFor` was called for this session key.
+    // Reconcile: the "Cancel run" button disappears and the run stream's
+    // `closeSubscriptionFor` was called for this session key.
     await waitForCondition(() => findCancelRunButton() === undefined, 100);
 
     expect(findCancelRunButton()).toBeUndefined();
@@ -725,7 +784,7 @@ describe('ChatView', () => {
     );
 
     expect(findCancelRunButton()).toBeTruthy();
-    expect(findButtonByText('New session')?.disabled).toBe(true);
+    expect(findButtonByText('New session')?.disabled).toBe(false);
     expect(closeSubscriptionForMock).not.toHaveBeenCalled();
     expect(subscribeRunEventsMock).toHaveBeenCalledTimes(1);
   });
@@ -860,7 +919,7 @@ describe('ChatView', () => {
     expect(sessionState.currentRun?.runId).toBe('run-replacement');
     expect(closeSubscriptionForMock).not.toHaveBeenCalled();
     expect(findCancelRunButton()).toBeTruthy();
-    expect(findButtonByText('New session')?.disabled).toBe(true);
+    expect(findButtonByText('New session')?.disabled).toBe(false);
   });
 
   // Helper: render a single running sub-agent tool row in the parent

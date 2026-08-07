@@ -14,7 +14,6 @@
   import { createChatRunStream } from '../lib/chatRunStream.js';
   import {
     agentActivityStatus,
-    canCreateNewSession,
     createChatController,
     createChatState,
     currentSessionState,
@@ -326,7 +325,6 @@
   // Any local override away from the selected agent's current session — also
   // true for same-agent drawer selections, which must offer a return path too.
   let sessionOverrideActive = $derived(Boolean(viewingSessionId));
-  let newSessionBlocked = $derived(!canCreateNewSession(activeSessionState));
   let composerDisabled = $derived(!activeAgent || chatState.loadingHistory);
   // Provider availability is the first prerequisite for every current Agent.
   // Do not infer it from Models: App supplies Settings' authoritative usable-
@@ -1347,7 +1345,7 @@
   };
 
   const handleNewSession = async () => {
-    if (newSessionBlocked || chatState.loadingHistory || creatingSession) {
+    if (chatState.loadingHistory || creatingSession) {
       return;
     }
     // "New session" means "make the chat ready for a fresh conversation."
@@ -1748,7 +1746,6 @@
     {activeSessionState}
     {showSessionDrawer}
     {creatingSession}
-    {newSessionBlocked}
     newSessionLoading={chatState.loadingHistory}
     {projects}
     {selectedProjectId}

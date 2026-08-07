@@ -1,14 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
 import {
-  CHAT_STATUS_COMPLETED,
   CHAT_STATUS_CANCELLED,
   CHAT_STATUS_FAILED,
   CHAT_STATUS_RUNNING,
   assistantRunChildProgressKey,
   addServerQueuedMessage,
   appendRunEvent,
-  canCreateNewSession,
   createChatState,
   ensureSessionState,
   isSessionEmpty,
@@ -145,31 +143,6 @@ describe('chat state helpers', () => {
       },
     ]);
     expect(removeQueuedMessage(sessionState, 'queue-missing')).toBe(false);
-  });
-
-  it('blocks new session creation only while the current session has a run', () => {
-    const state = createChatState();
-    const sessionState = ensureSessionState(state, 'alpha', 'session-one');
-
-    expect(canCreateNewSession(sessionState)).toBe(true);
-
-    startRun(sessionState, {
-      run_id: 'run-one',
-      sse_url: '/api/runs/run-one/events',
-      status: CHAT_STATUS_RUNNING,
-      started_at: '2026-08-05T18:00:00.000Z',
-    });
-
-    expect(canCreateNewSession(sessionState)).toBe(false);
-    expect(sessionState.currentRun?.startedAt).toBe('2026-08-05T18:00:00.000Z');
-
-    appendRunEvent(sessionState, {
-      type: 'run_completed',
-      sequence: 2,
-      payload: { status: CHAT_STATUS_COMPLETED },
-    });
-
-    expect(canCreateNewSession(sessionState)).toBe(true);
   });
 
   it('classifies only loaded sessions without conversation activity as empty', () => {
