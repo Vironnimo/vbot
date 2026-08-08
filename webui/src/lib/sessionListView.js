@@ -77,8 +77,12 @@ export function visibleSessionsForSelection(
     (session) =>
       showAll ||
       session?.id === normalizedSelectedSessionId ||
-      !isBackgroundOnlySession(session),
+      !isSessionHiddenByDefault(session),
   );
+}
+
+export function isSessionHiddenByDefault(session) {
+  return isSubAgentSession(session) || isBackgroundOnlySession(session);
 }
 
 export function isBackgroundOnlySession(session) {
@@ -160,6 +164,13 @@ function normalizeSession(session) {
   normalizedSession.display_name = sessionDisplayName(normalizedSession);
 
   return normalizedSession;
+}
+
+function isSubAgentSession(session) {
+  return (
+    session?.is_subagent_session === true ||
+    isPlainObject(session?.subagent_parent)
+  );
 }
 
 function normalizeRunKinds(runKinds) {

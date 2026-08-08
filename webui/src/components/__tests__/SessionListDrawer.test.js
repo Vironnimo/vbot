@@ -467,7 +467,7 @@ describe('SessionListDrawer', () => {
     expect(forkBadges[0].textContent.trim()).toBe('Fork');
   });
 
-  it('shows important sessions by default and reveals labelled background sessions', async () => {
+  it('shows important sessions by default and reveals labelled execution sessions', async () => {
     listSessionsMock.mockResolvedValue({
       sessions: [
         {
@@ -485,6 +485,15 @@ describe('SessionListDrawer', () => {
           created_at: '2026-05-11T00:00:00+00:00',
           run_kinds: ['reflection'],
         },
+        {
+          id: 'subagent-session',
+          created_at: '2026-05-12T00:00:00+00:00',
+          is_subagent_session: true,
+          subagent_parent: {
+            agent_id: 'alpha',
+            session_id: 'user-session',
+          },
+        },
       ],
     });
     mountedComponent = mount(SessionListDrawer, {
@@ -501,18 +510,20 @@ describe('SessionListDrawer', () => {
     );
     expect(document.body.textContent).not.toContain('cron-session');
     expect(document.body.textContent).not.toContain('reflection-session');
+    expect(document.body.textContent).not.toContain('subagent-session');
 
     document.querySelector('[role="switch"]').click();
     flushSync();
 
     await waitForCondition(
-      () => document.querySelectorAll('.session-row').length === 3,
+      () => document.querySelectorAll('.session-row').length === 4,
     );
     const badgeLabels = Array.from(document.querySelectorAll('.badge')).map(
       (badge) => badge.textContent.trim(),
     );
     expect(badgeLabels).toContain('Cron');
     expect(badgeLabels).toContain('Reflection');
+    expect(badgeLabels).toContain('Sub-agent');
   });
 });
 
