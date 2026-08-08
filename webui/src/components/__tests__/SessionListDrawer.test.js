@@ -181,9 +181,9 @@ describe('SessionListDrawer', () => {
       () => document.querySelector('.session-row__unread-dot') !== null,
     );
 
-    expect(
-      document.querySelector('.session-row__unread')?.textContent,
-    ).toContain('Unread');
+    const unreadMarker = document.querySelector('.session-row__unread');
+    expect(unreadMarker?.textContent.trim()).toBe('');
+    expect(unreadMarker?.getAttribute('aria-label')).toBe('Unread');
     expect(
       document
         .querySelector('.session-row__select--active')
@@ -459,13 +459,62 @@ describe('SessionListDrawer', () => {
       () => document.querySelectorAll('.session-row').length === 2,
     );
 
-    // The fork marker is now the shared Badge primitive, identified by its
-    // translated label rather than a bespoke per-variant class.
-    const forkBadges = Array.from(document.querySelectorAll('.badge')).filter(
-      (element) => element.textContent.trim() === 'Fork',
+    const forkMarkers = document.querySelectorAll(
+      '[data-session-marker="fork"]',
     );
-    expect(forkBadges.length).toBe(1);
-    expect(forkBadges[0].textContent.trim()).toBe('Fork');
+    expect(forkMarkers.length).toBe(1);
+    expect(forkMarkers[0].textContent.trim()).toBe('');
+    expect(forkMarkers[0].getAttribute('aria-label')).toBe('Fork');
+    expect(forkMarkers[0].querySelector('svg')).toBeTruthy();
+  });
+
+  it('renders Telegram, Discord, and fallback Channels as labelled icon markers', async () => {
+    listSessionsMock.mockResolvedValue({
+      sessions: [
+        {
+          id: 'telegram-session',
+          created_at: '2026-05-09T00:00:00+00:00',
+          platform: 'telegram',
+          platform_conv_id: 'telegram-chat',
+        },
+        {
+          id: 'discord-session',
+          created_at: '2026-05-10T00:00:00+00:00',
+          platform: 'discord',
+          platform_conv_id: 'discord-chat',
+        },
+        {
+          id: 'matrix-session',
+          created_at: '2026-05-11T00:00:00+00:00',
+          platform: 'matrix',
+          platform_conv_id: 'matrix-room',
+        },
+      ],
+    });
+    mountedComponent = mount(SessionListDrawer, {
+      target: document.body,
+      props: {
+        agentId: 'alpha',
+        currentSessionId: 'telegram-session',
+      },
+    });
+    flushSync();
+    await waitForCondition(
+      () => document.querySelectorAll('[data-session-marker]').length === 3,
+    );
+
+    const markers = Array.from(
+      document.querySelectorAll('[data-session-marker]'),
+    );
+    expect(markers.map((marker) => marker.getAttribute('aria-label'))).toEqual([
+      'Matrix',
+      'Discord',
+      'Telegram',
+    ]);
+    expect(markers.every((marker) => marker.querySelector('svg'))).toBe(true);
+    expect(markers.every((marker) => marker.textContent.trim() === '')).toBe(
+      true,
+    );
   });
 
   it('moves secondary session metadata into the row tooltip', async () => {
@@ -566,12 +615,18 @@ describe('SessionListDrawer', () => {
     await waitForCondition(
       () => document.querySelectorAll('.session-row').length === 4,
     );
-    const badgeLabels = Array.from(document.querySelectorAll('.badge')).map(
-      (badge) => badge.textContent.trim(),
-    );
-    expect(badgeLabels).toContain('Cron');
-    expect(badgeLabels).toContain('Reflection');
-    expect(badgeLabels).toContain('Sub-agent');
+    const markerLabels = Array.from(
+      document.querySelectorAll('[data-session-marker]'),
+    ).map((marker) => marker.getAttribute('aria-label'));
+    expect(markerLabels).toContain('Cron');
+    expect(markerLabels).toContain('Reflection');
+    expect(markerLabels).toContain('Subagent');
+    expect(
+      Array.from(document.querySelectorAll('[data-session-marker]')).every(
+        (marker) =>
+          marker.textContent.trim() === '' && marker.querySelector('svg'),
+      ),
+    ).toBe(true);
   });
 });
 

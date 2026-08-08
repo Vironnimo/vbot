@@ -596,7 +596,11 @@ describe('ChatView', () => {
       100,
     );
 
-    expect(document.body.textContent).toContain('Sub-agent');
+    expect(
+      document
+        .querySelector('[data-session-marker="subagent"]')
+        ?.getAttribute('aria-label'),
+    ).toBe('Subagent');
     expect(document.body.textContent).not.toContain('Parent:');
     expect(document.body.textContent).not.toContain(
       'orchestrator/parent-session',
