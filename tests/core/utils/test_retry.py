@@ -87,10 +87,11 @@ async def test_retry_does_not_retry_auth_error():
     mock_fn = AsyncMock(side_effect=ProviderAuthError("Unauthorized"))
 
     # Act / Assert
-    with pytest.raises(ProviderAuthError, match="Unauthorized"):
+    with pytest.raises(ProviderAuthError, match="Unauthorized") as error:
         await retry_async(mock_fn)
 
     assert mock_fn.call_count == 1
+    assert error.value.attempts_made == 1
 
 
 @pytest.mark.asyncio
@@ -118,11 +119,12 @@ async def test_retry_stops_after_max_retries_rate_limit():
     # Act / Assert
     with (
         patch("core.utils.retry.asyncio.sleep", new_callable=AsyncMock),
-        pytest.raises(ProviderRateLimitError, match="Rate limited"),
+        pytest.raises(ProviderRateLimitError, match="Rate limited") as error,
     ):
         await retry_async(mock_fn)
 
     assert mock_fn.call_count == MAX_RETRIES + 1
+    assert error.value.attempts_made == MAX_RETRIES + 1
 
 
 @pytest.mark.asyncio

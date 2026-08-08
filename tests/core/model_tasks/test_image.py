@@ -18,8 +18,13 @@ from core.model_tasks import (
     ImageConfigurationError,
     ImageExecutionError,
     ImageInputError,
+    ImageNotFoundError,
     ImageOutcomeUnknownError,
+    ImageReadError,
     ImageService,
+    ImageTooLargeError,
+    ImageUnderstandingUnavailableError,
+    ImageUnsupportedMediaTypeError,
     ImageUnsupportedTargetError,
     TaskModelError,
 )
@@ -34,6 +39,7 @@ from core.model_tasks.image import (
 )
 from core.model_tasks.image_types import ImageGenerationResult
 from core.providers.errors import ProviderError, ProviderOutcomeUnknownError
+from core.utils.errors import ConfigError
 
 
 @pytest.mark.asyncio
@@ -676,7 +682,7 @@ async def test_analyze_rejects_more_than_six_images_before_reading_files(
     service = ImageService(_UnderstandingModelTasks(), cast(Any, runtime))
     image_paths = [tmp_path / f"image-{index}.png" for index in range(7)]
 
-    with pytest.raises(ImageInputError) as error:
+    with pytest.raises(ImageTooLargeError) as error:
         await service.analyze("Compare them", image_paths=image_paths)
 
     assert DEFAULT_IMAGE_ANALYSIS_MAX_IMAGES == 6
@@ -704,7 +710,7 @@ async def test_analyze_rejects_inputs_above_the_total_byte_limit(
         test_limit,
     )
 
-    with pytest.raises(ImageInputError) as error:
+    with pytest.raises(ImageTooLargeError) as error:
         await service.analyze("Compare them", image_paths=[first, second])
 
     assert str(error.value) == (
@@ -715,7 +721,7 @@ async def test_analyze_rejects_inputs_above_the_total_byte_limit(
 
 
 def test_default_analysis_total_limit_has_actionable_error() -> None:
-    with pytest.raises(ImageInputError) as error:
+    with pytest.raises(ImageTooLargeError) as error:
         _ensure_analysis_total_size(
             DEFAULT_IMAGE_ANALYSIS_MAX_TOTAL_BYTES + 1,
             DEFAULT_IMAGE_ANALYSIS_MAX_TOTAL_BYTES,
@@ -801,11 +807,11 @@ async def test_analyze_rejects_non_understanding_model_and_unsupported_wire(
         cast(Any, _UnderstandingRuntime(adapter)),
     )
 
-    with pytest.raises(ImageUnsupportedTargetError, match="not an image-understanding"):
+    with pytest.raises(ImageUnderstandingUnavailableError, match="not an image-understanding"):
         await text_only.analyze("Describe it", image_paths=[source])
-    with pytest.raises(ImageUnsupportedTargetError, match="not an image-understanding"):
+    with pytest.raises(ImageUnderstandingUnavailableError, match="not an image-understanding"):
         await image_only.analyze("Describe it", image_paths=[source])
-    with pytest.raises(ImageUnsupportedTargetError, match="cannot carry"):
+    with pytest.raises(ImageUnsupportedMediaTypeError, match="cannot carry"):
         await unsupported_wire.analyze("Describe it", image_paths=[source])
 
     assert adapter.closed is True
@@ -824,12 +830,16 @@ async def test_analyze_rejects_missing_non_image_and_oversize_input(
     text_file = tmp_path / "notes.txt"
     text_file.write_text("plain text", encoding="utf-8")
     oversize = _png(tmp_path / "large.png", b"too-many-pixels")
+    directory = tmp_path / "directory"
+    directory.mkdir()
 
-    with pytest.raises(ImageInputError, match="not found"):
+    with pytest.raises(ImageNotFoundError, match="not found"):
         await service.analyze("Describe it", image_paths=[tmp_path / "missing.png"])
-    with pytest.raises(ImageInputError, match="not a supported image"):
+    with pytest.raises(ImageReadError, match="not a file"):
+        await service.analyze("Describe it", image_paths=[directory])
+    with pytest.raises(ImageUnsupportedMediaTypeError, match="not a supported image"):
         await service.analyze("Describe it", image_paths=[text_file])
-    with pytest.raises(ImageInputError, match="size limit"):
+    with pytest.raises(ImageTooLargeError, match="size limit"):
         await service.analyze("Describe it", image_paths=[oversize])
 
     assert runtime.calls == []
@@ -840,7 +850,9 @@ async def test_analyze_maps_provider_failure_and_empty_output_and_closes_adapter
     tmp_path: Path,
 ) -> None:
     source = _png(tmp_path / "source.png")
-    failing_adapter = _UnderstandingAdapter(ProviderError("rate limited"))
+    provider_error = ProviderError("rate limited", retryable=True)
+    provider_error.attempts_made = 4
+    failing_adapter = _UnderstandingAdapter(provider_error)
     failing = ImageService(
         _UnderstandingModelTasks(),
         cast(Any, _UnderstandingRuntime(failing_adapter)),
@@ -851,13 +863,48 @@ async def test_analyze_maps_provider_failure_and_empty_output_and_closes_adapter
         cast(Any, _UnderstandingRuntime(empty_adapter)),
     )
 
-    with pytest.raises(ImageExecutionError, match="rate limited"):
+    with pytest.raises(ImageExecutionError, match="rate limited") as error:
         await failing.analyze("Describe it", image_paths=[source])
     with pytest.raises(ImageExecutionError, match="no text analysis"):
         await empty.analyze("Describe it", image_paths=[source])
 
     assert failing_adapter.closed is True
     assert empty_adapter.closed is True
+    assert error.value.code == "provider_error"
+    assert error.value.retryable is True
+    assert error.value.attempts_made == 4
+
+
+@pytest.mark.asyncio
+async def test_analyze_maps_adapter_configuration_failure_to_unavailable(
+    tmp_path: Path,
+) -> None:
+    source = _png(tmp_path / "source.png")
+    service = ImageService(
+        _UnderstandingModelTasks(),
+        cast(Any, _UnderstandingRuntime(ConfigError("connection disabled"))),
+    )
+
+    with pytest.raises(ImageUnderstandingUnavailableError, match="connection disabled") as error:
+        await service.analyze("Describe it", image_paths=[source])
+
+    assert error.value.code == "image_understanding_unavailable"
+    assert error.value.retryable is False
+
+
+@pytest.mark.asyncio
+async def test_analyze_does_not_mask_unexpected_adapter_failure(tmp_path: Path) -> None:
+    source = _png(tmp_path / "source.png")
+    adapter = _UnderstandingAdapter(RuntimeError("adapter bug"))
+    service = ImageService(
+        _UnderstandingModelTasks(),
+        cast(Any, _UnderstandingRuntime(adapter)),
+    )
+
+    with pytest.raises(RuntimeError, match="adapter bug"):
+        await service.analyze("Describe it", image_paths=[source])
+
+    assert adapter.closed is True
 
 
 @pytest.mark.asyncio
@@ -869,7 +916,7 @@ async def test_analyze_requires_binding_prompt_and_images(tmp_path: Path) -> Non
         cast(Any, _UnderstandingRuntime(_UnderstandingAdapter())),
     )
 
-    with pytest.raises(ImageConfigurationError, match="configured"):
+    with pytest.raises(ImageUnderstandingUnavailableError, match="configured"):
         await missing.analyze("Describe it", image_paths=[source])
     with pytest.raises(ImageConfigurationError, match="Prompt"):
         await configured.analyze("  ", image_paths=[source])

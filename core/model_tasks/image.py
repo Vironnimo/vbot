@@ -24,7 +24,7 @@ from core.model_tasks.model_tasks import model_supports_task
 from core.model_tasks.task_execution import TaskBindingResolver
 from core.providers.errors import ProviderOutcomeUnknownError
 from core.providers.task_client import TaskClientRuntime
-from core.utils.errors import TaskError, VBotError
+from core.utils.errors import ConfigError, TaskError, VBotError
 from core.utils.logging import get_logger
 
 JsonObject = JsonObject
@@ -63,6 +63,10 @@ class ImageRuntime(TaskClientRuntime, Protocol):
 class ImageError(TaskError):
     """Base class for expected image task errors."""
 
+    code = "image_error"
+    retryable = False
+    attempts_made: int | None = None
+
 
 class ImageConfigurationError(ImageError):
     """Raised when the requested image task is not configured."""
@@ -72,8 +76,27 @@ class ImageUnsupportedTargetError(ImageError):
     """Raised when a configured image target cannot execute the requested task."""
 
 
+class ImageUnderstandingUnavailableError(ImageConfigurationError):
+    """Raised when the configured image-understanding path cannot execute."""
+
+    code = "image_understanding_unavailable"
+
+
 class ImageExecutionError(ImageError):
     """Raised when a provider image task request fails."""
+
+    code = "provider_error"
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        retryable: bool = False,
+        attempts_made: int | None = None,
+    ) -> None:
+        self.retryable = retryable
+        self.attempts_made = attempts_made
+        super().__init__(message)
 
 
 class ImageOutcomeUnknownError(ImageExecutionError):
@@ -88,6 +111,30 @@ class ImageOutcomeUnknownError(ImageExecutionError):
 
 class ImageInputError(ImageError):
     """Raised when a local source image cannot be loaded."""
+
+    code = "image_read_error"
+
+
+class ImageNotFoundError(ImageInputError):
+    """Raised when a requested local image does not exist."""
+
+    code = "image_not_found"
+
+
+class ImageReadError(ImageInputError):
+    """Raised when a local image path cannot be read as a file."""
+
+
+class ImageTooLargeError(ImageInputError):
+    """Raised when image count or bytes exceed an analysis limit."""
+
+    code = "image_too_large"
+
+
+class ImageUnsupportedMediaTypeError(ImageInputError):
+    """Raised when an input is not an image or its image type cannot be carried."""
+
+    code = "unsupported_image_type"
 
 
 class ImageService:
@@ -258,7 +305,7 @@ class ImageService:
             raise ImageInputError("At least one image path is required")
         image_count = len(image_paths)
         if image_count > DEFAULT_IMAGE_ANALYSIS_MAX_IMAGES:
-            raise ImageInputError(
+            raise ImageTooLargeError(
                 "Image analysis accepts at most "
                 f"{DEFAULT_IMAGE_ANALYSIS_MAX_IMAGES} images per call, but received "
                 f"{image_count}. "
@@ -275,16 +322,19 @@ class ImageService:
     ) -> ImageUnderstandingResult:
         """Execute one bounded image-understanding request."""
 
-        binding = self._resolver.binding_for(TASK_IMAGE_UNDERSTANDING)
-        target_ref = self._resolver.parse_target(binding.target)
+        try:
+            binding = self._resolver.binding_for(TASK_IMAGE_UNDERSTANDING)
+            target_ref = self._resolver.parse_target(binding.target)
+        except ImageConfigurationError as exc:
+            raise ImageUnderstandingUnavailableError(str(exc)) from exc
         if target_ref.kind == "local":
-            raise ImageUnsupportedTargetError(
+            raise ImageUnderstandingUnavailableError(
                 f"Image understanding does not support local targets: {target_ref.target}"
             )
 
         model = self._model_tasks.model_for_target(target_ref)
         if model is None or not model_supports_task(model, TASK_IMAGE_UNDERSTANDING):
-            raise ImageUnsupportedTargetError(
+            raise ImageUnderstandingUnavailableError(
                 f"Configured target is not an image-understanding model: {target_ref.target}"
             )
 
@@ -296,17 +346,25 @@ class ImageService:
         )
         adapter = None
         try:
-            adapter = self._runtime.get_adapter(
-                target_ref.provider_id,
-                target_ref.connection_id,
-            )
+            try:
+                adapter = self._runtime.get_adapter(
+                    target_ref.provider_id,
+                    target_ref.connection_id,
+                )
+            except (ConfigError, KeyError) as exc:
+                _LOGGER.warning(
+                    "Image understanding target became unavailable for target=%s: %s",
+                    target_ref.target,
+                    exc,
+                )
+                raise ImageUnderstandingUnavailableError(str(exc)) from exc
             wire_media_types = _adapter_wire_media_types(adapter, target_ref.model_id)
             unsupported_media_types = sorted(
                 {image.media_type for image in input_images} - wire_media_types
             )
             if unsupported_media_types:
                 media_list = ", ".join(unsupported_media_types)
-                raise ImageUnsupportedTargetError(
+                raise ImageUnsupportedMediaTypeError(
                     "Configured image-understanding target cannot carry "
                     f"these image types: {media_list}"
                 )
@@ -344,10 +402,11 @@ class ImageService:
                 target_ref.target,
                 exc,
             )
-            raise ImageExecutionError(str(exc)) from exc
-        except Exception as exc:
-            _LOGGER.error("Image understanding failed", exc_info=True)
-            raise ImageExecutionError(str(exc)) from exc
+            raise ImageExecutionError(
+                str(exc),
+                retryable=bool(getattr(exc, "retryable", False)),
+                attempts_made=_attempts_made(exc),
+            ) from exc
         finally:
             if adapter is not None:
                 await _close_adapter(adapter)
@@ -458,6 +517,13 @@ def _prompt_with_hints(prompt: str, hints: list[str]) -> str:
     return f"{prompt} ({', '.join(hints)})"
 
 
+def _attempts_made(error: VBotError) -> int | None:
+    attempts_made = getattr(error, "attempts_made", None)
+    if isinstance(attempts_made, bool) or not isinstance(attempts_made, int):
+        return None
+    return attempts_made if attempts_made > 0 else None
+
+
 def _adapter_wire_media_types(adapter: Any, model_id: str) -> frozenset[str]:
     wire_media_support = getattr(adapter, "wire_media_support", None)
     if not callable(wire_media_support):
@@ -487,13 +553,13 @@ def _load_image_inputs(
     for source_path in source_paths:
         path = Path(source_path).expanduser().resolve()
         if not path.exists():
-            raise ImageInputError(f"Source image not found: {path}")
+            raise ImageNotFoundError(f"Source image not found: {path}")
         if not path.is_file():
-            raise ImageInputError(f"Source image path is not a file: {path}")
+            raise ImageReadError(f"Source image path is not a file: {path}")
         try:
             reported_size = path.stat().st_size
             if reported_size > max_size_bytes:
-                raise ImageInputError(
+                raise ImageTooLargeError(
                     f"Source image exceeds size limit {max_size_bytes} bytes: {path}"
                 )
             reported_total_bytes = total_bytes + reported_size
@@ -501,15 +567,17 @@ def _load_image_inputs(
             with path.open("rb") as source_file:
                 data = source_file.read(max_size_bytes + 1)
         except OSError as exc:
-            raise ImageInputError(f"Cannot read source image {path}: {exc}") from exc
+            raise ImageReadError(f"Cannot read source image {path}: {exc}") from exc
         if len(data) > max_size_bytes:
-            raise ImageInputError(f"Source image exceeds size limit {max_size_bytes} bytes: {path}")
+            raise ImageTooLargeError(
+                f"Source image exceeds size limit {max_size_bytes} bytes: {path}"
+            )
         total_bytes += len(data)
         _ensure_analysis_total_size(total_bytes, max_total_bytes)
 
         media_type = sniff_media_type(data, path.name)
         if not media_type.startswith("image/"):
-            raise ImageInputError(f"Source file is not a supported image: {path}")
+            raise ImageUnsupportedMediaTypeError(f"Source file is not a supported image: {path}")
         inputs.append(
             ImageInput(
                 filename=_input_filename(path, media_type),
@@ -531,7 +599,7 @@ def _ensure_analysis_total_size(total_bytes: int, max_total_bytes: int | None) -
         if mebibytes > 0 and remainder == 0
         else f"{max_total_bytes} bytes"
     )
-    raise ImageInputError(
+    raise ImageTooLargeError(
         f"Image analysis input totals {total_bytes} bytes, exceeding the {limit_label} limit. "
         "Pass fewer or smaller images and try again."
     )

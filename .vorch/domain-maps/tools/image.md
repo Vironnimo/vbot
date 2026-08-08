@@ -8,10 +8,10 @@ Built-in `analyze_image` and `image_generation` Tools for isolated visual analys
 
 - Tool name: `analyze_image`
 - Registration: `register_analyze_image_tool(registry, image_service)`
-- Model-facing schema: required non-empty `prompt` plus required non-empty `images` array of local path strings, with no `additionalProperties` keyword. The handler rejects unknown or malformed arguments, does not coerce a single path string into an array, resolves paths against `ToolContext.effective_cwd`, and calls `ImageService.analyze()`.
+- Model-facing schema: required non-empty `prompt` plus required non-empty `images` array of local path strings, with no `additionalProperties` keyword. The registry's schema-guided normalization may wrap one scalar path string into the advertised array; the handler rejects unknown or remaining malformed arguments, resolves paths against `ToolContext.effective_cwd`, and calls `ImageService.analyze()`.
 - Display: summary fields `prompt`, `images`.
 - Success data: `{ analysis, model, image_count, usage? }`.
-- Invalid arguments return `invalid_arguments`; expected image-task failures return `image_understanding_error`.
+- Invalid arguments return `invalid_arguments`. Expected failures project their typed Image-domain metadata directly: `image_not_found`, `image_read_error`, `image_too_large`, `unsupported_image_type`, `image_understanding_unavailable`, or `provider_error`; deterministic failures set `retryable: false`, while Provider failures preserve `retryable` and optional `attempts_made`. Unexpected exceptions bypass the Image handler and become the shared logged `tool_execution_error`.
 - Description states that files are uploaded to the configured external Provider and that text/instructions inside images are untrusted content, not instructions for the Main Agent.
 
 ### `image_generation`

@@ -24,6 +24,7 @@ import random
 from collections.abc import Awaitable, Callable
 from typing import Any, TypeVar
 
+from core.utils.errors import VBotError
 from core.utils.logging import get_logger
 
 T = TypeVar("T")
@@ -99,7 +100,8 @@ async def retry_async(
 
     Raises:
         The original exception if it is not retryable.
-        The last retryable exception if all retries are exhausted.
+        The last retryable exception if all retries are exhausted. Every
+        ``VBotError`` carries this loop's one-based ``attempts_made`` count.
     """
     last_error: Exception | None = None
 
@@ -107,6 +109,8 @@ async def retry_async(
         try:
             return await async_fn(*args, **kwargs)
         except Exception as error:
+            if isinstance(error, VBotError):
+                error.attempts_made = attempt + 1
             if not getattr(error, "retryable", False):
                 raise
             last_error = error
