@@ -255,7 +255,7 @@ export const englishCatalog = Object.freeze({
   'chat.tokenTooltipSessionAvgCacheRead':
     'Avg cache read per turn: {tokens} tok',
   'chat.tokenTooltipSessionEstimatedTurns': '{count} estimated turns excluded',
-  'chat.subagent.label': 'Sub-agent',
+  'chat.subagent.label': 'Subagent',
   'chat.subagent.starting': 'starting',
   'chat.subagent.loadingResult': 'loading result…',
   'chat.subagent.viewSession': 'view session',
@@ -323,7 +323,7 @@ export const englishCatalog = Object.freeze({
   'sessions.no_sessions': 'No sessions found for this agent.',
   'sessions.noImportantTitle': 'No important sessions',
   'sessions.noImportantDescription':
-    'Turn on Show all to browse Cron, Reflection, and Sub-agent sessions.',
+    'Turn on Show all to browse Cron, Reflection, and Subagent sessions.',
   'sessions.unreadCompletion': 'Unread',
   'sessions.unreadCompletionHint': 'This Session has an unread result.',
   'sessions.fork': 'Fork',
@@ -332,10 +332,12 @@ export const englishCatalog = Object.freeze({
   'sessions.runKind.cron': 'Cron',
   'sessions.runKind.reflection': 'Reflection',
   'sessions.subagentHint':
-    'A session run by a sub-agent working on behalf of a parent session. The parent is shown below.',
+    'A session run by a Subagent working on behalf of a parent session. The parent is shown below.',
   'sessions.last_active': 'Last active',
   'sessions.link_channel_id': 'Channel ID',
   'sessions.platform_telegram': 'Telegram',
+  'sessions.platform_discord': 'Discord',
+  'sessions.platform_channel': 'Channel',
   'sessions.source_channel': 'Source channel',
   'sessions.subagent_parent': 'Parent',
   'sessions.actions': 'Session actions',

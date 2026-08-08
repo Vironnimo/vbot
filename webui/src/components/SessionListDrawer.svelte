@@ -472,7 +472,14 @@
     if (platform === 'telegram') {
       return t('sessions.platform_telegram', 'Telegram');
     }
-    return platform;
+    if (platform === 'discord') {
+      return t('sessions.platform_discord', 'Discord');
+    }
+    const normalizedPlatform = asText(platform);
+    if (!normalizedPlatform) {
+      return t('sessions.platform_channel', 'Channel');
+    }
+    return `${normalizedPlatform.slice(0, 1).toUpperCase()}${normalizedPlatform.slice(1)}`;
   };
 
   function asText(value) {
@@ -543,7 +550,7 @@
       title={t('sessions.noImportantTitle', 'No important sessions')}
       description={t(
         'sessions.noImportantDescription',
-        'Turn on Show all to browse Cron, Reflection, and Sub-agent sessions.',
+        'Turn on Show all to browse Cron, Reflection, and Subagent sessions.',
       )}
     />
   {:else}
@@ -586,73 +593,239 @@
                 <p class="session-row__name">
                   {session.display_name || sessionDisplayName(session)}
                 </p>
-                {#if session.has_unread_completion && session.id !== currentSessionId}
-                  <span
-                    class="session-row__unread"
-                    use:tooltip={t(
-                      'sessions.unreadCompletionHint',
-                      'This Session has an unread result.',
-                    )}
-                  >
-                    <span class="session-row__unread-dot" aria-hidden="true"
-                    ></span>
-                    <span>{t('sessions.unreadCompletion', 'Unread')}</span>
-                  </span>
-                {/if}
-                {#if session.platform}
-                  <Badge variant="info" class="session-row__badge">
-                    {#if session.platform === 'telegram'}
-                      <svg
-                        viewBox="0 0 18 18"
-                        width="10"
-                        height="10"
-                        fill="currentColor"
+                <span class="session-row__markers">
+                  {#if session.has_unread_completion && session.id !== currentSessionId}
+                    <span
+                      class="session-row__unread"
+                      aria-label={t('sessions.unreadCompletion', 'Unread')}
+                      use:tooltip={t(
+                        'sessions.unreadCompletionHint',
+                        'This Session has an unread result.',
+                      )}
+                    >
+                      <span
+                        class="tab-indicator tab-indicator--unread session-row__unread-dot"
                         aria-hidden="true"
+                      ></span>
+                    </span>
+                  {/if}
+                  {#if session.platform}
+                    <span
+                      class="tooltip-anchor session-row__marker-anchor"
+                      use:tooltip={resolvePlatformLabel(session.platform)}
+                    >
+                      <Badge
+                        variant="info"
+                        class="session-row__badge session-row__badge--icon"
+                        aria-label={resolvePlatformLabel(session.platform)}
+                        data-session-marker={`platform-${session.platform}`}
                       >
-                        <path
-                          d="M15.36 3.27c.39-.15.77.2.67.61l-1.94 9.14c-.07.34-.45.5-.74.31l-3.16-2.13-1.62 1.57c-.22.22-.6.11-.67-.2l-.52-2.41 6.72-5.91c.14-.12-.04-.35-.2-.24L5.6 9.04 2.5 7.8c-.34-.13-.35-.6-.02-.75l12.88-3.78z"
-                        />
-                      </svg>
-                    {/if}
-                    <span>{resolvePlatformLabel(session.platform)}</span>
-                  </Badge>
-                {/if}
-                {#if session.is_subagent_session}
-                  <span
-                    class="tooltip-anchor"
-                    use:tooltip={t(
-                      'sessions.subagentHint',
-                      'A session run by a sub-agent working on behalf of a parent session. The parent is shown below.',
-                    )}
-                  >
-                    <Badge variant="neutral" class="session-row__badge">
-                      {t('chat.subagent.label', 'Sub-agent')}
-                    </Badge>
-                  </span>
-                {/if}
-                {#if session.is_fork}
-                  <span
-                    class="tooltip-anchor"
-                    use:tooltip={t(
-                      'sessions.forkHint',
-                      'A copy of another session. Background reflection and /reflect review a conversation in a fork so the original session stays untouched.',
-                    )}
-                  >
-                    <Badge variant="neutral" class="session-row__badge">
-                      {t('sessions.fork', 'Fork')}
-                    </Badge>
-                  </span>
-                {/if}
-                {#if session.run_kinds.includes('cron')}
-                  <Badge variant="warn" class="session-row__badge">
-                    {t('sessions.runKind.cron', 'Cron')}
-                  </Badge>
-                {/if}
-                {#if session.run_kinds.includes('reflection')}
-                  <Badge variant="neutral" class="session-row__badge">
-                    {t('sessions.runKind.reflection', 'Reflection')}
-                  </Badge>
-                {/if}
+                        {#if session.platform === 'telegram'}
+                          <svg
+                            viewBox="0 0 18 18"
+                            width="11"
+                            height="11"
+                            fill="currentColor"
+                            aria-hidden="true"
+                          >
+                            <path
+                              d="M15.36 3.27c.39-.15.77.2.67.61l-1.94 9.14c-.07.34-.45.5-.74.31l-3.16-2.13-1.62 1.57c-.22.22-.6.11-.67-.2l-.52-2.41 6.72-5.91c.14-.12-.04-.35-.2-.24L5.6 9.04 2.5 7.8c-.34-.13-.35-.6-.02-.75l12.88-3.78z"
+                            />
+                          </svg>
+                        {:else if session.platform === 'discord'}
+                          <svg
+                            viewBox="0 0 16 16"
+                            width="11"
+                            height="11"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="1.45"
+                            stroke-linecap="round"
+                            stroke-linejoin="round"
+                            aria-hidden="true"
+                          >
+                            <path
+                              d="M4.1 4.1a9.5 9.5 0 0 1 7.8 0c1.15 1.75 1.7 3.7 1.55 5.8a8.8 8.8 0 0 1-2.4 1.25l-.75-1.05"
+                            />
+                            <path
+                              d="M5.7 10.1l-.75 1.05a8.8 8.8 0 0 1-2.4-1.25C2.4 7.8 2.95 5.85 4.1 4.1"
+                            />
+                            <path d="M5.25 5.05a7.7 7.7 0 0 1 5.5 0" />
+                            <circle
+                              cx="5.8"
+                              cy="7.7"
+                              r=".8"
+                              fill="currentColor"
+                              stroke="none"
+                            />
+                            <circle
+                              cx="10.2"
+                              cy="7.7"
+                              r=".8"
+                              fill="currentColor"
+                              stroke="none"
+                            />
+                          </svg>
+                        {:else}
+                          <svg
+                            viewBox="0 0 14 14"
+                            width="11"
+                            height="11"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="1.4"
+                            stroke-linecap="round"
+                            aria-hidden="true"
+                          >
+                            <circle
+                              cx="7"
+                              cy="7"
+                              r="1.2"
+                              fill="currentColor"
+                              stroke="none"
+                            />
+                            <path
+                              d="M4.6 4.6a3.4 3.4 0 0 0 0 4.8M9.4 4.6a3.4 3.4 0 0 1 0 4.8"
+                            />
+                            <path
+                              d="M2.5 2.5a6.35 6.35 0 0 0 0 9M11.5 2.5a6.35 6.35 0 0 1 0 9"
+                            />
+                          </svg>
+                        {/if}
+                      </Badge>
+                    </span>
+                  {/if}
+                  {#if session.is_subagent_session}
+                    <span
+                      class="tooltip-anchor session-row__marker-anchor"
+                      use:tooltip={t(
+                        'sessions.subagentHint',
+                        'A session run by a Subagent working on behalf of a parent session. The parent is shown below.',
+                      )}
+                    >
+                      <Badge
+                        variant="neutral"
+                        class="session-row__badge session-row__badge--icon"
+                        aria-label={t('chat.subagent.label', 'Subagent')}
+                        data-session-marker="subagent"
+                      >
+                        <svg
+                          viewBox="0 0 14 14"
+                          width="11"
+                          height="11"
+                          fill="none"
+                          stroke="currentColor"
+                          stroke-width="1.45"
+                          stroke-linecap="round"
+                          stroke-linejoin="round"
+                          aria-hidden="true"
+                        >
+                          <circle cx="4" cy="3.5" r="1.7" />
+                          <circle cx="10.25" cy="9.75" r="1.35" />
+                          <path d="M4 5.2v2.55c0 1.1.9 2 2 2h2.9" />
+                        </svg>
+                      </Badge>
+                    </span>
+                  {/if}
+                  {#if session.is_fork}
+                    <span
+                      class="tooltip-anchor session-row__marker-anchor"
+                      use:tooltip={t(
+                        'sessions.forkHint',
+                        'A copy of another session. Background reflection and /reflect review a conversation in a fork so the original session stays untouched.',
+                      )}
+                    >
+                      <Badge
+                        variant="neutral"
+                        class="session-row__badge session-row__badge--icon"
+                        aria-label={t('sessions.fork', 'Fork')}
+                        data-session-marker="fork"
+                      >
+                        <svg
+                          viewBox="0 0 14 14"
+                          width="11"
+                          height="11"
+                          fill="none"
+                          stroke="currentColor"
+                          stroke-width="1.45"
+                          stroke-linecap="round"
+                          stroke-linejoin="round"
+                          aria-hidden="true"
+                        >
+                          <circle cx="3.25" cy="3" r="1.25" />
+                          <circle cx="3.25" cy="11" r="1.25" />
+                          <circle cx="10.5" cy="3.75" r="1.25" />
+                          <path
+                            d="M3.25 4.25v5.5M4.5 7.25h1.25a3.5 3.5 0 0 0 3.5-3.5"
+                          />
+                        </svg>
+                      </Badge>
+                    </span>
+                  {/if}
+                  {#if session.run_kinds.includes('cron')}
+                    <span
+                      class="tooltip-anchor session-row__marker-anchor"
+                      use:tooltip={t('sessions.runKind.cron', 'Cron')}
+                    >
+                      <Badge
+                        variant="warn"
+                        class="session-row__badge session-row__badge--icon"
+                        aria-label={t('sessions.runKind.cron', 'Cron')}
+                        data-session-marker="cron"
+                      >
+                        <svg
+                          viewBox="0 0 14 14"
+                          width="11"
+                          height="11"
+                          fill="none"
+                          stroke="currentColor"
+                          stroke-width="1.45"
+                          stroke-linecap="round"
+                          stroke-linejoin="round"
+                          aria-hidden="true"
+                        >
+                          <circle cx="7" cy="7" r="4.75" />
+                          <path d="M7 4.25v3.1l2.15 1.2" />
+                        </svg>
+                      </Badge>
+                    </span>
+                  {/if}
+                  {#if session.run_kinds.includes('reflection')}
+                    <span
+                      class="tooltip-anchor session-row__marker-anchor"
+                      use:tooltip={t(
+                        'sessions.runKind.reflection',
+                        'Reflection',
+                      )}
+                    >
+                      <Badge
+                        variant="neutral"
+                        class="session-row__badge session-row__badge--icon"
+                        aria-label={t(
+                          'sessions.runKind.reflection',
+                          'Reflection',
+                        )}
+                        data-session-marker="reflection"
+                      >
+                        <svg
+                          viewBox="0 0 14 14"
+                          width="11"
+                          height="11"
+                          fill="none"
+                          stroke="currentColor"
+                          stroke-width="1.35"
+                          stroke-linecap="round"
+                          stroke-linejoin="round"
+                          aria-hidden="true"
+                        >
+                          <path d="M10.9 6.9A4.1 4.1 0 1 1 9.65 4" />
+                          <path d="M9.65 1.9V4h-2.1" />
+                          <path d="M11.1 1.7v2.2M10 2.8h2.2" />
+                        </svg>
+                      </Badge>
+                    </span>
+                  {/if}
+                </span>
               </div>
             </button>
             <div class="session-row__actions">
@@ -1039,8 +1212,7 @@
     min-width: 0;
     align-items: center;
     justify-content: flex-start;
-    flex-wrap: wrap;
-    gap: 6px;
+    gap: 8px;
   }
 
   .session-row__name {
@@ -1062,14 +1234,36 @@
     white-space: nowrap;
   }
 
+  .session-row__markers,
+  .session-row__marker-anchor {
+    display: inline-flex;
+    flex-shrink: 0;
+    align-items: center;
+  }
+
+  .session-row__markers {
+    gap: 4px;
+  }
+
+  :global(.badge.session-row__badge--icon) {
+    width: 18px;
+    height: 18px;
+    flex: 0 0 18px;
+    justify-content: center;
+    gap: 0;
+    padding: 0;
+    border-radius: var(--r-sm);
+  }
+
+  :global(.badge.session-row__badge--icon > svg) {
+    flex-shrink: 0;
+  }
+
   .session-row__unread {
     display: inline-flex;
     flex-shrink: 0;
     align-items: center;
-    gap: 5px;
     color: var(--blue);
-    font-size: var(--fs-label-sm);
-    font-weight: 600;
   }
 
   .session-row__unread-dot {
