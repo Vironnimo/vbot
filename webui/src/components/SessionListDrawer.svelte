@@ -447,6 +447,27 @@
     return timestampFormatter.format(new Date(parsedValue));
   };
 
+  const sessionHoverDetails = (session) => {
+    const lines = [
+      session.display_name || sessionDisplayName(session),
+      `${t('sessions.last_active', 'Last active')}: ${formatTimestamp(session.last_active_at ?? session.created_at)}`,
+    ];
+
+    if (session.source_channel_id) {
+      lines.push(
+        `${t('sessions.source_channel', 'Source channel')}: ${session.source_channel_id}`,
+      );
+    }
+
+    if (session.subagent_parent) {
+      lines.push(
+        `${t('sessions.subagent_parent', 'Parent')}: ${session.subagent_parent.agent_id}/${session.subagent_parent.session_id}`,
+      );
+    }
+
+    return lines.join('\n');
+  };
+
   const resolvePlatformLabel = (platform) => {
     if (platform === 'telegram') {
       return t('sessions.platform_telegram', 'Telegram');
@@ -559,13 +580,10 @@
                 session.id}
               class="session-row__select"
               onclick={() => handleSelectSession(session.id)}
+              use:tooltip={sessionHoverDetails(session)}
             >
               <div class="session-row__heading">
-                <p
-                  class="session-row__name"
-                  use:tooltip={session.display_name ||
-                    sessionDisplayName(session)}
-                >
+                <p class="session-row__name">
                   {session.display_name || sessionDisplayName(session)}
                 </p>
                 {#if session.has_unread_completion && session.id !== currentSessionId}
@@ -582,7 +600,7 @@
                   </span>
                 {/if}
                 {#if session.platform}
-                  <Badge variant="info">
+                  <Badge variant="info" class="session-row__badge">
                     {#if session.platform === 'telegram'}
                       <svg
                         viewBox="0 0 18 18"
@@ -607,7 +625,7 @@
                       'A session run by a sub-agent working on behalf of a parent session. The parent is shown below.',
                     )}
                   >
-                    <Badge variant="neutral">
+                    <Badge variant="neutral" class="session-row__badge">
                       {t('chat.subagent.label', 'Sub-agent')}
                     </Badge>
                   </span>
@@ -620,39 +638,22 @@
                       'A copy of another session. Background reflection and /reflect review a conversation in a fork so the original session stays untouched.',
                     )}
                   >
-                    <Badge variant="neutral">
+                    <Badge variant="neutral" class="session-row__badge">
                       {t('sessions.fork', 'Fork')}
                     </Badge>
                   </span>
                 {/if}
                 {#if session.run_kinds.includes('cron')}
-                  <Badge variant="warn">
+                  <Badge variant="warn" class="session-row__badge">
                     {t('sessions.runKind.cron', 'Cron')}
                   </Badge>
                 {/if}
                 {#if session.run_kinds.includes('reflection')}
-                  <Badge variant="neutral">
+                  <Badge variant="neutral" class="session-row__badge">
                     {t('sessions.runKind.reflection', 'Reflection')}
                   </Badge>
                 {/if}
               </div>
-              <p class="session-row__meta">
-                {t('sessions.last_active', 'Last active')}:
-                {formatTimestamp(session.last_active_at ?? session.created_at)}
-              </p>
-              {#if session.source_channel_id}
-                <p class="session-row__meta session-row__meta--mono">
-                  {t('sessions.source_channel', 'Source channel')}:
-                  {session.source_channel_id}
-                </p>
-              {/if}
-              {#if session.subagent_parent}
-                <p class="session-row__meta session-row__meta--mono">
-                  {t('sessions.subagent_parent', 'Parent')}:
-                  {session.subagent_parent.agent_id}/{session.subagent_parent
-                    .session_id}
-                </p>
-              {/if}
             </button>
             <div class="session-row__actions">
               <button
@@ -881,17 +882,16 @@
 
   .session-row__select {
     width: 100%;
-    min-height: 64px;
+    min-height: 48px;
     border: 0;
     border-radius: inherit;
-    padding: 12px 36px 11px 14px;
+    padding: 10px 36px 10px 14px;
     text-align: left;
     background: transparent;
     color: var(--text-hi);
     display: flex;
     flex-direction: column;
     justify-content: center;
-    gap: 7px;
     line-height: 1.35;
     transition:
       background 150ms ease,
@@ -1035,13 +1035,16 @@
 
   .session-row__heading {
     display: flex;
+    width: 100%;
     min-width: 0;
     align-items: center;
-    justify-content: space-between;
-    gap: 8px;
+    justify-content: flex-start;
+    flex-wrap: wrap;
+    gap: 6px;
   }
 
   .session-row__name {
+    flex: 1 1 110px;
     min-width: 0;
     margin: 0;
     color: var(--text-hi);
@@ -1051,6 +1054,11 @@
     line-height: 1.25;
     overflow: hidden;
     text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  :global(.session-row__badge) {
+    flex-shrink: 0;
     white-space: nowrap;
   }
 
@@ -1070,21 +1078,6 @@
     border-radius: 50%;
     background: var(--blue);
     box-shadow: 0 0 0 2px var(--blue-dim);
-  }
-
-  .session-row__meta {
-    margin: 0;
-    color: var(--text-med);
-    font-size: 11.5px;
-    line-height: 1.35;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .session-row__meta--mono {
-    font-family: var(--font-mono);
-    font-size: var(--fs-mono-sm);
   }
 
   .session-drawer__state {

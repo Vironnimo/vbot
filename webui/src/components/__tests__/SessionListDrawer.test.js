@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushSync, mount, unmount } from 'svelte';
 
 import { init } from '../../lib/i18n.js';
+import { TOOLTIP_SHOW_DELAY_MS } from '../../lib/tooltip.js';
 
 const listSessionsMock = vi.fn(async () => ({ sessions: [] }));
 const renameSessionMock = vi.fn(async () => ({ title: 'Release planning' }));
@@ -465,6 +466,53 @@ describe('SessionListDrawer', () => {
     );
     expect(forkBadges.length).toBe(1);
     expect(forkBadges[0].textContent.trim()).toBe('Fork');
+  });
+
+  it('moves secondary session metadata into the row tooltip', async () => {
+    listSessionsMock.mockResolvedValue({
+      sessions: [
+        {
+          id: 'child-session-with-a-long-identifier',
+          title: 'Child session title',
+          source_channel_id: 'telegram-main',
+          created_at: '2026-05-09T00:00:00+00:00',
+          last_active_at: '2026-05-09T01:00:00+00:00',
+          is_subagent_session: true,
+          subagent_parent: {
+            agent_id: 'orchestrator',
+            session_id: 'parent-session',
+          },
+        },
+      ],
+    });
+    mountedComponent = mount(SessionListDrawer, {
+      target: document.body,
+      props: {
+        agentId: 'alpha',
+        currentSessionId: 'child-session-with-a-long-identifier',
+      },
+    });
+    flushSync();
+
+    await waitForCondition(
+      () => document.querySelector('.session-row__select') !== null,
+    );
+    const sessionButton = document.querySelector('.session-row__select');
+    expect(sessionButton.textContent).toContain('Child session title');
+    expect(sessionButton.textContent).not.toContain('Last active');
+    expect(sessionButton.textContent).not.toContain('Source channel');
+    expect(sessionButton.textContent).not.toContain('Parent');
+
+    sessionButton.focus();
+    await new Promise((resolve) =>
+      setTimeout(resolve, TOOLTIP_SHOW_DELAY_MS + 50),
+    );
+
+    const tooltipText = document.getElementById('app-tooltip')?.textContent;
+    expect(tooltipText).toContain('Child session title');
+    expect(tooltipText).toContain('Last active:');
+    expect(tooltipText).toContain('Source channel: telegram-main');
+    expect(tooltipText).toContain('Parent: orchestrator/parent-session');
   });
 
   it('shows important sessions by default and reveals labelled execution sessions', async () => {
