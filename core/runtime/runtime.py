@@ -34,7 +34,14 @@ from core.extensions import (
     purge_extension_modules,
 )
 from core.memory import MemoryService
-from core.model_tasks import EmbeddingService, ImageService, SpeechService, TaskModelService
+from core.model_tasks import (
+    EmbeddingService,
+    ImageService,
+    MusicService,
+    SpeechService,
+    TaskModelService,
+    VideoService,
+)
 from core.models.database import begin_runtime_model_database_refresh
 from core.models.models import Model, ModelRegistry
 from core.projects import (
@@ -127,6 +134,8 @@ from core.tools import (
     register_analyze_image_tool,
     register_bash_tool,
     register_edit_tool,
+    register_generate_music_tool,
+    register_generate_video_tool,
     register_glob_tool,
     register_grep_tool,
     register_history_tool,
@@ -396,6 +405,8 @@ class Runtime:
         self._model_tasks: TaskModelService | None = None
         self._speech: SpeechService | None = None
         self._image: ImageService | None = None
+        self._video: VideoService | None = None
+        self._music: MusicService | None = None
         self._embeddings: EmbeddingService | None = None
         self._storage: StorageManager | None = None
         self._attachment_store: AttachmentStore | None = None
@@ -534,6 +545,8 @@ class Runtime:
             self,
             max_input_bytes=self._attachment_store.max_size_bytes,
         )
+        self._video = VideoService(self._model_tasks, self)
+        self._music = MusicService(self._model_tasks, self)
         self._embeddings = EmbeddingService(self._model_tasks, self)
         self._agents = AgentStore(
             self._storage.data_dir,
@@ -576,6 +589,8 @@ class Runtime:
         register_text_to_speech_tool(self._tools, self._speech)
         register_analyze_image_tool(self._tools, self._image)
         register_image_generation_tool(self._tools, self._image)
+        register_generate_video_tool(self._tools, self._video)
+        register_generate_music_tool(self._tools, self._music)
         extension_dirs = self._extra_extension_directories(settings)
         disabled_extensions, extension_config = self._extension_load_options(settings)
         self._extensions = ExtensionRegistry.load(
@@ -1970,6 +1985,22 @@ class Runtime:
         if self._image is None:
             raise RuntimeError("Image service not available")
         return self._image
+
+    @property
+    def video(self) -> VideoService:
+        """Access to Video generation execution."""
+        self._ensure_started()
+        if self._video is None:
+            raise RuntimeError("Video service not available")
+        return self._video
+
+    @property
+    def music(self) -> MusicService:
+        """Access to Music generation execution."""
+        self._ensure_started()
+        if self._music is None:
+            raise RuntimeError("Music service not available")
+        return self._music
 
     @property
     def embeddings(self) -> EmbeddingService:

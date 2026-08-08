@@ -1109,7 +1109,7 @@ export const englishCatalog = Object.freeze({
   'settings.webSearch.saveSuccess': 'Web search settings updated.',
   'settings.specializedModels.title': 'Specialized Models',
   'settings.specializedModels.subtitle':
-    'Task-specific model bindings for speech, image, and embedding tools. These bindings are independent of agent and project defaults.',
+    'Task-specific model bindings for speech, images, video, music, and embeddings. These bindings are independent of agent and project defaults.',
   'settings.specializedModels.loading': 'Loading specialized model targets…',
   'settings.specializedModels.loadError':
     'Specialized model targets could not be loaded.',
@@ -1129,6 +1129,12 @@ export const englishCatalog = Object.freeze({
   'settings.specializedModels.imageGeneration': 'Image generation',
   'settings.specializedModels.imageGenerationDescription':
     'Used for image generation requests.',
+  'settings.specializedModels.videoGeneration': 'Video generation',
+  'settings.specializedModels.videoGenerationDescription':
+    'Used by the agent generate_video tool.',
+  'settings.specializedModels.musicGeneration': 'Music generation',
+  'settings.specializedModels.musicGenerationDescription':
+    'Used by the agent generate_music tool.',
   'settings.specializedModels.embeddingModel': 'Embedding model',
   'settings.specializedModels.embeddingModelDescription':
     'Turns text into numeric vectors for meaning-based search. Required when Recall is set to Semantic.',

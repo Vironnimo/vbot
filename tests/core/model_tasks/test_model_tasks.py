@@ -865,6 +865,14 @@ def test_text_embedding_added_to_supported_task_types() -> None:
     assert validate_task_type("text_embedding") == "text_embedding"
 
 
+def test_generated_media_tasks_are_supported_binding_types() -> None:
+    assert model_task_constants.TASK_VIDEO_GENERATION == "video_generation"
+    assert model_task_constants.TASK_MUSIC_GENERATION == "music_generation"
+    assert {"video_generation", "music_generation"} <= SUPPORTED_TASK_TYPES
+    assert validate_task_type("video_generation") == "video_generation"
+    assert validate_task_type("music_generation") == "music_generation"
+
+
 # ---------------------------------------------------------------------------
 # Phase 3 — model-aware option schemas
 # ---------------------------------------------------------------------------

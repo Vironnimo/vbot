@@ -115,6 +115,8 @@ describe('SettingsSpecializedModelsPanel', () => {
       'text_to_speech',
       'image_understanding',
       'image_generation',
+      'video_generation',
+      'music_generation',
       'text_embedding',
     ];
     await waitForCondition(() =>

@@ -149,7 +149,7 @@ def test_dispatch_task_model_set_reads_complete_options_from_stdin(
 
 def test_parse_args_rejects_unknown_task_type(capsys: pytest.CaptureFixture[str]) -> None:
     with pytest.raises(SystemExit) as exc_info:
-        cli_main.parse_args(["task-model", "targets", "music_generation"])
+        cli_main.parse_args(["task-model", "targets", "audio_effect_generation"])
 
     assert exc_info.value.code == 2
     assert "invalid choice" in capsys.readouterr().err

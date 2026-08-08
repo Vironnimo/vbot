@@ -1,15 +1,14 @@
 """Shared HTTP plumbing for provider-backed task-model clients.
 
-The speech, image, and embeddings domains each bind one resolved
+The provider-backed specialized-task domains each bind one resolved
 ``(provider, connection, token_getter, model_id)`` tuple to a small
 OpenAI-compatible HTTP client. :class:`ProviderTaskClient` owns that
 shared plumbing — target resolution from a runtime handle, auth
 headers, the POST/classify/parse request cycle, and retry semantics —
 while each domain keeps its own payload shaping and response parsing.
 
-Task-specific execution lives in the per-task wire clients in
-:mod:`core.model_tasks` (``speech_providers``, ``image_providers``,
-``embeddings_providers``); only the wire plumbing lives here.
+Task-specific execution lives in the per-task ``*_providers`` wire clients in
+:mod:`core.model_tasks`; only the shared wire plumbing lives here.
 """
 
 from __future__ import annotations
@@ -248,6 +247,32 @@ class ProviderTaskClient:
                         f"the provider returned HTTP {response.status_code}, but vBot could not "
                         f"confirm a usable result: {exc}",
                     ) from exc
+
+        return await retry_async(_do_request)
+
+    async def get_and_parse(
+        self,
+        endpoint: str,
+        *,
+        timeout: float,
+        parse: Callable[[httpx.Response], ParsedResultT],
+    ) -> ParsedResultT:
+        """GET *endpoint* with task auth, retrying the replay-safe whole cycle."""
+
+        async def _do_request() -> ParsedResultT:
+            async with httpx.AsyncClient(
+                base_url=self._base_url,
+                timeout=timeout,
+            ) as client:
+                try:
+                    response = await client.get(endpoint, headers=await self._headers())
+                except httpx.TransportError as exc:
+                    raise wrap_network_error(exc) from exc
+                classify_task_response(
+                    response,
+                    extra_retryable_status_codes=self.EXTRA_RETRYABLE_STATUS_CODES,
+                )
+                return parse(response)
 
         return await retry_async(_do_request)
 

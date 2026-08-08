@@ -1,11 +1,9 @@
 """Shared blob + JSON-sidecar artifact persistence for task execution services.
 
-Speech and image execution persist results the same way: one binary blob and
-one JSON metadata sidecar per artifact under a task-specific directory, with
-``uuid4().hex`` ids. :class:`TaskArtifactStore` owns that layout — id
-generation and validation, the write order (blob before sidecar), and the
-fail-closed read path — while each task keeps its own artifact dataclass and
-error type.
+Speech and image execution use the sidecar-backed :class:`TaskArtifactStore`.
+Video and Music use :func:`write_generated_media_artifact` for caller-owned
+exclusive files without a central sidecar. Both paths use ``uuid4().hex`` ids
+and preserve each task's own error type.
 """
 
 from __future__ import annotations
@@ -38,8 +36,8 @@ class StoredArtifact:
 class TaskArtifactStore:
     """Blob + sidecar artifact storage for one task's artifact directory.
 
-    *kind* names the task in error messages (``"speech"`` / ``"image"``);
-    *error* is the task's configuration-error class used for every expected
+        *kind* names the task in error messages (``"speech"`` / ``"image"``);
+        *error* is the task's configuration-error class used for every expected
     failure so callers keep their domain error contract.
     """
 
@@ -114,3 +112,47 @@ class TaskArtifactStore:
             file_path=file_path,
             metadata=metadata if isinstance(metadata, dict) else {},
         )
+
+
+@dataclass(frozen=True)
+class GeneratedMediaArtifact:
+    """Generated media persisted in a caller-owned working directory."""
+
+    id: str
+    filename: str
+    media_type: str
+    size_bytes: int
+    file_path: Path
+
+
+def write_generated_media_artifact(
+    payload: bytes,
+    *,
+    output_dir: str | Path,
+    extension: str,
+    media_type: str,
+    error: type[TaskError],
+) -> GeneratedMediaArtifact:
+    """Write generated media exclusively, never overwriting an existing file."""
+
+    destination = Path(output_dir)
+    try:
+        destination.mkdir(parents=True, exist_ok=True)
+        while True:
+            artifact_id = uuid4().hex
+            filename = f"{artifact_id}.{extension}"
+            file_path = destination / filename
+            try:
+                with file_path.open("xb") as media_file:
+                    media_file.write(payload)
+            except FileExistsError:
+                continue
+            return GeneratedMediaArtifact(
+                id=artifact_id,
+                filename=filename,
+                media_type=media_type,
+                size_bytes=len(payload),
+                file_path=file_path,
+            )
+    except OSError as exc:
+        raise error(str(exc)) from exc

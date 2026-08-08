@@ -82,6 +82,7 @@ MODEL_TASK_ORDER = (
     "video_understanding",
     "image_generation",
     "audio_generation",
+    "music_generation",
     "text_to_speech",
     "text_embedding",
     "video_generation",

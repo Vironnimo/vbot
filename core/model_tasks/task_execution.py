@@ -1,6 +1,6 @@
 """Shared binding-resolution plumbing for task execution services.
 
-Every task execution service (speech, image, embeddings) starts a request the
+Every task execution service starts a request the
 same way: resolve the configured binding for its task type, merge stored
 options over the backend schema defaults, and parse the target id — mapping
 every ``TaskModelError`` to the task's own configuration-error class.
