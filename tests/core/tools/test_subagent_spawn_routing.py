@@ -62,6 +62,7 @@ async def test_register_subagent_tools_registers_one_flat_public_tool() -> None:
     assert set(properties) == {
         "action",
         "content",
+        "description",
         "agent_id",
         "session_id",
         "model",
@@ -80,6 +81,14 @@ async def test_register_subagent_tools_registers_one_flat_public_tool() -> None:
         "Task or continuation message. Required for run; make it self-contained unless "
         "continuing session_id."
     )
+    assert properties["description"] == {
+        "type": "string",
+        "description": (
+            "Short 3–5 word title for the delegated task. Strongly preferred; omit only if the "
+            "first 48 characters of content clearly identify the task."
+        ),
+    }
+    assert "description" not in subagent.parameters["required"]
     assert properties["agent_id"]["description"] == (
         "Target Agent for run. Omit to use the caller when starting a new Session; required "
         "with session_id."
@@ -108,6 +117,31 @@ async def test_register_subagent_tools_registers_one_flat_public_tool() -> None:
     assert "background" not in properties
     assert "run_id" not in properties
     assert "queue_item_id" not in properties
+
+    described_display = subagent.display.to_payload(
+        {
+            "action": "run",
+            "content": "Inspect the Tool contract and report concise findings.",
+            "description": "Review Tool contract",
+            "agent_id": "reviewer",
+        }
+    )
+    fallback_display = subagent.display.to_payload(
+        {
+            "action": "run",
+            "content": "Inspect the Tool contract and report concise findings.",
+            "agent_id": "reviewer",
+        }
+    )
+    assert [part["value"] for part in described_display["primary"]] == [
+        "Review Tool contract",
+        "reviewer",
+    ]
+    assert described_display["primary"][0]["kind"] == "description"
+    assert [part["value"] for part in fallback_display["primary"]] == [
+        "Inspect the Tool contract and report concise findings.",
+        "reviewer",
+    ]
 
 
 async def test_subagent_tool_enforces_depth_limit(tmp_path: Path) -> None:

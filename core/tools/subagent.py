@@ -85,6 +85,13 @@ _SUBAGENT_CONTENT_PARAMETER: JsonObject = {
         "continuing session_id."
     ),
 }
+_SUBAGENT_DESCRIPTION_PARAMETER: JsonObject = {
+    "type": "string",
+    "description": (
+        "Short 3–5 word title for the delegated task. Strongly preferred; omit only if the "
+        "first 48 characters of content clearly identify the task."
+    ),
+}
 _SUBAGENT_AGENT_ID_PARAMETER: JsonObject = {
     "type": "string",
     "minLength": 1,
@@ -130,6 +137,7 @@ SUBAGENT_TOOL_PARAMETERS: JsonObject = {
             ),
         },
         "content": _SUBAGENT_CONTENT_PARAMETER,
+        "description": _SUBAGENT_DESCRIPTION_PARAMETER,
         "agent_id": _SUBAGENT_AGENT_ID_PARAMETER,
         "session_id": _SUBAGENT_SESSION_ID_PARAMETER,
         "model": _SUBAGENT_MODEL_PARAMETER,
@@ -172,11 +180,14 @@ def _subagent_display_parts(arguments: JsonObject) -> tuple[ToolDisplayPart, ...
     agent_id = arguments.get("agent_id")
     if action == "run":
         parts: list[ToolDisplayPart] = []
+        description = arguments.get("description")
+        content = arguments.get("content")
+        if isinstance(description, str) and description.strip():
+            parts.append(ToolDisplayPart(description.strip(), kind="description"))
+        elif isinstance(content, str) and content:
+            parts.append(ToolDisplayPart(content))
         if isinstance(agent_id, str) and agent_id:
             parts.append(ToolDisplayPart(agent_id, kind="identifier", truncate="middle"))
-        content = arguments.get("content")
-        if isinstance(content, str) and content:
-            parts.append(ToolDisplayPart(content))
         if parts:
             return tuple(parts)
     parts = [ToolDisplayPart(action, truncate="never", tooltip="none")]

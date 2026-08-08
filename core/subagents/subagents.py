@@ -74,6 +74,7 @@ USER_CANCEL_REASON = "user"
 PARENT_AGENT_CANCEL_REASON = "parent_agent"
 SUBAGENT_USER_CANCEL_MESSAGE = "Cancelled by the user"
 SUBAGENT_WORK_ID_PREFIX = "sub_"
+SUBAGENT_SESSION_TITLE_MAX_CHARACTERS = 48
 SUBAGENT_ACTIVITY_NOTE_TEMPLATE = (
     "Current Sub-Agent activity is available at {path}. Read this file if the Sub-Agent's "
     "status or progress becomes relevant."
@@ -348,6 +349,7 @@ async def _handle_subagent(
     unknown_arguments = set(arguments) - {
         "action",
         "content",
+        "description",
         "agent_id",
         "session_id",
         "model",
@@ -365,6 +367,7 @@ async def _handle_subagent(
 
     try:
         explicit_agent_address = optional_string(arguments.get("agent_id"), field_name="agent_id")
+        description = optional_string(arguments.get("description"), field_name="description")
         session_id = optional_string(arguments.get("session_id"), field_name="session_id")
         if session_id is not None and explicit_agent_address is None:
             return tool_failure(
@@ -429,6 +432,12 @@ async def _handle_subagent(
 
         if session_id is None:
             session = runtime.chat_sessions.create(target_agent_id, project_id=target_project_id)
+            runtime.chat_sessions.set_auto_title(
+                target_agent_id,
+                session.id,
+                _subagent_session_title(description, content),
+                target_project_id,
+            )
         else:
             try:
                 session = runtime.chat_sessions.get(target_agent_id, session_id, target_project_id)
@@ -1523,6 +1532,13 @@ def _mark_subagent_session(
         "project_id": context.project_id,
     }
     session_manager.set_metadata(sub_agent_id, sub_session_id, metadata, sub_project_id)
+
+
+def _subagent_session_title(description: str | None, content: str) -> str:
+    """Build the stable child Session title from the parent-authored task identity."""
+
+    source = description if description else content
+    return " ".join(source.split())[:SUBAGENT_SESSION_TITLE_MAX_CHARACTERS]
 
 
 async def _emit_subagent_session_started(

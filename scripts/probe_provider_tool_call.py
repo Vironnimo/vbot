@@ -443,6 +443,7 @@ SUBAGENT_CASES = (
     "run_agent",
     "run_continue",
     "run_model",
+    "run_description",
     "run_all",
     "thinking_default",
     "thinking_minimal",
@@ -1925,9 +1926,15 @@ def _subagent_scenario(case_name: str) -> ProbeScenario:
             "content": "Inspect the Tool contract and report concise findings.",
             "model": "openai/gpt-5.6-luna",
         },
+        "run_description": {
+            "action": "run",
+            "content": "Inspect the Tool contract and report concise findings.",
+            "description": "Review Tool contract",
+        },
         "run_all": {
             "action": "run",
             "content": "Now verify the remaining edge case.",
+            "description": "Verify remaining edge case",
             "agent_id": "reviewer",
             "session_id": "session-123",
             "model": "openai/gpt-5.6-luna",
