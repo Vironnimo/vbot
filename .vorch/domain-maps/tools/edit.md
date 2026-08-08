@@ -8,7 +8,7 @@ Replaces text inside an existing UTF-8 text file, matching `old_string` with con
 - Registration: `register_edit_tool(registry, *, file_state)` — the `FileReadState` guard registry is injected (factory `make_edit_handler(file_state)`).
 - Model-facing schema: required `path`, `old_string`, `new_string`; optional boolean `replace_all`. It omits `additionalProperties` and the JSON Schema `default` keyword; omission means one unique match, with the handler applying `false` and rejecting unknown or malformed arguments.
 - Success data includes `message`, resolved `path`, `first_changed_line`, and `replacements`; the returned path and the same path inside vBot-authored failure text use the shared forward-slash Model presentation.
-- Display: summary field `path`; hides `old_string` and `new_string` from argument details.
+- Display: primary `path`; hides `old_string` and `new_string` from argument details. After a successful mutation it emits presentation-only `line_change` facts in `added`, then `removed` order: logical lines in `new_string` and `old_string`, respectively, multiplied by the actual replacement count. A replacement therefore reports both sides, while an empty `new_string` reports `added: 0`.
 
 ## Conventions
 

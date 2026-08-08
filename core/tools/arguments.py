@@ -161,6 +161,14 @@ def optional_bool(value: object, *, field_name: str, default: bool) -> bool:
     raise ToolArgumentError(f"{field_name} must be a boolean")
 
 
+def logical_line_count(text: str) -> int:
+    """Count ordinary text-file lines without inventing one after a final newline."""
+    if not text:
+        return 0
+    line_breaks = text.count("\n") + text.count("\r") - text.count("\r\n")
+    return line_breaks + (0 if text.endswith(("\r", "\n")) else 1)
+
+
 def looks_like_line_numbered_content(text: str) -> bool:
     """Return whether ``text`` is dominated by the read tool's reference gutter.
 

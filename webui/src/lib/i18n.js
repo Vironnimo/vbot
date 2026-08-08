@@ -226,6 +226,7 @@ export const englishCatalog = Object.freeze({
   'chat.toolFact.matches': '{count} matches',
   'chat.toolFact.result': '{count} result',
   'chat.toolFact.results': '{count} results',
+  'chat.toolFact.lines': 'lines {start}-{end}',
   'chat.toolResultLabel': 'Result',
   'chat.toolNoData': '—',
   'chat.runIterations': '{count} iter',

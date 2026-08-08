@@ -39,7 +39,7 @@ ToolCallResultPersistedRegistrar = Callable[[str, ToolResultPersistedCallback], 
 ToolHandler = Callable[["ToolContext", JsonObject], JsonObject | Awaitable[JsonObject]]
 ToolReadinessPredicate = Callable[[], bool]
 ToolSummaryBuilder = Callable[[JsonObject], str | None]
-ToolDisplayFactBuilder = Callable[[JsonObject, JsonObject], Sequence[JsonObject]]
+ToolDisplayFactBuilder = Callable[[JsonObject, JsonObject | None], Sequence[JsonObject]]
 MAX_TOOL_DISPLAY_SUMMARY_LENGTH = 120
 MAX_TOOL_DISPLAY_VALUE_LENGTH = 8192
 DEFAULT_TOOL_DISPLAY_MAX_CHARACTERS = 64
@@ -49,6 +49,7 @@ TOOL_DISPLAY_VALUE_KINDS = frozenset(
 TOOL_DISPLAY_TRUNCATION_MODES = frozenset({"start", "end", "middle", "never"})
 TOOL_DISPLAY_TOOLTIP_MODES = frozenset({"always", "none", "truncated"})
 TOOL_DISPLAY_FACT_UNITS = frozenset({"matches", "results"})
+TOOL_DISPLAY_LINE_CHANGES = frozenset({"added", "removed"})
 
 
 class ToolError(VBotError):
@@ -152,10 +153,10 @@ def result_count_fact_builder(
     if not all(isinstance(key, str) and key for key in conditions):
         raise ValueError("Tool display result count conditions must use non-empty string keys")
 
-    def build(arguments: JsonObject, result: JsonObject) -> Sequence[JsonObject]:
+    def build(arguments: JsonObject, result: JsonObject | None) -> Sequence[JsonObject]:
         if any(arguments.get(key) != expected for key, expected in conditions.items()):
             return ()
-        if result.get("ok") is not True:
+        if not isinstance(result, dict) or result.get("ok") is not True:
             return ()
         data = result.get("data")
         if not isinstance(data, dict):
@@ -349,7 +350,7 @@ class ToolDisplay:
         facts: Sequence[JsonObject],
     ) -> list[JsonObject]:
         raw_facts = list(facts)
-        if self.fact_builder is not None and isinstance(arguments, dict) and result is not None:
+        if self.fact_builder is not None and isinstance(arguments, dict):
             raw_facts.extend(self.fact_builder(arguments, result))
         normalized: list[JsonObject] = []
         for fact in raw_facts:
@@ -514,6 +515,16 @@ class ToolContext:
         if fact is None:
             raise ValueError("Invalid Tool display count")
         self.presentation_facts.append(fact)
+
+    def add_display_line_changes(self, *, added: int, removed: int) -> None:
+        """Record added and removed line counts without changing the Tool result."""
+        for change, value in (("added", added), ("removed", removed)):
+            fact = _normalize_display_fact(
+                {"kind": "line_change", "change": change, "value": value}
+            )
+            if fact is None:
+                raise ValueError("Invalid Tool display line change")
+            self.presentation_facts.append(fact)
 
     async def emit(self, event_type: str, payload: JsonObject) -> None:
         """Emit a tool lifecycle event through the runtime hook, when present."""
@@ -1474,7 +1485,34 @@ def _normalize_display_value(value: str | None) -> str:
 
 
 def _normalize_display_fact(value: Any) -> JsonObject | None:
-    if not isinstance(value, dict) or value.get("kind") != "count":
+    if not isinstance(value, dict):
+        return None
+    kind = value.get("kind")
+    if kind == "line_range":
+        start = value.get("start")
+        end = value.get("end")
+        if (
+            isinstance(start, bool)
+            or not isinstance(start, int)
+            or start < 1
+            or isinstance(end, bool)
+            or not isinstance(end, int)
+            or end < start
+        ):
+            return None
+        return {"kind": "line_range", "start": start, "end": end}
+    if kind == "line_change":
+        count = value.get("value")
+        change = value.get("change")
+        if (
+            isinstance(count, bool)
+            or not isinstance(count, int)
+            or count < 0
+            or change not in TOOL_DISPLAY_LINE_CHANGES
+        ):
+            return None
+        return {"kind": "line_change", "change": change, "value": count}
+    if kind != "count":
         return None
     count = value.get("value")
     unit = value.get("unit")

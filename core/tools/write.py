@@ -6,7 +6,7 @@ import asyncio
 from contextlib import nullcontext
 from pathlib import Path
 
-from core.tools.arguments import looks_like_line_numbered_content
+from core.tools.arguments import logical_line_count, looks_like_line_numbered_content
 from core.tools.file_state import FileReadState, atomic_write_bytes, stale_failure_text
 from core.tools.syntax_check import warning_for_written_file
 from core.tools.tools import (
@@ -26,6 +26,7 @@ from core.utils.paths import model_path
 # round-trip with the BOM-stripping read tool does not silently drop it.
 _UTF8_BOM_BYTES = b"\xef\xbb\xbf"
 _UTF8_BOM = chr(0xFEFF)
+_LINE_COUNT_CHUNK_BYTES = 64 * 1024
 
 WRITE_TOOL_NAME = "write"
 WRITE_TOOL_DESCRIPTION = (
@@ -62,6 +63,22 @@ def _file_starts_with_bom(path: Path) -> bool:
             return handle.read(len(_UTF8_BOM_BYTES)) == _UTF8_BOM_BYTES
     except OSError:
         return False
+
+
+def _file_line_count(path: Path) -> int:
+    """Count CRLF/LF/CR-delimited lines without retaining file contents."""
+    line_breaks = 0
+    last_byte: int | None = None
+    with path.open("rb") as handle:
+        while chunk := handle.read(_LINE_COUNT_CHUNK_BYTES):
+            line_breaks += chunk.count(b"\n") + chunk.count(b"\r")
+            line_breaks -= chunk.count(b"\r\n")
+            if last_byte == ord("\r") and chunk.startswith(b"\n"):
+                line_breaks -= 1
+            last_byte = chunk[-1]
+    if last_byte is None:
+        return 0
+    return line_breaks + (0 if last_byte in {ord("\r"), ord("\n")} else 1)
 
 
 def write_handler(
@@ -103,13 +120,15 @@ def write_handler(
 
     mutation_lock = file_state.lock_path(resolved) if file_state is not None else nullcontext()
     with mutation_lock:
+        target_exists = resolved.exists()
         # A new file is never stale; the guard only gates overwriting an existing one.
-        if file_state is not None and resolved.exists():
+        if file_state is not None and target_exists:
             reason = file_state.check_stale(context.session_id, resolved)
             if reason is not None:
                 return tool_failure(*stale_failure_text(reason, resolved))
 
         try:
+            removed_lines = _file_line_count(resolved) if target_exists else 0
             resolved.parent.mkdir(parents=True, exist_ok=True)
             # Preserve a BOM the existing file already had, so a full-file rewrite of
             # content the model read BOM-free does not silently drop the marker.
@@ -127,6 +146,11 @@ def write_handler(
         # without re-reading, and so the next stale check compares against this write.
         if file_state is not None:
             file_state.record_read(context.session_id, resolved)
+
+    context.add_display_line_changes(
+        added=logical_line_count(content_argument),
+        removed=removed_lines,
+    )
 
     byte_count = len(encoded)
     message = f"OK: written {byte_count} bytes to {displayed_path}"

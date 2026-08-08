@@ -434,7 +434,12 @@
               {@render toolArgumentLine(eventPresentation.primary)}
             {/if}
             {#each eventPresentation.facts as fact, index (`${fact.kind}:${index}`)}
-              <span class="te-fact">{fact.text}</span>
+              <span
+                class="te-fact"
+                class:te-fact--added={fact.variant === 'added'}
+                class:te-fact--removed={fact.variant === 'removed'}
+                >{fact.text}</span
+              >
             {/each}
           </summary>
           <div class="tool-event-body">

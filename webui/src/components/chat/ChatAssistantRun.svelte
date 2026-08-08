@@ -196,7 +196,11 @@
 
 {#snippet toolFacts(facts)}
   {#each facts as fact, index (`${fact.kind}:${index}`)}
-    <span class="te-fact">{fact.text}</span>
+    <span
+      class="te-fact"
+      class:te-fact--added={fact.variant === 'added'}
+      class:te-fact--removed={fact.variant === 'removed'}>{fact.text}</span
+    >
   {/each}
 {/snippet}
 
