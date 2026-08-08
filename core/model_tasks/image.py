@@ -11,6 +11,7 @@ from typing import Any, Protocol
 from uuid import uuid4
 
 from core.attachments import sniff_media_type
+from core.debug import DebugContext
 from core.model_tasks.constants import TASK_IMAGE_GENERATION, TASK_IMAGE_UNDERSTANDING
 from core.model_tasks.image_providers import ProviderImageClient
 from core.model_tasks.image_types import (
@@ -18,9 +19,10 @@ from core.model_tasks.image_types import (
     ImageGenerationResult,
     ImageInput,
     ImageUnderstandingResult,
+    ImageUnderstandingRunContext,
     JsonObject,
 )
-from core.model_tasks.model_tasks import model_supports_task
+from core.model_tasks.model_tasks import TaskModelTargetRef, model_supports_task
 from core.model_tasks.task_execution import TaskBindingResolver
 from core.providers.errors import ProviderOutcomeUnknownError
 from core.providers.task_client import TaskClientRuntime
@@ -181,6 +183,7 @@ class ImageService:
             return False
 
         adapter = None
+        target_ref = None
         try:
             binding = self._resolver.binding_for(TASK_IMAGE_UNDERSTANDING)
             target_ref = self._resolver.parse_target(binding.target)
@@ -195,8 +198,8 @@ class ImageService:
         except (ImageConfigurationError, VBotError, KeyError, RuntimeError):
             return False
         finally:
-            if adapter is not None:
-                await _close_adapter(adapter)
+            if adapter is not None and target_ref is not None:
+                await _close_adapter_safely(adapter, target_ref)
 
     async def generate(
         self,
@@ -227,7 +230,7 @@ class ImageService:
 
         if target_ref.kind == "local":
             raise ImageUnsupportedTargetError(
-                f"Image generation does not support local targets: {target_ref.target}"
+                f"Image generation does not support local targets: {_safe_target_label(target_ref)}"
             )
 
         model = None
@@ -238,7 +241,8 @@ class ImageService:
             input_modalities = getattr(getattr(model, "capabilities", None), "input_modalities", ())
             if "image" not in input_modalities:
                 raise ImageUnsupportedTargetError(
-                    f"Configured image model does not support source images: {target_ref.target}"
+                    "Configured image model does not support source images: "
+                    f"{_safe_target_label(target_ref)}"
                 )
 
         wire_options, prompt_hints = split_image_call_options(model, call_options or {})
@@ -262,33 +266,42 @@ class ImageService:
         except ImageError:
             raise
         except ProviderOutcomeUnknownError as exc:
+            safe_error = _safe_error_text(exc, target_ref)
             _LOGGER.warning(
                 "Image generation failed for target=%s: %s",
-                target_ref.target,
-                exc,
+                _safe_target_label(target_ref),
+                safe_error,
             )
             raise ImageOutcomeUnknownError(
-                str(exc),
+                safe_error,
                 operation_key=exc.operation_key,
             ) from exc
         except VBotError as exc:
             # ProviderError / NetworkError / ProviderAuthError / … are
             # expected provider failures, not crashes.
+            safe_error = _safe_error_text(exc, target_ref)
             _LOGGER.warning(
                 "Image generation failed for target=%s: %s",
-                target_ref.target,
-                exc,
+                _safe_target_label(target_ref),
+                safe_error,
             )
-            raise ImageExecutionError(str(exc)) from exc
+            raise ImageExecutionError(safe_error) from exc
         except Exception as exc:
-            _LOGGER.error("Image generation failed", exc_info=True)
-            raise ImageExecutionError(str(exc)) from exc
+            safe_error = _safe_error_text(exc, target_ref)
+            _LOGGER.error(
+                "Image generation failed for target=%s error_type=%s: %s",
+                _safe_target_label(target_ref),
+                type(exc).__name__,
+                safe_error,
+            )
+            raise ImageExecutionError(safe_error) from exc
 
     async def analyze(
         self,
         prompt: str,
         *,
         image_paths: Sequence[str | Path],
+        run_context: ImageUnderstandingRunContext | None = None,
     ) -> ImageUnderstandingResult:
         """Analyze local images with the configured image-understanding Model.
 
@@ -313,12 +326,18 @@ class ImageService:
             )
 
         async with self._analysis_semaphore:
-            return await self._analyze(normalized_prompt, image_paths)
+            return await self._analyze(
+                normalized_prompt,
+                image_paths,
+                run_context=run_context,
+            )
 
     async def _analyze(
         self,
         normalized_prompt: str,
         image_paths: Sequence[str | Path],
+        *,
+        run_context: ImageUnderstandingRunContext | None,
     ) -> ImageUnderstandingResult:
         """Execute one bounded image-understanding request."""
 
@@ -329,13 +348,15 @@ class ImageService:
             raise ImageUnderstandingUnavailableError(str(exc)) from exc
         if target_ref.kind == "local":
             raise ImageUnderstandingUnavailableError(
-                f"Image understanding does not support local targets: {target_ref.target}"
+                "Image understanding does not support local targets: "
+                f"{_safe_target_label(target_ref)}"
             )
 
         model = self._model_tasks.model_for_target(target_ref)
         if model is None or not model_supports_task(model, TASK_IMAGE_UNDERSTANDING):
             raise ImageUnderstandingUnavailableError(
-                f"Configured target is not an image-understanding model: {target_ref.target}"
+                "Configured target is not an image-understanding model: "
+                f"{_safe_target_label(target_ref)}"
             )
 
         input_images = await asyncio.to_thread(
@@ -352,12 +373,13 @@ class ImageService:
                     target_ref.connection_id,
                 )
             except (ConfigError, KeyError) as exc:
+                safe_error = _safe_error_text(exc, target_ref)
                 _LOGGER.warning(
                     "Image understanding target became unavailable for target=%s: %s",
-                    target_ref.target,
-                    exc,
+                    _safe_target_label(target_ref),
+                    safe_error,
                 )
-                raise ImageUnderstandingUnavailableError(str(exc)) from exc
+                raise ImageUnderstandingUnavailableError(safe_error) from exc
             wire_media_types = _adapter_wire_media_types(adapter, target_ref.model_id)
             unsupported_media_types = sorted(
                 {image.media_type for image in input_images} - wire_media_types
@@ -374,6 +396,7 @@ class ImageService:
                 normalized_prompt,
                 input_images,
             )
+            _set_analysis_debug_context(adapter, target_ref, run_context)
             response = await adapter.send(
                 [
                     {"role": "system", "content": IMAGE_UNDERSTANDING_SYSTEM_PROMPT},
@@ -397,19 +420,20 @@ class ImageService:
         except ImageError:
             raise
         except VBotError as exc:
+            safe_error = _safe_error_text(exc, target_ref)
             _LOGGER.warning(
                 "Image understanding failed for target=%s: %s",
-                target_ref.target,
-                exc,
+                _safe_target_label(target_ref),
+                safe_error,
             )
             raise ImageExecutionError(
-                str(exc),
+                safe_error,
                 retryable=bool(getattr(exc, "retryable", False)),
                 attempts_made=_attempts_made(exc),
             ) from exc
         finally:
             if adapter is not None:
-                await _close_adapter(adapter)
+                await _close_adapter_safely(adapter, target_ref)
 
     async def generate_artifacts(
         self,
@@ -531,6 +555,43 @@ def _adapter_wire_media_types(adapter: Any, model_id: str) -> frozenset[str]:
     return frozenset(wire_media_support(model_id))
 
 
+def _set_analysis_debug_context(
+    adapter: Any,
+    target_ref: TaskModelTargetRef,
+    run_context: ImageUnderstandingRunContext | None,
+) -> None:
+    if run_context is None:
+        return
+    set_debug_context = getattr(adapter, "set_debug_context", None)
+    if not callable(set_debug_context):
+        return
+    set_debug_context(
+        DebugContext(
+            run_id=run_context.run_id,
+            agent_id=run_context.agent_id,
+            session_id=run_context.session_id,
+            provider_id=target_ref.provider_id,
+            connection_id=target_ref.connection_id,
+            model_id=target_ref.model_id,
+            streaming=False,
+            iteration_number=run_context.iteration_number,
+        )
+    )
+
+
+def _safe_target_label(target_ref: TaskModelTargetRef) -> str:
+    if target_ref.kind == "local":
+        return f"local/{target_ref.local_id}"
+    return f"{target_ref.provider_id}/{target_ref.model_id}"
+
+
+def _safe_error_text(error: BaseException, target_ref: TaskModelTargetRef) -> str:
+    text = str(error).replace(target_ref.target, _safe_target_label(target_ref))
+    if target_ref.account_id:
+        text = text.replace(target_ref.account_id, "[REDACTED]")
+    return text
+
+
 async def _close_adapter(adapter: Any) -> None:
     close_method = getattr(adapter, "aclose", None)
     if not callable(close_method):
@@ -538,6 +599,18 @@ async def _close_adapter(adapter: Any) -> None:
     close_result = close_method()
     if inspect.isawaitable(close_result):
         await close_result
+
+
+async def _close_adapter_safely(adapter: Any, target_ref: TaskModelTargetRef) -> None:
+    try:
+        await _close_adapter(adapter)
+    except Exception as exc:
+        _LOGGER.warning(
+            "Image-understanding adapter cleanup failed for target=%s error_type=%s: %s",
+            _safe_target_label(target_ref),
+            type(exc).__name__,
+            _safe_error_text(exc, target_ref),
+        )
 
 
 def _load_image_inputs(

@@ -204,6 +204,39 @@ async def test_dispatch_exposes_current_active_skill_env_grants(tmp_path: Path) 
 
 
 @pytest.mark.asyncio
+async def test_dispatch_exposes_parent_iteration_number(tmp_path: Path) -> None:
+    seen: list[int] = []
+    tools = ToolRegistry()
+
+    def probe(context: ToolContext, _arguments: JsonObject) -> JsonObject:
+        seen.append(context.iteration_number)
+        return tool_success({"status": "completed"})
+
+    tools.register(
+        "probe",
+        "Probe ToolContext",
+        {"type": "object", "properties": {}},
+        probe,
+        open_input_schema=True,
+    )
+    runtime, agent = _build_runtime_and_agent(tmp_path, tools)
+    session = _build_session(tmp_path)
+    run = Run(run_id="run-one", agent_id=agent.id, session_id=session.id)
+    run.iteration_count = 3
+
+    await _dispatch_tool_calls(
+        runtime,
+        agent,
+        [ToolCall(id="call-one", name="probe", arguments={})],
+        session,
+        run,
+        nesting_depth=0,
+    )
+
+    assert seen == [3]
+
+
+@pytest.mark.asyncio
 async def test_session_tool_grant_precedes_agent_and_run_dispatch_gates(tmp_path: Path) -> None:
     tools = ToolRegistry()
     tools.register(

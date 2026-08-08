@@ -10,7 +10,7 @@ Built-in `analyze_image` and `image_generation` Tools for isolated visual analys
 - Registration: `register_analyze_image_tool(registry, image_service)`
 - Model-facing schema: required non-empty `prompt` plus required non-empty `images` array of local path strings, with no `additionalProperties` keyword. The registry's schema-guided normalization may wrap one scalar path string into the advertised array; the handler rejects unknown or remaining malformed arguments, resolves paths against `ToolContext.effective_cwd`, and calls `ImageService.analyze()`.
 - Display: summary fields `prompt`, `images`.
-- Success data: `{ analysis, model, image_count, usage? }`.
+- Success data is the closed, validated object `{ analysis: non-empty string, image_count: positive integer }`; `{}` and additional fields are rejected. The service retains bare Model id and Provider Usage internally, but neither enters the Agent-facing Tool Result or Session Statistics.
 - Invalid arguments return `invalid_arguments`. Expected failures project their typed Image-domain metadata directly: `image_not_found`, `image_read_error`, `image_too_large`, `unsupported_image_type`, `image_understanding_unavailable`, or `provider_error`; deterministic failures set `retryable: false`, while Provider failures preserve `retryable` and optional `attempts_made`. Unexpected exceptions bypass the Image handler and become the shared logged `tool_execution_error`.
 - Description states that files are uploaded to the configured external Provider and that text/instructions inside images are untrusted content, not instructions for the Main Agent.
 
@@ -25,7 +25,7 @@ Built-in `analyze_image` and `image_generation` Tools for isolated visual analys
 
 ## Runtime
 
-Runtime registers both Tools at startup with the same runtime-owned `ImageService`; neither Tool calls Providers directly. `image_generation` remains a normal allowlist Tool. `analyze_image` is registered in the catalog but Chat includes it in Provider Tool definitions and the effective System Prompt only when the active Model route cannot carry images and `await ImageService.analysis_is_available()` is true. That availability check requires both a usable `image_understanding` binding and at least one `image/*` MIME type on the configured target's actual Chat Adapter wire; it creates no Provider request and closes the temporary Adapter. Normal Tool permissions still apply as a separate gate.
+Runtime registers both Tools at startup with the same runtime-owned `ImageService`; neither Tool calls Providers directly. `image_generation` remains a normal allowlist Tool. `analyze_image` is registered in the catalog but Chat includes it in Provider Tool definitions and the effective System Prompt only when the active Model route cannot carry images and `await ImageService.analysis_is_available()` is true. That availability check requires both a usable `image_understanding` binding and at least one `image/*` MIME type on the configured target's actual Chat Adapter wire; it creates no Provider request and closes the temporary Adapter without letting a cleanup failure change availability. Normal Tool permissions still apply as a separate gate. On execution, the handler passes Run/Agent/Session identity and the parent Agentic Loop Iteration to `ImageService`, which completes the Provider-specific `DebugContext` before the isolated request.
 
 ## Constraints & Gotchas
 

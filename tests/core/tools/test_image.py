@@ -15,10 +15,11 @@ from core.model_tasks import (
     ImageOutcomeUnknownError,
     ImageReadError,
     ImageTooLargeError,
+    ImageUnderstandingRunContext,
     ImageUnderstandingUnavailableError,
     ImageUnsupportedMediaTypeError,
 )
-from core.tools import ToolContractError
+from core.tools import InvalidToolResultError, ToolContractError
 from core.tools.image import (
     ANALYZE_IMAGE_TOOL_DESCRIPTION,
     ANALYZE_IMAGE_TOOL_NAME,
@@ -404,8 +405,12 @@ async def test_analyze_image_tool_resolves_paths_and_returns_analysis(
     assert "additionalProperties" not in tool.parameters
     assert tool.open_input_schema is True
 
-    result = await registry.dispatch(
+    context = replace(
         _make_context(workspace, tool_name=ANALYZE_IMAGE_TOOL_NAME),
+        iteration_number=4,
+    )
+    result = await registry.dispatch(
+        context,
         {
             "prompt": "Read the ingredients.",
             "images": ["first.png", str(second)],
@@ -415,12 +420,52 @@ async def test_analyze_image_tool_resolves_paths_and_returns_analysis(
     assert result["ok"] is True
     assert result["data"] == {
         "analysis": "Visible details",
-        "model": "vision-model",
         "image_count": 2,
     }
     assert service.received_analysis_prompt == "Read the ingredients."
     assert service.received_analysis_paths == (first.resolve(), second.resolve())
+    assert service.received_analysis_run_context == ImageUnderstandingRunContext(
+        run_id="run",
+        agent_id="agent",
+        session_id="session",
+        iteration_number=4,
+    )
     assert "untrusted content" in ANALYZE_IMAGE_TOOL_DESCRIPTION
+
+
+@pytest.mark.parametrize(
+    "invalid_data",
+    [
+        {},
+        {
+            "analysis": "Visible details",
+            "image_count": 1,
+            "model": "vision-model",
+        },
+    ],
+)
+def test_analyze_image_tool_has_closed_result_contract(
+    tmp_path: Path,
+    invalid_data: dict[str, object],
+) -> None:
+    registry = ToolRegistry()
+    register_analyze_image_tool(registry, _ImageService(tmp_path / "unused.png"))
+    tool = registry.get(ANALYZE_IMAGE_TOOL_NAME)
+
+    assert tool.result_schema == {
+        "type": "object",
+        "properties": {
+            "analysis": {"type": "string", "minLength": 1},
+            "image_count": {"type": "integer", "minimum": 1},
+        },
+        "required": ["analysis", "image_count"],
+        "additionalProperties": False,
+    }
+    with pytest.raises(InvalidToolResultError, match="violates its contract"):
+        registry.validate_result(
+            ANALYZE_IMAGE_TOOL_NAME,
+            {"ok": True, "error": None, "data": invalid_data, "artifacts": []},
+        )
 
 
 @pytest.mark.asyncio
@@ -589,6 +634,7 @@ class _ImageService:
         self.received_output_dirs: list[Path] = []
         self.received_analysis_prompt: str | None = None
         self.received_analysis_paths: tuple[Path, ...] | None = None
+        self.received_analysis_run_context: ImageUnderstandingRunContext | None = None
 
     def generation_supports_source_images(self) -> bool:
         return self._supports_source_images
@@ -620,15 +666,16 @@ class _ImageService:
         prompt: str,
         *,
         image_paths: tuple[Path, ...],
+        run_context: ImageUnderstandingRunContext,
     ) -> object:
         self.received_analysis_prompt = prompt
         self.received_analysis_paths = image_paths
+        self.received_analysis_run_context = run_context
         if self._analysis_error is not None:
             raise self._analysis_error
         return SimpleNamespace(
-            to_dict=lambda: {
-                "analysis": "Visible details",
-                "model": "vision-model",
-                "image_count": len(image_paths),
-            }
+            content="Visible details",
+            model="vision-model",
+            image_count=len(image_paths),
+            usage={"input_tokens": 12, "output_tokens": 7},
         )
