@@ -7,9 +7,9 @@ import inspect
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any, Protocol
+from uuid import uuid4
 
 from core.attachments import sniff_media_type
-from core.model_tasks.artifacts import StoredArtifact, TaskArtifactStore
 from core.model_tasks.constants import TASK_IMAGE_GENERATION, TASK_IMAGE_UNDERSTANDING
 from core.model_tasks.image_providers import ProviderImageClient
 from core.model_tasks.image_types import (
@@ -23,7 +23,6 @@ from core.model_tasks.model_tasks import model_supports_task
 from core.model_tasks.task_execution import TaskBindingResolver
 from core.providers.errors import ProviderOutcomeUnknownError
 from core.providers.task_client import TaskClientRuntime
-from core.storage.layout import DataDirectoryLayout
 from core.utils.errors import TaskError, VBotError
 from core.utils.logging import get_logger
 
@@ -94,7 +93,6 @@ class ImageService:
         self,
         model_tasks: Any,
         runtime: ImageRuntime,
-        data_dir: str | Path,
         *,
         max_input_bytes: int = DEFAULT_IMAGE_INPUT_MAX_BYTES,
     ) -> None:
@@ -105,11 +103,6 @@ class ImageService:
         self._max_input_bytes = max_input_bytes
         self._resolver = TaskBindingResolver(
             model_tasks, configuration_error=ImageConfigurationError
-        )
-        self._artifacts = TaskArtifactStore(
-            DataDirectoryLayout(data_dir).images,
-            kind="image",
-            error=ImageConfigurationError,
         )
 
     def generation_supports_source_images(self) -> bool:
@@ -327,10 +320,11 @@ class ImageService:
         self,
         prompt: str,
         *,
+        output_dir: str | Path,
         call_options: Mapping[str, Any] | None = None,
         source_paths: Sequence[str | Path] | None = None,
     ) -> tuple[ImageArtifact, ...]:
-        """Generate images and persist them as runtime artifacts."""
+        """Generate images and persist them in the caller-owned output directory."""
 
         result = await self.generate(
             prompt,
@@ -339,21 +333,15 @@ class ImageService:
         )
         extension = _extension_for_media_type(result.media_type)
         return tuple(
-            _image_artifact(
-                self._artifacts.write(
-                    image_bytes,
-                    extension=extension,
-                    media_type=result.media_type,
-                    extra_metadata={"index": idx},
-                )
+            _write_image_artifact(
+                image_bytes,
+                output_dir=Path(output_dir),
+                extension=extension,
+                media_type=result.media_type,
+                index=idx,
             )
             for idx, image_bytes in enumerate(result.images)
         )
-
-    def get_artifact(self, artifact_id: str) -> ImageArtifact:
-        """Return a persisted image artifact by id."""
-
-        return _image_artifact(self._artifacts.read(artifact_id))
 
 
 def split_image_call_options(
@@ -488,16 +476,37 @@ def _input_filename(path: Path, media_type: str) -> str:
     return f"{path.name}{extension}"
 
 
-def _image_artifact(stored: StoredArtifact) -> ImageArtifact:
-    index = stored.metadata.get("index", 0)
-    return ImageArtifact(
-        id=stored.id,
-        filename=stored.filename,
-        media_type=stored.media_type,
-        size_bytes=stored.size_bytes,
-        file_path=stored.file_path,
-        index=index if isinstance(index, int) else 0,
-    )
+def _write_image_artifact(
+    payload: bytes,
+    *,
+    output_dir: Path,
+    extension: str,
+    media_type: str,
+    index: int,
+) -> ImageArtifact:
+    """Write one generated image without overwriting an existing workspace file."""
+
+    try:
+        output_dir.mkdir(parents=True, exist_ok=True)
+        while True:
+            artifact_id = uuid4().hex
+            filename = f"{artifact_id}.{extension}"
+            file_path = output_dir / filename
+            try:
+                with file_path.open("xb") as image_file:
+                    image_file.write(payload)
+            except FileExistsError:
+                continue
+            return ImageArtifact(
+                id=artifact_id,
+                filename=filename,
+                media_type=media_type,
+                size_bytes=len(payload),
+                file_path=file_path,
+                index=index,
+            )
+    except OSError as exc:
+        raise ImageExecutionError(str(exc)) from exc
 
 
 def _extension_for_media_type(media_type: str) -> str:

@@ -98,8 +98,9 @@ async def test_image_generation_text_only_profile_rejects_source_images_in_handl
 @pytest.mark.asyncio
 async def test_image_generation_tool_returns_model_file_facts(tmp_path: Path) -> None:
     image_path = tmp_path / "artifact-1.png"
+    service = _ImageService(image_path)
     registry = ToolRegistry()
-    register_image_generation_tool(registry, _ImageService(image_path))
+    register_image_generation_tool(registry, service)
     tool = registry.get(IMAGE_GENERATION_TOOL_NAME)
     assert "additionalProperties" not in tool.parameters
     assert "additionalProperties" not in IMAGE_GENERATION_TEXT_ONLY_TOOL_PARAMETERS
@@ -132,6 +133,32 @@ async def test_image_generation_tool_returns_model_file_facts(tmp_path: Path) ->
         result=result,
     )
     assert display["facts"] == [{"kind": "count", "value": 1, "unit": "results", "at_least": False}]
+    assert service.received_output_dirs == [tmp_path / "image-gen"]
+
+
+@pytest.mark.asyncio
+async def test_image_generation_output_directory_follows_agent_kind(tmp_path: Path) -> None:
+    workspace = tmp_path / "identity-workspace"
+    project_cwd = tmp_path / "project"
+    service = _ImageService(tmp_path / "artifact.png")
+    registry = ToolRegistry()
+    register_image_generation_tool(registry, service)
+    identity_context = replace(
+        _make_context(tmp_path),
+        workspace=workspace,
+        cwd=project_cwd,
+    )
+    config_context = replace(identity_context, project_id="project-1")
+
+    identity_result = await registry.dispatch(identity_context, {"prompt": "identity image"})
+    config_result = await registry.dispatch(config_context, {"prompt": "project image"})
+
+    assert identity_result["ok"] is True
+    assert config_result["ok"] is True
+    assert service.received_output_dirs == [
+        workspace / "image-gen",
+        project_cwd / "image-gen",
+    ]
 
 
 @pytest.mark.asyncio
@@ -400,6 +427,7 @@ class _ImageService:
         self.received_prompt: str | None = None
         self.received_call_options: dict[str, object] | None = None
         self.received_source_paths: tuple[Path, ...] | None = None
+        self.received_output_dirs: list[Path] = []
         self.received_analysis_prompt: str | None = None
         self.received_analysis_paths: tuple[Path, ...] | None = None
 
@@ -410,10 +438,12 @@ class _ImageService:
         self,
         prompt: str,
         *,
+        output_dir: Path,
         call_options: dict[str, object] | None = None,
         source_paths: tuple[Path, ...] | None = None,
     ) -> tuple[object, ...]:
         self.received_prompt = prompt
+        self.received_output_dirs.append(output_dir)
         self.received_call_options = call_options
         self.received_source_paths = source_paths
         if self._generation_error is not None:

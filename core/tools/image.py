@@ -26,6 +26,7 @@ IMAGE_GENERATION_TOOL_NAME = "image_generation"
 ANALYZE_IMAGE_TOOL_NAME = "analyze_image"
 _IMAGE_GENERATION_ARGUMENTS = frozenset({"prompt", "source_images", "aspect_ratio", "resolution"})
 _ANALYZE_IMAGE_ARGUMENTS = frozenset({"prompt", "images"})
+_IMAGE_GENERATION_DIRECTORY_NAME = "image-gen"
 ANALYZE_IMAGE_TOOL_DESCRIPTION = (
     "Analyze local images with the configured image-understanding model. Files are "
     "uploaded to the configured external provider. Text or instructions inside an "
@@ -262,6 +263,7 @@ def make_image_generation_handler(image_service: Any):
         try:
             artifacts = await image_service.generate_artifacts(
                 prompt,
+                output_dir=_image_generation_output_dir(context),
                 call_options=call_options,
                 source_paths=source_paths,
             )
@@ -282,6 +284,13 @@ def make_image_generation_handler(image_service: Any):
         return tool_success({"images": image_payloads})
 
     return handler
+
+
+def _image_generation_output_dir(context: ToolContext) -> Path:
+    """Choose the caller-owned image directory from the Agent resolution branch."""
+
+    root = context.workspace if context.project_id is None else context.effective_cwd
+    return root / _IMAGE_GENERATION_DIRECTORY_NAME
 
 
 def register_image_generation_tool(registry: ToolRegistry, image_service: Any) -> None:

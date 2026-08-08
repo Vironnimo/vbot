@@ -13,7 +13,6 @@ _LOGGER = logging.getLogger("vbot.storage")
 DATA_DIRECTORY_RELATIVE_PATHS = (
     Path("artifacts"),
     Path("artifacts/attachments"),
-    Path("artifacts/images"),
     Path("artifacts/speech"),
     Path("artifacts/models"),
     Path("artifacts/debug"),
@@ -60,10 +59,6 @@ class DataDirectoryLayout:
     @property
     def attachments(self) -> Path:
         return self.artifacts / "attachments"
-
-    @property
-    def images(self) -> Path:
-        return self.artifacts / "images"
 
     @property
     def speech(self) -> Path:

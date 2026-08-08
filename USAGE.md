@@ -338,14 +338,14 @@ Setup, Runtime, direct `core/storage/layout.py` use, and managed Worktree creati
 <data-dir>/
 ├── artifacts/
 │   ├── attachments/
-│   ├── images/
 │   ├── speech/
 │   ├── models/
 │   ├── debug/
 │   └── temp/
 │       ├── atomic/
 │       ├── bash/
-│       └── subagents/
+│       ├── subagents/
+│       └── terminals/
 ├── statistics/
 │   └── provider-usage/
 ├── agents/
@@ -364,7 +364,7 @@ Setup, Runtime, direct `core/storage/layout.py` use, and managed Worktree creati
 └── settings.json
 ```
 
-`artifacts/attachments/`, `artifacts/images/`, `artifacts/speech/`, `artifacts/models/`, and `artifacts/debug/` contain durable domain-owned artifacts. The three `artifacts/temp/` children remain separate: atomic replacement staging, 72-hour retained Bash output, and 24-hour retained Sub-Agent activity. `statistics/provider-usage/` is normalized Provider-owned upstream history; local Statistics still derive from Sessions and add no persistence. The tracked system Model DB remains `resources/models/`; only the complete instance runtime Model DB moves under `artifacts/models/`.
+`artifacts/attachments/`, `artifacts/speech/`, `artifacts/models/`, and `artifacts/debug/` contain durable domain-owned artifacts. The four `artifacts/temp/` children remain separate: atomic replacement staging, 72-hour retained Bash and Terminal output, and 24-hour retained Sub-Agent activity. `statistics/provider-usage/` is normalized Provider-owned upstream history; local Statistics still derive from Sessions and add no persistence. The tracked system Model DB remains `resources/models/`; only the complete instance runtime Model DB moves under `artifacts/models/`.
 
 Independent roots keep their established ownership: `agents/` contains Identity Agent configs, default Workspaces, private Skills, and Sessions; `projects/` contains Project metadata and Project Agent Sessions; `skills/` contains global user Skills; `channels/`, `cron/`, `extensions/`, `prompts/`, `recall/`, `logs/`, `oauth/`, and `archive/` retain their existing records. Custom absolute Workspaces remain outside the data directory. `processes/` is reserved for future persistent process records and is not the Bash-output location.
 
@@ -639,6 +639,8 @@ Specialized bindings keep non-chat tasks independent from the Agent's primary Mo
 | `text_embedding` | semantic and hybrid Recall |
 | `image_generation` | image generation and editing, including source-image workflows when the target supports them |
 
+The `image_generation` Tool writes generated files into a caller-owned `image-gen/` directory. Identity Agents always use `<Workspace>/image-gen/`, including when Rooted in a Project; Project Config Agents use `<Project cwd>/image-gen/`. The Tool returns the absolute local paths, and Chat exposes referenced files through signed `/api/files/` URLs without keeping a second image copy in the data directory.
+
 Use Settings for target-specific option forms, or inspect and bind them through the CLI:
 
 ```bash
@@ -881,7 +883,6 @@ Invoke-RestMethod -Method Post -Uri "$base/api/rpc" -ContentType "application/js
 - `POST /api/speech/transcribe` — transcribe audio
 - `POST /api/speech/synthesize` — synthesize speech
 - `GET /api/speech/artifacts/{artifact_id}` — retrieve a generated speech artifact
-- `GET /api/images/artifacts/{artifact_id}` — retrieve a generated image artifact
 
 ## Development and verification
 
