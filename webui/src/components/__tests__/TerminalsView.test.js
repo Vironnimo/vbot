@@ -146,6 +146,24 @@ describe('TerminalsView', () => {
     expect(killTerminalMock).not.toHaveBeenCalled();
   });
 
+  it('uses the shared secondary sidebar header, action, list, and selection contract', async () => {
+    listTerminalsMock.mockResolvedValue({ terminals: [terminal()] });
+    mountedComponent = mount(TerminalsView, { target: document.body });
+    flushSync();
+    await waitFor(() => streams.length === 1);
+
+    const pane = document.querySelector('.terminals-view__list-pane');
+    const header = pane.querySelector('.secondary-pane__header');
+    const list = pane.querySelector('.secondary-pane__scroll.secondary-list');
+    const item = list.querySelector('.secondary-list__item');
+
+    expect(header.textContent).toContain('Terminals');
+    expect(header.textContent).not.toContain('Terminal sessions');
+    expect(header.querySelector('button').textContent.trim()).toBe('Add');
+    expect(item.classList.contains('active')).toBe(true);
+    expect(item.getAttribute('aria-current')).toBe('true');
+  });
+
   it('renders the shared empty state when no Terminal Session is active', async () => {
     listTerminalsMock.mockResolvedValue({ terminals: [] });
     mountedComponent = mount(TerminalsView, { target: document.body });
@@ -241,7 +259,7 @@ describe('TerminalsView', () => {
     flushSync();
     await waitFor(() => document.body.textContent.includes('Open a terminal'));
 
-    findButton('New terminal').click();
+    findButton('Add').click();
     flushSync();
     setField('#terminal-start-command', 'codex');
     setField('#terminal-start-arguments', '--profile\nwork space');
