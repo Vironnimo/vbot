@@ -105,6 +105,10 @@ def test_schema_matches_flat_action_tool_conventions(tmp_path: Path) -> None:
         "directory."
     )
     assert "survive individual Runs" in TERMINAL_BETA_TOOL_DESCRIPTION
+    assert TERMINAL_BETA_TOOL_DESCRIPTION.startswith(
+        "Run and control a program through a real PTY/ConPTY when it waits for interactive "
+        "input or must be operated by typing into and observing its live screen"
+    )
     assert "without program-specific flags, hooks, or configuration" in (
         TERMINAL_BETA_TOOL_DESCRIPTION
     )
