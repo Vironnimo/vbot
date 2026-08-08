@@ -678,6 +678,7 @@ class Runtime:
         assert self._process_manager is not None
         assert self._file_state is not None
         assert self._storage is not None
+        assert self._image is not None
         chat_dependencies = ChatLoopDependencies(
             agent_resolver=self._agent_resolver,
             projects=self._projects,
@@ -696,7 +697,7 @@ class Runtime:
             resolve_skills=self.skills_for,
             refresh_skills=self.refresh_skills_for,
             get_local_context_windows=self.local_context_windows,
-            task_model_available=self._model_tasks.binding_is_usable,
+            image_understanding_available=self._image.analysis_is_available,
             deliver_background_completions=lambda run, session: (
                 self._trigger_service.deliver_background_completions(run, session)
                 if self._trigger_service is not None

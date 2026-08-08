@@ -251,6 +251,8 @@ def test_runtime_wires_trigger_service_to_streaming_chat_loop(config: Config) ->
     runtime.start()
 
     assert runtime.trigger_service._trigger_chat_loop is runtime.streaming_chat_loop
+    availability = runtime.chat_loop._dependencies.image_understanding_available  # noqa: SLF001
+    assert getattr(availability, "__self__", None) is runtime._image  # noqa: SLF001
 
 
 def test_runtime_logger_exists_after_start(tmp_path: Path):

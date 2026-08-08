@@ -127,6 +127,30 @@ class ImageService:
         )
         return "image" in input_modalities
 
+    async def analysis_is_available(self) -> bool:
+        """Return whether the configured understanding target can carry images."""
+
+        if not self._model_tasks.binding_is_usable(TASK_IMAGE_UNDERSTANDING):
+            return False
+
+        adapter = None
+        try:
+            binding = self._resolver.binding_for(TASK_IMAGE_UNDERSTANDING)
+            target_ref = self._resolver.parse_target(binding.target)
+            if target_ref.kind == "local":
+                return False
+            adapter = self._runtime.get_adapter(
+                target_ref.provider_id,
+                target_ref.connection_id,
+            )
+            wire_media_types = _adapter_wire_media_types(adapter, target_ref.model_id)
+            return any(media_type.startswith("image/") for media_type in wire_media_types)
+        except (ImageConfigurationError, VBotError, KeyError, RuntimeError):
+            return False
+        finally:
+            if adapter is not None:
+                await _close_adapter(adapter)
+
     async def generate(
         self,
         prompt: str,
@@ -276,11 +300,7 @@ class ImageService:
                 target_ref.provider_id,
                 target_ref.connection_id,
             )
-            wire_media_types = (
-                frozenset(adapter.wire_media_support(target_ref.model_id))
-                if hasattr(adapter, "wire_media_support")
-                else frozenset()
-            )
+            wire_media_types = _adapter_wire_media_types(adapter, target_ref.model_id)
             unsupported_media_types = sorted(
                 {image.media_type for image in input_images} - wire_media_types
             )
@@ -330,11 +350,7 @@ class ImageService:
             raise ImageExecutionError(str(exc)) from exc
         finally:
             if adapter is not None:
-                close_method = getattr(adapter, "aclose", None)
-                if callable(close_method):
-                    close_result = close_method()
-                    if inspect.isawaitable(close_result):
-                        await close_result
+                await _close_adapter(adapter)
 
     async def generate_artifacts(
         self,
@@ -440,6 +456,22 @@ def _prompt_with_hints(prompt: str, hints: list[str]) -> str:
     if not hints:
         return prompt
     return f"{prompt} ({', '.join(hints)})"
+
+
+def _adapter_wire_media_types(adapter: Any, model_id: str) -> frozenset[str]:
+    wire_media_support = getattr(adapter, "wire_media_support", None)
+    if not callable(wire_media_support):
+        return frozenset()
+    return frozenset(wire_media_support(model_id))
+
+
+async def _close_adapter(adapter: Any) -> None:
+    close_method = getattr(adapter, "aclose", None)
+    if not callable(close_method):
+        return
+    close_result = close_method()
+    if inspect.isawaitable(close_result):
+        await close_result
 
 
 def _load_image_inputs(

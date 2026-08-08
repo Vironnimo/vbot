@@ -15,6 +15,7 @@ from core.chat import (
     ChatMessage,
     ChatSessionManager,
 )
+from core.model_tasks import TASK_IMAGE_UNDERSTANDING
 from core.projects import AgentResolutionError, ConfigAgent
 from core.providers.reasoning import (
     ReasoningReplayPolicy,
@@ -32,6 +33,11 @@ JsonObject = dict[str, Any]
 
 def build_chat_loop(runtime: Any, **kwargs: Any) -> ChatLoop:
     """Construct ChatLoop from a runtime-shaped test double."""
+
+    async def image_understanding_available() -> bool:
+        availability = getattr(runtime, "task_model_available", None)
+        return bool(availability(TASK_IMAGE_UNDERSTANDING)) if callable(availability) else False
+
     missing = SimpleNamespace()
     dependencies = ChatLoopDependencies(
         agent_resolver=cast(Any, getattr(runtime, "agent_resolver", missing)),
@@ -55,9 +61,7 @@ def build_chat_loop(runtime: Any, **kwargs: Any) -> ChatLoop:
             project_id, agent_id
         ),
         get_local_context_windows=lambda: runtime.local_context_windows(),
-        task_model_available=lambda task_type: bool(
-            getattr(runtime, "task_model_available", lambda _task_type: False)(task_type)
-        ),
+        image_understanding_available=image_understanding_available,
         deliver_background_completions=lambda run, session: bool(
             getattr(
                 runtime,

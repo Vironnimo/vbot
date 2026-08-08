@@ -463,8 +463,10 @@ class _UnderstandingModelTasks:
         input_modalities: tuple[str, ...] = ("text", "image"),
         output_modalities: tuple[str, ...] = ("text",),
         task_types: tuple[str, ...] = (TASK_IMAGE_UNDERSTANDING,),
+        binding_usable: bool = True,
     ) -> None:
         self._target = target
+        self._binding_usable = binding_usable
         self._model = SimpleNamespace(
             capabilities=SimpleNamespace(
                 input_modalities=input_modalities,
@@ -476,6 +478,10 @@ class _UnderstandingModelTasks:
     def binding_for(self, task_type: str) -> object:
         assert task_type == TASK_IMAGE_UNDERSTANDING
         return SimpleNamespace(task_type=task_type, target=self._target, options={})
+
+    def binding_is_usable(self, task_type: str) -> bool:
+        assert task_type == TASK_IMAGE_UNDERSTANDING
+        return self._binding_usable
 
     def model_for_target(self, _target_ref: object) -> Any:
         return self._model
@@ -493,10 +499,12 @@ class _UnderstandingAdapter:
             "usage": {"input_tokens": 12, "output_tokens": 7},
         }
         self.wire_media_types = wire_media_types
+        self.wire_media_models: list[str] = []
         self.requests: list[dict[str, Any]] = []
         self.closed = False
 
-    def wire_media_support(self, _model_id: str) -> frozenset[str]:
+    def wire_media_support(self, model_id: str) -> frozenset[str]:
+        self.wire_media_models.append(model_id)
         return self.wire_media_types
 
     async def send(
@@ -550,18 +558,69 @@ class _BlockingUnderstandingAdapter(_UnderstandingAdapter):
 
 
 class _UnderstandingRuntime:
-    def __init__(self, adapter: _UnderstandingAdapter) -> None:
+    def __init__(self, adapter: _UnderstandingAdapter | Exception) -> None:
         self.adapter = adapter
         self.calls: list[tuple[str, str]] = []
 
     def get_adapter(self, provider_id: str, connection_id: str) -> _UnderstandingAdapter:
         self.calls.append((provider_id, connection_id))
+        if isinstance(self.adapter, Exception):
+            raise self.adapter
         return self.adapter
 
 
 def _png(path: Path, suffix: bytes = b"pixels") -> Path:
     path.write_bytes(b"\x89PNG\r\n\x1a\n" + suffix)
     return path
+
+
+@pytest.mark.asyncio
+async def test_analysis_availability_requires_adapter_image_wire_support() -> None:
+    supported_adapter = _UnderstandingAdapter(
+        wire_media_types=frozenset({"application/pdf", "image/png"})
+    )
+    unsupported_adapter = _UnderstandingAdapter(
+        wire_media_types=frozenset({"application/pdf", "audio/wav"})
+    )
+    supported_runtime = _UnderstandingRuntime(supported_adapter)
+    unsupported_runtime = _UnderstandingRuntime(unsupported_adapter)
+
+    supported = await ImageService(
+        _UnderstandingModelTasks(), cast(Any, supported_runtime)
+    ).analysis_is_available()
+    unsupported = await ImageService(
+        _UnderstandingModelTasks(), cast(Any, unsupported_runtime)
+    ).analysis_is_available()
+
+    assert supported is True
+    assert unsupported is False
+    assert supported_runtime.calls == [("openrouter", "openrouter:api-key")]
+    assert unsupported_runtime.calls == [("openrouter", "openrouter:api-key")]
+    assert supported_adapter.wire_media_models == ["vision-model"]
+    assert unsupported_adapter.wire_media_models == ["vision-model"]
+    assert supported_adapter.closed is True
+    assert unsupported_adapter.closed is True
+
+
+@pytest.mark.asyncio
+async def test_analysis_availability_rejects_unusable_binding_before_adapter_resolution() -> None:
+    runtime = _UnderstandingRuntime(RuntimeError("adapter must not be resolved"))
+    service = ImageService(
+        _UnderstandingModelTasks(binding_usable=False),
+        cast(Any, runtime),
+    )
+
+    assert await service.analysis_is_available() is False
+    assert runtime.calls == []
+
+
+@pytest.mark.asyncio
+async def test_analysis_availability_maps_expected_adapter_resolution_failure_to_false() -> None:
+    runtime = _UnderstandingRuntime(RuntimeError("runtime unavailable"))
+    service = ImageService(_UnderstandingModelTasks(), cast(Any, runtime))
+
+    assert await service.analysis_is_available() is False
+    assert runtime.calls == [("openrouter", "openrouter:api-key")]
 
 
 @pytest.mark.asyncio
