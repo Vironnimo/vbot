@@ -12,7 +12,12 @@ from core.chat.errors import ChatMessageValidationError
 JsonObject = dict[str, Any]
 
 _FENCE_PATTERN = re.compile(r"^[ \t]{0,3}(`{3,}|~{3,})(.*)$")
-_FILE_MARKER_PATTERN = re.compile(r"(?<![A-Za-z0-9_-])file:(\S+)")
+_MARKDOWN_WRAPPERS = ("***", "___", "**", "__", "*", "_", "`")
+_MARKDOWN_WRAPPER_PATTERN = "|".join(re.escape(wrapper) for wrapper in _MARKDOWN_WRAPPERS)
+_FILE_MARKER_PATTERN = re.compile(
+    rf"(?<![A-Za-z0-9_-])(?P<wrapper>{_MARKDOWN_WRAPPER_PATTERN})?"
+    r"(?P<marker>file:(?P<path>\S+))"
+)
 _TRAILING_PROSE_DELIMITERS = frozenset('.,;!?)]}"`')
 
 
@@ -98,20 +103,17 @@ def resolve_assistant_file_references(
         if line.startswith(("\t", "    ")):
             continue
         for match in _FILE_MARKER_PATTERN.finditer(line):
-            resolved_marker = _resolve_marked_path(match.group(1), cwd=cwd)
+            wrapper = match.group("wrapper")
+            resolved_marker = _resolve_marked_path(
+                match.group("path"),
+                wrapper=wrapper,
+                cwd=cwd,
+            )
             if resolved_marker is None:
                 continue
-            resolved, path_length = resolved_marker
-            start_index = match.start()
-            end_index = match.start(1) + path_length
-            if (
-                start_index > 0
-                and line[start_index - 1] == "`"
-                and end_index < len(line)
-                and line[end_index] == "`"
-            ):
-                start_index -= 1
-                end_index += 1
+            resolved, path_length, closing_wrapper_length = resolved_marker
+            start_index = match.start() if closing_wrapper_length else match.start("marker")
+            end_index = match.start("path") + path_length + closing_wrapper_length
             references.append(
                 AssistantFileReference(
                     line_index=line_index,
@@ -123,13 +125,45 @@ def resolve_assistant_file_references(
     return references or None
 
 
-def _resolve_marked_path(candidate: str, *, cwd: Path | None) -> tuple[Path, int] | None:
+def _resolve_marked_path(
+    candidate: str,
+    *,
+    wrapper: str | None,
+    cwd: Path | None,
+) -> tuple[Path, int, int] | None:
     """Resolve one whitespace-bounded token while preserving adjacent prose punctuation."""
+    if wrapper is not None:
+        wrapped = _resolve_wrapped_marked_path(candidate, wrapper=wrapper, cwd=cwd)
+        if wrapped is not None:
+            resolved, path_length = wrapped
+            return resolved, path_length, len(wrapper)
+
     end_index = len(candidate)
     while end_index:
-        resolved = _resolve_regular_file(candidate[:end_index], cwd=cwd)
-        if resolved is not None:
-            return resolved, end_index
+        unwrapped_path = _resolve_regular_file(candidate[:end_index], cwd=cwd)
+        if unwrapped_path is not None:
+            return unwrapped_path, end_index, 0
+        if candidate[end_index - 1] not in _TRAILING_PROSE_DELIMITERS:
+            return None
+        end_index -= 1
+    return None
+
+
+def _resolve_wrapped_marked_path(
+    candidate: str,
+    *,
+    wrapper: str,
+    cwd: Path | None,
+) -> tuple[Path, int] | None:
+    """Resolve a marker whose matching Markdown wrapper may precede prose punctuation."""
+    end_index = len(candidate)
+    while end_index:
+        wrapped_candidate = candidate[:end_index]
+        if wrapped_candidate.endswith(wrapper):
+            path_length = end_index - len(wrapper)
+            resolved = _resolve_regular_file(candidate[:path_length], cwd=cwd)
+            if resolved is not None:
+                return resolved, path_length
         if candidate[end_index - 1] not in _TRAILING_PROSE_DELIMITERS:
             return None
         end_index -= 1

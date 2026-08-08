@@ -100,7 +100,7 @@ def test_rpc_final_message_and_history_share_signed_original_file_projection(
     report = workspace / "report.txt"
     image.write_bytes(b"\x89PNG\r\n\x1a\nchart-one")
     report.write_text("report-one", encoding="utf-8")
-    content = f"Files: file:{image} and file:{report}"
+    content = f"Files: **file:{image}** and _file:{report}_"
     runtime = StubRuntime(
         tmp_path / "data",
         StubAdapter([{"content": content, "tool_calls": None}]),

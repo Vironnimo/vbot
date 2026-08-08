@@ -2,6 +2,8 @@
 
 from pathlib import Path
 
+import pytest
+
 from core.chat.output_files import (
     AssistantFileReference,
     resolve_assistant_file_references,
@@ -46,11 +48,15 @@ def test_keeps_trailing_sentence_punctuation_outside_the_marker(tmp_path: Path) 
     ]
 
 
-def test_single_backtick_pair_is_part_of_the_explicit_marker(tmp_path: Path) -> None:
+@pytest.mark.parametrize("wrapper", ["*", "**", "***", "_", "__", "___", "`"])
+def test_markdown_wrapper_pair_is_part_of_the_explicit_marker(
+    tmp_path: Path,
+    wrapper: str,
+) -> None:
     image = tmp_path / "image.png"
     image.write_bytes(b"image")
-    marker = f"`file:{image}`"
-    line = f"Look at {marker} and continue"
+    marker = f"{wrapper}file:{image}{wrapper}"
+    line = f"Look at {marker}, then continue"
 
     assert resolve_assistant_file_references(line, cwd=tmp_path) == [
         _reference(line, 0, marker, image)
