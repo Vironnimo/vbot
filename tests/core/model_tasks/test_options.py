@@ -8,9 +8,11 @@ import pytest
 
 from core.model_tasks.constants import (
     TASK_IMAGE_GENERATION,
+    TASK_MUSIC_GENERATION,
     TASK_SPEECH_TO_TEXT,
     TASK_TEXT_EMBEDDING,
     TASK_TEXT_TO_SPEECH,
+    TASK_VIDEO_GENERATION,
 )
 from core.model_tasks.options import (
     ALLOWED_OPTION_TYPES,
@@ -672,6 +674,57 @@ def test_image_openai_task_options_profile_drives_fields() -> None:
         "quality",
         "style",
         "response_format",
+        "extra_options",
+    ]
+
+
+def test_video_schema_projects_dedicated_catalog_options() -> None:
+    model = _make_model(
+        "black-forest-labs/flux-3-video",
+        task_options={
+            "video_generation": {
+                "parameters": {
+                    "resolution": {"type": "enum", "values": ["720p", "1080p"]},
+                    "duration": {"type": "enum", "values": ["5", "10"]},
+                    "generate_audio": {"type": "boolean"},
+                },
+                "passthrough_parameters": ["safety_tolerance"],
+            }
+        },
+    )
+
+    schema = option_schema_for(
+        TASK_VIDEO_GENERATION,
+        "openrouter",
+        "openrouter/black-forest-labs/flux-3-video::api-key",
+        model=model,
+    )
+
+    assert [field.name for field in schema.fields] == [
+        "resolution",
+        "duration",
+        "generate_audio",
+        "provider_options",
+        "extra_options",
+    ]
+
+
+def test_music_schema_uses_only_model_supported_sampling_options() -> None:
+    model = _make_model(
+        "google/lyria-3-pro-preview",
+        supported_parameters=("temperature", "seed"),
+    )
+
+    schema = option_schema_for(
+        TASK_MUSIC_GENERATION,
+        "openrouter",
+        "openrouter/google/lyria-3-pro-preview::api-key",
+        model=model,
+    )
+
+    assert [field.name for field in schema.fields] == [
+        "temperature",
+        "seed",
         "extra_options",
     ]
 

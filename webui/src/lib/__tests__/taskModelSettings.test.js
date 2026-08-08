@@ -4,9 +4,11 @@ import {
   JSON_OPTION_TYPE,
   TASK_IMAGE_GENERATION,
   TASK_IMAGE_UNDERSTANDING,
+  TASK_MUSIC_GENERATION,
   TASK_SPEECH_TO_TEXT,
   TASK_TEXT_EMBEDDING,
   TASK_TEXT_TO_SPEECH,
+  TASK_VIDEO_GENERATION,
   TASK_MODEL_ROWS,
   applyOptionDefaults,
   createTaskModelUpdatePayload,
@@ -74,6 +76,8 @@ describe('taskModelSettings helpers', () => {
         TASK_TEXT_TO_SPEECH,
         TASK_IMAGE_UNDERSTANDING,
         TASK_IMAGE_GENERATION,
+        TASK_VIDEO_GENERATION,
+        TASK_MUSIC_GENERATION,
         TASK_TEXT_EMBEDDING,
       ]),
     );
@@ -92,6 +96,14 @@ describe('taskModelSettings helpers', () => {
     expect(imageUnderstandingRow.descriptionFallback).toContain(
       'active agent route',
     );
+    expect(
+      TASK_MODEL_ROWS.find((row) => row.taskType === TASK_VIDEO_GENERATION)
+        .descriptionFallback,
+    ).toContain('generate_video');
+    expect(
+      TASK_MODEL_ROWS.find((row) => row.taskType === TASK_MUSIC_GENERATION)
+        .descriptionFallback,
+    ).toContain('generate_music');
   });
 
   it('normalizes an embedding binding and includes it in the update payload', () => {

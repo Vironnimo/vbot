@@ -2,6 +2,8 @@ export const TASK_SPEECH_TO_TEXT = 'speech_to_text';
 export const TASK_TEXT_TO_SPEECH = 'text_to_speech';
 export const TASK_IMAGE_UNDERSTANDING = 'image_understanding';
 export const TASK_IMAGE_GENERATION = 'image_generation';
+export const TASK_VIDEO_GENERATION = 'video_generation';
+export const TASK_MUSIC_GENERATION = 'music_generation';
 export const TASK_TEXT_EMBEDDING = 'text_embedding';
 
 export const JSON_OPTION_TYPE = 'json';
@@ -85,9 +87,27 @@ const TEXT_EMBEDDING_TASK_ROWS = Object.freeze([
   },
 ]);
 
+const GENERATED_MEDIA_TASK_ROWS = Object.freeze([
+  {
+    taskType: TASK_VIDEO_GENERATION,
+    titleKey: 'settings.specializedModels.videoGeneration',
+    titleFallback: 'Video generation',
+    descriptionKey: 'settings.specializedModels.videoGenerationDescription',
+    descriptionFallback: 'Used by the agent generate_video tool.',
+  },
+  {
+    taskType: TASK_MUSIC_GENERATION,
+    titleKey: 'settings.specializedModels.musicGeneration',
+    titleFallback: 'Music generation',
+    descriptionKey: 'settings.specializedModels.musicGenerationDescription',
+    descriptionFallback: 'Used by the agent generate_music tool.',
+  },
+]);
+
 export const TASK_MODEL_ROWS = Object.freeze([
   ...SPEECH_TASK_ROWS,
   ...IMAGE_TASK_ROWS,
+  ...GENERATED_MEDIA_TASK_ROWS,
   ...TEXT_EMBEDDING_TASK_ROWS,
 ]);
 

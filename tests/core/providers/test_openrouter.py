@@ -832,6 +832,31 @@ def test_normalize_catalog_entry_preserves_non_text_outputs() -> None:
     assert "file_input" in model.capabilities.task_types
 
 
+def test_normalize_catalog_entry_tags_music_without_tagging_general_audio() -> None:
+    lyria = raw_openrouter_model(
+        input_modalities=["text", "image"],
+        output_modalities=["text", "audio"],
+    )
+    lyria["id"] = "google/lyria-3-pro-preview"
+    lyria["name"] = "Google: Lyria 3 Pro Preview"
+    lyria["architecture"]["modality"] = "text+image->text+audio"
+    gpt_audio = raw_openrouter_model(
+        input_modalities=["text", "audio"],
+        output_modalities=["text", "audio"],
+    )
+    gpt_audio["id"] = "openai/gpt-audio"
+    gpt_audio["name"] = "OpenAI: GPT Audio"
+    gpt_audio["architecture"]["modality"] = "text+audio->text+audio"
+
+    music_model = OpenRouterAdapter.normalize_catalog_entry(lyria, {})
+    general_audio_model = OpenRouterAdapter.normalize_catalog_entry(gpt_audio, {})
+
+    assert "music_generation" in music_model.capabilities.task_types
+    assert "audio_generation" in music_model.capabilities.task_types
+    assert "music_generation" not in general_audio_model.capabilities.task_types
+    assert "audio_generation" in general_audio_model.capabilities.task_types
+
+
 def test_normalize_catalog_entry_preserves_unknown_null_max_tokens() -> None:
     model = OpenRouterAdapter.normalize_catalog_entry(
         raw_openrouter_model(max_completion_tokens=None),
@@ -1185,6 +1210,43 @@ async def test_discover_task_models_rejects_malformed_catalog() -> None:
 
     with pytest.raises(ValueError, match="data list"):
         await OpenRouterAdapter.discover_task_models({}, fetch_json)
+
+
+@pytest.mark.asyncio
+async def test_discover_task_models_projects_video_catalog_capabilities() -> None:
+    fetch_json = _fake_fetch_json(
+        {
+            "/images/models": {"data": []},
+            "/videos/models": {
+                "data": [
+                    {
+                        "id": "black-forest-labs/flux-3-video",
+                        "name": "FLUX.3 Video",
+                        "supported_resolutions": ["720p", "1080p"],
+                        "supported_aspect_ratios": ["16:9", "9:16"],
+                        "supported_sizes": None,
+                        "supported_durations": [5, 10],
+                        "supported_frame_images": ["first_frame", "last_frame"],
+                        "generate_audio": True,
+                        "seed": False,
+                        "allowed_passthrough_parameters": ["safety_tolerance"],
+                    }
+                ]
+            },
+        }
+    )
+
+    discovered = await OpenRouterAdapter.discover_task_models({}, fetch_json)
+
+    model = discovered["black-forest-labs/flux-3-video"]
+    assert model.capabilities.task_types == ("video_generation",)
+    options = model.capabilities.task_options["video_generation"]
+    assert options["parameters"]["resolution"]["values"] == ("720p", "1080p")
+    assert options["parameters"]["duration"]["values"] == ("5", "10")
+    assert options["parameters"]["generate_audio"] == {"type": "boolean"}
+    assert "seed" not in options["parameters"]
+    assert options["frame_images"] == ("first_frame", "last_frame")
+    assert options["passthrough_parameters"] == ("safety_tolerance",)
 
 
 def test_normalize_image_parameters_shapes() -> None:

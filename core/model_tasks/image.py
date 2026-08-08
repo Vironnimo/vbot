@@ -661,6 +661,16 @@ def _load_image_inputs(
     return tuple(inputs)
 
 
+def load_image_inputs(
+    source_paths: Sequence[str | Path],
+    *,
+    max_size_bytes: int = DEFAULT_IMAGE_INPUT_MAX_BYTES,
+) -> tuple[ImageInput, ...]:
+    """Load bounded local image inputs for another task-model workflow."""
+
+    return _load_image_inputs(source_paths, max_size_bytes=max_size_bytes)
+
+
 def _ensure_analysis_total_size(total_bytes: int, max_total_bytes: int | None) -> None:
     """Reject an analysis payload whose cumulative source bytes exceed its limit."""
 

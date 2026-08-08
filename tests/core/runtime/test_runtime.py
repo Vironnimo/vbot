@@ -37,6 +37,8 @@ CANONICAL_BUILTIN_TOOLS = [
     "bash",
     "cron",
     "edit",
+    "generate_music",
+    "generate_video",
     "glob",
     "grep",
     "history",

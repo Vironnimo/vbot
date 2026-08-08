@@ -1,10 +1,11 @@
-"""Task-model bindings, discovery, and task execution (speech, image, embeddings)."""
+"""Task-model bindings, discovery, and specialized task execution."""
 
 from core.model_tasks.constants import (
     SPEECH_TASK_TYPES,
     SUPPORTED_TASK_TYPES,
     TASK_IMAGE_GENERATION,
     TASK_IMAGE_UNDERSTANDING,
+    TASK_MUSIC_GENERATION,
     TASK_SPEECH_TO_TEXT,
     TASK_TEXT_EMBEDDING,
     TASK_TEXT_TO_SPEECH,
@@ -59,6 +60,15 @@ from core.model_tasks.model_tasks import (
     public_provider_target_id,
     validate_task_type,
 )
+from core.model_tasks.music import (
+    MusicConfigurationError,
+    MusicError,
+    MusicExecutionError,
+    MusicOutcomeUnknownError,
+    MusicService,
+)
+from core.model_tasks.music_providers import ProviderMusicClient
+from core.model_tasks.music_types import MusicGenerationResult
 from core.model_tasks.options import (
     TaskModelOptionChoice,
     TaskModelOptionField,
@@ -78,6 +88,15 @@ from core.model_tasks.speech import (
 from core.model_tasks.speech_local import LocalSpeechError, LocalSpeechExecutor
 from core.model_tasks.speech_providers import ProviderSpeechClient, audio_format_from
 from core.model_tasks.speech_types import SpeechSynthesisResult, SpeechTranscriptionResult
+from core.model_tasks.video import (
+    VideoConfigurationError,
+    VideoError,
+    VideoExecutionError,
+    VideoOutcomeUnknownError,
+    VideoService,
+)
+from core.model_tasks.video_providers import ProviderVideoClient
+from core.model_tasks.video_types import VideoGenerationResult
 
 __all__ = [
     "DEFAULT_LOCAL_TASK_TARGET_REGISTRY",
@@ -111,8 +130,15 @@ __all__ = [
     "LocalTaskTargetDescriptor",
     "LocalTaskTargetError",
     "LocalTaskTargetRegistry",
+    "MusicConfigurationError",
+    "MusicError",
+    "MusicExecutionError",
+    "MusicGenerationResult",
+    "MusicOutcomeUnknownError",
+    "MusicService",
     "ProviderEmbeddingClient",
     "ProviderImageClient",
+    "ProviderMusicClient",
     "ProviderSpeechClient",
     "SPEECH_TASK_TYPES",
     "SUPPORTED_TASK_TYPES",
@@ -127,6 +153,7 @@ __all__ = [
     "SpeechUnsupportedTargetError",
     "TASK_IMAGE_GENERATION",
     "TASK_IMAGE_UNDERSTANDING",
+    "TASK_MUSIC_GENERATION",
     "TASK_SPEECH_TO_TEXT",
     "TASK_TEXT_EMBEDDING",
     "TASK_TEXT_TO_SPEECH",
@@ -140,6 +167,13 @@ __all__ = [
     "TaskModelTarget",
     "TaskModelTargetRef",
     "TaskModelValidationError",
+    "VideoConfigurationError",
+    "VideoError",
+    "VideoExecutionError",
+    "VideoGenerationResult",
+    "VideoOutcomeUnknownError",
+    "VideoService",
+    "ProviderVideoClient",
     "audio_format_from",
     "option_schema_for",
     "parse_task_model_target_id",

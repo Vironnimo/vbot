@@ -12,7 +12,9 @@ descriptions, control types) — the per-model facts live in the model DB.
 
 Every provider target also gets an ``extra_options`` JSON escape hatch merged
 into the provider request by the wire layer, so an option vBot does not
-surface is usable without a code change.
+surface is usable without a code change. Video fields come from OpenRouter's
+dedicated Video catalog; Music exposes only sampling controls published by its
+Model.
 """
 
 from __future__ import annotations
@@ -24,9 +26,11 @@ from typing import Any
 
 from core.model_tasks.constants import (
     TASK_IMAGE_GENERATION,
+    TASK_MUSIC_GENERATION,
     TASK_SPEECH_TO_TEXT,
     TASK_TEXT_EMBEDDING,
     TASK_TEXT_TO_SPEECH,
+    TASK_VIDEO_GENERATION,
 )
 from core.models import Model
 
@@ -424,6 +428,10 @@ def option_schema_for(
         fields = _text_to_speech_fields(provider_id, model)
     elif task_type == TASK_IMAGE_GENERATION:
         fields = _image_generation_fields(provider_id, model)
+    elif task_type == TASK_VIDEO_GENERATION:
+        fields = _video_generation_fields(provider_id, model)
+    elif task_type == TASK_MUSIC_GENERATION:
+        fields = _music_generation_fields(provider_id, model)
     elif task_type == TASK_TEXT_EMBEDDING:
         fields = _text_embedding_fields(provider_id, model)
     else:
@@ -850,6 +858,158 @@ def _openai_image_fallback_fields(model: Model | None) -> list[TaskModelOptionFi
         if field is not None:
             fields.append(field)
     return fields
+
+
+# ---------------------------------------------------------------------------
+# Video and Music
+# ---------------------------------------------------------------------------
+
+
+def _video_generation_fields(
+    provider_id: str,
+    model: Model | None,
+) -> tuple[TaskModelOptionField, ...]:
+    if provider_id != "openrouter":
+        return ()
+    task_options = _task_options(model, TASK_VIDEO_GENERATION)
+    parameters = task_options.get("parameters")
+    if not isinstance(parameters, Mapping):
+        parameters = {}
+
+    fields: list[TaskModelOptionField] = []
+    for name in ("resolution", "aspect_ratio", "size", "duration"):
+        if name == "size" and any(
+            conflict in parameters for conflict in ("resolution", "aspect_ratio")
+        ):
+            continue
+        values = _string_values(parameters.get(name))
+        if len(values) < 2:
+            continue
+        labels = (
+            tuple(TaskModelOptionChoice(value=value, label=f"{value} seconds") for value in values)
+            if name == "duration"
+            else tuple(TaskModelOptionChoice(value=value, label=value) for value in values)
+        )
+        fields.append(
+            TaskModelOptionField(
+                name=name,
+                type="select",
+                label={
+                    "resolution": "Resolution",
+                    "aspect_ratio": "Aspect ratio",
+                    "size": "Size",
+                    "duration": "Duration",
+                }[name],
+                default="",
+                options=(
+                    TaskModelOptionChoice(value="", label=PROVIDER_DEFAULT_CHOICE_LABEL),
+                    *labels,
+                ),
+            )
+        )
+    if _parameter_is_supported(parameters.get("generate_audio")):
+        fields.append(
+            TaskModelOptionField(
+                name="generate_audio",
+                type="boolean",
+                label="Generate audio",
+                default=None,
+            )
+        )
+    if _parameter_is_supported(parameters.get("seed")):
+        fields.append(
+            TaskModelOptionField(
+                name="seed",
+                type="number",
+                label="Seed",
+                default=None,
+                step=1,
+                description="Reproducible generation seed.",
+            )
+        )
+
+    passthrough = task_options.get("passthrough_parameters")
+    if isinstance(passthrough, list | tuple) and passthrough:
+        allowed = ", ".join(str(value) for value in passthrough)
+        fields.append(
+            TaskModelOptionField(
+                name="provider_options",
+                type="json",
+                label="Provider options",
+                default={},
+                description=(
+                    "Provider-specific options sent as provider.options, keyed by upstream "
+                    f"provider slug. Catalog-advertised passthrough keys: {allowed}."
+                ),
+            )
+        )
+    return tuple(fields)
+
+
+def _music_generation_fields(
+    provider_id: str,
+    model: Model | None,
+) -> tuple[TaskModelOptionField, ...]:
+    if provider_id != "openrouter":
+        return ()
+    supported = set(model.capabilities.supported_parameters) if model is not None else set()
+    fields: list[TaskModelOptionField] = []
+    if not supported or "temperature" in supported:
+        fields.append(
+            TaskModelOptionField(
+                name="temperature",
+                type="number",
+                label="Temperature",
+                default=None,
+                min_value=0,
+                max_value=2,
+                step=0.1,
+            )
+        )
+    if not supported or "top_p" in supported:
+        fields.append(
+            TaskModelOptionField(
+                name="top_p",
+                type="number",
+                label="Top P",
+                default=None,
+                min_value=0,
+                max_value=1,
+                step=0.05,
+            )
+        )
+    if not supported or "seed" in supported:
+        fields.append(
+            TaskModelOptionField(
+                name="seed",
+                type="number",
+                label="Seed",
+                default=None,
+                step=1,
+                description="Reproducible generation seed.",
+            )
+        )
+    return tuple(fields)
+
+
+def _task_options(model: Model | None, task_type: str) -> Mapping[str, Any]:
+    if model is None:
+        return {}
+    options = model.capabilities.task_options.get(task_type)
+    return options if isinstance(options, Mapping) else {}
+
+
+def _string_values(spec: Any) -> tuple[str, ...]:
+    if not isinstance(spec, Mapping):
+        return ()
+    values = spec.get("values")
+    if not isinstance(values, list | tuple):
+        return ()
+    return tuple(value for value in values if isinstance(value, str) and value)
+
+
+def _parameter_is_supported(spec: Any) -> bool:
+    return isinstance(spec, Mapping) and spec.get("type") == "boolean"
 
 
 # ---------------------------------------------------------------------------

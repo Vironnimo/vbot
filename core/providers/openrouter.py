@@ -12,7 +12,13 @@ from urllib.parse import quote
 
 import httpx
 
-from core.models.models import Capabilities, Model, ReasoningCapabilities
+from core.models.models import (
+    MODEL_TASK_ORDER,
+    Capabilities,
+    Model,
+    ReasoningCapabilities,
+    derive_model_task_types,
+)
 from core.providers._http_shared import (
     build_streaming_request,
     classify_http_status,
@@ -110,6 +116,7 @@ SUPPLEMENTARY_OUTPUT_MODALITIES = (
 # provider passthrough keys — facts the ``/models`` catalog omits entirely.
 # New image models are added exclusively to this API.
 IMAGE_MODELS_ENDPOINT = "/images/models"
+VIDEO_MODELS_ENDPOINT = "/videos/models"
 
 # Per-model endpoint-detail fetches run concurrently but bounded, so a large
 # image catalog does not open dozens of simultaneous connections during an
@@ -412,7 +419,7 @@ class OpenRouterAdapter(OpenAICompatibleAdapter):
         normalized_models: Mapping[str, Model],
         fetch_json: Callable[[str], Awaitable[Any]],
     ) -> dict[str, Model]:
-        """Discover image models and their typed option schemas.
+        """Discover image/video models and their typed option schemas.
 
         Fetches the dedicated image API catalog plus the per-model endpoint
         details and projects them into ``capabilities.task_options`` under the
@@ -424,10 +431,30 @@ class OpenRouterAdapter(OpenAICompatibleAdapter):
         image-generation targets.
         """
 
-        payload = await fetch_json(IMAGE_MODELS_ENDPOINT)
+        task_payloads = await asyncio.gather(
+            fetch_json(IMAGE_MODELS_ENDPOINT),
+            fetch_json(VIDEO_MODELS_ENDPOINT),
+            return_exceptions=True,
+        )
+        image_payload_result: Any = task_payloads[0]
+        video_payload_result: Any = task_payloads[1]
+        if isinstance(image_payload_result, BaseException):
+            raise image_payload_result
+        if isinstance(video_payload_result, BaseException) and not isinstance(
+            video_payload_result, Exception
+        ):
+            raise video_payload_result
+        if isinstance(video_payload_result, Exception):
+            _LOGGER.warning("Video model catalog fetch failed: %s", video_payload_result)
+            video_payload_result = {"data": []}
+        payload: Any = image_payload_result
+        video_payload: Any = video_payload_result
         entries = payload.get("data") if isinstance(payload, Mapping) else None
         if not isinstance(entries, list):
             raise ValueError("Image models response must contain a data list")
+        video_entries = video_payload.get("data") if isinstance(video_payload, Mapping) else None
+        if not isinstance(video_entries, list):
+            raise ValueError("Video models response must contain a data list")
 
         valid_entries = [
             entry
@@ -478,6 +505,30 @@ class OpenRouterAdapter(OpenAICompatibleAdapter):
                 )
                 continue
             discovered[model_id] = _image_catalog_model(entry, image_options)
+
+        for entry in video_entries:
+            if (
+                not isinstance(entry, Mapping)
+                or not isinstance(entry.get("id"), str)
+                or not entry.get("id")
+            ):
+                continue
+            model_id = entry["id"]
+            video_options = _normalize_video_options(entry)
+            existing = discovered.get(model_id) or normalized_models.get(model_id)
+            if existing is not None:
+                merged_task_options = dict(existing.capabilities.task_options)
+                if video_options:
+                    merged_task_options["video_generation"] = video_options
+                discovered[model_id] = replace(
+                    existing,
+                    capabilities=replace(
+                        existing.capabilities,
+                        task_options=merged_task_options,
+                    ),
+                )
+                continue
+            discovered[model_id] = _video_catalog_model(entry, video_options)
         return discovered
 
     @classmethod
@@ -502,6 +553,7 @@ class OpenRouterAdapter(OpenAICompatibleAdapter):
         # other models). Defensive default keeps the field safe to read for
         # every model entry — providers omit it, not raise, when irrelevant.
         supported_voices = _read_optional_string_list(raw, "supported_voices")
+        task_types = _openrouter_task_types(raw, input_modalities, output_modalities)
 
         return Model(
             model_id=_read_string(raw, "id"),
@@ -523,6 +575,7 @@ class OpenRouterAdapter(OpenAICompatibleAdapter):
                 output_modalities=tuple(output_modalities),
                 supported_parameters=tuple(supported_parameters),
                 supported_voices=tuple(supported_voices),
+                task_types=task_types,
             ),
             # OpenRouter reports ``context_length: 0`` for non-chat models
             # (transcription, image/video generation). A ``0`` is no usable
@@ -889,6 +942,74 @@ def _passthrough_from_detail(detail: Any) -> dict[str, list[str]]:
     return {slug: sorted(keys) for slug, keys in sorted(passthrough.items())}
 
 
+def _openrouter_task_types(
+    raw: Mapping[str, Any],
+    input_modalities: list[str],
+    output_modalities: list[str],
+) -> tuple[str, ...]:
+    """Derive OpenRouter tasks, conservatively separating music from audio.
+
+    OpenRouter currently exposes Music and conversational Audio models through
+    the same ``output_modalities=audio`` filter and publishes no explicit Music
+    task tag. Its Music models have a distinct capability signature: text plus
+    optional image input, audio output, and no audio input. Keeping this rule in
+    the provider normalizer avoids misclassifying GPT Audio as Music while the
+    provider feed lacks a first-class semantic tag.
+    """
+
+    tasks = set(derive_model_task_types(input_modalities, output_modalities))
+    inputs = set(input_modalities)
+    outputs = set(output_modalities)
+    architecture = raw.get("architecture")
+    modality = architecture.get("modality") if isinstance(architecture, Mapping) else None
+    if (
+        modality == "text+image->text+audio"
+        and inputs == {"text", "image"}
+        and {"text", "audio"}.issubset(outputs)
+    ):
+        tasks.add("music_generation")
+    return tuple(task for task in MODEL_TASK_ORDER if task in tasks)
+
+
+def _normalize_video_options(entry: Mapping[str, Any]) -> dict[str, Any]:
+    """Project OpenRouter's dedicated video catalog to typed task options."""
+
+    parameters: dict[str, Any] = {}
+    enum_fields = (
+        ("resolution", "supported_resolutions"),
+        ("aspect_ratio", "supported_aspect_ratios"),
+        ("size", "supported_sizes"),
+    )
+    for name, source_name in enum_fields:
+        values = _read_optional_string_list(entry, source_name)
+        if values:
+            parameters[name] = {"type": "enum", "values": values}
+
+    durations = entry.get("supported_durations")
+    if isinstance(durations, list):
+        values = [str(value) for value in durations if isinstance(value, int) and value > 0]
+        if values:
+            parameters["duration"] = {"type": "enum", "values": values}
+    if entry.get("generate_audio") is True:
+        parameters["generate_audio"] = {"type": "boolean"}
+    if entry.get("seed") is True:
+        parameters["seed"] = {"type": "boolean"}
+
+    options: dict[str, Any] = {}
+    if parameters:
+        options["parameters"] = parameters
+    frame_images = _read_optional_string_list(entry, "supported_frame_images")
+    supported_frames = [
+        frame_type for frame_type in frame_images if frame_type in {"first_frame", "last_frame"}
+    ]
+    if supported_frames:
+        options["frame_images"] = supported_frames
+    passthrough = _read_optional_string_list(entry, "allowed_passthrough_parameters")
+    if passthrough:
+        options["passthrough_parameters"] = passthrough
+    return options
+
+
 def _image_catalog_model(entry: Mapping[str, Any], image_options: dict[str, Any]) -> Model:
     """Build a minimal ``Model`` for an image-API-only catalog entry.
 
@@ -914,6 +1035,28 @@ def _image_catalog_model(entry: Mapping[str, Any], image_options: dict[str, Any]
             reasoning=ReasoningCapabilities(supported=False),
             input_modalities=tuple(input_modalities),
             output_modalities=tuple(output_modalities),
+            task_options=task_options,
+        ),
+        context_window=None,
+        max_output_tokens=None,
+    )
+
+
+def _video_catalog_model(entry: Mapping[str, Any], video_options: dict[str, Any]) -> Model:
+    """Build a minimal ``Model`` for a video-API-only catalog entry."""
+
+    name = entry.get("name")
+    task_options = {"video_generation": video_options} if video_options else {}
+    return Model(
+        model_id=str(entry["id"]),
+        name=name if isinstance(name, str) and name else str(entry["id"]),
+        capabilities=Capabilities(
+            vision=False,
+            tools=False,
+            json_mode=False,
+            reasoning=ReasoningCapabilities(supported=False),
+            input_modalities=("text",),
+            output_modalities=("video",),
             task_options=task_options,
         ),
         context_window=None,

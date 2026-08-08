@@ -1,5 +1,5 @@
 {
-  "fetched_at": "2026-08-01T14:33:54.106350+00:00",
+  "fetched_at": "2026-08-08T20:45:54.224775+00:00",
   "models": {
     "ai21/jamba-large-1.7": {
       "capabilities": {
@@ -229,6 +229,74 @@
           "top_p"
         ],
         "supported_voices": [],
+        "task_options": {
+          "video_generation": {
+            "frame_images": [
+              "first_frame"
+            ],
+            "parameters": {
+              "aspect_ratio": {
+                "type": "enum",
+                "values": [
+                  "16:9",
+                  "9:16",
+                  "1:1",
+                  "4:3",
+                  "3:4",
+                  "21:9",
+                  "9:21"
+                ]
+              },
+              "duration": {
+                "type": "enum",
+                "values": [
+                  "3",
+                  "4",
+                  "5",
+                  "6",
+                  "7",
+                  "8",
+                  "9",
+                  "10",
+                  "11",
+                  "12",
+                  "13",
+                  "14",
+                  "15"
+                ]
+              },
+              "resolution": {
+                "type": "enum",
+                "values": [
+                  "720p",
+                  "1080p"
+                ]
+              },
+              "seed": {
+                "type": "boolean"
+              },
+              "size": {
+                "type": "enum",
+                "values": [
+                  "1280x720",
+                  "720x1280",
+                  "720x720",
+                  "960x720",
+                  "720x960",
+                  "1680x720",
+                  "720x1680",
+                  "1920x1080",
+                  "1080x1920",
+                  "1080x1080",
+                  "1440x1080",
+                  "1080x1440",
+                  "2520x1080",
+                  "1080x2520"
+                ]
+              }
+            }
+          }
+        },
         "task_types": [
           "image_input",
           "video_generation"
@@ -270,6 +338,74 @@
           "top_p"
         ],
         "supported_voices": [],
+        "task_options": {
+          "video_generation": {
+            "frame_images": [
+              "first_frame"
+            ],
+            "parameters": {
+              "aspect_ratio": {
+                "type": "enum",
+                "values": [
+                  "16:9",
+                  "9:16",
+                  "1:1",
+                  "4:3",
+                  "3:4",
+                  "21:9",
+                  "9:21"
+                ]
+              },
+              "duration": {
+                "type": "enum",
+                "values": [
+                  "3",
+                  "4",
+                  "5",
+                  "6",
+                  "7",
+                  "8",
+                  "9",
+                  "10",
+                  "11",
+                  "12",
+                  "13",
+                  "14",
+                  "15"
+                ]
+              },
+              "resolution": {
+                "type": "enum",
+                "values": [
+                  "720p",
+                  "1080p"
+                ]
+              },
+              "seed": {
+                "type": "boolean"
+              },
+              "size": {
+                "type": "enum",
+                "values": [
+                  "1280x720",
+                  "720x1280",
+                  "720x720",
+                  "960x720",
+                  "720x960",
+                  "1680x720",
+                  "720x1680",
+                  "1920x1080",
+                  "1080x1920",
+                  "1080x1080",
+                  "1440x1080",
+                  "1080x1440",
+                  "2520x1080",
+                  "1080x2520"
+                ]
+              }
+            }
+          }
+        },
         "task_types": [
           "image_input",
           "video_generation"
@@ -308,6 +444,58 @@
           "top_p"
         ],
         "supported_voices": [],
+        "task_options": {
+          "video_generation": {
+            "frame_images": [
+              "first_frame"
+            ],
+            "parameters": {
+              "aspect_ratio": {
+                "type": "enum",
+                "values": [
+                  "16:9",
+                  "9:16"
+                ]
+              },
+              "duration": {
+                "type": "enum",
+                "values": [
+                  "5",
+                  "10"
+                ]
+              },
+              "generate_audio": {
+                "type": "boolean"
+              },
+              "resolution": {
+                "type": "enum",
+                "values": [
+                  "720p",
+                  "1080p"
+                ]
+              },
+              "seed": {
+                "type": "boolean"
+              },
+              "size": {
+                "type": "enum",
+                "values": [
+                  "1280x720",
+                  "1080x1920",
+                  "720x1280",
+                  "1920x1080"
+                ]
+              }
+            },
+            "passthrough_parameters": [
+              "negative_prompt",
+              "enable_prompt_expansion",
+              "shot_type",
+              "audio",
+              "size"
+            ]
+          }
+        },
         "task_types": [
           "image_input",
           "video_generation"
@@ -346,6 +534,78 @@
           "top_p"
         ],
         "supported_voices": [],
+        "task_options": {
+          "video_generation": {
+            "frame_images": [
+              "first_frame",
+              "last_frame"
+            ],
+            "parameters": {
+              "aspect_ratio": {
+                "type": "enum",
+                "values": [
+                  "16:9",
+                  "9:16",
+                  "1:1",
+                  "4:3",
+                  "3:4"
+                ]
+              },
+              "duration": {
+                "type": "enum",
+                "values": [
+                  "2",
+                  "3",
+                  "4",
+                  "5",
+                  "6",
+                  "7",
+                  "8",
+                  "9",
+                  "10"
+                ]
+              },
+              "generate_audio": {
+                "type": "boolean"
+              },
+              "resolution": {
+                "type": "enum",
+                "values": [
+                  "720p",
+                  "1080p"
+                ]
+              },
+              "seed": {
+                "type": "boolean"
+              },
+              "size": {
+                "type": "enum",
+                "values": [
+                  "1280x720",
+                  "720x1280",
+                  "1920x1080",
+                  "1080x1920",
+                  "720x720",
+                  "1080x1080",
+                  "960x720",
+                  "720x960",
+                  "1440x1080",
+                  "1080x1440"
+                ]
+              }
+            },
+            "passthrough_parameters": [
+              "negative_prompt",
+              "prompt_extend",
+              "audio",
+              "ratio",
+              "last_image",
+              "video",
+              "videos",
+              "images"
+            ]
+          }
+        },
         "task_types": [
           "image_input",
           "video_generation"
@@ -795,6 +1055,56 @@
       },
       "name": "Anthropic: Claude Fable 5"
     },
+    "anthropic/claude-fable-5:batch": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "file"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "include_reasoning",
+          "max_tokens",
+          "reasoning",
+          "reasoning_effort",
+          "response_format",
+          "stop",
+          "structured_outputs",
+          "tool_choice",
+          "tools",
+          "verbosity"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding",
+          "file_input",
+          "file_understanding"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 1000000,
+      "max_output_tokens": 128000,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image+file->text"
+        }
+      },
+      "name": "Anthropic: Claude Fable 5 (batch)"
+    },
     "anthropic/claude-haiku-4.5": {
       "capabilities": {
         "input_modalities": [
@@ -849,6 +1159,57 @@
         }
       },
       "name": "Anthropic: Claude Haiku 4.5"
+    },
+    "anthropic/claude-haiku-4.5:batch": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "file"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "include_reasoning",
+          "max_tokens",
+          "reasoning",
+          "response_format",
+          "stop",
+          "structured_outputs",
+          "temperature",
+          "tool_choice",
+          "tools",
+          "top_k",
+          "top_p"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding",
+          "file_input",
+          "file_understanding"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 200000,
+      "max_output_tokens": 64000,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image+file->text"
+        }
+      },
+      "name": "Anthropic: Claude Haiku 4.5 (batch)"
     },
     "anthropic/claude-opus-4": {
       "capabilities": {
@@ -908,7 +1269,7 @@
           "text",
           "file"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -919,12 +1280,9 @@
         },
         "supported_parameters": [
           "include_reasoning",
-          "max_completion_tokens",
           "max_tokens",
           "reasoning",
-          "response_format",
           "stop",
-          "structured_outputs",
           "temperature",
           "tool_choice",
           "tools",
@@ -955,6 +1313,55 @@
         }
       },
       "name": "Anthropic: Claude Opus 4.1"
+    },
+    "anthropic/claude-opus-4.1:batch": {
+      "capabilities": {
+        "input_modalities": [
+          "image",
+          "text",
+          "file"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "include_reasoning",
+          "max_tokens",
+          "reasoning",
+          "response_format",
+          "stop",
+          "structured_outputs",
+          "temperature",
+          "tool_choice",
+          "tools"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding",
+          "file_input",
+          "file_understanding"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 200000,
+      "max_output_tokens": 32000,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image+file->text"
+        }
+      },
+      "name": "Anthropic: Claude Opus 4.1 (batch)"
     },
     "anthropic/claude-opus-4.5": {
       "capabilities": {
@@ -1014,6 +1421,56 @@
         }
       },
       "name": "Anthropic: Claude Opus 4.5"
+    },
+    "anthropic/claude-opus-4.5:batch": {
+      "capabilities": {
+        "input_modalities": [
+          "file",
+          "image",
+          "text"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "include_reasoning",
+          "max_tokens",
+          "reasoning",
+          "response_format",
+          "stop",
+          "structured_outputs",
+          "temperature",
+          "tool_choice",
+          "tools",
+          "verbosity"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding",
+          "file_input",
+          "file_understanding"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 200000,
+      "max_output_tokens": 64000,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image+file->text"
+        }
+      },
+      "name": "Anthropic: Claude Opus 4.5 (batch)"
     },
     "anthropic/claude-opus-4.6": {
       "capabilities": {
@@ -1076,6 +1533,58 @@
         }
       },
       "name": "Anthropic: Claude Opus 4.6"
+    },
+    "anthropic/claude-opus-4.6:batch": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "file"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "include_reasoning",
+          "max_tokens",
+          "reasoning",
+          "reasoning_effort",
+          "response_format",
+          "stop",
+          "structured_outputs",
+          "temperature",
+          "tool_choice",
+          "tools",
+          "top_p",
+          "verbosity"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding",
+          "file_input",
+          "file_understanding"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 1000000,
+      "max_output_tokens": 128000,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image+file->text"
+        }
+      },
+      "name": "Anthropic: Claude Opus 4.6 (batch)"
     },
     "anthropic/claude-opus-4.7": {
       "capabilities": {
@@ -1195,6 +1704,56 @@
         }
       },
       "name": "Anthropic: Claude Opus 4.7 (Fast)"
+    },
+    "anthropic/claude-opus-4.7:batch": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "file"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "include_reasoning",
+          "max_tokens",
+          "reasoning",
+          "reasoning_effort",
+          "response_format",
+          "stop",
+          "structured_outputs",
+          "tool_choice",
+          "tools",
+          "verbosity"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding",
+          "file_input",
+          "file_understanding"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 1000000,
+      "max_output_tokens": 128000,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image+file->text"
+        }
+      },
+      "name": "Anthropic: Claude Opus 4.7 (batch)"
     },
     "anthropic/claude-opus-4.8": {
       "capabilities": {
@@ -1316,6 +1875,56 @@
       },
       "name": "Anthropic: Claude Opus 4.8 (Fast)"
     },
+    "anthropic/claude-opus-4.8:batch": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "file"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "include_reasoning",
+          "max_tokens",
+          "reasoning",
+          "reasoning_effort",
+          "response_format",
+          "stop",
+          "structured_outputs",
+          "tool_choice",
+          "tools",
+          "verbosity"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding",
+          "file_input",
+          "file_understanding"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 1000000,
+      "max_output_tokens": 128000,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image+file->text"
+        }
+      },
+      "name": "Anthropic: Claude Opus 4.8 (batch)"
+    },
     "anthropic/claude-opus-5": {
       "capabilities": {
         "input_modalities": [
@@ -1436,6 +2045,56 @@
       },
       "name": "Claude Opus 5 (Fast)"
     },
+    "anthropic/claude-opus-5:batch": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "file"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "include_reasoning",
+          "max_tokens",
+          "reasoning",
+          "reasoning_effort",
+          "response_format",
+          "stop",
+          "structured_outputs",
+          "tool_choice",
+          "tools",
+          "verbosity"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding",
+          "file_input",
+          "file_understanding"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 1000000,
+      "max_output_tokens": 128000,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image+file->text"
+        }
+      },
+      "name": "Claude Opus 5 (batch)"
+    },
     "anthropic/claude-sonnet-4": {
       "capabilities": {
         "input_modalities": [
@@ -1543,6 +2202,57 @@
       },
       "name": "Anthropic: Claude Sonnet 4.5"
     },
+    "anthropic/claude-sonnet-4.5:batch": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "file"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "include_reasoning",
+          "max_tokens",
+          "reasoning",
+          "response_format",
+          "stop",
+          "structured_outputs",
+          "temperature",
+          "tool_choice",
+          "tools",
+          "top_k",
+          "top_p"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding",
+          "file_input",
+          "file_understanding"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 1000000,
+      "max_output_tokens": 64000,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image+file->text"
+        }
+      },
+      "name": "Anthropic: Claude Sonnet 4.5 (batch)"
+    },
     "anthropic/claude-sonnet-4.6": {
       "capabilities": {
         "input_modalities": [
@@ -1605,6 +2315,58 @@
       },
       "name": "Anthropic: Claude Sonnet 4.6"
     },
+    "anthropic/claude-sonnet-4.6:batch": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "file"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "include_reasoning",
+          "max_tokens",
+          "reasoning",
+          "reasoning_effort",
+          "response_format",
+          "stop",
+          "structured_outputs",
+          "temperature",
+          "tool_choice",
+          "tools",
+          "top_p",
+          "verbosity"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding",
+          "file_input",
+          "file_understanding"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 1000000,
+      "max_output_tokens": 128000,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image+file->text"
+        }
+      },
+      "name": "Anthropic: Claude Sonnet 4.6 (batch)"
+    },
     "anthropic/claude-sonnet-5": {
       "capabilities": {
         "input_modalities": [
@@ -1664,6 +2426,56 @@
         }
       },
       "name": "Anthropic: Claude Sonnet 5"
+    },
+    "anthropic/claude-sonnet-5:batch": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "file"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "include_reasoning",
+          "max_tokens",
+          "reasoning",
+          "reasoning_effort",
+          "response_format",
+          "stop",
+          "structured_outputs",
+          "tool_choice",
+          "tools",
+          "verbosity"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding",
+          "file_input",
+          "file_understanding"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 1000000,
+      "max_output_tokens": 128000,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image+file->text"
+        }
+      },
+      "name": "Anthropic: Claude Sonnet 5 (batch)"
     },
     "arcee-ai/maestro-reasoning": {
       "capabilities": {
@@ -1986,6 +2798,98 @@
         }
       },
       "name": "Baidu: ERNIE 4.5 VL 424B A47B "
+    },
+    "black-forest-labs/flux-3-video": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "video"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "video"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [],
+        "supported_voices": [],
+        "task_options": {
+          "video_generation": {
+            "frame_images": [
+              "first_frame",
+              "last_frame"
+            ],
+            "parameters": {
+              "aspect_ratio": {
+                "type": "enum",
+                "values": [
+                  "21:9",
+                  "16:9",
+                  "4:3",
+                  "1:1",
+                  "3:4",
+                  "9:16"
+                ]
+              },
+              "duration": {
+                "type": "enum",
+                "values": [
+                  "5",
+                  "6",
+                  "7",
+                  "8",
+                  "9",
+                  "10",
+                  "11",
+                  "12",
+                  "13",
+                  "14",
+                  "15",
+                  "16",
+                  "17",
+                  "18",
+                  "19",
+                  "20"
+                ]
+              },
+              "generate_audio": {
+                "type": "boolean"
+              },
+              "resolution": {
+                "type": "enum",
+                "values": [
+                  "720p",
+                  "1080p"
+                ]
+              }
+            },
+            "passthrough_parameters": [
+              "safety_tolerance",
+              "version"
+            ]
+          }
+        },
+        "task_types": [
+          "image_input",
+          "video_input",
+          "video_generation"
+        ],
+        "tools": false,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": null,
+      "max_output_tokens": null,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image+video->video"
+        }
+      },
+      "name": "Black Forest Labs: FLUX.3 Video"
     },
     "black-forest-labs/flux.2-flex": {
       "capabilities": {
@@ -2649,6 +3553,86 @@
           "frequency_penalty"
         ],
         "supported_voices": [],
+        "task_options": {
+          "video_generation": {
+            "frame_images": [
+              "first_frame",
+              "last_frame"
+            ],
+            "parameters": {
+              "aspect_ratio": {
+                "type": "enum",
+                "values": [
+                  "1:1",
+                  "3:4",
+                  "9:16",
+                  "9:21",
+                  "4:3",
+                  "16:9",
+                  "21:9"
+                ]
+              },
+              "duration": {
+                "type": "enum",
+                "values": [
+                  "4",
+                  "5",
+                  "6",
+                  "7",
+                  "8",
+                  "9",
+                  "10",
+                  "11",
+                  "12"
+                ]
+              },
+              "generate_audio": {
+                "type": "boolean"
+              },
+              "resolution": {
+                "type": "enum",
+                "values": [
+                  "480p",
+                  "720p",
+                  "1080p"
+                ]
+              },
+              "seed": {
+                "type": "boolean"
+              },
+              "size": {
+                "type": "enum",
+                "values": [
+                  "480x480",
+                  "480x640",
+                  "480x854",
+                  "480x1120",
+                  "640x480",
+                  "720x720",
+                  "720x960",
+                  "720x1280",
+                  "720x1680",
+                  "854x480",
+                  "960x720",
+                  "1080x1080",
+                  "1080x1440",
+                  "1080x1920",
+                  "1080x2520",
+                  "1120x480",
+                  "1280x720",
+                  "1440x1080",
+                  "1680x720",
+                  "1920x1080",
+                  "2520x1080"
+                ]
+              }
+            },
+            "passthrough_parameters": [
+              "watermark",
+              "req_key"
+            ]
+          }
+        },
         "task_types": [
           "image_input",
           "video_generation"
@@ -2687,6 +3671,94 @@
           "frequency_penalty"
         ],
         "supported_voices": [],
+        "task_options": {
+          "video_generation": {
+            "frame_images": [
+              "first_frame",
+              "last_frame"
+            ],
+            "parameters": {
+              "aspect_ratio": {
+                "type": "enum",
+                "values": [
+                  "1:1",
+                  "3:4",
+                  "9:16",
+                  "4:3",
+                  "16:9",
+                  "21:9",
+                  "9:21"
+                ]
+              },
+              "duration": {
+                "type": "enum",
+                "values": [
+                  "4",
+                  "5",
+                  "6",
+                  "7",
+                  "8",
+                  "9",
+                  "10",
+                  "11",
+                  "12",
+                  "13",
+                  "14",
+                  "15"
+                ]
+              },
+              "generate_audio": {
+                "type": "boolean"
+              },
+              "resolution": {
+                "type": "enum",
+                "values": [
+                  "480p",
+                  "720p",
+                  "1080p",
+                  "4K"
+                ]
+              },
+              "seed": {
+                "type": "boolean"
+              },
+              "size": {
+                "type": "enum",
+                "values": [
+                  "480x480",
+                  "480x640",
+                  "480x854",
+                  "640x480",
+                  "854x480",
+                  "1120x480",
+                  "720x720",
+                  "720x960",
+                  "720x1280",
+                  "720x1680",
+                  "960x720",
+                  "1280x720",
+                  "1680x720",
+                  "1080x1080",
+                  "1080x1440",
+                  "1080x1920",
+                  "1440x1080",
+                  "1920x1080",
+                  "2520x1080",
+                  "3840x2160",
+                  "2160x3840",
+                  "2160x2160",
+                  "2880x2160",
+                  "2160x2880",
+                  "5040x2160"
+                ]
+              }
+            },
+            "passthrough_parameters": [
+              "watermark",
+              "req_key"
+            ]
+          }
+        },
         "task_types": [
           "image_input",
           "audio_input",
@@ -2727,6 +3799,80 @@
           "frequency_penalty"
         ],
         "supported_voices": [],
+        "task_options": {
+          "video_generation": {
+            "frame_images": [
+              "first_frame",
+              "last_frame"
+            ],
+            "parameters": {
+              "aspect_ratio": {
+                "type": "enum",
+                "values": [
+                  "1:1",
+                  "3:4",
+                  "9:16",
+                  "4:3",
+                  "16:9",
+                  "21:9",
+                  "9:21"
+                ]
+              },
+              "duration": {
+                "type": "enum",
+                "values": [
+                  "4",
+                  "5",
+                  "6",
+                  "7",
+                  "8",
+                  "9",
+                  "10",
+                  "11",
+                  "12",
+                  "13",
+                  "14",
+                  "15"
+                ]
+              },
+              "generate_audio": {
+                "type": "boolean"
+              },
+              "resolution": {
+                "type": "enum",
+                "values": [
+                  "480p",
+                  "720p"
+                ]
+              },
+              "seed": {
+                "type": "boolean"
+              },
+              "size": {
+                "type": "enum",
+                "values": [
+                  "480x480",
+                  "480x640",
+                  "480x854",
+                  "640x480",
+                  "854x480",
+                  "1120x480",
+                  "720x720",
+                  "720x960",
+                  "720x1280",
+                  "720x1680",
+                  "960x720",
+                  "1280x720",
+                  "1680x720"
+                ]
+              }
+            },
+            "passthrough_parameters": [
+              "watermark",
+              "req_key"
+            ]
+          }
+        },
         "task_types": [
           "image_input",
           "audio_input",
@@ -3847,7 +4993,7 @@
           "reasoning_response_field": "reasoning_content"
         }
       },
-      "name": "DeepSeek: DeepSeek V4 Flash"
+      "name": "DeepSeek: DeepSeek V4 Flash 0423"
     },
     "deepseek/deepseek-v4-flash-0731": {
       "capabilities": {
@@ -3885,6 +5031,7 @@
           "temperature",
           "tool_choice",
           "tools",
+          "top_a",
           "top_k",
           "top_logprobs",
           "top_p"
@@ -3901,7 +5048,7 @@
         "api-key"
       ],
       "context_window": 1048576,
-      "family": "deepseek",
+      "family": "deepseek-flash",
       "max_output_tokens": 384000,
       "metadata": {
         "openrouter": {
@@ -4380,6 +5527,120 @@
       },
       "name": "Google: Gemini 2.5 Flash Lite"
     },
+    "google/gemini-2.5-flash-lite:batch": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "file",
+          "audio",
+          "video"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "include_reasoning",
+          "max_tokens",
+          "reasoning",
+          "response_format",
+          "seed",
+          "stop",
+          "structured_outputs",
+          "temperature",
+          "tool_choice",
+          "tools",
+          "top_p"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding",
+          "file_input",
+          "file_understanding",
+          "audio_input",
+          "speech_to_text",
+          "video_input",
+          "video_understanding"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 1048576,
+      "max_output_tokens": 65535,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image+file+audio+video->text"
+        }
+      },
+      "name": "Google: Gemini 2.5 Flash Lite (batch)"
+    },
+    "google/gemini-2.5-flash:batch": {
+      "capabilities": {
+        "input_modalities": [
+          "file",
+          "image",
+          "text",
+          "audio",
+          "video"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "include_reasoning",
+          "max_tokens",
+          "reasoning",
+          "response_format",
+          "seed",
+          "stop",
+          "structured_outputs",
+          "temperature",
+          "tool_choice",
+          "tools",
+          "top_p"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding",
+          "file_input",
+          "file_understanding",
+          "audio_input",
+          "speech_to_text",
+          "video_input",
+          "video_understanding"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 1048576,
+      "max_output_tokens": 65535,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image+file+audio+video->text"
+        }
+      },
+      "name": "Google: Gemini 2.5 Flash (batch)"
+    },
     "google/gemini-2.5-pro": {
       "capabilities": {
         "input_modalities": [
@@ -4557,6 +5818,63 @@
       },
       "name": "Google: Gemini 2.5 Pro Preview 05-06"
     },
+    "google/gemini-2.5-pro:batch": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "file",
+          "audio",
+          "video"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "include_reasoning",
+          "max_tokens",
+          "reasoning",
+          "response_format",
+          "seed",
+          "stop",
+          "structured_outputs",
+          "temperature",
+          "tool_choice",
+          "tools",
+          "top_p"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding",
+          "file_input",
+          "file_understanding",
+          "audio_input",
+          "speech_to_text",
+          "video_input",
+          "video_understanding"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 1048576,
+      "max_output_tokens": 65536,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image+file+audio+video->text"
+        }
+      },
+      "name": "Google: Gemini 2.5 Pro (batch)"
+    },
     "google/gemini-3-flash-preview": {
       "capabilities": {
         "input_modalities": [
@@ -4615,7 +5933,7 @@
       ],
       "context_window": 1048576,
       "family": "gemini-flash",
-      "max_output_tokens": 65535,
+      "max_output_tokens": 65536,
       "metadata": {
         "openrouter": {
           "modality": "text+image+file+audio+video->text",
@@ -4623,6 +5941,64 @@
         }
       },
       "name": "Google: Gemini 3 Flash Preview"
+    },
+    "google/gemini-3-flash-preview:batch": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "file",
+          "audio",
+          "video"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "include_reasoning",
+          "max_tokens",
+          "reasoning",
+          "reasoning_effort",
+          "response_format",
+          "seed",
+          "stop",
+          "structured_outputs",
+          "temperature",
+          "tool_choice",
+          "tools",
+          "top_p"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding",
+          "file_input",
+          "file_understanding",
+          "audio_input",
+          "speech_to_text",
+          "video_input",
+          "video_understanding"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 1048576,
+      "max_output_tokens": 65536,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image+file+audio+video->text"
+        }
+      },
+      "name": "Google: Gemini 3 Flash Preview (batch)"
     },
     "google/gemini-3-pro-image": {
       "capabilities": {
@@ -5251,6 +6627,64 @@
       },
       "name": "Google: Gemini 3.1 Flash Lite Preview"
     },
+    "google/gemini-3.1-flash-lite:batch": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "video",
+          "file",
+          "audio"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "include_reasoning",
+          "max_tokens",
+          "reasoning",
+          "reasoning_effort",
+          "response_format",
+          "seed",
+          "stop",
+          "structured_outputs",
+          "temperature",
+          "tool_choice",
+          "tools",
+          "top_p"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding",
+          "file_input",
+          "file_understanding",
+          "audio_input",
+          "speech_to_text",
+          "video_input",
+          "video_understanding"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 1048576,
+      "max_output_tokens": 65536,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image+file+audio+video->text"
+        }
+      },
+      "name": "Google: Gemini 3.1 Flash Lite (batch)"
+    },
     "google/gemini-3.1-flash-tts-preview": {
       "capabilities": {
         "input_modalities": [
@@ -5449,6 +6883,64 @@
       },
       "name": "Google: Gemini 3.1 Pro Preview Custom Tools"
     },
+    "google/gemini-3.1-pro-preview:batch": {
+      "capabilities": {
+        "input_modalities": [
+          "audio",
+          "file",
+          "image",
+          "text",
+          "video"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "include_reasoning",
+          "max_tokens",
+          "reasoning",
+          "reasoning_effort",
+          "response_format",
+          "seed",
+          "stop",
+          "structured_outputs",
+          "temperature",
+          "tool_choice",
+          "tools",
+          "top_p"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding",
+          "file_input",
+          "file_understanding",
+          "audio_input",
+          "speech_to_text",
+          "video_input",
+          "video_understanding"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 1048576,
+      "max_output_tokens": 65536,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image+file+audio+video->text"
+        }
+      },
+      "name": "Google: Gemini 3.1 Pro Preview (batch)"
+    },
     "google/gemini-3.5-flash": {
       "capabilities": {
         "input_modalities": [
@@ -5581,6 +7073,120 @@
       },
       "name": "Google: Gemini 3.5 Flash Lite"
     },
+    "google/gemini-3.5-flash-lite:batch": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "video",
+          "file",
+          "audio"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "include_reasoning",
+          "max_tokens",
+          "reasoning",
+          "reasoning_effort",
+          "response_format",
+          "seed",
+          "stop",
+          "structured_outputs",
+          "tool_choice",
+          "tools"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding",
+          "file_input",
+          "file_understanding",
+          "audio_input",
+          "speech_to_text",
+          "video_input",
+          "video_understanding"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 1048576,
+      "max_output_tokens": 65536,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image+file+audio+video->text"
+        }
+      },
+      "name": "Google: Gemini 3.5 Flash Lite (batch)"
+    },
+    "google/gemini-3.5-flash:batch": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "video",
+          "file",
+          "audio"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "include_reasoning",
+          "max_tokens",
+          "reasoning",
+          "reasoning_effort",
+          "response_format",
+          "seed",
+          "stop",
+          "structured_outputs",
+          "temperature",
+          "tool_choice",
+          "tools",
+          "top_p"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding",
+          "file_input",
+          "file_understanding",
+          "audio_input",
+          "speech_to_text",
+          "video_input",
+          "video_understanding"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 1048576,
+      "max_output_tokens": 65536,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image+file+audio+video->text"
+        }
+      },
+      "name": "Google: Gemini 3.5 Flash (batch)"
+    },
     "google/gemini-3.6-flash": {
       "capabilities": {
         "input_modalities": [
@@ -5646,6 +7252,62 @@
         }
       },
       "name": "Google: Gemini 3.6 Flash"
+    },
+    "google/gemini-3.6-flash:batch": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "video",
+          "file",
+          "audio"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "include_reasoning",
+          "max_tokens",
+          "reasoning",
+          "reasoning_effort",
+          "response_format",
+          "seed",
+          "stop",
+          "structured_outputs",
+          "tool_choice",
+          "tools"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding",
+          "file_input",
+          "file_understanding",
+          "audio_input",
+          "speech_to_text",
+          "video_input",
+          "video_understanding"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 1048576,
+      "max_output_tokens": 65536,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image+file+audio+video->text"
+        }
+      },
+      "name": "Google: Gemini 3.6 Flash (batch)"
     },
     "google/gemini-embedding-001": {
       "capabilities": {
@@ -6279,7 +7941,8 @@
           "text_output",
           "image_input",
           "image_understanding",
-          "audio_generation"
+          "audio_generation",
+          "music_generation"
         ],
         "tools": false,
         "vision": true
@@ -6321,7 +7984,8 @@
           "text_output",
           "image_input",
           "image_understanding",
-          "audio_generation"
+          "audio_generation",
+          "music_generation"
         ],
         "tools": false,
         "vision": true
@@ -6360,6 +8024,63 @@
           "top_p"
         ],
         "supported_voices": [],
+        "task_options": {
+          "video_generation": {
+            "frame_images": [
+              "first_frame",
+              "last_frame"
+            ],
+            "parameters": {
+              "aspect_ratio": {
+                "type": "enum",
+                "values": [
+                  "16:9",
+                  "9:16"
+                ]
+              },
+              "duration": {
+                "type": "enum",
+                "values": [
+                  "4",
+                  "6",
+                  "8"
+                ]
+              },
+              "generate_audio": {
+                "type": "boolean"
+              },
+              "resolution": {
+                "type": "enum",
+                "values": [
+                  "720p",
+                  "1080p",
+                  "4K"
+                ]
+              },
+              "seed": {
+                "type": "boolean"
+              },
+              "size": {
+                "type": "enum",
+                "values": [
+                  "1280x720",
+                  "1080x1920",
+                  "1920x1080",
+                  "720x1280",
+                  "3840x2160",
+                  "2160x3840"
+                ]
+              }
+            },
+            "passthrough_parameters": [
+              "personGeneration",
+              "aspectRatio",
+              "negativePrompt",
+              "conditioningScale",
+              "enhancePrompt"
+            ]
+          }
+        },
         "task_types": [
           "image_input",
           "video_generation"
@@ -6400,6 +8121,63 @@
           "top_p"
         ],
         "supported_voices": [],
+        "task_options": {
+          "video_generation": {
+            "frame_images": [
+              "first_frame",
+              "last_frame"
+            ],
+            "parameters": {
+              "aspect_ratio": {
+                "type": "enum",
+                "values": [
+                  "16:9",
+                  "9:16"
+                ]
+              },
+              "duration": {
+                "type": "enum",
+                "values": [
+                  "4",
+                  "6",
+                  "8"
+                ]
+              },
+              "generate_audio": {
+                "type": "boolean"
+              },
+              "resolution": {
+                "type": "enum",
+                "values": [
+                  "720p",
+                  "1080p",
+                  "4K"
+                ]
+              },
+              "seed": {
+                "type": "boolean"
+              },
+              "size": {
+                "type": "enum",
+                "values": [
+                  "1280x720",
+                  "1080x1920",
+                  "1920x1080",
+                  "720x1280",
+                  "3840x2160",
+                  "2160x3840"
+                ]
+              }
+            },
+            "passthrough_parameters": [
+              "personGeneration",
+              "aspectRatio",
+              "negativePrompt",
+              "conditioningScale",
+              "enhancePrompt"
+            ]
+          }
+        },
         "task_types": [
           "image_input",
           "video_generation"
@@ -6440,6 +8218,60 @@
           "top_p"
         ],
         "supported_voices": [],
+        "task_options": {
+          "video_generation": {
+            "frame_images": [
+              "first_frame",
+              "last_frame"
+            ],
+            "parameters": {
+              "aspect_ratio": {
+                "type": "enum",
+                "values": [
+                  "16:9",
+                  "9:16"
+                ]
+              },
+              "duration": {
+                "type": "enum",
+                "values": [
+                  "8",
+                  "4",
+                  "6"
+                ]
+              },
+              "generate_audio": {
+                "type": "boolean"
+              },
+              "resolution": {
+                "type": "enum",
+                "values": [
+                  "720p",
+                  "1080p"
+                ]
+              },
+              "seed": {
+                "type": "boolean"
+              },
+              "size": {
+                "type": "enum",
+                "values": [
+                  "1280x720",
+                  "720x1280",
+                  "1920x1080",
+                  "1080x1920"
+                ]
+              }
+            },
+            "passthrough_parameters": [
+              "personGeneration",
+              "aspectRatio",
+              "negativePrompt",
+              "conditioningScale",
+              "enhancePrompt"
+            ]
+          }
+        },
         "task_types": [
           "image_input",
           "video_generation"
@@ -6861,7 +8693,7 @@
       },
       "name": "inclusionAI: Ling-2.6-flash"
     },
-    "inclusionai/ling-3.0-flash:free": {
+    "inclusionai/ling-3.0-flash": {
       "capabilities": {
         "input_modalities": [
           "text"
@@ -6871,12 +8703,58 @@
           "text"
         ],
         "reasoning": {
-          "control": "levels",
-          "levels": [
-            "low",
-            "medium",
-            "high"
-          ],
+          "supported": true
+        },
+        "supported_parameters": [
+          "frequency_penalty",
+          "include_reasoning",
+          "logit_bias",
+          "logprobs",
+          "max_tokens",
+          "min_p",
+          "presence_penalty",
+          "reasoning",
+          "repetition_penalty",
+          "seed",
+          "stop",
+          "temperature",
+          "tool_choice",
+          "tools",
+          "top_k",
+          "top_logprobs",
+          "top_p"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
+        "tools": true,
+        "vision": false
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 262144,
+      "family": "ling",
+      "max_output_tokens": 32768,
+      "metadata": {
+        "openrouter": {
+          "modality": "text->text"
+        }
+      },
+      "name": "Ling-3.0-flash"
+    },
+    "inclusionai/ling-3.0-tiny:free": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
           "supported": true
         },
         "supported_parameters": [
@@ -6915,7 +8793,7 @@
           "modality": "text->text"
         }
       },
-      "name": "Ling-3.0-flash (free)"
+      "name": "inclusionAI: Ling 3.0 Tiny (free)"
     },
     "inclusionai/ring-2.6-1t": {
       "capabilities": {
@@ -7503,6 +9381,63 @@
           "top_p"
         ],
         "supported_voices": [],
+        "task_options": {
+          "video_generation": {
+            "frame_images": [
+              "first_frame",
+              "last_frame"
+            ],
+            "parameters": {
+              "aspect_ratio": {
+                "type": "enum",
+                "values": [
+                  "16:9",
+                  "9:16",
+                  "1:1"
+                ]
+              },
+              "duration": {
+                "type": "enum",
+                "values": [
+                  "3",
+                  "4",
+                  "5",
+                  "6",
+                  "7",
+                  "8",
+                  "9",
+                  "10",
+                  "11",
+                  "12",
+                  "13",
+                  "14",
+                  "15"
+                ]
+              },
+              "generate_audio": {
+                "type": "boolean"
+              },
+              "resolution": {
+                "type": "enum",
+                "values": [
+                  "720p"
+                ]
+              },
+              "size": {
+                "type": "enum",
+                "values": [
+                  "1280x720",
+                  "720x1280",
+                  "720x720"
+                ]
+              }
+            },
+            "passthrough_parameters": [
+              "negative_prompt",
+              "cfg_scale"
+            ]
+          }
+        },
         "task_types": [
           "image_input",
           "video_generation"
@@ -7541,6 +9476,63 @@
           "top_p"
         ],
         "supported_voices": [],
+        "task_options": {
+          "video_generation": {
+            "frame_images": [
+              "first_frame",
+              "last_frame"
+            ],
+            "parameters": {
+              "aspect_ratio": {
+                "type": "enum",
+                "values": [
+                  "16:9",
+                  "9:16",
+                  "1:1"
+                ]
+              },
+              "duration": {
+                "type": "enum",
+                "values": [
+                  "3",
+                  "4",
+                  "5",
+                  "6",
+                  "7",
+                  "8",
+                  "9",
+                  "10",
+                  "11",
+                  "12",
+                  "13",
+                  "14",
+                  "15"
+                ]
+              },
+              "generate_audio": {
+                "type": "boolean"
+              },
+              "resolution": {
+                "type": "enum",
+                "values": [
+                  "720p"
+                ]
+              },
+              "size": {
+                "type": "enum",
+                "values": [
+                  "1280x720",
+                  "720x1280",
+                  "720x720"
+                ]
+              }
+            },
+            "passthrough_parameters": [
+              "negative_prompt",
+              "cfg_scale"
+            ]
+          }
+        },
         "task_types": [
           "image_input",
           "video_generation"
@@ -7579,6 +9571,51 @@
           "top_p"
         ],
         "supported_voices": [],
+        "task_options": {
+          "video_generation": {
+            "frame_images": [
+              "first_frame",
+              "last_frame"
+            ],
+            "parameters": {
+              "aspect_ratio": {
+                "type": "enum",
+                "values": [
+                  "16:9",
+                  "9:16",
+                  "1:1"
+                ]
+              },
+              "duration": {
+                "type": "enum",
+                "values": [
+                  "5",
+                  "10"
+                ]
+              },
+              "generate_audio": {
+                "type": "boolean"
+              },
+              "resolution": {
+                "type": "enum",
+                "values": [
+                  "720p"
+                ]
+              },
+              "size": {
+                "type": "enum",
+                "values": [
+                  "1280x720",
+                  "720x1280",
+                  "720x720"
+                ]
+              }
+            },
+            "passthrough_parameters": [
+              "negative_prompt"
+            ]
+          }
+        },
         "task_types": [
           "image_input",
           "video_generation"
@@ -7641,7 +9678,7 @@
       ],
       "context_window": 8000,
       "family": "alpha",
-      "max_output_tokens": 2000,
+      "max_output_tokens": 6000,
       "metadata": {
         "openrouter": {
           "modality": "text->text"
@@ -7943,7 +9980,7 @@
       ],
       "context_window": 131072,
       "family": "llama",
-      "max_output_tokens": 128000,
+      "max_output_tokens": 16384,
       "metadata": {
         "openrouter": {
           "modality": "text->text"
@@ -8217,6 +10254,73 @@
         }
       },
       "name": "Meta: Muse Spark 1.1"
+    },
+    "meta/muse-spark-1.2": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "video",
+          "file",
+          "audio"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "control": "levels",
+          "levels": [
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "xhigh"
+          ],
+          "supported": true
+        },
+        "supported_parameters": [
+          "include_reasoning",
+          "max_tokens",
+          "reasoning",
+          "reasoning_effort",
+          "repetition_penalty",
+          "response_format",
+          "structured_outputs",
+          "temperature",
+          "tool_choice",
+          "tools",
+          "top_k",
+          "top_p"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding",
+          "file_input",
+          "file_understanding",
+          "audio_input",
+          "speech_to_text",
+          "video_input",
+          "video_understanding"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 1048576,
+      "family": "muse",
+      "max_output_tokens": 1048576,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image+file+audio+video->text"
+        }
+      },
+      "name": "Meta: Muse Spark 1.2"
     },
     "microsoft/mai-image-2.5": {
       "capabilities": {
@@ -8588,6 +10692,44 @@
           "top_p"
         ],
         "supported_voices": [],
+        "task_options": {
+          "video_generation": {
+            "frame_images": [
+              "first_frame"
+            ],
+            "parameters": {
+              "aspect_ratio": {
+                "type": "enum",
+                "values": [
+                  "16:9"
+                ]
+              },
+              "duration": {
+                "type": "enum",
+                "values": [
+                  "6",
+                  "10"
+                ]
+              },
+              "resolution": {
+                "type": "enum",
+                "values": [
+                  "1080p"
+                ]
+              },
+              "size": {
+                "type": "enum",
+                "values": [
+                  "1920x1080"
+                ]
+              }
+            },
+            "passthrough_parameters": [
+              "prompt_optimizer",
+              "fast_pretreatment"
+            ]
+          }
+        },
         "task_types": [
           "image_input",
           "video_generation"
@@ -8628,6 +10770,55 @@
           "top_p"
         ],
         "supported_voices": [],
+        "task_options": {
+          "video_generation": {
+            "frame_images": [
+              "first_frame",
+              "last_frame"
+            ],
+            "parameters": {
+              "aspect_ratio": {
+                "type": "enum",
+                "values": [
+                  "21:9",
+                  "16:9",
+                  "4:3",
+                  "1:1",
+                  "3:4",
+                  "9:16"
+                ]
+              },
+              "duration": {
+                "type": "enum",
+                "values": [
+                  "5",
+                  "6",
+                  "7",
+                  "8",
+                  "9",
+                  "10",
+                  "11",
+                  "12",
+                  "13",
+                  "14",
+                  "15"
+                ]
+              },
+              "generate_audio": {
+                "type": "boolean"
+              },
+              "resolution": {
+                "type": "enum",
+                "values": [
+                  "2K"
+                ]
+              }
+            },
+            "passthrough_parameters": [
+              "aigc_watermark"
+            ]
+          }
+        },
         "task_types": [
           "image_input",
           "audio_input",
@@ -9048,6 +11239,62 @@
         }
       },
       "name": "MiniMax: MiniMax M3"
+    },
+    "minimax/minimax-m3:batch": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "video"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "frequency_penalty",
+          "include_reasoning",
+          "logit_bias",
+          "max_tokens",
+          "min_p",
+          "presence_penalty",
+          "reasoning",
+          "repetition_penalty",
+          "response_format",
+          "stop",
+          "structured_outputs",
+          "temperature",
+          "tool_choice",
+          "tools",
+          "top_k",
+          "top_p"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding",
+          "video_input",
+          "video_understanding"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 524288,
+      "max_output_tokens": null,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image+video->text"
+        }
+      },
+      "name": "MiniMax: MiniMax M3 (batch)"
     },
     "minimax/speech-2.8-hd": {
       "capabilities": {
@@ -10598,6 +12845,59 @@
       },
       "name": "MoonshotAI: Kimi K2.7 Code"
     },
+    "moonshotai/kimi-k2.7-code:batch": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "frequency_penalty",
+          "include_reasoning",
+          "logit_bias",
+          "max_tokens",
+          "min_p",
+          "presence_penalty",
+          "reasoning",
+          "repetition_penalty",
+          "response_format",
+          "stop",
+          "structured_outputs",
+          "temperature",
+          "tool_choice",
+          "tools",
+          "top_k",
+          "top_p"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 262144,
+      "max_output_tokens": null,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image->text"
+        }
+      },
+      "name": "MoonshotAI: Kimi K2.7 Code (batch)"
+    },
     "moonshotai/kimi-k3": {
       "capabilities": {
         "input_modalities": [
@@ -11461,6 +13761,57 @@
       },
       "name": "NVIDIA: Nemotron 3 Ultra"
     },
+    "nvidia/nemotron-3-ultra-550b-a55b:batch": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "frequency_penalty",
+          "include_reasoning",
+          "logit_bias",
+          "max_tokens",
+          "min_p",
+          "presence_penalty",
+          "reasoning",
+          "reasoning_effort",
+          "repetition_penalty",
+          "response_format",
+          "stop",
+          "structured_outputs",
+          "temperature",
+          "tool_choice",
+          "tools",
+          "top_k",
+          "top_p"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
+        "tools": true,
+        "vision": false
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 512288,
+      "max_output_tokens": null,
+      "metadata": {
+        "openrouter": {
+          "modality": "text->text"
+        }
+      },
+      "name": "NVIDIA: Nemotron 3 Ultra (batch)"
+    },
     "nvidia/nemotron-3-ultra-550b-a55b:free": {
       "capabilities": {
         "input_modalities": [
@@ -11932,6 +14283,54 @@
       },
       "name": "OpenAI: GPT-3.5 Turbo Instruct"
     },
+    "openai/gpt-3.5-turbo:batch": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [
+          "frequency_penalty",
+          "logit_bias",
+          "logprobs",
+          "max_tokens",
+          "presence_penalty",
+          "response_format",
+          "seed",
+          "stop",
+          "structured_outputs",
+          "temperature",
+          "tool_choice",
+          "tools",
+          "top_logprobs",
+          "top_p"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
+        "tools": true,
+        "vision": false
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 16385,
+      "max_output_tokens": 4096,
+      "metadata": {
+        "openrouter": {
+          "modality": "text->text"
+        }
+      },
+      "name": "OpenAI: GPT-3.5 Turbo (batch)"
+    },
     "openai/gpt-4": {
       "capabilities": {
         "input_modalities": [
@@ -12077,6 +14476,57 @@
       },
       "name": "OpenAI: GPT-4 Turbo Preview"
     },
+    "openai/gpt-4-turbo:batch": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [
+          "frequency_penalty",
+          "logit_bias",
+          "logprobs",
+          "max_tokens",
+          "presence_penalty",
+          "response_format",
+          "seed",
+          "stop",
+          "structured_outputs",
+          "temperature",
+          "tool_choice",
+          "tools",
+          "top_logprobs",
+          "top_p"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 128000,
+      "max_output_tokens": 4096,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image->text"
+        }
+      },
+      "name": "OpenAI: GPT-4 Turbo (batch)"
+    },
     "openai/gpt-4.1": {
       "capabilities": {
         "input_modalities": [
@@ -12171,6 +14621,54 @@
       },
       "name": "OpenAI: GPT-4.1 Mini"
     },
+    "openai/gpt-4.1-mini:batch": {
+      "capabilities": {
+        "input_modalities": [
+          "image",
+          "text",
+          "file"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [
+          "max_tokens",
+          "response_format",
+          "seed",
+          "structured_outputs",
+          "temperature",
+          "tool_choice",
+          "tools",
+          "top_p"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding",
+          "file_input",
+          "file_understanding"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 1047576,
+      "max_output_tokens": 32768,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image+file->text"
+        }
+      },
+      "name": "OpenAI: GPT-4.1 Mini (batch)"
+    },
     "openai/gpt-4.1-nano": {
       "capabilities": {
         "input_modalities": [
@@ -12217,6 +14715,102 @@
         }
       },
       "name": "OpenAI: GPT-4.1 Nano"
+    },
+    "openai/gpt-4.1-nano:batch": {
+      "capabilities": {
+        "input_modalities": [
+          "image",
+          "text",
+          "file"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [
+          "max_tokens",
+          "response_format",
+          "seed",
+          "structured_outputs",
+          "temperature",
+          "tool_choice",
+          "tools",
+          "top_p"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding",
+          "file_input",
+          "file_understanding"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 1047576,
+      "max_output_tokens": 32768,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image+file->text"
+        }
+      },
+      "name": "OpenAI: GPT-4.1 Nano (batch)"
+    },
+    "openai/gpt-4.1:batch": {
+      "capabilities": {
+        "input_modalities": [
+          "image",
+          "text",
+          "file"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [
+          "max_tokens",
+          "response_format",
+          "seed",
+          "structured_outputs",
+          "temperature",
+          "tool_choice",
+          "tools",
+          "top_p"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding",
+          "file_input",
+          "file_understanding"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 1047576,
+      "max_output_tokens": 32768,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image+file->text"
+        }
+      },
+      "name": "OpenAI: GPT-4.1 (batch)"
     },
     "openai/gpt-4o": {
       "capabilities": {
@@ -12596,6 +15190,62 @@
       },
       "name": "OpenAI: GPT-4o Mini Transcribe"
     },
+    "openai/gpt-4o-mini:batch": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "file"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [
+          "frequency_penalty",
+          "logit_bias",
+          "logprobs",
+          "max_tokens",
+          "prediction",
+          "presence_penalty",
+          "response_format",
+          "seed",
+          "stop",
+          "structured_outputs",
+          "temperature",
+          "tool_choice",
+          "tools",
+          "top_logprobs",
+          "top_p",
+          "web_search_options"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding",
+          "file_input",
+          "file_understanding"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 128000,
+      "max_output_tokens": 16384,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image+file->text"
+        }
+      },
+      "name": "OpenAI: GPT-4o-mini (batch)"
+    },
     "openai/gpt-4o-transcribe": {
       "capabilities": {
         "input_modalities": [
@@ -12642,6 +15292,62 @@
         }
       },
       "name": "OpenAI: GPT-4o Transcribe"
+    },
+    "openai/gpt-4o:batch": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "file"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [
+          "frequency_penalty",
+          "logit_bias",
+          "logprobs",
+          "max_tokens",
+          "prediction",
+          "presence_penalty",
+          "response_format",
+          "seed",
+          "stop",
+          "structured_outputs",
+          "temperature",
+          "tool_choice",
+          "tools",
+          "top_logprobs",
+          "top_p",
+          "web_search_options"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding",
+          "file_input",
+          "file_understanding"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 128000,
+      "max_output_tokens": 16384,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image+file->text"
+        }
+      },
+      "name": "OpenAI: GPT-4o (batch)"
     },
     "openai/gpt-5": {
       "capabilities": {
@@ -12700,6 +15406,51 @@
         }
       },
       "name": "OpenAI: GPT-5"
+    },
+    "openai/gpt-5-codex:batch": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "include_reasoning",
+          "max_tokens",
+          "reasoning",
+          "response_format",
+          "seed",
+          "structured_outputs",
+          "tool_choice",
+          "tools"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 400000,
+      "max_output_tokens": 128000,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image->text"
+        }
+      },
+      "name": "OpenAI: GPT-5 Codex (batch)"
     },
     "openai/gpt-5-image": {
       "capabilities": {
@@ -12959,6 +15710,55 @@
       },
       "name": "OpenAI: GPT-5 Mini"
     },
+    "openai/gpt-5-mini:batch": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "file"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "include_reasoning",
+          "max_tokens",
+          "reasoning",
+          "reasoning_effort",
+          "response_format",
+          "seed",
+          "structured_outputs",
+          "tool_choice",
+          "tools"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding",
+          "file_input",
+          "file_understanding"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 400000,
+      "max_output_tokens": 128000,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image+file->text"
+        }
+      },
+      "name": "OpenAI: GPT-5 Mini (batch)"
+    },
     "openai/gpt-5-nano": {
       "capabilities": {
         "input_modalities": [
@@ -13017,6 +15817,55 @@
       },
       "name": "OpenAI: GPT-5 Nano"
     },
+    "openai/gpt-5-nano:batch": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "file"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "include_reasoning",
+          "max_tokens",
+          "reasoning",
+          "reasoning_effort",
+          "response_format",
+          "seed",
+          "structured_outputs",
+          "tool_choice",
+          "tools"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding",
+          "file_input",
+          "file_understanding"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 400000,
+      "max_output_tokens": 128000,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image+file->text"
+        }
+      },
+      "name": "OpenAI: GPT-5 Nano (batch)"
+    },
     "openai/gpt-5-pro": {
       "capabilities": {
         "input_modalities": [
@@ -13070,6 +15919,55 @@
         }
       },
       "name": "OpenAI: GPT-5 Pro"
+    },
+    "openai/gpt-5-pro:batch": {
+      "capabilities": {
+        "input_modalities": [
+          "image",
+          "text",
+          "file"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "include_reasoning",
+          "max_tokens",
+          "reasoning",
+          "reasoning_effort",
+          "response_format",
+          "seed",
+          "structured_outputs",
+          "tool_choice",
+          "tools"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding",
+          "file_input",
+          "file_understanding"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 400000,
+      "max_output_tokens": 128000,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image+file->text"
+        }
+      },
+      "name": "OpenAI: GPT-5 Pro (batch)"
     },
     "openai/gpt-5.1": {
       "capabilities": {
@@ -13289,6 +16187,55 @@
       },
       "name": "OpenAI: GPT-5.1-Codex-Mini"
     },
+    "openai/gpt-5.1:batch": {
+      "capabilities": {
+        "input_modalities": [
+          "image",
+          "text",
+          "file"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "include_reasoning",
+          "max_tokens",
+          "reasoning",
+          "reasoning_effort",
+          "response_format",
+          "seed",
+          "structured_outputs",
+          "tool_choice",
+          "tools"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding",
+          "file_input",
+          "file_understanding"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 400000,
+      "max_output_tokens": 128000,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image+file->text"
+        }
+      },
+      "name": "OpenAI: GPT-5.1 (batch)"
+    },
     "openai/gpt-5.2": {
       "capabilities": {
         "input_modalities": [
@@ -13506,6 +16453,104 @@
       },
       "name": "OpenAI: GPT-5.2 Pro"
     },
+    "openai/gpt-5.2-pro:batch": {
+      "capabilities": {
+        "input_modalities": [
+          "image",
+          "text",
+          "file"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "include_reasoning",
+          "max_tokens",
+          "reasoning",
+          "reasoning_effort",
+          "response_format",
+          "seed",
+          "structured_outputs",
+          "tool_choice",
+          "tools"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding",
+          "file_input",
+          "file_understanding"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 400000,
+      "max_output_tokens": 128000,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image+file->text"
+        }
+      },
+      "name": "OpenAI: GPT-5.2 Pro (batch)"
+    },
+    "openai/gpt-5.2:batch": {
+      "capabilities": {
+        "input_modalities": [
+          "file",
+          "image",
+          "text"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "include_reasoning",
+          "max_tokens",
+          "reasoning",
+          "reasoning_effort",
+          "response_format",
+          "seed",
+          "structured_outputs",
+          "tool_choice",
+          "tools"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding",
+          "file_input",
+          "file_understanding"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 400000,
+      "max_output_tokens": 128000,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image+file->text"
+        }
+      },
+      "name": "OpenAI: GPT-5.2 (batch)"
+    },
     "openai/gpt-5.3-chat": {
       "capabilities": {
         "input_modalities": [
@@ -13521,7 +16566,6 @@
           "supported": false
         },
         "supported_parameters": [
-          "max_completion_tokens",
           "max_tokens",
           "response_format",
           "seed",
@@ -13837,6 +16881,55 @@
       },
       "name": "OpenAI: GPT-5.4 Mini"
     },
+    "openai/gpt-5.4-mini:batch": {
+      "capabilities": {
+        "input_modalities": [
+          "file",
+          "image",
+          "text"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "include_reasoning",
+          "max_tokens",
+          "reasoning",
+          "reasoning_effort",
+          "response_format",
+          "seed",
+          "structured_outputs",
+          "tool_choice",
+          "tools"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding",
+          "file_input",
+          "file_understanding"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 400000,
+      "max_output_tokens": 128000,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image+file->text"
+        }
+      },
+      "name": "OpenAI: GPT-5.4 Mini (batch)"
+    },
     "openai/gpt-5.4-nano": {
       "capabilities": {
         "input_modalities": [
@@ -13896,6 +16989,55 @@
       },
       "name": "OpenAI: GPT-5.4 Nano"
     },
+    "openai/gpt-5.4-nano:batch": {
+      "capabilities": {
+        "input_modalities": [
+          "file",
+          "image",
+          "text"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "include_reasoning",
+          "max_tokens",
+          "reasoning",
+          "reasoning_effort",
+          "response_format",
+          "seed",
+          "structured_outputs",
+          "tool_choice",
+          "tools"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding",
+          "file_input",
+          "file_understanding"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 400000,
+      "max_output_tokens": 128000,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image+file->text"
+        }
+      },
+      "name": "OpenAI: GPT-5.4 Nano (batch)"
+    },
     "openai/gpt-5.4-pro": {
       "capabilities": {
         "input_modalities": [
@@ -13952,6 +17094,104 @@
         }
       },
       "name": "OpenAI: GPT-5.4 Pro"
+    },
+    "openai/gpt-5.4-pro:batch": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "file"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "include_reasoning",
+          "max_tokens",
+          "reasoning",
+          "reasoning_effort",
+          "response_format",
+          "seed",
+          "structured_outputs",
+          "tool_choice",
+          "tools"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding",
+          "file_input",
+          "file_understanding"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 1050000,
+      "max_output_tokens": 128000,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image+file->text"
+        }
+      },
+      "name": "OpenAI: GPT-5.4 Pro (batch)"
+    },
+    "openai/gpt-5.4:batch": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "file"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "include_reasoning",
+          "max_tokens",
+          "reasoning",
+          "reasoning_effort",
+          "response_format",
+          "seed",
+          "structured_outputs",
+          "tool_choice",
+          "tools"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding",
+          "file_input",
+          "file_understanding"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 1050000,
+      "max_output_tokens": 128000,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image+file->text"
+        }
+      },
+      "name": "OpenAI: GPT-5.4 (batch)"
     },
     "openai/gpt-5.5": {
       "capabilities": {
@@ -14067,6 +17307,104 @@
         }
       },
       "name": "OpenAI: GPT-5.5 Pro"
+    },
+    "openai/gpt-5.5-pro:batch": {
+      "capabilities": {
+        "input_modalities": [
+          "file",
+          "image",
+          "text"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "include_reasoning",
+          "max_tokens",
+          "reasoning",
+          "reasoning_effort",
+          "response_format",
+          "seed",
+          "structured_outputs",
+          "tool_choice",
+          "tools"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding",
+          "file_input",
+          "file_understanding"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 1050000,
+      "max_output_tokens": 128000,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image+file->text"
+        }
+      },
+      "name": "OpenAI: GPT-5.5 Pro (batch)"
+    },
+    "openai/gpt-5.5:batch": {
+      "capabilities": {
+        "input_modalities": [
+          "file",
+          "image",
+          "text"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "include_reasoning",
+          "max_tokens",
+          "reasoning",
+          "reasoning_effort",
+          "response_format",
+          "seed",
+          "structured_outputs",
+          "tool_choice",
+          "tools"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding",
+          "file_input",
+          "file_understanding"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 1050000,
+      "max_output_tokens": 128000,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image+file->text"
+        }
+      },
+      "name": "OpenAI: GPT-5.5 (batch)"
     },
     "openai/gpt-5.6-luna": {
       "capabilities": {
@@ -14188,6 +17526,104 @@
       },
       "name": "OpenAI: GPT-5.6 Luna Pro"
     },
+    "openai/gpt-5.6-luna-pro:batch": {
+      "capabilities": {
+        "input_modalities": [
+          "file",
+          "image",
+          "text"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "include_reasoning",
+          "max_tokens",
+          "reasoning",
+          "reasoning_effort",
+          "response_format",
+          "seed",
+          "structured_outputs",
+          "tool_choice",
+          "tools"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding",
+          "file_input",
+          "file_understanding"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 1050000,
+      "max_output_tokens": 128000,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image+file->text"
+        }
+      },
+      "name": "OpenAI: GPT-5.6 Luna Pro (batch)"
+    },
+    "openai/gpt-5.6-luna:batch": {
+      "capabilities": {
+        "input_modalities": [
+          "file",
+          "image",
+          "text"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "include_reasoning",
+          "max_tokens",
+          "reasoning",
+          "reasoning_effort",
+          "response_format",
+          "seed",
+          "structured_outputs",
+          "tool_choice",
+          "tools"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding",
+          "file_input",
+          "file_understanding"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 1050000,
+      "max_output_tokens": 128000,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image+file->text"
+        }
+      },
+      "name": "OpenAI: GPT-5.6 Luna (batch)"
+    },
     "openai/gpt-5.6-sol": {
       "capabilities": {
         "input_modalities": [
@@ -14308,6 +17744,104 @@
       },
       "name": "OpenAI: GPT-5.6 Sol Pro"
     },
+    "openai/gpt-5.6-sol-pro:batch": {
+      "capabilities": {
+        "input_modalities": [
+          "file",
+          "image",
+          "text"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "include_reasoning",
+          "max_tokens",
+          "reasoning",
+          "reasoning_effort",
+          "response_format",
+          "seed",
+          "structured_outputs",
+          "tool_choice",
+          "tools"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding",
+          "file_input",
+          "file_understanding"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 1050000,
+      "max_output_tokens": 128000,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image+file->text"
+        }
+      },
+      "name": "OpenAI: GPT-5.6 Sol Pro (batch)"
+    },
+    "openai/gpt-5.6-sol:batch": {
+      "capabilities": {
+        "input_modalities": [
+          "file",
+          "image",
+          "text"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "include_reasoning",
+          "max_tokens",
+          "reasoning",
+          "reasoning_effort",
+          "response_format",
+          "seed",
+          "structured_outputs",
+          "tool_choice",
+          "tools"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding",
+          "file_input",
+          "file_understanding"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 1050000,
+      "max_output_tokens": 128000,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image+file->text"
+        }
+      },
+      "name": "OpenAI: GPT-5.6 Sol (batch)"
+    },
     "openai/gpt-5.6-terra": {
       "capabilities": {
         "input_modalities": [
@@ -14427,6 +17961,153 @@
         }
       },
       "name": "OpenAI: GPT-5.6 Terra Pro"
+    },
+    "openai/gpt-5.6-terra-pro:batch": {
+      "capabilities": {
+        "input_modalities": [
+          "file",
+          "image",
+          "text"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "include_reasoning",
+          "max_tokens",
+          "reasoning",
+          "reasoning_effort",
+          "response_format",
+          "seed",
+          "structured_outputs",
+          "tool_choice",
+          "tools"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding",
+          "file_input",
+          "file_understanding"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 1050000,
+      "max_output_tokens": 128000,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image+file->text"
+        }
+      },
+      "name": "OpenAI: GPT-5.6 Terra Pro (batch)"
+    },
+    "openai/gpt-5.6-terra:batch": {
+      "capabilities": {
+        "input_modalities": [
+          "file",
+          "image",
+          "text"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "include_reasoning",
+          "max_tokens",
+          "reasoning",
+          "reasoning_effort",
+          "response_format",
+          "seed",
+          "structured_outputs",
+          "tool_choice",
+          "tools"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding",
+          "file_input",
+          "file_understanding"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 1050000,
+      "max_output_tokens": 128000,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image+file->text"
+        }
+      },
+      "name": "OpenAI: GPT-5.6 Terra (batch)"
+    },
+    "openai/gpt-5:batch": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "file"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "include_reasoning",
+          "max_tokens",
+          "reasoning",
+          "reasoning_effort",
+          "response_format",
+          "seed",
+          "structured_outputs",
+          "tool_choice",
+          "tools"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding",
+          "file_input",
+          "file_understanding"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 400000,
+      "max_output_tokens": 128000,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image+file->text"
+        }
+      },
+      "name": "OpenAI: GPT-5 (batch)"
     },
     "openai/gpt-audio": {
       "capabilities": {
@@ -15112,6 +18793,53 @@
       },
       "name": "OpenAI: gpt-oss-safeguard-20b"
     },
+    "openai/gpt-transcribe": {
+      "capabilities": {
+        "input_modalities": [
+          "audio"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "transcription"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [
+          "frequency_penalty",
+          "logit_bias",
+          "logprobs",
+          "max_tokens",
+          "presence_penalty",
+          "response_format",
+          "seed",
+          "stop",
+          "structured_outputs",
+          "temperature",
+          "top_logprobs",
+          "top_p"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "text_output",
+          "audio_input",
+          "speech_to_text"
+        ],
+        "tools": false,
+        "vision": false
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": null,
+      "max_output_tokens": null,
+      "metadata": {
+        "openrouter": {
+          "modality": "audio->transcription"
+        }
+      },
+      "name": "OpenAI: GPT Transcribe"
+    },
     "openai/o1": {
       "capabilities": {
         "input_modalities": [
@@ -15210,6 +18938,100 @@
         }
       },
       "name": "OpenAI: o1-pro"
+    },
+    "openai/o1-pro:batch": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "file"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "include_reasoning",
+          "max_tokens",
+          "reasoning",
+          "response_format",
+          "seed",
+          "structured_outputs"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding",
+          "file_input",
+          "file_understanding"
+        ],
+        "tools": false,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 200000,
+      "max_output_tokens": 100000,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image+file->text"
+        }
+      },
+      "name": "OpenAI: o1-pro (batch)"
+    },
+    "openai/o1:batch": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "file"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "include_reasoning",
+          "max_tokens",
+          "reasoning",
+          "response_format",
+          "seed",
+          "structured_outputs",
+          "tool_choice",
+          "tools"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding",
+          "file_input",
+          "file_understanding"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 200000,
+      "max_output_tokens": 100000,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image+file->text"
+        }
+      },
+      "name": "OpenAI: o1 (batch)"
     },
     "openai/o3": {
       "capabilities": {
@@ -15369,6 +19191,97 @@
       },
       "name": "OpenAI: o3 Mini High"
     },
+    "openai/o3-mini-high:batch": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "file"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "include_reasoning",
+          "max_tokens",
+          "reasoning",
+          "reasoning_effort",
+          "response_format",
+          "seed",
+          "structured_outputs",
+          "tool_choice",
+          "tools"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output",
+          "file_input",
+          "file_understanding"
+        ],
+        "tools": true,
+        "vision": false
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 200000,
+      "max_output_tokens": 100000,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+file->text"
+        }
+      },
+      "name": "OpenAI: o3 Mini High (batch)"
+    },
+    "openai/o3-mini:batch": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "file"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "include_reasoning",
+          "max_tokens",
+          "reasoning",
+          "response_format",
+          "seed",
+          "structured_outputs",
+          "tool_choice",
+          "tools"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output",
+          "file_input",
+          "file_understanding"
+        ],
+        "tools": true,
+        "vision": false
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 200000,
+      "max_output_tokens": 100000,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+file->text"
+        }
+      },
+      "name": "OpenAI: o3 Mini (batch)"
+    },
     "openai/o3-pro": {
       "capabilities": {
         "input_modalities": [
@@ -15423,6 +19336,102 @@
         }
       },
       "name": "OpenAI: o3 Pro"
+    },
+    "openai/o3-pro:batch": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "file",
+          "image"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "include_reasoning",
+          "max_tokens",
+          "reasoning",
+          "response_format",
+          "seed",
+          "structured_outputs",
+          "tool_choice",
+          "tools"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding",
+          "file_input",
+          "file_understanding"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 200000,
+      "max_output_tokens": 100000,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image+file->text"
+        }
+      },
+      "name": "OpenAI: o3 Pro (batch)"
+    },
+    "openai/o3:batch": {
+      "capabilities": {
+        "input_modalities": [
+          "image",
+          "text",
+          "file"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "include_reasoning",
+          "max_tokens",
+          "reasoning",
+          "response_format",
+          "seed",
+          "structured_outputs",
+          "tool_choice",
+          "tools"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding",
+          "file_input",
+          "file_understanding"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 200000,
+      "max_output_tokens": 100000,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image+file->text"
+        }
+      },
+      "name": "OpenAI: o3 (batch)"
     },
     "openai/o4-mini": {
       "capabilities": {
@@ -15533,6 +19542,103 @@
       },
       "name": "OpenAI: o4 Mini High"
     },
+    "openai/o4-mini-high:batch": {
+      "capabilities": {
+        "input_modalities": [
+          "image",
+          "text",
+          "file"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "include_reasoning",
+          "max_tokens",
+          "reasoning",
+          "reasoning_effort",
+          "response_format",
+          "seed",
+          "structured_outputs",
+          "tool_choice",
+          "tools"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding",
+          "file_input",
+          "file_understanding"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 200000,
+      "max_output_tokens": 100000,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image+file->text"
+        }
+      },
+      "name": "OpenAI: o4 Mini High (batch)"
+    },
+    "openai/o4-mini:batch": {
+      "capabilities": {
+        "input_modalities": [
+          "image",
+          "text",
+          "file"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "include_reasoning",
+          "max_tokens",
+          "reasoning",
+          "response_format",
+          "seed",
+          "structured_outputs",
+          "tool_choice",
+          "tools"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding",
+          "file_input",
+          "file_understanding"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 200000,
+      "max_output_tokens": 100000,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image+file->text"
+        }
+      },
+      "name": "OpenAI: o4 Mini (batch)"
+    },
     "openai/sora-2-pro": {
       "capabilities": {
         "input_modalities": [
@@ -15555,6 +19661,52 @@
           "top_logprobs"
         ],
         "supported_voices": [],
+        "task_options": {
+          "video_generation": {
+            "parameters": {
+              "aspect_ratio": {
+                "type": "enum",
+                "values": [
+                  "16:9",
+                  "9:16"
+                ]
+              },
+              "duration": {
+                "type": "enum",
+                "values": [
+                  "4",
+                  "8",
+                  "12",
+                  "16",
+                  "20"
+                ]
+              },
+              "generate_audio": {
+                "type": "boolean"
+              },
+              "resolution": {
+                "type": "enum",
+                "values": [
+                  "720p",
+                  "1080p"
+                ]
+              },
+              "size": {
+                "type": "enum",
+                "values": [
+                  "1280x720",
+                  "1080x1920",
+                  "1920x1080",
+                  "720x1280"
+                ]
+              }
+            },
+            "passthrough_parameters": [
+              "quality",
+              "style"
+            ]
+          }
+        },
         "task_types": [
           "image_input",
           "video_generation"
@@ -15619,6 +19771,51 @@
         }
       },
       "name": "OpenAI: Text Embedding 3 Large"
+    },
+    "openai/text-embedding-3-large:batch": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "embeddings"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [
+          "frequency_penalty",
+          "logit_bias",
+          "logprobs",
+          "max_tokens",
+          "presence_penalty",
+          "response_format",
+          "seed",
+          "stop",
+          "structured_outputs",
+          "temperature",
+          "top_logprobs",
+          "top_p"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "text_embedding"
+        ],
+        "tools": false,
+        "vision": false
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 8192,
+      "max_output_tokens": null,
+      "metadata": {
+        "openrouter": {
+          "modality": "text->embeddings"
+        }
+      },
+      "name": "OpenAI: Text Embedding 3 Large (batch)"
     },
     "openai/text-embedding-3-small": {
       "capabilities": {
@@ -15710,6 +19907,51 @@
         }
       },
       "name": "OpenAI: Text Embedding Ada 002"
+    },
+    "openai/text-embedding-ada-002:batch": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "embeddings"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [
+          "frequency_penalty",
+          "logit_bias",
+          "logprobs",
+          "max_tokens",
+          "presence_penalty",
+          "response_format",
+          "seed",
+          "stop",
+          "structured_outputs",
+          "temperature",
+          "top_logprobs",
+          "top_p"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "text_embedding"
+        ],
+        "tools": false,
+        "vision": false
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 8192,
+      "max_output_tokens": null,
+      "metadata": {
+        "openrouter": {
+          "modality": "text->embeddings"
+        }
+      },
+      "name": "OpenAI: Text Embedding Ada 002 (batch)"
     },
     "openai/whisper-1": {
       "capabilities": {
@@ -16876,6 +21118,176 @@
       },
       "name": "Qwen: Qwen-Audio-3.0-TTS Plus"
     },
+    "qwen/qwen-image-3": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "image"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [
+          "max_tokens",
+          "presence_penalty",
+          "response_format",
+          "seed",
+          "temperature",
+          "top_p"
+        ],
+        "supported_voices": [],
+        "task_options": {
+          "image_generation": {
+            "parameters": {
+              "aspect_ratio": {
+                "type": "enum",
+                "values": [
+                  "1:1",
+                  "1:2",
+                  "1:4",
+                  "2:1",
+                  "2:3",
+                  "3:2",
+                  "3:4",
+                  "4:1",
+                  "4:3",
+                  "4:5",
+                  "5:4",
+                  "9:16",
+                  "16:9"
+                ]
+              },
+              "input_references": {
+                "max": 4,
+                "min": 0,
+                "type": "range"
+              },
+              "n": {
+                "max": 6,
+                "min": 1,
+                "type": "range"
+              },
+              "resolution": {
+                "type": "enum",
+                "values": [
+                  "1K",
+                  "2K"
+                ]
+              },
+              "seed": {
+                "type": "boolean"
+              }
+            }
+          }
+        },
+        "task_types": [
+          "image_input",
+          "image_generation"
+        ],
+        "tools": false,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 65536,
+      "max_output_tokens": null,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image->image"
+        }
+      },
+      "name": "Qwen: Qwen Image 3"
+    },
+    "qwen/qwen-image-3-pro": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "image"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [
+          "max_tokens",
+          "presence_penalty",
+          "response_format",
+          "seed",
+          "temperature",
+          "top_p"
+        ],
+        "supported_voices": [],
+        "task_options": {
+          "image_generation": {
+            "parameters": {
+              "aspect_ratio": {
+                "type": "enum",
+                "values": [
+                  "1:1",
+                  "1:2",
+                  "1:4",
+                  "2:1",
+                  "2:3",
+                  "3:2",
+                  "3:4",
+                  "4:1",
+                  "4:3",
+                  "4:5",
+                  "5:4",
+                  "9:16",
+                  "16:9"
+                ]
+              },
+              "input_references": {
+                "max": 4,
+                "min": 0,
+                "type": "range"
+              },
+              "n": {
+                "max": 6,
+                "min": 1,
+                "type": "range"
+              },
+              "resolution": {
+                "type": "enum",
+                "values": [
+                  "1K",
+                  "2K"
+                ]
+              },
+              "seed": {
+                "type": "boolean"
+              }
+            }
+          }
+        },
+        "task_types": [
+          "image_input",
+          "image_generation"
+        ],
+        "tools": false,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 65536,
+      "max_output_tokens": null,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image->image"
+        }
+      },
+      "name": "Qwen: Qwen Image 3 Pro"
+    },
     "qwen/qwen-plus": {
       "capabilities": {
         "input_modalities": [
@@ -17679,7 +22091,7 @@
       ],
       "context_window": 262144,
       "family": "qwen",
-      "max_output_tokens": 262144,
+      "max_output_tokens": 32768,
       "metadata": {
         "openrouter": {
           "modality": "text->text"
@@ -18072,7 +22484,7 @@
       ],
       "context_window": 262144,
       "family": "qwen",
-      "max_output_tokens": 262144,
+      "max_output_tokens": 16384,
       "metadata": {
         "openrouter": {
           "modality": "text->text"
@@ -18125,7 +22537,7 @@
       ],
       "context_window": 262144,
       "family": "qwen",
-      "max_output_tokens": 32768,
+      "max_output_tokens": 262144,
       "metadata": {
         "openrouter": {
           "modality": "text->text"
@@ -18290,7 +22702,7 @@
       ],
       "context_window": 262144,
       "family": "qwen",
-      "max_output_tokens": 32768,
+      "max_output_tokens": 16384,
       "metadata": {
         "openrouter": {
           "modality": "text+image->text"
@@ -18565,7 +22977,7 @@
       ],
       "context_window": 262144,
       "family": "qwen",
-      "max_output_tokens": 65536,
+      "max_output_tokens": 81920,
       "metadata": {
         "openrouter": {
           "modality": "text+image+video->text"
@@ -19045,7 +23457,7 @@
       ],
       "context_window": 262144,
       "family": "qwen",
-      "max_output_tokens": 65536,
+      "max_output_tokens": 262144,
       "metadata": {
         "openrouter": {
           "modality": "text+image+video->text"
@@ -19447,6 +23859,72 @@
         }
       },
       "name": "Qwen: Qwen3.7 Plus"
+    },
+    "qwen/qwen3.8-max": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "video"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "control": "levels",
+          "levels": [
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "xhigh"
+          ],
+          "supported": true
+        },
+        "supported_parameters": [
+          "frequency_penalty",
+          "include_reasoning",
+          "logprobs",
+          "max_tokens",
+          "presence_penalty",
+          "reasoning",
+          "reasoning_effort",
+          "response_format",
+          "seed",
+          "stop",
+          "structured_outputs",
+          "temperature",
+          "tool_choice",
+          "tools",
+          "top_k",
+          "top_logprobs",
+          "top_p"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding",
+          "video_input",
+          "video_understanding"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 1000000,
+      "family": "qwen",
+      "max_output_tokens": 131072,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image+video->text"
+        }
+      },
+      "name": "Qwen: Qwen3.8 Max"
     },
     "recraft/recraft-v3": {
       "capabilities": {
@@ -20393,6 +24871,32 @@
         },
         "supported_parameters": [],
         "supported_voices": [],
+        "task_options": {
+          "video_generation": {
+            "parameters": {
+              "aspect_ratio": {
+                "type": "enum",
+                "values": [
+                  "16:9",
+                  "4:3",
+                  "3:2",
+                  "1:1",
+                  "2:3",
+                  "3:4",
+                  "9:16",
+                  "21:9"
+                ]
+              },
+              "seed": {
+                "type": "boolean"
+              }
+            },
+            "passthrough_parameters": [
+              "contentModeration",
+              "keyframes"
+            ]
+          }
+        },
         "task_types": [
           "image_input",
           "video_input",
@@ -20428,6 +24932,55 @@
         },
         "supported_parameters": [],
         "supported_voices": [],
+        "task_options": {
+          "video_generation": {
+            "frame_images": [
+              "first_frame"
+            ],
+            "parameters": {
+              "aspect_ratio": {
+                "type": "enum",
+                "values": [
+                  "16:9",
+                  "9:16"
+                ]
+              },
+              "duration": {
+                "type": "enum",
+                "values": [
+                  "2",
+                  "3",
+                  "4",
+                  "5",
+                  "6",
+                  "7",
+                  "8",
+                  "9",
+                  "10"
+                ]
+              },
+              "resolution": {
+                "type": "enum",
+                "values": [
+                  "720p"
+                ]
+              },
+              "seed": {
+                "type": "boolean"
+              },
+              "size": {
+                "type": "enum",
+                "values": [
+                  "1280x720",
+                  "720x1280"
+                ]
+              }
+            },
+            "passthrough_parameters": [
+              "contentModeration"
+            ]
+          }
+        },
         "task_types": [
           "image_input",
           "video_generation"
@@ -21777,7 +26330,7 @@
         "api-key"
       ],
       "context_window": 1024000,
-      "max_output_tokens": 32768,
+      "max_output_tokens": 1024000,
       "metadata": {
         "openrouter": {
           "modality": "text->text"
@@ -21932,7 +26485,7 @@
       ],
       "context_window": 1048576,
       "family": "ling",
-      "max_output_tokens": 1048576,
+      "max_output_tokens": 262144,
       "metadata": {
         "openrouter": {
           "modality": "text+image+audio->text"
@@ -21999,6 +26552,7 @@
         "api-key"
       ],
       "context_window": 524288,
+      "family": "ling",
       "max_output_tokens": 262144,
       "metadata": {
         "openrouter": {
@@ -22006,6 +26560,61 @@
         }
       },
       "name": "Thinking Machines: Inkling Small"
+    },
+    "thinkingmachines/inkling:batch": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "audio"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "frequency_penalty",
+          "include_reasoning",
+          "logit_bias",
+          "max_tokens",
+          "min_p",
+          "presence_penalty",
+          "reasoning",
+          "reasoning_effort",
+          "repetition_penalty",
+          "stop",
+          "temperature",
+          "tool_choice",
+          "tools",
+          "top_k",
+          "top_p"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding",
+          "audio_input",
+          "speech_to_text"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 524288,
+      "max_output_tokens": null,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image+audio->text"
+        }
+      },
+      "name": "Thinking Machines: Inkling (batch)"
     },
     "undi95/remm-slerp-l2-13b": {
       "capabilities": {
@@ -22049,7 +26658,7 @@
         "api-key"
       ],
       "context_window": 6144,
-      "max_output_tokens": 2048,
+      "max_output_tokens": 6144,
       "metadata": {
         "openrouter": {
           "modality": "text->text"
@@ -22070,14 +26679,17 @@
           "supported": true
         },
         "supported_parameters": [
+          "frequency_penalty",
           "include_reasoning",
           "max_tokens",
+          "presence_penalty",
           "reasoning",
           "response_format",
           "structured_outputs",
           "temperature",
           "tool_choice",
-          "tools"
+          "tools",
+          "top_p"
         ],
         "supported_voices": [],
         "task_types": [
@@ -22090,9 +26702,9 @@
       "connections": [
         "api-key"
       ],
-      "context_window": 128000,
+      "context_window": 131072,
       "family": "solar-pro",
-      "max_output_tokens": 128000,
+      "max_output_tokens": 131072,
       "metadata": {
         "openrouter": {
           "modality": "text->text"
@@ -22321,7 +26933,7 @@
           "modality": "text+image+file->text"
         }
       },
-      "name": "xAI: Grok 4.20"
+      "name": "SpaceXAI: Grok 4.20"
     },
     "x-ai/grok-4.20-multi-agent": {
       "capabilities": {
@@ -22380,7 +26992,7 @@
           "modality": "text+image+file->text"
         }
       },
-      "name": "xAI: Grok 4.20 Multi-Agent"
+      "name": "SpaceXAI: Grok 4.20 Multi-Agent"
     },
     "x-ai/grok-4.3": {
       "capabilities": {
@@ -22444,7 +27056,7 @@
           "modality": "text+image+file->text"
         }
       },
-      "name": "xAI: Grok 4.3"
+      "name": "SpaceXAI: Grok 4.3"
     },
     "x-ai/grok-4.5": {
       "capabilities": {
@@ -22507,7 +27119,7 @@
           "modality": "text+image+file->text"
         }
       },
-      "name": "xAI: Grok 4.5"
+      "name": "SpaceXAI: Grok 4.5"
     },
     "x-ai/grok-build-0.1": {
       "capabilities": {
@@ -22563,7 +27175,7 @@
           "modality": "text+image+file->text"
         }
       },
-      "name": "xAI: Grok Build 0.1"
+      "name": "SpaceXAI: Grok Build 0.1"
     },
     "x-ai/grok-imagine-image-quality": {
       "capabilities": {
@@ -22650,7 +27262,7 @@
           "modality": "text+image->image"
         }
       },
-      "name": "xAI: Grok Imagine Image Quality"
+      "name": "SpaceXAI: Grok Imagine Image Quality"
     },
     "x-ai/grok-imagine-video": {
       "capabilities": {
@@ -22678,6 +27290,73 @@
           "top_p"
         ],
         "supported_voices": [],
+        "task_options": {
+          "video_generation": {
+            "frame_images": [
+              "first_frame"
+            ],
+            "parameters": {
+              "aspect_ratio": {
+                "type": "enum",
+                "values": [
+                  "16:9",
+                  "9:16",
+                  "1:1",
+                  "4:3",
+                  "3:4",
+                  "3:2",
+                  "2:3"
+                ]
+              },
+              "duration": {
+                "type": "enum",
+                "values": [
+                  "1",
+                  "2",
+                  "3",
+                  "4",
+                  "5",
+                  "6",
+                  "7",
+                  "8",
+                  "9",
+                  "10",
+                  "11",
+                  "12",
+                  "13",
+                  "14",
+                  "15"
+                ]
+              },
+              "resolution": {
+                "type": "enum",
+                "values": [
+                  "480p",
+                  "720p"
+                ]
+              },
+              "size": {
+                "type": "enum",
+                "values": [
+                  "854x480",
+                  "1280x720",
+                  "480x854",
+                  "720x1280",
+                  "480x480",
+                  "720x720",
+                  "640x480",
+                  "960x720",
+                  "480x640",
+                  "720x960",
+                  "720x480",
+                  "1080x720",
+                  "480x720",
+                  "720x1080"
+                ]
+              }
+            }
+          }
+        },
         "task_types": [
           "image_input",
           "video_generation"
@@ -22695,7 +27374,7 @@
           "modality": "text+image->video"
         }
       },
-      "name": "xAI: Grok Imagine Video"
+      "name": "SpaceXAI: Grok Imagine Video"
     },
     "x-ai/grok-imagine-video-1.5": {
       "capabilities": {
@@ -22723,6 +27402,55 @@
           "top_p"
         ],
         "supported_voices": [],
+        "task_options": {
+          "video_generation": {
+            "frame_images": [
+              "first_frame"
+            ],
+            "parameters": {
+              "aspect_ratio": {
+                "type": "enum",
+                "values": [
+                  "16:9",
+                  "9:16",
+                  "1:1",
+                  "4:3",
+                  "3:4",
+                  "3:2",
+                  "2:3"
+                ]
+              },
+              "duration": {
+                "type": "enum",
+                "values": [
+                  "1",
+                  "2",
+                  "3",
+                  "4",
+                  "5",
+                  "6",
+                  "7",
+                  "8",
+                  "9",
+                  "10",
+                  "11",
+                  "12",
+                  "13",
+                  "14",
+                  "15"
+                ]
+              },
+              "resolution": {
+                "type": "enum",
+                "values": [
+                  "480p",
+                  "720p",
+                  "1080p"
+                ]
+              }
+            }
+          }
+        },
         "task_types": [
           "image_input",
           "video_generation"
@@ -22740,7 +27468,7 @@
           "modality": "text+image->video"
         }
       },
-      "name": "xAI: Grok Imagine Video 1.5"
+      "name": "SpaceXAI: Grok Imagine Video 1.5"
     },
     "x-ai/grok-stt-1.0": {
       "capabilities": {
@@ -22785,7 +27513,7 @@
           "modality": "audio->transcription"
         }
       },
-      "name": "xAI: Grok STT 1.0"
+      "name": "SpaceXAI: Grok STT 1.0"
     },
     "x-ai/grok-voice-tts-1.0": {
       "capabilities": {
@@ -22835,7 +27563,7 @@
           "modality": "text->speech"
         }
       },
-      "name": "xAI: Grok Voice TTS 1.0"
+      "name": "SpaceXAI: Grok Voice TTS 1.0"
     },
     "xiaomi/mimo-v2.5": {
       "capabilities": {
@@ -23315,6 +28043,7 @@
           "temperature",
           "tool_choice",
           "tools",
+          "top_a",
           "top_k",
           "top_logprobs",
           "top_p"
@@ -23542,7 +28271,7 @@
       ],
       "context_window": 204800,
       "family": "glm",
-      "max_output_tokens": 128000,
+      "max_output_tokens": 131072,
       "metadata": {
         "openrouter": {
           "modality": "text->text",
@@ -23612,6 +28341,57 @@
         }
       },
       "name": "Z.ai: GLM 5.2"
+    },
+    "z-ai/glm-5.2:batch": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "frequency_penalty",
+          "include_reasoning",
+          "logit_bias",
+          "max_tokens",
+          "min_p",
+          "presence_penalty",
+          "reasoning",
+          "reasoning_effort",
+          "repetition_penalty",
+          "response_format",
+          "stop",
+          "structured_outputs",
+          "temperature",
+          "tool_choice",
+          "tools",
+          "top_k",
+          "top_p"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
+        "tools": true,
+        "vision": false
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 512000,
+      "max_output_tokens": null,
+      "metadata": {
+        "openrouter": {
+          "modality": "text->text"
+        }
+      },
+      "name": "Z.ai: GLM 5.2 (batch)"
     },
     "z-ai/glm-5v-turbo": {
       "capabilities": {
@@ -24000,6 +28780,68 @@
         }
       },
       "name": "Anthropic Claude Sonnet Latest"
+    },
+    "~deepseek/deepseek-v4-flash-latest": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "control": "levels",
+          "levels": [
+            "low",
+            "high",
+            "max"
+          ],
+          "supported": true
+        },
+        "supported_parameters": [
+          "frequency_penalty",
+          "include_reasoning",
+          "logit_bias",
+          "logprobs",
+          "max_tokens",
+          "min_p",
+          "presence_penalty",
+          "reasoning",
+          "reasoning_effort",
+          "repetition_penalty",
+          "response_format",
+          "seed",
+          "stop",
+          "structured_outputs",
+          "temperature",
+          "tool_choice",
+          "tools",
+          "top_a",
+          "top_k",
+          "top_logprobs",
+          "top_p"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
+        "tools": true,
+        "vision": false
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 1048576,
+      "family": "deepseek",
+      "max_output_tokens": 131072,
+      "metadata": {
+        "openrouter": {
+          "modality": "text->text"
+        }
+      },
+      "name": "DeepSeek V4 Flash Latest"
     },
     "~google/gemini-flash-latest": {
       "capabilities": {
