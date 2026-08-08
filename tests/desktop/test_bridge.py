@@ -13,6 +13,7 @@ import pytest
 
 from desktop.connection import PreparedConnection, ServerEntry
 from desktop.main import DesktopProbeResult, DesktopTarget
+from desktop.system_actions import DesktopSystemActions
 from desktop.wakeword import bridge as bridge_module
 from desktop.wakeword import engine as engine_module
 from desktop.wakeword.bridge import DesktopBridge
@@ -96,7 +97,36 @@ def test_get_desktop_capabilities(tmp_path: Path) -> None:
 
     capabilities = bridge.getDesktopCapabilities()
 
-    assert capabilities == {"wakeword": True, "serverSelection": True}
+    assert capabilities == {
+        "wakeword": True,
+        "serverSelection": True,
+        "contextMenu": True,
+    }
+
+
+def test_desktop_system_actions_validate_and_delegate(tmp_path: Path) -> None:
+    _write_settings(tmp_path / "settings.json")
+    copied: list[str] = []
+    opened: list[str] = []
+
+    def open_url(url: str) -> bool:
+        opened.append(url)
+        return True
+
+    bridge = DesktopBridge(
+        settings_path=tmp_path / "settings.json",
+        system_actions=DesktopSystemActions(
+            clipboard_writer=copied.append,
+            clipboard_reader=lambda: "paste me",
+            external_url_opener=open_url,
+        ),
+    )
+
+    assert bridge.setClipboardText("copy me") == {"copied": True}
+    assert bridge.getClipboardText() == "paste me"
+    assert bridge.openExternalUrl("https://example.com/path?q=1") == {"opened": True}
+    assert copied == ["copy me"]
+    assert opened == ["https://example.com/path?q=1"]
 
 
 def test_get_wakeword_status_shape(tmp_path: Path) -> None:
@@ -985,6 +1015,7 @@ def test_wakeword_and_connection_methods_share_one_bridge(tmp_path: Path) -> Non
     assert bridge.getDesktopCapabilities() == {
         "wakeword": True,
         "serverSelection": True,
+        "contextMenu": True,
     }
     bridge.connect("pi.lan", 9000)
     assert controller.prepare_calls == [("pi.lan", 9000)]

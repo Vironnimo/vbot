@@ -8,7 +8,7 @@ The *same* bridge instance stays the window's single `js_api` across
 `Window.load_url` navigation, so it must serve both callers: the shell
 connection screen (which calls the connection methods to list/select/add/
 remove/connect servers) and the remote WebUI (which calls the wakeword
-methods). The connection methods delegate to the injected
+and native system-action methods). The connection methods delegate to the injected
 ``ConnectionController``; the bridge owns no server-selection logic itself.
 """
 
@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol, cast
 
 from desktop.settings import read_wakeword_settings, write_wakeword_settings
+from desktop.system_actions import DesktopSystemActions
 from desktop.wakeword.engine import (
     DEFAULT_WAKEWORD_SENSITIVITY,
     MAX_ACTIVE_WAKEWORD_MODELS,
@@ -139,6 +140,7 @@ class DesktopBridge:
         mode: str = "real",
         model_catalog: Any = None,
         speech_readiness_checker: Callable[[str], str | None] | None = None,
+        system_actions: DesktopSystemActions | None = None,
     ) -> None:
         self._settings_path = settings_path
         self._worker = worker
@@ -156,6 +158,7 @@ class DesktopBridge:
             model_catalog if model_catalog is not None else WakewordModelCatalog(settings_path)
         )
         self._speech_readiness_checker = speech_readiness_checker
+        self._system_actions = system_actions or DesktopSystemActions()
         self._state = _WAKEWORD_STATE_OFF
         self._error_code: str | None = None
         self._active_microphone: dict[str, Any] | None = None
@@ -191,7 +194,21 @@ class DesktopBridge:
 
     def getDesktopCapabilities(self) -> dict[str, bool]:  # noqa: N802
         """Return desktop-only feature flags for the WebUI feature gates."""
-        return {"wakeword": True, "serverSelection": True}
+        return {"wakeword": True, "serverSelection": True, "contextMenu": True}
+
+    def setClipboardText(self, text: Any) -> dict[str, bool]:  # noqa: N802
+        """Replace the host clipboard with validated plain text."""
+        self._system_actions.set_clipboard_text(text)
+        return {"copied": True}
+
+    def getClipboardText(self) -> str:  # noqa: N802
+        """Return plain text from the host clipboard for an explicit paste."""
+        return self._system_actions.get_clipboard_text()
+
+    def openExternalUrl(self, url: Any) -> dict[str, bool]:  # noqa: N802
+        """Open one validated HTTP(S) URL in the host's default browser."""
+        self._system_actions.open_external_url(url)
+        return {"opened": True}
 
     # -- Status polling ------------------------------------------------------
 

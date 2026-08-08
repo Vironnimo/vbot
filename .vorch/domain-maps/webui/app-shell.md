@@ -4,9 +4,16 @@ Read this reference only for WebUI application-shell, navigation, connectivity, 
 
 ## Ownership
 
-`App.svelte` composes the major views and creates the long-lived application controller. `appController.js` owns global loading, active-view availability, navigation, server-event dispatch, and refresh coordination. `api.js` owns the actual HTTP, WebSocket, and SSE transport adapters; `connectionState.js`, `navigationHistory.js`, and `resourceInvalidation.js` keep their respective state machines out of the root component.
+`App.svelte` composes the major views and creates the long-lived application controller. `appController.js` owns global loading, active-view availability, navigation, server-event dispatch, and refresh coordination. `AppShell.svelte` owns global viewport/focus presentation, including the capability-gated Desktop context menu. `api.js` owns the actual HTTP, WebSocket, and SSE transport adapters; `connectionState.js`, `navigationHistory.js`, and `resourceInvalidation.js` keep their respective state machines out of the root component.
 
 Domain controllers still own their data. The app shell may request a refresh or route a lifecycle event, but it must not duplicate Chat, Provider, Extension, Project, or Settings rules.
+
+## Desktop context menu
+
+- `App.svelte` enables the custom menu only after the live Desktop bridge advertises `contextMenu`; an ordinary browser never has its native `contextmenu` event cancelled.
+- `AppShell.svelte` derives actions from the event's composed DOM path: safe absolute HTTP(S) links expose Copy link address and Open in browser, selected non-sensitive text exposes Copy, and writable text controls additionally expose Cut and Paste. Password controls expose Paste without copying/cutting their selected value. It snapshots the selection before moving focus into the menu so editing actions still target the original control.
+- The menu measures after render, clamps to the viewport, focuses its first action, supports Arrow Up/Down, Home/End, and Escape, and closes on outside press, captured ancestor scroll, resize, or window blur. Action completion restores the original focus target.
+- Native operations go through `lib/desktopBridge.js`; AppShell never depends on `navigator.clipboard`, and the Desktop Python boundary repeats URL validation. Failures produce one warning Toast through App's existing `onToast` callback.
 
 ## Startup and availability
 

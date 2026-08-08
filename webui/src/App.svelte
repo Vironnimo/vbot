@@ -940,6 +940,7 @@
             desktopCapabilities = {
               wakeword: false,
               serverSelection: false,
+              contextMenu: false,
             };
             return null;
           }
@@ -961,11 +962,16 @@
             desktopCapabilities = {
               wakeword: false,
               serverSelection: false,
+              contextMenu: false,
             };
           }
         });
     } else {
-      desktopCapabilities = { wakeword: false, serverSelection: false };
+      desktopCapabilities = {
+        wakeword: false,
+        serverSelection: false,
+        contextMenu: false,
+      };
     }
 
     debugStatus()
@@ -1009,6 +1015,8 @@
   onRetryConnection={connectServerEvents}
   canSwitchServer={Boolean(desktopCapabilities?.serverSelection)}
   onSwitchServer={() => (serverSwitcherOpen = true)}
+  desktopContextMenuEnabled={Boolean(desktopCapabilities?.contextMenu)}
+  onToast={showToast}
 >
   {#if showFinishSetup}
     <Banner variant="info" class="app-finish-setup">
