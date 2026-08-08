@@ -45,8 +45,8 @@ When rules compete, use this priority order: correct Tool selection and invocati
 ## Parameter Descriptions
 
 - Describe the value the Model should provide, not the Python type or handler variable.
-- Every parameter must have a concise description that makes its purpose and omission behavior clear to the Model. A short self-evident description is preferable to no description.
-- For an optional parameter whose omission has meaningful behavior, say `Omit to ...` or state the omission behavior in equally direct language.
+- Every parameter must have a concise description that makes its purpose clear and, when optional, tells the Model when to omit it. A short self-evident description is preferable to no description.
+- State the omission condition from the Model's decision point, for example `Omit when no specific destination is given.` Add the resulting omission behavior or runtime default only when it materially affects that decision.
 - For a conditionally required parameter, state the relevant action or mode directly, for example `Required for write and submit.`
 - Do not repeat `required`, enum values, numeric bounds, or defaults in prose unless the repetition resolves a real ambiguity.
 - Use examples only when the expected syntax is not obvious from the schema.
@@ -57,7 +57,7 @@ When rules compete, use this priority order: correct Tool selection and invocati
 - Do not emit the JSON Schema `default` keyword for strings, booleans, enums, arrays, objects, or null values.
 - A numeric `default` may be emitted only when omission is common, the number materially helps the Model plan the call, the value is stable, and the handler applies exactly the same value.
 - Do not add a numeric `default` merely because the handler has one. Pagination sizes, result limits, offsets, and timeouts are typical candidates; incidental implementation constants are not.
-- Explain non-numeric omission behavior in the parameter description only when the Model needs to know it.
+- Explain a non-numeric omission result in the parameter description only when it materially affects whether the Model should omit the field.
 - Never rely on a Provider to apply a default or inject an omitted argument.
 
 ## Action Tools
@@ -129,7 +129,7 @@ Before accepting a Tool definition, verify all of the following:
 
 - The Tool can be selected correctly from its name and first description sentence.
 - Every required argument is in `required`, and every optional argument is absent from it.
-- Every meaningful omission behavior is clear to the Model.
+- Every optional parameter tells the Model when to omit it; omission results appear only when they affect that decision.
 - No `additionalProperties` keyword is present.
 - No non-numeric JSON Schema `default` is present.
 - Every Action Tool has one flat object and only `action` is unconditionally required unless another field is truly required by every action.

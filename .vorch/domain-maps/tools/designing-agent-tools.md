@@ -17,7 +17,7 @@ Do not expose `request.operation`, an operation-key object such as `{"create": {
 - Keep the parameter set minimal and Agent-relevant. Do not expose implementation details such as internal source paths, executable flags, storage layout, working directories, or cache controls unless choosing them is part of the user's requested behavior.
 - Represent one concept once. Prefer one normalized field over several overlapping schedule, selector, or mode fields; do not preserve aliases in the canonical Tool contract.
 - When two Tool names separate discovery from exact retrieval but share the same authority and lifecycle, keep one configurable capability and derive the reader as a companion. A search result should return the reader's directly callable argument shape so the Agent does not translate identifiers or depend on both toggles being configured independently.
-- Make a field optional only when omission has a real default, an unambiguous derived fallback, or selects the current target. State that behavior in the field or Tool description.
+- Make a field optional only when omission has a real default, an unambiguous derived fallback, or selects the current target. Tell the Model when to omit the field; mention the resulting default or fallback only when it affects that decision.
 - Put a field in `required` only when every valid call needs it. A multi-action Tool requires `action` and advertises the shared optional-property superset; its handler enforces action-specific requirements and dependencies.
 - Reject fields that are unknown or inapplicable to the selected action in the handler before side effects. A typo or stale field must fail with `invalid_arguments`, not be ignored.
 - Use stable IDs returned by prior Tool Results for follow-up mutations. If IDs can shift, say when the Agent must list or refresh first.
@@ -35,7 +35,7 @@ Do not expose `request.operation`, an operation-key object such as `{"create": {
 
 - The Tool description says what the Tool accomplishes, when to use it, and any decision the Agent must make. Do not spend the description teaching the Agent to construct an avoidably complex envelope.
 - An `action` description names every action in operational language. Each conditional field says which actions require it.
-- The handler owns every actual default. Describe meaningful omission behavior directly; never emit non-numeric schema defaults, and use a numeric schema default only under the narrow stable, plan-relevant conditions in `TOOLS.md`.
+- The handler owns every actual default. Describe an optional field from the Model's decision point: state the condition for omitting it, then add the omission result only when that result changes the decision. Never emit non-numeric schema defaults, and use a numeric schema default only under the narrow stable, plan-relevant conditions in `TOOLS.md`.
 - Keep examples canonical and short. Show omitted optional fields as omitted, not as `null`, unless `null` is a meaningful accepted value.
 
 ## Results, Errors, and Display
