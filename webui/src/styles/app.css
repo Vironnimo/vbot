@@ -2558,6 +2558,14 @@ textarea::placeholder {
   white-space: nowrap;
 }
 
+.te-fact--added {
+  color: var(--green);
+}
+
+.te-fact--removed {
+  color: var(--red);
+}
+
 .te-arg.subagent-preview {
   display: inline-block;
 }

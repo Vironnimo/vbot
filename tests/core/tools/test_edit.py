@@ -500,8 +500,9 @@ def test_edit_replaces_ambiguous_matches_with_replace_all(tmp_path: Path) -> Non
     target = workspace / "notes.txt"
     target.write_text("same\nother\nsame\n", encoding="utf-8")
 
+    context = make_context(workspace)
     result = edit_handler(
-        make_context(workspace),
+        context,
         {"path": "notes.txt", "old_string": "same", "new_string": "changed", "replace_all": True},
     )
 
@@ -509,6 +510,33 @@ def test_edit_replaces_ambiguous_matches_with_replace_all(tmp_path: Path) -> Non
     assert target.read_text(encoding="utf-8") == "changed\nother\nchanged\n"
     assert data["replacements"] == 2
     assert data["first_changed_line"] == 1
+    assert context.presentation_facts == [
+        {"kind": "line_change", "change": "added", "value": 2},
+        {"kind": "line_change", "change": "removed", "value": 2},
+    ]
+
+
+def test_edit_counts_multiline_replacement_facts(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    target = workspace / "notes.txt"
+    target.write_text("before\nblock\nafter\n", encoding="utf-8")
+    context = make_context(workspace)
+
+    result = edit_handler(
+        context,
+        {
+            "path": "notes.txt",
+            "old_string": "before\nblock",
+            "new_string": "replacement\nwith\nthree lines",
+        },
+    )
+
+    assert_success_envelope(result)
+    assert context.presentation_facts == [
+        {"kind": "line_change", "change": "added", "value": 3},
+        {"kind": "line_change", "change": "removed", "value": 2},
+    ]
 
 
 def test_edit_preserves_lf_file_line_endings_at_byte_level(tmp_path: Path) -> None:

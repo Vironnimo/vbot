@@ -8,6 +8,7 @@ from pathlib import Path
 from core.tools.arguments import (
     ToolArgumentError,
     line_number_gutter_candidates,
+    logical_line_count,
     looks_like_line_numbered_content,
     optional_bool,
 )
@@ -343,6 +344,10 @@ def edit_handler(
                 "The edit was applied to the current on-disk content and preserved "
                 "all unmatched bytes."
             )
+        context.add_display_line_changes(
+            added=logical_line_count(new_string) * result.replacements,
+            removed=logical_line_count(old_string) * result.replacements,
+        )
         return tool_success(
             _build_success_data(
                 resolved,

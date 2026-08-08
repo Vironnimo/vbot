@@ -153,9 +153,10 @@ async def test_dispatch_write_offloads_sync_file_io(
 def test_write_writes_relative_workspace_path(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
+    context = make_context(workspace)
 
     result = write_handler(
-        make_context(workspace),
+        context,
         {"path": "notes.txt", "content": "hello\nworkspace\n"},
     )
 
@@ -167,6 +168,10 @@ def test_write_writes_relative_workspace_path(tmp_path: Path) -> None:
     assert data["message"] == (
         f"OK: written {data['bytes']} bytes to {model_path(target.resolve())}"
     )
+    assert context.presentation_facts == [
+        {"kind": "line_change", "change": "added", "value": 2},
+        {"kind": "line_change", "change": "removed", "value": 0},
+    ]
 
 
 def test_write_resolves_relative_path_against_cwd_not_workspace(tmp_path: Path) -> None:
@@ -222,15 +227,20 @@ def test_write_replaces_full_file_content(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     target = workspace / "notes.txt"
-    target.write_text("old content that should disappear", encoding="utf-8")
+    target.write_bytes(b"old content\r\nthat should disappear\r\n")
 
+    context = make_context(workspace)
     result = write_handler(
-        make_context(workspace),
-        {"path": "notes.txt", "content": "new"},
+        context,
+        {"path": "notes.txt", "content": "new\nbody\nthree"},
     )
 
     assert_success_envelope(result)
-    assert target.read_bytes() == b"new"
+    assert target.read_bytes() == b"new\nbody\nthree"
+    assert context.presentation_facts == [
+        {"kind": "line_change", "change": "added", "value": 3},
+        {"kind": "line_change", "change": "removed", "value": 2},
+    ]
 
 
 def test_write_preserves_exact_supplied_content_at_byte_level(tmp_path: Path) -> None:

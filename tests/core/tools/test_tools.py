@@ -521,6 +521,31 @@ class TestTool:
             {"kind": "count", "value": 10, "unit": "matches", "at_least": True}
         ]
 
+    def test_context_records_added_and_removed_line_facts_in_display_order(self) -> None:
+        context = make_context()
+
+        context.add_display_line_changes(added=4, removed=0)
+
+        assert context.presentation_facts == [
+            {"kind": "line_change", "change": "added", "value": 4},
+            {"kind": "line_change", "change": "removed", "value": 0},
+        ]
+
+    def test_display_normalizes_line_range_and_change_facts(self) -> None:
+        display = ToolDisplay(
+            fact_builder=lambda _arguments, _result: (
+                {"kind": "line_range", "start": 170, "end": 280},
+                {"kind": "line_change", "change": "added", "value": 3},
+                {"kind": "line_change", "change": "removed", "value": 2},
+            )
+        )
+
+        assert display.to_payload({})["facts"] == [
+            {"kind": "line_range", "start": 170, "end": 280},
+            {"kind": "line_change", "change": "added", "value": 3},
+            {"kind": "line_change", "change": "removed", "value": 2},
+        ]
+
     def test_result_count_fact_builder_counts_successful_lists_and_pagination(self) -> None:
         display = ToolDisplay(
             fact_builder=result_count_fact_builder(

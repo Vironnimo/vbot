@@ -663,6 +663,36 @@ function toolPrimaryPart(part) {
 
 function toolFactPresentation(fact) {
   if (
+    isPlainObject(fact) &&
+    fact.kind === 'line_range' &&
+    Number.isInteger(fact.start) &&
+    fact.start >= 1 &&
+    Number.isInteger(fact.end) &&
+    fact.end >= fact.start
+  ) {
+    return {
+      kind: 'line_range',
+      text: t('chat.toolFact.lines', 'lines {start}-{end}', {
+        start: fact.start,
+        end: fact.end,
+      }),
+      variant: 'neutral',
+    };
+  }
+  if (
+    isPlainObject(fact) &&
+    fact.kind === 'line_change' &&
+    Number.isInteger(fact.value) &&
+    fact.value >= 0 &&
+    ['added', 'removed'].includes(fact.change)
+  ) {
+    return {
+      kind: 'line_change',
+      text: `${fact.change === 'added' ? '+' : '-'}${fact.value}`,
+      variant: fact.change,
+    };
+  }
+  if (
     !isPlainObject(fact) ||
     fact.kind !== 'count' ||
     !Number.isInteger(fact.value) ||
@@ -687,7 +717,7 @@ function toolFactPresentation(fact) {
         : t('chat.toolFact.results', '{count} results', {
             count: renderedCount,
           });
-  return { kind: 'count', text: label };
+  return { kind: 'count', text: label, variant: 'neutral' };
 }
 
 export function compactToolPath(value) {

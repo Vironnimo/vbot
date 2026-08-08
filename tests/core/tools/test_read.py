@@ -185,6 +185,17 @@ def test_register_read_tool_exposes_provider_schema_without_description_property
     assert "default 2000" in parameters["properties"]["limit"]["description"]
     assert "description" not in parameters["properties"]
 
+    ranged_display = registry.display_for_call(
+        "read", {"path": "notes.txt", "offset": 170, "limit": 111}
+    )
+    default_display = registry.display_for_call("read", {"path": "notes.txt"})
+    continued_display = registry.display_for_call(
+        "read", {"path": "notes.txt", "offset": "170:42", "limit": 10}
+    )
+    assert ranged_display["facts"] == [{"kind": "line_range", "start": 170, "end": 280}]
+    assert default_display["facts"] == []
+    assert continued_display["facts"] == [{"kind": "line_range", "start": 170, "end": 179}]
+
 
 @pytest.mark.asyncio
 async def test_read_reads_relative_workspace_path(tmp_path: Path) -> None:

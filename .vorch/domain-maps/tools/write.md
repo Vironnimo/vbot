@@ -8,7 +8,7 @@ Creates or replaces a complete UTF-8 text file.
 - Registration: `register_write_tool(registry, *, file_state)` — the `FileReadState` guard registry is injected (factory `make_write_handler(file_state)`, mirrors the read tool).
 - Schema: required `path` and `content`; the model-facing schema omits `additionalProperties`, while the handler rejects unknown arguments.
 - Success data includes `message`, resolved `path`, and written byte count; the returned path and the same path inside vBot-authored failure text use the shared forward-slash Model presentation.
-- Display: summary field `path`; hides `content` from argument details.
+- Display: primary `path`; hides `content` from argument details. After a successful mutation it emits presentation-only `line_change` facts in `added`, then `removed` order: the new content's logical line count and the complete previous target's streamed line count. A new or empty previous file reports `removed: 0`; the counts never enter the Agent-visible Result.
 
 ## Conventions
 
@@ -20,6 +20,7 @@ Creates or replaces a complete UTF-8 text file.
 
 - Parent directories are created automatically.
 - Content is written as UTF-8 text.
+- Previous-line counting is bounded-memory binary streaming under the same path mutation lock and recognizes CRLF, LF, and CR without counting the second byte of CRLF twice. The new UTF-8 content uses the same logical-line rule; an empty value has zero lines and a final line ending does not invent an additional empty line.
 - A UTF-8 BOM the existing file already had is preserved: if the target starts with a BOM and the supplied content does not, the BOM is re-prepended (never doubled). This keeps the round-trip with the BOM-stripping `read` tool from silently dropping the marker. New files get no BOM. The syntax check (below) still runs on the BOM-free content.
 - Validation and expected filesystem errors return failure envelopes.
 - Content dominated by read's `N| ` line-number gutter (≥2 consecutive numbered lines) is rejected with a `line_numbered_content` failure, so a model cannot corrupt a file by pasting read output back in. Shared detector: `looks_like_line_numbered_content` in `core/tools/arguments.py`; it tolerates a reproduced gutter whose separator space was dropped.

@@ -850,6 +850,35 @@ def _read_video(resolved: Path, media_type: str) -> JsonObject:
     )
 
 
+def _read_line_range_facts(
+    arguments: JsonObject, _result: JsonObject | None
+) -> tuple[JsonObject, ...]:
+    """Describe an explicitly bounded read without coupling the UI to read arguments."""
+    if "offset" not in arguments and "limit" not in arguments:
+        return ()
+
+    raw_offset = arguments.get("offset", 1)
+    if isinstance(raw_offset, str) and ":" in raw_offset:
+        raw_offset = raw_offset.partition(":")[0]
+    start = _display_line_number(raw_offset)
+    limit = _display_line_number(arguments.get("limit", DEFAULT_LINE_LIMIT))
+    if start is None or limit is None:
+        return ()
+    return ({"kind": "line_range", "start": start, "end": start + limit - 1},)
+
+
+def _display_line_number(value: object) -> int | None:
+    """Accept canonical integers and their pre-normalization decimal spelling."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value if value >= 1 else None
+    if isinstance(value, str) and value.isdigit():
+        parsed = int(value)
+        return parsed if parsed >= 1 else None
+    return None
+
+
 def register_read_tool(
     registry: ToolRegistry,
     *,
@@ -879,7 +908,8 @@ def register_read_tool(
                     tooltip="always",
                     copyable=True,
                 ),
-            )
+            ),
+            fact_builder=_read_line_range_facts,
         ),
         parallel_safe=True,
         open_input_schema=True,

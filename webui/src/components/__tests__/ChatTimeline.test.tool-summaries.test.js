@@ -509,6 +509,109 @@ describe('ChatTimeline', () => {
     expect(summaryLine.textContent).not.toContain('src');
   });
 
+  it('renders an explicit read line range as a neutral toolbar fact', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-read-line-range',
+    );
+    appendRunEvent(sessionState, {
+      type: 'tool_call_started',
+      run_id: 'run-read-line-range',
+      sequence: 1,
+      payload: {
+        tool_call: {
+          id: 'call-read-line-range',
+          index: 0,
+          name: 'read',
+          arguments: { path: 'notes.txt', offset: 170, limit: 111 },
+        },
+        display: {
+          version: 1,
+          summary: 'notes.txt',
+          hidden_argument_keys: [],
+          primary: [],
+          facts: [{ kind: 'line_range', start: 170, end: 280 }],
+        },
+      },
+    });
+
+    mountedComponent = mount(ChatTimeline, {
+      target: document.body,
+      props: { sessionState, agentName: 'Alpha' },
+    });
+    flushSync();
+
+    const fact = document.querySelector('.tool-event-line .te-fact');
+    expect(fact.textContent).toBe('lines 170-280');
+    expect(fact.classList.contains('te-fact--added')).toBe(false);
+    expect(fact.classList.contains('te-fact--removed')).toBe(false);
+  });
+
+  it('renders live edit line changes with semantic colors', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-edit-line-changes',
+    );
+    appendRunEvent(sessionState, {
+      type: 'tool_call_started',
+      run_id: 'run-edit-line-changes',
+      sequence: 1,
+      payload: {
+        tool_call: {
+          id: 'call-edit-line-changes',
+          index: 0,
+          name: 'edit',
+          arguments: { path: 'notes.txt' },
+        },
+        display: {
+          version: 1,
+          summary: 'notes.txt',
+          hidden_argument_keys: [],
+          primary: [],
+          facts: [],
+        },
+      },
+    });
+    appendRunEvent(sessionState, {
+      type: 'tool_call_result',
+      run_id: 'run-edit-line-changes',
+      sequence: 2,
+      payload: {
+        tool_call: {
+          id: 'call-edit-line-changes',
+          index: 0,
+          name: 'edit',
+        },
+        result: { ok: true, data: { message: 'updated' } },
+        display: {
+          version: 1,
+          summary: 'notes.txt',
+          hidden_argument_keys: [],
+          primary: [],
+          facts: [
+            { kind: 'line_change', change: 'added', value: 3 },
+            { kind: 'line_change', change: 'removed', value: 2 },
+          ],
+        },
+      },
+    });
+
+    mountedComponent = mount(ChatTimeline, {
+      target: document.body,
+      props: { sessionState, agentName: 'Alpha' },
+    });
+    flushSync();
+
+    expect(
+      document.querySelector('.tool-event-line .te-fact--added').textContent,
+    ).toBe('+3');
+    expect(
+      document.querySelector('.tool-event-line .te-fact--removed').textContent,
+    ).toBe('-2');
+  });
+
   it('compacts a structured read path and exposes a focus/touch copy card', async () => {
     vi.useFakeTimers();
     const writeText = vi.fn(async () => {});
@@ -640,6 +743,53 @@ describe('ChatTimeline', () => {
     expect(summaryLine.textContent).toContain('version variables');
     expect(summaryLine.textContent).toContain('3+ matches');
     expect(summaryLine.textContent).not.toContain('VERSION');
+  });
+
+  it('loads write line changes including removed zero from History', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-write-line-history',
+    );
+    sessionState.messages = [
+      {
+        id: 'assistant-write-history',
+        role: 'assistant',
+        tool_calls: [
+          {
+            id: 'call-write-history',
+            name: 'write',
+            arguments: { path: 'new.txt', content: 'one\ntwo\n' },
+          },
+        ],
+      },
+      {
+        id: 'tool-write-history',
+        role: 'tool',
+        tool_call_id: 'call-write-history',
+        name: 'write',
+        content: '{"ok":true,"data":{"message":"written"}}',
+        tool_display: {
+          version: 1,
+          summary: 'new.txt',
+          hidden_argument_keys: ['content'],
+          primary: [],
+          facts: [
+            { kind: 'line_change', change: 'added', value: 2 },
+            { kind: 'line_change', change: 'removed', value: 0 },
+          ],
+        },
+      },
+    ];
+
+    mountedComponent = mount(ChatTimeline, {
+      target: document.body,
+      props: { sessionState, agentName: 'Alpha' },
+    });
+    flushSync();
+
+    expect(document.querySelector('.te-fact--added').textContent).toBe('+2');
+    expect(document.querySelector('.te-fact--removed').textContent).toBe('-0');
   });
 
   it('falls back to bash command and ignores unsupported description arguments', () => {

@@ -7,6 +7,7 @@ import pytest
 from core.tools.arguments import (
     ToolArgumentError,
     line_number_gutter_candidates,
+    logical_line_count,
     looks_like_line_numbered_content,
     optional_bool,
     optional_int,
@@ -15,6 +16,22 @@ from core.tools.arguments import (
     required_int,
     required_string,
 )
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("", 0),
+        ("one", 1),
+        ("one\n", 1),
+        ("one\ntwo", 2),
+        ("one\r\ntwo\r\n", 2),
+        ("one\rtwo", 2),
+        ("\n\n", 2),
+    ],
+)
+def test_logical_line_count_handles_text_file_endings(text: str, expected: int) -> None:
+    assert logical_line_count(text) == expected
 
 
 class TestOptionalString:
