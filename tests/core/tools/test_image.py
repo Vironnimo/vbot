@@ -8,7 +8,16 @@ from types import SimpleNamespace
 
 import pytest
 
-from core.model_tasks import ImageInputError, ImageOutcomeUnknownError
+from core.model_tasks import (
+    ImageExecutionError,
+    ImageInputError,
+    ImageNotFoundError,
+    ImageOutcomeUnknownError,
+    ImageReadError,
+    ImageTooLargeError,
+    ImageUnderstandingUnavailableError,
+    ImageUnsupportedMediaTypeError,
+)
 from core.tools import ToolContractError
 from core.tools.image import (
     ANALYZE_IMAGE_TOOL_DESCRIPTION,
@@ -459,9 +468,88 @@ async def test_analyze_image_tool_rejects_invalid_arguments_and_maps_image_error
     )
 
     assert image_error["error"] == {
-        "code": "image_understanding_error",
+        "code": "image_read_error",
         "message": "bad image",
+        "retryable": False,
     }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("analysis_error", "expected_code"),
+    [
+        (ImageNotFoundError("missing"), "image_not_found"),
+        (ImageReadError("unreadable"), "image_read_error"),
+        (ImageTooLargeError("too large"), "image_too_large"),
+        (ImageUnsupportedMediaTypeError("unsupported"), "unsupported_image_type"),
+        (ImageUnderstandingUnavailableError("not configured"), "image_understanding_unavailable"),
+    ],
+)
+async def test_analyze_image_tool_projects_stable_expected_error_codes(
+    tmp_path: Path,
+    analysis_error: ImageInputError | ImageUnderstandingUnavailableError,
+    expected_code: str,
+) -> None:
+    registry = ToolRegistry()
+    register_analyze_image_tool(
+        registry,
+        _ImageService(tmp_path / "unused.png", analysis_error=analysis_error),
+    )
+
+    result = await registry.dispatch(
+        _make_context(tmp_path, tool_name=ANALYZE_IMAGE_TOOL_NAME),
+        {"prompt": "Describe it.", "images": ["photo.png"]},
+    )
+
+    assert result["error"] == {
+        "code": expected_code,
+        "message": str(analysis_error),
+        "retryable": False,
+    }
+
+
+@pytest.mark.asyncio
+async def test_analyze_image_tool_preserves_provider_retry_metadata(tmp_path: Path) -> None:
+    provider_error = ImageExecutionError(
+        "rate limited",
+        retryable=True,
+        attempts_made=4,
+    )
+    registry = ToolRegistry()
+    register_analyze_image_tool(
+        registry,
+        _ImageService(tmp_path / "unused.png", analysis_error=provider_error),
+    )
+
+    result = await registry.dispatch(
+        _make_context(tmp_path, tool_name=ANALYZE_IMAGE_TOOL_NAME),
+        {"prompt": "Describe it.", "images": ["photo.png"]},
+    )
+
+    assert result["error"] == {
+        "code": "provider_error",
+        "message": "rate limited",
+        "retryable": True,
+        "attempts_made": 4,
+    }
+
+
+@pytest.mark.asyncio
+async def test_analyze_image_tool_does_not_mask_unexpected_failure(tmp_path: Path) -> None:
+    registry = ToolRegistry()
+    register_analyze_image_tool(
+        registry,
+        _ImageService(
+            tmp_path / "unused.png",
+            analysis_error=RuntimeError("implementation defect"),
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="implementation defect"):
+        await registry.dispatch(
+            _make_context(tmp_path, tool_name=ANALYZE_IMAGE_TOOL_NAME),
+            {"prompt": "Describe it.", "images": ["photo.png"]},
+        )
 
 
 def _make_context(

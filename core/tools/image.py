@@ -224,7 +224,12 @@ def make_analyze_image_handler(image_service: Any):
         try:
             result = await image_service.analyze(prompt, image_paths=image_paths)
         except ImageError as exc:
-            return tool_failure("image_understanding_error", str(exc))
+            return tool_failure(
+                exc.code,
+                str(exc),
+                retryable=exc.retryable,
+                attempts_made=exc.attempts_made,
+            )
         return tool_success(result.to_dict())
 
     return handler

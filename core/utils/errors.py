@@ -5,7 +5,9 @@ Base classes for all vBot-specific errors.
 
 
 class VBotError(Exception):
-    """Base exception for all vBot errors."""
+    """Base exception for vBot errors, including shared retry-attempt metadata."""
+
+    attempts_made: int | None = None
 
 
 class ConfigError(VBotError):
