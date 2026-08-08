@@ -519,54 +519,60 @@
 </script>
 
 <section class="terminals-view" aria-labelledby="terminals-title">
-  <aside class="terminals-view__list-pane secondary-pane">
-    <div class="terminals-view__list-heading">
-      <span class="secondary-pane__title">
-        {t('terminals.sessionsLabel', 'Terminal sessions')}
+  <aside
+    class="terminals-view__list-pane secondary-pane"
+    aria-labelledby="terminals-list-title"
+  >
+    <div class="secondary-pane__header">
+      <span id="terminals-list-title" class="secondary-pane__title">
+        {t('terminals.title', 'Terminals')}
       </span>
-      <span
-        class="terminals-view__count"
-        aria-label={t('terminals.sessionCount', '{count} sessions', {
-          count: viewState.terminals.length,
-        })}
+      <Button
+        variant="primary"
+        disabled={serverUnavailable}
+        onClick={openStartDialog}
       >
-        {viewState.terminals.length}
-      </span>
+        <svg viewBox="0 0 14 14" width="11" height="11" aria-hidden="true">
+          <path d="M7 1v12M1 7h12" />
+        </svg>
+        {t('common.add', 'Add')}
+      </Button>
     </div>
 
-    {#if viewState.loading && viewState.terminals.length === 0}
-      <Banner variant="neutral" class="terminals-view__list-feedback">
-        {t('terminals.loading', 'Loading terminal sessions…')}
-      </Banner>
-    {:else if viewState.listError && !serverUnavailable}
-      <Banner variant="error" class="terminals-view__list-feedback">
-        <span
-          >{t(
-            'terminals.listError',
-            'Terminal sessions could not be loaded.',
-          )}</span
-        >
-        <Button variant="secondary" onClick={() => controller.loadTerminals()}>
-          {t('common.retry', 'Retry')}
-        </Button>
-      </Banner>
-    {:else if viewState.terminals.length === 0}
-      <EmptyState
-        density="compact"
-        title={t('terminals.emptyTitle', 'No terminal sessions')}
-        description={t(
-          'terminals.emptyDescription',
-          'Open a manual terminal here, or monitor Terminal Sessions started by an agent.',
-        )}
-      />
-    {:else}
-      <div class="secondary-list terminals-view__list">
+    <div class="secondary-pane__scroll secondary-list terminals-view__list">
+      {#if viewState.loading && viewState.terminals.length === 0}
+        <Banner variant="neutral">
+          {t('terminals.loading', 'Loading terminal sessions…')}
+        </Banner>
+      {:else if viewState.listError && !serverUnavailable}
+        <Banner variant="error">
+          <span
+            >{t(
+              'terminals.listError',
+              'Terminal sessions could not be loaded.',
+            )}</span
+          >
+          <Button
+            variant="secondary"
+            onClick={() => controller.loadTerminals()}
+          >
+            {t('common.retry', 'Retry')}
+          </Button>
+        </Banner>
+      {:else if viewState.terminals.length === 0}
+        <EmptyState
+          title={t('terminals.emptyTitle', 'No terminal sessions')}
+          description={t(
+            'terminals.emptyDescription',
+            'Open a manual terminal here, or monitor Terminal Sessions started by an agent.',
+          )}
+        />
+      {:else}
         {#each viewState.terminals as item (item.terminal_id)}
           <button
             type="button"
             class="secondary-list__item terminals-view__list-item"
-            class:secondary-list__item--active={item.terminal_id ===
-              viewState.selectedTerminalId}
+            class:active={item.terminal_id === viewState.selectedTerminalId}
             aria-current={item.terminal_id === viewState.selectedTerminalId
               ? 'true'
               : undefined}
@@ -593,8 +599,8 @@
             </span>
           </button>
         {/each}
-      </div>
-    {/if}
+      {/if}
+    </div>
   </aside>
 
   <div class="terminals-view__detail">
@@ -622,13 +628,6 @@
             {streamStatusLabel}
           </StatusChip>
         {/if}
-        <Button
-          variant="primary"
-          disabled={serverUnavailable}
-          onClick={openStartDialog}
-        >
-          {t('terminals.new', 'New terminal')}
-        </Button>
       </div>
     </header>
 
@@ -915,34 +914,6 @@
 
   .terminals-view__list-pane {
     gap: 0;
-  }
-
-  .terminals-view__list-heading {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 8px;
-    padding: 0 12px 10px;
-  }
-
-  .terminals-view__count {
-    min-width: 22px;
-    padding: 2px 6px;
-    border: 1px solid var(--border);
-    border-radius: var(--r-sm);
-    color: var(--text-med);
-    background: var(--surface-2);
-    font-family: var(--font-mono);
-    font-size: var(--fs-mono-xs);
-    text-align: center;
-  }
-
-  :global(.terminals-view__list-feedback) {
-    margin: 0 12px;
-  }
-
-  .terminals-view__list {
-    overflow: auto;
   }
 
   .terminals-view__list-item {
