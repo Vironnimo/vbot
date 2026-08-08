@@ -72,7 +72,7 @@ Domain-specific vocabulary for tools. The core Tool term lives in `.vorch/GLOSSA
 - `tools/web_search.md` - `web_search`
 - `tools/bash.md` - `bash`
 - `tools/process.md` - `process` and `ProcessManager`
-- `tools/terminal_beta.md` - program-agnostic Agent-owned and manual interactive PTY/ConPTY Terminal Sessions, `terminal_beta`, `TerminalManager`, and generic activity delivery
+- `tools/terminal.md` - program-agnostic Agent-owned and manual interactive PTY/ConPTY Terminal Sessions, `terminal`, `TerminalManager`, and generic activity delivery
 - `tools/status.md` - `status`
 - `tools/memory.md` - `memory`
 - `tools/image.md` - `analyze_image` and `image_generation`

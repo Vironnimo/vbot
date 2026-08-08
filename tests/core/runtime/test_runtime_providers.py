@@ -1536,7 +1536,7 @@ def test_runtime_loads_phase_two_services(runtime: Runtime) -> None:
         "skill_manage",
         "status",
         "subagent",
-        "terminal_beta",
+        "terminal",
         "text_to_speech",
         "web_fetch",
         "web_search",

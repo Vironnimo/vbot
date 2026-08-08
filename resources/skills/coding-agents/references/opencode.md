@@ -1,6 +1,6 @@
 # OpenCode interactive reference
 
-Launch `opencode` as a real TUI through `terminal_beta`. Keep the returned `terminal_id` and send every follow-up or menu interaction to that same live Terminal Session.
+Launch `opencode` as a real TUI through `terminal`. Keep the returned `terminal_id` and send every follow-up or menu interaction to that same live Terminal Session.
 
 ## Start
 

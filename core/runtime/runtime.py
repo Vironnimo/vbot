@@ -138,7 +138,7 @@ from core.tools import (
     register_session_search_tool,
     register_skill_manage_tool,
     register_skill_tool,
-    register_terminal_beta_tool,
+    register_terminal_tool,
     register_text_to_speech_tool,
     register_web_fetch_tool,
     register_web_search_tool,
@@ -734,7 +734,7 @@ class Runtime:
             data_dir=self._storage.data_dir,
         )
         self._start_terminal_manager()
-        register_terminal_beta_tool(self._tools, self._terminal_manager, self._projects)
+        register_terminal_tool(self._tools, self._terminal_manager, self._projects)
         self._bootstrap_service = BootstrapService(
             self._trigger_service,
             self._storage.data_dir,

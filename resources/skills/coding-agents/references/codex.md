@@ -1,6 +1,6 @@
 # Codex interactive reference
 
-Launch `codex` as a real TUI through `terminal_beta`. Keep the returned `terminal_id`; while that process is alive, all follow-up instructions and approvals belong in that same Terminal Session.
+Launch `codex` as a real TUI through `terminal`. Keep the returned `terminal_id`; while that process is alive, all follow-up instructions and approvals belong in that same Terminal Session.
 
 ## Start
 
@@ -40,7 +40,7 @@ Useful interactive start settings:
 | Inline TUI | `--no-alt-screen` | Keep terminal scrollback inline when specifically useful; the normal alternate-screen TUI is supported. |
 | Strict config | `--strict-config` | Fail early when unknown configuration keys should be treated as errors. |
 
-Prefer `terminal_beta`'s `workdir` over also passing Codex `--cd`; using both creates two sources of truth. Leave unspecified settings to the user's global, Project, or profile configuration.
+Prefer `terminal`'s `workdir` over also passing Codex `--cd`; using both creates two sources of truth. Leave unspecified settings to the user's global, Project, or profile configuration.
 
 If authentication, workspace trust, or first-run setup is uncertain, start without `text`, inspect `status`, and complete or hand off setup before sending the task.
 

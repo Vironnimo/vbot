@@ -52,7 +52,7 @@ CANONICAL_BUILTIN_TOOLS = [
     "skill_manage",
     "status",
     "subagent",
-    "terminal_beta",
+    "terminal",
     "text_to_speech",
     "web_fetch",
     "web_search",
