@@ -4,6 +4,9 @@ import {
   isDesktop,
   isDesktopAccessor,
   getDesktopCapabilities,
+  getDesktopClipboardText,
+  openDesktopExternalUrl,
+  setDesktopClipboardText,
   listDesktopServers,
   addDesktopServer,
   removeDesktopServer,
@@ -84,24 +87,37 @@ describe('getDesktopCapabilities', () => {
           getDesktopCapabilities: () => ({
             wakeword: true,
             serverSelection: true,
+            contextMenu: true,
           }),
         },
       },
     };
 
     const caps1 = await getDesktopCapabilities();
-    expect(caps1).toEqual({ wakeword: true, serverSelection: true });
+    expect(caps1).toEqual({
+      wakeword: true,
+      serverSelection: true,
+      contextMenu: true,
+    });
 
     // Second call should return cached result
     const caps2 = await getDesktopCapabilities();
-    expect(caps2).toEqual({ wakeword: true, serverSelection: true });
+    expect(caps2).toEqual({
+      wakeword: true,
+      serverSelection: true,
+      contextMenu: true,
+    });
   });
 
   it('returns disabled when bridge absent', async () => {
     globalThis.window = { location: { search: '' }, pywebview: undefined };
 
     const caps = await getDesktopCapabilities();
-    expect(caps).toEqual({ wakeword: false, serverSelection: false });
+    expect(caps).toEqual({
+      wakeword: false,
+      serverSelection: false,
+      contextMenu: false,
+    });
   });
 
   it('does not reuse cached capabilities for a different bridge api object', async () => {
@@ -112,6 +128,7 @@ describe('getDesktopCapabilities', () => {
           getDesktopCapabilities: () => ({
             wakeword: true,
             serverSelection: true,
+            contextMenu: true,
           }),
         },
       },
@@ -120,6 +137,7 @@ describe('getDesktopCapabilities', () => {
     expect(await getDesktopCapabilities()).toEqual({
       wakeword: true,
       serverSelection: true,
+      contextMenu: true,
     });
 
     globalThis.window.pywebview = {
@@ -131,7 +149,44 @@ describe('getDesktopCapabilities', () => {
     expect(await getDesktopCapabilities()).toEqual({
       wakeword: false,
       serverSelection: false,
+      contextMenu: false,
     });
+  });
+});
+
+describe('desktop context-menu actions', () => {
+  it('reads, writes, and opens through the native bridge', async () => {
+    const setClipboardText = vi.fn(() => ({ copied: true }));
+    const openExternalUrl = vi.fn(() => ({ opened: true }));
+    globalThis.window = {
+      location: { search: '?accessor=desktop' },
+      pywebview: {
+        api: {
+          setClipboardText,
+          getClipboardText: () => 'paste me',
+          openExternalUrl,
+        },
+      },
+    };
+
+    await expect(setDesktopClipboardText('copy me')).resolves.toEqual({
+      copied: true,
+    });
+    await expect(getDesktopClipboardText()).resolves.toBe('paste me');
+    await expect(
+      openDesktopExternalUrl('https://example.com/path'),
+    ).resolves.toEqual({ opened: true });
+    expect(setClipboardText).toHaveBeenCalledWith('copy me');
+    expect(openExternalUrl).toHaveBeenCalledWith('https://example.com/path');
+  });
+
+  it('normalizes a non-text clipboard response to empty text', async () => {
+    globalThis.window = {
+      location: { search: '?accessor=desktop' },
+      pywebview: { api: { getClipboardText: () => null } },
+    };
+
+    await expect(getDesktopClipboardText()).resolves.toBe('');
   });
 });
 

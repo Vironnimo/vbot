@@ -10,6 +10,7 @@ const BRIDGE_READY_TIMEOUT_MS = 5000;
 const DISABLED_DESKTOP_CAPABILITIES = Object.freeze({
   wakeword: false,
   serverSelection: false,
+  contextMenu: false,
 });
 
 let cachedCapabilities = null;
@@ -97,12 +98,29 @@ export async function getDesktopCapabilities() {
     cachedCapabilities = {
       wakeword: Boolean(caps?.wakeword),
       serverSelection: Boolean(caps?.serverSelection),
+      contextMenu: Boolean(caps?.contextMenu),
     };
     cachedBridgeApi = window.pywebview.api;
     return cachedCapabilities;
   } catch {
     return { ...DISABLED_DESKTOP_CAPABILITIES };
   }
+}
+
+/** Replace the Desktop host clipboard with plain text. */
+export async function setDesktopClipboardText(text) {
+  return callBridge('setClipboardText', String(text));
+}
+
+/** Read plain text from the Desktop host clipboard. */
+export async function getDesktopClipboardText() {
+  const text = await callBridge('getClipboardText');
+  return typeof text === 'string' ? text : '';
+}
+
+/** Open an absolute HTTP(S) URL in the Desktop host's default browser. */
+export async function openDesktopExternalUrl(url) {
+  return callBridge('openExternalUrl', url);
 }
 
 /** Return Desktop-local remembered servers, including the active marker. */

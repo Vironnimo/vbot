@@ -1,6 +1,12 @@
 <script>
+  import { onMount } from 'svelte';
   import Button from './ui/Button.svelte';
   import { t } from '$lib/i18n.js';
+  import {
+    getDesktopClipboardText,
+    openDesktopExternalUrl,
+    setDesktopClipboardText,
+  } from '$lib/desktopBridge.js';
   import {
     CONNECTION_STATUS_CONNECTED,
     CONNECTION_STATUS_RECONNECTING,
@@ -18,11 +24,24 @@
     onRetryConnection = () => {},
     canSwitchServer = false,
     onSwitchServer = () => {},
+    desktopContextMenuEnabled = false,
+    onToast = () => {},
     children,
   } = $props();
 
   const MOBILE_NAV_MEDIA_QUERY = '(max-width: 640px)';
+  const CONTEXT_MENU_VIEWPORT_MARGIN = 8;
+  const TEXT_INPUT_TYPES = new Set([
+    'email',
+    'password',
+    'search',
+    'tel',
+    'text',
+    'url',
+  ]);
   let navigationElement = $state(null);
+  let contextMenuElement = $state(null);
+  let contextMenu = $state(null);
 
   const handleSelectView = (viewId) => {
     if (onSelectView) {
@@ -80,6 +99,365 @@
 
   const serverRestored = $derived(serverNoticeState === 'restored');
 
+  const composedPath = (event) =>
+    typeof event.composedPath === 'function'
+      ? event.composedPath()
+      : [event.target];
+
+  const linkFromPath = (path) =>
+    path.find((node) => node instanceof HTMLAnchorElement) ?? null;
+
+  const editableFromPath = (path) => {
+    for (const node of path) {
+      if (node instanceof HTMLTextAreaElement) {
+        return {
+          element: node,
+          writable: !node.disabled && !node.readOnly,
+          kind: 'control',
+        };
+      }
+      if (node instanceof HTMLInputElement && TEXT_INPUT_TYPES.has(node.type)) {
+        return {
+          element: node,
+          writable: !node.disabled && !node.readOnly,
+          kind: 'control',
+          sensitive: node.type === 'password',
+        };
+      }
+      if (node instanceof HTMLElement && node.isContentEditable) {
+        return { element: node, writable: true, kind: 'contenteditable' };
+      }
+    }
+    return null;
+  };
+
+  const safeExternalUrl = (anchor) => {
+    if (!anchor) return '';
+    try {
+      const url = new URL(anchor.href, window.location.href);
+      return ['http:', 'https:'].includes(url.protocol) && url.hostname
+        ? url.href
+        : '';
+    } catch {
+      return '';
+    }
+  };
+
+  const selectionForEditable = (editable) => {
+    if (!editable) return null;
+    if (editable.kind === 'control') {
+      const start = editable.element.selectionStart ?? 0;
+      const end = editable.element.selectionEnd ?? start;
+      return {
+        kind: editable.kind,
+        element: editable.element,
+        start,
+        end,
+        text: editable.sensitive
+          ? ''
+          : editable.element.value.slice(start, end),
+      };
+    }
+
+    const selection = window.getSelection();
+    if (!selection || selection.rangeCount === 0) {
+      return {
+        kind: editable.kind,
+        element: editable.element,
+        range: null,
+        text: '',
+      };
+    }
+    const range = selection.getRangeAt(0);
+    if (!editable.element.contains(range.commonAncestorContainer)) {
+      return {
+        kind: editable.kind,
+        element: editable.element,
+        range: null,
+        text: '',
+      };
+    }
+    return {
+      kind: editable.kind,
+      element: editable.element,
+      range: range.cloneRange(),
+      text: selection.toString(),
+    };
+  };
+
+  const selectionAtTarget = (target) => {
+    const selection = window.getSelection();
+    if (!selection || selection.rangeCount === 0 || selection.isCollapsed) {
+      return null;
+    }
+    const range = selection.getRangeAt(0);
+    try {
+      if (!(target instanceof Node) || !range.intersectsNode(target)) {
+        return null;
+      }
+    } catch {
+      return null;
+    }
+    const text = selection.toString();
+    return text ? { text, range: range.cloneRange() } : null;
+  };
+
+  const contextMenuPosition = (event) => {
+    if (event.clientX || event.clientY) {
+      return { x: event.clientX, y: event.clientY };
+    }
+    const rect = event.target?.getBoundingClientRect?.();
+    return {
+      x: rect?.left ?? CONTEXT_MENU_VIEWPORT_MARGIN,
+      y: rect?.bottom ?? CONTEXT_MENU_VIEWPORT_MARGIN,
+    };
+  };
+
+  const handleContextMenu = (event) => {
+    if (!desktopContextMenuEnabled) return;
+
+    const path = composedPath(event);
+    const editable = editableFromPath(path);
+    const editableSelection = selectionForEditable(editable);
+    const selectedText = editable
+      ? editableSelection
+      : selectionAtTarget(event.target);
+    const url = safeExternalUrl(linkFromPath(path));
+    const actions = [];
+
+    if (url) {
+      actions.push(
+        {
+          id: 'copy-link',
+          group: 'link',
+          label: t('desktop.contextMenu.copyLinkAddress', 'Copy link address'),
+        },
+        {
+          id: 'open-link',
+          group: 'link',
+          label: t('desktop.contextMenu.openInBrowser', 'Open in browser'),
+        },
+      );
+    }
+    if (editable) {
+      if (selectedText?.text && editable.writable) {
+        actions.push({
+          id: 'cut',
+          group: 'edit',
+          label: t('desktop.contextMenu.cut', 'Cut'),
+        });
+      }
+      if (selectedText?.text) {
+        actions.push({
+          id: 'copy',
+          group: 'edit',
+          label: t('common.copy', 'Copy'),
+        });
+      }
+      if (editable.writable) {
+        actions.push({
+          id: 'paste',
+          group: 'edit',
+          label: t('desktop.contextMenu.paste', 'Paste'),
+        });
+      }
+    } else if (selectedText?.text) {
+      actions.push({
+        id: 'copy',
+        group: 'selection',
+        label: t('common.copy', 'Copy'),
+      });
+    }
+
+    if (actions.length === 0) return;
+
+    event.preventDefault();
+    const position = contextMenuPosition(event);
+    contextMenu = {
+      ...position,
+      positioned: false,
+      actions,
+      editable,
+      selection: selectedText,
+      url,
+      focusTarget:
+        editable?.element ??
+        (event.target instanceof HTMLElement ? event.target : null),
+    };
+  };
+
+  const restoreContextFocus = (target) => {
+    if (!(target instanceof HTMLElement) || !target.isConnected) return;
+    queueMicrotask(() => target.focus({ preventScroll: true }));
+  };
+
+  const closeContextMenu = ({ restoreFocus = false } = {}) => {
+    const focusTarget = contextMenu?.focusTarget;
+    contextMenu = null;
+    if (restoreFocus) restoreContextFocus(focusTarget);
+  };
+
+  const dispatchEditInput = (element, inputType, data = null) => {
+    const event =
+      typeof InputEvent === 'function'
+        ? new InputEvent('input', { bubbles: true, inputType, data })
+        : new Event('input', { bubbles: true });
+    element.dispatchEvent(event);
+  };
+
+  const replaceEditableSelection = (selection, replacement, inputType) => {
+    if (!selection) return;
+    selection.element.focus({ preventScroll: true });
+    if (selection.kind === 'control') {
+      selection.element.setSelectionRange(selection.start, selection.end);
+      selection.element.setRangeText(
+        replacement,
+        selection.start,
+        selection.end,
+        'end',
+      );
+      dispatchEditInput(selection.element, inputType, replacement || null);
+      return;
+    }
+    if (!selection.range) return;
+    const range = selection.range;
+    range.deleteContents();
+    if (replacement) {
+      const textNode = document.createTextNode(replacement);
+      range.insertNode(textNode);
+      range.setStartAfter(textNode);
+    }
+    range.collapse(true);
+    const browserSelection = window.getSelection();
+    browserSelection?.removeAllRanges();
+    browserSelection?.addRange(range);
+    dispatchEditInput(selection.element, inputType, replacement || null);
+  };
+
+  const notifyContextMenuFailure = () => {
+    onToast({
+      title: t(
+        'desktop.contextMenu.actionFailedTitle',
+        'Desktop action failed',
+      ),
+      message: t(
+        'desktop.contextMenu.actionFailedMessage',
+        'The clipboard or default browser could not complete the action.',
+      ),
+      variant: 'warn',
+    });
+  };
+
+  const handleContextMenuAction = async (actionId) => {
+    const snapshot = contextMenu;
+    if (!snapshot) return;
+    contextMenu = null;
+    try {
+      if (actionId === 'copy-link') {
+        await setDesktopClipboardText(snapshot.url);
+      } else if (actionId === 'open-link') {
+        await openDesktopExternalUrl(snapshot.url);
+      } else if (actionId === 'copy') {
+        await setDesktopClipboardText(snapshot.selection?.text ?? '');
+      } else if (actionId === 'cut') {
+        await setDesktopClipboardText(snapshot.selection?.text ?? '');
+        replaceEditableSelection(snapshot.selection, '', 'deleteByCut');
+      } else if (actionId === 'paste') {
+        const clipboardText = await getDesktopClipboardText();
+        replaceEditableSelection(
+          snapshot.selection,
+          clipboardText,
+          'insertFromPaste',
+        );
+      }
+    } catch {
+      notifyContextMenuFailure();
+    } finally {
+      restoreContextFocus(snapshot.focusTarget);
+    }
+  };
+
+  const handleContextMenuKeydown = (event) => {
+    const items = Array.from(
+      contextMenuElement?.querySelectorAll('[role="menuitem"]') ?? [],
+    );
+    const currentIndex = items.indexOf(document.activeElement);
+    let nextIndex = null;
+    if (event.key === 'ArrowDown') {
+      nextIndex = (currentIndex + 1) % items.length;
+    } else if (event.key === 'ArrowUp') {
+      nextIndex = (currentIndex - 1 + items.length) % items.length;
+    } else if (event.key === 'Home') {
+      nextIndex = 0;
+    } else if (event.key === 'End') {
+      nextIndex = items.length - 1;
+    } else if (event.key === 'Escape') {
+      event.preventDefault();
+      event.stopPropagation();
+      closeContextMenu({ restoreFocus: true });
+      return;
+    }
+    if (nextIndex === null || items.length === 0) return;
+    event.preventDefault();
+    items[nextIndex].focus({ preventScroll: true });
+  };
+
+  const handleWindowPointerDown = (event) => {
+    if (contextMenu && !contextMenuElement?.contains(event.target)) {
+      closeContextMenu();
+    }
+  };
+
+  const handleWindowKeydown = (event) => {
+    if (contextMenu && event.key === 'Escape') {
+      closeContextMenu({ restoreFocus: true });
+    }
+  };
+
+  $effect(() => {
+    if (!contextMenu || contextMenu.positioned || !contextMenuElement) {
+      return undefined;
+    }
+    const menuSnapshot = contextMenu;
+    const frame = requestAnimationFrame(() => {
+      if (contextMenu !== menuSnapshot || !contextMenuElement) return;
+      const bounds = contextMenuElement.getBoundingClientRect();
+      const maximumX = Math.max(
+        CONTEXT_MENU_VIEWPORT_MARGIN,
+        window.innerWidth - bounds.width - CONTEXT_MENU_VIEWPORT_MARGIN,
+      );
+      const maximumY = Math.max(
+        CONTEXT_MENU_VIEWPORT_MARGIN,
+        window.innerHeight - bounds.height - CONTEXT_MENU_VIEWPORT_MARGIN,
+      );
+      contextMenu = {
+        ...contextMenu,
+        x: Math.min(
+          Math.max(contextMenu.x, CONTEXT_MENU_VIEWPORT_MARGIN),
+          maximumX,
+        ),
+        y: Math.min(
+          Math.max(contextMenu.y, CONTEXT_MENU_VIEWPORT_MARGIN),
+          maximumY,
+        ),
+        positioned: true,
+      };
+      contextMenuElement
+        .querySelector('[role="menuitem"]')
+        ?.focus({ preventScroll: true });
+    });
+    return () => cancelAnimationFrame(frame);
+  });
+
+  onMount(() => {
+    const closeOnCapturedScroll = () => {
+      if (contextMenu) closeContextMenu();
+    };
+    window.addEventListener('scroll', closeOnCapturedScroll, true);
+    return () =>
+      window.removeEventListener('scroll', closeOnCapturedScroll, true);
+  });
+
   // A direct mobile deep-link can activate an item outside the initially
   // visible part of the horizontal navigation. Reveal it after Svelte has
   // updated aria-current, without moving the page on wider layouts.
@@ -108,6 +486,14 @@
     return () => cancelAnimationFrame(frame);
   });
 </script>
+
+<svelte:window
+  oncontextmenu={handleContextMenu}
+  onpointerdown={handleWindowPointerDown}
+  onkeydown={handleWindowKeydown}
+  onresize={() => contextMenu && closeContextMenu()}
+  onblur={() => contextMenu && closeContextMenu()}
+/>
 
 <div
   class="app-shell"
@@ -270,5 +656,65 @@
         </div>
       {/if}
     </aside>
+  {/if}
+
+  {#if contextMenu}
+    <div
+      bind:this={contextMenuElement}
+      class="desktop-context-menu"
+      role="menu"
+      tabindex="-1"
+      aria-label={t('desktop.contextMenu.label', 'Context menu')}
+      style={`left: ${contextMenu.x}px; top: ${contextMenu.y}px; visibility: ${contextMenu.positioned ? 'visible' : 'hidden'};`}
+      onkeydown={handleContextMenuKeydown}
+    >
+      {#each contextMenu.actions as action, index (action.id)}
+        {#if index > 0 && contextMenu.actions[index - 1].group !== action.group}
+          <div class="desktop-context-menu__separator" role="separator"></div>
+        {/if}
+        <Button
+          variant="tertiary"
+          class="desktop-context-menu__item"
+          role="menuitem"
+          tabindex="-1"
+          onClick={() => handleContextMenuAction(action.id)}
+        >
+          {#if action.id === 'copy-link'}
+            <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
+              <path
+                d="M6.5 9.5 9.5 6.5M5.2 11.8l-1 .9a2.3 2.3 0 0 1-3.2-3.2l2.6-2.6a2.3 2.3 0 0 1 3.2 0M10.8 4.2l1-.9A2.3 2.3 0 0 1 15 6.5l-2.6 2.6a2.3 2.3 0 0 1-3.2 0"
+              />
+            </svg>
+          {:else if action.id === 'open-link'}
+            <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
+              <path d="M9 2h5v5M14 2 7.5 8.5" />
+              <path
+                d="M12.5 9.5v3a1.5 1.5 0 0 1-1.5 1.5H3.5A1.5 1.5 0 0 1 2 12.5V5a1.5 1.5 0 0 1 1.5-1.5h3"
+              />
+            </svg>
+          {:else if action.id === 'cut'}
+            <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
+              <circle cx="4" cy="12" r="2.2" />
+              <circle cx="12" cy="12" r="2.2" />
+              <path d="m5.8 10.7 6.4-8.2M10.2 10.7 3.8 2.5M7.1 7.8 8 9" />
+            </svg>
+          {:else if action.id === 'paste'}
+            <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
+              <path d="M5.5 4H3.8A1.3 1.3 0 0 0 2.5 5.3v8.2h9v-2" />
+              <rect x="5.5" y="2" width="5" height="3" rx="1" />
+              <path d="M8 8h5.5M11 5.5 13.5 8 11 10.5" />
+            </svg>
+          {:else}
+            <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
+              <rect x="5" y="5" width="8" height="9" rx="1.5" />
+              <path
+                d="M3 11H2.5A1.5 1.5 0 0 1 1 9.5v-7A1.5 1.5 0 0 1 2.5 1h7A1.5 1.5 0 0 1 11 2.5V3"
+              />
+            </svg>
+          {/if}
+          <span>{action.label}</span>
+        </Button>
+      {/each}
+    </div>
   {/if}
 </div>

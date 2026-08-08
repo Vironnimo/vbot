@@ -596,6 +596,61 @@ svg {
   }
 }
 
+/* Desktop replaces pywebview's production-disabled browser menu with one
+   small host-aware action surface. It intentionally reads like native app
+   chrome: compact rows, technical restraint, and no decorative accent. */
+.desktop-context-menu {
+  position: fixed;
+  z-index: var(--z-floating);
+  min-width: 224px;
+  max-width: calc(100vw - 16px);
+  padding: 4px;
+  overflow: hidden;
+  border: 1px solid var(--border-2);
+  border-radius: var(--r-md);
+  background: var(--surface-2);
+  box-shadow: var(--floating-elevation);
+}
+
+.desktop-context-menu__item.btn-tertiary {
+  width: 100%;
+  min-height: 32px;
+  justify-content: flex-start;
+  gap: 10px;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: var(--r-sm);
+  color: var(--text-med);
+  background: transparent;
+  font-family: var(--font-ui);
+  font-size: var(--fs-body-sm);
+  font-weight: 500;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.desktop-context-menu__item.btn-tertiary:hover,
+.desktop-context-menu__item.btn-tertiary:focus-visible {
+  color: var(--text-hi);
+  background: var(--surface-3);
+  box-shadow: none;
+}
+
+.desktop-context-menu__item svg {
+  flex: 0 0 auto;
+  fill: none;
+  stroke: currentcolor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.25;
+}
+
+.desktop-context-menu__separator {
+  height: 1px;
+  margin: 4px;
+  background: var(--border);
+}
+
 .view {
   display: none;
   min-height: 0;

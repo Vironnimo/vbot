@@ -114,6 +114,15 @@ export const englishCatalog = Object.freeze({
   'common.saving': 'Saving…',
   'common.unknown': 'Unknown',
 
+  'desktop.contextMenu.label': 'Context menu',
+  'desktop.contextMenu.copyLinkAddress': 'Copy link address',
+  'desktop.contextMenu.openInBrowser': 'Open in browser',
+  'desktop.contextMenu.cut': 'Cut',
+  'desktop.contextMenu.paste': 'Paste',
+  'desktop.contextMenu.actionFailedTitle': 'Desktop action failed',
+  'desktop.contextMenu.actionFailedMessage':
+    'The clipboard or default browser could not complete the action.',
+
   'autosave.transitionFailureTitle': 'Changes could not be saved',
   'autosave.transitionFailureBody':
     'Your changes are still open. Try saving again, or discard them and continue.',
