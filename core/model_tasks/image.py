@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import inspect
 from collections.abc import Mapping, Sequence
@@ -29,6 +30,9 @@ from core.utils.logging import get_logger
 JsonObject = JsonObject
 _LOGGER = get_logger("image")
 DEFAULT_IMAGE_INPUT_MAX_BYTES = 20 * 1024 * 1024
+DEFAULT_IMAGE_ANALYSIS_MAX_IMAGES = 6
+DEFAULT_IMAGE_ANALYSIS_MAX_TOTAL_BYTES = 100 * 1024 * 1024
+_IMAGE_ANALYSIS_CONCURRENCY_LIMIT = 1
 
 # Per-call knob → prompt-hint phrasing, used when a knob cannot be routed as a
 # native provider parameter. Unknown knobs fall back to a generic label.
@@ -101,6 +105,7 @@ class ImageService:
         self._model_tasks = model_tasks
         self._runtime = runtime
         self._max_input_bytes = max_input_bytes
+        self._analysis_semaphore = asyncio.Semaphore(_IMAGE_ANALYSIS_CONCURRENCY_LIMIT)
         self._resolver = TaskBindingResolver(
             model_tasks, configuration_error=ImageConfigurationError
         )
@@ -168,7 +173,8 @@ class ImageService:
         wire_options, prompt_hints = split_image_call_options(model, call_options or {})
         merged_options = {**options, **wire_options}
         request_prompt = _prompt_with_hints(normalized_prompt, prompt_hints)
-        input_images = _load_image_inputs(
+        input_images = await asyncio.to_thread(
+            _load_image_inputs,
             source_paths or (),
             max_size_bytes=self._max_input_bytes,
         )
@@ -226,6 +232,24 @@ class ImageService:
             raise ImageConfigurationError("Prompt must not be empty")
         if not image_paths:
             raise ImageInputError("At least one image path is required")
+        image_count = len(image_paths)
+        if image_count > DEFAULT_IMAGE_ANALYSIS_MAX_IMAGES:
+            raise ImageInputError(
+                "Image analysis accepts at most "
+                f"{DEFAULT_IMAGE_ANALYSIS_MAX_IMAGES} images per call, but received "
+                f"{image_count}. "
+                "Pass fewer images and try again."
+            )
+
+        async with self._analysis_semaphore:
+            return await self._analyze(normalized_prompt, image_paths)
+
+    async def _analyze(
+        self,
+        normalized_prompt: str,
+        image_paths: Sequence[str | Path],
+    ) -> ImageUnderstandingResult:
+        """Execute one bounded image-understanding request."""
 
         binding = self._resolver.binding_for(TASK_IMAGE_UNDERSTANDING)
         target_ref = self._resolver.parse_target(binding.target)
@@ -240,9 +264,11 @@ class ImageService:
                 f"Configured target is not an image-understanding model: {target_ref.target}"
             )
 
-        input_images = _load_image_inputs(
+        input_images = await asyncio.to_thread(
+            _load_image_inputs,
             image_paths,
             max_size_bytes=self._max_input_bytes,
+            max_total_bytes=DEFAULT_IMAGE_ANALYSIS_MAX_TOTAL_BYTES,
         )
         adapter = None
         try:
@@ -265,17 +291,11 @@ class ImageService:
                     f"these image types: {media_list}"
                 )
 
-            content: list[JsonObject] = [
-                {"type": "text", "text": normalized_prompt},
-                *[
-                    {
-                        "type": "media",
-                        "base64": base64.b64encode(image.data).decode("ascii"),
-                        "media_type": image.media_type,
-                    }
-                    for image in input_images
-                ],
-            ]
+            content = await asyncio.to_thread(
+                _analysis_content,
+                normalized_prompt,
+                input_images,
+            )
             response = await adapter.send(
                 [
                     {"role": "system", "content": IMAGE_UNDERSTANDING_SYSTEM_PROMPT},
@@ -426,10 +446,12 @@ def _load_image_inputs(
     source_paths: Sequence[str | Path],
     *,
     max_size_bytes: int,
+    max_total_bytes: int | None = None,
 ) -> tuple[ImageInput, ...]:
     """Read bounded local image files without imposing a path allowlist."""
 
     inputs: list[ImageInput] = []
+    total_bytes = 0
     for source_path in source_paths:
         path = Path(source_path).expanduser().resolve()
         if not path.exists():
@@ -442,12 +464,16 @@ def _load_image_inputs(
                 raise ImageInputError(
                     f"Source image exceeds size limit {max_size_bytes} bytes: {path}"
                 )
+            reported_total_bytes = total_bytes + reported_size
+            _ensure_analysis_total_size(reported_total_bytes, max_total_bytes)
             with path.open("rb") as source_file:
                 data = source_file.read(max_size_bytes + 1)
         except OSError as exc:
             raise ImageInputError(f"Cannot read source image {path}: {exc}") from exc
         if len(data) > max_size_bytes:
             raise ImageInputError(f"Source image exceeds size limit {max_size_bytes} bytes: {path}")
+        total_bytes += len(data)
+        _ensure_analysis_total_size(total_bytes, max_total_bytes)
 
         media_type = sniff_media_type(data, path.name)
         if not media_type.startswith("image/"):
@@ -460,6 +486,39 @@ def _load_image_inputs(
             )
         )
     return tuple(inputs)
+
+
+def _ensure_analysis_total_size(total_bytes: int, max_total_bytes: int | None) -> None:
+    """Reject an analysis payload whose cumulative source bytes exceed its limit."""
+
+    if max_total_bytes is None or total_bytes <= max_total_bytes:
+        return
+    mebibytes, remainder = divmod(max_total_bytes, 1024 * 1024)
+    limit_label = (
+        f"{mebibytes} MiB ({max_total_bytes} bytes)"
+        if mebibytes > 0 and remainder == 0
+        else f"{max_total_bytes} bytes"
+    )
+    raise ImageInputError(
+        f"Image analysis input totals {total_bytes} bytes, exceeding the {limit_label} limit. "
+        "Pass fewer or smaller images and try again."
+    )
+
+
+def _analysis_content(prompt: str, input_images: Sequence[ImageInput]) -> list[JsonObject]:
+    """Build canonical analysis content outside the async event loop."""
+
+    return [
+        {"type": "text", "text": prompt},
+        *[
+            {
+                "type": "media",
+                "base64": base64.b64encode(image.data).decode("ascii"),
+                "media_type": image.media_type,
+            }
+            for image in input_images
+        ],
+    ]
 
 
 def _input_filename(path: Path, media_type: str) -> str:

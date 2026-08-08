@@ -458,7 +458,10 @@ async def test_analyze_image_tool_rejects_invalid_arguments_and_maps_image_error
         {"prompt": "Describe it.", "images": ["photo.png"]},
     )
 
-    assert image_error["error"]["code"] == "image_understanding_error"
+    assert image_error["error"] == {
+        "code": "image_understanding_error",
+        "message": "bad image",
+    }
 
 
 def _make_context(
