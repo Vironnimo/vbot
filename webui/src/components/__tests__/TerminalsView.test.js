@@ -282,6 +282,63 @@ describe('TerminalsView', () => {
     expect(terminalInstances[0].focus).toHaveBeenCalled();
   });
 
+  it('prefills the last launch and can select an older persistent setup', async () => {
+    listTerminalsMock.mockResolvedValue({
+      terminals: [],
+      launch_history: [
+        launchHistory({
+          id: 'recent',
+          command: 'codex',
+          args: ['--profile', 'daily'],
+          workdir: 'C:\\Development\\vBot',
+        }),
+        launchHistory({
+          id: 'older',
+          command: 'python',
+          args: ['-m', 'http.server', '8080'],
+          workdir: 'C:\\Sites\\docs',
+        }),
+      ],
+    });
+    mountedComponent = mount(TerminalsView, { target: document.body });
+    flushSync();
+    await waitFor(() => document.body.textContent.includes('Open a terminal'));
+
+    findButton('Add').click();
+    flushSync();
+    expect(document.querySelector('#terminal-start-command').value).toBe(
+      'codex',
+    );
+    expect(document.querySelector('#terminal-start-arguments').value).toBe(
+      '--profile\ndaily',
+    );
+    expect(document.querySelector('#terminal-start-workdir').value).toBe(
+      'C:\\Development\\vBot',
+    );
+
+    document.querySelector('#terminal-start-history').click();
+    await waitFor(() =>
+      [...document.querySelectorAll('button')].some((button) =>
+        button.textContent.includes('python -m http.server 8080'),
+      ),
+    );
+    [...document.querySelectorAll('button')]
+      .find((button) =>
+        button.textContent.includes('python -m http.server 8080'),
+      )
+      .click();
+    flushSync();
+    expect(document.querySelector('#terminal-start-command').value).toBe(
+      'python',
+    );
+    expect(document.querySelector('#terminal-start-arguments').value).toBe(
+      '-m\nhttp.server\n8080',
+    );
+    expect(document.querySelector('#terminal-start-workdir').value).toBe(
+      'C:\\Sites\\docs',
+    );
+  });
+
   it('takes control on terminal click, forwards native keys, and exposes scrollback recovery', async () => {
     listTerminalsMock.mockResolvedValue({ terminals: [terminal()] });
     mountedComponent = mount(TerminalsView, { target: document.body });
@@ -333,6 +390,17 @@ function terminal(changes = {}) {
       session_id: 'session-one',
     },
     attention: null,
+    ...changes,
+  };
+}
+
+function launchHistory(changes = {}) {
+  return {
+    id: 'launch-1',
+    command: null,
+    args: [],
+    workdir: null,
+    used_at: '2026-08-08T10:00:00+00:00',
     ...changes,
   };
 }

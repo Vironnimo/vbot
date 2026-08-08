@@ -17,7 +17,11 @@ JsonObject = dict[str, Any]
 def _terminal_list(state: Any, params: JsonObject) -> JsonObject:
     if params:
         raise RpcError(RPC_ERROR_INVALID_REQUEST, "terminal.list does not accept params")
-    return {"terminals": _terminal_manager(state).list_for_operator()}
+    manager = _terminal_manager(state)
+    return {
+        "terminals": manager.list_for_operator(),
+        "launch_history": manager.list_operator_launch_history(),
+    }
 
 
 async def _terminal_start(state: Any, params: JsonObject) -> JsonObject:
@@ -38,6 +42,7 @@ async def _terminal_start(state: Any, params: JsonObject) -> JsonObject:
             command=command,
             arguments=arguments,
             cwd=Path(workdir).expanduser() if workdir is not None else None,
+            launch_workdir=workdir,
             columns=columns,
             rows=rows,
         )
@@ -45,7 +50,10 @@ async def _terminal_start(state: Any, params: JsonObject) -> JsonObject:
         raise RpcError(RPC_ERROR_INVALID_REQUEST, str(exc)) from exc
     except Exception as exc:
         raise _map_expected_error(exc) from exc
-    return {"terminal": terminal}
+    return {
+        "terminal": terminal,
+        "launch_history": _terminal_manager(state).list_operator_launch_history(),
+    }
 
 
 async def _terminal_input(state: Any, params: JsonObject) -> JsonObject:

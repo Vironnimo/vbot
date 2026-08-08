@@ -31,6 +31,17 @@ class FakeTerminalManager:
     def list_for_operator(self) -> list[dict[str, Any]]:
         return [{"terminal_id": "term-1", "state": "working"}]
 
+    def list_operator_launch_history(self) -> list[dict[str, Any]]:
+        return [
+            {
+                "id": "launch-1",
+                "command": "codex",
+                "args": ["--profile", "work"],
+                "workdir": "~/repo",
+                "used_at": "2026-08-08T10:00:00+00:00",
+            }
+        ]
+
     async def send_operator_input(self, terminal_id: str, data: str) -> dict[str, Any]:
         self.inputs.append((terminal_id, data))
         return {"terminal_id": terminal_id, "state": "working"}
@@ -64,7 +75,8 @@ async def test_terminal_operator_handlers_project_list_input_resize_and_kill() -
     state = _state(manager)
 
     assert _terminal_list(state, {}) == {
-        "terminals": [{"terminal_id": "term-1", "state": "working"}]
+        "terminals": [{"terminal_id": "term-1", "state": "working"}],
+        "launch_history": manager.list_operator_launch_history(),
     }
     assert await _terminal_start(
         state,
@@ -75,7 +87,10 @@ async def test_terminal_operator_handlers_project_list_input_resize_and_kill() -
             "columns": 100,
             "rows": 30,
         },
-    ) == {"terminal": {"terminal_id": "manual-1", "state": "ready", "owner": None}}
+    ) == {
+        "terminal": {"terminal_id": "manual-1", "state": "ready", "owner": None},
+        "launch_history": manager.list_operator_launch_history(),
+    }
     assert await _terminal_input(state, {"terminal_id": "term-1", "data": "status\r"}) == {
         "terminal": {"terminal_id": "term-1", "state": "working"}
     }
@@ -101,6 +116,7 @@ async def test_terminal_operator_handlers_project_list_input_resize_and_kill() -
             "command": "codex",
             "arguments": ["--profile", "work space"],
             "cwd": Path("~/repo").expanduser(),
+            "launch_workdir": "~/repo",
             "columns": 100,
             "rows": 30,
         }

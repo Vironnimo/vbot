@@ -36,6 +36,7 @@ DATA_DIRECTORY_RELATIVE_PATHS = (
     Path("prompts"),
     Path("recall"),
     Path("skills"),
+    Path("terminals"),
 )
 
 ENVIRONMENT_TEMPLATE_RELATIVE_PATH = Path("data-dir/.env.example")
@@ -151,6 +152,10 @@ class DataDirectoryLayout:
     @property
     def skills(self) -> Path:
         return self.root / "skills"
+
+    @property
+    def terminals(self) -> Path:
+        return self.root / "terminals"
 
     @property
     def environment_file(self) -> Path:

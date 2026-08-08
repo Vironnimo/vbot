@@ -55,6 +55,7 @@ def test_layout_exposes_every_canonical_named_path(tmp_path: Path) -> None:
     assert layout.provider_usage == tmp_path / "statistics" / "provider-usage"
     assert layout.bootstrap == tmp_path / "bootstrap"
     assert layout.processes == tmp_path / "processes"
+    assert layout.terminals == tmp_path / "terminals"
     assert layout.environment_file == tmp_path / ".env"
     assert layout.settings_file == tmp_path / "settings.json"
 

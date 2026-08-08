@@ -25,6 +25,7 @@ const TERMINAL_STATES_FINISHED = new Set(['exited', 'error']);
 export function createTerminalsViewState() {
   return {
     terminals: [],
+    launchHistory: [],
     selectedTerminalId: '',
     loading: false,
     listError: '',
@@ -56,6 +57,7 @@ export function reconcileTerminalList(state, result) {
   state.terminals = terminals.filter(
     (terminal) => terminal && typeof terminal.terminal_id === 'string',
   );
+  reconcileTerminalLaunchHistory(state, result);
   if (
     state.selectedTerminalId &&
     state.terminals.some(
@@ -66,6 +68,23 @@ export function reconcileTerminalList(state, result) {
   }
   state.selectedTerminalId = state.terminals[0]?.terminal_id ?? '';
   return state.selectedTerminalId;
+}
+
+export function reconcileTerminalLaunchHistory(state, result) {
+  if (!Array.isArray(result?.launch_history)) {
+    return state.launchHistory;
+  }
+  state.launchHistory = result.launch_history.filter(
+    (entry) =>
+      entry &&
+      typeof entry.id === 'string' &&
+      entry.id &&
+      (entry.command === null || typeof entry.command === 'string') &&
+      Array.isArray(entry.args) &&
+      entry.args.every((argument) => typeof argument === 'string') &&
+      (entry.workdir === null || typeof entry.workdir === 'string'),
+  );
+  return state.launchHistory;
 }
 
 export function mergeTerminalSummary(state, terminal) {
@@ -457,6 +476,7 @@ export function createTerminalsController({
       if (!terminal) {
         throw new Error('The server returned an invalid terminal.');
       }
+      reconcileTerminalLaunchHistory(state, result);
       state.selectedTerminalId = terminal.terminal_id;
       switchStream(terminal.terminal_id);
       return terminal;

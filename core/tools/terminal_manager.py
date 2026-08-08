@@ -26,6 +26,7 @@ from core.tools.terminal_backend import (
     spawn_terminal_adapter,
     terminate_process_tree,
 )
+from core.utils.atomic import atomic_write_text
 from core.utils.errors import VBotError
 from core.utils.logging import get_logger
 from core.utils.paths import model_path
@@ -55,6 +56,8 @@ TERMINAL_INPUT_KEY_DELAY_SECONDS = 0.1
 TERMINAL_STREAM_RETENTION_EVENTS = 4_096
 TERMINAL_STREAM_SUBSCRIBER_QUEUE_EVENTS = 512
 TERMINAL_INPUT_MAX_CHARS = 65_536
+TERMINAL_LAUNCH_HISTORY_VERSION = 1
+TERMINAL_LAUNCH_HISTORY_MAX_ENTRIES = 50
 TERMINAL_INPUT_KEY_SEQUENCES = {
     "enter": "\r",
     "escape": "\x1b",
@@ -147,6 +150,17 @@ class TerminalOwner:
     session_id: str
 
 
+@dataclass(frozen=True, slots=True)
+class TerminalLaunchHistoryEntry:
+    """One durable, most-recently-used manual Terminal launch."""
+
+    id: str
+    command: str | None
+    arguments: tuple[str, ...]
+    workdir: str | None
+    used_at: datetime
+
+
 @dataclass(slots=True)
 class TerminalAttention:
     """One program-agnostic Agent-attention boundary for a Terminal Session."""
@@ -207,6 +221,8 @@ class TerminalManager:
         trigger_service: Any | None = None,
         *,
         temporary_files: TemporaryFileManager | None = None,
+        launch_history_path: Path | None = None,
+        data_dir: Path | None = None,
         adapter_factory: TerminalAdapterFactory | None = None,
         scrollback_lines: int = TERMINAL_SCROLLBACK_LINES,
         finished_session_ttl: timedelta = TERMINAL_FINISHED_TTL,
@@ -223,6 +239,8 @@ class TerminalManager:
             raise ValueError("Terminal activity quiet period must be positive")
         self._trigger_service = trigger_service
         self._temporary_files = temporary_files
+        self._launch_history_path = launch_history_path
+        self._data_dir = data_dir
         self._adapter_factory = adapter_factory or spawn_terminal_adapter
         self._scrollback_lines = scrollback_lines
         self._finished_session_ttl = finished_session_ttl
@@ -230,6 +248,7 @@ class TerminalManager:
         self._activity_quiet_seconds = activity_quiet_seconds
         self._sessions: dict[str, TerminalSession] = {}
         self._changed_callbacks: list[TerminalChangedCallback] = []
+        self._launch_history = self._load_launch_history()
         self._cursor_secret = os.urandom(32)
         self._sweeper_task: asyncio.Task[None] | None = None
 
@@ -318,6 +337,7 @@ class TerminalManager:
         command: str | None,
         arguments: Sequence[str],
         cwd: Path | None,
+        launch_workdir: str | None = None,
         columns: int = TERMINAL_DEFAULT_COLUMNS,
         rows: int = TERMINAL_DEFAULT_ROWS,
     ) -> dict[str, Any]:
@@ -332,6 +352,14 @@ class TerminalManager:
             columns=columns,
             rows=rows,
             origin_run_id=None,
+        )
+        remembered_workdir = launch_workdir
+        if remembered_workdir is None and cwd is not None:
+            remembered_workdir = str(cwd)
+        self._remember_operator_launch(
+            command=command,
+            arguments=arguments,
+            workdir=remembered_workdir,
         )
         return self._operator_summary(session)
 
@@ -448,6 +476,67 @@ class TerminalManager:
             reverse=True,
         )
         return [self._operator_summary(session) for session in sessions]
+
+    def list_operator_launch_history(self) -> list[dict[str, Any]]:
+        """Return newest-first manual launch configurations for operator reuse."""
+        return [
+            {
+                "id": entry.id,
+                "command": entry.command,
+                "args": list(entry.arguments),
+                "workdir": entry.workdir,
+                "used_at": entry.used_at.isoformat(),
+            }
+            for entry in self._launch_history
+        ]
+
+    def _load_launch_history(self) -> list[TerminalLaunchHistoryEntry]:
+        path = self._launch_history_path
+        if path is None or not path.exists():
+            return []
+        try:
+            document = json.loads(path.read_text(encoding="utf-8"))
+            return _parse_launch_history(document)
+        except (OSError, UnicodeError, ValueError) as error:
+            _LOGGER.warning("Could not load Terminal launch history from '%s': %s", path, error)
+            return []
+
+    def _remember_operator_launch(
+        self,
+        *,
+        command: str | None,
+        arguments: Sequence[str],
+        workdir: str | None,
+    ) -> None:
+        entry = TerminalLaunchHistoryEntry(
+            id=_launch_history_id(command, arguments, workdir),
+            command=command,
+            arguments=tuple(arguments),
+            workdir=workdir,
+            used_at=_utc_now(),
+        )
+        self._launch_history = [
+            entry,
+            *(item for item in self._launch_history if item.id != entry.id),
+        ][:TERMINAL_LAUNCH_HISTORY_MAX_ENTRIES]
+        self._persist_launch_history()
+
+    def _persist_launch_history(self) -> None:
+        path = self._launch_history_path
+        if path is None:
+            return
+        document = {
+            "version": TERMINAL_LAUNCH_HISTORY_VERSION,
+            "entries": self.list_operator_launch_history(),
+        }
+        try:
+            atomic_write_text(
+                path,
+                json.dumps(document, ensure_ascii=False, indent=2) + "\n",
+                data_dir=self._data_dir,
+            )
+        except OSError as error:
+            _LOGGER.warning("Could not persist Terminal launch history to '%s': %s", path, error)
 
     async def watch_for_operator(
         self, terminal_id: str
@@ -1246,6 +1335,80 @@ def _input_chunks(
     return tuple(chunks)
 
 
+def _parse_launch_history(document: Any) -> list[TerminalLaunchHistoryEntry]:
+    if not isinstance(document, dict) or set(document) != {"version", "entries"}:
+        raise ValueError("Terminal launch history must contain only version and entries")
+    if document["version"] != TERMINAL_LAUNCH_HISTORY_VERSION:
+        raise ValueError("Unsupported Terminal launch history version")
+    entries = document["entries"]
+    if not isinstance(entries, list) or len(entries) > TERMINAL_LAUNCH_HISTORY_MAX_ENTRIES:
+        raise ValueError("Terminal launch history entries are invalid")
+
+    parsed: list[TerminalLaunchHistoryEntry] = []
+    seen_ids: set[str] = set()
+    for raw_entry in entries:
+        if not isinstance(raw_entry, dict) or set(raw_entry) != {
+            "id",
+            "command",
+            "args",
+            "workdir",
+            "used_at",
+        }:
+            raise ValueError("Terminal launch history entry shape is invalid")
+        entry_id = raw_entry["id"]
+        command = raw_entry["command"]
+        arguments = raw_entry["args"]
+        workdir = raw_entry["workdir"]
+        if not isinstance(entry_id, str) or not entry_id:
+            raise ValueError("Terminal launch history id is invalid")
+        if command is not None and (not isinstance(command, str) or not command):
+            raise ValueError("Terminal launch history command is invalid")
+        if not isinstance(arguments, list) or any(not isinstance(item, str) for item in arguments):
+            raise ValueError("Terminal launch history arguments are invalid")
+        if workdir is not None and (not isinstance(workdir, str) or not workdir):
+            raise ValueError("Terminal launch history workdir is invalid")
+        if entry_id != _launch_history_id(command, arguments, workdir) or entry_id in seen_ids:
+            raise ValueError("Terminal launch history id does not match its configuration")
+        used_at = _parse_launch_history_timestamp(raw_entry["used_at"])
+        seen_ids.add(entry_id)
+        parsed.append(
+            TerminalLaunchHistoryEntry(
+                id=entry_id,
+                command=command,
+                arguments=tuple(arguments),
+                workdir=workdir,
+                used_at=used_at,
+            )
+        )
+    return parsed
+
+
+def _launch_history_id(
+    command: str | None,
+    arguments: Sequence[str],
+    workdir: str | None,
+) -> str:
+    encoded = json.dumps(
+        {"command": command, "args": list(arguments), "workdir": workdir},
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _parse_launch_history_timestamp(value: Any) -> datetime:
+    if not isinstance(value, str):
+        raise ValueError("Terminal launch history timestamp is invalid")
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as error:
+        raise ValueError("Terminal launch history timestamp is invalid") from error
+    if parsed.tzinfo is None or parsed.utcoffset() != timedelta(0):
+        raise ValueError("Terminal launch history timestamp must be UTC")
+    return parsed.astimezone(UTC)
+
+
 def _attention_body(session: TerminalSession, attention: TerminalAttention) -> str:
     heading = {
         "output_settled": "Terminal output settled",
@@ -1340,6 +1503,7 @@ __all__ = [
     "TerminalClosedError",
     "TerminalCursorError",
     "TerminalLaunchError",
+    "TerminalLaunchHistoryEntry",
     "TerminalManager",
     "TerminalManagerError",
     "TerminalNotFoundError",
