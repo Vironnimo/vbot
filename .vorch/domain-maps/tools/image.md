@@ -25,7 +25,7 @@ Built-in `analyze_image` and `image_generation` Tools for isolated visual analys
 
 ## Runtime
 
-Runtime registers both Tools at startup with the same runtime-owned `ImageService`; neither Tool calls Providers directly. `image_generation` remains a normal allowlist Tool. `analyze_image` is registered in the catalog but Chat includes it in Provider Tool definitions and the effective System Prompt only when the active Model route cannot carry images and `TaskModelService.binding_is_usable("image_understanding")` is true. Normal Tool permissions still apply as a separate gate.
+Runtime registers both Tools at startup with the same runtime-owned `ImageService`; neither Tool calls Providers directly. `image_generation` remains a normal allowlist Tool. `analyze_image` is registered in the catalog but Chat includes it in Provider Tool definitions and the effective System Prompt only when the active Model route cannot carry images and `await ImageService.analysis_is_available()` is true. That availability check requires both a usable `image_understanding` binding and at least one `image/*` MIME type on the configured target's actual Chat Adapter wire; it creates no Provider request and closes the temporary Adapter. Normal Tool permissions still apply as a separate gate.
 
 ## Constraints & Gotchas
 

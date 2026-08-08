@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import time
-from collections.abc import AsyncIterator, Callable, Mapping, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
@@ -162,7 +162,6 @@ from core.chat.usage import (
 )
 from core.debug import DebugContext
 from core.extensions import HookContext
-from core.model_tasks import TASK_IMAGE_UNDERSTANDING
 from core.projects import (
     ProjectError,
     resolve_prompt_project,
@@ -455,7 +454,7 @@ class ChatLoopDependencies:
     resolve_skills: Callable[[str | None, str | None], SkillRegistry]
     refresh_skills: Callable[[str | None, str | None], SkillRegistry]
     get_local_context_windows: Callable[[], Mapping[str, Any]]
-    task_model_available: Callable[[str], bool]
+    image_understanding_available: Callable[[], Awaitable[bool]]
     deliver_background_completions: Callable[[Run, ChatSession], bool]
 
 
@@ -2273,7 +2272,7 @@ class ChatLoop:
             if session_tool_grants
             else base_tools
         )
-        tools = self._route_tool_definitions(
+        tools = await self._route_tool_definitions(
             tools,
             input_modalities=effective_input_modalities,
             wire_media_types=wire_media_types,
@@ -2505,7 +2504,7 @@ class ChatLoop:
             # needs no exception details to release its ContextVar ownership.
             await write_lock.__aexit__(None, None, None)
 
-    def _route_tool_definitions(
+    async def _route_tool_definitions(
         self,
         tools: list[JsonObject],
         *,
@@ -2523,7 +2522,7 @@ class ChatLoop:
         image_task_available = (
             False
             if route_can_view_images
-            else self._dependencies.task_model_available(TASK_IMAGE_UNDERSTANDING)
+            else await self._dependencies.image_understanding_available()
         )
         if image_task_available:
             return tools
