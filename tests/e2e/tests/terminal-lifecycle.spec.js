@@ -44,7 +44,10 @@ async function openTerminals(page) {
 }
 
 async function startTerminal(page, { command, arguments: args = [] } = {}) {
-  await page.getByRole("button", { name: "New terminal" }).first().click();
+  await page
+    .getByRole("complementary", { name: "Terminals" })
+    .getByRole("button", { exact: true, name: "Add" })
+    .click();
   const dialog = page.getByRole("dialog", { name: "New terminal" });
   await expect(dialog).toBeVisible();
   if (command) {
