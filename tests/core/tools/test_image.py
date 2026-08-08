@@ -58,7 +58,7 @@ def test_image_generation_profile_matches_configured_model_capability(tmp_path: 
     assert text_only_registry.get(IMAGE_GENERATION_TOOL_NAME).open_input_schema is True
     assert editing_registry.get(IMAGE_GENERATION_TOOL_NAME).open_input_schema is True
     assert "source_images" not in text_only_properties
-    assert {"prompt", "aspect_ratio", "resolution"} == set(text_only_properties)
+    assert {"prompt", "aspect_ratio", "resolution", "output_dir"} == set(text_only_properties)
     assert editing[0]["description"] == IMAGE_GENERATION_TOOL_DESCRIPTION
     assert "source_images" in editing_properties
     assert text_only == text_only_registry.provider_definitions(
@@ -105,6 +105,16 @@ async def test_image_generation_tool_returns_model_file_facts(tmp_path: Path) ->
     assert "additionalProperties" not in tool.parameters
     assert "additionalProperties" not in IMAGE_GENERATION_TEXT_ONLY_TOOL_PARAMETERS
     assert tool.open_input_schema is True
+    output_dir_parameter = tool.parameters["properties"]["output_dir"]
+    assert output_dir_parameter == {
+        "type": "string",
+        "description": (
+            "Directory to save generated images. Relative paths resolve from the working "
+            "directory; missing directories are created. Omit when no specific destination "
+            "is given."
+        ),
+    }
+    assert "output_dir" not in tool.parameters["required"]
     context = _make_context(tmp_path)
 
     result = await registry.dispatch(context, {"prompt": "a red fox"})
@@ -159,6 +169,64 @@ async def test_image_generation_output_directory_follows_agent_kind(tmp_path: Pa
         workspace / "image-gen",
         project_cwd / "image-gen",
     ]
+
+
+@pytest.mark.asyncio
+async def test_image_generation_resolves_explicit_output_directory_from_working_directory(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "identity-workspace"
+    project_cwd = tmp_path / "project"
+    service = _ImageService(tmp_path / "artifact.png")
+    registry = ToolRegistry()
+    register_image_generation_tool(registry, service)
+    context = replace(
+        _make_context(tmp_path),
+        workspace=workspace,
+        cwd=project_cwd,
+    )
+
+    result = await registry.dispatch(
+        context,
+        {"prompt": "identity image", "output_dir": "assets/generated"},
+    )
+
+    assert result["ok"] is True
+    assert service.received_output_dirs == [(project_cwd / "assets" / "generated").resolve()]
+
+
+@pytest.mark.asyncio
+async def test_image_generation_accepts_absolute_output_directory(tmp_path: Path) -> None:
+    output_dir = tmp_path / "exports"
+    service = _ImageService(tmp_path / "artifact.png")
+    registry = ToolRegistry()
+    register_image_generation_tool(registry, service)
+
+    result = await registry.dispatch(
+        _make_context(tmp_path),
+        {"prompt": "export image", "output_dir": str(output_dir)},
+    )
+
+    assert result["ok"] is True
+    assert service.received_output_dirs == [output_dir.resolve()]
+
+
+@pytest.mark.asyncio
+async def test_image_generation_rejects_blank_output_directory(tmp_path: Path) -> None:
+    service = _ImageService(tmp_path / "artifact.png")
+    registry = ToolRegistry()
+    register_image_generation_tool(registry, service)
+
+    result = await registry.dispatch(
+        _make_context(tmp_path),
+        {"prompt": "export image", "output_dir": "   "},
+    )
+
+    assert result["error"] == {
+        "code": "invalid_arguments",
+        "message": "output_dir must be a non-empty string when provided",
+    }
+    assert service.received_output_dirs == []
 
 
 @pytest.mark.asyncio
