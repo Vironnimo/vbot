@@ -24,7 +24,9 @@ from core.utils.paths import model_path
 
 IMAGE_GENERATION_TOOL_NAME = "image_generation"
 ANALYZE_IMAGE_TOOL_NAME = "analyze_image"
-_IMAGE_GENERATION_ARGUMENTS = frozenset({"prompt", "source_images", "aspect_ratio", "resolution"})
+_IMAGE_GENERATION_ARGUMENTS = frozenset(
+    {"prompt", "source_images", "aspect_ratio", "resolution", "output_dir"}
+)
 _ANALYZE_IMAGE_ARGUMENTS = frozenset({"prompt", "images"})
 _IMAGE_GENERATION_DIRECTORY_NAME = "image-gen"
 ANALYZE_IMAGE_TOOL_DESCRIPTION = (
@@ -98,6 +100,14 @@ IMAGE_GENERATION_TOOL_PARAMETERS: JsonObject = {
             "description": (
                 "Desired output resolution, such as 1K, 2K, or 4K. Omit to use Settings; "
                 "unsupported values become best-effort prompt hints."
+            ),
+        },
+        "output_dir": {
+            "type": "string",
+            "description": (
+                "Directory to save generated images. Relative paths resolve from the working "
+                "directory; missing directories are created. Omit when no specific destination "
+                "is given."
             ),
         },
     },
@@ -257,13 +267,14 @@ def make_image_generation_handler(image_service: Any):
         try:
             call_options = _collect_call_options(arguments)
             source_paths = _collect_source_paths(context, arguments)
+            output_dir = _image_generation_output_dir(context, arguments)
         except ValueError as exc:
             return tool_failure("invalid_arguments", str(exc))
 
         try:
             artifacts = await image_service.generate_artifacts(
                 prompt,
-                output_dir=_image_generation_output_dir(context),
+                output_dir=output_dir,
                 call_options=call_options,
                 source_paths=source_paths,
             )
@@ -286,8 +297,14 @@ def make_image_generation_handler(image_service: Any):
     return handler
 
 
-def _image_generation_output_dir(context: ToolContext) -> Path:
-    """Choose the caller-owned image directory from the Agent resolution branch."""
+def _image_generation_output_dir(context: ToolContext, arguments: JsonObject) -> Path:
+    """Resolve an explicit destination or choose the caller-owned default directory."""
+
+    output_dir = optional_string(arguments.get("output_dir"), field_name="output_dir")
+    if output_dir == "":
+        raise ValueError("output_dir must be a non-empty string when provided")
+    if output_dir is not None:
+        return context.resolve_path(output_dir)
 
     root = context.workspace if context.project_id is None else context.effective_cwd
     return root / _IMAGE_GENERATION_DIRECTORY_NAME

@@ -287,10 +287,12 @@ IMAGE_GENERATION_CASES = (
     "full_source_many",
     "full_aspect",
     "full_resolution",
+    "full_output_dir",
     "full_all",
     "text_default",
     "text_aspect",
     "text_resolution",
+    "text_output_dir",
     "text_all",
 )
 MEMORY_CASES = (
@@ -841,19 +843,23 @@ def _image_generation_scenario(case_name: str) -> ProbeScenario:
         "full_source_many": {"prompt": prompt, "source_images": many_sources},
         "full_aspect": {"prompt": prompt, "aspect_ratio": "16:9"},
         "full_resolution": {"prompt": prompt, "resolution": "4K"},
+        "full_output_dir": {"prompt": prompt, "output_dir": "assets/generated"},
         "full_all": {
             "prompt": "Ändere das Licht.\nBehalte Motiv und Komposition unverändert.",
             "source_images": many_sources,
             "aspect_ratio": "16:9",
             "resolution": "4K",
+            "output_dir": "assets/generated",
         },
         "text_default": {"prompt": prompt},
         "text_aspect": {"prompt": prompt, "aspect_ratio": "16:9"},
         "text_resolution": {"prompt": prompt, "resolution": "4K"},
+        "text_output_dir": {"prompt": prompt, "output_dir": "assets/generated"},
         "text_all": {
             "prompt": prompt,
             "aspect_ratio": "16:9",
             "resolution": "4K",
+            "output_dir": "assets/generated",
         },
     }
     expected_arguments = image_generation_arguments[case_name]
