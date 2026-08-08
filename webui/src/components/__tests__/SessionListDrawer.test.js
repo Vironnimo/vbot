@@ -191,6 +191,27 @@ describe('SessionListDrawer', () => {
     ).toBeNull();
   });
 
+  it('renders the centered row-action affordance as a vertical ellipsis', async () => {
+    mountedComponent = mount(SessionListDrawer, {
+      target: document.body,
+      props: {
+        agentId: 'alpha',
+        currentSessionId: 'session-1',
+      },
+    });
+    flushSync();
+
+    await waitForCondition(
+      () => document.querySelector('.session-row__menu-trigger') !== null,
+    );
+
+    const dots = [
+      ...document.querySelectorAll('.session-row__menu-trigger circle'),
+    ];
+    expect(dots.map((dot) => dot.getAttribute('cx'))).toEqual(['8', '8', '8']);
+    expect(dots.map((dot) => dot.getAttribute('cy'))).toEqual(['3', '8', '13']);
+  });
+
   it('renames a session through the row menu and reloads the list', async () => {
     mountedComponent = mount(SessionListDrawer, {
       target: document.body,
