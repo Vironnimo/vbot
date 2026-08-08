@@ -597,8 +597,10 @@ describe('ChatView', () => {
     );
 
     expect(document.body.textContent).toContain('Sub-agent');
-    expect(document.body.textContent).toContain('Parent:');
-    expect(document.body.textContent).toContain('orchestrator/parent-session');
+    expect(document.body.textContent).not.toContain('Parent:');
+    expect(document.body.textContent).not.toContain(
+      'orchestrator/parent-session',
+    );
   });
 
   it('applies a non-null connectionSnapshot prop to the run stream', async () => {
