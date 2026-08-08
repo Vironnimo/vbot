@@ -840,9 +840,9 @@
                 onclick={(event) => toggleMenu(session.id, event.currentTarget)}
               >
                 <svg viewBox="0 0 16 16" aria-hidden="true">
-                  <circle cx="3" cy="8" r="1.4" />
+                  <circle cx="8" cy="3" r="1.4" />
                   <circle cx="8" cy="8" r="1.4" />
-                  <circle cx="13" cy="8" r="1.4" />
+                  <circle cx="8" cy="13" r="1.4" />
                 </svg>
               </button>
               {#if openMenuSessionId === session.id}
@@ -1084,8 +1084,9 @@
 
   .session-row__actions {
     position: absolute;
-    top: 7px;
+    top: 50%;
     right: 7px;
+    transform: translateY(-50%);
   }
 
   .session-row__menu-trigger {
