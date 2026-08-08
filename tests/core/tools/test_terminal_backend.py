@@ -119,7 +119,7 @@ def test_alternate_screen_is_rendered_and_primary_screen_restores_after_resize()
     renderer = TerminalRenderer(12, 3, scrollback_lines=20)
     renderer.feed("primary")
 
-    renderer.feed("\x1b[?1049h\x1b[2J\x1b[Hgame\x1b[2;1Hscore: 7")
+    assert renderer.feed("\x1b[?1049h\x1b[2J\x1b[Hgame\x1b[2;1Hscore: 7") is False
 
     assert renderer.screen_text() == "game\nscore: 7"
     assert "game" in renderer.ansi_snapshot()
@@ -129,12 +129,22 @@ def test_alternate_screen_is_rendered_and_primary_screen_restores_after_resize()
     renderer.feed("\x1b[3;1Hresized")
     assert renderer.screen_text() == "game\nscore: 7\nresized"
 
-    renderer.feed("\x1b[?1049l")
+    assert renderer.feed("\x1b[?1049l") is True
 
     assert renderer.columns == 16
     assert renderer.rows == 4
     assert renderer.screen_text() == "primary"
     assert "primary" in renderer.ansi_snapshot()
+
+
+def test_renderer_tracks_bracketed_paste_mode() -> None:
+    renderer = TerminalRenderer(12, 3, scrollback_lines=20)
+
+    renderer.feed("\x1b[?2004h")
+    assert renderer.bracketed_paste_enabled is True
+
+    renderer.feed("\x1b[?2004l")
+    assert renderer.bracketed_paste_enabled is False
 
 
 def test_ansi_snapshot_preserves_styles_cursor_and_visibility() -> None:

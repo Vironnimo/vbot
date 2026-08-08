@@ -62,12 +62,14 @@ TERMINAL_BETA_TOOL_DESCRIPTION = (
     "program. After Agent input, vBot wakes you when PTY output has been quiet for a short period, "
     "or when the process exits or the terminal fails. Quiet output is only an activity boundary: "
     "inspect status to decide whether the program is working, waiting for input, or finished. Use "
-    "data for exact terminal sequences, text/key/enter for convenient input, status for the "
-    "rendered screen and paginated scrollback, and list/status titles announced by programs "
-    "through the standard terminal protocol. Follow scrollback.next_request unchanged to read "
-    "each older status page. Use wait only for a short same-Run pause, resize for TUI dimensions, "
-    "and kill only when the process tree should end. Reuse a live Terminal Session for later "
-    "work instead of starting a duplicate process."
+    "data for exact terminal sequences, text/key/enter for convenient input (multiline text uses "
+    "bracketed paste when the program enables it), and status for the rendered cell screen and "
+    "paginated scrollback; list/status expose titles announced by programs through the standard "
+    "terminal protocol. Rendered terminal cells cannot distinguish tabs from equivalent spaces "
+    "or cursor movement, so inspect files with read when exact characters matter. Follow "
+    "scrollback.next_request unchanged to read each older status page. Use wait only for a short "
+    "same-Run pause, resize for TUI dimensions, and kill only when the process tree should end. "
+    "Reuse a live Terminal Session for later work instead of starting a duplicate process."
 )
 
 
@@ -152,9 +154,10 @@ TERMINAL_BETA_TOOL_PARAMETERS: JsonObject = {
             "minLength": 1,
             "maxLength": TERMINAL_INPUT_MAX_CHARS,
             "description": (
-                "For start, the first task to submit after launch. For input, text to type. "
-                "Omit on start to leave the TUI ready without beginning a task. For exact control "
-                "sequences, use data instead."
+                "For start, the first task to submit after launch. For input, text to type; "
+                "multiline text uses bracketed paste when the terminal program enables it and "
+                "does not append Enter unless enter is true. Omit on start to leave the TUI ready "
+                "without beginning a task. For exact control sequences, use data instead."
             ),
         },
         "workdir": {
@@ -232,10 +235,8 @@ TERMINAL_BETA_TOOL_PARAMETERS: JsonObject = {
         },
         "enter": {
             "type": "boolean",
-            "description": (
-                "For input, append Enter after text/key. Omit to append Enter when text is present "
-                "without a key, otherwise omit it."
-            ),
+            "default": False,
+            "description": "For input, append Enter after text/key. Default false.",
         },
         "expected_screen_revision": {
             "type": "integer",
@@ -466,8 +467,7 @@ async def _handle_input(
     key = optional_string(arguments.get("key"), field_name="key")
     if key is not None and key not in TERMINAL_BETA_KEYS:
         raise ValueError(f"key must be one of: {', '.join(TERMINAL_BETA_KEYS)}")
-    enter_default = text is not None and key is None
-    enter = optional_bool(arguments.get("enter"), field_name="enter", default=enter_default)
+    enter = optional_bool(arguments.get("enter"), field_name="enter", default=False)
     expected_revision = optional_int(
         arguments.get("expected_screen_revision"),
         field_name="expected_screen_revision",

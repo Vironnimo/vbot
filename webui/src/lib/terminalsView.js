@@ -270,6 +270,11 @@ export function createTerminalsController({
       onOutput(event.data);
       return;
     }
+    if (event.type === 'terminal_snapshot' && typeof event.ansi === 'string') {
+      const terminal = mergeTerminalSummary(state, event.terminal);
+      onSnapshot(event.ansi, terminal);
+      return;
+    }
     if (event.type === 'terminal_state') {
       const terminal = mergeTerminalSummary(state, event.terminal);
       if (terminalIsFinished(terminal)) {
