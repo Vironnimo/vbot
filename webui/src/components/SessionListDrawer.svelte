@@ -522,7 +522,7 @@
       title={t('sessions.noImportantTitle', 'No important sessions')}
       description={t(
         'sessions.noImportantDescription',
-        'Turn on Show all to browse Cron and Reflection sessions.',
+        'Turn on Show all to browse Cron, Reflection, and Sub-agent sessions.',
       )}
     />
   {:else}

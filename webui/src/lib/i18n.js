@@ -323,7 +323,7 @@ export const englishCatalog = Object.freeze({
   'sessions.no_sessions': 'No sessions found for this agent.',
   'sessions.noImportantTitle': 'No important sessions',
   'sessions.noImportantDescription':
-    'Turn on Show all to browse Cron and Reflection sessions.',
+    'Turn on Show all to browse Cron, Reflection, and Sub-agent sessions.',
   'sessions.unreadCompletion': 'Unread',
   'sessions.unreadCompletionHint': 'This Session has an unread result.',
   'sessions.fork': 'Fork',

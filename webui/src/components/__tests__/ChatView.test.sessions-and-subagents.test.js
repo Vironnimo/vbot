@@ -583,6 +583,15 @@ describe('ChatView', () => {
     sessionsButton.click();
 
     await waitForCondition(
+      () => document.querySelector('.session-drawer__filter [role="switch"]'),
+      100,
+    );
+    expect(document.body.textContent).not.toContain('child-session');
+
+    document.querySelector('.session-drawer__filter [role="switch"]').click();
+    flushSync();
+
+    await waitForCondition(
       () => document.body.textContent.includes('child-session'),
       100,
     );

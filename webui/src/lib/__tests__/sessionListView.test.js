@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   applySessionList,
   createSessionListState,
+  isSessionHiddenByDefault,
   selectSession,
   sessionDisplayName,
   visibleSessionsForSelection,
@@ -210,11 +211,19 @@ describe('sessionListView helpers', () => {
     });
   });
 
-  it('hides background-only sessions unless all sessions are requested', () => {
+  it('hides background-only and sub-agent sessions unless all sessions are requested', () => {
     const next = applySessionList(createSessionListState(), [
       { id: 'user-session', run_kinds: ['user'] },
       { id: 'cron-session', run_kinds: ['cron'] },
       { id: 'reflection-session', run_kinds: ['reflection'] },
+      { id: 'subagent-session', is_subagent_session: true },
+      {
+        id: 'linked-subagent-session',
+        subagent_parent: {
+          agent_id: 'parent-agent',
+          session_id: 'parent-session',
+        },
+      },
       { id: 'mixed-session', run_kinds: ['cron', 'user'] },
       {
         id: 'channel-session',
@@ -231,7 +240,13 @@ describe('sessionListView helpers', () => {
       visibleSessionsForSelection(next.sessions, { showAll: true }).map(
         (session) => session.id,
       ),
-    ).toHaveLength(5);
+    ).toHaveLength(7);
+
+    expect(
+      isSessionHiddenByDefault(
+        next.sessions.find((session) => session.id === 'subagent-session'),
+      ),
+    ).toBe(true);
   });
 
   it('keeps the selected background session visible in the important view', () => {
@@ -245,5 +260,18 @@ describe('sessionListView helpers', () => {
         selectedSessionId: 'cron-session',
       }).map((session) => session.id),
     ).toEqual(['cron-session', 'user-session']);
+  });
+
+  it('keeps the selected sub-agent session visible in the important view', () => {
+    const next = applySessionList(createSessionListState(), [
+      { id: 'user-session', run_kinds: ['user'] },
+      { id: 'subagent-session', is_subagent_session: true },
+    ]);
+
+    expect(
+      visibleSessionsForSelection(next.sessions, {
+        selectedSessionId: 'subagent-session',
+      }).map((session) => session.id),
+    ).toEqual(['subagent-session', 'user-session']);
   });
 });

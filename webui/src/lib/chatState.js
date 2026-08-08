@@ -44,7 +44,7 @@ import {
   subAgentShouldFetchResult,
   visibleRunChildren,
 } from './chatTimelinePresentation.js';
-import { isBackgroundOnlySession } from './sessionListView.js';
+import { isSessionHiddenByDefault } from './sessionListView.js';
 import { createToolArgumentPreviewScanner } from './toolArgumentPreview.js';
 
 export {
@@ -2265,12 +2265,7 @@ export function pickProjectAgentSessionId(sessions) {
   let best = null;
   let bestTime = -Infinity;
   for (const session of list) {
-    if (
-      session?.is_subagent_session === true ||
-      (session?.subagent_parent !== null &&
-        typeof session?.subagent_parent === 'object') ||
-      isBackgroundOnlySession(session)
-    ) {
+    if (isSessionHiddenByDefault(session)) {
       continue;
     }
     const sessionId = typeof session?.id === 'string' ? session.id.trim() : '';
