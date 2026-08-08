@@ -105,6 +105,12 @@ _BASH_COMMAND_PARAMETER: JsonObject = {
     "minLength": 1,
     "description": "Shell command to run.",
 }
+_BASH_DESCRIPTION_PARAMETER: JsonObject = {
+    "type": "string",
+    "description": (
+        "Short 3–5 word title for the command’s purpose. Omit when the command is self-explanatory."
+    ),
+}
 _BASH_WORKDIR_PARAMETER: JsonObject = {
     "type": "string",
     "description": (
@@ -162,6 +168,7 @@ def _bash_tool_parameters(*, subagent: bool) -> JsonObject:
                 "description": mode_description,
             },
             "command": _BASH_COMMAND_PARAMETER,
+            "description": _BASH_DESCRIPTION_PARAMETER,
             "workdir": _BASH_WORKDIR_PARAMETER,
             "yield_after": {
                 "type": "number",
@@ -645,6 +652,7 @@ def _register_user_cancel_callback(
 def _parse_arguments(arguments: JsonObject) -> JsonObject | str:
     unknown_arguments = set(arguments) - {
         "command",
+        "description",
         "mode",
         "workdir",
         "yield_after",
@@ -667,6 +675,7 @@ def _parse_arguments(arguments: JsonObject) -> JsonObject | str:
 
     try:
         workdir = optional_string(arguments.get("workdir"), field_name="workdir")
+        optional_string(arguments.get("description"), field_name="description")
         yield_after = optional_number(
             arguments.get("yield_after"),
             field_name="yield_after",
