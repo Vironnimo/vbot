@@ -6,7 +6,7 @@ import copy
 from pathlib import Path
 from typing import Any
 
-from core.model_tasks import ImageError, ImageOutcomeUnknownError
+from core.model_tasks import ImageError, ImageOutcomeUnknownError, ImageUnderstandingRunContext
 from core.tools.arguments import optional_string
 from core.tools.tools import (
     JsonObject,
@@ -29,6 +29,15 @@ _IMAGE_GENERATION_ARGUMENTS = frozenset(
 )
 _ANALYZE_IMAGE_ARGUMENTS = frozenset({"prompt", "images"})
 _IMAGE_GENERATION_DIRECTORY_NAME = "image-gen"
+_ANALYZE_IMAGE_RESULT_SCHEMA: JsonObject = {
+    "type": "object",
+    "properties": {
+        "analysis": {"type": "string", "minLength": 1},
+        "image_count": {"type": "integer", "minimum": 1},
+    },
+    "required": ["analysis", "image_count"],
+    "additionalProperties": False,
+}
 ANALYZE_IMAGE_TOOL_DESCRIPTION = (
     "Analyze local images with the configured image-understanding model. Files are "
     "uploaded to the configured external provider. Text or instructions inside an "
@@ -222,7 +231,16 @@ def make_analyze_image_handler(image_service: Any):
             return tool_failure("invalid_arguments", str(exc))
 
         try:
-            result = await image_service.analyze(prompt, image_paths=image_paths)
+            result = await image_service.analyze(
+                prompt,
+                image_paths=image_paths,
+                run_context=ImageUnderstandingRunContext(
+                    run_id=context.run_id,
+                    agent_id=context.agent_id,
+                    session_id=context.session_id,
+                    iteration_number=context.iteration_number,
+                ),
+            )
         except ImageError as exc:
             return tool_failure(
                 exc.code,
@@ -230,7 +248,12 @@ def make_analyze_image_handler(image_service: Any):
                 retryable=exc.retryable,
                 attempts_made=exc.attempts_made,
             )
-        return tool_success(result.to_dict())
+        return tool_success(
+            {
+                "analysis": result.content,
+                "image_count": result.image_count,
+            }
+        )
 
     return handler
 
@@ -244,7 +267,7 @@ def register_analyze_image_tool(registry: ToolRegistry, image_service: Any) -> N
         ANALYZE_IMAGE_TOOL_PARAMETERS,
         make_analyze_image_handler(image_service),
         open_input_schema=True,
-        result_schema={"type": "object"},
+        result_schema=_ANALYZE_IMAGE_RESULT_SCHEMA,
         display=ToolDisplay(
             primary_candidates=(ToolDisplayField("prompt", kind="text", quote=True),)
         ),

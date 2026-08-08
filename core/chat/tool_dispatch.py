@@ -491,6 +491,7 @@ async def _dispatch_tool_calls(
             workspace=workspace,
             vbot_root=context.vbot_root,
             data_root=context.data_root,
+            iteration_number=run.iteration_count,
             cwd=_resolve_tool_cwd(context.project_cwd, workspace),
             # The owning run's project rides onto every ToolContext so the
             # subagent tool can inherit it; None keeps the identity path.

@@ -435,6 +435,9 @@ class ToolContext:
     workspace: Path
     vbot_root: Path
     data_root: Path
+    # Completed Agentic Loop Iteration whose Assistant response requested this
+    # Tool Call. Direct callers that do not execute inside Chat leave it at 0.
+    iteration_number: int = 0
     # Working directory for relative-path resolution by file/shell tools. ``None``
     # falls back to ``workspace`` (the identity-agent home) so every existing
     # caller and identity session keeps today's behavior; a project session
@@ -587,6 +590,8 @@ class ToolExecutionConfig:
     workspace: Path
     vbot_root: Path
     data_root: Path
+    # Completed Agentic Loop Iteration that produced this execution group.
+    iteration_number: int = 0
     # Working directory for relative-path resolution; ``None`` falls back to
     # ``workspace`` so existing execution groups keep today's behavior. See
     # ``ToolContext.cwd`` for the contract.
@@ -1339,6 +1344,7 @@ class ToolExecutor:
                 workspace=config.workspace,
                 vbot_root=config.vbot_root,
                 data_root=config.data_root,
+                iteration_number=config.iteration_number,
                 cwd=config.cwd,
                 project_id=config.project_id,
                 skill_project_id=config.skill_project_id,

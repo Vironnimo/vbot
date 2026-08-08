@@ -60,6 +60,16 @@ class ImageUnderstandingResult:
 
 
 @dataclass(frozen=True)
+class ImageUnderstandingRunContext:
+    """Run identity needed to correlate an isolated understanding request."""
+
+    run_id: str
+    agent_id: str
+    session_id: str
+    iteration_number: int
+
+
+@dataclass(frozen=True)
 class ImageArtifact:
     """Generated image persisted in a caller-owned working directory."""
 

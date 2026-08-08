@@ -12,6 +12,7 @@ from unittest.mock import patch
 
 import pytest
 
+from core.debug import DebugContext
 from core.model_tasks import (
     TASK_IMAGE_GENERATION,
     TASK_IMAGE_UNDERSTANDING,
@@ -23,6 +24,7 @@ from core.model_tasks import (
     ImageReadError,
     ImageService,
     ImageTooLargeError,
+    ImageUnderstandingRunContext,
     ImageUnderstandingUnavailableError,
     ImageUnsupportedMediaTypeError,
     ImageUnsupportedTargetError,
@@ -150,6 +152,34 @@ async def test_generate_logs_provider_error_at_warning_without_traceback(
     assert relevant, "expected a log record for the failed image generation"
     assert all(r.levelno == logging.WARNING for r in relevant)
     assert all(r.exc_info is None for r in relevant)
+
+
+@pytest.mark.asyncio
+async def test_generate_redacts_pinned_account_from_error_and_log(
+    tmp_path: Path,
+    caplog: Any,
+) -> None:
+    account_id = "private_account"
+    target = f"openrouter/openai/gpt-image-1::api-key:{account_id}"
+    service = ImageService(_ProviderModelTasks(target=target), cast(Any, object()))
+    failing_client = _FailingProviderImageClient(
+        ProviderError(f"request for {target} via {account_id} failed")
+    )
+
+    with (
+        patch(
+            "core.model_tasks.image.ProviderImageClient.from_runtime",
+            return_value=failing_client,
+        ),
+        caplog.at_level(logging.WARNING, logger="vbot.image"),
+        pytest.raises(ImageExecutionError) as error,
+    ):
+        await service.generate("a cat")
+
+    assert str(error.value) == ("request for openrouter/openai/gpt-image-1 via [REDACTED] failed")
+    assert account_id not in caplog.text
+    assert target not in caplog.text
+    assert "target=openrouter/openai/gpt-image-1" in caplog.text
 
 
 @pytest.mark.asyncio
@@ -437,10 +467,17 @@ class _LocalModelTasks:
 
 
 class _ProviderModelTasks:
+    def __init__(
+        self,
+        *,
+        target: str = "openrouter/openai/gpt-image-1::api-key",
+    ) -> None:
+        self._target = target
+
     def binding_for(self, task_type: str) -> object:
         return SimpleNamespace(
             task_type=task_type,
-            target="openrouter/openai/gpt-image-1::api-key",
+            target=self._target,
             options={},
         )
 
@@ -499,6 +536,7 @@ class _UnderstandingAdapter:
         response: object | None = None,
         *,
         wire_media_types: frozenset[str] = frozenset({"image/png"}),
+        close_error: Exception | None = None,
     ) -> None:
         self.response = response or {
             "content": "Visible ingredients: flour and salt.",
@@ -507,7 +545,12 @@ class _UnderstandingAdapter:
         self.wire_media_types = wire_media_types
         self.wire_media_models: list[str] = []
         self.requests: list[dict[str, Any]] = []
+        self.debug_contexts: list[DebugContext] = []
         self.closed = False
+        self.close_error = close_error
+
+    def set_debug_context(self, context: DebugContext) -> None:
+        self.debug_contexts.append(context)
 
     def wire_media_support(self, model_id: str) -> frozenset[str]:
         self.wire_media_models.append(model_id)
@@ -536,6 +579,8 @@ class _UnderstandingAdapter:
 
     async def aclose(self) -> None:
         self.closed = True
+        if self.close_error is not None:
+            raise self.close_error
 
 
 class _BlockingUnderstandingAdapter(_UnderstandingAdapter):
@@ -630,6 +675,24 @@ async def test_analysis_availability_maps_expected_adapter_resolution_failure_to
 
 
 @pytest.mark.asyncio
+async def test_analysis_availability_ignores_adapter_cleanup_failure(
+    caplog: Any,
+) -> None:
+    adapter = _UnderstandingAdapter(close_error=RuntimeError("cleanup failed"))
+    service = ImageService(
+        _UnderstandingModelTasks(),
+        cast(Any, _UnderstandingRuntime(adapter)),
+    )
+
+    with caplog.at_level(logging.WARNING, logger="vbot.image"):
+        available = await service.analysis_is_available()
+
+    assert available is True
+    assert adapter.closed is True
+    assert "adapter cleanup failed" in caplog.text
+
+
+@pytest.mark.asyncio
 async def test_analyze_sends_fixed_isolated_prompt_and_ordered_images(
     tmp_path: Path,
 ) -> None:
@@ -642,9 +705,16 @@ async def test_analyze_sends_fixed_isolated_prompt_and_ordered_images(
         cast(Any, runtime),
     )
 
+    run_context = ImageUnderstandingRunContext(
+        run_id="run-1",
+        agent_id="agent-1",
+        session_id="session-1",
+        iteration_number=3,
+    )
     result = await service.analyze(
         "List the recipe ingredients exactly.",
         image_paths=[first, second],
+        run_context=run_context,
     )
 
     assert result.to_dict() == {
@@ -672,6 +742,18 @@ async def test_analyze_sends_fixed_isolated_prompt_and_ordered_images(
     ]
     assert user_content[1]["base64"] != user_content[2]["base64"]
     assert adapter.closed is True
+    assert adapter.debug_contexts == [
+        DebugContext(
+            run_id="run-1",
+            agent_id="agent-1",
+            session_id="session-1",
+            provider_id="openrouter",
+            connection_id="openrouter:api-key",
+            model_id="vision-model",
+            streaming=False,
+            iteration_number=3,
+        )
+    ]
 
 
 @pytest.mark.asyncio
@@ -793,8 +875,12 @@ async def test_analyze_rejects_non_understanding_model_and_unsupported_wire(
     tmp_path: Path,
 ) -> None:
     source = _png(tmp_path / "source.png")
+    pinned_target = "openrouter/vision-model::api-key:private_account"
     text_only = ImageService(
-        _UnderstandingModelTasks(input_modalities=("text",)),
+        _UnderstandingModelTasks(
+            target=pinned_target,
+            input_modalities=("text",),
+        ),
         cast(Any, _UnderstandingRuntime(_UnderstandingAdapter())),
     )
     image_only = ImageService(
@@ -807,7 +893,10 @@ async def test_analyze_rejects_non_understanding_model_and_unsupported_wire(
         cast(Any, _UnderstandingRuntime(adapter)),
     )
 
-    with pytest.raises(ImageUnderstandingUnavailableError, match="not an image-understanding"):
+    with pytest.raises(
+        ImageUnderstandingUnavailableError,
+        match="openrouter/vision-model",
+    ) as text_only_error:
         await text_only.analyze("Describe it", image_paths=[source])
     with pytest.raises(ImageUnderstandingUnavailableError, match="not an image-understanding"):
         await image_only.analyze("Describe it", image_paths=[source])
@@ -815,6 +904,8 @@ async def test_analyze_rejects_non_understanding_model_and_unsupported_wire(
         await unsupported_wire.analyze("Describe it", image_paths=[source])
 
     assert adapter.closed is True
+    assert "private_account" not in str(text_only_error.value)
+    assert pinned_target not in str(text_only_error.value)
 
 
 @pytest.mark.asyncio
@@ -873,6 +964,80 @@ async def test_analyze_maps_provider_failure_and_empty_output_and_closes_adapter
     assert error.value.code == "provider_error"
     assert error.value.retryable is True
     assert error.value.attempts_made == 4
+
+
+@pytest.mark.asyncio
+async def test_analyze_preserves_success_when_adapter_cleanup_fails(
+    tmp_path: Path,
+    caplog: Any,
+) -> None:
+    source = _png(tmp_path / "source.png")
+    adapter = _UnderstandingAdapter(close_error=RuntimeError("cleanup failed for private_account"))
+    service = ImageService(
+        _UnderstandingModelTasks(target="openrouter/vision-model::api-key:private_account"),
+        cast(Any, _UnderstandingRuntime(adapter)),
+    )
+
+    with caplog.at_level(logging.WARNING, logger="vbot.image"):
+        result = await service.analyze("Describe it", image_paths=[source])
+
+    assert result.content == "Visible ingredients: flour and salt."
+    assert adapter.closed is True
+    assert "adapter cleanup failed" in caplog.text
+    assert "private_account" not in caplog.text
+    assert "[REDACTED]" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_analyze_preserves_primary_error_when_adapter_cleanup_fails(
+    tmp_path: Path,
+    caplog: Any,
+) -> None:
+    source = _png(tmp_path / "source.png")
+    adapter = _UnderstandingAdapter(
+        ProviderError("primary provider failure"),
+        close_error=RuntimeError("secondary cleanup failure"),
+    )
+    service = ImageService(
+        _UnderstandingModelTasks(),
+        cast(Any, _UnderstandingRuntime(adapter)),
+    )
+
+    with (
+        caplog.at_level(logging.WARNING, logger="vbot.image"),
+        pytest.raises(ImageExecutionError, match="primary provider failure") as error,
+    ):
+        await service.analyze("Describe it", image_paths=[source])
+
+    assert "secondary cleanup failure" not in str(error.value)
+    assert "secondary cleanup failure" in caplog.text
+    assert adapter.closed is True
+
+
+@pytest.mark.asyncio
+async def test_analyze_redacts_pinned_account_from_provider_error_and_log(
+    tmp_path: Path,
+    caplog: Any,
+) -> None:
+    source = _png(tmp_path / "source.png")
+    account_id = "private_account"
+    target = f"openrouter/vision-model::api-key:{account_id}"
+    adapter = _UnderstandingAdapter(ProviderError(f"request for {target} via {account_id} failed"))
+    service = ImageService(
+        _UnderstandingModelTasks(target=target),
+        cast(Any, _UnderstandingRuntime(adapter)),
+    )
+
+    with (
+        caplog.at_level(logging.WARNING, logger="vbot.image"),
+        pytest.raises(ImageExecutionError) as error,
+    ):
+        await service.analyze("Describe it", image_paths=[source])
+
+    assert str(error.value) == "request for openrouter/vision-model via [REDACTED] failed"
+    assert account_id not in caplog.text
+    assert target not in caplog.text
+    assert "target=openrouter/vision-model" in caplog.text
 
 
 @pytest.mark.asyncio

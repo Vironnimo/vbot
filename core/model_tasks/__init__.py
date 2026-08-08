@@ -40,6 +40,7 @@ from core.model_tasks.image_types import (
     ImageArtifact,
     ImageGenerationResult,
     ImageUnderstandingResult,
+    ImageUnderstandingRunContext,
 )
 from core.model_tasks.local_targets import (
     DEFAULT_LOCAL_TASK_TARGET_REGISTRY,
@@ -101,6 +102,7 @@ __all__ = [
     "ImageService",
     "ImageTooLargeError",
     "ImageUnderstandingResult",
+    "ImageUnderstandingRunContext",
     "ImageUnderstandingUnavailableError",
     "ImageUnsupportedMediaTypeError",
     "ImageUnsupportedTargetError",

@@ -97,6 +97,7 @@ Exports `DebugTraceStore`, `ProviderDebugRecorder`, `DebugContext`, `redact_head
 ### Adapter contract (`core/providers/adapter.py`)
 
 - `ProviderAdapter.set_debug_context(ctx: DebugContext)` — base-class method, forwards to `recorder.set_context`. Subclasses do not override it. HTTP-only adapters add no capture code; a stateful non-HTTP transport must explicitly feed the same recorder contract, as OpenAI Subscription WebSocket streaming does.
+- Isolated `analyze_image` Provider requests set the same complete `DebugContext` immediately before `send`: Run/Agent/Session and the completed parent Iteration come from `ToolContext`; Provider/Connection/Model come from the resolved `image_understanding` target; `streaming` is false. The Provider subrequest reuses the parent Iteration for correlation and does not advance the Agentic Loop.
 - Recorder lifecycle: `Runtime._build_debug_recorder()` (`core/runtime/runtime.py`) builds a fresh `ProviderDebugRecorder` + `DebugTraceStore` **each time it constructs an adapter**, reading `debug.enabled` / `trace_limit` live, and returns `None` when debug is off. A Chat Run retains one adapter for its Model/Tool loop and closes it at Run cleanup, so toggling Debug Mode takes effect on the next adapter construction rather than mutating an active Run's transport.
 
 ### RPC (`server/rpc/debug_methods.py`)
