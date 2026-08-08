@@ -19,6 +19,9 @@ const CLEANUP_RECONCILIATION_ATTEMPTS = 2;
 async function rpc(request, method, params = {}) {
   const response = await request.post("/api/rpc", {
     data: { method, params },
+    // Browser interactions can outlive Uvicorn's idle keep-alive window between
+    // direct RPC checks, so do not let Playwright race a stale pooled socket.
+    headers: { Connection: "close" },
   });
   const payload = await response.json();
   if (!response.ok() || payload?.ok !== true) {
