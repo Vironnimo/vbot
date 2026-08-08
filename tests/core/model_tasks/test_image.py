@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import threading
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -21,8 +23,13 @@ from core.model_tasks import (
     ImageUnsupportedTargetError,
     TaskModelError,
 )
+from core.model_tasks import image as image_module
 from core.model_tasks.image import (
+    DEFAULT_IMAGE_ANALYSIS_MAX_IMAGES,
+    DEFAULT_IMAGE_ANALYSIS_MAX_TOTAL_BYTES,
     IMAGE_UNDERSTANDING_SYSTEM_PROMPT,
+    _ensure_analysis_total_size,
+    _load_image_inputs,
     split_image_call_options,
 )
 from core.model_tasks.image_types import ImageGenerationResult
@@ -517,6 +524,31 @@ class _UnderstandingAdapter:
         self.closed = True
 
 
+class _BlockingUnderstandingAdapter(_UnderstandingAdapter):
+    def __init__(self) -> None:
+        super().__init__()
+        self.started = asyncio.Event()
+        self.release = asyncio.Event()
+        self.active_requests = 0
+        self.max_active_requests = 0
+
+    async def send(
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        model_id: str,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        self.active_requests += 1
+        self.max_active_requests = max(self.max_active_requests, self.active_requests)
+        self.started.set()
+        try:
+            await self.release.wait()
+            return await super().send(messages, model_id=model_id, **kwargs)
+        finally:
+            self.active_requests -= 1
+
+
 class _UnderstandingRuntime:
     def __init__(self, adapter: _UnderstandingAdapter) -> None:
         self.adapter = adapter
@@ -575,6 +607,120 @@ async def test_analyze_sends_fixed_isolated_prompt_and_ordered_images(
     ]
     assert user_content[1]["base64"] != user_content[2]["base64"]
     assert adapter.closed is True
+
+
+@pytest.mark.asyncio
+async def test_analyze_rejects_more_than_six_images_before_reading_files(
+    tmp_path: Path,
+) -> None:
+    runtime = _UnderstandingRuntime(_UnderstandingAdapter())
+    service = ImageService(_UnderstandingModelTasks(), cast(Any, runtime))
+    image_paths = [tmp_path / f"image-{index}.png" for index in range(7)]
+
+    with pytest.raises(ImageInputError) as error:
+        await service.analyze("Compare them", image_paths=image_paths)
+
+    assert DEFAULT_IMAGE_ANALYSIS_MAX_IMAGES == 6
+    assert str(error.value) == (
+        "Image analysis accepts at most 6 images per call, but received 7. "
+        "Pass fewer images and try again."
+    )
+    assert runtime.calls == []
+
+
+@pytest.mark.asyncio
+async def test_analyze_rejects_inputs_above_the_total_byte_limit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    first = _png(tmp_path / "first.png", b"first")
+    second = _png(tmp_path / "second.png", b"second")
+    total_bytes = first.stat().st_size + second.stat().st_size
+    test_limit = total_bytes - 1
+    runtime = _UnderstandingRuntime(_UnderstandingAdapter())
+    service = ImageService(_UnderstandingModelTasks(), cast(Any, runtime))
+    monkeypatch.setattr(
+        image_module,
+        "DEFAULT_IMAGE_ANALYSIS_MAX_TOTAL_BYTES",
+        test_limit,
+    )
+
+    with pytest.raises(ImageInputError) as error:
+        await service.analyze("Compare them", image_paths=[first, second])
+
+    assert str(error.value) == (
+        f"Image analysis input totals {total_bytes} bytes, exceeding the {test_limit} bytes "
+        "limit. Pass fewer or smaller images and try again."
+    )
+    assert runtime.calls == []
+
+
+def test_default_analysis_total_limit_has_actionable_error() -> None:
+    with pytest.raises(ImageInputError) as error:
+        _ensure_analysis_total_size(
+            DEFAULT_IMAGE_ANALYSIS_MAX_TOTAL_BYTES + 1,
+            DEFAULT_IMAGE_ANALYSIS_MAX_TOTAL_BYTES,
+        )
+
+    assert DEFAULT_IMAGE_ANALYSIS_MAX_TOTAL_BYTES == 100 * 1024 * 1024
+    assert str(error.value) == (
+        "Image analysis input totals 104857601 bytes, exceeding the 100 MiB "
+        "(104857600 bytes) limit. Pass fewer or smaller images and try again."
+    )
+
+
+@pytest.mark.asyncio
+async def test_analyze_offloads_file_loading_and_base64_encoding(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = _png(tmp_path / "source.png")
+    runtime = _UnderstandingRuntime(_UnderstandingAdapter())
+    service = ImageService(_UnderstandingModelTasks(), cast(Any, runtime))
+    event_loop_thread = threading.get_ident()
+    load_threads: list[int] = []
+    content_threads: list[int] = []
+    original_content = image_module._analysis_content
+
+    def tracked_load(*args: Any, **kwargs: Any) -> Any:
+        load_threads.append(threading.get_ident())
+        return _load_image_inputs(*args, **kwargs)
+
+    def tracked_content(*args: Any, **kwargs: Any) -> Any:
+        content_threads.append(threading.get_ident())
+        return original_content(*args, **kwargs)
+
+    monkeypatch.setattr(image_module, "_load_image_inputs", tracked_load)
+    monkeypatch.setattr(image_module, "_analysis_content", tracked_content)
+
+    await service.analyze("Describe it", image_paths=[source])
+
+    assert load_threads and all(thread_id != event_loop_thread for thread_id in load_threads)
+    assert content_threads and all(thread_id != event_loop_thread for thread_id in content_threads)
+
+
+@pytest.mark.asyncio
+async def test_analyze_serializes_concurrent_requests(tmp_path: Path) -> None:
+    source = _png(tmp_path / "source.png")
+    adapter = _BlockingUnderstandingAdapter()
+    runtime = _UnderstandingRuntime(adapter)
+    service = ImageService(_UnderstandingModelTasks(), cast(Any, runtime))
+
+    first = asyncio.create_task(service.analyze("First", image_paths=[source]))
+    await adapter.started.wait()
+    second = asyncio.create_task(service.analyze("Second", image_paths=[source]))
+    await asyncio.sleep(0)
+
+    assert runtime.calls == [("openrouter", "openrouter:api-key")]
+
+    adapter.release.set()
+    await asyncio.gather(first, second)
+
+    assert adapter.max_active_requests == 1
+    assert runtime.calls == [
+        ("openrouter", "openrouter:api-key"),
+        ("openrouter", "openrouter:api-key"),
+    ]
 
 
 @pytest.mark.asyncio
