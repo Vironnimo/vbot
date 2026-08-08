@@ -79,22 +79,25 @@ def _shell_syntax_notes() -> str:
 
 
 BASH_TOOL_DESCRIPTION = (
-    "Run a shell command on the host. Use foreground when this Run needs the result, auto to "
-    "wait before handing off a still-running command, and background for known long-lived "
-    "commands. Handed-off commands are monitored automatically: continue independent work "
-    "or end the Run instead of polling or starting another copy. Never manually detach or "
-    "daemonize a command because that bypasses vBot's process ownership. Result output keeps "
-    f"the newest {BASH_MODEL_OUTPUT_CAP_CHARS} characters; when output is truncated or a command "
-    "is handed off, the result includes a log_file path to the complete combined stdout/stderr "
-    "stream — read or grep it for the full output." + _shell_syntax_notes()
+    "Run an unattended shell command on the host through pipes when no interactive terminal "
+    "input or live screen is needed, such as scripts, builds, non-interactive Git, file "
+    "operations, and servers. Use foreground when this Run needs the result, auto to wait "
+    "before handing off a still-running command, and background for known long-lived commands. "
+    "Handed-off commands are monitored automatically: continue independent work or end the Run "
+    "instead of polling or starting another copy. Never manually detach or daemonize a command "
+    "because that bypasses vBot's process ownership. Result output keeps the newest "
+    f"{BASH_MODEL_OUTPUT_CAP_CHARS} characters; when output is truncated or a command is handed "
+    "off, the result includes a log_file path to the complete combined stdout/stderr stream — "
+    "read or grep it for the full output." + _shell_syntax_notes()
 )
 BASH_SUBAGENT_TOOL_DESCRIPTION = (
-    "Run a shell command inside this Sub-Agent, where process handoff is unavailable. Use "
-    "foreground to wait for completion and auto only for bounded work; auto kills a command "
-    "still running after yield_after. Never manually detach or daemonize a command. Result "
-    f"output keeps the newest {BASH_MODEL_OUTPUT_CAP_CHARS} characters; when output is truncated, "
-    "the result includes a log_file path to the complete combined stdout/stderr stream."
-    + _shell_syntax_notes()
+    "Run an unattended shell command inside this Sub-Agent through pipes when no interactive "
+    "terminal input or live screen is needed, such as scripts, builds, non-interactive Git, and "
+    "file operations; process handoff is unavailable. Use foreground to wait for completion and "
+    "auto only for bounded work; auto kills a command still running after yield_after. Never "
+    "manually detach or daemonize a command. Result output keeps the newest "
+    f"{BASH_MODEL_OUTPUT_CAP_CHARS} characters; when output is truncated, the result includes a "
+    "log_file path to the complete combined stdout/stderr stream." + _shell_syntax_notes()
 )
 BASH_EXECUTION_MODES = ("foreground", "auto", "background")
 VBOT_RUN_AGENT_ID_ENV = "VBOT_RUN_AGENT_ID"

@@ -1581,6 +1581,10 @@ def test_register_bash_tool() -> None:
     tool = registry.get("bash")
     assert tool.description == BASH_TOOL_DESCRIPTION
     assert tool.parameters == BASH_TOOL_PARAMETERS
+    assert tool.description.startswith(
+        "Run an unattended shell command on the host through pipes when no interactive "
+        "terminal input or live screen is needed"
+    )
     assert "Use foreground when this Run needs the result" in tool.description
     assert "Never manually detach or daemonize a command" in tool.description
     assert "that bypasses vBot's process ownership" in tool.description
@@ -1669,6 +1673,10 @@ def test_subagent_projection_exposes_only_non_handoff_bash_modes() -> None:
     bash_definition = projected[0]
 
     assert bash_definition["description"] == BASH_SUBAGENT_TOOL_DESCRIPTION
+    assert bash_definition["description"].startswith(
+        "Run an unattended shell command inside this Sub-Agent through pipes when no "
+        "interactive terminal input or live screen is needed"
+    )
     assert bash_definition["parameters"] == BASH_SUBAGENT_TOOL_PARAMETERS
     parameters = bash_definition["parameters"]
     assert "oneOf" not in parameters
