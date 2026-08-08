@@ -39,7 +39,9 @@ test("learn authors a private Skill and reflect creates a review Fork", async ({
   await expect(drawer.getByRole("listitem")).toHaveCount(
     previousSessionCount + 1,
   );
-  await expect(
-    drawer.getByRole("listitem").filter({ hasText: "Reflection" }).first(),
-  ).toBeVisible();
+  const reflectionMarker = drawer.locator(
+    '[data-session-marker="reflection"]',
+  );
+  await expect(reflectionMarker).toBeVisible();
+  await expect(reflectionMarker).toHaveAttribute("aria-label", "Reflection");
 });

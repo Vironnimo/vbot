@@ -29,7 +29,7 @@ test("a top-level subagent Tool Run delivers its child result automatically", as
       finalText: "Sub-agent tool completed.",
       timeout: 45_000,
     });
-    const subagent = await expectToolSucceeded(page, chat, "Sub-agent");
+    const subagent = await expectToolSucceeded(page, chat, "Subagent");
     await openToolRow(subagent);
     await expect(subagent).toContainText("Fake sub-agent result.");
   } finally {
