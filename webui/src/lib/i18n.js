@@ -37,6 +37,9 @@ export const englishCatalog = Object.freeze({
   'terminals.startTitle': 'New terminal',
   'terminals.startIntro':
     'Leave Command empty to open the server user’s default shell. Every command uses the same real PTY / ConPTY.',
+  'terminals.historyLabel': 'Recent setup',
+  'terminals.historyHelp':
+    'Saved on this vBot server. Choosing a setup fills Command, Arguments, and Working directory.',
   'terminals.commandLabel': 'Command',
   'terminals.commandHelp':
     'Optional. For example: codex, powershell, bash, or python.',

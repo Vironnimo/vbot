@@ -7,6 +7,7 @@ import {
   createTerminalsController,
   createTerminalsViewState,
   reconcileTerminalList,
+  reconcileTerminalLaunchHistory,
   selectedTerminal,
 } from '../terminalsView.js';
 
@@ -34,6 +35,18 @@ describe('terminal list projection', () => {
       'term-3',
     ]);
     expect(selectedTerminal(state)?.state).toBe('ready');
+  });
+
+  it('keeps the server launch history in newest-first order', () => {
+    const state = createTerminalsViewState();
+    const history = [
+      launchHistory('recent', { command: 'codex' }),
+      launchHistory('older', { command: 'python' }),
+    ];
+
+    reconcileTerminalLaunchHistory(state, { launch_history: history });
+
+    expect(state.launchHistory).toEqual(history);
   });
 });
 
@@ -146,6 +159,7 @@ describe('terminal live controller', () => {
     await controller.start();
     api.startTerminal.mockResolvedValueOnce({
       terminal: terminal('manual-1', { command: 'codex', owner: null }),
+      launch_history: [launchHistory('codex', { command: 'codex' })],
     });
 
     const started = await controller.startManualTerminal({ command: 'codex' });
@@ -154,6 +168,9 @@ describe('terminal live controller', () => {
     expect(started).toMatchObject({ terminal_id: 'manual-1', owner: null });
     expect(state.selectedTerminalId).toBe('manual-1');
     expect(state.startError).toBe('');
+    expect(state.launchHistory).toEqual([
+      launchHistory('codex', { command: 'codex' }),
+    ]);
     expect(streams).toHaveLength(2);
     expect(streams[0].connection.close).toHaveBeenCalledWith(
       1000,
@@ -201,6 +218,17 @@ function terminal(terminalId, changes = {}) {
       session_id: 'session-1',
     },
     attention: null,
+    ...changes,
+  };
+}
+
+function launchHistory(id, changes = {}) {
+  return {
+    id,
+    command: null,
+    args: [],
+    workdir: null,
+    used_at: '2026-08-08T10:00:00+00:00',
     ...changes,
   };
 }

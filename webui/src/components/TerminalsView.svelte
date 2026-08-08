@@ -5,6 +5,7 @@
   import Banner from './ui/Banner.svelte';
   import Button from './ui/Button.svelte';
   import ConfirmDialog from './ui/ConfirmDialog.svelte';
+  import Dropdown from './Dropdown.svelte';
   import EmptyState from './ui/EmptyState.svelte';
   import FormField from './ui/FormField.svelte';
   import Modal from './ui/Modal.svelte';
@@ -39,6 +40,7 @@
   let terminalScrolledBack = $state(false);
   let stopDialogOpen = $state(false);
   let startDialogOpen = $state(false);
+  let selectedLaunchHistoryId = $state('');
   let startCommand = $state('');
   let startArguments = $state('');
   let startWorkdir = $state('');
@@ -57,6 +59,13 @@
   let terminalFinished = $derived(terminalIsFinished(terminal));
   let streamStatusLabel = $derived(streamLabel(viewState.streamStatus));
   let streamStatusVariant = $derived(streamVariant(viewState.streamStatus));
+  let launchHistoryOptions = $derived(
+    viewState.launchHistory.map((entry) => ({
+      value: entry.id,
+      label: launchHistoryLabel(entry),
+      secondaryLabel: launchHistoryWorkdir(entry),
+    })),
+  );
 
   const controller = createTerminalsController({
     state: viewState,
@@ -319,11 +328,44 @@
   }
 
   function openStartDialog() {
-    startCommand = '';
-    startArguments = '';
-    startWorkdir = '';
+    applyLaunchHistory(viewState.launchHistory[0] ?? null);
     viewState.startError = '';
     startDialogOpen = true;
+  }
+
+  function applyLaunchHistory(entry) {
+    selectedLaunchHistoryId = entry?.id ?? '';
+    startCommand = entry?.command ?? '';
+    startArguments = Array.isArray(entry?.args) ? entry.args.join('\n') : '';
+    startWorkdir = entry?.workdir ?? '';
+    viewState.startError = '';
+  }
+
+  function selectLaunchHistory(entryId) {
+    const entry = viewState.launchHistory.find((item) => item.id === entryId);
+    if (entry) {
+      applyLaunchHistory(entry);
+    }
+  }
+
+  function markLaunchHistoryEdited() {
+    selectedLaunchHistoryId = '';
+    viewState.startError = '';
+  }
+
+  function launchHistoryLabel(entry) {
+    const command =
+      String(entry?.command || '').trim() ||
+      t('terminals.commandPlaceholder', 'Default shell');
+    const argumentsList = Array.isArray(entry?.args) ? entry.args : [];
+    return [command, ...argumentsList].join(' ');
+  }
+
+  function launchHistoryWorkdir(entry) {
+    return (
+      String(entry?.workdir || '').trim() ||
+      t('terminals.workdirPlaceholder', 'User home directory')
+    );
   }
 
   function closeStartDialog() {
@@ -788,6 +830,31 @@
             </Banner>
           {/if}
 
+          {#if viewState.launchHistory.length > 0}
+            <FormField
+              controlId="terminal-start-history"
+              label={t('terminals.historyLabel', 'Recent setup')}
+              help={t(
+                'terminals.historyHelp',
+                'Saved on this vBot server. Choosing a setup fills Command, Arguments, and Working directory.',
+              )}
+            >
+              {#snippet children(field)}
+                <Dropdown
+                  id={field.controlId}
+                  value={selectedLaunchHistoryId}
+                  options={launchHistoryOptions}
+                  ariaLabel={t('terminals.historyLabel', 'Recent setup')}
+                  ariaDescribedby={field.describedBy}
+                  disabled={viewState.startingTerminal}
+                  triggerClass="terminals-view__history-dropdown"
+                  listClass="terminals-view__history-dropdown-list"
+                  onValueChange={selectLaunchHistory}
+                />
+              {/snippet}
+            </FormField>
+          {/if}
+
           <FormField
             controlId="terminal-start-command"
             label={t('terminals.commandLabel', 'Command')}
@@ -806,7 +873,7 @@
                 placeholder={t('terminals.commandPlaceholder', 'Default shell')}
                 onInput={(next) => {
                   startCommand = next;
-                  viewState.startError = '';
+                  markLaunchHistoryEdited();
                 }}
               />
             {/snippet}
@@ -834,7 +901,7 @@
                 )}
                 onInput={(next) => {
                   startArguments = next;
-                  viewState.startError = '';
+                  markLaunchHistoryEdited();
                 }}
               />
             {/snippet}
@@ -861,7 +928,7 @@
                 )}
                 onInput={(next) => {
                   startWorkdir = next;
-                  viewState.startError = '';
+                  markLaunchHistoryEdited();
                 }}
               />
             {/snippet}
@@ -1074,6 +1141,18 @@
     color: var(--text-med);
     font-size: var(--fs-body-sm);
     line-height: 1.5;
+  }
+
+  :global(.terminals-view__history-dropdown) {
+    width: 100%;
+  }
+
+  :global(.terminals-view__history-dropdown .dropdown-primitive__trigger) {
+    width: 100%;
+  }
+
+  :global(.terminals-view__history-dropdown-list) {
+    font-family: var(--font-mono);
   }
 
   :global(.terminals-view__attention strong) {

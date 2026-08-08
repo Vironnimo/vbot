@@ -380,6 +380,56 @@ async def test_manual_terminal_has_no_agent_owner_or_attention_delivery(
 
 
 @pytest.mark.asyncio
+async def test_manual_launch_history_is_persistent_mru_and_deduplicated(tmp_path: Path) -> None:
+    history_path = tmp_path / "terminals" / "launch-history.json"
+    factory = AdapterFactory()
+    manager = TerminalManager(
+        adapter_factory=factory,
+        launch_history_path=history_path,
+        data_dir=tmp_path,
+        sweep_interval_seconds=3600,
+    )
+    manager.start()
+    try:
+        await manager.spawn_for_operator(
+            command="python",
+            arguments=["-m", "http.server", "8080"],
+            cwd=tmp_path,
+            launch_workdir="~/sites/docs",
+        )
+        await manager.spawn_for_operator(
+            command="codex",
+            arguments=["--profile", "work space"],
+            cwd=tmp_path,
+            launch_workdir="C:\\Development\\vBot",
+        )
+        await manager.spawn_for_operator(
+            command="python",
+            arguments=["-m", "http.server", "8080"],
+            cwd=tmp_path,
+            launch_workdir="~/sites/docs",
+        )
+
+        history = manager.list_operator_launch_history()
+        assert len(history) == 2
+        assert history[0]["command"] == "python"
+        assert history[0]["args"] == ["-m", "http.server", "8080"]
+        assert history[0]["workdir"] == "~/sites/docs"
+        assert len(history[0]["id"]) == 64
+        assert history[1]["command"] == "codex"
+        assert history_path.is_file()
+    finally:
+        await manager.aclose()
+
+    reloaded = TerminalManager(
+        launch_history_path=history_path,
+        data_dir=tmp_path,
+        adapter_factory=AdapterFactory(),
+    )
+    assert reloaded.list_operator_launch_history() == history
+
+
+@pytest.mark.asyncio
 async def test_operator_kill_recovers_a_partially_recorded_finish(
     terminal_manager: tuple[TerminalManager, AdapterFactory], tmp_path: Path
 ) -> None:
