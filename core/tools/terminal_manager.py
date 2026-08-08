@@ -56,6 +56,8 @@ TERMINAL_INPUT_KEY_DELAY_SECONDS = 0.1
 TERMINAL_STREAM_RETENTION_EVENTS = 4_096
 TERMINAL_STREAM_SUBSCRIBER_QUEUE_EVENTS = 512
 TERMINAL_INPUT_MAX_CHARS = 65_536
+TERMINAL_BRACKETED_PASTE_START = "\x1b[200~"
+TERMINAL_BRACKETED_PASTE_END = "\x1b[201~"
 TERMINAL_LAUNCH_HISTORY_VERSION = 1
 TERMINAL_LAUNCH_HISTORY_MAX_ENTRIES = 50
 TERMINAL_INPUT_KEY_SEQUENCES = {
@@ -199,6 +201,7 @@ class TerminalSession:
     attention: TerminalAttention | None = None
     activity_generation: int = 0
     notify_on_settle: bool = False
+    snapshot_on_settle: bool = False
     suppress_exit_attention: bool = False
     lock: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False)
     output_event: asyncio.Event = field(default_factory=asyncio.Event, repr=False)
@@ -672,7 +675,6 @@ class TerminalManager:
     ) -> dict[str, Any]:
         """Write exact data or named terminal input and track generic PTY activity."""
         session = self.get_session(terminal_id, owner)
-        chunks = _input_chunks(data=data, text=text, key=key, enter=enter)
         initial_task = session.initial_input_task
         if (
             initial_task is not None
@@ -689,6 +691,18 @@ class TerminalManager:
                 raise TerminalStaleScreenError(
                     "Terminal screen changed; inspect status before sending this input"
                 )
+            bracketed_paste = (
+                text is not None
+                and ("\n" in text or "\r" in text)
+                and session.renderer.bracketed_paste_enabled
+            )
+            chunks = _input_chunks(
+                data=data,
+                text=text,
+                key=key,
+                enter=enter,
+                bracketed_paste=bracketed_paste,
+            )
             prior_state = session.state
             prior_attention_revision = session.attention_revision
             session.activity_origin_run_id = origin_run_id
@@ -707,6 +721,7 @@ class TerminalManager:
                 "characters_sent": sum(len(chunk) for chunk in chunks),
                 "key": key,
                 "enter": enter,
+                "bracketed_paste": bracketed_paste,
                 "superseded_attention_revision": (
                     prior_attention_revision if session.attention is not None else None
                 ),
@@ -930,9 +945,17 @@ class TerminalManager:
                         session.log_handle.write(text)
                         session.log_handle.flush()
                     previous_title = session.renderer.title
-                    session.renderer.feed(text)
+                    bracketed_paste_was_enabled = session.renderer.bracketed_paste_enabled
+                    alternate_screen_exited = session.renderer.feed(text)
+                    bracketed_paste_disabled = (
+                        bracketed_paste_was_enabled and not session.renderer.bracketed_paste_enabled
+                    )
                     title_changed = session.renderer.title != previous_title
                     self._publish_output(session, text)
+                    if alternate_screen_exited:
+                        self._publish_snapshot(session)
+                    if alternate_screen_exited or bracketed_paste_disabled:
+                        session.snapshot_on_settle = True
                     state_changed = False
                     if session.state != "starting":
                         state_changed = session.state != "working"
@@ -994,6 +1017,9 @@ class TerminalManager:
                 deliver = session.notify_on_settle
                 session.notify_on_settle = False
                 session.state = "ready"
+                if session.snapshot_on_settle:
+                    session.snapshot_on_settle = False
+                    self._publish_snapshot(session)
                 self._set_attention(
                     session,
                     kind="output_settled",
@@ -1030,6 +1056,7 @@ class TerminalManager:
             session.exit_code = await asyncio.to_thread(session.adapter.exit_code)
             if error is None:
                 session.state = "exited"
+                self._publish_snapshot(session)
                 if not session.suppress_exit_attention:
                     self._set_attention(
                         session,
@@ -1041,6 +1068,7 @@ class TerminalManager:
                     self._publish_state(session)
             else:
                 session.state = "error"
+                self._publish_snapshot(session)
                 if not session.suppress_exit_attention:
                     self._set_attention(
                         session,
@@ -1239,6 +1267,17 @@ class TerminalManager:
             }
         )
 
+    def _publish_snapshot(self, session: TerminalSession) -> None:
+        session.stream_sequence += 1
+        session.stream.publish(
+            {
+                "type": "terminal_snapshot",
+                "sequence": session.stream_sequence,
+                "terminal": self._operator_summary(session),
+                "ansi": session.renderer.ansi_snapshot(),
+            }
+        )
+
     def _publish_state(self, session: TerminalSession) -> None:
         session.stream_sequence += 1
         session.stream.publish(
@@ -1307,7 +1346,12 @@ class TerminalManager:
 
 
 def _input_chunks(
-    *, data: str | None, text: str | None, key: str | None, enter: bool
+    *,
+    data: str | None,
+    text: str | None,
+    key: str | None,
+    enter: bool,
+    bracketed_paste: bool = False,
 ) -> tuple[str, ...]:
     if data is not None:
         if text is not None or key is not None or enter:
@@ -1325,7 +1369,11 @@ def _input_chunks(
             raise ValueError("text must be non-empty when provided")
         if len(text) > TERMINAL_INPUT_MAX_CHARS:
             raise ValueError(f"text must not exceed {TERMINAL_INPUT_MAX_CHARS} characters")
-        chunks.append(text)
+        chunks.append(
+            f"{TERMINAL_BRACKETED_PASTE_START}{text}{TERMINAL_BRACKETED_PASTE_END}"
+            if bracketed_paste
+            else text
+        )
     if key is not None:
         chunks.append(TERMINAL_INPUT_KEY_SEQUENCES[key])
     if enter:

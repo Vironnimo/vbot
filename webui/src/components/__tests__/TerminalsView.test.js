@@ -34,6 +34,7 @@ vi.mock('@xterm/xterm', () => ({
       this.cols = 120;
       this.rows = 32;
       this.reset = vi.fn();
+      this.refresh = vi.fn();
       this.resize = vi.fn((columns, rows) => {
         this.cols = columns;
         this.rows = rows;
@@ -136,6 +137,7 @@ describe('TerminalsView', () => {
       '\u001b[2JDemo TUI ready',
       expect.any(Function),
     );
+    expect(terminalInstances[0].refresh).toHaveBeenCalledWith(0, 27);
 
     await unmount(mountedComponent);
     mountedComponent = null;

@@ -255,7 +255,10 @@
     }
     xterm.reset();
     terminalScrolledBack = false;
-    xterm.write(ansi, scheduleFit);
+    xterm.write(ansi, () => {
+      xterm?.refresh(0, xterm.rows - 1);
+      scheduleFit();
+    });
   }
 
   function scheduleFit() {

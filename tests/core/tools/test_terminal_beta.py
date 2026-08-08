@@ -89,8 +89,10 @@ def test_schema_matches_flat_action_tool_conventions(tmp_path: Path) -> None:
     assert properties["lines"]["default"] == 30
     assert properties["timeout_ms"]["default"] == TERMINAL_BETA_DEFAULT_WAIT_MS
     assert properties["command"]["default"] == TERMINAL_BETA_DEFAULT_COMMAND
+    assert properties["enter"]["default"] is False
     assert "no program-specific flags" in properties["command"]["description"]
     assert "sent unchanged" in properties["data"]["description"]
+    assert "bracketed paste" in properties["text"]["description"]
     assert properties["data"]["maxLength"] == 65_536
     assert properties["text"]["maxLength"] == 65_536
     assert "f12" in properties["key"]["enum"]
@@ -107,6 +109,7 @@ def test_schema_matches_flat_action_tool_conventions(tmp_path: Path) -> None:
         TERMINAL_BETA_TOOL_DESCRIPTION
     )
     assert "Quiet output is only an activity boundary" in TERMINAL_BETA_TOOL_DESCRIPTION
+    assert "cannot distinguish tabs" in TERMINAL_BETA_TOOL_DESCRIPTION
 
     registry = ToolRegistry()
     register_terminal_beta_tool(
@@ -377,8 +380,22 @@ async def test_input_supports_convenient_and_exact_data_and_rejects_stale_screen
         },
     )
     assert result["ok"] is True
-    assert factory.adapters[0].writes == ["answer", "\r"]
+    assert factory.adapters[0].writes == ["answer"]
+    assert cast(dict[str, Any], result["data"])["enter"] is False
     assert cast(dict[str, Any], result["data"])["delivery"] == ("automatic_terminal_activity")
+
+    submitted = await call(
+        terminal_manager,
+        context,
+        {
+            "action": "input",
+            "terminal_id": terminal_id,
+            "text": "submit",
+            "enter": True,
+        },
+    )
+    assert submitted["ok"] is True
+    assert factory.adapters[0].writes[-2:] == ["submit", "\r"]
 
     raw = "\x1b[200~more\r\n\x1b[201~"
     exact = await call(
@@ -388,6 +405,18 @@ async def test_input_supports_convenient_and_exact_data_and_rejects_stale_screen
     )
     assert exact["ok"] is True
     assert factory.adapters[0].writes[-1] == raw
+
+    factory.adapters[0].emit("\x1b[?2004h")
+    await eventually(lambda: session.renderer.bracketed_paste_enabled)
+    multiline = "first\n  second"
+    pasted = await call(
+        terminal_manager,
+        context,
+        {"action": "input", "terminal_id": terminal_id, "text": multiline},
+    )
+    assert pasted["ok"] is True
+    assert factory.adapters[0].writes[-1] == f"\x1b[200~{multiline}\x1b[201~"
+    assert cast(dict[str, Any], pasted["data"])["bracketed_paste"] is True
 
 
 @pytest.mark.asyncio

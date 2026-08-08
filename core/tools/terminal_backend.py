@@ -22,6 +22,7 @@ from core.tools.process_manager import guarded_process_launch, subprocess_creati
 
 _HARD_KILL_SIGNAL = getattr(signal, "SIGKILL", 9)
 _ALTERNATE_SCREEN_MODES = frozenset({47, 1047, 1049})
+_BRACKETED_PASTE_MODE = 2004
 _WINDOWS_INTERACTIVE_SHELLS = ("pwsh.exe", "powershell.exe")
 TERMINAL_TITLE_MAX_CHARS = 160
 _SCREEN_STATE_FIELDS = (
@@ -134,6 +135,8 @@ class _TerminalScreen(pyte.Screen):
         self._on_scroll = on_scroll
         self._primary_state: dict[str, Any] | None = None
         self._alternate_modes: set[int] = set()
+        self.alternate_exit_revision = 0
+        self.bracketed_paste_enabled = False
         super().__init__(columns, lines)
 
     def index(self) -> None:
@@ -143,7 +146,10 @@ class _TerminalScreen(pyte.Screen):
         super().index()
 
     def set_mode(self, *modes: int, **kwargs: Any) -> None:
-        alternate = _ALTERNATE_SCREEN_MODES.intersection(modes) if kwargs.get("private") else set()
+        private = kwargs.get("private")
+        alternate = _ALTERNATE_SCREEN_MODES.intersection(modes) if private else set()
+        if private and _BRACKETED_PASTE_MODE in modes:
+            self.bracketed_paste_enabled = True
         if alternate and self._primary_state is None:
             self._primary_state = self._capture_state()
             super().reset()
@@ -151,12 +157,16 @@ class _TerminalScreen(pyte.Screen):
         super().set_mode(*modes, **kwargs)
 
     def reset_mode(self, *modes: int, **kwargs: Any) -> None:
-        alternate = _ALTERNATE_SCREEN_MODES.intersection(modes) if kwargs.get("private") else set()
+        private = kwargs.get("private")
+        alternate = _ALTERNATE_SCREEN_MODES.intersection(modes) if private else set()
+        if private and _BRACKETED_PASTE_MODE in modes:
+            self.bracketed_paste_enabled = False
         self._alternate_modes.difference_update(alternate)
         if alternate and not self._alternate_modes and self._primary_state is not None:
             primary_state = self._primary_state
             self._primary_state = None
             self._restore_state(primary_state)
+            self.alternate_exit_revision += 1
             remaining = tuple(mode for mode in modes if mode not in alternate)
             if remaining:
                 super().reset_mode(*remaining, **kwargs)
@@ -204,11 +214,14 @@ class TerminalRenderer:
         self._screen = _TerminalScreen(columns, rows, self._capture_scrolled_line)
         self._stream = pyte.Stream(self._screen)
 
-    def feed(self, text: str) -> None:
+    def feed(self, text: str) -> bool:
+        """Render output and report whether it exited an alternate screen."""
         if not text:
-            return
+            return False
+        alternate_exit_revision = self._screen.alternate_exit_revision
         self._stream.feed(text)
         self.revision += 1
+        return self._screen.alternate_exit_revision != alternate_exit_revision
 
     def resize(self, columns: int, rows: int) -> None:
         self._screen.resize(lines=rows, columns=columns)
@@ -226,6 +239,11 @@ class TerminalRenderer:
     def title(self) -> str:
         """Return one bounded single-line title announced through the VT stream."""
         return _normalize_terminal_title(self._screen.title or self._screen.icon_name)
+
+    @property
+    def bracketed_paste_enabled(self) -> bool:
+        """Report whether the foreground terminal application enabled bracketed paste."""
+        return self._screen.bracketed_paste_enabled
 
     def ansi_snapshot(self) -> str:
         """Serialize bounded scrollback plus the current screen for a late viewer."""

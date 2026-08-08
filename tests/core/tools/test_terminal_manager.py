@@ -305,6 +305,91 @@ async def test_operator_stream_starts_with_ansi_snapshot_and_continues_in_sequen
 
 
 @pytest.mark.asyncio
+async def test_operator_stream_refreshes_authoritative_screen_after_alternate_screen_exit(
+    terminal_manager: tuple[TerminalManager, AdapterFactory], tmp_path: Path
+) -> None:
+    manager, factory = terminal_manager
+    session = await spawn(manager, tmp_path)
+    adapter = factory.adapters[0]
+    adapter.emit("PS> ")
+    await eventually(lambda: session.renderer.screen_text() == "PS>")
+    stream = manager.watch_for_operator(session.terminal_id)
+    ready = await anext(stream)
+
+    adapter.emit("\x1b[?1049h\x1b[2J\x1b[Hnvim\x1b[?1049lPS> ")
+    output = await asyncio.wait_for(anext(stream), timeout=1)
+    while output["type"] != "terminal_output":
+        output = await asyncio.wait_for(anext(stream), timeout=1)
+    snapshot = await asyncio.wait_for(anext(stream), timeout=1)
+
+    assert output["type"] == "terminal_output"
+    assert snapshot["type"] == "terminal_snapshot"
+    assert snapshot["sequence"] == output["sequence"] + 1
+    assert snapshot["sequence"] > ready["sequence"]
+    assert "PS>" in snapshot["ansi"]
+    assert "nvim" not in snapshot["ansi"]
+    await stream.aclose()
+
+
+@pytest.mark.asyncio
+async def test_operator_stream_refreshes_after_tui_disables_bracketed_paste(
+    terminal_manager: tuple[TerminalManager, AdapterFactory], tmp_path: Path
+) -> None:
+    manager, factory = terminal_manager
+    session = await spawn(manager, tmp_path)
+    adapter = factory.adapters[0]
+    adapter.emit("\x1b[?2004hTUI")
+    await eventually(lambda: session.renderer.bracketed_paste_enabled)
+    stream = manager.watch_for_operator(session.terminal_id)
+    ready = await anext(stream)
+
+    adapter.emit("\x1b[?2004lPS> ")
+    snapshot: dict[str, Any] | None = None
+    while snapshot is None:
+        event = await asyncio.wait_for(anext(stream), timeout=1)
+        if event["type"] == "terminal_snapshot":
+            snapshot = event
+
+    assert snapshot["sequence"] > ready["sequence"]
+    assert "PS>" in snapshot["ansi"]
+    assert session.renderer.bracketed_paste_enabled is False
+    await stream.aclose()
+
+
+@pytest.mark.asyncio
+async def test_operator_stream_publishes_final_snapshot_before_terminal_state(
+    terminal_manager: tuple[TerminalManager, AdapterFactory], tmp_path: Path
+) -> None:
+    manager, factory = terminal_manager
+    session = await spawn(manager, tmp_path)
+    stream = manager.watch_for_operator(session.terminal_id)
+    ready = await anext(stream)
+
+    factory.adapters[0].emit("final screen")
+    await eventually(lambda: "final screen" in session.renderer.screen_text())
+    factory.adapters[0].finish(0)
+    events: list[dict[str, Any]] = []
+    while not any(
+        event["type"] == "terminal_state" and event["terminal"]["state"] == "exited"
+        for event in events
+    ):
+        events.append(await asyncio.wait_for(anext(stream), timeout=1))
+
+    terminal_snapshot_index = next(
+        index for index, event in enumerate(events) if event["type"] == "terminal_snapshot"
+    )
+    terminal_state_index = next(
+        index
+        for index, event in enumerate(events)
+        if event["type"] == "terminal_state" and event["terminal"]["state"] == "exited"
+    )
+    assert terminal_snapshot_index < terminal_state_index
+    assert events[terminal_snapshot_index]["sequence"] > ready["sequence"]
+    assert "final screen" in events[terminal_snapshot_index]["ansi"]
+    await stream.aclose()
+
+
+@pytest.mark.asyncio
 async def test_operator_controls_same_live_session_and_changed_callbacks(
     terminal_manager: tuple[TerminalManager, AdapterFactory], tmp_path: Path
 ) -> None:
@@ -534,6 +619,48 @@ async def test_exact_agent_data_and_named_keys_share_the_generic_pty(
 
     assert factory.adapters[0].writes == [raw, "\x1b[24~"]
     assert sent["characters_sent"] == len(raw)
+
+
+@pytest.mark.asyncio
+async def test_multiline_text_uses_bracketed_paste_only_when_terminal_enables_it(
+    terminal_manager: tuple[TerminalManager, AdapterFactory], tmp_path: Path
+) -> None:
+    manager, factory = terminal_manager
+    session = await spawn(manager, tmp_path)
+    adapter = factory.adapters[0]
+    multiline = "first\n  second\n    third"
+    adapter.emit("\x1b[?2004h")
+    await eventually(lambda: session.renderer.bracketed_paste_enabled)
+
+    pasted = await manager.send_input(
+        session.terminal_id,
+        owner(),
+        data=None,
+        text=multiline,
+        key=None,
+        enter=False,
+        expected_screen_revision=None,
+        origin_run_id="run-b",
+    )
+
+    assert adapter.writes == [f"\x1b[200~{multiline}\x1b[201~"]
+    assert pasted["bracketed_paste"] is True
+
+    adapter.emit("\x1b[?2004l")
+    await eventually(lambda: not session.renderer.bracketed_paste_enabled)
+    typed = await manager.send_input(
+        session.terminal_id,
+        owner(),
+        data=None,
+        text=multiline,
+        key=None,
+        enter=False,
+        expected_screen_revision=None,
+        origin_run_id="run-b",
+    )
+
+    assert adapter.writes[-1] == multiline
+    assert typed["bracketed_paste"] is False
 
 
 @pytest.mark.asyncio
