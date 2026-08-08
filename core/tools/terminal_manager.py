@@ -1473,7 +1473,7 @@ def _attention_body(session: TerminalSession, attention: TerminalAttention) -> s
     if attention.kind == "output_settled":
         sections.extend(
             (
-                "Use terminal_beta status to inspect the current screen. Decide from that "
+                "Use terminal status to inspect the current screen. Decide from that "
                 "screen whether the program is still working, is waiting for input, has "
                 "returned to a prompt, or needs no action. Reuse this Terminal Session; do "
                 "not start a duplicate process.",

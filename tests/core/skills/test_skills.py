@@ -37,7 +37,7 @@ def test_bundled_coding_agents_uses_interactive_terminal_contract() -> None:
     reference_text = "\n".join(references.values())
     combined = f"{skill_text}\n{reference_text}"
 
-    assert "terminal_beta" in skill_text
+    assert "through terminal," in skill_text
     assert "Terminal Sessions survive individual Runs" in skill_text
     assert "expected_screen_revision" in skill_text
     assert "terminal_id" in reference_text

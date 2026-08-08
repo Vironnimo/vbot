@@ -81,7 +81,7 @@ PROJECT_DEFAULT_ALLOWED_TOOLS: tuple[str, ...] = (
     "grep",
     "bash",
     "process",
-    "terminal_beta",
+    "terminal",
     "web_fetch",
     "web_search",
     "status",

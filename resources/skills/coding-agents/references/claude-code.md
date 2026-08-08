@@ -1,6 +1,6 @@
 # Claude Code interactive reference
 
-Launch `claude` as a real TUI through `terminal_beta`. Keep the returned `terminal_id` and use the same live Terminal Session for follow-up work, questions, permission prompts, and user takeover.
+Launch `claude` as a real TUI through `terminal`. Keep the returned `terminal_id` and use the same live Terminal Session for follow-up work, questions, permission prompts, and user takeover.
 
 ## Start
 

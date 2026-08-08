@@ -1,4 +1,4 @@
-"""Tests for the Agent-facing terminal_beta Tool contract."""
+"""Tests for the Agent-facing terminal Tool contract."""
 
 from __future__ import annotations
 
@@ -10,16 +10,16 @@ import pytest
 import pytest_asyncio
 
 from core.projects import ProjectStore
-from core.tools.terminal_beta import (
-    TERMINAL_BETA_ACTIONS,
-    TERMINAL_BETA_DEFAULT_COMMAND,
-    TERMINAL_BETA_DEFAULT_WAIT_MS,
-    TERMINAL_BETA_PROJECT_WORKDIR_PREFIX,
-    TERMINAL_BETA_TOOL_DESCRIPTION,
-    TERMINAL_BETA_TOOL_NAME,
-    TERMINAL_BETA_TOOL_PARAMETERS,
-    make_terminal_beta_handler,
-    register_terminal_beta_tool,
+from core.tools.terminal import (
+    TERMINAL_ACTIONS,
+    TERMINAL_DEFAULT_COMMAND,
+    TERMINAL_DEFAULT_WAIT_MS,
+    TERMINAL_PROJECT_WORKDIR_PREFIX,
+    TERMINAL_TOOL_DESCRIPTION,
+    TERMINAL_TOOL_NAME,
+    TERMINAL_TOOL_PARAMETERS,
+    make_terminal_handler,
+    register_terminal_tool,
 )
 from core.tools.terminal_manager import TerminalManager, TerminalOwner
 from core.tools.tools import JsonObject, ToolContext, ToolRegistry, tool_failure
@@ -53,7 +53,7 @@ def make_context(
         session_id=session_id,
         run_id="run-a",
         tool_call_id="call-a",
-        tool_name=TERMINAL_BETA_TOOL_NAME,
+        tool_name=TERMINAL_TOOL_NAME,
         tool_call_index=0,
         workspace=tmp_path,
         vbot_root=tmp_path,
@@ -73,22 +73,22 @@ async def call(
     project_store = projects if projects is not None else ProjectStore(context.data_root)
     return cast(
         JsonObject,
-        await make_terminal_beta_handler(manager, project_store)(context, arguments),
+        await make_terminal_handler(manager, project_store)(context, arguments),
     )
 
 
 def test_schema_matches_flat_action_tool_conventions(tmp_path: Path) -> None:
-    assert TERMINAL_BETA_TOOL_PARAMETERS["type"] == "object"
-    assert TERMINAL_BETA_TOOL_PARAMETERS["required"] == ["action"]
-    assert "oneOf" not in TERMINAL_BETA_TOOL_PARAMETERS
-    assert "additionalProperties" not in TERMINAL_BETA_TOOL_PARAMETERS
-    properties = cast(dict[str, Any], TERMINAL_BETA_TOOL_PARAMETERS["properties"])
-    assert properties["action"]["enum"] == list(TERMINAL_BETA_ACTIONS)
+    assert TERMINAL_TOOL_PARAMETERS["type"] == "object"
+    assert TERMINAL_TOOL_PARAMETERS["required"] == ["action"]
+    assert "oneOf" not in TERMINAL_TOOL_PARAMETERS
+    assert "additionalProperties" not in TERMINAL_TOOL_PARAMETERS
+    properties = cast(dict[str, Any], TERMINAL_TOOL_PARAMETERS["properties"])
+    assert properties["action"]["enum"] == list(TERMINAL_ACTIONS)
     assert properties["columns"]["default"] == 120
     assert properties["rows"]["default"] == 32
     assert properties["lines"]["default"] == 30
-    assert properties["timeout_ms"]["default"] == TERMINAL_BETA_DEFAULT_WAIT_MS
-    assert properties["command"]["default"] == TERMINAL_BETA_DEFAULT_COMMAND
+    assert properties["timeout_ms"]["default"] == TERMINAL_DEFAULT_WAIT_MS
+    assert properties["command"]["default"] == TERMINAL_DEFAULT_COMMAND
     assert properties["enter"]["default"] is False
     assert "no program-specific flags" in properties["command"]["description"]
     assert "sent unchanged" in properties["data"]["description"]
@@ -104,28 +104,26 @@ def test_schema_matches_flat_action_tool_conventions(tmp_path: Path) -> None:
         "for that directory. Use 'project:<project-id>' to start in a registered Project's "
         "directory."
     )
-    assert "survive individual Runs" in TERMINAL_BETA_TOOL_DESCRIPTION
-    assert TERMINAL_BETA_TOOL_DESCRIPTION.startswith(
+    assert "survive individual Runs" in TERMINAL_TOOL_DESCRIPTION
+    assert TERMINAL_TOOL_DESCRIPTION.startswith(
         "Run and control a program through a real PTY/ConPTY when it waits for interactive "
         "input or must be operated by typing into and observing its live screen"
     )
-    assert "without program-specific flags, hooks, or configuration" in (
-        TERMINAL_BETA_TOOL_DESCRIPTION
-    )
-    assert "Quiet output is only an activity boundary" in TERMINAL_BETA_TOOL_DESCRIPTION
-    assert "cannot distinguish tabs" in TERMINAL_BETA_TOOL_DESCRIPTION
+    assert "without program-specific flags, hooks, or configuration" in (TERMINAL_TOOL_DESCRIPTION)
+    assert "Quiet output is only an activity boundary" in TERMINAL_TOOL_DESCRIPTION
+    assert "cannot distinguish tabs" in TERMINAL_TOOL_DESCRIPTION
 
     registry = ToolRegistry()
-    register_terminal_beta_tool(
+    register_terminal_tool(
         registry,
         TerminalManager(adapter_factory=AdapterFactory()),
         ProjectStore(tmp_path),
     )
-    tool = registry.get(TERMINAL_BETA_TOOL_NAME)
+    tool = registry.get(TERMINAL_TOOL_NAME)
     assert tool.open_input_schema is True
     assert tool.display.summary({"action": "start"}) == "start · codex"
     list_display = registry.display_for_call(
-        TERMINAL_BETA_TOOL_NAME,
+        TERMINAL_TOOL_NAME,
         {"action": "list"},
         result={
             "ok": True,
@@ -158,14 +156,14 @@ async def test_start_defaults_to_unmodified_codex_and_returns_non_polling_handof
     assert result["ok"] is True
     data = cast(dict[str, Any], result["data"])
     assert data["state"] == "ready"
-    assert data["command"] == TERMINAL_BETA_DEFAULT_COMMAND
+    assert data["command"] == TERMINAL_DEFAULT_COMMAND
     assert data["columns"] == 120
     assert data["rows"] == 32
     assert data["delivery"] == "automatic_terminal_activity"
     assert "continues independently of this vBot Run" in data["handoff_note"]
     assert "Quiet output does not prove" in data["handoff_note"]
     assert "do not poll" in data["handoff_note"]
-    assert factory.calls[0][0] == [TERMINAL_BETA_DEFAULT_COMMAND]
+    assert factory.calls[0][0] == [TERMINAL_DEFAULT_COMMAND]
     assert not any(name.startswith("VBOT_TERMINAL_") for name in factory.calls[0][2])
 
 
@@ -188,7 +186,7 @@ async def test_start_resolves_live_project_cwd_by_stable_id_without_changing_own
         {
             "action": "start",
             "command": "fake-tui",
-            "workdir": f"{TERMINAL_BETA_PROJECT_WORKDIR_PREFIX}vbot",
+            "workdir": f"{TERMINAL_PROJECT_WORKDIR_PREFIX}vbot",
         },
         projects,
     )
@@ -209,7 +207,7 @@ async def test_start_resolves_live_project_cwd_by_stable_id_without_changing_own
         {
             "action": "start",
             "command": "fake-tui",
-            "workdir": f"{TERMINAL_BETA_PROJECT_WORKDIR_PREFIX}vbot",
+            "workdir": f"{TERMINAL_PROJECT_WORKDIR_PREFIX}vbot",
         },
         projects,
     )

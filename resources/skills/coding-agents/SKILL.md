@@ -1,6 +1,6 @@
 ---
 name: coding-agents
-description: Operate Codex, Claude Code, OpenCode, and other interactive coding-agent CLIs as persistent shared TUI sessions through terminal_beta, including explicit model, reasoning or effort, Agent, profile, permission, sandbox, and other startup settings. Use when delegating coding work, selecting how a coding agent should start, supervising it, answering its questions or approvals, checking progress, or continuing an existing coding-agent session. Do not use to operate vBot itself; that is the vbot-cli skill.
+description: Operate Codex, Claude Code, OpenCode, and other interactive coding-agent CLIs as persistent shared TUI sessions through terminal, including explicit model, reasoning or effort, Agent, profile, permission, sandbox, and other startup settings. Use when delegating coding work, selecting how a coding agent should start, supervising it, answering its questions or approvals, checking progress, or continuing an existing coding-agent session. Do not use to operate vBot itself; that is the vbot-cli skill.
 ---
 
 # Coding Agents
@@ -9,7 +9,7 @@ Use a real interactive Terminal Session for the coding agent's entire lifecycle.
 
 ## Non-negotiable rules
 
-1. Use `terminal_beta` and launch the CLI's normal interactive command. Do not convert the task into a one-shot or machine-output invocation.
+1. Use `terminal` and launch the CLI's normal interactive command. Do not convert the task into a one-shot or machine-output invocation.
 2. Keep the exact `terminal_id` returned by `start`. Use that same live Terminal Session for questions, approvals, follow-up instructions, and later work instead of starting another process.
 3. Treat quiet output as an activity boundary, never as proof of completion. Use `wait`, then inspect `status` and the rendered screen.
 4. Do not disable approvals, permission checks, or sandboxes merely to avoid interaction. Answer safe, unambiguous prompts through the TUI; ask the user when the choice carries meaningful authority, risk, cost, or product intent.
@@ -32,13 +32,13 @@ Read the matching reference before starting a known CLI:
 - Claude Code: `references/claude-code.md`
 - OpenCode: `references/opencode.md`
 
-For another coding-agent CLI, launch its ordinary interactive command in `terminal_beta`, inspect its TUI and local help, and operate it through normal terminal input. Do not invent a headless mode. This workflow is program-agnostic and also applies to future CLIs.
+For another coding-agent CLI, launch its ordinary interactive command in `terminal`, inspect its TUI and local help, and operate it through normal terminal input. Do not invent a headless mode. This workflow is program-agnostic and also applies to future CLIs.
 
 ## Monitor without polling blindly
 
 Keep the last returned `attention_revision`. Call `wait` with that revision and a timeout of at most 10 seconds when a short same-Run pause is useful. A timeout only means no new activity boundary arrived during that interval; the Terminal Session continues independently.
 
-After a wakeup, call `status`. Read the current screen first, then use paginated scrollback when the visible screen lacks needed context. Request at most 100 lines. When `scrollback.next_request` is non-null, pass that complete object unchanged to `terminal_beta`; repeat until `next_request` is null. Each continuation is older than the page before it, so prepend older pages when reconstructing chronological output, then append the current `screen`. Do not add fields to the returned continuation or replace its cursor. Use the raw `log_file` only for VT-level diagnostics or an expired scrollback cursor, not as the normal way to recover a final response, because it contains unrendered control sequences and redraws.
+After a wakeup, call `status`. Read the current screen first, then use paginated scrollback when the visible screen lacks needed context. Request at most 100 lines. When `scrollback.next_request` is non-null, pass that complete object unchanged to `terminal`; repeat until `next_request` is null. Each continuation is older than the page before it, so prepend older pages when reconstructing chronological output, then append the current `screen`. Do not add fields to the returned continuation or replace its cursor. Use the raw `log_file` only for VT-level diagnostics or an expired scrollback cursor, not as the normal way to recover a final response, because it contains unrendered control sequences and redraws.
 
 Report meaningful progress rather than every output fragment. It is valid to end the current Run while the coding agent keeps working; a later Run can recover the Terminal Session with `list`.
 

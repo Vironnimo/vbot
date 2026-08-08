@@ -45,15 +45,15 @@ from core.tools.tools import (
 )
 from core.utils.paths import model_path
 
-TERMINAL_BETA_TOOL_NAME = "terminal_beta"
-TERMINAL_BETA_ACTIONS = ("start", "list", "status", "wait", "input", "resize", "kill")
-TERMINAL_BETA_DEFAULT_COMMAND = "codex"
-TERMINAL_BETA_DEFAULT_WAIT_MS = 1_000
-TERMINAL_BETA_MAX_WAIT_MS = 10_000
-TERMINAL_BETA_KEYS = tuple(TERMINAL_INPUT_KEY_SEQUENCES)
-TERMINAL_BETA_PROJECT_WORKDIR_PREFIX = "project:"
+TERMINAL_TOOL_NAME = "terminal"
+TERMINAL_ACTIONS = ("start", "list", "status", "wait", "input", "resize", "kill")
+TERMINAL_DEFAULT_COMMAND = "codex"
+TERMINAL_DEFAULT_WAIT_MS = 1_000
+TERMINAL_MAX_WAIT_MS = 10_000
+TERMINAL_KEYS = tuple(TERMINAL_INPUT_KEY_SEQUENCES)
+TERMINAL_PROJECT_WORKDIR_PREFIX = "project:"
 
-TERMINAL_BETA_TOOL_DESCRIPTION = (
+TERMINAL_TOOL_DESCRIPTION = (
     "Run and control a program through a real PTY/ConPTY when it waits for interactive input or "
     "must be operated by typing into and observing its live screen, such as a REPL, TUI, prompt, "
     "or debugger. Terminal Sessions belong to this vBot Session, survive individual Runs, and "
@@ -99,7 +99,7 @@ _ACTION_FIELDS = {
     "kill": frozenset({"action", "terminal_id"}),
 }
 
-TERMINAL_BETA_TOOL_PARAMETERS: JsonObject = {
+TERMINAL_TOOL_PARAMETERS: JsonObject = {
     "type": "object",
     "description": (
         "Use start to create a Terminal Session, list to discover this vBot Session's terminals, "
@@ -108,7 +108,7 @@ TERMINAL_BETA_TOOL_PARAMETERS: JsonObject = {
     "properties": {
         "action": {
             "type": "string",
-            "enum": list(TERMINAL_BETA_ACTIONS),
+            "enum": list(TERMINAL_ACTIONS),
             "description": (
                 "start launches a TUI, list returns owned Terminal Sessions, status reads a "
                 "bounded screen page, wait pauses briefly for a new activity boundary, input sends "
@@ -126,9 +126,9 @@ TERMINAL_BETA_TOOL_PARAMETERS: JsonObject = {
         "command": {
             "type": "string",
             "minLength": 1,
-            "default": TERMINAL_BETA_DEFAULT_COMMAND,
+            "default": TERMINAL_DEFAULT_COMMAND,
             "description": (
-                f"Executable for start; default {TERMINAL_BETA_DEFAULT_COMMAND}. Every executable "
+                f"Executable for start; default {TERMINAL_DEFAULT_COMMAND}. Every executable "
                 "uses the same generic PTY path with no program-specific flags, hooks, or "
                 "configuration. vBot does not interpolate the value into a shell."
             ),
@@ -220,16 +220,16 @@ TERMINAL_BETA_TOOL_PARAMETERS: JsonObject = {
         "timeout_ms": {
             "type": "integer",
             "minimum": 0,
-            "maximum": TERMINAL_BETA_MAX_WAIT_MS,
-            "default": TERMINAL_BETA_DEFAULT_WAIT_MS,
+            "maximum": TERMINAL_MAX_WAIT_MS,
+            "default": TERMINAL_DEFAULT_WAIT_MS,
             "description": (
-                f"Maximum same-Run wait in milliseconds; default {TERMINAL_BETA_DEFAULT_WAIT_MS}, "
-                f"maximum {TERMINAL_BETA_MAX_WAIT_MS}. The terminal continues after timeout."
+                f"Maximum same-Run wait in milliseconds; default {TERMINAL_DEFAULT_WAIT_MS}, "
+                f"maximum {TERMINAL_MAX_WAIT_MS}. The terminal continues after timeout."
             ),
         },
         "key": {
             "type": "string",
-            "enum": list(TERMINAL_BETA_KEYS),
+            "enum": list(TERMINAL_KEYS),
             "description": (
                 "Named terminal key for input. Supports navigation, F1-F12, Shift-Tab, and "
                 "Ctrl-A through Ctrl-Z; may be combined with text. Use data for any other sequence."
@@ -253,26 +253,26 @@ TERMINAL_BETA_TOOL_PARAMETERS: JsonObject = {
 }
 
 
-def make_terminal_beta_handler(terminal_manager: TerminalManager, projects: ProjectStore):
-    """Create a terminal_beta Tool handler bound to one Terminal Manager."""
+def make_terminal_handler(terminal_manager: TerminalManager, projects: ProjectStore):
+    """Create a terminal Tool handler bound to one Terminal Manager."""
 
     async def handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
-        return await _handle_terminal_beta(terminal_manager, projects, context, arguments)
+        return await _handle_terminal(terminal_manager, projects, context, arguments)
 
     return handler
 
 
-async def _handle_terminal_beta(
+async def _handle_terminal(
     terminal_manager: TerminalManager,
     projects: ProjectStore,
     context: ToolContext,
     arguments: JsonObject,
 ) -> JsonObject:
     action = arguments.get("action")
-    if not isinstance(action, str) or action not in TERMINAL_BETA_ACTIONS:
+    if not isinstance(action, str) or action not in TERMINAL_ACTIONS:
         return tool_failure(
             "invalid_arguments",
-            f"action must be one of: {', '.join(TERMINAL_BETA_ACTIONS)}",
+            f"action must be one of: {', '.join(TERMINAL_ACTIONS)}",
             retryable=False,
         )
     unsupported = sorted(set(arguments) - _ACTION_FIELDS[action])
@@ -312,7 +312,7 @@ async def _handle_terminal_beta(
     except _ProjectWorkdirUnavailableError as error:
         return tool_failure("project_unavailable", str(error), retryable=False)
     except FileNotFoundError as error:
-        command = error.filename or TERMINAL_BETA_DEFAULT_COMMAND
+        command = error.filename or TERMINAL_DEFAULT_COMMAND
         return tool_failure(
             "terminal_command_not_found",
             f"Interactive terminal executable was not found: {command}",
@@ -330,7 +330,7 @@ async def _handle_start(
 ) -> JsonObject:
     raw_command = arguments.get("command")
     command = (
-        TERMINAL_BETA_DEFAULT_COMMAND
+        TERMINAL_DEFAULT_COMMAND
         if raw_command is None
         else required_string(raw_command, field_name="command")
     )
@@ -435,9 +435,9 @@ async def _handle_wait(
     timeout_ms = optional_int(
         arguments.get("timeout_ms"),
         field_name="timeout_ms",
-        default=TERMINAL_BETA_DEFAULT_WAIT_MS,
+        default=TERMINAL_DEFAULT_WAIT_MS,
         minimum=0,
-        maximum=TERMINAL_BETA_MAX_WAIT_MS,
+        maximum=TERMINAL_MAX_WAIT_MS,
     )
     assert timeout_ms is not None
     snapshot, timed_out = await terminal_manager.wait_for_attention(
@@ -467,8 +467,8 @@ async def _handle_input(
     if text is not None and not isinstance(text, str):
         raise ValueError("text must be a string")
     key = optional_string(arguments.get("key"), field_name="key")
-    if key is not None and key not in TERMINAL_BETA_KEYS:
-        raise ValueError(f"key must be one of: {', '.join(TERMINAL_BETA_KEYS)}")
+    if key is not None and key not in TERMINAL_KEYS:
+        raise ValueError(f"key must be one of: {', '.join(TERMINAL_KEYS)}")
     enter = optional_bool(arguments.get("enter"), field_name="enter", default=False)
     expected_revision = optional_int(
         arguments.get("expected_screen_revision"),
@@ -620,10 +620,10 @@ def _resolve_workdir(
 ) -> Path:
     if workdir_value is None:
         return context.effective_cwd.resolve()
-    if not workdir_value.startswith(TERMINAL_BETA_PROJECT_WORKDIR_PREFIX):
+    if not workdir_value.startswith(TERMINAL_PROJECT_WORKDIR_PREFIX):
         return context.resolve_path(workdir_value)
 
-    project_id = workdir_value.removeprefix(TERMINAL_BETA_PROJECT_WORKDIR_PREFIX)
+    project_id = workdir_value.removeprefix(TERMINAL_PROJECT_WORKDIR_PREFIX)
     if not project_id:
         raise ValueError(
             "workdir Project reference must use project:<project-id> with a non-empty id"
@@ -647,17 +647,17 @@ def _owner(context: ToolContext) -> TerminalOwner:
     return TerminalOwner(context.project_id, context.agent_id, context.session_id)
 
 
-def register_terminal_beta_tool(
+def register_terminal_tool(
     registry: ToolRegistry,
     terminal_manager: TerminalManager,
     projects: ProjectStore,
 ) -> None:
     """Register the Agent-facing interactive terminal Tool."""
     registry.register(
-        TERMINAL_BETA_TOOL_NAME,
-        TERMINAL_BETA_TOOL_DESCRIPTION,
-        TERMINAL_BETA_TOOL_PARAMETERS,
-        make_terminal_beta_handler(terminal_manager, projects),
+        TERMINAL_TOOL_NAME,
+        TERMINAL_TOOL_DESCRIPTION,
+        TERMINAL_TOOL_PARAMETERS,
+        make_terminal_handler(terminal_manager, projects),
         open_input_schema=True,
         result_schema={"type": "object"},
         display=ToolDisplay(
@@ -669,7 +669,7 @@ def register_terminal_beta_tool(
 
 def _terminal_display_parts(arguments: JsonObject) -> tuple[ToolDisplayPart, ...]:
     action = arguments.get("action")
-    if not isinstance(action, str) or action not in TERMINAL_BETA_ACTIONS:
+    if not isinstance(action, str) or action not in TERMINAL_ACTIONS:
         return ()
     parts = [ToolDisplayPart(action, truncate="never", tooltip="none")]
     terminal_id = arguments.get("terminal_id")
@@ -679,22 +679,22 @@ def _terminal_display_parts(arguments: JsonObject) -> tuple[ToolDisplayPart, ...
     command = arguments.get("command")
     if action == "start":
         command_label = (
-            command if isinstance(command, str) and command else TERMINAL_BETA_DEFAULT_COMMAND
+            command if isinstance(command, str) and command else TERMINAL_DEFAULT_COMMAND
         )
         parts.append(ToolDisplayPart(command_label, kind="command"))
     return tuple(parts)
 
 
 __all__ = [
-    "TERMINAL_BETA_ACTIONS",
-    "TERMINAL_BETA_DEFAULT_COMMAND",
-    "TERMINAL_BETA_DEFAULT_WAIT_MS",
-    "TERMINAL_BETA_KEYS",
-    "TERMINAL_BETA_MAX_WAIT_MS",
-    "TERMINAL_BETA_PROJECT_WORKDIR_PREFIX",
-    "TERMINAL_BETA_TOOL_DESCRIPTION",
-    "TERMINAL_BETA_TOOL_NAME",
-    "TERMINAL_BETA_TOOL_PARAMETERS",
-    "make_terminal_beta_handler",
-    "register_terminal_beta_tool",
+    "TERMINAL_ACTIONS",
+    "TERMINAL_DEFAULT_COMMAND",
+    "TERMINAL_DEFAULT_WAIT_MS",
+    "TERMINAL_KEYS",
+    "TERMINAL_MAX_WAIT_MS",
+    "TERMINAL_PROJECT_WORKDIR_PREFIX",
+    "TERMINAL_TOOL_DESCRIPTION",
+    "TERMINAL_TOOL_NAME",
+    "TERMINAL_TOOL_PARAMETERS",
+    "make_terminal_handler",
+    "register_terminal_tool",
 ]
