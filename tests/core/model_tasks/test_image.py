@@ -27,14 +27,13 @@ from core.model_tasks.image import (
 )
 from core.model_tasks.image_types import ImageGenerationResult
 from core.providers.errors import ProviderError, ProviderOutcomeUnknownError
-from core.storage.layout import DataDirectoryLayout
 
 
 @pytest.mark.asyncio
 async def test_generate_without_configured_binding_is_expected_error(tmp_path: Path) -> None:
     """A missing image-generation binding is an expected configuration error."""
 
-    service = ImageService(_MissingModelTasks(), cast(Any, object()), tmp_path)
+    service = ImageService(_MissingModelTasks(), cast(Any, object()))
 
     with pytest.raises(ImageConfigurationError, match="configured"):
         await service.generate("a cat")
@@ -49,7 +48,6 @@ def test_generation_source_image_capability_follows_configured_model(tmp_path: P
         ImageService(
             _RoutingModelTasks(image_model),
             cast(Any, object()),
-            tmp_path / "image",
         ).generation_supports_source_images()
         is True
     )
@@ -57,7 +55,6 @@ def test_generation_source_image_capability_follows_configured_model(tmp_path: P
         ImageService(
             _RoutingModelTasks(text_model),
             cast(Any, object()),
-            tmp_path / "text",
         ).generation_supports_source_images()
         is False
     )
@@ -65,7 +62,6 @@ def test_generation_source_image_capability_follows_configured_model(tmp_path: P
         ImageService(
             _MissingModelTasks(),
             cast(Any, object()),
-            tmp_path / "missing",
         ).generation_supports_source_images()
         is False
     )
@@ -73,7 +69,6 @@ def test_generation_source_image_capability_follows_configured_model(tmp_path: P
         ImageService(
             _LocalModelTasks(),
             cast(Any, object()),
-            tmp_path / "local",
         ).generation_supports_source_images()
         is False
     )
@@ -83,31 +78,39 @@ def test_generation_source_image_capability_follows_configured_model(tmp_path: P
 async def test_generate_with_local_target_is_unsupported(tmp_path: Path) -> None:
     """Local image targets are out of scope for this iteration."""
 
-    service = ImageService(_LocalModelTasks(), cast(Any, object()), tmp_path)
+    service = ImageService(_LocalModelTasks(), cast(Any, object()))
 
     with pytest.raises(ImageUnsupportedTargetError, match="local"):
         await service.generate("a cat")
 
 
 @pytest.mark.asyncio
-async def test_generate_artifacts_uses_canonical_image_directory(
+async def test_generate_artifacts_uses_caller_owned_output_directory(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    service = ImageService(_MissingModelTasks(), cast(Any, object()), tmp_path)
+    service = ImageService(_MissingModelTasks(), cast(Any, object()))
 
     async def generate(_prompt: str, **_kwargs: Any) -> ImageGenerationResult:
         return ImageGenerationResult(
-            images=(b"image",),
+            images=(b"first image", b"second image"),
             media_type="image/png",
             model="provider/model",
         )
 
     monkeypatch.setattr(service, "generate", generate)
 
-    artifacts = await service.generate_artifacts("a cat")
+    output_dir = tmp_path / "workspace" / "image-gen"
+    artifacts = await service.generate_artifacts("a cat", output_dir=output_dir)
 
-    assert artifacts[0].file_path.parent == DataDirectoryLayout(tmp_path).images
+    assert len(artifacts) == 2
+    assert {artifact.file_path.parent for artifact in artifacts} == {output_dir}
+    assert artifacts[0].file_path != artifacts[1].file_path
+    assert [artifact.file_path.read_bytes() for artifact in artifacts] == [
+        b"first image",
+        b"second image",
+    ]
+    assert list(output_dir.glob("*.json")) == []
 
 
 @pytest.mark.asyncio
@@ -117,7 +120,7 @@ async def test_generate_logs_provider_error_at_warning_without_traceback(
 ) -> None:
     """A provider :class:`ProviderError` (a VBotError) logs at warning, no traceback."""
 
-    service = ImageService(_ProviderModelTasks(), cast(Any, object()), tmp_path)
+    service = ImageService(_ProviderModelTasks(), cast(Any, object()))
     failing_client = _FailingProviderImageClient(ProviderError("rate limited"))
 
     with (
@@ -141,7 +144,7 @@ async def test_generate_preserves_unknown_provider_outcome(
     tmp_path: Path,
     caplog: Any,
 ) -> None:
-    service = ImageService(_ProviderModelTasks(), cast(Any, object()), tmp_path)
+    service = ImageService(_ProviderModelTasks(), cast(Any, object()))
     failing_client = _FailingProviderImageClient(
         ProviderOutcomeUnknownError("request may have completed", operation_key="image-op")
     )
@@ -305,7 +308,7 @@ class _RoutingModelTasks:
 async def test_generate_native_call_value_overrides_binding_default(tmp_path: Path) -> None:
     model = _image_model({"aspect_ratio": {"type": "enum", "values": ("1:1", "16:9")}})
     model_tasks = _RoutingModelTasks(model, binding_options={"aspect_ratio": "1:1"})
-    service = ImageService(model_tasks, cast(Any, object()), tmp_path)
+    service = ImageService(model_tasks, cast(Any, object()))
     client = _RecordingImageClient()
 
     with patch("core.model_tasks.image.ProviderImageClient.from_runtime", return_value=client):
@@ -319,7 +322,7 @@ async def test_generate_native_call_value_overrides_binding_default(tmp_path: Pa
 async def test_generate_non_native_call_value_hints_and_keeps_binding(tmp_path: Path) -> None:
     model = _image_model({"aspect_ratio": {"type": "enum", "values": ("1:1", "16:9")}})
     model_tasks = _RoutingModelTasks(model, binding_options={"aspect_ratio": "1:1"})
-    service = ImageService(model_tasks, cast(Any, object()), tmp_path)
+    service = ImageService(model_tasks, cast(Any, object()))
     client = _RecordingImageClient()
 
     with patch("core.model_tasks.image.ProviderImageClient.from_runtime", return_value=client):
@@ -334,7 +337,7 @@ async def test_generate_non_native_call_value_hints_and_keeps_binding(tmp_path: 
 async def test_generate_without_call_options_reproduces_binding_request(tmp_path: Path) -> None:
     model = _image_model({"aspect_ratio": {"type": "enum", "values": ("1:1",)}})
     model_tasks = _RoutingModelTasks(model, binding_options={"size": "1024x1024"})
-    service = ImageService(model_tasks, cast(Any, object()), tmp_path)
+    service = ImageService(model_tasks, cast(Any, object()))
     client = _RecordingImageClient()
 
     with patch("core.model_tasks.image.ProviderImageClient.from_runtime", return_value=client):
@@ -353,7 +356,7 @@ async def test_generate_loads_any_reachable_local_source_image(tmp_path: Path) -
     source = source_dir / "photo.png"
     source.write_bytes(b"\x89PNG\r\n\x1a\nsource-bytes")
     model_tasks = _RoutingModelTasks(_image_model({}))
-    service = ImageService(model_tasks, cast(Any, object()), tmp_path / "data")
+    service = ImageService(model_tasks, cast(Any, object()))
     client = _RecordingImageClient()
 
     with patch("core.model_tasks.image.ProviderImageClient.from_runtime", return_value=client):
@@ -371,7 +374,7 @@ async def test_generate_gives_extensionless_source_a_provider_filename(tmp_path:
     source = tmp_path / "attachment-blob"
     source.write_bytes(b"\xff\xd8\xffsource-bytes")
     model_tasks = _RoutingModelTasks(_image_model({}))
-    service = ImageService(model_tasks, cast(Any, object()), tmp_path / "data")
+    service = ImageService(model_tasks, cast(Any, object()))
     client = _RecordingImageClient()
 
     with patch("core.model_tasks.image.ProviderImageClient.from_runtime", return_value=client):
@@ -387,7 +390,7 @@ async def test_generate_rejects_source_image_for_text_only_model(tmp_path: Path)
     source.write_bytes(b"\x89PNG\r\n\x1a\nsource")
     model = _image_model({})
     model.capabilities.input_modalities = ("text",)
-    service = ImageService(_RoutingModelTasks(model), cast(Any, object()), tmp_path / "data")
+    service = ImageService(_RoutingModelTasks(model), cast(Any, object()))
 
     with pytest.raises(ImageUnsupportedTargetError, match="does not support source images"):
         await service.generate("make it rainy", source_paths=[source])
@@ -396,7 +399,7 @@ async def test_generate_rejects_source_image_for_text_only_model(tmp_path: Path)
 @pytest.mark.asyncio
 async def test_generate_rejects_missing_or_non_image_source(tmp_path: Path) -> None:
     model_tasks = _RoutingModelTasks(_image_model({}))
-    service = ImageService(model_tasks, cast(Any, object()), tmp_path / "data")
+    service = ImageService(model_tasks, cast(Any, object()))
 
     with pytest.raises(ImageInputError, match="not found"):
         await service.generate("make it rainy", source_paths=[tmp_path / "missing.png"])
@@ -540,7 +543,6 @@ async def test_analyze_sends_fixed_isolated_prompt_and_ordered_images(
     service = ImageService(
         _UnderstandingModelTasks(task_types=("chat", "text_output")),
         cast(Any, runtime),
-        tmp_path,
     )
 
     result = await service.analyze(
@@ -583,18 +585,15 @@ async def test_analyze_rejects_non_understanding_model_and_unsupported_wire(
     text_only = ImageService(
         _UnderstandingModelTasks(input_modalities=("text",)),
         cast(Any, _UnderstandingRuntime(_UnderstandingAdapter())),
-        tmp_path / "text-only",
     )
     image_only = ImageService(
         _UnderstandingModelTasks(input_modalities=("image",)),
         cast(Any, _UnderstandingRuntime(_UnderstandingAdapter())),
-        tmp_path / "image-only",
     )
     adapter = _UnderstandingAdapter(wire_media_types=frozenset())
     unsupported_wire = ImageService(
         _UnderstandingModelTasks(),
         cast(Any, _UnderstandingRuntime(adapter)),
-        tmp_path / "wire",
     )
 
     with pytest.raises(ImageUnsupportedTargetError, match="not an image-understanding"):
@@ -615,7 +614,6 @@ async def test_analyze_rejects_missing_non_image_and_oversize_input(
     service = ImageService(
         _UnderstandingModelTasks(),
         cast(Any, runtime),
-        tmp_path / "data",
         max_input_bytes=12,
     )
     text_file = tmp_path / "notes.txt"
@@ -641,13 +639,11 @@ async def test_analyze_maps_provider_failure_and_empty_output_and_closes_adapter
     failing = ImageService(
         _UnderstandingModelTasks(),
         cast(Any, _UnderstandingRuntime(failing_adapter)),
-        tmp_path / "failing",
     )
     empty_adapter = _UnderstandingAdapter({"content": "   "})
     empty = ImageService(
         _UnderstandingModelTasks(),
         cast(Any, _UnderstandingRuntime(empty_adapter)),
-        tmp_path / "empty",
     )
 
     with pytest.raises(ImageExecutionError, match="rate limited"):
@@ -662,11 +658,10 @@ async def test_analyze_maps_provider_failure_and_empty_output_and_closes_adapter
 @pytest.mark.asyncio
 async def test_analyze_requires_binding_prompt_and_images(tmp_path: Path) -> None:
     source = _png(tmp_path / "source.png")
-    missing = ImageService(_MissingModelTasks(), cast(Any, object()), tmp_path / "missing")
+    missing = ImageService(_MissingModelTasks(), cast(Any, object()))
     configured = ImageService(
         _UnderstandingModelTasks(),
         cast(Any, _UnderstandingRuntime(_UnderstandingAdapter())),
-        tmp_path / "configured",
     )
 
     with pytest.raises(ImageConfigurationError, match="configured"):

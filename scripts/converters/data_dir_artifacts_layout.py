@@ -56,7 +56,6 @@ class DataDirectoryConversionResult:
 
 LEGACY_DIRECTORY_MAPPINGS = (
     DirectoryMapping(Path("attachments"), "attachments"),
-    DirectoryMapping(Path("images"), "images"),
     DirectoryMapping(Path("speech"), "speech"),
     DirectoryMapping(Path("models"), "models"),
     DirectoryMapping(Path("debug"), "debug"),

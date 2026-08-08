@@ -61,7 +61,7 @@ class ImageUnderstandingResult:
 
 @dataclass(frozen=True)
 class ImageArtifact:
-    """Persisted image generation artifact metadata."""
+    """Generated image persisted in a caller-owned working directory."""
 
     id: str
     filename: str
@@ -69,18 +69,3 @@ class ImageArtifact:
     size_bytes: int
     file_path: Path
     index: int = 0
-
-    @property
-    def url(self) -> str:
-        return f"/api/images/artifacts/{self.id}"
-
-    def to_dict(self) -> JsonObject:
-        return {
-            "id": self.id,
-            "kind": "image",
-            "filename": self.filename,
-            "media_type": self.media_type,
-            "size_bytes": self.size_bytes,
-            "url": self.url,
-            "index": self.index,
-        }

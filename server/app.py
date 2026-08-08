@@ -18,10 +18,6 @@ from core.attachments.attachments import (
     AttachmentTypeNotAllowedError,
 )
 from core.model_tasks import (
-    ImageConfigurationError,
-    ImageError,
-    ImageExecutionError,
-    ImageUnsupportedTargetError,
     SpeechConfigurationError,
     SpeechError,
     SpeechExecutionError,
@@ -295,19 +291,6 @@ def create_app(
             artifact = speech_service.get_artifact(artifact_id)
         except SpeechError as exc:
             raise _speech_http_exception(exc) from exc
-        return FileResponse(
-            artifact.file_path,
-            media_type=artifact.media_type,
-            filename=artifact.filename,
-        )
-
-    @app.get("/api/images/artifacts/{artifact_id}")
-    async def get_image_artifact(request: Request, artifact_id: str) -> FileResponse:
-        image_service = request.app.state.runtime.image
-        try:
-            artifact = image_service.get_artifact(artifact_id)
-        except ImageError as exc:
-            raise _image_http_exception(exc) from exc
         return FileResponse(
             artifact.file_path,
             media_type=artifact.media_type,
@@ -607,16 +590,6 @@ def _speech_http_exception(error: SpeechError) -> HTTPException:
     if isinstance(error, SpeechUnsupportedTargetError):
         return HTTPException(status_code=422, detail=str(error))
     if isinstance(error, SpeechExecutionError):
-        return HTTPException(status_code=502, detail=str(error))
-    return HTTPException(status_code=400, detail=str(error))
-
-
-def _image_http_exception(error: ImageError) -> HTTPException:
-    if isinstance(error, ImageConfigurationError):
-        return HTTPException(status_code=409, detail=str(error))
-    if isinstance(error, ImageUnsupportedTargetError):
-        return HTTPException(status_code=422, detail=str(error))
-    if isinstance(error, ImageExecutionError):
         return HTTPException(status_code=502, detail=str(error))
     return HTTPException(status_code=400, detail=str(error))
 

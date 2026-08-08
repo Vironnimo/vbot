@@ -45,7 +45,6 @@ def test_layout_exposes_every_canonical_named_path(tmp_path: Path) -> None:
     layout = DataDirectoryLayout(tmp_path)
 
     assert layout.attachments == tmp_path / "artifacts" / "attachments"
-    assert layout.images == tmp_path / "artifacts" / "images"
     assert layout.speech == tmp_path / "artifacts" / "speech"
     assert layout.models == tmp_path / "artifacts" / "models"
     assert layout.debug == tmp_path / "artifacts" / "debug"

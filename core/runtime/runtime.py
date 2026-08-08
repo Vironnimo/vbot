@@ -532,7 +532,6 @@ class Runtime:
         self._image = ImageService(
             self._model_tasks,
             self,
-            self._storage.data_dir,
             max_input_bytes=self._attachment_store.max_size_bytes,
         )
         self._embeddings = EmbeddingService(self._model_tasks, self)

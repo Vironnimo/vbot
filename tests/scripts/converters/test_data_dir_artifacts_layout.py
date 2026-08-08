@@ -128,12 +128,12 @@ def test_apply_preserves_retired_legacy_skill_drafts_in_place(tmp_path: Path) ->
 def test_preflight_rejects_destination_collision_before_any_move(tmp_path: Path) -> None:
     data_dir = tmp_path / "data"
     first = data_dir / "attachments" / "first.bin"
-    second = data_dir / "images" / "second.bin"
+    second = data_dir / "speech" / "second.bin"
     first.parent.mkdir(parents=True)
     second.parent.mkdir(parents=True)
     first.write_bytes(b"first")
     second.write_bytes(b"second")
-    collision = DataDirectoryLayout(data_dir).images / "second.bin"
+    collision = DataDirectoryLayout(data_dir).speech / "second.bin"
     collision.parent.mkdir(parents=True)
     collision.write_bytes(b"collision")
 
