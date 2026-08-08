@@ -1212,6 +1212,46 @@ async def test_env_argument_is_rejected(
 
 
 @pytest.mark.asyncio
+async def test_description_is_accepted_without_affecting_command_execution(
+    manager: ProcessManager,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(bash_module, "_shell_argv", python_command)
+    description = "Run the focused Bash verification command with a deliberately long title"
+
+    result = await bash_handler(
+        make_context(tmp_path),
+        {
+            "command": "print('done')",
+            "description": description,
+            "mode": "foreground",
+        },
+        manager,
+    )
+
+    assert result["ok"] is True
+    assert result["data"]["output"].strip() == "done"
+
+
+@pytest.mark.asyncio
+async def test_non_string_description_is_rejected(
+    manager: ProcessManager,
+    tmp_path: Path,
+) -> None:
+    result = await bash_handler(
+        make_context(tmp_path),
+        {"command": "echo ignored", "description": 123, "mode": "foreground"},
+        manager,
+    )
+
+    assert result["error"] == {
+        "code": "invalid_arguments",
+        "message": "description must be a string",
+    }
+
+
+@pytest.mark.asyncio
 async def test_workdir_defaults_to_workspace(
     manager: ProcessManager,
     tmp_path: Path,
@@ -1550,12 +1590,21 @@ def test_register_bash_tool() -> None:
     assert set(tool.parameters["properties"]) == {
         "mode",
         "command",
+        "description",
         "workdir",
         "yield_after",
         "timeout",
         "env_keys",
     }
     assert tool.parameters["required"] == ["mode", "command"]
+    assert tool.parameters["properties"]["description"] == {
+        "type": "string",
+        "description": (
+            "Short 3–5 word title for the command’s purpose. Omit when the command is "
+            "self-explanatory."
+        ),
+    }
+    assert "maxLength" not in tool.parameters["properties"]["description"]
     assert tool.parameters["properties"]["mode"]["enum"] == [
         "foreground",
         "auto",

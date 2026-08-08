@@ -222,6 +222,7 @@ OPTIONAL_BOOLEAN_CASES = ("omit", "include_links", "raw", "both")
 ANALYZE_IMAGE_CASES = ("single", "multiple")
 BASH_CASES = (
     "top_foreground",
+    "top_foreground_description",
     "top_foreground_workdir",
     "top_foreground_timeout",
     "top_foreground_env_one",
@@ -237,6 +238,7 @@ BASH_CASES = (
     "top_background_timeout",
     "top_background_all",
     "sub_foreground",
+    "sub_foreground_description",
     "sub_foreground_all",
     "sub_auto_default",
     "sub_auto_zero",
@@ -1425,6 +1427,11 @@ def _ha_call_service_scenario(case_name: str) -> ProbeScenario:
 def _bash_scenario(case_name: str) -> ProbeScenario:
     bash_arguments: dict[str, dict[str, Any]] = {
         "top_foreground": {"mode": "foreground", "command": "python --version"},
+        "top_foreground_description": {
+            "mode": "foreground",
+            "command": "python --version",
+            "description": "Check Python version",
+        },
         "top_foreground_workdir": {
             "mode": "foreground",
             "command": "python --version",
@@ -1448,6 +1455,7 @@ def _bash_scenario(case_name: str) -> ProbeScenario:
         "top_foreground_all_multiline": {
             "mode": "foreground",
             "command": ("python --version\npython -m pytest tests/core/tools/test_bash.py -q"),
+            "description": "Run Bash tool tests",
             "workdir": "src",
             "timeout": 120,
         },
@@ -1473,6 +1481,7 @@ def _bash_scenario(case_name: str) -> ProbeScenario:
         "top_auto_all": {
             "mode": "auto",
             "command": "python -m pytest tests/core/tools/test_bash.py -q",
+            "description": "Run Bash tool tests",
             "workdir": "src",
             "yield_after": 5,
             "timeout": 120,
@@ -1494,13 +1503,20 @@ def _bash_scenario(case_name: str) -> ProbeScenario:
         "top_background_all": {
             "mode": "background",
             "command": "python -m http.server 8765",
+            "description": "Serve local preview",
             "workdir": "public",
             "timeout": 600,
         },
         "sub_foreground": {"mode": "foreground", "command": "python --version"},
+        "sub_foreground_description": {
+            "mode": "foreground",
+            "command": "python --version",
+            "description": "Check Python version",
+        },
         "sub_foreground_all": {
             "mode": "foreground",
             "command": "python --version",
+            "description": "Check Python version",
             "workdir": "src",
             "timeout": 120,
         },
@@ -1516,6 +1532,7 @@ def _bash_scenario(case_name: str) -> ProbeScenario:
         "sub_auto_all": {
             "mode": "auto",
             "command": "python -m pytest tests/core/tools/test_bash.py -q",
+            "description": "Run Bash tool tests",
             "workdir": "src",
             "yield_after": 300,
             "timeout": 600,
