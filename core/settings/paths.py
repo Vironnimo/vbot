@@ -58,10 +58,12 @@ from core.settings.normalizers import (
 from core.settings.settings import (
     ALLOWED_THINKING_EFFORTS,
     DEFAULT_APPEARANCE_CHAT_WIDTH,
+    DEFAULT_APPEARANCE_CHAT_WORKING_MODE,
     MAX_TEMPERATURE,
     MIN_TEMPERATURE,
     OPENROUTER_ROUTING_MODES,
     SUPPORTED_APPEARANCE_CHAT_WIDTHS,
+    SUPPORTED_APPEARANCE_CHAT_WORKING_MODES,
 )
 from core.settings.validation import PORT_SETTING_KEYS, validate_settings_data
 from core.utils.errors import StorageError
@@ -226,6 +228,13 @@ _DEFINITIONS: tuple[SettingDefinition, ...] = (
         "Reading-column width used by Chat.",
         default=DEFAULT_APPEARANCE_CHAT_WIDTH,
         allowed_values=tuple(sorted(SUPPORTED_APPEARANCE_CHAT_WIDTHS)),
+    ),
+    _static(
+        "appearance.chat_working_mode",
+        "string",
+        "Presentation mode for Thinking and Tool activity in Chat.",
+        default=DEFAULT_APPEARANCE_CHAT_WORKING_MODE,
+        allowed_values=tuple(sorted(SUPPORTED_APPEARANCE_CHAT_WORKING_MODES)),
     ),
     _static(
         "skills.directories",

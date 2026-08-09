@@ -528,6 +528,8 @@ Error messages: standalone timeline entries, not assistant bubbles. Use the red 
 
 Thinking blocks: collapsible, italic `text-med` body, `border-2` left border, `font-ui` (not mono). Collapsed by default in production; open in prototypes.
 
+Compact Working blocks: when Appearance selects Compact work details, every contiguous Thinking/Tool span inside one Assistant Run becomes one closed disclosure, and visible Assistant prose ends that span. The summary is a quiet `surface` strip with a structural border/left rail, a semantic status dot, Mono-caps “Working”, an ellipsized latest Thinking/Tool activity label, optional live/final timing, and a muted chevron; opening it reveals the unchanged nested Thinking and Tool disclosures on a `border-2` left rail. Normal mode retains the inline sequence. The active indicator uses the existing amber restrained pulse and disables animation for reduced-motion users.
+
 Code blocks: `bg` fill, `border` border, `surface-2` header bar with language label + copy button. Mono 12px / `text-med`.
 
 ## Do's and Don'ts

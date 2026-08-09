@@ -142,6 +142,7 @@ async def test_settings_get_returns_normalized_settings_payload_without_secrets(
             "language": "en",
             "available_languages": ["en"],
             "chat_width": "comfortable",
+            "chat_working_mode": "normal",
         },
         "defaults": {},
         "subagents": {

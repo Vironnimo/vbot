@@ -54,6 +54,9 @@
     // Phase 3 seeds the persisted value from App; the default keeps the chat
     // self-contained (centered, capped at the comfortable measure).
     chatWidth = 'comfortable',
+    // Normal renders Thinking and Tool rows inline. Compact groups each
+    // contiguous work span behind a Working disclosure.
+    chatWorkingMode = 'normal',
     // Project context (two-bar chat). `projects` feeds the project dropdown;
     // `selectedProjectId` is the chosen project (empty = Personal). App owns
     // the persisted selection; ChatView reflects it back through
@@ -1896,6 +1899,7 @@
           <ChatTimeline
             sessionState={activeSessionState}
             agentName={activeAgent.name}
+            {chatWorkingMode}
             loadingHistory={chatState.loadingHistory}
             {transientCards}
             {submittedTurnScrollKey}

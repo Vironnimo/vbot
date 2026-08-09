@@ -119,7 +119,13 @@ async def test_appearance_only_update_does_not_log(
             state,
             {
                 "method": "settings.update",
-                "params": {"appearance": {"language": "en", "chat_width": "wide"}},
+                "params": {
+                    "appearance": {
+                        "language": "en",
+                        "chat_width": "wide",
+                        "chat_working_mode": "compact",
+                    }
+                },
             },
         )
 

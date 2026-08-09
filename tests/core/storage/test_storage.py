@@ -6,7 +6,11 @@ from typing import Any
 
 import pytest
 
-from core.settings import DEFAULT_APPEARANCE_CHAT_WIDTH, DEFAULT_APPEARANCE_LANGUAGE
+from core.settings import (
+    DEFAULT_APPEARANCE_CHAT_WIDTH,
+    DEFAULT_APPEARANCE_CHAT_WORKING_MODE,
+    DEFAULT_APPEARANCE_LANGUAGE,
+)
 from core.storage import (
     DATA_DIRECTORY_RELATIVE_PATHS,
     DataDirectoryLayout,
@@ -423,6 +427,7 @@ def test_load_appearance_settings_returns_default_language_when_missing(tmp_path
     assert storage.load_appearance_settings() == {
         "language": DEFAULT_APPEARANCE_LANGUAGE,
         "chat_width": DEFAULT_APPEARANCE_CHAT_WIDTH,
+        "chat_working_mode": DEFAULT_APPEARANCE_CHAT_WORKING_MODE,
     }
 
 
@@ -433,6 +438,7 @@ def test_load_appearance_settings_defaults_invalid_section(tmp_path: Path) -> No
     assert storage.load_appearance_settings() == {
         "language": DEFAULT_APPEARANCE_LANGUAGE,
         "chat_width": DEFAULT_APPEARANCE_CHAT_WIDTH,
+        "chat_working_mode": DEFAULT_APPEARANCE_CHAT_WORKING_MODE,
     }
 
 
@@ -857,7 +863,11 @@ def test_update_settings_sections_persists_multiple_sections_with_one_save(
 
     assert save_count == 1
     assert updated == {
-        "appearance": {"language": "en", "chat_width": "comfortable"},
+        "appearance": {
+            "language": "en",
+            "chat_width": "comfortable",
+            "chat_working_mode": "normal",
+        },
         "subagents": {
             "max_subagent_depth": 6,
             "max_subagents_per_turn": 12,
@@ -875,7 +885,11 @@ def test_update_settings_sections_persists_multiple_sections_with_one_save(
         "recall": {"backend": "sqlite_fts"},
     }
     assert storage.load_settings() == {
-        "appearance": {"language": "en", "chat_width": "comfortable"},
+        "appearance": {
+            "language": "en",
+            "chat_width": "comfortable",
+            "chat_working_mode": "normal",
+        },
         "compaction": {
             "enabled": False,
             "trigger": {"type": "context_ratio", "threshold": 0.9},
@@ -919,23 +933,41 @@ def test_update_appearance_settings_persists_language_and_preserves_other_settin
 
     updated = storage.update_settings_sections({"appearance": {"language": "en"}})
 
-    assert updated["appearance"] == {"language": "en", "chat_width": "comfortable"}
+    assert updated["appearance"] == {
+        "language": "en",
+        "chat_width": "comfortable",
+        "chat_working_mode": "normal",
+    }
     assert storage.load_settings() == {
-        "appearance": {"language": "en", "chat_width": "comfortable"},
+        "appearance": {
+            "language": "en",
+            "chat_width": "comfortable",
+            "chat_working_mode": "normal",
+        },
         "server_port": 8500,
     }
 
 
-def test_update_appearance_settings_persists_chat_width(tmp_path: Path) -> None:
+def test_update_appearance_settings_persists_chat_display_preferences(tmp_path: Path) -> None:
     storage = StorageManager(tmp_path)
     storage.save_settings({"appearance": {}})
 
     updated = storage.update_settings_sections(
-        {"appearance": {"language": "en", "chat_width": "wide"}}
+        {
+            "appearance": {
+                "language": "en",
+                "chat_width": "wide",
+                "chat_working_mode": "compact",
+            }
+        }
     )
 
-    assert updated["appearance"] == {"language": "en", "chat_width": "wide"}
-    assert storage.load_appearance_settings() == {"language": "en", "chat_width": "wide"}
+    assert updated["appearance"] == {
+        "language": "en",
+        "chat_width": "wide",
+        "chat_working_mode": "compact",
+    }
+    assert storage.load_appearance_settings() == updated["appearance"]
 
 
 def test_update_appearance_settings_coerces_unknown_chat_width_to_default(tmp_path: Path) -> None:
@@ -945,7 +977,11 @@ def test_update_appearance_settings_coerces_unknown_chat_width_to_default(tmp_pa
         {"appearance": {"language": "en", "chat_width": "bogus"}}
     )
 
-    assert updated["appearance"] == {"language": "en", "chat_width": "comfortable"}
+    assert updated["appearance"] == {
+        "language": "en",
+        "chat_width": "comfortable",
+        "chat_working_mode": "normal",
+    }
 
 
 def test_update_appearance_settings_drops_deprecated_appearance_keys(tmp_path: Path) -> None:
@@ -963,9 +999,17 @@ def test_update_appearance_settings_drops_deprecated_appearance_keys(tmp_path: P
 
     updated = storage.update_settings_sections({"appearance": {"language": "en"}})
 
-    assert updated["appearance"] == {"language": "en", "chat_width": "comfortable"}
+    assert updated["appearance"] == {
+        "language": "en",
+        "chat_width": "comfortable",
+        "chat_working_mode": "normal",
+    }
     assert storage.load_settings() == {
-        "appearance": {"language": "en", "chat_width": "comfortable"},
+        "appearance": {
+            "language": "en",
+            "chat_width": "comfortable",
+            "chat_working_mode": "normal",
+        },
         "server_port": 8500,
     }
 

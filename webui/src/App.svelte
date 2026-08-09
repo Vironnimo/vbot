@@ -98,6 +98,7 @@
   import {
     appearancePrefs,
     setChatWidth,
+    setChatWorkingMode,
   } from '$lib/appearancePrefs.svelte.js';
   import {
     createAutosaveCoordinator,
@@ -385,6 +386,7 @@
       const result = await getSettings();
       settings = result;
       setChatWidth(result?.appearance?.chat_width);
+      setChatWorkingMode(result?.appearance?.chat_working_mode);
       const language = result?.appearance?.language;
       if (typeof language === 'string' && language.length > 0) {
         init(language);
@@ -987,9 +989,8 @@
       });
 
     // Seed app-wide appearance preferences and the operational state that
-    // drives first-run onboarding. `chat_width` drives the chat reading-column
-    // width app-wide (passed to ChatView); the language seed closes the
-    // startup-language gap.
+    // drives first-run onboarding. Chat appearance preferences are passed to
+    // ChatView; the language seed closes the startup-language gap.
     void loadAppSettings();
 
     return () => {
@@ -1047,6 +1048,7 @@
         sharedAgents={agents}
         sharedSelectedAgentId={selectedAgentId}
         chatWidth={appearancePrefs.chatWidth}
+        chatWorkingMode={appearancePrefs.chatWorkingMode}
         {projects}
         {selectedProjectId}
         onProjectSelected={selectProject}

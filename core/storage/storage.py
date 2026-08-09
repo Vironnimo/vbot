@@ -436,7 +436,9 @@ class StorageManager:
         if not isinstance(appearance, Mapping):
             raise StorageError("Appearance settings must be a mapping")
 
-        unsupported_fields = sorted(set(appearance) - {"language", "chat_width"})
+        unsupported_fields = sorted(
+            set(appearance) - {"language", "chat_width", "chat_working_mode"}
+        )
         if unsupported_fields:
             raise StorageError(f"Unsupported appearance settings: {', '.join(unsupported_fields)}")
 

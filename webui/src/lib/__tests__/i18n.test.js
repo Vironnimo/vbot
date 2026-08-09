@@ -487,6 +487,10 @@ describe('i18n t()', () => {
       'settings.appearance.chatWidth.comfortable',
       'settings.appearance.chatWidth.wide',
       'settings.appearance.chatWidth.full',
+      'settings.appearance.chatWorkingMode.label',
+      'settings.appearance.chatWorkingMode.description',
+      'settings.appearance.chatWorkingMode.normal',
+      'settings.appearance.chatWorkingMode.compact',
       'settings.appearance.saveSuccess',
       'settings.language.en',
     ];

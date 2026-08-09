@@ -36,9 +36,11 @@ from core.settings.settings import (
     AGENT_DEFAULT_FIELDS,
     ALLOWED_THINKING_EFFORTS,
     DEFAULT_APPEARANCE_CHAT_WIDTH,
+    DEFAULT_APPEARANCE_CHAT_WORKING_MODE,
     MAX_TEMPERATURE,
     MIN_TEMPERATURE,
     SUPPORTED_APPEARANCE_CHAT_WIDTHS,
+    SUPPORTED_APPEARANCE_CHAT_WORKING_MODES,
     SettingsValidationError,
     parse_openrouter_routing,
 )
@@ -188,6 +190,7 @@ def normalize_appearance_settings(appearance: Any) -> dict[str, str]:
     return {
         "language": _normalize_appearance_language(section),
         "chat_width": _normalize_appearance_chat_width(section),
+        "chat_working_mode": _normalize_appearance_chat_working_mode(section),
     }
 
 
@@ -205,6 +208,13 @@ def _normalize_appearance_chat_width(section: Mapping[str, Any]) -> str:
     value = section.get("chat_width")
     if value not in SUPPORTED_APPEARANCE_CHAT_WIDTHS:
         return DEFAULT_APPEARANCE_CHAT_WIDTH
+    return cast(str, value)
+
+
+def _normalize_appearance_chat_working_mode(section: Mapping[str, Any]) -> str:
+    value = section.get("chat_working_mode")
+    if value not in SUPPORTED_APPEARANCE_CHAT_WORKING_MODES:
+        return DEFAULT_APPEARANCE_CHAT_WORKING_MODE
     return cast(str, value)
 
 

@@ -193,7 +193,11 @@ class IntegrationStorage:
         self.data_dir = data_dir
 
     def load_appearance_settings(self) -> JsonObject:
-        return {"language": "en", "chat_width": "comfortable"}
+        return {
+            "language": "en",
+            "chat_width": "comfortable",
+            "chat_working_mode": "normal",
+        }
 
     def supported_appearance_languages(self) -> list[str]:
         return ["en"]
@@ -619,6 +623,7 @@ def test_model_list_and_settings_get_follow_credential_contract(tmp_path: Path) 
                 "language": "en",
                 "available_languages": ["en"],
                 "chat_width": "comfortable",
+                "chat_working_mode": "normal",
             },
             "subagents": {
                 "max_subagent_depth": 4,

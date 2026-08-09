@@ -8,6 +8,7 @@ import {
   accountDisplayName,
   buildAgentDefaultsPayload,
   buildChatWidthOptions,
+  buildChatWorkingModeOptions,
   buildLanguageOptions,
   buildProviderConnectPayload,
   buildProviderDisconnectPayload,
@@ -29,6 +30,7 @@ import {
   getConnectionAccounts,
   getDefaultSkillDirectoryValue,
   getPersistedChatWidth,
+  getPersistedChatWorkingMode,
   getRecallSettings,
   getSkillDirectories,
   getUsableProviderItems,
@@ -358,17 +360,26 @@ describe('settingsView helpers', () => {
       },
     ]);
     expect(
-      createAppearanceUpdatePayload({ language: 'fr', chatWidth: 'wide' }),
+      createAppearanceUpdatePayload({
+        language: 'fr',
+        chatWidth: 'wide',
+        chatWorkingMode: 'compact',
+      }),
     ).toEqual({
       appearance: {
         language: 'fr',
         chat_width: 'wide',
+        chat_working_mode: 'compact',
       },
     });
     expect(buildChatWidthOptions().map((option) => option.id)).toEqual([
       'comfortable',
       'wide',
       'full',
+    ]);
+    expect(buildChatWorkingModeOptions().map((option) => option.id)).toEqual([
+      'normal',
+      'compact',
     ]);
     expect(getPersistedChatWidth({ appearance: { chat_width: 'full' } })).toBe(
       'full',
@@ -379,13 +390,21 @@ describe('settingsView helpers', () => {
     );
     expect(getPersistedChatWidth(null)).toBe('comfortable');
     expect(
+      getPersistedChatWorkingMode({
+        appearance: { chat_working_mode: 'compact' },
+      }),
+    ).toBe('compact');
+    expect(getPersistedChatWorkingMode(null)).toBe('normal');
+    expect(
       isAppearanceSaveDisabled({
         loading: false,
         saving: false,
         selectedLanguageId: 'en',
         selectedChatWidth: 'wide',
+        selectedChatWorkingMode: 'normal',
         persistedLanguageId: 'en',
         persistedChatWidth: 'comfortable',
+        persistedChatWorkingMode: 'normal',
       }),
     ).toBe(false);
     expect(
@@ -394,8 +413,10 @@ describe('settingsView helpers', () => {
         saving: false,
         selectedLanguageId: 'en',
         selectedChatWidth: 'comfortable',
+        selectedChatWorkingMode: 'normal',
         persistedLanguageId: 'en',
         persistedChatWidth: 'comfortable',
+        persistedChatWorkingMode: 'normal',
       }),
     ).toBe(true);
     expect(createSkillDirectoriesUpdatePayload([' C:/skills ', ''])).toEqual({

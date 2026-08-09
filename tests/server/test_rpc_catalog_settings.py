@@ -156,11 +156,13 @@ async def test_settings_update_persists_supported_language_and_returns_full_payl
     assert state.runtime.storage.load_appearance_settings() == {
         "language": "en",
         "chat_width": "comfortable",
+        "chat_working_mode": "normal",
     }
     assert response["result"]["appearance"] == {
         "language": "en",
         "available_languages": ["en"],
         "chat_width": "comfortable",
+        "chat_working_mode": "normal",
     }
     assert response["result"]["general"]["server"] == {
         "listen_host": "127.0.0.1",

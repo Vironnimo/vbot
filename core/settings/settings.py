@@ -66,6 +66,10 @@ MAX_TEMPERATURE = 2.0
 # validate membership without a circular import (normalizers imports settings).
 DEFAULT_APPEARANCE_CHAT_WIDTH = "comfortable"
 SUPPORTED_APPEARANCE_CHAT_WIDTHS = frozenset({"comfortable", "wide", "full"})
+# Appearance preference for inline Thinking/Tool detail versus compact Working
+# disclosures in Chat. It is display-only and applies live in accessors.
+DEFAULT_APPEARANCE_CHAT_WORKING_MODE = "normal"
+SUPPORTED_APPEARANCE_CHAT_WORKING_MODES = frozenset({"normal", "compact"})
 SETTINGS_UPDATE_SECTIONS = frozenset(
     {
         "appearance",
@@ -683,7 +687,7 @@ def _parse_appearance_update(appearance: Any) -> JsonObject:
     if not isinstance(appearance, dict):
         raise SettingsValidationError("params.appearance must be an object")
 
-    unsupported_fields = sorted(set(appearance) - {"language", "chat_width"})
+    unsupported_fields = sorted(set(appearance) - {"language", "chat_width", "chat_working_mode"})
     if unsupported_fields:
         raise SettingsValidationError(
             f"unsupported appearance settings: {', '.join(unsupported_fields)}"
@@ -691,8 +695,8 @@ def _parse_appearance_update(appearance: Any) -> JsonObject:
 
     # `language` stays required so a partial update never resets it: the
     # appearance section is normalized as a whole (full replace), so callers
-    # send the complete section. `chat_width` is optional and validated when
-    # present; a missing value normalizes to the comfortable default.
+    # send the complete section. Display preferences are optional and validated
+    # when present; missing values normalize to their defaults.
     language = appearance.get("language")
     if not isinstance(language, str) or not language:
         raise SettingsValidationError("params.appearance.language must be a non-empty string")
@@ -707,6 +711,15 @@ def _parse_appearance_update(appearance: Any) -> JsonObject:
                 f"params.appearance.chat_width must be one of: {supported}"
             )
         parsed["chat_width"] = chat_width
+
+    if "chat_working_mode" in appearance:
+        chat_working_mode = appearance.get("chat_working_mode")
+        if chat_working_mode not in SUPPORTED_APPEARANCE_CHAT_WORKING_MODES:
+            supported = ", ".join(sorted(SUPPORTED_APPEARANCE_CHAT_WORKING_MODES))
+            raise SettingsValidationError(
+                f"params.appearance.chat_working_mode must be one of: {supported}"
+            )
+        parsed["chat_working_mode"] = chat_working_mode
 
     return parsed
 

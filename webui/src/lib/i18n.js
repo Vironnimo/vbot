@@ -209,6 +209,7 @@ export const englishCatalog = Object.freeze({
   'chat.role.assistantAvatar': 'A',
   'chat.role.systemAvatar': 'S',
   'chat.event.thinking': 'Thinking',
+  'chat.working.label': 'Working',
   'chat.event.toolStarted': 'Tool started',
   'chat.event.toolResult': 'Tool result',
   'chat.modelFallbackActivated': 'Switched to {model}',
@@ -1503,7 +1504,7 @@ export const englishCatalog = Object.freeze({
   'settings.extensions.reloadHelp':
     'Rebuilds all extensions from disk — picks up code edits, new and removed extensions.',
   'settings.appearance.title': 'Appearance',
-  'settings.appearance.subtitle': 'Language and chat reading width.',
+  'settings.appearance.subtitle': 'Language and Chat presentation.',
   'settings.appearance.language': 'Language',
   'settings.appearance.languageDescription': 'Interface language.',
   'settings.appearance.chatWidth.label': 'Chat width',
@@ -1512,6 +1513,11 @@ export const englishCatalog = Object.freeze({
   'settings.appearance.chatWidth.comfortable': 'Comfortable',
   'settings.appearance.chatWidth.wide': 'Wide',
   'settings.appearance.chatWidth.full': 'Full width',
+  'settings.appearance.chatWorkingMode.label': 'Work details',
+  'settings.appearance.chatWorkingMode.description':
+    'Show Thinking and Tool activity inline or group it into Working blocks.',
+  'settings.appearance.chatWorkingMode.normal': 'Normal',
+  'settings.appearance.chatWorkingMode.compact': 'Compact',
   'settings.appearance.saveSuccess': 'Appearance updated.',
   'settings.language.en': 'English',
 

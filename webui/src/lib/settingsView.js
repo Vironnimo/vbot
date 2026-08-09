@@ -1205,6 +1205,8 @@ export function getPersistedLanguageId(settings) {
 // SUPPORTED_APPEARANCE_CHAT_WIDTHS / DEFAULT_APPEARANCE_CHAT_WIDTH).
 export const CHAT_WIDTH_OPTIONS = ['comfortable', 'wide', 'full'];
 export const DEFAULT_CHAT_WIDTH = 'comfortable';
+export const CHAT_WORKING_MODE_OPTIONS = ['normal', 'compact'];
+export const DEFAULT_CHAT_WORKING_MODE = 'normal';
 
 export function getPersistedChatWidth(settings) {
   const value = settings?.appearance?.chat_width;
@@ -1219,30 +1221,53 @@ export function buildChatWidthOptions() {
   }));
 }
 
+export function getPersistedChatWorkingMode(settings) {
+  const value = settings?.appearance?.chat_working_mode;
+  return CHAT_WORKING_MODE_OPTIONS.includes(value)
+    ? value
+    : DEFAULT_CHAT_WORKING_MODE;
+}
+
+export function buildChatWorkingModeOptions() {
+  return CHAT_WORKING_MODE_OPTIONS.map((id) => ({
+    id,
+    labelKey: `settings.appearance.chatWorkingMode.${id}`,
+    labelFallback: id,
+  }));
+}
+
 // The appearance section is normalized as a whole on the backend (a missing
-// field resets to its default), so both controls always save together.
+// field resets to its default), so all controls always save together.
 export function isAppearanceSaveDisabled({
   loading,
   saving,
   selectedLanguageId,
   selectedChatWidth,
+  selectedChatWorkingMode,
   persistedLanguageId,
   persistedChatWidth,
+  persistedChatWorkingMode,
 }) {
   if (loading || saving || selectedLanguageId.length === 0) {
     return true;
   }
   return (
     selectedLanguageId === persistedLanguageId &&
-    selectedChatWidth === persistedChatWidth
+    selectedChatWidth === persistedChatWidth &&
+    selectedChatWorkingMode === persistedChatWorkingMode
   );
 }
 
-export function createAppearanceUpdatePayload({ language, chatWidth }) {
+export function createAppearanceUpdatePayload({
+  language,
+  chatWidth,
+  chatWorkingMode,
+}) {
   return {
     appearance: {
       language,
       chat_width: chatWidth,
+      chat_working_mode: chatWorkingMode,
     },
   };
 }
