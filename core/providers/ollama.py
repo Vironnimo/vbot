@@ -1,10 +1,11 @@
-"""Ollama provider adapter.
+"""Ollama provider adapters.
 
-Speaks Ollama's native ``/api/chat`` wire protocol — not the OpenAI-compatible
-shim — so it subclasses :class:`ProviderAdapter` directly (like the Anthropic
-adapter). One adapter serves two Providers without merging their Model identity:
-keyless local ``ollama`` (``http://localhost:11434``) and API-key
-``ollama-cloud`` (``https://ollama.com``, same native API with Bearer auth).
+Local ``ollama`` speaks the native ``/api/chat`` wire. Direct ``ollama-cloud``
+chat uses Ollama's OpenAI-compatible ``/v1/chat/completions`` wire because that
+route reliably returns model reasoning and accepts the documented
+``reasoning_effort`` control. Both Providers still share Ollama's native
+``/api/tags`` and ``/api/show`` discovery contract, and account usage remains a
+separate native ``/api/usage`` concern.
 
 Key wire facts (verified live against Ollama 0.24.0 on 2026-07-07):
 
@@ -64,6 +65,7 @@ from core.providers.adapter import (
     project_tool_result_content_fallbacks,
 )
 from core.providers.errors import NetworkError, ProviderError
+from core.providers.openai_compatible import OpenAICompatibleAdapter
 from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig
 from core.providers.reasoning import (
     REASONING_INTENT_DEFAULT,
@@ -76,6 +78,8 @@ from core.providers.reasoning import (
     model_reasoning_control,
     model_reasoning_levels,
     model_reasoning_supported,
+    normalize_thinking_effort,
+    remove_reasoning_kwargs,
     resolve_reasoning_intent,
 )
 from core.providers.token_getter import StaticTokenGetter, TokenGetter
@@ -110,6 +114,14 @@ _CAPABILITY_EMBEDDING = "embedding"
 OLLAMA_EFFORT_FLOOR = ("low", "medium", "high")
 OLLAMA_GPT_OSS_EFFORTS = ("low", "medium", "high")
 OLLAMA_FULL_HISTORY_MODEL_PREFIXES = ("glm-4.7",)
+OLLAMA_CLOUD_REASONING_EFFORTS = ("none", "low", "medium", "high", "max")
+_OLLAMA_CLOUD_OPENAI_PATH = "/v1"
+_OLLAMA_CLOUD_REASONING_PARAMETERS = (
+    "thinking_effort",
+    "reasoning_effort",
+    "reasoning",
+    "include_reasoning",
+)
 
 # Per-model ``/api/show`` enrichment calls run concurrently but bounded, so a
 # host with many installed models is not hit with dozens of simultaneous
@@ -126,8 +138,121 @@ _OPTION_KWARG_MAP = {
 _OLLAMA_TOOL_DONE_REASONS = frozenset({"tool_calls"})
 
 
+class OllamaCloudAdapter(OpenAICompatibleAdapter):
+    """OpenAI-compatible chat transport for direct Ollama Cloud connections.
+
+    Discovery deliberately remains mapped to :class:`OllamaAdapter`; this class
+    owns only the Cloud chat wire and its verified response quirks.
+    """
+
+    def __init__(
+        self,
+        config: ProviderConfig,
+        token_getter: TokenGetter | str,
+        base_url: str | None = None,
+        auth_config: AuthConfig | None = None,
+        model_lookup: ModelLookup | None = None,
+        debug_recorder: ProviderDebugRecorder | None = None,
+        *,
+        connection_mode: str | None = None,
+    ) -> None:
+        native_base_url = base_url or config.base_url
+        self._cloud_base_url = _ollama_cloud_openai_base_url(native_base_url)
+        super().__init__(
+            config,
+            token_getter,
+            self._cloud_base_url,
+            auth_config,
+            model_lookup=model_lookup,
+            debug_recorder=debug_recorder,
+            connection_mode=connection_mode,
+        )
+
+    def wire_media_support(self, model_id: str) -> frozenset[str]:
+        """Ollama's compatible chat wire is verified for images, not audio."""
+
+        del model_id
+        return IMAGE_WIRE_MEDIA_TYPES
+
+    def _wrap_transport_error(self, exc: httpx.TransportError) -> Exception:
+        """Preserve the Provider-specific direct Cloud connection diagnostic."""
+
+        if isinstance(exc, httpx.ConnectError):
+            return NetworkError(f"Ollama Cloud is not reachable at {self._cloud_base_url} ({exc})")
+        return super()._wrap_transport_error(exc)
+
+    def _supported_reasoning_efforts(self, model_id: str) -> tuple[str, ...]:
+        """Intersect the Model ladder with Ollama Cloud's accepted wire values."""
+
+        declared = model_reasoning_levels(self._model_lookup, model_id)
+        if declared is None:
+            return OLLAMA_CLOUD_REASONING_EFFORTS
+        supported: list[str] = ["none"]
+        for effort in declared:
+            wire_effort = "max" if effort == "xhigh" else effort
+            if wire_effort in OLLAMA_CLOUD_REASONING_EFFORTS and wire_effort not in supported:
+                supported.append(wire_effort)
+        return tuple(supported)
+
+    def _apply_reasoning(
+        self,
+        payload: dict[str, Any],
+        request_kwargs: dict[str, Any],
+        model_id: str,
+    ) -> None:
+        """Render the Cloud effort vocabulary, mapping vBot ``xhigh`` to ``max``."""
+
+        if self._model_reasoning_supported(model_id) is not True:
+            # Match Ollama's catalog contract: only send a reasoning control
+            # after /api/show has positively identified the Model as a thinker.
+            remove_reasoning_kwargs(
+                request_kwargs,
+                *_OLLAMA_CLOUD_REASONING_PARAMETERS,
+            )
+            return
+
+        selected_key = (
+            "thinking_effort" if request_kwargs.get("thinking_effort") else "reasoning_effort"
+        )
+        selected_effort = normalize_thinking_effort(request_kwargs.get(selected_key))
+        if selected_effort == "xhigh":
+            request_kwargs[selected_key] = "max"
+        super()._apply_reasoning(payload, request_kwargs, model_id)
+        if selected_effort == "none" and self._model_reasoning_supported(model_id) is True:
+            # Ollama Cloud defaults thinking on. Its OpenAI wire spells the off
+            # switch as an effort even when native /api/show describes the Model
+            # as a binary on/off thinker.
+            payload["reasoning_effort"] = "none"
+
+    def normalize_response(
+        self, response: dict[str, Any], *, model_id: str | None = None
+    ) -> dict[str, Any]:
+        """Normalize a Cloud response without trusting impossible zero input usage."""
+
+        normalized = super().normalize_response(response, model_id=model_id)
+        _drop_ollama_cloud_zero_prompt_tokens(normalized.get("usage"), response.get("usage"))
+        return normalized
+
+    def _normalize_stream_chunk(
+        self,
+        raw_chunk: dict[str, Any],
+        tool_call_slots: set[int],
+        normalization_state: dict[str, Any] | None = None,
+    ) -> list[dict[str, Any]]:
+        deltas = super()._normalize_stream_chunk(
+            raw_chunk,
+            tool_call_slots,
+            normalization_state,
+        )
+        raw_usage = raw_chunk.get("usage")
+        for delta in deltas:
+            if delta.get("type") == "usage":
+                _drop_ollama_cloud_zero_prompt_tokens(delta, raw_usage)
+        return deltas
+
+
 class OllamaAdapter(ProviderAdapter):
-    """Adapter for Ollama's native ``/api/chat`` API (local and cloud).
+    """Native ``/api/chat`` adapter for local and locally proxied Cloud Models.
 
     Args:
         config: Immutable provider configuration.
@@ -809,6 +934,37 @@ def _extract_ollama_usage(response: Mapping[str, Any]) -> dict[str, Any] | None:
     ):
         usage["output_tokens"] = output_tokens
     return usage or None
+
+
+def _ollama_cloud_openai_base_url(native_base_url: str) -> str:
+    """Return the direct Cloud OpenAI base without disturbing native endpoints."""
+
+    normalized = native_base_url.rstrip("/")
+    return (
+        normalized
+        if normalized.endswith(_OLLAMA_CLOUD_OPENAI_PATH)
+        else (f"{normalized}{_OLLAMA_CLOUD_OPENAI_PATH}")
+    )
+
+
+def _drop_ollama_cloud_zero_prompt_tokens(normalized_usage: Any, raw_usage: Any) -> None:
+    """Treat Cloud ``prompt_tokens: 0`` as absent for non-empty chat requests.
+
+    MiniMax M3 returns zero for short and Tool requests while returning positive
+    counts for longer prompts. Every vBot chat request has at least one message,
+    so zero cannot be a truthful input-token measurement. Removing only that
+    field lets the chat layer retain measured output while estimating input.
+    """
+
+    if not isinstance(normalized_usage, dict) or not isinstance(raw_usage, Mapping):
+        return
+    prompt_tokens = raw_usage.get("prompt_tokens")
+    if (
+        isinstance(prompt_tokens, int)
+        and not isinstance(prompt_tokens, bool)
+        and prompt_tokens == 0
+    ):
+        normalized_usage.pop("input_tokens", None)
 
 
 def _normalize_ollama_done_reason(done_reason: Any, *, has_tool_calls: bool) -> str:

@@ -1292,7 +1292,7 @@ async def test_model_refresh_db_fetches_public_catalog_without_inference_credent
         SimpleNamespace(
             id="ollama-cloud",
             name="Ollama Cloud",
-            adapter="ollama",
+            adapter="ollama_cloud",
             base_url="https://ollama.com",
             defaults={},
             extra_headers={},

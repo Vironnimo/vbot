@@ -24,11 +24,17 @@ from core.models.models import (
 )
 from core.providers.adapter import TOOL_RESULT_CONTENT_BLOCKS_FIELD
 from core.providers.errors import NetworkError, ProviderError
-from core.providers.ollama import OLLAMA_CLOUD_MODE, OLLAMA_LOCAL_MODE, OllamaAdapter
+from core.providers.ollama import (
+    OLLAMA_CLOUD_MODE,
+    OLLAMA_LOCAL_MODE,
+    OllamaAdapter,
+    OllamaCloudAdapter,
+)
 from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig
 from core.tools import HISTORY_TOOL_DESCRIPTION, HISTORY_TOOL_NAME, HISTORY_TOOL_PARAMETERS
 
 OLLAMA_CHAT_URL = "http://localhost:11434/api/chat"
+OLLAMA_CLOUD_CHAT_URL = "https://ollama.com/v1/chat/completions"
 
 OLLAMA_CONFIG = ProviderConfig(
     id="ollama",
@@ -50,7 +56,7 @@ OLLAMA_CONFIG = ProviderConfig(
 OLLAMA_CLOUD_CONFIG = ProviderConfig(
     id="ollama-cloud",
     name="Ollama Cloud",
-    adapter="ollama",
+    adapter="ollama_cloud",
     base_url="https://ollama.com",
     models_endpoint="/api/tags",
     connections=[
@@ -183,11 +189,30 @@ DEEPSEEK_CLOUD_MODEL = Model(
     metadata={"ollama": {"remote": True}},
 )
 
+MINIMAX_CLOUD_MODEL = Model(
+    model_id="minimax-m3",
+    name="MiniMax M3",
+    capabilities=Capabilities(
+        vision=False,
+        tools=True,
+        json_mode=False,
+        reasoning=ReasoningCapabilities(
+            supported=True,
+            control=REASONING_CONTROL_LEVELS,
+            levels=("low", "medium", "high", "max"),
+        ),
+    ),
+    context_window=1_048_576,
+    max_output_tokens=None,
+    metadata={"ollama": {"remote": True}},
+)
+
 _MODELS = {
     "thinking-model": THINKING_MODEL,
     "plain-model": PLAIN_MODEL,
     "gpt-oss:20b": GPT_OSS_MODEL,
     "deepseek-v4-flash": DEEPSEEK_CLOUD_MODEL,
+    "minimax-m3": MINIMAX_CLOUD_MODEL,
 }
 
 
@@ -200,10 +225,261 @@ def adapter() -> OllamaAdapter:
     return OllamaAdapter(OLLAMA_CONFIG, "", model_lookup=_model_lookup)
 
 
+@pytest.fixture
+def cloud_adapter() -> OllamaCloudAdapter:
+    return OllamaCloudAdapter(
+        OLLAMA_CLOUD_CONFIG,
+        "ollama-secret",
+        model_lookup=_model_lookup,
+        connection_mode=OLLAMA_CLOUD_MODE,
+    )
+
+
 def _last_request_payload(route: respx.Route) -> dict[str, Any]:
     payload = json.loads(route.calls.last.request.content.decode("utf-8"))
     assert isinstance(payload, dict)
     return payload
+
+
+CLOUD_TEXT_RESPONSE: dict[str, Any] = {
+    "id": "chatcmpl-ollama-cloud",
+    "object": "chat.completion",
+    "choices": [
+        {
+            "index": 0,
+            "message": {
+                "role": "assistant",
+                "content": "OK",
+                "reasoning": "The user requested exactly OK.",
+            },
+            "finish_reason": "stop",
+        }
+    ],
+    "usage": {"prompt_tokens": 0, "completion_tokens": 9, "total_tokens": 9},
+}
+
+
+class TestOllamaCloudChatWire:
+    @respx.mock
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("effort", ["low", "medium", "high", "max"])
+    async def test_standard_efforts_use_openai_chat_completions(
+        self,
+        cloud_adapter: OllamaCloudAdapter,
+        effort: str,
+    ) -> None:
+        route = respx.post(OLLAMA_CLOUD_CHAT_URL).mock(
+            return_value=httpx.Response(200, json=CLOUD_TEXT_RESPONSE)
+        )
+
+        await cloud_adapter.send(
+            SAMPLE_MESSAGES,
+            model_id="minimax-m3",
+            thinking_effort=effort,
+        )
+
+        payload = _last_request_payload(route)
+        assert payload["reasoning_effort"] == effort
+        assert route.calls.last.request.headers["Authorization"] == "Bearer ollama-secret"
+        await cloud_adapter.aclose()
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_xhigh_maps_to_cloud_max(
+        self,
+        cloud_adapter: OllamaCloudAdapter,
+    ) -> None:
+        route = respx.post(OLLAMA_CLOUD_CHAT_URL).mock(
+            return_value=httpx.Response(200, json=CLOUD_TEXT_RESPONSE)
+        )
+
+        await cloud_adapter.send(
+            SAMPLE_MESSAGES,
+            model_id="deepseek-v4-flash",
+            thinking_effort="xhigh",
+        )
+
+        assert _last_request_payload(route)["reasoning_effort"] == "max"
+        await cloud_adapter.aclose()
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_none_sends_explicit_cloud_off_switch_for_on_off_model(
+        self,
+        cloud_adapter: OllamaCloudAdapter,
+    ) -> None:
+        route = respx.post(OLLAMA_CLOUD_CHAT_URL).mock(
+            return_value=httpx.Response(200, json=CLOUD_TEXT_RESPONSE)
+        )
+
+        await cloud_adapter.send(
+            SAMPLE_MESSAGES,
+            model_id="thinking-model",
+            thinking_effort="none",
+        )
+
+        assert _last_request_payload(route)["reasoning_effort"] == "none"
+        await cloud_adapter.aclose()
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_non_thinking_model_omits_reasoning_effort(
+        self,
+        cloud_adapter: OllamaCloudAdapter,
+    ) -> None:
+        route = respx.post(OLLAMA_CLOUD_CHAT_URL).mock(
+            return_value=httpx.Response(200, json=CLOUD_TEXT_RESPONSE)
+        )
+
+        await cloud_adapter.send(
+            SAMPLE_MESSAGES,
+            model_id="plain-model",
+            thinking_effort="high",
+        )
+
+        assert "reasoning_effort" not in _last_request_payload(route)
+        await cloud_adapter.aclose()
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_unknown_model_omits_reasoning_effort_until_catalog_confirms_support(
+        self,
+        cloud_adapter: OllamaCloudAdapter,
+    ) -> None:
+        route = respx.post(OLLAMA_CLOUD_CHAT_URL).mock(
+            return_value=httpx.Response(200, json=CLOUD_TEXT_RESPONSE)
+        )
+
+        await cloud_adapter.send(
+            SAMPLE_MESSAGES,
+            model_id="new-unenriched-model",
+            thinking_effort="high",
+        )
+
+        assert "reasoning_effort" not in _last_request_payload(route)
+        await cloud_adapter.aclose()
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_unknown_effort_is_omitted_instead_of_rejected(
+        self,
+        cloud_adapter: OllamaCloudAdapter,
+    ) -> None:
+        route = respx.post(OLLAMA_CLOUD_CHAT_URL).mock(
+            return_value=httpx.Response(200, json=CLOUD_TEXT_RESPONSE)
+        )
+
+        await cloud_adapter.send(
+            SAMPLE_MESSAGES,
+            model_id="minimax-m3",
+            thinking_effort="future-tier",
+        )
+
+        assert "reasoning_effort" not in _last_request_payload(route)
+        await cloud_adapter.aclose()
+
+    def test_response_keeps_reasoning_and_measured_output_but_drops_zero_input(
+        self,
+        cloud_adapter: OllamaCloudAdapter,
+    ) -> None:
+        normalized = cloud_adapter.normalize_response(
+            CLOUD_TEXT_RESPONSE,
+            model_id="minimax-m3",
+        )
+
+        assert normalized["reasoning"] == "The user requested exactly OK."
+        assert normalized["usage"] == {"output_tokens": 9}
+
+    def test_response_preserves_positive_prompt_usage(
+        self,
+        cloud_adapter: OllamaCloudAdapter,
+    ) -> None:
+        response = {
+            **CLOUD_TEXT_RESPONSE,
+            "usage": {"prompt_tokens": 2975, "completion_tokens": 25, "total_tokens": 3000},
+        }
+
+        normalized = cloud_adapter.normalize_response(response, model_id="minimax-m3")
+
+        assert normalized["usage"] == {"input_tokens": 2975, "output_tokens": 25}
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_stream_surfaces_reasoning_and_omits_zero_input_usage(
+        self,
+        cloud_adapter: OllamaCloudAdapter,
+    ) -> None:
+        sse_body = "".join(
+            (
+                'data: {"choices":[{"delta":{"reasoning":"Check."}}]}\n\n',
+                'data: {"choices":[{"delta":{"content":"OK"},"finish_reason":"stop"}]}\n\n',
+                'data: {"choices":[],"usage":{"prompt_tokens":0,'
+                '"completion_tokens":22,"total_tokens":0}}\n\n',
+                "data: [DONE]\n\n",
+            )
+        )
+        route = respx.post(OLLAMA_CLOUD_CHAT_URL).mock(
+            return_value=httpx.Response(
+                200,
+                text=sse_body,
+                headers={"content-type": "text/event-stream"},
+            )
+        )
+
+        deltas = [
+            delta
+            async for delta in cloud_adapter.stream(
+                SAMPLE_MESSAGES,
+                model_id="minimax-m3",
+                thinking_effort="high",
+            )
+        ]
+
+        assert {"type": "reasoning_delta", "text": "Check."} in deltas
+        assert {"type": "content_delta", "text": "OK"} in deltas
+        assert {"type": "usage", "output_tokens": 22} in deltas
+        payload = _last_request_payload(route)
+        assert payload["stream"] is True
+        assert payload["stream_options"] == {"include_usage": True}
+        await cloud_adapter.aclose()
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_tool_continuation_uses_openai_compatible_message_shape(
+        self,
+        cloud_adapter: OllamaCloudAdapter,
+    ) -> None:
+        route = respx.post(OLLAMA_CLOUD_CHAT_URL).mock(
+            return_value=httpx.Response(200, json=CLOUD_TEXT_RESPONSE)
+        )
+        messages: list[dict[str, Any]] = [
+            *SAMPLE_MESSAGES,
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": "call_weather",
+                        "name": "get_weather",
+                        "arguments": {"city": "Berlin"},
+                    }
+                ],
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "call_weather",
+                "name": "get_weather",
+                "content": '{"temperature": 24}',
+            },
+        ]
+
+        await cloud_adapter.send(messages, model_id="minimax-m3", thinking_effort="high")
+
+        payload_messages = _last_request_payload(route)["messages"]
+        assistant_tool_call = payload_messages[-2]["tool_calls"][0]
+        assert assistant_tool_call["function"]["arguments"] == '{"city":"Berlin"}'
+        assert payload_messages[-1]["tool_call_id"] == "call_weather"
+        await cloud_adapter.aclose()
 
 
 # ---------------------------------------------------------------------------
@@ -229,23 +505,23 @@ class TestPayloadBuilding:
 
     @respx.mock
     @pytest.mark.asyncio
-    async def test_cloud_connection_sends_bearer_header(self) -> None:
-        """An api_key connection carries the Bearer token."""
+    async def test_cloud_connection_sends_bearer_header_without_doubling_v1(self) -> None:
+        """An explicit compatible base and API key reach the exact Cloud route."""
         # Arrange
         cloud_connection = OLLAMA_CLOUD_CONFIG.get_connection("api-key")
-        adapter = OllamaAdapter(
+        adapter = OllamaCloudAdapter(
             OLLAMA_CLOUD_CONFIG,
             "sk-cloud",
-            cloud_connection.base_url,
+            "https://ollama.com/v1/",
             cloud_connection.auth,
             connection_mode=cloud_connection.mode,
         )
-        route = respx.post("https://ollama.com/api/chat").mock(
-            return_value=httpx.Response(200, json=TEXT_RESPONSE)
+        route = respx.post(OLLAMA_CLOUD_CHAT_URL).mock(
+            return_value=httpx.Response(200, json=CLOUD_TEXT_RESPONSE)
         )
 
         # Act
-        await adapter.send(SAMPLE_MESSAGES, model_id="kimi-k2.6")
+        await adapter.send(SAMPLE_MESSAGES, model_id="minimax-m3")
 
         # Assert
         assert route.calls.last.request.headers["Authorization"] == "Bearer sk-cloud"
@@ -1034,7 +1310,7 @@ class TestStreamNdjson:
     @pytest.mark.asyncio
     async def test_cloud_connect_error_does_not_suggest_starting_local_service(self) -> None:
         connection = OLLAMA_CLOUD_CONFIG.get_connection("api-key")
-        adapter = OllamaAdapter(
+        adapter = OllamaCloudAdapter(
             OLLAMA_CLOUD_CONFIG,
             "sk-cloud",
             connection.base_url,

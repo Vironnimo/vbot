@@ -566,6 +566,11 @@ class OpenAICompatibleAdapter(ProviderAdapter):
             response_headers=response_headers,
         )
 
+    def _wrap_transport_error(self, exc: httpx.TransportError) -> Exception:
+        """Wrap a transport failure, allowing concrete gateways to add context."""
+
+        return wrap_network_error(exc)
+
     # ------------------------------------------------------------------
     # send() — non-streaming
     # ------------------------------------------------------------------
@@ -612,7 +617,7 @@ class OpenAICompatibleAdapter(ProviderAdapter):
                     headers=headers,
                 )
             except httpx.TransportError as exc:
-                raise wrap_network_error(exc) from exc
+                raise self._wrap_transport_error(exc) from exc
 
             reason = response.text
             detail = (
@@ -708,7 +713,7 @@ class OpenAICompatibleAdapter(ProviderAdapter):
             try:
                 response = await self._client.send(request, stream=True)
             except httpx.TransportError as exc:
-                raise wrap_network_error(exc) from exc
+                raise self._wrap_transport_error(exc) from exc
 
             # If the status indicates an error, read and close the response
             # before classifying — this frees the connection for retry.
@@ -766,7 +771,7 @@ class OpenAICompatibleAdapter(ProviderAdapter):
             if not seen_done_marker:
                 raise NetworkError("Stream ended without [DONE] marker")
         except httpx.TimeoutException as exc:
-            raise wrap_network_error(exc) from exc
+            raise self._wrap_transport_error(exc) from exc
         except httpx.TransportError as exc:
             raise NetworkError(f"Stream read failed: {exc}") from exc
         finally:
@@ -1322,29 +1327,41 @@ def _extract_stream_usage(chunk: dict[str, Any]) -> dict[str, Any] | None:
 
 
 def _openai_cached_prompt_tokens(usage: dict[str, Any]) -> int | None:
-    """Read ``prompt_tokens_details.cached_tokens`` when present.
+    """Read cache-hit tokens from common OpenAI-compatible response shapes.
 
     Cached tokens are a subset of ``prompt_tokens`` on the OpenAI wire,
     so no input-token adjustment is needed.
     """
     details = usage.get("prompt_tokens_details")
-    if not isinstance(details, dict):
-        return None
-    cached_tokens = details.get("cached_tokens")
-    return cached_tokens if isinstance(cached_tokens, int) else None
+    if isinstance(details, dict):
+        cached_tokens = _optional_non_negative_usage_int(details.get("cached_tokens"))
+        if cached_tokens is not None:
+            return cached_tokens
+    for key in ("cache_read_input_tokens", "prompt_cache_hit_tokens"):
+        cached_tokens = _optional_non_negative_usage_int(usage.get(key))
+        if cached_tokens is not None:
+            return cached_tokens
+    return None
 
 
 def _openai_cache_write_tokens(usage: dict[str, Any]) -> int | None:
-    """Read ``prompt_tokens_details.cache_write_tokens`` when present."""
+    """Read cache-creation tokens from common compatible response shapes."""
     details = usage.get("prompt_tokens_details")
-    if not isinstance(details, dict):
-        return None
-    cache_write_tokens = details.get("cache_write_tokens")
-    if isinstance(cache_write_tokens, bool):
-        return None
-    if isinstance(cache_write_tokens, int) and cache_write_tokens >= 0:
+    if isinstance(details, dict):
+        for key in ("cache_write_tokens", "cache_creation_tokens"):
+            cache_write_tokens = _optional_non_negative_usage_int(details.get(key))
+            if cache_write_tokens is not None:
+                return cache_write_tokens
+    cache_write_tokens = _optional_non_negative_usage_int(usage.get("cache_creation_input_tokens"))
+    if cache_write_tokens is not None:
         return cache_write_tokens
     return None
+
+
+def _optional_non_negative_usage_int(value: Any) -> int | None:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        return None
+    return value
 
 
 def _read_optional_mapping(data: Mapping[str, Any], key: str) -> Mapping[str, Any]:
