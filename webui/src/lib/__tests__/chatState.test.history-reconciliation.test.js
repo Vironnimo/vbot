@@ -883,23 +883,38 @@ describe('chat state helpers', () => {
       status: CHAT_STATUS_RUNNING,
     });
     appendRunEvent(sessionState, {
-      type: 'assistant_output',
+      type: 'assistant_output_delta',
       run_id: 'run-one',
       sequence: 1,
-      payload: { message: { role: 'assistant', content: 'Done' } },
+      payload: { content_delta: 'Done' },
+    });
+    appendRunEvent(sessionState, {
+      type: 'assistant_output',
+      run_id: 'run-one',
+      sequence: 2,
+      payload: {
+        message: { id: 'message-one', role: 'assistant', content: 'Done' },
+      },
     });
     appendRunEvent(sessionState, {
       type: 'run_completed',
       run_id: 'run-one',
-      sequence: 2,
+      sequence: 3,
       payload: { status: CHAT_STATUS_COMPLETED },
     });
 
     loadHistory(sessionState, [
       { id: 'message-one', role: 'assistant', content: 'Done' },
+      {
+        id: 'summary-one',
+        role: 'run_summary',
+        run_id: 'run-one',
+        status: CHAT_STATUS_COMPLETED,
+      },
     ]);
 
     expect(sessionState.runEvents).toEqual([]);
+    expect(sessionState.streamingRunEvents).toEqual([]);
   });
 });
 

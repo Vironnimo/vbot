@@ -446,6 +446,19 @@ function runOutputPersistedInHistory(events, messages) {
   return true;
 }
 
+export function runProjectionPersistedInHistory(runEvents, messages, runId) {
+  if (!runId) {
+    return false;
+  }
+  if (persistedRunSummaryIds(messages).has(runId)) {
+    return true;
+  }
+  return runOutputPersistedInHistory(
+    (runEvents ?? []).filter((event) => event?.run_id === runId),
+    messages,
+  );
+}
+
 // Safety net: `runEvents` accumulates every run event appended while the tab is
 // open and is only cleared by the next `loadHistory` for an idle session. When a
 // follow-up run starts in the same session, the previous run's events remain
@@ -500,7 +513,6 @@ export function pruneRunEventsPersistedInHistory(
   messages,
   activeRunId,
 ) {
-  const summarizedRunIds = persistedRunSummaryIds(messages);
   const eventsByRun = new Map();
   for (const event of runEvents ?? []) {
     const runId = event?.run_id;
@@ -515,10 +527,7 @@ export function pruneRunEventsPersistedInHistory(
 
   const prunedRunIds = new Set();
   for (const [runId, events] of eventsByRun) {
-    if (
-      summarizedRunIds.has(runId) ||
-      runOutputPersistedInHistory(events, messages)
-    ) {
+    if (runProjectionPersistedInHistory(events, messages, runId)) {
       prunedRunIds.add(runId);
     }
   }

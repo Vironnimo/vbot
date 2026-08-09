@@ -28,7 +28,10 @@ import {
   replaceActiveSubAgentStatuses,
   subAgentGuardKeysForEvictedStatuses,
 } from './clientCaches.js';
-import { pruneRunEventsPersistedInHistory } from './chatTimeline.js';
+import {
+  pruneRunEventsPersistedInHistory,
+  runProjectionPersistedInHistory,
+} from './chatTimeline.js';
 import {
   isSubAgentSpawnTool,
   resolveSubAgentCancelPlan,
@@ -67,6 +70,12 @@ export const TERMINAL_RUN_EVENTS = new Set([
   'run_failed',
   'run_cancelled',
   'run_interrupted',
+]);
+const TERMINAL_RUN_STATUSES = new Set([
+  CHAT_STATUS_COMPLETED,
+  CHAT_STATUS_FAILED,
+  CHAT_STATUS_CANCELLED,
+  CHAT_STATUS_INTERRUPTED,
 ]);
 const TERMINAL_VISIBLE_DRAFT_EVENT_TYPES = new Set([
   RUN_EVENT_ASSISTANT_OUTPUT_DELTA,
@@ -718,7 +727,10 @@ export function createChatController({
         runStream.closeSubscriptionFor(sessionState.key);
       }
       if (isDisplayed()) {
-        runStream.attachRunStream(sessionState, history?.active_run);
+        runStream.attachRunStream(
+          sessionState,
+          attachableHistoryRun(sessionState, history?.active_run),
+        );
         if (
           sessionState.unreadRunId &&
           sessionHasTerminalRun(sessionState, sessionState.unreadRunId)
@@ -765,11 +777,15 @@ export function createChatController({
         backgroundBashStatuses: history?.background_bash_statuses,
       });
       sessionState.markReadFailedRunId = '';
-      if (history?.active_run) {
+      const activeRun = attachableHistoryRun(sessionState, history?.active_run);
+      if (activeRun) {
         if (isDisplayedSession(sessionState.agentId, sessionState.sessionId)) {
-          runStream.attachRunStream(sessionState, history.active_run);
+          runStream.attachRunStream(sessionState, activeRun);
         }
-      } else {
+      } else if (
+        !history?.active_run &&
+        !hasRetainedTerminalRunProjection(sessionState)
+      ) {
         resetStaleRun(sessionState);
         runStream.closeSubscriptionFor(sessionState.key);
       }
@@ -1446,35 +1462,39 @@ export function loadHistory(sessionState, messages, options = {}) {
   const visibleMessages = Array.isArray(messages)
     ? messages.filter(isVisibleHistoryMessage)
     : [];
-  // While a run is active the retained run events survive the reload, but
-  // events of *other* runs whose output the fresh history now persists are
-  // dead weight: the render-time dedup drops them anyway, so prune them here
-  // to keep `runEvents` from growing across navigations (handoff3 B10).
-  const activeRunEvents = isRunActive(sessionState)
+  const retainLiveRunProjection = shouldRetainLiveRunProjection(
+    sessionState,
+    visibleMessages,
+  );
+  // While a Run is active, or its just-finished output is newer than the
+  // arriving History snapshot, retained events survive the reload. Events of
+  // other Runs whose output the fresh History now persists are dead weight:
+  // render-time dedup drops them anyway, so prune them here (handoff3 B10).
+  const retainedRunEvents = retainLiveRunProjection
     ? pruneRunEventsPersistedInHistory(
         sessionState.runEvents,
         visibleMessages,
         sessionState.currentRun?.runId ?? null,
       )
     : [];
-  const activeStreamingRunEvents = isRunActive(sessionState)
+  const retainedStreamingRunEvents = retainLiveRunProjection
     ? sessionState.streamingRunEvents
     : [];
-  const activeStreamingPhase = isRunActive(sessionState)
+  const retainedStreamingPhase = retainLiveRunProjection
     ? sessionState.streamingPhase
     : 0;
-  const activeSeenStreamingEventKeys = isRunActive(sessionState)
+  const retainedSeenStreamingEventKeys = retainLiveRunProjection
     ? sessionState.seenStreamingEventKeys
     : new Set();
   sessionState.messages = visibleMessages;
   sessionState.historyLoaded = true;
   sessionState.hasOlderHistory = options.hasMore === true;
-  sessionState.runEvents = activeRunEvents;
-  sessionState.streamingRunEvents = activeStreamingRunEvents;
-  sessionState.streamingPhase = activeStreamingPhase;
-  sessionState.seenStreamingEventKeys = activeSeenStreamingEventKeys;
+  sessionState.runEvents = retainedRunEvents;
+  sessionState.streamingRunEvents = retainedStreamingRunEvents;
+  sessionState.streamingPhase = retainedStreamingPhase;
+  sessionState.seenStreamingEventKeys = retainedSeenStreamingEventKeys;
   sessionState.error = null;
-  if (!isRunActive(sessionState)) {
+  if (!retainLiveRunProjection) {
     sessionState.status = CHAT_STATUS_IDLE;
     sessionState.streamError = '';
   }
@@ -1494,6 +1514,44 @@ export function loadHistory(sessionState, messages, options = {}) {
     ? { ...options.backgroundBashStatuses }
     : {};
   return sessionState;
+}
+
+function shouldRetainLiveRunProjection(sessionState, messages) {
+  if (isRunActive(sessionState)) {
+    return true;
+  }
+
+  const runId = sessionState?.currentRun?.runId;
+  return (
+    hasRetainedTerminalRunProjection(sessionState) &&
+    !runProjectionPersistedInHistory(sessionState.runEvents, messages, runId)
+  );
+}
+
+function hasRetainedTerminalRunProjection(sessionState) {
+  const runId = sessionState?.currentRun?.runId;
+  const runStatus = sessionState?.currentRun?.status ?? sessionState?.status;
+  if (!runId || !TERMINAL_RUN_STATUSES.has(runStatus)) {
+    return false;
+  }
+  return [
+    ...(sessionState.runEvents ?? []),
+    ...(sessionState.streamingRunEvents ?? []),
+  ].some((event) => event?.run_id === runId);
+}
+
+function attachableHistoryRun(sessionState, activeRun) {
+  if (!activeRun?.run_id) {
+    return null;
+  }
+  const currentRun = sessionState?.currentRun;
+  if (
+    currentRun?.runId === activeRun.run_id &&
+    TERMINAL_RUN_STATUSES.has(currentRun.status)
+  ) {
+    return null;
+  }
+  return activeRun;
 }
 
 export function prependHistory(sessionState, messages, options = {}) {
