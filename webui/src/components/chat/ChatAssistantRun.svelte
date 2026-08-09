@@ -4,7 +4,11 @@
   import CopyButton from '../ui/CopyButton.svelte';
   import { t } from '$lib/i18n.js';
   import { reasoningMarkdownSource } from '$lib/markdown.js';
-  import { floatingHoverCard, tooltip } from '$lib/tooltip.js';
+  import {
+    INTENTIONAL_HOVER_SHOW_DELAY_MS,
+    floatingHoverCard,
+    tooltip,
+  } from '$lib/tooltip.js';
   import {
     avatarForItem,
     compactToolValue,
@@ -171,7 +175,12 @@
           use:tooltip={part.copyable ? '' : part.tooltipText}
         >
           {part.text}{#if part.copyable && part.tooltipText}
-            <div class="tool-primary-hover-card" use:floatingHoverCard>
+            <div
+              class="tool-primary-hover-card"
+              use:floatingHoverCard={{
+                showDelayMs: INTENTIONAL_HOVER_SHOW_DELAY_MS,
+              }}
+            >
               <span class="tool-primary-hover-card__value">{part.fullText}</span
               >
               <CopyButton
