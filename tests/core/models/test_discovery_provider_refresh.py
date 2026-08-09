@@ -803,6 +803,74 @@ class TestRefreshModels:
 
     @respx.mock
     @pytest.mark.asyncio
+    async def test_refresh_models_direct_ollama_cloud_is_remote_without_auth_header(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        cloud_connection = ConnectionConfig(
+            id="api-key",
+            type="api_key",
+            label="API key",
+            auth=AuthConfig(
+                header="Authorization",
+                prefix="Bearer ",
+                credential_key="OLLAMA_API_KEY",
+            ),
+            mode="cloud",
+            catalog_requires_credentials=False,
+        )
+        provider_config = ProviderConfig(
+            id="ollama-cloud",
+            name="Ollama Cloud",
+            adapter="ollama",
+            base_url="https://ollama.com",
+            connections=[cloud_connection],
+            models_endpoint="/api/tags",
+        )
+        tags_route = respx.get("https://ollama.com/api/tags").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "models": [
+                        {
+                            "name": "glm-5.1",
+                            "model": "glm-5.1",
+                            "details": {"family": "glm5.1"},
+                        }
+                    ]
+                },
+            )
+        )
+        show_route = respx.post("https://ollama.com/api/show").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "capabilities": ["completion", "tools", "thinking"],
+                    "model_info": {
+                        "general.architecture": "glm5.1",
+                        "glm5.1.context_length": 202752,
+                    },
+                },
+            )
+        )
+
+        result = await refresh_models(
+            provider_config,
+            "",
+            tmp_path / "resources",
+            credential_connection=cloud_connection,
+        )
+
+        model = ModelRegistry.load(tmp_path / "resources").get("ollama-cloud", "glm-5.1")
+        assert result["model_count"] == 1
+        assert model.metadata["ollama"] == {"remote": True}
+        assert model.connections == ("api-key",)
+        assert model.context_window == 202752
+        assert "Authorization" not in tags_route.calls.last.request.headers
+        assert "Authorization" not in show_route.calls.last.request.headers
+
+    @respx.mock
+    @pytest.mark.asyncio
     async def test_refresh_models_ollama_show_failure_keeps_baseline(self, tmp_path: Path):
         """A failing /api/show degrades to the conservative catalog, not a failed refresh."""
         keyless_connection = ConnectionConfig(

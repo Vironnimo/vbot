@@ -1279,6 +1279,50 @@ async def test_model_refresh_db_rejects_missing_credentials(
 
 
 @pytest.mark.asyncio
+async def test_model_refresh_db_fetches_public_catalog_without_inference_credentials(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("OLLAMA_API_KEY", raising=False)
+    monkeypatch.setattr(connection_methods, "refresh_models", fake_refresh_models)
+    FAKE_REFRESH_MODEL_CALLS.clear()
+    FAKE_REFRESH_MODEL_KWARGS.clear()
+    state = make_state(tmp_path, StubAdapter())
+    state.runtime.providers.add(
+        SimpleNamespace(
+            id="ollama-cloud",
+            name="Ollama Cloud",
+            adapter="ollama",
+            base_url="https://ollama.com",
+            defaults={},
+            extra_headers={},
+            models_endpoint="/api/tags",
+            connections=[
+                SimpleNamespace(
+                    id="api-key",
+                    type="api_key",
+                    label="API key",
+                    mode="cloud",
+                    models_endpoint=None,
+                    base_url=None,
+                    catalog_requires_credentials=False,
+                    auth=SimpleNamespace(credential_key="OLLAMA_API_KEY"),
+                )
+            ],
+        )
+    )
+
+    response = await dispatch_rpc(
+        state,
+        {"method": "model.refresh_db", "params": {"provider_id": "ollama-cloud"}},
+    )
+
+    assert response["ok"] is True
+    assert FAKE_REFRESH_MODEL_CALLS == [""]
+    assert FAKE_REFRESH_MODEL_KWARGS[0]["credential_connection"].id == "api-key"
+
+
+@pytest.mark.asyncio
 async def test_model_refresh_db_rejects_unknown_provider(tmp_path: Path) -> None:
     state = make_state(tmp_path, StubAdapter())
 

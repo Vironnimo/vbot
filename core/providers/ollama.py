@@ -2,9 +2,9 @@
 
 Speaks Ollama's native ``/api/chat`` wire protocol — not the OpenAI-compatible
 shim — so it subclasses :class:`ProviderAdapter` directly (like the Anthropic
-adapter). One adapter serves both connections: the keyless ``local`` connection
-(``http://localhost:11434``) and the API-key ``cloud`` connection
-(``https://ollama.com``, same native API with Bearer auth).
+adapter). One adapter serves two Providers without merging their Model identity:
+keyless local ``ollama`` (``http://localhost:11434``) and API-key
+``ollama-cloud`` (``https://ollama.com``, same native API with Bearer auth).
 
 Key wire facts (verified live against Ollama 0.24.0 on 2026-07-07):
 
@@ -18,13 +18,14 @@ Key wire facts (verified live against Ollama 0.24.0 on 2026-07-07):
   OpenAI). vBot's canonical arguments are also a dict, so the mapping is direct.
 - Sampling/runtime parameters ride under ``options`` (``temperature``,
   ``num_predict``, ``num_ctx``, …).
-- Reasoning is a binary ``think`` toggle; ``capabilities`` containing
-  ``"thinking"`` (from ``POST /api/show``) marks support.
-- Catalog discovery: ``GET /api/tags`` lists installed models; proxied cloud
-  models are recognized by the presence of ``remote_host`` (the ``:cloud``
-  name suffix is convention, ``remote_host`` is the fact). Capabilities and
-  the model's theoretical context window come from ``POST /api/show`` per
-  model (the discovery enrichment hook).
+- Reasoning uses Ollama's ``think`` Boolean/level control; ``capabilities``
+  containing ``"thinking"`` (from ``POST /api/show``) marks support and the
+  Model DB supplies any Provider-specific effort ladder.
+- Catalog discovery: ``GET /api/tags`` lists available Models; a local proxy's
+  Cloud Models are recognized by ``remote_host`` (the ``:cloud`` suffix is
+  convention, ``remote_host`` is the fact), while direct Cloud scope is known
+  from its Connection. Capabilities and theoretical context come from
+  ``POST /api/show`` per Model (the discovery enrichment hook).
 """
 
 from __future__ import annotations
@@ -32,6 +33,7 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
+from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
 import httpx
@@ -62,7 +64,7 @@ from core.providers.adapter import (
     project_tool_result_content_fallbacks,
 )
 from core.providers.errors import NetworkError, ProviderError
-from core.providers.providers import AuthConfig, ProviderConfig
+from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig
 from core.providers.reasoning import (
     REASONING_INTENT_DEFAULT,
     REASONING_INTENT_EFFORT,
@@ -85,6 +87,9 @@ _LOGGER = get_logger("providers.ollama")
 
 CHAT_ENDPOINT = "/api/chat"
 SHOW_ENDPOINT = "/api/show"
+
+OLLAMA_LOCAL_MODE = "local"
+OLLAMA_CLOUD_MODE = "cloud"
 
 # Provider-scoped metadata key: ``metadata.ollama.local`` / ``metadata.ollama.remote``
 # mark where a discovered model actually runs (see ``normalize_catalog_entry``).
@@ -156,9 +161,7 @@ class OllamaAdapter(ProviderAdapter):
         )
         self._auth_config = auth_config or config.connections[0].auth
         self._local_context_resolver = local_context_resolver
-        # ``connection_mode`` is accepted for parity with the unified
-        # ``get_adapter`` call site; both Ollama connections speak one wire.
-        del connection_mode
+        self._connection_mode = connection_mode or OLLAMA_LOCAL_MODE
         super().__init__(model_lookup=model_lookup, debug_recorder=debug_recorder)
         self._base_url = base_url or config.base_url
         self._client = build_async_client(
@@ -176,6 +179,8 @@ class OllamaAdapter(ProviderAdapter):
         """
 
         if isinstance(exc, httpx.ConnectError):
+            if self._connection_mode == OLLAMA_CLOUD_MODE:
+                return NetworkError(f"Ollama Cloud is not reachable at {self._base_url} ({exc})")
             return NetworkError(
                 f"Ollama is not reachable at {self._base_url} — "
                 f"is the Ollama service running? ({exc})"
@@ -269,6 +274,33 @@ class OllamaAdapter(ProviderAdapter):
             family=family,
             metadata={OLLAMA_METADATA_KEY: {locality_field: True}},
         )
+
+    @classmethod
+    def finalize_discovered_model(
+        cls,
+        model: Model,
+        connection: ConnectionConfig | None,
+    ) -> Model:
+        """Stamp direct Ollama Cloud catalog entries as remote.
+
+        A local Ollama proxy identifies offloaded Models with ``remote_host``.
+        The direct ``ollama.com/api/tags`` response has no such field because
+        every entry is already remote, so Connection context supplies the
+        missing fact.
+        """
+
+        if connection is None or connection.mode != OLLAMA_CLOUD_MODE:
+            return model
+        metadata = {
+            key: dict(value) if isinstance(value, Mapping) else value
+            for key, value in model.metadata.items()
+        }
+        ollama_metadata = metadata.get(OLLAMA_METADATA_KEY)
+        provider_metadata = dict(ollama_metadata) if isinstance(ollama_metadata, Mapping) else {}
+        provider_metadata.pop(LOCAL_METADATA_FIELD, None)
+        provider_metadata[REMOTE_METADATA_FIELD] = True
+        metadata[OLLAMA_METADATA_KEY] = provider_metadata
+        return replace(model, metadata=metadata)
 
     @classmethod
     async def enrich_discovered_models(
@@ -403,9 +435,9 @@ class OllamaAdapter(ProviderAdapter):
 
         The toggle is only sent when the catalog positively marks the model as
         thinking-capable — Ollama rejects ``think`` on models that cannot
-        reason, so unknown support means the field stays absent. Most Models use
-        a boolean; GPT-OSS is profiled with its documented level-only ladder and
-        receives ``low``/``medium``/``high`` strings instead.
+        reason, so unknown support means the field stays absent. Model metadata
+        chooses Boolean or level control; GPT-OSS is the level-only special case
+        that cannot accept Boolean off.
         """
 
         thinking_effort = request_kwargs.pop("thinking_effort", "")
@@ -425,9 +457,12 @@ class OllamaAdapter(ProviderAdapter):
         if model_reasoning_control(self._model_lookup, model_id) == REASONING_CONTROL_LEVELS:
             if intent.kind == REASONING_INTENT_EFFORT and intent.effort_level is not None:
                 payload["think"] = intent.effort_level
-            # GPT-OSS cannot disable thinking and ignores booleans. Omitting the
-            # field is the only truthful representation of an unsupported off
-            # request; the provider keeps its default.
+            elif intent.kind == REASONING_INTENT_OFF and not _is_gpt_oss_model(model_id):
+                # Direct Cloud Models may expose an effort ladder through
+                # models.dev while still accepting Ollama's documented Boolean
+                # off switch. GPT-OSS is the exception: it ignores Booleans and
+                # cannot disable its trace.
+                payload["think"] = False
             return
         payload["think"] = intent.kind != REASONING_INTENT_OFF
 
@@ -614,11 +649,18 @@ def _to_ollama_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
 def _to_ollama_message(message: dict[str, Any]) -> dict[str, Any]:
     role = message.get("role")
     if role == "tool":
-        return {
+        tool_message = {
             "role": "tool",
             "content": _flatten_text_content(message.get("content", "")),
             "tool_call_id": message.get("tool_call_id", ""),
         }
+        tool_name = message.get("name")
+        if isinstance(tool_name, str) and tool_name:
+            # Native Ollama supports both fields. ``tool_name`` is the
+            # documented template-facing identity; ``tool_call_id`` preserves
+            # exact pairing when a Model returns ids.
+            tool_message["tool_name"] = tool_name
+        return tool_message
     if role == "assistant":
         return _to_ollama_assistant_message(message)
 
@@ -833,14 +875,17 @@ def _ollama_reasoning_capabilities(
 ) -> ReasoningCapabilities:
     if not thinking:
         return ReasoningCapabilities(supported=False)
-    bare_id = model_id.split(":", 1)[0].lower()
-    if bare_id == "gpt-oss":
+    if _is_gpt_oss_model(model_id):
         return ReasoningCapabilities(
             supported=True,
             control=REASONING_CONTROL_LEVELS,
             levels=OLLAMA_GPT_OSS_EFFORTS,
         )
     return ReasoningCapabilities(supported=True, control=REASONING_CONTROL_ON_OFF)
+
+
+def _is_gpt_oss_model(model_id: str) -> bool:
+    return model_id.split("::", 1)[0].split(":", 1)[0].lower() == "gpt-oss"
 
 
 def _ollama_enriched_metadata(model: Model) -> dict[str, Any]:

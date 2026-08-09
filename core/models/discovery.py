@@ -31,6 +31,7 @@ from core.models.models_dev import (
     reasoning_response_field,
 )
 from core.providers._http_shared import classify_http_status, wrap_network_error
+from core.providers.adapter import ProviderAdapter
 from core.providers.anthropic import AnthropicAdapter
 from core.providers.errors import CatalogEntrySkipped, NetworkError
 from core.providers.github_copilot import GitHubCopilotAdapter
@@ -172,13 +173,13 @@ async def refresh_models(
                         exc,
                     )
                     continue
-                for model in supplementary_models:
-                    model_id = model.get("id")
+                for supplementary_model in supplementary_models:
+                    model_id = supplementary_model.get("id")
                     if isinstance(model_id, str) and model_id not in seen_ids:
                         # ``raw_models`` is the same list object held inside
                         # ``raw_payload`` (see ``_fetch_raw_models``), so this
                         # single append also extends the persisted raw payload.
-                        raw_models.append(model)
+                        raw_models.append(supplementary_model)
                         seen_ids.add(model_id)
 
         models_dir = resources_dir / "models"
@@ -214,6 +215,11 @@ async def refresh_models(
                 continue
             try:
                 model = adapter_class.normalize_catalog_entry(raw_model, provider_config.defaults)
+                if isinstance(adapter_class, type) and issubclass(adapter_class, ProviderAdapter):
+                    model = adapter_class.finalize_discovered_model(
+                        model,
+                        credential_connection,
+                    )
             except CatalogEntrySkipped as exc:
                 _LOGGER.debug(
                     "Skipping model during discovery for provider '%s': %s",

@@ -9,18 +9,8 @@
       "id": "local",
       "type": "none",
       "label": "Local",
+      "mode": "local",
       "auto_refresh": true
-    },
-    {
-      "id": "cloud",
-      "type": "api_key",
-      "label": "Ollama Cloud",
-      "base_url": "https://ollama.com",
-      "auth": {
-        "header": "Authorization",
-        "prefix": "Bearer ",
-        "credential_key": "OLLAMA_API_KEY"
-      }
     }
   ]
 }
