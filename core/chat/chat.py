@@ -137,7 +137,9 @@ from core.chat.streaming import (
     STREAM_PROGRESS_TIMEOUT_SECONDS,
     StreamingAccumulator,
     StreamingChunkTimeoutError,
+    StreamingDeltaBatcher,
     StreamingProgressTimeoutError,
+    StreamingVisibleDelta,
     StreamRecoveryAction,
     decide_stream_recovery,
     is_local_provider_base_url,
@@ -769,6 +771,45 @@ def _serialize_continuation_request(
     if isinstance(content, list):
         return [content_block_to_dict(block) for block in content]
     return content
+
+
+class _StreamingRunDeltaEmitter:
+    """Schedule bounded Run-event batches without delaying a quiet stream."""
+
+    def __init__(self, run: Run) -> None:
+        self._run = run
+        self._batcher = StreamingDeltaBatcher()
+        self._flush_handle: asyncio.TimerHandle | None = None
+
+    def add(self, delta: StreamingVisibleDelta) -> None:
+        ready = self._batcher.add(delta)
+        if ready:
+            self._cancel_flush()
+            self._emit(ready)
+        if self._batcher.has_pending and self._flush_handle is None:
+            delay = self._batcher.seconds_until_flush()
+            assert delay is not None
+            self._flush_handle = asyncio.get_running_loop().call_later(delay, self._flush_due)
+
+    def flush(self) -> None:
+        self._cancel_flush()
+        self._emit(self._batcher.flush())
+
+    def close(self) -> None:
+        self._cancel_flush()
+
+    def _flush_due(self) -> None:
+        self._flush_handle = None
+        self._emit(self._batcher.flush(now=time.monotonic()))
+
+    def _cancel_flush(self) -> None:
+        if self._flush_handle is not None:
+            self._flush_handle.cancel()
+            self._flush_handle = None
+
+    def _emit(self, deltas: list[StreamingVisibleDelta]) -> None:
+        for delta in deltas:
+            self._run.emit(delta.event_type, delta.payload)
 
 
 class ChatLoop:
@@ -3605,6 +3646,7 @@ class ChatLoop:
         continuation_tracker: ContinuationTracker | None = None,
     ) -> _AssistantStep:
         accumulator = StreamingAccumulator()
+        delta_emitter = _StreamingRunDeltaEmitter(run)
         stream = adapter.stream(
             messages,
             model_id=model_id,
@@ -3625,6 +3667,7 @@ class ChatLoop:
             ):
                 run.raise_if_cancelled()
                 if delta.get("type") == "heartbeat":
+                    delta_emitter.flush()
                     run.emit(
                         PROVIDER_HEARTBEAT_EVENT,
                         {
@@ -3636,13 +3679,14 @@ class ChatLoop:
                 last_model_delta_at = time.monotonic()
                 visible_deltas = accumulator.add_delta(delta)
                 for visible_delta in visible_deltas:
-                    run.emit(visible_delta.event_type, visible_delta.payload)
                     if continuation_tracker is not None:
                         continuation_tracker.record_stream_delta(
                             reasoning=str(visible_delta.payload.get("reasoning_delta", "")),
                             content=str(visible_delta.payload.get("content_delta", "")),
                         )
+                    delta_emitter.add(visible_delta)
                 run.raise_if_cancelled()
+            delta_emitter.flush()
             if accumulator.finish_reason is None:
                 raise NetworkError("Provider stream ended without finish delta")
             assistant_fields = accumulator.finalize_assistant_fields()
@@ -3652,6 +3696,7 @@ class ChatLoop:
             StreamingChunkTimeoutError,
             StreamingProgressTimeoutError,
         ) as exc:
+            delta_emitter.flush()
             # One provider-agnostic owner decides what a stream break means; the
             # action stays here (the chat loop owns side effects, not the policy).
             action = decide_stream_recovery(
@@ -3739,6 +3784,7 @@ class ChatLoop:
             else:
                 raise
         except asyncio.CancelledError:
+            delta_emitter.close()
             # User cancel mid-stream. Output the user already saw must not
             # vanish (GLOSSARY → Cancel), so accumulated visible content is
             # finalized like a stream break after visible output; the caller
@@ -3757,6 +3803,9 @@ class ChatLoop:
                     interruption_cause=("user" if run.cancel_reason == "user" else "internal"),
                     output_cwd=output_cwd,
                 )
+            raise
+        except BaseException:
+            delta_emitter.close()
             raise
 
         assistant_message = _assistant_message_from_response(

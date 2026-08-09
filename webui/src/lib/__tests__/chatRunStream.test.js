@@ -21,6 +21,7 @@ function makeStreamHarness({
   displayedSessionId,
   subscribeRunEvents,
   reconcileRunSession = vi.fn(async () => true),
+  reportStreamDiagnostic = vi.fn(),
 } = {}) {
   const subAgentRunStatuses = {};
   const isDisplayedSession = vi.fn(
@@ -38,6 +39,7 @@ function makeStreamHarness({
       })),
     syncSessionQueue,
     reconcileRunSession,
+    reportStreamDiagnostic,
     isDisplayedSession,
     updateSubAgentRunStatuses: (updates, { replaceActive = false } = {}) => {
       if (replaceActive) {
@@ -59,6 +61,7 @@ function makeStreamHarness({
     subAgentRunStatuses,
     isDisplayedSession,
     reconcileRunSession,
+    reportStreamDiagnostic,
     syncSessionQueue,
   };
 }
@@ -882,7 +885,10 @@ describe('createChatRunStream() SSE reconnect budget (regression for B2)', () =>
     vi.restoreAllMocks();
   });
 
-  function setupRunningStream({ reconcileRunSession } = {}) {
+  function setupRunningStream({
+    reconcileRunSession,
+    reportStreamDiagnostic,
+  } = {}) {
     const subscriptions = [];
     const subscribeRunEvents = vi.fn((sseUrl, handlers, options) => {
       const subscription = { sseUrl, handlers, options, close: vi.fn() };
@@ -895,6 +901,7 @@ describe('createChatRunStream() SSE reconnect budget (regression for B2)', () =>
       displayedSessionId: DISPLAYED_SESSION_ID,
       subscribeRunEvents,
       reconcileRunSession,
+      reportStreamDiagnostic,
     });
     harness.stream.applyConnectionSnapshot({
       type: 'connection_ready',
@@ -972,6 +979,86 @@ describe('createChatRunStream() SSE reconnect budget (regression for B2)', () =>
 
     vi.advanceTimersByTime(5_000);
     expect(subscriptions[0].close).toHaveBeenCalledOnce();
+  });
+
+  it('reconnects from the contiguous cursor when a sequence gap stays open', () => {
+    const reportStreamDiagnostic = vi.fn();
+    const { subscriptions, sessionState } = setupRunningStream({
+      reportStreamDiagnostic,
+    });
+
+    subscriptions[0].handlers.onEvent(runEvent(1));
+    subscriptions[0].handlers.onEvent(runEvent(3));
+    subscriptions[0].handlers.onHeartbeat();
+    vi.advanceTimersByTime(2_000);
+
+    expect(subscriptions[0].close).toHaveBeenCalledOnce();
+    expect(sessionState.streamError).toContain('Reconnecting');
+    vi.advanceTimersByTime(500);
+    expect(subscriptions).toHaveLength(2);
+    expect(subscriptions[1].options.afterSequence).toBe(1);
+    expect(reportStreamDiagnostic).toHaveBeenCalledWith(
+      expect.objectContaining({
+        reason: 'sequence_gap_timeout',
+        runId: RUN_ID,
+        expectedSequence: 2,
+        receivedSequence: 3,
+      }),
+    );
+
+    subscriptions[1].handlers.onEvent(runEvent(3));
+    expect(sessionState.runEvents.map((event) => event.sequence)).toEqual([
+      1, 3,
+    ]);
+  });
+
+  it('cancels the gap watchdog when the missing event arrives in time', () => {
+    const { subscriptions, sessionState } = setupRunningStream();
+
+    subscriptions[0].handlers.onEvent(runEvent(1));
+    subscriptions[0].handlers.onEvent(runEvent(3));
+    subscriptions[0].handlers.onEvent(runEvent(2));
+    vi.advanceTimersByTime(2_000);
+
+    expect(subscriptions).toHaveLength(1);
+    expect(subscriptions[0].close).not.toHaveBeenCalled();
+    expect(sessionState.runEvents.map((event) => event.sequence)).toEqual([
+      1, 2, 3,
+    ]);
+  });
+
+  it('loads durable history when a terminal WebSocket event is blocked by a gap', async () => {
+    const reconcileRunSession = vi.fn(async () => true);
+    const reportStreamDiagnostic = vi.fn();
+    const { subscriptions, harness, sessionState } = setupRunningStream({
+      reconcileRunSession,
+      reportStreamDiagnostic,
+    });
+    subscriptions[0].handlers.onEvent(runEvent(1));
+
+    harness.stream.handleServerEvents({
+      type: 'run_completed',
+      payload: {
+        run_id: RUN_ID,
+        agent_id: DISPLAYED_AGENT_ID,
+        session_id: DISPLAYED_SESSION_ID,
+        run_event_type: 'run_completed',
+        run_event_sequence: 3,
+        status: 'completed',
+      },
+    });
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    expect(subscriptions[0].close).toHaveBeenCalledOnce();
+    expect(reconcileRunSession).toHaveBeenCalledWith(sessionState, RUN_ID);
+    expect(reportStreamDiagnostic).toHaveBeenCalledWith(
+      expect.objectContaining({
+        reason: 'terminal_event_blocked',
+        runId: RUN_ID,
+        expectedSequence: 2,
+        receivedSequence: 3,
+      }),
+    );
   });
 
   it('closes the SSE subscription when a contiguous terminal event arrives over WebSocket', () => {

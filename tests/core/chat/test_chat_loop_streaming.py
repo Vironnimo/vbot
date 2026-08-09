@@ -2,15 +2,18 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 from typing import Any
 
 import pytest
 
+from core.chat.chat import _StreamingRunDeltaEmitter
 from core.chat.continuation import (
     recover_continuation,
 )
+from core.chat.streaming import StreamingVisibleDelta
 from core.providers.errors import (
     NetworkError,
 )
@@ -22,6 +25,7 @@ from core.runs import (
     TOOL_CALL_DELTA_EVENT,
     TOOL_CALL_RESULT_EVENT,
     TOOL_CALL_STARTED_EVENT,
+    Run,
     RunStatus,
 )
 from core.tools import (
@@ -39,6 +43,32 @@ from tests.core.chat.chat_loop_support import (
 )
 
 JsonObject = dict[str, Any]
+
+
+@pytest.mark.asyncio
+async def test_stream_delta_emitter_flushes_a_quiet_pending_fragment() -> None:
+    run = Run(run_id="run-one", agent_id="coder", session_id="session-one")
+    emitter = _StreamingRunDeltaEmitter(run)
+
+    emitter.add(
+        StreamingVisibleDelta(
+            event_type=ASSISTANT_OUTPUT_DELTA_EVENT,
+            payload={"content_delta": "first"},
+        )
+    )
+    emitter.add(
+        StreamingVisibleDelta(
+            event_type=ASSISTANT_OUTPUT_DELTA_EVENT,
+            payload={"content_delta": " second"},
+        )
+    )
+    await asyncio.sleep(0.06)
+    emitter.close()
+
+    assert [event.payload for event in run.events] == [
+        {"content_delta": "first"},
+        {"content_delta": " second"},
+    ]
 
 
 @pytest.mark.asyncio
@@ -76,17 +106,16 @@ async def test_streaming_mode_emits_deltas_then_final_authoritative_message(
         "user_message_persisted",
         REASONING_DELTA_EVENT,
         ASSISTANT_OUTPUT_DELTA_EVENT,
-        ASSISTANT_OUTPUT_DELTA_EVENT,
         "reasoning",
         "assistant_output",
         MODEL_STEP_USAGE_EVENT,
         "run_completed",
     ]
     assert run.events[2].payload == {"reasoning_delta": "Think"}
-    assert run.events[3].payload == {"content_delta": "Hello"}
-    assert run.events[6].payload["message"]["content"] == "Hello world"
-    assert "reasoning_meta" not in run.events[6].payload["message"]
-    assert "reasoning_scope" not in run.events[6].payload["message"]
+    assert run.events[3].payload == {"content_delta": "Hello world"}
+    assert run.events[5].payload["message"]["content"] == "Hello world"
+    assert "reasoning_meta" not in run.events[5].payload["message"]
+    assert "reasoning_scope" not in run.events[5].payload["message"]
     assert adapter.requests == []
     assert adapter.stream_requests[0]["kwargs"]["thinking_effort"] == "high"
 
@@ -188,9 +217,14 @@ async def test_streaming_mode_persists_only_final_messages_and_continues_tool_lo
         if event.type in {TOOL_CALL_DELTA_EVENT, TOOL_CALL_STARTED_EVENT}
     ] == [
         TOOL_CALL_DELTA_EVENT,
-        TOOL_CALL_DELTA_EVENT,
         TOOL_CALL_STARTED_EVENT,
     ]
+    tool_delta = next(event for event in run.events if event.type == TOOL_CALL_DELTA_EVENT)
+    assert tool_delta.payload == {
+        "tool_call_id": "call_abc",
+        "name_delta": "get_weather",
+        "arguments_delta": '{"city":"Berlin"}',
+    }
     tool_started = next(event for event in run.events if event.type == TOOL_CALL_STARTED_EVENT)
     assert tool_started.payload["tool_call"]["arguments"] == {"city": "Berlin"}
     assert tool_started.payload["display"] == {

@@ -17,6 +17,8 @@ const SSE_RECONNECT_DELAY_MS = 500;
 const MAX_SSE_RECONNECT_ATTEMPTS = 3;
 const SSE_HEARTBEAT_TIMEOUT_MS = 25_000;
 const SSE_RECOVERY_RETRY_DELAY_MS = 5_000;
+const RUN_EVENT_GAP_TIMEOUT_MS = 2_000;
+const TERMINAL_RECONCILIATION_DELAY_MS = 1_000;
 // Dedup only has to cover events that can still be re-delivered through
 // App.svelte's bounded `runServerEvents` list (500 entries), so the cap just
 // needs to comfortably exceed that window; everything older can be forgotten
@@ -50,6 +52,10 @@ function bareAgentIdForStatusKey(agentId) {
   return separatorIndex === -1 ? value : value.slice(0, separatorIndex);
 }
 
+function defaultStreamDiagnostic(diagnostic) {
+  console.warn('vBot Run stream recovery', diagnostic);
+}
+
 export function createChatRunStream({
   chatState,
   subscribeRunEvents,
@@ -57,12 +63,15 @@ export function createChatRunStream({
   reconcileRunSession = async () => false,
   isDisplayedSession,
   updateSubAgentRunStatuses,
+  reportStreamDiagnostic = defaultStreamDiagnostic,
 }) {
   const activeSubscriptions = {};
   const pendingReconnects = {};
   const pendingHeartbeatWatchdogs = {};
   const pendingRecoveryRetries = {};
   const pendingReconciliations = {};
+  const pendingGapWatchdogs = {};
+  const pendingTerminalReconciliations = {};
   const pendingRunEventQueues = {};
   const pendingRunEventFlushes = {};
   const orderedRunEventBuffers = {};
@@ -70,6 +79,14 @@ export function createChatRunStream({
   const handledRunServerEventKeys = createBoundedKeySet(
     MAX_HANDLED_RUN_SERVER_EVENT_KEYS,
   );
+
+  function reportDiagnostic(diagnostic) {
+    try {
+      reportStreamDiagnostic(diagnostic);
+    } catch {
+      // Diagnostics are best-effort and must never interfere with recovery.
+    }
+  }
 
   function subscribeToRun(sessionState, sseUrl, options = {}) {
     if (!sseUrl || destroyed) {
@@ -202,7 +219,13 @@ export function createChatRunStream({
     pendingRunEventQueues[sessionKey] ??= [];
     pendingRunEventQueues[sessionKey].push({ eventData, options });
     if (!DELAYED_RUN_EVENT_TYPES.has(eventData?.type)) {
-      flushPendingRunEvents(sessionKey);
+      const terminalEvent = flushPendingRunEvents(sessionKey);
+      if (
+        TERMINAL_RUN_EVENTS.has(eventData?.type) &&
+        terminalEvent?.run_id !== eventData?.run_id
+      ) {
+        scheduleTerminalReconciliation(sessionState, eventData);
+      }
       return;
     }
     scheduleRunEventFlush(sessionKey);
@@ -262,6 +285,12 @@ export function createChatRunStream({
     // only at that transport-proven boundary; later gaps still wait for their
     // missing event so mirrored WebSocket terminal output cannot overtake SSE.
     if (options.acceptAsReplayHead && sequence > buffer.nextSequence) {
+      reportDiagnostic({
+        reason: 'replay_rebased',
+        runId,
+        expectedSequence: buffer.nextSequence,
+        receivedSequence: sequence,
+      });
       buffer.nextSequence = sequence;
       for (const pendingSequence of buffer.pending.keys()) {
         if (pendingSequence < sequence) {
@@ -270,6 +299,7 @@ export function createChatRunStream({
       }
     }
     if (sequence - buffer.nextSequence >= MAX_PENDING_ORDERED_RUN_EVENTS) {
+      armGapWatchdog(sessionState, buffer, sequence);
       return [];
     }
     if (!buffer.pending.has(sequence)) {
@@ -286,7 +316,114 @@ export function createChatRunStream({
         appendedEvents.push(appended);
       }
     }
+    syncGapWatchdog(sessionState, buffer);
     return appendedEvents;
+  }
+
+  function syncGapWatchdog(sessionState, buffer) {
+    if (buffer.pending.size === 0) {
+      clearGapWatchdog(sessionState.key);
+      return;
+    }
+    const firstPendingSequence = Math.min(...buffer.pending.keys());
+    if (firstPendingSequence <= buffer.nextSequence) {
+      clearGapWatchdog(sessionState.key);
+      return;
+    }
+    armGapWatchdog(sessionState, buffer, firstPendingSequence);
+  }
+
+  function armGapWatchdog(sessionState, buffer, receivedSequence) {
+    const sessionKey = sessionState.key;
+    const existing = pendingGapWatchdogs[sessionKey];
+    if (
+      existing?.runId === buffer.runId &&
+      existing.expectedSequence === buffer.nextSequence
+    ) {
+      existing.receivedSequence = Math.max(
+        existing.receivedSequence,
+        receivedSequence,
+      );
+      return;
+    }
+    clearGapWatchdog(sessionKey);
+    const gap = {
+      runId: buffer.runId,
+      expectedSequence: buffer.nextSequence,
+      receivedSequence,
+      timeoutId: null,
+    };
+    gap.timeoutId = setTimeout(() => {
+      if (pendingGapWatchdogs[sessionKey] !== gap) {
+        return;
+      }
+      delete pendingGapWatchdogs[sessionKey];
+      const currentRun = sessionState.currentRun;
+      const currentBuffer = orderedRunEventBuffers[sessionKey];
+      if (
+        currentRun?.runId !== gap.runId ||
+        currentRun.status !== 'running' ||
+        currentBuffer?.runId !== gap.runId ||
+        currentBuffer.nextSequence !== gap.expectedSequence
+      ) {
+        return;
+      }
+      reportDiagnostic({
+        reason: 'sequence_gap_timeout',
+        runId: gap.runId,
+        expectedSequence: gap.expectedSequence,
+        receivedSequence: gap.receivedSequence,
+      });
+      recoverRunStream(
+        sessionState,
+        currentRun.sseUrl,
+        0,
+        new Error(
+          `Run event sequence gap at ${gap.expectedSequence} before ${gap.receivedSequence}.`,
+        ),
+      );
+    }, RUN_EVENT_GAP_TIMEOUT_MS);
+    pendingGapWatchdogs[sessionKey] = gap;
+  }
+
+  function scheduleTerminalReconciliation(sessionState, event) {
+    const sessionKey = sessionState.key;
+    const runId = event?.run_id;
+    if (!runId || pendingTerminalReconciliations[sessionKey]?.runId === runId) {
+      return;
+    }
+    clearTerminalReconciliation(sessionKey);
+    const pending = {
+      runId,
+      terminalSequence: event.sequence,
+      timeoutId: null,
+    };
+    pending.timeoutId = setTimeout(() => {
+      if (pendingTerminalReconciliations[sessionKey] !== pending) {
+        return;
+      }
+      delete pendingTerminalReconciliations[sessionKey];
+      if (
+        sessionState.currentRun?.runId !== runId ||
+        sessionState.currentRun.status !== 'running'
+      ) {
+        return;
+      }
+      const buffer = orderedRunEventBuffers[sessionKey];
+      reportDiagnostic({
+        reason: 'terminal_event_blocked',
+        runId,
+        expectedSequence: buffer?.nextSequence ?? null,
+        receivedSequence: pending.terminalSequence ?? null,
+      });
+      sessionState.streamError = t(
+        'errors.streamClosed',
+        'The live stream closed before the run finished. Waiting for server status.',
+      );
+      closeRunSubscription(sessionKey);
+      void reconcileAfterStreamFailure(sessionState, runId);
+    }, TERMINAL_RECONCILIATION_DELAY_MS);
+    pendingTerminalReconciliations[sessionKey] = pending;
   }
 
   function scheduleRunEventFlush(sessionKey) {
@@ -354,6 +491,8 @@ export function createChatRunStream({
     }
     if (TERMINAL_RUN_EVENTS.has(event.type)) {
       delete orderedRunEventBuffers[sessionState.key];
+      clearGapWatchdog(sessionState.key);
+      clearTerminalReconciliation(sessionState.key);
       clearPendingReconnect(sessionState.key);
       clearPendingRecoveryRetry(sessionState.key);
       closeRunSubscription(sessionState.key);
@@ -535,6 +674,18 @@ export function createChatRunStream({
       return;
     }
 
+    reportDiagnostic({
+      reason:
+        retryAttempt < MAX_SSE_RECONNECT_ATTEMPTS
+          ? 'stream_reconnect'
+          : 'stream_recovery_exhausted',
+      runId: currentRun.runId,
+      afterSequence: highestContiguousRunEventSequence(sessionState),
+      retryAttempt,
+      errorType:
+        typeof error?.name === 'string' && error.name ? error.name : 'Error',
+    });
+
     if (retryAttempt < MAX_SSE_RECONNECT_ATTEMPTS) {
       sessionState.streamError = t(
         'errors.streamReconnecting',
@@ -682,8 +833,13 @@ export function createChatRunStream({
       sessionState.currentRun?.runId === event.run_id &&
       displayed
     ) {
+      let terminalAppended = false;
       for (const appendedEvent of appendOrderedRunEvent(sessionState, event)) {
         handleAppendedRunEvent(sessionState, appendedEvent);
+        terminalAppended ||= TERMINAL_RUN_EVENTS.has(appendedEvent.type);
+      }
+      if (TERMINAL_RUN_EVENTS.has(event.type) && !terminalAppended) {
+        scheduleTerminalReconciliation(sessionState, event);
       }
       return;
     }
@@ -776,6 +932,7 @@ export function createChatRunStream({
     activeSubscriptions[sessionKey]?.close();
     delete activeSubscriptions[sessionKey];
     clearHeartbeatWatchdog(sessionKey);
+    clearGapWatchdog(sessionKey);
   }
 
   function closeSubscriptionFor(sessionKey) {
@@ -783,6 +940,7 @@ export function createChatRunStream({
     delete orderedRunEventBuffers[sessionKey];
     clearPendingReconnect(sessionKey);
     clearPendingRecoveryRetry(sessionKey);
+    clearTerminalReconciliation(sessionKey);
   }
 
   function closeSubscriptionsExcept(sessionKey) {
@@ -791,6 +949,8 @@ export function createChatRunStream({
       ...Object.keys(pendingReconnects),
       ...Object.keys(pendingHeartbeatWatchdogs),
       ...Object.keys(pendingRecoveryRetries),
+      ...Object.keys(pendingGapWatchdogs),
+      ...Object.keys(pendingTerminalReconciliations),
     ]);
     for (const key of subscriptionKeys) {
       if (key === sessionKey) {
@@ -846,6 +1006,34 @@ export function createChatRunStream({
     }
   }
 
+  function clearGapWatchdog(sessionKey) {
+    const pending = pendingGapWatchdogs[sessionKey];
+    if (pending) {
+      clearTimeout(pending.timeoutId);
+      delete pendingGapWatchdogs[sessionKey];
+    }
+  }
+
+  function clearGapWatchdogs() {
+    for (const key of Object.keys(pendingGapWatchdogs)) {
+      clearGapWatchdog(key);
+    }
+  }
+
+  function clearTerminalReconciliation(sessionKey) {
+    const pending = pendingTerminalReconciliations[sessionKey];
+    if (pending) {
+      clearTimeout(pending.timeoutId);
+      delete pendingTerminalReconciliations[sessionKey];
+    }
+  }
+
+  function clearTerminalReconciliations() {
+    for (const key of Object.keys(pendingTerminalReconciliations)) {
+      clearTerminalReconciliation(key);
+    }
+  }
+
   function clearPendingRunEventFlush(sessionKey) {
     const timeoutId = pendingRunEventFlushes[sessionKey];
     if (timeoutId !== undefined) {
@@ -874,6 +1062,8 @@ export function createChatRunStream({
     clearPendingReconnects();
     clearHeartbeatWatchdogs();
     clearPendingRecoveryRetries();
+    clearGapWatchdogs();
+    clearTerminalReconciliations();
     clearPendingRunEventFlushes();
     for (const key of Object.keys(orderedRunEventBuffers)) {
       delete orderedRunEventBuffers[key];
