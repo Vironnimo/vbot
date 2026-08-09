@@ -30,6 +30,7 @@ JsonObject = dict[str, Any]
 
 STREAM_CHUNK_TIMEOUT_SECONDS = 180.0
 STREAM_PROGRESS_TIMEOUT_SECONDS = 900.0
+STREAM_EVENT_EMIT_INTERVAL_SECONDS = 0.04
 
 
 class StreamingError(VBotError):
@@ -178,6 +179,108 @@ class StreamingVisibleDelta:
 
     event_type: str
     payload: JsonObject
+
+
+class StreamingDeltaBatcher:
+    """Bound the Run-event rate while preserving visible delta order.
+
+    Provider streams may yield hundreds of tiny fragments per second. Keeping
+    every fragment as its own replayable Run event needlessly pressures the
+    browser transport and its sequence reducer. The first fragment remains
+    immediate; later adjacent fragments are merged and released at the bounded
+    cadence or at the next stable stream boundary.
+    """
+
+    def __init__(self, interval_seconds: float = STREAM_EVENT_EMIT_INTERVAL_SECONDS) -> None:
+        if interval_seconds <= 0:
+            raise ValueError("stream event emit interval must be positive")
+        self._interval_seconds = interval_seconds
+        self._next_emit_at = 0.0
+        self._pending: list[StreamingVisibleDelta] = []
+
+    def add(
+        self,
+        delta: StreamingVisibleDelta,
+        *,
+        now: float | None = None,
+    ) -> list[StreamingVisibleDelta]:
+        """Accept one delta and return a batch when the cadence is due."""
+        current_time = time.monotonic() if now is None else now
+        if self._next_emit_at == 0.0:
+            self._next_emit_at = current_time + self._interval_seconds
+            return [delta]
+
+        self._append_pending(delta)
+        if current_time < self._next_emit_at:
+            return []
+
+        self._next_emit_at = current_time + self._interval_seconds
+        return self.flush()
+
+    @property
+    def has_pending(self) -> bool:
+        return bool(self._pending)
+
+    def seconds_until_flush(self, *, now: float | None = None) -> float | None:
+        if not self._pending:
+            return None
+        current_time = time.monotonic() if now is None else now
+        return max(0.0, self._next_emit_at - current_time)
+
+    def flush(self, *, now: float | None = None) -> list[StreamingVisibleDelta]:
+        """Return and clear every pending delta in its original order."""
+        pending = self._pending
+        self._pending = []
+        if pending and now is not None:
+            self._next_emit_at = now + self._interval_seconds
+        return pending
+
+    def _append_pending(self, delta: StreamingVisibleDelta) -> None:
+        if self._pending:
+            merged = _merge_adjacent_visible_deltas(self._pending[-1], delta)
+            if merged is not None:
+                self._pending[-1] = merged
+                return
+        self._pending.append(delta)
+
+
+def _merge_adjacent_visible_deltas(
+    existing: StreamingVisibleDelta,
+    incoming: StreamingVisibleDelta,
+) -> StreamingVisibleDelta | None:
+    if existing.event_type != incoming.event_type:
+        return None
+
+    if existing.event_type == ASSISTANT_OUTPUT_DELTA_EVENT:
+        return _merge_text_visible_delta(existing, incoming, "content_delta")
+    if existing.event_type == REASONING_DELTA_EVENT:
+        return _merge_text_visible_delta(existing, incoming, "reasoning_delta")
+    if existing.event_type != TOOL_CALL_DELTA_EVENT:
+        return None
+
+    existing_id = existing.payload.get("tool_call_id")
+    if not isinstance(existing_id, str) or incoming.payload.get("tool_call_id") != existing_id:
+        return None
+    payload: JsonObject = {"tool_call_id": existing_id}
+    for key in ("name_delta", "arguments_delta"):
+        combined = f"{existing.payload.get(key, '')}{incoming.payload.get(key, '')}"
+        if combined:
+            payload[key] = combined
+    return StreamingVisibleDelta(event_type=existing.event_type, payload=payload)
+
+
+def _merge_text_visible_delta(
+    existing: StreamingVisibleDelta,
+    incoming: StreamingVisibleDelta,
+    payload_key: str,
+) -> StreamingVisibleDelta:
+    return StreamingVisibleDelta(
+        event_type=existing.event_type,
+        payload={
+            payload_key: f"{existing.payload.get(payload_key, '')}"
+            f"{incoming.payload.get(payload_key, '')}",
+        },
+    )
 
 
 @dataclass(frozen=True)

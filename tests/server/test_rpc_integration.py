@@ -874,13 +874,18 @@ async def test_cancel_suppresses_late_output_and_prevents_new_tool_steps(tmp_pat
         "user_message_persisted",
         "reasoning_delta",
         "tool_call_delta",
-        "tool_call_delta",
         "reasoning",
         "assistant_output",
         "model_step_usage",
         "tool_call_started",
         "run_cancelled",
     ]
+    tool_delta = next(event for event in run.events if event.type == "tool_call_delta")
+    assert tool_delta.payload == {
+        "tool_call_id": "call_slow",
+        "name_delta": "slow_tool",
+        "arguments_delta": '{"value":"late"}',
+    }
     assert [message.role for message in messages] == [
         "note",
         "user",

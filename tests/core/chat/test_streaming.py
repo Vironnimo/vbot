@@ -13,8 +13,10 @@ from core.chat.streaming import (
     StreamingAccumulator,
     StreamingAssistantFields,
     StreamingChunkTimeoutError,
+    StreamingDeltaBatcher,
     StreamingDeltaError,
     StreamingProgressTimeoutError,
+    StreamingVisibleDelta,
     StreamRecoveryAction,
     decide_stream_recovery,
     is_local_provider_base_url,
@@ -71,6 +73,77 @@ async def test_accumulates_visible_deltas_in_provider_order() -> None:
     ]
     assert fields.content == "Hello world"
     assert fields.reasoning == "Think"
+
+
+async def test_batches_adjacent_visible_deltas_at_bounded_cadence() -> None:
+    batcher = StreamingDeltaBatcher(interval_seconds=0.04)
+
+    first = batcher.add(
+        StreamingVisibleDelta(
+            event_type=ASSISTANT_OUTPUT_DELTA_EVENT,
+            payload={"content_delta": "Hel"},
+        ),
+        now=10.0,
+    )
+    second = batcher.add(
+        StreamingVisibleDelta(
+            event_type=ASSISTANT_OUTPUT_DELTA_EVENT,
+            payload={"content_delta": "lo"},
+        ),
+        now=10.01,
+    )
+    due = batcher.add(
+        StreamingVisibleDelta(
+            event_type=ASSISTANT_OUTPUT_DELTA_EVENT,
+            payload={"content_delta": "!"},
+        ),
+        now=10.04,
+    )
+
+    assert [delta.payload for delta in first] == [{"content_delta": "Hel"}]
+    assert second == []
+    assert [delta.payload for delta in due] == [{"content_delta": "lo!"}]
+    assert batcher.flush() == []
+
+
+async def test_batcher_preserves_delta_order_and_tool_call_identity() -> None:
+    batcher = StreamingDeltaBatcher(interval_seconds=1.0)
+
+    batcher.add(
+        StreamingVisibleDelta(
+            event_type=REASONING_DELTA_EVENT,
+            payload={"reasoning_delta": "First"},
+        ),
+        now=1.0,
+    )
+    batcher.add(
+        StreamingVisibleDelta(
+            event_type=TOOL_CALL_DELTA_EVENT,
+            payload={"tool_call_id": "one", "name_delta": "re"},
+        ),
+        now=1.1,
+    )
+    batcher.add(
+        StreamingVisibleDelta(
+            event_type=TOOL_CALL_DELTA_EVENT,
+            payload={"tool_call_id": "one", "name_delta": "ad"},
+        ),
+        now=1.2,
+    )
+    batcher.add(
+        StreamingVisibleDelta(
+            event_type=TOOL_CALL_DELTA_EVENT,
+            payload={"tool_call_id": "two", "arguments_delta": "{}"},
+        ),
+        now=1.3,
+    )
+
+    pending = batcher.flush()
+
+    assert [(delta.event_type, delta.payload) for delta in pending] == [
+        (TOOL_CALL_DELTA_EVENT, {"tool_call_id": "one", "name_delta": "read"}),
+        (TOOL_CALL_DELTA_EVENT, {"tool_call_id": "two", "arguments_delta": "{}"}),
+    ]
 
 
 async def test_partial_reasoning_is_none_without_reasoning_deltas() -> None:
