@@ -2600,8 +2600,7 @@ textarea::placeholder {
   text-overflow: clip;
 }
 
-.te-primary-separator,
-.te-primary-quote {
+.te-primary-separator {
   flex-shrink: 0;
 }
 
@@ -2623,10 +2622,6 @@ textarea::placeholder {
 
 .te-arg.subagent-preview {
   display: inline-block;
-}
-
-.te-arg-mark {
-  flex-shrink: 0;
 }
 
 .te-arg-value {

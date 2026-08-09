@@ -462,6 +462,33 @@ describe('ChatAssistantRun tool dot state', () => {
       'command: "cd C:\\\\Development\\\\projects\\\\vBot; npm install"',
     );
   });
+
+  it('renders active Tool primary values without wrapper punctuation', () => {
+    const item = createAssistantRunItem({
+      items: [
+        {
+          ...createWriteToolChild({ status: 'running' }),
+          display: {
+            primary: [
+              {
+                kind: 'description',
+                value: 'Update the toolbar',
+                quote: true,
+              },
+            ],
+          },
+        },
+      ],
+    });
+    mountedComponent = mountRun({ item });
+
+    const summaryLine = document.querySelector('.tool-event-line');
+    expect(summaryLine.querySelector('.te-primary-value').textContent).toBe(
+      'Update the toolbar',
+    );
+    expect(summaryLine.querySelector('.te-arg-mark')).toBeNull();
+    expect(summaryLine.querySelector('.te-primary-quote')).toBeNull();
+  });
 });
 
 describe('ChatAssistantRun copy actions', () => {

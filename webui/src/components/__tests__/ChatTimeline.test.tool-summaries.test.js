@@ -414,7 +414,7 @@ describe('ChatTimeline', () => {
     );
   });
 
-  it('renders structured description and fixed result fact independently', () => {
+  it('renders structured values without JSON punctuation', () => {
     const sessionState = ensureSessionState(
       createChatState(),
       'alpha',
@@ -500,8 +500,10 @@ describe('ChatTimeline', () => {
 
     const summaryLine = document.querySelector('.tool-event-line');
     expect(summaryLine.querySelector('.te-primary-value').textContent).toBe(
-      '"search for all version variables"',
+      'search for all version variables',
     );
+    expect(summaryLine.querySelector('.te-arg-mark')).toBeNull();
+    expect(summaryLine.querySelector('.te-primary-quote')).toBeNull();
     expect(summaryLine.querySelector('.te-fact').textContent).toBe(
       '10 matches',
     );
@@ -838,7 +840,7 @@ describe('ChatTimeline', () => {
     );
   });
 
-  it('keeps long bash command truncation separate from closing marker and timing', () => {
+  it('keeps long bash command truncation separate from timing', () => {
     const sessionState = ensureSessionState(
       createChatState(),
       'alpha',
@@ -891,12 +893,10 @@ describe('ChatTimeline', () => {
 
     const summaryLine = document.querySelector('.tool-event-line');
     const argumentValue = summaryLine.querySelector('.te-arg-value');
-    const argumentMarkers = summaryLine.querySelectorAll('.te-arg-mark');
 
     expect(argumentValue.textContent).toBe(`${command.slice(0, 63)}…`);
     expect(argumentValue.textContent.length).toBe(64);
-    expect(argumentMarkers[0].textContent).toBe('(');
-    expect(argumentMarkers[1].textContent).toBe(')');
+    expect(summaryLine.querySelector('.te-arg-mark')).toBeNull();
     expect(summaryLine.querySelector('.te-time').textContent).toContain('1.2s');
   });
 

@@ -159,7 +159,6 @@
 
 {#snippet toolPrimaryLine(primary)}
   <span class="te-arg te-primary">
-    <span class="te-arg-mark">(</span>
     <span class="te-primary-values">
       {#each primary as part, index (`${part.kind}:${index}`)}
         {#if index > 0}<span class="te-primary-separator">·</span>{/if}
@@ -168,14 +167,10 @@
         <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
         <span
           class="te-arg-value te-primary-value te-primary-value--{part.truncate}"
-          class:te-primary-value--quoted={part.quote}
           tabindex={part.tooltipText ? 0 : undefined}
           use:tooltip={part.copyable ? '' : part.tooltipText}
         >
-          {#if part.quote}<span class="te-primary-quote">"</span
-            >{/if}{part.text}{#if part.quote}<span class="te-primary-quote"
-              >"</span
-            >{/if}{#if part.copyable && part.tooltipText}
+          {part.text}{#if part.copyable && part.tooltipText}
             <div class="tool-primary-hover-card" use:floatingHoverCard>
               <span class="tool-primary-hover-card__value">{part.fullText}</span
               >
@@ -190,7 +185,6 @@
         >
       {/each}
     </span>
-    <span class="te-arg-mark">)</span>
   </span>
 {/snippet}
 
