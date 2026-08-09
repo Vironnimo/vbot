@@ -21,8 +21,9 @@
 
 import { portal } from './dropdownPanel.js';
 
-// Exported so tests can wait out the hover delay instead of hardcoding it.
+// Exported so callers and tests share named interaction timings.
 export const TOOLTIP_SHOW_DELAY_MS = 150;
+export const INTENTIONAL_HOVER_SHOW_DELAY_MS = 500;
 export const FLOATING_HOVER_CLOSE_DELAY_MS = 150;
 
 const ANCHOR_OFFSET = 6;
@@ -195,6 +196,7 @@ export function tooltip(node, text = '') {
  * `accessible: false` keeps decorative previews out of the accessibility tree.
  * Accessible cards are linked to the hovered/focused anchor through
  * `aria-describedby` while visible.
+ * `showDelayMs` requires pointer dwell while focus and touch stay immediate.
  */
 export function floatingHoverCard(node, options = {}) {
   const anchor = node.parentElement;
@@ -203,8 +205,10 @@ export function floatingHoverCard(node, options = {}) {
   }
 
   let currentOptions = normalizeFloatingHoverOptions(options);
+  let showTimer = null;
   let closeTimer = null;
   let descriptionTarget = null;
+  let ignorePointerFocus = false;
   let open = false;
   const cardId = node.id || `floating-hover-card-${++hoverCardSequence}`;
   const portalAction = portal(node);
@@ -215,9 +219,19 @@ export function floatingHoverCard(node, options = {}) {
   node.setAttribute('aria-hidden', 'true');
 
   function normalizeFloatingHoverOptions(value) {
+    const showDelayMs = value?.showDelayMs;
     return {
       accessible: value?.accessible !== false,
+      showDelayMs:
+        Number.isFinite(showDelayMs) && showDelayMs > 0 ? showDelayMs : 0,
     };
+  }
+
+  function cancelScheduledShow() {
+    if (showTimer !== null) {
+      clearTimeout(showTimer);
+      showTimer = null;
+    }
   }
 
   function cancelScheduledClose() {
@@ -265,6 +279,7 @@ export function floatingHoverCard(node, options = {}) {
   }
 
   function hide() {
+    cancelScheduledShow();
     cancelScheduledClose();
     if (!open) {
       return;
@@ -280,6 +295,7 @@ export function floatingHoverCard(node, options = {}) {
   }
 
   function show(event) {
+    cancelScheduledShow();
     cancelScheduledClose();
     if (activeHoverCardHide && activeHoverCardHide !== hide) {
       activeHoverCardHide();
@@ -303,8 +319,24 @@ export function floatingHoverCard(node, options = {}) {
   }
 
   function scheduleClose() {
+    cancelScheduledShow();
     cancelScheduledClose();
+    if (!open) {
+      return;
+    }
     closeTimer = setTimeout(hide, FLOATING_HOVER_CLOSE_DELAY_MS);
+  }
+
+  function schedulePointerShow(event) {
+    cancelScheduledShow();
+    if (open || currentOptions.showDelayMs === 0) {
+      show(event);
+      return;
+    }
+    showTimer = setTimeout(() => {
+      showTimer = null;
+      show(event);
+    }, currentOptions.showDelayMs);
   }
 
   function onWindowKeydown(event) {
@@ -331,12 +363,19 @@ export function floatingHoverCard(node, options = {}) {
 
   function onAnchorPointerEnter(event) {
     if (event.pointerType !== 'touch') {
-      show(event);
+      schedulePointerShow(event);
     }
   }
 
   function onAnchorPointerDown(event) {
     if (event.pointerType !== 'touch') {
+      if (currentOptions.showDelayMs > 0) {
+        ignorePointerFocus = true;
+        queueMicrotask(() => {
+          ignorePointerFocus = false;
+        });
+        hide();
+      }
       return;
     }
     if (open) {
@@ -346,10 +385,16 @@ export function floatingHoverCard(node, options = {}) {
     }
   }
 
+  function onAnchorFocusIn(event) {
+    if (!ignorePointerFocus) {
+      show(event);
+    }
+  }
+
   anchor.addEventListener('pointerenter', onAnchorPointerEnter);
   anchor.addEventListener('pointerleave', scheduleClose);
   anchor.addEventListener('pointerdown', onAnchorPointerDown);
-  anchor.addEventListener('focusin', show);
+  anchor.addEventListener('focusin', onAnchorFocusIn);
   anchor.addEventListener('focusout', scheduleClose);
   node.addEventListener('pointerenter', cancelScheduledClose);
   node.addEventListener('pointerleave', scheduleClose);
@@ -358,6 +403,7 @@ export function floatingHoverCard(node, options = {}) {
 
   return {
     update(nextOptions = {}) {
+      cancelScheduledShow();
       currentOptions = normalizeFloatingHoverOptions(nextOptions);
       if (!open) {
         node.setAttribute('aria-hidden', 'true');
@@ -375,7 +421,7 @@ export function floatingHoverCard(node, options = {}) {
       anchor.removeEventListener('pointerenter', onAnchorPointerEnter);
       anchor.removeEventListener('pointerleave', scheduleClose);
       anchor.removeEventListener('pointerdown', onAnchorPointerDown);
-      anchor.removeEventListener('focusin', show);
+      anchor.removeEventListener('focusin', onAnchorFocusIn);
       anchor.removeEventListener('focusout', scheduleClose);
       node.removeEventListener('pointerenter', cancelScheduledClose);
       node.removeEventListener('pointerleave', scheduleClose);

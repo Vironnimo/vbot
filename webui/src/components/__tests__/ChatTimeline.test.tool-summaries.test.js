@@ -9,6 +9,10 @@ import {
   ensureSessionState,
 } from '../../lib/chatState.js';
 import { init } from '../../lib/i18n.js';
+import {
+  FLOATING_HOVER_CLOSE_DELAY_MS,
+  INTENTIONAL_HOVER_SHOW_DELAY_MS,
+} from '../../lib/tooltip.js';
 
 vi.mock('svelte', async () => {
   return import('../../../node_modules/svelte/src/index-client.js');
@@ -614,7 +618,7 @@ describe('ChatTimeline', () => {
     ).toBe('-2');
   });
 
-  it('compacts a structured read path and exposes a focus/touch copy card', async () => {
+  it('compacts a structured read path and exposes a delayed-hover/focus/touch copy card', async () => {
     vi.useFakeTimers();
     const writeText = vi.fn(async () => {});
     Object.defineProperty(navigator, 'clipboard', {
@@ -669,8 +673,18 @@ describe('ChatTimeline', () => {
     expect(value.textContent).toBe('…/components/chat/ChatAssistantRun.svelte');
     expect(value.getAttribute('tabindex')).toBe('0');
     expect(value.hasAttribute('title')).toBe(false);
-    value.focus();
     const card = document.querySelector('.tool-primary-hover-card');
+    value.dispatchEvent(new Event('pointerenter'));
+    await vi.advanceTimersByTimeAsync(INTENTIONAL_HOVER_SHOW_DELAY_MS - 1);
+    expect(card.dataset.floatingOpen).toBe('false');
+    await vi.advanceTimersByTimeAsync(1);
+    expect(card.dataset.floatingOpen).toBe('true');
+
+    value.dispatchEvent(new Event('pointerleave'));
+    await vi.advanceTimersByTimeAsync(FLOATING_HOVER_CLOSE_DELAY_MS);
+    expect(card.dataset.floatingOpen).toBe('false');
+
+    value.focus();
     expect(card.dataset.floatingOpen).toBe('true');
     expect(card.textContent).toContain(fullPath);
     const copyButton = card.querySelector('button');
@@ -680,7 +694,7 @@ describe('ChatTimeline', () => {
     expect(writeText).toHaveBeenCalledWith(fullPath);
 
     value.blur();
-    await vi.advanceTimersByTimeAsync(150);
+    await vi.advanceTimersByTimeAsync(FLOATING_HOVER_CLOSE_DELAY_MS);
     const touch = new Event('pointerdown', { bubbles: true });
     Object.defineProperty(touch, 'pointerType', { value: 'touch' });
     value.dispatchEvent(touch);

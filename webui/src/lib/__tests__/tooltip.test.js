@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   FLOATING_HOVER_CLOSE_DELAY_MS,
+  INTENTIONAL_HOVER_SHOW_DELAY_MS,
   TOOLTIP_SHOW_DELAY_MS as SHOW_DELAY_MS,
   floatingHoverCard,
   positionFloating,
@@ -235,6 +236,42 @@ describe('floatingHoverCard action', () => {
     expect(anchor.getAttribute('aria-describedby')).toBe(card.id);
     expect(card.style.left).not.toBe('');
     expect(card.style.top).not.toBe('');
+  });
+
+  it('waits for intentional pointer dwell and cancels a pending open', () => {
+    action = floatingHoverCard(card, {
+      showDelayMs: INTENTIONAL_HOVER_SHOW_DELAY_MS,
+    });
+
+    anchor.dispatchEvent(new Event('pointerenter'));
+    vi.advanceTimersByTime(INTENTIONAL_HOVER_SHOW_DELAY_MS - 1);
+    expect(card.dataset.floatingOpen).toBe('false');
+
+    anchor.dispatchEvent(new Event('pointerleave'));
+    vi.advanceTimersByTime(INTENTIONAL_HOVER_SHOW_DELAY_MS);
+    expect(card.dataset.floatingOpen).toBe('false');
+
+    anchor.dispatchEvent(new Event('pointerenter'));
+    vi.advanceTimersByTime(INTENTIONAL_HOVER_SHOW_DELAY_MS);
+    expect(card.dataset.floatingOpen).toBe('true');
+  });
+
+  it('lets an anchor press win over a delayed hover open', async () => {
+    const button = document.createElement('button');
+    anchor.prepend(button);
+    action = floatingHoverCard(card, {
+      showDelayMs: INTENTIONAL_HOVER_SHOW_DELAY_MS,
+    });
+
+    anchor.dispatchEvent(new Event('pointerenter'));
+    anchor.dispatchEvent(new Event('pointerdown'));
+    button.dispatchEvent(new FocusEvent('focusin', { bubbles: true }));
+    vi.advanceTimersByTime(INTENTIONAL_HOVER_SHOW_DELAY_MS);
+    expect(card.dataset.floatingOpen).toBe('false');
+
+    await Promise.resolve();
+    button.dispatchEvent(new FocusEvent('focusin', { bubbles: true }));
+    expect(card.dataset.floatingOpen).toBe('true');
   });
 
   it('keeps an interactive card open while the pointer crosses the gap', () => {
