@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, Any, Final, Literal, cast
 
 if TYPE_CHECKING:
     from core.debug import DebugContext, ProviderDebugRecorder
+    from core.providers.providers import ConnectionConfig
 
 from core.models.models import Model
 from core.providers.reasoning import REASONING_REPLAY_CURRENT_RUN, ReasoningReplayPolicy
@@ -629,6 +630,28 @@ class ProviderAdapter(ABC):
         """
         del model_id
         return frozenset()
+
+    # ------------------------------------------------------------------
+    # Catalog normalization policy
+    # ------------------------------------------------------------------
+
+    @classmethod
+    def finalize_discovered_model(
+        cls,
+        model: Model,
+        connection: ConnectionConfig | None,
+    ) -> Model:
+        """Apply Connection-specific facts after catalog entry normalization.
+
+        Most Providers expose identical Model facts on every Connection and
+        therefore return the normalized Model unchanged. Adapters override
+        this only when the listing payload is ambiguous without Connection
+        context, such as Ollama's direct Cloud catalog omitting the
+        ``remote_host`` marker used by a local Ollama proxy.
+        """
+
+        del connection
+        return model
 
     # ------------------------------------------------------------------
     # Per-request conversation context

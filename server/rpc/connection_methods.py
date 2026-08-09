@@ -1020,9 +1020,11 @@ async def _refresh_provider_connections(
 ) -> tuple[list[JsonObject], list[JsonObject]]:
     """Refresh every connection on *provider* that supports it.
 
-    Connections without an effective ``models_endpoint`` or without
-    credentials are skipped. Successful refreshes accumulate into the
-    shared ``<provider>.json`` catalog via discovery's merge logic. The
+    Connections without an effective ``models_endpoint`` are skipped.
+    Credentialed catalogs also require a usable Connection; explicitly public
+    catalogs refresh without a credential while inference usability remains
+    unchanged. Successful refreshes accumulate into the shared
+    ``<provider>.json`` catalog via discovery's merge logic. The
     pre-fetched ``models_dev_catalog`` is threaded into each refresh so the
     public catalog is fetched once per refresh, not once per connection.
 
@@ -1039,20 +1041,22 @@ async def _refresh_provider_connections(
         if not _connection_effective_endpoint(connection, provider):
             continue
         connection_id = f"{provider_id}:{connection.id}"
-        if not runtime.provider_credentials.is_usable(provider_id, connection_id):
-            continue
-        try:
-            credential_value = await _runtime_provider_credential(
-                runtime, provider_id, connection_id, connection
-            )
-        except (ConfigError, RpcError) as exc:
-            _LOGGER.warning(
-                "Skipping model refresh for provider '%s' connection '%s': %s",
-                provider_id,
-                connection.id,
-                exc,
-            )
-            continue
+        credential_value = ""
+        if getattr(connection, "catalog_requires_credentials", True):
+            if not runtime.provider_credentials.is_usable(provider_id, connection_id):
+                continue
+            try:
+                credential_value = await _runtime_provider_credential(
+                    runtime, provider_id, connection_id, connection
+                )
+            except (ConfigError, RpcError) as exc:
+                _LOGGER.warning(
+                    "Skipping model refresh for provider '%s' connection '%s': %s",
+                    provider_id,
+                    connection.id,
+                    exc,
+                )
+                continue
         try:
             discovery_connection = connection
             if provider_id == "github-copilot":

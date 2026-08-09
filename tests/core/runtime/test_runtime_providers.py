@@ -70,6 +70,8 @@ def test_runtime_providers_populated(runtime: Runtime) -> None:
     assert "nous" in ids
     assert "stepfun" in ids
     assert "opencode-zen" in ids
+    assert "ollama" in ids
+    assert "ollama-cloud" in ids
 
 
 def test_runtime_provider_config_fields(runtime: Runtime) -> None:
@@ -1080,19 +1082,26 @@ def test_get_adapter_rejects_disabled_connection(runtime: Runtime) -> None:
 
 
 def test_ollama_provider_config_fields(runtime: Runtime) -> None:
-    """The shipped Ollama provider config parses with both connections."""
+    """Local Ollama and direct Ollama Cloud are distinct Provider identities."""
     # Act
-    config = runtime.providers.get("ollama")
+    local_config = runtime.providers.get("ollama")
+    cloud_config = runtime.providers.get("ollama-cloud")
 
     # Assert
-    assert config.adapter == "ollama"
-    assert config.base_url == "http://localhost:11434"
-    assert config.models_endpoint == "/api/tags"
-    local = config.get_connection("local")
-    cloud = config.get_connection("cloud")
+    assert local_config.adapter == "ollama"
+    assert local_config.base_url == "http://localhost:11434"
+    assert local_config.models_endpoint == "/api/tags"
+    local = local_config.get_connection("local")
     assert local.type == "none"
+    assert local.mode == "local"
+
+    assert cloud_config.adapter == "ollama"
+    assert cloud_config.base_url == "https://ollama.com"
+    assert cloud_config.models_endpoint == "/api/tags"
+    cloud = cloud_config.get_connection("api-key")
     assert cloud.type == "api_key"
-    assert cloud.base_url == "https://ollama.com"
+    assert cloud.mode == "cloud"
+    assert cloud.catalog_requires_credentials is False
     assert cloud.auth.credential_key == "OLLAMA_API_KEY"
 
 

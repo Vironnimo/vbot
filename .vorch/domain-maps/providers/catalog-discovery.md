@@ -6,7 +6,7 @@ Read this reference only for Provider Model discovery and refresh. Model-DB laye
 
 `core/models/discovery.py` is the refresh pipeline, but Provider Adapters supply wire knowledge: discovery headers/params, normalization, optional enrichment, and optional task feeds. Refresh writes Provider projection artifacts; it does not own cross-file Model assembly or fetch during Model load.
 
-A discovery target is one usable Connection with an effective `models_endpoint`. The effective base URL and endpoint use Connection overrides before Provider defaults. Account choice supplies a credential only; discovered Models are tagged with the local Connection id, not the Account.
+A discovery target is one Connection with an effective `models_endpoint`. By default it must be usable and contributes its selected Account credential; a Connection with `catalog_requires_credentials: false` may refresh a public catalog with an empty discovery credential even while no usable Account exists. The effective base URL and endpoint use Connection overrides before Provider defaults. Discovered Models are tagged with the local Connection id, not the Account.
 
 An OpenAI-compatible Custom Provider participates without a separate discovery path: its implicit `default` Connection, optional Settings `models_endpoint`, Adapter selector, and credential resolver feed this same pipeline. Manual Custom Model facts are applied later by `ModelRegistry` and therefore override a discovered Model with the same wire id without deleting discovered-only Models.
 
@@ -16,6 +16,7 @@ An OpenAI-compatible Custom Provider participates without a separate discovery p
 - `discovery_headers()`, `discovery_params()`, and `supplementary_discovery_params()` let a Provider describe catalog auth/query variants without branching generic discovery by Provider id.
 - `resolve_discovery_params(fetch_json)` may replace time-sensitive query parameters from a public JSON source; failure is logged and keeps the static `discovery_params()` fallback. OpenAI Subscription uses the stable `@openai/codex` package version because `/codex/models` gates newly available Models by `client_version`; only a strict numeric `x.y.z` version is accepted.
 - `enrich_discovered_models(normalized_models, post_json)` supports bounded Provider detail calls after primary normalization; a per-Model enrichment failure keeps the conservative baseline.
+- `finalize_discovered_model(model, connection)` applies facts known only from Connection scope after baseline normalization and before optional enrichment. Keep the default identity implementation; override it when the same Adapter serves scopes with different durable facts, such as forcing every direct Ollama Cloud catalog entry remote.
 - `discover_task_models(normalized_models, fetch_json)` adds Provider task-capability feeds. A task-catalog failure degrades the task projection and does not fail the primary refresh.
 - Raw primary, supplementary, enrichment, and task responses are retained in refresh artifacts for later projection changes, while Runtime reads only normalized/assembled Model data.
 

@@ -1,0 +1,21 @@
+{
+  "id": "ollama-cloud",
+  "name": "Ollama Cloud",
+  "adapter": "ollama",
+  "base_url": "https://ollama.com",
+  "models_endpoint": "/api/tags",
+  "connections": [
+    {
+      "id": "api-key",
+      "type": "api_key",
+      "label": "API key",
+      "mode": "cloud",
+      "catalog_requires_credentials": false,
+      "auth": {
+        "header": "Authorization",
+        "prefix": "Bearer ",
+        "credential_key": "OLLAMA_API_KEY"
+      }
+    }
+  ]
+}

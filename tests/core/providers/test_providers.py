@@ -1146,6 +1146,50 @@ class TestNoneConnectionType:
         with pytest.raises(ConfigError, match="auto_refresh must be a boolean"):
             ProviderRegistry.load(resources)
 
+    def test_public_catalog_flag_parses(self, tmp_path: Path) -> None:
+        resources = self._write_provider(
+            tmp_path,
+            {
+                "id": "cloud",
+                "type": "api_key",
+                "label": "Cloud",
+                "catalog_requires_credentials": False,
+                "auth": {
+                    "header": "Authorization",
+                    "prefix": "Bearer ",
+                    "credential_key": "OLLAMA_API_KEY",
+                },
+            },
+        )
+
+        connection = ProviderRegistry.load(resources).get("ollama").get_connection("cloud")
+
+        assert connection.catalog_requires_credentials is False
+
+    def test_catalog_requires_credentials_defaults_to_true(self, tmp_path: Path) -> None:
+        resources = self._write_provider(
+            tmp_path,
+            {"id": "local", "type": "none", "label": "Local"},
+        )
+
+        connection = ProviderRegistry.load(resources).get("ollama").get_connection("local")
+
+        assert connection.catalog_requires_credentials is True
+
+    def test_non_boolean_public_catalog_flag_raises_config_error(self, tmp_path: Path) -> None:
+        resources = self._write_provider(
+            tmp_path,
+            {
+                "id": "local",
+                "type": "none",
+                "label": "Local",
+                "catalog_requires_credentials": "no",
+            },
+        )
+
+        with pytest.raises(ConfigError, match="catalog_requires_credentials must be a boolean"):
+            ProviderRegistry.load(resources)
+
 
 # ---------------------------------------------------------------------------
 # models_dev_id — vBot↔models.dev provider-id mapping (Phase 3 consumer)

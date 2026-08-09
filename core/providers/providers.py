@@ -226,6 +226,10 @@ class ConnectionConfig:
             catalog automatically (at startup and on picker open, throttled).
             Meant for local endpoints (e.g. Ollama) whose installed-model set
             changes outside vBot; remote catalogs stay explicit-refresh only.
+        catalog_requires_credentials: Whether catalog discovery requires the
+            Connection credential. Defaults to ``True``; set ``False`` only
+            when the Provider documents its model-list and detail endpoints as
+            public while inference on the same Connection remains authenticated.
     """
 
     id: str
@@ -237,6 +241,7 @@ class ConnectionConfig:
     mode: str | None = None
     models_endpoint: str | None = None
     auto_refresh: bool = False
+    catalog_requires_credentials: bool = True
 
 
 def connection_default_enabled(connection: ConnectionConfig) -> bool:
@@ -746,6 +751,14 @@ class ProviderRegistry:
                     f"must be a boolean when set, got {type(auto_refresh).__name__}"
                 )
 
+            catalog_requires_credentials = connection_data.get("catalog_requires_credentials", True)
+            if not isinstance(catalog_requires_credentials, bool):
+                raise ConfigError(
+                    f"Provider '{provider_id}' connection '{local_id}' "
+                    "catalog_requires_credentials must be a boolean when set, "
+                    f"got {type(catalog_requires_credentials).__name__}"
+                )
+
             connections.append(
                 ConnectionConfig(
                     id=local_id,
@@ -757,6 +770,7 @@ class ProviderRegistry:
                     mode=mode,
                     models_endpoint=models_endpoint,
                     auto_refresh=auto_refresh,
+                    catalog_requires_credentials=catalog_requires_credentials,
                 )
             )
 

@@ -23,8 +23,8 @@ from core.models.models import (
     ReasoningCapabilities,
 )
 from core.providers.adapter import TOOL_RESULT_CONTENT_BLOCKS_FIELD
-from core.providers.errors import ProviderError
-from core.providers.ollama import OllamaAdapter
+from core.providers.errors import NetworkError, ProviderError
+from core.providers.ollama import OLLAMA_CLOUD_MODE, OLLAMA_LOCAL_MODE, OllamaAdapter
 from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig
 from core.tools import HISTORY_TOOL_DESCRIPTION, HISTORY_TOOL_NAME, HISTORY_TOOL_PARAMETERS
 
@@ -42,16 +42,28 @@ OLLAMA_CONFIG = ProviderConfig(
             type="none",
             label="Local",
             auth=AuthConfig(header="", prefix="", credential_key=""),
+            mode=OLLAMA_LOCAL_MODE,
         ),
+    ],
+)
+
+OLLAMA_CLOUD_CONFIG = ProviderConfig(
+    id="ollama-cloud",
+    name="Ollama Cloud",
+    adapter="ollama",
+    base_url="https://ollama.com",
+    models_endpoint="/api/tags",
+    connections=[
         ConnectionConfig(
-            id="cloud",
+            id="api-key",
             type="api_key",
-            label="Ollama Cloud",
+            label="API key",
             auth=AuthConfig(
                 header="Authorization", prefix="Bearer ", credential_key="OLLAMA_API_KEY"
             ),
-            base_url="https://ollama.com",
-        ),
+            mode=OLLAMA_CLOUD_MODE,
+            catalog_requires_credentials=False,
+        )
     ],
 )
 
@@ -153,10 +165,29 @@ GPT_OSS_MODEL = Model(
     max_output_tokens=None,
 )
 
+DEEPSEEK_CLOUD_MODEL = Model(
+    model_id="deepseek-v4-flash",
+    name="DeepSeek V4 Flash",
+    capabilities=Capabilities(
+        vision=False,
+        tools=True,
+        json_mode=False,
+        reasoning=ReasoningCapabilities(
+            supported=True,
+            control=REASONING_CONTROL_LEVELS,
+            levels=("high", "max"),
+        ),
+    ),
+    context_window=1_048_576,
+    max_output_tokens=None,
+    metadata={"ollama": {"remote": True}},
+)
+
 _MODELS = {
     "thinking-model": THINKING_MODEL,
     "plain-model": PLAIN_MODEL,
     "gpt-oss:20b": GPT_OSS_MODEL,
+    "deepseek-v4-flash": DEEPSEEK_CLOUD_MODEL,
 }
 
 
@@ -201,12 +232,13 @@ class TestPayloadBuilding:
     async def test_cloud_connection_sends_bearer_header(self) -> None:
         """An api_key connection carries the Bearer token."""
         # Arrange
-        cloud_connection = OLLAMA_CONFIG.get_connection("cloud")
+        cloud_connection = OLLAMA_CLOUD_CONFIG.get_connection("api-key")
         adapter = OllamaAdapter(
-            OLLAMA_CONFIG,
+            OLLAMA_CLOUD_CONFIG,
             "sk-cloud",
             cloud_connection.base_url,
             cloud_connection.auth,
+            connection_mode=cloud_connection.mode,
         )
         route = respx.post("https://ollama.com/api/chat").mock(
             return_value=httpx.Response(200, json=TEXT_RESPONSE)
@@ -464,6 +496,39 @@ class TestReasoningToggle:
 
         assert "think" not in _last_request_payload(route)
 
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_cloud_reasoning_ladder_sends_max_level(self, adapter: OllamaAdapter) -> None:
+        route = respx.post(OLLAMA_CHAT_URL).mock(
+            return_value=httpx.Response(200, json=TEXT_RESPONSE)
+        )
+
+        await adapter.send(
+            SAMPLE_MESSAGES,
+            model_id="deepseek-v4-flash",
+            thinking_effort="max",
+        )
+
+        assert _last_request_payload(route)["think"] == "max"
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_cloud_reasoning_ladder_uses_boolean_off_switch(
+        self,
+        adapter: OllamaAdapter,
+    ) -> None:
+        route = respx.post(OLLAMA_CHAT_URL).mock(
+            return_value=httpx.Response(200, json=TEXT_RESPONSE)
+        )
+
+        await adapter.send(
+            SAMPLE_MESSAGES,
+            model_id="deepseek-v4-flash",
+            thinking_effort="none",
+        )
+
+        assert _last_request_payload(route)["think"] is False
+
 
 # ---------------------------------------------------------------------------
 # Message translation
@@ -488,7 +553,12 @@ class TestMessageTranslation:
                     {"id": "call_dmop6zf4", "name": "get_weather", "arguments": {"city": "Berlin"}}
                 ],
             },
-            {"role": "tool", "tool_call_id": "call_dmop6zf4", "content": "Sunny, 25°C"},
+            {
+                "role": "tool",
+                "tool_call_id": "call_dmop6zf4",
+                "name": "get_weather",
+                "content": "Sunny, 25°C",
+            },
         ]
 
         # Act
@@ -506,6 +576,7 @@ class TestMessageTranslation:
             "role": "tool",
             "content": "Sunny, 25°C",
             "tool_call_id": "call_dmop6zf4",
+            "tool_name": "get_weather",
         }
 
     @respx.mock
@@ -921,6 +992,24 @@ class TestStreamNdjson:
         with pytest.raises(NetworkError, match="is the Ollama service running"):
             await adapter.send(SAMPLE_MESSAGES, model_id="ministral-3:8b")
 
+    @pytest.mark.asyncio
+    async def test_cloud_connect_error_does_not_suggest_starting_local_service(self) -> None:
+        connection = OLLAMA_CLOUD_CONFIG.get_connection("api-key")
+        adapter = OllamaAdapter(
+            OLLAMA_CLOUD_CONFIG,
+            "sk-cloud",
+            connection.base_url,
+            connection.auth,
+            connection_mode=connection.mode,
+        )
+
+        error = adapter._wrap_transport_error(httpx.ConnectError("connection refused"))
+
+        assert isinstance(error, NetworkError)
+        assert "Ollama Cloud is not reachable" in str(error)
+        assert "service running" not in str(error)
+        await adapter.aclose()
+
 
 # ---------------------------------------------------------------------------
 # Catalog normalization and enrichment
@@ -969,6 +1058,22 @@ class TestCatalogNormalization:
         # Assert
         assert model.metadata["ollama"] == {"remote": True}
         assert model.family == "kimi"
+
+    def test_direct_cloud_connection_overrides_missing_remote_host_marker(self) -> None:
+        raw = {
+            "name": "glm-5.1",
+            "model": "glm-5.1",
+            "details": {"family": "glm5.1"},
+        }
+        baseline = OllamaAdapter.normalize_catalog_entry(raw)
+
+        model = OllamaAdapter.finalize_discovered_model(
+            baseline,
+            OLLAMA_CLOUD_CONFIG.get_connection("api-key"),
+        )
+
+        assert baseline.metadata["ollama"] == {"local": True}
+        assert model.metadata["ollama"] == {"remote": True}
 
     def test_current_tags_facts_are_used_before_show_enrichment(self) -> None:
         raw = {

@@ -1533,6 +1533,17 @@ class TestModelRegistryRealResources:
         deepseek = registry.get("opencode-go", "deepseek-v4-pro")
         assert deepseek.capabilities.reasoning.supported is True
 
+    def test_ollama_cloud_catalog_is_separate_and_entirely_remote(self):
+        registry = ModelRegistry.load(RESOURCES_DIR)
+
+        models = registry.list_for_provider("ollama-cloud")
+
+        assert models
+        assert registry.get("ollama-cloud", "gpt-oss:120b").model_id == "gpt-oss:120b"
+        assert all(model.connections == ("api-key",) for model in models)
+        assert all(model.metadata.get("ollama", {}).get("remote") is True for model in models)
+        assert all(model.metadata.get("ollama", {}).get("local") is not True for model in models)
+
     def test_overrides_are_applied_at_load(self):
         """``<provider>.overrides.json`` is now merged at LOAD (it used to only
         apply at refresh). The openai overrides add override-only task models —
@@ -1607,7 +1618,7 @@ class TestModelRegistryRealResources:
 
     @pytest.mark.parametrize(
         "provider_id",
-        ["openai", "openrouter", "anthropic", "github-copilot", "mistral"],
+        ["openai", "openrouter", "anthropic", "github-copilot", "mistral", "ollama-cloud"],
     )
     def test_provider_loads_and_has_models(self, provider_id: str):
         registry = ModelRegistry.load(RESOURCES_DIR)

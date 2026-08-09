@@ -3940,6 +3940,32 @@
       "release_date": "2026-03-31",
       "temperature": false
     },
+    "ibm/granite-4-h-small": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": true,
+        "vision": false
+      },
+      "context_window": 131072,
+      "family": "granite",
+      "last_updated": "2025-10-02",
+      "max_output_tokens": 131072,
+      "name": "Granite-4.0-H-Small",
+      "release_date": "2025-10-02",
+      "temperature": true
+    },
     "meituan/longcat-2.0": {
       "capabilities": {
         "input_modalities": [
@@ -4918,6 +4944,34 @@
       "max_output_tokens": 256000,
       "name": "Mistral Small 4",
       "release_date": "2026-03-16",
+      "temperature": true
+    },
+    "mistral/mistral-small-3-1-24b-instruct-2503": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "context_window": 128000,
+      "family": "mistral-small",
+      "knowledge": "2024-06",
+      "last_updated": "2025-03-17",
+      "max_output_tokens": 16384,
+      "name": "Mistral Small 3.1 24B",
+      "release_date": "2025-03-17",
       "temperature": true
     },
     "mistral/mistral-small-latest": {
