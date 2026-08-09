@@ -23,6 +23,7 @@ from core.providers.usage import (
     _epoch_to_iso,
     _parse_copilot_usage,
     _parse_minimax_usage,
+    _parse_ollama_usage,
     _parse_openai_usage,
     _secondary_window_label,
     clamp_percent,
@@ -188,6 +189,36 @@ def _openai_runtime(*, usable: bool = True) -> FakeRuntime:
     )
 
 
+def _ollama_cloud_provider_config() -> ProviderConfig:
+    return ProviderConfig(
+        id="ollama-cloud",
+        name="Ollama Cloud",
+        adapter="ollama",
+        base_url="https://ollama.com",
+        connections=[
+            ConnectionConfig(
+                id="api-key",
+                type="api_key",
+                label="API key",
+                auth=AuthConfig(
+                    header="Authorization",
+                    prefix="Bearer ",
+                    credential_key="OLLAMA_API_KEY",
+                ),
+                mode="cloud",
+            )
+        ],
+    )
+
+
+def _ollama_cloud_runtime() -> FakeRuntime:
+    return FakeRuntime(
+        providers=FakeProviders({"ollama-cloud": _ollama_cloud_provider_config()}),
+        credentials=FakeCredentials({"ollama-cloud:api-key"}),
+        tokens={"ollama-cloud:api-key:default": "ollama-secret"},
+    )
+
+
 _OPENAI_BODY: dict[str, Any] = {
     "plan_type": "Plus",
     "credits": {"balance": 0},
@@ -201,6 +232,31 @@ _OPENAI_BODY: dict[str, Any] = {
             "used_percent": 12.0,
             "limit_window_seconds": 604_800,
             "reset_at": 1_750_600_000,
+        },
+    },
+}
+
+
+_OLLAMA_BODY: dict[str, Any] = {
+    "activity": {
+        "cost": "0.00000",
+        "models": [],
+        "period": {"type": "last_4_weeks"},
+    },
+    "limits": {
+        "session": {
+            "models": [
+                {"name": "gemma4:31b", "request_count": 6},
+                {"name": "minimax-m3", "request_count": 3},
+            ],
+            "usage": 0.019,
+        },
+        "weekly": {
+            "models": [
+                {"name": "gemma4:31b", "request_count": 9},
+                {"name": "minimax-m3", "request_count": 5},
+            ],
+            "usage": 0.007,
         },
     },
 }
@@ -313,6 +369,26 @@ async def test_report_returns_openai_snapshot_with_windows() -> None:
     assert headers["chatgpt-account-id"] == "acct-123"
     assert headers["OpenAI-Beta"] == "responses=experimental"
     assert headers["originator"] == "vbot"
+
+
+@pytest.mark.asyncio
+async def test_report_fetches_ollama_cloud_usage_with_connection_auth() -> None:
+    transport = FakeTransport(FakeResponse(payload=_OLLAMA_BODY))
+    service = ProviderUsageService(_ollama_cloud_runtime(), transport=transport)
+
+    report = await service.report()
+
+    assert len(report.providers) == 1
+    snapshot = report.providers[0]
+    assert snapshot.connection == "ollama-cloud:api-key"
+    assert snapshot.account == "default"
+    assert [window.used_percent for window in snapshot.windows] == [1.9, 0.7]
+    assert transport.calls == [
+        (
+            "https://ollama.com/api/usage",
+            {"Authorization": "Bearer ollama-secret"},
+        )
+    ]
 
 
 @pytest.mark.asyncio
@@ -557,6 +633,59 @@ def test_parse_copilot_usage_missing_snapshots_is_graceful() -> None:
     assert snapshot.windows == []
     assert snapshot.plan == "business"
     assert snapshot.error is None
+
+
+# ---------------------------------------------------------------------------
+# Ollama Cloud parsing (live-verified shape)
+# ---------------------------------------------------------------------------
+
+
+def test_parse_ollama_usage_normalizes_limits_and_observed_requests() -> None:
+    snapshot = _parse_ollama_usage(
+        "ollama-cloud:api-key",
+        "Ollama Cloud",
+        _OLLAMA_BODY,
+    )
+
+    assert snapshot.plan is None
+    assert snapshot.error is None
+    assert snapshot.windows == [
+        UsageWindow(
+            label="5h",
+            used_percent=1.9,
+            window_seconds=18_000,
+            used_units=9.0,
+            unit="requests",
+        ),
+        UsageWindow(
+            label="Week",
+            used_percent=0.7,
+            window_seconds=604_800,
+            used_units=14.0,
+            unit="requests",
+        ),
+    ]
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"unexpected": True},
+        {"limits": {}},
+        {"limits": {"session": {"usage": "0.1"}}},
+    ],
+)
+def test_parse_ollama_usage_malformed_limits_raise_fetch_error(body: Any) -> None:
+    with pytest.raises(UsageFetchError, match="Unsupported response shape"):
+        _parse_ollama_usage("ollama-cloud:api-key", "Ollama Cloud", body)
+
+
+def test_parse_ollama_usage_keeps_percent_when_request_breakdown_changes() -> None:
+    body = {"limits": {"session": {"usage": 0.25, "models": {"unexpected": True}}}}
+
+    snapshot = _parse_ollama_usage("ollama-cloud:api-key", "Ollama Cloud", body)
+
+    assert snapshot.windows == [UsageWindow(label="5h", used_percent=25.0, window_seconds=18_000)]
 
 
 # ---------------------------------------------------------------------------

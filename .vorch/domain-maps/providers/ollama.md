@@ -1,6 +1,6 @@
 # Ollama Provider
 
-Two Providers speak Ollama's **native** `/api/chat` wire (not the OpenAI-compatible shim) through the same `OllamaAdapter`: `ollama` owns the keyless local service at `http://localhost:11434`, including signed-in locally proxied `:cloud` Models; `ollama-cloud` owns the direct API at `https://ollama.com` with `OLLAMA_API_KEY`. Keeping the Provider identities separate prevents identical wire Model ids in the local and direct catalogs from colliding in Model selection. Local wire facts were verified against Ollama 0.24.0 on 2026-07-07; direct Cloud `/api/tags`, `/api/show`, and unauthenticated `/api/chat` rejection were verified live on 2026-08-09, while credential-backed inference remains unverified (see FLAGGED.md).
+Two Providers speak Ollama's **native** `/api/chat` wire (not the OpenAI-compatible shim) through the same `OllamaAdapter`: `ollama` owns the keyless local service at `http://localhost:11434`, including signed-in locally proxied `:cloud` Models; `ollama-cloud` owns the direct API at `https://ollama.com` with `OLLAMA_API_KEY`. Keeping the Provider identities separate prevents identical wire Model ids in the local and direct catalogs from colliding in Model selection. Local wire facts were verified against Ollama 0.24.0 on 2026-07-07; direct Cloud catalog discovery, authenticated non-streaming inference, and Account usage were verified live on 2026-08-09, while credential-backed streaming, Tool Calls, and reasoning remain unverified (see FLAGGED.md).
 
 **The `local` Connection is disabled by default** (keyless Connections need an explicit opt-in — `providers.md` → Terms → Usable and `providers/connections.md`). Until the user enables it (Settings → Providers toggle, `vbot provider enable ollama --connection ollama:local`, or the `connection.set_enabled` RPC), vBot never probes localhost, lists no Ollama Models, and refuses Adapter creation with a clear "connection is disabled" error. Enabling an auto-refresh Connection forces an immediate catalog probe so the caller gets live reachability feedback; "enabled but not running" is a valid state — the enable sticks and the Models appear on the next successful probe.
 
@@ -28,13 +28,19 @@ Discovery stamps a conservative replay profile into `metadata.ollama.reasoning_r
 - Direct Cloud catalog endpoints are public: explicit/system refresh can fetch `/api/tags` and enrich through `/api/show` without an API key because the Connection declares `catalog_requires_credentials: false`. Chat still requires a usable Account, so discovered Cloud Models are not selectable for inference until `OLLAMA_API_KEY` is configured.
 - A refused/failed TCP connect is wrapped into a `NetworkError` that names the base URL and asks "is the Ollama service running?" (still retryable, unchanged classification) — so a chat against a stopped Ollama fails with the real cause instead of a bare socket error.
 
+## Provider Usage
+
+The usable `ollama-cloud:api-key` Connection participates in Provider Usage through authenticated `GET https://ollama.com/api/usage`. This endpoint was discovered and live-verified on 2026-08-09 but is not in Ollama's public API documentation, so its parser is strict and any HTTP or shape change must degrade to an unavailable snapshot without affecting Chat or Statistics.
+
+The response's `limits.session.usage` and `limits.weekly.usage` are ratios; vBot multiplies them by 100 and projects the documented 5-hour and 7-day durations. Ollama returns no exact reset timestamps or plan name, so vBot leaves both absent. Each window's `models[].request_count` values are summed only as observed requests: they are not total or remaining quota units because Ollama weights usage separately. The unrelated four-week `activity.cost` field is not a subscription-credit balance and is intentionally ignored.
+
 ## Effective context window / num_ctx enforcement
 
 Ollama reports a local Model's *theoretical* max (262144 for an 8B model) and **silently truncates** the prompt when the loaded context is smaller. vBot therefore budgets flagged-local Models against the effective window (user knob or `min(32768, max)` — `resolve_effective_context_window`) **and enforces exactly that window on the wire**: the runtime injects `local_context_resolver` (keyword-only constructor arg, DI like `model_lookup`) into the adapter, which sets `options.num_ctx` on every send/stream for flagged-local Models. Direct `ollama-cloud`, locally proxied `:cloud`, and unknown Models are remote/non-local and receive no local cap or `num_ctx`. Settings are read live per call; verified via `GET /api/ps` → `context_length` of the loaded local Model. Assumption == reality.
 
 ## Constraints & Gotchas
 
-- Direct Cloud inference uses the documented native API with `Authorization: Bearer`; streaming, Tool calls, reasoning, and Usage are covered by adapter tests but still need a credential-backed live probe (FLAGGED.md).
+- Direct Cloud inference uses the documented native API with `Authorization: Bearer`; authenticated non-streaming Chat and Account usage are live-verified, while streaming, Tool Calls, and reasoning still need credential-backed live probes (FLAGGED.md).
 - Transport errors are mode-aware: local failures suggest checking the local service, while direct Cloud failures name Ollama Cloud and never suggest starting a daemon.
 - The same wire Model id may legitimately exist in both catalogs. Preserve the distinct Provider ids `ollama/<model>` and `ollama-cloud/<model>`; do not fold direct Cloud back into an `ollama` Connection.
 - `/api/ps` (loaded models + actual context) and `/api/version` are live-testing aids only — vBot does not consume them.
