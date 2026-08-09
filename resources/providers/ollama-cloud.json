@@ -1,7 +1,7 @@
 {
   "id": "ollama-cloud",
   "name": "Ollama Cloud",
-  "adapter": "ollama",
+  "adapter": "ollama_cloud",
   "base_url": "https://ollama.com",
   "models_endpoint": "/api/tags",
   "connections": [

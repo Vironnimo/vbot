@@ -924,6 +924,9 @@ _DISCOVERY_ADAPTER_MAP = {
     "stepfun": StepFunAdapter,
     "github_copilot": GitHubCopilotAdapter,
     "ollama": OllamaAdapter,
+    # Direct Cloud chat uses OpenAI compatibility, but model discovery remains
+    # Ollama-native (/api/tags + /api/show).
+    "ollama_cloud": OllamaAdapter,
     "lmstudio": LMStudioAdapter,
     "xai": XAIAdapter,
 }

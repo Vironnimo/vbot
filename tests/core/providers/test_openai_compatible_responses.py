@@ -499,6 +499,90 @@ class TestNormalizeResponseUsage:
             "reasoning_tokens": 8,
         }
 
+    def test_usage_accepts_anthropic_style_top_level_cache_details(self, openai_adapter):
+        """Compatible gateways may expose cache subsets beside the token totals."""
+        response = {
+            "choices": [{"message": {"role": "assistant", "content": "Hi"}}],
+            "usage": {
+                "prompt_tokens": 42,
+                "completion_tokens": 13,
+                "cache_read_input_tokens": 30,
+                "cache_creation_input_tokens": 5,
+            },
+        }
+
+        normalized = openai_adapter.normalize_response(response)
+
+        assert normalized["usage"] == {
+            "input_tokens": 42,
+            "output_tokens": 13,
+            "cache_read_tokens": 30,
+            "cache_write_tokens": 5,
+        }
+
+    def test_usage_accepts_deepseek_prompt_cache_hit_tokens(self, openai_adapter):
+        """DeepSeek-compatible responses use a separate cache-hit field."""
+        response = {
+            "choices": [{"message": {"role": "assistant", "content": "Hi"}}],
+            "usage": {
+                "prompt_tokens": 42,
+                "completion_tokens": 13,
+                "prompt_cache_hit_tokens": 30,
+            },
+        }
+
+        normalized = openai_adapter.normalize_response(response)
+
+        assert normalized["usage"] == {
+            "input_tokens": 42,
+            "output_tokens": 13,
+            "cache_read_tokens": 30,
+        }
+
+    def test_nested_cache_details_win_over_compatible_top_level_fallbacks(
+        self,
+        openai_adapter,
+    ):
+        """The canonical OpenAI detail object remains the preferred source."""
+        response = {
+            "choices": [{"message": {"role": "assistant", "content": "Hi"}}],
+            "usage": {
+                "prompt_tokens": 42,
+                "completion_tokens": 13,
+                "prompt_tokens_details": {
+                    "cached_tokens": 20,
+                    "cache_write_tokens": 4,
+                },
+                "cache_read_input_tokens": 30,
+                "cache_creation_input_tokens": 5,
+            },
+        }
+
+        normalized = openai_adapter.normalize_response(response)
+
+        assert normalized["usage"] == {
+            "input_tokens": 42,
+            "output_tokens": 13,
+            "cache_read_tokens": 20,
+            "cache_write_tokens": 4,
+        }
+
+    def test_usage_ignores_boolean_and_negative_cache_details(self, openai_adapter):
+        """Invalid cache counters never enter canonical Usage."""
+        response = {
+            "choices": [{"message": {"role": "assistant", "content": "Hi"}}],
+            "usage": {
+                "prompt_tokens": 42,
+                "completion_tokens": 13,
+                "cache_read_input_tokens": True,
+                "cache_creation_input_tokens": -1,
+            },
+        }
+
+        normalized = openai_adapter.normalize_response(response)
+
+        assert normalized["usage"] == {"input_tokens": 42, "output_tokens": 13}
+
     def test_usage_omits_cache_read_tokens_when_cached_tokens_not_int(self, openai_adapter):
         """Non-integer cached_tokens values are ignored."""
         response = {

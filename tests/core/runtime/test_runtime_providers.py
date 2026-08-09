@@ -19,7 +19,7 @@ from core.providers.kimi import KIMI_CODING_MODE, KimiAdapter
 from core.providers.minimax import MiniMaxAdapter
 from core.providers.mistral import MistralAdapter
 from core.providers.nous import NousAdapter
-from core.providers.ollama import OllamaAdapter
+from core.providers.ollama import OllamaAdapter, OllamaCloudAdapter
 from core.providers.openai import CODEX_RESPONSES_MODE, OpenAIAdapter
 from core.providers.openai_compatible import OpenAICompatibleAdapter
 from core.providers.opencode_go import OpenCodeGoAdapter
@@ -1074,6 +1074,20 @@ def test_runtime_wires_ollama_adapter_for_keyless_local_connection(runtime: Runt
     assert isinstance(adapter, OllamaAdapter)
 
 
+def test_runtime_wires_openai_compatible_adapter_for_ollama_cloud(
+    runtime: Runtime,
+) -> None:
+    """Direct Cloud chat uses Ollama's OpenAI-compatible reasoning wire."""
+    runtime._provider_credentials = ProviderCredentialResolver(  # type: ignore[attr-defined]
+        runtime.providers,
+        process_env={"OLLAMA_API_KEY": "ollama-secret"},
+    )
+
+    adapter = runtime.get_adapter("ollama-cloud", "ollama-cloud:api-key")
+
+    assert isinstance(adapter, OllamaCloudAdapter)
+
+
 def test_get_adapter_rejects_disabled_connection(runtime: Runtime) -> None:
     """A disabled connection never reaches adapter construction."""
     # Act / Assert — ollama:local is keyless and therefore disabled by default.
@@ -1095,7 +1109,7 @@ def test_ollama_provider_config_fields(runtime: Runtime) -> None:
     assert local.type == "none"
     assert local.mode == "local"
 
-    assert cloud_config.adapter == "ollama"
+    assert cloud_config.adapter == "ollama_cloud"
     assert cloud_config.base_url == "https://ollama.com"
     assert cloud_config.models_endpoint == "/api/tags"
     cloud = cloud_config.get_connection("api-key")
