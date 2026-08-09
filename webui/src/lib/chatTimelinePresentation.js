@@ -655,7 +655,6 @@ function toolPrimaryPart(part) {
     text,
     fullText,
     truncate,
-    quote: part.quote === true,
     copyable: part.copyable === true,
     tooltipText: showTooltip ? fullText : '',
   };
