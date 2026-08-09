@@ -365,6 +365,123 @@ describe('chat controller', () => {
     );
   });
 
+  it('keeps terminal live output when an in-flight History request returns a pre-completion snapshot', async () => {
+    let resolveStaleHistory;
+    const loadChatHistory = vi
+      .fn()
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveStaleHistory = resolve;
+          }),
+      )
+      .mockResolvedValueOnce({
+        active_run: null,
+        has_more: false,
+        messages: [
+          { id: 'user-final', role: 'user', content: 'Finish the work' },
+          {
+            id: 'assistant-final',
+            role: 'assistant',
+            content: 'Final answer',
+          },
+          {
+            id: 'summary-final',
+            role: 'run_summary',
+            run_id: 'run-final',
+            status: 'completed',
+          },
+        ],
+      });
+    const { chatState, controller, runStream } = setup({
+      isDisplayedSession: () => true,
+      operationOverrides: { loadChatHistory },
+    });
+    const sessionState = ensureSessionState(chatState, 'alpha', 'session-one');
+    startRun(sessionState, {
+      run_id: 'run-final',
+      status: 'running',
+      sse_url: '/api/runs/run-final/events',
+    });
+
+    const staleLoad = controller.loadHistoryForSession('alpha', 'session-one');
+    await vi.waitFor(() => expect(loadChatHistory).toHaveBeenCalledOnce());
+    appendRunEvent(sessionState, {
+      type: 'user_message_persisted',
+      run_id: 'run-final',
+      sequence: 1,
+      payload: {
+        message: {
+          id: 'user-final',
+          role: 'user',
+          content: 'Finish the work',
+        },
+      },
+    });
+    appendRunEvent(sessionState, {
+      type: 'assistant_output_delta',
+      run_id: 'run-final',
+      sequence: 2,
+      payload: { content_delta: 'Final answer' },
+    });
+    appendRunEvent(sessionState, {
+      type: 'assistant_output',
+      run_id: 'run-final',
+      sequence: 3,
+      payload: {
+        message: {
+          id: 'assistant-final',
+          role: 'assistant',
+          content: 'Final answer',
+        },
+      },
+    });
+    appendRunEvent(sessionState, {
+      type: 'run_completed',
+      run_id: 'run-final',
+      sequence: 4,
+      payload: { status: 'completed' },
+    });
+
+    resolveStaleHistory({
+      active_run: {
+        run_id: 'run-final',
+        status: 'running',
+        sse_url: '/api/runs/run-final/events',
+      },
+      has_more: false,
+      messages: [
+        { id: 'user-final', role: 'user', content: 'Finish the work' },
+      ],
+    });
+    await expect(staleLoad).resolves.toBe(true);
+
+    const visibleOutput = () =>
+      visibleTimelineItemsForRender(sessionState)
+        .flatMap((item) => item.outputs ?? [])
+        .map((item) => item.content);
+    expect(sessionState.status).toBe('completed');
+    expect(sessionState.runEvents.map((event) => event.type)).toContain(
+      'assistant_output',
+    );
+    expect(sessionState.streamingRunEvents).toHaveLength(1);
+    expect(visibleOutput()).toEqual(['Final answer']);
+    expect(sessionState.currentRun?.status).toBe('completed');
+    expect(runStream.attachRunStream).toHaveBeenLastCalledWith(
+      sessionState,
+      null,
+    );
+
+    await expect(
+      controller.loadHistoryForSession('alpha', 'session-one'),
+    ).resolves.toBe(true);
+
+    expect(sessionState.status).toBe('idle');
+    expect(sessionState.runEvents).toEqual([]);
+    expect(sessionState.streamingRunEvents).toEqual([]);
+    expect(visibleOutput()).toEqual(['Final answer']);
+  });
+
   it('reconciles a stalled Run to its durable final assistant answer without re-executing it', async () => {
     const loadChatHistory = vi.fn().mockResolvedValue({
       active_run: null,
@@ -407,6 +524,66 @@ describe('chat controller', () => {
     expect(runStream.closeSubscriptionFor).toHaveBeenCalledWith(
       sessionState.key,
     );
+  });
+
+  it('does not reset terminal output when stalled-Run recovery returns an older snapshot', async () => {
+    let resolveHistory;
+    const loadChatHistory = vi.fn(
+      () =>
+        new Promise((resolve) => {
+          resolveHistory = resolve;
+        }),
+    );
+    const { chatState, controller, runStream } = setup({
+      isDisplayedSession: () => true,
+      operationOverrides: { loadChatHistory },
+    });
+    const sessionState = ensureSessionState(chatState, 'alpha', 'session-one');
+    startRun(sessionState, {
+      run_id: 'run-recovering',
+      status: 'running',
+      sse_url: '/api/runs/run-recovering/events',
+    });
+
+    const recovery = controller.reconcileRunSession(
+      sessionState,
+      'run-recovering',
+    );
+    await vi.waitFor(() => expect(loadChatHistory).toHaveBeenCalledOnce());
+    appendRunEvent(sessionState, {
+      type: 'assistant_output_delta',
+      run_id: 'run-recovering',
+      sequence: 1,
+      payload: { content_delta: 'Recovered answer' },
+    });
+    appendRunEvent(sessionState, {
+      type: 'assistant_output',
+      run_id: 'run-recovering',
+      sequence: 2,
+      payload: {
+        message: {
+          id: 'assistant-recovering',
+          role: 'assistant',
+          content: 'Recovered answer',
+        },
+      },
+    });
+    appendRunEvent(sessionState, {
+      type: 'run_completed',
+      run_id: 'run-recovering',
+      sequence: 3,
+      payload: { status: 'completed' },
+    });
+    resolveHistory({ active_run: null, has_more: false, messages: [] });
+
+    await expect(recovery).resolves.toBe(true);
+    expect(sessionState.status).toBe('completed');
+    expect(sessionState.currentRun?.runId).toBe('run-recovering');
+    expect(sessionState.runEvents.map((event) => event.type)).toContain(
+      'assistant_output',
+    );
+    expect(sessionState.streamingRunEvents).toHaveLength(1);
+    expect(runStream.closeSubscriptionFor).not.toHaveBeenCalled();
   });
 
   it('drops sparse live replay after history proves every Run is finished', async () => {
