@@ -156,6 +156,52 @@ async def test_streaming_response_with_usage_delta_produces_assistant_with_usage
 
 
 @pytest.mark.asyncio
+async def test_partial_provider_usage_estimates_only_missing_input(
+    tmp_path: Path,
+) -> None:
+    agent = StubAgent(id="coder", model="ollama-cloud/minimax-m3", allowed_tools=["*"])
+    adapter = StubAdapter(
+        [],
+        stream_responses=[
+            [
+                {"type": "content_delta", "text": "Hello"},
+                {"type": "usage", "output_tokens": 2572},
+                {"type": "finish", "reason": "stop"},
+            ]
+        ],
+    )
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+
+    assistant = await build_chat_loop(runtime, streaming=True).send(
+        "coder", "Hi", session_id="session-one"
+    )
+
+    assert assistant.usage is not None
+    assert assistant.usage == {
+        "input_tokens": assistant.usage["input_tokens"],
+        "input_tokens_estimated": True,
+        "output_tokens": 2572,
+        "estimated": True,
+    }
+    run = next(iter(runtime.chat_runs._runs.values()))
+    completed = [event for event in run.events if event.type == "run_completed"]
+    assert completed[0].payload["session_usage"] == {
+        "measured_turns": 0,
+        "estimated_turns": 1,
+        "cache_turns": 0,
+        "input_tokens": 0,
+        "output_tokens": 2572,
+        "cache_read_tokens": 0,
+        "cache_write_tokens": 0,
+    }
+    assert completed[0].payload["context_usage"] == {
+        "tokens": assistant.usage["input_tokens"] + 2572,
+        "estimated": True,
+        "provider_output_tokens": 2572,
+    }
+
+
+@pytest.mark.asyncio
 async def test_response_without_usage_applies_estimation(
     tmp_path: Path,
 ) -> None:
@@ -170,7 +216,9 @@ async def test_response_without_usage_applies_estimation(
     assert assistant.usage["estimated"] is True
     assert assistant.usage == {
         "input_tokens": assistant.usage["input_tokens"],
+        "input_tokens_estimated": True,
         "output_tokens": assistant.usage["output_tokens"],
+        "output_tokens_estimated": True,
         "estimated": True,
     }
     session = runtime.chat_sessions.get("coder", "session-one")
@@ -201,7 +249,9 @@ async def test_estimation_computes_from_request_message_contents(
 
     assert assistant.usage == {
         "input_tokens": expected_input,
+        "input_tokens_estimated": True,
         "output_tokens": expected_output,
+        "output_tokens_estimated": True,
         "estimated": True,
     }
 

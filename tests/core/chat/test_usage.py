@@ -72,6 +72,26 @@ def test_estimated_turns_are_counted_but_never_summed() -> None:
     assert "reasoning_turns" not in totals
 
 
+def test_partial_turn_splits_estimated_input_from_measured_output() -> None:
+    totals = aggregate_session_usage(
+        [
+            _assistant(
+                {
+                    "input_tokens": 9999,
+                    "input_tokens_estimated": True,
+                    "output_tokens": 2572,
+                    "estimated": True,
+                }
+            )
+        ]
+    )
+
+    assert totals["measured_turns"] == 0
+    assert totals["estimated_turns"] == 1
+    assert totals["input_tokens"] == 0
+    assert totals["output_tokens"] == 2572
+
+
 def test_reasoning_turns_count_reported_zero_without_changing_output() -> None:
     totals = aggregate_session_usage(
         [
@@ -179,14 +199,30 @@ def test_context_usage_falls_back_to_complete_request_without_provider_measureme
         {"role": "user", "content": "hello"},
         {"role": "assistant", "content": "world"},
     ]
-    expected_tokens, _ = estimate_request_input_tokens(current_request)
-
     context_usage = build_model_step_context_usage(
         {"input_tokens": 10, "output_tokens": 2, "estimated": True},
         current_request,
     )
 
-    assert context_usage == {"tokens": expected_tokens, "estimated": True}
+    assert context_usage == {"tokens": 12, "estimated": True}
+
+
+def test_context_usage_preserves_provider_output_with_estimated_input() -> None:
+    context_usage = build_model_step_context_usage(
+        {
+            "input_tokens": 134_547,
+            "input_tokens_estimated": True,
+            "output_tokens": 2572,
+            "estimated": True,
+        },
+        [{"role": "user", "content": "request"}],
+    )
+
+    assert context_usage == {
+        "tokens": 137_119,
+        "estimated": True,
+        "provider_output_tokens": 2572,
+    }
 
 
 def test_latest_session_context_usage_restores_provider_anchor_plus_new_messages() -> None:

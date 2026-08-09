@@ -66,6 +66,8 @@ function contextUsageLines(contextUsage, format) {
 function lastTurnLines(usage, format) {
   const input = nonNegative(usage.input_tokens);
   const output = nonNegative(usage.output_tokens);
+  const inputEstimated = usageFieldIsEstimated(usage, 'input_tokens');
+  const outputEstimated = usageFieldIsEstimated(usage, 'output_tokens');
   const cacheRead = finiteOrNull(usage.cache_read_tokens);
   const cacheWrite = finiteOrNull(usage.cache_write_tokens);
   const reasoning = nonNegativeOrNull(usage.reasoning_tokens);
@@ -73,7 +75,7 @@ function lastTurnLines(usage, format) {
   const lines = [
     t('chat.tokenTooltipLastTurn', 'Last turn'),
     t('chat.tokenTooltipInput', 'Input: {tokens} tok', {
-      tokens: format(input),
+      tokens: `${inputEstimated ? '~' : ''}${format(input)}`,
     }),
   ];
   if (cacheRead !== null) {
@@ -96,7 +98,7 @@ function lastTurnLines(usage, format) {
   }
   lines.push(
     t('chat.tokenTooltipOutput', 'Output: {tokens} tok', {
-      tokens: format(output),
+      tokens: `${outputEstimated ? '~' : ''}${format(output)}`,
     }),
   );
   if (reasoning !== null) {
@@ -108,11 +110,25 @@ function lastTurnLines(usage, format) {
       ),
     );
   }
-  if (usage.estimated === true) {
+  if (inputEstimated && outputEstimated) {
     lines.push(
       t(
         'chat.tokenTooltipEstimated',
         'Estimated (provider sent no usage data)',
+      ),
+    );
+  } else if (inputEstimated) {
+    lines.push(
+      t(
+        'chat.tokenTooltipInputEstimated',
+        'Input estimated (provider omitted input usage)',
+      ),
+    );
+  } else if (outputEstimated) {
+    lines.push(
+      t(
+        'chat.tokenTooltipOutputEstimated',
+        'Output estimated (provider omitted output usage)',
       ),
     );
   }
@@ -121,11 +137,11 @@ function lastTurnLines(usage, format) {
 
 function sessionUsageLines(sessionUsage, format) {
   const measuredTurns = nonNegative(sessionUsage?.measured_turns);
-  if (measuredTurns <= 0) {
+  const input = nonNegative(sessionUsage?.input_tokens);
+  const output = nonNegative(sessionUsage?.output_tokens);
+  if (measuredTurns <= 0 && input <= 0 && output <= 0) {
     return [];
   }
-  const input = nonNegative(sessionUsage.input_tokens);
-  const output = nonNegative(sessionUsage.output_tokens);
   const cacheRead = nonNegative(sessionUsage.cache_read_tokens);
   // Turns that reported cache fields at all — a session on a provider without
   // cache reporting must not render as a 0% hit rate.
@@ -135,7 +151,7 @@ function sessionUsageLines(sessionUsage, format) {
   const reasoning = nonNegative(sessionUsage.reasoning_tokens);
 
   const lines = [
-    t('chat.tokenTooltipSession', 'Session ({turns} measured turns)', {
+    t('chat.tokenTooltipSession', 'Session ({turns} fully measured turns)', {
       turns: format(measuredTurns),
     }),
     t('chat.tokenTooltipInput', 'Input: {tokens} tok', {
@@ -175,12 +191,26 @@ function sessionUsageLines(sessionUsage, format) {
     lines.push(
       t(
         'chat.tokenTooltipSessionEstimatedTurns',
-        '{count} estimated turns excluded',
+        'Turns with estimated token fields: {count}; those fields are excluded',
         { count: format(estimatedTurns) },
       ),
     );
   }
   return lines;
+}
+
+function usageFieldIsEstimated(usage, tokenField) {
+  const estimationField = `${tokenField}_estimated`;
+  if (Object.hasOwn(usage, estimationField)) {
+    return usage[estimationField] === true;
+  }
+  if (
+    Object.hasOwn(usage, 'input_tokens_estimated') ||
+    Object.hasOwn(usage, 'output_tokens_estimated')
+  ) {
+    return false;
+  }
+  return usage.estimated === true;
 }
 
 function cacheReadShareLine(cacheRead, input, format) {

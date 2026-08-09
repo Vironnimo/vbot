@@ -304,4 +304,4 @@ def test_corrupt_index_is_discarded_and_rebuilt_once(tmp_path: Path) -> None:
 
     assert report.overview.total_runs == 1
     with sqlite3.connect(index_path) as connection:
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 1
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 2

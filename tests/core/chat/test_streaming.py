@@ -760,6 +760,16 @@ async def test_accumulator_accumulates_usage_delta() -> None:
     assert fields.usage == {"input_tokens": 250, "output_tokens": 80}
 
 
+async def test_accumulator_preserves_partial_usage_delta() -> None:
+    accumulator = StreamingAccumulator()
+
+    visible = accumulator.add_delta({"type": "usage", "output_tokens": 2572})
+
+    assert visible == []
+    fields = accumulator.finalize_assistant_fields()
+    assert fields.usage == {"output_tokens": 2572}
+
+
 async def test_finalize_assistant_fields_includes_usage_when_received_via_delta() -> None:
     accumulator = StreamingAccumulator()
 

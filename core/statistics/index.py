@@ -26,7 +26,7 @@ JsonObject = dict[str, Any]
 _INDEX_DIRECTORY = "statistics"
 _INDEX_FILENAME = "session-statistics.sqlite"
 _GLOBAL_SCOPE = ""
-_SCHEMA_VERSION = 1
+_SCHEMA_VERSION = 2
 _SQLITE_BUSY_TIMEOUT_MS = 1000
 
 
@@ -542,6 +542,8 @@ def _project_usage(usage: JsonObject, *, assistant: bool) -> JsonObject:
             "output_tokens",
             "reasoning_tokens",
             "estimated",
+            "input_tokens_estimated",
+            "output_tokens_estimated",
             "cache_read_tokens",
             "cache_write_tokens",
         )

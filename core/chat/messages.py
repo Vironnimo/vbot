@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import uuid
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from typing import Any, Literal, cast
@@ -70,6 +70,13 @@ ReplySurfaceKind = Literal["webui", "channel"]
 ConversationKind = Literal["direct", "group"]
 GroupRole = Literal["admin", "member"]
 JsonObject = dict[str, Any]
+
+USAGE_INPUT_TOKENS_ESTIMATED_FIELD = "input_tokens_estimated"
+USAGE_OUTPUT_TOKENS_ESTIMATED_FIELD = "output_tokens_estimated"
+_USAGE_ESTIMATION_FIELDS = {
+    "input_tokens": USAGE_INPUT_TOKENS_ESTIMATED_FIELD,
+    "output_tokens": USAGE_OUTPUT_TOKENS_ESTIMATED_FIELD,
+}
 
 TIMESTAMP_SUFFIX = "+00:00"
 UTC_Z_SUFFIX = "Z"
@@ -1521,19 +1528,57 @@ def _assistant_message_from_response(
     )
 
 
-def _apply_usage_estimation(
+def _complete_usage_with_estimates(
     message: ChatMessage,
     request_messages: list[JsonObject],
 ) -> ChatMessage:
-    """Estimate token usage when the provider doesn't supply usage data."""
-    estimated_input, _ = estimate_request_input_tokens(request_messages)
-    estimated_output, _ = estimate_message_tokens(message.to_dict())
-    usage: JsonObject = {
-        "input_tokens": estimated_input,
-        "output_tokens": estimated_output,
-        "estimated": True,
-    }
+    """Fill only missing usage counters and preserve field-level provenance."""
+
+    usage = dict(message.usage or {})
+    has_specific_provenance = any(field in usage for field in _USAGE_ESTIMATION_FIELDS.values())
+    legacy_estimated = usage.get("estimated") is True and not has_specific_provenance
+
+    if _optional_usage_token_count(usage.get("input_tokens")) is None:
+        estimated_input, _ = estimate_request_input_tokens(request_messages)
+        usage["input_tokens"] = estimated_input
+        usage[USAGE_INPUT_TOKENS_ESTIMATED_FIELD] = True
+    elif legacy_estimated:
+        usage[USAGE_INPUT_TOKENS_ESTIMATED_FIELD] = True
+
+    if _optional_usage_token_count(usage.get("output_tokens")) is None:
+        estimated_output, _ = estimate_message_tokens(message.to_dict())
+        usage["output_tokens"] = estimated_output
+        usage[USAGE_OUTPUT_TOKENS_ESTIMATED_FIELD] = True
+    elif legacy_estimated:
+        usage[USAGE_OUTPUT_TOKENS_ESTIMATED_FIELD] = True
+
+    if usage_token_is_estimated(usage, "input_tokens") or usage_token_is_estimated(
+        usage, "output_tokens"
+    ):
+        usage["estimated"] = True
+    else:
+        usage.pop("estimated", None)
     return replace(message, usage=usage)
+
+
+def usage_token_is_estimated(
+    usage: Mapping[str, Any],
+    token_field: Literal["input_tokens", "output_tokens"],
+) -> bool:
+    """Return field-level provenance with legacy whole-turn compatibility."""
+
+    estimation_field = _USAGE_ESTIMATION_FIELDS[token_field]
+    if estimation_field in usage:
+        return usage.get(estimation_field) is True
+    if any(field in usage for field in _USAGE_ESTIMATION_FIELDS.values()):
+        return False
+    return usage.get("estimated") is True
+
+
+def _optional_usage_token_count(value: Any) -> int | None:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        return None
+    return value
 
 
 def _nullable_response_string(response: JsonObject, key: str) -> str | None:

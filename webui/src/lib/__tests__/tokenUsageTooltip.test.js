@@ -98,6 +98,38 @@ describe('formatTokenUsageTooltip', () => {
     expect(tooltip).toContain('Estimated (provider sent no usage data)');
   });
 
+  it('marks only omitted input as estimated when output is provider-reported', () => {
+    const tooltip = formatTokenUsageTooltip(
+      null,
+      {
+        input_tokens: 134547,
+        input_tokens_estimated: true,
+        output_tokens: 2572,
+        estimated: true,
+      },
+      {
+        measured_turns: 0,
+        estimated_turns: 1,
+        input_tokens: 0,
+        output_tokens: 2572,
+      },
+    );
+
+    expect(tooltip).toBe(
+      [
+        'Last turn',
+        'Input: ~134,547 tok',
+        'Output: 2,572 tok',
+        'Input estimated (provider omitted input usage)',
+        '',
+        'Session (0 fully measured turns)',
+        'Input: 0 tok',
+        'Output: 2,572 tok',
+        'Turns with estimated token fields: 1; those fields are excluded',
+      ].join('\n'),
+    );
+  });
+
   it('renders the session block with hit rate, per-turn average and estimated note', () => {
     const tooltip = formatTokenUsageTooltip(
       null,
@@ -119,13 +151,13 @@ describe('formatTokenUsageTooltip', () => {
     expect(lastTurnBlock).toContain('Last turn');
     expect(sessionBlock).toBe(
       [
-        'Session (42 measured turns)',
+        'Session (42 fully measured turns)',
         'Input: 1,243,000 tok',
         '  · read from cache: 1,019,000 (82%)',
         'Output: 48,300 tok',
         '  · reasoning: 32,000 tok (30 reporting turns; included in output)',
         'Avg cache read per turn: 25,475 tok',
-        '3 estimated turns excluded',
+        'Turns with estimated token fields: 3; those fields are excluded',
       ].join('\n'),
     );
   });
@@ -143,7 +175,7 @@ describe('formatTokenUsageTooltip', () => {
 
     expect(tooltip).toBe(
       [
-        'Session (4 measured turns)',
+        'Session (4 fully measured turns)',
         'Input: 8,000 tok',
         'Output: 600 tok',
       ].join('\n'),
