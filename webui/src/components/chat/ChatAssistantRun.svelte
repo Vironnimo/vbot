@@ -44,6 +44,7 @@
   let {
     item,
     agentName = '',
+    chatWorkingMode = 'normal',
     subAgentStatuses = {},
     subAgentResults = {},
     isReasoningOpen = () => false,
@@ -55,6 +56,11 @@
   } = $props();
 
   let pendingActions = $state({});
+  let workingDisclosureState = $state({});
+
+  let runDisplayGroups = $derived(
+    groupRunChildren(visibleRunChildren(item), chatWorkingMode),
+  );
 
   let answerCopyText = $derived(
     visibleRunChildren(item)
@@ -107,6 +113,99 @@
     } finally {
       pendingActions[actionKey] = false;
     }
+  }
+
+  function setWorkingOpen(groupId, open) {
+    workingDisclosureState[groupId] = open;
+  }
+
+  function workingGroupIsActive(group) {
+    const visibleChildren = visibleRunChildren(item);
+    const latestVisibleChild = visibleChildren.at(-1);
+    return (
+      item?.status === 'running' &&
+      latestVisibleChild?.id === group.children.at(-1)?.id
+    );
+  }
+
+  function workingGroupStatus(group) {
+    if (workingGroupIsActive(group)) {
+      return 'running';
+    }
+
+    const latestChild = group.children.at(-1);
+    if (latestChild?.type === 'tool_call') {
+      return isSubAgentSpawnTool(latestChild)
+        ? subAgentDotStatus(latestChild, subAgentStatuses)
+        : toolStatus(latestChild);
+    }
+    return 'success';
+  }
+
+  function workingGroupActivity(group) {
+    const latestChild = group.children.at(-1);
+    if (latestChild?.type === 'reasoning') {
+      return t('chat.event.thinking', 'Thinking');
+    }
+    if (!latestChild || latestChild.type !== 'tool_call') {
+      return '';
+    }
+
+    const toolName = isSubAgentSpawnTool(latestChild)
+      ? t('chat.subagent.label', 'Sub-agent')
+      : toolNameForRunTool(latestChild);
+    const activity = isSubAgentSpawnTool(latestChild)
+      ? subAgentLastToolName(latestChild, subAgentStatuses) ||
+        subAgentPreview(latestChild)
+      : toolRowPresentation(latestChild).primary[0]?.text;
+    return [toolName, activity].filter(Boolean).join(' · ');
+  }
+
+  function workingGroupTimeLabel(group) {
+    const latestChild = group.children.at(-1);
+    if (latestChild?.type !== 'tool_call') {
+      return '';
+    }
+    if (isSubAgentSpawnTool(latestChild)) {
+      return subAgentToolStatusLabel(
+        latestChild,
+        subAgentDotStatus(latestChild, subAgentStatuses),
+        subAgentStatuses,
+        nowMs,
+      );
+    }
+    return toolStatusLabel(latestChild, nowMs);
+  }
+
+  function groupRunChildren(children, workingMode) {
+    if (workingMode !== 'compact') {
+      return children.map((child) => ({
+        id: `child:${child.id}`,
+        type: 'child',
+        child,
+      }));
+    }
+
+    const groups = [];
+    let workingGroup = null;
+    for (const child of children) {
+      if (child.type === 'reasoning' || child.type === 'tool_call') {
+        if (!workingGroup) {
+          workingGroup = {
+            id: `working:${child.id}`,
+            type: 'working',
+            children: [],
+          };
+          groups.push(workingGroup);
+        }
+        workingGroup.children.push(child);
+        continue;
+      }
+
+      workingGroup = null;
+      groups.push({ id: `child:${child.id}`, type: 'child', child });
+    }
+    return groups;
   }
 </script>
 
@@ -229,7 +328,7 @@
     {/if}
   </div>
   <div class="msg-content assistant-run-content">
-    {#each visibleRunChildren(item) as child (child.id)}
+    {#snippet runChild(child)}
       {#if child.type === 'reasoning'}
         {@const working = isRunChildWorking(item, child)}
         <details
@@ -525,6 +624,59 @@
         </Banner>
       {:else if child.type === 'compaction_separator'}
         <ChatCompactionSeparator item={child} inRun />
+      {/if}
+    {/snippet}
+    {#each runDisplayGroups as group (group.id)}
+      {#if group.type === 'working'}
+        {@const groupStatus = workingGroupStatus(group)}
+        {@const groupOpen = Boolean(workingDisclosureState[group.id])}
+        {@const groupActivity = workingGroupActivity(group)}
+        {@const groupTimeLabel = workingGroupTimeLabel(group)}
+        <details
+          class="working-block"
+          open={groupOpen}
+          ontoggle={(event) =>
+            setWorkingOpen(group.id, event.currentTarget.open)}
+        >
+          <summary class="working-block__summary">
+            <span
+              class:running={groupStatus === 'running'}
+              class:done={groupStatus === 'success'}
+              class:error={groupStatus === 'failed'}
+              class:cancelled={groupStatus === 'cancelled'}
+              class="working-block__dot"
+              aria-hidden="true">●</span
+            >
+            <span class="working-block__label">
+              {t('chat.working.label', 'Working')}
+            </span>
+            <span class="working-block__activity">
+              {groupActivity}
+            </span>
+            {#if groupTimeLabel}
+              <span class="working-block__time">
+                {groupTimeLabel}
+              </span>
+            {/if}
+            <svg
+              class="working-block__chevron"
+              viewBox="0 0 16 16"
+              width="10"
+              height="10"
+              style:transform={groupOpen ? 'rotate(180deg)' : 'none'}
+              aria-hidden="true"
+            >
+              <path d="M4 6l4 4 4-4" />
+            </svg>
+          </summary>
+          <div class="working-block__body">
+            {#each group.children as child (child.id)}
+              {@render runChild(child)}
+            {/each}
+          </div>
+        </details>
+      {:else}
+        {@render runChild(group.child)}
       {/if}
     {/each}
   </div>

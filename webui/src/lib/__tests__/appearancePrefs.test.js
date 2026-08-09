@@ -1,11 +1,16 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 
-import { appearancePrefs, setChatWidth } from '../appearancePrefs.svelte.js';
+import {
+  appearancePrefs,
+  setChatWidth,
+  setChatWorkingMode,
+} from '../appearancePrefs.svelte.js';
 
 describe('appearancePrefs', () => {
   beforeEach(() => {
     // The store is a module singleton; reset between tests.
     setChatWidth('comfortable');
+    setChatWorkingMode('normal');
   });
 
   it('defaults chatWidth to comfortable', () => {
@@ -28,5 +33,13 @@ describe('appearancePrefs', () => {
     setChatWidth('wide');
     setChatWidth(undefined);
     expect(appearancePrefs.chatWidth).toBe('comfortable');
+  });
+
+  it('stores compact working mode and defaults unsupported values to normal', () => {
+    setChatWorkingMode('compact');
+    expect(appearancePrefs.chatWorkingMode).toBe('compact');
+
+    setChatWorkingMode('dense');
+    expect(appearancePrefs.chatWorkingMode).toBe('normal');
   });
 });

@@ -619,6 +619,7 @@ describe('SettingsView', () => {
           appearance: {
             language: 'fr',
             chat_width: 'comfortable',
+            chat_working_mode: 'normal',
           },
         },
       ],

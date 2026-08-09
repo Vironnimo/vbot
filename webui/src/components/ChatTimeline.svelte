@@ -24,6 +24,7 @@
   let {
     sessionState,
     agentName = '',
+    chatWorkingMode = 'normal',
     transientCards = [],
     submittedTurnScrollKey = 0,
     submittedTurnScrollRunId = '',
@@ -816,6 +817,7 @@
               <ChatAssistantRun
                 {item}
                 {agentName}
+                {chatWorkingMode}
                 {subAgentStatuses}
                 {subAgentResults}
                 {nowMs}

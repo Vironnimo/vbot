@@ -66,6 +66,8 @@ export function createSettingsPayload(overrides = {}) {
     appearance: {
       language: 'en',
       available_languages: ['en', 'fr'],
+      chat_width: 'comfortable',
+      chat_working_mode: 'normal',
     },
     subagents: {
       max_subagent_depth: 4,

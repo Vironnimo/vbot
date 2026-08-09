@@ -51,6 +51,7 @@ from core.settings.settings import (
     AGENT_DEFAULT_FIELDS,
     RECALL_BACKEND_PATTERN,
     SUPPORTED_APPEARANCE_CHAT_WIDTHS,
+    SUPPORTED_APPEARANCE_CHAT_WORKING_MODES,
     SettingsValidationError,
     parse_openrouter_routing,
     validate_temperature,
@@ -92,7 +93,7 @@ SUBAGENT_SETTING_FIELDS = (
     "max_subagents_per_turn",
     "subagent_timeout_minutes",
 )
-APPEARANCE_FIELDS = frozenset({"language", "chat_width"})
+APPEARANCE_FIELDS = frozenset({"language", "chat_width", "chat_working_mode"})
 COMPACTION_FIELDS = frozenset({"enabled", "trigger", "strategy"})
 DEFAULTS_SECTIONS = frozenset({"agent"})
 RECALL_FIELDS = frozenset({"backend"})
@@ -391,6 +392,7 @@ def _validate_appearance(diagnostics: list[JsonDiagnostic], value: Any) -> None:
 
     _warn_unknown_keys(diagnostics, "$.appearance", value, APPEARANCE_FIELDS, "appearance field")
     _validate_appearance_chat_width(diagnostics, value.get("chat_width"))
+    _validate_appearance_chat_working_mode(diagnostics, value.get("chat_working_mode"))
 
     language = value.get("language")
     if language is None:
@@ -414,6 +416,18 @@ def _validate_appearance_chat_width(diagnostics: list[JsonDiagnostic], value: An
             diagnostics,
             "$.appearance.chat_width",
             f"unsupported chat width; supported: {supported}",
+        )
+
+
+def _validate_appearance_chat_working_mode(diagnostics: list[JsonDiagnostic], value: Any) -> None:
+    if value is None:
+        return
+    if value not in SUPPORTED_APPEARANCE_CHAT_WORKING_MODES:
+        supported = ", ".join(sorted(SUPPORTED_APPEARANCE_CHAT_WORKING_MODES))
+        _error(
+            diagnostics,
+            "$.appearance.chat_working_mode",
+            f"unsupported chat working mode; supported: {supported}",
         )
 
 

@@ -37,7 +37,7 @@ Settings-style panels register their pending local draft and save lifecycle with
 - `onboarding.js` derives operational readiness and the recommended next action from server-backed Settings, Provider Connections, and the target Agent's Model state. Operational readiness requires at least one Connection whose server-projected `usable` value is true; a fresh keyless Connection remains an Add Provider candidate, while an added-but-disabled keyless Connection remains visible in Provider management without becoming operational. The frontend does not persist a second readiness flag or reconstruct usability from credentials, Account state, enablement, or reachability.
 - Automatic onboarding is a one-shot entry into the Settings surface; users can later reopen the flow explicitly. Completing one step refreshes the underlying resources before deciding the next step.
 - Provider recommendations and model-search prefills are presentation guidance. Availability and connectability still come from current backend data.
-- Appearance saves language and Chat width through Settings. Changing the active language updates i18n immediately while persisted state still reconciles to the save result.
+- Appearance saves language, Chat width, and the `normal` / `compact` Working presentation through Settings. `appearancePrefs.svelte.js` projects both Chat display preferences app-wide so a successful save reflows the open Chat without a reload; changing the active language updates i18n immediately while persisted state still reconciles to the save result.
 
 ## Desktop app settings and browser boundaries
 

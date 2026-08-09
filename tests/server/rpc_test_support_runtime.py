@@ -60,7 +60,11 @@ class StubStorage:
         self.data_dir = tmp_path
         self.layout = DataDirectoryLayout(tmp_path)
         self.prompts_dir = tmp_path / "prompts"
-        self._appearance = {"language": "en", "chat_width": "comfortable"}
+        self._appearance = {
+            "language": "en",
+            "chat_width": "comfortable",
+            "chat_working_mode": "normal",
+        }
         self._skill_directories: list[str] = []
         self._settings: JsonObject = {}
         self._credentials: dict[str, str] = {}
@@ -84,7 +88,9 @@ class StubStorage:
         return ["en"]
 
     def _apply_appearance_settings(self, appearance: JsonObject) -> JsonObject:
-        unsupported_fields = sorted(set(appearance) - {"language", "chat_width"})
+        unsupported_fields = sorted(
+            set(appearance) - {"language", "chat_width", "chat_working_mode"}
+        )
         if unsupported_fields:
             raise StorageError(f"unsupported appearance settings: {', '.join(unsupported_fields)}")
         language = appearance.get("language")
@@ -95,7 +101,14 @@ class StubStorage:
         chat_width = appearance.get("chat_width")
         if chat_width not in {"comfortable", "wide", "full"}:
             chat_width = "comfortable"
-        self._appearance = {"language": language, "chat_width": chat_width}
+        chat_working_mode = appearance.get("chat_working_mode")
+        if chat_working_mode not in {"normal", "compact"}:
+            chat_working_mode = "normal"
+        self._appearance = {
+            "language": language,
+            "chat_width": chat_width,
+            "chat_working_mode": chat_working_mode,
+        }
         return dict(self._appearance)
 
     def load_skill_directory_settings(self) -> list[str]:

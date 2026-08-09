@@ -9,12 +9,17 @@
     useAutosaveContext,
   } from '$lib/autosave.js';
   import { init, t } from '$lib/i18n.js';
-  import { setChatWidth } from '$lib/appearancePrefs.svelte.js';
+  import {
+    setChatWidth,
+    setChatWorkingMode,
+  } from '$lib/appearancePrefs.svelte.js';
   import {
     buildChatWidthOptions,
+    buildChatWorkingModeOptions,
     buildLanguageOptions,
     createAppearanceUpdatePayload,
     getPersistedChatWidth,
+    getPersistedChatWorkingMode,
     getPersistedLanguageId,
     isAppearanceSaveDisabled,
   } from '$lib/settingsView.js';
@@ -37,6 +42,9 @@
   let selectedChatWidth = $state(
     untrack(() => getPersistedChatWidth(settings)),
   );
+  let selectedChatWorkingMode = $state(
+    untrack(() => getPersistedChatWorkingMode(settings)),
+  );
   let saving = $state(false);
   let autoSaveTimer = null;
 
@@ -55,16 +63,27 @@
       label: t(option.labelKey, option.labelFallback),
     })),
   );
+  let chatWorkingModeDropdownOptions = $derived(
+    buildChatWorkingModeOptions().map((option) => ({
+      value: option.id,
+      label: t(option.labelKey, option.labelFallback),
+    })),
+  );
   let persistedLanguageId = $derived(getPersistedLanguageId(settings));
   let persistedChatWidth = $derived(getPersistedChatWidth(settings));
+  let persistedChatWorkingMode = $derived(
+    getPersistedChatWorkingMode(settings),
+  );
   let saveDisabled = $derived(
     isAppearanceSaveDisabled({
       loading: false,
       saving,
       selectedLanguageId,
       selectedChatWidth,
+      selectedChatWorkingMode,
       persistedLanguageId,
       persistedChatWidth,
+      persistedChatWorkingMode,
     }),
   );
   const autosaveContext = useAutosaveContext();
@@ -73,6 +92,7 @@
     getSnapshot: () => ({
       language: selectedLanguageId,
       chatWidth: selectedChatWidth,
+      chatWorkingMode: selectedChatWorkingMode,
     }),
     hasChanges: appearanceHasChanges,
     save: saveAppearance,
@@ -117,6 +137,11 @@
     onError('');
   }
 
+  function handleChatWorkingModeChange(value) {
+    selectedChatWorkingMode = value;
+    onError('');
+  }
+
   function handleManualSave() {
     if (saving) {
       return;
@@ -140,8 +165,10 @@
       saving: false,
       selectedLanguageId,
       selectedChatWidth,
+      selectedChatWorkingMode,
       persistedLanguageId,
       persistedChatWidth,
+      persistedChatWorkingMode,
     });
   }
 
@@ -158,13 +185,15 @@
         createAppearanceUpdatePayload({
           language: selectedLanguageId,
           chatWidth: selectedChatWidth,
+          chatWorkingMode: selectedChatWorkingMode,
         }),
       );
       onCommit(nextSettings);
       init(selectedLanguageId);
-      // Update the app-wide prefs store so the open chat reflows live (no
-      // reload), since chat width has no runtime reload hook.
+      // Update the app-wide prefs store so the open Chat changes live; these
+      // display preferences have no runtime reload hook.
       setChatWidth(selectedChatWidth);
+      setChatWorkingMode(selectedChatWorkingMode);
       onToast({
         title: t('settings.appearance.saveSuccess', 'Appearance updated.'),
         variant: 'success',
@@ -226,6 +255,32 @@
       triggerClass="settings-view__dropdown"
       listClass="settings-view__thinking-list"
       onValueChange={handleChatWidthChange}
+    />
+  </div>
+</div>
+
+<div class="s-row">
+  <div class="s-row-info">
+    <div class="s-row-label">
+      {t('settings.appearance.chatWorkingMode.label', 'Work details')}
+    </div>
+    <div class="s-row-desc">
+      {t(
+        'settings.appearance.chatWorkingMode.description',
+        'Show Thinking and Tool activity inline or group it into Working blocks.',
+      )}
+    </div>
+  </div>
+  <div class="s-row-control s-row-control--appearance">
+    <Dropdown
+      id="settings-appearance-chat-working-mode"
+      value={selectedChatWorkingMode}
+      options={chatWorkingModeDropdownOptions}
+      ariaLabel={t('settings.appearance.chatWorkingMode.label', 'Work details')}
+      disabled={saving}
+      triggerClass="settings-view__dropdown"
+      listClass="settings-view__thinking-list"
+      onValueChange={handleChatWorkingModeChange}
     />
   </div>
 </div>

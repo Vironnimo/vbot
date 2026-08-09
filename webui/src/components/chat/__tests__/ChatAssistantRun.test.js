@@ -609,6 +609,106 @@ describe('ChatAssistantRun copy actions', () => {
   });
 });
 
+describe('ChatAssistantRun compact Working blocks', () => {
+  let mountedComponent;
+
+  beforeEach(() => {
+    document.body.innerHTML = '';
+    init('en');
+    mountedComponent = null;
+  });
+
+  afterEach(async () => {
+    if (mountedComponent) {
+      await unmount(mountedComponent);
+      mountedComponent = null;
+    }
+    document.body.innerHTML = '';
+  });
+
+  it('groups contiguous Thinking and Tool rows behind a closed disclosure', () => {
+    const item = createAssistantRunItem({
+      items: [
+        {
+          type: 'reasoning',
+          id: 'reasoning-first',
+          content: 'Inspect the repository.',
+          streaming: false,
+        },
+        createReadToolChild({ status: 'success' }),
+      ],
+    });
+    mountedComponent = mountRun({ item, chatWorkingMode: 'compact' });
+
+    const block = document.querySelector('.working-block');
+    expect(block).toBeTruthy();
+    expect(block.open).toBe(false);
+    expect(
+      block.querySelector('.working-block__label').textContent.trim(),
+    ).toBe('Working');
+    expect(
+      block.querySelector('.working-block__activity').textContent.trim(),
+    ).toContain('read');
+    expect(block.querySelectorAll('.reasoning-block')).toHaveLength(1);
+    expect(block.querySelectorAll('.tool-event')).toHaveLength(1);
+  });
+
+  it('ends a Working block at visible Assistant output and starts a new one', () => {
+    const item = createAssistantRunItem({
+      items: [
+        {
+          type: 'reasoning',
+          id: 'reasoning-before',
+          content: 'First pass.',
+          streaming: false,
+        },
+        createReadToolChild({ id: 'tool-before', status: 'success' }),
+        {
+          type: 'assistant_output',
+          id: 'assistant-middle',
+          content: 'I found the responsible module.',
+          streaming: false,
+        },
+        createBashToolChild({
+          id: 'tool-after',
+          toolCallId: 'call-after',
+          status: 'success',
+          includeResult: true,
+        }),
+      ],
+    });
+    mountedComponent = mountRun({ item, chatWorkingMode: 'compact' });
+
+    const blocks = document.querySelectorAll('.working-block');
+    expect(blocks).toHaveLength(2);
+    expect(document.querySelector('.msg-markdown').textContent).toContain(
+      'I found the responsible module.',
+    );
+    expect(blocks[0].compareDocumentPosition(blocks[1])).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING,
+    );
+  });
+
+  it('keeps the normal mode inline without a Working wrapper', () => {
+    const item = createAssistantRunItem({
+      items: [
+        {
+          type: 'reasoning',
+          id: 'reasoning-normal',
+          content: 'Inspect.',
+          streaming: false,
+        },
+        createReadToolChild({ status: 'success' }),
+      ],
+    });
+    mountedComponent = mountRun({ item, chatWorkingMode: 'normal' });
+
+    expect(document.querySelector('.working-block')).toBeNull();
+    expect(document.querySelector('.reasoning-block')).toBeTruthy();
+    expect(document.querySelector('.tool-event')).toBeTruthy();
+  });
+});
+
 async function flushAsync() {
   for (let index = 0; index < 5; index += 1) {
     await Promise.resolve();

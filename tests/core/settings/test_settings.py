@@ -134,6 +134,17 @@ def test_parse_settings_update_accepts_each_supported_chat_width(chat_width: str
     assert parsed == {"appearance": {"language": "en", "chat_width": chat_width}}
 
 
+@pytest.mark.parametrize("chat_working_mode", ["normal", "compact"])
+def test_parse_settings_update_accepts_each_supported_chat_working_mode(
+    chat_working_mode: str,
+) -> None:
+    parsed = parse_settings_update(
+        {"appearance": {"language": "en", "chat_working_mode": chat_working_mode}}
+    )
+
+    assert parsed == {"appearance": {"language": "en", "chat_working_mode": chat_working_mode}}
+
+
 def test_parse_settings_update_omits_absent_chat_width() -> None:
     parsed = parse_settings_update({"appearance": {"language": "en"}})
 
@@ -249,6 +260,10 @@ def test_parse_settings_update_rejects_conflicting_openrouter_routing(
         (
             {"appearance": {"language": "en", "chat_width": "huge"}},
             "params.appearance.chat_width must be one of",
+        ),
+        (
+            {"appearance": {"language": "en", "chat_working_mode": "dense"}},
+            "params.appearance.chat_working_mode must be one of",
         ),
         (
             {"appearance": {"language": "en", "theme": "dark"}},
@@ -415,7 +430,11 @@ def test_validate_settings_file_accepts_known_settings(tmp_path: Path) -> None:
         json.dumps(
             {
                 "server_port": 8500,
-                "appearance": {"language": "en", "chat_width": "wide"},
+                "appearance": {
+                    "language": "en",
+                    "chat_width": "wide",
+                    "chat_working_mode": "compact",
+                },
                 "skill_directories": ["~/skills"],
                 "extension_directories": ["C:/vbot/extensions"],
                 "attachment_max_size_bytes": 1024,
@@ -568,6 +587,25 @@ def test_validate_settings_file_reports_invalid_chat_width(tmp_path: Path) -> No
             "error",
             "$.appearance.chat_width",
             "unsupported chat width; supported: comfortable, full, wide",
+        )
+    ]
+
+
+def test_validate_settings_file_reports_invalid_chat_working_mode(tmp_path: Path) -> None:
+    settings_path = tmp_path / "settings.json"
+    settings_path.write_text(
+        json.dumps({"appearance": {"language": "en", "chat_working_mode": "dense"}}),
+        encoding="utf-8",
+    )
+
+    report = validate_settings_file(settings_path)
+
+    assert report.ok is False
+    assert diagnostics_as_tuples(report) == [
+        (
+            "error",
+            "$.appearance.chat_working_mode",
+            "unsupported chat working mode; supported: compact, normal",
         )
     ]
 
