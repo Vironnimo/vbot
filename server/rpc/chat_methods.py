@@ -119,8 +119,8 @@ def _chat_history(state: Any, params: JsonObject) -> JsonObject:
         "messages": messages,
         "has_more": has_more,
         "background_bash_statuses": background_bash_statuses(loaded_messages),
-        # Whole-session usage totals (measured turns only) — the page above may
-        # be a slice, but these always cover the full transcript.
+        # Whole-session provider-reported token fields — the page above may be a
+        # slice, but these always cover the full transcript.
         "session_usage": aggregate_session_usage(loaded_messages),
     }
     context_usage = (

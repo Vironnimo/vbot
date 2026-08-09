@@ -9,9 +9,9 @@ the report path (see ``.vorch/domain-maps/statistics.md``):
   own, so per-run aggregates are obtained by *segmenting* each session's message
   list at ``run_summary`` boundaries: the messages between two consecutive
   ``run_summary`` records form one run group.
-- **Real vs estimated tokens are never merged into one "true" number.** ``usage``
-  with ``estimated: true`` is accumulated separately from provider-reported
-  usage, and the count of estimated assistant turns is reported.
+- **Real vs estimated tokens are never merged into one "true" number.** Each
+  input/output field is accumulated by its own provenance; a partially reported
+  turn can therefore contribute measured output and estimated input separately.
 - **Derived fallback** (a run group with ≥2 distinct bare models) is a
   best-effort signal, clearly labelled — it is NOT the authoritative in-memory
   ``model_fallback_activated`` event, which is not persisted.
@@ -33,7 +33,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Protocol
 
-from core.chat.messages import ChatMessage
+from core.chat.messages import ChatMessage, usage_token_is_estimated
 from core.chat.model_resolution import parse_bare_model
 from core.sessions import (
     FORK_SOURCE_META_KEY,
@@ -1001,51 +1001,60 @@ class _Aggregator:
         provider_acc.assistant_messages += 1
 
         facts = _read_usage(message.usage)
-        self._cache_read_tokens += facts.cache_read
-        self._cache_write_tokens += facts.cache_write
         daily = self._daily_bucket(day)
 
         if facts.estimated:
             self._usage_estimated_turns += 1
             model.estimated_turns += 1
             provider_acc.estimated_turns += 1
-            model.estimated_input_tokens += facts.input_tokens
-            model.estimated_output_tokens += facts.output_tokens
-            provider_acc.estimated_input_tokens += facts.input_tokens
-            provider_acc.estimated_output_tokens += facts.output_tokens
-            if daily is not None:
-                daily.estimated_input_tokens += facts.input_tokens
-                daily.estimated_output_tokens += facts.output_tokens
         else:
             self._usage_measured_turns += 1
+
+        if facts.input_estimated:
+            model.estimated_input_tokens += facts.input_tokens
+            provider_acc.estimated_input_tokens += facts.input_tokens
+            if daily is not None:
+                daily.estimated_input_tokens += facts.input_tokens
+        else:
             model.measured_input_tokens += facts.input_tokens
-            model.measured_output_tokens += facts.output_tokens
             provider_acc.measured_input_tokens += facts.input_tokens
-            provider_acc.measured_output_tokens += facts.output_tokens
             if daily is not None:
                 daily.measured_input_tokens += facts.input_tokens
+
+        if facts.output_estimated:
+            model.estimated_output_tokens += facts.output_tokens
+            provider_acc.estimated_output_tokens += facts.output_tokens
+            if daily is not None:
+                daily.estimated_output_tokens += facts.output_tokens
+        else:
+            model.measured_output_tokens += facts.output_tokens
+            provider_acc.measured_output_tokens += facts.output_tokens
+            if daily is not None:
                 daily.measured_output_tokens += facts.output_tokens
-            if facts.has_reasoning_data:
-                self._reasoning_tokens += facts.reasoning
-                self._reasoning_turns += 1
-                for reasoning_acc in (model, provider_acc):
-                    reasoning_acc.reasoning_tokens += facts.reasoning
-                    reasoning_acc.reasoning_turns += 1
-                if daily is not None:
-                    daily.reasoning_tokens += facts.reasoning
-                    daily.reasoning_turns += 1
-            if facts.has_cache_data:
-                self._cache_turns += 1
-                self._cache_input_tokens += facts.input_tokens
-                for cache_acc in (model, provider_acc):
-                    cache_acc.cache_turns += 1
-                    cache_acc.cache_input_tokens += facts.input_tokens
-                    cache_acc.cache_read_tokens += facts.cache_read
-                    cache_acc.cache_write_tokens += facts.cache_write
-                if daily is not None:
-                    daily.cache_input_tokens += facts.input_tokens
-                    daily.cache_read_tokens += facts.cache_read
-                    daily.cache_write_tokens += facts.cache_write
+
+        if not facts.output_estimated and facts.has_reasoning_data:
+            self._reasoning_tokens += facts.reasoning
+            self._reasoning_turns += 1
+            for reasoning_acc in (model, provider_acc):
+                reasoning_acc.reasoning_tokens += facts.reasoning
+                reasoning_acc.reasoning_turns += 1
+            if daily is not None:
+                daily.reasoning_tokens += facts.reasoning
+                daily.reasoning_turns += 1
+        if not facts.input_estimated and facts.has_cache_data:
+            self._cache_read_tokens += facts.cache_read
+            self._cache_write_tokens += facts.cache_write
+            self._cache_turns += 1
+            self._cache_input_tokens += facts.input_tokens
+            for cache_acc in (model, provider_acc):
+                cache_acc.cache_turns += 1
+                cache_acc.cache_input_tokens += facts.input_tokens
+                cache_acc.cache_read_tokens += facts.cache_read
+                cache_acc.cache_write_tokens += facts.cache_write
+            if daily is not None:
+                daily.cache_input_tokens += facts.input_tokens
+                daily.cache_read_tokens += facts.cache_read
+                daily.cache_write_tokens += facts.cache_write
 
     def _record_error(
         self,
@@ -1899,11 +1908,13 @@ def _run_activity_record(
         if message.role != "assistant":
             continue
         facts = _read_usage(message.usage)
-        if facts.estimated:
+        if facts.input_estimated:
             estimated_input += facts.input_tokens
-            estimated_output += facts.output_tokens
         else:
             measured_input += facts.input_tokens
+        if facts.output_estimated:
+            estimated_output += facts.output_tokens
+        else:
             measured_output += facts.output_tokens
 
     started_at = _timing_field(summary.timing, "started_at") or summary.timestamp
@@ -2001,6 +2012,8 @@ class _UsageFacts:
     input_tokens: int
     output_tokens: int
     reasoning: int
+    input_estimated: bool
+    output_estimated: bool
     estimated: bool
     cache_read: int
     cache_write: int
@@ -2019,12 +2032,16 @@ def _read_usage(usage: JsonObject | None) -> _UsageFacts:
     are surfaced only as separate informational totals — never added on top.
     """
     if not isinstance(usage, dict):
-        return _UsageFacts(0, 0, 0, False, 0, 0, False, False)
+        return _UsageFacts(0, 0, 0, False, False, False, 0, 0, False, False)
+    input_estimated = usage_token_is_estimated(usage, "input_tokens")
+    output_estimated = usage_token_is_estimated(usage, "output_tokens")
     return _UsageFacts(
         input_tokens=_non_negative_int(usage.get("input_tokens")),
         output_tokens=_non_negative_int(usage.get("output_tokens")),
         reasoning=_non_negative_int(usage.get("reasoning_tokens")),
-        estimated=usage.get("estimated") is True,
+        input_estimated=input_estimated,
+        output_estimated=output_estimated,
+        estimated=input_estimated or output_estimated,
         cache_read=_non_negative_int(usage.get("cache_read_tokens")),
         cache_write=_non_negative_int(usage.get("cache_write_tokens")),
         has_cache_data="cache_read_tokens" in usage or "cache_write_tokens" in usage,

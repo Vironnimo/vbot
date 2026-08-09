@@ -647,6 +647,38 @@ def test_measured_and_estimated_tokens_stay_separate(tmp_path: Path) -> None:
     assert day.reasoning_turns == 1
 
 
+def test_partial_usage_keeps_provider_output_measured(tmp_path: Path) -> None:
+    service, manager = _service(tmp_path, ["main"])
+    _write_session(
+        manager,
+        "main",
+        [
+            _assistant(
+                model="ollama-cloud/minimax-m3",
+                at=BASE,
+                usage={
+                    "input_tokens": 134_547,
+                    "input_tokens_estimated": True,
+                    "output_tokens": 2572,
+                    "estimated": True,
+                },
+            ),
+            _run_summary(status="completed", at=BASE, duration_ms=1000, run_id="r1"),
+        ],
+    )
+
+    report = service.report()
+    totals = report.usage.totals
+
+    assert totals.measured_input_tokens == 0
+    assert totals.measured_output_tokens == 2572
+    assert totals.estimated_input_tokens == 134_547
+    assert totals.estimated_output_tokens == 0
+    assert totals.measured_turns == 0
+    assert totals.estimated_turns == 1
+    assert report.usage.models[0].total_tokens == 137_119
+
+
 def test_cache_totals_split_per_provider_model_and_day(tmp_path: Path) -> None:
     service, manager = _service(tmp_path, ["main"])
     cached_model = "anthropic/claude-sonnet-4"

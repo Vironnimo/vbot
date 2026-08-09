@@ -78,9 +78,9 @@ from core.chat.messages import (
     ReplySurface,
     _append_input_origin_note,
     _append_reply_surface_note,
-    _apply_usage_estimation,
     _assistant_continuation_dict,
     _assistant_message_from_response,
+    _complete_usage_with_estimates,
     _display_content_preview,
     _effective_compaction_messages,
     _embed_notes_into_request,
@@ -2695,8 +2695,7 @@ class ChatLoop:
             )
             if not preserve_after_cancel:
                 run.raise_if_cancelled()
-            if assistant_message.usage is None:
-                assistant_message = _apply_usage_estimation(assistant_message, messages)
+            assistant_message = _complete_usage_with_estimates(assistant_message, messages)
             assistant_message = _with_assistant_output_files(assistant_message, cwd=output_cwd)
             run.input_token_total += _usage_token_count(assistant_message.usage, "input_tokens")
             run.output_token_total += _usage_token_count(assistant_message.usage, "output_tokens")

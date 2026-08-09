@@ -799,12 +799,16 @@ def _ollama_stream_tool_calls(raw_tool_calls: Any) -> list[dict[str, Any]]:
 def _extract_ollama_usage(response: Mapping[str, Any]) -> dict[str, Any] | None:
     input_tokens = response.get("prompt_eval_count")
     output_tokens = response.get("eval_count")
-    if not isinstance(input_tokens, int):
-        return None
-    return {
-        "input_tokens": input_tokens,
-        "output_tokens": output_tokens if isinstance(output_tokens, int) else 0,
-    }
+    usage: dict[str, Any] = {}
+    if isinstance(input_tokens, int) and not isinstance(input_tokens, bool) and input_tokens >= 0:
+        usage["input_tokens"] = input_tokens
+    if (
+        isinstance(output_tokens, int)
+        and not isinstance(output_tokens, bool)
+        and output_tokens >= 0
+    ):
+        usage["output_tokens"] = output_tokens
+    return usage or None
 
 
 def _normalize_ollama_done_reason(done_reason: Any, *, has_tool_calls: bool) -> str:

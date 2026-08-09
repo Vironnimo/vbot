@@ -542,7 +542,9 @@ class ProviderAdapter(ABC):
       (optional ``cache_read_tokens`` / ``cache_write_tokens`` ints when the
       provider reports prompt-cache usage, plus optional ``reasoning_tokens``
       as a subset of output; ``input_tokens`` is always the total prompt
-      including cached tokens)
+      including cached tokens; either primary token counter may be omitted when
+      the upstream Provider reports only the other one, and Chat estimates only
+      the missing field)
     - ``{"type": "finish", "reason": "stop" | "tool_calls" |
       "output_truncated" | "content_filtered" | "error" | "unknown"}``
 

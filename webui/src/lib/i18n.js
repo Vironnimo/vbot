@@ -262,12 +262,17 @@ export const englishCatalog = Object.freeze({
   'chat.tokenTooltipOutput': 'Output: {tokens} tok',
   'chat.tokenTooltipReasoning': '  · reasoning (included in output): {tokens}',
   'chat.tokenTooltipEstimated': 'Estimated (provider sent no usage data)',
-  'chat.tokenTooltipSession': 'Session ({turns} measured turns)',
+  'chat.tokenTooltipInputEstimated':
+    'Input estimated (provider omitted input usage)',
+  'chat.tokenTooltipOutputEstimated':
+    'Output estimated (provider omitted output usage)',
+  'chat.tokenTooltipSession': 'Session ({turns} fully measured turns)',
   'chat.tokenTooltipSessionReasoning':
     '  · reasoning: {tokens} tok ({turns} reporting turns; included in output)',
   'chat.tokenTooltipSessionAvgCacheRead':
     'Avg cache read per turn: {tokens} tok',
-  'chat.tokenTooltipSessionEstimatedTurns': '{count} estimated turns excluded',
+  'chat.tokenTooltipSessionEstimatedTurns':
+    'Turns with estimated token fields: {count}; those fields are excluded',
   'chat.subagent.label': 'Subagent',
   'chat.subagent.starting': 'starting',
   'chat.subagent.loadingResult': 'loading result…',

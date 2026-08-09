@@ -504,13 +504,18 @@ class StreamingAccumulator:
         self._reasoning_meta.update(reasoning_meta)
 
     def _add_usage(self, delta: JsonObject) -> None:
-        input_tokens = delta.get("input_tokens")
-        output_tokens = delta.get("output_tokens")
-        if not isinstance(input_tokens, int) or not isinstance(output_tokens, int):
-            raise StreamingDeltaError(
-                "usage delta must include integer input_tokens and output_tokens"
-            )
-        usage: JsonObject = {"input_tokens": input_tokens, "output_tokens": output_tokens}
+        usage = dict(self._usage or {})
+        primary_count = 0
+        for token_key in ("input_tokens", "output_tokens"):
+            if token_key not in delta:
+                continue
+            token_count = delta[token_key]
+            if isinstance(token_count, bool) or not isinstance(token_count, int) or token_count < 0:
+                raise StreamingDeltaError(f"usage delta {token_key} must be a non-negative integer")
+            usage[token_key] = token_count
+            primary_count += 1
+        if primary_count == 0:
+            raise StreamingDeltaError("usage delta must include input_tokens or output_tokens")
         for detail_key in ("cache_read_tokens", "cache_write_tokens", "reasoning_tokens"):
             detail_tokens = delta.get(detail_key)
             if (

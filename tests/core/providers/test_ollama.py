@@ -791,6 +791,20 @@ class TestNormalizeResponse:
         # Assert
         assert "usage" not in normalized
 
+    def test_cloud_response_without_prompt_count_preserves_output_usage(
+        self, adapter: OllamaAdapter
+    ) -> None:
+        normalized = adapter.normalize_response(
+            {
+                "message": {"content": "Answer."},
+                "done": True,
+                "done_reason": "stop",
+                "eval_count": 2572,
+            }
+        )
+
+        assert normalized["usage"] == {"output_tokens": 2572}
+
 
 # ---------------------------------------------------------------------------
 # Streaming (NDJSON)
@@ -829,6 +843,31 @@ class TestStreamNdjson:
             {"type": "content_delta", "text": "Hel"},
             {"type": "content_delta", "text": "lo"},
             {"type": "usage", "input_tokens": 558, "output_tokens": 4},
+            {"type": "finish", "reason": "stop"},
+        ]
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_cloud_stream_preserves_eval_count_when_prompt_count_is_omitted(
+        self, adapter: OllamaAdapter
+    ) -> None:
+        body = _ndjson(
+            {"model": "m", "message": {"role": "assistant", "content": "Answer."}, "done": False},
+            {
+                "model": "m",
+                "message": {"role": "assistant", "content": ""},
+                "done": True,
+                "done_reason": "stop",
+                "eval_count": 2572,
+            },
+        )
+        respx.post(OLLAMA_CHAT_URL).mock(return_value=httpx.Response(200, text=body))
+
+        deltas = [d async for d in adapter.stream(SAMPLE_MESSAGES, model_id="minimax-m3")]
+
+        assert deltas == [
+            {"type": "content_delta", "text": "Answer."},
+            {"type": "usage", "output_tokens": 2572},
             {"type": "finish", "reason": "stop"},
         ]
 

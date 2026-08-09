@@ -707,7 +707,7 @@ describe('ChatView', () => {
       '  · uncached: 686',
       'Output: 92 tok',
       '',
-      'Session (12 measured turns)',
+      'Session (12 fully measured turns)',
       'Input: 40,000 tok',
       '  · read from cache: 32,000 (80%)',
       'Output: 1,500 tok',
