@@ -40,9 +40,10 @@ The hourly sampler isolates each automatic attempt. An unexpected collection fai
 
 - `openai:subscription`: ChatGPT usage windows/credits and account-scoped Codex headers; verified endpoint details in `providers/openai.md`.
 - `github-copilot:oauth`: Copilot entitlement/usage using stored GitHub OAuth extra; details in `providers/github-copilot.md`.
+- `ollama-cloud:api-key`: Ollama Cloud session/weekly quota ratios and observed per-Model request counts; details in `providers/ollama.md`.
 - `minimax:api-key`: MiniMax token-plan remains projection; details in `providers/minimax.md`.
 
-OpenAI is live-verified as documented in its map. Copilot and MiniMax parsing is intentionally fail-open against inferred upstream shapes; a mismatch must remain an error snapshot, not break the report.
+OpenAI and Ollama Cloud are live-verified as documented in their maps. Ollama Cloud's endpoint is not publicly documented and must remain strict and fail-open. Copilot and MiniMax parsing is intentionally fail-open against inferred upstream shapes; a mismatch must remain an error snapshot, not break the report.
 
 ## Source and tests
 

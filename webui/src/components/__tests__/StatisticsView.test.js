@@ -873,6 +873,65 @@ describe('StatisticsView', () => {
     expect(document.body.textContent).toContain('updated every 10 seconds');
   });
 
+  it('shows Ollama Cloud quota percentages and labels request counts as observed', async () => {
+    const ollamaUsage = makeUsageReport({
+      providers: [
+        {
+          connection: 'ollama-cloud:api-key',
+          account: 'default',
+          display_name: 'Ollama Cloud',
+          plan: null,
+          credits: null,
+          windows: [
+            {
+              label: '5h',
+              used_percent: 1.9,
+              reset_at: null,
+              window_seconds: 18000,
+              used_units: 9,
+              remaining_units: null,
+              total_units: null,
+              unit: 'requests',
+              unlimited: null,
+            },
+            {
+              label: 'Week',
+              used_percent: 0.7,
+              reset_at: null,
+              window_seconds: 604800,
+              used_units: 14,
+              remaining_units: null,
+              total_units: null,
+              unit: 'requests',
+              unlimited: null,
+            },
+          ],
+          error: null,
+        },
+      ],
+    });
+    rpcMock.mockImplementation(routedRpc(ollamaUsage));
+
+    mountedComponent = mount(StatisticsView, { target: document.body });
+    await waitForCondition(() =>
+      document.body.textContent.includes('Per agent'),
+    );
+    openLimitsTab();
+    await waitForCondition(() =>
+      document.body.textContent.includes('Ollama Cloud'),
+    );
+
+    expect(document.body.textContent).toContain('2% used');
+    expect(document.body.textContent).toContain('1% used');
+    expect(document.body.textContent).toContain(
+      '9 requests observed; quota usage is provider-weighted',
+    );
+    expect(document.body.textContent).toContain(
+      '14 requests observed; quota usage is provider-weighted',
+    );
+    expect(document.body.textContent).not.toContain('Resets in');
+  });
+
   it('renders hourly limit history and correlated vBot Runs', async () => {
     rpcMock.mockImplementation((method) => {
       if (method === 'provider.usage') {

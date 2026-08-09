@@ -1991,6 +1991,8 @@ export const englishCatalog = Object.freeze({
   'statistics.limits.unavailable': 'Usage unavailable',
   'statistics.limits.usedPercent': '{percent}% used',
   'statistics.limits.resetsIn': 'Resets in {duration}',
+  'statistics.limits.observedUnits':
+    '{used} {unit} observed; quota usage is provider-weighted',
 
   // First-run onboarding wizard.
   'onboarding.title': 'Set up vBot',

@@ -1830,6 +1830,17 @@
           },
         )}
       </span>
+    {:else if window.used_units != null}
+      <span class="stats-limit-window__units">
+        {t(
+          'statistics.limits.observedUnits',
+          '{used} {unit} observed; quota usage is provider-weighted',
+          {
+            used: formatInteger(window.used_units, locale),
+            unit: window.unit ?? t('statistics.limits.units', 'units'),
+          },
+        )}
+      </span>
     {/if}
   </li>
 {/snippet}

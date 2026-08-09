@@ -57,12 +57,14 @@ DEFAULT_USAGE_HISTORY_INTERVAL_SECONDS = 60 * 60
 
 OPENAI_USAGE_CONNECTION = "openai:subscription"
 COPILOT_USAGE_CONNECTION = "github-copilot:oauth"
+OLLAMA_USAGE_CONNECTION = "ollama-cloud:api-key"
 MINIMAX_USAGE_CONNECTION = "minimax:api-key"
 
 OPENAI_USAGE_PATH = "/wham/usage"
 # GitHub's own host, not the Copilot API host: the usage endpoint authenticates
 # with the GitHub OAuth token (token-store ``extra``), not the Copilot bearer.
 COPILOT_USAGE_URL = "https://api.github.com/copilot_internal/user"
+OLLAMA_USAGE_PATH = "/api/usage"
 MINIMAX_USAGE_PATH = "/token_plan/remains"
 
 # Candidate field names for the MiniMax remaining/total counts. The shape is
@@ -81,11 +83,13 @@ _MINIMAX_PLAN_KEYS = ("plan", "plan_name", "subscription_type")
 _MINIMAX_CHAT_MODEL_PREFIX = "minimax-m"
 
 _WEEK_SECONDS = 7 * 24 * 3600
+_OLLAMA_SESSION_SECONDS = 5 * 3600
 _DAY_SECONDS = 24 * 3600
 # Epoch values above this are milliseconds, not seconds (year ~33658 in seconds).
 _EPOCH_MILLISECONDS_THRESHOLD = 1_000_000_000_000
 _PRIMARY_FALLBACK_LABEL = "Limit"
 _SECONDARY_FALLBACK_LABEL = "Weekly"
+_RATIO_PERCENT_DECIMAL_PLACES = 10
 
 
 # ---------------------------------------------------------------------------
@@ -298,6 +302,7 @@ class _SupportedConnection:
 _SUPPORTED_CONNECTIONS: tuple[_SupportedConnection, ...] = (
     _SupportedConnection("openai", "subscription"),
     _SupportedConnection("github-copilot", "oauth"),
+    _SupportedConnection("ollama-cloud", "api-key"),
     _SupportedConnection("minimax", "api-key"),
 )
 
@@ -345,6 +350,7 @@ class ProviderUsageService:
         self._fetchers: dict[str, _Fetcher] = {
             OPENAI_USAGE_CONNECTION: self._fetch_openai,
             COPILOT_USAGE_CONNECTION: self._fetch_copilot,
+            OLLAMA_USAGE_CONNECTION: self._fetch_ollama,
             MINIMAX_USAGE_CONNECTION: self._fetch_minimax,
         }
 
@@ -643,6 +649,24 @@ class ProviderUsageService:
             account=connection.account_id,
         )
 
+    async def _fetch_ollama(self, connection: _SupportedConnection) -> ProviderUsageSnapshot:
+        provider = self._runtime.providers.get(connection.provider_id)
+        connection_config = provider.get_connection(connection.local_connection_id)
+        base_url = connection_config.base_url or provider.base_url
+
+        token_getter = self._runtime.get_connection_token_getter(
+            connection.provider_id, connection.target_id
+        )
+        token = await token_getter()
+        headers = {connection_config.auth.header: f"{connection_config.auth.prefix}{token}"}
+        body = await self._get_json(_join_url(base_url, OLLAMA_USAGE_PATH), headers)
+        return _parse_ollama_usage(
+            connection.connection_id,
+            self._display_name(connection),
+            body,
+            account=connection.account_id,
+        )
+
     async def _get_json(self, url: str, headers: Mapping[str, str]) -> Any:
         response = await self._transport.get(url, headers=headers, timeout=self._timeout)
         if response.status_code >= 400:
@@ -782,6 +806,79 @@ def _copilot_plan(body: Any) -> str | None:
         return None
     plan = body.get("copilot_plan")
     return plan.strip() if isinstance(plan, str) and plan.strip() else None
+
+
+# ---------------------------------------------------------------------------
+# Ollama Cloud parsing (live-verified, undocumented endpoint)
+# ---------------------------------------------------------------------------
+
+
+def _parse_ollama_usage(
+    connection_id: str,
+    display_name: str,
+    body: Any,
+    *,
+    account: str = DEFAULT_ACCOUNT_ID,
+) -> ProviderUsageSnapshot:
+    limits = body.get("limits") if isinstance(body, Mapping) else None
+    if not isinstance(limits, Mapping):
+        raise UsageFetchError("Unsupported response shape")
+
+    windows: list[UsageWindow] = []
+    for key, label, window_seconds in (
+        ("session", "5h", _OLLAMA_SESSION_SECONDS),
+        ("weekly", "Week", _WEEK_SECONDS),
+    ):
+        raw = limits.get(key)
+        if raw is None:
+            continue
+        window = _ollama_window(raw, label, window_seconds)
+        if window is None:
+            raise UsageFetchError("Unsupported response shape")
+        windows.append(window)
+
+    if not windows:
+        raise UsageFetchError("Unsupported response shape")
+    return ProviderUsageSnapshot(
+        connection=connection_id,
+        account=account,
+        display_name=display_name,
+        windows=windows,
+    )
+
+
+def _ollama_window(raw: Any, label: str, window_seconds: int) -> UsageWindow | None:
+    if not isinstance(raw, Mapping):
+        return None
+    usage_ratio = _as_number(raw.get("usage"))
+    if usage_ratio is None:
+        return None
+    request_count = _ollama_request_count(raw.get("models"))
+    return UsageWindow(
+        label=label,
+        used_percent=clamp_percent(round(usage_ratio * 100.0, _RATIO_PERCENT_DECIMAL_PLACES)),
+        window_seconds=window_seconds,
+        used_units=request_count,
+        unit="requests" if request_count is not None else None,
+    )
+
+
+def _ollama_request_count(models: Any) -> float | None:
+    """Sum complete per-Model counts without treating them as quota units."""
+
+    if not isinstance(models, list):
+        return None
+    total = 0
+    for model in models:
+        if not isinstance(model, Mapping):
+            return None
+        request_count = model.get("request_count")
+        if isinstance(request_count, bool) or not isinstance(request_count, int):
+            return None
+        if request_count < 0:
+            return None
+        total += request_count
+    return float(total)
 
 
 # ---------------------------------------------------------------------------
