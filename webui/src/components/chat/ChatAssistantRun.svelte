@@ -128,18 +128,16 @@
     );
   }
 
-  function workingGroupActivity(group) {
-    const latestChild = group.children.at(-1);
-    if (latestChild?.type === 'reasoning') {
-      return t('chat.event.thinking', 'Thinking');
+  function workingGroupToolName(group) {
+    for (let index = group.children.length - 1; index >= 0; index -= 1) {
+      const child = group.children[index];
+      if (child.type === 'tool_call') {
+        return isSubAgentSpawnTool(child)
+          ? t('chat.subagent.label', 'Sub-agent')
+          : toolNameForRunTool(child);
+      }
     }
-    if (!latestChild || latestChild.type !== 'tool_call') {
-      return '';
-    }
-
-    return isSubAgentSpawnTool(latestChild)
-      ? t('chat.subagent.label', 'Sub-agent')
-      : toolNameForRunTool(latestChild);
+    return '';
   }
 
   function groupRunChildren(children, workingMode) {
@@ -603,7 +601,7 @@
       {#if group.type === 'working'}
         {@const groupActive = workingGroupIsActive(group)}
         {@const groupOpen = Boolean(workingDisclosureState[group.id])}
-        {@const groupActivity = workingGroupActivity(group)}
+        {@const groupToolName = groupActive ? workingGroupToolName(group) : ''}
         <details
           class="working-block"
           open={groupOpen}
@@ -616,9 +614,11 @@
                 ? t('chat.working.active', 'working...')
                 : t('chat.working.done', 'done working')}
             </span>
-            <span class="working-block__activity">
-              {groupActivity}
-            </span>
+            {#if groupToolName}
+              <span class="working-block__activity">
+                {groupToolName}
+              </span>
+            {/if}
             <svg
               class="working-block__chevron"
               viewBox="0 0 16 16"
