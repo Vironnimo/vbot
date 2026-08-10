@@ -63,12 +63,16 @@ async def test_cancel_during_tool_dispatch_persists_all_sibling_tool_results(
     # never sees a dangling tool_calls turn in the session history.
     from tests.core.chat.test_chat_loop import StubAdapter, StubAgent, StubRuntime
 
+    siblings_started: set[str] = set()
+    all_siblings_started = asyncio.Event()
+    release_siblings = asyncio.Event()
+
     def make_handler(label: str):
         async def handler(_context: ToolContext, _arguments: dict) -> dict:
-            # Yield so the cancel task can race with dispatch. The
-            # post-dispatch code path (the persist loop) must then record
-            # all sibling results before honoring the cancel.
-            await asyncio.sleep(0.5)
+            siblings_started.add(label)
+            if len(siblings_started) == 3:
+                all_siblings_started.set()
+            await release_siblings.wait()
             return tool_success({"sibling": label})
 
         return handler
@@ -118,13 +122,12 @@ async def test_cancel_during_tool_dispatch_persists_all_sibling_tool_results(
     run = await build_chat_loop(runtime).start_run("coder", "Multi", session_id="session-one")
 
     async def fire_cancel_after_dispatch() -> None:
-        # Yield briefly so the chat loop runs the tool dispatch first.
-        # Then flip the cancel flag directly (without cancelling the
-        # chat-loop task) — that lets the gather finish and the persist
-        # loop record every sibling result before `raise_if_cancelled`
-        # is honored at the end of the persist block.
-        await asyncio.sleep(0.1)
+        # Flip the flag only after every sibling entered its handler. This keeps
+        # the test independent of platform-specific task-startup timing while
+        # still exercising cancellation during an in-flight parallel dispatch.
+        await all_siblings_started.wait()
         run.cancel_requested = True
+        release_siblings.set()
 
     cancel_task = asyncio.create_task(fire_cancel_after_dispatch())
 
