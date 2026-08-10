@@ -55,6 +55,8 @@ describe('SessionListDrawer', () => {
     }
     vi.unstubAllGlobals();
     document.body.innerHTML = '';
+    vi.clearAllTimers();
+    vi.useRealTimers();
   });
 
   it('reloads the session list when the reload token bumps', async () => {
@@ -539,10 +541,10 @@ describe('SessionListDrawer', () => {
     expect(sessionButton.textContent).not.toContain('Source channel');
     expect(sessionButton.textContent).not.toContain('Parent');
 
+    vi.useFakeTimers();
     sessionButton.focus();
-    await new Promise((resolve) =>
-      setTimeout(resolve, TOOLTIP_SHOW_DELAY_MS + 50),
-    );
+    await vi.advanceTimersByTimeAsync(TOOLTIP_SHOW_DELAY_MS);
+    flushSync();
 
     const tooltipText = document.getElementById('app-tooltip')?.textContent;
     expect(tooltipText).toContain('Child session title');

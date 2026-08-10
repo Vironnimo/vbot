@@ -65,6 +65,7 @@ describe('ChatView', () => {
       100,
     );
 
+    vi.useFakeTimers();
     expect(
       await hoveredTooltipText(
         document.querySelector('.chat-header .agent-tab'),

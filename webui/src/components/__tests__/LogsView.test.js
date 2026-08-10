@@ -350,10 +350,10 @@ describe('LogsView', () => {
     expect(rows[0].querySelectorAll('span')).toHaveLength(4);
     expect(errorRow).toBeTruthy();
     expect(errorRow?.textContent).toContain('Failed Traceback line');
+    vi.useFakeTimers();
     errorRow.dispatchEvent(new Event('pointerenter'));
-    await new Promise((resolve) =>
-      setTimeout(resolve, TOOLTIP_SHOW_DELAY_MS + 50),
-    );
+    await vi.advanceTimersByTimeAsync(TOOLTIP_SHOW_DELAY_MS);
+    flushSync();
     expect(document.getElementById('app-tooltip')?.textContent).toBe(
       'Failed\nTraceback line',
     );
