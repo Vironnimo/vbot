@@ -66,6 +66,10 @@ _MOCK_DEFAULT_SCORES = [0.0] * 25 + [1.0]
 # non-idempotent POST (audio transcription). Duplicated, not imported: the
 # desktop process must not import from core (see .vorch/PROJECT.md).
 _RETRYABLE_STATUS_CODES = frozenset([429, 502, 503, 504])
+# Only RPC reads may be repeated after an ambiguous transport failure. Retrying
+# session.create or chat.stream can duplicate a committed Session or Run when
+# the server handled the first request but its response was lost.
+_RETRYABLE_RPC_METHODS = frozenset(["agent.get", "session.list"])
 
 _VOICE_CANCEL_PHRASES = frozenset(["abbrechen", "vergiss es"])
 _COMMON_CAPTURE_SAMPLE_RATES = (16000, 48000, 44100, 32000)
@@ -749,8 +753,9 @@ class WakewordWorker:
 
         url = f"{self._server_url}/api/rpc"
         payload = {"method": method, "params": params}
+        attempt_count = _MAX_RETRIES if method in _RETRYABLE_RPC_METHODS else 1
 
-        for attempt in range(_MAX_RETRIES):
+        for attempt in range(attempt_count):
             try:
                 response = httpx.post(url, json=payload, timeout=_RPC_TIMEOUT)
                 if response.status_code == 200:
@@ -769,15 +774,17 @@ class WakewordWorker:
                         return {}
                     result = rpc_response.get("result", {})
                     return result if isinstance(result, dict) else {}
-                if response.status_code in _RETRYABLE_STATUS_CODES:
-                    if not self._running.is_set():
-                        return {}
+                if (
+                    response.status_code in _RETRYABLE_STATUS_CODES
+                    and attempt < attempt_count - 1
+                    and self._running.is_set()
+                ):
                     _backoff_sleep(attempt, self._running)
                     continue
                 logger.warning("RPC %s failed: HTTP %s", method, response.status_code)
                 return {}
             except httpx.RequestError:
-                if attempt < _MAX_RETRIES - 1 and self._running.is_set():
+                if attempt < attempt_count - 1 and self._running.is_set():
                     _backoff_sleep(attempt, self._running)
                     continue
                 logger.warning("RPC %s request failed", method, exc_info=True)

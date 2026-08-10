@@ -11,6 +11,7 @@ from collections.abc import Callable
 from typing import Any
 from unittest.mock import MagicMock
 
+import httpx
 import pytest
 
 from desktop.wakeword.engine import MockWakewordEngine, WakewordMatch
@@ -1189,6 +1190,72 @@ def test_rpc_call_returns_empty_for_rpc_error(
     )
 
     assert worker._rpc_call("agent.get", {"id": "main"}) == {}
+
+
+@pytest.mark.parametrize("method", ["session.create", "chat.stream"])
+def test_rpc_call_does_not_retry_mutation_after_ambiguous_transport_failure(
+    fake_bridge: FakeBridge,
+    monkeypatch: pytest.MonkeyPatch,
+    method: str,
+) -> None:
+    from desktop.wakeword import worker as worker_module
+    from desktop.wakeword.worker import WakewordWorker
+
+    calls = 0
+
+    def ambiguous_failure(*_args: object, **_kwargs: object) -> object:
+        nonlocal calls
+        calls += 1
+        request = httpx.Request("POST", "http://127.0.0.1:8420/api/rpc")
+        raise httpx.ReadTimeout("response lost after send", request=request)
+
+    monkeypatch.setattr(worker_module.httpx, "post", ambiguous_failure)
+    worker = WakewordWorker(
+        engine=MockWakewordEngine(),
+        bridge=fake_bridge,
+        server_url="http://127.0.0.1:8420",
+    )
+    worker._running.set()
+
+    assert worker._rpc_call(method, {}) == {}
+    assert calls == 1
+
+
+def test_rpc_call_retries_safe_read_after_transport_failure(
+    fake_bridge: FakeBridge,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from desktop.wakeword import worker as worker_module
+    from desktop.wakeword.worker import WakewordWorker
+
+    calls = 0
+
+    class SuccessfulResponse:
+        status_code = 200
+
+        @staticmethod
+        def json() -> dict[str, object]:
+            return {"ok": True, "result": {"id": "main"}}
+
+    def post(*_args: object, **_kwargs: object) -> object:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            request = httpx.Request("POST", "http://127.0.0.1:8420/api/rpc")
+            raise httpx.ReadTimeout("temporary read failure", request=request)
+        return SuccessfulResponse()
+
+    monkeypatch.setattr(worker_module.httpx, "post", post)
+    monkeypatch.setattr(worker_module, "_backoff_sleep", lambda *_args: None)
+    worker = WakewordWorker(
+        engine=MockWakewordEngine(),
+        bridge=fake_bridge,
+        server_url="http://127.0.0.1:8420",
+    )
+    worker._running.set()
+
+    assert worker._rpc_call("agent.get", {"id": "main"}) == {"id": "main"}
+    assert calls == 2
 
 
 def test_mock_worker_start_stop_lifecycle(fake_bridge: FakeBridge) -> None:
