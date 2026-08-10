@@ -211,6 +211,10 @@ def make_api_key_connection() -> ConnectionConfig:
     )
 
 
+async def no_models_dev_catalog() -> None:
+    return None
+
+
 def make_state(tmp_path: Any, provider: ProviderConfig) -> SimpleNamespace:
     return SimpleNamespace(
         runtime=SimpleNamespace(
@@ -772,6 +776,7 @@ async def test_model_refresh_db_uses_oauth_token_getter_for_fresh_token(
 
     monkeypatch.setattr("server.rpc.provider_access.OAuthTokenGetter", StubOAuthTokenGetter)
     monkeypatch.setattr("server.rpc.connection_methods.refresh_models", fake_refresh_models)
+    monkeypatch.setattr(connection_methods, "fetch_catalog", no_models_dev_catalog)
 
     response = await dispatch_rpc(
         state,
@@ -817,6 +822,7 @@ async def test_model_refresh_db_preserves_api_key_credential_path(
         }
 
     monkeypatch.setattr("server.rpc.connection_methods.refresh_models", fake_refresh_models)
+    monkeypatch.setattr(connection_methods, "fetch_catalog", no_models_dev_catalog)
 
     response = await dispatch_rpc(
         state,
