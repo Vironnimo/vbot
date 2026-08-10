@@ -216,6 +216,7 @@ BACKGROUND_AT_DEPTH_EXPLICIT_MESSAGE = (
 _LOGGER = get_logger("tools.bash")
 
 _cached_shell_env: dict[str, str] | None = None
+_shell_env_probe_task: asyncio.Task[dict[str, str]] | None = None
 
 
 def project_bash_tool_definitions(
@@ -725,10 +726,27 @@ def _shell_argv(command: str) -> list[str]:
 
 
 async def _get_shell_env() -> dict[str, str]:
-    global _cached_shell_env
+    global _cached_shell_env, _shell_env_probe_task
 
     if _cached_shell_env is None:
-        _cached_shell_env = await _probe_shell_env()
+        probe_task = _shell_env_probe_task
+        if probe_task is None:
+            probe_task = asyncio.create_task(_probe_shell_env())
+            _shell_env_probe_task = probe_task
+        try:
+            probed_env = await asyncio.shield(probe_task)
+        except asyncio.CancelledError:
+            if probe_task.cancelled() and _shell_env_probe_task is probe_task:
+                _shell_env_probe_task = None
+            raise
+        except BaseException:
+            if _shell_env_probe_task is probe_task:
+                _shell_env_probe_task = None
+            raise
+        if _cached_shell_env is None:
+            _cached_shell_env = probed_env
+        if _shell_env_probe_task is probe_task:
+            _shell_env_probe_task = None
     return dict(_cached_shell_env)
 
 

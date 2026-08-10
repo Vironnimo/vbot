@@ -28,7 +28,7 @@ Runs host shell commands and streams foreground stdout/stderr into the Run timel
 ## Constraints & Gotchas
 
 - Combined `output` and the streamed stdout/stderr Run events are ANSI-stripped — terminal color/escape sequences are removed before the text reaches the model or UI. Stripping happens once in `ProcessManager` (shared `core/utils/ansi.strip_ansi`); see `process.md`.
-- A login shell environment is probed once per process and falls back to `os.environ` on failure or timeout.
+- A login shell environment is probed once per process and falls back to `os.environ` on failure or timeout. Concurrent first Bash calls share one in-flight probe task, and cancelling one waiter does not cancel that shared initialization.
 - Env grants keep values out of Provider-bound prompts and Tool arguments but are not a shell sandbox: a command with an injected credential can print, transform, write, or transmit it. Granting a name authorizes Bash use; this layer does not claim secrecy from the executing Agent and does not redact process output.
 - Spawn failures and tool-enforced timeouts are failure envelopes. A `process_timeout` is reported only when the timeout actually killed a still-running process (terminal status `killed`); a process that exits on its own as the deadline elapses keeps its completed/failed result instead of being masked as a timeout.
 - Timeout-style failures (`process_timeout` and the sub-agent yield_after kill) append the output tail (`FAILURE_OUTPUT_TAIL_CHARS`, 10k) and the complete-log path to the error message, so diagnostics printed before the kill reach the model. A spawn `FileNotFoundError` names the missing shell, with an explicit PowerShell 7 hint when `pwsh` is absent on Windows.
