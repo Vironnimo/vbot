@@ -8,7 +8,10 @@ from types import SimpleNamespace
 import pytest
 
 import server.rpc.connection_methods as connection_methods
-from server.rpc.connection_methods import _await_local_catalog_refresh
+from server.rpc.connection_methods import (
+    _await_local_catalog_refresh,
+    shutdown_background_refresh_tasks,
+)
 
 
 class TestAwaitLocalCatalogRefresh:
@@ -59,6 +62,30 @@ class TestAwaitLocalCatalogRefresh:
 
         # Act / Assert — must not raise.
         await _await_local_catalog_refresh(runtime)
+
+    @pytest.mark.asyncio
+    async def test_shutdown_cancels_and_drains_slow_runtime_refresh(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(connection_methods, "LOCAL_CATALOG_REFRESH_WAIT_SECONDS", 0.001)
+        started = asyncio.Event()
+        cancelled = asyncio.Event()
+
+        async def maybe_refresh_local_catalogs() -> None:
+            started.set()
+            try:
+                await asyncio.Event().wait()
+            finally:
+                cancelled.set()
+
+        runtime = SimpleNamespace(maybe_refresh_local_catalogs=maybe_refresh_local_catalogs)
+        await _await_local_catalog_refresh(runtime)
+        await started.wait()
+
+        await shutdown_background_refresh_tasks(runtime)
+
+        assert cancelled.is_set()
+        assert id(runtime) not in connection_methods._BACKGROUND_REFRESH_TASKS
 
     @pytest.mark.asyncio
     async def test_refresh_exception_is_consumed_not_raised(self) -> None:

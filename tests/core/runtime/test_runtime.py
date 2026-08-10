@@ -18,7 +18,7 @@ from core.prompts import LayoutEntry, SystemPromptManager
 from core.providers.credentials import ProviderCredentialResolver
 from core.providers.providers import ProviderRegistry
 from core.recall import JsonlSessionRecallBackend, RecallBackendRegistry, SqliteFtsRecallBackend
-from core.runs import ChatRunManager, RunCancelledError
+from core.runs import ChatRunManager, Run, RunCancelledError, RunStatus
 from core.runtime.runtime import _VBOT_ROOT, Runtime, _detect_vbot_version
 from core.sessions import ChatSessionManager
 from core.skills.skills import SKILL_ORIGIN_GLOBAL, SkillRegistry
@@ -865,6 +865,52 @@ async def test_runtime_aclose_reaps_process_sessions(config: Config) -> None:
     assert temporary_files._sweeper_task is None
     with pytest.raises(RuntimeError):
         _ = runtime.process_manager
+
+
+@pytest.mark.asyncio
+async def test_runtime_aclose_cancels_runs_titles_and_reflections(config: Config) -> None:
+    logging.getLogger("vbot").handlers = []
+    runtime = Runtime(config)
+    runtime.start()
+    run_started = asyncio.Event()
+    background_started = asyncio.Event()
+    background_count = 0
+
+    async def execute(_run: Run) -> str:
+        run_started.set()
+        await asyncio.Event().wait()
+        return "unreachable"
+
+    async def background_work() -> None:
+        nonlocal background_count
+        background_count += 1
+        if background_count == 2:
+            background_started.set()
+        await asyncio.Event().wait()
+
+    run = await runtime.chat_run_manager.start(
+        agent_id="main",
+        session_id="shutdown-session",
+        executor=execute,
+        project_id=None,
+    )
+    title_task = asyncio.create_task(background_work())
+    reflection_task = asyncio.create_task(background_work())
+    title_service = runtime._session_title_service  # noqa: SLF001
+    reflection_service = runtime._reflection_service  # noqa: SLF001
+    assert title_service is not None
+    assert reflection_service is not None
+    title_service._background_tasks.add(title_task)  # noqa: SLF001
+    reflection_service._background_tasks.add(reflection_task)  # noqa: SLF001
+    await run_started.wait()
+    await background_started.wait()
+
+    await runtime.aclose()
+
+    assert run.status == RunStatus.CANCELLED
+    assert title_task.cancelled()
+    assert reflection_task.cancelled()
+    assert runtime.chat_runs is None
 
 
 def test_runtime_registers_bash_and_process_tools(config: Config) -> None:

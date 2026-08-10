@@ -78,6 +78,7 @@ class SessionTitleService:
     def __init__(self, runtime: RuntimeServices) -> None:
         self._runtime = runtime
         self._background_tasks: set[asyncio.Task[None]] = set()
+        self._closed = False
 
     def notify_user_message(
         self,
@@ -90,6 +91,8 @@ class SessionTitleService:
         run_id: str,
     ) -> None:
         """Handle the first visible user message without delaying its Run."""
+        if self._closed:
+            return
         try:
             self._initialize_title(
                 agent_id=agent_id,
@@ -174,6 +177,16 @@ class SessionTitleService:
         exception = task.exception()
         if exception is not None:
             _LOGGER.warning("Background Session title task failed", exc_info=exception)
+
+    async def aclose(self) -> None:
+        """Cancel and drain every in-flight generated-title request."""
+        self._closed = True
+        tasks = tuple(self._background_tasks)
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        self._background_tasks.clear()
 
     async def _generate_title(
         self,

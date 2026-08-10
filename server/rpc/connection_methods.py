@@ -286,8 +286,9 @@ def _provider_config_or_none(runtime: Any, provider_id: str) -> Any:
 LOCAL_CATALOG_REFRESH_WAIT_SECONDS = 3.0
 
 # Strong references to background refresh sweeps that outlived their
-# model.list call, so the tasks are not garbage-collected mid-flight.
-_BACKGROUND_REFRESH_TASKS: set[asyncio.Task[None]] = set()
+# model.list call, grouped by the owning Runtime so one server shutdown never
+# cancels another in-process app's work.
+_BACKGROUND_REFRESH_TASKS: dict[int, set[asyncio.Task[None]]] = {}
 
 
 async def _await_local_catalog_refresh(runtime: Any) -> None:
@@ -305,8 +306,33 @@ async def _await_local_catalog_refresh(runtime: Any) -> None:
         if exception is not None:
             _LOGGER.warning("Local catalog auto-refresh failed: %s", exception)
     if pending:
-        _BACKGROUND_REFRESH_TASKS.add(refresh_task)
-        refresh_task.add_done_callback(_BACKGROUND_REFRESH_TASKS.discard)
+        runtime_key = id(runtime)
+        tasks = _BACKGROUND_REFRESH_TASKS.setdefault(runtime_key, set())
+        tasks.add(refresh_task)
+        refresh_task.add_done_callback(
+            lambda completed, key=runtime_key: _discard_background_refresh_task(
+                key,
+                completed,
+            )
+        )
+
+
+def _discard_background_refresh_task(runtime_key: int, task: asyncio.Task[None]) -> None:
+    tasks = _BACKGROUND_REFRESH_TASKS.get(runtime_key)
+    if tasks is None:
+        return
+    tasks.discard(task)
+    if not tasks:
+        _BACKGROUND_REFRESH_TASKS.pop(runtime_key, None)
+
+
+async def shutdown_background_refresh_tasks(runtime: Any) -> None:
+    """Cancel and drain model.list refresh sweeps owned by one Runtime."""
+    tasks = tuple(_BACKGROUND_REFRESH_TASKS.pop(id(runtime), ()))
+    for task in tasks:
+        task.cancel()
+    if tasks:
+        await asyncio.gather(*tasks, return_exceptions=True)
 
 
 async def _set_connection_enabled(state: Any, params: JsonObject) -> JsonObject:

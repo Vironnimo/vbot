@@ -173,6 +173,34 @@ async def _drain(service: ReflectionService) -> None:
         await asyncio.gather(*list(service._background_tasks))
 
 
+@pytest.mark.asyncio
+async def test_aclose_cancels_and_drains_background_reflection_tasks() -> None:
+    service, _sessions, _loop = _make_service()
+    started = asyncio.Event()
+
+    async def blocking_review() -> None:
+        started.set()
+        await asyncio.Event().wait()
+
+    task = asyncio.create_task(blocking_review())
+    service._background_tasks.add(task)
+    service._agents_in_review.add("main")
+    await started.wait()
+
+    await service.aclose()
+
+    assert task.cancelled()
+    assert service._background_tasks == set()
+    assert service._agents_in_review == set()
+    service.notify_run_end(
+        cast("Any", _FakeRun()),
+        _identity_agent(),
+        internal=False,
+        outcome="success",
+    )
+    assert service._background_tasks == set()
+
+
 # --- notify_run_end inline gates ---------------------------------------------
 
 

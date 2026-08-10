@@ -70,6 +70,7 @@ class _CompletionDeliveryCoordinator:
         self._sessions = sessions
         self._buckets: dict[CompletionSessionKey, _CompletionBucket] = {}
         self._suppressed_origins: dict[CompletionSessionKey, list[str]] = {}
+        self._closed = False
 
     def submit(
         self,
@@ -83,6 +84,10 @@ class _CompletionDeliveryCoordinator:
         on_persisted: Callable[[], None] | None,
     ) -> asyncio.Future[None]:
         """Submit one result and return a Future resolved after durable delivery."""
+        if self._closed:
+            delivered: asyncio.Future[None] = asyncio.get_running_loop().create_future()
+            delivered.cancel()
+            return delivered
         key = (project_id, agent_id, session_id)
         bucket = self._buckets.setdefault(key, _CompletionBucket())
         existing = bucket.notices.get(notice_id)
@@ -135,6 +140,8 @@ class _CompletionDeliveryCoordinator:
 
     def deliver_to_request(self, run: Run, session: ChatSession) -> bool:
         """Persist ready results for the next request of their active boundary Run."""
+        if self._closed:
+            return False
         key = (run.project_id, run.agent_id, run.session_id)
         bucket = self._buckets.get(key)
         if bucket is None or self._active_run(key) is not run:
@@ -399,7 +406,10 @@ class _CompletionDeliveryCoordinator:
                 continue
             bucket.notices.pop(notice.id, None)
             if not notice.delivered.done():
-                notice.delivered.set_exception(error)
+                if isinstance(error, asyncio.CancelledError):
+                    notice.delivered.cancel()
+                else:
+                    notice.delivered.set_exception(error)
 
     def _suppress_origin(self, key: CompletionSessionKey, run_id: str) -> None:
         origins = self._suppressed_origins.setdefault(key, [])
@@ -408,6 +418,27 @@ class _CompletionDeliveryCoordinator:
         origins.append(run_id)
         if len(origins) > _SUPPRESSED_ORIGIN_LIMIT:
             del origins[: len(origins) - _SUPPRESSED_ORIGIN_LIMIT]
+
+    async def aclose(self) -> None:
+        """Cancel delivery workers and settle every producer-facing Future."""
+        if self._closed:
+            return
+        self._closed = True
+        tasks = tuple(
+            bucket.delivery_task
+            for bucket in self._buckets.values()
+            if bucket.delivery_task is not None and not bucket.delivery_task.done()
+        )
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        for bucket in self._buckets.values():
+            for notice in bucket.notices.values():
+                if not notice.delivered.done():
+                    notice.delivered.cancel()
+        self._buckets.clear()
+        self._suppressed_origins.clear()
 
 
 async def _wait_for_terminal_run(run: Run) -> None:
@@ -521,6 +552,10 @@ class TriggerService:
     def deliver_background_completions(self, run: Run, session: ChatSession) -> bool:
         """Inject ready completion results into an active Run's next Model request."""
         return self._completion_delivery.deliver_to_request(run, session)
+
+    async def aclose(self) -> None:
+        """Stop and drain automatic background-completion delivery."""
+        await self._completion_delivery.aclose()
 
     async def trigger_run(
         self,
