@@ -1311,6 +1311,42 @@ class TestChatSessionManager:
 
         assert asyncio.run(asyncio.wait_for(scenario(), timeout=1.0)) is True
 
+    def test_write_lock_reacquires_when_inherited_child_outlives_parent(self, tmp_path):
+        manager = ChatSessionManager(tmp_path)
+
+        async def scenario() -> None:
+            lock = manager.write_lock("coder", "session-one")
+            child_may_enter = asyncio.Event()
+            child_entered = asyncio.Event()
+            unrelated_entered = asyncio.Event()
+            release_unrelated = asyncio.Event()
+
+            async def inherited_child() -> None:
+                await child_may_enter.wait()
+                async with lock:
+                    child_entered.set()
+
+            async with lock:
+                child = asyncio.create_task(inherited_child())
+
+            async def unrelated_writer() -> None:
+                async with lock:
+                    unrelated_entered.set()
+                    await release_unrelated.wait()
+
+            unrelated = asyncio.create_task(unrelated_writer())
+            await unrelated_entered.wait()
+            child_may_enter.set()
+            await asyncio.sleep(0)
+
+            assert not child_entered.is_set()
+
+            release_unrelated.set()
+            await asyncio.gather(child, unrelated)
+            assert child_entered.is_set()
+
+        asyncio.run(asyncio.wait_for(scenario(), timeout=1.0))
+
     def test_open_tool_cycle_blocks_out_of_band_note_until_release(self, tmp_path):
         manager = ChatSessionManager(tmp_path)
         session = manager.create("coder", session_id="session-one")

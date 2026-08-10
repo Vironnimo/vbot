@@ -568,6 +568,14 @@ class ChatSession:
         )
 
 
+@dataclass
+class _SessionWriteLease:
+    """One live ownership lease shared with reentrant child contexts."""
+
+    holders: int = 1
+    active: bool = True
+
+
 class _SessionWriteLock:
     """Context-reentrant async lock guarding one session transcript's appends.
 
@@ -575,12 +583,17 @@ class _SessionWriteLock:
     lock*, so a Run that holds the lock across its tool cycle can run a tool (for
     example ``channel_send``) that targets its own session without
     self-deadlocking — even though the tool executor runs each tool call in its
-    own ``asyncio.create_task``. Ownership is tracked through a ``ContextVar``
-    rather than the running task: ``asyncio`` copies the holder's context into
-    those child tasks at creation, so they inherit the reentrancy depth and nest
-    instead of blocking on the held lock. Keying on ``current_task()`` instead
-    would deadlock here, because the tool runs in a different task than the one
-    that acquired the lock.
+    own ``asyncio.create_task``. Ownership is tracked through a live lease in a
+    ``ContextVar`` rather than the running task: ``asyncio`` copies the holder's
+    context into those child tasks at creation, so they can nest while that lease
+    still owns the underlying lock. Keying on ``current_task()`` instead would
+    deadlock here, because the tool runs in a different task than the one that
+    acquired the lock.
+
+    A child that outlives the original holder keeps a copied reference to an
+    *inactive* lease. It must acquire a new lease normally and therefore cannot
+    bypass an unrelated writer that acquired the lock after the parent released
+    it.
 
     A task from an unrelated context chain (a channel observe worker, an RPC
     handler, a Run on another accessor) is not a child of the holder and does not
@@ -590,26 +603,32 @@ class _SessionWriteLock:
 
     def __init__(self) -> None:
         self._lock = asyncio.Lock()
-        # Per-instance reentrancy depth. A ContextVar so child tasks spawned by
-        # the holder inherit the depth (contexts are copied at task creation) and
-        # re-enter, while unrelated tasks see the default 0 and contend normally.
-        self._depth: contextvars.ContextVar[int] = contextvars.ContextVar(
-            "session_write_lock_depth", default=0
+        self._lease_stack: contextvars.ContextVar[tuple[_SessionWriteLease, ...]] = (
+            contextvars.ContextVar("session_write_lock_leases", default=())
         )
 
     async def __aenter__(self) -> _SessionWriteLock:
-        depth = self._depth.get()
-        if depth > 0:
-            self._depth.set(depth + 1)
+        stack = self._lease_stack.get()
+        while stack and not stack[-1].active:
+            stack = stack[:-1]
+        if stack:
+            lease = stack[-1]
+            lease.holders += 1
+            self._lease_stack.set((*stack, lease))
             return self
         await self._lock.acquire()
-        self._depth.set(1)
+        self._lease_stack.set((*stack, _SessionWriteLease()))
         return self
 
     async def __aexit__(self, *exc_info: object) -> None:
-        depth = self._depth.get()
-        self._depth.set(depth - 1)
-        if depth == 1:
+        stack = self._lease_stack.get()
+        if not stack:
+            raise RuntimeError("session write lock exited without an active lease")
+        lease = stack[-1]
+        self._lease_stack.set(stack[:-1])
+        lease.holders -= 1
+        if lease.holders == 0:
+            lease.active = False
             self._lock.release()
 
 
