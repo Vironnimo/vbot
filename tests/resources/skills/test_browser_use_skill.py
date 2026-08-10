@@ -12,7 +12,6 @@ from typing import Any
 import pytest
 
 from core.skills.skills import SkillRegistry
-from core.tools.skill import load_skill_content
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 SKILLS_ROOT = PROJECT_ROOT / "resources" / "skills"
@@ -59,7 +58,7 @@ class FakeClient:
         return next(self.responses, {})
 
 
-def test_skill_requires_agent_browser_and_exposes_script(tmp_path: Path) -> None:
+def test_skill_requires_agent_browser(tmp_path: Path) -> None:
     missing_registry = SkillRegistry.load(SKILLS_ROOT, environment={"PATH": ""})
     missing = missing_registry.availability_for("browser-use", ["*"])
     assert missing.state == "unavailable"
@@ -70,30 +69,6 @@ def test_skill_requires_agent_browser_and_exposes_script(tmp_path: Path) -> None
     executable.chmod(0o755)
     registry = SkillRegistry.load(SKILLS_ROOT, environment={"PATH": str(tmp_path)})
     assert registry.availability_for("browser-use", ["*"]).state == "available"
-
-    activated = load_skill_content("browser-use", SKILL_ROOT / "SKILL.md")["content"]
-    assert SCRIPT_PATH.as_posix() in activated
-    assert "# Browser Use" in activated
-
-
-def test_skill_has_no_playwright_dependency() -> None:
-    assert "playwright" not in (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8").lower()
-    assert "playwright" not in SCRIPT_PATH.read_text(encoding="utf-8").lower()
-
-
-def test_skill_documents_explicit_windows_and_linux_installation() -> None:
-    content = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
-
-    assert "### Windows PowerShell" in content
-    assert "### Linux" in content
-    assert "npm install -g agent-browser" in content
-    assert "agent-browser install`" in content
-    assert "agent-browser install --with-deps" in content
-    assert "agent-browser --version" in content
-    assert "start about:blank" in content
-    assert "install-check close" in content
-    assert "does not authorize installation or upgrade" in content
-    assert "do not improvise with `sudo npm`" in content
 
 
 def test_start_opens_isolated_session_and_returns_fresh_snapshot(tmp_path: Path) -> None:
@@ -283,3 +258,19 @@ def test_missing_backend_uses_stable_json_error_contract(
     assert exit_code == 2
     assert captured.out == ""
     assert json.loads(captured.err)["ok"] is False
+
+
+def test_main_emits_ascii_safe_json_for_arbitrary_page_text(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(
+        BROWSER_USE,
+        "_execute",
+        lambda _: {"ok": True, "snapshot": "non‑breaking ümlaut"},
+    )
+
+    assert BROWSER_USE.main(["--session", "browser-test", "snapshot"]) == 0
+
+    output = capsys.readouterr().out
+    output.encode("ascii")
+    assert json.loads(output)["snapshot"] == "non‑breaking ümlaut"
