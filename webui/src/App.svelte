@@ -238,6 +238,7 @@
   // Project context for the two-bar chat. `projects` feeds the chat dropdown;
   // `selectedProjectId` is the chosen project (empty = Personal/identity path).
   let projects = $state([]);
+  let projectsLoadRequestId = 0;
   let selectedProjectId = $state(initialSelectedProjectId);
   // Projects-tab selection is remembered independently so browsing project
   // settings does not silently change the Chat context. A selected Chat
@@ -488,8 +489,13 @@
   };
 
   const loadProjects = async () => {
+    const requestId = projectsLoadRequestId + 1;
+    projectsLoadRequestId = requestId;
     try {
       const result = await listProjects();
+      if (requestId !== projectsLoadRequestId) {
+        return false;
+      }
       projects = Array.isArray(result?.projects) ? result.projects : [];
       // Drop a stale persisted selection if its project no longer exists. The
       // remembered project agent goes with it — it only means anything within a
@@ -507,9 +513,11 @@
       ) {
         managedProjectId = '';
       }
+      return true;
     } catch {
-      // Projects RPC unavailable — keep the chat in the identity-only path.
-      projects = [];
+      // Keep the last valid catalog during a transient RPC failure. A newer
+      // request also owns any visible state change, so stale failures are inert.
+      return false;
     }
   };
 
@@ -897,6 +905,10 @@
     return appControllerState.modelsRefreshToken;
   }
 
+  export function getProjects() {
+    return projects;
+  }
+
   export function getSessionsRefreshToken() {
     return appControllerState.sessionsRefreshToken;
   }
@@ -995,6 +1007,7 @@
 
     return () => {
       cancelled = true;
+      projectsLoadRequestId += 1;
       appController.destroy();
       clearToastDismissTimers();
       if (cleanupWakewordPoll) {

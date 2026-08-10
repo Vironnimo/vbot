@@ -79,6 +79,8 @@
   // a target reload re-applies option defaults onto the bindings.
   let pendingTaskModelReload = $state(false);
   let lastModelsRefreshToken = null;
+  let taskModelSchemaRequestIds = {};
+  let destroyed = false;
 
   let saveDisabled = $derived(
     taskModelSaving ||
@@ -113,6 +115,8 @@
   });
 
   onDestroy(() => {
+    destroyed = true;
+    taskModelSchemaRequestIds = {};
     unregisterTaskModelsAutosave();
     clearAutoSaveTimer();
   });
@@ -199,16 +203,40 @@
   }
 
   async function loadTaskModelSchema(taskType, target) {
+    const requestId = (taskModelSchemaRequestIds[taskType] ?? 0) + 1;
+    taskModelSchemaRequestIds = {
+      ...taskModelSchemaRequestIds,
+      [taskType]: requestId,
+    };
+    const isCurrentRequest = () =>
+      !destroyed &&
+      taskModelSchemaRequestIds[taskType] === requestId &&
+      (taskModelBindings[taskType]?.target ?? '') === target;
+
     if (!target) {
+      if (!isCurrentRequest()) {
+        return false;
+      }
       taskModelSchemasByType = {
         ...taskModelSchemasByType,
         [taskType]: [],
       };
       clearTaskModelJsonErrors(taskType);
-      return;
+      return true;
     }
 
-    const result = await getTaskModelOptions(taskType, target);
+    let result;
+    try {
+      result = await getTaskModelOptions(taskType, target);
+    } catch (error) {
+      if (!isCurrentRequest()) {
+        return false;
+      }
+      throw error;
+    }
+    if (!isCurrentRequest()) {
+      return false;
+    }
     const fields = normalizeOptionSchema(result);
     taskModelSchemasByType = {
       ...taskModelSchemasByType,
@@ -219,6 +247,7 @@
       ...taskModelBindings,
       [taskType]: applyOptionDefaults(taskModelBindings[taskType], fields),
     };
+    return true;
   }
 
   function handleManualTaskModelSave() {

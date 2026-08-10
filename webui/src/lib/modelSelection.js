@@ -10,6 +10,43 @@ const SUITABILITY_REASON_NO_TOOLS = 'noTools';
 const SUITABILITY_REASON_BELOW_MIN_CONTEXT = 'belowMinContext';
 const SUITABILITY_REASON_CONTEXT_UNKNOWN = 'contextUnknown';
 
+export function createModelCatalogLoader({ listModels, listConnections }) {
+  let requestId = 0;
+
+  return {
+    async load() {
+      const currentRequestId = requestId + 1;
+      requestId = currentRequestId;
+
+      try {
+        const [modelsResult, connectionsResult] = await Promise.all([
+          listModels(),
+          listConnections(),
+        ]);
+        if (currentRequestId !== requestId) {
+          return null;
+        }
+        return {
+          models: Array.isArray(modelsResult?.models)
+            ? modelsResult.models
+            : [],
+          connections: Array.isArray(connectionsResult?.connections)
+            ? connectionsResult.connections
+            : [],
+        };
+      } catch (error) {
+        if (currentRequestId !== requestId) {
+          return null;
+        }
+        throw error;
+      }
+    },
+    invalidate() {
+      requestId += 1;
+    },
+  };
+}
+
 export function modelSuitability(model) {
   const reasons = [];
 

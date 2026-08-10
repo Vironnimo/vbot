@@ -162,6 +162,74 @@ describe('SettingsSpecializedModelsPanel', () => {
     expect(visibleOptions[0].textContent).toContain('Gemini Specialized');
   });
 
+  it('ignores a late option schema response for a previously selected model', async () => {
+    const staleSchema = deferred();
+    listTaskModelTargetsMock.mockImplementation((taskType) =>
+      Promise.resolve({
+        targets:
+          taskType === 'speech_to_text'
+            ? [
+                { id: 'provider/first', label: 'First model' },
+                { id: 'provider/second', label: 'Second model' },
+              ]
+            : [],
+      }),
+    );
+    getTaskModelOptionsMock.mockImplementation((_taskType, target) => {
+      if (target === 'provider/first') {
+        return staleSchema.promise;
+      }
+      return Promise.resolve({
+        fields: [
+          {
+            name: 'new_option',
+            type: 'string',
+            label: 'Newest option',
+            default: 'new',
+          },
+        ],
+      });
+    });
+    mountedComponent = mount(SettingsSpecializedModelsPanel, {
+      target: document.body,
+      props: { settings: {}, modelsRefreshToken: 0 },
+    });
+    flushSync();
+    await waitForCondition(
+      () =>
+        !document.getElementById('settings-specialized-speech_to_text')
+          ?.disabled,
+    );
+
+    selectTarget('speech_to_text', 'First model');
+    await waitForCondition(() =>
+      getTaskModelOptionsMock.mock.calls.some(
+        ([, target]) => target === 'provider/first',
+      ),
+    );
+    selectTarget('speech_to_text', 'Second model');
+    await waitForCondition(() =>
+      document.body.textContent.includes('Newest option'),
+    );
+
+    staleSchema.resolve({
+      fields: [
+        {
+          name: 'stale_option',
+          type: 'string',
+          label: 'Stale option',
+          default: 'stale',
+        },
+      ],
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    flushSync();
+
+    expect(document.body.textContent).toContain('Newest option');
+    expect(document.body.textContent).not.toContain('Stale option');
+  });
+
   it('auto-saves after a boolean option toggle is flipped', async () => {
     // The boolean option field is the shared Toggle (role="switch"); flipping it
     // must arm the same autosave flow as the other option controls.
@@ -239,4 +307,25 @@ async function waitForCondition(check, attempts = 20, delayMs = 0) {
     }
   }
   throw new Error('Timed out waiting for condition.');
+}
+
+function selectTarget(taskType, label) {
+  document
+    .getElementById(`settings-specialized-${taskType}`)
+    .dispatchEvent(new MouseEvent('click', { bubbles: true }));
+  flushSync();
+  const option = Array.from(
+    document.body.querySelectorAll('.searchable-dropdown__option'),
+  ).find((candidate) => candidate.textContent.includes(label));
+  expect(option).toBeTruthy();
+  option.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+  flushSync();
+}
+
+function deferred() {
+  let resolve;
+  const promise = new Promise((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
 }
