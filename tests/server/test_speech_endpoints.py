@@ -52,6 +52,23 @@ def test_synthesize_endpoint_rejects_malformed_json_before_speech_call(tmp_path:
     assert runtime.speech.synthesize_calls == 0
 
 
+def test_synthesize_endpoint_rejects_non_json_media_type_before_speech_call(
+    tmp_path: Path,
+) -> None:
+    runtime = _SpeechRuntime(tmp_path / "data", fail=False)
+    app = create_app(runtime=cast(Any, runtime))
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/speech/synthesize",
+            content='{"text":"hello"}',
+            headers={"content-type": "text/plain"},
+        )
+
+    assert response.status_code == 415
+    assert runtime.speech.synthesize_calls == 0
+
+
 def test_synthesize_endpoint_rejects_invalid_utf8_before_speech_call(tmp_path: Path) -> None:
     runtime = _SpeechRuntime(tmp_path / "data", fail=False)
     app = create_app(runtime=cast(Any, runtime))
