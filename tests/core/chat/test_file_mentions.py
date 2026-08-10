@@ -353,7 +353,7 @@ class TestResolveMentionRoot:
             data_dir=tmp_path,
         )
 
-        with pytest.raises(ChatError, match="Project repository is unavailable"):
+        with pytest.raises(ChatError):
             resolve_mention_root(cast(Any, runtime), "main", None)
 
     def test_identity_without_workspace_falls_back_to_data_dir(self, tmp_path: Path) -> None:

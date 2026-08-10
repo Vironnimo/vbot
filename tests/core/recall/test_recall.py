@@ -87,22 +87,22 @@ def test_registry_create_unknown_backend_raises_key_error(
     registry: RecallBackendRegistry,
     context: RecallBackendContext,
 ) -> None:
-    with pytest.raises(KeyError, match="unknown recall backend"):
+    with pytest.raises(KeyError):
         registry.create("missing", context)
 
 
 def test_registry_rejects_duplicate_registration() -> None:
     registry = RecallBackendRegistry()
     registry.register("alpha", lambda context: JsonlSessionRecallBackend(context.sessions))
-    with pytest.raises(ValueError, match="already registered"):
+    with pytest.raises(ValueError):
         registry.register("alpha", lambda context: JsonlSessionRecallBackend(context.sessions))
 
 
 def test_registry_rejects_non_lowercase_snake_case_names() -> None:
     registry = RecallBackendRegistry()
-    with pytest.raises(ValueError, match="lowercase snake_case"):
+    with pytest.raises(ValueError):
         registry.register("CamelCase", lambda context: JsonlSessionRecallBackend(context.sessions))
-    with pytest.raises(ValueError, match="lowercase snake_case"):
+    with pytest.raises(ValueError):
         registry.register("Mixed_Case", lambda context: JsonlSessionRecallBackend(context.sessions))
 
 

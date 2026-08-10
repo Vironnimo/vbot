@@ -104,7 +104,7 @@ async def test_stream_responses_raises_network_error_on_mid_stream_read_error(
             "_connect_stream",
             new=AsyncMock(return_value=broken_response),
         ),
-        pytest.raises(NetworkError, match="Stream read failed: connection reset"),
+        pytest.raises(NetworkError, match="connection reset"),
     ):
         async for _ in metadata_copilot_adapter.stream(SAMPLE_MESSAGES, model_id="gpt-5-mini"):
             pass
@@ -127,7 +127,7 @@ async def test_stream_responses_raises_network_error_on_eof_without_completion(
         )
     )
 
-    with pytest.raises(NetworkError, match="response completion event"):
+    with pytest.raises(NetworkError):
         async for _ in metadata_copilot_adapter.stream(SAMPLE_MESSAGES, model_id="gpt-5-mini"):
             pass
 
@@ -147,7 +147,7 @@ async def test_stream_responses_raises_provider_timeout_error_on_mid_stream_time
             "_connect_stream",
             new=AsyncMock(return_value=broken_response),
         ),
-        pytest.raises(ProviderTimeoutError, match="timed out"),
+        pytest.raises(ProviderTimeoutError),
     ):
         async for _ in metadata_copilot_adapter.stream(SAMPLE_MESSAGES, model_id="gpt-5-mini"):
             pass

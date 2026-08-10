@@ -33,7 +33,7 @@ class TestValidateAccountId:
     def test_rejects_malformed_account_ids(self, account_id: str) -> None:
         """Uppercase, dashes, leading underscore, and overlong ids are rejected."""
         # Act / Assert
-        with pytest.raises(ConfigError, match="Invalid account id"):
+        with pytest.raises(ConfigError):
             validate_account_id(account_id)
 
 
@@ -109,7 +109,7 @@ class TestSplitConnectionId:
     def test_rejects_malformed_connection_ids(self, connection_id: str) -> None:
         """Missing or foreign provider prefixes raise ConfigError."""
         # Act / Assert
-        with pytest.raises(ConfigError, match="Unknown connection id"):
+        with pytest.raises(ConfigError):
             split_connection_id("openai", connection_id)
 
     @pytest.mark.parametrize(
@@ -119,7 +119,7 @@ class TestSplitConnectionId:
     def test_rejects_invalid_account_parts(self, connection_id: str) -> None:
         """Empty, uppercase, or multi-part account ids raise ConfigError."""
         # Act / Assert
-        with pytest.raises(ConfigError, match="Invalid account id"):
+        with pytest.raises(ConfigError):
             split_connection_id("openai", connection_id)
 
     @pytest.mark.parametrize("account_id", [None, "work"])

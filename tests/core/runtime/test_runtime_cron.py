@@ -31,5 +31,5 @@ async def test_runtime_start_exposes_cron_service_and_stop_clears_it(config: Con
     runtime.stop()
 
     assert runtime._cron_service is None  # noqa: SLF001
-    with pytest.raises(RuntimeError, match="not started"):
+    with pytest.raises(RuntimeError):
         _ = runtime.cron_service

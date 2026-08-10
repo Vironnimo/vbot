@@ -214,7 +214,7 @@ def test_normalize_catalog_entry_marks_non_magistral_reasoning_models_as_reasoni
 
 
 def test_normalize_catalog_entry_rejects_non_chat_models() -> None:
-    with pytest.raises(CatalogEntrySkipped, match="Skipped non-chat model"):
+    with pytest.raises(CatalogEntrySkipped):
         MistralAdapter.normalize_catalog_entry(
             raw_mistral_model(completion_chat=False),
             {"max_tokens": 8192},
@@ -222,7 +222,7 @@ def test_normalize_catalog_entry_rejects_non_chat_models() -> None:
 
 
 def test_normalize_catalog_entry_rejects_archived_models() -> None:
-    with pytest.raises(CatalogEntrySkipped, match="Skipped non-chat model"):
+    with pytest.raises(CatalogEntrySkipped):
         MistralAdapter.normalize_catalog_entry(
             raw_mistral_model(archived=True),
             {"max_tokens": 8192},

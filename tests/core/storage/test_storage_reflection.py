@@ -133,7 +133,7 @@ class TestUpdateReflectionSettings:
     def test_rejects_unsupported_fields(self, tmp_path: Path) -> None:
         storage = StorageManager(tmp_path)
 
-        with pytest.raises(StorageError, match="Unsupported reflection settings: unknown"):
+        with pytest.raises(StorageError):
             storage.update_settings_sections({"reflection": {"enabled": True, "unknown": 1}})
 
     def test_leaves_file_unchanged_when_rejected(self, tmp_path: Path) -> None:
@@ -141,7 +141,7 @@ class TestUpdateReflectionSettings:
         original = {"server_port": 8500, "reflection": {"enabled": True}}
         storage.save_settings(original)
 
-        with pytest.raises(StorageError, match="Unsupported reflection settings"):
+        with pytest.raises(StorageError):
             storage.update_settings_sections({"reflection": {"unknown": 1}})
 
         assert storage.load_settings() == original

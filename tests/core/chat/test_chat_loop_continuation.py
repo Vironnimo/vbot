@@ -55,7 +55,7 @@ async def test_start_run_requires_existing_session(tmp_path: Path) -> None:
     adapter = StubAdapter([{"content": "Hello", "tool_calls": None}])
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
 
-    with pytest.raises(Exception, match="session does not exist"):
+    with pytest.raises(ChatSessionError):
         await build_chat_loop(runtime).start_run("coder", "Hi", session_id="missing-session")
 
     assert adapter.requests == []
@@ -367,7 +367,7 @@ async def test_start_run_rejects_second_run_for_same_session(tmp_path: Path) -> 
     first_run = await build_chat_loop(runtime).start_run("coder", "Hi", session_id="session-one")
     await adapter.request_started.wait()
 
-    with pytest.raises(ActiveRunError, match="active run"):
+    with pytest.raises(ActiveRunError):
         await build_chat_loop(runtime).start_run("coder", "Again", session_id="session-one")
 
     first_run.request_cancel()

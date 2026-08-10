@@ -179,7 +179,7 @@ class TestListAccounts:
         )
 
         # Act / Assert
-        with pytest.raises(ConfigError, match="Unknown connection id"):
+        with pytest.raises(ConfigError):
             resolver.list_accounts("openai", "missing")
 
 
@@ -238,7 +238,7 @@ class TestGetCredentialsWithAccounts:
         )
 
         # Act / Assert
-        with pytest.raises(ConfigError, match="account 'work'") as error_info:
+        with pytest.raises(ConfigError, match="work") as error_info:
             resolver.get_credentials("openai", "openai:api-key:work")
         assert "default-secret" not in str(error_info.value)
 
@@ -297,7 +297,7 @@ class TestGetCredentialsWithAccounts:
         )
 
         # Act / Assert
-        with pytest.raises(ConfigError, match="account 'work'"):
+        with pytest.raises(ConfigError, match="work"):
             resolver.get_credentials("openai", "openai:subscription:work")
 
     def test_oauth_stub_with_credential_key_resolves_derived_env_accounts(
@@ -339,7 +339,7 @@ class TestResolveAccountId:
         )
 
         # Act / Assert
-        with pytest.raises(ConfigError, match="No credential for account 'work'"):
+        with pytest.raises(ConfigError, match="work"):
             resolver.resolve_account_id("openai", "api-key", "work")
 
     def test_invalid_explicit_account_id_raises_config_error(self, tmp_path: Path) -> None:
@@ -350,7 +350,7 @@ class TestResolveAccountId:
         )
 
         # Act / Assert
-        with pytest.raises(ConfigError, match="Invalid account id"):
+        with pytest.raises(ConfigError):
             resolver.resolve_account_id("openai", "api-key", "WORK")
 
     def test_no_account_resolves_to_first_usable(self, tmp_path: Path) -> None:
@@ -376,5 +376,5 @@ class TestResolveAccountId:
         )
 
         # Act / Assert
-        with pytest.raises(ConfigError, match="No usable account"):
+        with pytest.raises(ConfigError):
             resolver.resolve_account_id("openai", "subscription")

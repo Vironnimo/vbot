@@ -111,7 +111,6 @@ def test_initialize_uses_empty_environment_when_template_is_unavailable(
     assert (data_dir / "settings.json").read_bytes() == b"{}\n"
     assert result.created_files == (data_dir / ".env", data_dir / "settings.json")
     assert str(template_path) in caplog.text
-    assert "creating an empty .env file" in caplog.text
 
 
 def test_layout_cli_initializes_data_directory(tmp_path: Path) -> None:

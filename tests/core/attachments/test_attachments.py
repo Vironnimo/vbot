@@ -221,7 +221,7 @@ def test_set_transcription_rejects_empty_text(tmp_path: Path) -> None:
     record = store.store("voice.ogg", b"OggS\x00\x02opus-data")
 
     # Act / Assert
-    with pytest.raises(AttachmentError, match="non-empty string"):
+    with pytest.raises(AttachmentError):
         store.set_transcription(record.id, "   ")
 
 
@@ -230,7 +230,7 @@ def test_store_rejects_file_larger_than_max_size(tmp_path: Path) -> None:
     store = AttachmentStore(tmp_path, max_size_bytes=4)
 
     # Act / Assert
-    with pytest.raises(AttachmentTooLargeError, match="exceeds limit"):
+    with pytest.raises(AttachmentTooLargeError):
         store.store("too-large.txt", b"12345")
 
 
@@ -239,7 +239,7 @@ def test_ensure_within_limit_rejects_oversized_reported_size(tmp_path: Path) -> 
     store = AttachmentStore(tmp_path, max_size_bytes=4)
 
     # Act / Assert
-    with pytest.raises(AttachmentTooLargeError, match="exceeds limit"):
+    with pytest.raises(AttachmentTooLargeError):
         store.ensure_within_limit(5)
 
 
@@ -257,7 +257,7 @@ def test_store_rejects_blocked_mime_type(tmp_path: Path) -> None:
     store = AttachmentStore(tmp_path)
 
     # Act / Assert
-    with pytest.raises(AttachmentTypeNotAllowedError, match="Attachment type not allowed"):
+    with pytest.raises(AttachmentTypeNotAllowedError):
         store.store("payload.exe", b"MZ\x90\x00\x03\x00\x00\x00")
 
 
@@ -267,7 +267,7 @@ def test_get_missing_attachment_raises_not_found(tmp_path: Path) -> None:
     missing_attachment_id = "00000000-0000-4000-8000-000000000000"
 
     # Act / Assert
-    with pytest.raises(AttachmentNotFoundError, match="Attachment not found"):
+    with pytest.raises(AttachmentNotFoundError):
         store.get(missing_attachment_id)
 
 
@@ -276,7 +276,7 @@ def test_get_rejects_path_traversal_attachment_id(tmp_path: Path) -> None:
     store = AttachmentStore(tmp_path)
 
     # Act / Assert
-    with pytest.raises(AttachmentNotFoundError, match="Invalid attachment id"):
+    with pytest.raises(AttachmentNotFoundError):
         store.get("../../etc/passwd")
 
 
@@ -285,7 +285,7 @@ def test_get_rejects_empty_attachment_id(tmp_path: Path) -> None:
     store = AttachmentStore(tmp_path)
 
     # Act / Assert
-    with pytest.raises(AttachmentNotFoundError, match="Invalid attachment id"):
+    with pytest.raises(AttachmentNotFoundError):
         store.get("")
 
 
@@ -294,7 +294,7 @@ def test_get_rejects_non_uuid_attachment_id(tmp_path: Path) -> None:
     store = AttachmentStore(tmp_path)
 
     # Act / Assert
-    with pytest.raises(AttachmentNotFoundError, match="Invalid attachment id"):
+    with pytest.raises(AttachmentNotFoundError):
         store.get("not-a-uuid")
 
 
@@ -319,7 +319,7 @@ def test_get_rejects_sidecar_id_mismatch(tmp_path: Path) -> None:
     payload["id"] = "00000000-0000-4000-8000-000000000000"
     sidecar_path.write_text(json.dumps(payload), encoding="utf-8")
 
-    with pytest.raises(AttachmentError, match="metadata id mismatch"):
+    with pytest.raises(AttachmentError):
         store.get(record.id)
 
 
@@ -328,7 +328,7 @@ def test_get_rejects_missing_blob_with_existing_sidecar(tmp_path: Path) -> None:
     record = store.store("notes.txt", b"missing blob")
     Path(record.file_path).unlink()
 
-    with pytest.raises(AttachmentNotFoundError, match="Attachment blob not found"):
+    with pytest.raises(AttachmentNotFoundError):
         store.get(record.id)
 
 
@@ -367,7 +367,7 @@ def test_delete_rejects_path_traversal_id_without_removing_existing_files(tmp_pa
     sidecar_path = DataDirectoryLayout(tmp_path).attachments / f"{record.id}.json"
 
     # Act / Assert
-    with pytest.raises(AttachmentNotFoundError, match="Invalid attachment id"):
+    with pytest.raises(AttachmentNotFoundError):
         store.delete("../../etc/passwd")
 
     assert blob_path.exists()

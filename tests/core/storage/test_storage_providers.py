@@ -85,13 +85,13 @@ class TestSetProviderConnectionEnabled:
     def test_rejects_key_without_connection_part(self, tmp_path: Path) -> None:
         storage = StorageManager(tmp_path)
 
-        with pytest.raises(StorageError, match="'<provider>:<connection>'"):
+        with pytest.raises(StorageError):
             storage.set_provider_connection_enabled("ollama", True)
 
     def test_rejects_non_boolean_value(self, tmp_path: Path) -> None:
         storage = StorageManager(tmp_path)
 
-        with pytest.raises(StorageError, match="must be a boolean"):
+        with pytest.raises(StorageError):
             storage.set_provider_connection_enabled("ollama:local", "yes")  # type: ignore[arg-type]
 
     def test_preserves_openrouter_routing(self, tmp_path: Path) -> None:

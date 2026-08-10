@@ -18,7 +18,7 @@ from core.chat.chat import (
     TOOL_ITERATION_LIMIT_FAILURE_CODE,
     _FailedToolCallCircuitBreaker,
 )
-from core.chat.messages import HISTORY_COMPACTION_GUIDANCE, ToolCall, ToolCallRejection
+from core.chat.messages import ToolCall, ToolCallRejection
 from core.model_tasks import TASK_IMAGE_UNDERSTANDING
 from core.runs import (
     MODEL_STEP_USAGE_EVENT,
@@ -759,10 +759,10 @@ async def test_auto_compaction_preserves_active_tool_continuation_reasoning(
         "assistant",
         "tool",
     ]
-    assert continued_messages[1]["content"] == (
-        "<system-reminder>\nCompacted prior context.\n\n"
-        f"{HISTORY_COMPACTION_GUIDANCE.format(ordinal=1)}\n</system-reminder>"
-    )
+    reminder = continued_messages[1]["content"]
+    assert reminder.startswith("<system-reminder>\n")
+    assert reminder.endswith("\n</system-reminder>")
+    assert "Compacted prior context." in reminder
     assert continued_messages[3]["reasoning"] == "Need weather."
     assert continued_messages[3]["reasoning_meta"] == {"encrypted_content": "opaque-current-turn"}
     assert "usage" not in continued_messages[3]

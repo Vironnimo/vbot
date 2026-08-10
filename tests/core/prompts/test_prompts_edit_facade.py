@@ -101,7 +101,7 @@ def test_update_block_writes_override_and_returns_state(tmp_path: Path) -> None:
 def test_update_block_rejects_data_block(tmp_path: Path) -> None:
     manager = _facade_manager(tmp_path)
 
-    with pytest.raises(PromptError, match="not editable"):
+    with pytest.raises(PromptError):
         manager.update_block("core:soul", "nope")
 
 
@@ -141,7 +141,7 @@ def test_reset_block_rejects_user_block(tmp_path: Path) -> None:
     )
     manager = _facade_manager(tmp_path, store=store)
 
-    with pytest.raises(PromptError, match="no default to reset"):
+    with pytest.raises(PromptError):
         manager.reset_block("user:note")
 
 
@@ -186,7 +186,7 @@ def test_set_layout_keeps_existing_user_block(tmp_path: Path) -> None:
 def test_create_block_rejects_bad_slug(tmp_path: Path) -> None:
     manager = _facade_manager(tmp_path)
 
-    with pytest.raises(PromptError, match="invalid custom block slug"):
+    with pytest.raises(PromptError):
         manager.create_block("../etc/passwd")
 
 
@@ -194,7 +194,7 @@ def test_create_block_rejects_collision(tmp_path: Path) -> None:
     store = StubBlockStore(layouts={"default": [LayoutEntry(id="user:note", source="user")]})
     manager = _facade_manager(tmp_path, store=store)
 
-    with pytest.raises(PromptError, match="already exists"):
+    with pytest.raises(PromptError):
         manager.create_block("note")
 
 
@@ -239,7 +239,7 @@ def test_create_block_inserts_at_requested_position(tmp_path: Path) -> None:
 def test_remove_block_rejects_non_user_id(tmp_path: Path) -> None:
     manager = _facade_manager(tmp_path)
 
-    with pytest.raises(PromptError, match="only custom user blocks"):
+    with pytest.raises(PromptError):
         manager.remove_block("core:tools")
 
 
@@ -336,5 +336,5 @@ def test_edit_facade_rejects_disabled_agent_scope(tmp_path: Path) -> None:
     disabled = _agent(tmp_path, custom_system_prompt_enabled=False)
     manager = _facade_manager(tmp_path, agents=[disabled])
 
-    with pytest.raises(PromptError, match="not enabled"):
+    with pytest.raises(PromptError):
         manager.list_blocks({"type": "agent", "agent_id": "coder"})

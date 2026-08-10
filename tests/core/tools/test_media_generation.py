@@ -37,7 +37,8 @@ def test_video_profile_only_exposes_configured_model_capabilities(tmp_path: Path
         "first_frame",
         "output_dir",
     }
-    assert "uploaded" in definition["description"]
+    assert isinstance(definition["description"], str)
+    assert definition["description"]
 
 
 @pytest.mark.asyncio

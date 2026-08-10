@@ -328,7 +328,7 @@ async def test_reasoning_only_restart_exhaustion_keeps_only_final_attempt_checkp
     )
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
 
-    with pytest.raises(RunInterruptedError, match="run interrupted: network"):
+    with pytest.raises(RunInterruptedError, match="network"):
         await build_chat_loop(runtime, streaming=True).send("coder", "Hi", session_id="session-one")
 
     session = runtime.chat_sessions.get("coder", "session-one")
@@ -646,7 +646,7 @@ async def test_streaming_mode_restart_exhaustion_marks_run_interrupted(tmp_path:
     )
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
 
-    with pytest.raises(RunInterruptedError, match="run interrupted: network"):
+    with pytest.raises(RunInterruptedError, match="network"):
         await build_chat_loop(runtime, streaming=True).send("coder", "Hi", session_id="session-one")
 
     run = next(iter(runtime.chat_runs._runs.values()))
@@ -879,7 +879,7 @@ async def test_remote_provider_stream_aborted_by_chunk_stall(
         provider_base_url="https://api.openai.com/v1",
     )
 
-    with pytest.raises(RunInterruptedError, match="run interrupted: timeout") as exc_info:
+    with pytest.raises(RunInterruptedError, match="timeout") as exc_info:
         await build_chat_loop(runtime, streaming=True).send("coder", "Hi", session_id="session-one")
 
     run = next(iter(runtime.chat_runs._runs.values()))

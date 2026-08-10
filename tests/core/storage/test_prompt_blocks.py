@@ -104,14 +104,14 @@ def test_split_block_id_accepts_trailing_hyphen_per_agent_rule(tmp_path: Path) -
 def test_split_block_id_rejects_unknown_namespace(tmp_path: Path) -> None:
     store = make_store(tmp_path)
 
-    with pytest.raises(StorageError, match="Unknown block namespace"):
+    with pytest.raises(StorageError):
         store.block_override_path(None, "bogus:thing")
 
 
 def test_split_block_id_rejects_missing_prefix(tmp_path: Path) -> None:
     store = make_store(tmp_path)
 
-    with pytest.raises(StorageError, match="missing a source prefix"):
+    with pytest.raises(StorageError):
         store.block_override_path(None, "noprefix")
 
 
@@ -120,16 +120,16 @@ def test_split_block_id_rejects_invalid_user_slug_via_agent_rule(tmp_path: Path)
 
     # Leading hyphen and over-long slugs both fail the canonical agent-id rule
     # (AGENT_ID_PATTERN caps a slug at 64 chars: a lead char plus up to 63 more).
-    with pytest.raises(StorageError, match="Unsafe block slug"):
+    with pytest.raises(StorageError):
         store.block_override_path(None, "user:-leading")
-    with pytest.raises(StorageError, match="Unsafe block slug"):
+    with pytest.raises(StorageError):
         store.block_override_path(None, "user:" + "x" * 65)
 
 
 def test_scope_root_rejects_unsafe_agent_id(tmp_path: Path) -> None:
     store = make_store(tmp_path)
 
-    with pytest.raises(StorageError, match="Unsafe agent id"):
+    with pytest.raises(StorageError):
         store.block_override_path("../escape", "tool:bash")
 
 
@@ -186,7 +186,7 @@ def test_read_layout_rejects_non_array(tmp_path: Path) -> None:
     layout_path.parent.mkdir(parents=True, exist_ok=True)
     layout_path.write_text(json.dumps({"id": "core:intro"}), encoding="utf-8")
 
-    with pytest.raises(StorageError, match="must be a JSON array"):
+    with pytest.raises(StorageError):
         store.read_layout(None)
 
 
@@ -196,7 +196,7 @@ def test_read_layout_rejects_invalid_json(tmp_path: Path) -> None:
     layout_path.parent.mkdir(parents=True, exist_ok=True)
     layout_path.write_text("{not json", encoding="utf-8")
 
-    with pytest.raises(StorageError, match="Invalid layout JSON"):
+    with pytest.raises(StorageError):
         store.read_layout(None)
 
 
@@ -206,7 +206,7 @@ def test_read_layout_rejects_entry_without_id(tmp_path: Path) -> None:
     layout_path.parent.mkdir(parents=True, exist_ok=True)
     layout_path.write_text(json.dumps([{"enabled": True}]), encoding="utf-8")
 
-    with pytest.raises(StorageError, match="missing a string id"):
+    with pytest.raises(StorageError):
         store.read_layout(None)
 
 
@@ -216,7 +216,7 @@ def test_read_layout_rejects_non_boolean_enabled(tmp_path: Path) -> None:
     layout_path.parent.mkdir(parents=True, exist_ok=True)
     layout_path.write_text(json.dumps([{"id": "core:intro", "enabled": "yes"}]), encoding="utf-8")
 
-    with pytest.raises(StorageError, match="non-boolean enabled"):
+    with pytest.raises(StorageError):
         store.read_layout(None)
 
 

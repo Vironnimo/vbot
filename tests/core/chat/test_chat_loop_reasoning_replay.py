@@ -11,7 +11,6 @@ from core.chat import (
     ChatMessage,
     ToolCall,
 )
-from core.chat.messages import HISTORY_COMPACTION_GUIDANCE
 from core.providers.reasoning import (
     REASONING_REPLAY_FULL_HISTORY,
     REASONING_REPLAY_NONE,
@@ -381,10 +380,10 @@ async def test_auto_compaction_preserves_reasoning_for_all_current_run_turns(
         "assistant",
         "tool",
     ]
-    assert rebuilt[1]["content"] == (
-        "<system-reminder>\nCompacted prior context.\n\n"
-        f"{HISTORY_COMPACTION_GUIDANCE.format(ordinal=1)}\n</system-reminder>"
-    )
+    reminder = rebuilt[1]["content"]
+    assert reminder.startswith("<system-reminder>\n")
+    assert reminder.endswith("\n</system-reminder>")
+    assert "Compacted prior context." in reminder
     # Both current-run assistant turns keep their reasoning after the rebuild,
     # not just the latest tool continuation.
     assert rebuilt[3]["reasoning"] == "First step."

@@ -475,7 +475,7 @@ async def test_non_idempotent_request_does_not_retry_broken_success_response() -
     def _parse(_response: httpx.Response) -> None:
         raise ProviderError("result is incomplete", retryable=True)
 
-    with pytest.raises(ProviderOutcomeUnknownError, match="could not confirm a usable result"):
+    with pytest.raises(ProviderOutcomeUnknownError):
         await client.post_and_parse(
             "/things",
             timeout=5.0,

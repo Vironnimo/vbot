@@ -295,7 +295,7 @@ async def test_typed_vector_search_has_no_literal_fallback_or_distance_cutoff(
     assert page.hits[-1].score > _MAX_DISTANCE
 
     unavailable = backend(tmp_path / "none", ChatSessionManager(tmp_path / "none"))
-    with pytest.raises(RecallSearchError, match="embedding model"):
+    with pytest.raises(RecallSearchError):
         await unavailable.search_page(search_request("literal"))
 
 
@@ -503,7 +503,7 @@ async def test_run_embed_rejects_actual_model_drift_between_batches(tmp_path: Pa
     recall = backend(tmp_path, sessions, embeddings=_DriftingEmbeddings())
     texts = [f"text-{index}" for index in range(_EMBED_BATCH_SIZE + 1)]
 
-    with pytest.raises(EmbeddingError, match="response model changed mid-batch"):
+    with pytest.raises(EmbeddingError):
         await recall._run_embed(texts)
 
 

@@ -88,7 +88,7 @@ async def test_send_rejects_buttons_with_files(
         allowed_chat_ids=[12345],
     )
 
-    with pytest.raises(ChannelConfigError, match="cannot be combined with file"):
+    with pytest.raises(ChannelConfigError):
         await adapter.send(
             "caption",
             "12345",

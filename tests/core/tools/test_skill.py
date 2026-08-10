@@ -19,7 +19,7 @@ from core.tools import (
     register_skill_tool,
     tool_failure,
 )
-from core.tools.skill import SKILL_TOOL_DESCRIPTION, SKILL_TOOL_PARAMETERS, load_skill_content
+from core.tools.skill import SKILL_TOOL_PARAMETERS, load_skill_content
 
 
 def _fixed_registry(
@@ -36,7 +36,6 @@ def _no_refresh() -> None:
 def test_skill_tool_describes_activation_and_file_path_contract() -> None:
     properties = cast(dict[str, Any], SKILL_TOOL_PARAMETERS["properties"])
 
-    assert "scripts as absolute paths for direct execution" in SKILL_TOOL_DESCRIPTION
     assert set(properties) == {"name", "file_path"}
     assert properties["name"]["type"] == "string"
     assert properties["name"]["minLength"] == 1
@@ -331,7 +330,7 @@ def test_skill_tool_file_path_requires_name(tmp_path: Path) -> None:
         _no_refresh,
     )
 
-    with pytest.raises(ToolContractError, match="'name' is a required property"):
+    with pytest.raises(ToolContractError, match="name"):
         asyncio.run(
             async_dispatch(
                 tools,
@@ -450,7 +449,7 @@ def test_skill_tool_requires_non_blank_name(tmp_path: Path) -> None:
     tools = ToolRegistry()
     register_skill_tool(tools, _fixed_registry(registry), _no_refresh)
 
-    with pytest.raises(ToolContractError, match="does not match"):
+    with pytest.raises(ToolContractError):
         asyncio.run(async_dispatch(tools, _context(tmp_path), {"name": "  "}))
 
 

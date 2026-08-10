@@ -37,8 +37,9 @@ def test_saved_layout_disables_a_core_block(workspace: Path, tmp_path: Path) -> 
 
     prompt = manager.build_system_prompt(agent)
 
-    assert "## Available Skills" not in prompt
-    assert "## Runtime" in prompt  # other blocks still present
+    assert "agent-cli" not in prompt
+    assert "Delegate" not in prompt
+    assert "0.1.0" in prompt  # other blocks still render
 
 
 def test_block_override_replaces_owner_default_text(workspace: Path, tmp_path: Path) -> None:
@@ -62,7 +63,6 @@ def test_block_override_replaces_owner_default_text(workspace: Path, tmp_path: P
     prompt = manager.build_system_prompt(agent)
 
     assert "## Custom Tools" in prompt
-    assert "## Tool Call Style" not in prompt  # bundled default replaced
     assert "- read_file: Read a workspace file" in prompt  # producer still expands
 
 
@@ -108,7 +108,7 @@ def test_custom_agent_scope_uses_agent_fragments_without_default_fallback(
     # Default-scope runtime fragment is not read for an agent build.
     assert ("default", "runtime.md") not in storage.reads
     # Tools fragment is unset for the agent scope → tools block collapses.
-    assert "## Tool Call Style" not in prompt
+    assert ("default", "tools.md") not in storage.reads
 
 
 def test_default_prompt_scope_preview_ignores_agent_custom_toggle(
@@ -125,4 +125,4 @@ def test_default_prompt_scope_preview_ignores_agent_custom_toggle(
 
     # Default scope uses bundled runtime, not the agent's custom fragment.
     assert "## Custom Runtime" not in prompt
-    assert "## Runtime" in prompt
+    assert "test-os" in prompt

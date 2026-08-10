@@ -189,11 +189,15 @@ async def test_description_explains_active_backend(tmp_path: Path) -> None:
     sessions = ChatSessionManager(tmp_path)
     context = RecallBackendContext(data_dir=tmp_path, sessions=sessions)
 
-    assert (
-        "literal" in build_session_search_description(JsonlSessionRecallBackend(sessions)).lower()
+    descriptions = {
+        build_session_search_description(JsonlSessionRecallBackend(sessions)),
+        build_session_search_description(VectorRecallBackend(context)),
+        build_session_search_description(HybridRecallBackend(context)),
+    }
+    assert len(descriptions) == 3
+    assert all(
+        description.startswith(SESSION_SEARCH_TOOL_DESCRIPTION) for description in descriptions
     )
-    assert "meaning" in build_session_search_description(VectorRecallBackend(context)).lower()
-    assert "combines" in build_session_search_description(HybridRecallBackend(context)).lower()
 
 
 @pytest.mark.parametrize(

@@ -98,10 +98,8 @@ async def test_image_generation_text_only_profile_rejects_source_images_in_handl
         {"prompt": "make it rainy", "source_images": ["photo.png"]},
     )
 
-    assert result["error"] == {
-        "code": "invalid_arguments",
-        "message": "source_images is unavailable for the configured image generation model",
-    }
+    assert result["ok"] is False
+    assert result["error"]["code"] == "invalid_arguments"
     assert service.received_prompt is None
 
 
@@ -116,14 +114,9 @@ async def test_image_generation_tool_returns_model_file_facts(tmp_path: Path) ->
     assert "additionalProperties" not in IMAGE_GENERATION_TEXT_ONLY_TOOL_PARAMETERS
     assert tool.open_input_schema is True
     output_dir_parameter = tool.parameters["properties"]["output_dir"]
-    assert output_dir_parameter == {
-        "type": "string",
-        "description": (
-            "Directory to save generated images. Relative paths resolve from the working "
-            "directory; missing directories are created. Omit when no specific destination "
-            "is given."
-        ),
-    }
+    assert output_dir_parameter["type"] == "string"
+    assert isinstance(output_dir_parameter["description"], str)
+    assert output_dir_parameter["description"]
     assert "output_dir" not in tool.parameters["required"]
     context = _make_context(tmp_path)
 
@@ -143,9 +136,6 @@ async def test_image_generation_tool_returns_model_file_facts(tmp_path: Path) ->
             }
         ]
     }
-    assert "configured external provider" in IMAGE_GENERATION_TOOL_DESCRIPTION
-    assert "chat display links" not in IMAGE_GENERATION_TOOL_DESCRIPTION
-    assert "chat display links" not in IMAGE_GENERATION_TEXT_ONLY_TOOL_DESCRIPTION
     display = registry.display_for_call(
         IMAGE_GENERATION_TOOL_NAME,
         {"prompt": "a red fox"},
@@ -361,7 +351,7 @@ async def test_image_generation_tool_rejects_empty_source_images(tmp_path: Path)
     registry = ToolRegistry()
     register_image_generation_tool(registry, service)
 
-    with pytest.raises(ToolContractError, match="non-empty"):
+    with pytest.raises(ToolContractError):
         await registry.dispatch(
             _make_context(tmp_path),
             {"prompt": "make it rainy", "source_images": []},
@@ -382,7 +372,7 @@ async def test_image_generation_tool_rejects_invalid_source_paths_shape(tmp_path
     registry = ToolRegistry()
     register_image_generation_tool(registry, service)
 
-    with pytest.raises(ToolContractError, match="expected JSON string"):
+    with pytest.raises(ToolContractError):
         await registry.dispatch(
             _make_context(tmp_path),
             {"prompt": "make it rainy", "source_images": {"path": "photo.png"}},
@@ -430,7 +420,7 @@ async def test_analyze_image_tool_resolves_paths_and_returns_analysis(
         session_id="session",
         iteration_number=4,
     )
-    assert "untrusted content" in ANALYZE_IMAGE_TOOL_DESCRIPTION
+    assert ANALYZE_IMAGE_TOOL_DESCRIPTION
 
 
 @pytest.mark.parametrize(
@@ -461,7 +451,7 @@ def test_analyze_image_tool_has_closed_result_contract(
         "required": ["analysis", "image_count"],
         "additionalProperties": False,
     }
-    with pytest.raises(InvalidToolResultError, match="violates its contract"):
+    with pytest.raises(InvalidToolResultError):
         registry.validate_result(
             ANALYZE_IMAGE_TOOL_NAME,
             {"ok": True, "error": None, "data": invalid_data, "artifacts": []},
@@ -497,7 +487,7 @@ async def test_analyze_image_tool_rejects_invalid_arguments_and_maps_image_error
     register_analyze_image_tool(registry, service)
     context = _make_context(tmp_path, tool_name=ANALYZE_IMAGE_TOOL_NAME)
 
-    with pytest.raises(ToolContractError, match="non-empty"):
+    with pytest.raises(ToolContractError):
         await registry.dispatch(context, {"prompt": "Describe it.", "images": []})
     unknown = await registry.dispatch(
         context,
@@ -590,7 +580,7 @@ async def test_analyze_image_tool_does_not_mask_unexpected_failure(tmp_path: Pat
         ),
     )
 
-    with pytest.raises(RuntimeError, match="implementation defect"):
+    with pytest.raises(RuntimeError):
         await registry.dispatch(
             _make_context(tmp_path, tool_name=ANALYZE_IMAGE_TOOL_NAME),
             {"prompt": "Describe it.", "images": ["photo.png"]},

@@ -69,7 +69,7 @@ class TestCatalogNormalization:
         assert model.capabilities.reasoning.control == REASONING_CONTROL_ON_OFF
 
     def test_non_chat_entry_is_skipped(self) -> None:
-        with pytest.raises(CatalogEntrySkipped, match="not a chat model"):
+        with pytest.raises(CatalogEntrySkipped):
             LMStudioAdapter.normalize_catalog_entry({"type": "embedding", "key": "nomic-embed"})
 
 

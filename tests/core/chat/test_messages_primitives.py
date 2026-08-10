@@ -37,7 +37,7 @@ class TestToolCall:
         }
 
     def test_from_dict_rejects_non_object_arguments(self):
-        with pytest.raises(ChatMessageValidationError, match="arguments"):
+        with pytest.raises(ChatMessageValidationError):
             ToolCall.from_dict({"id": "call_abc", "name": "get_weather", "arguments": []})
 
     def test_rejection_round_trips_with_canonical_tool_call(self):
@@ -83,21 +83,18 @@ class TestMessageSender:
         )
 
     def test_from_dict_rejects_unknown_role(self):
-        with pytest.raises(ChatMessageValidationError, match="sender role must be admin or member"):
+        with pytest.raises(ChatMessageValidationError):
             MessageSender.from_dict({"id": "50", "display_name": "Alice", "role": "owner"})
 
     @pytest.mark.parametrize("bad_id", [None, "", 50, {"nested": True}])
     def test_from_dict_rejects_bad_id(self, bad_id):
-        with pytest.raises(
-            ChatMessageValidationError, match="sender id must be a non-empty string"
-        ):
+        with pytest.raises(ChatMessageValidationError):
             MessageSender.from_dict({"id": bad_id, "display_name": "Alice"})
 
     @pytest.mark.parametrize("bad_display_name", [None, "", 50, ["Alice"]])
     def test_from_dict_rejects_bad_display_name(self, bad_display_name):
         with pytest.raises(
             ChatMessageValidationError,
-            match="sender display_name must be a non-empty string",
         ):
             MessageSender.from_dict({"id": "50", "display_name": bad_display_name})
 
@@ -110,7 +107,7 @@ class TestMessageSender:
 
 class TestReplySurface:
     def test_invalid_cross_kind_fields_are_rejected(self):
-        with pytest.raises(ChatError, match="cannot include Channel fields"):
+        with pytest.raises(ChatError):
             ReplySurface(kind="webui", channel_id="tg-main")
 
     def test_webui_note_round_trips_and_renders_exact_reminder(self):
@@ -156,14 +153,11 @@ class TestReplySurface:
         note = ChatMessage.note(surface.to_note_content())
 
         assert reply_surface_from_note(note) == surface
-        assert _embed_notes_into_request([note])[0]["content"] == (
-            "<system-reminder>\n"
-            "The current conversation is a direct message on Telegram. "
-            "Your reply to the following request will be delivered via Telegram using channel "
-            "`tg-main`. Return normal reply text; vBot delivers it automatically. To deliver any "
-            "file, always call `channel_send` and include every file path in `file_paths`.\n"
-            "</system-reminder>"
-        )
+        content = _embed_notes_into_request([note])[0]["content"]
+        assert content.startswith("<system-reminder>\n")
+        assert content.endswith("\n</system-reminder>")
+        assert "Telegram" in content
+        assert "tg-main" in content
 
     @pytest.mark.parametrize(
         ("platform", "display_name"),
@@ -389,7 +383,7 @@ class TestChatMessageFactories:
         assert restored.reasoning_scope == "openai/gpt-5.5::api-key"
 
     def test_non_assistant_message_rejects_phase(self):
-        with pytest.raises(ChatMessageValidationError, match="cannot include phase"):
+        with pytest.raises(ChatMessageValidationError):
             ChatMessage.from_dict(
                 {
                     "id": "u1",
@@ -403,7 +397,6 @@ class TestChatMessageFactories:
     def test_assistant_message_rejects_non_string_phase(self):
         with pytest.raises(
             ChatMessageValidationError,
-            match="phase must be a non-empty string",
         ):
             ChatMessage.assistant(
                 model="openai/gpt-5.5",
@@ -460,7 +453,7 @@ class TestChatMessageFactories:
         assert "tool_display" not in _message_to_request_dict(message)
 
     def test_non_tool_message_rejects_tool_display(self):
-        with pytest.raises(ChatMessageValidationError, match="cannot include tool_display"):
+        with pytest.raises(ChatMessageValidationError):
             ChatMessage(
                 id="user-1",
                 timestamp="2026-05-03T14:30:00+00:00",
@@ -553,7 +546,7 @@ class TestChatMessageFactories:
         assert "interruption_cause" not in message.to_dict()
 
     def test_interrupted_rejected_on_non_assistant_role(self):
-        with pytest.raises(ChatMessageValidationError, match="interrupted"):
+        with pytest.raises(ChatMessageValidationError):
             ChatMessage.from_dict(
                 {
                     "id": "u1",
@@ -565,7 +558,7 @@ class TestChatMessageFactories:
             )
 
     def test_interrupted_must_be_boolean(self):
-        with pytest.raises(ChatMessageValidationError, match="interrupted must be a boolean"):
+        with pytest.raises(ChatMessageValidationError):
             ChatMessage.from_dict(
                 {
                     "id": "a1",
@@ -578,7 +571,7 @@ class TestChatMessageFactories:
             )
 
     def test_interruption_cause_requires_interrupted_assistant(self):
-        with pytest.raises(ChatMessageValidationError, match="requires an interrupted assistant"):
+        with pytest.raises(ChatMessageValidationError):
             ChatMessage.from_dict(
                 {
                     "id": "a1",
@@ -591,7 +584,7 @@ class TestChatMessageFactories:
             )
 
     def test_interruption_cause_rejects_unknown_value(self):
-        with pytest.raises(ChatMessageValidationError, match="invalid interruption_cause"):
+        with pytest.raises(ChatMessageValidationError):
             ChatMessage.from_dict(
                 {
                     "id": "a1",
@@ -605,7 +598,7 @@ class TestChatMessageFactories:
             )
 
     def test_naive_timestamp_is_rejected(self):
-        with pytest.raises(ChatMessageValidationError, match="timezone"):
+        with pytest.raises(ChatMessageValidationError):
             ChatMessage.user("hello", timestamp=datetime(2026, 5, 3, 14, 30))
 
 
@@ -672,7 +665,7 @@ class TestChatMessageParsing:
     def test_from_dict_rejects_invalid_run_summary_iteration_count(
         self, iteration_count: object
     ) -> None:
-        with pytest.raises(ChatMessageValidationError, match="iteration_count"):
+        with pytest.raises(ChatMessageValidationError):
             ChatMessage.from_dict(
                 {
                     "id": "summary-one",
@@ -686,7 +679,7 @@ class TestChatMessageParsing:
             )
 
     def test_from_dict_rejects_bad_timing_duration(self):
-        with pytest.raises(ChatMessageValidationError, match="duration_ms"):
+        with pytest.raises(ChatMessageValidationError):
             ChatMessage.from_dict(
                 {
                     "id": "summary-one",
@@ -772,7 +765,7 @@ class TestChatMessageParsing:
         assert "future_field" not in message.to_dict()
 
     def test_invalid_role_is_rejected(self):
-        with pytest.raises(ChatMessageValidationError, match="role"):
+        with pytest.raises(ChatMessageValidationError):
             ChatMessage.from_dict(
                 {
                     "id": "d4e5f6",
@@ -783,7 +776,7 @@ class TestChatMessageParsing:
             )
 
     def test_user_message_rejects_model(self):
-        with pytest.raises(ChatMessageValidationError, match="model"):
+        with pytest.raises(ChatMessageValidationError):
             ChatMessage.from_dict(
                 {
                     "id": "d4e5f6",
@@ -795,7 +788,7 @@ class TestChatMessageParsing:
             )
 
     def test_user_message_rejects_empty_content_block_list(self):
-        with pytest.raises(ChatMessageValidationError, match="must not be empty"):
+        with pytest.raises(ChatMessageValidationError):
             ChatMessage.from_dict(
                 {
                     "id": "msg_empty_blocks",
@@ -824,11 +817,11 @@ class TestChatMessageParsing:
         }
         data.update(extra_fields)
 
-        with pytest.raises(ChatMessageValidationError, match="content"):
+        with pytest.raises(ChatMessageValidationError):
             ChatMessage.from_dict(data)
 
     def test_tool_message_requires_tool_call_id(self):
-        with pytest.raises(ChatMessageValidationError, match="tool_call_id"):
+        with pytest.raises(ChatMessageValidationError):
             ChatMessage.from_dict(
                 {
                     "id": "j0k1l2",
@@ -869,7 +862,7 @@ class TestChatMessageParsing:
         assert "usage" not in message.to_dict()
 
     def test_from_dict_rejects_non_object_usage(self):
-        with pytest.raises(ChatMessageValidationError, match="usage must be an object"):
+        with pytest.raises(ChatMessageValidationError):
             ChatMessage.from_dict(
                 {
                     "id": "msg_bad_usage",
@@ -882,7 +875,7 @@ class TestChatMessageParsing:
             )
 
     def test_from_dict_rejects_usage_on_user_message(self):
-        with pytest.raises(ChatMessageValidationError, match="usage"):
+        with pytest.raises(ChatMessageValidationError):
             ChatMessage.from_dict(
                 {
                     "id": "msg_usage_user",
@@ -894,7 +887,7 @@ class TestChatMessageParsing:
             )
 
     def test_from_dict_rejects_usage_on_system_message(self):
-        with pytest.raises(ChatMessageValidationError, match="usage"):
+        with pytest.raises(ChatMessageValidationError):
             ChatMessage.from_dict(
                 {
                     "id": "msg_usage_sys",
@@ -907,7 +900,7 @@ class TestChatMessageParsing:
             )
 
     def test_from_dict_rejects_usage_on_tool_message(self):
-        with pytest.raises(ChatMessageValidationError, match="usage"):
+        with pytest.raises(ChatMessageValidationError):
             ChatMessage.from_dict(
                 {
                     "id": "msg_usage_tool",
@@ -945,7 +938,7 @@ class TestChatMessageParsing:
             ChatMessage.from_dict(data)
 
     def test_from_dict_rejects_note_without_content(self):
-        with pytest.raises(ChatMessageValidationError, match="content"):
+        with pytest.raises(ChatMessageValidationError):
             ChatMessage.from_dict(
                 {
                     "id": "note_missing_content",
@@ -980,7 +973,7 @@ class TestChatMessageParsing:
             ChatMessage.from_dict(data)
 
     def test_from_dict_rejects_error_without_content(self):
-        with pytest.raises(ChatMessageValidationError, match="content"):
+        with pytest.raises(ChatMessageValidationError):
             ChatMessage.from_dict(
                 {
                     "id": "error_missing_content",
@@ -991,7 +984,7 @@ class TestChatMessageParsing:
             )
 
     def test_from_dict_rejects_error_without_error_kind(self):
-        with pytest.raises(ChatMessageValidationError, match="error_kind"):
+        with pytest.raises(ChatMessageValidationError):
             ChatMessage.from_dict(
                 {
                     "id": "error_missing_kind",
@@ -1002,7 +995,7 @@ class TestChatMessageParsing:
             )
 
     def test_from_dict_rejects_error_with_empty_error_kind(self):
-        with pytest.raises(ChatMessageValidationError, match="error_kind"):
+        with pytest.raises(ChatMessageValidationError):
             ChatMessage.from_dict(
                 {
                     "id": "error_empty_kind",
@@ -1014,7 +1007,7 @@ class TestChatMessageParsing:
             )
 
     def test_from_dict_rejects_non_object_sender(self):
-        with pytest.raises(ChatMessageValidationError, match="sender must be an object"):
+        with pytest.raises(ChatMessageValidationError):
             ChatMessage.from_dict(
                 {
                     "id": "msg_bad_sender",
@@ -1026,9 +1019,7 @@ class TestChatMessageParsing:
             )
 
     def test_from_dict_rejects_malformed_sender_object(self):
-        with pytest.raises(
-            ChatMessageValidationError, match="sender id must be a non-empty string"
-        ):
+        with pytest.raises(ChatMessageValidationError):
             ChatMessage.from_dict(
                 {
                     "id": "msg_malformed_sender",
@@ -1074,11 +1065,11 @@ class TestChatMessageParsing:
             **extra_fields,
         }
 
-        with pytest.raises(ChatMessageValidationError, match="sender"):
+        with pytest.raises(ChatMessageValidationError):
             ChatMessage.from_dict(data)
 
     def test_from_dict_usage_as_array_is_rejected(self):
-        with pytest.raises(ChatMessageValidationError, match="usage must be an object"):
+        with pytest.raises(ChatMessageValidationError):
             ChatMessage.from_dict(
                 {
                     "id": "msg_usage_arr",

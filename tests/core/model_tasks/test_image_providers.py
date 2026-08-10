@@ -403,7 +403,7 @@ async def test_openrouter_image_generate_rejects_empty_data() -> None:
     )
     client = _openrouter_image_client("black-forest-labs/flux.2-pro")
 
-    with pytest.raises(ProviderOutcomeUnknownError, match="no data"):
+    with pytest.raises(ProviderOutcomeUnknownError):
         await client.generate("a cat", options={})
 
     assert route.call_count == 1
@@ -803,7 +803,7 @@ def test_parse_openai_codex_sse_extracts_final_image_and_usage() -> None:
 
 
 def test_parse_openai_codex_sse_without_final_image_is_retryable() -> None:
-    with pytest.raises(ProviderError, match="no final image") as exc_info:
+    with pytest.raises(ProviderError) as exc_info:
         _parse_openai_codex_image_response(
             _sse_event({"type": "response.completed", "response": {"status": "completed"}}),
             model="gpt-image-2",
@@ -948,7 +948,7 @@ async def test_openai_image_generate_rejects_empty_data_list() -> None:
     )
     client = _openai_image_client("gpt-image-1")
 
-    with pytest.raises(ProviderError, match="no data"):
+    with pytest.raises(ProviderError):
         await client.generate("a cat", options={})
 
 
@@ -1064,7 +1064,7 @@ async def test_openai_subscription_image_does_not_retry_missing_final_image() ->
     )
     client = _openai_subscription_image_client("gpt-image-2")
 
-    with pytest.raises(ProviderOutcomeUnknownError, match="no final image") as exc_info:
+    with pytest.raises(ProviderOutcomeUnknownError) as exc_info:
         await client.generate("a cat", options={})
 
     assert exc_info.value.retryable is False

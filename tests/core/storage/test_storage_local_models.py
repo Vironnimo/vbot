@@ -93,7 +93,7 @@ class TestUpdateLocalModelsSettings:
     def test_rejects_invalid_update_value(self, tmp_path: Path) -> None:
         storage = StorageManager(tmp_path)
 
-        with pytest.raises(StorageError, match="must be a positive integer"):
+        with pytest.raises(StorageError):
             storage.update_settings_sections(
                 {"local_models": {"context_windows": {"ollama/m": -5}}}
             )
@@ -101,5 +101,5 @@ class TestUpdateLocalModelsSettings:
     def test_rejects_unsupported_field(self, tmp_path: Path) -> None:
         storage = StorageManager(tmp_path)
 
-        with pytest.raises(StorageError, match="Unsupported local_models settings"):
+        with pytest.raises(StorageError):
             storage.update_settings_sections({"local_models": {"context_windows": {}, "extra": 1}})

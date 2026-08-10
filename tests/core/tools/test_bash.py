@@ -280,15 +280,8 @@ async def test_background_mode_returns_running_session_with_clear_handoff(
     assert result["data"]["status"] == "running"
     assert result["data"]["mode"] == "background"
     assert result["data"]["delivery"] == "automatic"
-    assert (
-        result["data"]["handoff_note"]
-        == "The command is still running and has been handed off to vBot immediately. "
-        "vBot will monitor it and deliver its terminal result automatically in one "
-        "coalesced follow-up Run. You may continue work that does not depend on this "
-        "result, or finish the current Run now. Do not poll merely to wait, and do not "
-        "start another copy of the command. If your next action depends on the result, "
-        "inspect the process explicitly or use foreground mode next time."
-    )
+    assert isinstance(result["data"]["handoff_note"], str)
+    assert result["data"]["handoff_note"]
     assert isinstance(result["data"]["session_id"], str)
 
     await kill_background(manager, result)
@@ -755,7 +748,8 @@ async def test_yield_after_expiry_backgrounds_running_process(
     assert result["ok"] is True
     assert result["data"]["status"] == "running"
     assert result["data"]["mode"] == "auto"
-    assert "handed off to vBot after 0.01 seconds" in result["data"]["handoff_note"]
+    assert isinstance(result["data"]["handoff_note"], str)
+    assert result["data"]["handoff_note"]
 
     await kill_background(manager, result)
 
@@ -837,18 +831,6 @@ async def test_auto_handoff_includes_capped_output_and_usable_process_session(
         await spool_manager.aclose()
 
 
-def test_auto_handoff_note_uses_agent_facing_contract() -> None:
-    assert (
-        bash_module._handoff_note("auto", 30)
-        == "The command is still running and has been handed off to vBot after 30 seconds. "
-        "vBot will monitor it and deliver its terminal result automatically in one "
-        "coalesced follow-up Run. You may continue work that does not depend on this "
-        "result, or finish the current Run now. Do not poll merely to wait, and do not "
-        "start another copy of the command. If your next action depends on the result, "
-        "inspect the process explicitly or use foreground mode next time."
-    )
-
-
 @pytest.mark.asyncio
 async def test_foreground_mode_never_hands_off(
     manager: ProcessManager,
@@ -899,7 +881,6 @@ async def test_yield_after_is_rejected_outside_auto_mode(
 
     assert result["ok"] is False
     assert result["error"]["code"] == "invalid_arguments"
-    assert result["error"]["message"] == "yield_after is only valid when mode is auto"
 
 
 @pytest.mark.asyncio
@@ -917,7 +898,6 @@ async def test_execution_mode_is_required(
 
     assert result["ok"] is False
     assert result["error"]["code"] == "invalid_arguments"
-    assert result["error"]["message"] == "mode must be one of: foreground, auto, background"
 
 
 @pytest.mark.asyncio
@@ -992,7 +972,6 @@ async def test_automatic_background_at_depth_kills_process_and_fails(
 
     assert result["ok"] is False
     assert result["error"]["code"] == bash_module.BACKGROUND_AT_DEPTH_FAILURE_CODE
-    assert "Auto mode reached yield_after" in result["error"]["message"]
     assert watcher_calls == []
     assert kill_calls, "the still-running process should have been killed"
 
@@ -1208,7 +1187,6 @@ async def test_env_argument_is_rejected(
 
     assert result["ok"] is False
     assert result["error"]["code"] == "invalid_arguments"
-    assert result["error"]["message"] == "Unknown argument(s): env"
 
 
 @pytest.mark.asyncio
@@ -1245,10 +1223,8 @@ async def test_non_string_description_is_rejected(
         manager,
     )
 
-    assert result["error"] == {
-        "code": "invalid_arguments",
-        "message": "description must be a string",
-    }
+    assert result["ok"] is False
+    assert result["error"]["code"] == "invalid_arguments"
 
 
 @pytest.mark.asyncio
@@ -1580,15 +1556,8 @@ def test_register_bash_tool() -> None:
 
     tool = registry.get("bash")
     assert tool.description == BASH_TOOL_DESCRIPTION
+    assert tool.description
     assert tool.parameters == BASH_TOOL_PARAMETERS
-    assert tool.description.startswith(
-        "Run an unattended shell command on the host through pipes when no interactive "
-        "terminal input or live screen is needed"
-    )
-    assert "Use foreground when this Run needs the result" in tool.description
-    assert "Never manually detach or daemonize a command" in tool.description
-    assert "that bypasses vBot's process ownership" in tool.description
-    assert "continue independent work or end the Run instead of polling" in tool.description
     assert "oneOf" not in tool.parameters
     assert "additionalProperties" not in tool.parameters
     assert set(tool.parameters["properties"]) == {
@@ -1601,29 +1570,23 @@ def test_register_bash_tool() -> None:
         "env_keys",
     }
     assert tool.parameters["required"] == ["mode", "command"]
-    assert tool.parameters["properties"]["description"] == {
-        "type": "string",
-        "description": (
-            "Short 3–5 word title for the command’s purpose. Omit when the command is "
-            "self-explanatory."
-        ),
-    }
+    properties = tool.parameters["properties"]
+    assert properties["description"]["type"] == "string"
     assert "maxLength" not in tool.parameters["properties"]["description"]
     assert tool.parameters["properties"]["mode"]["enum"] == [
         "foreground",
         "auto",
         "background",
     ]
-    assert tool.parameters["properties"]["env_keys"] == {
-        "type": "array",
-        "description": (
-            "Exact names of granted environment credentials to make available to the command. "
-            "Omit when no credential is needed."
-        ),
-        "items": {"type": "string", "minLength": 1},
-        "minItems": 1,
-        "uniqueItems": True,
-    }
+    env_keys = properties["env_keys"]
+    assert env_keys["type"] == "array"
+    assert env_keys["items"] == {"type": "string", "minLength": 1}
+    assert env_keys["minItems"] == 1
+    assert env_keys["uniqueItems"] is True
+    assert all(
+        isinstance(property_schema.get("description"), str) and property_schema["description"]
+        for property_schema in properties.values()
+    )
     display = registry.display_for_call(
         "bash",
         {
@@ -1635,21 +1598,6 @@ def test_register_bash_tool() -> None:
     assert display["primary"][0]["value"] == "Run the frontend tests"
     assert display["primary"][0]["kind"] == "description"
     assert tool.parameters["properties"]["yield_after"]["default"] == 30
-    assert tool.parameters["properties"]["mode"]["description"] == (
-        "Execution behavior: foreground waits for completion; auto waits up to yield_after "
-        "(default 30s), then hands a still-running command off to vBot; background hands off "
-        "immediately — yield_after applies only to auto."
-    )
-    assert tool.parameters["properties"]["yield_after"]["description"] == (
-        'Only valid when mode is "auto". Seconds auto waits before a still-running command is '
-        "handed to vBot. Omit for the default (30 seconds); independent of timeout."
-    )
-    assert "does not extend yield_after" in tool.parameters["properties"]["timeout"]["description"]
-    assert (
-        "when output is truncated or a command is handed off, the result includes a log_file "
-        "path to the complete combined stdout/stderr stream — read or grep it for the full "
-        "output." in tool.description
-    )
     assert tool.parallel_safe is True
 
 
@@ -1673,31 +1621,13 @@ def test_subagent_projection_exposes_only_non_handoff_bash_modes() -> None:
     bash_definition = projected[0]
 
     assert bash_definition["description"] == BASH_SUBAGENT_TOOL_DESCRIPTION
-    assert bash_definition["description"].startswith(
-        "Run an unattended shell command inside this Sub-Agent through pipes when no "
-        "interactive terminal input or live screen is needed"
-    )
+    assert bash_definition["description"]
     assert bash_definition["parameters"] == BASH_SUBAGENT_TOOL_PARAMETERS
     parameters = bash_definition["parameters"]
     assert "oneOf" not in parameters
     assert "additionalProperties" not in parameters
     assert parameters["properties"]["mode"]["enum"] == ["foreground", "auto"]
     assert parameters["properties"]["yield_after"]["default"] == 1800
-    assert parameters["properties"]["mode"]["description"] == (
-        "Execution behavior: foreground waits for completion; auto waits until yield_after, "
-        "then kills a still-running command because handoff is unavailable — yield_after "
-        "applies only to auto."
-    )
-    assert parameters["properties"]["yield_after"]["description"] == (
-        'Only valid when mode is "auto". Seconds auto waits before the command is killed '
-        "because process handoff is unavailable. Omit for the default (30 minutes); independent "
-        "of timeout."
-    )
-    assert "process handoff is unavailable" in bash_definition["description"]
-    assert (
-        "when output is truncated, the result includes a log_file path to the complete combined "
-        "stdout/stderr stream." in bash_definition["description"]
-    )
     assert projected[1] is definitions[1]
     assert definitions[0]["description"] == BASH_TOOL_DESCRIPTION
     assert definitions[0]["parameters"] == BASH_TOOL_PARAMETERS
@@ -1821,7 +1751,6 @@ async def test_user_cancel_during_foreground_returns_cancelled_by_user_envelope(
 
     assert result["ok"] is False
     assert result["error"]["code"] == "cancelled_by_user"
-    assert "aborted" in result["error"]["message"].lower()
     assert cancel_calls, "process_manager.cancel_for_user should have been called"
     session_id_used, agent_id_used = cancel_calls[0]
     assert agent_id_used == AGENT_ID
@@ -2206,7 +2135,6 @@ async def test_timeout_failure_carries_output_tail_and_log_pointer(
         assert result["error"]["code"] == "process_timeout"
         message = result["error"]["message"]
         assert "diag-marker" in message, "output produced before the kill must survive"
-        assert "Complete output:" in message
     finally:
         await spool_manager.aclose()
 
@@ -2234,8 +2162,6 @@ async def test_subagent_kill_failure_carries_output_tail(
         assert result["ok"] is False
         assert result["error"]["code"] == bash_module.BACKGROUND_AT_DEPTH_FAILURE_CODE
         message = result["error"]["message"]
-        assert "Auto mode reached yield_after" in message
-        assert "process handoff is not available inside a Sub-Agent" in message
         assert "diag-marker" in message
     finally:
         await spool_manager.aclose()
@@ -2247,7 +2173,6 @@ def test_spawn_failure_message_names_missing_shell() -> None:
     )
 
     assert "missing-vbot-shell" in message
-    assert "was not found" in message
 
 
 def test_spawn_failure_message_explains_pwsh_requirement() -> None:

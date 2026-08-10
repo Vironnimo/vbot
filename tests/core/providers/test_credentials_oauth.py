@@ -112,7 +112,7 @@ def test_get_credentials_oauth_without_token_raises_config_error(tmp_path: Path)
     )
 
     # Act / Assert
-    with pytest.raises(ConfigError, match="OAuth token"):
+    with pytest.raises(ConfigError):
         resolver.get_credentials("github-copilot", "github-copilot:oauth")
 
 

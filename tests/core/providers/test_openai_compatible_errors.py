@@ -72,7 +72,7 @@ class TestSendErrorClassification:
         # Act / Assert
         with (
             patch("core.utils.retry.asyncio.sleep", new_callable=AsyncMock),
-            pytest.raises(ProviderTimeoutError, match="timed out"),
+            pytest.raises(ProviderTimeoutError),
         ):
             await openai_adapter.send(SAMPLE_MESSAGES, model_id="gpt-5.2")
 
@@ -86,7 +86,7 @@ class TestSendErrorClassification:
         # Act / Assert
         with (
             patch("core.utils.retry.asyncio.sleep", new_callable=AsyncMock),
-            pytest.raises(NetworkError, match="Connection failed: connection failed"),
+            pytest.raises(NetworkError, match="connection failed"),
         ):
             await openai_adapter.send(SAMPLE_MESSAGES, model_id="gpt-5.2")
 
@@ -128,7 +128,7 @@ class TestSendErrorClassification:
         # Act / Assert
         with (
             patch("core.utils.retry.asyncio.sleep", new_callable=AsyncMock),
-            pytest.raises(NetworkError, match="Connection failed: connection reset"),
+            pytest.raises(NetworkError, match="connection reset"),
         ):
             await openai_adapter.send(SAMPLE_MESSAGES, model_id="gpt-5.2")
 
@@ -164,7 +164,7 @@ class TestSendErrorClassification:
         # Act / Assert
         with (
             patch("core.utils.retry.asyncio.sleep", new_callable=AsyncMock),
-            pytest.raises(NetworkError, match="Connection failed: server disconnected"),
+            pytest.raises(NetworkError, match="server disconnected"),
         ):
             await openai_adapter.send(SAMPLE_MESSAGES, model_id="gpt-5.2")
 

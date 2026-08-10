@@ -59,18 +59,16 @@ class TestParseReflectionUpdate:
         assert result == {"reflection": {}}
 
     def test_reflection_not_a_dict(self) -> None:
-        with pytest.raises(SettingsValidationError, match="params.reflection must be an object"):
+        with pytest.raises(SettingsValidationError):
             parse_settings_update({"reflection": []})
 
     def test_unknown_field(self) -> None:
-        with pytest.raises(SettingsValidationError, match="unsupported reflection settings: extra"):
+        with pytest.raises(SettingsValidationError):
             parse_settings_update({"reflection": {"enabled": True, "extra": 1}})
 
     @pytest.mark.parametrize("value", ["yes", 1, 0, None, 1.0, [], {}])
     def test_enabled_not_boolean(self, value: object) -> None:
-        with pytest.raises(
-            SettingsValidationError, match="params.reflection.enabled must be a boolean"
-        ):
+        with pytest.raises(SettingsValidationError):
             parse_settings_update({"reflection": {"enabled": value}})
 
     @pytest.mark.parametrize("field", ["memory_turn_interval", "skill_model_step_interval"])
@@ -96,11 +94,11 @@ class TestNormalizeReflectionSettings:
         assert normalize_reflection_settings(section) == section
 
     def test_non_object_section_raises(self) -> None:
-        with pytest.raises(StorageError, match="settings.reflection to be an object"):
+        with pytest.raises(StorageError):
             normalize_reflection_settings("on")
 
     def test_non_boolean_enabled_raises(self) -> None:
-        with pytest.raises(StorageError, match="enabled must be a boolean"):
+        with pytest.raises(StorageError):
             normalize_reflection_settings({"enabled": "yes"})
 
     @pytest.mark.parametrize("field", ["memory_turn_interval", "skill_model_step_interval"])

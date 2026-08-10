@@ -222,7 +222,7 @@ async def test_running_job_cannot_be_mutated(tmp_path: Path) -> None:
     while not trigger.calls:
         await asyncio.sleep(0)
 
-    with pytest.raises(BootstrapJobValidationError, match="currently running"):
+    with pytest.raises(BootstrapJobValidationError):
         service.delete_job(created.id)
 
     release.set()

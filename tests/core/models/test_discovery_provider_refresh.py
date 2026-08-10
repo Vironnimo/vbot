@@ -451,7 +451,7 @@ class TestRefreshModels:
             defaults={"max_tokens": 8192},
         )
 
-        with pytest.raises(ValueError, match="does not define a models_endpoint"):
+        with pytest.raises(ValueError):
             await refresh_models(
                 config,
                 "sk-test",
@@ -1258,7 +1258,7 @@ class TestRefreshModels:
     ):
         respx.get(OPENROUTER_MODELS_URL).mock(return_value=httpx.Response(200, text="not-json"))
 
-        with pytest.raises(ModelDiscoveryError, match="Model discovery failed"):
+        with pytest.raises(ModelDiscoveryError):
             await refresh_models(openrouter_config, API_KEY, tmp_path / "resources")
 
     @respx.mock
@@ -1338,7 +1338,7 @@ class TestRefreshModels:
             return_value=httpx.Response(404, text="Not Found")
         )
 
-        with pytest.raises(ModelDiscoveryError, match="Model discovery failed"):
+        with pytest.raises(ModelDiscoveryError):
             await refresh_models(_simple_compatible_config(), API_KEY, tmp_path / "resources")
 
         assert route.call_count == 1

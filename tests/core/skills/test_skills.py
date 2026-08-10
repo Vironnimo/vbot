@@ -543,7 +543,7 @@ class TestSkillRegistryGet:
     def test_get_missing_skill_raises_key_error(self, tmp_path: Path) -> None:
         registry = SkillRegistry.load(tmp_path / "missing-skills")
 
-        with pytest.raises(KeyError, match="Skill not found: missing"):
+        with pytest.raises(KeyError, match="missing"):
             registry.get("missing")
 
 

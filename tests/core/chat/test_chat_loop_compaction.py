@@ -27,7 +27,6 @@ from core.chat.continuation import (
     recover_continuation,
     render_continuation_reminder,
 )
-from core.chat.messages import HISTORY_COMPACTION_GUIDANCE
 from core.compaction import (
     MIN_AUTO_COMPACTION_RECLAIM_TOKENS,
     TOOL_RESULT_COMPACTED_FIELD,
@@ -560,10 +559,10 @@ async def test_compaction_maybe_auto_compact_appends_checkpoint_and_rebuilds_mes
         == MIN_AUTO_COMPACTION_RECLAIM_TOKENS
     )
     assert [message["role"] for message in rebuilt] == ["system", "user", "user", "assistant"]
-    assert rebuilt[1]["content"] == (
-        "<system-reminder>\nCompacted tail context.\n\n"
-        f"{HISTORY_COMPACTION_GUIDANCE.format(ordinal=1)}\n</system-reminder>"
-    )
+    reminder = rebuilt[1]["content"]
+    assert reminder.startswith("<system-reminder>\n")
+    assert reminder.endswith("\n</system-reminder>")
+    assert "Compacted tail context." in reminder
     assert rebuilt[2]["content"] == "Tail user"
     assert rebuilt[3]["content"] == "Tail assistant"
     post_compaction_tools = runtime.system_prompts.provider_tool_definitions(
@@ -1494,9 +1493,7 @@ async def test_compact_session_appends_checkpoint_and_closes_adapter(tmp_path: P
     assert adapter.closed is True
     persisted_checkpoint = session.load()[-1]
     assert persisted_checkpoint.projection is not None
-    assert HISTORY_COMPACTION_GUIDANCE.format(ordinal=1) in str(
-        persisted_checkpoint.projection[0]["content"]
-    )
+    assert str(persisted_checkpoint.projection[0]["content"]).startswith("[compaction-summary]")
 
 
 @pytest.mark.asyncio

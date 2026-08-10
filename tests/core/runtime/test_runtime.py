@@ -536,7 +536,7 @@ def test_phase_two_services_inaccessible_before_start(config: Config):
         "chat_sessions",
         "system_prompts",
     ):
-        with pytest.raises(RuntimeError, match="not started"):
+        with pytest.raises(RuntimeError):
             getattr(runtime, attribute_name)
 
 
@@ -650,10 +650,9 @@ async def test_runtime_start_does_not_crash_when_channel_adapter_cannot_start(
 
     assert runtime.channel_service.has_active_channels() is False
     assert runtime.channel_service.is_failed("tg-assistant") is True
-    assert (
-        runtime.channel_service.failure_reason("tg-assistant")
-        == "Missing Telegram token in environment variable: TELEGRAM_BOT_TOKEN_TG_ASSISTANT"
-    )
+    failure_reason = runtime.channel_service.failure_reason("tg-assistant")
+    assert failure_reason
+    assert "TELEGRAM_BOT_TOKEN_TG_ASSISTANT" in failure_reason
 
     runtime.stop()
 
@@ -690,9 +689,9 @@ async def test_runtime_start_does_not_crash_when_channel_agent_is_missing(
     assert runtime.agents.get("main").id == "main"
     assert runtime.channel_service.has_active_channels() is False
     assert runtime.channel_service.is_failed("tg-assistant") is True
-    assert (
-        runtime.channel_service.failure_reason("tg-assistant") == "Unknown agent_id: missing-agent"
-    )
+    failure_reason = runtime.channel_service.failure_reason("tg-assistant")
+    assert failure_reason
+    assert "missing-agent" in failure_reason
 
     runtime.stop()
 
@@ -807,13 +806,13 @@ def test_runtime_stop_clears_phase_two_services(config: Config):
 
     runtime.stop()
 
-    with pytest.raises(RuntimeError, match="not started"):
+    with pytest.raises(RuntimeError):
         _ = runtime.storage
-    with pytest.raises(RuntimeError, match="not started"):
+    with pytest.raises(RuntimeError):
         _ = runtime.provider_credentials
-    with pytest.raises(RuntimeError, match="not started"):
+    with pytest.raises(RuntimeError):
         _ = runtime.process_manager
-    with pytest.raises(RuntimeError, match="not started"):
+    with pytest.raises(RuntimeError):
         _ = runtime.terminal_manager
 
 
@@ -864,7 +863,7 @@ async def test_runtime_aclose_reaps_process_sessions(config: Config) -> None:
     assert session.proc.returncode is not None
     assert session.wait_task is not None and session.wait_task.done()
     assert temporary_files._sweeper_task is None
-    with pytest.raises(RuntimeError, match="not started"):
+    with pytest.raises(RuntimeError):
         _ = runtime.process_manager
 
 

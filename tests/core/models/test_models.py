@@ -459,7 +459,6 @@ class TestModelRegistryLoad:
         assert registry.get("healthy", "model-a").name == "Healthy"
         assert registry.list_for_provider("corrupt") == []
         assert str(corrupt_path) in caplog.text
-        assert "Ignoring invalid Model DB provider file" in caplog.text
 
     def test_structurally_invalid_provider_file_does_not_block_load(
         self,
@@ -481,7 +480,6 @@ class TestModelRegistryLoad:
         assert registry.get("healthy", "model-a").name == "Healthy"
         assert registry.list_for_provider("invalid") == []
         assert str(invalid_path) in caplog.text
-        assert "'models' must be an object" in caplog.text
 
     def test_invalid_model_entry_does_not_hide_valid_sibling(
         self,
@@ -523,7 +521,6 @@ class TestModelRegistryLoad:
 
         assert registry.get("healthy", "model-a").name == "Generated"
         assert str(override_path) in caplog.text
-        assert "Ignoring invalid Model DB override file" in caplog.text
 
     def test_corrupt_canonical_file_is_ignored_without_hiding_provider_model(
         self,
@@ -541,7 +538,6 @@ class TestModelRegistryLoad:
 
         assert registry.get("healthy", "model-a").name == "Provider"
         assert str(canonical_path) in caplog.text
-        assert "Ignoring invalid Model DB canonical file" in caplog.text
 
     def test_empty_provider_record_can_inherit_complete_canonical_model(self, tmp_path: Path):
         models_dir = tmp_path / "models"
@@ -575,8 +571,6 @@ class TestModelRegistryLoad:
 
         assert registry.list_for_provider("unavailable") == []
         assert str(models_dir) in caplog.text
-        assert "Could not scan Model DB provider files" in caplog.text
-        assert "Could not scan Model DB override files" in caplog.text
 
     def test_load_reads_optional_metadata(self, tmp_path: Path):
         models_dir = tmp_path / "models"

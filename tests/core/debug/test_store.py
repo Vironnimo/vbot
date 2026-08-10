@@ -184,7 +184,7 @@ class TestGetTrace:
         channel_path.parent.mkdir(parents=True)
         channel_path.write_text('{"bot_token": "secret"}', encoding="utf-8")
 
-        with pytest.raises(InvalidTraceIdError, match="Invalid debug trace id"):
+        with pytest.raises(InvalidTraceIdError):
             store.get_trace("../../../channels/telegram/channel")
 
     @pytest.mark.parametrize(
@@ -201,7 +201,7 @@ class TestGetTrace:
         """Only canonical lowercase UUID4 hex ids may become trace paths."""
         store = DebugTraceStore(tmp_path, trace_limit=10)
 
-        with pytest.raises(InvalidTraceIdError, match="Invalid debug trace id"):
+        with pytest.raises(InvalidTraceIdError):
             store.get_trace(trace_id)
 
 

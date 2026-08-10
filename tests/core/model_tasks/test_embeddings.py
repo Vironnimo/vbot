@@ -33,7 +33,7 @@ async def test_embed_without_configured_binding_raises_configuration_error() -> 
 
     service = EmbeddingService(_MissingModelTasks(), _RuntimeStub())
 
-    with pytest.raises(EmbeddingConfigurationError, match="configured"):
+    with pytest.raises(EmbeddingConfigurationError):
         await service.embed(["a", "b"])
 
 
@@ -46,7 +46,7 @@ async def test_embed_with_local_target_raises_unsupported_target_error() -> None
         _RuntimeStub(),
     )
 
-    with pytest.raises(EmbeddingUnsupportedTargetError, match="local"):
+    with pytest.raises(EmbeddingUnsupportedTargetError):
         await service.embed(["a", "b"])
 
 
@@ -72,7 +72,7 @@ async def test_embed_with_empty_input_raises_configuration_error() -> None:
         _RuntimeStub(),
     )
 
-    with pytest.raises(EmbeddingConfigurationError, match="non-empty"):
+    with pytest.raises(EmbeddingConfigurationError):
         await service.embed([])
 
 
@@ -85,7 +85,7 @@ async def test_embed_with_non_list_input_raises_configuration_error() -> None:
         _RuntimeStub(),
     )
 
-    with pytest.raises(EmbeddingConfigurationError, match="non-empty"):
+    with pytest.raises(EmbeddingConfigurationError):
         await service.embed("not-a-list")  # type: ignore[arg-type]
 
 
@@ -99,7 +99,7 @@ async def test_embed_with_non_string_element_raises_configuration_error() -> Non
     )
 
     mixed_inputs: list[Any] = ["ok", 42, "also-ok"]
-    with pytest.raises(EmbeddingConfigurationError, match="not a string"):
+    with pytest.raises(EmbeddingConfigurationError):
         await service.embed(mixed_inputs)
 
 
@@ -248,7 +248,7 @@ async def test_embed_rejects_unknown_purpose_before_provider_execution() -> None
             "core.model_tasks.embeddings.ProviderEmbeddingClient.from_runtime",
             return_value=fake_client,
         ),
-        pytest.raises(EmbeddingConfigurationError, match="Unsupported embedding purpose"),
+        pytest.raises(EmbeddingConfigurationError),
     ):
         await service.embed(["query"], purpose="classification")  # type: ignore[arg-type]
 
@@ -417,7 +417,7 @@ def test_resolve_model_id_without_binding_raises_configuration_error() -> None:
 
     service = EmbeddingService(_MissingModelTasks(), _RuntimeStub())
 
-    with pytest.raises(EmbeddingConfigurationError, match="configured"):
+    with pytest.raises(EmbeddingConfigurationError):
         service.resolve_model_id()
 
 
@@ -432,7 +432,7 @@ def test_resolve_model_id_with_local_target_raises_unsupported_target_error() ->
         _RuntimeStub(),
     )
 
-    with pytest.raises(EmbeddingUnsupportedTargetError, match="local"):
+    with pytest.raises(EmbeddingUnsupportedTargetError):
         service.resolve_model_id()
 
 

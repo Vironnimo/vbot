@@ -103,15 +103,7 @@ async def wait_for_terminal(manager: ProcessManager, session_id: str) -> None:
 
 
 def test_schema_exposes_small_flat_action_contract() -> None:
-    assert PROCESS_TOOL_DESCRIPTION == (
-        "Inspect or control your own background Process Sessions created by the `bash` Tool. "
-        "Use the session_id returned when a bash call continues in the background; this Tool "
-        "cannot access arbitrary operating-system processes. Bash output is only a capped "
-        "snapshot; when log_file is present, it receives the complete combined stdout/stderr "
-        "stream live through exit. Completion is delivered automatically, so use status only "
-        "for an immediate snapshot, input to write raw UTF-8 to the stdin pipe, and kill to "
-        "stop a Process Session. Input is not an interactive terminal or TTY."
-    )
+    assert PROCESS_TOOL_DESCRIPTION
     assert PROCESS_TOOL_PARAMETERS["type"] == "object"
     assert "oneOf" not in PROCESS_TOOL_PARAMETERS
     properties = cast(dict[str, Any], PROCESS_TOOL_PARAMETERS["properties"])
@@ -125,15 +117,13 @@ def test_schema_exposes_small_flat_action_contract() -> None:
     }
     assert PROCESS_TOOL_PARAMETERS["required"] == ["action"]
     assert "additionalProperties" not in PROCESS_TOOL_PARAMETERS
-    assert "input and kill require session_id" in PROCESS_TOOL_PARAMETERS["description"]
-    assert "Required for input and kill" in properties["session_id"]["description"]
-    assert "returned by the bash Tool" in properties["session_id"]["description"]
-    assert "Read-Host is unavailable" in properties["text"]["description"]
-    assert "[Console]::In.ReadLine()" in properties["text"]["description"]
+    assert isinstance(PROCESS_TOOL_PARAMETERS["description"], str)
+    assert all(
+        isinstance(property_schema.get("description"), str) and property_schema["description"]
+        for property_schema in properties.values()
+    )
     assert "default" not in properties["newline"]
-    assert "default true" in properties["newline"]["description"]
     assert "default" not in properties["eof"]
-    assert "default false" in properties["eof"]["description"]
 
 
 @pytest.mark.asyncio

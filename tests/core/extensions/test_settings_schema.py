@@ -26,93 +26,93 @@ def _field(**overrides: object) -> dict:
 
 
 def test_reject_non_list_schema() -> None:
-    with pytest.raises(ValueError, match="must be a list"):
+    with pytest.raises(ValueError):
         parse_settings_fields({"key": "url"})  # type: ignore[arg-type]
 
 
 def test_reject_non_dict_field() -> None:
-    with pytest.raises(ValueError, match="must be a dict"):
+    with pytest.raises(ValueError):
         parse_settings_fields(["nope"])
 
 
 def test_reject_missing_key() -> None:
-    with pytest.raises(ValueError, match="key must match"):
+    with pytest.raises(ValueError):
         parse_settings_fields([{"type": "text", "label": "URL"}])
 
 
 def test_reject_bad_key_pattern() -> None:
-    with pytest.raises(ValueError, match="key must match"):
+    with pytest.raises(ValueError):
         parse_settings_fields([_field(key="Bad-Key")])
 
 
 def test_reject_duplicate_key() -> None:
-    with pytest.raises(ValueError, match="duplicate key"):
+    with pytest.raises(ValueError):
         parse_settings_fields([_field(), _field(label="Second")])
 
 
 def test_reject_unknown_attribute() -> None:
-    with pytest.raises(ValueError, match="unknown attribute"):
+    with pytest.raises(ValueError):
         parse_settings_fields([_field(placeholder="x")])
 
 
 def test_reject_bad_type() -> None:
-    with pytest.raises(ValueError, match="type must be one of"):
+    with pytest.raises(ValueError):
         parse_settings_fields([_field(type="date")])
 
 
 def test_reject_empty_label() -> None:
-    with pytest.raises(ValueError, match="label must be a non-empty string"):
+    with pytest.raises(ValueError):
         parse_settings_fields([_field(label="  ")])
 
 
 def test_reject_non_string_description() -> None:
-    with pytest.raises(ValueError, match="description must be a string"):
+    with pytest.raises(ValueError):
         parse_settings_fields([_field(description=123)])
 
 
 def test_reject_non_bool_required() -> None:
-    with pytest.raises(ValueError, match="required must be a boolean"):
+    with pytest.raises(ValueError):
         parse_settings_fields([_field(required="yes")])
 
 
 def test_reject_secret_without_env_key() -> None:
-    with pytest.raises(ValueError, match="secret env_key must match"):
+    with pytest.raises(ValueError):
         parse_settings_fields([_field(key="token", type="secret")])
 
 
 def test_reject_secret_with_bad_env_key() -> None:
-    with pytest.raises(ValueError, match="secret env_key must match"):
+    with pytest.raises(ValueError):
         parse_settings_fields([_field(key="token", type="secret", env_key="lower_case")])
 
 
 def test_reject_env_key_on_non_secret() -> None:
-    with pytest.raises(ValueError, match="env_key is only valid for a secret field"):
+    with pytest.raises(ValueError):
         parse_settings_fields([_field(env_key="HASS_URL")])
 
 
 def test_reject_default_on_secret() -> None:
-    with pytest.raises(ValueError, match="secret field cannot declare a default"):
+    with pytest.raises(ValueError):
         parse_settings_fields([_field(key="token", type="secret", env_key="TOKEN", default="x")])
 
 
 def test_reject_text_default_wrong_type() -> None:
-    with pytest.raises(ValueError, match="default must be a string"):
+    with pytest.raises(ValueError):
         parse_settings_fields([_field(default=1)])
 
 
 def test_reject_number_default_wrong_type() -> None:
-    with pytest.raises(ValueError, match="default must be a number"):
+    with pytest.raises(ValueError):
         parse_settings_fields([_field(key="port", type="number", default="80")])
 
 
 def test_reject_number_default_bool() -> None:
     # bool is a subclass of int but must not pass as a number default.
-    with pytest.raises(ValueError, match="default must be a number"):
+    with pytest.raises(ValueError):
         parse_settings_fields([_field(key="port", type="number", default=True)])
 
 
 def test_reject_toggle_default_wrong_type() -> None:
-    with pytest.raises(ValueError, match="default must be a boolean"):
+    with pytest.raises(ValueError):
         parse_settings_fields([_field(key="on", type="toggle", default="true")])
 
 

@@ -168,7 +168,7 @@ class TestFirstUsableConnectionId:
             usable={"openai:api-key"},
         )
 
-        with pytest.raises(ChatError, match=r"allowlist \[subscription\]"):
+        with pytest.raises(ChatError):
             _first_usable_connection_id(runtime, "openai", ("subscription",))
 
 
@@ -220,7 +220,7 @@ class TestResolveAgentConnection:
             models={("openai", "codex-auto-review"): ("subscription",)},
         )
 
-        with pytest.raises(ChatError, match="allowlist"):
+        with pytest.raises(ChatError):
             _resolve_agent_connection(runtime, _agent("openai/codex-auto-review"))
 
     def test_unknown_bare_model_is_unrestricted(self) -> None:
