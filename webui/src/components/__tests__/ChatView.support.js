@@ -139,6 +139,8 @@ export function setupChatViewTestSuite() {
     }
 
     document.body.innerHTML = '';
+    vi.clearAllTimers();
+    vi.useRealTimers();
   });
 
   return {
@@ -382,6 +384,7 @@ export async function hoveredTokenBadgeTooltip(expectedText) {
     () => document.body.querySelector('.token-badge') !== null,
     100,
   );
+  vi.useFakeTimers();
   return hoveredTooltipText(
     document.body.querySelector('.token-badge'),
     expectedText,
@@ -390,14 +393,10 @@ export async function hoveredTokenBadgeTooltip(expectedText) {
 
 export async function hoveredTooltipText(element, expectedText) {
   element.dispatchEvent(new Event('pointerenter'));
-  await new Promise((resolve) =>
-    setTimeout(resolve, TOOLTIP_SHOW_DELAY_MS + 50),
-  );
-  await waitForCondition(
-    () => document.getElementById('app-tooltip')?.textContent === expectedText,
-    100,
-  );
+  await vi.advanceTimersByTimeAsync(TOOLTIP_SHOW_DELAY_MS);
+  flushSync();
   const tooltipText = document.getElementById('app-tooltip')?.textContent ?? '';
+  expect(tooltipText).toBe(expectedText);
   element.dispatchEvent(new Event('pointerleave'));
   return tooltipText;
 }

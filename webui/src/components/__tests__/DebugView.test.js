@@ -74,6 +74,7 @@ describe('DebugView', () => {
     }
     document.body.innerHTML = '';
     localStorage.clear();
+    vi.clearAllTimers();
     vi.useRealTimers();
   });
 
@@ -112,6 +113,7 @@ describe('DebugView', () => {
     const providerCell = document.querySelector('.debug-trace__provider');
     const modelCell = document.querySelector('.debug-trace__model');
 
+    vi.useFakeTimers();
     expect(await hoveredTooltipText(providerCell)).toBe(
       'openai-subscription-with-a-very-long-name',
     );
@@ -669,9 +671,8 @@ async function waitForCondition(check, attempts = 60) {
 // Hovers `element` and returns the shared quick tooltip's text once it shows.
 async function hoveredTooltipText(element) {
   element.dispatchEvent(new Event('pointerenter'));
-  await new Promise((resolve) =>
-    setTimeout(resolve, TOOLTIP_SHOW_DELAY_MS + 50),
-  );
+  await vi.advanceTimersByTimeAsync(TOOLTIP_SHOW_DELAY_MS);
+  flushSync();
   const text = document.getElementById('app-tooltip')?.textContent ?? null;
   element.dispatchEvent(new Event('pointerleave'));
   return text;
