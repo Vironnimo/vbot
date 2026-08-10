@@ -128,20 +128,6 @@
     );
   }
 
-  function workingGroupStatus(group) {
-    if (workingGroupIsActive(group)) {
-      return 'running';
-    }
-
-    const latestChild = group.children.at(-1);
-    if (latestChild?.type === 'tool_call') {
-      return isSubAgentSpawnTool(latestChild)
-        ? subAgentDotStatus(latestChild, subAgentStatuses)
-        : toolStatus(latestChild);
-    }
-    return 'success';
-  }
-
   function workingGroupActivity(group) {
     const latestChild = group.children.at(-1);
     if (latestChild?.type === 'reasoning') {
@@ -151,30 +137,9 @@
       return '';
     }
 
-    const toolName = isSubAgentSpawnTool(latestChild)
+    return isSubAgentSpawnTool(latestChild)
       ? t('chat.subagent.label', 'Sub-agent')
       : toolNameForRunTool(latestChild);
-    const activity = isSubAgentSpawnTool(latestChild)
-      ? subAgentLastToolName(latestChild, subAgentStatuses) ||
-        subAgentPreview(latestChild)
-      : toolRowPresentation(latestChild).primary[0]?.text;
-    return [toolName, activity].filter(Boolean).join(' · ');
-  }
-
-  function workingGroupTimeLabel(group) {
-    const latestChild = group.children.at(-1);
-    if (latestChild?.type !== 'tool_call') {
-      return '';
-    }
-    if (isSubAgentSpawnTool(latestChild)) {
-      return subAgentToolStatusLabel(
-        latestChild,
-        subAgentDotStatus(latestChild, subAgentStatuses),
-        subAgentStatuses,
-        nowMs,
-      );
-    }
-    return toolStatusLabel(latestChild, nowMs);
   }
 
   function groupRunChildren(children, workingMode) {
@@ -187,24 +152,32 @@
     }
 
     const groups = [];
-    let workingGroup = null;
+    let workingChildren = [];
+
+    function flushWorkingChildren() {
+      if (workingChildren.length === 1) {
+        const [child] = workingChildren;
+        groups.push({ id: `child:${child.id}`, type: 'child', child });
+      } else if (workingChildren.length > 1) {
+        groups.push({
+          id: `working:${workingChildren[0].id}`,
+          type: 'working',
+          children: workingChildren,
+        });
+      }
+      workingChildren = [];
+    }
+
     for (const child of children) {
       if (child.type === 'reasoning' || child.type === 'tool_call') {
-        if (!workingGroup) {
-          workingGroup = {
-            id: `working:${child.id}`,
-            type: 'working',
-            children: [],
-          };
-          groups.push(workingGroup);
-        }
-        workingGroup.children.push(child);
+        workingChildren.push(child);
         continue;
       }
 
-      workingGroup = null;
+      flushWorkingChildren();
       groups.push({ id: `child:${child.id}`, type: 'child', child });
     }
+    flushWorkingChildren();
     return groups;
   }
 </script>
@@ -628,10 +601,9 @@
     {/snippet}
     {#each runDisplayGroups as group (group.id)}
       {#if group.type === 'working'}
-        {@const groupStatus = workingGroupStatus(group)}
+        {@const groupActive = workingGroupIsActive(group)}
         {@const groupOpen = Boolean(workingDisclosureState[group.id])}
         {@const groupActivity = workingGroupActivity(group)}
-        {@const groupTimeLabel = workingGroupTimeLabel(group)}
         <details
           class="working-block"
           open={groupOpen}
@@ -639,25 +611,14 @@
             setWorkingOpen(group.id, event.currentTarget.open)}
         >
           <summary class="working-block__summary">
-            <span
-              class:running={groupStatus === 'running'}
-              class:done={groupStatus === 'success'}
-              class:error={groupStatus === 'failed'}
-              class:cancelled={groupStatus === 'cancelled'}
-              class="working-block__dot"
-              aria-hidden="true">●</span
-            >
             <span class="working-block__label">
-              {t('chat.working.label', 'Working')}
+              {groupActive
+                ? t('chat.working.active', 'working...')
+                : t('chat.working.done', 'done working')}
             </span>
             <span class="working-block__activity">
               {groupActivity}
             </span>
-            {#if groupTimeLabel}
-              <span class="working-block__time">
-                {groupTimeLabel}
-              </span>
-            {/if}
             <svg
               class="working-block__chevron"
               viewBox="0 0 16 16"

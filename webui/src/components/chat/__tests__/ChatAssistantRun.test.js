@@ -15,6 +15,7 @@ const { default: ChatAssistantRun } =
 function createAssistantRunItem({
   runId = 'run-parent',
   startTimestamp = '2026-06-09T12:00:00+00:00',
+  status,
   items = [],
 } = {}) {
   return {
@@ -24,6 +25,7 @@ function createAssistantRunItem({
     agentId: 'alpha',
     sessionId: 'session-1',
     startTimestamp,
+    ...(status ? { status } : {}),
     items,
   };
 }
@@ -626,7 +628,7 @@ describe('ChatAssistantRun compact Working blocks', () => {
     document.body.innerHTML = '';
   });
 
-  it('groups contiguous Thinking and Tool rows behind a closed disclosure', () => {
+  it('groups contiguous Thinking and Tool rows behind a completed disclosure', () => {
     const item = createAssistantRunItem({
       items: [
         {
@@ -645,12 +647,40 @@ describe('ChatAssistantRun compact Working blocks', () => {
     expect(block.open).toBe(false);
     expect(
       block.querySelector('.working-block__label').textContent.trim(),
-    ).toBe('Working');
+    ).toBe('done working');
     expect(
       block.querySelector('.working-block__activity').textContent.trim(),
-    ).toContain('read');
+    ).toBe('read');
+    const summaryText = block.querySelector('summary').textContent;
+    expect(summaryText).not.toContain('README.md');
+    expect(block.querySelector('.working-block__dot')).toBeNull();
+    expect(block.querySelector('.working-block__time')).toBeNull();
     expect(block.querySelectorAll('.reasoning-block')).toHaveLength(1);
     expect(block.querySelectorAll('.tool-event')).toHaveLength(1);
+  });
+
+  it('labels the latest grouped activity as working while the Run is active', () => {
+    const item = createAssistantRunItem({
+      status: 'running',
+      items: [
+        {
+          type: 'reasoning',
+          id: 'reasoning-active',
+          content: 'Inspect the repository.',
+          streaming: false,
+        },
+        createBashToolChild({ status: 'running' }),
+      ],
+    });
+    mountedComponent = mountRun({ item, chatWorkingMode: 'compact' });
+
+    const block = document.querySelector('.working-block');
+    expect(
+      block.querySelector('.working-block__label').textContent.trim(),
+    ).toBe('working...');
+    expect(
+      block.querySelector('.working-block__activity').textContent.trim(),
+    ).toBe('bash');
   });
 
   it('ends a Working block at visible Assistant output and starts a new one', () => {
@@ -675,6 +705,11 @@ describe('ChatAssistantRun compact Working blocks', () => {
           status: 'success',
           includeResult: true,
         }),
+        createReadToolChild({
+          id: 'tool-after-read',
+          toolCallId: 'call-after-read',
+          status: 'success',
+        }),
       ],
     });
     mountedComponent = mountRun({ item, chatWorkingMode: 'compact' });
@@ -687,6 +722,33 @@ describe('ChatAssistantRun compact Working blocks', () => {
     expect(blocks[0].compareDocumentPosition(blocks[1])).toBe(
       Node.DOCUMENT_POSITION_FOLLOWING,
     );
+  });
+
+  it('keeps a single Thinking row inline in compact mode', () => {
+    const item = createAssistantRunItem({
+      items: [
+        {
+          type: 'reasoning',
+          id: 'reasoning-single',
+          content: 'Inspect.',
+          streaming: false,
+        },
+      ],
+    });
+    mountedComponent = mountRun({ item, chatWorkingMode: 'compact' });
+
+    expect(document.querySelector('.working-block')).toBeNull();
+    expect(document.querySelector('.reasoning-block')).toBeTruthy();
+  });
+
+  it('keeps a single Tool row inline in compact mode', () => {
+    const item = createAssistantRunItem({
+      items: [createReadToolChild({ status: 'success' })],
+    });
+    mountedComponent = mountRun({ item, chatWorkingMode: 'compact' });
+
+    expect(document.querySelector('.working-block')).toBeNull();
+    expect(document.querySelector('.tool-event')).toBeTruthy();
   });
 
   it('keeps the normal mode inline without a Working wrapper', () => {

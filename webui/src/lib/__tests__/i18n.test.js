@@ -491,6 +491,8 @@ describe('i18n t()', () => {
       'settings.appearance.chatWorkingMode.description',
       'settings.appearance.chatWorkingMode.normal',
       'settings.appearance.chatWorkingMode.compact',
+      'chat.working.active',
+      'chat.working.done',
       'settings.appearance.saveSuccess',
       'settings.language.en',
     ];
