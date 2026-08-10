@@ -524,7 +524,9 @@ def test_stash_conflict_fails_before_restart(tmp_path: Path) -> None:
             return _ok("main")
         if command[:2] == ["git", "status"]:
             return _ok(" M x.py")
-        if command[:3] == ["git", "stash", "pop"]:
+        if command[:3] == ["git", "stash", "create"]:
+            return _ok("updater-stash-object")
+        if command[:3] == ["git", "stash", "apply"]:
             return _err("conflict")
         if command[:2] == ["git", "rev-parse"]:
             return _ok(next(revisions))
@@ -866,6 +868,8 @@ def test_stash_is_restored_when_git_pull_fails(tmp_path: Path) -> None:
             return _ok("old")
         if command[:2] == ["git", "status"]:
             return _ok(" M local.py")
+        if command[:3] == ["git", "stash", "create"]:
+            return _ok("updater-stash-object")
         if command[:2] == ["git", "pull"]:
             return _err("offline")
         return _ok()
@@ -874,7 +878,44 @@ def test_stash_is_restored_when_git_pull_fails(tmp_path: Path) -> None:
     result = run_update(_instance(), stash=True, runner=runner, root=tmp_path)
 
     assert not result.ok
-    assert runner.ran("git", "stash", "pop", "stash@{0}")
+    retained_refs = [
+        call[2]
+        for call in runner.calls
+        if call[:2] == ["git", "update-ref"] and len(call) == 4 and call[2] != "-d"
+    ]
+    assert len(retained_refs) == 1
+    retained_ref = retained_refs[0]
+    assert retained_ref.startswith("refs/vbot/update-stashes/")
+    assert runner.ran("git", "stash", "apply", "--index", retained_ref)
+    assert runner.ran("git", "update-ref", "-d", retained_ref, "updater-stash-object")
+    assert not runner.ran("stash@{0}")
+
+
+def test_stash_flag_does_not_restore_an_existing_stash_when_changes_disappear(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / ".git").mkdir()
+    _write_state(tmp_path, revision="old", webui_revision="old")
+
+    def handler(command: list[str]) -> CommandRun:
+        if command[:2] == ["git", "symbolic-ref"]:
+            return _ok("main")
+        if command[:2] == ["git", "rev-parse"]:
+            return _ok("old")
+        if command[:2] == ["git", "status"]:
+            return _ok(" M local.py")
+        if command[:3] == ["git", "stash", "create"]:
+            return _ok("")
+        if command[:2] == ["git", "pull"]:
+            return _err("offline")
+        return _ok()
+
+    runner = ScriptedRunner(handler)
+    result = run_update(_instance(), stash=True, runner=runner, root=tmp_path)
+
+    assert not result.ok
+    assert not runner.ran("git", "stash", "apply")
+    assert not runner.ran("git", "stash", "pop")
 
 
 def test_desktop_client_update_keeps_exact_shape_and_never_starts_server(
