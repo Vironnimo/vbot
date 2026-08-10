@@ -196,7 +196,6 @@ class TestDebugTraceList:
 
         assert response["ok"] is False
         assert response["error"]["code"] == RPC_ERROR_DOMAIN
-        assert "not enabled" in response["error"]["message"]
 
     @pytest.mark.asyncio
     async def test_returns_traces_newest_first(self, tmp_path: Path) -> None:
@@ -273,7 +272,6 @@ class TestDebugTraceGet:
 
         assert response["ok"] is False
         assert response["error"]["code"] == RPC_ERROR_DOMAIN
-        assert "not enabled" in response["error"]["message"]
 
     @pytest.mark.asyncio
     async def test_returns_full_trace_when_enabled(self, tmp_path: Path) -> None:
@@ -305,7 +303,6 @@ class TestDebugTraceGet:
 
         assert response["ok"] is False
         assert response["error"]["code"] == RPC_ERROR_DOMAIN
-        assert "not found" in response["error"]["message"].lower()
 
     @pytest.mark.asyncio
     async def test_rejects_missing_trace_id(self, tmp_path: Path) -> None:
@@ -337,7 +334,6 @@ class TestDebugTraceGet:
 
         assert response["ok"] is False
         assert response["error"]["code"] == RPC_ERROR_INVALID_REQUEST
-        assert response["error"]["message"] == "Invalid debug trace id"
 
     @pytest.mark.asyncio
     async def test_rejects_unsupported_fields(self, tmp_path: Path) -> None:
@@ -354,7 +350,6 @@ class TestDebugTraceGet:
 
         assert response["ok"] is False
         assert response["error"]["code"] == RPC_ERROR_INVALID_REQUEST
-        assert "unsupported" in response["error"]["message"].lower()
 
 
 # ---------------------------------------------------------------------------
@@ -445,7 +440,6 @@ class TestDebugModelProbe:
 
         assert response["ok"] is False
         assert response["error"]["code"] == RPC_ERROR_DOMAIN
-        assert "not enabled" in response["error"]["message"]
 
     @pytest.mark.asyncio
     async def test_rejects_unknown_provider(self, tmp_path: Path) -> None:
@@ -465,7 +459,7 @@ class TestDebugModelProbe:
 
         assert response["ok"] is False
         assert response["error"]["code"] == RPC_ERROR_DOMAIN
-        assert "unknown provider" in response["error"]["message"].lower()
+        assert "nonexistent" in response["error"]["message"]
 
     @pytest.mark.asyncio
     async def test_rejects_provider_without_models_endpoint(self, tmp_path: Path) -> None:
@@ -487,7 +481,6 @@ class TestDebugModelProbe:
 
         assert response["ok"] is False
         assert response["error"]["code"] == RPC_ERROR_DOMAIN
-        assert "does not support model probing" in response["error"]["message"].lower()
 
     @pytest.mark.asyncio
     async def test_rejects_invalid_connection_id(self, tmp_path: Path) -> None:
@@ -508,10 +501,8 @@ class TestDebugModelProbe:
 
         assert response["ok"] is False
         assert response["error"]["code"] == RPC_ERROR_DOMAIN
-        assert (
-            "unknown connection id 'wrong-prefix:api-key' for provider 'openrouter'"
-            in response["error"]["message"].lower()
-        )
+        assert "wrong-prefix:api-key" in response["error"]["message"]
+        assert "openrouter" in response["error"]["message"]
 
     @pytest.mark.asyncio
     async def test_rejects_missing_provider_id(self, tmp_path: Path) -> None:

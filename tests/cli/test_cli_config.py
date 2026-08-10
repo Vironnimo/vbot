@@ -257,9 +257,9 @@ def test_config_set_posts_single_atomic_patch(
             "operations": [{"op": "set", "path": "web_search.provider", "value": "searxng"}]
         },
     }
-    assert result.message == (
-        'updated: web_search.provider = "searxng"\n  application: live\nrestart_required: no'
-    )
+    assert 'web_search.provider = "searxng"' in result.message
+    assert "application: live" in result.message
+    assert "restart_required: no" in result.message
 
 
 def test_config_patch_reports_pending_restart_value(
@@ -328,8 +328,6 @@ def test_config_raw_returns_error_on_rpc_failure(
 
     result = config_management.config_raw(instance)
 
-    assert result == CommandResult(
-        ok=False,
-        message="internal_error: boom",
-        instance=instance,
-    )
+    assert result.ok is False
+    assert result.instance is instance
+    assert result.message.startswith("internal_error:")

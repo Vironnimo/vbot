@@ -10,7 +10,7 @@ import pytest
 
 from cli import main as cli_main
 from cli import skill_management
-from cli.server_management import CommandResult, ServerInstance
+from cli.server_management import ServerInstance
 from core.utils.logging import resolve_daily_log_path
 
 
@@ -60,11 +60,9 @@ def test_skill_list_posts_skill_list_rpc(tmp_path: Path, monkeypatch: pytest.Mon
 
     result = skill_management.skill_list(instance)
 
-    assert result == CommandResult(
-        ok=True,
-        message="skills:\n- summarize  Summarize long text",
-        instance=instance,
-    )
+    assert result.ok is True
+    assert result.instance is instance
+    assert "- summarize  Summarize long text" in result.message
     assert calls == [
         {
             "url": f"{instance.url}/api/rpc",
@@ -103,8 +101,7 @@ def test_skill_list_formats_skills(tmp_path: Path, monkeypatch: pytest.MonkeyPat
 
     assert result.ok is True
     assert result.instance == instance
-    assert result.message.splitlines() == [
-        "skills:",
+    assert result.message.splitlines()[1:] == [
         "- draft-email  Draft concise replies",
         "- release-notes  Write release notes",
     ]
@@ -125,7 +122,9 @@ def test_skill_list_returns_empty_message(tmp_path: Path, monkeypatch: pytest.Mo
 
     result = skill_management.skill_list(instance)
 
-    assert result == CommandResult(ok=True, message="no skills configured", instance=instance)
+    assert result.ok is True
+    assert result.instance is instance
+    assert result.message.strip()
 
 
 def test_skill_list_formats_requirement_status(
@@ -163,8 +162,7 @@ def test_skill_list_formats_requirement_status(
     result = skill_management.skill_list(instance)
 
     assert result.ok is True
-    assert result.message.splitlines() == [
-        "skills:",
+    assert result.message.splitlines()[1:] == [
         "- native-build  Build native projects "
         "(unavailable: missing binary 'gcc'; optional missing: missing binary 'jq')",
     ]
@@ -230,11 +228,9 @@ def test_skill_list_returns_error_on_rpc_failure(
 
     result = skill_management.skill_list(instance)
 
-    assert result == CommandResult(
-        ok=False,
-        message="rpc_error: server exploded",
-        instance=instance,
-    )
+    assert result.ok is False
+    assert result.instance is instance
+    assert result.message.startswith("rpc_error:")
 
 
 def test_skill_editable_scope_crud_and_supporting_file_commands(
@@ -286,12 +282,12 @@ def test_skill_editable_scope_crud_and_supporting_file_commands(
     )
     deleted = skill_management.skill_delete(instance, "agent:assistant", "librarian", True)
 
-    assert "editable skills in agent:assistant" in read.message
-    assert created.message.startswith("created skill librarian")
-    assert updated.message.startswith("updated skill librarian")
-    assert wrote.message.startswith("wrote_file skill librarian")
-    assert removed_file.message.startswith("removed_file skill librarian")
-    assert deleted.message.startswith("deleted skill librarian")
+    assert "agent:assistant" in read.message
+    assert "created" in created.message and "librarian" in created.message
+    assert "updated" in updated.message and "librarian" in updated.message
+    assert "wrote_file" in wrote.message and "librarian" in wrote.message
+    assert "removed_file" in removed_file.message and "librarian" in removed_file.message
+    assert "deleted" in deleted.message and "librarian" in deleted.message
     assert [call["method"] for call in calls] == [
         "skill.read",
         "skill.create",

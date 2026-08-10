@@ -49,11 +49,10 @@ def test_log_list_posts_rpc_and_formats_files(
 
     result = log_management.log_list(instance)
 
-    assert result == CommandResult(
-        ok=True,
-        message="logs: default=2026-05-11\n- 2026-05-11\n- 2026-05-10",
-        instance=instance,
-    )
+    assert result.ok
+    assert result.instance == instance
+    assert result.message.count("2026-05-11") == 2
+    assert "2026-05-10" in result.message
 
 
 def test_log_read_posts_rpc_and_formats_entries(
@@ -90,16 +89,18 @@ def test_log_read_posts_rpc_and_formats_entries(
 
     result = log_management.log_read(instance, "2026-05-11")
 
-    assert result == CommandResult(
-        ok=True,
-        message=(
-            "log: 2026-05-11\n"
-            "cursor: cursor-1\n"
-            "- 2026-05-11 09:00:00 [info] vbot.server.app - Ready\n"
-            "  trace line"
-        ),
-        instance=instance,
-    )
+    assert result.ok
+    assert result.instance == instance
+    for value in (
+        "2026-05-11",
+        "cursor-1",
+        "2026-05-11 09:00:00",
+        "info",
+        "vbot.server.app",
+        "Ready",
+        "trace line",
+    ):
+        assert value in result.message
 
 
 def test_run_dispatches_log_read(

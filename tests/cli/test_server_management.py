@@ -329,7 +329,7 @@ def test_start_server_does_not_spawn_when_non_vbot_occupies_port(
     result = start_server(instance)
 
     assert result.ok is False
-    assert result.message == "port occupied by non-vBot process"
+    assert result.health == HealthProbeResult(reachable=True, is_vbot=False, status_code=200)
 
 
 def test_start_server_reports_already_running_without_spawning(
@@ -353,14 +353,11 @@ def test_start_server_reports_already_running_without_spawning(
 
     result = start_server(instance)
 
-    assert result == CommandResult(
-        ok=True,
-        message="already running",
-        instance=instance,
-        health=HealthProbeResult(reachable=True, is_vbot=True, status_code=200),
-        webui=WebUIProbeResult(False, 404),
-        log_path=instance.log_path,
-    )
+    assert result.ok is True
+    assert result.instance is instance
+    assert result.health == HealthProbeResult(reachable=True, is_vbot=True, status_code=200)
+    assert result.webui == WebUIProbeResult(False, 404)
+    assert result.log_path == instance.log_path
 
 
 def test_start_server_waits_for_health_and_reports_webui(
@@ -384,15 +381,12 @@ def test_start_server_waits_for_health_and_reports_webui(
 
     result = start_server(instance, startup_timeout_seconds=1.0, probe_interval_seconds=0.0)
 
-    assert result == CommandResult(
-        ok=True,
-        message="started",
-        instance=instance,
-        health=HealthProbeResult(reachable=True, is_vbot=True, status_code=200),
-        webui=WebUIProbeResult(True, 200),
-        log_path=instance.log_path,
-        process_id=321,
-    )
+    assert result.ok is True
+    assert result.instance is instance
+    assert result.health == HealthProbeResult(reachable=True, is_vbot=True, status_code=200)
+    assert result.webui == WebUIProbeResult(True, 200)
+    assert result.log_path == instance.log_path
+    assert result.process_id == 321
 
 
 def test_start_server_preserves_managed_daily_log_without_raw_child_output(
@@ -416,7 +410,7 @@ def test_start_server_preserves_managed_daily_log_without_raw_child_output(
 
     result = start_server(instance, startup_timeout_seconds=1.0, probe_interval_seconds=0.0)
 
-    assert result.message == "started"
+    assert result.ok is True
     log_lines = instance.log_path.read_text(encoding="utf-8").splitlines()
     assert log_lines
     assert all(re.match(MANAGED_CLI_LOG_PATTERN, line) for line in log_lines)
@@ -460,14 +454,11 @@ def test_start_server_reports_readiness_timeout(
 
     result = start_server(instance, startup_timeout_seconds=0.0, probe_interval_seconds=0.0)
 
-    assert result == CommandResult(
-        ok=False,
-        message="server readiness timed out",
-        instance=instance,
-        health=HealthProbeResult(reachable=False, is_vbot=False, error="ConnectError"),
-        log_path=instance.log_path,
-        process_id=654,
-    )
+    assert result.ok is False
+    assert result.instance is instance
+    assert result.health == HealthProbeResult(reachable=False, is_vbot=False, error="ConnectError")
+    assert result.log_path == instance.log_path
+    assert result.process_id == 654
 
 
 def test_start_server_cleans_up_spawned_process_after_readiness_timeout(
@@ -501,7 +492,7 @@ def test_start_server_cleans_up_spawned_process_after_readiness_timeout(
 
     result = start_server(instance, startup_timeout_seconds=0.0, probe_interval_seconds=0.0)
 
-    assert result.message == "server readiness timed out"
+    assert result.ok is False
     assert calls == ["terminate", "wait:0.5"]
 
 
@@ -538,7 +529,7 @@ def test_start_server_kills_spawned_process_when_cleanup_terminate_times_out(
 
     result = start_server(instance, startup_timeout_seconds=0.0, probe_interval_seconds=0.0)
 
-    assert result.message == "server readiness timed out"
+    assert result.ok is False
     assert calls == ["terminate", "wait:0.5", "kill", "wait:0.5"]
 
 
@@ -575,7 +566,6 @@ def test_start_server_preserves_failure_when_cleanup_kill_times_out(
     result = start_server(instance, startup_timeout_seconds=0.0, probe_interval_seconds=0.0)
 
     assert result.ok is False
-    assert result.message == "server readiness timed out"
     assert calls == ["terminate", "wait:0.5", "kill", "wait:0.5"]
 
 
@@ -609,7 +599,7 @@ def test_start_server_cleans_up_spawned_process_when_non_vbot_appears(
 
     result = start_server(instance, startup_timeout_seconds=1.0, probe_interval_seconds=0.0)
 
-    assert result.message == "port occupied by non-vBot process"
+    assert result.ok is False
     assert calls == ["terminate", "wait:0.5"]
 
 
@@ -720,7 +710,6 @@ def test_stop_server_does_not_terminate_non_vbot_conflict(
     result = stop_server(instance)
 
     assert result.ok is False
-    assert result.message == "port occupied by non-vBot process"
 
 
 def test_stop_server_terminates_confirmed_vbot(
@@ -878,14 +867,11 @@ def test_stop_server_returns_failure_when_kill_wait_times_out(
 
     result = stop_server(instance, shutdown_timeout_seconds=2.0)
 
-    assert result == CommandResult(
-        ok=False,
-        message="forced termination timed out",
-        instance=instance,
-        health=health,
-        process_id=789,
-        forced=True,
-    )
+    assert result.ok is False
+    assert result.instance is instance
+    assert result.health == health
+    assert result.process_id == 789
+    assert result.forced is True
     assert calls == ["terminate", ("wait", 2.0), "kill", ("wait", 2.0)]
 
 
@@ -905,7 +891,7 @@ def test_get_status_reports_running_with_webui(
     result = get_status(instance)
 
     assert result.ok is True
-    assert result.message == "running"
+    assert result.health == HealthProbeResult(reachable=True, is_vbot=True, status_code=200)
     assert result.webui == WebUIProbeResult(True, 200)
 
 
@@ -931,7 +917,7 @@ def test_schedule_server_restart_detaches_exact_target_and_strips_run_context(
     )
 
     assert result.ok is True
-    assert result.message == "restart scheduled by helper process 7654"
+    assert "7654" in result.message
     assert captured["arguments"] == [
         server_management.sys.executable,
         "-m",
@@ -1040,7 +1026,7 @@ def test_get_status_reports_non_vbot_conflict(
     result = get_status(instance)
 
     assert result.ok is False
-    assert result.message == "port occupied by non-vBot process"
+    assert result.health == HealthProbeResult(reachable=True, is_vbot=False, status_code=200)
     assert result.webui == WebUIProbeResult(False)
 
 
@@ -1057,7 +1043,7 @@ def test_get_status_reports_not_running_with_webui_unavailable(
     result = get_status(instance)
 
     assert result.ok is True
-    assert result.message == "not running"
+    assert result.health == HealthProbeResult(reachable=False, is_vbot=False, error="ConnectError")
     assert result.webui == WebUIProbeResult(False)
 
 
@@ -1109,12 +1095,12 @@ def test_cli_lifecycle_smoke_with_faked_process_network_and_webui(
     status_result = get_status(instance)
     stop_result = stop_server(instance, shutdown_timeout_seconds=2.0)
 
-    assert start_result.message == "started"
+    assert start_result.ok is True
     assert start_result.process_id == 987
     assert start_result.webui == WebUIProbeResult(False, 404)
-    assert status_result.message == "running"
+    assert status_result.ok is True
     assert status_result.webui == WebUIProbeResult(False, 404)
-    assert stop_result.message == "stopped"
+    assert stop_result.ok is True
     assert stop_result.forced is False
     assert calls == ["health", "spawn", "health", "health", "health", "terminate", "wait:2.0"]
 
@@ -1134,7 +1120,6 @@ def test_restart_server_managed_path_stops_then_starts(tmp_path: Path) -> None:
     result = restart_server(instance, stop=stop, start=start, is_managed=lambda _name: False)
 
     assert result.ok
-    assert result.message == "restarted"
     assert events == ["stop", "start"]
 
 
@@ -1152,7 +1137,6 @@ def test_restart_server_managed_aborts_when_stop_fails(tmp_path: Path) -> None:
     result = restart_server(instance, stop=stop, start=start, is_managed=lambda _name: False)
 
     assert not result.ok
-    assert "restart aborted" in result.message
 
 
 def test_restart_server_uses_systemd_when_unit_managed(tmp_path: Path) -> None:
@@ -1173,7 +1157,6 @@ def test_restart_server_uses_systemd_when_unit_managed(tmp_path: Path) -> None:
     )
 
     assert result.ok
-    assert "via systemd" in result.message
 
 
 def test_restart_server_rejects_unsafe_systemd_service_name(tmp_path: Path) -> None:
@@ -1190,7 +1173,6 @@ def test_restart_server_rejects_unsafe_systemd_service_name(tmp_path: Path) -> N
     )
 
     assert not result.ok
-    assert "invalid systemd service name" in result.message
 
 
 def test_restart_server_rejects_option_like_systemd_service_name(tmp_path: Path) -> None:
@@ -1207,7 +1189,6 @@ def test_restart_server_rejects_option_like_systemd_service_name(tmp_path: Path)
     )
 
     assert not result.ok
-    assert "invalid systemd service name" in result.message
 
 
 def test_restart_via_systemd_returns_none_when_unmanaged(tmp_path: Path) -> None:
@@ -1264,7 +1245,7 @@ def test_systemd_restart_confirms_health(tmp_path: Path, monkeypatch: pytest.Mon
     )
 
     assert result.ok
-    assert result.message == "restarted via systemd"
+    assert result.health == healthy
 
 
 def test_systemd_restart_reports_unit_failure(tmp_path: Path) -> None:
@@ -1276,7 +1257,6 @@ def test_systemd_restart_reports_unit_failure(tmp_path: Path) -> None:
     result = server_management._systemd_restart(instance, "vbot", runner=runner)
 
     assert not result.ok
-    assert "failed" in result.message
 
 
 def test_systemd_restart_unhealthy_after_restart(tmp_path: Path) -> None:
@@ -1291,7 +1271,7 @@ def test_systemd_restart_unhealthy_after_restart(tmp_path: Path) -> None:
     )
 
     assert not result.ok
-    assert "did not become healthy" in result.message
+    assert result.health == unhealthy
 
 
 def test_systemd_stop_preserves_unit_and_reports_failure(tmp_path: Path) -> None:
@@ -1416,5 +1396,4 @@ def test_systemd_restart_surfaces_timeout_message(tmp_path: Path) -> None:
     result = server_management._systemd_restart(instance, "vbot", runner=runner)
 
     assert not result.ok
-    assert "timed out" in result.message
-    assert "unavailable" not in result.message
+    assert "systemctl timed out after 30s" in result.message

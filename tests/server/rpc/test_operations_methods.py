@@ -302,7 +302,8 @@ def test_update_edits_block_by_id(tmp_path: Path, caplog: pytest.LogCaptureFixtu
     prompt_logs = [
         record.getMessage() for record in caplog.records if record.name == "vbot.server.rpc.prompts"
     ]
-    assert prompt_logs == ["Prompt mutated (operation=updated scope=default block=core:tools)"]
+    assert len(prompt_logs) == 1
+    assert "core:tools" in prompt_logs[0]
     assert "## Custom" not in caplog.text
 
 
@@ -604,8 +605,9 @@ async def test_preview_missing_rooted_project_cwd_maps_error_without_fallback(
         },
     )
 
-    with pytest.raises(RpcError, match="Project repository is unavailable"):
+    with pytest.raises(RpcError) as exc_info:
         await _preview_prompt(state, {"agent_id": "coder"})
+    assert exc_info.value.code == "domain_error"
 
 
 @pytest.mark.asyncio

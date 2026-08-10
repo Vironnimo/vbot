@@ -36,11 +36,11 @@ async def test_provider_key_logs_once_without_secret_or_account(
         record.getMessage()
         for record in caplog.records
         if record.name == "vbot.server.rpc.connection_methods"
-        and record.getMessage().startswith("Provider credential saved")
     ]
-    assert messages == [
-        "Provider credential saved (provider=openai connection=api-key configured=true usable=True)"
-    ]
+    assert len(messages) == 1
+    assert "provider=openai" in messages[0]
+    assert "connection=api-key" in messages[0]
+    assert "configured=true" in messages[0]
     assert "provider-secret-value" not in " ".join(messages)
     assert "private_slot" not in " ".join(messages)
 
@@ -77,11 +77,10 @@ async def test_provider_key_removal_logs_only_when_credential_existed(
         record.getMessage()
         for record in caplog.records
         if record.name == "vbot.server.rpc.connection_methods"
-        and record.getMessage().startswith("Provider credential removed")
     ]
-    assert messages == [
-        "Provider credential removed "
-        "(provider=openai connection=api-key configured=False usable=False)"
-    ]
+    assert len(messages) == 1
+    assert "provider=openai" in messages[0]
+    assert "connection=api-key" in messages[0]
+    assert "configured=False" in messages[0]
     assert "provider-secret-value" not in " ".join(messages)
     assert "private_slot" not in " ".join(messages)

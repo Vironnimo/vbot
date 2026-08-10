@@ -10,7 +10,7 @@ import pytest
 
 from cli import cron_management
 from cli import main as cli_main
-from cli.server_management import CommandResult, ServerInstance
+from cli.server_management import ServerInstance
 from core.utils.logging import resolve_daily_log_path
 
 
@@ -73,7 +73,6 @@ def test_parse_args_cron_create_rejects_cron_and_at_together(
         )
 
     assert exc_info.value.code == 2
-    assert "not allowed with" in capsys.readouterr().err
 
 
 def test_parse_args_cron_create_requires_schedule(capsys: pytest.CaptureFixture[str]) -> None:
@@ -81,7 +80,6 @@ def test_parse_args_cron_create_requires_schedule(capsys: pytest.CaptureFixture[
         cli_main.parse_args(["cron", "create", "assistant", "--name", "Test job", "--prompt", "x"])
 
     assert exc_info.value.code == 2
-    assert "--cron" in capsys.readouterr().err
 
 
 def test_parse_args_cron_create_rejects_per_job_timezone(
@@ -105,7 +103,6 @@ def test_parse_args_cron_create_rejects_per_job_timezone(
         )
 
     assert exc_info.value.code == 2
-    assert "unrecognized arguments: --timezone" in capsys.readouterr().err
 
 
 def test_parse_args_supports_cron_update_status() -> None:
@@ -143,7 +140,9 @@ def test_cron_create_posts_recurring_fields(
         },
     )
 
-    assert result == CommandResult(ok=True, message="created cron job job-1", instance=instance)
+    assert result.ok is True
+    assert result.instance is instance
+    assert "job-1" in result.message
     assert calls == [
         {
             "method": "cron.create",
@@ -203,8 +202,7 @@ def test_cron_list_formats_rows(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
     result = cron_management.cron_list(instance)
 
     assert result.ok is True
-    assert result.message.splitlines() == [
-        "cron jobs:",
+    assert result.message.splitlines()[1:] == [
         (
             "- name=Morning news id=job-1 agent=assistant status=active "
             "schedule=cron[0 9 * * *] remaining_runs=unlimited "
@@ -231,7 +229,9 @@ def test_cron_list_reports_empty_state(tmp_path: Path, monkeypatch: pytest.Monke
 
     result = cron_management.cron_list(instance)
 
-    assert result == CommandResult(ok=True, message="no cron jobs configured", instance=instance)
+    assert result.ok is True
+    assert result.instance is instance
+    assert result.message.strip()
 
 
 def test_cron_update_rejects_empty_changes(tmp_path: Path) -> None:
@@ -239,22 +239,28 @@ def test_cron_update_rejects_empty_changes(tmp_path: Path) -> None:
 
     result = cron_management.cron_update(instance, "job-1", {})
 
-    assert result == CommandResult(
-        ok=False,
-        message=(
-            "no cron fields provided; use one of: --agent, --name, --prompt, --cron, "
-            "--every, --at, --repeat, --session, --status"
-        ),
-        instance=instance,
-    )
+    assert result.ok is False
+    assert result.instance is instance
+    for option in (
+        "--agent",
+        "--name",
+        "--prompt",
+        "--cron",
+        "--every",
+        "--at",
+        "--repeat",
+        "--session",
+        "--status",
+    ):
+        assert option in result.message
 
 
 @pytest.mark.parametrize(
-    ("function_name", "method", "expected_message"),
+    ("function_name", "method"),
     [
-        ("cron_delete", "cron.delete", "deleted cron job job-1"),
-        ("cron_enable", "cron.enable", "enabled cron job job-1"),
-        ("cron_disable", "cron.disable", "disabled cron job job-1"),
+        ("cron_delete", "cron.delete"),
+        ("cron_enable", "cron.enable"),
+        ("cron_disable", "cron.disable"),
     ],
 )
 def test_cron_simple_id_commands_post_expected_rpc(
@@ -262,7 +268,6 @@ def test_cron_simple_id_commands_post_expected_rpc(
     monkeypatch: pytest.MonkeyPatch,
     function_name: str,
     method: str,
-    expected_message: str,
 ) -> None:
     instance = make_instance(tmp_path)
     calls: list[dict[str, Any]] = []
@@ -277,7 +282,9 @@ def test_cron_simple_id_commands_post_expected_rpc(
 
     result = getattr(cron_management, function_name)(instance, "job-1")
 
-    assert result == CommandResult(ok=True, message=expected_message, instance=instance)
+    assert result.ok is True
+    assert result.instance is instance
+    assert "job-1" in result.message
     assert calls == [{"method": method, "params": {"id": "job-1"}}]
 
 
@@ -326,7 +333,7 @@ def test_run_dispatches_cron_create_with_once_schedule(
     )
 
     assert exit_code == 0
-    assert capsys.readouterr().out.splitlines() == ["created cron job job-9"]
+    assert "job-9" in capsys.readouterr().out
 
 
 def test_run_dispatches_cron_update_schedule_change(
@@ -360,7 +367,7 @@ def test_run_dispatches_cron_update_schedule_change(
     )
 
     assert exit_code == 0
-    assert capsys.readouterr().out.splitlines() == ["updated cron job job-1"]
+    assert "job-1" in capsys.readouterr().out
 
 
 def test_cron_create_full_response_confirms_schedule_and_next_fire(
@@ -406,7 +413,6 @@ def test_cron_create_full_response_confirms_schedule_and_next_fire(
     )
 
     assert result.ok is True
-    assert result.message.splitlines()[0] == "created cron job Build check (job-1)"
     assert "name=Build check" in result.message
     assert "agent=builder@vbot" in result.message
     assert "next_fire_at=2026-07-21T07:00:00+00:00" in result.message

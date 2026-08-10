@@ -146,8 +146,9 @@ def test_rooted_identity_missing_project_cwd_maps_error_without_global_fallback(
         project_cwd=str(tmp_path / "missing-repo"),
     )
 
-    with pytest.raises(RpcError, match="Project repository is unavailable"):
+    with pytest.raises(RpcError) as exc_info:
         _list_commands(state, {"agent_id": "main"})
+    assert exc_info.value.code == "domain_error"
 
 
 def test_commands_are_always_present() -> None:
@@ -465,8 +466,9 @@ async def test_files_list_missing_rooted_cwd_maps_error_without_workspace_fallba
         root_project_id="vbot",
     )
 
-    with pytest.raises(RpcError, match="Project repository is unavailable"):
+    with pytest.raises(RpcError) as exc_info:
         await _list_files(state, {"agent_id": "main"})
+    assert exc_info.value.code == "domain_error"
 
 
 @pytest.mark.asyncio

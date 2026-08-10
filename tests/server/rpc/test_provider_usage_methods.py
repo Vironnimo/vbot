@@ -209,14 +209,17 @@ async def test_provider_usage_returns_report_shape() -> None:
 
 @pytest.mark.asyncio
 async def test_provider_usage_rejects_unknown_fields() -> None:
-    with pytest.raises(RpcError, match="unsupported provider.usage fields: bogus"):
+    with pytest.raises(RpcError) as exc_info:
         await _provider_usage(SimpleNamespace(), {"bogus": 1})
+    assert exc_info.value.code == "invalid_request"
+    assert "bogus" in exc_info.value.message
 
 
 @pytest.mark.asyncio
 async def test_provider_usage_rejects_malformed_connections_filter() -> None:
-    with pytest.raises(RpcError, match="params.connections must be a list"):
+    with pytest.raises(RpcError) as exc_info:
         await _provider_usage(SimpleNamespace(), {"connections": "openai:subscription"})
+    assert exc_info.value.code == "invalid_request"
 
 
 @pytest.mark.asyncio

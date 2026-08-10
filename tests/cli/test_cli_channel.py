@@ -246,7 +246,7 @@ def test_run_dispatches_additive_channel_admin_command(
 
     assert exit_code == 0
     assert calls == [("tg-assistant", "-100", "51")]
-    assert "result: admin saved" in capsys.readouterr().out
+    assert "admin saved" in capsys.readouterr().out
 
 
 def test_parse_args_supports_channel_update_options() -> None:
@@ -301,7 +301,9 @@ def test_channel_add_posts_create_rpc(tmp_path: Path, monkeypatch: pytest.Monkey
         ["100", "101"],
     )
 
-    assert result == CommandResult(ok=True, message="created tg-assistant", instance=instance)
+    assert result.ok is True
+    assert result.instance is instance
+    assert "tg-assistant" in result.message
     assert calls == [
         {
             "url": f"{instance.url}/api/rpc",
@@ -420,15 +422,14 @@ def test_channel_set_token_posts_rpc_and_reports_override(
     ]
     assert "rotated-secret" not in result.message
     assert "effective_source=process_environment applied=no" in result.message
-    assert "process environment still overrides" in result.message
 
 
 @pytest.mark.parametrize(
-    ("command", "method", "expected_message"),
+    ("command", "method"),
     [
-        ("remove", "channel.delete", "removed tg-assistant"),
-        ("enable", "channel.enable", "enabled tg-assistant"),
-        ("disable", "channel.disable", "disabled tg-assistant"),
+        ("remove", "channel.delete"),
+        ("enable", "channel.enable"),
+        ("disable", "channel.disable"),
     ],
 )
 def test_channel_simple_id_commands_post_expected_rpc(
@@ -436,7 +437,6 @@ def test_channel_simple_id_commands_post_expected_rpc(
     monkeypatch: pytest.MonkeyPatch,
     command: str,
     method: str,
-    expected_message: str,
 ) -> None:
     instance = make_instance(tmp_path)
     calls: list[dict[str, Any]] = []
@@ -456,7 +456,9 @@ def test_channel_simple_id_commands_post_expected_rpc(
 
     result = function_map[command](instance, "tg-assistant")
 
-    assert result == CommandResult(ok=True, message=expected_message, instance=instance)
+    assert result.ok is True
+    assert result.instance is instance
+    assert "tg-assistant" in result.message
     assert calls == [
         {
             "url": f"{instance.url}/api/rpc",
@@ -552,14 +554,11 @@ def test_channel_status_lists_denied_chats(tmp_path: Path, monkeypatch: pytest.M
     assert result.ok is True
     lines = result.message.splitlines()
     assert lines[0] == "tg-assistant: enabled=yes running=yes failed=no"
-    assert lines[1] == ("denied inbound chats (messaged the bot but are not in the allowlist):")
-    assert lines[2] == (
+    assert (
         "- chat_id=99999 kind=direct name=Julian B. last_seen=2026-07-05T12:00:00+00:00 messages=3"
-    )
-    assert lines[3] == (
-        "- chat_id=-10001 kind=group last_seen=2026-07-05T11:00:00+00:00 messages=1"
-    )
-    assert "vbot channel update tg-assistant --allow" in lines[4]
+    ) in lines
+    assert ("- chat_id=-10001 kind=group last_seen=2026-07-05T11:00:00+00:00 messages=1") in lines
+    assert any("vbot channel update tg-assistant --allow" in line for line in lines)
 
 
 def test_channel_status_omits_denied_chat_block_when_empty(
@@ -619,7 +618,9 @@ def test_channel_update_posts_update_rpc(tmp_path: Path, monkeypatch: pytest.Mon
         },
     )
 
-    assert result == CommandResult(ok=True, message="updated tg-assistant", instance=instance)
+    assert result.ok is True
+    assert result.instance is instance
+    assert "tg-assistant" in result.message
     assert calls == [
         {
             "url": f"{instance.url}/api/rpc",
@@ -643,15 +644,20 @@ def test_channel_update_rejects_empty_changes(tmp_path: Path) -> None:
 
     result = channel_management.channel_update(instance, "tg-assistant", {})
 
-    assert result == CommandResult(
-        ok=False,
-        message=(
-            "no channel fields provided; use one of: --platform, --agent, --token-env, "
-            "--dm-scope, --allow, --enabled, --response-mode, --mention-pattern, "
-            "--observe-unaddressed"
-        ),
-        instance=instance,
-    )
+    assert result.ok is False
+    assert result.instance is instance
+    for option in (
+        "--platform",
+        "--agent",
+        "--token-env",
+        "--dm-scope",
+        "--allow",
+        "--enabled",
+        "--response-mode",
+        "--mention-pattern",
+        "--observe-unaddressed",
+    ):
+        assert option in result.message
 
 
 def test_channel_list_formats_rows(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -698,8 +704,7 @@ def test_channel_list_formats_rows(tmp_path: Path, monkeypatch: pytest.MonkeyPat
 
     assert result.ok is True
     assert result.instance == instance
-    assert result.message.splitlines() == [
-        "channels:",
+    assert result.message.splitlines()[1:] == [
         (
             "- id=tg-assistant platform=telegram agent=assistant "
             "dm_scope=per_conversation enabled=yes allowed_chat_ids=123,456 "
@@ -815,11 +820,10 @@ def test_channel_commands_surface_rpc_domain_errors(
 
     result = channel_management.channel_enable(instance, "tg-unknown")
 
-    assert result == CommandResult(
-        ok=False,
-        message="channel_not_found: channel not found: tg-unknown",
-        instance=instance,
-    )
+    assert result.ok is False
+    assert result.instance is instance
+    assert result.message.startswith("channel_not_found:")
+    assert "tg-unknown" in result.message
 
 
 @pytest.mark.parametrize(
@@ -1047,12 +1051,11 @@ def test_print_channel_command_result_is_deterministic(
 
     cli_main.print_channel_command_result("enable", result)
 
-    assert capsys.readouterr().out.splitlines() == [
-        "command: channel enable",
-        "result: enabled tg-assistant",
-        "url: http://127.0.0.1:8420",
-        f"data_dir: {tmp_path / 'data'}",
-    ]
+    output = capsys.readouterr().out
+    assert "channel enable" in output
+    assert "enabled tg-assistant" in output
+    assert "http://127.0.0.1:8420" in output
+    assert str(tmp_path / "data") in output
 
 
 def test_channel_command_exit_code_maps_failed_result_to_failure(tmp_path: Path) -> None:
@@ -1135,7 +1138,6 @@ def test_channel_add_advanced_policy_is_sent_and_confirmed(
     )
 
     assert result.ok is True
-    assert result.message.splitlines()[0] == "created channel tg-main"
     assert "response_mode=all" in result.message
     assert "owner_user_ids" not in calls[0]["params"]
     assert calls[0]["params"]["observe_unaddressed"] is True

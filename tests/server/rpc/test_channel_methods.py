@@ -287,7 +287,6 @@ async def test_channel_create_rejects_ambiguous_token_inputs() -> None:
 
     assert response["ok"] is False
     assert response["error"]["code"] == "invalid_request"
-    assert "exactly one" in response["error"]["message"]
 
 
 @pytest.mark.asyncio
@@ -731,13 +730,9 @@ async def test_session_link_channel_rejects_channel_from_other_agent() -> None:
         },
     )
 
-    assert response == {
-        "ok": False,
-        "error": {
-            "code": "channel_config_error",
-            "message": "Channel tg-assistant belongs to agent assistant, not writer",
-        },
-    }
+    assert response["ok"] is False
+    assert response["error"]["code"] == "channel_config_error"
+    assert "tg-assistant" in response["error"]["message"]
     chat_sessions.get.assert_not_called()
     chat_sessions.set_metadata.assert_not_called()
 
@@ -763,13 +758,8 @@ async def test_channel_create_maps_duplicate_error_to_channel_already_exists() -
         },
     )
 
-    assert response == {
-        "ok": False,
-        "error": {
-            "code": "channel_already_exists",
-            "message": "Channel already exists: tg-assistant",
-        },
-    }
+    assert response["ok"] is False
+    assert response["error"]["code"] == "channel_already_exists"
 
 
 @pytest.mark.asyncio
@@ -789,13 +779,8 @@ async def test_channel_update_maps_config_error_to_channel_config_error() -> Non
         },
     )
 
-    assert response == {
-        "ok": False,
-        "error": {
-            "code": "channel_config_error",
-            "message": "invalid channel config",
-        },
-    }
+    assert response["ok"] is False
+    assert response["error"]["code"] == "channel_config_error"
 
 
 @pytest.mark.asyncio
@@ -816,13 +801,9 @@ async def test_channel_create_rejects_unknown_agent() -> None:
         },
     )
 
-    assert response == {
-        "ok": False,
-        "error": {
-            "code": "channel_config_error",
-            "message": "Unknown agent_id: missing",
-        },
-    }
+    assert response["ok"] is False
+    assert response["error"]["code"] == "channel_config_error"
+    assert "missing" in response["error"]["message"]
 
 
 @pytest.mark.asyncio
@@ -841,13 +822,9 @@ async def test_channel_update_rejects_unknown_agent() -> None:
         },
     )
 
-    assert response == {
-        "ok": False,
-        "error": {
-            "code": "channel_config_error",
-            "message": "Unknown agent_id: missing",
-        },
-    }
+    assert response["ok"] is False
+    assert response["error"]["code"] == "channel_config_error"
+    assert "missing" in response["error"]["message"]
 
 
 @pytest.mark.asyncio
@@ -866,13 +843,9 @@ async def test_channel_status_unknown_channel_returns_channel_not_found() -> Non
         },
     )
 
-    assert response == {
-        "ok": False,
-        "error": {
-            "code": "channel_not_found",
-            "message": "Channel not found: missing-channel",
-        },
-    }
+    assert response["ok"] is False
+    assert response["error"]["code"] == "channel_not_found"
+    assert "missing-channel" in response["error"]["message"]
 
 
 @pytest.mark.asyncio

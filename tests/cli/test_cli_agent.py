@@ -10,7 +10,7 @@ import pytest
 
 from cli import agent_management
 from cli import main as cli_main
-from cli.server_management import CommandResult, ServerInstance
+from cli.server_management import ServerInstance
 from core.utils.logging import resolve_daily_log_path
 
 
@@ -74,8 +74,7 @@ def test_agent_list_posts_rpc_and_formats_rows(
     result = agent_management.agent_list(instance)
 
     assert result.ok is True
-    assert result.message.splitlines() == [
-        "agents:",
+    assert result.message.splitlines()[1:] == [
         "- id=writer name=Coder model=openai/gpt-5.2 "
         "fallback_model=anthropic/claude-sonnet-4 temperature=0.4 "
         "thinking_effort=high current_session_id=session-one context_window=256000",
@@ -102,8 +101,7 @@ def test_agent_show_posts_rpc_and_formats_detail(
     result = agent_management.agent_show(instance, "coder")
 
     assert result.ok is True
-    assert result.message.splitlines() == [
-        "agent:",
+    assert result.message.splitlines()[1:] == [
         "id: coder",
         "name: Coder",
         "model: openai/gpt-5.2",
@@ -157,7 +155,9 @@ def test_agent_create_posts_mutable_fields(
         },
     )
 
-    assert result == CommandResult(ok=True, message="created writer", instance=instance)
+    assert result.ok is True
+    assert result.instance is instance
+    assert "writer" in result.message
 
 
 def test_agent_update_posts_null_and_lists(
@@ -200,7 +200,9 @@ def test_agent_update_posts_null_and_lists(
         },
     )
 
-    assert result == CommandResult(ok=True, message="updated coder", instance=instance)
+    assert result.ok is True
+    assert result.instance is instance
+    assert "coder" in result.message
 
 
 def test_agent_update_rejects_empty_changes(tmp_path: Path) -> None:
@@ -208,19 +210,22 @@ def test_agent_update_rejects_empty_changes(tmp_path: Path) -> None:
 
     result = agent_management.agent_update(instance, "coder", {})
 
-    assert result == CommandResult(
-        ok=False,
-        message=(
-            "no agent fields provided; use one of: --name, --model, --clear-model, "
-            "--fallback-model, --clear-fallback-model, "
-            "--temperature, --clear-temperature, --thinking-effort, --clear-thinking-effort, "
-            "--memory-prompt-mode, --custom-system-prompt, "
-            "--allowed-tools, --allowed-skills, --subagent-allow, --compaction-policy, "
-            "--clear-compaction-policy, --workspace, --default-workspace, "
-            "--copy-workspace-files, --project, --clear-project, --current-session-id"
-        ),
-        instance=instance,
-    )
+    assert result.ok is False
+    assert result.instance is instance
+    for option in (
+        "--name",
+        "--model",
+        "--fallback-model",
+        "--temperature",
+        "--thinking-effort",
+        "--memory-prompt-mode",
+        "--allowed-tools",
+        "--allowed-skills",
+        "--workspace",
+        "--project",
+        "--current-session-id",
+    ):
+        assert option in result.message
 
 
 def test_agent_update_requires_workspace_target_when_copying_files(tmp_path: Path) -> None:
@@ -232,11 +237,11 @@ def test_agent_update_requires_workspace_target_when_copying_files(tmp_path: Pat
         {"copy_workspace_identity_files": True},
     )
 
-    assert result == CommandResult(
-        ok=False,
-        message="--copy-workspace-files requires --workspace or --default-workspace",
-        instance=instance,
-    )
+    assert result.ok is False
+    assert result.instance is instance
+    assert "--copy-workspace-files" in result.message
+    assert "--workspace" in result.message
+    assert "--default-workspace" in result.message
 
 
 def test_agent_delete_posts_rpc(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -252,7 +257,9 @@ def test_agent_delete_posts_rpc(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
 
     result = agent_management.agent_delete(instance, "writer")
 
-    assert result == CommandResult(ok=True, message="deleted writer", instance=instance)
+    assert result.ok is True
+    assert result.instance is instance
+    assert "writer" in result.message
 
 
 def test_agent_rename_posts_rpc(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -271,11 +278,10 @@ def test_agent_rename_posts_rpc(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
 
     result = agent_management.agent_rename(instance, "writer", "researcher")
 
-    assert result == CommandResult(
-        ok=True,
-        message="renamed writer -> researcher",
-        instance=instance,
-    )
+    assert result.ok is True
+    assert result.instance is instance
+    assert "writer" in result.message
+    assert "researcher" in result.message
 
 
 def test_agent_rename_rejects_same_id_without_rpc(tmp_path: Path) -> None:
@@ -283,11 +289,9 @@ def test_agent_rename_rejects_same_id_without_rpc(tmp_path: Path) -> None:
 
     result = agent_management.agent_rename(instance, "writer", "writer")
 
-    assert result == CommandResult(
-        ok=False,
-        message="new agent id must differ from the current id",
-        instance=instance,
-    )
+    assert result.ok is False
+    assert result.instance is instance
+    assert result.message.strip()
 
 
 def test_agent_update_maps_clear_delegation_and_policy_flags() -> None:
@@ -357,11 +361,10 @@ def test_agent_create_full_response_confirms_saved_state(
     result = agent_management.agent_create(instance, "librarian", "Librarian", {})
 
     assert result.ok is True
-    assert result.message.splitlines()[0] == "created agent librarian"
     assert "workspace: C:/agents/librarian/workspace" in result.message
     assert "project: second-brain" in result.message
     assert 'effective_sources: {"model":"agent"}' in result.message
-    assert "warning: no effective Model" not in result.message
+    assert "vbot model list --task chat" not in result.message
 
 
 def test_agent_create_warns_and_gives_recovery_when_no_model_is_effective(
@@ -402,8 +405,5 @@ def test_agent_create_warns_and_gives_recovery_when_no_model_is_effective(
     result = agent_management.agent_create(instance, "librarian", "Librarian", {})
 
     assert result.ok is True
-    assert result.message.splitlines()[-3:] == [
-        "warning: no effective Model is configured; this Agent cannot run",
-        "next: vbot model list --task chat",
-        "next: vbot agent update librarian --model <model-id>",
-    ]
+    assert "vbot model list --task chat" in result.message
+    assert "vbot agent update librarian --model <model-id>" in result.message

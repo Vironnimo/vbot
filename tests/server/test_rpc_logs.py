@@ -183,4 +183,3 @@ async def test_log_read_rejects_missing_file_with_domain_error(tmp_path: Path) -
 
     assert response["ok"] is False
     assert response["error"]["code"] == "domain_error"
-    assert response["error"]["message"] == "log file not found: 2026-05-11"

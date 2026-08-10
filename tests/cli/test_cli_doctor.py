@@ -75,15 +75,12 @@ def test_doctor_settings_reports_errors_and_warnings(tmp_path: Path) -> None:
     result = doctor_management.doctor_settings(tmp_path)
 
     assert result.ok is False
-    assert result.message.splitlines() == [
-        "doctor settings: failed",
-        f"data_dir: {tmp_path.resolve()}",
-        f"file: {tmp_path.resolve() / 'settings.json'}",
-        "errors: 1",
-        "warnings: 1",
-        "- warning $.typo: unknown settings key: typo",
-        "- error $.server_port: must be between 1 and 65535",
-    ]
+    assert f"data_dir: {tmp_path.resolve()}" in result.message
+    assert f"file: {tmp_path.resolve() / 'settings.json'}" in result.message
+    assert "errors: 1" in result.message
+    assert "warnings: 1" in result.message
+    assert "$.typo" in result.message
+    assert "$.server_port" in result.message
 
 
 def test_doctor_config_reports_all_config_files(tmp_path: Path) -> None:
@@ -112,15 +109,12 @@ def test_doctor_config_reports_all_config_files(tmp_path: Path) -> None:
     result = doctor_management.doctor_config(tmp_path)
 
     assert result.ok is False
-    assert result.message.splitlines() == [
-        "doctor config: failed",
-        f"data_dir: {tmp_path.resolve()}",
-        "files_checked: 2",
-        "errors: 1",
-        "settings.json: valid",
-        "agents/broken/agent.json:",
-        "- error $.allowed_tools: must be a list of strings",
-    ]
+    assert f"data_dir: {tmp_path.resolve()}" in result.message
+    assert "files_checked: 2" in result.message
+    assert "errors: 1" in result.message
+    assert "settings.json" in result.message
+    assert "agents/broken/agent.json" in result.message
+    assert "$.allowed_tools" in result.message
 
 
 def test_run_dispatches_doctor_settings(

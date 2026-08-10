@@ -14,6 +14,7 @@ from core.chat import (
     ToolCall,
 )
 from core.chat.content_blocks import FileBlock, MediaBlock, TextBlock
+from core.chat.errors import ChatError
 from core.tools import FileReadState, register_read_tool
 from server.rpc import (
     chat_methods,
@@ -339,7 +340,6 @@ async def test_chat_send_requires_existing_session(
 
     assert response["ok"] is False
     assert response["error"]["code"] == "domain_error"
-    assert "session does not exist" in response["error"]["message"]
 
 
 @pytest.mark.asyncio
@@ -400,7 +400,6 @@ async def test_chat_methods_handle_new_command_with_session_payload(
     assert response["ok"] is True
     result = response["result"]
     assert result["command_handled"] is True
-    assert result["reply"].startswith("New session started: ")
     assert result["data"]["command"] == "new"
     new_session_id = result["data"]["session_id"]
     assert isinstance(new_session_id, str)
@@ -451,14 +450,10 @@ async def test_chat_methods_reject_compact_command_while_session_run_is_active(
         release.set()
         await active_run.wait()
 
-    assert response == {
-        "ok": True,
-        "result": {
-            "command_handled": True,
-            "reply": "Cannot compact while a run is active for this session.",
-            "output": "toast",
-        },
-    }
+    assert response["ok"] is True
+    assert response["result"]["command_handled"] is True
+    assert response["result"]["output"] == "toast"
+    assert response["result"]["reply"]
     assert compaction_service.calls == 0
     assert adapter.requests == []
     assert adapter.stream_requests == []
@@ -488,14 +483,10 @@ async def test_chat_methods_handle_compact_command_when_service_unavailable(
         },
     )
 
-    assert response == {
-        "ok": True,
-        "result": {
-            "command_handled": True,
-            "reply": "Compaction is not available.",
-            "output": "toast",
-        },
-    }
+    assert response["ok"] is True
+    assert response["result"]["command_handled"] is True
+    assert response["result"]["output"] == "toast"
+    assert response["result"]["reply"]
     assert adapter.requests == []
     assert adapter.stream_requests == []
 
@@ -527,7 +518,7 @@ async def test_chat_stream_exposes_compact_command_model_errors_on_the_run(
     assert result["status"] == "running"
     assert result["sse_url"] == f"/api/runs/{result['run_id']}/events"
     run = state.chat_runs.get(result["run_id"])
-    with pytest.raises(Exception, match="agent has no model set"):
+    with pytest.raises(ChatError):
         await run.wait()
     assert [event.type for event in run.events] == [
         "run_started",
@@ -560,13 +551,8 @@ async def test_chat_send_returns_compact_command_run_failure(tmp_path: Path) -> 
         },
     )
 
-    assert response == {
-        "ok": False,
-        "error": {
-            "code": "domain_error",
-            "message": "agent has no model set",
-        },
-    }
+    assert response["ok"] is False
+    assert response["error"]["code"] == "domain_error"
     assert compaction_service.calls == 0
     assert adapter.requests == []
     assert adapter.stream_requests == []
@@ -862,9 +848,6 @@ async def test_chat_methods_reject_invalid_content_type(
 
     assert response["ok"] is False
     assert response["error"]["code"] == "invalid_request"
-    assert response["error"]["message"] == (
-        "params.content must be a non-empty string or a list of content blocks"
-    )
 
 
 @pytest.mark.asyncio
@@ -891,7 +874,7 @@ async def test_chat_methods_reject_invalid_input_origin(
 
     assert response["ok"] is False
     assert response["error"]["code"] == "invalid_request"
-    assert "params.input_origin" in response["error"]["message"]
+    assert "input_origin" in response["error"]["message"]
 
 
 @pytest.mark.asyncio

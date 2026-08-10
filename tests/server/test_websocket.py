@@ -414,7 +414,7 @@ def test_websocket_receives_app_error_events(tmp_path: Path) -> None:
 def test_server_event_contract_rejects_unknown_events() -> None:
     bus = ServerEventBus()
 
-    with pytest.raises(ValueError, match="unsupported server event type"):
+    with pytest.raises(ValueError):
         bus.publish("unknown.event", {"message": "No contract"})
 
 

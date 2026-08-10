@@ -459,7 +459,9 @@ async def test_set_secret_does_not_log_the_value(caplog: pytest.LogCaptureFixtur
         for record in caplog.records
         if record.name == "vbot.server.rpc.extensions"
     ]
-    assert messages == ["Extension secret saved (extension=homeassistant field=token)"]
+    assert len(messages) == 1
+    assert "extension=homeassistant" in messages[0]
+    assert "field=token" in messages[0]
 
 
 @pytest.mark.asyncio

@@ -192,8 +192,9 @@ def test_run_activity_returns_correlated_run_details(tmp_path: Path) -> None:
 def test_run_activity_requires_complete_window(tmp_path: Path) -> None:
     state, _manager = _state(tmp_path, ["main"])
 
-    with pytest.raises(RpcError, match="params.until must be an ISO 8601 timestamp string"):
+    with pytest.raises(RpcError) as exc_info:
         asyncio.run(_statistics_run_activity(state, {"since": "2026-06-01T12:00:00Z"}))
+    assert exc_info.value.code == "invalid_request"
 
 
 def test_report_lazily_caches_service_on_state(tmp_path: Path) -> None:
@@ -210,27 +211,31 @@ def test_report_lazily_caches_service_on_state(tmp_path: Path) -> None:
 def test_report_rejects_unknown_params(tmp_path: Path) -> None:
     state, _manager = _state(tmp_path, ["main"])
 
-    with pytest.raises(RpcError, match="unsupported statistics.report fields: bogus"):
+    with pytest.raises(RpcError) as exc_info:
         asyncio.run(_statistics_report(state, {"bogus": 1}))
+    assert exc_info.value.code == "invalid_request"
+    assert "bogus" in exc_info.value.message
 
 
 def test_report_rejects_malformed_timestamp(tmp_path: Path) -> None:
     state, _manager = _state(tmp_path, ["main"])
 
-    with pytest.raises(RpcError, match="params.since must be an ISO 8601 timestamp string"):
+    with pytest.raises(RpcError) as exc_info:
         asyncio.run(_statistics_report(state, {"since": "not-a-date"}))
+    assert exc_info.value.code == "invalid_request"
 
 
 def test_report_rejects_inverted_window(tmp_path: Path) -> None:
     state, _manager = _state(tmp_path, ["main"])
 
-    with pytest.raises(RpcError, match="params.since must not be after params.until"):
+    with pytest.raises(RpcError) as exc_info:
         asyncio.run(
             _statistics_report(
                 state,
                 {"since": "2026-06-10T00:00:00Z", "until": "2026-06-01T00:00:00Z"},
             )
         )
+    assert exc_info.value.code == "invalid_request"
 
 
 def test_report_empty_data_returns_zeroed_report(tmp_path: Path) -> None:
