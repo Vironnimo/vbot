@@ -270,7 +270,7 @@ export async function playWakewordCue(state) {
  * Start a polling subscription for wakeword status changes.
  *
  * Calls `callback(status)` on every poll with the full status object.
- * Returns a cleanup function that stops the interval.
+ * Returns a cleanup function that stops future polls.
  *
  * @param {Function} callback — receives the full wakeword status object.
  * @param {number} [intervalMs=500]
@@ -286,6 +286,7 @@ export function onWakewordStatusChange(
 
   let lastStatusKey = '';
   let running = true;
+  let timeoutId = null;
 
   const poll = async () => {
     if (!running) return;
@@ -298,16 +299,21 @@ export function onWakewordStatusChange(
       }
     } catch {
       // Bridge call failed, silently skip this poll cycle
+    } finally {
+      if (running) {
+        timeoutId = setTimeout(poll, intervalMs);
+      }
     }
   };
 
   // Immediate first poll
-  poll();
-
-  const intervalId = setInterval(poll, intervalMs);
+  void poll();
 
   return () => {
     running = false;
-    clearInterval(intervalId);
+    if (timeoutId !== null) {
+      clearTimeout(timeoutId);
+      timeoutId = null;
+    }
   };
 }

@@ -176,6 +176,32 @@ describe('WakewordVoiceSettings', () => {
     expect(buttonContainingText('Bluetooth hands-free').disabled).toBe(true);
   });
 
+  it('does not start status polling after unmount during initial load', async () => {
+    const status = deferred();
+    const microphones = deferred();
+    const models = deferred();
+    desktopBridge.getWakewordStatus.mockReturnValue(status.promise);
+    desktopBridge.listMicrophones.mockReturnValue(microphones.promise);
+    desktopBridge.listWakewordModels.mockReturnValue(models.promise);
+
+    mountedComponent = mount(WakewordVoiceSettings, {
+      target: document.body,
+    });
+    flushSync();
+    await Promise.resolve();
+    const component = mountedComponent;
+    mountedComponent = null;
+    await unmount(component);
+
+    status.resolve(baseStatus());
+    microphones.resolve([]);
+    models.resolve([]);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(desktopBridge.onWakewordStatusChange).not.toHaveBeenCalled();
+  });
+
   it('shows a warning instead of an error when a running microphone disconnects', async () => {
     desktopBridge.getWakewordStatus.mockResolvedValue({
       ...baseStatus(),
@@ -556,6 +582,14 @@ describe('WakewordVoiceSettings', () => {
     await settle();
   }
 });
+
+function deferred() {
+  let resolve;
+  const promise = new Promise((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
 
 function baseStatus() {
   return {

@@ -574,6 +574,36 @@ describe('onWakewordStatusChange', () => {
     cleanup();
   });
 
+  it('never overlaps slow status polls or publishes after cleanup', async () => {
+    const first = deferred();
+    const second = deferred();
+    const getStatus = vi
+      .fn()
+      .mockReturnValueOnce(first.promise)
+      .mockReturnValueOnce(second.promise);
+    const callback = vi.fn();
+    globalThis.window = {
+      location: { search: '?accessor=desktop' },
+      pywebview: { api: { getWakewordStatus: getStatus } },
+    };
+
+    const cleanup = onWakewordStatusChange(callback, 100);
+    await vi.advanceTimersByTimeAsync(500);
+    expect(getStatus).toHaveBeenCalledOnce();
+
+    first.resolve({ state: 'listening', enabled: true });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(callback).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(100);
+    expect(getStatus).toHaveBeenCalledTimes(2);
+
+    cleanup();
+    second.resolve({ state: 'off', enabled: false });
+    await vi.advanceTimersByTimeAsync(500);
+    expect(callback).toHaveBeenCalledOnce();
+    expect(getStatus).toHaveBeenCalledTimes(2);
+  });
+
   it('returns noop cleanup when not on desktop', () => {
     globalThis.window = { location: { search: '' }, pywebview: undefined };
 
@@ -596,4 +626,12 @@ function createDesktopWindowWithoutBridge() {
       listeners.delete(eventName);
     },
   };
+}
+
+function deferred() {
+  let resolve;
+  const promise = new Promise((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
 }
