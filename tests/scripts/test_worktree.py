@@ -1,6 +1,7 @@
 import argparse
 import importlib.util
 import json
+from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
@@ -241,6 +242,43 @@ def test_cmd_create_initializes_canonical_data_dir_without_agent(tmp_path, monke
     assert not (data_dir / "agents" / "main").exists()
 
 
+def test_cmd_create_holds_port_lock_until_marker_and_settings_are_durable(tmp_path, monkeypatch):
+    module = _load_worktree_module()
+    name = "locked-allocation"
+    worktrees_dir = tmp_path / ".worktrees"
+    worktree_path = worktrees_dir / name
+    webui_path = worktree_path / "webui"
+    data_dir = tmp_path / "home" / f".vbot-{name}"
+    observed = []
+
+    monkeypatch.setattr(module, "WORKTREES_DIR", worktrees_dir)
+    monkeypatch.setattr(module, "find_free_port", lambda _worktrees_dir: 8422)
+    monkeypatch.setattr(module.shutil, "which", lambda _name: "npm")
+    monkeypatch.setattr(module.Path, "home", staticmethod(lambda: tmp_path / "home"))
+
+    @contextmanager
+    def recording_lock():
+        observed.append("entered")
+        yield
+        assert (
+            json.loads((data_dir / "settings.json").read_text(encoding="utf-8"))["server_port"]
+            == 8422
+        )
+        assert (worktree_path / module.WORKTREE_FILE_NAME).is_file()
+        observed.append("released")
+
+    def fake_run_command(command, *, cwd=None):
+        if command[:3] == ["git", "worktree", "add"]:
+            webui_path.mkdir(parents=True, exist_ok=True)
+        return 0, ""
+
+    monkeypatch.setattr(module, "_port_allocation_lock", recording_lock)
+    monkeypatch.setattr(module, "_run_command", fake_run_command)
+
+    assert module.cmd_create(argparse.Namespace(name=name, from_branch="main")) == 0
+    assert observed == ["entered", "released"]
+
+
 def test_find_free_port_skips_server_when_paired_provider_port_is_bound(tmp_path, monkeypatch):
     module = _load_worktree_module()
     monkeypatch.setattr(module, "scan_used_ports", lambda _worktrees_dir: set())
@@ -446,13 +484,18 @@ def test_cmd_delete_rejects_unsafe_name(tmp_path, monkeypatch):
 def test_cmd_delete_uses_expected_data_dir_when_marker_is_tampered(tmp_path, monkeypatch):
     module = _load_worktree_module()
     monkeypatch.setattr(module, "WORKTREES_DIR", tmp_path / ".worktrees")
+    monkeypatch.setattr(module.Path, "home", staticmethod(lambda: tmp_path / "home"))
 
     name = "safe-delete"
     worktree_path = module.WORKTREES_DIR / name
     worktree_path.mkdir(parents=True)
+    expected_data_dir = tmp_path / "home" / f".vbot-{name}"
+    expected_data_dir.mkdir(parents=True)
+    malicious_target = tmp_path / "malicious-target"
+    malicious_target.mkdir()
 
     (worktree_path / module.WORKTREE_FILE_NAME).write_text(
-        json.dumps({"data_dir": str(tmp_path / "malicious-target")}),
+        json.dumps({"data_dir": str(malicious_target)}),
         encoding="utf-8",
     )
 
@@ -462,23 +505,108 @@ def test_cmd_delete_uses_expected_data_dir_when_marker_is_tampered(tmp_path, mon
         commands.append(command)
         return 0, ""
 
-    removed_paths = []
-
-    def fake_rmtree(path, ignore_errors):
-        removed_paths.append((Path(path), ignore_errors))
-
     monkeypatch.setattr(module, "_run_command", fake_run_command)
     monkeypatch.setattr(module, "_read_worktree_branch_name", lambda _path: name)
-    monkeypatch.setattr(module.shutil, "rmtree", fake_rmtree)
 
     result = module.cmd_delete(argparse.Namespace(name=name, force=False))
 
     assert result == 0
-    assert removed_paths == [(Path.home() / f".vbot-{name}", True)]
+    assert not expected_data_dir.exists()
+    assert malicious_target.exists()
     assert commands == [
         ["git", "-C", str(worktree_path), "clean", "-f", "--", module.WORKTREE_FILE_NAME],
         ["git", "worktree", "remove", str(worktree_path)],
     ]
+
+
+def test_cmd_delete_stops_managed_services_before_removing_worktree(tmp_path, monkeypatch):
+    module = _load_worktree_module()
+    name = "running-worktree"
+    worktree_path = tmp_path / ".worktrees" / name
+    data_dir = tmp_path / "home" / f".vbot-{name}"
+    (worktree_path / "scripts").mkdir(parents=True)
+    (worktree_path / "scripts" / "test-env.py").write_text("", encoding="utf-8")
+    (worktree_path / module.WORKTREE_FILE_NAME).write_text(
+        json.dumps({"data_dir": f"~/.vbot-{name}", "managed_branch": False}),
+        encoding="utf-8",
+    )
+    data_dir.mkdir(parents=True)
+    (data_dir / "settings.json").write_text(json.dumps({"server_port": 8422}), encoding="utf-8")
+    calls = []
+
+    monkeypatch.setattr(module, "WORKTREES_DIR", tmp_path / ".worktrees")
+    monkeypatch.setattr(module.Path, "home", staticmethod(lambda: tmp_path / "home"))
+    monkeypatch.setattr(module, "_read_worktree_branch_name", lambda _path: name)
+
+    def fake_run_command(command, *, cwd=None):
+        calls.append((command, cwd))
+        return 0, ""
+
+    monkeypatch.setattr(module, "_run_command", fake_run_command)
+
+    assert module.cmd_delete(argparse.Namespace(name=name, force=False)) == 0
+    assert calls[0] == (
+        [
+            module.sys.executable,
+            str(worktree_path / "scripts" / "test-env.py"),
+            "stop",
+            "--host",
+            "127.0.0.1",
+            "--data-dir",
+            str(data_dir),
+            "--port",
+            "8422",
+        ],
+        worktree_path,
+    )
+    assert calls[1][0][:3] == ["git", "-C", str(worktree_path)]
+    assert not data_dir.exists()
+
+
+def test_cmd_delete_reports_stop_failure_without_removing_anything(tmp_path, monkeypatch):
+    module = _load_worktree_module()
+    name = "unstoppable-worktree"
+    worktree_path = tmp_path / ".worktrees" / name
+    data_dir = tmp_path / "home" / f".vbot-{name}"
+    (worktree_path / "scripts").mkdir(parents=True)
+    (worktree_path / "scripts" / "test-env.py").write_text("", encoding="utf-8")
+    data_dir.mkdir(parents=True)
+    (data_dir / "settings.json").write_text("{}", encoding="utf-8")
+    calls = []
+
+    monkeypatch.setattr(module, "WORKTREES_DIR", tmp_path / ".worktrees")
+    monkeypatch.setattr(module.Path, "home", staticmethod(lambda: tmp_path / "home"))
+    monkeypatch.setattr(module, "_read_worktree_branch_name", lambda _path: name)
+
+    def fake_run_command(command, *, cwd=None):
+        calls.append(command)
+        return 1, "still running"
+
+    monkeypatch.setattr(module, "_run_command", fake_run_command)
+
+    assert module.cmd_delete(argparse.Namespace(name=name, force=True)) == 1
+    assert len(calls) == 1
+    assert calls[0][2] == "stop"
+    assert worktree_path.exists()
+    assert data_dir.exists()
+
+
+def test_cmd_delete_reports_data_directory_removal_failure(tmp_path, monkeypatch):
+    module = _load_worktree_module()
+    name = "locked-data"
+    worktree_path = tmp_path / ".worktrees" / name
+    data_dir = tmp_path / "home" / f".vbot-{name}"
+    worktree_path.mkdir(parents=True)
+    data_dir.mkdir(parents=True)
+
+    monkeypatch.setattr(module, "WORKTREES_DIR", tmp_path / ".worktrees")
+    monkeypatch.setattr(module.Path, "home", staticmethod(lambda: tmp_path / "home"))
+    monkeypatch.setattr(module, "_read_worktree_branch_name", lambda _path: name)
+    monkeypatch.setattr(module, "_run_command", lambda _command, *, cwd=None: (0, ""))
+    monkeypatch.setattr(module, "_remove_directory_tree", lambda _path: "locked")
+
+    assert module.cmd_delete(argparse.Namespace(name=name, force=True)) == 1
+    assert data_dir.exists()
 
 
 def test_cmd_delete_missing_marker_same_name_branch_skips_branch_delete(tmp_path, monkeypatch):

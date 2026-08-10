@@ -3,6 +3,8 @@ import importlib.util
 import json
 import sys
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import Mock
 
 from cli.server_management import CommandResult, HealthProbeResult, ServerInstance, WebUIProbeResult
 
@@ -221,6 +223,10 @@ def test_start_fake_provider_launches_owned_node_process(monkeypatch, tmp_path):
     class FakeProcess:
         pid = 4321
 
+        @staticmethod
+        def terminate():
+            return None
+
     def fake_popen(command, **kwargs):
         popen_calls.append((command, kwargs))
         return FakeProcess()
@@ -229,9 +235,17 @@ def test_start_fake_provider_launches_owned_node_process(monkeypatch, tmp_path):
     monkeypatch.setattr(module, "_fake_provider_port_is_bound", lambda _instance: False)
     monkeypatch.setattr(module.shutil, "which", lambda _name: "node")
     monkeypatch.setattr(module.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(
+        module.psutil,
+        "Process",
+        lambda _pid: SimpleNamespace(create_time=lambda: 1234.5),
+    )
 
     assert module.start_fake_provider(fake_provider) is True
-    assert fake_provider.pid_path.read_text(encoding="utf-8") == "4321"
+    assert json.loads(fake_provider.pid_path.read_text(encoding="utf-8")) == {
+        "pid": 4321,
+        "create_time": 1234.5,
+    }
     assert popen_calls[0][0] == ["node", str(module.FAKE_PROVIDER_ENTRY)]
     assert popen_calls[0][1]["env"]["VBOT_E2E_PROVIDER_PORT"] == "18422"
 
@@ -245,16 +259,65 @@ def test_stop_fake_provider_terminates_only_ready_owned_process(monkeypatch, tmp
         log_path=tmp_path / "processes" / "fake-provider.log",
     )
     fake_provider.pid_path.parent.mkdir(parents=True)
-    fake_provider.pid_path.write_text("4321", encoding="utf-8")
-    killed = []
+    fake_provider.pid_path.write_text(
+        json.dumps({"pid": 4321, "create_time": 1234.5}),
+        encoding="utf-8",
+    )
+    terminated = []
+
+    class FakeProcess:
+        pid = 4321
+
+        @staticmethod
+        def create_time():
+            return 1234.5
+
+        @staticmethod
+        def cmdline():
+            return ["node", str(module.FAKE_PROVIDER_ENTRY)]
+
+        @staticmethod
+        def terminate():
+            terminated.append(4321)
+
+        @staticmethod
+        def wait(*, timeout):
+            assert timeout == module.FAKE_PROVIDER_STARTUP_TIMEOUT_SECONDS
 
     monkeypatch.setattr(module, "_fake_provider_is_ready", lambda _instance: True)
     monkeypatch.setattr(module, "_wait_for_fake_provider", lambda _instance, *, ready: not ready)
-    monkeypatch.setattr(module.os, "kill", lambda pid, sig: killed.append((pid, sig)))
+    monkeypatch.setattr(module.psutil, "Process", lambda _pid: FakeProcess())
 
     assert module.stop_fake_provider(fake_provider) is True
-    assert killed == [(4321, module.signal.SIGTERM)]
+    assert terminated == [4321]
     assert not fake_provider.pid_path.exists()
+
+
+def test_stop_fake_provider_refuses_reused_pid(monkeypatch, tmp_path):
+    module = _load_test_env_module()
+    fake_provider = module.FakeProviderInstance(
+        host="127.0.0.1",
+        port=18422,
+        pid_path=tmp_path / "processes" / "fake-provider.pid",
+        log_path=tmp_path / "processes" / "fake-provider.log",
+    )
+    fake_provider.pid_path.parent.mkdir(parents=True)
+    fake_provider.pid_path.write_text(
+        json.dumps({"pid": 4321, "create_time": 1234.5}),
+        encoding="utf-8",
+    )
+    terminate = Mock()
+    reused_process = SimpleNamespace(
+        create_time=lambda: 9999.0,
+        cmdline=lambda: ["node", str(module.FAKE_PROVIDER_ENTRY)],
+        terminate=terminate,
+    )
+    monkeypatch.setattr(module.psutil, "Process", lambda _pid: reused_process)
+    monkeypatch.setattr(module, "_fake_provider_is_ready", lambda _instance: True)
+
+    assert module.stop_fake_provider(fake_provider) is False
+    terminate.assert_not_called()
+    assert fake_provider.pid_path.exists()
 
 
 def test_main_starts_seeded_provider_before_vbot(monkeypatch, tmp_path):
