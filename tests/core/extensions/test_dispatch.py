@@ -11,6 +11,7 @@ and load-order preservation.
 from __future__ import annotations
 
 import logging
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -78,6 +79,21 @@ class TestRunStartRunEnd:
         await registry.dispatch_run_start(_ctx(), session_id="s1", agent_id="a1")
 
         assert calls == ["sync:s1:a1", "async"]
+
+    @pytest.mark.asyncio
+    async def test_sync_run_start_handler_runs_outside_event_loop_thread(self) -> None:
+        registry = ExtensionRegistry()
+        loop_thread = threading.get_ident()
+        handler_threads: list[int] = []
+
+        def handler(ctx: HookContext, **payload: Any) -> None:
+            handler_threads.append(threading.get_ident())
+
+        _register(registry, "ext-a", "run_start", handler)
+
+        await registry.dispatch_run_start(_ctx(), session_id="s", agent_id="a")
+
+        assert handler_threads and handler_threads != [loop_thread]
 
     @pytest.mark.asyncio
     async def test_run_start_handler_exception_is_isolated(self) -> None:

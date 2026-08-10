@@ -4,6 +4,8 @@ Task-gated reference for Built-in and Extension Command recognition, scheduling,
 
 ## Ownership and execution contract
 
+Built-in Command execution keeps Run/Queue orchestration on the Event Loop but routes synchronous Agent/Project settings, prompt-fragment reads, Session CRUD/metadata/transcript operations, status assembly, and directory scans through bounded Command or Session workers. Extension Commands share `invoke_extension_handler`, so synchronous handlers are off-loop while coroutine handlers retain the ordinary async contract.
+
 `core/chat/commands.py::CommandDispatcher` is the single end-to-end owner for every Built-in and Extension Command. It declares the Built-in catalog, owns the live Extension registration table, recognizes eligible Chat content, parses the argument once, selects immediate versus serialized execution, enforces command/domain guards, performs state changes and Run orchestration, and returns a surface-neutral result. RPC and Channel code may validate/authenticate their own ingress, supply addressing and a `ReplySurface`, schedule prepared work, project the result, and publish generic change facts; they must not switch on command names or rebuild a workflow.
 
 `CommandSpec` declares `name`, `description`, `argument` (`none`, `optional`, or `required`), neutral `catalog_result` (`notice`, `detail`, or `state_change`), default `execution_mode`, optional argument-specific execution mode, preferred-new-Session-id support, and unavailable surface kinds. The WebUI catalog retains its public `toast`/`transient`/`action` values through generic RPC projection; those accessor words never enter the Chat contract.

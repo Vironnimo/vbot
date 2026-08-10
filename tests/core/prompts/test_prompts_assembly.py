@@ -1,5 +1,8 @@
 """System Prompt assembly and core data-block tests."""
 
+import asyncio
+import threading
+
 from core.utils.paths import model_path
 
 from .prompts_test_support import (
@@ -68,6 +71,7 @@ def test_identity_agent_prompt_assembles_blocks_in_default_layout_order(
 
     # Runtime-owned values are expanded and preserved without pinning their prose labels.
     assert "test-host" in prompt
+
     assert "test-os" in prompt
     assert "0.1.0" in prompt
     assert model_path((tmp_path / "app").resolve()) in prompt
@@ -114,6 +118,34 @@ def test_identity_agent_prompt_assembles_blocks_in_default_layout_order(
     # Same agent allowlist drives prompt tools and gate 2's memory-tool check.
     assert tools.prompt_allowlist_calls[0] == ["read_file"]
     assert skills.allowlist == ["agent-cli"]
+
+
+@pytest.mark.asyncio
+async def test_async_prompt_build_keeps_sync_assembly_off_event_loop(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manager = _manager(tmp_path)
+    started = threading.Event()
+    release = threading.Event()
+    worker_threads: list[int] = []
+
+    def blocking_build(_agent: object, _scope: object = None, **_options: object) -> str:
+        worker_threads.append(threading.get_ident())
+        started.set()
+        assert release.wait(timeout=2)
+        return "prompt"
+
+    monkeypatch.setattr(manager, "build_system_prompt", blocking_build)
+    loop_thread = threading.get_ident()
+    build_task = asyncio.create_task(manager.build_system_prompt_async(_agent("")))
+    assert await asyncio.to_thread(started.wait, 2)
+    await asyncio.sleep(0)
+
+    assert worker_threads and worker_threads != [loop_thread]
+    assert build_task.done() is False
+    release.set()
+    assert await build_task == "prompt"
 
 
 def test_memory_block_renders_with_empty_memory_files(tmp_path: Path) -> None:

@@ -1165,6 +1165,32 @@ class TestChatSessionManager:
         assert (archive_dir / session.sidecar_path.name).exists()
         assert (archive_dir / session.activity_path.name).exists()
 
+    @pytest.mark.asyncio
+    async def test_archive_keeps_storage_io_off_the_event_loop(self, tmp_path, monkeypatch):
+        manager = ChatSessionManager(tmp_path)
+        manager.create("coder", session_id="session-one")
+        started = threading.Event()
+        release = threading.Event()
+        worker_threads: list[int] = []
+        original_archive = manager._archive_storage
+
+        def blocking_archive(*arguments):
+            worker_threads.append(threading.get_ident())
+            started.set()
+            assert release.wait(timeout=2)
+            return original_archive(*arguments)
+
+        monkeypatch.setattr(manager, "_archive_storage", blocking_archive)
+        loop_thread = threading.get_ident()
+        archive_task = asyncio.create_task(manager.archive("coder", "session-one"))
+        assert await asyncio.to_thread(started.wait, 2)
+        await asyncio.sleep(0)
+
+        assert worker_threads and worker_threads != [loop_thread]
+        assert archive_task.done() is False
+        release.set()
+        await archive_task
+
     def test_archive_lands_under_sessions_archive_root(self, tmp_path):
         manager = ChatSessionManager(tmp_path)
         manager.create("coder", session_id="session-one")

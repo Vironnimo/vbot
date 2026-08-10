@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 from heapq import nsmallest
 from pathlib import Path
 
@@ -26,6 +25,7 @@ from core.tools.tools import (
     ToolDisplay,
     ToolDisplayField,
     ToolRegistry,
+    run_tool_worker,
     tool_failure,
     tool_success,
 )
@@ -133,7 +133,7 @@ def _collect_glob_matches(
 def glob_handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
     """Handle a glob tool call and return a stable vBot result envelope.
 
-    Sync core; registered behind an ``asyncio.to_thread`` wrapper so a large
+    Sync core; registered behind the bounded Tool worker pool so a large
     tree walk never blocks the kernel event loop.
     """
     unknown_arguments = set(arguments) - {"pattern", "path", "limit", "offset", "include_ignored"}
@@ -218,7 +218,7 @@ def glob_handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
 
 
 async def _glob_handler_async(context: ToolContext, arguments: JsonObject) -> JsonObject:
-    return await asyncio.to_thread(glob_handler, context, arguments)
+    return await run_tool_worker(glob_handler, context, arguments)
 
 
 def register_glob_tool(registry: ToolRegistry) -> None:

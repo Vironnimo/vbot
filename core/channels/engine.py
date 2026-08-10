@@ -56,6 +56,7 @@ from core.runs import (
 )
 from core.sessions.sessions import CHANNEL_MESSAGE_NOTE_PREFIX, SESSION_ID_PATTERN
 from core.utils.logging import get_logger
+from core.utils.workers import BoundedWorkerPool
 
 if TYPE_CHECKING:
     from core.automation.automation import TriggerService
@@ -65,6 +66,7 @@ if TYPE_CHECKING:
     from core.sessions import ChatSession, ChatSessionManager
 
 _LOGGER = get_logger("channels.engine")
+_CHANNEL_SESSION_WORKERS = BoundedWorkerPool(name="channel-session", max_workers=4)
 
 _FAILED_REPLY = "Sorry, I couldn't complete that request. Please try again."
 _CANCELLED_REPLY = "Sorry, this request was cancelled before completion."
@@ -265,7 +267,7 @@ class ChannelConversationEngine:
                 await self._send_command_unavailability(reply_plan, unavailable)
                 return
             if prepared_command.execution_mode == "immediate":
-                route, reply_plan = self.prepare_inbound_route(conversation)
+                route, reply_plan = await self._prepare_inbound_route_async(conversation)
                 await self._execute_prepared_command(
                     prepared_command,
                     conversation,
@@ -431,7 +433,8 @@ class ChannelConversationEngine:
         if registry is None:
             return "unavailable"
         binding_id, button_index = parsed_binding
-        claim = registry.claim_run_button_binding(
+        claim = await _CHANNEL_SESSION_WORKERS.run(
+            registry.claim_run_button_binding,
             self._config.id,
             binding_id,
             platform_target=conversation.chat_id,
@@ -444,18 +447,26 @@ class ChannelConversationEngine:
 
         binding = claim.binding
         restored_event = _restore_bound_interaction_event(binding, event, button_index)
-        if restored_event is None or not self._chat_sessions.exists(
-            self._config.agent_id, binding.origin_session_id
-        ):
+        origin_exists = await _CHANNEL_SESSION_WORKERS.run(
+            self._chat_sessions.exists,
+            self._config.agent_id,
+            binding.origin_session_id,
+        )
+        if restored_event is None or not origin_exists:
             return "unavailable"
 
         try:
-            previous_anchor_metadata = self._point_conversation_at_session(
+            previous_anchor_metadata = await _CHANNEL_SESSION_WORKERS.run(
+                self._point_conversation_at_session,
                 conversation,
                 binding.origin_session_id,
             )
         except Exception:
-            registry.restore_run_button_binding(self._config.id, binding.id)
+            await _CHANNEL_SESSION_WORKERS.run(
+                registry.restore_run_button_binding,
+                self._config.id,
+                binding.id,
+            )
             raise
         queued = self._enqueue_chat_work(
             conversation.chat_id,
@@ -467,8 +478,16 @@ class ChannelConversationEngine:
         if queued:
             return "enqueued"
 
-        self._restore_conversation_pointer(conversation, previous_anchor_metadata)
-        registry.restore_run_button_binding(self._config.id, binding.id)
+        await _CHANNEL_SESSION_WORKERS.run(
+            self._restore_conversation_pointer,
+            conversation,
+            previous_anchor_metadata,
+        )
+        await _CHANNEL_SESSION_WORKERS.run(
+            registry.restore_run_button_binding,
+            self._config.id,
+            binding.id,
+        )
         await self._reject_overflow(conversation)
         return "busy"
 
@@ -481,6 +500,12 @@ class ChannelConversationEngine:
         reply_plan = self._reply_plan_for(conversation)
         self._update_session_metadata(route, conversation, reply_plan)
         return route, reply_plan
+
+    async def _prepare_inbound_route_async(
+        self,
+        conversation: ConversationFacts,
+    ) -> tuple[RouteFacts, ReplyPlanFacts]:
+        return await _CHANNEL_SESSION_WORKERS.run(self.prepare_inbound_route, conversation)
 
     def _reply_plan_for(self, conversation: ConversationFacts) -> ReplyPlanFacts:
         """Build a reply target without creating or changing a Session."""
@@ -660,11 +685,34 @@ class ChannelConversationEngine:
         (so proactive sends target the live chat), and a note tells the model.
         Returns False when the old conversation has no session to bridge.
         """
+        prepared = await _CHANNEL_SESSION_WORKERS.run(
+            self._prepare_group_migration,
+            old_chat_id,
+            new_chat_id,
+        )
+        if prepared is None:
+            return False
+        agent_id, active_session_id = prepared
+        async with self._chat_sessions.write_lock(agent_id, active_session_id):
+            await _CHANNEL_SESSION_WORKERS.run(
+                self._append_session_note,
+                agent_id,
+                active_session_id,
+                f"This group chat was migrated by the platform to a new chat id "
+                f"(old: {old_chat_id}, new: {new_chat_id}). The conversation continues here.",
+            )
+        return True
+
+    def _prepare_group_migration(
+        self,
+        old_chat_id: str,
+        new_chat_id: str,
+    ) -> tuple[str, str] | None:
         agent_id = self._config.agent_id
         old_anchor = self._group_conversation_key(old_chat_id)
         active_session_id = self._resolve_active_session_id(agent_id, old_anchor)
         if not self._chat_sessions.exists(agent_id, active_session_id):
-            return False
+            return None
 
         new_anchor = self._group_conversation_key(new_chat_id)
         self._set_active_session_pointer(agent_id, new_anchor, active_session_id)
@@ -682,13 +730,11 @@ class ChannelConversationEngine:
             ReplyPlanFacts(channel_id=self._config.id, platform_target=new_chat_id),
             track_participant=False,
         )
-        async with self._chat_sessions.write_lock(agent_id, active_session_id):
-            session = self._chat_sessions.get_or_create(agent_id, active_session_id)
-            session.add_note(
-                f"This group chat was migrated by the platform to a new chat id "
-                f"(old: {old_chat_id}, new: {new_chat_id}). The conversation continues here."
-            )
-        return True
+        return agent_id, active_session_id
+
+    def _append_session_note(self, agent_id: str, session_id: str, note: str) -> None:
+        session = self._chat_sessions.get_or_create(agent_id, session_id)
+        session.add_note(note)
 
     def _derive_session_id(self, conversation: ConversationFacts) -> str:
         # Group conversations share one session keyed by chat id and ignore dm_scope.
@@ -825,7 +871,7 @@ class ChannelConversationEngine:
             # Serialized commands re-resolve at processing time like every other
             # queued item: an earlier navigation may have changed the active Session.
             self._trigger_service.release_waiting_work(queued.admission)
-            route, reply_plan = self.prepare_inbound_route(queued.conversation)
+            route, reply_plan = await self._prepare_inbound_route_async(queued.conversation)
             await self._execute_prepared_command(
                 queued.command,
                 queued.conversation,
@@ -838,7 +884,7 @@ class ChannelConversationEngine:
             await self._process_queued_media(queued)
             return
         if isinstance(queued, _QueuedInternalPrompt):
-            route, reply_plan = self.prepare_inbound_route(queued.conversation)
+            route, reply_plan = await self._prepare_inbound_route_async(queued.conversation)
             await self._trigger_and_relay(
                 route,
                 reply_plan,
@@ -852,22 +898,21 @@ class ChannelConversationEngine:
 
     async def _process_queued_observed_message(self, queued: _QueuedObservedMessage) -> None:
         self._trigger_service.release_waiting_work(queued.admission)
-        route, session = self._ensure_channel_session(queued.conversation)
-        reply_plan = ReplyPlanFacts(
-            channel_id=self._config.id,
-            platform_target=queued.conversation.chat_id,
-            thread_id=queued.conversation.thread_id,
-        )
-        self._update_session_metadata(route, queued.conversation, reply_plan)
+        route, _reply_plan = await self._prepare_inbound_route_async(queued.conversation)
         # Wait for any open tool cycle on this shared session (a Run via another
         # accessor) so the observed note lands after the cycle, never inside it.
         async with self._chat_sessions.write_lock(route.agent_id, route.session_id):
-            session.add_note(queued.note)
+            await _CHANNEL_SESSION_WORKERS.run(
+                self._append_session_note,
+                route.agent_id,
+                route.session_id,
+                queued.note,
+            )
 
     async def _process_queued_message(self, queued: _QueuedInboundMessage) -> None:
         # Prepared commands have their own queued-work type; only plain messages
         # reach this path, so processing goes straight to trigger/relay.
-        route, reply_plan = self.prepare_inbound_route(queued.conversation)
+        route, reply_plan = await self._prepare_inbound_route_async(queued.conversation)
         content: str | list[ContentBlock] = queued.message.content
         failure_reply: str | None = None
         if queued.conversation.kind == "group" and queued.raw_message is not None:
@@ -937,7 +982,7 @@ class ChannelConversationEngine:
         return blocks
 
     async def _process_queued_media(self, queued: _QueuedInboundMedia) -> None:
-        route, reply_plan = self.prepare_inbound_route(queued.conversation)
+        route, reply_plan = await self._prepare_inbound_route_async(queued.conversation)
         # Per-message handling: one failing album item must not drop its siblings,
         # and every failure produces user-visible feedback instead of silence.
         content_blocks: list[ContentBlock] = []
@@ -1221,16 +1266,12 @@ class ChannelConversationEngine:
                     "Channel continuation navigation must stay on its configured Agent"
                 )
             route = RouteFacts(agent_id=navigation.agent_id, session_id=navigation.session_id)
-            self._update_session_metadata(
+            await _CHANNEL_SESSION_WORKERS.run(
+                self._apply_continuation_navigation,
                 route,
                 conversation,
                 reply_plan,
-                track_participant=False,
-            )
-            self._set_active_session_pointer(
-                navigation.agent_id,
                 conversation_key,
-                navigation.session_id,
             )
             await self._send_reply(reply_plan, _NEW_SESSION_STARTED_REPLY)
             continued = True
@@ -1239,6 +1280,25 @@ class ChannelConversationEngine:
             await self._send_reply(reply_plan, outcome.feedback.text)
         for command_run in outcome.runs:
             await self._relay_run_events(command_run.run, reply_plan)
+
+    def _apply_continuation_navigation(
+        self,
+        route: RouteFacts,
+        conversation: ConversationFacts,
+        reply_plan: ReplyPlanFacts,
+        conversation_key: str,
+    ) -> None:
+        self._update_session_metadata(
+            route,
+            conversation,
+            reply_plan,
+            track_participant=False,
+        )
+        self._set_active_session_pointer(
+            route.agent_id,
+            conversation_key,
+            route.session_id,
+        )
 
     @staticmethod
     def _preferred_session_id(anchor: str) -> str:

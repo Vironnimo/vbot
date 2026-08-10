@@ -15,6 +15,7 @@ import inspect
 import json
 import sys
 import threading
+import time
 import types
 from collections import defaultdict
 from collections.abc import Callable
@@ -30,6 +31,7 @@ from core.extensions.interactions import (
 )
 from core.extensions.settings_schema import SettingsFieldDeclaration, parse_settings_fields
 from core.utils.logging import get_logger
+from core.utils.workers import BoundedWorkerPool
 
 if TYPE_CHECKING:
     from core.chat.commands import CommandDispatcher
@@ -40,6 +42,13 @@ _LOGGER = get_logger("extensions")
 _EXTENSION_PARENT_PACKAGE = "vbot_ext"
 _MANIFEST_FILENAME = "extension.json"
 _ASYNC_REGISTER_TIMEOUT_SECONDS = 10.0
+_EXTENSION_WORKER_LIMIT = 8
+_SLOW_EXTENSION_HANDLER_SECONDS = 1.0
+
+_EXTENSION_WORKERS = BoundedWorkerPool(
+    name="extension",
+    max_workers=_EXTENSION_WORKER_LIMIT,
+)
 
 # Public extension API version. Bumped when the extension contract changes in a
 # way third-party extensions can detect via their manifest ``api_version``.
@@ -59,6 +68,42 @@ ExtensionStatus = Literal["loaded", "failed", "disabled", "overridden"]
 # Sentinel distinguishing "handler raised and was skipped" from a handler that
 # legitimately returned ``None``.
 _HANDLER_FAILED = object()
+
+
+async def invoke_extension_handler(
+    handler: Callable[..., Any],
+    *arguments: Any,
+    **keyword_arguments: Any,
+) -> Any:
+    """Invoke one sync or async Extension callback without loop-blocking sync work."""
+    if inspect.iscoroutinefunction(handler):
+        result = handler(*arguments, **keyword_arguments)
+    else:
+        result = await _EXTENSION_WORKERS.run(
+            handler,
+            *arguments,
+            **keyword_arguments,
+        )
+    if inspect.isawaitable(result):
+        return await result
+    return result
+
+
+def _log_slow_extension_handler(
+    *,
+    extension_name: str,
+    handler_kind: str,
+    started_at: float,
+) -> None:
+    elapsed = time.perf_counter() - started_at
+    if elapsed < _SLOW_EXTENSION_HANDLER_SECONDS:
+        return
+    _LOGGER.warning(
+        "Extension %r %s handler completed slowly (duration=%.3fs)",
+        extension_name,
+        handler_kind,
+        elapsed,
+    )
 
 
 def _ignore_note(text: str) -> None:
@@ -1023,10 +1068,9 @@ class ExtensionRegistry:
         self, phase: str, extension_name: str, handler: LifecycleHandler
     ) -> None:
         """Call one lifecycle handler with fail-open isolation (logs at ``error``)."""
+        started_at = time.perf_counter()
         try:
-            result = handler()
-            if inspect.isawaitable(result):
-                await result
+            await invoke_extension_handler(handler)
         except Exception as exc:
             _LOGGER.error(
                 "Extension %r %s handler raised: %s",
@@ -1034,6 +1078,12 @@ class ExtensionRegistry:
                 phase,
                 exc,
                 exc_info=True,
+            )
+        finally:
+            _log_slow_extension_handler(
+                extension_name=extension_name,
+                handler_kind=phase,
+                started_at=started_at,
             )
 
     async def _invoke(
@@ -1050,11 +1100,9 @@ class ExtensionRegistry:
         ``_HANDLER_FAILED`` sentinel so callers can skip the handler without
         confusing a raised handler with one that returned ``None``.
         """
+        started_at = time.perf_counter()
         try:
-            result = handler(ctx, **payload)
-            if inspect.isawaitable(result):
-                result = await result
-            return result
+            return await invoke_extension_handler(handler, ctx, **payload)
         except Exception as exc:
             _LOGGER.warning(
                 "Extension %r %s handler raised: %s",
@@ -1064,6 +1112,12 @@ class ExtensionRegistry:
                 exc_info=True,
             )
             return _HANDLER_FAILED
+        finally:
+            _log_slow_extension_handler(
+                extension_name=extension_name,
+                handler_kind=event,
+                started_at=started_at,
+            )
 
     async def dispatch_run_start(self, ctx: HookContext, *, session_id: str, agent_id: str) -> None:
         """Observer event: run all ``run_start`` handlers; ignore return values."""
@@ -1207,10 +1261,9 @@ class ExtensionRegistry:
         if entry is None:
             return False
         extension_name, handler = entry
+        started_at = time.perf_counter()
         try:
-            result = handler(event, responder)
-            if inspect.isawaitable(result):
-                await result
+            await invoke_extension_handler(handler, event, responder)
         except Exception as exc:
             _LOGGER.warning(
                 "Extension %r interaction handler %r raised: %s",
@@ -1218,6 +1271,12 @@ class ExtensionRegistry:
                 prefix,
                 exc,
                 exc_info=True,
+            )
+        finally:
+            _log_slow_extension_handler(
+                extension_name=extension_name,
+                handler_kind=f"interaction:{prefix}",
+                started_at=started_at,
             )
         return True
 

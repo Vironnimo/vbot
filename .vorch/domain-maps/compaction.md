@@ -17,6 +17,8 @@ Core cross-cutting terms (Session, Agent, Model, Tool) live in `.vorch/GLOSSARY.
 
 ## Interfaces
 
+`CompactionService.compact` keeps Provider `adapter.send` on the Event Loop but runs synchronous Strategy planning, prompt-fragment reads, canonical/model-message projection, Provider response normalization, projection validation, and token/reclaim estimation through a dedicated four-worker Compaction pool. The boundary preserves the single-Model-call contract and keeps cancellation/order behavior at the async orchestration layer.
+
 - `CompactionService.should_auto_compact(...)` selects the configured Trigger from the registry and evaluates it against current input tokens and the resolved Context window.
 - `CompactionService.has_new_compactable_context(...)` preflights automatic Strategy usefulness. Summary+Tail returns true when the selected Head contains canonical content beyond the previous Summary and separately pinned active User, or when deterministic compaction of already-consumed Tool payloads alone reclaims at least the automatic 4,096-token floor; manual Compaction bypasses this preflight.
 - `CompactionStrategy.plan(context, settings) -> CompactionPlan` is the extension seam for programmed Strategies. A Strategy receives the current effective canonical messages, an optional exact provider-request snapshot, previous cumulative count, manual instruction, and prompt-fragment storage; it performs no Model I/O itself.

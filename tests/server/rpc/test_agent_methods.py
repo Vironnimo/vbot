@@ -269,10 +269,11 @@ def _sessions_resource_events(state: SimpleNamespace) -> list[dict[str, Any]]:
     ]
 
 
-def test_create_bare_agent_creates_identity_session() -> None:
+@pytest.mark.asyncio
+async def test_create_bare_agent_creates_identity_session() -> None:
     state, resolver, sessions = _make_state()
 
-    result = _create_session(state, {"agent_id": "builder", "make_current": True})
+    result = await _create_session(state, {"agent_id": "builder", "make_current": True})
 
     assert result == {"agent_id": "builder", "session_id": "new-session"}
     assert resolver.resolved == [(None, "builder")]
@@ -281,10 +282,11 @@ def test_create_bare_agent_creates_identity_session() -> None:
     assert state._updates == [{"builder": {"current_session_id": "new-session"}}]
 
 
-def test_create_qualified_agent_creates_project_session() -> None:
+@pytest.mark.asyncio
+async def test_create_qualified_agent_creates_project_session() -> None:
     state, resolver, sessions = _make_state()
 
-    result = _create_session(state, {"agent_id": "builder@vbot", "make_current": True})
+    result = await _create_session(state, {"agent_id": "builder@vbot", "make_current": True})
 
     assert result == {"agent_id": "builder", "session_id": "new-session"}
     assert resolver.resolved == [("vbot", "builder")]
@@ -293,20 +295,22 @@ def test_create_qualified_agent_creates_project_session() -> None:
     assert state._updates == []
 
 
-def test_create_invalid_address_is_invalid_request() -> None:
+@pytest.mark.asyncio
+async def test_create_invalid_address_is_invalid_request() -> None:
     state, _resolver, sessions = _make_state()
 
     with pytest.raises(RpcError) as exc_info:
-        _create_session(state, {"agent_id": "builder@bad project"})
+        await _create_session(state, {"agent_id": "builder@bad project"})
 
     assert exc_info.value.code == "invalid_request"
     assert sessions.created == []
 
 
-def test_list_qualified_agent_scopes_to_project() -> None:
+@pytest.mark.asyncio
+async def test_list_qualified_agent_scopes_to_project() -> None:
     state, _resolver, sessions = _make_state()
 
-    result = _list_sessions(state, {"agent_id": "builder@vbot"})
+    result = await _list_sessions(state, {"agent_id": "builder@vbot"})
 
     assert result["sessions"][0]["id"] == "s1"
     assert result["sessions"][0]["compaction_policy_override"] is None
@@ -314,10 +318,11 @@ def test_list_qualified_agent_scopes_to_project() -> None:
     assert sessions.listed == [("builder", "vbot")]
 
 
-def test_list_bare_agent_is_identity() -> None:
+@pytest.mark.asyncio
+async def test_list_bare_agent_is_identity() -> None:
     state, _resolver, sessions = _make_state()
 
-    _list_sessions(state, {"agent_id": "builder"})
+    await _list_sessions(state, {"agent_id": "builder"})
 
     assert sessions.listed == [("builder", None)]
 
@@ -393,10 +398,11 @@ async def test_activity_list_maps_session_storage_failures() -> None:
     assert sessions.listed == [("builder", None)]
 
 
-def test_mark_session_read_acknowledges_exact_project_run() -> None:
+@pytest.mark.asyncio
+async def test_mark_session_read_acknowledges_exact_project_run() -> None:
     state, resolver, sessions = _make_state()
 
-    result = _mark_session_read(
+    result = await _mark_session_read(
         state,
         {"agent_id": "builder@vbot", "session_id": "s1", "run_id": "run-one"},
     )
@@ -408,14 +414,15 @@ def test_mark_session_read_acknowledges_exact_project_run() -> None:
     assert _sessions_resource_events(state) == []
 
 
-def test_mark_session_read_stale_ack_does_not_invalidate_sessions() -> None:
+@pytest.mark.asyncio
+async def test_mark_session_read_stale_ack_does_not_invalidate_sessions() -> None:
     state, _resolver, sessions = _make_state()
     sessions.mark_read_result["marked_read"] = False
     sessions.mark_read_result["has_unread_completion"] = True
     sessions.mark_read_result["latest_completion_run_id"] = "run-newer"
     sessions.mark_read_result["unread_run_id"] = "run-newer"
 
-    result = _mark_session_read(
+    result = await _mark_session_read(
         state,
         {"agent_id": "builder", "session_id": "s1", "run_id": "run-old"},
     )
@@ -424,7 +431,8 @@ def test_mark_session_read_stale_ack_does_not_invalidate_sessions() -> None:
     assert _sessions_resource_events(state) == []
 
 
-def test_session_compaction_policy_override_and_clear() -> None:
+@pytest.mark.asyncio
+async def test_session_compaction_policy_override_and_clear() -> None:
     state, _resolver, sessions = _make_state()
     policy = {
         "enabled": True,
@@ -432,11 +440,11 @@ def test_session_compaction_policy_override_and_clear() -> None:
         "strategy": {"type": "continuation"},
     }
 
-    set_result = _set_session_compaction_policy(
+    set_result = await _set_session_compaction_policy(
         state,
         {"agent_id": "builder", "session_id": "s1", "policy": policy},
     )
-    clear_result = _set_session_compaction_policy(
+    clear_result = await _set_session_compaction_policy(
         state,
         {"agent_id": "builder", "session_id": "s1", "policy": None},
     )
@@ -448,11 +456,12 @@ def test_session_compaction_policy_override_and_clear() -> None:
     assert sessions.saved_metadata[("builder", "s1", None)] == {}
 
 
-def test_session_compaction_policy_rejects_invalid_shape() -> None:
+@pytest.mark.asyncio
+async def test_session_compaction_policy_rejects_invalid_shape() -> None:
     state, _resolver, sessions = _make_state()
 
     with pytest.raises(RpcError) as exc_info:
-        _set_session_compaction_policy(
+        await _set_session_compaction_policy(
             state,
             {
                 "agent_id": "builder",
@@ -465,10 +474,11 @@ def test_session_compaction_policy_rejects_invalid_shape() -> None:
     assert sessions.saved_metadata == {}
 
 
-def test_create_session_publishes_sessions_resource_changed() -> None:
+@pytest.mark.asyncio
+async def test_create_session_publishes_sessions_resource_changed() -> None:
     state, _resolver, _sessions = _make_state()
 
-    _create_session(state, {"agent_id": "builder", "make_current": True})
+    await _create_session(state, {"agent_id": "builder", "make_current": True})
 
     # The single sessions emit point: other windows refresh this agent's session
     # list/marking. Scoped to the agent so windows on a different agent ignore it.
@@ -477,10 +487,11 @@ def test_create_session_publishes_sessions_resource_changed() -> None:
     ]
 
 
-def test_create_session_scope_uses_bare_agent_id_for_project_address() -> None:
+@pytest.mark.asyncio
+async def test_create_session_scope_uses_bare_agent_id_for_project_address() -> None:
     state, _resolver, _sessions = _make_state()
 
-    _create_session(state, {"agent_id": "builder@vbot"})
+    await _create_session(state, {"agent_id": "builder@vbot"})
 
     # The scope carries the bare agent id (the project rides separately), matching
     # how the queue/session channels are keyed on the client.
@@ -489,10 +500,11 @@ def test_create_session_scope_uses_bare_agent_id_for_project_address() -> None:
     ]
 
 
-def test_rename_bare_agent_sets_title() -> None:
+@pytest.mark.asyncio
+async def test_rename_bare_agent_sets_title() -> None:
     state, _resolver, sessions = _make_state()
 
-    result = _rename_session(
+    result = await _rename_session(
         state, {"agent_id": "builder", "session_id": "s1", "title": "Release planning"}
     )
 
@@ -500,10 +512,11 @@ def test_rename_bare_agent_sets_title() -> None:
     assert sessions.renamed == [("builder", "s1", "Release planning", None)]
 
 
-def test_rename_qualified_agent_scopes_to_project() -> None:
+@pytest.mark.asyncio
+async def test_rename_qualified_agent_scopes_to_project() -> None:
     state, _resolver, sessions = _make_state()
 
-    result = _rename_session(
+    result = await _rename_session(
         state, {"agent_id": "builder@vbot", "session_id": "s1", "title": "Release planning"}
     )
 
@@ -511,31 +524,34 @@ def test_rename_qualified_agent_scopes_to_project() -> None:
     assert sessions.renamed == [("builder", "s1", "Release planning", "vbot")]
 
 
-def test_rename_without_title_clears() -> None:
+@pytest.mark.asyncio
+async def test_rename_without_title_clears() -> None:
     state, _resolver, sessions = _make_state()
 
     # An absent title field is the clear signal: the handler passes through "".
-    result = _rename_session(state, {"agent_id": "builder", "session_id": "s1"})
+    result = await _rename_session(state, {"agent_id": "builder", "session_id": "s1"})
 
     assert result == {"agent_id": "builder", "session_id": "s1", "title": None}
     assert sessions.renamed == [("builder", "s1", "", None)]
 
 
-def test_rename_publishes_sessions_resource_changed() -> None:
+@pytest.mark.asyncio
+async def test_rename_publishes_sessions_resource_changed() -> None:
     state, _resolver, _sessions = _make_state()
 
-    _rename_session(state, {"agent_id": "builder", "session_id": "s1", "title": "Hi"})
+    await _rename_session(state, {"agent_id": "builder", "session_id": "s1", "title": "Hi"})
 
     assert _sessions_resource_events(state) == [
         {"kind": "sessions", "scope": {"agent_id": "builder"}}
     ]
 
 
-def test_rename_rejects_unsupported_field() -> None:
+@pytest.mark.asyncio
+async def test_rename_rejects_unsupported_field() -> None:
     state, _resolver, sessions = _make_state()
 
     with pytest.raises(RpcError) as exc_info:
-        _rename_session(
+        await _rename_session(
             state, {"agent_id": "builder", "session_id": "s1", "title": "Hi", "bogus": 1}
         )
 
@@ -543,11 +559,15 @@ def test_rename_rejects_unsupported_field() -> None:
     assert sessions.renamed == []
 
 
-def test_rename_rejects_non_string_title() -> None:
+@pytest.mark.asyncio
+async def test_rename_rejects_non_string_title() -> None:
     state, _resolver, sessions = _make_state()
 
     with pytest.raises(RpcError) as exc_info:
-        _rename_session(state, {"agent_id": "builder", "session_id": "s1", "title": 42})
+        await _rename_session(
+            state,
+            {"agent_id": "builder", "session_id": "s1", "title": 42},
+        )
 
     assert exc_info.value.code == "invalid_request"
     assert sessions.renamed == []

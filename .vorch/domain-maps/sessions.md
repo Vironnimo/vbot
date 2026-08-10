@@ -10,6 +10,8 @@ The Sessions domain owns persistence and file-format details. Chat code may appe
 
 ## Interfaces
 
+`ChatSessionManager` keeps synchronous storage methods for synchronous callers and exposes matching async facades for create/existence/get-or-create/get, metadata read/write, manual title updates, terminal-read acknowledgement, and Session listing/activity projections. All Session async I/O, including `ChatSession` append/load primitives and manager `move`, `fork`, and `archive`, runs through the dedicated eight-worker Session pool; source write locks still cover the entire move/fork/archive worker operation, and cancellation is reported only after an already-started filesystem mutation settles.
+
 - `ChatSession(path)` — handle for one current JSONL session file. The constructor validates the current `.jsonl` path shape.
 - `ChatSession.create(sessions_dir, session_id=None)` — creates an empty session file in the supplied sessions directory. Custom IDs are validated before path construction.
 - `ChatSession.id` — session identifier derived from the current filename stem.

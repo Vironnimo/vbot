@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import base64
 import binascii
 import hashlib
@@ -38,6 +37,7 @@ from core.tools.tools import (
     ToolDisplayPart,
     ToolRegistry,
     result_count_fact_builder,
+    run_tool_worker,
     tool_failure,
     tool_success,
 )
@@ -362,8 +362,8 @@ async def _list_sessions(
     agent_id = _agent_id(arguments, context)
     limit = _limit(arguments)
     offset = cursor.offset if cursor is not None else 0
-    summaries = await asyncio.to_thread(sessions.list_with_metadata, agent_id, context.project_id)
-    snapshot = await asyncio.to_thread(
+    summaries = await run_tool_worker(sessions.list_with_metadata, agent_id, context.project_id)
+    snapshot = await run_tool_worker(
         _session_list_snapshot, sessions, agent_id, context.project_id, summaries
     )
     _validate_snapshot(cursor, snapshot)
@@ -375,7 +375,7 @@ async def _list_sessions(
     since, until = _parse_period(arguments.get("period"))
     period_refs: dict[str, tuple[str, str]] = {}
     if since is not None or until is not None:
-        summaries, period_refs = await asyncio.to_thread(
+        summaries, period_refs = await run_tool_worker(
             _filter_session_summaries_by_period,
             sessions,
             agent_id,
@@ -419,9 +419,9 @@ async def _read_session(
     end_message_id = _optional_string(arguments.get("end_message_id"))
     try:
         session = sessions.get(agent_id, session_id, context.project_id)
-        messages = await asyncio.to_thread(session.load)
-        stat = await asyncio.to_thread(session.path.stat)
-        metadata = await asyncio.to_thread(
+        messages = await run_tool_worker(session.load)
+        stat = await run_tool_worker(session.path.stat)
+        metadata = await run_tool_worker(
             sessions.get_metadata, agent_id, session_id, context.project_id
         )
     except Exception as error:
@@ -497,7 +497,7 @@ async def _search_sessions(
     )
     if isinstance(recall_backend, SupportsRecallSearch):
         page = await _call_search_page(recall_backend, request)
-        read_refs = await asyncio.to_thread(
+        read_refs = await run_tool_worker(
             _read_refs_for_hits,
             list(page.hits),
             agent_id=agent_id,
@@ -539,7 +539,7 @@ async def _call_search_page(backend: Any, request: RecallSearchRequest) -> Recal
     if inspect.iscoroutinefunction(method):
         result = await method(request)
     else:
-        result = await asyncio.to_thread(method, request)
+        result = await run_tool_worker(method, request)
         if inspect.isawaitable(result):
             result = await result
     if not isinstance(result, RecallSearchPage):
@@ -584,7 +584,7 @@ async def _legacy_search(
     if inspect.iscoroutinefunction(method):
         payload = await method(request)
     else:
-        payload = await asyncio.to_thread(method, request)
+        payload = await run_tool_worker(method, request)
         if inspect.isawaitable(payload):
             payload = await payload
     if not isinstance(payload, dict):

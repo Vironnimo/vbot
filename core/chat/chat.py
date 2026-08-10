@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
@@ -222,6 +223,7 @@ from core.tools import (
 from core.utils.errors import ConfigError, ProviderError, VBotError
 from core.utils.logging import get_logger
 from core.utils.tokens import estimate_request_input_tokens
+from core.utils.workers import BoundedWorkerPool
 
 if TYPE_CHECKING:
     from core.chat.block_resolver import ContentBlockResolver
@@ -242,6 +244,12 @@ if TYPE_CHECKING:
     from core.tools.tools import ToolRegistry
 
 _LOGGER = get_logger("chat")
+
+CHAT_TRANSFORM_WORKER_LIMIT = 4
+_CHAT_TRANSFORM_WORKERS = BoundedWorkerPool(
+    name="chat-transform",
+    max_workers=CHAT_TRANSFORM_WORKER_LIMIT,
+)
 
 MAX_TOOL_ITERATIONS = 1000
 MAX_IDENTICAL_FAILED_TOOL_CALLS = 8
@@ -279,6 +287,124 @@ class _AssistantStep:
     message: ChatMessage
     terminal_outcome: TerminalOutcome | None
     recovery: Literal["none", "continue", "interrupt"] = "none"
+
+
+@dataclass(frozen=True)
+class _PreparedRequestMessages:
+    """CPU-built provider request projection plus its effective canonical source."""
+
+    messages: list[JsonObject]
+    effective_messages: list[ChatMessage]
+
+
+async def _run_prompt_method(
+    manager: Any,
+    async_name: str,
+    sync_name: str,
+    *arguments: Any,
+    **keyword_arguments: Any,
+) -> Any:
+    """Prefer a prompt-owned async boundary and preserve sync test doubles."""
+    async_method = getattr(manager, async_name, None)
+    if callable(async_method) and inspect.iscoroutinefunction(async_method):
+        return await async_method(*arguments, **keyword_arguments)
+    return await _CHAT_TRANSFORM_WORKERS.run(
+        getattr(manager, sync_name),
+        *arguments,
+        **keyword_arguments,
+    )
+
+
+def _prepare_request_messages(
+    *,
+    system_prompt: str,
+    agent_model: str,
+    session: ChatSession,
+    session_messages: list[ChatMessage],
+    replay_policy: ReasoningReplayPolicy,
+    reasoning_scope_model: str,
+) -> _PreparedRequestMessages:
+    """Project canonical history without consuming Event-Loop time on large Sessions."""
+    system_messages = (
+        [ChatMessage.system(system_prompt, agent_model).to_dict()] if system_prompt.strip() else []
+    )
+    checkpoint = _latest_compaction_checkpoint(session_messages)
+    effective_messages = _effective_compaction_messages(session_messages)
+    history = _embed_notes_into_request(
+        effective_messages,
+        replay_policy=replay_policy,
+        agent_model=reasoning_scope_model,
+    )
+    missing_skill_contexts: list[JsonObject] = []
+    updated_skill_contexts: list[JsonObject] = []
+    if checkpoint is not None:
+        projected_skills = skill_activation_contents(effective_messages)
+        for name, content in session.activated_skill_contents(session_messages).items():
+            projected_content = projected_skills.get(name)
+            if projected_content is None:
+                missing_skill_contexts.append({"role": "user", "content": content})
+            elif projected_content != content:
+                updated_skill_contexts.append({"role": "user", "content": content})
+    return _PreparedRequestMessages(
+        messages=[
+            *system_messages,
+            *missing_skill_contexts,
+            *history,
+            *updated_skill_contexts,
+        ],
+        effective_messages=effective_messages,
+    )
+
+
+def _normalize_non_streaming_step(
+    adapter: Any,
+    response: JsonObject,
+    *,
+    model_id: str,
+    response_model: str,
+    agent_model: str,
+) -> _AssistantStep:
+    """Normalize one Provider response and build its canonical Assistant step."""
+    normalized = adapter.normalize_response(response, model_id=model_id)
+    return _AssistantStep(
+        message=_assistant_message_from_response(
+            agent_model,
+            normalized,
+            reasoning_scope=response_model,
+        ),
+        terminal_outcome=terminal_outcome_from_response(normalized),
+    )
+
+
+def _finalize_compaction_checkpoint(
+    checkpoint: ChatMessage,
+    session_messages: list[ChatMessage],
+) -> ChatMessage:
+    ordinal = sum(message.role == "compaction_checkpoint" for message in session_messages) + 1
+    return finalize_checkpoint_history_guidance(checkpoint, ordinal=ordinal)
+
+
+def _prepare_completed_assistant(
+    assistant_message: ChatMessage,
+    request_messages: list[JsonObject],
+    output_cwd: Path | None,
+) -> ChatMessage:
+    """Fill estimated Usage and resolve output-file references off the Event Loop."""
+    completed = _complete_usage_with_estimates(assistant_message, request_messages)
+    return _with_assistant_output_files(completed, cwd=output_cwd)
+
+
+def _request_content_resolution_inputs(
+    effective_messages: list[ChatMessage],
+    session_messages: list[ChatMessage],
+) -> tuple[ChatMessage | None, list[JsonObject]]:
+    """Find attachment boundaries and Run-local media without loop-bound scans."""
+    current_user_message: ChatMessage | None = None
+    if _session_has_any_content_blocks(effective_messages):
+        current_user_message = _last_user_message_with_content_blocks(
+            effective_messages
+        ) or _last_user_message(effective_messages)
+    return current_user_message, _current_run_read_media_outputs(session_messages)
 
 
 @dataclass
@@ -1048,7 +1174,7 @@ class ChatLoop:
         working_project_id = resolve_working_project_id(project_id, agent)
         provider_id, _connection_id = _resolve_agent_connection(self._dependencies, agent)
         _ensure_provider_exists(self._dependencies.providers, provider_id)
-        session = self._get_session(
+        session = await self._get_session_async(
             agent_id, session_id, create_missing=False, project_id=project_id
         )
         manager = self._dependencies.run_manager
@@ -1121,7 +1247,7 @@ class ChatLoop:
 
         agent = self._dependencies.agent_resolver.resolve_agent(project_id, agent_id)
         working_project_id = resolve_working_project_id(project_id, agent)
-        session = self._get_session(
+        session = await self._get_session_async(
             agent_id, session_id, create_missing=False, project_id=project_id
         )
         return await self._dependencies.run_manager.start(
@@ -1175,7 +1301,7 @@ class ChatLoop:
         instruction: str | None,
     ) -> ChatMessage:
         """Execute one manual Compaction inside its canonical Run lifecycle."""
-        await asyncio.to_thread(
+        await _CHAT_TRANSFORM_WORKERS.run(
             self._dependencies.sessions.record_run_kind,
             run.agent_id,
             run.session_id,
@@ -1193,7 +1319,7 @@ class ChatLoop:
                 COMPACTION_STARTED_EVENT,
                 {"context_usage": context_usage} if context_usage is not None else {},
             )
-            settings = await asyncio.to_thread(
+            settings = await _CHAT_TRANSFORM_WORKERS.run(
                 self._load_compaction_settings,
                 agent,
                 agent_id=run.agent_id,
@@ -1225,7 +1351,7 @@ class ChatLoop:
                     if prompt_project is not None
                     else None
                 )
-                working_project_context = await asyncio.to_thread(
+                working_project_context = await _CHAT_TRANSFORM_WORKERS.run(
                     self._pinned_working_project_context,
                     run.agent_id,
                     run.session_id,
@@ -1236,7 +1362,7 @@ class ChatLoop:
                 skill_project_id, identity_agent_id = resolve_skill_scope(
                     run.project_id, prompt_project, run.agent_id
                 )
-                skill_registry = await asyncio.to_thread(
+                skill_registry = await _CHAT_TRANSFORM_WORKERS.run(
                     self._dependencies.resolve_skills,
                     skill_project_id,
                     identity_agent_id,
@@ -1255,7 +1381,7 @@ class ChatLoop:
                 )
                 wire_media_types = _resolve_wire_media_support(adapter, model_id)
                 agent_body = runtime_agent_body(agent)
-                skill_catalog = await asyncio.to_thread(
+                skill_catalog = await _CHAT_TRANSFORM_WORKERS.run(
                     self._pinned_skill_catalog,
                     run.agent_id,
                     run.session_id,
@@ -1278,7 +1404,8 @@ class ChatLoop:
                     skill_catalog=skill_catalog,
                     session_messages_override=messages,
                 )
-                estimated_context_tokens_before, _ = estimate_request_input_tokens(
+                estimated_context_tokens_before, _ = await _CHAT_TRANSFORM_WORKERS.run(
+                    estimate_request_input_tokens,
                     request_state.messages,
                     request_state.tools,
                 )
@@ -1308,14 +1435,14 @@ class ChatLoop:
                 if summary_adapter is not None and summary_adapter is not adapter:
                     await _close_adapter(summary_adapter)
 
-            ordinal = (
-                len([message for message in messages if message.role == "compaction_checkpoint"])
-                + 1
+            checkpoint = await _CHAT_TRANSFORM_WORKERS.run(
+                _finalize_compaction_checkpoint,
+                checkpoint,
+                messages,
             )
-            checkpoint = finalize_checkpoint_history_guidance(checkpoint, ordinal=ordinal)
             prompt_refresh: _CompactionPromptRefresh | None = None
             try:
-                prompt_refresh = await asyncio.to_thread(
+                prompt_refresh = await _CHAT_TRANSFORM_WORKERS.run(
                     self._prepare_prompt_context_after_compaction,
                     agent_id=run.agent_id,
                     session_id=run.session_id,
@@ -1370,7 +1497,7 @@ class ChatLoop:
             )
             await session.append_async(checkpoint)
             messages.append(checkpoint)
-            await asyncio.to_thread(
+            await _CHAT_TRANSFORM_WORKERS.run(
                 self._dependencies.sessions.rotate_prompt_cache_affinity_id,
                 run.agent_id,
                 run.session_id,
@@ -1378,7 +1505,7 @@ class ChatLoop:
             )
             if prompt_refresh is not None:
                 try:
-                    await asyncio.to_thread(
+                    await _CHAT_TRANSFORM_WORKERS.run(
                         self._commit_prompt_context_after_compaction,
                         agent_id=run.agent_id,
                         session_id=run.session_id,
@@ -1426,7 +1553,7 @@ class ChatLoop:
         working_project_id = resolve_working_project_id(project_id, agent)
         provider_id, _connection_id = _resolve_agent_connection(self._dependencies, agent)
         _ensure_provider_exists(self._dependencies.providers, provider_id)
-        session = self._get_session(
+        session = await self._get_session_async(
             agent_id, session_id, create_missing=create_missing, project_id=project_id
         )
         manager = self._dependencies.run_manager
@@ -1457,12 +1584,12 @@ class ChatLoop:
         request: _RunRequest,
     ) -> ChatMessage:
         project_id = run.project_id
-        session = self._dependencies.sessions.get(
+        session = await self._dependencies.sessions.get_async(
             run.agent_id,
             run.session_id,
             project_id,
         )
-        await asyncio.to_thread(
+        await _CHAT_TRANSFORM_WORKERS.run(
             self._dependencies.sessions.record_run_kind,
             run.agent_id,
             run.session_id,
@@ -1558,7 +1685,7 @@ class ChatLoop:
             if prompt_project is not None
             else None
         )
-        working_project_context = await asyncio.to_thread(
+        working_project_context = await _CHAT_TRANSFORM_WORKERS.run(
             self._pinned_working_project_context,
             run.agent_id,
             run.session_id,
@@ -1569,12 +1696,12 @@ class ChatLoop:
         skill_project_id, identity_agent_id = resolve_skill_scope(
             project_id, prompt_project, run.agent_id
         )
-        skill_registry = await asyncio.to_thread(
+        skill_registry = await _CHAT_TRANSFORM_WORKERS.run(
             self._dependencies.resolve_skills,
             skill_project_id,
             identity_agent_id,
         )
-        skill_catalog = await asyncio.to_thread(
+        skill_catalog = await _CHAT_TRANSFORM_WORKERS.run(
             self._pinned_skill_catalog,
             run.agent_id,
             run.session_id,
@@ -1582,7 +1709,7 @@ class ChatLoop:
             skill_registry,
             project_id,
         )
-        prompt_cache_affinity_id = await asyncio.to_thread(
+        prompt_cache_affinity_id = await _CHAT_TRANSFORM_WORKERS.run(
             self._dependencies.sessions.prompt_cache_affinity_id,
             run.agent_id,
             run.session_id,
@@ -1628,7 +1755,7 @@ class ChatLoop:
         remain unchanged.
         """
         try:
-            registry = await asyncio.to_thread(
+            registry = await _CHAT_TRANSFORM_WORKERS.run(
                 self._dependencies.resolve_skills,
                 project_id,
                 context.run.agent_id,
@@ -1723,7 +1850,7 @@ class ChatLoop:
                     )
 
                 run.raise_if_cancelled()
-                await asyncio.to_thread(
+                await _CHAT_TRANSFORM_WORKERS.run(
                     self._announce_newly_available_skills,
                     run.agent_id,
                     run.session_id,
@@ -1785,7 +1912,7 @@ class ChatLoop:
                     session.activated_skill_contents(context.session_snapshot.messages)
                     session.begin_defer_notes()
                     try:
-                        await asyncio.to_thread(
+                        await _CHAT_TRANSFORM_WORKERS.run(
                             _activate_triggered_skills,
                             agent,
                             session,
@@ -1979,7 +2106,7 @@ class ChatLoop:
             await context.session_snapshot.refresh(session)
             if run.contributes_to_agent_activity:
                 try:
-                    await asyncio.to_thread(
+                    await _CHAT_TRANSFORM_WORKERS.run(
                         self._dependencies.sessions.record_terminal_run,
                         run.agent_id,
                         run.session_id,
@@ -2086,6 +2213,30 @@ class ChatLoop:
             if not create_missing:
                 raise
             return session_manager.create(agent_id, session_id=session_id, project_id=project_id)
+
+    async def _get_session_async(
+        self,
+        agent_id: str,
+        session_id: str | None,
+        *,
+        create_missing: bool,
+        project_id: str | None = None,
+    ) -> ChatSession:
+        session_manager = self._dependencies.sessions
+        if session_id is None:
+            if not create_missing:
+                raise ChatSessionError("session id is required")
+            return await session_manager.create_async(agent_id, project_id=project_id)
+        try:
+            return await session_manager.get_async(agent_id, session_id, project_id)
+        except ChatSessionError:
+            if not create_missing:
+                raise
+            return await session_manager.create_async(
+                agent_id,
+                session_id=session_id,
+                project_id=project_id,
+            )
 
     def _resolve_project_cwd(self, project_id: str | None) -> Path | None:
         """Resolve a working Project cwd, failing closed when unavailable."""
@@ -2394,7 +2545,12 @@ class ChatLoop:
             else list(session_messages_override)
         )
         system_prompts = self._dependencies.get_system_prompts()
-        base_tools = system_prompts.provider_tool_definitions(agent)
+        base_tools = await _run_prompt_method(
+            system_prompts,
+            "provider_tool_definitions_async",
+            "provider_tool_definitions",
+            agent,
+        )
         base_tool_names = {
             str(definition["name"])
             for definition in base_tools
@@ -2409,7 +2565,10 @@ class ChatLoop:
             else _model_input_modalities(self._dependencies, agent)
         )
         tools = (
-            system_prompts.provider_tool_definitions(
+            await _run_prompt_method(
+                system_prompts,
+                "provider_tool_definitions_async",
+                "provider_tool_definitions",
                 agent,
                 session_tool_grants=session_tool_grants,
             )
@@ -2426,9 +2585,15 @@ class ChatLoop:
             for definition in tools
             if isinstance(definition.get("name"), str)
         )
-        tool_contracts = self._dependencies.tools.contracts_for_provider_definitions(tools)
+        tool_contracts = await _CHAT_TRANSFORM_WORKERS.run(
+            self._dependencies.tools.contracts_for_provider_definitions,
+            tools,
+        )
         prompt_read_paths: list[Path] = []
-        system_prompt = system_prompts.build_system_prompt(
+        system_prompt = await _run_prompt_method(
+            system_prompts,
+            "build_system_prompt_async",
+            "build_system_prompt",
             agent,
             agent_body=agent_body,
             project_context=project_context,
@@ -2446,35 +2611,22 @@ class ChatLoop:
         # one directly without a redundant read call. Rebuilt every request, so the
         # stamp always reflects what the model currently sees; a later on-disk change
         # still trips the stale guard and forces a re-read.
-        self._stamp_prompt_files_read(session.id, prompt_read_paths)
-        system_messages = (
-            [ChatMessage.system(system_prompt, agent.model).to_dict()]
-            if system_prompt.strip()
-            else []
+        await _CHAT_TRANSFORM_WORKERS.run(
+            self._stamp_prompt_files_read,
+            session.id,
+            prompt_read_paths,
         )
-        checkpoint = _latest_compaction_checkpoint(session_messages)
-        effective_messages = _effective_compaction_messages(session_messages)
-        history = _embed_notes_into_request(
-            effective_messages,
+        prepared_messages = await _CHAT_TRANSFORM_WORKERS.run(
+            _prepare_request_messages,
+            system_prompt=system_prompt,
+            agent_model=agent.model,
+            session=session,
+            session_messages=session_messages,
             replay_policy=replay_policy,
-            agent_model=reasoning_scope_model or agent.model,
+            reasoning_scope_model=reasoning_scope_model or agent.model,
         )
-        missing_skill_contexts: list[JsonObject] = []
-        updated_skill_contexts: list[JsonObject] = []
-        if checkpoint is not None:
-            projected_skills = skill_activation_contents(effective_messages)
-            for name, content in session.activated_skill_contents(session_messages).items():
-                projected_content = projected_skills.get(name)
-                if projected_content is None:
-                    missing_skill_contexts.append({"role": "user", "content": content})
-                elif projected_content != content:
-                    updated_skill_contexts.append({"role": "user", "content": content})
-        request_messages = [
-            *system_messages,
-            *missing_skill_contexts,
-            *history,
-            *updated_skill_contexts,
-        ]
+        effective_messages = prepared_messages.effective_messages
+        request_messages = prepared_messages.messages
 
         session.drain_pending_notes()
 
@@ -2487,23 +2639,24 @@ class ChatLoop:
                 tool_contracts,
             )
 
-        if _session_has_any_content_blocks(effective_messages):
-            # Use the most recently appended user turn as the current-turn marker.
-            # If that turn is plain text, all user content blocks resolve as historical.
-            current_user_message = _last_user_message_with_content_blocks(
-                effective_messages
-            ) or _last_user_message(effective_messages)
-            if current_user_message is not None:
-                request_messages = await self._attachment_resolver.resolve_messages(
-                    request_messages,
-                    current_user_message_id=current_user_message.id,
-                    input_modalities=effective_input_modalities,
-                    wire_media_types=wire_media_types,
-                )
+        current_user_message, read_media_outputs = await _CHAT_TRANSFORM_WORKERS.run(
+            _request_content_resolution_inputs,
+            effective_messages,
+            session_messages,
+        )
+        # Use the most recently appended user turn as the current-turn marker.
+        # If that turn is plain text, all user content blocks resolve as historical.
+        if current_user_message is not None:
+            request_messages = await self._attachment_resolver.resolve_messages(
+                request_messages,
+                current_user_message_id=current_user_message.id,
+                input_modalities=effective_input_modalities,
+                wire_media_types=wire_media_types,
+            )
 
         await self._attach_tool_result_content(
             [message for message in request_messages if message.get("role") == "tool"],
-            _current_run_read_media_outputs(session_messages),
+            read_media_outputs,
             effective_input_modalities,
             wire_media_types,
         )
@@ -2566,7 +2719,8 @@ class ChatLoop:
                 ),
                 live_request_messages,
             )
-        context_tokens_after, _ = estimate_request_input_tokens(
+        context_tokens_after, _ = await _CHAT_TRANSFORM_WORKERS.run(
+            estimate_request_input_tokens,
             projected_messages,
             projected_state.tools,
         )
@@ -2810,8 +2964,23 @@ class ChatLoop:
             )
             if not preserve_after_cancel:
                 run.raise_if_cancelled()
-            assistant_message = _complete_usage_with_estimates(assistant_message, messages)
-            assistant_message = _with_assistant_output_files(assistant_message, cwd=output_cwd)
+            assistant_message = await _CHAT_TRANSFORM_WORKERS.run(
+                _prepare_completed_assistant,
+                assistant_message,
+                messages,
+                output_cwd,
+            )
+            assistant_request_message = await _CHAT_TRANSFORM_WORKERS.run(
+                _assistant_continuation_dict,
+                assistant_message,
+                replay_policy=replay_policy,
+            )
+            assert isinstance(assistant_message.usage, dict)
+            assistant_context_usage = await _CHAT_TRANSFORM_WORKERS.run(
+                build_model_step_context_usage,
+                assistant_message.usage,
+                [*messages_for_request, assistant_request_message],
+            )
             run.input_token_total += _usage_token_count(assistant_message.usage, "input_tokens")
             run.output_token_total += _usage_token_count(assistant_message.usage, "output_tokens")
             _LOGGER.debug(
@@ -2837,15 +3006,6 @@ class ChatLoop:
                 preserved_cancelled_output = run.cancel_requested and preserve_after_cancel
                 await session.append_async(assistant_message)
                 await context.session_snapshot.refresh(session)
-                assert isinstance(assistant_message.usage, dict)
-                assistant_request_message = _assistant_continuation_dict(
-                    assistant_message,
-                    replay_policy=replay_policy,
-                )
-                assistant_context_usage = build_model_step_context_usage(
-                    assistant_message.usage,
-                    [*messages_for_request, assistant_request_message],
-                )
                 run.terminal_payload_extras["context_usage"] = assistant_context_usage
                 session_usage = add_session_turn_usage(session_usage, assistant_message.usage)
                 run.terminal_payload_extras["session_usage"] = session_usage
@@ -3061,7 +3221,8 @@ class ChatLoop:
                 assistant_request_message,
                 *tool_request_messages,
             ]
-            tool_context_usage = build_model_step_context_usage(
+            tool_context_usage = await _CHAT_TRANSFORM_WORKERS.run(
+                build_model_step_context_usage,
                 assistant_message.usage,
                 continuation_request_messages,
                 estimated_delta_messages=tool_request_messages,
@@ -3187,7 +3348,7 @@ class ChatLoop:
         if self._compaction_service is None:
             return current_state
 
-        settings = await asyncio.to_thread(
+        settings = await _CHAT_TRANSFORM_WORKERS.run(
             self._load_compaction_settings,
             agent,
             agent_id=run.agent_id,
@@ -3208,10 +3369,13 @@ class ChatLoop:
             return current_state
 
         current_request_messages = continuation_request_messages or messages
-        resolved_context_usage = context_usage or build_model_step_context_usage(
-            usage,
-            current_request_messages,
-        )
+        resolved_context_usage = context_usage
+        if resolved_context_usage is None:
+            resolved_context_usage = await _CHAT_TRANSFORM_WORKERS.run(
+                build_model_step_context_usage,
+                usage,
+                current_request_messages,
+            )
         context_tokens = resolved_context_usage.get("tokens")
         if isinstance(context_tokens, bool) or not isinstance(context_tokens, int):
             raise AssertionError("Context Usage must carry an integer token count")
@@ -3234,10 +3398,12 @@ class ChatLoop:
         if not should_compact:
             return current_state
         session_messages, snapshot_cursor = await self._load_compaction_snapshot(run, session)
-        if not self._compaction_service.has_new_compactable_context(
+        has_new_context = await _CHAT_TRANSFORM_WORKERS.run(
+            self._compaction_service.has_new_compactable_context,
             session_messages,
             settings,
-        ):
+        )
+        if not has_new_context:
             return current_state
 
         _LOGGER.info(
@@ -3302,17 +3468,15 @@ class ChatLoop:
             if close_summary_adapter:
                 await _close_adapter(summary_adapter)
 
-        ordinal = (
-            len(
-                [message for message in session_messages if message.role == "compaction_checkpoint"]
-            )
-            + 1
+        checkpoint = await _CHAT_TRANSFORM_WORKERS.run(
+            _finalize_compaction_checkpoint,
+            checkpoint,
+            session_messages,
         )
-        checkpoint = finalize_checkpoint_history_guidance(checkpoint, ordinal=ordinal)
         prompt_refresh: _CompactionPromptRefresh | None = None
         try:
             try:
-                prompt_refresh = await asyncio.to_thread(
+                prompt_refresh = await _CHAT_TRANSFORM_WORKERS.run(
                     self._prepare_prompt_context_after_compaction,
                     agent_id=run.agent_id,
                     session_id=run.session_id,
@@ -3456,7 +3620,7 @@ class ChatLoop:
                     )
             return current_state
         await context.session_snapshot.refresh(session)
-        context.prompt_cache_affinity_id = await asyncio.to_thread(
+        context.prompt_cache_affinity_id = await _CHAT_TRANSFORM_WORKERS.run(
             self._dependencies.sessions.rotate_prompt_cache_affinity_id,
             run.agent_id,
             run.session_id,
@@ -3464,7 +3628,7 @@ class ChatLoop:
         )
         if prompt_refresh is not None:
             try:
-                await asyncio.to_thread(
+                await _CHAT_TRANSFORM_WORKERS.run(
                     self._commit_prompt_context_after_compaction,
                     agent_id=run.agent_id,
                     session_id=run.session_id,
@@ -3705,14 +3869,13 @@ class ChatLoop:
             tools=tools,
             **request_context,
         )
-        normalized = adapter.normalize_response(response, model_id=model_id)
-        return _AssistantStep(
-            message=_assistant_message_from_response(
-                agent.model,
-                normalized,
-                reasoning_scope=response_model,
-            ),
-            terminal_outcome=terminal_outcome_from_response(normalized),
+        return await _CHAT_TRANSFORM_WORKERS.run(
+            _normalize_non_streaming_step,
+            adapter,
+            response,
+            model_id=model_id,
+            response_model=response_model,
+            agent_model=agent.model,
         )
 
     async def _send_streaming_assistant_request(

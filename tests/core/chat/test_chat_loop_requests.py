@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -76,6 +77,40 @@ async def test_send_appends_user_and_final_assistant_without_tools(tmp_path: Pat
     ]
     assert run.events[1].payload["message"]["content"] == "Hi"
     assert run.events[3].payload["message"]["content"] == "Hello"
+
+
+@pytest.mark.asyncio
+async def test_non_streaming_provider_normalization_runs_off_event_loop(
+    tmp_path: Path,
+) -> None:
+    loop_thread = threading.get_ident()
+
+    class RecordingAdapter(StubAdapter):
+        def __init__(self) -> None:
+            super().__init__([{"content": "Hello", "tool_calls": None}])
+            self.send_threads: list[int] = []
+            self.normalize_threads: list[int] = []
+
+        async def send(
+            self, messages: list[JsonObject], *, model_id: str, **kwargs: Any
+        ) -> JsonObject:
+            self.send_threads.append(threading.get_ident())
+            return await super().send(messages, model_id=model_id, **kwargs)
+
+        def normalize_response(
+            self, response: JsonObject, *, model_id: str | None = None
+        ) -> JsonObject:
+            self.normalize_threads.append(threading.get_ident())
+            return response
+
+    adapter = RecordingAdapter()
+    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=[])
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+
+    await build_chat_loop(runtime).send("coder", "Hi", session_id="session-one")
+
+    assert adapter.send_threads == [loop_thread]
+    assert adapter.normalize_threads and adapter.normalize_threads != [loop_thread]
 
 
 @pytest.mark.asyncio

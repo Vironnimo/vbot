@@ -24,6 +24,7 @@ from core.runs import RunKind
 from core.settings import is_valid_agent_id, is_valid_project_id
 from core.utils.atomic import atomic_write_text
 from core.utils.logging import get_logger
+from core.utils.workers import BoundedWorkerPool
 
 if TYPE_CHECKING:
     from core.chat.chat import ChatMessage
@@ -102,6 +103,11 @@ CHANNEL_MESSAGE_NOTE_PREFIX = "[channel-message] "
 SKILL_AVAILABLE_NOTE_PREFIX = "[skill-available] "
 _TAIL_CHUNK_SIZE = 8192
 _LOGGER = get_logger("sessions")
+SESSION_IO_WORKER_LIMIT = 8
+_SESSION_IO_WORKERS = BoundedWorkerPool(
+    name="session-io",
+    max_workers=SESSION_IO_WORKER_LIMIT,
+)
 
 
 def _new_prompt_cache_affinity_id() -> str:
@@ -798,6 +804,15 @@ class ChatSessionManager:
         """Create a new session for an agent."""
         return ChatSession.create(self.sessions_dir(agent_id, project_id), session_id=session_id)
 
+    async def create_async(
+        self,
+        agent_id: str,
+        session_id: str | None = None,
+        project_id: str | None = None,
+    ) -> ChatSession:
+        """Create a Session without blocking an async caller on filesystem I/O."""
+        return await _run_session_io(self.create, agent_id, session_id, project_id)
+
     def exists(self, agent_id: str, session_id: str, project_id: str | None = None) -> bool:
         """Return whether a valid session exists for an agent."""
         try:
@@ -805,6 +820,15 @@ class ChatSessionManager:
         except ChatSessionError:
             return False
         return True
+
+    async def exists_async(
+        self,
+        agent_id: str,
+        session_id: str,
+        project_id: str | None = None,
+    ) -> bool:
+        """Check Session existence through the async storage boundary."""
+        return await _run_session_io(self.exists, agent_id, session_id, project_id)
 
     def get_or_create(
         self, agent_id: str, session_id: str, project_id: str | None = None
@@ -818,6 +842,15 @@ class ChatSessionManager:
             return ChatSession(session_path)
         return self.create(agent_id, session_id=session_id, project_id=project_id)
 
+    async def get_or_create_async(
+        self,
+        agent_id: str,
+        session_id: str,
+        project_id: str | None = None,
+    ) -> ChatSession:
+        """Resolve or create a Session without blocking an async caller."""
+        return await _run_session_io(self.get_or_create, agent_id, session_id, project_id)
+
     def get(self, agent_id: str, session_id: str, project_id: str | None = None) -> ChatSession:
         """Return a session handle for an existing agent session."""
         _validate_session_id(session_id)
@@ -828,12 +861,30 @@ class ChatSessionManager:
             raise ChatSessionError(f"session does not exist: {session_id}")
         return ChatSession(session_path)
 
+    async def get_async(
+        self,
+        agent_id: str,
+        session_id: str,
+        project_id: str | None = None,
+    ) -> ChatSession:
+        """Resolve an existing Session through the async storage boundary."""
+        return await _run_session_io(self.get, agent_id, session_id, project_id)
+
     def get_metadata(
         self, agent_id: str, session_id: str, project_id: str | None = None
     ) -> JsonObject:
         """Load session metadata from sidecar JSON or return an empty object."""
         session = self.get(agent_id, session_id, project_id)
         return self._load_sidecar(session)
+
+    async def get_metadata_async(
+        self,
+        agent_id: str,
+        session_id: str,
+        project_id: str | None = None,
+    ) -> JsonObject:
+        """Read Session metadata without blocking the Event Loop."""
+        return await _run_session_io(self.get_metadata, agent_id, session_id, project_id)
 
     def prompt_cache_affinity_id(
         self,
@@ -893,6 +944,16 @@ class ChatSessionManager:
             atomic_write_text(sidecar_path, serialized)
         except OSError as exc:
             raise ChatSessionError(f"failed to write metadata for session: {session_id}") from exc
+
+    async def set_metadata_async(
+        self,
+        agent_id: str,
+        session_id: str,
+        data: dict[str, Any],
+        project_id: str | None = None,
+    ) -> None:
+        """Persist Session metadata without blocking the Event Loop."""
+        await _run_session_io(self.set_metadata, agent_id, session_id, data, project_id)
 
     def record_run_kind(
         self,
@@ -1063,6 +1124,22 @@ class ChatSessionManager:
             self._notify_completion_read(agent_id, session_id, project_id)
         return payload
 
+    async def mark_terminal_run_read_async(
+        self,
+        agent_id: str,
+        session_id: str,
+        run_id: str,
+        project_id: str | None = None,
+    ) -> JsonObject:
+        """Acknowledge a completion without blocking the Event Loop."""
+        return await _run_session_io(
+            self.mark_terminal_run_read,
+            agent_id,
+            session_id,
+            run_id,
+            project_id,
+        )
+
     def set_title(
         self,
         agent_id: str,
@@ -1094,6 +1171,22 @@ class ChatSessionManager:
         if previous_title != normalized_title:
             self._notify_title_changed(agent_id, session_id, project_id)
         return normalized_title
+
+    async def set_title_async(
+        self,
+        agent_id: str,
+        session_id: str,
+        title: str,
+        project_id: str | None = None,
+    ) -> str | None:
+        """Set a manual Session title without blocking the Event Loop."""
+        return await _run_session_io(
+            self.set_title,
+            agent_id,
+            session_id,
+            title,
+            project_id,
+        )
 
     def set_auto_title(
         self,
@@ -1195,58 +1288,75 @@ class ChatSessionManager:
         """
         _validate_session_id(session_id)
         async with self.write_lock(source_agent_id, session_id, source_project_id):
-            source = self.get(source_agent_id, session_id, source_project_id)
-            destination_dir = self.sessions_dir(target_agent_id, target_project_id)
-            destination_path = destination_dir / f"{session_id}{SESSION_FILE_EXTENSION}"
-            if destination_path.exists():
-                raise ChatSessionError(f"destination session already exists: {session_id}")
+            return await _run_session_io(
+                self._move_storage,
+                source_agent_id,
+                session_id,
+                target_agent_id,
+                source_project_id,
+                target_project_id,
+                strip_meta_keys,
+            )
 
-            source_sidecar = source.sidecar_path
-            source_activity = source.activity_path
-            source_continuation = source.continuation_path
-            had_sidecar = source_sidecar.exists()
-            had_continuation = source_continuation.exists()
-            sidecar_data = self._load_sidecar(source)
+    def _move_storage(
+        self,
+        source_agent_id: str,
+        session_id: str,
+        target_agent_id: str,
+        source_project_id: str | None,
+        target_project_id: str | None,
+        strip_meta_keys: frozenset[str],
+    ) -> ChatSession:
+        source = self.get(source_agent_id, session_id, source_project_id)
+        destination_dir = self.sessions_dir(target_agent_id, target_project_id)
+        destination_path = destination_dir / f"{session_id}{SESSION_FILE_EXTENSION}"
+        if destination_path.exists():
+            raise ChatSessionError(f"destination session already exists: {session_id}")
 
-            destination_dir.mkdir(parents=True, exist_ok=True)
-            with self._activity_lock:
-                had_activity = source_activity.exists()
-                try:
-                    os.replace(source.path, destination_path)
-                except OSError as exc:
-                    raise ChatSessionError(
-                        f"failed to move session transcript: {session_id}"
-                    ) from exc
-                if had_activity:
-                    destination_activity = destination_path.with_name(
-                        f"{session_id}{SESSION_ACTIVITY_FILE_SUFFIX}"
-                    )
-                    try:
-                        os.replace(source_activity, destination_activity)
-                    except OSError as exc:
-                        raise ChatSessionError(
-                            f"failed to move session activity: {session_id}"
-                        ) from exc
+        source_sidecar = source.sidecar_path
+        source_activity = source.activity_path
+        source_continuation = source.continuation_path
+        had_sidecar = source_sidecar.exists()
+        had_continuation = source_continuation.exists()
+        sidecar_data = self._load_sidecar(source)
 
-            if had_sidecar:
-                stripped = {
-                    key: value for key, value in sidecar_data.items() if key not in strip_meta_keys
-                }
-                self.set_metadata(target_agent_id, session_id, stripped, target_project_id)
-                source_sidecar.unlink(missing_ok=True)
-
-            if had_continuation:
-                destination_continuation = destination_path.with_name(
-                    f"{session_id}{CONTINUATION_FILE_SUFFIX}"
+        destination_dir.mkdir(parents=True, exist_ok=True)
+        with self._activity_lock:
+            had_activity = source_activity.exists()
+            try:
+                os.replace(source.path, destination_path)
+            except OSError as exc:
+                raise ChatSessionError(f"failed to move session transcript: {session_id}") from exc
+            if had_activity:
+                destination_activity = destination_path.with_name(
+                    f"{session_id}{SESSION_ACTIVITY_FILE_SUFFIX}"
                 )
                 try:
-                    os.replace(source_continuation, destination_continuation)
+                    os.replace(source_activity, destination_activity)
                 except OSError as exc:
                     raise ChatSessionError(
-                        f"failed to move continuation journal: {session_id}"
+                        f"failed to move session activity: {session_id}"
                     ) from exc
 
-            return ChatSession(destination_path)
+        if had_sidecar:
+            stripped = {
+                key: value for key, value in sidecar_data.items() if key not in strip_meta_keys
+            }
+            self.set_metadata(target_agent_id, session_id, stripped, target_project_id)
+            source_sidecar.unlink(missing_ok=True)
+
+        if had_continuation:
+            destination_continuation = destination_path.with_name(
+                f"{session_id}{CONTINUATION_FILE_SUFFIX}"
+            )
+            try:
+                os.replace(source_continuation, destination_continuation)
+            except OSError as exc:
+                raise ChatSessionError(
+                    f"failed to move continuation journal: {session_id}"
+                ) from exc
+
+        return ChatSession(destination_path)
 
     async def fork(
         self,
@@ -1282,61 +1392,76 @@ class ChatSessionManager:
         _validate_session_id(session_id)
         destination_agent_id = target_agent_id or source_agent_id
         async with self.write_lock(source_agent_id, session_id, source_project_id):
-            source = self.get(source_agent_id, session_id, source_project_id)
-            destination_dir = self.sessions_dir(destination_agent_id, target_project_id)
-            fork_session = ChatSession.create(destination_dir)
+            return await _run_session_io(
+                self._fork_storage,
+                source_agent_id,
+                session_id,
+                destination_agent_id,
+                source_project_id,
+                target_project_id,
+                strip_meta_keys,
+            )
 
+    def _fork_storage(
+        self,
+        source_agent_id: str,
+        session_id: str,
+        destination_agent_id: str,
+        source_project_id: str | None,
+        target_project_id: str | None,
+        strip_meta_keys: frozenset[str],
+    ) -> ChatSession:
+        source = self.get(source_agent_id, session_id, source_project_id)
+        destination_dir = self.sessions_dir(destination_agent_id, target_project_id)
+        fork_session = ChatSession.create(destination_dir)
+
+        try:
             try:
-                try:
-                    transcript_bytes = source.path.read_bytes()
-                    fork_session.path.write_bytes(transcript_bytes)
-                except OSError as exc:
-                    raise ChatSessionError(
-                        f"failed to copy session transcript: {session_id}"
-                    ) from exc
-                message_count = transcript_bytes.count(SESSION_LINE_ENDING_BYTES)
+                transcript_bytes = source.path.read_bytes()
+                fork_session.path.write_bytes(transcript_bytes)
+            except OSError as exc:
+                raise ChatSessionError(f"failed to copy session transcript: {session_id}") from exc
+            message_count = transcript_bytes.count(SESSION_LINE_ENDING_BYTES)
 
-                source_metadata = self._load_sidecar(source)
-                forked_metadata = {
-                    key: value
-                    for key, value in source_metadata.items()
-                    if key not in strip_meta_keys
-                }
-                same_prompt_scope = (
-                    destination_agent_id == source_agent_id
-                    and target_project_id == source_project_id
-                )
-                if same_prompt_scope:
-                    stored_affinity = source_metadata.get(PROMPT_CACHE_AFFINITY_META_KEY)
-                    if stored_affinity is None:
-                        stored_affinity = _default_prompt_cache_affinity_id(
-                            source_agent_id,
-                            session_id,
-                            source_project_id,
-                        )
-                    elif not _is_prompt_cache_affinity_id(stored_affinity):
-                        raise ChatSessionError(
-                            f"invalid prompt cache affinity id for session: {session_id}"
-                        )
-                    forked_metadata[PROMPT_CACHE_AFFINITY_META_KEY] = stored_affinity
-                else:
-                    forked_metadata[PROMPT_CACHE_AFFINITY_META_KEY] = (
-                        _new_prompt_cache_affinity_id()
+            source_metadata = self._load_sidecar(source)
+            forked_metadata = {
+                key: value for key, value in source_metadata.items() if key not in strip_meta_keys
+            }
+            same_prompt_scope = (
+                destination_agent_id == source_agent_id and target_project_id == source_project_id
+            )
+            if same_prompt_scope:
+                stored_affinity = source_metadata.get(PROMPT_CACHE_AFFINITY_META_KEY)
+                if stored_affinity is None:
+                    stored_affinity = _default_prompt_cache_affinity_id(
+                        source_agent_id,
+                        session_id,
+                        source_project_id,
                     )
-                forked_metadata[FORK_SOURCE_META_KEY] = {
-                    "agent_id": source_agent_id,
-                    "session_id": session_id,
-                    "project_id": source_project_id,
-                    "forked_at": _format_timestamp(datetime.now(UTC)),
-                    "message_count": message_count,
-                }
-                self.set_metadata(
-                    destination_agent_id, fork_session.id, forked_metadata, target_project_id
-                )
-            except Exception:
-                fork_session.delete()
-                raise
-            return fork_session
+                elif not _is_prompt_cache_affinity_id(stored_affinity):
+                    raise ChatSessionError(
+                        f"invalid prompt cache affinity id for session: {session_id}"
+                    )
+                forked_metadata[PROMPT_CACHE_AFFINITY_META_KEY] = stored_affinity
+            else:
+                forked_metadata[PROMPT_CACHE_AFFINITY_META_KEY] = _new_prompt_cache_affinity_id()
+            forked_metadata[FORK_SOURCE_META_KEY] = {
+                "agent_id": source_agent_id,
+                "session_id": session_id,
+                "project_id": source_project_id,
+                "forked_at": _format_timestamp(datetime.now(UTC)),
+                "message_count": message_count,
+            }
+            self.set_metadata(
+                destination_agent_id,
+                fork_session.id,
+                forked_metadata,
+                target_project_id,
+            )
+        except Exception:
+            fork_session.delete()
+            raise
+        return fork_session
 
     def list(self, agent_id: str, project_id: str | None = None) -> list[ChatSession]:
         """List session handles for an agent sorted by filename."""
@@ -1348,6 +1473,14 @@ class ChatSessionManager:
             for path in sorted(sessions_dir.glob(f"*{SESSION_FILE_EXTENSION}"))
             if _is_valid_session_id(path.stem)
         ]
+
+    async def list_async(
+        self,
+        agent_id: str,
+        project_id: str | None = None,
+    ) -> builtins.list[ChatSession]:
+        """Enumerate Session handles without blocking the Event Loop."""
+        return await _run_session_io(self.list, agent_id, project_id)
 
     def list_with_metadata(
         self, agent_id: str, project_id: str | None = None
@@ -1365,6 +1498,14 @@ class ChatSessionManager:
             session_data["last_active_at"] = last_active_at
             sessions_with_metadata.append(session_data)
         return sessions_with_metadata
+
+    async def list_with_metadata_async(
+        self,
+        agent_id: str,
+        project_id: str | None = None,
+    ) -> builtins.list[dict[str, Any]]:
+        """List Session summaries through the async storage boundary."""
+        return await _run_session_io(self.list_with_metadata, agent_id, project_id)
 
     def list_completion_activity(
         self, agent_id: str, project_id: str | None = None
@@ -1384,6 +1525,14 @@ class ChatSessionManager:
             }
             for session in self.list(agent_id, project_id)
         ]
+
+    async def list_completion_activity_async(
+        self,
+        agent_id: str,
+        project_id: str | None = None,
+    ) -> builtins.list[dict[str, Any]]:
+        """List completion activity through the async storage boundary."""
+        return await _run_session_io(self.list_completion_activity, agent_id, project_id)
 
     def delete(self, agent_id: str, session_id: str, project_id: str | None = None) -> None:
         """Hard-delete one agent session's transcript and sidecars.
@@ -1414,37 +1563,50 @@ class ChatSessionManager:
         """
         _validate_session_id(session_id)
         async with self.write_lock(agent_id, session_id, project_id):
-            source = self.get(agent_id, session_id, project_id)
-            archive_dir = self._archive_dir(agent_id, project_id)
-            archive_dir.mkdir(parents=True, exist_ok=True)
-            archived_transcript = archive_dir / source.path.name
-            archived_sidecar = archive_dir / source.sidecar_path.name
-            archived_activity = archive_dir / source.activity_path.name
-            archived_continuation = archive_dir / source.continuation_path.name
+            return await _run_session_io(
+                self._archive_storage,
+                agent_id,
+                session_id,
+                project_id,
+            )
 
-            # Replace any prior archive for the same id (mirrors agent/project).
-            archived_transcript.unlink(missing_ok=True)
-            archived_sidecar.unlink(missing_ok=True)
-            archived_activity.unlink(missing_ok=True)
-            archived_continuation.unlink(missing_ok=True)
+    def _archive_storage(
+        self,
+        agent_id: str,
+        session_id: str,
+        project_id: str | None,
+    ) -> Path:
+        source = self.get(agent_id, session_id, project_id)
+        archive_dir = self._archive_dir(agent_id, project_id)
+        archive_dir.mkdir(parents=True, exist_ok=True)
+        archived_transcript = archive_dir / source.path.name
+        archived_sidecar = archive_dir / source.sidecar_path.name
+        archived_activity = archive_dir / source.activity_path.name
+        archived_continuation = archive_dir / source.continuation_path.name
 
-            had_sidecar = source.sidecar_path.exists()
-            had_continuation = source.continuation_path.exists()
-            with self._activity_lock:
-                had_activity = source.activity_path.exists()
-                try:
-                    os.replace(source.path, archived_transcript)
-                except OSError as exc:
-                    raise ChatSessionError(
-                        f"failed to archive session transcript: {session_id}"
-                    ) from exc
-                if had_activity:
-                    os.replace(source.activity_path, archived_activity)
-            if had_sidecar:
-                os.replace(source.sidecar_path, archived_sidecar)
-            if had_continuation:
-                os.replace(source.continuation_path, archived_continuation)
-            return archive_dir
+        # Replace any prior archive for the same id (mirrors agent/project).
+        archived_transcript.unlink(missing_ok=True)
+        archived_sidecar.unlink(missing_ok=True)
+        archived_activity.unlink(missing_ok=True)
+        archived_continuation.unlink(missing_ok=True)
+
+        had_sidecar = source.sidecar_path.exists()
+        had_continuation = source.continuation_path.exists()
+        with self._activity_lock:
+            had_activity = source.activity_path.exists()
+            try:
+                os.replace(source.path, archived_transcript)
+            except OSError as exc:
+                raise ChatSessionError(
+                    f"failed to archive session transcript: {session_id}"
+                ) from exc
+            if had_activity:
+                os.replace(source.activity_path, archived_activity)
+        if had_sidecar:
+            os.replace(source.sidecar_path, archived_sidecar)
+        if had_continuation:
+            os.replace(source.continuation_path, archived_continuation)
+        return archive_dir
 
     def _archive_dir(self, agent_id: str, project_id: str | None) -> Path:
         """Return the archive directory for one agent's deleted sessions.
@@ -1881,15 +2043,7 @@ async def _run_session_io(
     that worker even after task cancellation keeps a Session write lock from being
     released while its durable append is still in flight.
     """
-    task = asyncio.create_task(asyncio.to_thread(function, *arguments))
-    try:
-        return await asyncio.shield(task)
-    except asyncio.CancelledError:
-        try:
-            await task
-        except Exception:
-            raise
-        raise
+    return await _SESSION_IO_WORKERS.run(function, *arguments)
 
 
 def _write_all(file_descriptor: int, data: bytes) -> None:

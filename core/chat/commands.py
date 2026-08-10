@@ -13,6 +13,7 @@ from core.chat.content_blocks import ContentBlock, TextBlock
 from core.chat.errors import CompactionUnavailableError
 from core.chat.messages import ChatMessage, ReplySurface
 from core.chat.usage import aggregate_session_usage
+from core.extensions.extensions import invoke_extension_handler
 from core.projects import (
     AgentResolutionError,
     InvalidAgentAddressError,
@@ -39,6 +40,7 @@ from core.skills.skill_validator import SKILL_NAME_TRIGGER_PATTERN
 from core.tools.availability import memory_tool_enabled
 from core.tools.terminal_manager import TerminalManager, TerminalOwner
 from core.utils.logging import get_logger
+from core.utils.workers import BoundedWorkerPool
 
 if TYPE_CHECKING:
     from core.agents import AgentStore
@@ -68,6 +70,25 @@ CommandRunRole = Literal["primary", "follow_up"]
 CommandSurfaceKind = Literal["webui", "channel"]
 
 _LOGGER = get_logger("chat.commands")
+_COMMAND_WORKERS = BoundedWorkerPool(name="command", max_workers=4)
+
+
+async def _command_session_io(
+    manager: Any,
+    async_name: str,
+    sync_name: str,
+    *arguments: Any,
+    **keyword_arguments: Any,
+) -> Any:
+    async_method = getattr(manager, async_name, None)
+    if inspect.iscoroutinefunction(async_method):
+        return await async_method(*arguments, **keyword_arguments)
+    return await _COMMAND_WORKERS.run(
+        getattr(manager, sync_name),
+        *arguments,
+        **keyword_arguments,
+    )
+
 
 STATUS_PLACEHOLDER = "—"
 # Plain-English origin wording for the /model reply, keyed by the provenance
@@ -754,9 +775,11 @@ class CommandDispatcher:
             _on_change=context.on_change,
         )
         try:
-            result = registered.handler(extension_context, argument)
-            if inspect.isawaitable(result):
-                result = await result
+            result = await invoke_extension_handler(
+                registered.handler,
+                extension_context,
+                argument,
+            )
             self._validate_extension_outcome(result, expected_command=registered.spec.name)
             return cast(CommandOutcome, result)
         except Exception as exc:
@@ -906,15 +929,21 @@ class CommandDispatcher:
 
         if (target_agent_id, target_project_id) != (context.agent_id, context.project_id):
             try:
-                resolver.resolve_agent(target_project_id, target_agent_id)
+                await _COMMAND_WORKERS.run(
+                    resolver.resolve_agent,
+                    target_project_id,
+                    target_agent_id,
+                )
             except AgentResolutionError:
                 return self._notice("handoff", f"Cannot handoff to unknown agent: {target_display}")
 
+        handoff_prompt = await _COMMAND_WORKERS.run(
+            storage.read_prompt_fragment,
+            HANDOFF_FRAGMENT_NAME,
+        )
         handoff_run = await trigger_service.trigger_run(
             context.agent_id,
-            _build_handoff_prompt(
-                storage.read_prompt_fragment(HANDOFF_FRAGMENT_NAME), parsed.instruction
-            ),
+            _build_handoff_prompt(handoff_prompt, parsed.instruction),
             session_id=context.session_id,
             project_id=context.project_id,
             internal=True,
@@ -925,10 +954,20 @@ class CommandDispatcher:
         if not handoff_text:
             return self._notice("handoff", "Handoff could not be generated.")
 
-        target_session = sessions.create(target_agent_id, project_id=target_project_id)
+        target_session = await _command_session_io(
+            sessions,
+            "create_async",
+            "create",
+            target_agent_id,
+            project_id=target_project_id,
+        )
         if target_project_id is None:
             agents = _require_dependency(self._agents, "AgentStore")
-            agents.update(target_agent_id, current_session_id=target_session.id)
+            await _COMMAND_WORKERS.run(
+                agents.update,
+                target_agent_id,
+                current_session_id=target_session.id,
+            )
         change = CommandResourceChange(kind="sessions", scope={"agent_id": target_agent_id})
         context.report_change(change)
         target_run = await trigger_service.trigger_run(
@@ -979,14 +1018,22 @@ class CommandDispatcher:
             is not None
         ):
             return self._notice("learn", "A skill can be authored after the current run finishes.")
-        agent = resolver.resolve_agent(context.project_id, context.agent_id)
+        agent = await _COMMAND_WORKERS.run(
+            resolver.resolve_agent,
+            context.project_id,
+            context.agent_id,
+        )
         if not getattr(agent, "workspace", ""):
             return self._notice(
                 "learn", "Skill authoring needs an identity agent with its own skill home."
             )
+        learn_prompt = await _COMMAND_WORKERS.run(
+            storage.read_prompt_fragment,
+            LEARN_FRAGMENT_NAME,
+        )
         learn_run = await trigger_service.trigger_run(
             context.agent_id,
-            _build_learn_prompt(storage.read_prompt_fragment(LEARN_FRAGMENT_NAME), argument),
+            _build_learn_prompt(learn_prompt, argument),
             session_id=context.session_id,
             project_id=context.project_id,
             internal=True,
@@ -1010,7 +1057,11 @@ class CommandDispatcher:
             is not None
         ):
             return self._notice("reflect", "A reflection can run after the current run finishes.")
-        agent = resolver.resolve_agent(context.project_id, context.agent_id)
+        agent = await _COMMAND_WORKERS.run(
+            resolver.resolve_agent,
+            context.project_id,
+            context.agent_id,
+        )
         if not getattr(agent, "workspace", ""):
             return self._notice(
                 "reflect", "Reflection needs an identity agent with its own memory and skill home."
@@ -1032,7 +1083,12 @@ class CommandDispatcher:
             on_fork_created=lambda _fork_id: context.report_change(change),
             reply_surface=context.reply_surface,
         )
-        reflection.reset_counters(context.agent_id, context.session_id, context.project_id)
+        await _COMMAND_WORKERS.run(
+            reflection.reset_counters,
+            context.agent_id,
+            context.session_id,
+            context.project_id,
+        )
         return CommandOutcome(
             command="reflect",
             feedback=CommandFeedback(kind="notice", text=result.summary or "Reflection completed."),
@@ -1046,7 +1102,10 @@ class CommandDispatcher:
         if argument is None:
             return CommandOutcome(
                 command="agent",
-                feedback=CommandFeedback(kind="detail", text=self._build_agent_directory()),
+                feedback=CommandFeedback(
+                    kind="detail",
+                    text=await _COMMAND_WORKERS.run(self._build_agent_directory),
+                ),
             )
 
         resolver = _require_dependency(self._agent_resolver, "AgentResolver")
@@ -1075,7 +1134,11 @@ class CommandDispatcher:
         ):
             return self._notice("agent", "This session can be moved once its queued run finishes.")
         try:
-            resolver.resolve_agent(target_project_id, target_agent_id)
+            await _COMMAND_WORKERS.run(
+                resolver.resolve_agent,
+                target_project_id,
+                target_agent_id,
+            )
         except AgentResolutionError:
             return self._notice("agent", f"Cannot move to unknown agent: {target_display}")
 
@@ -1085,8 +1148,13 @@ class CommandDispatcher:
             async with self._chat_runs.session_admission_guard(
                 source_session_key, target_session_key
             ):
-                metadata = sessions.get_metadata(
-                    context.agent_id, context.session_id, context.project_id
+                metadata = await _command_session_io(
+                    sessions,
+                    "get_metadata_async",
+                    "get_metadata",
+                    context.agent_id,
+                    context.session_id,
+                    context.project_id,
                 )
                 refusal = self._session_move_block_reason(metadata)
                 if refusal is not None:
@@ -1103,15 +1171,28 @@ class CommandDispatcher:
                 async with sessions.write_lock(
                     target_agent_id, context.session_id, target_project_id
                 ):
-                    destination = sessions.get(
-                        target_agent_id, context.session_id, target_project_id
+                    destination = await _command_session_io(
+                        sessions,
+                        "get_async",
+                        "get",
+                        target_agent_id,
+                        context.session_id,
+                        target_project_id,
                     )
-                    destination.append(
+                    await _command_session_io(
+                        destination,
+                        "append_async",
+                        "append",
                         ChatMessage.agent_takeover(
                             from_address=source_display, to_address=target_display
-                        )
+                        ),
                     )
-                    destination.add_note(AGENT_TAKEOVER_NOTE.format(source=source_display))
+                    await _command_session_io(
+                        destination,
+                        "add_note_async",
+                        "add_note",
+                        AGENT_TAKEOVER_NOTE.format(source=source_display),
+                    )
 
                 if self._terminal_manager is not None:
                     self._terminal_manager.transfer_scope(
@@ -1128,9 +1209,17 @@ class CommandDispatcher:
                     )
 
                 if context.project_id is None:
-                    agents.reset_current_after_session_removed(context.agent_id, context.session_id)
+                    await _COMMAND_WORKERS.run(
+                        agents.reset_current_after_session_removed,
+                        context.agent_id,
+                        context.session_id,
+                    )
                 if target_project_id is None:
-                    agents.update(target_agent_id, current_session_id=context.session_id)
+                    await _COMMAND_WORKERS.run(
+                        agents.update,
+                        target_agent_id,
+                        current_session_id=context.session_id,
+                    )
         except RunAdmissionBlockedError:
             return self._notice(
                 "agent", "This session can be moved once its source and destination are idle."
@@ -1201,35 +1290,23 @@ class CommandDispatcher:
                 command="model",
                 feedback=CommandFeedback(
                     kind="detail",
-                    text=self._build_model_summary(context.agent_id, context.project_id),
+                    text=await _COMMAND_WORKERS.run(
+                        self._build_model_summary,
+                        context.agent_id,
+                        context.project_id,
+                    ),
                 ),
             )
-        resolver = _require_dependency(self._agent_resolver, "AgentResolver")
         raw = argument.strip()
         is_reset = raw.lower() == MODEL_RESET_TOKEN
         model = "" if is_reset else raw
-        if not is_reset:
-            resolver.require_model_configured(model)
-        changed = True
-        if context.project_id is None:
-            agents = _require_dependency(self._agents, "AgentStore")
-            previous_model = _stored_agent_model(agents, context.agent_id)
-            agents.update(context.agent_id, model=model)
-            changed = previous_model is _MISSING or previous_model != model
-        elif is_reset:
-            projects = _require_dependency(self._projects, "ProjectStore")
-            previous_model = _stored_project_override(
-                projects, context.project_id, context.agent_id, "model"
-            )
-            projects.clear_override(context.project_id, context.agent_id, "model")
-            changed = previous_model is _MISSING or previous_model is not None
-        else:
-            projects = _require_dependency(self._projects, "ProjectStore")
-            previous_model = _stored_project_override(
-                projects, context.project_id, context.agent_id, "model"
-            )
-            projects.set_override(context.project_id, context.agent_id, "model", model)
-            changed = previous_model is _MISSING or previous_model != model
+        changed = await _COMMAND_WORKERS.run(
+            self._apply_model_setting,
+            context.agent_id,
+            context.project_id,
+            model,
+            is_reset,
+        )
         if changed:
             _LOGGER.info(
                 "Agent model configuration %s (agent=%s field=model)",
@@ -1243,6 +1320,31 @@ class CommandDispatcher:
             ),
             facts={"agent_id": context.agent_id, "model": model},
         )
+
+    def _apply_model_setting(
+        self,
+        agent_id: str,
+        project_id: str | None,
+        model: str,
+        is_reset: bool,
+    ) -> bool:
+        resolver = _require_dependency(self._agent_resolver, "AgentResolver")
+        if not is_reset:
+            resolver.require_model_configured(model)
+        if project_id is None:
+            agents = _require_dependency(self._agents, "AgentStore")
+            previous_model = _stored_agent_model(agents, agent_id)
+            agents.update(agent_id, model=model)
+            return previous_model is _MISSING or previous_model != model
+        if is_reset:
+            projects = _require_dependency(self._projects, "ProjectStore")
+            previous_model = _stored_project_override(projects, project_id, agent_id, "model")
+            projects.clear_override(project_id, agent_id, "model")
+            return previous_model is _MISSING or previous_model is not None
+        projects = _require_dependency(self._projects, "ProjectStore")
+        previous_model = _stored_project_override(projects, project_id, agent_id, "model")
+        projects.set_override(project_id, agent_id, "model", model)
+        return previous_model is _MISSING or previous_model != model
 
     async def _execute_help(
         self, context: CommandExecutionContext, argument: str | None
@@ -1291,15 +1393,26 @@ class CommandDispatcher:
             return self._notice(
                 "new", "A new session can be started after the current run finishes."
             )
-        resolver.resolve_agent(context.project_id, context.agent_id)
-        session = sessions.create(
+        await _COMMAND_WORKERS.run(
+            resolver.resolve_agent,
+            context.project_id,
+            context.agent_id,
+        )
+        session = await _command_session_io(
+            sessions,
+            "create_async",
+            "create",
             context.agent_id,
             session_id=context.preferred_new_session_id,
             project_id=context.project_id,
         )
         if context.project_id is None:
             agents = _require_dependency(self._agents, "AgentStore")
-            agents.update(context.agent_id, current_session_id=session.id)
+            await _COMMAND_WORKERS.run(
+                agents.update,
+                context.agent_id,
+                current_session_id=session.id,
+            )
         return CommandOutcome(
             command="new",
             feedback=CommandFeedback(kind="notice", text=f"New session started: {session.id}"),
@@ -1319,7 +1432,10 @@ class CommandDispatcher:
         self, context: CommandExecutionContext, argument: str | None
     ) -> CommandOutcome:
         sessions = _require_dependency(self._sessions, "ChatSessionManager")
-        stored_title = sessions.set_title(
+        stored_title = await _command_session_io(
+            sessions,
+            "set_title_async",
+            "set_title",
             context.agent_id,
             context.session_id,
             argument or "",
@@ -1339,7 +1455,11 @@ class CommandDispatcher:
         messages: list[ChatMessage] = []
         try:
             if self._agent_resolver is not None:
-                agent = self._agent_resolver.resolve_agent(context.project_id, context.agent_id)
+                agent = await _COMMAND_WORKERS.run(
+                    self._agent_resolver.resolve_agent,
+                    context.project_id,
+                    context.agent_id,
+                )
         except Exception as error:
             log = (
                 _LOGGER.warning
@@ -1353,9 +1473,19 @@ class CommandDispatcher:
             )
         try:
             if self._sessions is not None:
-                messages = self._sessions.get(
-                    context.agent_id, context.session_id, context.project_id
-                ).load()
+                session = await _command_session_io(
+                    self._sessions,
+                    "get_async",
+                    "get",
+                    context.agent_id,
+                    context.session_id,
+                    context.project_id,
+                )
+                messages = await _command_session_io(
+                    session,
+                    "load_async",
+                    "load",
+                )
         except Exception as error:
             log = (
                 _LOGGER.warning if _has_exception_name(error, "ChatSessionError") else _LOGGER.error

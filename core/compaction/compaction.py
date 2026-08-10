@@ -18,6 +18,7 @@ from core.chat.messages import (
 from core.debug.redaction import redact_json_body
 from core.utils.errors import VBotError
 from core.utils.tokens import estimate_message_tokens, estimate_request_input_tokens
+from core.utils.workers import BoundedWorkerPool
 
 TOOL_RESULT_COMPACTED_FIELD = "_vbot_compacted_tool_result"
 
@@ -34,6 +35,12 @@ MAX_TOOL_RESULT_VALUE_CHARS = 800
 MAX_TOOL_ARGUMENTS_CHARS = 2_000
 MAX_TOOL_ARGUMENT_VALUE_CHARS = 512
 MAX_PROJECTED_COLLECTION_ITEMS = 12
+COMPACTION_WORKER_LIMIT = 4
+
+_COMPACTION_WORKERS = BoundedWorkerPool(
+    name="compaction",
+    max_workers=COMPACTION_WORKER_LIMIT,
+)
 
 ModelTarget = Literal["active", "summary"]
 
@@ -126,6 +133,13 @@ class _TailPlan:
         if self.pinned_user is None:
             return self.projected_suffix
         return (self.pinned_user, *self.projected_suffix)
+
+
+@dataclass(frozen=True)
+class _PreparedCompaction:
+    plan: CompactionPlan
+    effective_messages: list[ChatMessage]
+    strategy_id: str
 
 
 class CompactionStrategy(Protocol):
@@ -320,23 +334,18 @@ class CompactionService:
         del agent
         if minimum_reclaim_tokens < 0:
             raise CompactionError("minimum_reclaim_tokens cannot be negative")
-        strategy = self._strategies.get(settings.strategy)
-        if strategy is None:
-            raise CompactionError(f"Unknown compaction strategy: {settings.strategy}")
-        effective = _effective_compaction_messages(messages)
-        checkpoint = _latest_compaction_checkpoint(messages)
-        previous_count = _previous_compacted_token_count(checkpoint)
-        context = CompactionContext(
-            messages=tuple(effective),
-            request_messages=tuple(dict(message) for message in request_messages or []),
-            previous_compacted_token_count=previous_count,
-            instruction=instruction,
-            storage=storage,
-        )
         try:
-            plan = strategy.plan(context, settings)
-            _validate_plan(plan)
-            summary = plan.summary_text
+            prepared = await _COMPACTION_WORKERS.run(
+                self._prepare_compaction,
+                messages,
+                storage=storage,
+                settings=settings,
+                instruction=instruction,
+                request_messages=request_messages,
+            )
+            plan = prepared.plan
+            response: Any | None = None
+            response_adapter: Any | None = None
             if plan.model_messages is not None:
                 adapter, model_id = _plan_model_target(
                     plan,
@@ -352,41 +361,109 @@ class CompactionService:
                 }
                 if active_tools is not None:
                     request_options["tools"] = list(active_tools)
-                model_messages = [dict(message) for message in plan.model_messages]
-                if adapter is not active_adapter or model_id != active_model_id:
-                    _strip_assistant_reasoning_fields(model_messages)
+                model_messages = await _COMPACTION_WORKERS.run(
+                    _prepare_compaction_model_messages,
+                    plan,
+                    strip_reasoning=(adapter is not active_adapter or model_id != active_model_id),
+                )
                 response = await adapter.send(
                     model_messages,
                     **request_options,
                 )
-                summary = _extract_summary_text(_normalize_response(adapter, response))
-            projection = [*plan.before_summary]
-            if summary:
-                projection.append(ChatMessage.note(f"{COMPACTION_SUMMARY_NOTE_PREFIX}{summary}"))
-            projection.extend(plan.after_summary)
-            _validate_projection(projection)
-            reclaimed_tokens = _estimate_token_span(effective) - _estimate_token_span(projection)
-            if minimum_reclaim_tokens > 0 and reclaimed_tokens < minimum_reclaim_tokens:
-                raise CompactionInsufficientReclaimError(
-                    "Compaction projection reclaimed "
-                    f"{max(0, reclaimed_tokens)} tokens; "
-                    f"minimum is {minimum_reclaim_tokens}"
-                )
+                response_adapter = adapter
+            return await _COMPACTION_WORKERS.run(
+                _finalize_compaction,
+                prepared,
+                response=response,
+                response_adapter=response_adapter,
+                minimum_reclaim_tokens=minimum_reclaim_tokens,
+            )
         except CompactionError:
             raise
         except Exception as exc:
             raise CompactionError(f"Compaction failed: {exc}") from exc
-        return ChatMessage.compaction_checkpoint(
-            summary=summary,
-            projection=projection,
-            compacted_token_count=plan.compacted_token_count,
-            policy=settings.strategy,
-            strategy=strategy.id,
+
+    def _prepare_compaction(
+        self,
+        messages: list[ChatMessage],
+        *,
+        storage: Any,
+        settings: CompactionSettings,
+        instruction: str | None,
+        request_messages: list[JsonObject] | None,
+    ) -> _PreparedCompaction:
+        """Build and validate the sync Strategy plan inside the Compaction pool."""
+        strategy = self._strategies.get(settings.strategy)
+        if strategy is None:
+            raise CompactionError(f"Unknown compaction strategy: {settings.strategy}")
+        effective = _effective_compaction_messages(messages)
+        checkpoint = _latest_compaction_checkpoint(messages)
+        context = CompactionContext(
+            messages=tuple(effective),
+            request_messages=tuple(dict(message) for message in request_messages or []),
+            previous_compacted_token_count=_previous_compacted_token_count(checkpoint),
+            instruction=instruction,
+            storage=storage,
+        )
+        plan = strategy.plan(context, settings)
+        _validate_plan(plan)
+        return _PreparedCompaction(
+            plan=plan,
+            effective_messages=effective,
+            strategy_id=strategy.id,
         )
 
     def estimate_messages_tokens(self, messages: list[dict]) -> int:
         estimated_tokens, _ = estimate_request_input_tokens(messages)
         return estimated_tokens
+
+
+def _prepare_compaction_model_messages(
+    plan: CompactionPlan,
+    *,
+    strip_reasoning: bool,
+) -> list[JsonObject]:
+    if plan.model_messages is None:
+        raise CompactionError("Compaction plan has no Model request")
+    model_messages = [dict(message) for message in plan.model_messages]
+    if strip_reasoning:
+        _strip_assistant_reasoning_fields(model_messages)
+    return model_messages
+
+
+def _finalize_compaction(
+    prepared: _PreparedCompaction,
+    *,
+    response: Any | None,
+    response_adapter: Any | None,
+    minimum_reclaim_tokens: int,
+) -> ChatMessage:
+    """Normalize the response, validate the Projection, and estimate reclaim."""
+    plan = prepared.plan
+    summary = plan.summary_text
+    if response_adapter is not None:
+        summary = _extract_summary_text(_normalize_response(response_adapter, response))
+    projection = [*plan.before_summary]
+    if summary:
+        projection.append(ChatMessage.note(f"{COMPACTION_SUMMARY_NOTE_PREFIX}{summary}"))
+    projection.extend(plan.after_summary)
+    _validate_projection(projection)
+    reclaimed_tokens = _estimate_token_span(prepared.effective_messages) - _estimate_token_span(
+        projection
+    )
+    if minimum_reclaim_tokens > 0 and reclaimed_tokens < minimum_reclaim_tokens:
+        raise CompactionInsufficientReclaimError(
+            "Compaction projection reclaimed "
+            f"{max(0, reclaimed_tokens)} tokens; "
+            f"minimum is {minimum_reclaim_tokens}"
+        )
+    return ChatMessage.compaction_checkpoint(
+        summary=summary,
+        projection=projection,
+        compacted_token_count=plan.compacted_token_count,
+        policy=prepared.strategy_id,
+        strategy=prepared.strategy_id,
+    )
 
 
 def _plan_working_tail(messages: list[ChatMessage], tail_tokens: int) -> _TailPlan:
