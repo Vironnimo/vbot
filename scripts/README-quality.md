@@ -53,7 +53,7 @@ Every step is one external tool run. Steps are one of four kinds, which decides 
 
 Backend (`quality.py`), in order: `ruff format` (fix) → `ruff check --fix` (fix) → `ruff check` (gate) → `mypy --pretty` (gate) → `pytest -v --tb=short --timeout=30` (test). In `--check` mode the first two steps become one `ruff format --check` gate.
 
-Frontend (`quality-frontend.py`), in order: `prettier --write` (fix) → `eslint --fix` (fix) → `eslint` (gate) → `vitest run --reporter=verbose --passWithNoTests` (test) → `npm run build` (build). In `--check` mode the first two steps become one `prettier --check` gate. All npm commands run with `cwd=webui/`.
+Frontend (`quality-frontend.py`), in order: `prettier --write` (fix) → `eslint --fix` (fix) → `eslint` (gate) → `vitest run --reporter=default --passWithNoTests` (test) → `npm run build` (build). The default reporter keeps failure details and the aggregate summary without paying to render every passing test name. In `--check` mode the first two steps become one `prettier --check` gate. All npm commands run with `cwd=webui/`.
 
 On a **full scan** (no paths), the tools target fixed defaults rather than the whole tree indiscriminately:
 

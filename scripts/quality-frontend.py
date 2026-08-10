@@ -228,7 +228,7 @@ _VITEST_PASSED_COUNT_RE = re.compile(r"(\d+)\s+passed")
 
 
 def parse_vitest_counts(output: str) -> tuple[int, int]:
-    """Return ``(passed, total)`` from vitest verbose output."""
+    """Return ``(passed, total)`` from Vitest output."""
     cleaned_output = _ANSI_ESCAPE_RE.sub("", output)
 
     summary = _VITEST_TESTS_SUMMARY_RE.search(cleaned_output)
@@ -393,7 +393,7 @@ def main() -> int:
                 "vitest",
                 # --passWithNoTests: a path filter without nearby tests must not
                 # fail the gate (vitest exits 1 on "No test files found").
-                [npx_exe, "vitest", "run", "--reporter=verbose", "--passWithNoTests"]
+                [npx_exe, "vitest", "run", "--reporter=default", "--passWithNoTests"]
                 + vitest_paths,
                 "test",
                 None,

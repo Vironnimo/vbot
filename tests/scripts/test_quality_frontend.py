@@ -172,7 +172,7 @@ def test_filter_vitest_failure_output_removes_pass_noise():
     assert "Tests  1 failed | 3 passed (4)" in filtered
 
 
-def test_main_runs_vitest_with_verbose_reporter(monkeypatch, capsys):
+def test_main_runs_vitest_with_default_reporter(monkeypatch, capsys):
     module = _load_quality_frontend_module()
     commands: list[list[str]] = []
 
@@ -201,7 +201,7 @@ def test_main_runs_vitest_with_verbose_reporter(monkeypatch, capsys):
         "npx",
         "vitest",
         "run",
-        "--reporter=verbose",
+        "--reporter=default",
         "--passWithNoTests",
     ]
     assert vitest_command[5:] == [
