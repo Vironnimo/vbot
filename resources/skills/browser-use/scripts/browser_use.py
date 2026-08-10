@@ -484,7 +484,9 @@ def main(argv: list[str] | None = None) -> int:
             file=sys.stderr,
         )
         return 2
-    print(json.dumps(result, ensure_ascii=False))
+    # JSON escapes keep the stdout contract portable across Windows consoles
+    # whose legacy code pages cannot represent arbitrary page text.
+    print(json.dumps(result, ensure_ascii=True))
     return 0
 
 
