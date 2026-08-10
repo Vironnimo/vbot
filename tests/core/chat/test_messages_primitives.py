@@ -55,6 +55,25 @@ class TestToolCall:
 
         assert ToolCall.from_dict(tool_call.to_dict()) == tool_call
 
+    def test_argument_sequence_metadata_round_trips_with_canonical_tool_call(self):
+        tool_call = ToolCall(
+            id="call_batch",
+            name="bash",
+            arguments={"command": "echo one"},
+            argument_sequence_index=0,
+            argument_sequence_length=2,
+        )
+
+        assert ToolCall.from_dict(tool_call.to_dict()) == tool_call
+
+    def test_argument_sequence_metadata_requires_a_complete_valid_pair(self):
+        with pytest.raises(ChatMessageValidationError):
+            ToolCall(
+                id="call_batch",
+                name="bash",
+                argument_sequence_index=0,
+            )
+
     def test_frozen(self):
         tool_call = ToolCall(id="call_abc", name="get_weather")
 

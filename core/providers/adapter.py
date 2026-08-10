@@ -63,8 +63,68 @@ _RESPONSES_OUTPUT_META_KEY = "response_output"
 _TOOL_RESULT_ENVELOPE_KEYS = frozenset({"ok", "error", "data", "artifacts"})
 TOOL_RESULT_CONTENT_BLOCKS_FIELD = "tool_result_content"
 TOOL_CALL_REJECTION_FIELD = "rejection"
+TOOL_CALL_ARGUMENT_SEQUENCE_INDEX_FIELD = "argument_sequence_index"
+TOOL_CALL_ARGUMENT_SEQUENCE_LENGTH_FIELD = "argument_sequence_length"
 INVALID_TOOL_CALL_NAME = "invalid_tool_call"
 MALFORMED_TOOL_ARGUMENT_PREVIEW_CHARS = 1200
+
+
+def normalize_tool_call_candidates(
+    *,
+    tool_call_id: Any,
+    name: Any,
+    arguments: Any,
+    fallback_id: str,
+    rejection: Any = None,
+    argument_sequence_index: Any = None,
+    argument_sequence_length: Any = None,
+) -> list[JsonObject]:
+    """Return one or more canonical calls from one Provider Tool attempt.
+
+    Some Models encode sibling calls as consecutive top-level JSON values in one
+    ``arguments`` string. A fully decodable sequence is unambiguous enough to
+    preserve each value as an independently validated call. Calls reconstructed
+    this way carry scheduling metadata so Chat executes them in authored order.
+    """
+
+    decoded_sequence = _decode_tool_argument_sequence(arguments)
+    if decoded_sequence is None:
+        return [
+            normalize_tool_call_candidate(
+                tool_call_id=tool_call_id,
+                name=name,
+                arguments=arguments,
+                fallback_id=fallback_id,
+                rejection=rejection,
+                argument_sequence_index=argument_sequence_index,
+                argument_sequence_length=argument_sequence_length,
+            )
+        ]
+
+    resolved_id = tool_call_id if isinstance(tool_call_id, str) and tool_call_id else fallback_id
+    sequence_length = len(decoded_sequence)
+    candidates: list[JsonObject] = []
+    for index, decoded_arguments in enumerate(decoded_sequence):
+        candidate_id = (
+            resolved_id if index == 0 else _recovered_tool_call_id(resolved_id, fallback_id, index)
+        )
+        candidate_arguments = (
+            decoded_arguments
+            if isinstance(decoded_arguments, Mapping)
+            else json.dumps(decoded_arguments, ensure_ascii=False, separators=(",", ":"))
+        )
+        candidates.append(
+            normalize_tool_call_candidate(
+                tool_call_id=candidate_id,
+                name=name,
+                arguments=candidate_arguments,
+                fallback_id=fallback_id,
+                rejection=rejection if index == 0 else None,
+                argument_sequence_index=index,
+                argument_sequence_length=sequence_length,
+            )
+        )
+    return candidates
 
 
 def normalize_tool_call_candidate(
@@ -74,6 +134,8 @@ def normalize_tool_call_candidate(
     arguments: Any,
     fallback_id: str,
     rejection: Any = None,
+    argument_sequence_index: Any = None,
+    argument_sequence_length: Any = None,
 ) -> JsonObject:
     """Return one safe canonical Tool Call without discarding malformed attempts.
 
@@ -104,6 +166,12 @@ def normalize_tool_call_candidate(
         "name": resolved_name,
         "arguments": normalized_arguments,
     }
+    if _valid_argument_sequence_metadata(
+        argument_sequence_index,
+        argument_sequence_length,
+    ):
+        candidate[TOOL_CALL_ARGUMENT_SEQUENCE_INDEX_FIELD] = argument_sequence_index
+        candidate[TOOL_CALL_ARGUMENT_SEQUENCE_LENGTH_FIELD] = argument_sequence_length
     if problems:
         code = (
             "malformed_tool_arguments"
@@ -123,6 +191,43 @@ def normalize_tool_call_candidate(
     elif normalized_rejection is not None:
         candidate[TOOL_CALL_REJECTION_FIELD] = normalized_rejection
     return candidate
+
+
+def _decode_tool_argument_sequence(arguments: Any) -> list[Any] | None:
+    if not isinstance(arguments, str) or not arguments:
+        return None
+
+    decoder = json.JSONDecoder()
+    values: list[Any] = []
+    position = 0
+    while position < len(arguments):
+        while position < len(arguments) and arguments[position] in " \t\r\n":
+            position += 1
+        if position == len(arguments):
+            break
+        try:
+            value, position = decoder.raw_decode(arguments, position)
+        except json.JSONDecodeError:
+            return None
+        values.append(value)
+    return values if len(values) > 1 else None
+
+
+def _recovered_tool_call_id(base_id: str, fallback_id: str, index: int) -> str:
+    evidence = f"{base_id}\0{fallback_id}\0{index}"
+    digest = hashlib.sha256(evidence.encode("utf-8", errors="replace")).hexdigest()[:20]
+    return f"tool_call_recovered_{digest}"
+
+
+def _valid_argument_sequence_metadata(index: Any, length: Any) -> bool:
+    return (
+        isinstance(index, int)
+        and not isinstance(index, bool)
+        and isinstance(length, int)
+        and not isinstance(length, bool)
+        and length > 1
+        and 0 <= index < length
+    )
 
 
 def _normalize_tool_call_arguments(arguments: Any) -> tuple[JsonObject, str | None]:

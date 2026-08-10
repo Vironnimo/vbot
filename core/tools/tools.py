@@ -624,6 +624,7 @@ class ToolCall:
     id: str
     name: str
     arguments: Any
+    force_serial: bool = False
 
 
 @dataclass(frozen=True)
@@ -1346,7 +1347,7 @@ class ToolExecutor:
             parallel_group.clear()
 
         for index, tool_call in enumerate(tool_calls):
-            if self._registry.is_parallel_safe(tool_call.name):
+            if not tool_call.force_serial and self._registry.is_parallel_safe(tool_call.name):
                 parallel_group.append((index, tool_call))
                 continue
             await flush_parallel_group()

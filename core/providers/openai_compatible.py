@@ -39,7 +39,7 @@ from core.providers.adapter import (
     ModelLookup,
     ProviderAdapter,
     TerminalOutcome,
-    normalize_tool_call_candidate,
+    normalize_tool_call_candidates,
     project_tool_result_content_fallbacks,
 )
 from core.providers.errors import NetworkError, ProviderError
@@ -1140,8 +1140,8 @@ def _extract_openai_tool_calls(message: dict[str, Any]) -> list[dict[str, Any]] 
         raw_call = raw_call_value if isinstance(raw_call_value, Mapping) else {}
         function_value = raw_call.get("function")
         function = function_value if isinstance(function_value, Mapping) else {}
-        tool_calls.append(
-            normalize_tool_call_candidate(
+        tool_calls.extend(
+            normalize_tool_call_candidates(
                 tool_call_id=raw_call.get("id"),
                 name=function.get("name"),
                 arguments=function.get("arguments"),

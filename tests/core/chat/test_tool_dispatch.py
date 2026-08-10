@@ -769,6 +769,62 @@ class TestExtensionDecisionWiring:
         )
 
     @pytest.mark.asyncio
+    async def test_invalid_recovered_call_does_not_block_valid_sequence_sibling(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        executed: list[str] = []
+        tools = ToolRegistry()
+
+        def handler(context: ToolContext, _arguments: JsonObject) -> JsonObject:
+            executed.append(context.tool_call_id)
+            return tool_success({"ran": context.tool_call_id})
+
+        tools.register(
+            "echo",
+            "Echo input.",
+            {
+                "type": "object",
+                "properties": {"value": {"type": "string"}},
+                "required": ["value"],
+                "additionalProperties": False,
+            },
+            handler,
+        )
+        runtime, agent = _build_runtime_and_agent(tmp_path, tools)
+        session = _build_session(tmp_path)
+        run = Run(run_id="run-one", agent_id=agent.id, session_id=session.id)
+
+        messages, _ = await _dispatch_tool_calls(
+            runtime,
+            agent,
+            [
+                ToolCall(
+                    id="call-invalid",
+                    name="echo",
+                    arguments={},
+                    argument_sequence_index=0,
+                    argument_sequence_length=2,
+                ),
+                ToolCall(
+                    id="call-valid",
+                    name="echo",
+                    arguments={"value": "ok"},
+                    argument_sequence_index=1,
+                    argument_sequence_length=2,
+                ),
+            ],
+            session,
+            run,
+            nesting_depth=0,
+        )
+
+        results = [_decode_tool_result(message.content) for message in messages]
+        assert results[0]["error"]["code"] == "invalid_arguments"
+        assert results[1] == tool_success({"ran": "call-valid"})
+        assert executed == ["call-valid"]
+
+    @pytest.mark.asyncio
     async def test_tool_hooks_serialize_without_serializing_tool_handlers(
         self, tmp_path: Path
     ) -> None:

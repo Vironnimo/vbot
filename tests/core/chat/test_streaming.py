@@ -565,6 +565,34 @@ async def test_malformed_tool_arguments_become_rejected_tool_call() -> None:
     assert "malformed or incomplete JSON" in tool_call["rejection"]["message"]
 
 
+async def test_consecutive_streamed_argument_objects_become_sequential_calls() -> None:
+    accumulator = StreamingAccumulator()
+
+    accumulator.add_delta(
+        {
+            "type": "tool_call_delta",
+            "id": "call_batch",
+            "name_delta": "bash",
+            "arguments_delta": (
+                '{"mode":"foreground","command":"echo one"}'
+                '{"mode":"foreground","command":"echo two"}'
+            ),
+        }
+    )
+
+    fields = accumulator.finalize_assistant_fields()
+
+    assert fields.tool_calls is not None
+    assert [call["arguments"]["command"] for call in fields.tool_calls] == [
+        "echo one",
+        "echo two",
+    ]
+    assert [call["argument_sequence_index"] for call in fields.tool_calls] == [0, 1]
+    assert all(call["argument_sequence_length"] == 2 for call in fields.tool_calls)
+    assert fields.tool_calls[0]["id"] == "call_batch"
+    assert fields.tool_calls[1]["id"].startswith("tool_call_recovered_")
+
+
 async def test_malformed_tool_arguments_rejection_abbreviates_large_fragments() -> None:
     accumulator = StreamingAccumulator()
     huge_fragment = '{"path":"todo.html","content":"' + ("x" * 5000)

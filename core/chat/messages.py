@@ -21,8 +21,10 @@ from core.chat.content_blocks import (
 from core.chat.errors import ChatError, ChatMessageValidationError
 from core.chat.output_files import AssistantFileReference
 from core.providers.adapter import (
+    TOOL_CALL_ARGUMENT_SEQUENCE_INDEX_FIELD,
+    TOOL_CALL_ARGUMENT_SEQUENCE_LENGTH_FIELD,
     TOOL_CALL_REJECTION_FIELD,
-    normalize_tool_call_candidate,
+    normalize_tool_call_candidates,
 )
 from core.providers.reasoning import (
     REASONING_REPLAY_CURRENT_RUN,
@@ -173,6 +175,14 @@ class ToolCall:
     name: str
     arguments: JsonObject = field(default_factory=dict)
     rejection: ToolCallRejection | None = None
+    argument_sequence_index: int | None = None
+    argument_sequence_length: int | None = None
+
+    def __post_init__(self) -> None:
+        _validate_tool_call_argument_sequence(
+            self.argument_sequence_index,
+            self.argument_sequence_length,
+        )
 
     def to_dict(self) -> JsonObject:
         """Return a JSON-serializable tool call dictionary."""
@@ -183,6 +193,9 @@ class ToolCall:
         }
         if self.rejection is not None:
             result[TOOL_CALL_REJECTION_FIELD] = self.rejection.to_dict()
+        if self.argument_sequence_index is not None:
+            result[TOOL_CALL_ARGUMENT_SEQUENCE_INDEX_FIELD] = self.argument_sequence_index
+            result[TOOL_CALL_ARGUMENT_SEQUENCE_LENGTH_FIELD] = self.argument_sequence_length
         return result
 
     @classmethod
@@ -197,11 +210,14 @@ class ToolCall:
         rejection = (
             ToolCallRejection.from_dict(rejection_data) if rejection_data is not None else None
         )
+        sequence_index, sequence_length = _parse_tool_call_argument_sequence(data)
         return cls(
             id=tool_call_id,
             name=name,
             arguments=dict(arguments),
             rejection=rejection,
+            argument_sequence_index=sequence_index,
+            argument_sequence_length=sequence_length,
         )
 
 
@@ -1724,15 +1740,41 @@ def _parse_response_tool_calls(value: Any) -> list[ToolCall] | None:
     tool_calls: list[ToolCall] = []
     for index, raw_call in enumerate(raw_calls):
         call = raw_call if isinstance(raw_call, dict) else {}
-        candidate = normalize_tool_call_candidate(
+        candidates = normalize_tool_call_candidates(
             tool_call_id=call.get("id"),
             name=call.get("name"),
             arguments=call.get("arguments"),
             fallback_id=f"tool_call_{index}",
             rejection=call.get(TOOL_CALL_REJECTION_FIELD),
+            argument_sequence_index=call.get(TOOL_CALL_ARGUMENT_SEQUENCE_INDEX_FIELD),
+            argument_sequence_length=call.get(TOOL_CALL_ARGUMENT_SEQUENCE_LENGTH_FIELD),
         )
-        tool_calls.append(ToolCall.from_dict(candidate))
+        tool_calls.extend(ToolCall.from_dict(candidate) for candidate in candidates)
     return tool_calls or None
+
+
+def _parse_tool_call_argument_sequence(data: JsonObject) -> tuple[int | None, int | None]:
+    index = data.get(TOOL_CALL_ARGUMENT_SEQUENCE_INDEX_FIELD)
+    length = data.get(TOOL_CALL_ARGUMENT_SEQUENCE_LENGTH_FIELD)
+    _validate_tool_call_argument_sequence(index, length)
+    if index is None:
+        return None, None
+    return cast(int, index), cast(int, length)
+
+
+def _validate_tool_call_argument_sequence(index: Any, length: Any) -> None:
+    if index is None and length is None:
+        return
+    if (
+        not isinstance(index, int)
+        or isinstance(index, bool)
+        or not isinstance(length, int)
+        or isinstance(length, bool)
+        or length <= 1
+        or index < 0
+        or index >= length
+    ):
+        raise ChatMessageValidationError("tool call argument sequence metadata is invalid")
 
 
 def _is_content_block(value: Any) -> bool:

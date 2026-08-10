@@ -32,7 +32,7 @@ from core.providers.adapter import (
     TERMINAL_OUTCOME_UNKNOWN,
     ModelLookup,
     TerminalOutcome,
-    normalize_tool_call_candidate,
+    normalize_tool_call_candidates,
     project_tool_result_content_fallbacks,
 )
 from core.providers.anthropic_compatible import (
@@ -841,8 +841,8 @@ def _normalize_gemini_response(response: Mapping[str, Any]) -> dict[str, Any]:
             (reasoning_parts if part.get("thought") is True else text_parts).append(text)
         function_call = part.get("functionCall")
         if isinstance(function_call, Mapping):
-            tool_calls.append(
-                normalize_tool_call_candidate(
+            tool_calls.extend(
+                normalize_tool_call_candidates(
                     tool_call_id=_gemini_tool_call_id(function_call, response, index),
                     name=function_call.get("name"),
                     arguments=function_call.get("args"),
