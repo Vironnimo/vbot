@@ -474,14 +474,21 @@ class ChatSession:
 
     def load(self) -> list[ChatMessage]:
         """Load all valid JSONL messages from this session file."""
-        batch = self.load_since()
+        batch = self._load_since(
+            None,
+            repair_partial_tail=_current_context_holds_session_write_lock(self.path),
+        )
         if batch is None:  # A full read has no prefix cursor that can become stale.
             raise ChatSessionError(f"failed to read session: {self.path}")
         return list(batch.messages)
 
     async def load_async(self) -> list[ChatMessage]:
         """Load all canonical messages without blocking the event loop."""
-        return await _run_session_io(self.load)
+        repair_partial_tail = _current_context_holds_session_write_lock(self.path)
+        batch = await _run_session_io(self._load_since, None, repair_partial_tail)
+        if batch is None:  # A full read has no prefix cursor that can become stale.
+            raise ChatSessionError(f"failed to read session: {self.path}")
+        return list(batch.messages)
 
     def load_since(self, cursor: SessionReadCursor | None = None) -> SessionReadBatch | None:
         """Load and validate only messages appended after *cursor*.
@@ -493,6 +500,16 @@ class ChatSession:
         cursor always points immediately after the last complete line observed by
         this read.
         """
+        return self._load_since(
+            cursor,
+            repair_partial_tail=_current_context_holds_session_write_lock(self.path),
+        )
+
+    def _load_since(
+        self,
+        cursor: SessionReadCursor | None,
+        repair_partial_tail: bool,
+    ) -> SessionReadBatch | None:
         if not self.path.exists():
             raise ChatSessionError(f"session does not exist: {self.path}")
 
@@ -525,28 +542,31 @@ class ChatSession:
                     message = self._parse_line_bytes(line_bytes, line_number)
                 except UnicodeDecodeError as exc:
                     if _is_unterminated_line(line_bytes):
-                        self._truncate_partial_tail(
-                            byte_offset=line_start_offset,
-                            line_number=line_number,
-                        )
+                        if repair_partial_tail:
+                            self._truncate_partial_tail(
+                                byte_offset=line_start_offset,
+                                line_number=line_number,
+                            )
                         next_offset = line_start_offset
                         break
                     raise ChatSessionError(f"invalid UTF-8 at line {line_number}") from exc
                 except json.JSONDecodeError as exc:
                     if _is_unterminated_line(line_bytes):
-                        self._truncate_partial_tail(
-                            byte_offset=line_start_offset,
-                            line_number=line_number,
-                        )
+                        if repair_partial_tail:
+                            self._truncate_partial_tail(
+                                byte_offset=line_start_offset,
+                                line_number=line_number,
+                            )
                         next_offset = line_start_offset
                         break
                     raise ChatSessionError(f"invalid JSON at line {line_number}") from exc
                 except ChatSessionError:
                     if _is_unterminated_line(line_bytes):
-                        self._truncate_partial_tail(
-                            byte_offset=line_start_offset,
-                            line_number=line_number,
-                        )
+                        if repair_partial_tail:
+                            self._truncate_partial_tail(
+                                byte_offset=line_start_offset,
+                                line_number=line_number,
+                            )
                         next_offset = line_start_offset
                         break
                     raise
@@ -567,7 +587,8 @@ class ChatSession:
         self, cursor: SessionReadCursor | None = None
     ) -> SessionReadBatch | None:
         """Load one append-only delta without blocking the event loop."""
-        return await _run_session_io(self.load_since, cursor)
+        repair_partial_tail = _current_context_holds_session_write_lock(self.path)
+        return await _run_session_io(self._load_since, cursor, repair_partial_tail)
 
     def _cursor_matches(self, cursor: SessionReadCursor) -> bool:
         if (
@@ -713,6 +734,10 @@ class _SessionWriteLock:
         if lease.holders == 0:
             lease.active = False
             self._lock.release()
+
+    def held_by_current_context(self) -> bool:
+        """Return whether this context owns one active lease for the lock."""
+        return any(lease.active for lease in self._lease_stack.get())
 
 
 class ChatSessionManager:
@@ -2032,6 +2057,12 @@ def _append_bytes(path: Path, data: bytes) -> None:
         os.fsync(file_descriptor)
     finally:
         os.close(file_descriptor)
+
+
+def _current_context_holds_session_write_lock(path: Path) -> bool:
+    key = str(path.resolve())
+    lock = ChatSessionManager._write_locks.get(key)
+    return lock is not None and lock.held_by_current_context()
 
 
 async def _run_session_io(
