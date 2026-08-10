@@ -1,5 +1,6 @@
 <script>
   import { activeLocaleTag, t } from '$lib/i18n.js';
+  import { parseModelSelectionValue } from '$lib/modelSelection.js';
   import { formatTokenUsageTooltip } from '$lib/tokenUsageTooltip.js';
   import { tooltip } from '$lib/tooltip.js';
   import Button from '../ui/Button.svelte';
@@ -207,6 +208,13 @@
     }
     return t('chat.agentActivity.idle', '{name}: Idle', { name });
   }
+
+  function agentActivityTooltip(activityLabel, modelValue) {
+    const { model } = parseModelSelectionValue(
+      typeof modelValue === 'string' ? modelValue.trim() : '',
+    );
+    return model ? `${activityLabel}\n${model}` : activityLabel;
+  }
 </script>
 
 <header class="chat-header">
@@ -227,13 +235,17 @@
       {#each agents as agent (agent.id)}
         {@const agentStatus = agentStatuses[agent.id] ?? 'idle'}
         {@const activityLabel = agentActivityLabel(agent.name, agentStatus)}
+        {@const activityTooltip = agentActivityTooltip(
+          activityLabel,
+          agent.model,
+        )}
         <button
           type="button"
           class:active={agent.id === selectedAgentId}
           class="agent-tab"
           disabled={loadingAgents}
           aria-label={activityLabel}
-          use:tooltip={activityLabel}
+          use:tooltip={activityTooltip}
           onclick={() => onSelectAgent(agent.id)}
         >
           <span

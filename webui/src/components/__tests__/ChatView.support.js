@@ -382,9 +382,14 @@ export async function hoveredTokenBadgeTooltip(expectedText) {
     () => document.body.querySelector('.token-badge') !== null,
     100,
   );
-  document.body
-    .querySelector('.token-badge')
-    .dispatchEvent(new Event('pointerenter'));
+  return hoveredTooltipText(
+    document.body.querySelector('.token-badge'),
+    expectedText,
+  );
+}
+
+export async function hoveredTooltipText(element, expectedText) {
+  element.dispatchEvent(new Event('pointerenter'));
   await new Promise((resolve) =>
     setTimeout(resolve, TOOLTIP_SHOW_DELAY_MS + 50),
   );
@@ -392,5 +397,7 @@ export async function hoveredTokenBadgeTooltip(expectedText) {
     () => document.getElementById('app-tooltip')?.textContent === expectedText,
     100,
   );
-  return document.getElementById('app-tooltip')?.textContent ?? null;
+  const tooltipText = document.getElementById('app-tooltip')?.textContent ?? '';
+  element.dispatchEvent(new Event('pointerleave'));
+  return tooltipText;
 }
