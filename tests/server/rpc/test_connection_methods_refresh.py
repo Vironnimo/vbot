@@ -34,11 +34,12 @@ class TestAwaitLocalCatalogRefresh:
     ) -> None:
         """On timeout the sweep is not cancelled — it finishes in the background."""
         # Arrange
-        monkeypatch.setattr(connection_methods, "LOCAL_CATALOG_REFRESH_WAIT_SECONDS", 0.05)
+        monkeypatch.setattr(connection_methods, "LOCAL_CATALOG_REFRESH_WAIT_SECONDS", 0.0)
+        release = asyncio.Event()
         finished = asyncio.Event()
 
         async def maybe_refresh_local_catalogs() -> None:
-            await asyncio.sleep(0.2)
+            await release.wait()
             finished.set()
 
         runtime = SimpleNamespace(maybe_refresh_local_catalogs=maybe_refresh_local_catalogs)
@@ -48,6 +49,7 @@ class TestAwaitLocalCatalogRefresh:
 
         # Assert — the sweep was not cancelled and completes on its own.
         assert not finished.is_set()
+        release.set()
         await asyncio.wait_for(finished.wait(), timeout=1.0)
 
     @pytest.mark.asyncio
