@@ -21,6 +21,7 @@ import subprocess
 import sys
 import tarfile
 import tomllib
+import uuid
 from collections.abc import Callable
 from contextlib import suppress
 from dataclasses import dataclass, replace
@@ -103,7 +104,15 @@ class _Step:
 class _DirtyResolution:
     ok: bool
     message: str
-    stashed: bool = False
+    stashed: _UpdateStash | None = None
+
+
+@dataclass(frozen=True)
+class _UpdateStash:
+    """Exact temporary Git ref holding one updater-created stash object."""
+
+    object_id: str
+    reference: str
 
 
 def read_checkout_version(root: Path = VBOT_ROOT) -> str:
@@ -212,7 +221,7 @@ def run_update(
             f"update: checking local changes failed: {dirty_result.stderr or dirty_result.stdout}",
         )
     dirty = bool(dirty_result.stdout.strip())
-    stashed = False
+    stashed: _UpdateStash | None = None
     if dirty:
         guard = _handle_dirty(run, repo, discard=discard, stash=stash)
         if not guard.ok:
@@ -337,8 +346,8 @@ def run_update(
         lines.append(saved.message)
         return _failure_with_stash(instance, lines, run, repo, stashed=stashed)
 
-    if stashed:
-        restored = _restore_stash(run, repo)
+    if stashed is not None:
+        restored = _restore_stash(run, repo, stashed)
         if not restored.ok:
             lines.append(restored.message)
             lines.append(
@@ -408,12 +417,35 @@ def _handle_dirty(run: Runner, repo: Path, *, discard: bool, stash: bool) -> _Di
             )
         return _DirtyResolution(True, "")
     if stash:
-        stashed = run(["git", "stash", "push", "-m", "vbot update"], repo)
-        if stashed.returncode != 0:
+        created = run(["git", "stash", "create", "vbot update"], repo)
+        if created.returncode != 0:
             return _DirtyResolution(
-                False, f"update: stashing local changes failed: {stashed.stderr}"
+                False, f"update: snapshotting local changes failed: {created.stderr}"
             )
-        return _DirtyResolution(True, "", stashed=True)
+        object_id = created.stdout.strip()
+        if not object_id:
+            return _DirtyResolution(True, "")
+        reference = f"refs/vbot/update-stashes/{uuid.uuid4().hex}"
+        retained = run(["git", "update-ref", reference, object_id], repo)
+        if retained.returncode != 0:
+            return _DirtyResolution(
+                False,
+                "update: retaining the local-change snapshot failed: "
+                f"{retained.stderr or retained.stdout}",
+            )
+        cleared = run(["git", "reset", "--hard", "HEAD"], repo)
+        if cleared.returncode != 0:
+            return _DirtyResolution(
+                False,
+                "update: preparing the checkout after snapshotting local changes failed; "
+                f"the exact recovery snapshot remains at {reference}: "
+                f"{cleared.stderr or cleared.stdout}",
+            )
+        return _DirtyResolution(
+            True,
+            "",
+            stashed=_UpdateStash(object_id=object_id, reference=reference),
+        )
     return _DirtyResolution(
         False,
         "update: the checkout has local changes. Commit them, or re-run with "
@@ -914,15 +946,25 @@ def _save_state(repo: Path, state: InstallState) -> _Step:
     return _Step(True, "")
 
 
-def _restore_stash(run: Runner, repo: Path) -> _Step:
-    popped = run(["git", "stash", "pop", "stash@{0}"], repo)
-    if popped.returncode == 0:
-        return _Step(True, "local changes reapplied")
-    detail = popped.stderr or popped.stdout
+def _restore_stash(run: Runner, repo: Path, stash: _UpdateStash) -> _Step:
+    applied = run(["git", "stash", "apply", "--index", stash.reference], repo)
+    if applied.returncode == 0:
+        released = run(
+            ["git", "update-ref", "-d", stash.reference, stash.object_id],
+            repo,
+        )
+        if released.returncode == 0:
+            return _Step(True, "local changes reapplied")
+        return _Step(
+            False,
+            "local changes were reapplied, but the updater could not remove its recovery "
+            f"snapshot at {stash.reference}: {released.stderr or released.stdout}",
+        )
+    detail = applied.stderr or applied.stdout
     return _Step(
         False,
         "reapplying stashed changes hit a conflict; resolve it in the repo "
-        f"(the stash was kept; see 'git stash list'): {detail}",
+        f"(the exact snapshot remains at {stash.reference}): {detail}",
     )
 
 
@@ -932,11 +974,11 @@ def _failure_with_stash(
     run: Runner,
     repo: Path,
     *,
-    stashed: bool,
+    stashed: _UpdateStash | None,
 ) -> CommandResult:
     messages = list(lines)
-    if stashed:
-        restored = _restore_stash(run, repo)
+    if stashed is not None:
+        restored = _restore_stash(run, repo, stashed)
         messages.append(restored.message)
     return CommandResult(ok=False, message="\n".join(messages), instance=instance)
 
