@@ -90,6 +90,51 @@ async def _wait_for_background(service: SessionTitleService) -> None:
         await asyncio.gather(*tasks)
 
 
+@pytest.mark.asyncio
+async def test_aclose_cancels_and_drains_generated_title_tasks(tmp_path) -> None:
+    started = asyncio.Event()
+
+    class BlockingAdapter(StubAdapter):
+        async def send(self, messages: list[dict], **kwargs: Any) -> dict[str, Any]:
+            self.requests.append({"messages": messages, **kwargs})
+            started.set()
+            await asyncio.Event().wait()
+            return {"content": "unreachable"}
+
+    adapter = BlockingAdapter()
+    runtime = StubRuntime(
+        tmp_path,
+        enabled=True,
+        configured_model="openai/title::cheap",
+        adapters=[adapter],
+    )
+    _append_first_user(runtime, "A title request")
+    service = SessionTitleService(cast(Any, runtime))
+    service.notify_user_message(
+        agent_id="coder",
+        session_id="session-one",
+        project_id=None,
+        agent=SimpleNamespace(model="openai/agent::main"),
+        content="A title request",
+        run_id="run-one",
+    )
+    await started.wait()
+
+    await service.aclose()
+
+    assert service._background_tasks == set()
+    assert adapter.closed is True
+    service.notify_user_message(
+        agent_id="coder",
+        session_id="session-one",
+        project_id=None,
+        agent=SimpleNamespace(model="openai/agent::main"),
+        content="late title request",
+        run_id="run-two",
+    )
+    assert service._background_tasks == set()
+
+
 def test_local_title_collapses_whitespace_and_caps_at_40_with_ellipsis() -> None:
     title = _local_title("  Explain\n\nthis   very long request " + "x" * 50, [])
 

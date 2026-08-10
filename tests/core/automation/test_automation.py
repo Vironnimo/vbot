@@ -625,6 +625,59 @@ class _CompletionChatLoop:
         )
 
 
+async def test_completion_delivery_aclose_cancels_workers_and_pending_notices(
+    tmp_path: Path,
+) -> None:
+    run_manager = ChatRunManager()
+    active_started = asyncio.Event()
+    active_release = asyncio.Event()
+
+    async def active_executor(_run: Run) -> str:
+        active_started.set()
+        await active_release.wait()
+        return "done"
+
+    parent_run = await run_manager.start(
+        agent_id="coder",
+        session_id="session-one",
+        executor=active_executor,
+        project_id=None,
+    )
+    await active_started.wait()
+    sessions = ChatSessionManager(tmp_path)
+    sessions.create("coder", session_id="session-one")
+    completion_loop = _CompletionChatLoop(run_manager)
+    trigger_service = TriggerService(
+        cast(Any, completion_loop),
+        run_manager,
+        cast(Any, Mock()),
+        trigger_chat_loop=cast(Any, completion_loop),
+        sessions=sessions,
+    )
+    pending = trigger_service.submit_completion(
+        "coder",
+        "session-one",
+        notice_id="bash:pending-at-shutdown",
+        origin_run_id=parent_run.id,
+        body="pending result",
+    )
+    await asyncio.sleep(0)
+
+    await trigger_service.aclose()
+
+    assert pending.cancelled()
+    late = trigger_service.submit_completion(
+        "coder",
+        "session-one",
+        notice_id="bash:after-shutdown",
+        origin_run_id=parent_run.id,
+        body="late result",
+    )
+    assert late.cancelled()
+    active_release.set()
+    assert await parent_run.wait() == "done"
+
+
 async def test_completion_start_failure_persists_system_reminder_without_run(
     tmp_path: Path,
 ) -> None:

@@ -111,6 +111,56 @@ async def test_cancel_invokes_registered_abort_callback() -> None:
     assert run.status == RunStatus.CANCELLED
 
 
+async def test_cancel_keeps_session_owned_until_async_cleanup_finishes() -> None:
+    manager = ChatRunManager()
+    first_started = asyncio.Event()
+    cleanup_started = asyncio.Event()
+    cleanup_release = asyncio.Event()
+    second_started = asyncio.Event()
+
+    async def cleanup() -> None:
+        cleanup_started.set()
+        await cleanup_release.wait()
+
+    async def first_executor(run: Run) -> str:
+        run.add_cancel_callback(cleanup)
+        first_started.set()
+        await asyncio.Event().wait()
+        return "unreachable"
+
+    async def second_executor(_run: Run) -> str:
+        second_started.set()
+        return "second"
+
+    first = await manager.start(
+        agent_id="coder",
+        session_id="session-one",
+        executor=first_executor,
+        project_id=None,
+    )
+    await first_started.wait()
+    queued = await manager.enqueue(
+        agent_id="coder",
+        session_id="session-one",
+        display_content="second",
+        executor=second_executor,
+        project_id=None,
+    )
+
+    cancelling = asyncio.create_task(manager.cancel(first.id, reason="user"))
+    await cleanup_started.wait()
+    await asyncio.sleep(0)
+
+    assert not second_started.is_set()
+    assert not queued.future.done()
+
+    cleanup_release.set()
+    assert await cancelling is first
+    second = await queued.future
+    assert await second.wait() == "second"
+    assert second_started.is_set()
+
+
 async def test_cancel_callback_failure_does_not_skip_remaining_callbacks(
     caplog: pytest.LogCaptureFixture,
 ) -> None:

@@ -171,6 +171,7 @@ def create_app(
                 getattr(app.state, "device_flow_engine", None),
                 server_logger,
             )
+            await _shutdown_model_list_refreshes(app_runtime)
             await _shutdown_runtime(app_runtime)
 
     app = FastAPI(lifespan=lifespan)
@@ -807,6 +808,13 @@ async def _shutdown_runtime(runtime: Any) -> None:
         await aclose()
         return
     runtime.stop()
+
+
+async def _shutdown_model_list_refreshes(runtime: Any) -> None:
+    """Drain refresh tasks spawned by timed-out model.list requests."""
+    from server.rpc.connection_methods import shutdown_background_refresh_tasks
+
+    await shutdown_background_refresh_tasks(runtime)
 
 
 async def _shutdown_device_flow_engine(engine: Any, logger: logging.Logger) -> None:

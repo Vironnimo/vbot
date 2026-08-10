@@ -908,6 +908,14 @@ class Runtime:
             await self._cron_service.aclose()
         if self._bootstrap_service is not None:
             await self._bootstrap_service.aclose()
+        if self._trigger_service is not None:
+            await self._trigger_service.aclose()
+        if self._reflection_service is not None:
+            await self._reflection_service.aclose()
+        if self._session_title_service is not None:
+            await self._session_title_service.aclose()
+        if self._chat_run_manager is not None:
+            await self._chat_run_manager.aclose()
         if self._provider_usage is not None:
             await self._provider_usage.aclose()
         if self._process_manager is not None:

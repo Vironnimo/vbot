@@ -94,6 +94,7 @@ class ReflectionService:
         self._runtime = runtime
         self._background_tasks: set[asyncio.Task[None]] = set()
         self._agents_in_review: set[str] = set()
+        self._closed = False
 
     # -- background trigger ----------------------------------------------------
 
@@ -107,7 +108,12 @@ class ReflectionService:
         session metadata is loaded. The review runs in a fork, so the session
         this run belongs to stays free.
         """
-        if internal or not agent.workspace or not memory_tool_enabled(agent.memory_prompt_mode):
+        if (
+            self._closed
+            or internal
+            or not agent.workspace
+            or not memory_tool_enabled(agent.memory_prompt_mode)
+        ):
             return
         memory_tool_called = MEMORY_TOOL_NAME in run.tool_call_names
         user_cancelled_after_model_step = (
@@ -136,6 +142,17 @@ class ReflectionService:
         exception = task.exception()
         if exception is not None:
             _LOGGER.warning("Background reflection task failed: %s", exception, exc_info=exception)
+
+    async def aclose(self) -> None:
+        """Cancel and drain every automatic reflection orchestration task."""
+        self._closed = True
+        tasks = tuple(self._background_tasks)
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        self._background_tasks.clear()
+        self._agents_in_review.clear()
 
     async def _account_run_end(
         self,

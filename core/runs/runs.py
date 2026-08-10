@@ -268,6 +268,7 @@ class Run:
         self._execution_started = False
         self._cancel_callbacks: list[CancelCallback] = []
         self._tool_cancel_callbacks: dict[str, CancelCallback | _CancelledToolCallSentinel] = {}
+        self._cancel_cleanup_futures: set[asyncio.Future[Any]] = set()
         self._started_from_queue_item_id: str | None = None
         # Executor-supplied extras merged into every terminal event payload
         # (e.g. the chat loop's end-of-run session usage totals). Filled by the
@@ -303,7 +304,7 @@ class Run:
     def add_cancel_callback(self, callback: CancelCallback) -> None:
         """Register cleanup work to trigger when cancellation is requested."""
         if self.cancel_requested:
-            _schedule_callback(callback)
+            self._schedule_cancel_callback(callback)
             return
         self._cancel_callbacks.append(callback)
 
@@ -322,7 +323,7 @@ class Run:
         for tool_call_id in list(self._tool_cancel_callbacks):
             self.cancel_tool_call(tool_call_id)
         for callback in list(self._cancel_callbacks):
-            _schedule_callback(callback)
+            self._schedule_cancel_callback(callback)
         if self._task is not None and self._execution_started:
             self._task.cancel()
 
@@ -333,7 +334,7 @@ class Run:
             # late registration belongs to an already-cancelled Run and must
             # receive the same cleanup signal rather than becoming an orphan.
             self._tool_cancel_callbacks[tool_call_id] = _CANCELLED_TOOL_CALL
-            _schedule_callback(callback)
+            self._schedule_cancel_callback(callback)
             return
         self._tool_cancel_callbacks[tool_call_id] = callback
 
@@ -343,8 +344,29 @@ class Run:
         if entry is None or entry is _CANCELLED_TOOL_CALL:
             return False
         self._tool_cancel_callbacks[tool_call_id] = _CANCELLED_TOOL_CALL
-        _schedule_callback(cast(CancelCallback, entry))
+        self._schedule_cancel_callback(cast(CancelCallback, entry))
         return True
+
+    def _schedule_cancel_callback(self, callback: CancelCallback) -> None:
+        future = _schedule_callback(callback)
+        if future is None:
+            return
+        self._cancel_cleanup_futures.add(future)
+        future.add_done_callback(self._cancel_cleanup_futures.discard)
+
+    async def _wait_for_cancel_cleanup(self) -> None:
+        """Wait until every async cancellation callback has settled.
+
+        Callbacks may register further cancellation work while an earlier
+        callback is completing, so drain snapshots until the owned set is
+        empty. Callback failures are logged by their completion callback and do
+        not prevent the Run from reaching its terminal cancelled state.
+        """
+        while self._cancel_cleanup_futures:
+            await asyncio.gather(
+                *tuple(self._cancel_cleanup_futures),
+                return_exceptions=True,
+            )
 
     def tool_call_cancelled(self, tool_call_id: str) -> bool:
         """Return whether a tool call was user-cancelled."""
@@ -533,6 +555,7 @@ class ChatRunManager:
         self._completed_run_retention_limit = completed_run_retention_limit
         self._run_event_retention_limit = run_event_retention_limit
         self._waiting_work_limit = waiting_work_limit
+        self._closed = False
 
     def reserve_waiting_work(
         self,
@@ -552,6 +575,8 @@ class ChatRunManager:
             raise ValueError("waiting work scope must not be empty")
         if scope_limit < 1:
             raise ValueError("waiting work scope_limit must be positive")
+        if self._closed:
+            raise RunAdmissionBlockedError("run manager is shutting down")
 
         waiting_count = self._waiting_work_count()
         if waiting_count >= self._waiting_work_limit:
@@ -701,6 +726,8 @@ class ChatRunManager:
         """
         session_key = (project_id, agent_id, session_id)
         async with self._lock:
+            if self._closed:
+                raise RunAdmissionBlockedError("run manager is shutting down")
             self._ensure_run_admission_allowed_locked(session_key, working_project_id)
             active_run = self._active_by_session.get(session_key)
             if active_run is not None and active_run.status == RunStatus.RUNNING:
@@ -761,6 +788,9 @@ class ChatRunManager:
         item.future.add_done_callback(remove_abandoned_item)
 
         async with self._lock:
+            if self._closed:
+                item.future.cancel()
+                raise RunAdmissionBlockedError("run manager is shutting down")
             try:
                 self._ensure_run_admission_allowed_locked(session_key, working_project_id)
             except RunAdmissionBlockedError:
@@ -927,6 +957,30 @@ class ChatRunManager:
         """
         return [run for run in self._active_by_session.values() if run.status == RunStatus.RUNNING]
 
+    async def aclose(self) -> None:
+        """Reject new work, cancel queued items, and drain every active Run."""
+        async with self._lock:
+            if self._closed:
+                active_runs = list(self._active_by_session.values())
+            else:
+                self._closed = True
+                for queue in self._queues.values():
+                    for item in queue:
+                        if not item.future.done():
+                            item.future.cancel()
+                self._queues.clear()
+                self._waiting_work_admissions.clear()
+                active_runs = list(self._active_by_session.values())
+        for run in active_runs:
+            run.request_cancel(reason="shutdown")
+        active_tasks = [
+            run._task  # noqa: SLF001 - manager owns Run execution tasks.
+            for run in active_runs
+            if run._task is not None  # noqa: SLF001
+        ]
+        if active_tasks:
+            await asyncio.gather(*active_tasks, return_exceptions=True)
+
     def has_activity_for_agent(self, agent_id: str, *, project_id: str | None) -> bool:
         """Return whether an agent owns any running run or queued run item.
 
@@ -1073,6 +1127,7 @@ class ChatRunManager:
             run.emit(RUN_STARTED_EVENT, started_payload)
             result = await executor(run)
             if run.cancel_requested:
+                await run._wait_for_cancel_cleanup()  # noqa: SLF001
                 run.mark_cancelled(payload_extras=terminal_extras())
                 return
             result_usage = getattr(result, "usage", None) if result is not None else None
@@ -1082,10 +1137,12 @@ class ChatRunManager:
             run.mark_completed(result, payload_extras=payload_extras)
         except RunInterruptedError as error:
             if run.cancel_requested:
+                await run._wait_for_cancel_cleanup()  # noqa: SLF001
                 run.mark_cancelled(payload_extras=terminal_extras())
                 return
             run.mark_interrupted(error, payload_extras=terminal_extras())
         except asyncio.CancelledError:
+            await run._wait_for_cancel_cleanup()  # noqa: SLF001
             run.mark_cancelled(payload_extras=terminal_extras())
         except (KeyboardInterrupt, SystemExit):
             # Process-level interrupts must never be downgraded to a failed run:
@@ -1096,6 +1153,7 @@ class ChatRunManager:
             raise
         except Exception as exc:
             if run.cancel_requested:
+                await run._wait_for_cancel_cleanup()  # noqa: SLF001
                 run.mark_cancelled(payload_extras=terminal_extras())
                 return
             run.mark_failed(exc, payload_extras=terminal_extras())
@@ -1108,6 +1166,12 @@ class ChatRunManager:
 
     async def _drain_next(self, session_key: SessionKey) -> None:
         async with self._lock:
+            if self._closed:
+                closed_queue = self._queues.pop(session_key, ())
+                for item in closed_queue:
+                    if not item.future.done():
+                        item.future.cancel()
+                return
             active_run = self._active_by_session.get(session_key)
             if active_run is not None and active_run.status == RunStatus.RUNNING:
                 return
@@ -1191,21 +1255,23 @@ class ChatRunManager:
             self._runs.pop(run_id, None)
 
 
-def _schedule_callback(callback: CancelCallback) -> None:
+def _schedule_callback(callback: CancelCallback) -> asyncio.Future[Any] | None:
     try:
         result = callback()
     except Exception:
         _LOGGER.warning("Run cancel callback failed", exc_info=True)
-        return
+        return None
     if inspect.isawaitable(result):
-        task = asyncio.create_task(cast(Coroutine[Any, Any, Any], result))
-        task.add_done_callback(_on_cancel_callback_done)
+        future = asyncio.ensure_future(cast(Coroutine[Any, Any, Any], result))
+        future.add_done_callback(_on_cancel_callback_done)
+        return future
+    return None
 
 
-def _on_cancel_callback_done(task: asyncio.Task[Any]) -> None:
-    if task.cancelled():
+def _on_cancel_callback_done(future: asyncio.Future[Any]) -> None:
+    if future.cancelled():
         return
     try:
-        task.result()
+        future.result()
     except Exception:
         _LOGGER.warning("Run async cancel callback failed", exc_info=True)

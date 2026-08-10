@@ -40,7 +40,7 @@ Idempotent — a second call logs at debug and preserves the existing service in
 ### Shutdown
 
 - `stop()` — logs `Runtime stopped` if a logger exists, stops `ChannelService` / `CronService` / `BootstrapService` / the Provider usage collector / `ProcessManager` / `TerminalManager`, thereby killing every tracked Process Session and Terminal Session tree, then stops the shared temporary-file sweeper, clears all service references (including `token_store`), and closes the log manager. Safe to call before `start()`.
-- `aclose()` — async variant of `stop()`: same producer-before-temporary-files sequence but `await`s the channel / cron / Provider usage / process-manager / terminal-manager cleanup before the temporary-file manager. Accessors running inside an event loop should prefer `aclose()` over `stop()`.
+- `aclose()` — async variant of `stop()`: after stopping Channel, Cron, and Bootstrap producers, it closes Trigger completion delivery, Reflection, Session titles, and `ChatRunManager`, rejecting new work, cancelling queued work, and waiting for active Runs plus their asynchronous cancellation cleanup before closing Provider usage, Process and Terminal managers, and temporary files. Accessors running inside an event loop should prefer `aclose()` over `stop()`; no Runtime-owned background task may outlive the services it uses.
 
 ### Service properties
 

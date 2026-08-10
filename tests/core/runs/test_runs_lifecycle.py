@@ -12,6 +12,7 @@ from .runs_test_support import (
     Any,
     ChatRunManager,
     Run,
+    RunAdmissionBlockedError,
     RunKind,
     RunNotFoundError,
     RunStatus,
@@ -110,6 +111,45 @@ async def test_allows_parallel_runs_for_different_sessions() -> None:
     assert set(started) == {"session-one", "session-two"}
     assert await first_run.wait() == "session-one"
     assert await second_run.wait() == "session-two"
+
+
+async def test_manager_aclose_cancels_active_and_queued_work_and_rejects_new_runs() -> None:
+    manager = ChatRunManager()
+    started = asyncio.Event()
+
+    async def blocking_executor(_run: Run) -> str:
+        started.set()
+        await asyncio.Event().wait()
+        return "unreachable"
+
+    active = await manager.start(
+        agent_id="coder",
+        session_id="session-one",
+        executor=blocking_executor,
+        project_id=None,
+    )
+    await started.wait()
+    queued = await manager.enqueue(
+        agent_id="coder",
+        session_id="session-one",
+        display_content="queued",
+        executor=blocking_executor,
+        project_id=None,
+    )
+
+    await manager.aclose()
+
+    assert active.status == RunStatus.CANCELLED
+    assert manager.active_runs() == []
+    with pytest.raises(asyncio.CancelledError):
+        await queued.future
+    with pytest.raises(RunAdmissionBlockedError, match="shutting down"):
+        await manager.start(
+            agent_id="coder",
+            session_id="session-two",
+            executor=blocking_executor,
+            project_id=None,
+        )
 
 
 async def test_delta_events_use_normal_sequences_and_replay_filtering() -> None:
