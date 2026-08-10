@@ -467,6 +467,130 @@ describe('AgentsView', () => {
     ).toBe(false);
   });
 
+  it('shows both empty Memory categories while they are inactive and keeps adding available', async () => {
+    rpcMock.mockImplementation(
+      createAgentsRpcMock({
+        agents: [{ ...baseAgent(), memory_prompt_mode: 'off' }],
+        memories: { agent: [], user: [] },
+      }),
+    );
+
+    mountedComponent = mount(AgentsView, { target: document.body });
+    flushSync();
+    await waitForText('Manage Memory entries');
+
+    getButtonByAriaLabel('Manage Memory entries').click();
+    flushSync();
+    await waitForCondition(
+      () => rpcMock.mock.calls.some((call) => call[0] === 'memory.list'),
+      100,
+    );
+    await waitForText('No memories');
+
+    const scopes = Array.from(
+      document.body.querySelectorAll('.agents-view__memory-scope'),
+    );
+    expect(scopes).toHaveLength(2);
+    expect(
+      scopes.every((scope) =>
+        scope.classList.contains('agents-view__memory-scope--inactive'),
+      ),
+    ).toBe(true);
+    expect(document.body.textContent).toContain('Agent Memory');
+    expect(document.body.textContent).toContain('User profile');
+    expect(
+      document.body.querySelectorAll('.agents-view__memory-empty'),
+    ).toHaveLength(2);
+    expect(getButton('Add Memory').disabled).toBe(true);
+    const inactiveAgentScope = memoryScopeNamed('Agent Memory');
+    const inactiveAddArea = inactiveAgentScope.querySelector(
+      'textarea[aria-label="New Agent Memory entry"]',
+    );
+    inactiveAddArea.value = 'Still editable while inactive.';
+    inactiveAddArea.dispatchEvent(new Event('input', { bubbles: true }));
+    flushSync();
+    const inactiveAddButton = getButtonWithin(inactiveAgentScope, 'Add Memory');
+    expect(inactiveAddButton.disabled).toBe(false);
+    inactiveAddButton.click();
+    await waitForText('Still editable while inactive.');
+    expect(
+      rpcMock.mock.calls.find((call) => call[0] === 'memory.add')[1],
+    ).toEqual({
+      agent_id: 'alpha',
+      scope: 'agent',
+      content: 'Still editable while inactive.',
+    });
+    expect(
+      rpcMock.mock.calls.find((call) => call[0] === 'memory.list')[1],
+    ).toEqual({ agent_id: 'alpha' });
+  });
+
+  it('adds, edits, and deletes Memory entries from the expanded Agent editor', async () => {
+    rpcMock.mockImplementation(
+      createAgentsRpcMock({
+        memories: {
+          agent: [{ id: 1, scope: 'agent', content: 'Keep releases small.' }],
+          user: [],
+        },
+      }),
+    );
+
+    mountedComponent = mount(AgentsView, { target: document.body });
+    flushSync();
+    await waitForText('Manage Memory entries');
+    getButtonByAriaLabel('Manage Memory entries').click();
+    await waitForText('Keep releases small.');
+
+    const agentScope = memoryScopeNamed('Agent Memory');
+    getButtonWithin(agentScope, 'Edit').click();
+    flushSync();
+    const editArea = agentScope.querySelector(
+      'textarea[aria-label="Edit Memory entry"]',
+    );
+    editArea.value = 'Keep releases focused.';
+    editArea.dispatchEvent(new Event('input', { bubbles: true }));
+    flushSync();
+    getButtonWithin(agentScope, 'Save').click();
+    await waitForText('Keep releases focused.');
+
+    const userScope = memoryScopeNamed('User profile');
+    const addArea = userScope.querySelector(
+      'textarea[aria-label="New User profile entry"]',
+    );
+    addArea.value = 'Prefers concise answers.';
+    addArea.dispatchEvent(new Event('input', { bubbles: true }));
+    flushSync();
+    getButtonWithin(userScope, 'Add Memory').click();
+    await waitForText('Prefers concise answers.');
+
+    getButtonWithin(memoryScopeNamed('Agent Memory'), 'Delete').click();
+    flushSync();
+    getButton('Delete Memory').click();
+    await waitForCondition(
+      () => !document.body.textContent.includes('Keep releases focused.'),
+      100,
+    );
+
+    expect(
+      rpcMock.mock.calls.find((call) => call[0] === 'memory.replace')[1],
+    ).toEqual({
+      agent_id: 'alpha',
+      scope: 'agent',
+      entry_id: 1,
+      content: 'Keep releases focused.',
+    });
+    expect(
+      rpcMock.mock.calls.find((call) => call[0] === 'memory.add')[1],
+    ).toEqual({
+      agent_id: 'alpha',
+      scope: 'user',
+      content: 'Prefers concise answers.',
+    });
+    expect(
+      rpcMock.mock.calls.find((call) => call[0] === 'memory.remove')[1],
+    ).toEqual({ agent_id: 'alpha', scope: 'agent', entry_id: 1 });
+  });
+
   it('renders skill catalog warnings and unavailable diagnostics', async () => {
     rpcMock.mockImplementation(createAgentsRpcMock());
 
@@ -635,3 +759,21 @@ describe('AgentsView', () => {
     ).toBe('false');
   });
 });
+
+function memoryScopeNamed(name) {
+  const scope = Array.from(
+    document.body.querySelectorAll('.agents-view__memory-scope'),
+  ).find(
+    (candidate) => candidate.querySelector('h3')?.textContent.trim() === name,
+  );
+  expect(scope).toBeTruthy();
+  return scope;
+}
+
+function getButtonWithin(container, label) {
+  const button = Array.from(container.querySelectorAll('button')).find(
+    (candidate) => candidate.textContent.trim() === label,
+  );
+  expect(button).toBeTruthy();
+  return button;
+}

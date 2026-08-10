@@ -237,6 +237,51 @@ export function deleteAgent(id, options = {}) {
   return rpc('agent.delete', { id }, options);
 }
 
+export function listAgentMemories(agentId, options = {}) {
+  requireNonEmptyString(
+    agentId,
+    'Agent id must be a non-empty string',
+    'memory.list',
+  );
+  return rpc('memory.list', { agent_id: agentId }, options);
+}
+
+export function addAgentMemory(agentId, scope, content, options = {}) {
+  requireAgentMemoryMutation(agentId, scope, content, 'memory.add');
+  return rpc('memory.add', { agent_id: agentId, scope, content }, options);
+}
+
+export function replaceAgentMemory(
+  agentId,
+  scope,
+  entryId,
+  content,
+  options = {},
+) {
+  requireAgentMemoryMutation(agentId, scope, content, 'memory.replace');
+  requirePositiveInteger(entryId, 'Memory entry id', 'memory.replace');
+  return rpc(
+    'memory.replace',
+    { agent_id: agentId, scope, entry_id: entryId, content },
+    options,
+  );
+}
+
+export function removeAgentMemory(agentId, scope, entryId, options = {}) {
+  requireNonEmptyString(
+    agentId,
+    'Agent id must be a non-empty string',
+    'memory.remove',
+  );
+  requireMemoryScope(scope, 'memory.remove');
+  requirePositiveInteger(entryId, 'Memory entry id', 'memory.remove');
+  return rpc(
+    'memory.remove',
+    { agent_id: agentId, scope, entry_id: entryId },
+    options,
+  );
+}
+
 export function listModels(params = {}, options = {}) {
   requirePlainObject(params, 'Model filters must be an object', 'model.list');
   return rpc('model.list', params, options);
@@ -1835,6 +1880,36 @@ function requireNonEmptyString(value, message, method) {
     });
   }
   return value;
+}
+
+function requireAgentMemoryMutation(agentId, scope, content, method) {
+  requireNonEmptyString(agentId, 'Agent id must be a non-empty string', method);
+  requireMemoryScope(scope, method);
+  requireNonEmptyString(
+    content,
+    'Memory content must be a non-empty string',
+    method,
+  );
+}
+
+function requireMemoryScope(scope, method) {
+  if (scope !== 'agent' && scope !== 'user') {
+    throw new ApiClientError(
+      RPC_ERROR_INVALID_CLIENT_REQUEST,
+      'Memory scope must be agent or user',
+      { method },
+    );
+  }
+}
+
+function requirePositiveInteger(value, label, method) {
+  if (!Number.isInteger(value) || value <= 0) {
+    throw new ApiClientError(
+      RPC_ERROR_INVALID_CLIENT_REQUEST,
+      `${label} must be a positive integer`,
+      { method },
+    );
+  }
 }
 
 function requirePlainObject(value, message, method) {

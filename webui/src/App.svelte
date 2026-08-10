@@ -259,6 +259,7 @@
   let selectedProjectAgentId = $state(readStoredSelectedProjectAgentId());
   let agentsRefreshToken = $state(0);
   let modelsRefreshToken = $derived(appControllerState.modelsRefreshToken);
+  let memoriesRefreshToken = $derived(appControllerState.memoriesRefreshToken);
   let projectsRefreshToken = $derived(appControllerState.projectsRefreshToken);
   let sessionsRefreshToken = $derived(appControllerState.sessionsRefreshToken);
   let commandsRefreshToken = $derived(appControllerState.commandsRefreshToken);
@@ -1095,6 +1096,7 @@
           onNavigateToSettingsPanel={navigateToSettingsPanel}
           onNavigateToAgentPrompt={navigateToAgentPromptScope}
           {agentsRefreshToken}
+          {memoriesRefreshToken}
           {modelsRefreshToken}
           {projectsRefreshToken}
         />

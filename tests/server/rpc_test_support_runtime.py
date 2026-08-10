@@ -19,6 +19,7 @@ from core.chat import (
     ChatSessionManager,
     CommandDispatcher,
 )
+from core.memory import MemoryService
 from core.prompts import LayoutEntry
 from core.providers.accounts import (
     DEFAULT_ACCOUNT_ID,
@@ -796,6 +797,7 @@ class StubRuntime:
             StubAgent(id="coder", allowed_tools=["*"]),
             defaults_provider=lambda: self.storage.load_defaults().get("agent", {}),
         )
+        self.memory = MemoryService()
         self.agent_resolver = StubAgentResolver(self.agents)
         self.projects = StubProjects()
         self.chat_sessions = ChatSessionManager(tmp_path)

@@ -22,6 +22,22 @@ export function rpcBackedApiMock(rpcMock, overrides = {}) {
     updateAgent: (params) => call('agent.update', params),
     renameAgent: (id, newId) => call('agent.rename', { id, new_id: newId }),
     deleteAgent: (id) => call('agent.delete', { id }),
+    listAgentMemories: (agentId) => call('memory.list', { agent_id: agentId }),
+    addAgentMemory: (agentId, scope, content) =>
+      call('memory.add', { agent_id: agentId, scope, content }),
+    replaceAgentMemory: (agentId, scope, entryId, content) =>
+      call('memory.replace', {
+        agent_id: agentId,
+        scope,
+        entry_id: entryId,
+        content,
+      }),
+    removeAgentMemory: (agentId, scope, entryId) =>
+      call('memory.remove', {
+        agent_id: agentId,
+        scope,
+        entry_id: entryId,
+      }),
     listModels: (params = {}) =>
       Object.keys(params).length === 0
         ? call('model.list')

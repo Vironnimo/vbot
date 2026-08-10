@@ -265,6 +265,9 @@ export function createAgentsRpcMock(options = {}) {
     usableConnection('openai:api-key', 'openai', 'API Key'),
   ];
   let orderRevision = options.orderRevision ?? 1;
+  const memoryScopes = structuredClone(
+    options.memories ?? { agent: [], user: [] },
+  );
 
   return async (method, params) => {
     if (method === 'model.list') {
@@ -301,6 +304,59 @@ export function createAgentsRpcMock(options = {}) {
 
     if (method === 'agent.list') {
       return { agents, order_revision: orderRevision };
+    }
+
+    if (method === 'memory.list') {
+      return {
+        agent_id: params.agent_id,
+        scopes: structuredClone(memoryScopes),
+      };
+    }
+
+    if (method === 'memory.add') {
+      const entries = memoryScopes[params.scope];
+      const entry = {
+        id: entries.length + 1,
+        scope: params.scope,
+        content: params.content.trim(),
+      };
+      entries.push(entry);
+      return {
+        agent_id: params.agent_id,
+        entry,
+        scopes: structuredClone(memoryScopes),
+      };
+    }
+
+    if (method === 'memory.replace') {
+      const entries = memoryScopes[params.scope];
+      const entry = entries.find((item) => item.id === params.entry_id);
+      if (!entry) {
+        throw new Error('Memory entry not found');
+      }
+      entry.content = params.content.trim();
+      return {
+        agent_id: params.agent_id,
+        entry: structuredClone(entry),
+        scopes: structuredClone(memoryScopes),
+      };
+    }
+
+    if (method === 'memory.remove') {
+      const entries = memoryScopes[params.scope];
+      const index = entries.findIndex((item) => item.id === params.entry_id);
+      if (index < 0) {
+        throw new Error('Memory entry not found');
+      }
+      const [entry] = entries.splice(index, 1);
+      entries.forEach((item, entryIndex) => {
+        item.id = entryIndex + 1;
+      });
+      return {
+        agent_id: params.agent_id,
+        entry,
+        scopes: structuredClone(memoryScopes),
+      };
     }
 
     if (method === 'agent.reorder') {

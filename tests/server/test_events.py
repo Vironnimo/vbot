@@ -267,6 +267,7 @@ def test_allowed_resource_kinds_lock_the_documented_wire_contract() -> None:
         "cron",
         "commands",
         "terminals",
+        "memories",
     } == ALLOWED_RESOURCE_KINDS
 
 

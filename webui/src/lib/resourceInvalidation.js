@@ -14,6 +14,7 @@
 // through a bare counter.
 export const RESOURCE_TOKEN_MODELS = 'models';
 export const RESOURCE_TOKEN_AGENTS = 'agents';
+export const RESOURCE_TOKEN_MEMORIES = 'memories';
 export const RESOURCE_TOKEN_SESSIONS = 'sessions';
 export const RESOURCE_TOKEN_CLIENTS = 'clients';
 export const RESOURCE_TOKEN_CHANNELS = 'channels';
@@ -33,6 +34,7 @@ const KIND_TOKEN_GROUPS = {
   models: [RESOURCE_TOKEN_MODELS],
   providers: [RESOURCE_TOKEN_MODELS],
   agents: [RESOURCE_TOKEN_AGENTS],
+  memories: [RESOURCE_TOKEN_MEMORIES],
   sessions: [RESOURCE_TOKEN_SESSIONS],
   clients: [RESOURCE_TOKEN_CLIENTS],
   channels: [RESOURCE_TOKEN_CHANNELS],
