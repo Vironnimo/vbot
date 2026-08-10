@@ -13,6 +13,8 @@
 .vbot-install-venv
 .vbot-install.json
 .playwright-cli/
+/tmp/browser-use/
+/tmp/computer-use/
 
 # Python
 .mypy_cache/
