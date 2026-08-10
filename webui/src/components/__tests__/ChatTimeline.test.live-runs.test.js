@@ -1112,9 +1112,15 @@ describe('ChatTimeline', () => {
     const resultRow = Array.from(document.querySelectorAll('.teb-row')).find(
       (el) => el.querySelector('.teb-label')?.textContent === 'Result',
     );
+    const resultFields = Array.from(
+      resultRow.querySelectorAll('.teb-field'),
+    ).map((field) => ({
+      key: field.querySelector('.teb-field-key')?.textContent,
+      value: field.querySelector('.teb-field-value')?.textContent,
+    }));
+    expect(resultFields).toContainEqual({ key: 'status', value: 'completed' });
+    expect(resultFields).toContainEqual({ key: 'exit_code', value: '0' });
     const resultText = resultRow.querySelector('.teb-code').textContent;
-    expect(resultText).toContain('status: "completed"');
-    expect(resultText).toContain('exit_code: 0');
     expect(resultText).not.toContain('hello');
     expect(resultText).not.toContain('warn');
   });

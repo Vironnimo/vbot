@@ -28,6 +28,7 @@ import {
   subAgentToolStatusLabel,
   takeoverSeparatorLabel,
   toolArgumentSummary,
+  toolDetailPresentation,
   toolRowPresentation,
   visibleRunChildren,
 } from '../chatTimelinePresentation.js';
@@ -152,16 +153,32 @@ describe('chatTimelinePresentation', () => {
     );
 
     expect(value).toBe(
-      'summary: "first line\nsecond line"\n' +
-        'nested: {"text":"nested first\r\nnested second"}\n' +
-        'literal: "keep \\\\n as text"',
+      'summary: first line\n  second line\n' +
+        'nested: text: nested first\r\n    nested second\n' +
+        'literal: keep \\n as text',
     );
   });
 
-  it('keeps Tool Args line breaks JSON-escaped', () => {
+  it('renders Tool Args line breaks without JSON string wrappers', () => {
     const value = compactToolValue({ query: 'first\nsecond' });
 
-    expect(value).toBe('query: "first\\nsecond"');
+    expect(value).toBe('query: first\n  second');
+  });
+
+  it('keeps scalar types available after removing String wrappers', () => {
+    const presentation = toolDetailPresentation({
+      stringFalse: 'false',
+      booleanFalse: false,
+      count: 3,
+      missing: null,
+    });
+
+    expect(presentation.fields).toEqual([
+      { key: 'stringFalse', kind: 'string', text: 'false' },
+      { key: 'booleanFalse', kind: 'boolean', text: 'false' },
+      { key: 'count', kind: 'number', text: '3' },
+      { key: 'missing', kind: 'null', text: 'null' },
+    ]);
   });
 
   it('uses the path summary without exposing edit replacement text', () => {
@@ -777,8 +794,8 @@ describe('chatTimelinePresentation', () => {
       tool,
     });
 
-    expect(rendered).toContain('result: "Final answer from the worker."');
-    expect(rendered).toContain('status: "completed"');
+    expect(rendered).toContain('result: Final answer from the worker.');
+    expect(rendered).toContain('status: completed');
   });
 
   it('keeps the original tool result when no fetched output exists', () => {

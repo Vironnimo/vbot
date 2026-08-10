@@ -15,7 +15,6 @@
     attachmentUrlForBlock,
     fileMentionStatusLabel,
     avatarForItem,
-    compactToolValue,
     errorMessagePresentation,
     formatTime,
     hasAssistantContent,
@@ -44,6 +43,7 @@
     textFromEvent,
     textFromMessage,
     toolCallFromEvent,
+    toolDetailPresentation,
     toolNameForEvent,
     toolResultValueForEvent,
     toolRowFromEvent,
@@ -104,20 +104,45 @@
   toolName = '',
   tool = null,
 )}
-  {@const displayValue = compactToolValue(value, {
+  {@const presentation = toolDetailPresentation(value, {
     preferPayload,
     toolName,
     tool,
   })}
-  <div class="teb-row">
-    <span class="teb-label">{label}</span>
-    <span class:error={isError} class="teb-code">{displayValue}</span>
-    {#if displayValue !== t('chat.toolNoData', '—')}
-      <CopyButton
-        text={displayValue}
-        class="chat-copy-action tool-detail-copy"
-        label={t('chat.copyToolField', 'Copy {label}', { label })}
-      />
+  <div
+    class="teb-row teb-section"
+    class:teb-section--error={isError}
+    class:teb-section--success={preferPayload && !isError}
+  >
+    <div class="teb-section-header">
+      <span class="teb-label">{label}</span>
+      {#if presentation.copyText !== t('chat.toolNoData', '—')}
+        <CopyButton
+          text={presentation.copyText}
+          class="chat-copy-action tool-detail-copy"
+          label={t('chat.copyToolField', 'Copy {label}', { label })}
+        />
+      {/if}
+    </div>
+    {#if presentation.kind === 'fields'}
+      <div class:error={isError} class="teb-code teb-fields">
+        {#each presentation.fields as field (field.key)}
+          <div class="teb-field">
+            <span class="teb-field-key">{field.key}</span>
+            <span
+              class:error={isError}
+              class={`teb-field-value teb-field-value--${field.kind}`}
+              >{field.text}</span
+            >
+          </div>
+        {/each}
+      </div>
+    {:else}
+      <span
+        class:error={isError}
+        class={`teb-code teb-text teb-text--${presentation.kind}`}
+        >{presentation.text}</span
+      >
     {/if}
   </div>
 {/snippet}
@@ -446,7 +471,7 @@
               >
             {/each}
           </summary>
-          <div class="tool-event-body">
+          <div class="tool-event-body tool-event-details">
             {@render toolDetailSection(
               t('chat.toolArgs', 'Args'),
               toolCallFromEvent(item.event)?.arguments,

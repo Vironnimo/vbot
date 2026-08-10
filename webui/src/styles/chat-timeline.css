@@ -390,6 +390,123 @@
   white-space: pre-wrap;
 }
 
+/* Expanded Tool details continue the inline timeline as a quiet rail. The
+   collapsed Tool row deliberately remains owned by the existing `.te-*`
+   rules above; this structure begins only inside the open disclosure body. */
+.tool-event-body.tool-event-details {
+  position: relative;
+  width: 100%;
+  margin: 6px 0 0 4px;
+  padding: 4px 0 3px 20px;
+  border-left: 1px solid var(--border-2);
+}
+
+.tool-event[open] .tool-event-body.tool-event-details {
+  gap: 18px;
+}
+
+.tool-event-body .teb-row.teb-section {
+  position: relative;
+  display: block;
+  min-width: 0;
+}
+
+.teb-section::before {
+  position: absolute;
+  top: 8px;
+  left: -24px;
+  width: 7px;
+  height: 7px;
+  border: 1px solid var(--border-2);
+  border-radius: 50%;
+  background: var(--bg);
+  content: '';
+}
+
+.teb-section--success::before {
+  border-color: var(--green);
+}
+
+.teb-section--error::before {
+  border-color: var(--red);
+}
+
+.teb-section-header {
+  display: flex;
+  min-height: 24px;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 5px;
+}
+
+.teb-section-header .tool-detail-copy {
+  margin-left: auto;
+}
+
+.teb-section .teb-label {
+  color: var(--text-lo);
+  font-size: var(--fs-mono-xs);
+  font-weight: 500;
+  letter-spacing: 0.07em;
+}
+
+.teb-section .teb-code {
+  display: block;
+  min-width: 0;
+  color: var(--text-hi);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mono-sm);
+  line-height: 1.55;
+}
+
+.teb-section .teb-code.error {
+  color: var(--red);
+}
+
+.teb-fields {
+  display: grid;
+  gap: 5px;
+}
+
+.teb-field {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: minmax(96px, 180px) minmax(0, 1fr);
+  gap: 14px;
+  align-items: baseline;
+}
+
+.teb-field-key {
+  color: var(--text-med);
+  overflow-wrap: anywhere;
+}
+
+.teb-field-value {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.teb-field-value--boolean,
+.teb-field-value--number {
+  color: var(--blue);
+}
+
+.teb-field-value--null,
+.teb-text--empty {
+  color: var(--text-lo);
+}
+
+.teb-field-value.error {
+  color: var(--red);
+}
+
+.teb-text {
+  overflow-x: auto;
+  padding-right: 4px;
+  white-space: pre-wrap;
+}
+
 /* Copy actions stay visually quiet in the dense Chat timeline. Pointer hover
    reveals only the actions belonging to the current semantic copy surface;
    keyboard focus and coarse pointers keep the same controls discoverable. */
@@ -782,6 +899,15 @@ a.inline-attachment:focus-visible {
 
   .tool-event-body {
     max-width: 100%;
+  }
+
+  .teb-field {
+    grid-template-columns: 1fr;
+    gap: 2px;
+  }
+
+  .teb-field + .teb-field {
+    margin-top: 5px;
   }
 
   .attachment-item {

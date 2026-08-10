@@ -20,6 +20,11 @@ export const toolNameHasHiddenArguments = (toolName) =>
 export const compactToolValue = (
   value,
   { preferPayload = false, toolName = '', tool = null } = {},
+) => toolDetailPresentation(value, { preferPayload, toolName, tool }).copyText;
+
+export const toolDetailPresentation = (
+  value,
+  { preferPayload = false, toolName = '', tool = null } = {},
 ) => {
   const processed = preferPayload
     ? preferredToolResultValue(value, toolName, tool)
@@ -32,26 +37,29 @@ export const compactToolValue = (
       );
 
   if (!hasMeaningfulToolDetail(processed)) {
-    return t('chat.toolNoData', '—');
-  }
-
-  if (typeof processed === 'string') {
-    return processed;
-  }
-
-  if (typeof processed === 'number' || typeof processed === 'boolean') {
-    return String(processed);
+    const emptyText = t('chat.toolNoData', '—');
+    return { copyText: emptyText, fields: [], kind: 'empty', text: emptyText };
   }
 
   if (isPlainObject(processed)) {
-    return formatPlainObjectInner(processed, preferPayload);
+    const fields = Object.entries(processed).map(([key, entryValue]) => ({
+      key,
+      kind: toolDetailValueKind(entryValue),
+      text: formatReadableToolValue(entryValue),
+    }));
+    const copyText = fields
+      .map(({ key, text }) => `${key}: ${indentContinuationLines(text)}`)
+      .join('\n');
+    return { copyText, fields, kind: 'fields', text: copyText };
   }
 
-  try {
-    return formatJsonValue(processed, preferPayload);
-  } catch {
-    return String(processed);
-  }
+  const text = formatReadableToolValue(processed);
+  return {
+    copyText: text,
+    fields: [],
+    kind: toolDetailValueKind(processed),
+    text,
+  };
 };
 
 function hiddenArgumentKeysForTool(toolOrName, fallbackName = '') {
@@ -246,19 +254,9 @@ function hasOnlyContentField(value) {
   );
 }
 
-function formatPlainObjectInner(value, renderLineBreaks = false) {
-  return Object.entries(value)
-    .filter(([, entryValue]) => hasMeaningfulToolDetail(entryValue))
-    .map(
-      ([key, entryValue]) =>
-        `${key}: ${formatToolFieldValue(entryValue, renderLineBreaks)}`,
-    )
-    .join('\n');
-}
-
-function formatToolFieldValue(value, renderLineBreaks = false) {
+function formatReadableToolValue(value) {
   if (typeof value === 'string') {
-    return formatJsonValue(value, renderLineBreaks);
+    return value;
   }
 
   if (typeof value === 'number' || typeof value === 'boolean') {
@@ -269,51 +267,49 @@ function formatToolFieldValue(value, renderLineBreaks = false) {
     return 'null';
   }
 
-  try {
-    return formatJsonValue(value, renderLineBreaks);
-  } catch {
-    return String(value);
-  }
-}
-
-function formatJsonValue(value, renderLineBreaks) {
-  const serialized = JSON.stringify(value);
-  return renderLineBreaks ? renderSerializedLineBreaks(serialized) : serialized;
-}
-
-function renderSerializedLineBreaks(serialized) {
-  let rendered = '';
-
-  for (let index = 0; index < serialized.length; ) {
-    if (serialized[index] !== '\\') {
-      rendered += serialized[index];
-      index += 1;
-      continue;
+  if (Array.isArray(value)) {
+    if (value.length === 0) {
+      return '[]';
     }
-
-    let runEnd = index;
-    while (serialized[runEnd] === '\\') {
-      runEnd += 1;
-    }
-
-    const backslashCount = runEnd - index;
-    const escapedCharacter = serialized[runEnd];
-    const representsLineBreak =
-      backslashCount % 2 === 1 &&
-      (escapedCharacter === 'n' || escapedCharacter === 'r');
-
-    if (representsLineBreak) {
-      rendered += '\\'.repeat(backslashCount - 1);
-      rendered += escapedCharacter === 'n' ? '\n' : '\r';
-      index = runEnd + 1;
-      continue;
-    }
-
-    rendered += serialized.slice(index, runEnd);
-    index = runEnd;
+    return value
+      .map((entry) => {
+        const formatted = formatReadableToolValue(entry);
+        return `- ${indentContinuationLines(formatted)}`;
+      })
+      .join('\n');
   }
 
-  return rendered;
+  if (isPlainObject(value)) {
+    const entries = Object.entries(value);
+    if (entries.length === 0) {
+      return '{}';
+    }
+    return entries
+      .map(([key, entryValue]) => {
+        const formatted = formatReadableToolValue(entryValue);
+        return `${key}: ${indentContinuationLines(formatted)}`;
+      })
+      .join('\n');
+  }
+
+  return String(value);
+}
+
+function indentContinuationLines(value) {
+  return String(value).replaceAll('\n', '\n  ');
+}
+
+function toolDetailValueKind(value) {
+  if (value === null) {
+    return 'null';
+  }
+  if (Array.isArray(value)) {
+    return 'array';
+  }
+  if (isPlainObject(value)) {
+    return 'object';
+  }
+  return typeof value;
 }
 
 function parseJsonValue(value) {

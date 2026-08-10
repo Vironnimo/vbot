@@ -960,7 +960,7 @@ describe('ChatTimeline', () => {
     });
     flushSync();
 
-    // Compact layout: a single .teb-row per section, no .teb-entry children
+    // The disclosure keeps one Rail section per Tool detail category.
     const tebRows = document.querySelectorAll('.teb-row');
     expect(tebRows.length).toBeGreaterThan(0);
 
@@ -1255,6 +1255,21 @@ describe('ChatTimeline', () => {
   // compactToolValue unit tests (tested via rendered .teb-code elements)
   // ---------------------------------------------------------------------------
 
+  function detailCodeText(detailRow) {
+    const fields = Array.from(detailRow?.querySelectorAll('.teb-field') ?? []);
+    if (fields.length > 0) {
+      return fields
+        .map((field) => {
+          const key = field.querySelector('.teb-field-key')?.textContent ?? '';
+          const value =
+            field.querySelector('.teb-field-value')?.textContent ?? '';
+          return `${key}: ${value}`;
+        })
+        .join('\n');
+    }
+    return detailRow?.querySelector('.teb-code')?.textContent ?? '';
+  }
+
   /**
    * Mounts a single tool_call_result event and returns the text content of the
    * Result `.teb-code` element.  `resultValue` is placed verbatim into
@@ -1297,7 +1312,7 @@ describe('ChatTimeline', () => {
     const resultRow = Array.from(tebRows).find(
       (el) => el.querySelector('.teb-label')?.textContent === 'Result',
     );
-    const text = resultRow?.querySelector('.teb-code')?.textContent ?? '';
+    const text = detailCodeText(resultRow);
     unmount(comp);
     document.body.innerHTML = '';
     return text;
@@ -1335,7 +1350,7 @@ describe('ChatTimeline', () => {
     const argsRow = Array.from(tebRows).find(
       (el) => el.querySelector('.teb-label')?.textContent === 'Args',
     );
-    const text = argsRow?.querySelector('.teb-code')?.textContent ?? '';
+    const text = detailCodeText(argsRow);
     unmount(comp);
     document.body.innerHTML = '';
     return text;
@@ -1344,13 +1359,13 @@ describe('ChatTimeline', () => {
   describe('compactToolValue', () => {
     it('plain object → inner fields without the outer JSON object wrapper', () => {
       const text = getArgsCodeText({ path: 'file.txt', count: 3 }, 'ctv-obj');
-      expect(text).toBe('path: "file.txt"\ncount: 3');
+      expect(text).toBe('path: file.txt\ncount: 3');
       expect(text).not.toBe('{"path":"file.txt","count":3}');
       expect(text.trim().startsWith('{')).toBe(false);
       expect(text.trim().endsWith('}')).toBe(false);
     });
 
-    it('nested strings remain visibly distinct from JSON scalars', () => {
+    it('removes String wrappers without changing scalar values', () => {
       const text = getArgsCodeText(
         {
           stringFalse: 'false',
@@ -1361,7 +1376,7 @@ describe('ChatTimeline', () => {
         'ctv-scalar-types',
       );
       expect(text).toBe(
-        'stringFalse: "false"\nbooleanFalse: false\nstringNumber: "3"\nnumber: 3',
+        'stringFalse: false\nbooleanFalse: false\nstringNumber: 3\nnumber: 3',
       );
     });
 
@@ -1434,10 +1449,9 @@ describe('ChatTimeline', () => {
       expect(text).toContain('something went wrong');
     });
 
-    it('array → compact JSON stringify (no indentation)', () => {
-      // Arrays are passed as args; preferPayload=false (sanitizeToolDetailNode path)
+    it('array → one unwrapped value per line', () => {
       const text = getArgsCodeText([1, 2, 3], 'ctv-array');
-      expect(text).toBe('[1,2,3]');
+      expect(text).toBe('- 1\n- 2\n- 3');
     });
   });
 
