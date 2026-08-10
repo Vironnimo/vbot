@@ -541,7 +541,7 @@ async def test_cron_service_aclose_awaits_cancelled_job_tasks(
 
 
 @pytest.mark.asyncio
-async def test_unexpected_scheduler_task_failure_marks_job_failed(
+async def test_unexpected_scheduler_task_failure_restarts_active_recurring_job(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
@@ -554,25 +554,36 @@ async def test_unexpected_scheduler_task_failure_marks_job_failed(
         cron_expression="* * * * *",
     )
 
+    attempts = 0
+    restarted = asyncio.Event()
+
     async def fail_scheduler_task(_job: object) -> None:
-        raise RuntimeError("scheduler invariant failed")
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise RuntimeError("scheduler invariant failed")
+        restarted.set()
+        await asyncio.Future()
 
     monkeypatch.setattr(service, "_run_cron_job", fail_scheduler_task)
 
     with caplog.at_level(logging.ERROR, logger="vbot.automation.cron"):
         service.start()
-        await asyncio.sleep(0)
-        await asyncio.sleep(0)
+        await asyncio.wait_for(restarted.wait(), timeout=1)
 
-    failed = service.get_job(job.id)
+    recovered = service.get_job(job.id)
     persisted = json.loads((tmp_path / "cron" / "jobs.json").read_text(encoding="utf-8"))
-    assert failed.status == "failed"
-    assert failed.last_outcome == "failed"
-    assert failed.last_error == "scheduler invariant failed"
-    assert failed.consecutive_failures == 1
-    assert job.id not in service._job_tasks
-    assert persisted[0]["status"] == "failed"
+    assert recovered.status == "active"
+    assert recovered.last_outcome == "failed"
+    assert recovered.last_error == "scheduler invariant failed"
+    assert recovered.consecutive_failures == 1
+    assert attempts == 2
+    assert job.id in service._job_tasks
+    assert not service._job_tasks[job.id].done()
+    assert persisted[0]["status"] == "active"
     assert any("Cron job task failed" in record.getMessage() for record in caplog.records)
+
+    await service.aclose()
 
 
 @pytest.mark.asyncio
