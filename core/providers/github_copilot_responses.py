@@ -20,9 +20,11 @@ from core.providers.adapter import (
     TERMINAL_OUTCOME_STOP,
     TERMINAL_OUTCOME_TOOL_CALLS,
     TERMINAL_OUTCOME_UNKNOWN,
+    TOOL_CALL_ARGUMENT_SEQUENCE_INDEX_FIELD,
+    TOOL_CALL_ARGUMENT_SEQUENCE_LENGTH_FIELD,
     TOOL_CALL_REJECTION_FIELD,
     TerminalOutcome,
-    normalize_tool_call_candidate,
+    normalize_tool_call_candidates,
     normalize_tool_call_ids,
     tool_result_content_blocks,
 )
@@ -105,8 +107,8 @@ class ResponsesStreamState:
             *self.emitted_tool_arguments,
         ]
         for position, tool_call_id in enumerate(dict.fromkeys(known_tool_ids)):
-            tool_calls.append(
-                normalize_tool_call_candidate(
+            tool_calls.extend(
+                normalize_tool_call_candidates(
                     tool_call_id=tool_call_id,
                     name=self.emitted_tool_names.get(tool_call_id),
                     arguments=self.emitted_tool_arguments.get(tool_call_id),
@@ -293,10 +295,14 @@ def _safe_response_output_items(
     response_output: list[Mapping[str, Any]],
     raw_tool_calls: Any,
 ) -> list[dict[str, Any]]:
-    """Replace only rejected raw function items with their safe canonical calls."""
+    """Replace raw function items when canonical calls cannot replay them verbatim."""
 
     tool_calls = _mapping_list(raw_tool_calls)
-    if not any(TOOL_CALL_REJECTION_FIELD in tool_call for tool_call in tool_calls):
+    if not any(
+        TOOL_CALL_REJECTION_FIELD in tool_call
+        or TOOL_CALL_ARGUMENT_SEQUENCE_INDEX_FIELD in tool_call
+        for tool_call in tool_calls
+    ):
         return [dict(item) for item in response_output]
 
     safe_items: list[dict[str, Any]] = []
@@ -306,6 +312,11 @@ def _safe_response_output_items(
             safe_items.append(dict(item))
             continue
         tool_call = tool_calls[tool_call_index]
+        argument_sequence = _argument_sequence_at(tool_calls, tool_call_index)
+        if argument_sequence:
+            safe_items.extend(_tool_call_to_function_call(call) for call in argument_sequence)
+            tool_call_index += len(argument_sequence)
+            continue
         tool_call_index += 1
         safe_items.append(
             _tool_call_to_function_call(tool_call)
@@ -316,6 +327,27 @@ def _safe_response_output_items(
         _tool_call_to_function_call(tool_call) for tool_call in tool_calls[tool_call_index:]
     )
     return safe_items
+
+
+def _argument_sequence_at(
+    tool_calls: list[Mapping[str, Any]],
+    start: int,
+) -> list[Mapping[str, Any]]:
+    first = tool_calls[start]
+    sequence_index = first.get(TOOL_CALL_ARGUMENT_SEQUENCE_INDEX_FIELD)
+    sequence_length = first.get(TOOL_CALL_ARGUMENT_SEQUENCE_LENGTH_FIELD)
+    if sequence_index != 0 or not isinstance(sequence_length, int) or sequence_length <= 1:
+        return []
+    sequence = tool_calls[start : start + sequence_length]
+    if len(sequence) != sequence_length:
+        return []
+    if any(
+        call.get(TOOL_CALL_ARGUMENT_SEQUENCE_INDEX_FIELD) != index
+        or call.get(TOOL_CALL_ARGUMENT_SEQUENCE_LENGTH_FIELD) != sequence_length
+        for index, call in enumerate(sequence)
+    ):
+        return []
+    return sequence
 
 
 def _text_message_to_input_item(
@@ -664,8 +696,8 @@ def _extract_function_calls(output_items: list[Mapping[str, Any]]) -> list[dict[
     for position, item in enumerate(output_items):
         if item.get("type") != "function_call":
             continue
-        tool_calls.append(
-            normalize_tool_call_candidate(
+        tool_calls.extend(
+            normalize_tool_call_candidates(
                 tool_call_id=item.get("call_id") or item.get("id"),
                 name=_function_call_name(item),
                 arguments=_function_call_arguments(item),

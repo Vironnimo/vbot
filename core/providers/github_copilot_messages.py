@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from core.providers.adapter import normalize_tool_call_candidate, tool_result_content_blocks
+from core.providers.adapter import normalize_tool_call_candidates, tool_result_content_blocks
 from core.providers.anthropic_compatible import (
     AnthropicMessagesStreamDecoder,
     apply_anthropic_cache_usage,
@@ -588,8 +588,8 @@ def _extract_messages_tool_calls(content_blocks: Any) -> list[dict[str, Any]] | 
         block = raw_block
         if block.get("type") != TOOL_USE_BLOCK_TYPE:
             continue
-        tool_calls.append(
-            normalize_tool_call_candidate(
+        tool_calls.extend(
+            normalize_tool_call_candidates(
                 tool_call_id=block.get("id"),
                 name=block.get("name"),
                 arguments=block.get("input"),

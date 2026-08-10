@@ -206,6 +206,44 @@ class TestSendSuccess:
             {"id": "call_one", "name": "search", "arguments": {"q": "docs"}}
         ]
 
+    def test_normalize_response_recovers_consecutive_argument_objects(self, openai_adapter):
+        normalized = openai_adapter.normalize_response(
+            {
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": None,
+                            "tool_calls": [
+                                {
+                                    "id": "call_batch",
+                                    "type": "function",
+                                    "function": {
+                                        "name": "bash",
+                                        "arguments": (
+                                            '{"mode":"foreground","command":"echo one"}'
+                                            '{"mode":"foreground","command":"echo two"}'
+                                        ),
+                                    },
+                                }
+                            ],
+                        },
+                        "finish_reason": "tool_calls",
+                    }
+                ]
+            }
+        )
+
+        assert normalized["tool_calls"] is not None
+        assert [call["arguments"]["command"] for call in normalized["tool_calls"]] == [
+            "echo one",
+            "echo two",
+        ]
+        assert [call["argument_sequence_index"] for call in normalized["tool_calls"]] == [
+            0,
+            1,
+        ]
+
     def test_normalize_response_keeps_valid_tool_calls_when_one_is_malformed(
         self,
         openai_adapter,

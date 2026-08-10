@@ -13,9 +13,13 @@ import pytest
 
 from core.providers.adapter import (
     IMAGE_WIRE_MEDIA_TYPES,
+    TOOL_CALL_ARGUMENT_SEQUENCE_INDEX_FIELD,
+    TOOL_CALL_ARGUMENT_SEQUENCE_LENGTH_FIELD,
+    TOOL_CALL_REJECTION_FIELD,
     TOOL_RESULT_CONTENT_BLOCKS_FIELD,
     ProviderAdapter,
     normalize_tool_call_candidate,
+    normalize_tool_call_candidates,
     project_tool_result_content_fallbacks,
 )
 from core.providers.reasoning import REASONING_REPLAY_CURRENT_RUN
@@ -247,3 +251,61 @@ def test_normalize_tool_call_candidate_synthesizes_addressable_missing_name_fail
     assert candidate["name"] == "invalid_tool_call"
     assert candidate["arguments"] == {"path": "README.md"}
     assert candidate["rejection"]["code"] == "malformed_tool_call"
+
+
+def test_normalize_tool_call_candidates_recovers_consecutive_argument_objects() -> None:
+    arguments = (
+        '{"mode":"foreground","command":"cd repo \\u0026\\u0026 ls -la"}'
+        '{"mode":"foreground","command":"find core -name \\"*.py\\""}'
+    )
+
+    first = normalize_tool_call_candidates(
+        tool_call_id="call_batch",
+        name="bash",
+        arguments=arguments,
+        fallback_id="tool_call_0",
+    )
+    second = normalize_tool_call_candidates(
+        tool_call_id="call_batch",
+        name="bash",
+        arguments=arguments,
+        fallback_id="tool_call_0",
+    )
+
+    assert first == second
+    assert [call["arguments"] for call in first] == [
+        {"mode": "foreground", "command": "cd repo && ls -la"},
+        {"mode": "foreground", "command": 'find core -name "*.py"'},
+    ]
+    assert first[0]["id"] == "call_batch"
+    assert first[1]["id"].startswith("tool_call_recovered_")
+    assert len({call["id"] for call in first}) == 2
+    assert [call[TOOL_CALL_ARGUMENT_SEQUENCE_INDEX_FIELD] for call in first] == [0, 1]
+    assert all(call[TOOL_CALL_ARGUMENT_SEQUENCE_LENGTH_FIELD] == 2 for call in first)
+
+
+def test_normalize_tool_call_candidates_isolates_non_object_sequence_member() -> None:
+    candidates = normalize_tool_call_candidates(
+        tool_call_id="call_batch",
+        name="read",
+        arguments='{"path":"README.md"}null',
+        fallback_id="tool_call_0",
+    )
+
+    assert candidates[0]["arguments"] == {"path": "README.md"}
+    assert TOOL_CALL_REJECTION_FIELD not in candidates[0]
+    assert candidates[1]["arguments"] == {}
+    assert candidates[1]["rejection"]["code"] == "malformed_tool_arguments"
+
+
+def test_normalize_tool_call_candidates_does_not_recover_ambiguous_suffix() -> None:
+    candidates = normalize_tool_call_candidates(
+        tool_call_id="call_bad",
+        name="read",
+        arguments='{"path":"README.md"}{broken}',
+        fallback_id="tool_call_0",
+    )
+
+    assert len(candidates) == 1
+    assert candidates[0]["arguments"] == {}
+    assert candidates[0]["rejection"]["code"] == "malformed_tool_arguments"

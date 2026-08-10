@@ -15,7 +15,7 @@ from urllib.parse import urlparse
 from core.providers.adapter import (
     TERMINAL_OUTCOME_UNKNOWN,
     TerminalOutcome,
-    normalize_tool_call_candidate,
+    normalize_tool_call_candidates,
     terminal_outcome_from_response,
 )
 from core.providers.errors import ProviderStreamingUnsupportedError
@@ -335,8 +335,8 @@ class _ToolCallFragments:
         )
         return normalized_name_delta, normalized_arguments_delta
 
-    def to_tool_call(self) -> JsonObject:
-        return normalize_tool_call_candidate(
+    def to_tool_calls(self) -> list[JsonObject]:
+        return normalize_tool_call_candidates(
             tool_call_id=self.provider_id,
             name=self.name_text,
             arguments=self.arguments_text,
@@ -412,7 +412,7 @@ class StreamingAccumulator:
         """Build final fields, preserving malformed Tool Calls as rejected calls."""
         tool_calls: list[JsonObject] = []
         for fragments in self._tool_calls.values():
-            tool_calls.append(fragments.to_tool_call())
+            tool_calls.extend(fragments.to_tool_calls())
         return StreamingAssistantFields(
             content=_joined_or_none(self._content_parts),
             reasoning=_joined_or_none(self._reasoning_parts),

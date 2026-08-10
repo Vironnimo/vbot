@@ -1733,6 +1733,44 @@ class TestToolExecutor:
         ]
 
     @pytest.mark.asyncio
+    async def test_per_call_serial_override_orders_parallel_safe_calls(self) -> None:
+        registry = ToolRegistry()
+        events: list[str] = []
+        active_count = 0
+        max_active_count = 0
+
+        async def handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
+            nonlocal active_count, max_active_count
+            active_count += 1
+            max_active_count = max(max_active_count, active_count)
+            events.append(f"start:{context.tool_call_id}")
+            await asyncio.sleep(0.01)
+            events.append(f"end:{context.tool_call_id}")
+            active_count -= 1
+            return tool_success({"id": context.tool_call_id})
+
+        registry.register(
+            "safe",
+            "Parallel-safe tool for testing.",
+            {"type": "object"},
+            handler,
+            parallel_safe=True,
+        )
+        executor = ToolExecutor(registry, per_run_limit=2, global_limit=2)
+
+        results = await executor.execute_many(
+            [
+                ToolCall(id="call-1", name="safe", arguments={}, force_serial=True),
+                ToolCall(id="call-2", name="safe", arguments={}, force_serial=True),
+            ],
+            make_execution_config(allowed_tools=["*"]),
+        )
+
+        assert max_active_count == 1
+        assert events == ["start:call-1", "end:call-1", "start:call-2", "end:call-2"]
+        assert [result["data"]["id"] for result in results] == ["call-1", "call-2"]
+
+    @pytest.mark.asyncio
     async def test_semaphore_queues_overflow_with_lowered_limits(self) -> None:
         registry = ToolRegistry()
         active_count = 0

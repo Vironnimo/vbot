@@ -395,6 +395,80 @@ def test_build_payload_replaces_rejected_raw_function_call_with_safe_canonical_i
     ]
 
 
+def test_build_payload_expands_recovered_argument_sequence_for_replay() -> None:
+    response_output = [
+        {"type": "reasoning", "id": "rs_1", "encrypted_content": "opaque"},
+        {
+            "type": "function_call",
+            "id": "fc_batch",
+            "call_id": "call_batch",
+            "name": "bash",
+            "arguments": '{"command":"echo one"}{"command":"echo two"}',
+        },
+    ]
+    payload = build_responses_payload(
+        [
+            {
+                "role": "assistant",
+                "content": None,
+                "reasoning_meta": {"response_output": response_output},
+                "tool_calls": [
+                    {
+                        "id": "call_batch",
+                        "name": "bash",
+                        "arguments": {"command": "echo one"},
+                        "argument_sequence_index": 0,
+                        "argument_sequence_length": 2,
+                    },
+                    {
+                        "id": "tool_call_recovered_1234",
+                        "name": "bash",
+                        "arguments": {"command": "echo two"},
+                        "argument_sequence_index": 1,
+                        "argument_sequence_length": 2,
+                    },
+                ],
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "call_batch",
+                "name": "bash",
+                "content": "first",
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "tool_call_recovered_1234",
+                "name": "bash",
+                "content": "second",
+            },
+        ],
+        model_id="gpt-5.6-sol",
+        policy=responses_policy("gpt-5.6-sol"),
+    )
+
+    assert payload["input"] == [
+        response_output[0],
+        {
+            "type": "function_call",
+            "call_id": "call_batch",
+            "name": "bash",
+            "arguments": '{"command":"echo one"}',
+        },
+        {
+            "type": "function_call",
+            "call_id": "tool_call_recovered_1234",
+            "name": "bash",
+            "arguments": '{"command":"echo two"}',
+        },
+        {"type": "function_call_output", "call_id": "call_batch", "output": "first"},
+        {
+            "type": "function_call_output",
+            "call_id": "tool_call_recovered_1234",
+            "output": "second",
+        },
+    ]
+
+
 def test_build_payload_replays_phase_from_canonical_fallback_message() -> None:
     payload = build_responses_payload(
         [
@@ -652,6 +726,28 @@ def test_normalize_response_preserves_malformed_function_arguments_as_rejected_c
     assert tool_call["name"] == "search"
     assert tool_call["arguments"] == {}
     assert tool_call["rejection"]["code"] == "malformed_tool_arguments"
+
+
+def test_normalize_response_recovers_consecutive_function_argument_objects() -> None:
+    normalized = normalize_responses_response(
+        {
+            "output": [
+                {
+                    "type": "function_call",
+                    "call_id": "call_batch",
+                    "name": "bash",
+                    "arguments": '{"command":"echo one"}{"command":"echo two"}',
+                }
+            ]
+        }
+    )
+
+    assert normalized["tool_calls"] is not None
+    assert [call["arguments"]["command"] for call in normalized["tool_calls"]] == [
+        "echo one",
+        "echo two",
+    ]
+    assert [call["argument_sequence_index"] for call in normalized["tool_calls"]] == [0, 1]
 
 
 def test_normalize_response_accepts_collapsed_single_output_item() -> None:

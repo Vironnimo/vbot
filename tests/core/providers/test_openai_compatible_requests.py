@@ -134,6 +134,39 @@ class TestAssistantMessageFormatting:
             }
         ]
 
+    def test_recovered_argument_sequence_replays_as_correlated_sibling_calls(self) -> None:
+        wire_message = _to_openai_assistant_message(
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "call_batch",
+                        "name": "bash",
+                        "arguments": {"command": "echo one"},
+                        "argument_sequence_index": 0,
+                        "argument_sequence_length": 2,
+                    },
+                    {
+                        "id": "tool_call_recovered_1234",
+                        "name": "bash",
+                        "arguments": {"command": "echo two"},
+                        "argument_sequence_index": 1,
+                        "argument_sequence_length": 2,
+                    },
+                ],
+            }
+        )
+
+        assert [call["id"] for call in wire_message["tool_calls"]] == [
+            "call_batch",
+            "tool_call_recovered_1234",
+        ]
+        assert [call["function"]["arguments"] for call in wire_message["tool_calls"]] == [
+            '{"command":"echo one"}',
+            '{"command":"echo two"}',
+        ]
+
 
 # ---------------------------------------------------------------------------
 # send() — request format
