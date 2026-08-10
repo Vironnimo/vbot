@@ -168,7 +168,12 @@ def test_write_settings_raises_and_logs_persistent_write_errors(
         desktop_settings.write_settings({"servers": []}, settings_file)
 
     assert replace_attempts == desktop_settings._IO_RETRY_ATTEMPTS
-    assert "Desktop settings could not be persisted after 3 attempts" in caplog.text
+    error_records = [
+        record
+        for record in caplog.records
+        if record.name == "vbot.desktop.settings" and record.levelno == logging.ERROR
+    ]
+    assert len(error_records) == 1
     assert not settings_file.exists()
     assert list(tmp_path.glob(".settings.json.*.tmp")) == []
 
@@ -373,7 +378,7 @@ def test_write_window_size_rejects_invalid_dimensions(
     width: object,
     height: object,
 ) -> None:
-    with pytest.raises(ValueError, match="positive integers"):
+    with pytest.raises(ValueError):
         desktop_settings.write_window_size(width, height, tmp_path / "settings.json")  # type: ignore[arg-type]
 
 

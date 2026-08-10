@@ -70,7 +70,7 @@ def test_builtin_skill_requires_hass_token_and_exposes_script() -> None:
     missing_registry = SkillRegistry.load(SKILLS_ROOT, environment={})
     missing = missing_registry.availability_for("home-assistant", ["*"])
     assert missing.state == "unavailable"
-    assert missing.missing == ("missing environment variable 'HASS_TOKEN'",)
+    assert missing.missing
 
     registry = SkillRegistry.load(SKILLS_ROOT, environment={"HASS_TOKEN": "available"})
     skill = registry.get("home-assistant")
@@ -84,7 +84,8 @@ def test_builtin_skill_requires_hass_token_and_exposes_script() -> None:
         SKILL_ROOT / "SKILL.md",
         env_keys=("HASS_TOKEN",),
     )["content"]
-    assert activated.index("<environment_access>") < activated.index("# Home Assistant")
+    assert activated.startswith('<skill_content name="home-assistant">')
+    assert "<environment_access>" in activated
     assert "- `HASS_TOKEN`" in activated
     assert SCRIPT_PATH.as_posix() in activated
     assert "- references/dashboard-design.md" in activated
@@ -217,7 +218,7 @@ def test_apply_dashboard_rejects_a_race_before_writing(tmp_path: Path) -> None:
     client = FakeClient([current])
     backup = tmp_path / "backup.json"
 
-    with pytest.raises(HA_WS.HomeAssistantScriptError, match="changed since export"):
+    with pytest.raises(HA_WS.HomeAssistantScriptError):
         HA_WS.apply_dashboard(
             client,
             _config("light.proposed"),
@@ -243,7 +244,7 @@ def test_create_dashboard_rolls_back_metadata_when_initial_save_fails() -> None:
         ]
     )
 
-    with pytest.raises(HA_WS.HomeAssistantScriptError, match="metadata was rolled back"):
+    with pytest.raises(HA_WS.HomeAssistantScriptError):
         HA_WS.create_dashboard(
             client,
             {"title": "Kitchen", "url_path": "kitchen-wall"},

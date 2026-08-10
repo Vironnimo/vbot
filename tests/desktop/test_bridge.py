@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
 import threading
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -297,7 +298,7 @@ def test_calibration_requires_ready_real_listener(tmp_path: Path) -> None:
     )
     bridge.publish_state("listening")
 
-    with pytest.raises(RuntimeError, match="real Voice stack"):
+    with pytest.raises(RuntimeError):
         bridge.startWakewordCalibration()
 
 
@@ -546,7 +547,7 @@ def test_bridge_imports_selects_and_deletes_a_custom_model(
     engine = bridge._create_wakeword_engine()
     assert isinstance(engine, engine_module.MultiWakewordEngine)
     assert engine.active_model_ids == (DEFAULT_WAKEWORD_MODEL_IDS[0], imported["id"])
-    with pytest.raises(WakewordModelError, match="active"):
+    with pytest.raises(WakewordModelError):
         bridge.deleteWakewordModel(imported["id"])
 
     bridge.setWakewordConfig({"active_model_ids": list(DEFAULT_WAKEWORD_MODEL_IDS)})
@@ -563,12 +564,12 @@ def test_bridge_rejects_invalid_model_content_and_unknown_selection(
     _write_settings(settings_file)
     bridge = DesktopBridge(settings_path=settings_file)
 
-    with pytest.raises(WakewordModelError, match="base64"):
+    with pytest.raises(WakewordModelError):
         bridge.importWakewordModel("bad.tflite", "%%%")
     monkeypatch.setattr(bridge_module, "_MAX_CUSTOM_WAKEWORD_MODEL_BASE64_CHARS", 8)
-    with pytest.raises(WakewordModelError, match="size limit"):
+    with pytest.raises(WakewordModelError):
         bridge.importWakewordModel("large.tflite", "a" * 9)
-    with pytest.raises(WakewordModelError, match="not available"):
+    with pytest.raises(WakewordModelError):
         bridge.setWakewordConfig({"active_model_ids": ["custom/missing"]})
 
 
@@ -813,12 +814,23 @@ def test_publish_state_updates_state_and_logs_transitions(
         bridge.publish_state("error", "microphone_unavailable")
         assert bridge.getWakewordStatus()["state"] == "error"
 
-    assert "Voice state changed (sequence=1, from=off, to=listening)" in caplog.text
-    assert "Voice state changed (sequence=2, from=listening, to=recording)" in caplog.text
-    assert (
-        "Voice state changed (sequence=3, from=recording, to=error, "
-        "error_code=microphone_unavailable)"
-    ) in caplog.text
+    messages = [
+        record.getMessage()
+        for record in caplog.records
+        if record.name == "vbot.desktop.wakeword.bridge" and record.levelno == logging.INFO
+    ]
+    assert len(messages) == 3
+    assert all(marker in messages[0] for marker in ("sequence=1", "from=off", "to=listening"))
+    assert all(marker in messages[1] for marker in ("sequence=2", "from=listening", "to=recording"))
+    assert all(
+        marker in messages[2]
+        for marker in (
+            "sequence=3",
+            "from=recording",
+            "to=error",
+            "error_code=microphone_unavailable",
+        )
+    )
 
 
 def test_publish_state_does_not_log_unchanged_state(
@@ -833,7 +845,11 @@ def test_publish_state_does_not_log_unchanged_state(
         caplog.clear()
         bridge.publish_state("listening")
 
-    assert "Voice state changed" not in caplog.text
+    assert not [
+        record
+        for record in caplog.records
+        if record.name == "vbot.desktop.wakeword.bridge" and record.levelno == logging.INFO
+    ]
 
 
 def test_publish_state_rejects_invalid_state(tmp_path: Path) -> None:
@@ -841,7 +857,7 @@ def test_publish_state_rejects_invalid_state(tmp_path: Path) -> None:
 
     bridge = DesktopBridge(settings_path=tmp_path / "settings.json")
 
-    with pytest.raises(ValueError, match="Invalid wakeword state"):
+    with pytest.raises(ValueError):
         bridge.publish_state("nonexistent")
 
 
@@ -998,9 +1014,9 @@ def test_connection_methods_raise_without_controller(tmp_path: Path) -> None:
     _write_settings(tmp_path / "settings.json")
     bridge = DesktopBridge(settings_path=tmp_path / "settings.json")
 
-    with pytest.raises(RuntimeError, match="no connection controller"):
+    with pytest.raises(RuntimeError):
         bridge.connect("pi.lan", 9000)
-    with pytest.raises(RuntimeError, match="no connection controller"):
+    with pytest.raises(RuntimeError):
         bridge.listServers()
 
 

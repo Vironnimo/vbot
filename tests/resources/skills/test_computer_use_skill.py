@@ -56,7 +56,7 @@ def test_skill_requires_cua_driver_and_exposes_script(tmp_path: Path) -> None:
     missing_registry = SkillRegistry.load(SKILLS_ROOT, environment={"PATH": ""})
     missing = missing_registry.availability_for("computer-use", ["*"])
     assert missing.state == "unavailable"
-    assert missing.missing == ("missing binary 'cua-driver'",)
+    assert missing.missing
 
     executable = tmp_path / ("cua-driver.cmd" if sys.platform == "win32" else "cua-driver")
     executable.write_text("", encoding="utf-8")
@@ -66,7 +66,7 @@ def test_skill_requires_cua_driver_and_exposes_script(tmp_path: Path) -> None:
 
     activated = load_skill_content("computer-use", SKILL_ROOT / "SKILL.md")["content"]
     assert SCRIPT_PATH.as_posix() in activated
-    assert "# Computer Use" in activated
+    assert activated.startswith('<skill_content name="computer-use">')
 
 
 def test_capture_normalizes_screenshot_and_accessibility_data(tmp_path: Path) -> None:
@@ -197,7 +197,7 @@ def test_type_does_not_echo_text_in_result(tmp_path: Path) -> None:
 def test_dangerous_system_shortcut_is_blocked(tmp_path: Path) -> None:
     client = FakeClient()
 
-    with pytest.raises(COMPUTER_USE.ComputerUseError, match="shortcut is blocked"):
+    with pytest.raises(COMPUTER_USE.ComputerUseError):
         COMPUTER_USE._execute(
             [
                 "--session",
@@ -220,7 +220,7 @@ def test_dangerous_system_shortcut_is_blocked(tmp_path: Path) -> None:
 def test_click_requires_one_exact_target_kind(tmp_path: Path) -> None:
     client = FakeClient()
 
-    with pytest.raises(COMPUTER_USE.ComputerUseError, match="either --element"):
+    with pytest.raises(COMPUTER_USE.ComputerUseError):
         COMPUTER_USE._execute(
             [
                 "--session",

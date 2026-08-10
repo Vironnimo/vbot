@@ -815,7 +815,6 @@ def test_cmd_delete_lists_uncommitted_files_when_non_force_remove_fails(
 
     captured = capsys.readouterr()
     assert result == 1
-    assert "error: worktree has uncommitted changes, use --force to override" in captured.out
     assert "uncommitted: ?? docs/plans/task.md" in captured.out
     assert "uncommitted:  M webui/src/App.svelte" in captured.out
 

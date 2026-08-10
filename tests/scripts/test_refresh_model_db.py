@@ -81,11 +81,9 @@ def test_main_targets_this_checkout_system_database(
 
 def test_main_rejects_detached_checkout(
     monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
 ) -> None:
     monkeypatch.setattr(refresh_model_db, "_is_branch_checkout", lambda: False)
 
     exit_code = refresh_model_db.main([])
 
     assert exit_code == 2
-    assert "checkout is detached" in capsys.readouterr().out

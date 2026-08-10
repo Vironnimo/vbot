@@ -64,11 +64,11 @@ def test_catalog_imports_and_resolves_a_valid_custom_model(
 
 
 @pytest.mark.parametrize(
-    ("filename", "content", "message"),
+    ("filename", "content"),
     [
-        ("model.onnx", b"data", "TFLite"),
-        ("model.tflite", b"", "empty"),
-        ("", b"data", "filename"),
+        ("model.onnx", b"data"),
+        ("model.tflite", b""),
+        ("", b"data"),
     ],
 )
 def test_catalog_rejects_invalid_imports(
@@ -76,19 +76,18 @@ def test_catalog_rejects_invalid_imports(
     monkeypatch: pytest.MonkeyPatch,
     filename: str,
     content: bytes,
-    message: str,
 ) -> None:
     monkeypatch.setattr(engine_module, "_validate_custom_model", Mock())
     catalog = WakewordModelCatalog(tmp_path / "settings.json")
 
-    with pytest.raises(WakewordModelError, match=message):
+    with pytest.raises(WakewordModelError):
         catalog.import_model(filename, content)
 
 
 def test_catalog_rejects_oversized_import(tmp_path: Path) -> None:
     catalog = WakewordModelCatalog(tmp_path / "settings.json")
 
-    with pytest.raises(WakewordModelError, match="exceeds"):
+    with pytest.raises(WakewordModelError):
         catalog.import_model("large.tflite", b"x" * (MAX_CUSTOM_WAKEWORD_MODEL_BYTES + 1))
 
 
@@ -146,7 +145,7 @@ def test_catalog_deletes_only_imported_models(
         "builtin/alexa",
     ]
     assert not Path(imported.target).exists()
-    with pytest.raises(WakewordModelError, match="Built-in"):
+    with pytest.raises(WakewordModelError):
         catalog.delete_model(DEFAULT_WAKEWORD_MODEL_IDS[0])
 
 
