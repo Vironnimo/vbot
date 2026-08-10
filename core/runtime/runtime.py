@@ -2072,6 +2072,14 @@ class Runtime:
         return self._agents
 
     @property
+    def memory(self) -> MemoryService:
+        """Access to the pinned Memory service used by Tools and accessors."""
+        self._ensure_started()
+        if self._memory_service is None:
+            raise RuntimeError("Memory service not available")
+        return self._memory_service
+
+    @property
     def tools(self) -> ToolRegistry:
         """Access to the runtime tool registry."""
         self._ensure_started()

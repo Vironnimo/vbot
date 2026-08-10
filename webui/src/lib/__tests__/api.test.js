@@ -18,6 +18,7 @@ import {
   RUN_EVENT_TYPES,
   WEBSOCKET_ERROR_RESPONSE,
   addProject,
+  addAgentMemory,
   cancelProcess,
   cancelRun,
   cancelToolCall,
@@ -26,8 +27,10 @@ import {
   setOverride,
   createRpcEnvelope,
   listProjects,
+  listAgentMemories,
   listSessionActivity,
   removeProject,
+  removeAgentMemory,
   deleteSession,
   renameSession,
   setProject,
@@ -43,6 +46,7 @@ import {
   readLogFile,
   reorderAgents,
   renameAgent,
+  replaceAgentMemory,
   removeFromQueue,
   rpc,
   transcribeSpeech,
@@ -372,6 +376,63 @@ describe('agent API', () => {
         expected_revision: 3,
       },
     });
+  });
+
+  it('posts the structured Memory CRUD contracts', async () => {
+    const fetchFunction = vi
+      .fn()
+      .mockResolvedValue(jsonResponse({ ok: true, result: { scopes: {} } }));
+
+    await listAgentMemories('coder', { fetch: fetchFunction });
+    await addAgentMemory('coder', 'agent', 'Keep tests focused.', {
+      fetch: fetchFunction,
+    });
+    await replaceAgentMemory('coder', 'agent', 2, 'Keep tests deterministic.', {
+      fetch: fetchFunction,
+    });
+    await removeAgentMemory('coder', 'agent', 2, { fetch: fetchFunction });
+
+    expect(
+      fetchFunction.mock.calls.map((call) => JSON.parse(call[1].body)),
+    ).toEqual([
+      { method: 'memory.list', params: { agent_id: 'coder' } },
+      {
+        method: 'memory.add',
+        params: {
+          agent_id: 'coder',
+          scope: 'agent',
+          content: 'Keep tests focused.',
+        },
+      },
+      {
+        method: 'memory.replace',
+        params: {
+          agent_id: 'coder',
+          scope: 'agent',
+          entry_id: 2,
+          content: 'Keep tests deterministic.',
+        },
+      },
+      {
+        method: 'memory.remove',
+        params: { agent_id: 'coder', scope: 'agent', entry_id: 2 },
+      },
+    ]);
+  });
+
+  it('rejects invalid Memory scope and entry ids before sending', () => {
+    expect(() => addAgentMemory('coder', 'other', 'Fact')).toThrow(
+      expect.objectContaining({
+        code: RPC_ERROR_INVALID_CLIENT_REQUEST,
+        method: 'memory.add',
+      }),
+    );
+    expect(() => removeAgentMemory('coder', 'agent', 0)).toThrow(
+      expect.objectContaining({
+        code: RPC_ERROR_INVALID_CLIENT_REQUEST,
+        method: 'memory.remove',
+      }),
+    );
   });
 });
 

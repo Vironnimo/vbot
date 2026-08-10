@@ -8,6 +8,7 @@ import {
   RESOURCE_TOKEN_COMMANDS,
   RESOURCE_TOKEN_DEBUG_TRACES,
   RESOURCE_TOKEN_MODELS,
+  RESOURCE_TOKEN_MEMORIES,
   RESOURCE_TOKEN_SESSIONS,
   RESOURCE_TOKEN_TERMINALS,
   SURFACE_DISPLAY,
@@ -28,6 +29,10 @@ describe('tokenKeysForKind()', () => {
 
   it('routes an agents change to the agents token', () => {
     expect(tokenKeysForKind('agents')).toEqual([RESOURCE_TOKEN_AGENTS]);
+  });
+
+  it('routes a Memory change to the memories token', () => {
+    expect(tokenKeysForKind('memories')).toEqual([RESOURCE_TOKEN_MEMORIES]);
   });
 
   it('routes a sessions change to the sessions token', () => {

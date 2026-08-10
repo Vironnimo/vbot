@@ -188,6 +188,7 @@ describe('App controller', () => {
       });
 
       expect(state.modelsRefreshToken).toBe(1);
+      expect(state.memoriesRefreshToken).toBe(1);
       expect(state.projectsRefreshToken).toBe(1);
       expect(state.sessionsRefreshToken).toBe(1);
       expect(state.clientsRefreshToken).toBe(1);
@@ -212,6 +213,7 @@ describe('App controller', () => {
     });
 
     expect(state.modelsRefreshToken).toBe(0);
+    expect(state.memoriesRefreshToken).toBe(0);
     expect(state.projectsRefreshToken).toBe(0);
     expect(state.sessionsRefreshToken).toBe(0);
     expect(state.clientsRefreshToken).toBe(0);
@@ -233,6 +235,17 @@ describe('App controller', () => {
     });
 
     expect(state.cronRefreshToken).toBe(1);
+  });
+
+  it('bumps the memories refresh token for Memory changes', async () => {
+    const { controller, state } = setup();
+
+    await controller.handleServerEvent({
+      type: 'resource_changed',
+      payload: { kind: 'memories', scope: { agent_id: 'alpha' } },
+    });
+
+    expect(state.memoriesRefreshToken).toBe(1);
   });
 
   it('bumps the command refresh token for command catalog changes', async () => {

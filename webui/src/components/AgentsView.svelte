@@ -46,6 +46,7 @@
     modelsRefreshToken = 0,
     projectsRefreshToken = 0,
     agentsRefreshToken = 0,
+    memoriesRefreshToken = 0,
   } = $props();
 
   let agents = $state([]);
@@ -488,6 +489,7 @@
         {onToast}
         {onNavigateToSettingsPanel}
         {onNavigateToAgentPrompt}
+        {memoriesRefreshToken}
         onModelDropdownOpenChange={trackModelDropdownOpen}
       />
     {/key}

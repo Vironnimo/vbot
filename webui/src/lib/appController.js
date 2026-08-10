@@ -17,6 +17,7 @@ import {
 } from './navigationHistory.js';
 import {
   RESOURCE_TOKEN_AGENTS,
+  RESOURCE_TOKEN_MEMORIES,
   RESOURCE_TOKEN_CHANNELS,
   RESOURCE_TOKEN_CLIENTS,
   RESOURCE_TOKEN_CRON,
@@ -55,6 +56,7 @@ export function createAppControllerState(activeViewId) {
     connectionState: createConnectionState(),
     debugTracesRefreshToken: 0,
     modelsRefreshToken: 0,
+    memoriesRefreshToken: 0,
     pendingSessionNavigation: null,
     projectsRefreshToken: 0,
     promptScopeTarget: '',
@@ -389,6 +391,7 @@ export function createAppController({
         event.replay_status === CONNECTION_REPLAY_STATUS_EPOCH_CHANGED
       ) {
         state.modelsRefreshToken += 1;
+        state.memoriesRefreshToken += 1;
         state.projectsRefreshToken += 1;
         state.sessionsRefreshToken += 1;
         state.clientsRefreshToken += 1;
@@ -426,6 +429,9 @@ export function createAppController({
     const tokenKeys = tokenKeysForKind(kind);
     if (tokenKeys.includes(RESOURCE_TOKEN_MODELS)) {
       state.modelsRefreshToken += 1;
+    }
+    if (tokenKeys.includes(RESOURCE_TOKEN_MEMORIES)) {
+      state.memoriesRefreshToken += 1;
     }
     if (tokenKeys.includes(RESOURCE_TOKEN_PROJECTS)) {
       state.projectsRefreshToken += 1;
