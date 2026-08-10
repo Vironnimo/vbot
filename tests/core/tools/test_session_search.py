@@ -22,7 +22,7 @@ from core.recall import (
 from core.recall.hybrid import HybridRecallBackend
 from core.recall.jsonl import RECALL_TOOL_RESULT_NAMES
 from core.recall.vector import VectorRecallBackend
-from core.sessions import ChatSessionManager
+from core.sessions import ChatSession, ChatSessionManager
 from core.tools.session_search import (
     SESSION_READ_TOOL_NAME,
     SESSION_READ_TOOL_PARAMETERS,
@@ -501,6 +501,43 @@ async def test_read_supports_whole_session_and_open_or_closed_ranges(tmp_path: P
     assert whole["session"]["message_count"] == 4
     assert whole["session"]["first_message"]["message_id"] == messages[0].id
     assert whole["session"]["last_message"]["message_id"] == messages[-1].id
+
+
+async def test_read_reports_only_a_missing_session_as_not_found(tmp_path: Path) -> None:
+    sessions = ChatSessionManager(tmp_path)
+    context = make_context(tmp_path, tool_name=SESSION_READ_TOOL_NAME)
+
+    result = await session_read_handler(context, {"session_id": "missing"}, sessions)
+
+    failure(result, "session_not_found")
+
+
+async def test_read_does_not_report_corrupt_session_as_not_found(tmp_path: Path) -> None:
+    sessions = ChatSessionManager(tmp_path)
+    session = sessions.create("coder", session_id="corrupt")
+    session.path.write_text("{invalid-json}\n", encoding="utf-8")
+    context = make_context(tmp_path, tool_name=SESSION_READ_TOOL_NAME)
+
+    result = await session_read_handler(context, {"session_id": "corrupt"}, sessions)
+
+    failure(result, "session_read_error")
+
+
+async def test_read_does_not_report_permission_error_as_not_found(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sessions = ChatSessionManager(tmp_path)
+    session = sessions.create("coder", session_id="denied")
+    session.append(ChatMessage.user("private", timestamp=timestamp(1)))
+    context = make_context(tmp_path, tool_name=SESSION_READ_TOOL_NAME)
+
+    def deny_load(self: ChatSession) -> list[ChatMessage]:
+        raise PermissionError("access denied")
+
+    monkeypatch.setattr(ChatSession, "load", deny_load)
+    result = await session_read_handler(context, {"session_id": "denied"}, sessions)
+
+    failure(result, "session_read_error")
 
 
 async def test_oversized_read_record_is_losslessly_segmented(tmp_path: Path) -> None:
