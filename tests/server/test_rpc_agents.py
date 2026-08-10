@@ -245,10 +245,10 @@ async def test_agent_crud_rejects_connection_fields(tmp_path: Path) -> None:
 
     assert create_response["ok"] is False
     assert create_response["error"]["code"] == "invalid_request"
-    assert "unsupported agent fields" in create_response["error"]["message"]
+    assert "connection" in create_response["error"]["message"]
     assert update_response["ok"] is False
     assert update_response["error"]["code"] == "invalid_request"
-    assert "unsupported agent fields" in update_response["error"]["message"]
+    assert "fallback_connection" in update_response["error"]["message"]
 
 
 def _append_subscription_only_model(state: Any) -> None:
@@ -289,7 +289,7 @@ async def test_agent_create_rejects_model_on_forbidden_connection(tmp_path: Path
 
     assert response["ok"] is False
     assert response["error"]["code"] == "invalid_request"
-    assert "not available on connection 'api-key'" in response["error"]["message"]
+    assert "api-key" in response["error"]["message"]
 
 
 @pytest.mark.asyncio

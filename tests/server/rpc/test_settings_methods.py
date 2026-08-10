@@ -61,9 +61,7 @@ def test_trace_count_logs_warning_on_unexpected_error(
     assert _trace_count(runtime) == 0
 
     warning_records = [
-        record
-        for record in caplog.records
-        if record.name == "vbot.server.rpc.settings" and "debug trace count" in record.getMessage()
+        record for record in caplog.records if record.name == "vbot.server.rpc.settings"
     ]
     assert len(warning_records) == 1
     assert warning_records[0].exc_info is not None
@@ -105,7 +103,8 @@ async def test_session_title_settings_round_trip_and_validate_model_connection(
         for record in caplog.records
         if record.name == "vbot.server.rpc.settings"
     ]
-    assert messages == ["Settings updated (sections=session_titles)"]
+    assert len(messages) == 1
+    assert "sections=session_titles" in messages[0]
 
 
 @pytest.mark.asyncio

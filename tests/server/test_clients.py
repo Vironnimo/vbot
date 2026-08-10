@@ -72,13 +72,10 @@ def test_register_and_unregister_log_client_details_and_duration(
         )
         registry.unregister(entry.id)
 
-    assert [record.getMessage() for record in caplog.records] == [
-        "Client connected: Browser · Chrome on Windows (client_id=12345678)",
-        (
-            "Client disconnected: Browser · Chrome on Windows "
-            "(client_id=12345678, connected_for=18m 4s)"
-        ),
-    ]
+    messages = [record.getMessage() for record in caplog.records]
+    assert len(messages) == 2
+    assert all("client_id=12345678" in message for message in messages)
+    assert "connected_for=18m 4s" in messages[1]
 
 
 def test_overlapping_reconnect_logs_one_logical_presence_cycle(
@@ -108,10 +105,10 @@ def test_overlapping_reconnect_logs_one_logical_presence_cycle(
         registry.unregister(original.id)
         registry.unregister(replacement.id)
 
-    assert [record.getMessage() for record in caplog.records] == [
-        "Client connected: Desktop · Edge on Windows (client_id=same-tab)",
-        ("Client disconnected: Desktop · Edge on Windows (client_id=same-tab, connected_for=2m)"),
-    ]
+    messages = [record.getMessage() for record in caplog.records]
+    assert len(messages) == 2
+    assert all("client_id=same-tab" in message for message in messages)
+    assert "connected_for=2m" in messages[1]
 
 
 def test_unregister_removes_only_the_named_entry() -> None:

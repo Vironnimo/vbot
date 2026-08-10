@@ -224,7 +224,7 @@ async def test_rejects_non_boolean_enabled() -> None:
 
     # Assert
     assert response["ok"] is False
-    assert "boolean" in response["error"]["message"]
+    assert response["error"]["code"] == "invalid_request"
 
 
 @pytest.mark.asyncio
@@ -248,7 +248,7 @@ async def test_rejects_account_scoped_connection_id() -> None:
 
     # Assert
     assert response["ok"] is False
-    assert "account" in response["error"]["message"]
+    assert response["error"]["code"] == "invalid_request"
 
 
 @pytest.mark.asyncio

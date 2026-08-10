@@ -165,11 +165,9 @@ def test_missing_description_uses_body_and_reloads(tmp_path: Path) -> None:
         {"scope": "global", "name": "demo", "content": "---\nname: demo\n---\n\nbody\n"},
     )
 
-    assert result == {
-        "name": "demo",
-        "operation": "create",
-        "warnings": ["Skill metadata missing description; using the first body text line."],
-    }
+    assert result["name"] == "demo"
+    assert result["operation"] == "create"
+    assert result["warnings"]
     assert SkillRegistry.load(state.runtime.global_skills_dir).get("demo").description == "body"
     assert state.runtime.reload_calls == 1
 

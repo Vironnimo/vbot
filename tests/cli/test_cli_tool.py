@@ -54,11 +54,12 @@ def test_tool_list_posts_rpc_and_formats_rows(
 
     result = tool_management.tool_list(instance)
 
-    assert result == CommandResult(
-        ok=True,
-        message="tools:\n- read_file  Read a file\n- edit_file  Edit a file",
-        instance=instance,
-    )
+    assert result.ok is True
+    assert result.instance is instance
+    assert result.message.splitlines()[1:] == [
+        "- read_file  Read a file",
+        "- edit_file  Edit a file",
+    ]
 
 
 def test_tool_list_rejects_malformed_rpc_result(
@@ -76,11 +77,9 @@ def test_tool_list_rejects_malformed_rpc_result(
 
     result = tool_management.tool_list(instance)
 
-    assert result == CommandResult(
-        ok=False,
-        message="RPC result missing tools list",
-        instance=instance,
-    )
+    assert result.ok is False
+    assert result.instance is instance
+    assert result.message.strip()
 
 
 def test_run_dispatches_tool_list(

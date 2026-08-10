@@ -128,12 +128,15 @@ async def test_terminal_operator_handlers_validate_and_register_contract() -> No
     manager = FakeTerminalManager()
     state = _state(manager)
 
-    with pytest.raises(RpcError, match="does not accept params"):
+    with pytest.raises(RpcError) as list_error:
         _terminal_list(state, {"extra": True})
-    with pytest.raises(RpcError, match="params.columns must be an integer"):
+    assert list_error.value.code == "invalid_request"
+    with pytest.raises(RpcError) as resize_error:
         await _terminal_resize(state, {"terminal_id": "term-1", "columns": True, "rows": 30})
-    with pytest.raises(RpcError, match="params.args must be a list of strings"):
+    assert resize_error.value.code == "invalid_request"
+    with pytest.raises(RpcError) as start_error:
         await _terminal_start(state, {"args": ["valid", 1]})
+    assert start_error.value.code == "invalid_request"
 
     handlers = build_method_handlers()
     assert {

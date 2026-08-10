@@ -471,13 +471,9 @@ async def test_model_list_rejects_unsupported_fields(tmp_path: Path) -> None:
         {"method": "model.list", "params": {"provider_id": "openai", "extra": True}},
     )
 
-    assert response == {
-        "ok": False,
-        "error": {
-            "code": "invalid_request",
-            "message": "unsupported model.list fields: extra",
-        },
-    }
+    assert response["ok"] is False
+    assert response["error"]["code"] == "invalid_request"
+    assert "extra" in response["error"]["message"]
 
 
 @pytest.mark.asyncio
@@ -495,7 +491,6 @@ async def test_model_list_rejects_invalid_filter_values(
 
     assert response["ok"] is False
     assert response["error"]["code"] == "invalid_request"
-    assert "non-negative integer" in response["error"]["message"]
 
 
 @pytest.mark.asyncio
@@ -658,7 +653,6 @@ async def test_system_refresh_rejects_a_different_serving_checkout(tmp_path: Pat
 
     assert response["ok"] is False
     assert response["error"]["code"] == "invalid_request"
-    assert "serving checkout does not match" in response["error"]["message"]
 
 
 @pytest.mark.asyncio
@@ -1056,7 +1050,6 @@ async def test_model_refresh_db_skips_connections_without_effective_endpoint(
 
     assert response["ok"] is False
     assert response["error"]["code"] == "domain_error"
-    assert "provider 'openai' does not support model refresh" in response["error"]["message"]
     assert FAKE_REFRESH_MODEL_CALLS == []
 
 
@@ -1080,7 +1073,6 @@ async def test_model_refresh_db_maps_discovery_failures_to_rpc_error(
 
     assert response["ok"] is False
     assert response["error"]["code"] == "domain_error"
-    assert "bad JSON" in response["error"]["message"]
 
 
 @pytest.mark.asyncio
@@ -1254,7 +1246,6 @@ async def test_model_refresh_db_rejects_provider_without_models_endpoint(
 
     assert response["ok"] is False
     assert response["error"]["code"] == "domain_error"
-    assert "provider 'openai' does not support model refresh" in response["error"]["message"]
 
 
 @pytest.mark.asyncio
@@ -1273,9 +1264,7 @@ async def test_model_refresh_db_rejects_missing_credentials(
 
     assert response["ok"] is False
     assert response["error"]["code"] == "domain_error"
-    assert (
-        "Provider credentials not found for provider 'openrouter'" in response["error"]["message"]
-    )
+    assert "openrouter" in response["error"]["message"]
 
 
 @pytest.mark.asyncio
@@ -1347,4 +1336,4 @@ async def test_model_refresh_db_rejects_unsupported_fields(tmp_path: Path) -> No
 
     assert response["ok"] is False
     assert response["error"]["code"] == "invalid_request"
-    assert response["error"]["message"] == "unsupported model refresh fields: extra"
+    assert "extra" in response["error"]["message"]

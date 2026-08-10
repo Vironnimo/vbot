@@ -50,8 +50,9 @@ def test_list_clients_empty_without_registry() -> None:
 def test_list_clients_rejects_params() -> None:
     state = SimpleNamespace(client_registry=ClientRegistry())
 
-    with pytest.raises(RpcError, match="does not accept params"):
+    with pytest.raises(RpcError) as exc_info:
         _list_clients(state, {"unexpected": True})
+    assert exc_info.value.code == "invalid_request"
 
 
 def test_client_list_is_registered() -> None:

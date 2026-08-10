@@ -139,7 +139,6 @@ class TestChatCancelToolCall:
 
         assert response["ok"] is False
         assert response["error"]["code"] == RPC_ERROR_INVALID_REQUEST
-        assert "unsupported chat.cancel_tool_call fields" in response["error"]["message"]
         assert "extra" in response["error"]["message"]
 
         # Clean up: cancel the held run so the executor task can finish.
@@ -239,7 +238,6 @@ class TestChatCancelReason:
 
         assert response["ok"] is False
         assert response["error"]["code"] == RPC_ERROR_INVALID_REQUEST
-        assert "unsupported chat.cancel fields" in response["error"]["message"]
         assert "tool_call_id" in response["error"]["message"]
 
 

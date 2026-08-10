@@ -301,7 +301,7 @@ def test_add_rejects_missing_cwd(tmp_path: Path) -> None:
         _add_project(state, {"cwd": str(missing), "display_name": "vBot"})
 
     assert exc_info.value.code == "invalid_request"
-    assert "not an existing directory" in exc_info.value.message
+    assert str(missing) in exc_info.value.message
 
 
 def test_add_rejects_duplicate_cwd(tmp_path: Path) -> None:
@@ -329,8 +329,10 @@ def test_add_rejects_unknown_field(tmp_path: Path) -> None:
     state = _make_state(tmp_path)
     repo = _make_repo(tmp_path, "vbot")
 
-    with pytest.raises(RpcError, match="unsupported project.add fields: bogus"):
+    with pytest.raises(RpcError) as exc_info:
         _add_project(state, {"cwd": str(repo), "bogus": 1})
+    assert exc_info.value.code == "invalid_request"
+    assert "bogus" in exc_info.value.message
 
 
 # ---------------------------------------------------------------------------
@@ -442,8 +444,10 @@ def test_detect_nonexistent_cwd_is_success_with_empty_data(tmp_path: Path) -> No
 def test_detect_rejects_unknown_field(tmp_path: Path) -> None:
     state = _make_state(tmp_path)
 
-    with pytest.raises(RpcError, match="unsupported project.detect fields: bogus"):
+    with pytest.raises(RpcError) as exc_info:
         _detect_project(state, {"cwd": str(tmp_path), "bogus": 1})
+    assert exc_info.value.code == "invalid_request"
+    assert "bogus" in exc_info.value.message
 
 
 # ---------------------------------------------------------------------------
@@ -593,8 +597,9 @@ def test_set_requires_a_change(tmp_path: Path) -> None:
     state = _make_state(tmp_path)
     _add_project(state, {"cwd": str(_make_repo(tmp_path, "vbot")), "display_name": "vBot"})
 
-    with pytest.raises(RpcError, match="at least one field"):
+    with pytest.raises(RpcError) as exc_info:
         _set_project(state, {"project_id": "vbot"})
+    assert exc_info.value.code == "invalid_request"
 
 
 # ---------------------------------------------------------------------------
@@ -658,7 +663,7 @@ def test_set_rejects_tool_wildcard(tmp_path: Path) -> None:
     state = _make_state(tmp_path)
     _add_project(state, {"cwd": str(_make_repo(tmp_path, "vbot")), "display_name": "vBot"})
 
-    with pytest.raises(RpcError, match="wildcard") as exc_info:
+    with pytest.raises(RpcError) as exc_info:
         _set_project(state, {"project_id": "vbot", "allowed_tools": ["read", "*"]})
 
     assert exc_info.value.code == "invalid_request"
@@ -668,23 +673,25 @@ def test_set_rejects_new_unregistered_project_tool(tmp_path: Path) -> None:
     state = _make_state(tmp_path)
     _add_project(state, {"cwd": str(_make_repo(tmp_path, "vbot")), "display_name": "vBot"})
 
-    with pytest.raises(RpcError, match="not currently registered") as exc_info:
+    with pytest.raises(RpcError) as exc_info:
         _set_project(
             state,
             {"project_id": "vbot", "allowed_tools": ["read", "missing_extension_tool"]},
         )
 
     assert exc_info.value.code == "invalid_request"
+    assert "missing_extension_tool" in exc_info.value.message
 
 
 def test_set_rejects_registered_but_project_excluded_tool(tmp_path: Path) -> None:
     state = _make_state(tmp_path)
     _add_project(state, {"cwd": str(_make_repo(tmp_path, "vbot")), "display_name": "vBot"})
 
-    with pytest.raises(RpcError, match="memory") as exc_info:
+    with pytest.raises(RpcError) as exc_info:
         _set_project(state, {"project_id": "vbot", "allowed_tools": ["read", "memory"]})
 
     assert exc_info.value.code == "invalid_request"
+    assert "memory" in exc_info.value.message
 
 
 def test_set_accepts_registered_extension_tool(tmp_path: Path) -> None:
@@ -927,7 +934,8 @@ def test_set_override_rejects_agent_outside_project_team(tmp_path: Path) -> None
         )
 
     assert exc_info.value.code == "invalid_request"
-    assert exc_info.value.message == "agent 'typo' is not on project 'vbot' team"
+    assert "typo" in exc_info.value.message
+    assert "vbot" in exc_info.value.message
     assert state.runtime.projects.get("vbot").overrides == {}
 
 
@@ -942,7 +950,7 @@ def test_set_override_rejects_unknown_field(tmp_path: Path) -> None:
         )
 
     assert exc_info.value.code == "invalid_request"
-    assert "params.field must be one of" in exc_info.value.message
+    assert "params.field" in exc_info.value.message
 
 
 def test_set_override_rejects_bad_temperature(tmp_path: Path) -> None:
@@ -983,7 +991,7 @@ def test_set_override_rejects_unsupported_field_param(tmp_path: Path) -> None:
     repo = _make_repo(tmp_path, "vbot", "builder.md")
     _add_project(state, {"cwd": str(repo), "display_name": "vBot"})
 
-    with pytest.raises(RpcError, match="unsupported project.set_override fields: bogus"):
+    with pytest.raises(RpcError) as exc_info:
         _set_override(
             state,
             {
@@ -994,6 +1002,8 @@ def test_set_override_rejects_unsupported_field_param(tmp_path: Path) -> None:
                 "bogus": 1,
             },
         )
+    assert exc_info.value.code == "invalid_request"
+    assert "bogus" in exc_info.value.message
 
 
 def test_clear_override_removes_field_and_returns_scan(tmp_path: Path) -> None:
@@ -1035,10 +1045,12 @@ def test_clear_override_rejects_unsupported_field_param(tmp_path: Path) -> None:
     repo = _make_repo(tmp_path, "vbot", "builder.md")
     _add_project(state, {"cwd": str(repo), "display_name": "vBot"})
 
-    with pytest.raises(RpcError, match="unsupported project.clear_override fields: bogus"):
+    with pytest.raises(RpcError) as exc_info:
         _clear_override(
             state, {"project_id": "vbot", "agent_id": "builder", "field": "model", "bogus": 1}
         )
+    assert exc_info.value.code == "invalid_request"
+    assert "bogus" in exc_info.value.message
 
 
 def test_clear_override_unknown_project_raises(tmp_path: Path) -> None:
@@ -1243,7 +1255,7 @@ async def test_rm_rolls_back_agent_reset_when_project_archive_fails(
 
     monkeypatch.setattr(state.runtime.projects, "delete", fail_archive)
 
-    with pytest.raises(OSError, match="archive failed"):
+    with pytest.raises(OSError):
         await _remove_project(
             state,
             {

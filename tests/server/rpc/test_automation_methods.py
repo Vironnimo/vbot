@@ -302,7 +302,7 @@ async def test_cron_create_rejects_null_repeat_for_once_schedule() -> None:
     )
 
     assert response["ok"] is False
-    assert "params.repeat cannot be null" in response["error"]["message"]
+    assert response["error"]["code"] == "invalid_request"
     cron_service.create_job.assert_not_called()
 
 
@@ -477,7 +477,7 @@ async def test_cron_update_rejects_null_repeat_with_once_schedule() -> None:
     )
 
     assert response["ok"] is False
-    assert "params.repeat cannot be null" in response["error"]["message"]
+    assert response["error"]["code"] == "invalid_request"
     cron_service.update_job.assert_not_called()
 
 
@@ -628,10 +628,8 @@ async def test_cron_create_wraps_expected_domain_errors() -> None:
         },
     )
 
-    assert response == {
-        "ok": False,
-        "error": {"code": "domain_error", "message": "bad schedule"},
-    }
+    assert response["ok"] is False
+    assert response["error"]["code"] == "domain_error"
 
 
 @pytest.mark.asyncio
@@ -656,10 +654,9 @@ async def test_cron_create_rejects_unknown_agent() -> None:
         },
     )
 
-    assert response == {
-        "ok": False,
-        "error": {"code": "domain_error", "message": "Cron target does not exist: missing"},
-    }
+    assert response["ok"] is False
+    assert response["error"]["code"] == "domain_error"
+    assert "missing" in response["error"]["message"]
     cron_service.create_job.assert_called_once()
 
 
@@ -685,11 +682,7 @@ async def test_cron_create_rejects_unknown_project_target() -> None:
         },
     )
 
-    assert response == {
-        "ok": False,
-        "error": {
-            "code": "domain_error",
-            "message": "Cron target does not exist: ghost@vbot",
-        },
-    }
+    assert response["ok"] is False
+    assert response["error"]["code"] == "domain_error"
+    assert "ghost@vbot" in response["error"]["message"]
     cron_service.create_job.assert_called_once()

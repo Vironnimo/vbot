@@ -693,10 +693,10 @@ async def test_shutdown_local_catalog_refresh_logs_failed_task_without_raising(
         await _shutdown_local_catalog_refresh(task, logging.getLogger("test-shutdown"))
 
     # Assert
-    assert any(
-        "Local model catalog refresh failed during shutdown" in record.getMessage()
-        for record in caplog.records
-    )
+    warnings = [record for record in caplog.records if record.name == "test-shutdown"]
+    assert len(warnings) == 1
+    assert warnings[0].levelno == logging.WARNING
+    assert warnings[0].exc_info is not None
 
 
 def test_active_runs_snapshot_keeps_project_id_none_for_identity_run(

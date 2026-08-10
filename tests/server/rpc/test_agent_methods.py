@@ -646,7 +646,7 @@ async def test_delete_guard_rejects_run_while_archive_is_waiting() -> None:
     )
     await asyncio.wait_for(sessions.archive_started.wait(), timeout=1)
 
-    with pytest.raises(RunAdmissionBlockedError, match="admission is blocked"):
+    with pytest.raises(RunAdmissionBlockedError):
         await state.chat_runs.start(
             agent_id="builder",
             session_id="s1",

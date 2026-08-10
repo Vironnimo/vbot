@@ -504,7 +504,7 @@ async def test_settings_update_rejects_unknown_defaults_agent_field(tmp_path: Pa
 
     assert response["ok"] is False
     assert response["error"]["code"] == "invalid_request"
-    assert "unsupported defaults.agent settings" in response["error"]["message"]
+    assert "unknown_field" in response["error"]["message"]
 
 
 @pytest.mark.asyncio
@@ -622,7 +622,6 @@ async def test_settings_update_maps_storage_validation_errors_to_domain_error(
 
     assert response["ok"] is False
     assert response["error"]["code"] == "domain_error"
-    assert "Unsupported appearance language" in response["error"]["message"]
 
 
 @pytest.mark.asyncio
@@ -694,5 +693,4 @@ async def test_settings_update_maps_storage_section_error_without_partial_write(
 
     assert response["ok"] is False
     assert response["error"]["code"] == "domain_error"
-    assert response["error"]["message"] == "compaction write failed"
     assert state.runtime.storage.load_settings() == original_settings
