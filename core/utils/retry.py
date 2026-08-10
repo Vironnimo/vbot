@@ -35,8 +35,8 @@ MAX_RETRIES = 3
 INITIAL_DELAY_SECONDS = 1.0
 BACKOFF_FACTOR = 2
 JITTER_FACTOR = 0.5
-# Upper bound on a honored ``Retry-After`` hint. Caps how long a single backoff
-# may block so a malformed/hostile header cannot stall an interactive request.
+# Upper bound on the server-supplied floor before bounded jitter is added. This
+# keeps malformed hints bounded without collapsing every client onto one delay.
 MAX_RETRY_AFTER_SECONDS = 60.0
 
 
@@ -64,8 +64,9 @@ def compute_retry_delay(
     base_delay = initial_delay * (BACKOFF_FACTOR**attempt)
     jitter = random.uniform(0, base_delay * JITTER_FACTOR)
     delay = base_delay + jitter
-    if retry_after is not None and retry_after > delay:
-        return min(float(retry_after), MAX_RETRY_AFTER_SECONDS), True
+    if retry_after is not None and retry_after > base_delay:
+        retry_after_floor = min(float(retry_after), MAX_RETRY_AFTER_SECONDS)
+        return retry_after_floor + jitter, True
     return delay, False
 
 

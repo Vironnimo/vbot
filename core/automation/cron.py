@@ -1201,7 +1201,8 @@ class CronService:
         self._start_job_task(job)
 
     def _on_job_task_done(self, job_id: str, task: asyncio.Task[None]) -> None:
-        if self._job_tasks.get(job_id) is task:
+        owns_job_slot = self._job_tasks.get(job_id) is task
+        if owns_job_slot:
             self._job_tasks.pop(job_id, None)
 
         if task.cancelled():
@@ -1217,6 +1218,13 @@ class CronService:
             error,
             exc_info=(type(error), error, error.__traceback__),
         )
+        if not owns_job_slot:
+            return
+
+        job = self._jobs.get(job_id)
+        if job is not None and job.status == "active":
+            job.status = "failed"
+            self._jobs[job_id] = job
         self._record_run_failure(job_id, error)
 
     def _validate_job(self, job: CronJob, *, validate_references: bool = True) -> None:

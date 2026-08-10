@@ -362,19 +362,18 @@ class ModelRegistry:
         """
         resolved = resources_dir.resolve()
         resolved_runtime = runtime_models_dir.resolve() if runtime_models_dir is not None else None
-        cache_key = (resolved, resolved_runtime)
-        if cache_key in cls._cache:
-            registry = cls._cache[cache_key]
-            if custom_providers is not None:
-                registry.reload(
-                    resources_dir,
-                    runtime_models_dir=runtime_models_dir,
-                    custom_providers=custom_providers,
-                )
+        if custom_providers is not None:
+            models_dir = select_model_database_dir(resolved, resolved_runtime)
+            registry = cls(cls._assemble_models(models_dir, custom_providers))
+            registry._active_models_dir = models_dir
             return registry
 
+        cache_key = (resolved, resolved_runtime)
+        if cache_key in cls._cache:
+            return cls._cache[cache_key]
+
         models_dir = select_model_database_dir(resolved, resolved_runtime)
-        registry = cls(cls._assemble_models(models_dir, custom_providers or {}))
+        registry = cls(cls._assemble_models(models_dir, {}))
         registry._active_models_dir = models_dir
         cls._cache[cache_key] = registry
         return registry
@@ -401,7 +400,8 @@ class ModelRegistry:
         models_dir = select_model_database_dir(resolved, resolved_runtime)
         self._models = self._assemble_models(models_dir, custom_providers or {})
         self._active_models_dir = models_dir
-        type(self)._cache[(resolved, resolved_runtime)] = self
+        if custom_providers is None:
+            type(self)._cache[(resolved, resolved_runtime)] = self
 
     @classmethod
     def _assemble_models(

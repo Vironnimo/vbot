@@ -1274,10 +1274,11 @@ def _extract_openai_usage(response: dict[str, Any]) -> dict[str, int] | None:
     has_output = isinstance(completion_tokens, int)
     if not has_input and not has_output:
         return None
-    normalized = {
-        "input_tokens": prompt_tokens if isinstance(prompt_tokens, int) else 0,
-        "output_tokens": completion_tokens if isinstance(completion_tokens, int) else 0,
-    }
+    normalized: dict[str, int] = {}
+    if isinstance(prompt_tokens, int):
+        normalized["input_tokens"] = prompt_tokens
+    if isinstance(completion_tokens, int):
+        normalized["output_tokens"] = completion_tokens
     cache_read_tokens = _openai_cached_prompt_tokens(usage)
     if cache_read_tokens is not None:
         normalized["cache_read_tokens"] = cache_read_tokens
@@ -1294,10 +1295,9 @@ def _extract_stream_usage(chunk: dict[str, Any]) -> dict[str, Any] | None:
     """Extract token usage from an OpenAI-compatible streaming chunk.
 
     Yields a usage delta only when the chunk contains a ``usage`` dict
-    with at least ``prompt_tokens`` (as int).  Maps
-    ``prompt_tokens`` → ``input_tokens`` and
-    ``completion_tokens`` → ``output_tokens`` (defaulting to ``0`` if
-    absent or not an int).
+    with at least one integer primary token counter. Maps ``prompt_tokens``
+    → ``input_tokens`` and ``completion_tokens`` → ``output_tokens``;
+    an absent counter remains absent for Chat to estimate independently.
 
     Returns ``None`` when the chunk has no usable usage data, so that
     callers can skip yielding anything.
@@ -1306,14 +1306,16 @@ def _extract_stream_usage(chunk: dict[str, Any]) -> dict[str, Any] | None:
     if not isinstance(usage, dict):
         return None
     prompt_tokens = usage.get("prompt_tokens")
-    if not isinstance(prompt_tokens, int):
-        return None
     completion_tokens = usage.get("completion_tokens")
-    delta = {
-        "type": "usage",
-        "input_tokens": prompt_tokens,
-        "output_tokens": completion_tokens if isinstance(completion_tokens, int) else 0,
-    }
+    has_input = isinstance(prompt_tokens, int)
+    has_output = isinstance(completion_tokens, int)
+    if not has_input and not has_output:
+        return None
+    delta: dict[str, Any] = {"type": "usage"}
+    if has_input:
+        delta["input_tokens"] = prompt_tokens
+    if has_output:
+        delta["output_tokens"] = completion_tokens
     cache_read_tokens = _openai_cached_prompt_tokens(usage)
     if cache_read_tokens is not None:
         delta["cache_read_tokens"] = cache_read_tokens

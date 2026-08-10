@@ -451,6 +451,11 @@ async def test_web_fetch_handler_network_error(
 
     install_http_get(monkeypatch, responder)
 
+    async def no_retry_sleep(attempt: int, retry_after: float | None = None) -> None:
+        del attempt, retry_after
+
+    monkeypatch.setattr(web_fetch_module, "sleep_for_retry", no_retry_sleep)
+
     with caplog.at_level(logging.WARNING, logger="vbot.tools.web_fetch"):
         result = await web_fetch_handler(make_context(workspace), web_fetch_arguments(url))
 
@@ -588,24 +593,67 @@ async def test_web_fetch_handler_non_retryable_status_signals_not_retryable(
 
 
 @pytest.mark.asyncio
-async def test_web_fetch_handler_transport_error_signals_retryable_single_attempt(
+async def test_web_fetch_handler_transport_error_retries_before_signalling_failure(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     url = "https://example.com/network-fail"
 
+    calls = 0
+
     def responder(_url: str) -> _FetchResult:
+        nonlocal calls
+        calls += 1
         raise CurlConnectionError("connection refused")
 
     install_http_get(monkeypatch, responder)
 
+    async def no_retry_sleep(attempt: int, retry_after: float | None = None) -> None:
+        del attempt, retry_after
+
+    monkeypatch.setattr(web_fetch_module, "sleep_for_retry", no_retry_sleep)
+
     result = await web_fetch_handler(make_context(workspace), web_fetch_arguments(url))
 
     error = assert_failure_envelope(result, "request_error")
-    # web_fetch does not loop on transport errors, so it tried exactly once.
     assert error["retryable"] is True
-    assert error["attempts_made"] == 1
+    assert error["attempts_made"] == MAX_RETRIES + 1
+    assert calls == MAX_RETRIES + 1
+
+
+@pytest.mark.asyncio
+async def test_web_fetch_handler_recovers_from_transient_transport_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    url = "https://example.com/recovered"
+    calls = 0
+
+    def responder(_url: str) -> _FetchResult:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise CurlConnectionError("connection reset")
+        return make_result(
+            status_code=200,
+            headers={"Content-Type": "text/plain"},
+            text="recovered",
+            url=url,
+        )
+
+    install_http_get(monkeypatch, responder)
+
+    async def no_retry_sleep(attempt: int, retry_after: float | None = None) -> None:
+        del attempt, retry_after
+
+    monkeypatch.setattr(web_fetch_module, "sleep_for_retry", no_retry_sleep)
+
+    result = await web_fetch_handler(make_context(workspace), web_fetch_arguments(url))
+
+    assert assert_success_envelope(result)["content"] == "recovered"
+    assert calls == 2
 
 
 @pytest.mark.asyncio

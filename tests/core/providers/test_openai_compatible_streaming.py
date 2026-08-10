@@ -878,8 +878,8 @@ class TestStreamUsageDelta:
 
     @respx.mock
     @pytest.mark.asyncio
-    async def test_stream_yields_usage_delta_with_zero_completion_tokens(self, openai_adapter):
-        """Usage with prompt_tokens but no completion_tokens defaults output_tokens to 0."""
+    async def test_stream_usage_delta_omits_missing_completion_tokens(self, openai_adapter):
+        """A missing completion counter remains absent instead of becoming a measured zero."""
         # Arrange
         sse_body = (
             'data: {"id":"chatcmpl-1","choices":[{"delta":{"content":"Hi"}}]}\n\n'
@@ -900,7 +900,7 @@ class TestStreamUsageDelta:
         # Assert
         assert chunks == [
             {"type": "content_delta", "text": "Hi"},
-            {"type": "usage", "input_tokens": 100, "output_tokens": 0},
+            {"type": "usage", "input_tokens": 100},
         ]
 
     @respx.mock
@@ -991,8 +991,10 @@ class TestStreamUsageDelta:
 
     @respx.mock
     @pytest.mark.asyncio
-    async def test_stream_no_usage_delta_when_prompt_tokens_is_null(self, openai_adapter):
-        """A chunk with usage where prompt_tokens is null does not yield a usage delta."""
+    async def test_stream_usage_delta_keeps_completion_when_prompt_tokens_is_null(
+        self, openai_adapter
+    ):
+        """A reported completion counter survives without an input counter."""
         # Arrange
         sse_body = (
             'data: {"id":"chatcmpl-1","choices":[{"delta":{"content":"Hi"}}]}\n\n'
@@ -1012,12 +1014,15 @@ class TestStreamUsageDelta:
             chunks.append(chunk)
 
         # Assert
-        assert all(c["type"] != "usage" for c in chunks)
+        assert chunks == [
+            {"type": "content_delta", "text": "Hi"},
+            {"type": "usage", "output_tokens": 5},
+        ]
 
     @respx.mock
     @pytest.mark.asyncio
-    async def test_stream_no_usage_delta_when_prompt_tokens_missing(self, openai_adapter):
-        """A chunk with usage but no prompt_tokens field does not yield a usage delta."""
+    async def test_stream_usage_delta_when_prompt_tokens_missing(self, openai_adapter):
+        """A reported completion counter survives without a prompt_tokens field."""
         # Arrange
         sse_body = (
             'data: {"id":"chatcmpl-1","choices":[{"delta":{"content":"Hi"}}]}\n\n'
@@ -1037,7 +1042,10 @@ class TestStreamUsageDelta:
             chunks.append(chunk)
 
         # Assert
-        assert all(c["type"] != "usage" for c in chunks)
+        assert chunks == [
+            {"type": "content_delta", "text": "Hi"},
+            {"type": "usage", "output_tokens": 5},
+        ]
 
     @respx.mock
     @pytest.mark.asyncio
