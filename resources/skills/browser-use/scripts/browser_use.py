@@ -10,6 +10,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 import uuid
 from pathlib import Path
@@ -145,16 +146,39 @@ class AgentBrowserCli:
 
     def _invoke(self, arguments: list[str]) -> subprocess.CompletedProcess[str]:
         try:
-            completed = subprocess.run(
-                [self.executable, *arguments],
-                capture_output=True,
-                check=False,
-                env=_safe_environment(),
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                timeout=self.timeout,
-            )
+            # agent-browser starts a long-lived daemon. On Windows that daemon can
+            # inherit anonymous pipe handles and keep capture_output=True waiting
+            # for EOF after the short-lived CLI process has already exited.
+            # Seekable temporary files preserve stdout/stderr without coupling the
+            # wrapper's completion to the daemon's lifetime.
+            with (
+                tempfile.TemporaryFile(
+                    mode="w+", encoding="utf-8", errors="replace"
+                ) as stdout_file,
+                tempfile.TemporaryFile(
+                    mode="w+", encoding="utf-8", errors="replace"
+                ) as stderr_file,
+            ):
+                command = [self.executable, *arguments]
+                completed = subprocess.run(
+                    command,
+                    stdout=stdout_file,
+                    stderr=stderr_file,
+                    check=False,
+                    env=_safe_environment(),
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    timeout=self.timeout,
+                )
+                stdout_file.seek(0)
+                stderr_file.seek(0)
+                completed = subprocess.CompletedProcess(
+                    command,
+                    completed.returncode,
+                    stdout=stdout_file.read(),
+                    stderr=stderr_file.read(),
+                )
         except subprocess.TimeoutExpired as exc:
             raise BrowserUseError(f"agent-browser timed out after {self.timeout} seconds") from exc
         except OSError as exc:
@@ -291,6 +315,7 @@ def _build_parser() -> JsonArgumentParser:
     snapshot = subparsers.add_parser("snapshot")
     snapshot.add_argument("--target")
     snapshot.add_argument("--depth", type=int, choices=range(1, 21), metavar="DEPTH")
+    snapshot.add_argument("--full", action="store_true")
     snapshot.add_argument("--boxes", action="store_true")
 
     click = subparsers.add_parser("click")
@@ -364,7 +389,9 @@ def _execute(
         return _with_snapshot(client, "navigate", session, backend, directory)
 
     if args.action == "snapshot":
-        command = ["snapshot", "-i"]
+        command = ["snapshot"]
+        if not args.full:
+            command.append("-i")
         if args.target:
             command.extend(["-s", args.target])
         if args.depth:
