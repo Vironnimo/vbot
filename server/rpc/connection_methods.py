@@ -982,7 +982,10 @@ async def _refresh_provider_model_db(
     provider_id: str,
     resources_dir: Path,
 ) -> JsonObject:
-    provider = runtime.providers.get(provider_id)
+    try:
+        provider = runtime.providers.get(provider_id)
+    except KeyError as exc:
+        raise RpcError(RPC_ERROR_DOMAIN, f"unknown provider: {provider_id}") from exc
     if not _provider_supports_refresh(provider):
         raise RpcError(
             RPC_ERROR_DOMAIN,

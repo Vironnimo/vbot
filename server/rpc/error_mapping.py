@@ -72,7 +72,6 @@ def _map_expected_error(error: Exception) -> RpcError:
             RunError,
             TaskModelError,
             VBotError,
-            KeyError,
         ),
     ):
         return RpcError(RPC_ERROR_DOMAIN, str(error))
