@@ -44,11 +44,11 @@ export const compactToolValue = (
   }
 
   if (isPlainObject(processed)) {
-    return formatPlainObjectInner(processed);
+    return formatPlainObjectInner(processed, preferPayload);
   }
 
   try {
-    return JSON.stringify(processed);
+    return formatJsonValue(processed, preferPayload);
   } catch {
     return String(processed);
   }
@@ -246,16 +246,19 @@ function hasOnlyContentField(value) {
   );
 }
 
-function formatPlainObjectInner(value) {
+function formatPlainObjectInner(value, renderLineBreaks = false) {
   return Object.entries(value)
     .filter(([, entryValue]) => hasMeaningfulToolDetail(entryValue))
-    .map(([key, entryValue]) => `${key}: ${formatToolFieldValue(entryValue)}`)
+    .map(
+      ([key, entryValue]) =>
+        `${key}: ${formatToolFieldValue(entryValue, renderLineBreaks)}`,
+    )
     .join('\n');
 }
 
-function formatToolFieldValue(value) {
+function formatToolFieldValue(value, renderLineBreaks = false) {
   if (typeof value === 'string') {
-    return JSON.stringify(value);
+    return formatJsonValue(value, renderLineBreaks);
   }
 
   if (typeof value === 'number' || typeof value === 'boolean') {
@@ -267,10 +270,50 @@ function formatToolFieldValue(value) {
   }
 
   try {
-    return JSON.stringify(value);
+    return formatJsonValue(value, renderLineBreaks);
   } catch {
     return String(value);
   }
+}
+
+function formatJsonValue(value, renderLineBreaks) {
+  const serialized = JSON.stringify(value);
+  return renderLineBreaks ? renderSerializedLineBreaks(serialized) : serialized;
+}
+
+function renderSerializedLineBreaks(serialized) {
+  let rendered = '';
+
+  for (let index = 0; index < serialized.length; ) {
+    if (serialized[index] !== '\\') {
+      rendered += serialized[index];
+      index += 1;
+      continue;
+    }
+
+    let runEnd = index;
+    while (serialized[runEnd] === '\\') {
+      runEnd += 1;
+    }
+
+    const backslashCount = runEnd - index;
+    const escapedCharacter = serialized[runEnd];
+    const representsLineBreak =
+      backslashCount % 2 === 1 &&
+      (escapedCharacter === 'n' || escapedCharacter === 'r');
+
+    if (representsLineBreak) {
+      rendered += '\\'.repeat(backslashCount - 1);
+      rendered += escapedCharacter === 'n' ? '\n' : '\r';
+      index = runEnd + 1;
+      continue;
+    }
+
+    rendered += serialized.slice(index, runEnd);
+    index = runEnd;
+  }
+
+  return rendered;
 }
 
 function parseJsonValue(value) {

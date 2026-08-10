@@ -138,6 +138,32 @@ describe('chatTimelinePresentation', () => {
     expect(value).toBe('file contents');
   });
 
+  it('renders actual line breaks in nested Tool Result strings', () => {
+    const value = compactToolValue(
+      {
+        ok: true,
+        data: {
+          summary: 'first line\nsecond line',
+          nested: { text: 'nested first\r\nnested second' },
+          literal: 'keep \\n as text',
+        },
+      },
+      { preferPayload: true, toolName: 'probe' },
+    );
+
+    expect(value).toBe(
+      'summary: "first line\nsecond line"\n' +
+        'nested: {"text":"nested first\r\nnested second"}\n' +
+        'literal: "keep \\\\n as text"',
+    );
+  });
+
+  it('keeps Tool Args line breaks JSON-escaped', () => {
+    const value = compactToolValue({ query: 'first\nsecond' });
+
+    expect(value).toBe('query: "first\\nsecond"');
+  });
+
   it('uses the path summary without exposing edit replacement text', () => {
     const summary = toolArgumentSummary({
       name: 'edit',
