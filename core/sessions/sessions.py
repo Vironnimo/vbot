@@ -16,7 +16,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar, TypeVar
 
 from core.chat.errors import ChatMessageValidationError, ChatSessionError
 from core.projects.store import project_sessions_dir
@@ -29,6 +29,7 @@ if TYPE_CHECKING:
     from core.chat.chat import ChatMessage
 
 JsonObject = dict[str, Any]
+_SessionIoResult = TypeVar("_SessionIoResult")
 
 TIMESTAMP_SUFFIX = "+00:00"
 UTC_Z_SUFFIX = "Z"
@@ -170,6 +171,7 @@ class ChatSession:
         self._deferred_note_messages: list[ChatMessage] = []
         self._activated_skill_names: set[str] = set()
         self._activated_skill_contents: dict[str, str] = {}
+        self._state_lock = threading.RLock()
 
     @classmethod
     def create(cls, sessions_dir: Path, session_id: str | None = None) -> ChatSession:
@@ -205,13 +207,34 @@ class ChatSession:
 
     def append(self, message: ChatMessage) -> None:
         """Append one canonical message as a single JSONL line."""
-        payload = json.dumps(message.to_dict(), ensure_ascii=False, separators=(",", ":"))
-        line = (payload + SESSION_LINE_ENDING).encode("utf-8")
+        self.append_many([message])
+
+    def append_many(self, messages: list[ChatMessage]) -> None:
+        """Append ordered canonical messages through one durable write."""
+        if not messages:
+            return
+        encoded_lines = [
+            (
+                json.dumps(message.to_dict(), ensure_ascii=False, separators=(",", ":"))
+                + SESSION_LINE_ENDING
+            ).encode("utf-8")
+            for message in messages
+        ]
         self.path.parent.mkdir(parents=True, exist_ok=True)
         try:
-            _append_bytes(self.path, line)
+            _append_bytes(self.path, b"".join(encoded_lines))
         except OSError as exc:
             raise ChatSessionError(f"failed to append message to session: {self.id}") from exc
+
+    async def append_async(self, message: ChatMessage) -> None:
+        """Append one message without running durable filesystem I/O on the event loop."""
+        await _run_session_io(self.append, message)
+
+    async def append_many_async(self, messages: list[ChatMessage]) -> None:
+        """Append one ordered batch without blocking the event loop."""
+        if not messages:
+            return
+        await _run_session_io(self.append_many, list(messages))
 
     def append_continuation_record(self, record: JsonObject) -> None:
         """Append one compact object to the continuation journal and fsync it."""
@@ -237,6 +260,12 @@ class ChatSession:
             raise ChatSessionError(
                 f"failed to append continuation record for session: {self.id}"
             ) from exc
+
+    async def append_continuation_records_async(self, records: list[JsonObject]) -> None:
+        """Append one continuation batch without blocking the event loop."""
+        if not records:
+            return
+        await _run_session_io(self.append_continuation_records, list(records))
 
     def load_continuation_records(self) -> list[JsonObject]:
         """Load ordered continuation records, repairing only a torn final line."""
@@ -280,38 +309,74 @@ class ChatSession:
                 records.append(dict(data))
         return records
 
+    async def load_continuation_records_async(self) -> list[JsonObject]:
+        """Load continuation records without blocking the event loop."""
+        return await _run_session_io(self.load_continuation_records)
+
     def clear_continuation(self) -> None:
         """Remove the disposable continuation journal if it exists."""
         self.continuation_path.unlink(missing_ok=True)
 
+    async def clear_continuation_async(self) -> None:
+        """Remove the continuation journal without blocking the event loop."""
+        await _run_session_io(self.clear_continuation)
+
     def begin_defer_notes(self) -> None:
         """Defer note persistence until tool-result messages have been appended."""
-        self._defer_notes = True
+        with self._state_lock:
+            self._defer_notes = True
 
     def flush_deferred_notes(self) -> None:
         """Persist deferred notes and stop note deferral mode."""
-        deferred_notes = list(self._deferred_note_messages)
-        self._deferred_note_messages.clear()
-        self._defer_notes = False
-        for note in deferred_notes:
-            self.append(note)
+        self.append_many(self._take_deferred_notes())
+
+    async def flush_deferred_notes_async(self) -> None:
+        """Persist deferred notes as one batch without blocking the event loop."""
+        await self.append_many_async(self._take_deferred_notes())
+
+    def take_deferred_notes(self) -> list[ChatMessage]:
+        """Stop note deferral and return the ordered unpersisted notes."""
+        return self._take_deferred_notes()
+
+    def _take_deferred_notes(self) -> list[ChatMessage]:
+        with self._state_lock:
+            deferred_notes = list(self._deferred_note_messages)
+            self._deferred_note_messages.clear()
+            self._defer_notes = False
+            return deferred_notes
 
     def add_note(self, content: str) -> None:
         """Persist a kernel-internal note and enqueue it for provider-request injection."""
         from core.chat.chat import ChatMessage
 
         note = ChatMessage.note(content)
-        if self._defer_notes:
-            self._deferred_note_messages.append(note)
-        else:
+        with self._state_lock:
+            deferred = self._defer_notes
+            if deferred:
+                self._deferred_note_messages.append(note)
+            self._pending_notes.append(note)
+        if not deferred:
             self.append(note)
-        self._pending_notes.append(note)
+
+    async def add_note_async(self, content: str) -> None:
+        """Persist one note without running durable filesystem I/O on the event loop."""
+        from core.chat.chat import ChatMessage
+
+        note = ChatMessage.note(content)
+        with self._state_lock:
+            deferred = self._defer_notes
+            if deferred:
+                self._deferred_note_messages.append(note)
+            self._pending_notes.append(note)
+        if not deferred:
+            await self.append_async(note)
 
     def drain_pending_notes(self) -> list[ChatMessage]:
         """Return all pending notes and clear the in-memory pending buffer."""
-        notes = list(self._pending_notes)
-        self._pending_notes.clear()
-        return notes
+        with self._state_lock:
+            notes = list(self._pending_notes)
+            self._pending_notes.clear()
+            return notes
 
     def register_skill_activation(self, name: str, content: str) -> bool:
         """Record a Skill version; return ``False`` when identical content is active.
@@ -323,11 +388,12 @@ class ChatSession:
         package may activate again in the same Session; the latest content wins.
         """
         activated_contents = self._load_activated_skill_contents()
-        if activated_contents.get(name) == content:
-            return False
-        self._activated_skill_names.add(name)
-        self._activated_skill_contents[name] = content
-        return True
+        with self._state_lock:
+            if activated_contents.get(name) == content:
+                return False
+            self._activated_skill_names.add(name)
+            self._activated_skill_contents[name] = content
+            return True
 
     def activate_skill_context(self, name: str, data: JsonObject) -> bool:
         """Persist a user-triggered skill activation; ``False`` when already active.
@@ -364,19 +430,20 @@ class ChatSession:
         self,
         preloaded_messages: list[ChatMessage] | None = None,
     ) -> dict[str, str]:
-        if self._activated_skill_contents:
-            return dict(self._activated_skill_contents)
+        with self._state_lock:
+            if self._activated_skill_contents:
+                return dict(self._activated_skill_contents)
 
         source_messages = self.load() if preloaded_messages is None else preloaded_messages
         activated_contents = _skill_contexts_from_messages(source_messages)
-        self._activated_skill_names = set(activated_contents)
-        self._activated_skill_contents = dict(activated_contents)
-        return activated_contents
+        with self._state_lock:
+            if not self._activated_skill_contents:
+                self._activated_skill_names = set(activated_contents)
+                self._activated_skill_contents = dict(activated_contents)
+            return dict(self._activated_skill_contents)
 
     def _persist_skill_context_note(self, name: str, content: str) -> None:
-        from core.chat.chat import ChatMessage
-
-        self.append(ChatMessage.note(_skill_context_note_content(name, content)))
+        self.add_note(_skill_context_note_content(name, content))
 
     def bookend_timestamps(self) -> tuple[str, str] | None:
         """Return (first, last) message timestamps without loading the full session.
@@ -405,6 +472,10 @@ class ChatSession:
         if batch is None:  # A full read has no prefix cursor that can become stale.
             raise ChatSessionError(f"failed to read session: {self.path}")
         return list(batch.messages)
+
+    async def load_async(self) -> list[ChatMessage]:
+        """Load all canonical messages without blocking the event loop."""
+        return await _run_session_io(self.load)
 
     def load_since(self, cursor: SessionReadCursor | None = None) -> SessionReadBatch | None:
         """Load and validate only messages appended after *cursor*.
@@ -485,6 +556,12 @@ class ChatSession:
                 last_message_id=last_message_id,
             ),
         )
+
+    async def load_since_async(
+        self, cursor: SessionReadCursor | None = None
+    ) -> SessionReadBatch | None:
+        """Load one append-only delta without blocking the event loop."""
+        return await _run_session_io(self.load_since, cursor)
 
     def _cursor_matches(self, cursor: SessionReadCursor) -> bool:
         if (
@@ -1793,6 +1870,26 @@ def _append_bytes(path: Path, data: bytes) -> None:
         os.fsync(file_descriptor)
     finally:
         os.close(file_descriptor)
+
+
+async def _run_session_io(
+    function: Callable[..., _SessionIoResult], *arguments: Any
+) -> _SessionIoResult:
+    """Run one storage operation off-loop while preserving cancellation ordering.
+
+    A worker-thread filesystem call cannot be cancelled once started. Waiting for
+    that worker even after task cancellation keeps a Session write lock from being
+    released while its durable append is still in flight.
+    """
+    task = asyncio.create_task(asyncio.to_thread(function, *arguments))
+    try:
+        return await asyncio.shield(task)
+    except asyncio.CancelledError:
+        try:
+            await task
+        except Exception:
+            raise
+        raise
 
 
 def _write_all(file_descriptor: int, data: bytes) -> None:

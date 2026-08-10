@@ -32,6 +32,7 @@ from core.tools.tools import (
     ToolHandler,
     ToolRegistry,
     read_media_artifact,
+    run_tool_worker,
     tool_failure,
     tool_success,
 )
@@ -1135,9 +1136,24 @@ def make_web_fetch_handler(attachment_store: Any) -> ToolHandler:
                 attempts_made=(MAX_RETRIES + 1) if retryable else None,
             )
 
-        return _shape_success(attachment_store, result, url, output_mode=output_mode)
+        return await run_tool_worker(
+            _shape_success_for_mode,
+            attachment_store,
+            result,
+            url,
+            output_mode,
+        )
 
     return web_fetch_handler
+
+
+def _shape_success_for_mode(
+    attachment_store: Any,
+    result: _FetchResult,
+    url: str,
+    output_mode: WebFetchOutput,
+) -> JsonObject:
+    return _shape_success(attachment_store, result, url, output_mode=output_mode)
 
 
 def register_web_fetch_tool(registry: ToolRegistry, *, attachment_store: Any) -> None:

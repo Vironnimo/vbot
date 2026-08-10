@@ -118,8 +118,8 @@ async def _maybe_auto_compact(
 ) -> list[JsonObject]:
     """Build the same Run context used by production before probing Compaction."""
     del agent, model_id
-    prior_continuation = recover_continuation(session) if continuation_reminder else None
-    context = loop._create_run_execution_context(
+    prior_continuation = await recover_continuation(session) if continuation_reminder else None
+    context = await loop._create_run_execution_context(
         run,
         _RunRequest(content="test"),
         session=session,
@@ -638,7 +638,7 @@ async def test_compaction_allows_repeated_automatic_checkpoints_in_one_run(
     compaction_service = StubCompactionService(should_auto=True, checkpoint=checkpoint)
     loop = build_chat_loop(runtime, compaction_service=cast(Any, compaction_service))
     run = Run(run_id="run-1", agent_id=agent.id, session_id=session.id)
-    context = loop._create_run_execution_context(
+    context = await loop._create_run_execution_context(
         run,
         _RunRequest(content="test"),
         session=session,
@@ -929,7 +929,7 @@ async def test_compaction_reinjects_the_active_continuation_checkpoint(tmp_path:
     )
     interrupted_tracker.record_stream_delta(reasoning="Keep this plan")
     await interrupted_tracker.interrupt("network")
-    prior = recover_continuation(session)
+    prior = await recover_continuation(session)
     assert prior is not None
     session.append(ChatMessage.user("Keep going"))
     active_tracker = ContinuationTracker(
@@ -1126,7 +1126,7 @@ async def test_compaction_refreshes_rooted_working_project_files_and_auto_load(
         session_id=session.id,
         working_project_id="proj",
     )
-    context = loop._create_run_execution_context(
+    context = await loop._create_run_execution_context(
         run,
         _RunRequest(content="test"),
         session=session,

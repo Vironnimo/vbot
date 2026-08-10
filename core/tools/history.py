@@ -18,6 +18,7 @@ from core.tools.tools import (
     ToolDisplay,
     ToolDisplayPart,
     ToolRegistry,
+    offload_tool_handler,
     result_count_fact_builder,
     tool_failure,
     tool_success,
@@ -236,7 +237,7 @@ def register_history_tool(registry: ToolRegistry, sessions: ChatSessionManager) 
         name=HISTORY_TOOL_NAME,
         description=HISTORY_TOOL_DESCRIPTION,
         parameters=HISTORY_TOOL_PARAMETERS,
-        handler=make_history_handler(sessions),
+        handler=offload_tool_handler(make_history_handler(sessions)),
         result_schema={
             "type": "object",
             "required": ["action", "items", "has_more", "formatted_bytes"],

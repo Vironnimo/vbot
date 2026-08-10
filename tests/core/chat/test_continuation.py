@@ -81,6 +81,7 @@ async def test_ten_trackers_coalesce_many_deltas_to_one_periodic_flush_each(
             clock=clock,
             sleep=clock.sleep,
         )
+        await tracker.start()
         trackers.append(tracker)
         for _ in range(100):
             tracker.record_stream_delta(reasoning="r", content="c")
@@ -99,7 +100,7 @@ async def test_ten_trackers_coalesce_many_deltas_to_one_periodic_flush_each(
     for tracker in trackers:
         for _ in range(100):
             tracker.record_stream_delta(content="more")
-        tracker.record_assistant_boundary(
+        await tracker.record_assistant_boundary(
             message_id="assistant",
             reasoning="r" * 100,
             content="c" * 100,
@@ -126,10 +127,11 @@ async def test_boundary_timer_cancellation_cannot_lose_next_dirty_flush(tmp_path
         clock=clock,
         sleep=clock.sleep,
     )
+    await tracker.start()
     tracker.record_stream_delta(reasoning="before")
     await asyncio.sleep(0)
 
-    tracker.record_assistant_boundary(
+    await tracker.record_assistant_boundary(
         message_id="assistant-one",
         reasoning="before",
         content=None,
@@ -144,6 +146,50 @@ async def test_boundary_timer_cancellation_cannot_lose_next_dirty_flush(tmp_path
 
     assert batches[-1][0]["type"] == "stream_delta"
     assert batches[-1][0]["reasoning_delta"] == "after"
+    await tracker.resolve()
+
+
+@pytest.mark.asyncio
+async def test_periodic_flush_cannot_land_after_its_assistant_boundary(tmp_path: Path) -> None:
+    batches: list[list[dict[str, Any]]] = []
+    stream_write_started = asyncio.Event()
+    release_stream_write = asyncio.Event()
+
+    async def sink(records: list[dict[str, Any]]) -> None:
+        if records[0]["type"] == "stream_delta":
+            stream_write_started.set()
+            await release_stream_write.wait()
+        batches.append(records)
+
+    tracker = ContinuationTracker(
+        ChatSession.create(tmp_path, session_id="session"),
+        run_id="run-one",
+        request="work",
+        record_sink=sink,
+        flush_interval=0,
+    )
+    await tracker.start()
+    tracker.record_stream_delta(reasoning="before")
+    await stream_write_started.wait()
+
+    boundary = asyncio.create_task(
+        tracker.record_assistant_boundary(
+            message_id="assistant-one",
+            reasoning="before",
+            content=None,
+            interrupted=False,
+        )
+    )
+    await asyncio.sleep(0)
+    assert not boundary.done()
+
+    release_stream_write.set()
+    await boundary
+    assert [batch[0]["type"] for batch in batches] == [
+        "run_started",
+        "stream_delta",
+        "assistant_boundary",
+    ]
     await tracker.resolve()
 
 
@@ -381,7 +427,8 @@ def test_injection_places_reminder_immediately_before_new_turn_and_deduplicates(
     )
 
 
-def test_recover_classifies_abandoned_journal_as_process_restart(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_recover_classifies_abandoned_journal_as_process_restart(tmp_path: Path) -> None:
     session = ChatSession.create(tmp_path, session_id="session")
     session.append_continuation_record(
         _record(
@@ -392,13 +439,14 @@ def test_recover_classifies_abandoned_journal_as_process_restart(tmp_path: Path)
         )
     )
 
-    state = recover_continuation(session)
+    state = await recover_continuation(session)
 
     assert state is not None
     assert state.cause == "process_restart"
 
 
-def test_restart_reconciliation_uses_only_current_transcript_tail(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_restart_reconciliation_uses_only_current_transcript_tail(tmp_path: Path) -> None:
     session = ChatSession.create(tmp_path, session_id="session")
     session.append(ChatMessage.user("old work"))
     session.append(
@@ -445,14 +493,15 @@ def test_restart_reconciliation_uses_only_current_transcript_tail(tmp_path: Path
         )
     )
 
-    state = recover_continuation(session)
+    state = await recover_continuation(session)
 
     assert state is not None
     assert set(state.operations) == {"new-bash"}
     assert state.operations["new-bash"]["status"] == "completed"
 
 
-def test_recover_clears_stale_journal_when_transcript_proves_normal_completion(
+@pytest.mark.asyncio
+async def test_recover_clears_stale_journal_when_transcript_proves_normal_completion(
     tmp_path: Path,
 ) -> None:
     session = ChatSession.create(tmp_path, session_id="session")
@@ -479,5 +528,5 @@ def test_recover_clears_stale_journal_when_transcript_proves_normal_completion(
         )
     )
 
-    assert recover_continuation(session) is None
+    assert await recover_continuation(session) is None
     assert not session.continuation_path.exists()

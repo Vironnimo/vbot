@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+import inspect
+from collections.abc import Awaitable, Callable, Sequence
 from html import escape
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -24,6 +25,7 @@ from core.tools.tools import (
     ToolDisplayField,
     ToolRegistry,
     result_count_fact_builder,
+    run_tool_worker,
     tool_failure,
     tool_success,
 )
@@ -41,7 +43,7 @@ SkillRegistryResolver = Callable[[str | None, str | None], SkillRegistry]
 # ``Runtime.reload_skills``). Invoked once on a name miss so a skill hand-dropped
 # into a skill directory after this run's registry was cached is picked up without
 # a restart — see the rescan-on-miss retry in the handler below.
-SkillRefresh = Callable[[], None]
+SkillRefresh = Callable[[], None | Awaitable[None]]
 
 SKILL_TOOL_NAME = "skill"
 SKILL_TOOL_DESCRIPTION = (
@@ -114,7 +116,7 @@ def make_skill_handler(
     name without a restart.
     """
 
-    def skill_handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
+    async def skill_handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
         unknown_arguments = set(arguments) - {"name", "file_path"}
         if unknown_arguments:
             names = ", ".join(sorted(unknown_arguments))
@@ -125,7 +127,11 @@ def make_skill_handler(
         # private skill home (those skills bypass the project whitelist as
         # always-allowed for their owner).
         identity_agent_id = context.agent_id if context.project_id is None else None
-        skill_registry = resolve_registry(context.skill_project_id, identity_agent_id)
+        skill_registry = await run_tool_worker(
+            resolve_registry,
+            context.skill_project_id,
+            identity_agent_id,
+        )
 
         skill_name = arguments.get("name")
         file_path = arguments.get("file_path")
@@ -145,8 +151,17 @@ def make_skill_handler(
             # so "drop it in, then activate it by name" works without a restart. The
             # session-pinned prompt catalog is deliberately left untouched (no
             # availability note) — only activation is made live.
-            refresh_skills()
-            skill_registry = resolve_registry(context.skill_project_id, identity_agent_id)
+            if inspect.iscoroutinefunction(refresh_skills):
+                await refresh_skills()
+            else:
+                refresh_result = await run_tool_worker(refresh_skills)
+                if inspect.isawaitable(refresh_result):
+                    await refresh_result
+            skill_registry = await run_tool_worker(
+                resolve_registry,
+                context.skill_project_id,
+                identity_agent_id,
+            )
             try:
                 skill = skill_registry.get(skill_name)
             except KeyError:
@@ -168,7 +183,7 @@ def make_skill_handler(
 
         if isinstance(file_path, str):
             try:
-                data = load_skill_file(skill_name, skill.path, file_path)
+                data = await run_tool_worker(load_skill_file, skill_name, skill.path, file_path)
             except OSError as error:
                 return tool_failure(
                     "skill_read_error",
@@ -183,10 +198,11 @@ def make_skill_handler(
             )
 
         try:
-            data = load_skill_content(
+            data = await run_tool_worker(
+                _load_skill_content_with_env,
                 skill_name,
                 skill.path,
-                env_keys=environment_requirement_names(skill.requirements),
+                environment_requirement_names(skill.requirements),
             )
         except OSError as error:
             return tool_failure(
@@ -213,13 +229,21 @@ def make_skill_handler(
 def make_skill_list_handler(resolve_registry: SkillRegistryResolver) -> Any:
     """Return the Skill catalog handler."""
 
-    def skill_list_handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
+    async def skill_list_handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
         if arguments:
             names = ", ".join(sorted(arguments))
             return tool_failure("invalid_arguments", f"Unknown argument(s): {names}")
         identity_agent_id = context.agent_id if context.project_id is None else None
-        skill_registry = resolve_registry(context.skill_project_id, identity_agent_id)
-        return _skill_list_result(skill_registry, context.allowed_skills)
+        skill_registry = await run_tool_worker(
+            resolve_registry,
+            context.skill_project_id,
+            identity_agent_id,
+        )
+        return await run_tool_worker(
+            _skill_list_result,
+            skill_registry,
+            context.allowed_skills,
+        )
 
     return skill_list_handler
 
@@ -293,6 +317,14 @@ def load_skill_content(
         "resources": resources,
         "directory": directory,
     }
+
+
+def _load_skill_content_with_env(
+    skill_name: str,
+    skill_file: Path,
+    env_keys: Sequence[str],
+) -> JsonObject:
+    return load_skill_content(skill_name, skill_file, env_keys=env_keys)
 
 
 def load_skill_file(skill_name: str, skill_file: Path, file_path: str) -> JsonObject:

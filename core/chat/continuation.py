@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import time
 import uuid
@@ -33,7 +34,7 @@ UNCERTAIN_EFFECT_TOOLS = frozenset({"write", "edit", "bash"})
 _PROMPT_MIN_CHARS = 4_000
 _PROMPT_MAX_CHARS = 50_000
 
-RecordSink = Callable[[list[JsonObject]], None]
+RecordSink = Callable[[list[JsonObject]], None | Awaitable[None]]
 Clock = Callable[[], float]
 Sleeper = Callable[[float], Awaitable[None]]
 
@@ -195,7 +196,7 @@ class ContinuationTracker:
             prior_state.checkpoint_id if prior_state is not None else uuid.uuid4().hex
         )
         self.origin_run_id = prior_state.origin_run_id if prior_state is not None else run_id
-        self._sink = record_sink or session.append_continuation_records
+        self._sink = record_sink or session.append_continuation_records_async
         self._clock = clock
         self._sleep = sleep
         self._flush_interval = flush_interval
@@ -203,19 +204,22 @@ class ContinuationTracker:
         self._pending_reasoning: list[str] = []
         self._pending_content: list[str] = []
         self._periodic_task: asyncio.Task[None] | None = None
+        self._journal_lock = asyncio.Lock()
         self._step = 1
         self._closed = False
+        self._started = False
         self.interruption_cause: ContinuationCause | None = None
-        self._sink(
-            [
-                self._record(
-                    "run_started",
-                    checkpoint_id=self.checkpoint_id,
-                    origin_run_id=self.origin_run_id,
-                    request=request,
-                )
-            ]
+        self._start_record = self._record(
+            "run_started",
+            checkpoint_id=self.checkpoint_id,
+            origin_run_id=self.origin_run_id,
+            request=request,
         )
+
+    async def start(self) -> None:
+        """Durably start the continuation chain without blocking the event loop."""
+        async with self._journal_lock:
+            await self._ensure_started_unlocked()
 
     @property
     def step(self) -> int:
@@ -235,7 +239,7 @@ class ContinuationTracker:
         if self._periodic_task is None:
             self._periodic_task = asyncio.create_task(self._periodic_flush())
 
-    def record_assistant_boundary(
+    async def record_assistant_boundary(
         self,
         *,
         message_id: str,
@@ -244,7 +248,7 @@ class ContinuationTracker:
         interrupted: bool,
         tool_calls: list[Any] | None = None,
     ) -> None:
-        self._flush_boundary(
+        await self._flush_boundary(
             self._record(
                 "assistant_boundary",
                 step=self._step,
@@ -258,8 +262,8 @@ class ContinuationTracker:
             )
         )
 
-    def record_tool_starts(self, tool_calls: list[Any]) -> None:
-        self._flush_boundary(
+    async def record_tool_starts(self, tool_calls: list[Any]) -> None:
+        await self._flush_boundary(
             *[
                 self._record(
                     "tool_started",
@@ -270,7 +274,7 @@ class ContinuationTracker:
             ]
         )
 
-    def record_tool_results(self, tool_messages: list[Any]) -> None:
+    async def record_tool_results(self, tool_messages: list[Any]) -> None:
         records: list[JsonObject] = []
         for message in tool_messages:
             ok = False
@@ -287,7 +291,7 @@ class ContinuationTracker:
                     ok=ok,
                 )
             )
-        self._flush_boundary(*records)
+        await self._flush_boundary(*records)
         self._step += 1
 
     def mark_interruption_cause(self, cause: ContinuationCause) -> None:
@@ -301,13 +305,16 @@ class ContinuationTracker:
         if cancelled_task is not None:
             cancelled_task.cancel()
             self._periodic_task = None
-        self._pending_reasoning.clear()
-        self._pending_content.clear()
-        self._sink([self._record("stream_attempt_discarded", step=self._step)])
+        async with self._journal_lock:
+            self._pending_reasoning.clear()
+            self._pending_content.clear()
+            await self._write_records_unlocked(
+                [self._record("stream_attempt_discarded", step=self._step)]
+            )
         await self._close_timer(cancelled_task)
 
     async def interrupt(self, cause: ContinuationCause) -> None:
-        cancelled_task = self._flush_boundary(
+        cancelled_task = await self._flush_boundary(
             self._record(
                 "run_interrupted",
                 cause=cause,
@@ -315,17 +322,17 @@ class ContinuationTracker:
         )
         await self._close_timer(cancelled_task)
         self._closed = True
-        state = fold_continuation_records(self._session.load_continuation_records())
+        state = fold_continuation_records(await self._session.load_continuation_records_async())
         if state is None:
             raise RuntimeError("continuation journal lost its unresolved state")
 
     async def resolve(self) -> None:
-        cancelled_task = self._flush_boundary(
+        cancelled_task = await self._flush_boundary(
             self._record("resolved", checkpoint_id=self.checkpoint_id)
         )
         await self._close_timer(cancelled_task)
         self._closed = True
-        self._session.clear_continuation()
+        await self._session.clear_continuation_async()
 
     async def _periodic_flush(self) -> None:
         current_task = asyncio.current_task()
@@ -337,7 +344,7 @@ class ContinuationTracker:
             await self._sleep(delay)
             if self._closed:
                 return
-            self._flush_stream_record()
+            await self._flush_stream_record()
             self._last_periodic_flush = self._clock()
         finally:
             if self._periodic_task is current_task:
@@ -345,27 +352,57 @@ class ContinuationTracker:
                 if not self._closed and (self._pending_reasoning or self._pending_content):
                     self._periodic_task = asyncio.create_task(self._periodic_flush())
 
-    def _flush_boundary(self, *records: JsonObject) -> asyncio.Task[None] | None:
+    async def _flush_boundary(self, *records: JsonObject) -> asyncio.Task[None] | None:
         if self._closed:
             return None
         cancelled_task = self._periodic_task
         if cancelled_task is not None:
             cancelled_task.cancel()
             self._periodic_task = None
-        batch: list[JsonObject] = []
-        stream_record = self._take_stream_record()
-        if stream_record is not None:
-            batch.append(stream_record)
-            self._last_periodic_flush = self._clock()
-        batch.extend(records)
-        if batch:
-            self._sink(batch)
+        async with self._journal_lock:
+            batch: list[JsonObject] = []
+            stream_record = self._take_stream_record()
+            if stream_record is not None:
+                batch.append(stream_record)
+                self._last_periodic_flush = self._clock()
+            batch.extend(records)
+            if batch:
+                await self._write_records_unlocked(batch)
         return cancelled_task
 
-    def _flush_stream_record(self) -> None:
-        record = self._take_stream_record()
-        if record is not None:
-            self._sink([record])
+    async def _flush_stream_record(self) -> None:
+        async with self._journal_lock:
+            record = self._take_stream_record()
+            if record is not None:
+                await self._write_records_unlocked([record])
+
+    async def _write_records(self, records: list[JsonObject]) -> None:
+        async with self._journal_lock:
+            await self._write_records_unlocked(records)
+
+    async def _write_records_unlocked(self, records: list[JsonObject]) -> None:
+        await self._ensure_started_unlocked()
+        await self._settle_sink(self._sink(records))
+
+    async def _ensure_started_unlocked(self) -> None:
+        if self._started:
+            return
+        await self._settle_sink(self._sink([self._start_record]))
+        self._started = True
+
+    @staticmethod
+    async def _settle_sink(result: None | Awaitable[None]) -> None:
+        if not inspect.isawaitable(result):
+            return
+        task = asyncio.ensure_future(result)
+        try:
+            await asyncio.shield(task)
+        except asyncio.CancelledError:
+            try:
+                await task
+            except Exception:
+                raise
+            raise
 
     def _take_stream_record(self) -> JsonObject | None:
         if not self._pending_reasoning and not self._pending_content:
@@ -400,13 +437,14 @@ class ContinuationTracker:
             await task
 
 
-def recover_continuation(
+async def recover_continuation(
     session: ChatSession,
     *,
     active_run_id: str | None = None,
+    canonical_messages: list[Any] | None = None,
 ) -> ContinuationState | None:
     """Load a checkpoint and lazily classify a journal abandoned by a restart."""
-    records = session.load_continuation_records()
+    records = await session.load_continuation_records_async()
     if not records:
         return None
     try:
@@ -416,26 +454,31 @@ def recover_continuation(
 
         raise ChatSessionError(f"invalid continuation journal for session: {session.id}") from exc
     if state is None:
-        session.clear_continuation()
+        await session.clear_continuation_async()
         return None
-    _reconcile_canonical_tool_results(state, session)
+    messages = canonical_messages
+    if messages is None:
+        messages = await session.load_async()
+    _reconcile_canonical_tool_results(state, messages)
     if not state.active or state.latest_run_id == active_run_id:
         return state
-    if _transcript_proves_normal_completion(session, state.latest_run_id):
-        session.clear_continuation()
+    if _transcript_proves_normal_completion(messages, state.latest_run_id):
+        await session.clear_continuation_async()
         return None
-    session.append_continuation_record(
-        {
-            "version": CONTINUATION_RECORD_VERSION,
-            "type": "run_interrupted",
-            "run_id": state.latest_run_id,
-            "timestamp": _timestamp(),
-            "cause": "process_restart",
-        }
+    await session.append_continuation_records_async(
+        [
+            {
+                "version": CONTINUATION_RECORD_VERSION,
+                "type": "run_interrupted",
+                "run_id": state.latest_run_id,
+                "timestamp": _timestamp(),
+                "cause": "process_restart",
+            }
+        ]
     )
-    recovered = fold_continuation_records(session.load_continuation_records())
+    recovered = fold_continuation_records(await session.load_continuation_records_async())
     if recovered is not None:
-        _reconcile_canonical_tool_results(recovered, session)
+        _reconcile_canonical_tool_results(recovered, messages)
     return recovered
 
 
@@ -544,8 +587,7 @@ def normalize_interruption_cause(error: BaseException | None) -> ContinuationCau
     return "internal"
 
 
-def _transcript_proves_normal_completion(session: ChatSession, run_id: str) -> bool:
-    messages = session.load()
+def _transcript_proves_normal_completion(messages: list[Any], run_id: str) -> bool:
     for index, message in enumerate(messages):
         if message.role != "run_summary" or message.run_id != run_id:
             continue
@@ -560,9 +602,8 @@ def _transcript_proves_normal_completion(session: ChatSession, run_id: str) -> b
     return False
 
 
-def _reconcile_canonical_tool_results(state: ContinuationState, session: ChatSession) -> None:
+def _reconcile_canonical_tool_results(state: ContinuationState, messages: list[Any]) -> None:
     """Let canonical assistant/tool messages settle journal references after a crash."""
-    messages = session.load()
     if state.active or state.cause == "process_restart":
         tail_start = 0
         for index, message in enumerate(messages):

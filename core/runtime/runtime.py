@@ -627,7 +627,7 @@ class Runtime:
                 "see vbot.skills warnings for details",
                 invalid_skill_count,
             )
-        register_skill_tool(self._tools, self.skills_for, self.reload_skills)
+        register_skill_tool(self._tools, self.skills_for, self.reload_skills_async)
         # The agent skill-authoring write core refuses the bundled skills root; the
         # ``skill_manage`` tool writes the calling agent's private home (default) or
         # the shared global pool (only when the user asked).
@@ -1796,16 +1796,29 @@ class Runtime:
 
     def reload_skills(self) -> None:
         """Reload the runtime skill registry from current persisted settings."""
+        self._apply_reloaded_skills(self._load_reloaded_skills())
+
+    async def reload_skills_async(self) -> None:
+        """Reload Skills without scanning their files on the Event Loop."""
+        skills = await asyncio.to_thread(self._load_reloaded_skills)
+        self._apply_reloaded_skills(skills)
+
+    def _load_reloaded_skills(self) -> SkillRegistry:
+        """Build one replacement Skill registry without mutating Runtime state."""
         self._ensure_started()
         settings = self.storage.load_settings()
         resources_path = self._resolve_resources_path()
         skill_scan_roots = self._skill_scan_roots(settings, resources_path)
-        self._skills = SkillRegistry.load(
+        return SkillRegistry.load(
             skill_scan_roots[0],
             extra_dirs=skill_scan_roots[1:],
             environment=self._skill_environment(self.storage.load_environment()),
             origins=self._bundled_skill_origins(skill_scan_roots),
         )
+
+    def _apply_reloaded_skills(self, skills: SkillRegistry) -> None:
+        """Install a fully built Skill registry and refresh its loop-owned consumers."""
+        self._skills = skills
         # Project- and agent-scoped registries merge in the same bundled roots, so a
         # global skill reload makes every cached project *and* agent registry stale —
         # invalidate_project_skills() with no project drops both caches so the next
@@ -1824,7 +1837,7 @@ class Runtime:
         if self._tools is not None:
             self._tools.unregister("skill")
             self._tools.unregister(SKILL_LIST_TOOL_NAME)
-            register_skill_tool(self._tools, self.skills_for, self.reload_skills)
+            register_skill_tool(self._tools, self.skills_for, self.reload_skills_async)
             if self._skill_authoring is not None:
                 self._tools.unregister("skill_manage")
                 register_skill_manage_tool(
