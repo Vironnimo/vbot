@@ -632,6 +632,7 @@ async def _chat_queue_update(state: Any, params: JsonObject) -> JsonObject:
             agent_id,
             session_id,
             content,
+            queued_item,
             input_origin=input_origin,
             project_id=project_id,
         )

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import threading
 from pathlib import Path
 from typing import Any
@@ -457,6 +458,120 @@ async def test_queued_cross_surface_run_decides_when_it_actually_starts(tmp_path
     assert len(surface_notes) == 2
     assert "webui" in str(surface_notes[0].content)
     assert "telegram" in str(surface_notes[1].content)
+
+
+@pytest.mark.asyncio
+async def test_queue_edit_preserves_sender_reply_surface_and_tool_restriction(
+    tmp_path: Path,
+) -> None:
+    class QueueEditAdapter(StubAdapter):
+        def __init__(self) -> None:
+            super().__init__([])
+            self.first_request_started = asyncio.Event()
+            self.release_first_request = asyncio.Event()
+
+        async def send(
+            self,
+            messages: list[JsonObject],
+            *,
+            model_id: str,
+            **kwargs: Any,
+        ) -> JsonObject:
+            self.requests.append({"messages": messages, "model_id": model_id, "kwargs": kwargs})
+            request_number = len(self.requests)
+            if request_number == 1:
+                self.first_request_started.set()
+                await self.release_first_request.wait()
+                return {"content": "first done", "tool_calls": None}
+            if request_number == 2:
+                return {
+                    "content": None,
+                    "tool_calls": [{"id": "call_weather", "name": "weather", "arguments": {}}],
+                }
+            return {"content": "edited done", "tool_calls": None}
+
+    weather_calls: list[str] = []
+
+    async def weather_handler(_context: ToolContext, _arguments: JsonObject) -> ToolJsonObject:
+        weather_calls.append("weather")
+        return tool_success({"temperature": 20})
+
+    tools = ToolRegistry()
+    tools.register("weather", "Weather stub.", {"type": "object"}, weather_handler)
+    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
+    adapter = QueueEditAdapter()
+    runtime: Any = StubRuntime(
+        data_dir=tmp_path,
+        agent=agent,
+        adapter=adapter,
+        tools=tools,
+    )
+    runtime.chat_sessions.create("coder", session_id="session-one")
+    loop = build_chat_loop(runtime)
+    sender = MessageSender(id="50", display_name="Alice", role="admin")
+    channel_surface = ReplySurface.channel(
+        platform="telegram",
+        platform_display_name="Telegram",
+        channel_id="tg-main",
+        conversation_kind="group",
+    )
+
+    first_run = await loop.start_run(
+        "coder",
+        "first",
+        session_id="session-one",
+        reply_surface=ReplySurface.webui(),
+    )
+    await adapter.first_request_started.wait()
+    queued = await loop.queue_run(
+        "coder",
+        "original channel text",
+        session_id="session-one",
+        sender=sender,
+        reply_surface=channel_surface,
+        tool_restriction=("memory",),
+    )
+    resolved_session_id, updated_executor, updated_display = loop.build_queue_update(
+        "coder",
+        "session-one",
+        "edited channel text",
+        queued,
+    )
+    assert runtime.chat_runs.update_queued(
+        "coder",
+        resolved_session_id,
+        queued.item_id,
+        updated_executor,
+        updated_display,
+        project_id=None,
+    )
+
+    adapter.release_first_request.set()
+    await first_run.wait()
+    edited_run = await queued.future
+    await edited_run.wait()
+
+    messages = runtime.chat_sessions.get("coder", "session-one").load()
+    edited_user = next(
+        message
+        for message in messages
+        if message.role == "user" and message.content == "edited channel text"
+    )
+    surface_notes = [
+        message
+        for message in messages
+        if message.role == "note" and str(message.content).startswith("[reply-surface] ")
+    ]
+    weather_result = next(
+        json.loads(message.content)
+        for message in messages
+        if message.role == "tool" and message.tool_call_id == "call_weather"
+    )
+    assert edited_user.sender == sender
+    assert "telegram" in str(surface_notes[-1].content)
+    assert '"conversation_kind":"group"' in str(surface_notes[-1].content)
+    assert weather_calls == []
+    assert weather_result["error"]["code"] == "tool_not_allowed"
 
 
 @pytest.mark.asyncio

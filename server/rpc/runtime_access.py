@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from typing import Any, cast
 
-from core.chat import ChatLoop, CommandDispatcher, ReplySurface
+from core.chat import ChatLoop, CommandDispatcher
 from core.chat.content_blocks import ContentBlock
-from core.runs import ChatRunManager, RunExecutor
+from core.runs import ChatRunManager, QueuedRunItem, RunExecutor
 
 
 def _streaming_chat_loop(state: Any) -> ChatLoop:
@@ -18,6 +18,7 @@ def _build_streaming_queue_update(
     agent_id: str,
     session_id: str,
     content: str | list[ContentBlock],
+    queued_item: QueuedRunItem,
     *,
     input_origin: str | None = None,
     project_id: str | None = None,
@@ -29,8 +30,8 @@ def _build_streaming_queue_update(
             agent_id,
             session_id,
             content,
+            queued_item,
             input_origin=cast(Any, input_origin),
-            reply_surface=ReplySurface.webui(),
             project_id=project_id,
         ),
     )

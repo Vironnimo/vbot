@@ -1069,6 +1069,7 @@ async def test_chat_queue_update_returns_ok(monkeypatch: pytest.MonkeyPatch) -> 
         agent_id: str,
         session_id: str,
         content: str | list[TextBlock],
+        queued_item: QueuedRunItem,
         *,
         input_origin: str | None = None,
         project_id: str | None = None,
@@ -1076,6 +1077,7 @@ async def test_chat_queue_update_returns_ok(monkeypatch: pytest.MonkeyPatch) -> 
         captured["agent_id"] = agent_id
         captured["session_id"] = session_id
         captured["content"] = content
+        captured["queued_item_id"] = queued_item.item_id
         captured["input_origin"] = input_origin
         captured["project_id"] = project_id
         return session_id, fake_executor, "Updated queued message"
@@ -1110,6 +1112,7 @@ async def test_chat_queue_update_returns_ok(monkeypatch: pytest.MonkeyPatch) -> 
         "agent_id": "agent-1",
         "session_id": "session-1",
         "content": [TextBlock(type="text", text="Edited queued text")],
+        "queued_item_id": "queue-1",
         "input_origin": None,
         "project_id": None,
     }
