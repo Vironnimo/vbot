@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from unittest.mock import AsyncMock, patch
 
 import httpx
 import pytest
@@ -351,7 +352,7 @@ async def test_error_status_stream_persists_response_body(
     streaming_ctx: DebugContext,
 ) -> None:
     """An error status on a streaming request keeps its raw body in the trace."""
-    respx.post(OPENAI_URL).mock(
+    route = respx.post(OPENAI_URL).mock(
         return_value=httpx.Response(
             429,
             json={"error": {"message": "Rate limit exceeded"}},
@@ -361,9 +362,14 @@ async def test_error_status_stream_persists_response_body(
     adapter = _adapter_with_debug(debug_recorder)
     adapter.set_debug_context(streaming_ctx)
 
-    with pytest.raises(ProviderRateLimitError):
+    with (
+        patch("core.utils.retry.asyncio.sleep", new_callable=AsyncMock) as sleep_mock,
+        pytest.raises(ProviderRateLimitError),
+    ):
         await _drain(adapter)
 
+    assert route.call_count == 4
+    assert sleep_mock.await_count == 3
     trace = _latest_trace(debug_store)
     assert trace["request"]["method"] == "POST"
     assert trace["response"]["status_code"] == 429
