@@ -22,6 +22,7 @@ $ErrorActionPreference = "Stop"
 
 $ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $WebUiDir = Join-Path $ProjectRoot "webui"
+$DesktopIconPath = Join-Path $ProjectRoot "desktop\icon.ico"
 $RecoverableProblemExitCode = 2
 $DefaultAgentTemperature = 0.1
 $DefaultAgentThinkingEffort = "high"
@@ -461,6 +462,10 @@ function New-DesktopShortcut {
         return
     }
 
+    if (-not (Test-Path -LiteralPath $DesktopIconPath -PathType Leaf)) {
+        throw "The vBot Desktop icon was not found at '$DesktopIconPath'."
+    }
+
     $programsDir = [System.Environment]::GetFolderPath("Programs")
     if ([string]::IsNullOrWhiteSpace($programsDir)) {
         Write-Warning "Could not resolve the Start-menu Programs folder; skipping shortcut creation."
@@ -476,6 +481,7 @@ function New-DesktopShortcut {
         $shortcut.TargetPath = $TargetPath
         $shortcut.Arguments = ""
         $shortcut.WorkingDirectory = (Split-Path -Parent $TargetPath)
+        $shortcut.IconLocation = "$DesktopIconPath,0"
         $shortcut.Description = "Open the vBot desktop window"
         $shortcut.Save()
     }

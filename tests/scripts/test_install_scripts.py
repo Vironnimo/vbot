@@ -192,6 +192,8 @@ def test_windows_desktop_shortcut_targets_windowless_gui_entrypoint() -> None:
     assert project["gui-scripts"]["vbot-desktop"] == "desktop.main:main"
     assert "$desktopPath = Resolve-DesktopCommandPath $scriptsPath" in setup
     assert "New-DesktopShortcut -TargetPath $desktopPath" in setup
+    assert '$DesktopIconPath = Join-Path $ProjectRoot "desktop\\icon.ico"' in setup
+    assert '$shortcut.IconLocation = "$DesktopIconPath,0"' in setup
     assert '$shortcut.Arguments = "desktop"' not in setup
     assert '[string]$DesktopShortcutTarget = ""' in setup
 

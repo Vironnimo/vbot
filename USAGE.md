@@ -136,7 +136,7 @@ Windows accepts `-InstallDir`, `-Version`, `-Dev`, `-DataDir`, `-HostName`, `-Po
 
 </details>
 
-The public Installers show only high-level progress during a normal installation. Technical setup output is written to a temporary log and discarded after a clean installation; when installation or verification needs attention, the log is preserved and its exact path is printed. The immediate Windows background server, Task Scheduler action, and optional `vBot Desktop` Start-menu entry use windowless launch paths. For server installations, both public Installers verify Autostart and server health before printing `vBot is ready`; a live URL appears only when the server is running. If Autostart registration fails, the application remains installed and the summary prints the exact normal-user recovery command.
+The public Installers show only high-level progress during a normal installation. Technical setup output is written to a temporary log and discarded after a clean installation; when installation or verification needs attention, the log is preserved and its exact path is printed. The immediate Windows background server, Task Scheduler action, and optional `vBot Desktop` Start-menu entry use windowless launch paths; the Start-menu entry uses the bundled vBot icon. For server installations, both public Installers verify Autostart and server health before printing `vBot is ready`; a live URL appears only when the server is running. If Autostart registration fails, the application remains installed and the summary prints the exact normal-user recovery command.
 
 ### Install the current checkout
 
