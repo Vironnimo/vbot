@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Awaitable, Callable, Mapping
 from inspect import isawaitable
 from typing import Any
@@ -15,6 +16,8 @@ from server.rpc.errors import (
 JsonObject = dict[str, Any]
 RpcMethodHandler = Callable[[Any, JsonObject], JsonObject | Awaitable[JsonObject]]
 
+_LOGGER = logging.getLogger("vbot.server.rpc.dispatcher")
+
 
 async def dispatch_rpc(
     state: Any,
@@ -23,12 +26,29 @@ async def dispatch_rpc(
 ) -> JsonObject:
     """Dispatch one JSON-RPC-like vBot server request."""
 
+    method_name = _request_method_for_log(request)
     try:
         method, params = parse_rpc_request(request)
         result = await dispatch_method(state, method, params, handlers)
     except RpcError as exc:
+        _LOGGER.warning(
+            "RPC request rejected (method=%s code=%s)",
+            method_name,
+            exc.code,
+        )
         return {"ok": False, "error": exc.to_dict()}
+    except Exception:
+        _LOGGER.exception("Unexpected RPC request failure (method=%s)", method_name)
+        raise
     return {"ok": True, "result": result}
+
+
+def _request_method_for_log(request: Any) -> str:
+    if isinstance(request, dict):
+        method = request.get("method")
+        if isinstance(method, str) and method:
+            return method
+    return "<invalid>"
 
 
 async def dispatch_method(

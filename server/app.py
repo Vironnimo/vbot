@@ -76,6 +76,13 @@ try:
         StreamingResponse,
     )
     from fastapi.staticfiles import StaticFiles  # type: ignore[import-not-found]
+    from starlette.datastructures import (  # type: ignore[import-not-found]
+        UploadFile as StarletteUploadFile,
+    )
+    from starlette.formparsers import (  # type: ignore[import-not-found]
+        MultiPartException,
+        MultiPartParser,
+    )
     from starlette.websockets import WebSocketDisconnect  # type: ignore[import-not-found]
 except ModuleNotFoundError as exc:  # pragma: no cover - exercised when server extra is absent.
     _FASTAPI_IMPORT_ERROR = exc
@@ -85,10 +92,13 @@ except ModuleNotFoundError as exc:  # pragma: no cover - exercised when server e
     Request = Any  # type: ignore[misc,assignment]
     Response = Any  # type: ignore[misc,assignment]
     StaticFiles = Any  # type: ignore[misc,assignment]
+    StarletteUploadFile = Any  # type: ignore[misc,assignment]
     StreamingResponse = Any  # type: ignore[misc,assignment]
     UploadFile = Any  # type: ignore[misc,assignment]
     WebSocket = Any  # type: ignore[misc,assignment]
     WebSocketDisconnect = Exception  # type: ignore[misc,assignment]
+    MultiPartException = Exception  # type: ignore[misc,assignment]
+    MultiPartParser = object  # type: ignore[misc,assignment]
 else:
     _FASTAPI_IMPORT_ERROR = None
 
@@ -104,6 +114,8 @@ DEFAULT_SERVER_HOST = "127.0.0.1"
 DEFAULT_SERVER_PORT = 8420
 DEFAULT_SERVER_PORT_SOURCE = "default"
 UPLOAD_READ_CHUNK_SIZE_BYTES = 1_048_576
+MULTIPART_BODY_OVERHEAD_ALLOWANCE_BYTES = 65_536
+MULTIPART_MAX_FORM_FIELDS = 16
 SSE_HEARTBEAT_INTERVAL_SECONDS = 10.0
 REPLAY_STATUS_FRESH = "fresh"
 REPLAY_STATUS_RESUMED = "resumed"
@@ -115,6 +127,41 @@ JSON_MEDIA_TYPE = "application/json"
 HTTP_ORIGIN_SCHEMES = frozenset({"http", "https"})
 ORIGIN_HEADER_NAME = b"origin"
 HOST_HEADER_NAME = b"host"
+
+
+class _UploadTooLargeMultipartError(MultiPartException):  # type: ignore[misc]
+    """Abort multipart parsing before an oversized file part is spooled."""
+
+
+class _SizeLimitedMultiPartParser(MultiPartParser):  # type: ignore[misc]
+    """Starlette multipart parser with an exact per-file byte limit."""
+
+    def __init__(
+        self,
+        *args: Any,
+        max_file_size_bytes: int,
+        upload_kind: str,
+        **kwargs: Any,
+    ) -> None:
+        super().__init__(*args, **kwargs)
+        self._max_file_size_bytes = max_file_size_bytes
+        self._upload_kind = upload_kind
+        self._current_file_size_bytes = 0
+
+    def on_part_begin(self) -> None:
+        super().on_part_begin()
+        self._current_file_size_bytes = 0
+
+    def on_part_data(self, data: bytes, start: int, end: int) -> None:
+        part_size_bytes = end - start
+        if self._current_part.file is not None:
+            next_size_bytes = self._current_file_size_bytes + part_size_bytes
+            if next_size_bytes > self._max_file_size_bytes:
+                raise _UploadTooLargeMultipartError(
+                    f"{self._upload_kind} size exceeds limit {self._max_file_size_bytes}"
+                )
+            self._current_file_size_bytes = next_size_bytes
+        super().on_part_data(data, start, end)
 
 
 class _BrowserOriginGuardMiddleware:
@@ -308,8 +355,13 @@ def create_app(
         return await dispatch_rpc(request.app.state, payload)
 
     @app.post("/api/upload")
-    async def upload_attachment(request: Request, file: UploadFile) -> JsonObject:
+    async def upload_attachment(request: Request) -> JsonObject:
         attachment_store = request.app.state.runtime.attachment_store
+        file = await _parse_upload_file_with_limit(
+            request,
+            max_size_bytes=attachment_store.max_size_bytes,
+            upload_kind="Attachment",
+        )
         filename = file.filename or "upload"
         try:
             data = await _read_upload_file_with_limit(
@@ -347,9 +399,14 @@ def create_app(
         )
 
     @app.post("/api/speech/transcribe")
-    async def transcribe_speech(request: Request, file: UploadFile) -> JsonObject:
+    async def transcribe_speech(request: Request) -> JsonObject:
         runtime = request.app.state.runtime
         speech_service = runtime.speech
+        file = await _parse_upload_file_with_limit(
+            request,
+            max_size_bytes=runtime.speech_upload_max_size_bytes,
+            upload_kind="Speech audio",
+        )
         filename = file.filename or "recording.webm"
         media_type = file.content_type or "application/octet-stream"
         try:
@@ -687,6 +744,79 @@ async def _read_upload_file_with_limit(
                 detail=f"{upload_kind} size {size_bytes} exceeds limit {max_size_bytes}",
             )
         chunks.append(chunk)
+
+
+async def _parse_upload_file_with_limit(
+    request: Request,
+    *,
+    max_size_bytes: int,
+    upload_kind: str,
+) -> UploadFile:
+    content_type = request.headers.get("content-type", "")
+    media_type = content_type.partition(";")[0].strip().casefold()
+    if media_type != "multipart/form-data":
+        raise HTTPException(status_code=422, detail="multipart file field 'file' is required")
+
+    max_body_size_bytes = max_size_bytes + MULTIPART_BODY_OVERHEAD_ALLOWANCE_BYTES
+    content_length = _request_content_length(request)
+    if content_length is not None and content_length > max_body_size_bytes:
+        raise HTTPException(
+            status_code=413,
+            detail=f"{upload_kind} request body exceeds limit {max_body_size_bytes}",
+        )
+
+    parser = _SizeLimitedMultiPartParser(
+        request.headers,
+        _stream_request_body_with_limit(
+            request,
+            max_body_size_bytes=max_body_size_bytes,
+            upload_kind=upload_kind,
+        ),
+        max_files=1,
+        max_fields=MULTIPART_MAX_FORM_FIELDS,
+        max_part_size=MULTIPART_BODY_OVERHEAD_ALLOWANCE_BYTES,
+        max_file_size_bytes=max_size_bytes,
+        upload_kind=upload_kind,
+    )
+    try:
+        form = await parser.parse()
+    except _UploadTooLargeMultipartError as exc:
+        raise HTTPException(status_code=413, detail=exc.message) from exc
+    except MultiPartException as exc:
+        raise HTTPException(status_code=400, detail=exc.message) from exc
+
+    file = form.get("file")
+    if not isinstance(file, StarletteUploadFile):
+        await form.close()
+        raise HTTPException(status_code=422, detail="multipart file field 'file' is required")
+    return cast(UploadFile, file)
+
+
+def _request_content_length(request: Request) -> int | None:
+    value = request.headers.get("content-length")
+    if value is None:
+        return None
+    try:
+        content_length = int(value)
+    except ValueError:
+        return None
+    return content_length if content_length >= 0 else None
+
+
+async def _stream_request_body_with_limit(
+    request: Request,
+    *,
+    max_body_size_bytes: int,
+    upload_kind: str,
+) -> AsyncGenerator[bytes, None]:
+    received_size_bytes = 0
+    async for chunk in request.stream():
+        received_size_bytes += len(chunk)
+        if received_size_bytes > max_body_size_bytes:
+            raise _UploadTooLargeMultipartError(
+                f"{upload_kind} request body exceeds limit {max_body_size_bytes}"
+            )
+        yield chunk
 
 
 def _speech_http_exception(error: SpeechError) -> HTTPException:
