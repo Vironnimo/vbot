@@ -543,6 +543,54 @@ describe('ChatComposer', () => {
     });
   });
 
+  it('cancels the recorder when browser recording start fails', async () => {
+    const recorder = {
+      start: vi.fn(() => {
+        throw new Error('microphone start failed');
+      }),
+      cancel: vi.fn(),
+    };
+    createAudioRecorder.mockResolvedValue(recorder);
+    mountedComponent = mount(ChatComposer, { target: document.body });
+    flushSync();
+
+    document.body
+      .querySelector('button[aria-label="Start voice input"]')
+      .click();
+    await flushComposerAsyncWork();
+
+    expect(recorder.cancel).toHaveBeenCalledOnce();
+    expect(
+      document.body.querySelector('button[aria-label="Start voice input"]'),
+    ).toBeTruthy();
+  });
+
+  it('cancels the recorder when browser recording stop fails', async () => {
+    const recorder = {
+      start: vi.fn(),
+      stop: vi.fn(() => {
+        throw new Error('microphone stop failed');
+      }),
+      filename: () => 'recording.webm',
+      cancel: vi.fn(),
+    };
+    createAudioRecorder.mockResolvedValue(recorder);
+    mountedComponent = mount(ChatComposer, { target: document.body });
+    flushSync();
+
+    document.body
+      .querySelector('button[aria-label="Start voice input"]')
+      .click();
+    await flushComposerAsyncWork();
+    document.body.querySelector('button[aria-label="Stop recording"]').click();
+    await flushComposerAsyncWork();
+
+    expect(recorder.cancel).toHaveBeenCalledOnce();
+    expect(
+      document.body.querySelector('button[aria-label="Start voice input"]'),
+    ).toBeTruthy();
+  });
+
   it('sends uploaded text files as a file reference', async () => {
     const onSendMessage = vi.fn().mockResolvedValue(true);
     uploadAttachment.mockResolvedValue({

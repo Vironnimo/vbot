@@ -1,5 +1,5 @@
 <script>
-  import { onMount } from 'svelte';
+  import { onDestroy, onMount } from 'svelte';
 
   import {
     getSettings,
@@ -19,6 +19,7 @@
     projectTeamEntry,
   } from '$lib/agentTargetOptions.js';
   import { t } from '$lib/i18n.js';
+  import { createModelCatalogLoader } from '$lib/modelSelection.js';
   import {
     SURFACE_FORM,
     shouldApplyReloadNow,
@@ -30,6 +31,10 @@
 
   const noop = () => {};
   const autosaveContext = useAutosaveContext();
+  const modelCatalogLoader = createModelCatalogLoader({
+    listModels,
+    listConnections,
+  });
 
   let {
     sharedSelectedAgentId = '',
@@ -107,6 +112,10 @@
     void loadCatalogs();
     void loadProjectCatalog();
     void loadAgents({ preferredAgentId: sharedSelectedAgentId });
+  });
+
+  onDestroy(() => {
+    modelCatalogLoader.invalidate();
   });
 
   $effect(() => {
@@ -197,25 +206,6 @@
     }
   });
 
-  async function fetchModelCatalogs() {
-    try {
-      const [modelsResult, connectionsResult] = await Promise.all([
-        listModels(),
-        listConnections(),
-      ]);
-
-      return {
-        models: Array.isArray(modelsResult?.models) ? modelsResult.models : [],
-        connections: Array.isArray(connectionsResult?.connections)
-          ? connectionsResult.connections
-          : [],
-      };
-    } catch (error) {
-      loadError = viewErrorMessage(error, t('agents.loadError'));
-      return null;
-    }
-  }
-
   function applyModelCatalogs(catalogs) {
     availableModels = catalogs.models;
     availableConnections = catalogs.connections;
@@ -223,8 +213,15 @@
   }
 
   async function reloadModelCatalogs() {
-    const catalogs = await fetchModelCatalogs();
-    if (!catalogs) {
+    pendingModelCatalogs = null;
+    let catalogs;
+    try {
+      catalogs = await modelCatalogLoader.load();
+    } catch (error) {
+      loadError = viewErrorMessage(error, t('agents.loadError'));
+      return;
+    }
+    if (catalogs === null) {
       return;
     }
     if (
@@ -249,21 +246,17 @@
   }
 
   async function loadCatalogs() {
+    pendingModelCatalogs = null;
     try {
-      const [modelsResult, connectionsResult, toolsResult, skillsResult] =
-        await Promise.all([
-          listModels(),
-          listConnections(),
-          listTools(),
-          listSkills(),
-        ]);
+      const [catalogs, toolsResult, skillsResult] = await Promise.all([
+        modelCatalogLoader.load(),
+        listTools(),
+        listSkills(),
+      ]);
 
-      availableModels = Array.isArray(modelsResult?.models)
-        ? modelsResult.models
-        : [];
-      availableConnections = Array.isArray(connectionsResult?.connections)
-        ? connectionsResult.connections
-        : [];
+      if (catalogs !== null) {
+        applyModelCatalogs(catalogs);
+      }
       availableTools = Array.isArray(toolsResult?.tools)
         ? toolsResult.tools
         : [];

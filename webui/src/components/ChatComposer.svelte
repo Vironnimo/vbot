@@ -346,6 +346,11 @@
       activeRecorder.start();
       recordingState = 'recording';
     } catch (error) {
+      try {
+        activeRecorder?.cancel?.();
+      } catch {
+        // The recorder implementation remains responsible for track cleanup.
+      }
       activeRecorder = null;
       recordingState = 'idle';
       showTranscriptionError(
@@ -373,6 +378,11 @@
       });
       await insertTranscript(result.text);
     } catch (error) {
+      try {
+        recorder.cancel?.();
+      } catch {
+        // Preserve the transcription error; cleanup was already requested.
+      }
       showTranscriptionError(
         `${t('chat.voice.transcriptionFailed', 'Speech transcription failed.')} ${error.message ?? ''}`.trim(),
       );
@@ -385,9 +395,14 @@
     if (!activeRecorder) {
       return;
     }
-    activeRecorder.cancel?.();
-    activeRecorder = null;
-    recordingState = 'idle';
+    try {
+      activeRecorder.cancel?.();
+    } catch {
+      // Track cleanup remains best-effort during component teardown.
+    } finally {
+      activeRecorder = null;
+      recordingState = 'idle';
+    }
   };
 
   const insertTranscript = async (transcript) => {

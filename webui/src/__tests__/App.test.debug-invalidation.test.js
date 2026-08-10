@@ -8,6 +8,7 @@ import {
   App,
   cleanupAppHarness,
   createChatRpcMock,
+  createEmptyChatRpcMock,
   createSettingsRpcMock,
   debugEnabledToggle,
   debugStatusMock,
@@ -191,6 +192,68 @@ describe('App', () => {
     expect(mountedComponent.getModelsRefreshToken()).toBe(0);
   });
 
+  it('keeps the newest valid Project catalog across stale responses and transient errors', async () => {
+    const staleInitial = deferred();
+    const baseRpc = createEmptyChatRpcMock();
+    let projectListCalls = 0;
+    rpcMock.mockImplementation((method, params) => {
+      if (method === 'project.list') {
+        projectListCalls += 1;
+        if (projectListCalls === 1) {
+          return staleInitial.promise;
+        }
+        if (projectListCalls === 2) {
+          return Promise.resolve({
+            projects: [{ project_id: 'newest-project', name: 'Newest' }],
+          });
+        }
+        return Promise.reject(new Error('temporary project failure'));
+      }
+      return baseRpc(method, params);
+    });
+    mountedComponent = mount(App, { target: document.body });
+    flushSync();
+    await waitForCondition(() => {
+      expect(projectListCalls).toBe(1);
+    });
+    const [handlers] = subscribeServerEventsMock.mock.calls[0];
+
+    handlers.onEvent({
+      type: 'resource_changed',
+      sequence: 1,
+      payload: { kind: 'projects' },
+    });
+    await waitForCondition(() => {
+      expect(
+        mountedComponent.getProjects().map((project) => project.project_id),
+      ).toEqual(['newest-project']);
+    });
+
+    staleInitial.resolve({
+      projects: [{ project_id: 'stale-project', name: 'Stale' }],
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    flushSync();
+    expect(
+      mountedComponent.getProjects().map((project) => project.project_id),
+    ).toEqual(['newest-project']);
+
+    handlers.onEvent({
+      type: 'resource_changed',
+      sequence: 2,
+      payload: { kind: 'projects' },
+    });
+    await waitForCondition(() => {
+      expect(projectListCalls).toBe(3);
+    });
+    await Promise.resolve();
+    flushSync();
+    expect(
+      mountedComponent.getProjects().map((project) => project.project_id),
+    ).toEqual(['newest-project']);
+  });
+
   it('routes channel and debug trace invalidations to their views', () => {
     mountedComponent = mount(App, { target: document.body });
     flushSync();
@@ -288,3 +351,11 @@ describe('App', () => {
     expect(agentListCallsAfter).toBeGreaterThan(agentListCallsBefore);
   });
 });
+
+function deferred() {
+  let resolve;
+  const promise = new Promise((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}

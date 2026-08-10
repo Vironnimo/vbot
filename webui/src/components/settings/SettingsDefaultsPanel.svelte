@@ -15,6 +15,7 @@
   import { runSettingsSave } from '$lib/settingsSave.js';
   import {
     buildModelSelectOptions,
+    createModelCatalogLoader,
     filterModelSelectOptions,
     modelFilterFooterLabel,
     modelSelectionValue,
@@ -151,6 +152,10 @@
     saving || agentDefaultsMatch(agentDefaults, settings),
   );
   const autosaveContext = useAutosaveContext();
+  const modelCatalogLoader = createModelCatalogLoader({
+    listModels,
+    listConnections,
+  });
   const agentDefaultsAutosave = createAutosaveParticipant({
     cancelPending: clearAutoSaveTimer,
     getSnapshot: () => ({ ...agentDefaults }),
@@ -166,6 +171,7 @@
   });
 
   onDestroy(() => {
+    modelCatalogLoader.invalidate();
     unregisterAgentDefaultsAutosave();
     clearAutoSaveTimer();
   });
@@ -205,27 +211,6 @@
     }
   }
 
-  async function fetchModelCatalogs() {
-    try {
-      const [modelsResult, connectionsResult] = await Promise.all([
-        listModels(),
-        listConnections(),
-      ]);
-
-      return {
-        models: Array.isArray(modelsResult?.models) ? modelsResult.models : [],
-        connections: Array.isArray(connectionsResult?.connections)
-          ? connectionsResult.connections
-          : [],
-      };
-    } catch (error) {
-      onError(
-        `${t('settings.models.loadError', 'Model catalog could not be loaded.')} ${error.message}`,
-      );
-      return null;
-    }
-  }
-
   function applyModelCatalogs(catalogs) {
     availableModels = catalogs.models;
     availableConnections = catalogs.connections;
@@ -233,15 +218,31 @@
   }
 
   async function loadModelCatalogs() {
-    const catalogs = await fetchModelCatalogs();
-    if (catalogs) {
-      applyModelCatalogs(catalogs);
+    pendingModelCatalogs = null;
+    try {
+      const catalogs = await modelCatalogLoader.load();
+      if (catalogs !== null) {
+        applyModelCatalogs(catalogs);
+      }
+    } catch (error) {
+      onError(
+        `${t('settings.models.loadError', 'Model catalog could not be loaded.')} ${error.message}`,
+      );
     }
   }
 
   async function reloadModelCatalogs() {
-    const catalogs = await fetchModelCatalogs();
-    if (!catalogs) {
+    pendingModelCatalogs = null;
+    let catalogs;
+    try {
+      catalogs = await modelCatalogLoader.load();
+    } catch (error) {
+      onError(
+        `${t('settings.models.loadError', 'Model catalog could not be loaded.')} ${error.message}`,
+      );
+      return;
+    }
+    if (catalogs === null) {
       return;
     }
     if (

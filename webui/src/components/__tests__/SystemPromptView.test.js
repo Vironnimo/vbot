@@ -607,6 +607,62 @@ describe('SystemPromptView', () => {
     });
   });
 
+  it('keeps the newest scope when an older prompt list settles late', async () => {
+    const staleAgentResponse = deferred();
+    const baseRpc = createRpcMock();
+    rpcMock.mockImplementation((method, params) => {
+      if (method === 'prompt.list' && params?.scope?.agent_id === 'agent-1') {
+        return staleAgentResponse.promise;
+      }
+      return baseRpc(method, params);
+    });
+    mountedComponent = mount(SystemPromptView, { target: document.body });
+    flushSync();
+    await waitForCondition(
+      () => scopeTrigger()?.textContent.includes('Default'),
+      100,
+    );
+
+    selectPromptScope('Alpha');
+    await waitForCondition(
+      () =>
+        rpcMock.mock.calls.some(
+          ([method, params]) =>
+            method === 'prompt.list' && params?.scope?.agent_id === 'agent-1',
+        ),
+      100,
+    );
+    selectPromptScope('Default');
+    await waitForCondition(
+      () => scopeTrigger()?.textContent.includes('Default') && !isLoading(),
+      100,
+    );
+
+    staleAgentResponse.resolve({
+      blocks: [
+        {
+          id: 'user:stale',
+          owner: 'always',
+          kind: 'text',
+          source: 'user',
+          editable: true,
+          enabled: true,
+          text: 'stale',
+        },
+      ],
+      scopes: [
+        { type: 'default', label: 'Default' },
+        { type: 'agent', agent_id: 'agent-1', label: 'Alpha' },
+      ],
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    flushSync();
+
+    expect(scopeTrigger().textContent).toContain('Default');
+    expect(blockIds()).toEqual(baseBlocks().map((block) => block.id));
+  });
+
   it('renders only default and enabled agent prompt scopes', async () => {
     rpcMock.mockImplementation(createRpcMock());
 
@@ -1262,6 +1318,10 @@ function selectPromptScope(label) {
   flushSync();
 }
 
+function isLoading() {
+  return document.body.querySelector('.sp-blocklist-guide') === null;
+}
+
 async function waitForCondition(check, attempts = 20) {
   for (let index = 0; index < attempts; index += 1) {
     await Promise.resolve();
@@ -1274,4 +1334,12 @@ async function waitForCondition(check, attempts = 20) {
   }
 
   throw new Error('Timed out waiting for condition.');
+}
+
+function deferred() {
+  let resolve;
+  const promise = new Promise((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
 }

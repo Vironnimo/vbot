@@ -70,6 +70,7 @@
   let previewToolCount = $state(null);
   let isLoadingData = $state(true);
   let isRefreshingPreview = $state(false);
+  let scopeLoadRequestId = 0;
   let previewRequestId = 0;
   let previewRefreshTimer = null;
   let reorderAnnouncement = $state('');
@@ -156,6 +157,7 @@
     loadData();
     loadProjectTeams();
     return () => {
+      scopeLoadRequestId += 1;
       unregisterPromptAutosave();
       clearAutoSaveTimers();
       clearPreviewRefreshTimer();
@@ -285,20 +287,32 @@
   }
 
   async function loadBlocksForScope(scopeKey) {
+    const requestId = scopeLoadRequestId + 1;
+    scopeLoadRequestId = requestId;
     isLoadingData = true;
 
     try {
       const promptsResult = await listPrompts(promptListParams(scopeKey));
+      if (requestId !== scopeLoadRequestId) {
+        return false;
+      }
       promptScopes = normalizePromptScopes(promptsResult?.scopes, agents);
       selectedScopeKey = resolveScopeKey(scopeKey);
       applyBlocks(promptsResult?.blocks);
+      return true;
     } catch {
+      if (requestId !== scopeLoadRequestId) {
+        return false;
+      }
       showToast(
         t('systemPrompt.error.loadFailed', 'Failed to load prompt data'),
         'error',
       );
+      return false;
     } finally {
-      isLoadingData = false;
+      if (requestId === scopeLoadRequestId) {
+        isLoadingData = false;
+      }
     }
   }
 

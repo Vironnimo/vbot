@@ -1,8 +1,9 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import {
   SUITABLE_MIN_CONTEXT,
   buildModelSelectOptions,
+  createModelCatalogLoader,
   filterModelSelectOptions,
   modelFilterFooterLabel,
   modelSelectionValue,
@@ -11,6 +12,59 @@ import {
   parseModelSelectionValue,
   selectModelValue,
 } from '../modelSelection.js';
+
+describe('createModelCatalogLoader', () => {
+  it('applies only the newest overlapping catalog response', async () => {
+    const firstModels = deferred();
+    const firstConnections = deferred();
+    const listModels = vi
+      .fn()
+      .mockReturnValueOnce(firstModels.promise)
+      .mockResolvedValueOnce({ models: [{ id: 'new/model' }] });
+    const listConnections = vi
+      .fn()
+      .mockReturnValueOnce(firstConnections.promise)
+      .mockResolvedValueOnce({ connections: [{ id: 'new:connection' }] });
+    const loader = createModelCatalogLoader({ listModels, listConnections });
+
+    const older = loader.load();
+    const newer = loader.load();
+
+    await expect(newer).resolves.toEqual({
+      models: [{ id: 'new/model' }],
+      connections: [{ id: 'new:connection' }],
+    });
+    firstModels.resolve({ models: [{ id: 'stale/model' }] });
+    firstConnections.resolve({ connections: [{ id: 'stale:connection' }] });
+    await expect(older).resolves.toBeNull();
+  });
+
+  it('suppresses stale failures after a newer load starts', async () => {
+    const firstModels = deferred();
+    const listModels = vi
+      .fn()
+      .mockReturnValueOnce(firstModels.promise)
+      .mockResolvedValueOnce({ models: [] });
+    const listConnections = vi.fn().mockResolvedValue({ connections: [] });
+    const loader = createModelCatalogLoader({ listModels, listConnections });
+
+    const older = loader.load();
+    await loader.load();
+    firstModels.reject(new Error('stale failure'));
+
+    await expect(older).resolves.toBeNull();
+  });
+});
+
+function deferred() {
+  let resolve;
+  let reject;
+  const promise = new Promise((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
 
 function translateWithValues(_key, fallback, values = {}) {
   return fallback.replace(/\{(\w+)\}/g, (match, name) =>

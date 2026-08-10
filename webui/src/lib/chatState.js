@@ -156,6 +156,7 @@ export function createChatController({
   let activityRefreshVersion = 0;
   let commandsLoadVersion = 0;
   const historyLoadVersions = new Map();
+  const queueSyncVersions = new Map();
   const subAgentStatusVerificationKeys = new Set();
   const subAgentStatusInflightKeys = new Set();
 
@@ -642,13 +643,23 @@ export function createChatController({
     if (!sessionState?.agentId || !sessionState?.sessionId) {
       return;
     }
+    const requestVersion = (queueSyncVersions.get(sessionState.key) ?? 0) + 1;
+    queueSyncVersions.set(sessionState.key, requestVersion);
+    const isLatestRequest = () =>
+      queueSyncVersions.get(sessionState.key) === requestVersion;
     try {
       const result = await operations.listQueue(
         sessionState.agentId,
         sessionState.sessionId,
       );
+      if (!isLatestRequest()) {
+        return;
+      }
       syncQueueFromServer(sessionState, result?.items ?? []);
     } catch (error) {
+      if (!isLatestRequest()) {
+        return;
+      }
       sessionState.actionError = `${translate('queue.syncError', 'Queued messages could not be synced.')} ${errorMessage(error)}`;
     }
   }
@@ -1176,6 +1187,7 @@ export function createChatController({
   function destroy() {
     runStream.closeSubscriptions();
     historyLoadVersions.clear();
+    queueSyncVersions.clear();
     subAgentStatusInflightKeys.clear();
     subAgentStatusVerificationKeys.clear();
   }

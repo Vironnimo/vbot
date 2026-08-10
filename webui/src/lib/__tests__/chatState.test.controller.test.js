@@ -147,6 +147,39 @@ describe('chat controller', () => {
     expect(runStream.closeSubscriptions).toHaveBeenCalledOnce();
   });
 
+  it('ignores an older Queue response that settles after a newer sync', async () => {
+    const older = deferred();
+    const newer = deferred();
+    const listQueue = vi
+      .fn()
+      .mockReturnValueOnce(older.promise)
+      .mockReturnValueOnce(newer.promise);
+    const { chatState, controller } = setup({
+      operationOverrides: { listQueue },
+    });
+    const sessionState = ensureSessionState(chatState, 'alpha', 'session-one');
+
+    const olderSync = controller.syncSessionQueue(sessionState);
+    const newerSync = controller.syncSessionQueue(sessionState);
+    newer.resolve({
+      items: [{ id: 'new', content: 'Newest', editable: true }],
+    });
+    await newerSync;
+    older.resolve({
+      items: [{ id: 'old', content: 'Stale', editable: true }],
+    });
+    await olderSync;
+
+    expect(sessionState.queue).toEqual([
+      {
+        id: 'new',
+        content: 'Newest',
+        editable: true,
+        created_at: null,
+      },
+    ]);
+  });
+
   it('returns whether a Queue edit was saved and preserves failed edits', async () => {
     const updateQueueItem = vi
       .fn()
@@ -1270,3 +1303,11 @@ describe('chat controller', () => {
     });
   });
 });
+
+function deferred() {
+  let resolve;
+  const promise = new Promise((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
