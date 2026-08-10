@@ -507,7 +507,10 @@ def _parse_unified_image_response(
         b64_json = entry.get("b64_json")
         if not isinstance(b64_json, str) or not b64_json:
             continue
-        image_bytes_list.append(base64.b64decode(b64_json))
+        try:
+            image_bytes_list.append(base64.b64decode(b64_json, validate=True))
+        except (binascii.Error, ValueError):
+            continue
         entry_media_type = entry.get("media_type")
         if not detected_media_type and isinstance(entry_media_type, str):
             detected_media_type = entry_media_type
@@ -666,7 +669,10 @@ def _parse_openai_image_response(
             continue
         b64_json = entry.get("b64_json")
         if isinstance(b64_json, str) and b64_json:
-            image_bytes_list.append(base64.b64decode(b64_json))
+            try:
+                image_bytes_list.append(base64.b64decode(b64_json, validate=True))
+            except (binascii.Error, ValueError):
+                continue
         elif isinstance(entry.get("url"), str):
             # URL responses require an extra fetch; we surface a clear
             # error rather than silently dropping the image so the caller

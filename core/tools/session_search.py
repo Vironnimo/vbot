@@ -29,7 +29,7 @@ from core.recall import (
 from core.recall.jsonl import (
     SESSION_RECALL_DEFAULT_ROLES,
 )
-from core.sessions import ChatSessionManager
+from core.sessions import ChatSessionError, ChatSessionManager
 from core.tools.tools import (
     JsonObject,
     ToolContext,
@@ -419,15 +419,15 @@ async def _read_session(
     end_message_id = _optional_string(arguments.get("end_message_id"))
     try:
         session = sessions.get(agent_id, session_id, context.project_id)
-        messages = await run_tool_worker(session.load)
-        stat = await run_tool_worker(session.path.stat)
-        metadata = await run_tool_worker(
-            sessions.get_metadata, agent_id, session_id, context.project_id
-        )
-    except Exception as error:
+    except ChatSessionError as error:
         raise _SessionSearchError(
             "session_not_found", f"Session not found: {session_id}"
         ) from error
+    messages = await run_tool_worker(session.load)
+    stat = await run_tool_worker(session.path.stat)
+    metadata = await run_tool_worker(
+        sessions.get_metadata, agent_id, session_id, context.project_id
+    )
     snapshot = f"{session_id}:{stat.st_mtime_ns}:{stat.st_size}"
     _validate_snapshot(cursor, snapshot)
     indices = {str(message.id): index for index, message in enumerate(messages)}

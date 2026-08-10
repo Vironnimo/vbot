@@ -411,6 +411,24 @@ async def test_openrouter_image_generate_rejects_empty_data() -> None:
 
 @pytest.mark.asyncio
 @respx.mock
+async def test_openrouter_image_generate_does_not_retry_invalid_b64_json() -> None:
+    route = respx.post(OPENROUTER_IMAGES_URL).mock(
+        return_value=httpx.Response(
+            200,
+            json={"created": 1, "data": [{"b64_json": "not-base64!"}]},
+        )
+    )
+    client = _openrouter_image_client("black-forest-labs/flux.2-pro")
+
+    with pytest.raises(ProviderOutcomeUnknownError) as exc_info:
+        await client.generate("a cat", options={})
+
+    assert exc_info.value.retryable is False
+    assert route.call_count == 1
+
+
+@pytest.mark.asyncio
+@respx.mock
 async def test_openrouter_image_generate_retries_documented_503() -> None:
     route = respx.post(OPENROUTER_IMAGES_URL)
     route.side_effect = [
@@ -950,6 +968,24 @@ async def test_openai_image_generate_rejects_empty_data_list() -> None:
 
     with pytest.raises(ProviderError):
         await client.generate("a cat", options={})
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_openai_image_generate_does_not_retry_invalid_b64_json() -> None:
+    route = respx.post("https://api.openai.com/v1/images/generations").mock(
+        return_value=httpx.Response(
+            200,
+            json={"created": 1, "data": [{"b64_json": "not-base64!"}]},
+        )
+    )
+    client = _openai_image_client("gpt-image-1")
+
+    with pytest.raises(ProviderOutcomeUnknownError) as exc_info:
+        await client.generate("a cat", options={})
+
+    assert exc_info.value.retryable is False
+    assert route.call_count == 1
 
 
 @pytest.mark.asyncio
