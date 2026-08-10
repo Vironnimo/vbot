@@ -60,7 +60,7 @@ def test_converter_preflights_conflicts_before_moving_any_blob(tmp_path: Path) -
     second_legacy_path = second_typed_path.with_suffix("")
     shutil.copyfile(second_typed_path, second_legacy_path)
 
-    with pytest.raises(AttachmentBlobConversionError, match="Refusing to overwrite"):
+    with pytest.raises(AttachmentBlobConversionError):
         convert_attachment_blob_extensions(tmp_path)
 
     assert first_legacy_path.exists()

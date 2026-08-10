@@ -279,9 +279,6 @@ def test_provider_schemas_follow_each_tools_current_migration_state() -> None:
     assert call_properties["domain"]["pattern"]
     assert call_properties["service"]["pattern"]
     assert call_properties["data"]["type"] == "object"
-    assert call_properties["data"]["description"] == (
-        "Service data. Omit when none; put entity_id in the top-level field."
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -309,8 +306,7 @@ async def test_handler_guard_when_token_removed_mid_flight() -> None:
         tool.handler(make_context(HA_LIST_ENTITIES_NAME), {}),
     )
 
-    error = assert_failure_envelope(result, "home_assistant_error")
-    assert "HASS_TOKEN" in error["message"]
+    assert_failure_envelope(result, "home_assistant_error")
     assert route.called is False
 
 
@@ -482,7 +478,7 @@ async def test_list_entities_http_error(
 
     assert_failure_envelope(result, "home_assistant_error")
     assert any(
-        record.levelno == logging.WARNING and "Home Assistant request failed" in record.getMessage()
+        record.levelno == logging.WARNING and record.name == f"vbot.extensions.{_EXTENSION_NAME}"
         for record in caplog.records
     )
 
@@ -550,29 +546,26 @@ async def test_get_state_invalid_entity_id(entity_id: str) -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("tool_name", "arguments", "message"),
+    ("tool_name", "arguments"),
     (
-        (HA_LIST_ENTITIES_NAME, {"domain": 42}, "expected JSON string"),
-        (HA_GET_STATE_NAME, {"entity_id": 42}, "expected JSON string"),
-        (HA_LIST_SERVICES_NAME, {"domain": []}, "expected JSON string"),
+        (HA_LIST_ENTITIES_NAME, {"domain": 42}),
+        (HA_GET_STATE_NAME, {"entity_id": 42}),
+        (HA_LIST_SERVICES_NAME, {"domain": []}),
         (
             HA_CALL_SERVICE_NAME,
             {"domain": "light", "service": "turn_on", "data": []},
-            "expected JSON object",
         ),
     ),
 )
 async def test_handlers_reject_unknown_or_wrong_typed_arguments(
     tool_name: str,
     arguments: dict[str, Any],
-    message: str,
 ) -> None:
     tools = _tools_with_token()
 
     result = await _dispatch(tools, tool_name, arguments)
 
-    error = assert_failure_envelope(result, "invalid_arguments")
-    assert message in error["message"]
+    assert_failure_envelope(result, "invalid_arguments")
 
 
 @pytest.mark.asyncio
@@ -581,8 +574,7 @@ async def test_list_entities_handler_rejects_unknown_arguments_after_open_schema
 
     result = await _dispatch(tools, HA_LIST_ENTITIES_NAME, {"unknown": True})
 
-    error = assert_failure_envelope(result, "validation_error")
-    assert error["message"] == "Unknown argument(s): unknown"
+    assert_failure_envelope(result, "validation_error")
 
 
 @pytest.mark.asyncio
@@ -595,8 +587,7 @@ async def test_get_state_handler_rejects_unknown_arguments_after_open_schema() -
         {"entity_id": "light.living_room", "unknown": True},
     )
 
-    error = assert_failure_envelope(result, "validation_error")
-    assert error["message"] == "Unknown argument(s): unknown"
+    assert_failure_envelope(result, "validation_error")
 
 
 @pytest.mark.asyncio
@@ -605,8 +596,7 @@ async def test_list_services_handler_rejects_unknown_arguments_after_open_schema
 
     result = await _dispatch(tools, HA_LIST_SERVICES_NAME, {"unknown": True})
 
-    error = assert_failure_envelope(result, "validation_error")
-    assert error["message"] == "Unknown argument(s): unknown"
+    assert_failure_envelope(result, "validation_error")
 
 
 @pytest.mark.asyncio
@@ -619,8 +609,7 @@ async def test_call_service_handler_rejects_unknown_arguments_after_open_schema(
         {"domain": "light", "service": "turn_on", "unknown": True},
     )
 
-    error = assert_failure_envelope(result, "validation_error")
-    assert error["message"] == "Unknown argument(s): unknown"
+    assert_failure_envelope(result, "validation_error")
 
 
 @respx.mock

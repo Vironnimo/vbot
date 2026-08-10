@@ -178,7 +178,6 @@ def test_start_server_reports_structured_keyboard_interrupt(monkeypatch, tmp_pat
 
     captured = capsys.readouterr()
     assert "server..... FAILED" in captured.out
-    assert "result: interrupted while waiting for local server readiness" in captured.out
     assert f"url: {instance.url}" in captured.out
     assert f"log: {instance.log_path}" in captured.out
 

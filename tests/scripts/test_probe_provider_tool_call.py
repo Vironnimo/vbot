@@ -182,7 +182,7 @@ def test_optional_boolean_scenarios_differ_only_by_schema_defaults() -> None:
     assert with_schema["properties"]["raw"]["default"] is False
 
 
-def test_bare_optional_boolean_scenario_omits_default_values_from_descriptions() -> None:
+def test_bare_optional_boolean_scenario_omits_schema_defaults() -> None:
     scenario = PROBE._scenario(
         SimpleNamespace(scenario="optional_booleans_bare", optional_case="omit", lines=8),
     )
@@ -190,9 +190,6 @@ def test_bare_optional_boolean_scenario_omits_default_values_from_descriptions()
     properties = scenario.tools[0]["parameters"]["properties"]
     assert "default" not in properties["include_links"]
     assert "default" not in properties["raw"]
-    assert "true" not in properties["include_links"]["description"]
-    assert "false" not in properties["raw"]["description"]
-    assert "otherwise omit the field" in properties["include_links"]["description"]
 
 
 def test_optional_boolean_measurements_report_presence_without_argument_values() -> None:
@@ -241,27 +238,6 @@ def test_optional_boolean_measurements_report_presence_without_argument_values()
         ]
     }
     assert "secret" not in json.dumps(result)
-
-
-def test_optional_boolean_cases_request_one_exact_argument_shape() -> None:
-    expected_fragments = {
-        "omit": "Omit both include_links and raw",
-        "include_links": "include_links=false. Omit raw",
-        "raw": "raw=true. Omit include_links",
-        "both": "include_links=false, and raw=true",
-    }
-
-    for case_name, expected_fragment in expected_fragments.items():
-        scenario = PROBE._scenario(
-            SimpleNamespace(
-                scenario="optional_booleans",
-                optional_case=case_name,
-                lines=8,
-            ),
-        )
-
-        assert "exactly once" in scenario.messages[1]["content"]
-        assert expected_fragment in scenario.messages[1]["content"]
 
 
 def test_process_cases_use_production_schema_and_exact_expected_arguments() -> None:

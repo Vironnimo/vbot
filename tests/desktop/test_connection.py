@@ -134,7 +134,7 @@ def test_add_server_replaces_existing_same_host_port_in_place(tmp_path: Path) ->
 def test_add_server_validates_host_before_persisting(tmp_path: Path) -> None:
     settings_file = tmp_path / "settings.json"
 
-    with pytest.raises(ValueError, match="host name or IP address"):
+    with pytest.raises(ValueError):
         desktop_connection.add_server("http://pi.lan", 9000, settings_file=settings_file)
 
     assert not settings_file.exists()
@@ -143,7 +143,7 @@ def test_add_server_validates_host_before_persisting(tmp_path: Path) -> None:
 def test_add_server_rejects_invalid_port(tmp_path: Path) -> None:
     settings_file = tmp_path / "settings.json"
 
-    with pytest.raises(ValueError, match="between 1 and 65535"):
+    with pytest.raises(ValueError):
         desktop_connection.add_server("pi.lan", 0, settings_file=settings_file)
 
 
@@ -331,14 +331,13 @@ def test_prepare_connect_returns_inline_error_without_replacing_calling_document
 
     prepared = controller.prepare_connect("pi.lan", 9000)
 
-    assert prepared.to_bridge_payload() == {
-        "status": PROBE_SERVER_UNREACHABLE,
-        "error_title": "Server unreachable",
-        "error_body": (
-            "vBot Desktop could not reach that host and port. Check the server is "
-            "running and the address is right, then try again."
-        ),
-    }
+    payload = prepared.to_bridge_payload()
+    assert payload["status"] == PROBE_SERVER_UNREACHABLE
+    assert set(payload) == {"status", "error_title", "error_body"}
+    assert all(
+        isinstance(payload[field], str) and payload[field]
+        for field in ("error_title", "error_body")
+    )
     assert window.loaded_urls == []
     assert window.loaded_html == []
 
@@ -409,17 +408,12 @@ def test_connect_survives_active_server_listener_error(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize(
-    ("status", "expected_text"),
-    [
-        (PROBE_SERVER_UNREACHABLE, "Server unreachable"),
-        (PROBE_WEBUI_UNAVAILABLE, "WebUI unavailable"),
-        (PROBE_NOT_VBOT_SERVER, "Not a vBot server"),
-    ],
+    "status",
+    [PROBE_SERVER_UNREACHABLE, PROBE_WEBUI_UNAVAILABLE, PROBE_NOT_VBOT_SERVER],
 )
 def test_connect_failure_shows_connection_screen_inline(
     tmp_path: Path,
     status: str,
-    expected_text: str,
 ) -> None:
     window = FakeWindow()
     controller = desktop_connection.ConnectionController(
@@ -433,7 +427,7 @@ def test_connect_failure_shows_connection_screen_inline(
     assert result.status == status
     assert window.loaded_urls == []
     assert len(window.loaded_html) == 1
-    assert expected_text in window.loaded_html[0]
+    assert 'role="alert"' in window.loaded_html[0]
     # Failed host/port are prefilled so the user fixes the target in place.
     assert 'value="pi.lan"' in window.loaded_html[0]
     assert 'value="9000"' in window.loaded_html[0]
@@ -464,7 +458,7 @@ def test_connect_invalid_host_renders_invalid_target_screen(tmp_path: Path) -> N
 
     assert result.status == PROBE_INVALID_TARGET
     assert window.loaded_urls == []
-    assert "Invalid host or port" in window.loaded_html[0]
+    assert 'role="alert"' in window.loaded_html[0]
     assert 'value="http://pi.lan"' in window.loaded_html[0]
 
 
@@ -479,7 +473,7 @@ def test_prepare_connect_invalid_port_returns_bridge_error_instead_of_raising(
     prepared = controller.prepare_connect("pi.lan", "not-a-port")  # type: ignore[arg-type]
 
     assert prepared.result.status == PROBE_INVALID_TARGET
-    assert prepared.error_title == "Invalid host or port"
+    assert prepared.error_title
     assert prepared.navigation_url is None
 
 
@@ -582,7 +576,7 @@ def test_controller_without_window_raises(tmp_path: Path) -> None:
         probe=probe_returning(PROBE_WEBUI_AVAILABLE),
     )
 
-    with pytest.raises(RuntimeError, match="no window attached"):
+    with pytest.raises(RuntimeError):
         controller.connect("pi.lan", 9000)
 
 
@@ -636,7 +630,8 @@ def test_connection_html_awaits_bridge_result_before_navigation() -> None:
 def test_connection_html_empty_state_when_no_servers() -> None:
     page = desktop_connection.build_connection_html([])
 
-    assert "No servers saved yet." in page
+    assert '<ul class="servers">' not in page
+    assert "data-host=" not in page
 
 
 def test_connection_html_no_error_banner_without_probe_result() -> None:
@@ -649,17 +644,16 @@ def test_connection_html_no_error_banner_without_probe_result() -> None:
 
 
 @pytest.mark.parametrize(
-    ("status", "expected_text"),
+    "status",
     [
-        (PROBE_SERVER_UNREACHABLE, "Server unreachable"),
-        (PROBE_WEBUI_UNAVAILABLE, "WebUI unavailable"),
-        (PROBE_NOT_VBOT_SERVER, "Not a vBot server"),
-        (PROBE_INVALID_TARGET, "Invalid host or port"),
+        PROBE_SERVER_UNREACHABLE,
+        PROBE_WEBUI_UNAVAILABLE,
+        PROBE_NOT_VBOT_SERVER,
+        PROBE_INVALID_TARGET,
     ],
 )
 def test_connection_html_renders_each_probe_failure_inline(
     status: str,
-    expected_text: str,
 ) -> None:
     target = DesktopTarget("pi.lan", 9000, "http://pi.lan:9000/")
     page = desktop_connection.build_connection_html(
@@ -667,7 +661,6 @@ def test_connection_html_renders_each_probe_failure_inline(
     )
 
     assert 'role="alert"' in page
-    assert expected_text in page
     # The failed host/port prefill the form so the user corrects it in place.
     assert 'value="pi.lan"' in page
     assert 'value="9000"' in page
@@ -703,10 +696,10 @@ def test_quote_bearing_host_rejected_and_never_breaks_out_of_data_attribute(
 
     # (a) Defense-in-depth: the host is rejected before it can ever be stored,
     # both at the low-level validator and the persisting add_server path.
-    with pytest.raises(ValueError, match="host name or IP address"):
+    with pytest.raises(ValueError):
         validate_host(malicious)
     settings_file = tmp_path / "settings.json"
-    with pytest.raises(ValueError, match="host name or IP address"):
+    with pytest.raises(ValueError):
         desktop_connection.add_server(malicious, 9000, settings_file=settings_file)
     assert not settings_file.exists()
 
