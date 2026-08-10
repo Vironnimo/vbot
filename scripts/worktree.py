@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import importlib
 import json
 import os
 import re
@@ -14,8 +15,8 @@ import stat
 import subprocess
 import sys
 import time
-from collections.abc import Callable
-from contextlib import suppress
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager, suppress
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -58,6 +59,7 @@ SERVER_PORT_KEY = "server_port"
 UNKNOWN_VALUE = "unknown"
 VALID_WORKTREE_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 TRASH_DIR_PREFIX = ".trash-"
+PORT_ALLOCATION_LOCK_NAME = "vbot-worktree-port.lock"
 
 
 def print_ok(**fields: str | int | bool | Path) -> None:
@@ -336,6 +338,57 @@ def find_free_port(worktrees_dir: Path, start: int = FIRST_WORKTREE_PORT) -> int
         candidate += 1
 
 
+@contextmanager
+def _port_allocation_lock() -> Iterator[None]:
+    """Serialize port selection until the owning marker is durable."""
+    lock_path = _git_common_dir() / PORT_ALLOCATION_LOCK_NAME
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with lock_path.open("a+b") as lock_file:
+        lock_file.seek(0, os.SEEK_END)
+        if lock_file.tell() == 0:
+            lock_file.write(b"0")
+            lock_file.flush()
+        lock_file.seek(0)
+        if os.name == "nt":
+            import msvcrt
+
+            msvcrt.locking(lock_file.fileno(), msvcrt.LK_LOCK, 1)
+            try:
+                yield
+            finally:
+                lock_file.seek(0)
+                msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
+            return
+
+        fcntl = importlib.import_module("fcntl")
+
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
+
+def _git_common_dir() -> Path:
+    """Resolve the shared Git directory from either the main tree or a worktree."""
+    dot_git = PROJECT_ROOT / ".git"
+    if dot_git.is_dir():
+        return dot_git
+    try:
+        marker = dot_git.read_text(encoding="utf-8").strip()
+    except OSError:
+        return dot_git
+    prefix = "gitdir:"
+    if not marker.lower().startswith(prefix):
+        return dot_git
+    git_dir = Path(marker[len(prefix) :].strip())
+    if not git_dir.is_absolute():
+        git_dir = (PROJECT_ROOT / git_dir).resolve()
+    if git_dir.parent.name == "worktrees":
+        return git_dir.parent.parent
+    return git_dir
+
+
 def seed_worktree_settings(settings_path: Path, *, server_port: int) -> None:
     """Seed the free local Provider and Models without replacing existing settings."""
 
@@ -490,6 +543,32 @@ def cleanup_failed_create(
         _run_command(["git", "branch", "-D", name])
 
 
+def _stop_worktree_services(worktree_path: Path, data_dir: Path) -> str | None:
+    """Stop the exact managed server and fake Provider before deletion."""
+    settings_path = data_dir / "settings.json"
+    if not settings_path.exists():
+        return None
+    test_env_script = worktree_path / "scripts" / "test-env.py"
+    if not test_env_script.is_file():
+        return f"test environment stop script is missing: {test_env_script}"
+    port = _read_settings_port(data_dir)
+    command = [
+        sys.executable,
+        str(test_env_script),
+        "stop",
+        "--host",
+        "127.0.0.1",
+        "--data-dir",
+        str(data_dir),
+    ]
+    if port is not None:
+        command.extend(["--port", str(port)])
+    return_code, stderr = _run_command(command, cwd=worktree_path)
+    if return_code == 0:
+        return None
+    return stderr or "managed worktree services could not be stopped"
+
+
 def cmd_create(args: argparse.Namespace) -> int:
     """Create a new worktree with dedicated port and data directory."""
     name: str = args.name
@@ -521,50 +600,28 @@ def cmd_create(args: argparse.Namespace) -> int:
         print_error(stderr or "git worktree add failed")
         return 1
 
-    port = find_free_port(WORKTREES_DIR)
-
     data_dir_tilde = f"~/.vbot-{name}"
     data_dir = Path.home() / f".vbot-{name}"
     data_dir_preexisting = data_dir.exists()
-
     try:
-        data_dir.mkdir(parents=True, exist_ok=True)
-    except OSError as exc:
-        cleanup_failed_create(
-            name,
-            worktree_path,
-            data_dir,
-            managed_branch=managed_branch,
-            remove_data_dir=not data_dir_preexisting,
-        )
-        print_error(str(exc))
-        return 1
-
-    try:
-        initialize_data_dir(data_dir)
-        seed_worktree_settings(data_dir / "settings.json", server_port=port)
+        with _port_allocation_lock():
+            port = find_free_port(WORKTREES_DIR)
+            data_dir.mkdir(parents=True, exist_ok=True)
+            initialize_data_dir(data_dir)
+            seed_worktree_settings(data_dir / "settings.json", server_port=port)
+            marker = worktree_path / WORKTREE_FILE_NAME
+            marker.write_text(
+                json.dumps(
+                    {
+                        DATA_DIR_KEY: data_dir_tilde,
+                        MANAGED_BRANCH_KEY: managed_branch,
+                    },
+                    indent=2,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
     except (OSError, ValueError, json.JSONDecodeError) as exc:
-        cleanup_failed_create(
-            name,
-            worktree_path,
-            data_dir,
-            managed_branch=managed_branch,
-            remove_data_dir=not data_dir_preexisting,
-        )
-        print_error(str(exc))
-        return 1
-
-    marker = worktree_path / WORKTREE_FILE_NAME
-    marker_data = {
-        DATA_DIR_KEY: data_dir_tilde,
-        MANAGED_BRANCH_KEY: managed_branch,
-    }
-    try:
-        marker.write_text(
-            json.dumps(marker_data, indent=2) + "\n",
-            encoding="utf-8",
-        )
-    except OSError as exc:
         cleanup_failed_create(
             name,
             worktree_path,
@@ -635,6 +692,11 @@ def cmd_delete(args: argparse.Namespace) -> int:
     marker_data = _read_worktree_marker(marker)
     data_dir = _resolve_remove_data_dir(name, marker_data)
 
+    stop_error = _stop_worktree_services(worktree_path, data_dir)
+    if stop_error is not None:
+        print_error(f"worktree services could not be stopped: {stop_error}")
+        return 1
+
     marker_text: str | None = None
     if marker.exists() and not args.force:
         try:
@@ -688,7 +750,10 @@ def cmd_delete(args: argparse.Namespace) -> int:
                     return 1
         _run_command(["git", "worktree", "prune"])
 
-    shutil.rmtree(data_dir, ignore_errors=True)
+    data_removal_error = _remove_directory_tree(data_dir) if data_dir.exists() else None
+    if data_removal_error is not None and data_dir.exists():
+        print_error(f"data directory could not be removed: {data_removal_error}")
+        return 1
 
     if delete_branch:
         branch_delete_flag = "-D" if args.force else "-d"
@@ -698,6 +763,7 @@ def cmd_delete(args: argparse.Namespace) -> int:
         if branch_return_code != 0:
             reason = branch_stderr or f"git branch {branch_delete_flag} {name} failed"
             print_error(reason)
+            return 1
 
     for terminated in terminated_paths:
         print(f"terminated: {terminated}")

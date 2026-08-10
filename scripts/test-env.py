@@ -22,14 +22,16 @@ import http.client
 import json
 import os
 import shutil
-import signal
 import socket
 import subprocess
 import sys
 import time
+from contextlib import suppress
 from pathlib import Path
 from typing import NamedTuple
 from urllib.parse import urlsplit
+
+import psutil  # type: ignore[import-untyped]
 
 from cli.server_management import CommandResult, ServerInstance, resolve_instance
 from cli.server_management import start_server as start_server_command
@@ -60,6 +62,13 @@ class FakeProviderInstance(NamedTuple):
     @property
     def url(self) -> str:
         return f"http://{self.host}:{self.port}"
+
+
+class FakeProviderProcess(NamedTuple):
+    """Persisted identity that remains safe across operating-system PID reuse."""
+
+    pid: int
+    create_time: float
 
 
 def _run(cmd: list[str], *, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
@@ -136,12 +145,50 @@ def _fake_provider_port_is_bound(instance: FakeProviderInstance) -> bool:
         return False
 
 
-def _read_fake_provider_pid(instance: FakeProviderInstance) -> int | None:
+def _read_fake_provider_process(instance: FakeProviderInstance) -> FakeProviderProcess | None:
     try:
-        pid = int(instance.pid_path.read_text(encoding="utf-8").strip())
-    except (OSError, ValueError):
+        payload = json.loads(instance.pid_path.read_text(encoding="utf-8"))
+        pid = payload["pid"]
+        create_time = payload["create_time"]
+    except (KeyError, OSError, TypeError, ValueError, json.JSONDecodeError):
         return None
-    return pid if pid > 0 else None
+    if isinstance(pid, bool) or not isinstance(pid, int) or pid <= 0:
+        return None
+    if isinstance(create_time, bool) or not isinstance(create_time, (int, float)):
+        return None
+    return FakeProviderProcess(pid=pid, create_time=float(create_time))
+
+
+def _owned_fake_provider_process(identity: FakeProviderProcess) -> psutil.Process | None:
+    """Resolve an exact still-live fake Provider process from persisted identity."""
+    try:
+        process = psutil.Process(identity.pid)
+        if abs(process.create_time() - identity.create_time) > 0.001:
+            return None
+        expected_entry = FAKE_PROVIDER_ENTRY.resolve()
+        command_paths = []
+        for argument in process.cmdline()[1:]:
+            try:
+                command_paths.append(Path(argument).resolve())
+            except (OSError, ValueError):
+                continue
+        if expected_entry not in command_paths:
+            return None
+        return process
+    except (psutil.Error, OSError):
+        return None
+
+
+def _write_fake_provider_process(instance: FakeProviderInstance, pid: int) -> bool:
+    try:
+        create_time = psutil.Process(pid).create_time()
+        instance.pid_path.write_text(
+            json.dumps({"pid": pid, "create_time": create_time}) + "\n",
+            encoding="utf-8",
+        )
+    except (OSError, psutil.Error):
+        return False
+    return True
 
 
 def _wait_for_fake_provider(instance: FakeProviderInstance, *, ready: bool) -> bool:
@@ -159,17 +206,25 @@ def start_fake_provider(instance: FakeProviderInstance | None) -> bool:
     if instance is None:
         return True
 
-    pid = _read_fake_provider_pid(instance)
+    identity = _read_fake_provider_process(instance)
+    owned_process = _owned_fake_provider_process(identity) if identity is not None else None
     if _fake_provider_is_ready(instance):
-        if pid is None:
+        if owned_process is None:
             print("provider.... FAILED")
-            print(f"  result: fake Provider is running without an owned PID at {instance.url}")
+            print(
+                "  result: fake Provider is running without a verified owned process "
+                f"at {instance.url}"
+            )
             return False
         print("provider.... yes")
         print(f"provider-url {instance.url}")
         print(f"provider-log {instance.log_path}")
         return True
 
+    if owned_process is not None and not _terminate_fake_provider_process(owned_process):
+        print("provider.... FAILED")
+        print("  result: the previous owned fake Provider process could not be stopped")
+        return False
     instance.pid_path.unlink(missing_ok=True)
     if _fake_provider_port_is_bound(instance):
         print("provider.... FAILED")
@@ -209,7 +264,12 @@ def start_fake_provider(instance: FakeProviderInstance | None) -> bool:
                 stderr=subprocess.STDOUT,
                 start_new_session=True,
             )
-    instance.pid_path.write_text(str(process.pid), encoding="utf-8")
+    if not _write_fake_provider_process(instance, process.pid):
+        with suppress(psutil.Error, OSError):
+            _terminate_fake_provider_process(psutil.Process(process.pid))
+        print("provider.... FAILED")
+        print("  result: fake Provider process identity could not be persisted")
+        return False
 
     if not _wait_for_fake_provider(instance, ready=True):
         stop_fake_provider(instance)
@@ -230,29 +290,25 @@ def stop_fake_provider(instance: FakeProviderInstance | None) -> bool:
     if instance is None:
         return True
 
-    pid = _read_fake_provider_pid(instance)
+    identity = _read_fake_provider_process(instance)
+    owned_process = _owned_fake_provider_process(identity) if identity is not None else None
     ready = _fake_provider_is_ready(instance)
-    if pid is None:
+    if owned_process is None:
         if ready:
             print("provider-stop FAILED")
-            print(f"  result: fake Provider is running without an owned PID at {instance.url}")
+            print(
+                "  result: stored process identity does not match the fake Provider "
+                f"running at {instance.url}; refusing to terminate PID "
+                f"{identity.pid if identity is not None else 'unknown'}"
+            )
             return False
         instance.pid_path.unlink(missing_ok=True)
         print("provider-stop confirmed")
         return True
 
-    if not ready:
-        instance.pid_path.unlink(missing_ok=True)
-        print("provider-stop confirmed")
-        return True
-
-    try:
-        os.kill(pid, signal.SIGTERM)
-    except ProcessLookupError:
-        pass
-    except OSError as exc:
+    if not _terminate_fake_provider_process(owned_process):
         print("provider-stop FAILED")
-        print(f"  result: {exc.__class__.__name__}: {exc}")
+        print("  result: owned fake Provider process did not terminate")
         return False
 
     if not _wait_for_fake_provider(instance, ready=False):
@@ -263,6 +319,25 @@ def stop_fake_provider(instance: FakeProviderInstance | None) -> bool:
     instance.pid_path.unlink(missing_ok=True)
     print("provider-stop confirmed")
     return True
+
+
+def _terminate_fake_provider_process(process: psutil.Process) -> bool:
+    """Terminate one already-validated process with a bounded kill fallback."""
+    try:
+        process.terminate()
+        process.wait(timeout=FAKE_PROVIDER_STARTUP_TIMEOUT_SECONDS)
+        return True
+    except psutil.NoSuchProcess:
+        return True
+    except psutil.TimeoutExpired:
+        try:
+            process.kill()
+            process.wait(timeout=FAKE_PROVIDER_STARTUP_TIMEOUT_SECONDS)
+            return True
+        except (psutil.Error, OSError):
+            return False
+    except (psutil.Error, OSError):
+        return False
 
 
 def build_frontend() -> int:
