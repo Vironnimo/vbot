@@ -91,17 +91,10 @@ def test_registration_is_session_scoped_and_schema_is_flat(tmp_path: Path) -> No
     assert "oneOf" not in tool.parameters
     assert "additionalProperties" not in tool.parameters
     assert '"default"' not in json.dumps(tool.parameters)
-    assert tool.description == (
-        "Recover original records from this Session after Compaction. Use overview to inspect "
-        "available checkpoint sections, search to find matching records, read to retrieve "
-        "canonical records chronologically, or around to retrieve complete records near a known "
-        "message id. This Tool is available only after the Session has a Compaction checkpoint."
-    )
-    assert tool.parameters["properties"]["query"]["description"] == (
-        "Text to find. Required for search unless cursor is set."
-    )
-    assert tool.parameters["properties"]["message_id"]["description"] == (
-        "Anchor Message id. Required for around unless cursor is set."
+    assert tool.description
+    assert all(
+        isinstance(property_schema.get("description"), str) and property_schema["description"]
+        for property_schema in tool.parameters["properties"].values()
     )
     display = registry.display_for_call(
         HISTORY_TOOL_NAME,

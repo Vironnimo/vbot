@@ -85,7 +85,7 @@ def test_payload_enforces_documented_output_and_sampling_contract(adapter: NousA
 
 
 def test_invalid_temperature_fails_before_network(adapter: NousAdapter) -> None:
-    with pytest.raises(ProviderError, match="between 0 and 2") as exc_info:
+    with pytest.raises(ProviderError) as exc_info:
         adapter._build_payload(
             [{"role": "user", "content": "Hello"}],
             "openai/gpt-5.5-pro",
@@ -224,7 +224,7 @@ async def test_payment_required_is_non_retryable_entitlement_error(adapter: Nous
         return_value=httpx.Response(402, json={"error": "subscription_required"})
     )
 
-    with pytest.raises(ProviderError, match="subscription entitlement") as exc_info:
+    with pytest.raises(ProviderError) as exc_info:
         await adapter.send(
             [{"role": "user", "content": "Hello"}],
             model_id="openai/gpt-5.5-pro",

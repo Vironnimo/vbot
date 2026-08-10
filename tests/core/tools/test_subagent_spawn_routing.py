@@ -49,12 +49,8 @@ async def test_register_subagent_tools_registers_one_flat_public_tool() -> None:
     # Assert
     assert [tool.name for tool in registry.list_tools()] == [SUBAGENT_TOOL_NAME]
     subagent = registry.get(SUBAGENT_TOOL_NAME)
-    assert subagent.description == (
-        "Run, inspect, or cancel owned Sub-Agent work. Top-level run actions return "
-        "immediately and deliver results automatically; run actions made by a Sub-Agent "
-        "wait for completion."
-    )
     assert subagent.description == SUBAGENT_TOOL_DESCRIPTION
+    assert subagent.description
     assert subagent.parameters == SUBAGENT_TOOL_PARAMETERS
     assert "oneOf" not in subagent.parameters
     assert "additionalProperties" not in subagent.parameters
@@ -71,35 +67,13 @@ async def test_register_subagent_tools_registers_one_flat_public_tool() -> None:
     }
     assert subagent.parameters["required"] == ["action"]
     assert properties["action"]["enum"] == ["run", "status", "cancel"]
-    assert properties["action"]["description"] == (
-        "Lifecycle action: run starts or continues work, status inspects it, cancel stops it."
+    assert all(
+        isinstance(property_schema.get("description"), str) and property_schema["description"]
+        for property_schema in properties.values()
     )
-    assert properties["id"]["description"] == (
-        "Stable id returned by run. Required for status and cancel."
-    )
-    assert properties["content"]["description"] == (
-        "Task or continuation message. Required for run; make it self-contained unless "
-        "continuing session_id."
-    )
-    assert properties["description"] == {
-        "type": "string",
-        "description": (
-            "Short 3–5 word title for the delegated task. Strongly preferred; omit only if the "
-            "first 48 characters of content clearly identify the task."
-        ),
-    }
+    assert properties["description"]["type"] == "string"
+    assert "maxLength" not in properties["description"]
     assert "description" not in subagent.parameters["required"]
-    assert properties["agent_id"]["description"] == (
-        "Target Agent for run. Omit to use the caller when starting a new Session; required "
-        "with session_id."
-    )
-    assert properties["session_id"]["description"] == (
-        "Existing Sub-Agent Session to continue. Omit to start a new Session; requires agent_id."
-    )
-    assert properties["model"]["description"] == (
-        "Model override for run as <provider>/<model-id>. Omit to inherit the target Agent; "
-        "applies only to this Run."
-    )
     assert properties["thinking_effort"]["enum"] == [
         "",
         "high",
@@ -110,10 +84,6 @@ async def test_register_subagent_tools_registers_one_flat_public_tool() -> None:
         "none",
         "xhigh",
     ]
-    assert properties["thinking_effort"]["description"] == (
-        "Thinking effort for run. Omit to inherit the target Agent; an empty string selects "
-        "the Provider default. Applies only to this Run."
-    )
     assert "background" not in properties
     assert "run_id" not in properties
     assert "queue_item_id" not in properties

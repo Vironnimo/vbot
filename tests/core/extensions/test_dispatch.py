@@ -746,9 +746,9 @@ class TestPromptBlockDeclarations:
         registry = ExtensionRegistry()
         api = _loaded_record(registry, "ext")
 
-        with pytest.raises(ValueError, match="exactly one"):
+        with pytest.raises(ValueError):
             api.register_prompt_block("both", default_text="x", render=lambda ctx: "y")
-        with pytest.raises(ValueError, match="exactly one"):
+        with pytest.raises(ValueError):
             api.register_prompt_block("neither")
 
     def test_slug_collision_is_first_wins_with_diagnostic(

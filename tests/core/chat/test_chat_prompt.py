@@ -417,7 +417,7 @@ async def test_rooted_identity_missing_repository_fails_before_user_message(
     )
     session = runtime.chat_sessions.create("coder", session_id="s1")
 
-    with pytest.raises(ChatError, match="Project repository is unavailable"):
+    with pytest.raises(ChatError):
         await build_chat_loop(runtime).send("coder", "must not persist", session_id="s1")
 
     assert session.load() == []

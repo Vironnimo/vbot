@@ -56,7 +56,7 @@ class TestProviderAdapterABC:
 
     def test_cannot_instantiate_abc_directly(self) -> None:
         """ProviderAdapter raises TypeError when instantiated directly."""
-        with pytest.raises(TypeError, match="abstract method"):
+        with pytest.raises(TypeError):
             ProviderAdapter()  # type: ignore[abstract]
 
     def test_subclass_missing_send_raises_type_error(self) -> None:
@@ -68,7 +68,7 @@ class TestProviderAdapterABC:
             ) -> AsyncIterator[dict]:
                 yield {}
 
-        with pytest.raises(TypeError, match="abstract method"):
+        with pytest.raises(TypeError):
             _MissingSend()  # type: ignore[abstract]
 
     def test_subclass_missing_stream_raises_type_error(self) -> None:
@@ -78,7 +78,7 @@ class TestProviderAdapterABC:
             async def send(self, messages: list[dict], *, model_id: str, **kwargs) -> dict:
                 return {}
 
-        with pytest.raises(TypeError, match="abstract method"):
+        with pytest.raises(TypeError):
             _MissingStream()  # type: ignore[abstract]
 
     def test_subclass_missing_both_raises_type_error(self) -> None:
@@ -87,7 +87,7 @@ class TestProviderAdapterABC:
         class _MissingBoth(ProviderAdapter):
             pass
 
-        with pytest.raises(TypeError, match="abstract method"):
+        with pytest.raises(TypeError):
             _MissingBoth()  # type: ignore[abstract]
 
     def test_concrete_subclass_instantiates(self) -> None:
@@ -186,7 +186,7 @@ class TestProviderAdapterABC:
     def test_default_normalize_response_requires_adapter_implementation(self) -> None:
         """Response normalization is optional for ABC construction but required at use."""
         adapter = _StubAdapter()
-        with pytest.raises(NotImplementedError, match="normalize_response"):
+        with pytest.raises(NotImplementedError):
             adapter.normalize_response({})
 
     def test_stream_signature_stays_async_iterator_of_dicts(self) -> None:

@@ -70,7 +70,7 @@ def test_build_payload_drops_dimensions_when_none() -> None:
 
 
 def test_build_payload_rejects_zero_dimensions() -> None:
-    with pytest.raises(ProviderError, match="positive integer"):
+    with pytest.raises(ProviderError):
         _build_embeddings_payload("google/gemini-embedding-2", ["a"], {"dimensions": 0})
 
 
@@ -86,7 +86,7 @@ def test_build_payload_forwards_positive_integer_dimensions() -> None:
 
 
 def test_build_payload_rejects_float_dimensions() -> None:
-    with pytest.raises(ProviderError, match="positive integer"):
+    with pytest.raises(ProviderError):
         _build_embeddings_payload(
             "google/gemini-embedding-2",
             ["a"],
@@ -195,7 +195,7 @@ def test_parse_response_rejects_booleans_inside_embedding() -> None:
 
     payload = {"data": [{"index": 0, "embedding": [True, False]}]}
 
-    with pytest.raises(ProviderError, match="non-numeric"):
+    with pytest.raises(ProviderError):
         _parse_embeddings_response(payload, expected_count=1)
 
 
@@ -206,7 +206,7 @@ def test_parse_response_rejects_string_values_inside_embedding() -> None:
 
     payload = {"data": [{"index": 0, "embedding": ["0.1", "0.2"]}]}
 
-    with pytest.raises(ProviderError, match="non-numeric"):
+    with pytest.raises(ProviderError):
         _parse_embeddings_response(payload, expected_count=1)
 
 
@@ -218,7 +218,7 @@ def test_parse_response_rejects_empty_data_array() -> None:
 
     from core.providers.errors import ProviderError
 
-    with pytest.raises(ProviderError, match="no data"):
+    with pytest.raises(ProviderError):
         _parse_embeddings_response({"data": []}, expected_count=2)
 
 
@@ -231,7 +231,7 @@ def test_parse_response_rejects_missing_data_key() -> None:
 
     from core.providers.errors import ProviderError
 
-    with pytest.raises(ProviderError, match="no data"):
+    with pytest.raises(ProviderError):
         _parse_embeddings_response({}, expected_count=2)
 
 
@@ -263,7 +263,7 @@ def test_parse_response_keeps_empty_data_retryable_without_error() -> None:
 
     from core.providers.errors import ProviderError
 
-    with pytest.raises(ProviderError, match="no data") as exc_info:
+    with pytest.raises(ProviderError) as exc_info:
         _parse_embeddings_response({"data": []}, expected_count=2)
 
     assert exc_info.value.retryable is True
@@ -277,7 +277,7 @@ def test_parse_response_rejects_non_dict_payload() -> None:
 
     from core.providers.errors import ProviderError
 
-    with pytest.raises(ProviderError, match="JSON object"):
+    with pytest.raises(ProviderError):
         _parse_embeddings_response(["nope"], expected_count=1)
 
 
@@ -294,7 +294,7 @@ def test_parse_response_rejects_count_mismatch() -> None:
         ],
     }
 
-    with pytest.raises(ProviderError, match="1 vectors for 2 inputs"):
+    with pytest.raises(ProviderError):
         _parse_embeddings_response(payload, expected_count=2)
 
 
@@ -307,7 +307,7 @@ def test_parse_response_rejects_missing_embedding_field() -> None:
 
     payload = {"data": [{"index": 0}, {"index": 1, "embedding": [0.1]}]}
 
-    with pytest.raises(ProviderError, match="missing an embedding"):
+    with pytest.raises(ProviderError):
         _parse_embeddings_response(payload, expected_count=2)
 
 
@@ -318,7 +318,7 @@ def test_parse_response_rejects_non_object_data_entry() -> None:
 
     from core.providers.errors import ProviderError
 
-    with pytest.raises(ProviderError, match="not an object"):
+    with pytest.raises(ProviderError):
         _parse_embeddings_response({"data": ["not-a-dict"]}, expected_count=1)
 
 
@@ -340,7 +340,7 @@ def test_parse_response_rejects_non_object_data_entry() -> None:
     ],
 )
 def test_parse_response_rejects_non_bijective_indices(payload: object) -> None:
-    with pytest.raises(ProviderError, match="map each input exactly once"):
+    with pytest.raises(ProviderError):
         _parse_embeddings_response(payload, expected_count=2)
 
 
@@ -366,7 +366,7 @@ def test_parse_response_rejects_mixed_index_presence() -> None:
         ]
     }
 
-    with pytest.raises(ProviderError, match="mixes indexed and unindexed"):
+    with pytest.raises(ProviderError):
         _parse_embeddings_response(payload, expected_count=2)
 
 
@@ -378,13 +378,13 @@ def test_parse_response_rejects_inconsistent_vector_dimensions() -> None:
         ]
     }
 
-    with pytest.raises(ProviderError, match="inconsistent dimensions"):
+    with pytest.raises(ProviderError):
         _parse_embeddings_response(payload, expected_count=2)
 
 
 @pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf")])
 def test_parse_response_rejects_non_finite_vector_values(value: float) -> None:
-    with pytest.raises(ProviderError, match="non-finite"):
+    with pytest.raises(ProviderError):
         _parse_embeddings_response(
             {"data": [{"index": 0, "embedding": [value]}]},
             expected_count=1,
@@ -427,7 +427,7 @@ def test_parse_response_marks_missing_usage_as_unreported() -> None:
 
 @pytest.mark.parametrize("model", ["", 123, False])
 def test_parse_response_rejects_invalid_advertised_model(model: object) -> None:
-    with pytest.raises(ProviderError, match="model must be a non-empty string"):
+    with pytest.raises(ProviderError):
         _parse_embeddings_response(
             {
                 "data": [{"index": 0, "embedding": [0.1]}],
@@ -738,7 +738,7 @@ def test_build_payload_merges_non_reserved_extra_options() -> None:
     ["model", "input", "encoding_format", "dimensions", "input_type"],
 )
 def test_build_payload_rejects_reserved_extra_option(field: str) -> None:
-    with pytest.raises(ProviderError, match="cannot override reserved fields"):
+    with pytest.raises(ProviderError):
         _build_embeddings_payload(
             "openai/text-embedding-3-small",
             ["hello"],

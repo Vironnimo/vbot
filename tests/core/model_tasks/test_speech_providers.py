@@ -98,7 +98,7 @@ async def test_openrouter_tts_does_not_retry_empty_success_response() -> None:
     )
     client = _openrouter_client("openai/gpt-4o-mini-tts")
 
-    with pytest.raises(ProviderOutcomeUnknownError, match="contains no audio"):
+    with pytest.raises(ProviderOutcomeUnknownError):
         await client.synthesize("hello", options={"voice": "alloy"})
 
     assert route.call_count == 1

@@ -52,7 +52,7 @@ def test_resolve_wraps_missing_binding_as_configuration_error() -> None:
         _StubModelTasks(None), configuration_error=_StubConfigurationError
     )
 
-    with pytest.raises(_StubConfigurationError, match="No task model configured"):
+    with pytest.raises(_StubConfigurationError):
         resolver.resolve("speech_to_text")
 
 

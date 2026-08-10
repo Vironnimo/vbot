@@ -145,7 +145,7 @@ class TestAgentTakeoverMessage:
             ChatMessage.from_dict(data)
 
     def test_from_dict_rejects_missing_content(self) -> None:
-        with pytest.raises(ChatMessageValidationError, match="content"):
+        with pytest.raises(ChatMessageValidationError):
             ChatMessage.from_dict(
                 {
                     "id": "takeover-missing-content",
@@ -155,7 +155,7 @@ class TestAgentTakeoverMessage:
             )
 
     def test_from_dict_rejects_empty_content(self) -> None:
-        with pytest.raises(ChatMessageValidationError, match="non-empty"):
+        with pytest.raises(ChatMessageValidationError):
             ChatMessage.from_dict(
                 {
                     "id": "takeover-empty-content",

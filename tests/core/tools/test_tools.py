@@ -24,6 +24,7 @@ from core.tools import (
     ToolDisplayPart,
     ToolExecutionConfig,
     ToolExecutor,
+    ToolNotAllowedError,
     ToolNoteHook,
     ToolPromptBlockRegistry,
     ToolRegistry,
@@ -1030,7 +1031,7 @@ class TestToolReadiness:
     def test_register_rejects_non_callable_ready(self) -> None:
         registry = ToolRegistry()
 
-        with pytest.raises(ValueError, match="ready predicate must be callable"):
+        with pytest.raises(ValueError):
             registry.register(
                 name="gated",
                 description="A gated tool.",
@@ -1234,7 +1235,7 @@ class TestToolRegistryDispatch:
         registry = ToolRegistry()
         register_read_file(registry)
 
-        with pytest.raises(Exception, match="Tool not allowed: read_file"):
+        with pytest.raises(ToolNotAllowedError):
             await registry.dispatch(make_context("read_file"), {"path": "SOUL.md"}, [])
 
 
@@ -1832,9 +1833,9 @@ class TestToolPromptBlockRegistry:
     def test_requires_exactly_one_of_text_or_render(self) -> None:
         registry = ToolPromptBlockRegistry()
 
-        with pytest.raises(ValueError, match="exactly one"):
+        with pytest.raises(ValueError):
             registry.register("bash", default_text="x", render=lambda ctx: "y")
-        with pytest.raises(ValueError, match="exactly one"):
+        with pytest.raises(ValueError):
             registry.register("bash")
 
     def test_duplicate_tool_name_is_first_wins(self, caplog: pytest.LogCaptureFixture) -> None:

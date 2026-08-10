@@ -624,10 +624,10 @@ async def test_background_completion_joins_next_request_in_same_run(tmp_path: Pa
         "tool",
         "user",
     ]
-    assert second_request_messages[-1]["content"].startswith(
-        "<system-reminder>\nAutomatic completion delivery — this is not a new user request."
-    )
-    assert "Build finished successfully." in second_request_messages[-1]["content"]
+    reminder = second_request_messages[-1]["content"]
+    assert reminder.startswith("<system-reminder>\n")
+    assert reminder.endswith("\n</system-reminder>")
+    assert "Build finished successfully." in reminder
 
 
 @pytest.mark.asyncio

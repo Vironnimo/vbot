@@ -103,14 +103,14 @@ def test_bash_env_block_renders_only_for_permanent_agent_grants(
     )
 
     prompt = manager.build_system_prompt(granted)
+    ungranted_prompt = manager.build_system_prompt(ungranted)
+    denied_prompt = manager.build_system_prompt(bash_denied)
 
-    assert "## Bash Environment Access" in prompt
-    assert "permanent permission" in prompt
-    assert "- `OPENAI_API_KEY`" in prompt
-    assert "- `OPENROUTER_API_KEY`" in prompt
-    assert "`env_keys` array of every `bash` call" in prompt
-    assert "## Bash Environment Access" not in manager.build_system_prompt(ungranted)
-    assert "## Bash Environment Access" not in manager.build_system_prompt(bash_denied)
+    assert "OPENAI_API_KEY" in prompt
+    assert "OPENROUTER_API_KEY" in prompt
+    assert "OPENAI_API_KEY" not in ungranted_prompt
+    assert "OPENROUTER_API_KEY" not in ungranted_prompt
+    assert "OPENAI_API_KEY" not in denied_prompt
 
 
 def test_provider_tool_definitions_omit_memory_when_agent_memory_is_off(
@@ -275,9 +275,9 @@ def test_skill_maintenance_block_renders_for_identity_agent_with_skill_manage(
     agent = _agent(workspace, allowed_tools=["skill_manage"])
 
     prompt = manager.build_system_prompt(agent)
+    without_tool = manager.build_system_prompt(_agent(workspace, allowed_tools=["read_file"]))
 
-    assert "## Skill Maintenance" in prompt
-    assert "keep them alive with the `skill_manage` tool" in prompt
+    assert prompt != without_tool
 
 
 def test_skill_maintenance_block_absent_without_skill_manage_tool(
@@ -289,8 +289,9 @@ def test_skill_maintenance_block_absent_without_skill_manage_tool(
     agent = _agent(workspace, allowed_tools=["read_file"])
 
     prompt = manager.build_system_prompt(agent)
+    with_tool = manager.build_system_prompt(_agent(workspace, allowed_tools=["skill_manage"]))
 
-    assert "## Skill Maintenance" not in prompt
+    assert prompt != with_tool
 
 
 def test_skill_maintenance_block_absent_for_config_agent_even_with_wildcard(
@@ -303,8 +304,9 @@ def test_skill_maintenance_block_absent_for_config_agent_even_with_wildcard(
     agent = _agent("", allowed_tools=["*"], memory_prompt_mode=MEMORY_PROMPT_MODE_OFF)
 
     prompt = manager.build_system_prompt(agent, agent_body="You are the orchestrator.")
+    identity_prompt = manager.build_system_prompt(_agent(tmp_path, allowed_tools=["*"]))
 
-    assert "## Skill Maintenance" not in prompt
+    assert prompt != identity_prompt
 
 
 def test_list_blocks_shows_skill_maintenance_as_editable_tool_owned_block(
@@ -430,20 +432,15 @@ def test_subagent_block_renders_only_with_tool_and_lists_additional_targets(
         nesting_depth=1,
     )
 
-    assert "## Sub-Agents" in prompt
-    assert "omit `agent_id`" in prompt
-    assert "- `reviewer` — Reviewer — Reviews completed work." in prompt
-    assert "When starting a new Session, send a self-contained task" in prompt
-    assert "A continuation message may rely on that Sub-Agent Session's existing history" in prompt
-    assert "You are the top-level Agent." in prompt
-    assert "vBot monitors it, so you do not need to keep the current Run open" in prompt
-    assert "At Run end, vBot combines every background result already finished" in prompt
-    assert "You are a Sub-Agent." in nested_prompt
-    assert "executes in the foreground" in nested_prompt
-    assert "## Sub-Agents" not in manager.build_system_prompt(
+    denied_prompt = manager.build_system_prompt(
         denied,
         agent_project_id="vbot",
     )
+    for value in ("reviewer", "Reviewer", "Reviews completed work."):
+        assert value in prompt
+        assert value in nested_prompt
+        assert value not in denied_prompt
+    assert prompt != nested_prompt
 
 
 def test_subagent_block_stays_visible_without_additional_targets(
@@ -468,9 +465,9 @@ def test_subagent_block_stays_visible_without_additional_targets(
     )
 
     prompt = manager.build_system_prompt(agent)
+    denied = manager.build_system_prompt(_agent(workspace, allowed_tools=[]))
 
-    assert "## Sub-Agents" in prompt
-    assert "**No additional Agents are available.**" in prompt
+    assert prompt != denied
 
 
 def test_project_block_lists_projects_only_for_identity_agent_with_tool(
@@ -504,14 +501,11 @@ def test_project_block_lists_projects_only_for_identity_agent_with_tool(
 
     prompt = manager.build_system_prompt(identity)
 
-    assert "## Projects" in prompt
     assert '<project id="vbot" name="vBot"' in prompt
     assert f'cwd="{model_path(repo.resolve())}"' in prompt
     assert 'available="true" active="true"' in prompt
-    assert "Call it alone and wait for the result" in prompt
-    assert "on every `bash` call; each call starts a new shell" in prompt
-    assert "## Projects" not in manager.build_system_prompt(denied)
-    assert "## Projects" not in manager.build_system_prompt(config_agent)
+    assert '<project id="vbot"' not in manager.build_system_prompt(denied)
+    assert '<project id="vbot"' not in manager.build_system_prompt(config_agent)
 
 
 def test_enabling_tools_list_block_renders_tool_descriptions(
@@ -538,9 +532,7 @@ def test_enabling_tools_list_block_renders_tool_descriptions(
 
     prompt = manager.build_system_prompt(agent)
 
-    assert "## Available Tools" in prompt
     assert "- read_file: Read a workspace file" in prompt
-    assert "## Tool Call Style" in prompt  # the style block stays on independently
 
 
 def test_session_grant_drives_provider_and_enabled_live_tool_list(

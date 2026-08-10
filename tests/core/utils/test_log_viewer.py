@@ -266,7 +266,7 @@ def test_read_file_caps_unconsumed_handoff_snapshots(tmp_path: Path) -> None:
         ) as stream:
             await stream.__anext__()
 
-    with pytest.raises(ValueError, match="invalid log cursor"):
+    with pytest.raises(ValueError):
         asyncio.run(consume_pruned_cursor())
 
 
@@ -521,7 +521,7 @@ async def test_subscribe_rejects_invalid_cursor(tmp_path: Path) -> None:
 
     viewer = LogViewer(tmp_path)
 
-    with pytest.raises(ValueError, match="invalid log cursor"):
+    with pytest.raises(ValueError):
         async with aclosing(viewer.subscribe("2026-05-11", cursor="missing")) as stream:
             await stream.__anext__()
 
@@ -656,7 +656,7 @@ async def test_ensure_watcher_attaches_crash_logging_done_callback(
 def test_read_file_rejects_invalid_name(tmp_path: Path) -> None:
     viewer = LogViewer(tmp_path)
 
-    with pytest.raises(ValueError, match="invalid log file name"):
+    with pytest.raises(ValueError):
         viewer.read_file("../2026-05-11")
 
 

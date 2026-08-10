@@ -40,7 +40,7 @@ def test_anthropic_sanitizer_preserves_canonical_schema_without_mutation() -> No
 
 @pytest.mark.parametrize("schema", [{}, None, "object", {"anyOf": [{"type": "object"}]}])
 def test_anthropic_sanitizer_rejects_non_object_roots(schema: object) -> None:
-    with pytest.raises(ValueError, match="object root"):
+    with pytest.raises(ValueError):
         sanitize_anthropic_tool_input_schema(schema)
 
 

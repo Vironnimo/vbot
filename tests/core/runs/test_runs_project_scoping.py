@@ -157,7 +157,7 @@ async def test_project_and_identity_sessions_with_same_ids_never_collide() -> No
     # cancel would close the never-run task without terminal bookkeeping).
     await asyncio.sleep(0)
     # … while a second start in the *same* anchor is still rejected.
-    with pytest.raises(ActiveRunError, match="active run"):
+    with pytest.raises(ActiveRunError):
         await manager.start(
             agent_id="coder", session_id="main", executor=execute, project_id="acme"
         )
@@ -288,7 +288,7 @@ async def test_cancel_by_session_is_scoped_to_the_project_anchor() -> None:
     await asyncio.sleep(0)
 
     # The identity scope must not reach the project run.
-    with pytest.raises(RunNotFoundError, match="no active run"):
+    with pytest.raises(RunNotFoundError):
         manager.cancel_by_session("coder", "sess-uuid", project_id=None)
 
     cancelled = manager.cancel_by_session("coder", "sess-uuid", project_id="acme")

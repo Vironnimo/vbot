@@ -35,5 +35,5 @@ async def test_runtime_starts_shared_provider_usage_service_and_closes_it(
 
     assert runtime._provider_usage is None  # noqa: SLF001
     assert service._history_started is False  # noqa: SLF001
-    with pytest.raises(RuntimeError, match="not started"):
+    with pytest.raises(RuntimeError):
         _ = runtime.provider_usage

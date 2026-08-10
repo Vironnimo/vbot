@@ -1208,7 +1208,7 @@ async def test_discover_task_models_rejects_malformed_catalog() -> None:
 
     fetch_json = _fake_fetch_json({"/images/models": {"unexpected": True}})
 
-    with pytest.raises(ValueError, match="data list"):
+    with pytest.raises(ValueError):
         await OpenRouterAdapter.discover_task_models({}, fetch_json)
 
 

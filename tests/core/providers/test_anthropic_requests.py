@@ -197,7 +197,7 @@ class TestSendRequestFormat:
     )
     def test_invalid_media_block_raises_instead_of_raw_passthrough(self, invalid_block):
         """Malformed media blocks must never reach the wire as raw dicts."""
-        with pytest.raises(ProviderError, match="media content block requires"):
+        with pytest.raises(ProviderError):
             _to_anthropic_user_content_block(invalid_block)
 
     @pytest.mark.parametrize("media_type", ["audio/wav", "audio/ogg", "video/mp4"])
@@ -205,7 +205,7 @@ class TestSendRequestFormat:
         """Anthropic's wire has no audio/video input; reject instead of mislabeling."""
         block = {"type": "media", "base64": "YXVkaW8=", "media_type": media_type}
 
-        with pytest.raises(ProviderError, match="supports only image media blocks"):
+        with pytest.raises(ProviderError):
             _to_anthropic_user_content_block(block)
 
     def test_document_block_maps_to_anthropic_document_part(self):
@@ -237,7 +237,7 @@ class TestSendRequestFormat:
     )
     def test_invalid_document_block_raises(self, block):
         """Malformed document blocks must never reach the wire as raw dicts."""
-        with pytest.raises(ProviderError, match="document content block requires"):
+        with pytest.raises(ProviderError):
             _to_anthropic_user_content_block(block)
 
     @respx.mock

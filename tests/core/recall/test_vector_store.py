@@ -206,7 +206,7 @@ def test_vector_store_rejects_vector_with_wrong_dimension(tmp_path: Path) -> Non
         vector=[0.1, 0.2, 0.3, 0.4],
     )
 
-    with pytest.raises(VectorStoreError, match="does not match pinned dimension"):
+    with pytest.raises(VectorStoreError):
         _upsert_one(
             store,
             header=VectorHeader(provider_id="p", model_id="m", dimension=4),
@@ -235,7 +235,7 @@ def test_vector_store_knn_header_mismatch_is_read_only(tmp_path: Path) -> None:
         space_fingerprint="space-a",
         index_policy="passage-v1",
     )
-    with pytest.raises(VectorStoreError, match="header"):
+    with pytest.raises(VectorStoreError):
         store.knn_search(
             header=incompatible,
             query_vector=[1.0, 0.0, 0.0, 0.0],

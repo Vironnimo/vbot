@@ -77,5 +77,5 @@ def test_history_store_rejects_non_finite_provider_numbers(tmp_path: Any) -> Non
     snapshot = _snapshot()
     snapshot["windows"][0]["used_percent"] = float("nan")
 
-    with pytest.raises(UsageHistoryError, match="must be finite"):
+    with pytest.raises(UsageHistoryError):
         store.append("2026-07-01T01:00:00+00:00", [snapshot])

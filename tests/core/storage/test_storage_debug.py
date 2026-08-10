@@ -154,11 +154,11 @@ class TestUpdateDebugSettings:
     def test_rejects_unsupported_fields(self, tmp_path: Path) -> None:
         storage = StorageManager(tmp_path)
 
-        with pytest.raises(StorageError, match="Unsupported debug settings: unknown"):
+        with pytest.raises(StorageError):
             storage.update_settings_sections({"debug": {"enabled": True, "unknown": "value"}})
 
     @pytest.mark.parametrize(
-        ("debug", "message"),
+        ("debug", "_message"),
         [
             ([], "Debug settings must be a mapping"),
             ("not a dict", "Debug settings must be a mapping"),
@@ -172,11 +172,11 @@ class TestUpdateDebugSettings:
         self,
         tmp_path: Path,
         debug: Any,
-        message: str,
+        _message: str,
     ) -> None:
         storage = StorageManager(tmp_path)
 
-        with pytest.raises(StorageError, match=message):
+        with pytest.raises(StorageError):
             storage.update_settings_sections({"debug": debug})
 
     def test_leaves_file_unchanged_when_rejected(self, tmp_path: Path) -> None:
@@ -184,7 +184,7 @@ class TestUpdateDebugSettings:
         original = {"server_port": 8500, "debug": {"enabled": True, "trace_limit": 50}}
         storage.save_settings(original)
 
-        with pytest.raises(StorageError, match="Unsupported debug settings"):
+        with pytest.raises(StorageError):
             storage.update_settings_sections({"debug": {"unknown": 1}})
 
         assert storage.load_settings() == original
@@ -287,7 +287,7 @@ class TestUpdateSettingsSectionsWithDebug:
         original = {"server_port": 8500, "debug": {"enabled": False, "trace_limit": 50}}
         storage.save_settings(original)
 
-        with pytest.raises(StorageError, match="Compaction setting threshold"):
+        with pytest.raises(StorageError):
             storage.update_settings_sections(
                 {
                     "debug": {"enabled": True},

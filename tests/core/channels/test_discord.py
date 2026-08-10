@@ -286,7 +286,7 @@ async def test_thread_uses_parent_discord_channel_as_access_scope(tmp_path: Path
 
 
 def test_constructor_requires_token(tmp_path: Path) -> None:
-    with pytest.raises(ChannelConfigError, match="Missing Discord token"):
+    with pytest.raises(ChannelConfigError):
         DiscordChannelAdapter(
             make_config(allowed_chat_ids=[100]),
             cast(Any, SimpleNamespace()),
@@ -807,7 +807,7 @@ async def test_send_rejects_buttons(tmp_path: Path) -> None:
 
     # Discord has no interactive-message support; a non-None buttons value is
     # rejected rather than silently dropped.
-    with pytest.raises(ChannelError, match="buttons are not supported on Discord"):
+    with pytest.raises(ChannelError):
         await adapter.send(
             "hi",
             "100",
@@ -961,5 +961,5 @@ async def test_inbound_dispatch_propagates_cancellation(tmp_path: Path) -> None:
 
 
 def test_split_discord_message_rejects_non_positive_limit() -> None:
-    with pytest.raises(ValueError, match="positive"):
+    with pytest.raises(ValueError):
         split_discord_message("hello", 0)

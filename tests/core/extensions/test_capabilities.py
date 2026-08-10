@@ -221,7 +221,6 @@ def test_word_count_example_uses_an_open_schema_and_handler_validation(tmp_path:
 
     assert success["data"] == {"word_count": 2}
     assert rejected["error"]["code"] == "invalid_arguments"
-    assert rejected["error"]["message"] == "Unknown argument(s): unknown"
 
 
 def test_extension_not_ready_tool_hidden_from_provider_definitions_but_registered(

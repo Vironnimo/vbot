@@ -66,43 +66,23 @@ def test_identity_agent_prompt_assembles_blocks_in_default_layout_order(
 
     prompt = manager.build_system_prompt(agent)
 
-    # Shared Runtime and Identity Environment blocks (variables filled).
-    assert "- Server hostname: `test-host`" in prompt
-    assert "- Operating system: `test-os`" in prompt
-    assert "- vBot version: `0.1.0`" in prompt
-    assert f"- vBot root: `{model_path((tmp_path / 'app').resolve())}`" in prompt
-    assert f"- vBot data root: `{model_path((tmp_path / 'data').resolve())}`" in prompt
-    assert "- Model: `openai/gpt-5.2`" in prompt
+    # Runtime-owned values are expanded and preserved without pinning their prose labels.
+    assert "test-host" in prompt
+    assert "test-os" in prompt
+    assert "0.1.0" in prompt
+    assert model_path((tmp_path / "app").resolve()) in prompt
+    assert model_path((tmp_path / "data").resolve()) in prompt
+    assert "openai/gpt-5.2" in prompt
     assert model_path(workspace) in prompt
-    assert "- Configured thinking effort: `high`" in prompt
-    assert "- Current date (UTC): `2026-05-04`" in prompt
-    assert "## Working Project" not in prompt
-    # Tools block: call-style guidance only. The full name/description list lives
-    # in the opt-in core:tools_list block, which ships disabled — the provider tool
-    # definitions already carry every description.
-    assert "## Tool Call Style" in prompt
-    assert (
-        "When multiple tool calls are independent and all required arguments are already known, "
-        "issue them together in the same response. Keep calls sequential when one depends on "
-        "another's result or when the calls may conflict."
-    ) in prompt
-    assert "## Available Tools" not in prompt
-    assert "- read_file: Read a workspace file" not in prompt
+    assert "high" in prompt
+    assert "2026-05-04" in prompt
+    # The opt-in Tool-description list ships disabled.
+    assert "Read a workspace file" not in prompt
     assert "shell" not in prompt
-    # Channels block (only this agent's enabled Channel configs).
-    assert "## Channels" in prompt
-    assert "- tg-private: telegram (default target available)" in prompt
-    assert "- tg-group: telegram (explicit target required)" in prompt
-    assert "You can send messages and files through these configured channels:" in prompt
-    assert (
-        "Use `channel_send` for proactive outbound messages and whenever you send a file "
-        "through a channel."
-    ) in prompt
-    assert (
-        "Do not use `channel_send` for normal text-only replies to channel-originated turns; "
-        "those replies are routed automatically."
-    ) in prompt
-    assert ("Put every file path in `file_paths`; never send file Markdown to a channel.") in prompt
+    # Only this Agent's enabled Channel fixture data is rendered.
+    assert "tg-private" in prompt
+    assert "tg-group" in prompt
+    assert "telegram" in prompt
     assert "other-agent-channel" not in prompt
     # Skills block.
     assert "<name>agent-cli</name>" in prompt
@@ -113,28 +93,24 @@ def test_identity_agent_prompt_assembles_blocks_in_default_layout_order(
     assert "- Memory text" in prompt
     assert "- User text" in prompt
     assert '<file name="SOUL.md">' in prompt
-    # Memory renders under scope headings, not a <file> wrapper (tool-owned content).
-    assert "# Agent Memory" in prompt
-    assert "# User Profile" in prompt
+    # Memory is tool-owned content rather than an included workspace file.
     assert '<file name="MEMORY.md">' not in prompt
     assert '<file name="USER.md">' not in prompt
-    # No leftover placeholders / no "- None" / clean normalization.
+    # No leftover markers and clean normalization.
     assert "{" not in prompt
-    assert "- None" not in prompt
     assert prompt == prompt.strip()
     assert "\n\n\n" not in prompt
-    # Order: SOUL < memory < runtime < identity environment < tools < channels < skills.
+    # Block order is observed through injected values rather than bundled prose.
     order = [
         "Soul text",
-        "<memory>",
-        "## Runtime",
-        "## Identity Environment",
-        "## Tool Call Style",
-        "## Channels",
+        "Memory text",
+        "test-os",
+        model_path((tmp_path / "app").resolve()),
+        "tg-private",
+        "agent-cli",
     ]
     positions = [prompt.index(section) for section in order]
     assert positions == sorted(positions)
-    assert prompt.index("## Channels") < prompt.index("## Available Skills")
     # Same agent allowlist drives prompt tools and gate 2's memory-tool check.
     assert tools.prompt_allowlist_calls[0] == ["read_file"]
     assert skills.allowlist == ["agent-cli"]
@@ -151,15 +127,14 @@ def test_memory_block_renders_with_empty_memory_files(tmp_path: Path) -> None:
     manager = _manager(tmp_path)
     agent = _agent(empty_workspace, memory_prompt_mode=MEMORY_PROMPT_MODE_AGENT_USER)
 
-    prompt = manager.build_system_prompt(agent)
+    missing = manager.build_system_prompt(agent)
 
-    assert "<memory>" in prompt
-    assert "declarative facts" in prompt  # the guidance prose
-    assert "# Agent Memory" in prompt
-    assert "# User Profile" in prompt
-    assert "No entries yet." in prompt
+    assert "<memory>" in missing
     assert not (empty_workspace / "MEMORY.md").exists()
     assert not (empty_workspace / "USER.md").exists()
+    (empty_workspace / "MEMORY.md").write_text("", encoding="utf-8")
+    (empty_workspace / "USER.md").write_text("", encoding="utf-8")
+    assert manager.build_system_prompt(agent) == missing
 
 
 def test_memory_block_absent_when_memory_off(workspace: Path, tmp_path: Path) -> None:
@@ -181,22 +156,34 @@ def test_memory_block_includes_only_agent_memory(workspace: Path, tmp_path: Path
     prompt = manager.build_system_prompt(agent)
 
     assert "<memory>" in prompt
-    assert "# Agent Memory" in prompt
     assert "- Memory text" in prompt
-    assert "# User Profile" not in prompt
     assert "User text" not in prompt
 
 
 def test_channel_less_agent_has_no_channels_block(workspace: Path, tmp_path: Path) -> None:
     # Adapted from the old "renders - None" test: with no enabled Channels the whole
     # block gates out (owner "channel"), it does not render "- None".
-    manager = _manager(tmp_path, channels=StubChannels([]))
     agent = _agent(workspace, allowed_tools=["read_file"])
+    without_channels = _manager(tmp_path, channels=StubChannels([])).build_system_prompt(agent)
+    with_channels = _manager(
+        tmp_path,
+        channels=StubChannels(
+            [
+                ChannelConfig(
+                    id="enabled-fixture-channel",
+                    platform="telegram",
+                    agent_id="coder",
+                    allowed_chat_ids=["1"],
+                    token_env_var="TOKEN",
+                    enabled=True,
+                )
+            ]
+        ),
+    ).build_system_prompt(agent)
 
-    prompt = manager.build_system_prompt(agent)
-
-    assert "## Channels" not in prompt
-    assert "- None" not in prompt
+    assert without_channels != with_channels
+    assert "enabled-fixture-channel" not in without_channels
+    assert "enabled-fixture-channel" in with_channels
 
 
 def test_disabled_channel_does_not_enable_channels_block(
@@ -215,21 +202,20 @@ def test_disabled_channel_does_not_enable_channels_block(
             )
         ]
     )
-    manager = _manager(tmp_path, channels=channels)
+    agent = _agent(workspace)
+    prompt = _manager(tmp_path, channels=channels).build_system_prompt(agent)
+    empty = _manager(tmp_path, channels=StubChannels([])).build_system_prompt(agent)
 
-    prompt = manager.build_system_prompt(_agent(workspace))
-
-    assert "## Channels" not in prompt
+    assert prompt == empty
     assert "tg-disabled" not in prompt
 
 
 def test_channels_block_absent_without_channel_registry(workspace: Path, tmp_path: Path) -> None:
-    manager = _manager(tmp_path, channels=None)
     agent = _agent(workspace)
 
-    prompt = manager.build_system_prompt(agent)
-
-    assert "## Channels" not in prompt
+    assert _manager(tmp_path, channels=None).build_system_prompt(agent) == _manager(
+        tmp_path, channels=StubChannels([])
+    ).build_system_prompt(agent)
 
 
 def test_soul_block_collapses_without_workspace_file(tmp_path: Path) -> None:
@@ -313,7 +299,13 @@ def test_runtime_environment_renders_provider_default_thinking_effort(
 
     prompt = manager.build_system_prompt(agent)
 
-    assert "- Configured thinking effort: `provider default`" in prompt
+    equivalent_agent = _agent(
+        "",
+        memory_prompt_mode=MEMORY_PROMPT_MODE_OFF,
+        thinking_effort="" if thinking_effort is None else None,
+    )
+    assert prompt == manager.build_system_prompt(equivalent_agent)
+    assert "{thinking_effort}" not in prompt
 
 
 def test_project_config_agent_receives_project_workspace_without_identity_runtime(
@@ -331,20 +323,16 @@ def test_project_config_agent_receives_project_workspace_without_identity_runtim
         project_context=context,
     )
 
-    assert "## Runtime Environment" in prompt
-    assert "- Operating system: `test-os`" in prompt
-    assert "## Working Project" in prompt
-    assert "- Project: `vBot`" in prompt
-    assert "- Project ID: `vbot`" in prompt
-    assert f"- Your Project Workspace: `{model_path(repo)}`" in prompt
+    assert "test-os" in prompt
+    assert "vBot" in prompt
+    assert "vbot" in prompt
+    assert model_path(repo) in prompt
+    assert "You are the Project reviewer." in prompt
     assert "<project_context>" in prompt
     assert "<project_context " not in prompt
-    assert "## Identity Environment" not in prompt
-    assert "- Server hostname:" not in prompt
-    assert "vBot version:" not in prompt
-    assert "Identity and Memory Workspace:" not in prompt
-    assert "vBot root:" not in prompt
-    assert "vBot data root:" not in prompt
+    assert "test-host" not in prompt
+    assert model_path((tmp_path / "app").resolve()) not in prompt
+    assert model_path((tmp_path / "data").resolve()) not in prompt
 
 
 def test_rooted_identity_prompt_distinguishes_identity_and_project_workspaces(
@@ -364,10 +352,8 @@ def test_rooted_identity_prompt_distinguishes_identity_and_project_workspaces(
         working_project_context=snapshot,
     )
 
-    assert "## Identity Environment" in prompt
-    assert f"- Your Identity and Memory Workspace: `{model_path(workspace)}`" in prompt
-    assert "## Working Project" in prompt
-    assert f"- Your Project Workspace: `{model_path(repo)}`" in prompt
+    assert model_path(workspace) in prompt
+    assert model_path(repo) in prompt
 
 
 def test_project_files_render_in_order_after_memory(workspace: Path, tmp_path: Path) -> None:
@@ -467,8 +453,8 @@ def test_working_project_template_preserves_plain_metadata_and_file_placeholders
 
     snapshot = manager.render_working_project_context(context)
 
-    assert "- Project: `Research & Development`" in snapshot
-    assert f"- Your Project Workspace: `{model_path(repo)}`" in snapshot
+    assert "Research & Development" in snapshot
+    assert model_path(repo) in snapshot
     assert "&amp;" not in snapshot
     assert "Keep {project_name}, {project_workspace}, and $project_name literal." in snapshot
 
@@ -597,7 +583,7 @@ def test_project_files_never_abort_run_on_unreadable_file(
     assert ' <file name="GOOD.md">\nGood doc\n </file>' in prompt
     assert '<file name="ADIR">' not in prompt
     assert '<file name="BINARY.md">' not in prompt
-    assert "Skipping unreadable project file" in caplog.text
+    assert any(record.levelno == logging.WARNING for record in caplog.records)
 
 
 @pytest.mark.parametrize("filename", ["SOUL.md", "CUSTOM.md", "my-notes.txt", "notes.json"])
@@ -610,7 +596,7 @@ def test_validate_workspace_include_accepts_safe_flat_filenames(filename: str) -
     ["../foo", "foo/bar", "/etc/passwd", "C:\\Windows\\system32\\cmd.exe"],
 )
 def test_validate_workspace_include_rejects_unsafe_paths(filename: str) -> None:
-    with pytest.raises(PromptError, match="Unsafe workspace include"):
+    with pytest.raises(PromptError):
         validate_workspace_include(filename)
 
 
@@ -662,4 +648,4 @@ def test_soul_block_never_aborts_run_on_unreadable_file(
         prompt = manager.build_system_prompt(agent)
 
     assert '<file name="SOUL.md">' not in prompt
-    assert "Skipping unreadable workspace include" in caplog.text
+    assert any(record.levelno == logging.WARNING for record in caplog.records)

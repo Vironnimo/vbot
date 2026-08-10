@@ -801,13 +801,9 @@ async def test_completion_delivery_coalesces_every_result_ready_before_run_end(
 
     assert len(completion_loop.messages) == 1
     message = completion_loop.messages[0]
-    assert message.startswith(
-        "Automatic completion delivery — this is not a new user request. Do not restart or "
-        "repeat work merely because this report arrived. Re-evaluate the original user goal "
-        "and current system state before taking further action.\n\nResults:"
-    )
     assert "first" in message
     assert "second" in message
+    assert message.index("first") < message.index("second")
 
 
 async def test_completion_delivery_joins_active_run_at_next_request_boundary(

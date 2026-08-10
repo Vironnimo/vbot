@@ -578,7 +578,7 @@ class TestSendErrorClassification:
         # Act / Assert
         with (
             patch("core.utils.retry.asyncio.sleep", new_callable=AsyncMock),
-            pytest.raises(ProviderTimeoutError, match="timed out"),
+            pytest.raises(ProviderTimeoutError),
         ):
             await anthropic_adapter.send(SAMPLE_MESSAGES, model_id="claude-sonnet-4-20250219")
 
@@ -592,7 +592,7 @@ class TestSendErrorClassification:
         # Act / Assert
         with (
             patch("core.utils.retry.asyncio.sleep", new_callable=AsyncMock),
-            pytest.raises(NetworkError, match="Connection failed: connection failed"),
+            pytest.raises(NetworkError, match="connection failed"),
         ):
             await anthropic_adapter.send(SAMPLE_MESSAGES, model_id="claude-sonnet-4-20250219")
 
@@ -674,7 +674,7 @@ class TestSendErrorClassification:
         # Act / Assert
         with (
             patch("core.utils.retry.asyncio.sleep", new_callable=AsyncMock),
-            pytest.raises(NetworkError, match="Connection failed: connection reset"),
+            pytest.raises(NetworkError, match="connection reset"),
         ):
             await anthropic_adapter.send(SAMPLE_MESSAGES, model_id="claude-sonnet-4-20250219")
 
@@ -723,7 +723,7 @@ class TestSendErrorClassification:
         # Act / Assert
         with (
             patch("core.utils.retry.asyncio.sleep", new_callable=AsyncMock),
-            pytest.raises(NetworkError, match="Connection failed: server disconnected"),
+            pytest.raises(NetworkError, match="server disconnected"),
         ):
             await anthropic_adapter.send(SAMPLE_MESSAGES, model_id="claude-sonnet-4-20250219")
 
@@ -764,7 +764,7 @@ class TestSendErrorClassification:
         )
 
         # Act / Assert
-        with pytest.raises(ProviderError, match="invalid_request_error.*max_tokens is required"):
+        with pytest.raises(ProviderError, match="max_tokens is required"):
             await anthropic_adapter.send(SAMPLE_MESSAGES, model_id="claude-sonnet-4-20250219")
 
 

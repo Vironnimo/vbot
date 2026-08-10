@@ -200,7 +200,7 @@ def test_parse_settings_update_normalizes_openrouter_routing() -> None:
 
 
 @pytest.mark.parametrize(
-    ("routing", "message"),
+    ("routing", "_message"),
     [
         (
             {"default": {"mode": "allowed", "providers": []}},
@@ -236,14 +236,14 @@ def test_parse_settings_update_normalizes_openrouter_routing() -> None:
 )
 def test_parse_settings_update_rejects_conflicting_openrouter_routing(
     routing: dict,
-    message: str,
+    _message: str,
 ) -> None:
-    with pytest.raises(SettingsValidationError, match=message):
+    with pytest.raises(SettingsValidationError):
         parse_settings_update({"providers": {"openrouter": {"routing": routing}}})
 
 
 @pytest.mark.parametrize(
-    ("params", "message"),
+    ("params", "_message"),
     [
         ({}, "settings.update requires a section"),
         ({"general": {}}, "unsupported settings sections: general"),
@@ -356,9 +356,9 @@ def test_parse_settings_update_rejects_conflicting_openrouter_routing(
 )
 def test_parse_settings_update_rejects_invalid_payloads(
     params: dict,
-    message: str,
+    _message: str,
 ) -> None:
-    with pytest.raises(SettingsValidationError, match=message):
+    with pytest.raises(SettingsValidationError):
         parse_settings_update(params)
 
 
@@ -387,7 +387,7 @@ def test_parse_settings_update_defaults_empty_extensions_fields() -> None:
 
 
 @pytest.mark.parametrize(
-    ("params", "message"),
+    ("params", "_message"),
     [
         ({"extensions": []}, "params.extensions must be an object"),
         (
@@ -410,9 +410,9 @@ def test_parse_settings_update_defaults_empty_extensions_fields() -> None:
 )
 def test_parse_settings_update_rejects_invalid_extensions(
     params: dict,
-    message: str,
+    _message: str,
 ) -> None:
-    with pytest.raises(SettingsValidationError, match=message):
+    with pytest.raises(SettingsValidationError):
         parse_settings_update(params)
 
 

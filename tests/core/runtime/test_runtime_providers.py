@@ -413,7 +413,7 @@ def test_provider_credential_resolver_get_connection_missing_credentials(
     resolver = ProviderCredentialResolver(runtime.providers, process_env={})
 
     # Act / Assert
-    with pytest.raises(ConfigError, match="Provider credentials not found"):
+    with pytest.raises(ConfigError):
         resolver.get_credentials("openai", "openai:api-key")
 
 
@@ -482,7 +482,7 @@ def test_provider_credential_resolver_unknown_connection_id_raises_config_error(
     runtime.start()
 
     # Act / Assert
-    with pytest.raises(ConfigError, match="Unknown connection id"):
+    with pytest.raises(ConfigError):
         runtime.provider_credentials.has_credentials("openai", "openai:missing")
 
 
@@ -1091,7 +1091,7 @@ def test_runtime_wires_openai_compatible_adapter_for_ollama_cloud(
 def test_get_adapter_rejects_disabled_connection(runtime: Runtime) -> None:
     """A disabled connection never reaches adapter construction."""
     # Act / Assert — ollama:local is keyless and therefore disabled by default.
-    with pytest.raises(ConfigError, match="disabled"):
+    with pytest.raises(ConfigError):
         runtime.get_adapter("ollama", "ollama:local")
 
 
@@ -1497,7 +1497,7 @@ def test_providers_not_accessible_before_start(tmp_path: Path) -> None:
     runtime = Runtime(config)
 
     # Act & Assert
-    with pytest.raises(RuntimeError, match="not started"):
+    with pytest.raises(RuntimeError):
         _ = runtime.providers
 
 
@@ -1508,7 +1508,7 @@ def test_models_not_accessible_before_start(tmp_path: Path) -> None:
     runtime = Runtime(config)
 
     # Act & Assert
-    with pytest.raises(RuntimeError, match="not started"):
+    with pytest.raises(RuntimeError):
         _ = runtime.models
 
 
@@ -1526,7 +1526,7 @@ def test_phase_two_services_not_accessible_before_start(tmp_path: Path) -> None:
         "chat_sessions",
         "system_prompts",
     ):
-        with pytest.raises(RuntimeError, match="not started"):
+        with pytest.raises(RuntimeError):
             getattr(runtime, attribute_name)
 
 

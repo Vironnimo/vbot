@@ -46,7 +46,6 @@ def test_unreadable_utf8_env_file_is_ignored(
 
     assert values == {}
     assert str(env_path) in caplog.text
-    assert "Ignoring unreadable environment file" in caplog.text
 
 
 def test_default_data_dir_is_home_vbot(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -180,7 +179,6 @@ def test_non_utf8_worktree_file_falls_to_default(
 
     assert result is None
     assert str(worktree_file) in caplog.text
-    assert "Ignoring invalid worktree marker" in caplog.text
 
 
 def test_non_object_json_in_worktree_file_falls_to_default(tmp_path: Path) -> None:

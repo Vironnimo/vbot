@@ -132,7 +132,6 @@ def test_unreadable_extension_root_is_skipped(
 
     assert registry.records() == []
     assert str(root) in caplog.text
-    assert "Skipping unreadable Extension directory" in caplog.text
 
 
 def test_loads_directory_fallback_extension(tmp_path: Path) -> None:

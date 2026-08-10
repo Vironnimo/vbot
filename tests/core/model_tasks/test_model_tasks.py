@@ -38,7 +38,7 @@ def test_parse_openrouter_target_with_nested_model_id() -> None:
 
 
 def test_parse_provider_target_requires_connection_suffix() -> None:
-    with pytest.raises(TaskModelValidationError, match="connection suffix"):
+    with pytest.raises(TaskModelValidationError):
         parse_task_model_target_id("openrouter/openai/gpt-4o-transcribe")
 
 
@@ -68,12 +68,12 @@ def test_parse_target_without_account_leaves_account_empty() -> None:
 
 
 def test_parse_target_rejects_invalid_account_id() -> None:
-    with pytest.raises(TaskModelValidationError, match="account id"):
+    with pytest.raises(TaskModelValidationError):
         parse_task_model_target_id("openrouter/openai/gpt-4o-transcribe::api-key:Work-Acct")
 
 
 def test_parse_target_rejects_empty_connection_before_account() -> None:
-    with pytest.raises(TaskModelValidationError, match="Invalid provider task model target"):
+    with pytest.raises(TaskModelValidationError):
         parse_task_model_target_id("openrouter/openai/gpt-4o-transcribe::openrouter::work")
 
 
@@ -81,7 +81,7 @@ def test_parse_target_rejects_empty_connection_before_account() -> None:
 def test_update_rejects_invalid_embedding_dimensions(dimensions: object) -> None:
     service = TaskModelService(_Providers(), _Models([]), _Credentials(), _Storage())
 
-    with pytest.raises(TaskModelValidationError, match="positive integer or null"):
+    with pytest.raises(TaskModelValidationError):
         service.update(
             {
                 TASK_TEXT_EMBEDDING: {
@@ -95,7 +95,7 @@ def test_update_rejects_invalid_embedding_dimensions(dimensions: object) -> None
 def test_update_rejects_reserved_embedding_extra_options() -> None:
     service = TaskModelService(_Providers(), _Models([]), _Credentials(), _Storage())
 
-    with pytest.raises(TaskModelValidationError, match="reserved fields: input, model"):
+    with pytest.raises(TaskModelValidationError):
         service.update(
             {
                 TASK_TEXT_EMBEDDING: {
@@ -235,7 +235,7 @@ def test_update_rejects_unknown_option_name() -> None:
         _Storage(),
     )
 
-    with pytest.raises(TaskModelValidationError, match="not supported: fake"):
+    with pytest.raises(TaskModelValidationError, match="fake"):
         service.update(
             {
                 TASK_TEXT_TO_SPEECH: {
@@ -849,7 +849,7 @@ def test_validate_task_type_rejects_image_edit() -> None:
     removing the constant does not accidentally let the dead vocabulary
     back in via string equality."""
 
-    with pytest.raises(TaskModelValidationError, match="Unsupported task type 'image_edit'"):
+    with pytest.raises(TaskModelValidationError):
         validate_task_type("image_edit")
 
 

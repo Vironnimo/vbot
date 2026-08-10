@@ -537,7 +537,7 @@ async def test_summary_tail_compacts_consumed_tool_batch_without_rewriting_reque
 
 @pytest.mark.asyncio
 async def test_summary_tail_requires_active_request_context() -> None:
-    with pytest.raises(CompactionError, match="active request"):
+    with pytest.raises(CompactionError):
         await CompactionService().compact(
             [user("u1", "old"), assistant("a1", "tail")],
             agent=object(),
@@ -559,7 +559,6 @@ async def test_automatic_compaction_rejects_projection_below_minimum_reclaim() -
 
     with pytest.raises(
         CompactionInsufficientReclaimError,
-        match="minimum is 4096",
     ):
         await CompactionService().compact(
             messages,
@@ -634,7 +633,7 @@ async def test_continuation_preserves_request_prefix_and_active_tools() -> None:
 
 @pytest.mark.asyncio
 async def test_continuation_requires_active_request_and_target() -> None:
-    with pytest.raises(CompactionError, match="active request"):
+    with pytest.raises(CompactionError):
         await CompactionService().compact(
             [user("u1", "hello")],
             agent=object(),

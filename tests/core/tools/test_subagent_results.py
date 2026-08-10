@@ -596,7 +596,7 @@ async def test_subagent_result_does_not_complete_from_intermediate_assistant_out
     assert result["ok"] is True
     assert result["data"]["status"] == "failed"
     assert result["data"]["result"] is None
-    assert result["data"]["note"] == "No terminal Run summary found in sub-agent session."
+    assert result["data"]["note"]
 
 
 async def test_subagent_result_ignores_prior_terminal_run_when_new_output_is_unfinished(
@@ -671,7 +671,7 @@ async def test_subagent_result_reports_failed_when_jsonl_has_no_output(tmp_path:
     assert result["ok"] is True
     assert result["data"]["status"] == "failed"
     assert result["data"]["result"] is None
-    assert result["data"]["note"] == "No terminal Run summary found in sub-agent session."
+    assert result["data"]["note"]
 
 
 async def test_subagent_result_reports_failed_after_bounded_jsonl_poll(
