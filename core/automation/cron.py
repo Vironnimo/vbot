@@ -1222,10 +1222,14 @@ class CronService:
             return
 
         job = self._jobs.get(job_id)
-        if job is not None and job.status == "active":
+        if job is not None and job.status == "active" and job.schedule_type == "once":
             job.status = "failed"
             self._jobs[job_id] = job
         self._record_run_failure(job_id, error)
+
+        job = self._jobs.get(job_id)
+        if self._started and job is not None and job.status == "active":
+            self._start_job_task(job)
 
     def _validate_job(self, job: CronJob, *, validate_references: bool = True) -> None:
         if not isinstance(job.id, str) or not job.id:
