@@ -41,26 +41,31 @@ BROWSER_USE = _load_script()
 class FakeClient:
     def __init__(self, responses: list[Any] | None = None) -> None:
         self.responses = iter(responses or [])
-        self.calls: list[list[str]] = []
+        self.calls: list[tuple[list[str], list[str]]] = []
 
     def version(self) -> str:
-        return "playwright-cli 1.2.3"
+        return "agent-browser 1.2.3"
 
-    def call(self, arguments: list[str]) -> Any:
-        self.calls.append(arguments)
+    def call(
+        self,
+        arguments: list[str],
+        *,
+        launch_options: list[str] | None = None,
+    ) -> Any:
+        self.calls.append((arguments, launch_options or []))
         if arguments[0] == "screenshot":
-            filename = arguments[arguments.index("--filename") + 1]
+            filename = next(value for value in arguments if value.endswith(".png"))
             Path(filename).write_bytes(b"fake-png")
         return next(self.responses, {})
 
 
-def test_skill_requires_playwright_cli_and_exposes_script(tmp_path: Path) -> None:
+def test_skill_requires_agent_browser_and_exposes_script(tmp_path: Path) -> None:
     missing_registry = SkillRegistry.load(SKILLS_ROOT, environment={"PATH": ""})
     missing = missing_registry.availability_for("browser-use", ["*"])
     assert missing.state == "unavailable"
-    assert missing.missing == ("missing binary 'playwright-cli'",)
+    assert missing.missing == ("missing binary 'agent-browser'",)
 
-    executable = tmp_path / ("playwright-cli.cmd" if sys.platform == "win32" else "playwright-cli")
+    executable = tmp_path / ("agent-browser.cmd" if sys.platform == "win32" else "agent-browser")
     executable.write_text("", encoding="utf-8")
     executable.chmod(0o755)
     registry = SkillRegistry.load(SKILLS_ROOT, environment={"PATH": str(tmp_path)})
@@ -71,8 +76,18 @@ def test_skill_requires_playwright_cli_and_exposes_script(tmp_path: Path) -> Non
     assert "# Browser Use" in activated
 
 
+def test_skill_has_no_playwright_dependency() -> None:
+    assert "playwright" not in (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8").lower()
+    assert "playwright" not in SCRIPT_PATH.read_text(encoding="utf-8").lower()
+
+
 def test_start_opens_isolated_session_and_returns_fresh_snapshot(tmp_path: Path) -> None:
-    client = FakeClient([{"result": "opened"}, {"snapshot": "- heading Example"}])
+    client = FakeClient(
+        [
+            {"success": True, "data": {"url": "https://example.com"}},
+            {"success": True, "data": {"snapshot": "- heading Example"}},
+        ]
+    )
 
     result = BROWSER_USE._execute(
         ["--session", "browser-test", "start", "https://example.com"],
@@ -82,7 +97,10 @@ def test_start_opens_isolated_session_and_returns_fresh_snapshot(tmp_path: Path)
 
     assert result["ok"] is True
     assert result["snapshot"] == "- heading Example"
-    assert client.calls == [["open", "https://example.com"], ["snapshot"]]
+    assert client.calls == [
+        (["open", "https://example.com"], []),
+        (["snapshot", "-i"], []),
+    ]
 
 
 def test_navigate_rejects_non_web_and_credential_urls(tmp_path: Path) -> None:
@@ -106,7 +124,7 @@ def test_navigate_rejects_non_web_and_credential_urls(tmp_path: Path) -> None:
 
 def test_oversized_snapshot_is_bounded_and_written_as_artifact(tmp_path: Path) -> None:
     snapshot = "x" * (BROWSER_USE.MAX_SNAPSHOT_CHARS + 1)
-    client = FakeClient([{"snapshot": snapshot}])
+    client = FakeClient([{"success": True, "data": {"snapshot": snapshot}}])
 
     result = BROWSER_USE._execute(
         ["--session", "browser-test", "snapshot"], client=client, cwd=tmp_path
@@ -130,8 +148,90 @@ def test_screenshot_uses_controlled_output_path(tmp_path: Path) -> None:
     screenshot = Path(result["screenshot"])
     assert screenshot.read_bytes() == b"fake-png"
     assert screenshot.is_relative_to(tmp_path / "tmp" / "browser-use" / "browser-test")
-    assert client.calls[0][0] == "screenshot"
-    assert "--full-page" in client.calls[0]
+    assert client.calls[0][0][0] == "screenshot"
+    assert "--full" in client.calls[0][0]
+
+
+def test_fill_submit_uses_agent_browser_ref_and_press(tmp_path: Path) -> None:
+    client = FakeClient([{}, {}, {"data": {"snapshot": "- textbox Search [ref=e7]"}}])
+
+    result = BROWSER_USE._execute(
+        [
+            "--session",
+            "browser-test",
+            "fill",
+            "@e7",
+            "query",
+            "--submit",
+        ],
+        client=client,
+        cwd=tmp_path,
+    )
+
+    assert result["ok"] is True
+    assert [call[0] for call in client.calls] == [
+        ["fill", "@e7", "query"],
+        ["press", "Enter"],
+        ["snapshot", "-i"],
+    ]
+
+
+def test_click_rejects_non_ref_targets(tmp_path: Path) -> None:
+    client = FakeClient()
+
+    with pytest.raises(BROWSER_USE.BrowserUseError, match="agent-browser ref"):
+        BROWSER_USE._execute(
+            ["--session", "browser-test", "click", "#submit"],
+            client=client,
+            cwd=tmp_path,
+        )
+
+    assert client.calls == []
+
+
+def test_backend_invocation_uses_vbot_namespace_json_and_sanitized_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, Any] = {}
+
+    def fake_run(command: list[str], **kwargs: Any) -> Any:
+        captured["command"] = command
+        captured["kwargs"] = kwargs
+        return BROWSER_USE.subprocess.CompletedProcess(
+            command,
+            0,
+            stdout='{"success":true,"data":{"snapshot":"ok"}}',
+            stderr="",
+        )
+
+    monkeypatch.setattr(BROWSER_USE.subprocess, "run", fake_run)
+    monkeypatch.setenv("OPENAI_API_KEY", "must-not-leak")
+    client = BROWSER_USE.AgentBrowserCli(
+        "agent-browser", "browser-test", 45, Path("agent-browser.json")
+    )
+
+    result = client.call(["open", "https://example.com"], launch_options=["--engine", "chrome"])
+
+    assert result["success"] is True
+    assert captured["command"] == [
+        "agent-browser",
+        "--namespace",
+        "vbot",
+        "--session",
+        "browser-test",
+        "--config",
+        "agent-browser.json",
+        "--content-boundaries",
+        "--no-auto-dialog",
+        "--engine",
+        "chrome",
+        "open",
+        "https://example.com",
+        "--json",
+    ]
+    assert "OPENAI_API_KEY" not in captured["kwargs"]["env"]
+    assert captured["kwargs"]["env"]["NO_COLOR"] == "1"
+    assert "shell" not in captured["kwargs"]
 
 
 def test_invalid_session_is_rejected_before_backend_use(tmp_path: Path) -> None:
