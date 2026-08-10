@@ -70,12 +70,14 @@ _GIT_INTERNALS_EXCLUSION_GLOB = "!**/.git"
 
 GREP_TOOL_NAME = "grep"
 GREP_TOOL_DESCRIPTION = (
-    "Search file contents with a regex pattern by default. Set literal=true for "
-    "fixed-string matching, multiline=true for patterns spanning lines. Optional "
-    "glob filters candidate files (case-insensitive). Skips .gitignore'd files and "
-    ".git internals unless include_ignored=true. Returns path:line:text rows unless "
-    "output_mode requests matching files or counts; paths are relative to the "
-    "working directory (absolute when outside it). Page with offset."
+    "Search file contents with a regex pattern by default. Use this when you need to "
+    "orient in a codebase or quickly locate relevant files, symbols, references, or "
+    "matching text across a directory. Set literal=true for fixed-string matching, "
+    "multiline=true for patterns spanning lines. Optional glob filters candidate "
+    "files (case-insensitive). Skips .gitignore'd files and .git internals unless "
+    "include_ignored=true. Returns path:line:text rows unless output_mode requests "
+    "matching files or counts; paths are relative to the working directory "
+    "(absolute when outside it). Page with offset."
 )
 _GREP_COMMON_PARAMETERS: JsonObject = {
     "pattern": {
