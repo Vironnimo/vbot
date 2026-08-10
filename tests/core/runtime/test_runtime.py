@@ -1165,7 +1165,7 @@ def test_identity_project_context_grants_effective_project_skills(
     logging.getLogger("vbot").handlers = []
     runtime = Runtime(config)
     runtime.start()
-    bundled_name = runtime.skills.list_all()[0].name
+    bundled_name = runtime.skills.filter_allowed(["*"])[0].name
     repo = tmp_path / "repo"
     repo.mkdir()
     _write_project_skill(repo, "active-project-skill", "Active Project workflow.")

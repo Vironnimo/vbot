@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Stable JSON wrapper for isolated playwright-cli browser sessions."""
+"""Stable JSON wrapper for isolated agent-browser sessions."""
 
 from __future__ import annotations
 
@@ -17,10 +17,12 @@ from typing import Any, NoReturn
 from urllib.parse import urlparse
 
 SESSION_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
+REF_PATTERN = re.compile(r"^@e[1-9][0-9]*$")
 MAX_SNAPSHOT_CHARS = 20_000
 MAX_DIAGNOSTIC_CHARS = 4_000
 DEFAULT_TIMEOUT_SECONDS = 45
 MAX_TIMEOUT_SECONDS = 300
+VBOT_NAMESPACE = "vbot"
 SAFE_ENVIRONMENT_KEYS = {
     "APPDATA",
     "COMSPEC",
@@ -58,7 +60,11 @@ class JsonArgumentParser(argparse.ArgumentParser):
 
 
 def _safe_environment() -> dict[str, str]:
-    return {key: value for key, value in os.environ.items() if key.upper() in SAFE_ENVIRONMENT_KEYS}
+    environment = {
+        key: value for key, value in os.environ.items() if key.upper() in SAFE_ENVIRONMENT_KEYS
+    }
+    environment["NO_COLOR"] = "1"
+    return environment
 
 
 def _diagnostic(value: str) -> str:
@@ -84,29 +90,57 @@ def _parse_json_output(output: str) -> Any:
             except json.JSONDecodeError:
                 continue
             return value
-    raise BrowserUseError(f"playwright-cli returned non-JSON output: {_diagnostic(stripped)}")
+    raise BrowserUseError(f"agent-browser returned non-JSON output: {_diagnostic(stripped)}")
 
 
-class PlaywrightCli:
-    """Invoke playwright-cli without a shell or inherited credentials."""
+class AgentBrowserCli:
+    """Invoke agent-browser without a shell or inherited credentials."""
 
-    def __init__(self, executable: str, session: str, timeout: int) -> None:
+    def __init__(
+        self,
+        executable: str,
+        session: str,
+        timeout: int,
+        config_path: Path,
+    ) -> None:
         self.executable = executable
         self.session = session
         self.timeout = timeout
+        self.config_path = config_path
 
     def version(self) -> str:
         completed = self._invoke(["--version"])
         return completed.stdout.strip() or completed.stderr.strip()
 
-    def call(self, arguments: list[str]) -> Any:
-        completed = self._invoke([f"-s={self.session}", "--json", *arguments])
+    def call(
+        self,
+        arguments: list[str],
+        *,
+        launch_options: list[str] | None = None,
+    ) -> Any:
+        completed = self._invoke(
+            [
+                "--namespace",
+                VBOT_NAMESPACE,
+                "--session",
+                self.session,
+                "--config",
+                str(self.config_path),
+                "--content-boundaries",
+                "--no-auto-dialog",
+                *(launch_options or []),
+                *arguments,
+                "--json",
+            ]
+        )
         payload = _parse_json_output(completed.stdout)
         if isinstance(payload, dict) and (
-            payload.get("isError") is True or payload.get("is_error") is True
+            payload.get("success") is False
+            or payload.get("isError") is True
+            or payload.get("is_error") is True
         ):
             detail = payload.get("error") or payload.get("message") or payload
-            raise BrowserUseError(f"playwright-cli reported an error: {_diagnostic(str(detail))}")
+            raise BrowserUseError(f"agent-browser reported an error: {_diagnostic(str(detail))}")
         return payload
 
     def _invoke(self, arguments: list[str]) -> subprocess.CompletedProcess[str]:
@@ -122,13 +156,13 @@ class PlaywrightCli:
                 timeout=self.timeout,
             )
         except subprocess.TimeoutExpired as exc:
-            raise BrowserUseError(f"playwright-cli timed out after {self.timeout} seconds") from exc
+            raise BrowserUseError(f"agent-browser timed out after {self.timeout} seconds") from exc
         except OSError as exc:
-            raise BrowserUseError(f"could not execute playwright-cli: {exc}") from exc
+            raise BrowserUseError(f"could not execute agent-browser: {exc}") from exc
         if completed.returncode != 0:
             detail = completed.stderr or completed.stdout or "no diagnostic output"
             raise BrowserUseError(
-                f"playwright-cli exited with {completed.returncode}: {_diagnostic(detail)}"
+                f"agent-browser exited with {completed.returncode}: {_diagnostic(detail)}"
             )
         return completed
 
@@ -138,6 +172,12 @@ def _validate_session(value: str) -> str:
         raise BrowserUseError(
             "session must be 1-64 lowercase letters, digits, hyphens, or underscores"
         )
+    return value
+
+
+def _validate_ref(value: str) -> str:
+    if not REF_PATTERN.fullmatch(value):
+        raise BrowserUseError("target must be an agent-browser ref such as @e12")
     return value
 
 
@@ -153,9 +193,19 @@ def _validate_url(value: str) -> str:
 
 
 def _output_directory(cwd: Path, session: str) -> Path:
-    path = cwd / "tmp" / "browser-use" / session
+    root = cwd.resolve()
+    path = root / "tmp" / "browser-use" / session
     path.mkdir(parents=True, exist_ok=True)
-    return path.resolve()
+    resolved = path.resolve()
+    if not resolved.is_relative_to(root):
+        raise BrowserUseError("browser-use output directory resolves outside the cwd")
+    return resolved
+
+
+def _controlled_config(directory: Path) -> Path:
+    path = directory / "agent-browser.json"
+    path.write_text("{}\n", encoding="utf-8")
+    return path
 
 
 def _artifact_path(directory: Path, kind: str, suffix: str) -> Path:
@@ -164,17 +214,21 @@ def _artifact_path(directory: Path, kind: str, suffix: str) -> Path:
     return directory / f"{kind}-{timestamp}-{token}{suffix}"
 
 
+def _payload_data(payload: Any) -> Any:
+    if isinstance(payload, dict) and isinstance(payload.get("data"), (dict, list, str)):
+        return payload["data"]
+    return payload
+
+
 def _snapshot_text(payload: Any) -> str:
-    if isinstance(payload, dict):
-        snapshot = payload.get("snapshot")
+    data = _payload_data(payload)
+    if isinstance(data, dict):
+        snapshot = data.get("snapshot")
         if isinstance(snapshot, str):
             return snapshot
-        result = payload.get("result")
-        if isinstance(result, str):
-            return result
-    if isinstance(payload, str):
-        return payload
-    return json.dumps(payload, ensure_ascii=False)
+    if isinstance(data, str):
+        return data
+    return json.dumps(data, ensure_ascii=False)
 
 
 def _snapshot_result(payload: Any, directory: Path) -> dict[str, Any]:
@@ -191,14 +245,18 @@ def _snapshot_result(payload: Any, directory: Path) -> dict[str, Any]:
     }
 
 
+def _interactive_snapshot(client: AgentBrowserCli) -> Any:
+    return client.call(["snapshot", "-i"])
+
+
 def _with_snapshot(
-    client: PlaywrightCli,
+    client: AgentBrowserCli,
     action: str,
     session: str,
     backend: Any,
     directory: Path,
 ) -> dict[str, Any]:
-    snapshot = client.call(["snapshot"])
+    snapshot = _interactive_snapshot(client)
     return {
         "ok": True,
         "action": action,
@@ -224,9 +282,8 @@ def _build_parser() -> JsonArgumentParser:
 
     start = subparsers.add_parser("start")
     start.add_argument("url", nargs="?", default="about:blank")
-    start.add_argument("--browser", choices=("chrome", "firefox", "webkit", "msedge"))
+    start.add_argument("--engine", choices=("chrome", "lightpanda"))
     start.add_argument("--headed", action="store_true")
-    start.add_argument("--persistent", action="store_true")
 
     navigate = subparsers.add_parser("navigate")
     navigate.add_argument("url")
@@ -238,7 +295,6 @@ def _build_parser() -> JsonArgumentParser:
 
     click = subparsers.add_parser("click")
     click.add_argument("target")
-    click.add_argument("--button", choices=("left", "right", "middle"))
 
     fill = subparsers.add_parser("fill")
     fill.add_argument("target")
@@ -252,13 +308,12 @@ def _build_parser() -> JsonArgumentParser:
     press.add_argument("key")
 
     scroll = subparsers.add_parser("scroll")
-    scroll.add_argument("direction", choices=("up", "down"))
+    scroll.add_argument("direction", choices=("up", "down", "left", "right"))
     scroll.add_argument("--amount", type=int, default=600, choices=range(1, 5001))
 
     subparsers.add_parser("back")
 
     screenshot = subparsers.add_parser("screenshot")
-    screenshot.add_argument("--target")
     screenshot.add_argument("--full-page", action="store_true")
 
     subparsers.add_parser("close")
@@ -268,7 +323,7 @@ def _build_parser() -> JsonArgumentParser:
 def _execute(
     argv: list[str],
     *,
-    client: PlaywrightCli | None = None,
+    client: AgentBrowserCli | None = None,
     cwd: Path | None = None,
 ) -> dict[str, Any]:
     args = _build_parser().parse_args(argv)
@@ -276,66 +331,76 @@ def _execute(
     directory = _output_directory(cwd or Path.cwd(), session)
 
     if client is None:
-        executable = shutil.which("playwright-cli")
+        executable = shutil.which("agent-browser")
         if executable is None:
-            raise BrowserUseError("playwright-cli is not installed or is not available on PATH")
-        client = PlaywrightCli(executable, session, args.timeout)
+            raise BrowserUseError("agent-browser is not installed or is not available on PATH")
+        client = AgentBrowserCli(
+            executable,
+            session,
+            args.timeout,
+            _controlled_config(directory),
+        )
 
     if args.action == "doctor":
         return {
             "ok": True,
             "action": "doctor",
             "session": session,
-            "backend": "playwright-cli",
+            "backend": "agent-browser",
             "version": client.version(),
         }
 
     if args.action == "start":
-        command = ["open", _validate_url(args.url)]
-        if args.browser:
-            command.extend(["--browser", args.browser])
+        launch_options: list[str] = []
+        if args.engine:
+            launch_options.extend(["--engine", args.engine])
         if args.headed:
-            command.append("--headed")
-        if args.persistent:
-            command.append("--persistent")
-        backend = client.call(command)
+            launch_options.append("--headed")
+        backend = client.call(["open", _validate_url(args.url)], launch_options=launch_options)
         return _with_snapshot(client, "start", session, backend, directory)
 
     if args.action == "navigate":
-        backend = client.call(["goto", _validate_url(args.url)])
+        backend = client.call(["open", _validate_url(args.url)])
         return _with_snapshot(client, "navigate", session, backend, directory)
 
     if args.action == "snapshot":
-        command = ["snapshot"]
+        command = ["snapshot", "-i"]
         if args.target:
-            command.append(args.target)
+            command.extend(["-s", args.target])
         if args.depth:
-            command.extend(["--depth", str(args.depth)])
-        if args.boxes:
-            command.append("--boxes")
-        return {
+            command.extend(["-d", str(args.depth)])
+        result = {
             "ok": True,
             "action": "snapshot",
             "session": session,
             **_snapshot_result(client.call(command), directory),
         }
+        if args.boxes:
+            path = _artifact_path(directory, "annotated-screenshot", ".png")
+            result["backend_screenshot"] = client.call(["screenshot", "--annotate", str(path)])
+            if not path.is_file():
+                raise BrowserUseError(
+                    "agent-browser reported success but did not create the annotated screenshot"
+                )
+            result["screenshot"] = str(path)
+            result.setdefault("artifacts", []).append({"type": "image", "path": str(path)})
+        return result
 
     if args.action == "click":
-        command = ["click", args.target]
-        if args.button:
-            command.extend(["--button", args.button])
-        backend = client.call(command)
+        backend = client.call(["click", _validate_ref(args.target)])
         return _with_snapshot(client, "click", session, backend, directory)
 
     if args.action == "fill":
-        command = ["fill", args.target, args.text]
+        fill_backend: Any = client.call(["fill", _validate_ref(args.target), args.text])
         if args.submit:
-            command.append("--submit")
-        backend = client.call(command)
-        return _with_snapshot(client, "fill", session, backend, directory)
+            fill_backend = {
+                "fill": fill_backend,
+                "submit": client.call(["press", "Enter"]),
+            }
+        return _with_snapshot(client, "fill", session, fill_backend, directory)
 
     if args.action == "type":
-        backend = client.call(["type", args.text])
+        backend = client.call(["keyboard", "type", args.text])
         return _with_snapshot(client, "type", session, backend, directory)
 
     if args.action == "press":
@@ -343,26 +408,22 @@ def _execute(
         return _with_snapshot(client, "press", session, backend, directory)
 
     if args.action == "scroll":
-        delta = args.amount if args.direction == "down" else -args.amount
-        backend = client.call(["mousewheel", "0", str(delta)])
+        backend = client.call(["scroll", args.direction, str(args.amount)])
         return _with_snapshot(client, "scroll", session, backend, directory)
 
     if args.action == "back":
-        backend = client.call(["go-back"])
+        backend = client.call(["back"])
         return _with_snapshot(client, "back", session, backend, directory)
 
     if args.action == "screenshot":
         path = _artifact_path(directory, "screenshot", ".png")
-        command = ["screenshot"]
-        if args.target:
-            command.append(args.target)
-        command.extend(["--filename", str(path)])
+        command = ["screenshot", str(path)]
         if args.full_page:
-            command.append("--full-page")
+            command.append("--full")
         backend = client.call(command)
         if not path.is_file():
             raise BrowserUseError(
-                "playwright-cli reported success but did not create the screenshot"
+                "agent-browser reported success but did not create the screenshot"
             )
         return {
             "ok": True,
