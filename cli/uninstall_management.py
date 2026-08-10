@@ -82,7 +82,7 @@ ChangeDirectory = Callable[[str | os.PathLike[str]], None]
 ResolveInstance = Callable[..., ServerInstance]
 ProbeHealth = Callable[[ServerInstance], HealthProbeResult]
 ServerLifecycle = Callable[[ServerInstance], CommandResult]
-SystemdManaged = Callable[[str], bool]
+SystemdManaged = Callable[[ServerInstance, str], bool]
 SystemdLifecycle = Callable[[ServerInstance, str], CommandResult]
 Input = Callable[[str], str]
 Output = Callable[[str], None]
@@ -446,7 +446,7 @@ def _stop_application_server(
     """Stop the selected application's server before handing its files to a remover."""
 
     health = probe(instance)
-    unit_owned = systemd_managed(service_name)
+    unit_owned = systemd_managed(instance, service_name)
     if unit_owned:
         stopped = stop_systemd(instance, service_name)
     elif health.is_vbot:
@@ -476,7 +476,7 @@ def reset_data_directory(
     """Delete one data directory while preserving the target's prior running state."""
 
     health = probe(instance)
-    unit_owned = systemd_managed(service_name)
+    unit_owned = systemd_managed(instance, service_name)
     was_running = health.is_vbot or unit_owned
     if unit_owned:
         stopped = stop_systemd(instance, service_name)

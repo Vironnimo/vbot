@@ -6,6 +6,7 @@ import argparse
 import locale
 import os
 import re
+import shlex
 import socket
 import subprocess
 import sys
@@ -601,25 +602,61 @@ def _systemd_user_unit_dir() -> Path:
 
 
 def is_systemd_managed(
+    instance: ServerInstance,
     service_name: str = DEFAULT_SERVICE_NAME,
     *,
     platform: str = sys.platform,
     runner: SystemctlRunner = _run_systemctl,
     unit_dir: Path | None = None,
 ) -> bool:
-    """Return whether a systemd user unit currently owns the local server.
+    """Return whether a systemd user unit currently owns ``instance``.
 
-    Gated on the unit file's existence first, so non-systemd hosts never spawn a
-    systemctl probe.
+    A same-named active unit is insufficient: its generated ``ExecStart`` must
+    target the selected host, port, and data directory. Gating on the unit file
+    first keeps non-systemd hosts from spawning a systemctl probe.
     """
 
     if not platform.startswith("linux") or not is_valid_systemd_service_name(service_name):
         return False
     units = unit_dir or _systemd_user_unit_dir()
-    if not (units / f"{service_name}.service").is_file():
+    unit_path = units / f"{service_name}.service"
+    if not unit_path.is_file() or not _systemd_unit_targets_instance(unit_path, instance):
         return False
     active = runner(["systemctl", "--user", "is-active", f"{service_name}.service"])
     return active.returncode == 0 and active.stdout.strip() == "active"
+
+
+def _systemd_unit_targets_instance(unit_path: Path, instance: ServerInstance) -> bool:
+    """Match one vBot-generated unit's command to the selected server instance."""
+
+    try:
+        unit_lines = unit_path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return False
+    exec_start_values = [
+        line.removeprefix("ExecStart=").strip()
+        for line in unit_lines
+        if line.startswith("ExecStart=")
+    ]
+    if len(exec_start_values) != 1 or not exec_start_values[0]:
+        return False
+    try:
+        command = [value.replace("%%", "%") for value in shlex.split(exec_start_values[0])]
+    except ValueError:
+        return False
+    try:
+        module_index = command.index("-m")
+        if command[module_index + 1] != "server.main":
+            return False
+        arguments = command[module_index + 2 :]
+        host = arguments[arguments.index("--host") + 1]
+        port = int(arguments[arguments.index("--port") + 1])
+        data_dir = Path(arguments[arguments.index("--data-dir") + 1]).resolve()
+    except (IndexError, ValueError):
+        return False
+    return (
+        host == instance.host and port == instance.port and data_dir == instance.data_dir.resolve()
+    )
 
 
 def _await_vbot_health(
@@ -749,12 +786,12 @@ def restart_via_systemd_if_managed(
     instance: ServerInstance,
     *,
     service_name: str = DEFAULT_SERVICE_NAME,
-    is_managed: Callable[[str], bool] = is_systemd_managed,
+    is_managed: Callable[[ServerInstance, str], bool] = is_systemd_managed,
     do_restart: Callable[[ServerInstance, str], CommandResult] = _systemd_restart,
 ) -> CommandResult | None:
     """Restart via systemd when the target is unit-managed; return None otherwise."""
 
-    if not is_managed(service_name):
+    if not is_managed(instance, service_name):
         return None
     return do_restart(instance, service_name)
 
@@ -765,7 +802,7 @@ def restart_server(
     service_name: str = DEFAULT_SERVICE_NAME,
     stop: Callable[[ServerInstance], CommandResult] = stop_server,
     start: Callable[[ServerInstance], CommandResult] = start_server,
-    is_managed: Callable[[str], bool] = is_systemd_managed,
+    is_managed: Callable[[ServerInstance, str], bool] = is_systemd_managed,
     do_restart: Callable[[ServerInstance, str], CommandResult] = _systemd_restart,
 ) -> CommandResult:
     """Restart the local server, delegating to systemd when the unit owns it.

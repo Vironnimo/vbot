@@ -271,7 +271,7 @@ def test_interactive_data_reset_restarts_previously_running_server(tmp_path: Pat
         probe=lambda _instance: HealthProbeResult(reachable=True, is_vbot=True),
         stop=lambda _instance: _record_command(calls, "stop", instance),
         start=lambda _instance: _record_command(calls, "start", instance),
-        systemd_managed=lambda _name: False,
+        systemd_managed=lambda _instance, _name: False,
         remove_directory=lambda path: calls.append(f"remove:{path}"),
     )
 
@@ -293,7 +293,7 @@ def test_data_reset_keeps_previously_stopped_server_stopped(tmp_path: Path) -> N
         probe=lambda _instance: HealthProbeResult(reachable=False, is_vbot=False),
         stop=lambda _instance: _record_command(calls, "unexpected-stop", instance),
         start=lambda _instance: _record_command(calls, "unexpected-start", instance),
-        systemd_managed=lambda _name: False,
+        systemd_managed=lambda _instance, _name: False,
         remove_directory=lambda path: calls.append(f"remove:{path}"),
     )
 
@@ -315,7 +315,7 @@ def test_data_reset_preserves_systemd_ownership(tmp_path: Path) -> None:
         probe=lambda _instance: HealthProbeResult(reachable=True, is_vbot=True),
         stop=lambda _instance: _record_command(calls, "unexpected-stop", instance),
         start=lambda _instance: _record_command(calls, "unexpected-start", instance),
-        systemd_managed=lambda name: name == "custom-vbot",
+        systemd_managed=lambda selected, name: selected is instance and name == "custom-vbot",
         stop_systemd=lambda _instance, name: _record_command(
             calls, f"systemd-stop:{name}", instance
         ),
@@ -355,7 +355,7 @@ def test_app_only_preserves_data_and_all_forwards_data_to_launcher(tmp_path: Pat
         resolve=lambda **_kwargs: instance,
         probe=lambda _instance: HealthProbeResult(reachable=True, is_vbot=True),
         stop=stop,
-        systemd_managed=lambda _name: False,
+        systemd_managed=lambda _instance, _name: False,
         launcher=launcher,
     )
     all_result = run_uninstall(
@@ -365,7 +365,7 @@ def test_app_only_preserves_data_and_all_forwards_data_to_launcher(tmp_path: Pat
         resolve=lambda **_kwargs: instance,
         probe=lambda _instance: HealthProbeResult(reachable=True, is_vbot=True),
         stop=stop,
-        systemd_managed=lambda _name: False,
+        systemd_managed=lambda _instance, _name: False,
         launcher=launcher,
         working_directory=tmp_path,
         home_directory=tmp_path,
@@ -400,7 +400,7 @@ def test_application_removal_aborts_before_launcher_when_server_stop_fails(
         resolve=lambda **_kwargs: instance,
         probe=lambda _instance: HealthProbeResult(reachable=True, is_vbot=True),
         stop=lambda _instance: _command_result(instance, ok=False, message="locked"),
-        systemd_managed=lambda _name: False,
+        systemd_managed=lambda _instance, _name: False,
         launcher=launcher,
     )
 
@@ -429,7 +429,7 @@ def test_application_removal_stops_systemd_owned_server_before_launcher(
         resolve=lambda **_kwargs: instance,
         probe=lambda _instance: HealthProbeResult(reachable=True, is_vbot=True),
         stop=lambda _instance: _record_command(calls, "unexpected-stop", instance),
-        systemd_managed=lambda name: name == "custom-vbot",
+        systemd_managed=lambda selected, name: selected is instance and name == "custom-vbot",
         stop_systemd=lambda _instance, name: _record_command(
             calls, f"systemd-stop:{name}", instance
         ),
@@ -493,7 +493,7 @@ def test_uninstall_defaults_to_recorded_installation_target(tmp_path: Path) -> N
         root=root,
         resolve=resolve,
         probe=lambda _instance: HealthProbeResult(reachable=False, is_vbot=False),
-        systemd_managed=lambda _name: False,
+        systemd_managed=lambda _instance, _name: False,
         launcher=lambda **_kwargs: UninstallResult(ok=True, message="launched"),
     )
 
@@ -527,7 +527,7 @@ def test_desktop_client_application_scopes_never_target_default_server(tmp_path:
             resolve=unexpected_resolve,
             probe=unexpected_probe,
             stop=lambda _instance: _record_command(lifecycle_calls, "stop", _instance),
-            systemd_managed=lambda _name: False,
+            systemd_managed=lambda _instance, _name: False,
             launcher=launcher,
             working_directory=tmp_path,
             home_directory=tmp_path,
@@ -601,7 +601,7 @@ def test_desktop_client_data_only_accepts_complete_explicit_target(tmp_path: Pat
         data_dir=instance.data_dir,
         resolve=resolve,
         probe=lambda _instance: HealthProbeResult(reachable=False, is_vbot=False),
-        systemd_managed=lambda _name: False,
+        systemd_managed=lambda _instance, _name: False,
         remove_directory=lambda path: calls.append(f"remove:{path}"),
     )
 
@@ -674,7 +674,7 @@ def test_data_reset_aborts_before_delete_when_stop_fails(tmp_path: Path) -> None
         resolve=lambda **_kwargs: instance,
         probe=lambda _instance: HealthProbeResult(reachable=True, is_vbot=True),
         stop=lambda _instance: _command_result(instance, ok=False, message="locked"),
-        systemd_managed=lambda _name: False,
+        systemd_managed=lambda _instance, _name: False,
         remove_directory=remove_directory,
     )
 
