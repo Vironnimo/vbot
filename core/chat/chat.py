@@ -1596,7 +1596,12 @@ class ChatLoop:
             run.run_kind,
             project_id,
         )
-        session_snapshot = await _SessionSnapshot.load(session)
+        async with self._dependencies.sessions.write_lock(
+            run.agent_id,
+            run.session_id,
+            project_id,
+        ):
+            session_snapshot = await _SessionSnapshot.load(session)
         prior_continuation: ContinuationState | None = None
         continuation_reminder: str | None = None
         continuation_tracker: ContinuationTracker | None = None

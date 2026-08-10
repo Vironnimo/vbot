@@ -291,19 +291,20 @@ class TestChatSession:
 
         assert session.load_since(initial.cursor) is None
 
-    def test_load_recovers_partial_trailing_json_line(self, tmp_path):
+    def test_unlocked_load_skips_partial_trailing_json_line_without_truncating(self, tmp_path):
         session = ChatSession.create(tmp_path, session_id="session-one")
         message = ChatMessage.user("Survives crash", timestamp=FIXED_TIMESTAMP)
         session.append(message)
         valid_content = session.path.read_bytes()
-        session.path.write_bytes(valid_content + b'{"id":"partial"')
+        partial_content = b'{"id":"partial"'
+        session.path.write_bytes(valid_content + partial_content)
 
         messages = session.load()
 
         assert [loaded_message.to_dict() for loaded_message in messages] == [message.to_dict()]
-        assert session.path.read_bytes() == valid_content
+        assert session.path.read_bytes() == valid_content + partial_content
 
-    def test_load_recovers_partial_trailing_utf8_sequence(self, tmp_path):
+    def test_unlocked_load_skips_partial_utf8_sequence_without_truncating(self, tmp_path):
         session = ChatSession.create(tmp_path, session_id="session-one")
         message = ChatMessage.user("Valid", timestamp=FIXED_TIMESTAMP)
         session.append(message)
@@ -314,7 +315,67 @@ class TestChatSession:
         messages = session.load()
 
         assert [loaded_message.to_dict() for loaded_message in messages] == [message.to_dict()]
+        assert session.path.read_bytes() == valid_content + partial_line
+
+    @pytest.mark.asyncio
+    async def test_locked_load_repairs_partial_trailing_line(self, tmp_path):
+        manager = ChatSessionManager(tmp_path)
+        session = manager.create("coder", session_id="session-one")
+        message = ChatMessage.user("Survives crash", timestamp=FIXED_TIMESTAMP)
+        session.append(message)
+        valid_content = session.path.read_bytes()
+        session.path.write_bytes(valid_content + b'{"id":"partial"')
+
+        async with manager.write_lock("coder", "session-one"):
+            messages = await session.load_async()
+
+        assert [loaded_message.to_dict() for loaded_message in messages] == [message.to_dict()]
         assert session.path.read_bytes() == valid_content
+
+    @pytest.mark.asyncio
+    async def test_unlocked_load_cannot_truncate_an_in_progress_append(self, tmp_path, monkeypatch):
+        manager = ChatSessionManager(tmp_path)
+        session = manager.create("coder", session_id="session-one")
+        first = ChatMessage.user("first", timestamp=FIXED_TIMESTAMP)
+        second = ChatMessage.user("second", timestamp=FIXED_TIMESTAMP)
+        session.append(first)
+        valid_content = session.path.read_bytes()
+        second_line = (
+            json.dumps(second.to_dict(), ensure_ascii=False, separators=(",", ":")) + "\n"
+        ).encode("utf-8")
+        split_at = len(second_line) // 2
+        write_started = threading.Event()
+        release_write = threading.Event()
+        original_write_all = sessions_module._write_all
+
+        def blocking_write_all(file_descriptor: int, data: bytes) -> None:
+            original_write_all(file_descriptor, data[:split_at])
+            write_started.set()
+            assert release_write.wait(timeout=2)
+            original_write_all(file_descriptor, data[split_at:])
+
+        monkeypatch.setattr(sessions_module, "_write_all", blocking_write_all)
+
+        async def append_second() -> None:
+            async with manager.write_lock("coder", "session-one"):
+                await session.append_async(second)
+
+        append_task = asyncio.create_task(append_second())
+        observed_bytes = b""
+        try:
+            assert await asyncio.to_thread(write_started.wait, 2)
+            messages_during_write = session.load()
+            observed_bytes = session.path.read_bytes()
+        finally:
+            release_write.set()
+            await append_task
+
+        assert [message.to_dict() for message in messages_during_write] == [first.to_dict()]
+        assert observed_bytes == valid_content + second_line[:split_at]
+        assert [message.to_dict() for message in session.load()] == [
+            first.to_dict(),
+            second.to_dict(),
+        ]
 
     def test_bookend_timestamps_returns_first_and_last_message_timestamps(self, tmp_path):
         session = ChatSession.create(tmp_path, session_id="session-one")
@@ -455,19 +516,18 @@ class TestChatSession:
         with pytest.raises(ChatSessionError):
             session.load()
 
-    def test_load_recovers_unterminated_final_line_with_invalid_message_shape(self, tmp_path):
+    def test_unlocked_load_skips_unterminated_invalid_message_without_truncating(self, tmp_path):
         session = ChatSession.create(tmp_path, session_id="session-one")
         message = ChatMessage.user("Survives crash", timestamp=FIXED_TIMESTAMP)
         session.append(message)
         valid_content = session.path.read_bytes()
-        session.path.write_bytes(
-            valid_content + b'{"id":"d4e5f6","timestamp":"2026-05-03T14:30:01+00:00","role":"user"}'
-        )
+        partial_content = b'{"id":"d4e5f6","timestamp":"2026-05-03T14:30:01+00:00","role":"user"}'
+        session.path.write_bytes(valid_content + partial_content)
 
         messages = session.load()
 
         assert [loaded_message.to_dict() for loaded_message in messages] == [message.to_dict()]
-        assert session.path.read_bytes() == valid_content
+        assert session.path.read_bytes() == valid_content + partial_content
 
     def test_load_rejects_invalid_message_line(self, tmp_path):
         session = ChatSession.create(tmp_path, session_id="session-one")
