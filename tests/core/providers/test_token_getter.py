@@ -9,6 +9,7 @@ import logging
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
+from unittest.mock import AsyncMock, patch
 from urllib.parse import parse_qs
 
 import httpx
@@ -911,10 +912,15 @@ async def test_xai_retryable_refresh_failure_preserves_token(tmp_path: Path) -> 
         expires_at=datetime.now(UTC) - timedelta(minutes=1),
     )
     token_store.save("xai", "subscription", original)
-    respx.post(XAI_TOKEN_URL).mock(return_value=httpx.Response(503, text="unavailable"))
+    route = respx.post(XAI_TOKEN_URL).mock(return_value=httpx.Response(503, text="unavailable"))
     getter = OAuthTokenGetter(token_store, "xai", "subscription", _xai_oauth_config())
 
-    with pytest.raises(ProviderError):
+    with (
+        patch("core.utils.retry.asyncio.sleep", new_callable=AsyncMock) as sleep_mock,
+        pytest.raises(ProviderError),
+    ):
         await getter()
 
+    assert route.call_count == 4
+    assert sleep_mock.await_count == 3
     assert token_store.load("xai", "subscription") == original

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from core.providers.openrouter import OpenRouterAdapter
+
 from .discovery_test_support import (
     API_KEY,
     OPENROUTER_IMAGE_MODELS_URL,
@@ -20,6 +22,28 @@ from .discovery_test_support import (
 from .discovery_test_support import _clear_registry_cache as _clear_registry_cache
 from .discovery_test_support import openrouter_config as openrouter_config
 
+OPENROUTER_VIDEO_MODELS_URL = "https://openrouter.ai/api/v1/videos/models"
+
+
+def _mock_openrouter_task_catalogs(entries: list[dict] | None = None) -> None:
+    mock_openrouter_image_catalog(entries)
+    respx.get(OPENROUTER_VIDEO_MODELS_URL).mock(return_value=httpx.Response(200, json={"data": []}))
+
+
+def _set_supplementary_modalities(monkeypatch: pytest.MonkeyPatch, *modalities: str) -> None:
+    monkeypatch.setattr(
+        OpenRouterAdapter,
+        "supplementary_discovery_params",
+        classmethod(lambda _adapter: [{"output_modalities": modality} for modality in modalities]),
+    )
+
+
+@pytest.fixture(autouse=True)
+def _limit_supplementary_catalogs_to_the_modalities_under_test(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _set_supplementary_modalities(monkeypatch, "transcription", "speech")
+
 
 class TestRefreshModels:
     @respx.mock
@@ -31,7 +55,7 @@ class TestRefreshModels:
     ):
         """OpenRouter discovery fetches STT/TTS models via supplementary API calls."""
         resources_dir = tmp_path / "resources"
-        mock_openrouter_image_catalog()
+        _mock_openrouter_task_catalogs()
 
         # Main catalog returns a chat model and a multimodal audio model.
         main_models = {
@@ -108,7 +132,7 @@ class TestRefreshModels:
     ):
         """Supplementary fetches that return already-known models are deduplicated."""
         resources_dir = tmp_path / "resources"
-        mock_openrouter_image_catalog()
+        _mock_openrouter_task_catalogs()
 
         # Main catalog includes gpt-audio; supplementary also returns it.
         main_models = {
@@ -163,7 +187,7 @@ class TestRefreshModels:
     ):
         """If a supplementary fetch fails, discovery still completes with main models."""
         resources_dir = tmp_path / "resources"
-        mock_openrouter_image_catalog()
+        _mock_openrouter_task_catalogs()
 
         main_models = {
             "data": [
@@ -195,6 +219,7 @@ class TestRefreshModels:
         self,
         tmp_path: Path,
         openrouter_config: ProviderConfig,
+        monkeypatch: pytest.MonkeyPatch,
     ):
         """The image task catalog projects typed option schemas into the
         provider file: an existing chat-catalog model is enriched, an
@@ -202,6 +227,7 @@ class TestRefreshModels:
         responses."""
 
         resources_dir = tmp_path / "resources"
+        _set_supplementary_modalities(monkeypatch)
         respx.get(OPENROUTER_MODELS_URL).mock(
             return_value=httpx.Response(
                 200,
@@ -216,7 +242,7 @@ class TestRefreshModels:
                 },
             )
         )
-        mock_openrouter_image_catalog(
+        _mock_openrouter_task_catalogs(
             [
                 {
                     "id": "recraft/recraft-v3",
@@ -288,11 +314,13 @@ class TestRefreshModels:
         self,
         tmp_path: Path,
         openrouter_config: ProviderConfig,
+        monkeypatch: pytest.MonkeyPatch,
     ):
         """A failing image task catalog degrades to a refresh without task
         options — the chat catalog still lands."""
 
         resources_dir = tmp_path / "resources"
+        _set_supplementary_modalities(monkeypatch)
         respx.get(OPENROUTER_MODELS_URL).mock(
             return_value=httpx.Response(
                 200,
@@ -301,6 +329,9 @@ class TestRefreshModels:
         )
         respx.get(OPENROUTER_IMAGE_MODELS_URL).mock(
             return_value=httpx.Response(400, text="Invalid task-catalog request")
+        )
+        respx.get(OPENROUTER_VIDEO_MODELS_URL).mock(
+            return_value=httpx.Response(200, json={"data": []})
         )
 
         result = await refresh_models(openrouter_config, API_KEY, resources_dir)
@@ -320,7 +351,7 @@ class TestRefreshModels:
     ):
         """Supplementary models appear exactly once in the persisted raw payload."""
         resources_dir = tmp_path / "resources"
-        mock_openrouter_image_catalog()
+        _mock_openrouter_task_catalogs()
 
         main_models = {
             "data": [raw_openrouter_model(model_id="openai/gpt-4o", name="GPT-4o")],

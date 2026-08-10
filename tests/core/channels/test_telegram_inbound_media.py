@@ -642,6 +642,7 @@ async def test_album_messages_are_buffered_into_single_trigger_run(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr(telegram_module, "_ALBUM_FLUSH_SECONDS", 0)
     attachment_store = AttachmentStore(tmp_path)
     session_id = "ch-tg-assistant-12345"
     trigger_mock = AsyncMock(
@@ -685,7 +686,7 @@ async def test_album_messages_are_buffered_into_single_trigger_run(
         SimpleNamespace(),
     )
 
-    await asyncio.sleep(0.6)
+    await adapter._album_tasks["album-1"]
     await drain_chat_queue(adapter, 12345)
 
     trigger_mock.assert_awaited_once()
@@ -704,6 +705,7 @@ async def test_group_album_carries_sender_into_trigger_run(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr(telegram_module, "_ALBUM_FLUSH_SECONDS", 0)
     attachment_store = AttachmentStore(tmp_path)
     session_id = "ch-tg-assistant--10001"
     trigger_mock = AsyncMock(
@@ -750,7 +752,7 @@ async def test_group_album_carries_sender_into_trigger_run(
         SimpleNamespace(),
     )
 
-    await asyncio.sleep(0.6)
+    await adapter._album_tasks["album-1"]
     await drain_chat_queue(adapter, -10001)
 
     trigger_mock.assert_awaited_once()
