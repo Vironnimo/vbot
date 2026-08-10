@@ -1,6 +1,9 @@
 """Tests for the storage manager."""
 
 import os
+import threading
+from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
@@ -17,6 +20,59 @@ from core.storage import (
     StorageError,
     StorageManager,
 )
+from core.utils.atomic import atomic_write_text
+
+CREDENTIAL_MUTATION_CONTENTION_SECONDS = 0.1
+THREAD_START_TIMEOUT_SECONDS = 1.0
+THREAD_RESULT_TIMEOUT_SECONDS = 2.0
+
+
+def run_overlapping_credential_mutations(
+    monkeypatch: pytest.MonkeyPatch,
+    first_mutation: Callable[[], object],
+    second_mutation: Callable[[], object],
+) -> None:
+    """Force the second mutation to contend while the first write is pending."""
+    first_write_started = threading.Event()
+    second_mutation_started = threading.Event()
+    second_mutation_finished = threading.Event()
+    write_count = 0
+    write_count_lock = threading.Lock()
+
+    def delayed_atomic_write_text(
+        target_path: Path,
+        text: str,
+        *,
+        data_dir: Path | None = None,
+        encoding: str = "utf-8",
+    ) -> None:
+        nonlocal write_count
+        with write_count_lock:
+            write_count += 1
+            current_write = write_count
+        if current_write == 1:
+            first_write_started.set()
+            assert second_mutation_started.wait(THREAD_START_TIMEOUT_SECONDS)
+            second_mutation_finished.wait(CREDENTIAL_MUTATION_CONTENTION_SECONDS)
+        atomic_write_text(target_path, text, data_dir=data_dir, encoding=encoding)
+
+    def run_second_mutation() -> object:
+        second_mutation_started.set()
+        try:
+            return second_mutation()
+        finally:
+            second_mutation_finished.set()
+
+    monkeypatch.setattr(
+        "core.storage.storage.atomic_write_text",
+        delayed_atomic_write_text,
+    )
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        first_future = executor.submit(first_mutation)
+        assert first_write_started.wait(THREAD_START_TIMEOUT_SECONDS)
+        second_future = executor.submit(run_second_mutation)
+        first_future.result(timeout=THREAD_RESULT_TIMEOUT_SECONDS)
+        second_future.result(timeout=THREAD_RESULT_TIMEOUT_SECONDS)
 
 
 def create_prompt_resources(resources_dir: Path, *, include_compaction: bool = True) -> None:
@@ -144,6 +200,42 @@ def test_set_data_dir_credential_replaces_existing_key_and_preserves_other_lines
     assert (tmp_path / ".env").read_text(encoding="utf-8") == (
         "# Provider keys\nOPENROUTER_API_KEY=new\nOTHER_KEY=value\n"
     )
+
+
+def test_concurrent_credential_sets_preserve_both_updates(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    storage = StorageManager(tmp_path)
+    (tmp_path / ".env").write_text("EXISTING_KEY=value\n", encoding="utf-8")
+
+    run_overlapping_credential_mutations(
+        monkeypatch,
+        lambda: storage.set_data_dir_credential("FIRST_KEY", "first"),
+        lambda: storage.set_data_dir_credential("SECOND_KEY", "second"),
+    )
+
+    assert storage.load_data_dir_credentials() == {
+        "EXISTING_KEY": "value",
+        "FIRST_KEY": "first",
+        "SECOND_KEY": "second",
+    }
+
+
+def test_concurrent_credential_set_and_remove_preserve_both_updates(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    storage = StorageManager(tmp_path)
+    (tmp_path / ".env").write_text("REMOVE_KEY=old\n", encoding="utf-8")
+
+    run_overlapping_credential_mutations(
+        monkeypatch,
+        lambda: storage.set_data_dir_credential("KEEP_KEY", "new"),
+        lambda: storage.remove_data_dir_credential("REMOVE_KEY"),
+    )
+
+    assert storage.load_data_dir_credentials() == {"KEEP_KEY": "new"}
 
 
 def test_set_data_dir_credential_preserves_env_when_atomic_replace_fails(

@@ -176,33 +176,40 @@ class StorageManager:
             raise StorageError("Credential value must be a single line")
 
         self.ensure_directories()
-        env_path = self.data_dir / ".env"
-        try:
-            lines = env_path.read_text(encoding="utf-8").splitlines() if env_path.exists() else []
-        except OSError as exc:
-            raise StorageError(f"Cannot read {env_path}: {exc}") from exc
+        with self._settings_lock:
+            env_path = self.data_dir / ".env"
+            try:
+                lines = (
+                    env_path.read_text(encoding="utf-8").splitlines() if env_path.exists() else []
+                )
+            except OSError as exc:
+                raise StorageError(f"Cannot read {env_path}: {exc}") from exc
 
-        new_line = f"{key}={value}"
-        updated_lines: list[str] = []
-        replaced = False
-        for line in lines:
-            stripped = line.strip()
-            if stripped and not stripped.startswith("#") and "=" in stripped:
-                candidate_key = stripped.partition("=")[0].strip()
-                if candidate_key == key:
-                    if not replaced:
-                        updated_lines.append(new_line)
-                        replaced = True
-                    continue
-            updated_lines.append(line)
+            new_line = f"{key}={value}"
+            updated_lines: list[str] = []
+            replaced = False
+            for line in lines:
+                stripped = line.strip()
+                if stripped and not stripped.startswith("#") and "=" in stripped:
+                    candidate_key = stripped.partition("=")[0].strip()
+                    if candidate_key == key:
+                        if not replaced:
+                            updated_lines.append(new_line)
+                            replaced = True
+                        continue
+                updated_lines.append(line)
 
-        if not replaced:
-            updated_lines.append(new_line)
+            if not replaced:
+                updated_lines.append(new_line)
 
-        try:
-            atomic_write_text(env_path, "\n".join(updated_lines) + "\n", data_dir=self.data_dir)
-        except OSError as exc:
-            raise StorageError(f"Cannot write {env_path}: {exc}") from exc
+            try:
+                atomic_write_text(
+                    env_path,
+                    "\n".join(updated_lines) + "\n",
+                    data_dir=self.data_dir,
+                )
+            except OSError as exc:
+                raise StorageError(f"Cannot write {env_path}: {exc}") from exc
 
     def remove_data_dir_credential(self, key: str) -> bool:
         """Remove one credential from ``<data_dir>/.env``.
@@ -215,34 +222,39 @@ class StorageManager:
         if not ENV_KEY_PATTERN.fullmatch(key):
             raise StorageError(f"Invalid environment key: {key}")
 
-        env_path = self.data_dir / ".env"
-        if not env_path.exists():
-            return False
-        try:
-            lines = env_path.read_text(encoding="utf-8").splitlines()
-        except OSError as exc:
-            raise StorageError(f"Cannot read {env_path}: {exc}") from exc
+        with self._settings_lock:
+            env_path = self.data_dir / ".env"
+            if not env_path.exists():
+                return False
+            try:
+                lines = env_path.read_text(encoding="utf-8").splitlines()
+            except OSError as exc:
+                raise StorageError(f"Cannot read {env_path}: {exc}") from exc
 
-        updated_lines: list[str] = []
-        removed = False
-        for line in lines:
-            stripped = line.strip()
-            if stripped and not stripped.startswith("#") and "=" in stripped:
-                candidate_key = stripped.partition("=")[0].strip()
-                if candidate_key == key:
-                    removed = True
-                    continue
-            updated_lines.append(line)
+            updated_lines: list[str] = []
+            removed = False
+            for line in lines:
+                stripped = line.strip()
+                if stripped and not stripped.startswith("#") and "=" in stripped:
+                    candidate_key = stripped.partition("=")[0].strip()
+                    if candidate_key == key:
+                        removed = True
+                        continue
+                updated_lines.append(line)
 
-        if not removed:
-            return False
+            if not removed:
+                return False
 
-        self.ensure_directories()
-        try:
-            atomic_write_text(env_path, "\n".join(updated_lines) + "\n", data_dir=self.data_dir)
-        except OSError as exc:
-            raise StorageError(f"Cannot write {env_path}: {exc}") from exc
-        return True
+            self.ensure_directories()
+            try:
+                atomic_write_text(
+                    env_path,
+                    "\n".join(updated_lines) + "\n",
+                    data_dir=self.data_dir,
+                )
+            except OSError as exc:
+                raise StorageError(f"Cannot write {env_path}: {exc}") from exc
+            return True
 
     def build_environment_snapshot(self) -> dict[str, str]:
         """Return process-env-over-data-dir merged credentials without mutation."""
