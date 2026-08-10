@@ -81,6 +81,21 @@ def test_skill_has_no_playwright_dependency() -> None:
     assert "playwright" not in SCRIPT_PATH.read_text(encoding="utf-8").lower()
 
 
+def test_skill_documents_explicit_windows_and_linux_installation() -> None:
+    content = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
+
+    assert "### Windows PowerShell" in content
+    assert "### Linux" in content
+    assert "npm install -g agent-browser" in content
+    assert "agent-browser install`" in content
+    assert "agent-browser install --with-deps" in content
+    assert "agent-browser --version" in content
+    assert "start about:blank" in content
+    assert "install-check close" in content
+    assert "does not authorize installation or upgrade" in content
+    assert "do not improvise with `sudo npm`" in content
+
+
 def test_start_opens_isolated_session_and_returns_fresh_snapshot(tmp_path: Path) -> None:
     client = FakeClient(
         [
@@ -134,6 +149,19 @@ def test_oversized_snapshot_is_bounded_and_written_as_artifact(tmp_path: Path) -
     artifact = Path(result["snapshot_file"])
     assert artifact.read_text(encoding="utf-8") == snapshot
     assert artifact.is_relative_to(tmp_path / "tmp" / "browser-use" / "browser-test")
+
+
+def test_full_snapshot_includes_noninteractive_accessibility_tree(tmp_path: Path) -> None:
+    client = FakeClient([{"success": True, "data": {"snapshot": "- heading Result"}}])
+
+    result = BROWSER_USE._execute(
+        ["--session", "browser-test", "snapshot", "--full"],
+        client=client,
+        cwd=tmp_path,
+    )
+
+    assert result["snapshot"] == "- heading Result"
+    assert client.calls == [(["snapshot"], [])]
 
 
 def test_screenshot_uses_controlled_output_path(tmp_path: Path) -> None:
@@ -197,12 +225,10 @@ def test_backend_invocation_uses_vbot_namespace_json_and_sanitized_env(
     def fake_run(command: list[str], **kwargs: Any) -> Any:
         captured["command"] = command
         captured["kwargs"] = kwargs
-        return BROWSER_USE.subprocess.CompletedProcess(
-            command,
-            0,
-            stdout='{"success":true,"data":{"snapshot":"ok"}}',
-            stderr="",
-        )
+        kwargs["stdout"].write('{"success":true,"data":{"snapshot":"ok"}}')
+        kwargs["stdout"].flush()
+        kwargs["stderr"].flush()
+        return BROWSER_USE.subprocess.CompletedProcess(command, 0)
 
     monkeypatch.setattr(BROWSER_USE.subprocess, "run", fake_run)
     monkeypatch.setenv("OPENAI_API_KEY", "must-not-leak")
@@ -231,6 +257,9 @@ def test_backend_invocation_uses_vbot_namespace_json_and_sanitized_env(
     ]
     assert "OPENAI_API_KEY" not in captured["kwargs"]["env"]
     assert captured["kwargs"]["env"]["NO_COLOR"] == "1"
+    assert captured["kwargs"]["stdout"] is not BROWSER_USE.subprocess.PIPE
+    assert captured["kwargs"]["stderr"] is not BROWSER_USE.subprocess.PIPE
+    assert "capture_output" not in captured["kwargs"]
     assert "shell" not in captured["kwargs"]
 
 

@@ -11,6 +11,31 @@ metadata:
 
 Use the bundled Python script to control one isolated agent-browser session on the machine running the vBot server. This is a script-backed prototype, not a built-in Tool. On a remote Pi-server plus Windows Desktop Client setup it controls a browser on the Pi, not the user's Windows browser.
 
+## Installation
+
+Install only when the user explicitly asks for installation. An unavailable Skill or a missing dependency does not authorize installation or upgrade.
+
+### Windows PowerShell
+
+1. Run `node --version` and `npm --version`. If either command is missing, install the current Node.js LTS release first, reopen PowerShell, and verify both commands before continuing.
+2. Run `npm install -g agent-browser`.
+3. Run `agent-browser install` to download Chrome for Testing.
+4. Run `agent-browser --version`.
+5. Run `python {baseDir}/scripts/browser_use.py --session install-check doctor` and require `"ok": true`.
+6. Run `python {baseDir}/scripts/browser_use.py --session install-check start about:blank`, require `"ok": true`, then run `python {baseDir}/scripts/browser_use.py --session install-check close`.
+
+### Linux
+
+1. Run `node --version` and `npm --version`. If either command is missing, install a supported Node.js release through the host's approved package or version manager, then verify both commands.
+2. Run `npm install -g agent-browser`. If the global npm prefix is not user-writable, use an approved user-local Node/npm setup; do not improvise with `sudo npm`.
+3. On Debian, Ubuntu, Raspberry Pi OS, and compatible containers, run `agent-browser install --with-deps` to install Chrome for Testing plus required system libraries. This may invoke the system package manager and therefore still requires the user's authorization for system changes.
+4. On other distributions, run `agent-browser install`; if launch verification fails, use `agent-browser doctor --json` to identify missing libraries instead of guessing package names.
+5. Run `agent-browser --version`.
+6. Run `python {baseDir}/scripts/browser_use.py --session install-check doctor` and require `"ok": true`.
+7. Run `python {baseDir}/scripts/browser_use.py --session install-check start about:blank`, require `"ok": true`, then run `python {baseDir}/scripts/browser_use.py --session install-check close`.
+
+The native agent-browser binary supports Windows x64 and Linux x64/ARM64. The wrapper does not use `npx` as a runtime fallback: `agent-browser` must remain discoverable on the vBot server's `PATH` so vBot requirement checks and later Runs see the same installation.
+
 ## Script contract
 
 - Run `python {baseDir}/scripts/browser_use.py --session <session> doctor` before the first browser action in a task.
@@ -35,6 +60,7 @@ Use the bundled Python script to control one isolated agent-browser session on t
 python {baseDir}/scripts/browser_use.py --session <session> doctor
 python {baseDir}/scripts/browser_use.py --session <session> start https://example.com
 python {baseDir}/scripts/browser_use.py --session <session> navigate https://example.com/account
+python {baseDir}/scripts/browser_use.py --session <session> snapshot --full
 python {baseDir}/scripts/browser_use.py --session <session> snapshot --boxes
 python {baseDir}/scripts/browser_use.py --session <session> click @e12
 python {baseDir}/scripts/browser_use.py --session <session> fill @e7 "search text" --submit
