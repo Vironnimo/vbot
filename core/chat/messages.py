@@ -883,10 +883,15 @@ def should_append_reply_surface_note(messages: list[ChatMessage], incoming: Repl
     )
 
 
-def _append_reply_surface_note(session: ChatSession, surface: ReplySurface | None) -> None:
+def _append_reply_surface_note(
+    session: ChatSession,
+    surface: ReplySurface | None,
+    *,
+    messages: list[ChatMessage],
+) -> None:
     if surface is None:
         return
-    if should_append_reply_surface_note(session.load(), surface):
+    if should_append_reply_surface_note(messages, surface):
         session.add_note(surface.to_note_content())
 
 

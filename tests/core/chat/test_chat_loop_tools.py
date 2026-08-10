@@ -27,6 +27,7 @@ from core.runs import (
     RunCancelledError,
     RunStatus,
 )
+from core.sessions import ChatSession
 from core.tools import (
     ANALYZE_IMAGE_TOOL_NAME,
     BASH_SUBAGENT_TOOL_DESCRIPTION,
@@ -73,6 +74,53 @@ def _analyze_image_registry() -> ToolRegistry:
 def _request_tool_names(adapter: StubAdapter) -> set[str]:
     tools = adapter.requests[0]["kwargs"]["tools"]
     return {str(definition["name"]) for definition in tools}
+
+
+@pytest.mark.asyncio
+async def test_sibling_tool_results_use_one_ordered_session_batch(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    tools = ToolRegistry()
+    tools.register(
+        "probe",
+        "Return the probe id.",
+        {"type": "object"},
+        lambda context, _arguments: tool_success({"id": context.tool_call_id}),
+        parallel_safe=True,
+    )
+    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["probe"])
+    adapter = StubAdapter(
+        [
+            {
+                "content": None,
+                "tool_calls": [
+                    {"id": "first", "name": "probe", "arguments": {}},
+                    {"id": "second", "name": "probe", "arguments": {}},
+                ],
+            },
+            {"content": "done", "tool_calls": None},
+        ]
+    )
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter, tools=tools)
+    batches: list[list[str]] = []
+    original_append_many_async = ChatSession.append_many_async
+
+    async def recording_append_many(self: ChatSession, messages: list[ChatMessage]) -> None:
+        batches.append([message.role for message in messages])
+        await original_append_many_async(self, messages)
+
+    monkeypatch.setattr(ChatSession, "append_many_async", recording_append_many)
+
+    await build_chat_loop(runtime).send("coder", "run both", session_id="session-one")
+
+    tool_batches = [batch for batch in batches if "tool" in batch]
+    assert tool_batches == [["tool", "tool"]]
+    persisted = runtime.chat_sessions.get("coder", "session-one").load()
+    assert [message.tool_call_id for message in persisted if message.role == "tool"] == [
+        "first",
+        "second",
+    ]
 
 
 @pytest.mark.asyncio

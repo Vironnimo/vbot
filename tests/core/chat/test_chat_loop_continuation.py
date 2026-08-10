@@ -88,7 +88,7 @@ async def test_content_block_request_is_serialized_in_continuation_journal(
             session_id="session-one",
         )
 
-    state = recover_continuation(runtime.chat_sessions.get("coder", "session-one"))
+    state = await recover_continuation(runtime.chat_sessions.get("coder", "session-one"))
     assert state is not None
     assert state.original_requests == [
         [
@@ -124,7 +124,7 @@ async def test_internal_run_neither_consumes_nor_resolves_continuation(tmp_path:
     session = runtime.chat_sessions.create("coder", session_id="session-one")
     tracker = ContinuationTracker(session, run_id="interrupted-run", request="visible work")
     await tracker.interrupt("network")
-    before = recover_continuation(session)
+    before = await recover_continuation(session)
     assert before is not None
 
     run = await build_chat_loop(runtime).start_run(
@@ -135,7 +135,7 @@ async def test_internal_run_neither_consumes_nor_resolves_continuation(tmp_path:
     )
     await run.wait()
 
-    after = recover_continuation(session)
+    after = await recover_continuation(session)
     assert after is not None
     assert after.checkpoint_id == before.checkpoint_id
     assert after.cause == before.cause
@@ -273,7 +273,7 @@ async def test_second_interrupted_message_extends_same_checkpoint(tmp_path: Path
     loop = build_chat_loop(runtime, streaming=True)
     with pytest.raises(RunInterruptedError, match="network"):
         await loop.send("coder", "Do the work", session_id="session-one")
-    first_state = recover_continuation(runtime.chat_sessions.get("coder", "session-one"))
+    first_state = await recover_continuation(runtime.chat_sessions.get("coder", "session-one"))
     assert first_state is not None
 
     runtime.adapter = StubAdapter(
@@ -294,7 +294,7 @@ async def test_second_interrupted_message_extends_same_checkpoint(tmp_path: Path
     with pytest.raises(RunInterruptedError, match="network"):
         await second_run.wait()
 
-    second_state = recover_continuation(runtime.chat_sessions.get("coder", "session-one"))
+    second_state = await recover_continuation(runtime.chat_sessions.get("coder", "session-one"))
     assert second_state is not None
     assert second_state.checkpoint_id == first_state.checkpoint_id
     assert second_state.origin_run_id == first_state.origin_run_id

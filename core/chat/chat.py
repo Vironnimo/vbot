@@ -512,7 +512,33 @@ class _RunExecutionContext:
     prior_continuation: ContinuationState | None
     continuation_tracker: ContinuationTracker | None
     continuation_reminder: str | None
+    session_snapshot: _SessionSnapshot
     request_state: _RequestState | None = None
+
+
+@dataclass
+class _SessionSnapshot:
+    """Run-local canonical Session state refreshed through append-only deltas."""
+
+    messages: list[ChatMessage]
+    cursor: SessionReadCursor
+
+    @classmethod
+    async def load(cls, session: ChatSession) -> _SessionSnapshot:
+        batch = await session.load_since_async()
+        if batch is None:
+            raise AssertionError("A full Session snapshot must always produce a cursor")
+        return cls(messages=list(batch.messages), cursor=batch.cursor)
+
+    async def refresh(self, session: ChatSession) -> None:
+        batch = await session.load_since_async(self.cursor)
+        if batch is None:
+            replacement = await self.load(session)
+            self.messages = replacement.messages
+            self.cursor = replacement.cursor
+            return
+        self.messages.extend(batch.messages)
+        self.cursor = batch.cursor
 
 
 @dataclass(frozen=True)
@@ -1149,7 +1175,8 @@ class ChatLoop:
         instruction: str | None,
     ) -> ChatMessage:
         """Execute one manual Compaction inside its canonical Run lifecycle."""
-        self._dependencies.sessions.record_run_kind(
+        await asyncio.to_thread(
+            self._dependencies.sessions.record_run_kind,
             run.agent_id,
             run.session_id,
             run.run_kind,
@@ -1158,7 +1185,7 @@ class ChatLoop:
         adapter: Any | None = None
         summary_adapter: Any | None = None
         try:
-            messages = session.load()
+            messages = await session.load_async()
             context_usage = latest_session_context_usage(messages)
             if context_usage is not None:
                 run.terminal_payload_extras["context_usage"] = context_usage
@@ -1166,7 +1193,8 @@ class ChatLoop:
                 COMPACTION_STARTED_EVENT,
                 {"context_usage": context_usage} if context_usage is not None else {},
             )
-            settings = self._load_compaction_settings(
+            settings = await asyncio.to_thread(
+                self._load_compaction_settings,
                 agent,
                 agent_id=run.agent_id,
                 session_id=run.session_id,
@@ -1197,7 +1225,8 @@ class ChatLoop:
                     if prompt_project is not None
                     else None
                 )
-                working_project_context = self._pinned_working_project_context(
+                working_project_context = await asyncio.to_thread(
+                    self._pinned_working_project_context,
                     run.agent_id,
                     run.session_id,
                     prompt_project,
@@ -1207,7 +1236,8 @@ class ChatLoop:
                 skill_project_id, identity_agent_id = resolve_skill_scope(
                     run.project_id, prompt_project, run.agent_id
                 )
-                skill_registry = self._dependencies.resolve_skills(
+                skill_registry = await asyncio.to_thread(
+                    self._dependencies.resolve_skills,
                     skill_project_id,
                     identity_agent_id,
                 )
@@ -1225,7 +1255,8 @@ class ChatLoop:
                 )
                 wire_media_types = _resolve_wire_media_support(adapter, model_id)
                 agent_body = runtime_agent_body(agent)
-                skill_catalog = self._pinned_skill_catalog(
+                skill_catalog = await asyncio.to_thread(
+                    self._pinned_skill_catalog,
                     run.agent_id,
                     run.session_id,
                     agent,
@@ -1245,6 +1276,7 @@ class ChatLoop:
                     agent_project_id=run.project_id,
                     skill_registry=skill_registry,
                     skill_catalog=skill_catalog,
+                    session_messages_override=messages,
                 )
                 estimated_context_tokens_before, _ = estimate_request_input_tokens(
                     request_state.messages,
@@ -1283,7 +1315,8 @@ class ChatLoop:
             checkpoint = finalize_checkpoint_history_guidance(checkpoint, ordinal=ordinal)
             prompt_refresh: _CompactionPromptRefresh | None = None
             try:
-                prompt_refresh = self._prepare_prompt_context_after_compaction(
+                prompt_refresh = await asyncio.to_thread(
+                    self._prepare_prompt_context_after_compaction,
                     agent_id=run.agent_id,
                     session_id=run.session_id,
                     agent=agent,
@@ -1335,15 +1368,18 @@ class ChatLoop:
                 skill_registry=next_skill_registry,
                 skill_catalog=next_skill_catalog,
             )
-            session.append(checkpoint)
-            self._dependencies.sessions.rotate_prompt_cache_affinity_id(
+            await session.append_async(checkpoint)
+            messages.append(checkpoint)
+            await asyncio.to_thread(
+                self._dependencies.sessions.rotate_prompt_cache_affinity_id,
                 run.agent_id,
                 run.session_id,
                 run.project_id,
             )
             if prompt_refresh is not None:
                 try:
-                    self._commit_prompt_context_after_compaction(
+                    await asyncio.to_thread(
+                        self._commit_prompt_context_after_compaction,
                         agent_id=run.agent_id,
                         session_id=run.session_id,
                         project_id=run.project_id,
@@ -1357,8 +1393,8 @@ class ChatLoop:
                         run.session_id,
                         exc_info=True,
                     )
-            self._emit_compaction_completed(run, session, checkpoint)
-            run.terminal_payload_extras["session_usage"] = aggregate_session_usage(session.load())
+            self._emit_compaction_completed(run, messages, checkpoint)
+            run.terminal_payload_extras["session_usage"] = aggregate_session_usage(messages)
             return checkpoint
         except asyncio.CancelledError:
             run.emit(COMPACTION_ABORTED_EVENT, {"reason": "cancelled"})
@@ -1426,17 +1462,23 @@ class ChatLoop:
             run.session_id,
             project_id,
         )
-        self._dependencies.sessions.record_run_kind(
+        await asyncio.to_thread(
+            self._dependencies.sessions.record_run_kind,
             run.agent_id,
             run.session_id,
             run.run_kind,
             project_id,
         )
+        session_snapshot = await _SessionSnapshot.load(session)
         prior_continuation: ContinuationState | None = None
         continuation_reminder: str | None = None
         continuation_tracker: ContinuationTracker | None = None
         if not request.internal or request.resume_process_restart:
-            recovered = recover_continuation(session, active_run_id=run.id)
+            recovered = await recover_continuation(
+                session,
+                active_run_id=run.id,
+                canonical_messages=session_snapshot.messages,
+            )
             if request.internal and recovered is not None and recovered.cause != "process_restart":
                 recovered = None
             prior_continuation = recovered
@@ -1452,11 +1494,13 @@ class ChatLoop:
                     request=_serialize_continuation_request(request.content),
                     prior_state=prior_continuation,
                 )
+                await continuation_tracker.start()
         try:
-            context = self._create_run_execution_context(
+            context = await self._create_run_execution_context(
                 run,
                 request,
                 session=session,
+                session_snapshot=session_snapshot,
                 prior_continuation=prior_continuation,
                 continuation_reminder=continuation_reminder,
                 continuation_tracker=continuation_tracker,
@@ -1472,17 +1516,20 @@ class ChatLoop:
                 await continuation_tracker.interrupt(cause)
             raise
 
-    def _create_run_execution_context(
+    async def _create_run_execution_context(
         self,
         run: Run,
         request: _RunRequest,
         *,
         session: ChatSession,
+        session_snapshot: _SessionSnapshot | None = None,
         prior_continuation: ContinuationState | None,
         continuation_reminder: str | None,
         continuation_tracker: ContinuationTracker | None,
     ) -> _RunExecutionContext:
         """Resolve all stable execution inputs once at the Run boundary."""
+        if session_snapshot is None:
+            session_snapshot = await _SessionSnapshot.load(session)
         project_id = run.project_id
         working_project_id = run.working_project_id
         if request.agent_overrides is None:
@@ -1511,7 +1558,8 @@ class ChatLoop:
             if prompt_project is not None
             else None
         )
-        working_project_context = self._pinned_working_project_context(
+        working_project_context = await asyncio.to_thread(
+            self._pinned_working_project_context,
             run.agent_id,
             run.session_id,
             prompt_project,
@@ -1521,14 +1569,26 @@ class ChatLoop:
         skill_project_id, identity_agent_id = resolve_skill_scope(
             project_id, prompt_project, run.agent_id
         )
-        skill_registry = self._dependencies.resolve_skills(skill_project_id, identity_agent_id)
-        skill_catalog = self._pinned_skill_catalog(
+        skill_registry = await asyncio.to_thread(
+            self._dependencies.resolve_skills,
+            skill_project_id,
+            identity_agent_id,
+        )
+        skill_catalog = await asyncio.to_thread(
+            self._pinned_skill_catalog,
             run.agent_id,
             run.session_id,
             agent,
             skill_registry,
             project_id,
         )
+        prompt_cache_affinity_id = await asyncio.to_thread(
+            self._dependencies.sessions.prompt_cache_affinity_id,
+            run.agent_id,
+            run.session_id,
+            project_id,
+        )
+        session.activated_skill_contents(session_snapshot.messages)
         context = _RunExecutionContext(
             run=run,
             request=request,
@@ -1543,24 +1603,19 @@ class ChatLoop:
             skill_project_id=skill_project_id,
             skill_registry=skill_registry,
             skill_catalog=skill_catalog,
-            prompt_cache_affinity_id=(
-                self._dependencies.sessions.prompt_cache_affinity_id(
-                    run.agent_id,
-                    run.session_id,
-                    project_id,
-                )
-            ),
+            prompt_cache_affinity_id=prompt_cache_affinity_id,
             prior_continuation=prior_continuation,
             continuation_tracker=continuation_tracker,
             continuation_reminder=continuation_reminder,
+            session_snapshot=session_snapshot,
         )
         if project_id is None:
-            loaded_project_id = latest_project_tool_context_id(session.load())
+            loaded_project_id = latest_project_tool_context_id(session_snapshot.messages)
             if loaded_project_id is not None:
-                self._apply_project_skill_context(context, loaded_project_id)
+                await self._apply_project_skill_context(context, loaded_project_id)
         return context
 
-    def _apply_project_skill_context(
+    async def _apply_project_skill_context(
         self,
         context: _RunExecutionContext,
         project_id: str,
@@ -1573,7 +1628,11 @@ class ChatLoop:
         remain unchanged.
         """
         try:
-            registry = self._dependencies.resolve_skills(project_id, context.run.agent_id)
+            registry = await asyncio.to_thread(
+                self._dependencies.resolve_skills,
+                project_id,
+                context.run.agent_id,
+            )
         except (ProjectError, OSError) as error:
             _LOGGER.warning(
                 "Loaded Project Skill context is unavailable (agent=%s session=%s project=%s): %s",
@@ -1647,54 +1706,71 @@ class ChatLoop:
         )
 
         try:
-            extension_registry = self._dependencies.get_extension_registry()
-            if extension_registry is not None:
-                extension_ctx = HookContext(
-                    session_id=run.session_id,
-                    agent_id=run.agent_id,
-                    run_id=run.id,
-                    add_note=session.add_note,
-                )
-                await extension_registry.dispatch_run_start(
-                    extension_ctx,
-                    session_id=run.session_id,
-                    agent_id=run.agent_id,
-                )
+            session.begin_defer_notes()
+            try:
+                extension_registry = self._dependencies.get_extension_registry()
+                if extension_registry is not None:
+                    extension_ctx = HookContext(
+                        session_id=run.session_id,
+                        agent_id=run.agent_id,
+                        run_id=run.id,
+                        add_note=session.add_note,
+                    )
+                    await extension_registry.dispatch_run_start(
+                        extension_ctx,
+                        session_id=run.session_id,
+                        agent_id=run.agent_id,
+                    )
 
-            run.raise_if_cancelled()
-            self._announce_newly_available_skills(
-                run.agent_id,
-                run.session_id,
-                session,
-                agent,
-                context.skill_registry,
-                project_id,
-            )
-            async with self._dependencies.sessions.write_lock(
-                run.agent_id, run.session_id, project_id
-            ):
-                if internal:
-                    if not isinstance(request.content, str):
-                        raise ChatError("internal runs require string content")
-                    _append_reply_surface_note(session, request.reply_surface)
-                    session.add_note(request.content)
-                else:
-                    if request.content is None:
-                        raise ChatError("content is required for non-retry runs")
-                    _append_input_origin_note(session, request.input_origin)
-                    _append_reply_surface_note(session, request.reply_surface)
-                    user_message = ChatMessage.user(request.content, sender=request.sender)
-                    session.append(user_message)
-                    _emit_message_event(run, USER_MESSAGE_EVENT, user_message)
-                if request.input_persisted_hook is not None:
-                    try:
-                        request.input_persisted_hook()
-                    except Exception:
-                        _LOGGER.warning(
-                            "Input-persistence callback failed for run %s",
-                            run.id,
-                            exc_info=True,
+                run.raise_if_cancelled()
+                await asyncio.to_thread(
+                    self._announce_newly_available_skills,
+                    run.agent_id,
+                    run.session_id,
+                    session,
+                    agent,
+                    context.skill_registry,
+                    project_id,
+                )
+                async with self._dependencies.sessions.write_lock(
+                    run.agent_id, run.session_id, project_id
+                ):
+                    if internal:
+                        if not isinstance(request.content, str):
+                            raise ChatError("internal runs require string content")
+                        _append_reply_surface_note(
+                            session,
+                            request.reply_surface,
+                            messages=context.session_snapshot.messages,
                         )
+                        session.add_note(request.content)
+                        persisted_messages = session.take_deferred_notes()
+                    else:
+                        if request.content is None:
+                            raise ChatError("content is required for non-retry runs")
+                        _append_input_origin_note(session, request.input_origin)
+                        _append_reply_surface_note(
+                            session,
+                            request.reply_surface,
+                            messages=context.session_snapshot.messages,
+                        )
+                        user_message = ChatMessage.user(request.content, sender=request.sender)
+                        persisted_messages = [*session.take_deferred_notes(), user_message]
+                    await session.append_many_async(persisted_messages)
+                    await context.session_snapshot.refresh(session)
+                    if not internal:
+                        _emit_message_event(run, USER_MESSAGE_EVENT, user_message)
+                    if request.input_persisted_hook is not None:
+                        try:
+                            request.input_persisted_hook()
+                        except Exception:
+                            _LOGGER.warning(
+                                "Input-persistence callback failed for run %s",
+                                run.id,
+                                exc_info=True,
+                            )
+            finally:
+                await session.flush_deferred_notes_async()
             if not internal:
                 if self._session_title_service is not None:
                     self._session_title_service.notify_user_message(
@@ -1706,12 +1782,23 @@ class ChatLoop:
                         run_id=run.id,
                     )
                 if isinstance(request.content, str):
-                    _activate_triggered_skills(
-                        agent,
-                        session,
-                        request.content,
-                        context.skill_registry,
-                    )
+                    session.activated_skill_contents(context.session_snapshot.messages)
+                    session.begin_defer_notes()
+                    try:
+                        await asyncio.to_thread(
+                            _activate_triggered_skills,
+                            agent,
+                            session,
+                            request.content,
+                            context.skill_registry,
+                        )
+                        async with self._dependencies.sessions.write_lock(
+                            run.agent_id, run.session_id, project_id
+                        ):
+                            await session.flush_deferred_notes_async()
+                            await context.session_snapshot.refresh(session)
+                    finally:
+                        await session.flush_deferred_notes_async()
             run.raise_if_cancelled()
             context.request_state = await self._build_request_state(
                 agent,
@@ -1726,6 +1813,7 @@ class ChatLoop:
                 agent_project_id=context.project_id,
                 skill_registry=context.skill_registry,
                 skill_catalog=context.skill_catalog,
+                session_messages_override=context.session_snapshot.messages,
             )
             if context.continuation_reminder is not None:
                 assert context.prior_continuation is not None
@@ -1761,7 +1849,7 @@ class ChatLoop:
                             )
                         except (ConfigError, VBotError) as construction_exc:
                             _run_succeeded = False
-                            _persist_run_error(run, session, construction_exc)
+                            await _persist_run_error(run, session, construction_exc)
                             raise
                         run.add_cancel_callback(lambda: _close_adapter(fallback_target.adapter))
                         _LOGGER.info(
@@ -1774,10 +1862,11 @@ class ChatLoop:
                             MODEL_FALLBACK_ACTIVATED_EVENT,
                             {"from_model": agent.model, "to_model": fallback_model_str},
                         )
-                        session.add_note(
+                        await session.add_note_async(
                             "Primary model unavailable. Switched to "
                             f"{fallback_model_str} for this run."
                         )
+                        await context.session_snapshot.refresh(session)
                         context.request_state = await self._build_request_state(
                             agent,
                             session,
@@ -1791,6 +1880,7 @@ class ChatLoop:
                             agent_project_id=context.project_id,
                             skill_registry=context.skill_registry,
                             skill_catalog=context.skill_catalog,
+                            session_messages_override=context.session_snapshot.messages,
                         )
                         if context.continuation_reminder is not None:
                             context.request_state = _RequestState(
@@ -1823,14 +1913,14 @@ class ChatLoop:
                         except (ProviderError, ChatError, ConfigError, VBotError) as fallback_exc:
                             _run_succeeded = False
                             run_error = fallback_exc
-                            _persist_run_error(run, session, fallback_exc)
+                            await _persist_run_error(run, session, fallback_exc)
                             raise fallback_exc
                         finally:
                             await _close_adapter(fallback_target.adapter)
 
                 _run_succeeded = False
                 run_error = primary_exc
-                _persist_run_error(run, session, primary_exc)
+                await _persist_run_error(run, session, primary_exc)
                 raise
             except RunInterruptedError as exc:
                 _run_succeeded = False
@@ -1842,7 +1932,7 @@ class ChatLoop:
             except (ChatError, ConfigError, VBotError) as exc:
                 _run_succeeded = False
                 run_error = exc
-                _persist_run_error(run, session, exc)
+                await _persist_run_error(run, session, exc)
                 raise
             except asyncio.CancelledError:
                 run_error = asyncio.CancelledError()
@@ -1885,10 +1975,12 @@ class ChatLoop:
                 timing=run_timing,
                 iteration_count=run.iteration_count,
             )
-            session.append(run_summary)
+            await session.append_async(run_summary)
+            await context.session_snapshot.refresh(session)
             if run.contributes_to_agent_activity:
                 try:
-                    self._dependencies.sessions.record_terminal_run(
+                    await asyncio.to_thread(
+                        self._dependencies.sessions.record_terminal_run,
                         run.agent_id,
                         run.session_id,
                         run.id,
@@ -1925,7 +2017,8 @@ class ChatLoop:
             # keep their session-level token/cache display current without
             # re-fetching history. Diagnostics only — never mask the outcome.
             try:
-                terminal_messages = session.load()
+                await context.session_snapshot.refresh(session)
+                terminal_messages = context.session_snapshot.messages
                 run.terminal_payload_extras["session_usage"] = aggregate_session_usage(
                     terminal_messages
                 )
@@ -1939,18 +2032,26 @@ class ChatLoop:
 
             extension_registry = self._dependencies.get_extension_registry()
             if extension_registry is not None:
+                session.begin_defer_notes()
                 extension_ctx = HookContext(
                     session_id=run.session_id,
                     agent_id=run.agent_id,
                     run_id=run.id,
                     add_note=session.add_note,
                 )
-                await extension_registry.dispatch_run_end(
-                    extension_ctx,
-                    session_id=run.session_id,
-                    agent_id=run.agent_id,
-                    outcome=outcome,
-                )
+                try:
+                    await extension_registry.dispatch_run_end(
+                        extension_ctx,
+                        session_id=run.session_id,
+                        agent_id=run.agent_id,
+                        outcome=outcome,
+                    )
+                finally:
+                    async with self._dependencies.sessions.write_lock(
+                        run.agent_id, run.session_id, project_id
+                    ):
+                        await session.flush_deferred_notes_async()
+                        await context.session_snapshot.refresh(session)
 
             # Background reflection accounting. Fire-and-forget on the service's
             # side; a failure here must never mask the run outcome.
@@ -2288,7 +2389,9 @@ class ChatLoop:
         # the global registry); ``skill_catalog`` is the current prompt-epoch snapshot
         # the skills block renders from, so only Compaction replaces it.
         session_messages = (
-            session.load() if session_messages_override is None else list(session_messages_override)
+            await session.load_async()
+            if session_messages_override is None
+            else list(session_messages_override)
         )
         system_prompts = self._dependencies.get_system_prompts()
         base_tools = system_prompts.provider_tool_definitions(agent)
@@ -2490,7 +2593,7 @@ class ChatLoop:
             run.session_id,
             run.project_id,
         ):
-            snapshot = session.load_since()
+            snapshot = await session.load_since_async()
         if snapshot is None:
             raise AssertionError("A full Session snapshot must always produce a cursor")
         return list(snapshot.messages), snapshot.cursor
@@ -2508,10 +2611,10 @@ class ChatLoop:
             run.session_id,
             run.project_id,
         ):
-            appended = session.load_since(snapshot_cursor)
+            appended = await session.load_since_async(snapshot_cursor)
             if appended is None or appended.messages:
                 return False
-            session.append(checkpoint)
+            await session.append_async(checkpoint)
             return True
 
     @asynccontextmanager
@@ -2588,7 +2691,7 @@ class ChatLoop:
         replay_policy = target.replay_policy
         session_usage = run.terminal_payload_extras.get("session_usage")
         if not isinstance(session_usage, dict):
-            session_usage = aggregate_session_usage(session.load())
+            session_usage = aggregate_session_usage(context.session_snapshot.messages)
             run.terminal_payload_extras["session_usage"] = session_usage
         tool_iteration_count = 0
         stream_continuation_count = 0
@@ -2601,6 +2704,7 @@ class ChatLoop:
             async with self._dependencies.sessions.write_lock(
                 run.agent_id, run.session_id, project_id
             ):
+                session.begin_defer_notes()
                 try:
                     self._dependencies.deliver_background_completions(run, session)
                 except Exception:
@@ -2609,22 +2713,33 @@ class ChatLoop:
                         run.id,
                         exc_info=True,
                     )
+                finally:
+                    await session.flush_deferred_notes_async()
+                    await context.session_snapshot.refresh(session)
                 pending_notes = session.drain_pending_notes()
             if pending_notes:
                 messages.extend(_notes_to_request_messages(pending_notes))
             extension_registry = self._dependencies.get_extension_registry()
             messages_for_request = [dict(message) for message in messages]
             if extension_registry is not None:
+                session.begin_defer_notes()
                 extension_ctx = HookContext(
                     session_id=run.session_id,
                     agent_id=run.agent_id,
                     run_id=run.id,
                     add_note=session.add_note,
                 )
-                messages_for_request = await extension_registry.dispatch_context(
-                    extension_ctx,
-                    messages=messages_for_request,
-                )
+                try:
+                    messages_for_request = await extension_registry.dispatch_context(
+                        extension_ctx,
+                        messages=messages_for_request,
+                    )
+                finally:
+                    async with self._dependencies.sessions.write_lock(
+                        run.agent_id, run.session_id, project_id
+                    ):
+                        await session.flush_deferred_notes_async()
+                        await context.session_snapshot.refresh(session)
 
             # The next ordinal is derived from the canonical completed count.
             # Failed requests therefore do not consume an Iteration number.
@@ -2720,7 +2835,8 @@ class ChatLoop:
                 preserve_after_cancel=preserve_after_cancel,
             ):
                 preserved_cancelled_output = run.cancel_requested and preserve_after_cancel
-                session.append(assistant_message)
+                await session.append_async(assistant_message)
+                await context.session_snapshot.refresh(session)
                 assert isinstance(assistant_message.usage, dict)
                 assistant_request_message = _assistant_continuation_dict(
                     assistant_message,
@@ -2744,7 +2860,7 @@ class ChatLoop:
                     allow_after_cancel=preserved_cancelled_output,
                 )
                 if context.continuation_tracker is not None:
-                    context.continuation_tracker.record_assistant_boundary(
+                    await context.continuation_tracker.record_assistant_boundary(
                         message_id=assistant_message.id,
                         reasoning=assistant_message.reasoning,
                         content=(
@@ -2787,7 +2903,8 @@ class ChatLoop:
                                     output_cwd=output_cwd,
                                 ),
                             )
-                        session.add_note(STREAM_RECOVERY_NOTE)
+                        await session.add_note_async(STREAM_RECOVERY_NOTE)
+                        await context.session_snapshot.refresh(session)
                         stream_continuation_count += 1
                         continue
                     terminal_error = _terminal_outcome_error(
@@ -2809,10 +2926,6 @@ class ChatLoop:
 
                 session.begin_defer_notes()
                 try:
-                    if context.continuation_tracker is not None:
-                        context.continuation_tracker.record_tool_starts(
-                            assistant_message.tool_calls
-                        )
                     tool_dispatch_context = ToolDispatchContext(
                         registry=self._dependencies.tools,
                         extension_registry=self._dependencies.get_extension_registry(),
@@ -2836,6 +2949,15 @@ class ChatLoop:
                         terminal_outcome,
                         has_tool_calls=True,
                     )
+                    will_dispatch_tools = (
+                        terminal_outcome == TERMINAL_OUTCOME_TOOL_CALLS
+                        and not finalization_violation
+                        and not tool_limit_reached
+                    )
+                    if not will_dispatch_tools and context.continuation_tracker is not None:
+                        await context.continuation_tracker.record_tool_starts(
+                            assistant_message.tool_calls
+                        )
                     if terminal_outcome == TERMINAL_OUTCOME_TOOL_CALLS:
                         if finalization_violation:
                             tool_messages = _fail_tool_calls_without_dispatch(
@@ -2872,6 +2994,7 @@ class ChatLoop:
                             tool_messages, media_outputs = await _dispatch_tool_calls(
                                 tool_dispatch_context,
                                 assistant_message.tool_calls,
+                                continuation_tracker=context.continuation_tracker,
                             )
                     else:
                         failure_code, failure_message = _terminal_tool_failure(terminal_outcome)
@@ -2884,24 +3007,15 @@ class ChatLoop:
                         media_outputs = []
                     tool_request_messages: list[JsonObject] = []
                     for tool_message in tool_messages:
-                        session.append(tool_message)
                         assert tool_message.tool_call_id is not None
-                        tool_dispatch_context.notify_result_persisted(tool_message.tool_call_id)
                         request_message = _message_to_request_dict(tool_message)
                         messages.append(request_message)
                         tool_request_messages.append(request_message)
-                        loaded_project_id = project_tool_context_id(tool_message)
-                        if project_id is None and loaded_project_id is not None:
-                            self._apply_project_skill_context(context, loaded_project_id)
-                    if context.continuation_tracker is not None:
-                        context.continuation_tracker.record_tool_results(tool_messages)
                     repeated_failed_tool = failed_tool_call_breaker.observe(
                         assistant_message.tool_calls,
                         tool_messages,
                         tool_dispatch_context.registry,
                     )
-                    if terminal_error is not None:
-                        raise terminal_error
                     if repeated_failed_tool is not None and finalization_request_reason is None:
                         finalization_request_reason = (
                             f"Tool {repeated_failed_tool!r} repeated the same failed Call "
@@ -2911,6 +3025,19 @@ class ChatLoop:
                         session.add_note(
                             TOOL_FINALIZATION_NOTE.format(reason=finalization_request_reason)
                         )
+                    deferred_notes = session.take_deferred_notes()
+                    await session.append_many_async([*tool_messages, *deferred_notes])
+                    await context.session_snapshot.refresh(session)
+                    for tool_message in tool_messages:
+                        assert tool_message.tool_call_id is not None
+                        tool_dispatch_context.notify_result_persisted(tool_message.tool_call_id)
+                        loaded_project_id = project_tool_context_id(tool_message)
+                        if project_id is None and loaded_project_id is not None:
+                            await self._apply_project_skill_context(context, loaded_project_id)
+                    if context.continuation_tracker is not None:
+                        await context.continuation_tracker.record_tool_results(tool_messages)
+                    if terminal_error is not None:
+                        raise terminal_error
                     await self._attach_tool_result_content(
                         tool_request_messages,
                         media_outputs,
@@ -2927,7 +3054,7 @@ class ChatLoop:
                     # synthesizing the missing results before any provider sees it.
                     run.raise_if_cancelled()
                 finally:
-                    session.flush_deferred_notes()
+                    await session.flush_deferred_notes_async()
 
             continuation_request_messages = [
                 *messages_for_request,
@@ -3060,7 +3187,8 @@ class ChatLoop:
         if self._compaction_service is None:
             return current_state
 
-        settings = self._load_compaction_settings(
+        settings = await asyncio.to_thread(
+            self._load_compaction_settings,
             agent,
             agent_id=run.agent_id,
             session_id=run.session_id,
@@ -3184,7 +3312,8 @@ class ChatLoop:
         prompt_refresh: _CompactionPromptRefresh | None = None
         try:
             try:
-                prompt_refresh = self._prepare_prompt_context_after_compaction(
+                prompt_refresh = await asyncio.to_thread(
+                    self._prepare_prompt_context_after_compaction,
                     agent_id=run.agent_id,
                     session_id=run.session_id,
                     agent=agent,
@@ -3231,7 +3360,9 @@ class ChatLoop:
                 and context.continuation_reminder is not None
                 and context.continuation_tracker is not None
             ):
-                active_continuation = fold_continuation_records(session.load_continuation_records())
+                active_continuation = fold_continuation_records(
+                    await session.load_continuation_records_async()
+                )
                 if active_continuation is not None:
                     context.continuation_reminder = render_continuation_reminder(
                         active_continuation,
@@ -3282,6 +3413,7 @@ class ChatLoop:
             )
             if continue_same_run:
                 try:
+                    await context.session_snapshot.refresh(session)
                     refreshed_state = await self._build_request_state(
                         agent,
                         session,
@@ -3295,6 +3427,7 @@ class ChatLoop:
                         agent_project_id=context.project_id,
                         skill_registry=context.skill_registry,
                         skill_catalog=context.skill_catalog,
+                        session_messages_override=context.session_snapshot.messages,
                     )
                     refreshed_messages = _restore_in_run_tool_result_content(
                         _restore_in_run_assistant_reasoning(
@@ -3322,16 +3455,17 @@ class ChatLoop:
                         exc_info=True,
                     )
             return current_state
-        context.prompt_cache_affinity_id = (
-            self._dependencies.sessions.rotate_prompt_cache_affinity_id(
-                run.agent_id,
-                run.session_id,
-                run.project_id,
-            )
+        await context.session_snapshot.refresh(session)
+        context.prompt_cache_affinity_id = await asyncio.to_thread(
+            self._dependencies.sessions.rotate_prompt_cache_affinity_id,
+            run.agent_id,
+            run.session_id,
+            run.project_id,
         )
         if prompt_refresh is not None:
             try:
-                self._commit_prompt_context_after_compaction(
+                await asyncio.to_thread(
+                    self._commit_prompt_context_after_compaction,
                     agent_id=run.agent_id,
                     session_id=run.session_id,
                     project_id=run.project_id,
@@ -3351,7 +3485,7 @@ class ChatLoop:
             context.working_project_context = prompt_refresh.working_project_context
             context.skill_registry = prompt_refresh.skill_registry
             context.skill_catalog = prompt_refresh.skill_catalog
-        self._emit_compaction_completed(run, session, checkpoint)
+        self._emit_compaction_completed(run, context.session_snapshot.messages, checkpoint)
         checkpoint_usage = checkpoint.usage or {}
         _LOGGER.info(
             "Auto-compaction completed (run=%s session=%s estimated_tokens_after=%d)",
@@ -3364,7 +3498,7 @@ class ChatLoop:
     @staticmethod
     def _emit_compaction_completed(
         run: Run,
-        session: ChatSession,
+        session_messages: list[ChatMessage],
         checkpoint: ChatMessage,
     ) -> None:
         """Publish the one completed-checkpoint payload used by every trigger."""
@@ -3374,7 +3508,7 @@ class ChatLoop:
             run.terminal_payload_extras["context_usage"] = context_usage
         payload: JsonObject = {
             "message": checkpoint.to_dict(),
-            "checkpoint": checkpoint_ordinal(session.load(), checkpoint.id),
+            "checkpoint": checkpoint_ordinal(session_messages, checkpoint.id),
             "checkpoint_id": checkpoint.id,
             "history_available": True,
             "context_tokens_before": checkpoint_usage.get("context_tokens_before"),

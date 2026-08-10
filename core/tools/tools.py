@@ -9,8 +9,9 @@ import json
 import weakref
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
+from functools import wraps
 from pathlib import Path
-from typing import Any, ClassVar
+from typing import Any, ClassVar, TypeVar
 
 from core.tools.contracts import ToolContract, compile_tool_contract
 from core.utils.errors import VBotError
@@ -37,6 +38,7 @@ ToolResultPersistedCallback = Callable[[], None]
 ToolResultPersistedHook = Callable[[ToolResultPersistedCallback], None]
 ToolCallResultPersistedRegistrar = Callable[[str, ToolResultPersistedCallback], None]
 ToolHandler = Callable[["ToolContext", JsonObject], JsonObject | Awaitable[JsonObject]]
+_ToolWorkerResult = TypeVar("_ToolWorkerResult")
 ToolReadinessPredicate = Callable[[], bool]
 ToolSummaryBuilder = Callable[[JsonObject], str | None]
 ToolDisplayFactBuilder = Callable[[JsonObject, JsonObject | None], Sequence[JsonObject]]
@@ -133,6 +135,39 @@ class ToolDisplayPart:
 
 
 ToolDisplayPartBuilder = Callable[[JsonObject], Sequence[ToolDisplayPart]]
+
+
+async def run_tool_worker(
+    function: Callable[..., _ToolWorkerResult], *arguments: Any
+) -> _ToolWorkerResult:
+    """Run blocking Tool work off-loop and settle it before cancellation escapes."""
+    task = asyncio.create_task(asyncio.to_thread(function, *arguments))
+    try:
+        return await asyncio.shield(task)
+    except asyncio.CancelledError:
+        try:
+            await task
+        except Exception:
+            raise
+        raise
+
+
+def offload_tool_handler(handler: ToolHandler) -> ToolHandler:
+    """Run one blocking Tool implementation in a worker without unsafe cancellation.
+
+    Worker threads cannot be stopped once the handler starts. If the Tool task is
+    cancelled, wait for the handler to finish before propagating cancellation so
+    callers never treat an in-flight filesystem mutation as completed or abandoned.
+    """
+
+    @wraps(handler)
+    async def offloaded(context: ToolContext, arguments: JsonObject) -> JsonObject:
+        result = await run_tool_worker(handler, context, arguments)
+        if inspect.isawaitable(result):
+            return await result
+        return result
+
+    return offloaded
 
 
 def result_count_fact_builder(

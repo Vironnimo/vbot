@@ -29,6 +29,7 @@ from core.tools.tools import (
     ToolHandler,
     ToolRegistry,
     read_media_artifact,
+    run_tool_worker,
     tool_failure,
     tool_success,
 )
@@ -48,6 +49,14 @@ _LINE_BREAK_PATTERN = re.compile(r"\r\n|[\n\v\f\x1c-\x1e\x85\u2028\u2029\r]")
 _SIMILAR_FILE_SCAN_LIMIT = 50
 _SIMILAR_FILE_RESULT_LIMIT = 5
 _SIMILAR_FILE_MIN_RATIO = 0.55
+
+
+@dataclass(frozen=True)
+class _PreparedAudio:
+    resolved: Path
+    raw: bytes
+    media_type: str
+
 
 READ_TOOL_NAME = "read"
 READ_TOOL_DESCRIPTION = (
@@ -614,7 +623,7 @@ def make_read_handler(
     ):
         raise ValueError("speech_max_size_bytes must be a positive integer")
 
-    async def read_handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
+    def prepare_read(context: ToolContext, arguments: JsonObject) -> JsonObject | _PreparedAudio:
         path_argument = arguments.get("path")
         if not isinstance(path_argument, str) or not path_argument:
             return tool_failure("invalid_arguments", "path must be a non-empty string")
@@ -683,7 +692,7 @@ def make_read_handler(
                 return tool_failure(
                     "file_read_error", f"failed to read file: {displayed_path}: {error}"
                 )
-            return await _read_audio(speech_service, resolved, raw, media_type)
+            return _PreparedAudio(resolved=resolved, raw=raw, media_type=media_type)
         if media_type.startswith("video/"):
             return _read_video(resolved, media_type)
         # PDF/Office/notebook extraction runs before the binary check: pdf/docx/xlsx
@@ -720,6 +729,17 @@ def make_read_handler(
                 "file_read_error", f"failed to read file: {displayed_path}: {error}"
             )
         return tool_success({"content": content})
+
+    async def read_handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
+        prepared = await run_tool_worker(prepare_read, context, arguments)
+        if isinstance(prepared, _PreparedAudio):
+            return await _read_audio(
+                speech_service,
+                prepared.resolved,
+                prepared.raw,
+                prepared.media_type,
+            )
+        return prepared
 
     return read_handler
 

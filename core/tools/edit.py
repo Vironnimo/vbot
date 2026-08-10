@@ -28,6 +28,7 @@ from core.tools.tools import (
     ToolDisplayField,
     ToolHandler,
     ToolRegistry,
+    offload_tool_handler,
     tool_failure,
     tool_success,
 )
@@ -374,7 +375,7 @@ def register_edit_tool(registry: ToolRegistry, *, file_state: FileReadState) -> 
         EDIT_TOOL_NAME,
         EDIT_TOOL_DESCRIPTION,
         EDIT_TOOL_PARAMETERS,
-        make_edit_handler(file_state),
+        offload_tool_handler(make_edit_handler(file_state)),
         open_input_schema=True,
         result_schema={
             "type": "object",

@@ -23,6 +23,7 @@ from core.tools.tools import (
     ToolDisplayField,
     ToolPromptBlockRegistry,
     ToolRegistry,
+    offload_tool_handler,
     tool_failure,
     tool_success,
 )
@@ -198,7 +199,9 @@ def register_project_tool(
         PROJECT_TOOL_NAME,
         PROJECT_TOOL_DESCRIPTION,
         PROJECT_TOOL_PARAMETERS,
-        make_project_handler(projects, get_renderer, list_project_skills, file_state),
+        offload_tool_handler(
+            make_project_handler(projects, get_renderer, list_project_skills, file_state)
+        ),
         open_input_schema=True,
         result_schema={
             "type": "object",

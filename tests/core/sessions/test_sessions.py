@@ -3,6 +3,7 @@
 import asyncio
 import json
 import os
+import threading
 from datetime import UTC, datetime
 from uuid import UUID
 
@@ -22,6 +23,7 @@ from core.sessions import (
     project_tool_context_id,
     skill_context_note_name,
 )
+from core.sessions import sessions as sessions_module
 from core.sessions.sessions import (
     SKILL_CONTEXT_NOTE_PREFIX,
     SKILL_TOOL_LOADED_STATUS,
@@ -146,6 +148,56 @@ class TestChatSession:
         assert len(content.splitlines()) == 1
         assert "Grüße" in content
         assert json.loads(content) == message.to_dict()
+
+    def test_append_many_uses_one_durable_write_for_ordered_messages(self, tmp_path, monkeypatch):
+        session = ChatSession.create(tmp_path, session_id="session-one")
+        messages = [
+            ChatMessage.user("first", timestamp=FIXED_TIMESTAMP),
+            ChatMessage.assistant(
+                model="test/model",
+                content="second",
+                timestamp=FIXED_TIMESTAMP,
+            ),
+        ]
+        writes = []
+        original_append_bytes = sessions_module._append_bytes
+
+        def recording_append(path, data):
+            writes.append(data)
+            original_append_bytes(path, data)
+
+        monkeypatch.setattr(sessions_module, "_append_bytes", recording_append)
+
+        session.append_many(messages)
+
+        assert len(writes) == 1
+        assert [json.loads(line) for line in writes[0].decode("utf-8").splitlines()] == [
+            message.to_dict() for message in messages
+        ]
+
+    @pytest.mark.asyncio
+    async def test_append_async_keeps_durable_io_off_the_event_loop(self, tmp_path, monkeypatch):
+        session = ChatSession.create(tmp_path, session_id="session-one")
+        started = threading.Event()
+        release = threading.Event()
+        worker_threads = []
+
+        def blocking_append(_message):
+            worker_threads.append(threading.get_ident())
+            started.set()
+            assert release.wait(timeout=2)
+
+        monkeypatch.setattr(session, "append", blocking_append)
+        loop_thread = threading.get_ident()
+
+        append_task = asyncio.create_task(session.append_async(ChatMessage.user("hello")))
+        assert await asyncio.to_thread(started.wait, 2)
+        await asyncio.sleep(0)
+
+        assert worker_threads != [loop_thread]
+        assert not append_task.done()
+        release.set()
+        await append_task
 
     def test_add_note_appends_valid_note_jsonl_line(self, tmp_path):
         session = ChatSession.create(tmp_path, session_id="session-one")

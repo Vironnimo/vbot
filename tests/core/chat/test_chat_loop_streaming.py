@@ -311,7 +311,7 @@ async def test_streaming_mode_malformed_tool_arguments_return_tool_failure_and_c
     assert failure["error"]["code"] == "malformed_tool_arguments"
     assert failure["error"]["retryable"] is False
     assert not (tmp_path / "todo.html").exists()
-    assert recover_continuation(runtime.chat_sessions.get("coder", "session-one")) is None
+    assert await recover_continuation(runtime.chat_sessions.get("coder", "session-one")) is None
     assert [event.type for event in run.events][-1] == "run_completed"
 
 

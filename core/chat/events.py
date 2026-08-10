@@ -118,13 +118,13 @@ def _exception_to_error_kind(exc: Exception) -> str:
     return ERROR_KIND_PROVIDER_ERROR
 
 
-def _persist_run_error(run: Run, session: ChatSession, exc: Exception) -> None:
+async def _persist_run_error(run: Run, session: ChatSession, exc: Exception) -> None:
     # Persists the user-visible error message only. The failure itself is logged
     # centrally by Run.mark_failed once the re-raised exception reaches the run
     # executor, so logging here would duplicate that entry.
     kind = _exception_to_error_kind(exc)
     error_message = ChatMessage.error(error_kind=kind, content=str(exc))
-    session.append(error_message)
+    await session.append_async(error_message)
     _emit_message_event(run, ERROR_MESSAGE_PERSISTED_EVENT, error_message)
 
 

@@ -35,8 +35,36 @@ from core.tools import (
     tool_success,
 )
 from core.tools.availability import effective_agent_allowed_tools, sanitize_configured_allowed_tools
+from core.tools.tools import run_tool_worker
 
 JsonObject = dict[str, Any]
+
+
+@pytest.mark.asyncio
+async def test_tool_worker_offloads_and_settles_mutation_before_cancellation() -> None:
+    started = threading.Event()
+    release = threading.Event()
+    worker_threads: list[int] = []
+
+    def blocking_mutation() -> str:
+        worker_threads.append(threading.get_ident())
+        started.set()
+        assert release.wait(timeout=2)
+        return "done"
+
+    loop_thread = threading.get_ident()
+    task = asyncio.create_task(run_tool_worker(blocking_mutation))
+    assert await asyncio.to_thread(started.wait, 2)
+    assert worker_threads != [loop_thread]
+
+    task.cancel()
+    await asyncio.sleep(0)
+    assert not task.done()
+
+    release.set()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
 
 READ_FILE_SCHEMA = {
     "type": "object",

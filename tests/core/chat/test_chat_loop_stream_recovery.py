@@ -273,7 +273,7 @@ async def test_streaming_cancellation_with_reasoning_retains_continuation(
 
     messages = runtime.chat_sessions.get("coder", "session-one").load()
     assert persisted_roles(messages) == ["user"]
-    state = recover_continuation(runtime.chat_sessions.get("coder", "session-one"))
+    state = await recover_continuation(runtime.chat_sessions.get("coder", "session-one"))
     assert state is not None
     assert state.reasoning == "Need network."
     assert state.cause == "internal"
@@ -308,7 +308,7 @@ async def test_streaming_network_error_with_reasoning_restarts_cleanly(
     assert assistant.content == "Recovered"
     assert assistant.reasoning == "Recovered plan."
     assert len(adapter.stream_requests) == 2
-    assert recover_continuation(session) is None
+    assert await recover_continuation(session) is None
 
 
 @pytest.mark.asyncio
@@ -333,7 +333,7 @@ async def test_reasoning_only_restart_exhaustion_keeps_only_final_attempt_checkp
 
     session = runtime.chat_sessions.get("coder", "session-one")
     run = next(iter(runtime.chat_runs._runs.values()))
-    state = recover_continuation(session)
+    state = await recover_continuation(session)
     assert state is not None
     assert state.reasoning == "Attempt 3"
     assert state.cause == "network"
@@ -1023,7 +1023,7 @@ async def test_user_cancel_replays_interrupted_reasoning_only_through_checkpoint
     assert "reasoning_meta" not in reasoning_events[-1].payload["message"]
     assert assistant_events[-1].payload["message"]["interrupted"] is True
 
-    state = recover_continuation(runtime.chat_sessions.get("coder", "session-one"))
+    state = await recover_continuation(runtime.chat_sessions.get("coder", "session-one"))
     assert state is not None
     assert state.reasoning == "Thinking hard."
     summaries = [message for message in messages if message.role == "run_summary"]
