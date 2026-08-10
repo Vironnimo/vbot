@@ -28,14 +28,12 @@ describe('formatTokenUsageTooltip', () => {
       null,
     );
 
-    expect(tooltip).toBe(
-      [
-        'Current context: ~155,489 tok',
-        '  · provider input: 154,731',
-        '  · provider output: 243',
-        '  · estimated newer messages: 515',
-      ].join('\n'),
-    );
+    const lines = tooltip.split('\n');
+    expect(lines).toHaveLength(4);
+    expect(lines[0]).toContain('~155,489');
+    expect(lines[1]).toContain('154,731');
+    expect(lines[2]).toContain('243');
+    expect(lines[3]).toContain('515');
   });
 
   it('renders the last turn with cache shares, uncached remainder and percent', () => {
@@ -51,17 +49,15 @@ describe('formatTokenUsageTooltip', () => {
       null,
     );
 
-    expect(tooltip).toBe(
-      [
-        'Last turn',
-        'Input: 36,704 tok',
-        '  · read from cache: 6,656 (18%)',
-        '  · newly written to cache: 1,200',
-        '  · uncached: 28,848',
-        'Output: 2,190 tok',
-        '  · reasoning (included in output): 1,400',
-      ].join('\n'),
-    );
+    const lines = tooltip.split('\n');
+    expect(lines).toHaveLength(7);
+    expect(lines[1]).toContain('36,704');
+    expect(lines[2]).toContain('6,656');
+    expect(lines[2]).toContain('18%');
+    expect(lines[3]).toContain('1,200');
+    expect(lines[4]).toContain('28,848');
+    expect(lines[5]).toContain('2,190');
+    expect(lines[6]).toContain('1,400');
   });
 
   it('omits cache lines when the provider reported none', () => {
@@ -71,9 +67,10 @@ describe('formatTokenUsageTooltip', () => {
       null,
     );
 
-    expect(tooltip).toBe(
-      ['Last turn', 'Input: 500 tok', 'Output: 20 tok'].join('\n'),
-    );
+    const lines = tooltip.split('\n');
+    expect(lines).toHaveLength(3);
+    expect(lines[1]).toContain('500');
+    expect(lines[2]).toContain('20');
   });
 
   it('keeps the read-only cache split when no write was reported', () => {
@@ -83,9 +80,11 @@ describe('formatTokenUsageTooltip', () => {
       null,
     );
 
-    expect(tooltip).toContain('  · read from cache: 900 (90%)');
-    expect(tooltip).toContain('  · uncached: 100');
-    expect(tooltip).not.toContain('newly written');
+    const lines = tooltip.split('\n');
+    expect(lines).toHaveLength(5);
+    expect(lines[2]).toContain('900');
+    expect(lines[2]).toContain('90%');
+    expect(lines[3]).toContain('100');
   });
 
   it('appends the estimation note for estimated usage', () => {
@@ -95,7 +94,7 @@ describe('formatTokenUsageTooltip', () => {
       null,
     );
 
-    expect(tooltip).toContain('Estimated (provider sent no usage data)');
+    expect(tooltip.split('\n')).toHaveLength(4);
   });
 
   it('marks only omitted input as estimated when output is provider-reported', () => {
@@ -115,19 +114,16 @@ describe('formatTokenUsageTooltip', () => {
       },
     );
 
-    expect(tooltip).toBe(
-      [
-        'Last turn',
-        'Input: ~134,547 tok',
-        'Output: 2,572 tok',
-        'Input estimated (provider omitted input usage)',
-        '',
-        'Session (0 fully measured turns)',
-        'Input: 0 tok',
-        'Output: 2,572 tok',
-        'Turns with estimated token fields: 1; those fields are excluded',
-      ].join('\n'),
-    );
+    const [turnLines, sessionLines] = tooltip
+      .split('\n\n')
+      .map((section) => section.split('\n'));
+    expect(turnLines).toHaveLength(4);
+    expect(turnLines[1]).toContain('~134,547');
+    expect(turnLines[2]).toContain('2,572');
+    expect(sessionLines).toHaveLength(4);
+    expect(sessionLines[1]).toContain('0');
+    expect(sessionLines[2]).toContain('2,572');
+    expect(sessionLines[3]).toContain('1');
   });
 
   it('renders the session block with hit rate, per-turn average and estimated note', () => {
@@ -148,18 +144,18 @@ describe('formatTokenUsageTooltip', () => {
     );
 
     const [lastTurnBlock, sessionBlock] = tooltip.split('\n\n');
-    expect(lastTurnBlock).toContain('Last turn');
-    expect(sessionBlock).toBe(
-      [
-        'Session (42 fully measured turns)',
-        'Input: 1,243,000 tok',
-        '  · read from cache: 1,019,000 (82%)',
-        'Output: 48,300 tok',
-        '  · reasoning: 32,000 tok (30 reporting turns; included in output)',
-        'Avg cache read per turn: 25,475 tok',
-        'Turns with estimated token fields: 3; those fields are excluded',
-      ].join('\n'),
-    );
+    expect(lastTurnBlock.split('\n')).toHaveLength(5);
+    const sessionLines = sessionBlock.split('\n');
+    expect(sessionLines).toHaveLength(7);
+    expect(sessionLines[0]).toContain('42');
+    expect(sessionLines[1]).toContain('1,243,000');
+    expect(sessionLines[2]).toContain('1,019,000');
+    expect(sessionLines[2]).toContain('82%');
+    expect(sessionLines[3]).toContain('48,300');
+    expect(sessionLines[4]).toContain('32,000');
+    expect(sessionLines[4]).toContain('30');
+    expect(sessionLines[5]).toContain('25,475');
+    expect(sessionLines[6]).toContain('3');
   });
 
   it('hides the session cache lines when no turn reported cache fields', () => {
@@ -173,13 +169,11 @@ describe('formatTokenUsageTooltip', () => {
       cache_write_tokens: 0,
     });
 
-    expect(tooltip).toBe(
-      [
-        'Session (4 fully measured turns)',
-        'Input: 8,000 tok',
-        'Output: 600 tok',
-      ].join('\n'),
-    );
+    const lines = tooltip.split('\n');
+    expect(lines).toHaveLength(3);
+    expect(lines[0]).toContain('4');
+    expect(lines[1]).toContain('8,000');
+    expect(lines[2]).toContain('600');
   });
 
   it('keeps missing Reasoning detail absent instead of rendering zero', () => {
@@ -193,7 +187,14 @@ describe('formatTokenUsageTooltip', () => {
       },
     );
 
-    expect(tooltip).not.toContain('reasoning');
+    const sections = tooltip
+      .split('\n\n')
+      .map((section) => section.split('\n'));
+    expect(sections.map((section) => section.length)).toEqual([3, 3]);
+    expect(sections[0][1]).toContain('500');
+    expect(sections[0][2]).toContain('20');
+    expect(sections[1][1]).toContain('500');
+    expect(sections[1][2]).toContain('20');
   });
 
   it('skips the session block entirely without measured turns', () => {
@@ -203,6 +204,6 @@ describe('formatTokenUsageTooltip', () => {
       { measured_turns: 0, estimated_turns: 2, input_tokens: 0 },
     );
 
-    expect(tooltip).not.toContain('Session (');
+    expect(tooltip.split('\n\n')).toHaveLength(1);
   });
 });

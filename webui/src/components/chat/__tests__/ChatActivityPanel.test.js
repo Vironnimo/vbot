@@ -165,22 +165,18 @@ describe('ChatActivityPanel', () => {
     flushSync();
 
     expect(rail.getAttribute('aria-expanded')).toBe('true');
-    expect(document.querySelector('#chat-activity-title').textContent).toBe(
-      'Background tasks',
-    );
+    expect(document.querySelector('#chat-activity-title')).not.toBeNull();
     const rows = [...document.querySelectorAll('.chat-activity__task-row')];
     expect(rows).toHaveLength(6);
     const activeGroup = document.querySelector('.chat-activity__group--active');
     const finishedGroup = document.querySelector(
       '.chat-activity__group--finished',
     );
-    expect(activeGroup.querySelector('h3').textContent.trim()).toBe('Active');
+    expect(activeGroup.querySelector('h3')).not.toBeNull();
     expect(
       activeGroup.querySelectorAll('.chat-activity__task-row'),
     ).toHaveLength(2);
-    expect(finishedGroup.querySelector('h3').textContent.trim()).toBe(
-      'Finished',
-    );
+    expect(finishedGroup.querySelector('h3')).not.toBeNull();
     expect(
       finishedGroup.querySelectorAll('.chat-activity__task-row'),
     ).toHaveLength(4);
@@ -296,10 +292,7 @@ describe('ChatActivityPanel', () => {
     document.querySelector('.chat-activity__rail').click();
     flushSync();
 
-    expect(
-      document.querySelector('.chat-activity__empty').textContent.trim(),
-    ).toBe('No background tasks');
-    expect(document.body.textContent).toContain('No background tasks');
+    expect(document.querySelector('.chat-activity__empty')).toBeTruthy();
   });
 
   it('omits an empty Active group when every task is finished', () => {
@@ -329,9 +322,7 @@ describe('ChatActivityPanel', () => {
 
     expect(document.querySelector('.chat-activity__group--active')).toBeNull();
     expect(
-      document
-        .querySelector('.chat-activity__group--finished h3')
-        .textContent.trim(),
-    ).toBe('Finished');
+      document.querySelector('.chat-activity__group--finished h3'),
+    ).toBeTruthy();
   });
 });

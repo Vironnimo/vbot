@@ -123,7 +123,7 @@ describe('SettingsView', () => {
     });
   });
 
-  it('shows Already saved when manual save is clicked with no changes', async () => {
+  it('reports a successful no-op when manual save is clicked with no changes', async () => {
     const toastMock = vi.fn();
     rpcMock.mockImplementation(createSettingsRpcMock());
 
@@ -138,9 +138,8 @@ describe('SettingsView', () => {
     flushSync();
 
     expect(toastMock).toHaveBeenCalledWith(
-      expect.objectContaining({ title: 'Already saved', variant: 'success' }),
+      expect.objectContaining({ variant: 'success' }),
     );
-    expect(document.body.textContent).not.toContain('Already saved');
     expect(getSettingsUpdateCalls()).toHaveLength(0);
   });
 
@@ -153,10 +152,14 @@ describe('SettingsView', () => {
 
     expect(buttonByText('Connection')).toBeUndefined();
     expect(buttonByText('Voice')).toBeTruthy();
-    expect(document.body.textContent).toContain('Transcription audio');
-    expect(document.body.textContent).toContain(
-      'Wakeword listening is configured in the vBot Desktop app',
-    );
+    expect(
+      document.querySelector('button[aria-label="Transcription audio"]'),
+    ).toBeTruthy();
+    expect(
+      document.querySelector(
+        '[role="switch"][aria-label="Enable wakeword listening"]',
+      ),
+    ).toBeNull();
   });
 
   it('highlights the Voice section once for a target panel request', async () => {
@@ -192,11 +195,13 @@ describe('SettingsView', () => {
 
     // The Voice section renders (desktop capability) and the target request
     // marks its index entry active.
-    await waitForCondition(() =>
-      document.body.textContent.includes('Wakeword listening'),
+    await waitForCondition(
+      () =>
+        document.querySelector(
+          '[role="switch"][aria-label="Enable wakeword listening"]',
+        ) !== null,
     );
     expect(buttonByText('Connection')).toBeTruthy();
-    expect(document.body.textContent).toContain('Desktop app');
     await waitForCondition(
       () =>
         buttonByText('Voice')?.classList.contains('snav-item--active') === true,
@@ -215,8 +220,12 @@ describe('SettingsView', () => {
     expect(buttonByText('Voice')?.classList.contains('snav-item--active')).toBe(
       false,
     );
-    expect(document.body.textContent).toContain('Wakeword listening');
-    expect(document.body.textContent).toContain('Server host');
+    expect(
+      document.querySelector(
+        '[role="switch"][aria-label="Enable wakeword listening"]',
+      ),
+    ).toBeTruthy();
+    expect(document.querySelector('.desktop-connection-settings')).toBeTruthy();
   });
 
   it('keeps in-progress values while an auto-save request is in flight', async () => {

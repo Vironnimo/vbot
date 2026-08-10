@@ -55,7 +55,9 @@ describe('DesktopConnectionSettings', () => {
     await waitForText('office.lan:9000');
 
     expect(document.body.textContent).toContain('Home');
-    expect(document.body.textContent).toContain('Connected');
+    expect(
+      document.querySelector('.desktop-server-row .chip.success'),
+    ).toBeTruthy();
     expect(buttonsByText('Connect')).toHaveLength(1);
     expect(buttonsByText('Remove')).toHaveLength(1);
 

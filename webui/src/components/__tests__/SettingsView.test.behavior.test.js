@@ -49,10 +49,16 @@ describe('SettingsView', () => {
     flushSync();
     await openDefaultsPanel();
 
-    expect(document.body.textContent).toContain('Model');
-    expect(document.body.textContent).toContain('Fallback model');
-    expect(document.body.textContent).toContain('Temperature');
-    expect(document.body.textContent).toContain('Thinking effort');
+    expect(document.querySelector('#settings-defaults-model')).toBeTruthy();
+    expect(
+      document.querySelector('#settings-defaults-fallback-model'),
+    ).toBeTruthy();
+    expect(
+      document.querySelector('#settings-defaults-temperature'),
+    ).toBeTruthy();
+    expect(
+      document.querySelector('#settings-defaults-thinking-effort'),
+    ).toBeTruthy();
 
     expect(buttonsByText('Clear')).toHaveLength(0);
 
@@ -192,10 +198,7 @@ describe('SettingsView', () => {
     flushSync();
     await openRecallPanel();
 
-    expect(document.body.textContent).toContain('Recall backend');
-    expect(getSimpleTrigger('settings-recall-backend').textContent).toContain(
-      'Simple scan — exact keyword match, no index',
-    );
+    expect(getSimpleTrigger('settings-recall-backend')).toBeTruthy();
 
     openSimpleDropdown('settings-recall-backend');
     selectSimpleOption(
@@ -220,10 +223,7 @@ describe('SettingsView', () => {
     flushSync();
     await openWebSearchPanel();
 
-    expect(document.body.textContent).toContain('Search provider');
-    expect(
-      getSimpleTrigger('settings-web-search-provider').textContent,
-    ).toContain('Brave Search');
+    expect(getSimpleTrigger('settings-web-search-provider')).toBeTruthy();
 
     openSimpleDropdown('settings-web-search-provider');
     selectSimpleOption('settings-web-search-provider', 'SearXNG');

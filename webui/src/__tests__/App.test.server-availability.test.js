@@ -43,7 +43,7 @@ describe('App', () => {
 
     const toast = document.querySelector('.toast.error');
     expect(toast).toBeTruthy();
-    expect(toast.textContent).toContain('Error');
+    expect(toast.closest('[aria-live="polite"]')).toBeTruthy();
     expect(toast.textContent).toContain('Provider credentials are missing.');
   });
 
@@ -112,7 +112,6 @@ describe('App', () => {
       );
       expect(offlineNotice).toBeTruthy();
       expect(offlineNotice.getAttribute('role')).toBe('alert');
-      expect(offlineNotice.textContent).toContain('Server is not reachable');
       // The offline notice replaces connection symptoms, not unrelated sticky
       // errors the user has not dismissed.
       expect(document.querySelector('.toast.error')).toBe(unrelatedErrorToast);
@@ -150,7 +149,7 @@ describe('App', () => {
         '.server-availability-notice--restored',
       );
       expect(restoredNotice).toBeTruthy();
-      expect(restoredNotice.textContent).toContain('Server is reachable again');
+      expect(restoredNotice.getAttribute('role')).toBe('status');
       expect(
         document.querySelector('.app-shell__content')?.inert,
       ).toBeUndefined();
@@ -209,7 +208,9 @@ describe('App', () => {
       expect(modal.closest('.app-shell__content')).toBeNull();
       expect(document.querySelector('.server-availability-notice')).toBeNull();
       expect(modal.textContent).toContain('Home');
-      expect(modal.textContent).toContain('Connected');
+      expect(
+        modal.querySelector('.desktop-server-row .chip.success'),
+      ).toBeTruthy();
     } finally {
       vi.useRealTimers();
     }

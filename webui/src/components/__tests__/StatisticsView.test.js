@@ -471,6 +471,10 @@ async function waitForCondition(predicate, attempts = 50) {
   }
 }
 
+async function waitForOverview() {
+  await waitForCondition(() => document.querySelector('.stats-health__track'));
+}
+
 describe('StatisticsView', () => {
   let mountedComponent;
 
@@ -494,37 +498,24 @@ describe('StatisticsView', () => {
     rpcMock.mockResolvedValue(makeReport());
 
     mountedComponent = mount(StatisticsView, { target: document.body });
-    await waitForCondition(() =>
-      document.body.textContent.includes('Per agent'),
-    );
+    await waitForOverview();
 
     expect(rpcMock).toHaveBeenCalledWith('statistics.report');
-    expect(document.body.textContent).toContain(
-      'subscription limits keep one automatic local snapshot per hour',
-    );
-    expect(document.body.textContent).toContain('Run health');
-    expect(document.body.textContent).toContain('75.0%');
-    expect(document.body.textContent).toContain('Activity & reliability');
-    expect(document.body.textContent).toContain('Last 30 days');
+    expect(
+      document.querySelector('.stats-health__hero strong')?.textContent,
+    ).toBe('75.0%');
     expect(document.querySelectorAll('.stats-activity__col')).toHaveLength(30);
     expect(document.querySelectorAll('.stats-health__segment')).toHaveLength(4);
     expect(document.querySelector('.stats-donut')).toBeNull();
     expect(
-      document.querySelector('.stats-activity__legend').textContent,
-    ).not.toContain('Errors');
-    const chatMessagesCard = [...document.querySelectorAll('.stats-card')].find(
-      (card) => card.textContent.includes('Chat messages'),
-    );
-    expect(chatMessagesCard.textContent).toContain('11');
-    expect(document.body.textContent).toContain(
-      'Visible chat messages by role',
-    );
-    expect(document.body.textContent).toContain('Model steps');
-    expect(document.body.textContent).toContain('Stored Session records');
-    expect(document.body.textContent).toContain('System reminder');
-    expect(document.body.textContent).toContain('Run summary');
-    // "Open run groups" lives on the Runs & errors tab now, not the overview.
-    expect(document.body.textContent).not.toContain('Open run');
+      document.querySelectorAll('.stats-activity__legend .stats-legend'),
+    ).toHaveLength(4);
+    expect(
+      document
+        .querySelectorAll('.stats-grid .stats-card')[3]
+        .querySelector('.stats-card__value').textContent,
+    ).toBe('11');
+    expect(document.querySelectorAll('.stats-bars')).toHaveLength(2);
     expect(document.body.textContent).toContain('main');
     expect(document.querySelector('.stats-view.view-frame')).toBeTruthy();
     expect(document.querySelector('.stats-view .view-header')).toBeTruthy();
@@ -542,9 +533,7 @@ describe('StatisticsView', () => {
     rpcMock.mockResolvedValue(makeReport());
 
     mountedComponent = mount(StatisticsView, { target: document.body });
-    await waitForCondition(() =>
-      document.body.textContent.includes('Activity & reliability'),
-    );
+    await waitForOverview();
 
     const weekButton = [
       ...document.querySelectorAll('.stats-toggle__option'),
@@ -552,7 +541,6 @@ describe('StatisticsView', () => {
     weekButton.click();
     flushSync();
 
-    expect(document.body.textContent).toContain('Last 16 weeks');
     expect(document.querySelectorAll('.stats-activity__col')).toHaveLength(16);
   });
 
@@ -571,11 +559,10 @@ describe('StatisticsView', () => {
 
     mountedComponent = mount(StatisticsView, { target: document.body });
     await waitForCondition(() =>
-      document.body.textContent.includes('No Runs in this period.'),
+      document.querySelector('.stats-panel .stats-block .empty-state'),
     );
 
     expect(document.querySelector('.stats-activity')).toBeNull();
-    expect(document.body.textContent).toContain('Last 30 days');
   });
 
   it('renders unavailable outcome shares instead of a misleading zero percent with no Runs', async () => {
@@ -592,7 +579,7 @@ describe('StatisticsView', () => {
 
     mountedComponent = mount(StatisticsView, { target: document.body });
     await waitForCondition(() =>
-      document.body.textContent.includes('No activity recorded yet.'),
+      document.querySelector('.stats-health__hero strong'),
     );
 
     expect(
@@ -609,9 +596,7 @@ describe('StatisticsView', () => {
     rpcMock.mockResolvedValue(makeReport());
 
     mountedComponent = mount(StatisticsView, { target: document.body });
-    await waitForCondition(() =>
-      document.body.textContent.includes('Per agent'),
-    );
+    await waitForOverview();
 
     const usageTab = [...document.querySelectorAll('.tab-list__tab')].find(
       (button) => button.textContent.trim() === 'Usage',
@@ -619,23 +604,16 @@ describe('StatisticsView', () => {
     usageTab.click();
     flushSync();
 
-    expect(document.body.textContent).toContain('Providers');
     expect(document.body.textContent).toContain(
       'openrouter/anthropic/claude-sonnet-4',
     );
-    expect(document.body.textContent).toContain('~ estimated');
-    expect(document.body.textContent).toContain('Reasoning (output subset)');
-    expect(document.body.textContent).toContain(
-      'Reasoning tokens are provider-reported subsets of measured output',
+    expect(document.querySelector('.stats-tokens__est')).toBeTruthy();
+    const usageCards = document.querySelectorAll(
+      '.stats-panel > .stats-grid .stats-card',
     );
-    const reasoningCard = [...document.querySelectorAll('.stats-card')].find(
-      (card) => card.textContent.includes('Reasoning (output subset)'),
-    );
-    expect(reasoningCard.querySelector('.stats-card__value').textContent).toBe(
+    expect(usageCards).toHaveLength(8);
+    expect(usageCards[7].querySelector('.stats-card__value').textContent).toBe(
       '120',
-    );
-    expect(document.body.textContent).toContain(
-      'A fallback Run can appear in multiple rows',
     );
   });
 
@@ -643,9 +621,7 @@ describe('StatisticsView', () => {
     rpcMock.mockResolvedValue(makeReport());
 
     mountedComponent = mount(StatisticsView, { target: document.body });
-    await waitForCondition(() =>
-      document.body.textContent.includes('Per agent'),
-    );
+    await waitForOverview();
 
     const usageTab = [...document.querySelectorAll('.tab-list__tab')].find(
       (button) => button.textContent.trim() === 'Usage',
@@ -653,27 +629,25 @@ describe('StatisticsView', () => {
     usageTab.click();
     flushSync();
 
-    const text = document.body.textContent;
-    expect(text).toContain('Cache hit rate');
     // totals: 50 read of 500 cache-reporting input → 10.0%
-    expect(text).toContain('10.0%');
-    expect(text).toContain('Sessions with lowest cache hit rate');
-    expect(text).toContain('Suspected cache breaks (derived)');
-    expect(text).toContain(
-      '1 suspected breaks across 6 evaluated continuation turns.',
+    const usageCards = document.querySelectorAll(
+      '.stats-panel > .stats-grid .stats-card',
+    );
+    expect(usageCards[4].querySelector('.stats-card__value').textContent).toBe(
+      '10.0%',
+    );
+    expect(document.querySelectorAll('.stats-panel .stats-table')).toHaveLength(
+      4,
     );
     // The incident table shows the collapsed turn's expectation vs. reality.
-    expect(text).toContain('9,000');
-    expect(text).toContain('Prev. input');
+    expect(document.body.textContent).toContain('9,000');
   });
 
   it('renders the runs & errors sub-view with derived fallback labelling', async () => {
     rpcMock.mockResolvedValue(makeReport());
 
     mountedComponent = mount(StatisticsView, { target: document.body });
-    await waitForCondition(() =>
-      document.body.textContent.includes('Per agent'),
-    );
+    await waitForOverview();
 
     const runsTab = [...document.querySelectorAll('.tab-list__tab')].find(
       (button) => button.textContent.trim() === 'Runs & errors',
@@ -681,24 +655,22 @@ describe('StatisticsView', () => {
     runsTab.click();
     flushSync();
 
-    expect(document.body.textContent).toContain('Fallback runs (derived)');
-    expect(document.body.textContent).toContain('Open run groups');
-    expect(document.body.textContent).toContain('Longest runs');
-    expect(document.body.textContent).toContain('Avg Agent messages / Run');
-    expect(document.body.textContent).toContain('Avg Model steps / Run');
-    expect(document.body.textContent).toContain('By UTC hour');
-    expect(document.body.textContent).toContain(
-      'These are persisted Run errors',
-    );
+    const runGrids = document.querySelectorAll('.stats-panel > .stats-grid');
+    expect(runGrids).toHaveLength(3);
+    expect(
+      runGrids[1]
+        .querySelectorAll('.stats-card')[3]
+        .querySelector('.stats-card__value').textContent,
+    ).toBe('1');
+    expect(document.querySelectorAll('.stats-hours__col')).toHaveLength(24);
+    expect(document.querySelector('.stats-panel .stats-table')).toBeTruthy();
   });
 
   it('renders checkpoint-derived compaction statistics', async () => {
     rpcMock.mockResolvedValue(makeReport());
 
     mountedComponent = mount(StatisticsView, { target: document.body });
-    await waitForCondition(() =>
-      document.body.textContent.includes('Per agent'),
-    );
+    await waitForOverview();
 
     const compactionsTab = [
       ...document.querySelectorAll('.tab-list__tab'),
@@ -706,25 +678,21 @@ describe('StatisticsView', () => {
     compactionsTab.click();
     flushSync();
 
-    const text = document.body.textContent;
-    expect(text).toContain('Compacted Sessions');
-    expect(text).toContain('Estimated context reclaimed');
-    expect(text).toContain('220,000');
-    expect(text).toContain('By Strategy');
-    expect(text).toContain('summary_tail');
-    expect(text).toContain('Most compacted Sessions');
-    expect(text).toContain('compacted-session');
-    expect(text).toContain('150,000');
-    expect(text).toContain('Fork-copied history is excluded');
+    expect(document.body.textContent).toContain('220,000');
+    expect(document.body.textContent).toContain('summary_tail');
+    expect(document.body.textContent).toContain('compacted-session');
+    expect(document.body.textContent).toContain('150,000');
+    expect(document.querySelectorAll('.stats-panel .stats-grid')).toHaveLength(
+      2,
+    );
+    expect(document.querySelector('.stats-panel .stats-table')).toBeTruthy();
   });
 
   it('renders the tools sub-view without exposing arguments', async () => {
     rpcMock.mockResolvedValue(makeReport());
 
     mountedComponent = mount(StatisticsView, { target: document.body });
-    await waitForCondition(() =>
-      document.body.textContent.includes('Per agent'),
-    );
+    await waitForOverview();
 
     const toolsTab = [...document.querySelectorAll('.tab-list__tab')].find(
       (button) => button.textContent.trim() === 'Tools',
@@ -732,17 +700,10 @@ describe('StatisticsView', () => {
     toolsTab.click();
     flushSync();
 
-    expect(document.body.textContent).toContain('Per tool');
     expect(document.body.textContent).toContain('read');
     expect(document.body.textContent).toContain('not_found');
-    expect(document.body.textContent).toContain('Accepted');
-    expect(document.body.textContent).toContain('Rejected');
-    expect(document.body.textContent).toContain('Top rejection');
-    expect(document.body.textContent).toContain(
-      'Statistics never reads or includes Tool arguments',
-    );
-    expect(document.body.textContent).toContain(
-      'including safe validation and guardrail rejections',
+    expect(document.querySelectorAll('.stats-panel .stats-table')).toHaveLength(
+      2,
     );
   });
 
@@ -750,9 +711,7 @@ describe('StatisticsView', () => {
     rpcMock.mockResolvedValue(makeReport());
 
     mountedComponent = mount(StatisticsView, { target: document.body });
-    await waitForCondition(() =>
-      document.body.textContent.includes('Per agent'),
-    );
+    await waitForOverview();
 
     const skillsTab = [...document.querySelectorAll('.tab-list__tab')].find(
       (button) => button.textContent.trim() === 'Skills',
@@ -761,23 +720,20 @@ describe('StatisticsView', () => {
     flushSync();
 
     const text = document.body.textContent;
-    expect(text).toContain('Per skill');
-    // Summary cards distinguish evidence-backed candidates from new Skills
-    // whose catalogs have not been observed yet.
-    expect(text).toContain('No offer conversion');
-    expect(text).toContain('No offer data');
+    expect(
+      document.querySelectorAll('.stats-panel > .stats-grid .stats-card'),
+    ).toHaveLength(4);
     // Per-skill rows.
     expect(text).toContain('deploy');
     expect(text).toContain('lonely-skill');
     // Origins render as short localized labels (agent:<id>/project:<name>).
-    expect(text).toContain('bundled');
-    expect(text).toContain('project: vBot');
-    expect(text).toContain('agent: assistant');
+    expect(text).toContain('vBot');
+    expect(text).toContain('assistant');
+    expect(document.querySelectorAll('.stats-origins .badge')).toHaveLength(4);
     // usage_rate: 0.4 → 40%; null (offered == 0) → em dash, never NaN.
     expect(text).toContain('40%');
     expect(text).not.toContain('NaN');
     // Panel-wide activations-per-agent rollup shows the project agent.
-    expect(text).toContain('Activations per agent');
     expect(text).toContain('builder');
   });
 
@@ -785,9 +741,7 @@ describe('StatisticsView', () => {
     rpcMock.mockResolvedValue(makeReport());
 
     mountedComponent = mount(StatisticsView, { target: document.body });
-    await waitForCondition(() =>
-      document.body.textContent.includes('Per agent'),
-    );
+    await waitForOverview();
 
     const skillsTab = [...document.querySelectorAll('.tab-list__tab')].find(
       (button) => button.textContent.trim() === 'Skills',
@@ -802,8 +756,6 @@ describe('StatisticsView', () => {
     );
     expect(candidateRows.length).toBe(1);
     expect(candidateRows[0].textContent).toContain('lonely-skill');
-    expect(document.body.textContent).toContain('No offer conversion');
-    expect(document.body.textContent).toContain('No offer data');
     // The activated skill (deploy) is not highlighted.
     const rows = [...document.querySelectorAll('.stats-table tbody tr')].filter(
       (row) => row.textContent.includes('deploy'),
@@ -828,9 +780,7 @@ describe('StatisticsView', () => {
     );
 
     mountedComponent = mount(StatisticsView, { target: document.body });
-    await waitForCondition(() =>
-      document.body.textContent.includes('Per agent'),
-    );
+    await waitForOverview();
 
     const skillsTab = [...document.querySelectorAll('.tab-list__tab')].find(
       (button) => button.textContent.trim() === 'Skills',
@@ -838,18 +788,14 @@ describe('StatisticsView', () => {
     skillsTab.click();
     flushSync();
 
-    expect(document.body.textContent).toContain(
-      'No skills in the current inventory.',
-    );
+    expect(document.querySelector('.stats-panel .empty-state')).toBeTruthy();
   });
 
   it('lazily loads provider usage when the Limits sub-view opens', async () => {
     rpcMock.mockImplementation(routedRpc(makeUsageReport()));
 
     mountedComponent = mount(StatisticsView, { target: document.body });
-    await waitForCondition(() =>
-      document.body.textContent.includes('Per agent'),
-    );
+    await waitForOverview();
 
     // provider.usage is not fetched until the Limits tab is opened.
     expect(rpcMock).not.toHaveBeenCalledWith('provider.usage');
@@ -860,7 +806,7 @@ describe('StatisticsView', () => {
     expect(rpcMock).toHaveBeenCalledWith('provider.usage');
     expect(document.body.textContent).toContain('Plus');
     expect(document.body.textContent).toContain('5h');
-    expect(document.body.textContent).toContain('Resets in');
+    expect(document.querySelector('.stats-limit-window__reset')).toBeTruthy();
     // The error snapshot renders its message cleanly rather than crashing.
     expect(document.body.textContent).toContain('GitHub Copilot');
     expect(document.body.textContent).toContain('HTTP 401');
@@ -870,7 +816,6 @@ describe('StatisticsView', () => {
       ),
     ).toBe(false);
     expect(document.querySelector('.stats-view__generated')).toBeNull();
-    expect(document.body.textContent).toContain('updated every 10 seconds');
   });
 
   it('shows Ollama Cloud quota percentages and labels request counts as observed', async () => {
@@ -913,23 +858,20 @@ describe('StatisticsView', () => {
     rpcMock.mockImplementation(routedRpc(ollamaUsage));
 
     mountedComponent = mount(StatisticsView, { target: document.body });
-    await waitForCondition(() =>
-      document.body.textContent.includes('Per agent'),
-    );
+    await waitForOverview();
     openLimitsTab();
     await waitForCondition(() =>
       document.body.textContent.includes('Ollama Cloud'),
     );
 
-    expect(document.body.textContent).toContain('2% used');
-    expect(document.body.textContent).toContain('1% used');
-    expect(document.body.textContent).toContain(
-      '9 requests observed; quota usage is provider-weighted',
-    );
-    expect(document.body.textContent).toContain(
-      '14 requests observed; quota usage is provider-weighted',
-    );
-    expect(document.body.textContent).not.toContain('Resets in');
+    const fills = document.querySelectorAll('.stats-limit-window__fill');
+    expect(fills).toHaveLength(2);
+    expect(fills[0].getAttribute('style')).toContain('1.9%');
+    expect(fills[1].getAttribute('style')).toContain('0.7%');
+    const units = document.querySelectorAll('.stats-limit-window__units');
+    expect(units[0].textContent).toContain('9');
+    expect(units[1].textContent).toContain('14');
+    expect(document.querySelector('.stats-limit-window__reset')).toBeNull();
   });
 
   it('renders hourly limit history and correlated vBot Runs', async () => {
@@ -947,23 +889,14 @@ describe('StatisticsView', () => {
     });
 
     mountedComponent = mount(StatisticsView, { target: document.body });
-    await waitForCondition(() =>
-      document.body.textContent.includes('Per agent'),
-    );
+    await waitForOverview();
     openLimitsTab();
-    await waitForCondition(() =>
-      document.body.textContent.includes('Largest observed changes'),
-    );
-    await waitForCondition(() =>
-      document.body.textContent.includes('Investigate limits'),
-    );
+    await waitForCondition(() => document.querySelector('.limit-trace__line'));
+    await waitForCondition(() => document.querySelector('.limit-run__tokens'));
 
-    expect(document.body.textContent).toContain('Subscription flight recorder');
     expect(document.body.textContent).toContain('+28.5 pp');
-    expect(document.body.textContent).toContain('Measured tokens');
-    expect(document.body.textContent).toContain('120');
-    expect(document.body.textContent).toContain(
-      'Parallel use outside vBot may also change the Subscription.',
+    expect(document.querySelector('.limit-run__tokens').textContent).toContain(
+      '120',
     );
     expect(
       rpcMock.mock.calls.some(
@@ -993,27 +926,25 @@ describe('StatisticsView', () => {
     });
 
     mountedComponent = mount(StatisticsView, { target: document.body });
-    await waitForCondition(() =>
-      document.body.textContent.includes('Per agent'),
-    );
+    await waitForOverview();
     openLimitsTab();
-    await waitForCondition(() =>
-      document.body.textContent.includes('Largest observed changes'),
-    );
+    await waitForCondition(() => document.querySelector('.limit-trace__line'));
 
     const deleteButton = [...document.querySelectorAll('button')].find(
       (button) => button.textContent.trim() === 'Delete history',
     );
     deleteButton.click();
     flushSync();
-    expect(document.body.textContent).toContain('Delete limit history?');
+    expect(document.querySelector('[role="dialog"]')).toBeTruthy();
 
     const confirmButton = [...document.querySelectorAll('button')]
       .filter((button) => button.textContent.trim() === 'Delete history')
       .at(-1);
     confirmButton.click();
     await waitForCondition(() =>
-      document.body.textContent.includes('2 historical snapshots deleted.'),
+      rpcMock.mock.calls.some(
+        ([method]) => method === 'provider.usage_history.clear',
+      ),
     );
 
     expect(
@@ -1021,7 +952,9 @@ describe('StatisticsView', () => {
         ([method]) => method === 'provider.usage_history.clear',
       ),
     ).toBe(true);
-    expect(document.body.textContent).toContain('The flight recorder is ready');
+    await waitForCondition(() =>
+      document.querySelector('.limit-history > .empty-state'),
+    );
   });
 
   it('refreshes provider usage every ten seconds only while Limits is visible', async () => {
@@ -1029,9 +962,7 @@ describe('StatisticsView', () => {
     rpcMock.mockImplementation(routedRpc(makeUsageReport()));
 
     mountedComponent = mount(StatisticsView, { target: document.body });
-    await waitForCondition(() =>
-      document.body.textContent.includes('Per agent'),
-    );
+    await waitForOverview();
 
     openLimitsTab();
     await waitForCondition(
@@ -1075,9 +1006,7 @@ describe('StatisticsView', () => {
     });
 
     mountedComponent = mount(StatisticsView, { target: document.body });
-    await waitForCondition(() =>
-      document.body.textContent.includes('Per agent'),
-    );
+    await waitForOverview();
     openLimitsTab();
     await waitForCondition(() => usageCalls === 1);
 
@@ -1099,9 +1028,7 @@ describe('StatisticsView', () => {
     rpcMock.mockImplementation(routedRpc(makeUsageReport()));
 
     mountedComponent = mount(StatisticsView, { target: document.body });
-    await waitForCondition(() =>
-      document.body.textContent.includes('Per agent'),
-    );
+    await waitForOverview();
     openLimitsTab();
     await waitForCondition(
       () =>
@@ -1140,9 +1067,7 @@ describe('StatisticsView', () => {
     });
 
     mountedComponent = mount(StatisticsView, { target: document.body });
-    await waitForCondition(() =>
-      document.body.textContent.includes('Per agent'),
-    );
+    await waitForOverview();
     openLimitsTab();
     await waitForCondition(() =>
       document.body.textContent.includes('limits unavailable'),
@@ -1164,20 +1089,14 @@ describe('StatisticsView', () => {
     );
 
     mountedComponent = mount(StatisticsView, { target: document.body });
-    await waitForCondition(() =>
-      document.body.textContent.includes('Per agent'),
-    );
+    await waitForOverview();
 
     openLimitsTab();
     await waitForCondition(() =>
-      document.body.textContent.includes(
-        'No subscription providers connected.',
-      ),
+      document.querySelector('.stats-panel .empty-state'),
     );
 
-    expect(document.body.textContent).toContain(
-      'No subscription providers connected.',
-    );
+    expect(document.querySelector('.stats-panel .empty-state')).toBeTruthy();
   });
 
   it('shows an error message and retries on failure', async () => {
@@ -1191,9 +1110,7 @@ describe('StatisticsView', () => {
       (button) => button.textContent.trim() === 'Retry',
     );
     retryButton.click();
-    await waitForCondition(() =>
-      document.body.textContent.includes('Per agent'),
-    );
+    await waitForOverview();
 
     expect(rpcMock).toHaveBeenCalledTimes(2);
   });

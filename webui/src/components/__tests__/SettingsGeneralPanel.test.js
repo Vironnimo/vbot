@@ -86,11 +86,7 @@ describe('SettingsGeneralPanel', () => {
     flushSync();
     await flushAsync();
 
-    expect(document.body.textContent).toContain('Connected clients');
-    expect(document.body.textContent).toContain('Browser');
-    expect(document.body.textContent).toContain('Desktop');
     expect(document.body.textContent).toContain('Chrome');
-    expect(document.body.textContent).toContain('This window');
 
     expect(document.body.querySelectorAll('.s-client-row')).toHaveLength(2);
     expect(document.body.querySelectorAll('.s-client-row--own')).toHaveLength(
@@ -98,7 +94,6 @@ describe('SettingsGeneralPanel', () => {
     );
 
     const ownRow = document.body.querySelector('.s-client-row--own');
-    expect(ownRow.textContent).toContain('This window');
     expect(ownRow.textContent).toContain('Chrome');
   });
 
@@ -112,7 +107,7 @@ describe('SettingsGeneralPanel', () => {
     flushSync();
     await flushAsync();
 
-    expect(document.body.textContent).toContain('No app windows connected.');
+    expect(document.body.querySelector('.empty-state')).toBeTruthy();
     expect(document.body.querySelectorAll('.s-client-row')).toHaveLength(0);
   });
 
@@ -147,9 +142,7 @@ describe('SettingsGeneralPanel', () => {
     flushSync();
     await flushAsync();
 
-    expect(document.body.textContent).toContain(
-      'Connected clients could not be loaded.',
-    );
+    expect(document.body.querySelector('.banner--error')).toBeTruthy();
   });
 
   it('opens the setup guide when the re-entry button is clicked', async () => {

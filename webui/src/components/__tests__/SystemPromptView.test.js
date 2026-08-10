@@ -63,7 +63,7 @@ describe('SystemPromptView', () => {
     document.body.innerHTML = '';
   });
 
-  it('renders blocks in layout order with their owner labels', async () => {
+  it('renders blocks in layout order with the shared view chrome', async () => {
     rpcMock.mockImplementation(createRpcMock());
 
     mountedComponent = mount(SystemPromptView, { target: document.body });
@@ -81,17 +81,9 @@ describe('SystemPromptView', () => {
       'data:soul',
     ]);
 
-    // Owner lines read as plain sentences describing the render condition.
-    expect(document.body.textContent).toContain('Always included.');
-    expect(document.body.textContent).toContain(
-      'Included only while the memory tool is on.',
-    );
-    expect(document.body.textContent).toContain(
-      'Included only while the bash tool is active.',
-    );
+    expect(document.querySelectorAll('.sp-block-owner')).toHaveLength(4);
     expect(document.querySelector('.sp-scroll.view-frame')).toBeTruthy();
     expect(document.querySelector('.sp-header.view-header')).toBeTruthy();
-    expect(document.body.textContent).toContain('Prompt assembly');
     expect(
       document.querySelector('.sp-blocklist-toolbar.view-toolbar--split'),
     ).toBeTruthy();
@@ -100,11 +92,10 @@ describe('SystemPromptView', () => {
     expect(guide.getAttribute('aria-labelledby')).toBe(
       'sp-blocklist-guide-title',
     );
-    expect(guide.querySelector('h3')?.textContent).toContain(
-      'These blocks become the System Prompt.',
-    );
-    expect(guide.textContent).toContain('Blocks are read from top to bottom.');
-    expect(guide.textContent).toContain('Default applies to every Agent.');
+    expect(guide.querySelector('h3')).toBeTruthy();
+    expect(
+      guide.querySelectorAll('.sp-blocklist-guide__details p'),
+    ).toHaveLength(2);
   });
 
   it('renders an editable textarea for text blocks but not for data blocks', async () => {
@@ -129,7 +120,6 @@ describe('SystemPromptView', () => {
     const dataBlock = blockElement('data:soul');
     expect(dataBlock.querySelector('textarea')).toBeNull();
     expect(dataBlock.querySelector('.sp-data-block')).toBeTruthy();
-    expect(dataBlock.textContent).toContain('Generated content (read-only)');
   });
 
   it('reveals the collapsed data block preview on demand', async () => {

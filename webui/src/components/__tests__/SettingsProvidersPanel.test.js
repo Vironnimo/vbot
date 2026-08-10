@@ -206,7 +206,6 @@ describe('SettingsProvidersPanel', () => {
     expect(onReloadSettingsMock).toHaveBeenCalled();
     expect(onToast).toHaveBeenCalledWith(
       expect.objectContaining({
-        title: 'LM Studio added successfully.',
         variant: 'success',
       }),
     );

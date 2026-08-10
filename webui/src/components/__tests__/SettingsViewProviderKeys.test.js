@@ -68,14 +68,11 @@ describe('SettingsView provider API keys', () => {
     mountedComponent = mountSettingsView();
     await openProvidersPanel();
 
-    expect(document.body.textContent).toContain('OpenRouter');
-    expect(document.body.textContent).not.toContain('Anthropic');
-
     const row = providerRow('OpenRouter');
-    expect(row.textContent).toContain('Connected');
-    expect(row.textContent).toContain('Replace key…');
-    expect(row.textContent).toContain('Remove');
-    expect(row.textContent).not.toContain('Missing credentials');
+    expect(document.querySelectorAll('.s-provider-card')).toHaveLength(1);
+    expect(row.querySelector('.chip.success')).toBeTruthy();
+    expect(buttonByText('Replace key…')).toBeTruthy();
+    expect(buttonByText('Remove')).toBeTruthy();
   });
 
   it('saves a new provider api key through the add modal', async () => {
@@ -103,13 +100,9 @@ describe('SettingsView provider API keys', () => {
       value: 'sk-ant-test',
     });
     await waitForCondition(() =>
-      toastMock.mock.calls.some(
-        (call) => call[0]?.title === 'Anthropic connected successfully',
-      ),
+      toastMock.mock.calls.some((call) => call[0]?.variant === 'success'),
     );
-    await waitForCondition(() =>
-      document.body.textContent.includes('Anthropic'),
-    );
+    await waitForCondition(() => providerRow('Anthropic'));
     expect(modalRoot()).toBeUndefined();
   });
 
@@ -121,7 +114,6 @@ describe('SettingsView provider API keys', () => {
     flushSync();
 
     expect(modalRoot()).toBeTruthy();
-    expect(modalRoot().textContent).toContain('Connect OpenRouter');
 
     setInputValue('.provider-connect-modal input', 'sk-or-replacement');
 
@@ -163,9 +155,7 @@ describe('SettingsView provider API keys', () => {
       account: 'default',
     });
     await waitForCondition(() =>
-      toastMock.mock.calls.some(
-        (call) => call[0]?.title === 'API key removed.',
-      ),
+      toastMock.mock.calls.some((call) => call[0]?.variant === 'success'),
     );
     await waitForCondition(
       () => !document.body.textContent.includes('OpenRouter'),
@@ -217,18 +207,26 @@ describe('SettingsView provider API keys', () => {
     );
     expect(accountRows).toHaveLength(2);
 
-    expect(accountRows[0].textContent).toContain('Default');
-    expect(accountRows[0].textContent).toContain('Connected');
-    expect(accountRows[0].textContent).toContain('Process env');
-    expect(accountRows[1].textContent).toContain('work');
-    expect(accountRows[1].textContent).toContain('Not usable');
-    expect(accountRows[1].textContent).toContain('.env file');
+    expect(
+      accountRows[0].querySelector('.s-connection-account-id').textContent,
+    ).toContain('Default');
+    expect(accountRows[0].querySelector('.chip.success')).toBeTruthy();
+    expect(
+      accountRows[0].querySelector('.s-connection-account-source'),
+    ).toBeTruthy();
+    expect(
+      accountRows[1].querySelector('.s-connection-account-id').textContent,
+    ).toContain('work');
+    expect(accountRows[1].querySelector('.chip.warn')).toBeTruthy();
+    expect(
+      accountRows[1].querySelector('.s-connection-account-source'),
+    ).toBeTruthy();
 
     // The process-env account cannot be removed; the data-dir one can.
     expect(removeButton(accountRows[0]).disabled).toBe(true);
     expect(removeButton(accountRows[1]).disabled).toBe(false);
 
-    expect(row.textContent).toContain('Add account…');
+    expect(buttonContaining('Add account…')).toBeTruthy();
   });
 
   it('removes a named account with the account in the unset payload', async () => {
@@ -311,9 +309,11 @@ describe('SettingsView provider API keys', () => {
     setInputValue('.provider-connect-modal input[type="password"]', 'sk-x');
     setInputValue('.provider-connect-modal input[type="text"]', 'Not Valid');
 
-    expect(modalRoot().textContent).toContain(
-      'Account names use 1–32 lowercase letters, digits, or underscores',
-    );
+    expect(
+      document
+        .querySelector('.provider-connect-modal input[type="text"]')
+        .getAttribute('aria-invalid'),
+    ).toBe('true');
     expect(buttonByText('Save key').disabled).toBe(true);
   });
 

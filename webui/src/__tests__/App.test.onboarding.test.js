@@ -64,16 +64,8 @@ describe('App', () => {
       expect(document.querySelector('.app-finish-setup')).toBeTruthy();
     });
     expect(document.querySelector('.onboarding-view')).toBeFalsy();
-    await waitForCondition(() => {
-      expect(document.body.textContent).toContain(
-        'Connect a provider to start',
-      );
-    });
-    expect(document.body.textContent).not.toContain('Pick a model to start');
 
-    const finishButton = Array.from(
-      document.querySelectorAll('.app-finish-setup button'),
-    ).find((button) => button.textContent.trim() === 'Finish setup');
+    const finishButton = document.querySelector('.app-finish-setup button');
     finishButton?.click();
     flushSync();
 

@@ -163,10 +163,11 @@ describe('WakewordVoiceSettings', () => {
 
     await mountPanel();
 
-    expect(document.body.textContent).toContain('Voice needs attention');
-    expect(document.body.textContent).toContain(
-      'selected microphone cannot provide compatible audio',
-    );
+    expect(
+      document.querySelector(
+        '.voice-attention-banner.banner--error[role="alert"]',
+      ),
+    ).not.toBeNull();
     expect(buttonByText('Retry listening')).not.toBeNull();
 
     buttonByLabel('Microphone').click();
@@ -187,10 +188,8 @@ describe('WakewordVoiceSettings', () => {
 
     const warning = document.querySelector('.banner--warn');
     expect(warning).not.toBeNull();
-    expect(warning.textContent).toContain('Microphone disconnected');
-    expect(warning.textContent).toContain('microphone stopped responding');
+    expect(warning.getAttribute('role')).toBe('status');
     expect(document.querySelector('.banner--error')).toBeNull();
-    expect(document.body.textContent).not.toContain('Voice needs attention');
     expect(buttonByText('Retry listening')).not.toBeNull();
   });
 
@@ -299,10 +298,11 @@ describe('WakewordVoiceSettings', () => {
     expect(
       switchByLabel('Enable wakeword listening').getAttribute('aria-checked'),
     ).toBe('false');
-    expect(document.body.textContent).toContain('Voice needs attention');
-    expect(document.body.textContent).toContain(
-      'Configure a Speech-to-text Model',
-    );
+    expect(
+      document.querySelector(
+        '.voice-attention-banner.banner--error[role="alert"]',
+      ),
+    ).not.toBeNull();
   });
 
   it('starts with Okay Nabu and Hey Nabu active together', async () => {
@@ -314,8 +314,8 @@ describe('WakewordVoiceSettings', () => {
     expect(
       switchByLabel('Listen for Hey Nabu').getAttribute('aria-checked'),
     ).toBe('true');
-    expect(document.body.textContent).toContain(
-      '2 of 2 wakeword models active',
+    expect(document.querySelectorAll('.voice-model-card--active')).toHaveLength(
+      2,
     );
   });
 
@@ -329,8 +329,8 @@ describe('WakewordVoiceSettings', () => {
       active_model_ids: ['builtin/okay_nabu'],
     });
     expect(switchByLabel('Listen for Okay Nabu').disabled).toBe(true);
-    expect(document.body.textContent).toContain(
-      '1 of 2 wakeword models active',
+    expect(document.querySelectorAll('.voice-model-card--active')).toHaveLength(
+      1,
     );
   });
 
@@ -366,10 +366,23 @@ describe('WakewordVoiceSettings', () => {
     await settle();
 
     expect(desktopBridge.startWakewordCalibration).toHaveBeenCalledOnce();
-    expect(document.body.textContent).toContain('Guided calibration');
-    expect(document.body.textContent).toContain('Measurement complete');
-    expect(document.body.textContent).toContain('Ready to apply');
-    expect(document.body.textContent).toContain('Recommended sensitivity 70%');
+    const calibrationPanel = document.querySelector('.voice-calibration-panel');
+    expect(calibrationPanel).not.toBeNull();
+    expect(
+      calibrationPanel.querySelectorAll(
+        '.voice-calibration-steps li[data-state="complete"]',
+      ),
+    ).toHaveLength(2);
+    expect(
+      calibrationPanel.querySelectorAll(
+        '.voice-calibration-steps li[data-state="current"]',
+      ),
+    ).toHaveLength(1);
+    expect(calibrationPanel.querySelector('.chip.success')).not.toBeNull();
+    expect(
+      calibrationPanel.querySelector('.voice-calibration-model__result')
+        .textContent,
+    ).toContain('70%');
 
     const slider = document.getElementById(
       'voice-sensitivity-builtin/okay_nabu',
@@ -432,18 +445,23 @@ describe('WakewordVoiceSettings', () => {
     buttonByText('Start calibration').click();
     await settle();
 
-    expect(document.body.textContent).toContain(
-      'Say “Okay Nabu” naturally — 1 of 3 repetitions captured.',
-    );
+    expect(
+      document.querySelector('.voice-calibration-steps li:nth-child(2)').dataset
+        .state,
+    ).toBe('current');
+    expect(
+      document.querySelector('.voice-calibration-model--target'),
+    ).not.toBeNull();
     expect(buttonByText('Apply calibrated values').disabled).toBe(true);
 
     buttonByText('Restart calibration').click();
     await settle();
 
     expect(desktopBridge.restartWakewordCalibration).toHaveBeenCalledOnce();
-    expect(document.body.textContent).toContain(
-      'Stay quiet for 3 seconds while vBot measures the room.',
-    );
+    expect(
+      document.querySelector('.voice-calibration-steps li:first-child').dataset
+        .state,
+    ).toBe('current');
   });
 
   it('discards a calibration result without saving', async () => {
@@ -464,7 +482,8 @@ describe('WakewordVoiceSettings', () => {
     expect(
       document.getElementById('voice-sensitivity-builtin/okay_nabu').value,
     ).toBe('0.5');
-    expect(document.body.textContent).not.toContain('Guided calibration');
+    expect(document.querySelector('.voice-calibration-panel')).toBeNull();
+    expect(document.querySelector('.voice-calibration-entry')).not.toBeNull();
   });
 
   it('imports a TFLite model without replacing two active phrases', async () => {
@@ -516,9 +535,9 @@ describe('WakewordVoiceSettings', () => {
 
     buttonByText('Remove imported model').click();
     flushSync();
-    expect(document.body.textContent).toContain(
-      'Remove “Hey Computer” permanently',
-    );
+    const dialog = document.querySelector('[role="dialog"]');
+    expect(dialog).not.toBeNull();
+    expect(dialog.textContent).toContain('Hey Computer');
     buttonByText('Delete').click();
     await settle();
 

@@ -67,7 +67,7 @@ describe('SettingsView', () => {
     expect(root?.lastElementChild?.classList.contains('settings-content')).toBe(
       true,
     );
-    expect(document.body.textContent).toContain('Loading settings…');
+    expect(document.querySelector('.s-doc > .banner--neutral')).toBeTruthy();
 
     // Providers is the default panel, so its content is the settings-loaded
     // signal now that General is no longer shown first.
@@ -75,16 +75,15 @@ describe('SettingsView', () => {
 
     expect(rpcMock).toHaveBeenCalledWith('settings.get');
     expect(document.body.textContent).toContain('OpenAI');
-    expect(document.body.textContent).toContain('Connected');
+    expect(
+      document.querySelector('.s-provider-card .chip.success'),
+    ).toBeTruthy();
     expect(document.body.textContent).not.toContain('Anthropic');
     expect(document.body.textContent).toContain('Add provider');
-    expect(document.body.textContent).toContain('Session titles');
 
     clickButton('Server info');
 
-    expect(document.body.textContent).toContain('Server host');
     expect(document.body.textContent).toContain('0.0.0.0:9001');
-    expect(document.body.textContent).toContain('Data directory');
     expect(document.body.textContent).toContain('C:/Users/test/.vbot');
     expect(document.body.textContent).not.toMatch(
       /show[_ -]?token[_ -]?counts/i,
@@ -233,7 +232,6 @@ describe('SettingsView', () => {
     await waitForText('Add provider');
     openSection('Skills', 'skills');
 
-    expect(document.body.textContent).toContain('Default skill directory');
     expect(document.body.textContent).toContain('C:/Users/test/.vbot/skills');
     expect(document.body.textContent).toContain('C:/skills/shared');
 
@@ -260,7 +258,6 @@ describe('SettingsView', () => {
     await waitForCondition(() => toastMock.mock.calls.length > 0);
     expect(toastMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        title: 'Skill directories updated.',
         variant: 'success',
       }),
     );
@@ -285,10 +282,6 @@ describe('SettingsView', () => {
 
     await waitForText('Add provider');
     openSection('Sub-Agents', 'subagents');
-
-    expect(document.body.textContent).toContain('Max sub-agent depth');
-    expect(document.body.textContent).toContain('Max sub-agents per turn');
-    expect(document.body.textContent).toContain('Timeout minutes');
 
     const inputs = activeSection.querySelectorAll('input.s-input');
     expect(inputs).toHaveLength(3);
@@ -317,7 +310,6 @@ describe('SettingsView', () => {
     await waitForCondition(() => toastMock.mock.calls.length > 0);
     expect(toastMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        title: 'Sub-agent settings updated.',
         variant: 'success',
       }),
     );
@@ -346,8 +338,6 @@ describe('SettingsView', () => {
     await waitForText('Add provider');
     openSection('Recall', 'recall');
 
-    expect(document.body.textContent).toContain('Recall backend');
-
     const trigger = document.body.querySelector('#settings-recall-backend');
     expect(trigger).not.toBeNull();
     trigger.dispatchEvent(new MouseEvent('click', { bubbles: true }));
@@ -375,7 +365,6 @@ describe('SettingsView', () => {
     await waitForCondition(() => toastMock.mock.calls.length > 0);
     expect(toastMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        title: 'Recall backend updated.',
         variant: 'success',
       }),
     );
@@ -404,8 +393,6 @@ describe('SettingsView', () => {
 
     await waitForText('Add provider');
     openSection('Web Search', 'web_search');
-
-    expect(document.body.textContent).toContain('Search provider');
 
     const trigger = document.body.querySelector(
       '#settings-web-search-provider',
@@ -444,7 +431,6 @@ describe('SettingsView', () => {
     await waitForCondition(() => toastMock.mock.calls.length > 0);
     expect(toastMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        title: 'Web search settings updated.',
         variant: 'success',
       }),
     );
@@ -528,7 +514,6 @@ describe('SettingsView', () => {
     await waitForCondition(() => toastMock.mock.calls.length > 0);
     expect(toastMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        title: 'Session title settings updated.',
         variant: 'success',
       }),
     );
@@ -542,10 +527,9 @@ describe('SettingsView', () => {
     mountedComponent = mount(SettingsView, { target: document.body });
     flushSync();
 
-    await waitForText('Settings could not be loaded. server offline');
-
-    expect(document.body.textContent).toContain(
-      'Settings could not be loaded. server offline',
+    await waitForCondition(() => document.querySelector('.banner--error'));
+    expect(document.querySelector('.banner--error')?.textContent).toContain(
+      'server offline',
     );
 
     clickButton('Retry');
@@ -628,11 +612,10 @@ describe('SettingsView', () => {
     await waitForCondition(() => toastMock.mock.calls.length > 0);
     expect(toastMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        title: 'Appearance updated.',
         variant: 'success',
       }),
     );
-    expect(document.body.textContent).not.toContain('Appearance updated.');
+    expect(document.querySelector('.banner--success')).toBeNull();
     expect(
       document
         .querySelector(

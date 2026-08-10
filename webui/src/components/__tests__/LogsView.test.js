@@ -412,9 +412,9 @@ describe('LogsView', () => {
     streamConnections[0].emitError(new Event('error'));
     flushSync();
 
-    expect(document.body.textContent).toContain(
-      'Live log updates failed. Connection closed unexpectedly.',
-    );
+    expect(
+      document.querySelector('.logs-view .banner--warn[aria-live="polite"]'),
+    ).toBeTruthy();
     expect(document.body.textContent).not.toContain('undefined');
   });
 

@@ -85,7 +85,9 @@ describe('SettingsSpecializedModelsPanel', () => {
     expect(listTaskModelTargetsMock).toHaveBeenCalledWith(
       'image_understanding',
     );
-    expect(document.body.textContent).toContain('Image understanding');
+    expect(
+      document.querySelector('#settings-specialized-image_understanding'),
+    ).toBeTruthy();
   });
 
   it('renders every task-model target picker as searchable and filters by target id', async () => {

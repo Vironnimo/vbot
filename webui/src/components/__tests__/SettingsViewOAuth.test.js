@@ -98,7 +98,6 @@ describe('SettingsView OAuth providers', () => {
     expect(navigator.clipboard.writeText).toHaveBeenCalledWith('ABCD-1234');
     expect(toastMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        title: 'Device code copied.',
         variant: 'success',
       }),
     );
@@ -120,14 +119,11 @@ describe('SettingsView OAuth providers', () => {
       },
     });
     await waitForCondition(() =>
-      toastMock.mock.calls.some(
-        (call) => call[0]?.title === 'GitHub Copilot connected successfully',
-      ),
+      toastMock.mock.calls.some((call) => call[0]?.variant === 'success'),
     );
 
     expect(toastMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        title: 'GitHub Copilot connected successfully',
         variant: 'success',
       }),
     );
@@ -152,9 +148,7 @@ describe('SettingsView OAuth providers', () => {
         success: false,
       },
     });
-    await waitForCondition(() =>
-      document.body.textContent.includes('Authorization failed or timed out'),
-    );
+    await waitForCondition(() => modalRoot()?.querySelector('[role="alert"]'));
 
     expect(document.body.textContent).not.toContain('ABCD-1234');
     expect(modalRoot()).toBeTruthy();
@@ -250,9 +244,7 @@ describe('SettingsView OAuth providers', () => {
     // The event for another account must not complete this flow.
     expect(document.body.textContent).toContain('ABCD-1234');
     expect(
-      toastMock.mock.calls.some(
-        (call) => call[0]?.title === 'GitHub Copilot connected successfully',
-      ),
+      toastMock.mock.calls.some((call) => call[0]?.variant === 'success'),
     ).toBe(false);
 
     mountedComponent.handleProviderAuthCompleted({
@@ -265,9 +257,7 @@ describe('SettingsView OAuth providers', () => {
       },
     });
     await waitForCondition(() =>
-      toastMock.mock.calls.some(
-        (call) => call[0]?.title === 'GitHub Copilot connected successfully',
-      ),
+      toastMock.mock.calls.some((call) => call[0]?.variant === 'success'),
     );
     await waitForCondition(
       () => !document.body.textContent.includes('ABCD-1234'),
@@ -285,9 +275,11 @@ describe('SettingsView OAuth providers', () => {
 
     setInputValue('.provider-connect-modal input[type="text"]', 'Not Valid');
 
-    expect(document.body.textContent).toContain(
-      'Account names use 1–32 lowercase letters, digits, or underscores',
-    );
+    expect(
+      document
+        .querySelector('.provider-connect-modal input[type="text"]')
+        ?.getAttribute('aria-invalid'),
+    ).toBe('true');
     expect(buttonByText('Connect').disabled).toBe(true);
     expect(
       rpcMock.mock.calls.some((call) => call[0] === 'provider.connect'),

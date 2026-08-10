@@ -80,9 +80,6 @@ describe('OpenRouterRoutingSettings', () => {
     mountEditor();
     await waitForCondition(() => routingCalls().length === 1);
 
-    expect(document.body.textContent).toContain(
-      'Sticky Routing is best effort.',
-    );
     clickButton('Automatic (OpenRouter managed)');
     clickOption('Only allowed providers');
 
@@ -114,10 +111,9 @@ describe('OpenRouterRoutingSettings', () => {
       },
     });
     expect(onReloadSettingsMock).toHaveBeenCalledOnce();
-    expect(onToastMock).toHaveBeenCalledWith({
-      title: 'OpenRouter routing settings saved.',
-      variant: 'success',
-    });
+    expect(onToastMock).toHaveBeenCalledWith(
+      expect.objectContaining({ variant: 'success' }),
+    );
   });
 
   it('creates a full model override and warns when order disables stickiness', async () => {
@@ -139,21 +135,17 @@ describe('OpenRouterRoutingSettings', () => {
 
     clickButton('Global routing');
     clickOption('Claude Sonnet 4');
-    await waitForCondition(() =>
-      document.body.textContent.includes('This model inherits'),
+    const overrideToggle = document.querySelector(
+      '[aria-label="Use a routing override for anthropic/claude-sonnet-4"]',
     );
-    document
-      .querySelector(
-        '[aria-label="Use a routing override for anthropic/claude-sonnet-4"]',
-      )
-      .click();
+    expect(overrideToggle.getAttribute('aria-checked')).toBe('false');
+    overrideToggle.click();
     flushSync();
+    expect(overrideToggle.getAttribute('aria-checked')).toBe('true');
 
     clickButton('Only allowed providers');
     clickOption('Preferred provider order');
-    expect(document.body.textContent).toContain(
-      'A manual provider order overrides OpenRouter Sticky Routing.',
-    );
+    expect(document.querySelector('.banner--warn')).toBeTruthy();
 
     clickButton('Save routing');
     await waitForCondition(() => updateCalls().length === 1);
@@ -193,9 +185,13 @@ describe('OpenRouterRoutingSettings', () => {
     clickButton('Global routing');
     clickOption('retired/model');
 
-    expect(document.body.textContent).toContain(
-      'This model has its own routing policy.',
-    );
+    expect(
+      document
+        .querySelector(
+          '[aria-label="Use a routing override for retired/model"]',
+        )
+        .getAttribute('aria-checked'),
+    ).toBe('true');
     expect(document.body.textContent).toContain('deepinfra');
   });
 

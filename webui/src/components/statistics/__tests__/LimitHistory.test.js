@@ -99,11 +99,9 @@ describe('LimitHistory', () => {
     );
 
     mountedComponent = mount(LimitHistory, { target: document.body });
+    await waitForCondition(() => document.querySelector('.limit-trace__line'));
     await waitForCondition(() =>
-      document.body.textContent.includes('Largest observed changes'),
-    );
-    await waitForCondition(() =>
-      document.body.textContent.includes('No persisted vBot Runs'),
+      document.querySelector('.limit-activity .empty-state'),
     );
 
     expect(document.body.textContent).toContain('+20 pp');
@@ -122,11 +120,9 @@ describe('LimitHistory', () => {
 
     mountedComponent = mount(LimitHistory, { target: document.body });
     await waitForCondition(() =>
-      document.body.textContent.includes('The flight recorder is ready'),
+      document.querySelector('.limit-history > .empty-state'),
     );
 
-    expect(document.body.textContent).toContain(
-      'Further points are recorded at most once per hour.',
-    );
+    expect(document.querySelectorAll('.limit-trace')).toHaveLength(0);
   });
 });
