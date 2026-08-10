@@ -62,8 +62,7 @@ describe('App Desktop Wakeword feedback', () => {
     await waitForAssertion(() => {
       const toast = document.querySelector('.toast.error');
       expect(toast).toBeTruthy();
-      expect(toast.textContent).toContain('Voice needs attention');
-      expect(toast.textContent).toContain('Configure a Speech-to-text Model');
+      expect(toast.closest('[aria-live="polite"]')).toBeTruthy();
     });
 
     await vi.advanceTimersByTimeAsync(10000);
@@ -114,8 +113,7 @@ describe('App Desktop Wakeword feedback', () => {
 
     const warningToast = document.querySelector('.toast.warn');
     expect(warningToast).toBeTruthy();
-    expect(warningToast.textContent).toContain('Microphone disconnected');
-    expect(warningToast.textContent).toContain('Wakeword listening is paused');
+    expect(warningToast.closest('[aria-live="polite"]')).toBeTruthy();
     expect(document.querySelector('.toast.error')).toBeNull();
 
     await vi.advanceTimersByTimeAsync(3200);

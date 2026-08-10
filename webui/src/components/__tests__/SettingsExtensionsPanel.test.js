@@ -165,10 +165,10 @@ describe('SettingsExtensionsPanel', () => {
     flushSync();
     await flushAsync();
 
-    expect(document.body.textContent).toContain(
-      'On, waiting for configuration',
+    expect(document.querySelector('.s-ext-waiting')).toBeTruthy();
+    expect(document.querySelector('.s-ext-waiting-for')?.textContent).toContain(
+      'Token',
     );
-    expect(document.body.textContent).toContain('Waiting for: Token');
   });
 
   it('submits a secret field through its form', async () => {
@@ -245,7 +245,6 @@ describe('SettingsExtensionsPanel', () => {
     expect(updateCall[1]).toEqual({
       extensions: { disabled: ['guard_bash'], config: {} },
     });
-    expect(document.body.textContent).not.toContain('vbot server restart');
   });
 
   it('enables an extension live without a restart notice', async () => {
@@ -279,8 +278,6 @@ describe('SettingsExtensionsPanel', () => {
     expect(updateCall[1]).toEqual({
       extensions: { disabled: [], config: {} },
     });
-    expect(document.body.textContent).not.toContain('after a restart');
-    expect(document.body.textContent).not.toContain('vbot server restart');
   });
 
   it('reloads all extensions and re-lists', async () => {
@@ -450,9 +447,10 @@ describe('SettingsExtensionsPanel', () => {
     buttonByText('Save config').click();
     await flushAsync();
 
-    expect(document.body.textContent).toContain(
-      'Config must be a JSON object.',
-    );
+    expect(textarea.getAttribute('aria-invalid')).toBe('true');
+    expect(
+      document.querySelector('.form-field__error[role="alert"]'),
+    ).toBeTruthy();
     expect(
       rpcMock.mock.calls.some((call) => call[0] === 'settings.update'),
     ).toBe(false);

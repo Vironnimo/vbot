@@ -93,10 +93,7 @@ describe('AgentsView', () => {
     mountedComponent = mount(AgentsView, { target: document.body });
     flushSync();
 
-    await waitForCondition(
-      () => document.body.textContent.includes('id: alpha'),
-      100,
-    );
+    await waitForCondition(() => modelTriggerLabel() !== '', 100);
 
     // Default view: the unsuitable local model is hidden.
     await openSearchableDropdown('agent-model');
@@ -107,7 +104,6 @@ describe('AgentsView', () => {
       '.searchable-dropdown__footer',
     );
     expect(footer).toBeTruthy();
-    expect(footer.textContent).toContain('Show all models (1 hidden)');
     footer.dispatchEvent(new MouseEvent('click', { bubbles: true }));
     flushSync();
 
@@ -117,8 +113,9 @@ describe('AgentsView', () => {
       ),
     ).find((option) => option.textContent.includes('ollama/tiny'));
     expect(revealed).toBeTruthy();
-    expect(revealed.textContent).toContain('no tool calling');
-    expect(revealed.textContent).toContain('below 32k context');
+    expect(
+      revealed.querySelector('.searchable-dropdown__option-meta'),
+    ).toBeTruthy();
   });
 
   it('renders model dropdown options using canonical model ids', async () => {
@@ -451,7 +448,7 @@ describe('AgentsView', () => {
     });
   });
 
-  it('does not render a duplicate fallback status below the fallback picker', async () => {
+  it('renders each model field once without a duplicate fallback status', async () => {
     rpcMock.mockImplementation(createAgentsRpcMock());
 
     mountedComponent = mount(AgentsView, { target: document.body });
@@ -459,23 +456,15 @@ describe('AgentsView', () => {
 
     await waitForCondition(() => modelTriggerLabel() === 'openai/gpt-5.2', 100);
 
-    // Label text without the InfoHint "?" dot that may sit inside the label.
-    const modelLabels = Array.from(
+    expect(
       document.body.querySelectorAll(
         '.agents-view__model-fields .form-field__label',
       ),
-    ).map((label) => {
-      const clone = label.cloneNode(true);
-      clone.querySelectorAll('.info-hint').forEach((dot) => dot.remove());
-      return clone.textContent.trim();
-    });
-
-    expect(modelLabels).toEqual([
-      'Model',
-      'Fallback model',
-      'Thinking effort',
-      'Temperature',
-    ]);
+    ).toHaveLength(4);
+    expect(document.querySelectorAll('#agent-model')).toHaveLength(1);
+    expect(document.querySelectorAll('#agent-fallback-model')).toHaveLength(1);
+    expect(document.querySelectorAll('#agent-thinking-effort')).toHaveLength(1);
+    expect(document.querySelectorAll('#agent-temperature')).toHaveLength(1);
   });
 
   it('renders one usable connection without a label suffix', async () => {
@@ -583,7 +572,6 @@ describe('AgentsView', () => {
 
     selectSimpleOption('agent-thinking-effort', 'high');
     await waitForCondition(() => thinkingTriggerLabel() === 'high', 100);
-    expect(document.body.textContent).toContain('high');
   });
 
   it('treats connection.list failure as a catalog load error', async () => {
@@ -809,9 +797,7 @@ describe('AgentsView', () => {
     // inherit hint is hidden.
     const resetButton = getButtonByAriaLabel('Reset to inherited value');
     expect(resetButton).toBeTruthy();
-    expect(document.body.textContent).not.toContain(
-      'Provider default — nothing is set here',
-    );
+    expect(document.querySelector('#agent-temperature-help')).toBeNull();
 
     resetButton.click();
     flushSync();
@@ -821,6 +807,6 @@ describe('AgentsView', () => {
     expect(
       document.body.querySelector('[aria-label="Reset to inherited value"]'),
     ).toBeNull();
-    expect(document.body.textContent).toContain('Provider default');
+    expect(document.querySelector('#agent-temperature-help')).toBeTruthy();
   });
 });

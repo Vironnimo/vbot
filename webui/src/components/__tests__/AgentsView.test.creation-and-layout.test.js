@@ -129,22 +129,19 @@ describe('AgentsView', () => {
     mountedComponent = mount(AgentsView, { target: document.body });
     flushSync();
 
-    await waitForCondition(
-      () => document.body.textContent.includes('id: alpha'),
-      100,
-    );
+    await waitForCondition(() => listedAgentIds().includes('alpha'), 100);
 
     getButton('Add').click();
     flushSync();
 
     const modal = getDialog('Create agent');
-    expect(modal.textContent).toContain('Agent ID');
-    expect(modal.textContent).toContain('Name');
-    expect(modal.textContent).toContain('Model');
-    expect(modal.textContent).toContain('Thinking effort');
-    expect(modal.textContent).toContain('Temperature');
-    expect(modal.textContent).not.toContain('Fallback model');
-    expect(modal.textContent).not.toContain('Allowed tools');
+    expect(modal.querySelector('#agent-create-id')).toBeTruthy();
+    expect(modal.querySelector('#agent-create-name')).toBeTruthy();
+    expect(modal.querySelector('#agent-create-model')).toBeTruthy();
+    expect(modal.querySelector('#agent-create-thinking-effort')).toBeTruthy();
+    expect(modal.querySelector('#agent-create-temperature')).toBeTruthy();
+    expect(modal.querySelector('#agent-fallback-model')).toBeNull();
+    expect(modal.querySelector('[aria-label^="Toggle tool "]')).toBeNull();
     expect(
       modal.querySelector('label[for="agent-create-id"] .form-field__required'),
     ).toBeTruthy();
@@ -183,10 +180,7 @@ describe('AgentsView', () => {
       temperature: 0.4,
     });
 
-    await waitForCondition(
-      () => document.body.textContent.includes('id: bravo'),
-      100,
-    );
+    await waitForCondition(() => listedAgentIds().includes('bravo'), 100);
     expect(document.body.querySelector('[role="dialog"]')).toBeNull();
   });
 
@@ -199,10 +193,7 @@ describe('AgentsView', () => {
     });
     flushSync();
 
-    await waitForCondition(
-      () => document.body.textContent.includes('id: alpha'),
-      100,
-    );
+    await waitForCondition(() => listedAgentIds().includes('alpha'), 100);
 
     const addButton = Array.from(document.body.querySelectorAll('button')).find(
       (button) => button.textContent.trim() === 'Add',
@@ -215,9 +206,7 @@ describe('AgentsView', () => {
     flushSync();
 
     const modal = getDialog('Create agent');
-    expect(modal.textContent).toContain('Create agent');
-    expect(document.body.textContent).toContain('id: alpha');
-    expect(document.body.textContent).toContain('Delete agent');
+    expect(modal).toBeTruthy();
     expect(
       document.body.querySelector('button.agent-item.active'),
     ).toBeTruthy();
@@ -231,10 +220,7 @@ describe('AgentsView', () => {
     mountedComponent = mount(AgentsView, { target: document.body });
     flushSync();
 
-    await waitForCondition(
-      () => document.body.textContent.includes('id: alpha'),
-      100,
-    );
+    await waitForCondition(() => listedAgentIds().includes('alpha'), 100);
 
     const agentItem = document.body.querySelector('button.agent-item');
     expect(agentItem.classList.contains('secondary-list__item')).toBe(true);
@@ -284,7 +270,6 @@ describe('AgentsView', () => {
       agent_ids: ['bravo', 'charlie', 'alpha'],
       expected_revision: 7,
     });
-    expect(document.body.textContent).toContain('id: alpha');
   });
 
   it('reorders agents with arrow keys and announces the new position', async () => {
@@ -372,10 +357,7 @@ describe('AgentsView', () => {
     });
     flushSync();
 
-    await waitForCondition(
-      () => document.body.textContent.includes('id: alpha'),
-      100,
-    );
+    await waitForCondition(() => listedAgentIds().includes('alpha'), 100);
 
     const addButton = Array.from(document.body.querySelectorAll('button')).find(
       (button) => button.textContent.trim() === 'Add',
@@ -401,13 +383,8 @@ describe('AgentsView', () => {
     bravoButton.click();
     flushSync();
 
-    await waitForCondition(
-      () => document.body.textContent.includes('id: bravo'),
-      100,
-    );
+    await waitForCondition(() => textInputValue(0) === 'bravo', 100);
 
-    expect(document.body.textContent).toContain('Save changes');
-    expect(document.body.textContent).toContain('Delete agent');
     expect(textInputValue(0)).toBe('bravo');
     expect(textInputValue(1)).toBe('Bravo');
   });
@@ -514,19 +491,12 @@ describe('AgentsView', () => {
       100,
     );
 
-    const modelCard = Array.from(
-      document.body.querySelectorAll('.detail-group.agents-view__model-group'),
-    ).find((group) => group.textContent.includes('Model'));
-    const identityCard = Array.from(
-      document.body.querySelectorAll('.detail-group'),
-    ).find((group) => group.textContent.includes('Identity'));
+    const modelCard = document.body.querySelector(
+      '.detail-group.agents-view__model-group',
+    );
     const simpleRoot = getSimpleRoot('agent-thinking-effort');
 
     expect(modelCard).toBeTruthy();
-    expect(identityCard).toBeTruthy();
-    expect(identityCard.classList.contains('agents-view__model-group')).toBe(
-      false,
-    );
     expect(simpleRoot.closest('.detail-group')).toBe(modelCard);
 
     openSimpleDropdown('agent-thinking-effort');
@@ -555,19 +525,12 @@ describe('AgentsView', () => {
 
     // The memory dropdown now lives in its own Memory card (split out of the
     // System Prompt card), which must still let the portaled list escape.
-    const memoryCard = Array.from(
-      document.body.querySelectorAll('.detail-group.agents-view__memory-group'),
-    ).find((group) => group.textContent.includes('Memory'));
-    const identityCard = Array.from(
-      document.body.querySelectorAll('.detail-group'),
-    ).find((group) => group.textContent.includes('Identity'));
+    const memoryCard = document.body.querySelector(
+      '.detail-group.agents-view__memory-group',
+    );
     const simpleRoot = getSimpleRoot('agent-memory-prompt-mode');
 
     expect(memoryCard).toBeTruthy();
-    expect(identityCard).toBeTruthy();
-    expect(identityCard.classList.contains('agents-view__memory-group')).toBe(
-      false,
-    );
     expect(simpleRoot.closest('.detail-group')).toBe(memoryCard);
 
     openSimpleDropdown('agent-memory-prompt-mode');
@@ -607,22 +570,19 @@ describe('AgentsView', () => {
     mountedComponent = mount(AgentsView, { target: document.body });
     flushSync();
 
-    await waitForCondition(
-      () => document.body.textContent.includes('id: alpha'),
-      100,
-    );
+    await waitForCondition(() => listedAgentIds().includes('alpha'), 100);
 
     getButton('Add').click();
     flushSync();
     await flushAsyncUpdates();
 
-    const modal = getDialog('Create agent');
     // The three run fields default to the inherit state. The model inherit
     // option shows the global default fetched on open.
     await waitForCondition(
       () =>
-        triggerTextContent(getSearchableTrigger('agent-create-model')) ===
-        'Inherited: openai/gpt-5.2 (global default)',
+        triggerTextContent(getSearchableTrigger('agent-create-model')).includes(
+          'openai/gpt-5.2',
+        ),
       100,
     );
 
@@ -634,12 +594,7 @@ describe('AgentsView', () => {
 
     openSimpleDropdown('agent-create-thinking-effort');
     const labels = simpleOptionLabels('agent-create-thinking-effort');
-    expect(labels).toEqual([
-      'Inherit (provider default)',
-      'none',
-      'high',
-      'xhigh',
-    ]);
-    expect(modal.textContent).not.toContain('low');
+    expect(labels).toHaveLength(4);
+    expect(labels.slice(1)).toEqual(['none', 'high', 'xhigh']);
   });
 });

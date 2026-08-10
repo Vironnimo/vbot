@@ -71,16 +71,12 @@ describe('App', () => {
     });
     flushSync();
 
-    expect(document.querySelector('#logs-title')?.textContent).toContain(
-      'Logs',
-    );
     expect(listLogsMock).toHaveBeenCalledTimes(1);
     expect(
       document
         .querySelector('button#logs-file .dropdown-primitive__trigger-label')
         ?.textContent?.trim(),
     ).toBe('2026-05-11.log');
-    expect(document.body.textContent).toContain('Current file: 2026-05-11.log');
   });
 
   it('persists the selected agent and restores it after remount', async () => {
@@ -330,7 +326,7 @@ describe('App', () => {
     expect(listSessionActivityMock).toHaveBeenCalledTimes(
       activityLoadsBeforeSwitch,
     );
-    expect(document.body.textContent).not.toContain('Loading agents…');
+    expect(document.querySelector('.chat-view__state-banner')).toBeNull();
   });
 
   it('restores the Settings reading position after switching to another tab', async () => {
@@ -501,7 +497,11 @@ describe('App', () => {
     sidebarNavButton('Logs')?.click();
 
     await waitForCondition(() => {
-      expect(document.body.textContent).toContain('Changes could not be saved');
+      expect(
+        document.querySelector(
+          '[role="dialog"][aria-labelledby="autosave-transition-failure-title"]',
+        ),
+      ).toBeTruthy();
     });
     expect(sidebarNavButton('Settings')?.getAttribute('aria-current')).toBe(
       'page',

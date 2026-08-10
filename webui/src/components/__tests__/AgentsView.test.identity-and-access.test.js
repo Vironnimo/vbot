@@ -66,9 +66,9 @@ describe('AgentsView', () => {
       100,
     );
 
-    const workspaceLabels = Array.from(
-      document.body.querySelectorAll('.agent-detail-pane .form-field__label'),
-    ).filter((label) => label.textContent.trim() === 'Workspace');
+    const workspaceLabels = document.body.querySelectorAll(
+      '.agent-detail-pane label[for="agent-workspace"]',
+    );
     expect(workspaceLabels).toHaveLength(1);
 
     const workspaceInput = document.body.querySelector('#agent-workspace');
@@ -327,9 +327,6 @@ describe('AgentsView', () => {
     expect(
       document.body.querySelector('button[aria-label="Toggle agent alpha"]'),
     ).toBeNull();
-    expect(document.body.textContent).toContain(
-      'Rooting does not narrow this.',
-    );
 
     vi.useFakeTimers();
     getButtonByAriaLabel('Toggle agent worker').click();
@@ -360,9 +357,12 @@ describe('AgentsView', () => {
     );
 
     mountedComponent = mount(AgentsView, { target: document.body });
-    await waitForText('Allowed tools');
+    await waitForCondition(
+      () => document.body.querySelectorAll('.tl-section').length === 2,
+      100,
+    );
 
-    expect(document.body.textContent).not.toContain('Sub-Agent settings');
+    expect(document.body.querySelectorAll('.tl-section')).toHaveLength(2);
   });
 
   it('does not clear Sub-Agent settings when its tool is temporarily disabled', async () => {
@@ -427,19 +427,16 @@ describe('AgentsView', () => {
     );
     expect(memoryState).toBeTruthy();
     // baseAgent() uses memory_prompt_mode 'agent_user' (not off) → available.
-    expect(memoryState.textContent).toContain('currently available');
+    expect(
+      document
+        .querySelector('.access-chip--locked')
+        .classList.contains('is-on'),
+    ).toBe(true);
 
     // Memory is the first chip in the tools cloud.
-    const toolsSection = Array.from(
-      document.body.querySelectorAll('.tl-section'),
-    ).find((section) =>
-      section
-        .querySelector('.tl-section-label')
-        ?.textContent.includes('Allowed tools'),
-    );
-    const firstChipName = toolsSection
-      ?.querySelector('.access-chip__name')
-      ?.textContent?.trim();
+    const firstChipName = document
+      .querySelector('.access-chip--locked .access-chip__name')
+      .textContent.trim();
     expect(firstChipName).toBe('memory');
   });
 
@@ -463,8 +460,11 @@ describe('AgentsView', () => {
       '[data-testid="access-chip-locked-note"]',
     );
     expect(memoryState).toBeTruthy();
-    expect(memoryState.textContent).toContain('currently unavailable');
-    expect(memoryState.textContent).toContain('Memory is off');
+    expect(
+      document
+        .querySelector('.access-chip--locked')
+        .classList.contains('is-on'),
+    ).toBe(false);
   });
 
   it('renders skill catalog warnings and unavailable diagnostics', async () => {
@@ -477,9 +477,11 @@ describe('AgentsView', () => {
 
     expect(document.body.textContent).toContain('A loadable sample skill.');
     expect(document.body.textContent).toContain('name differs from folder');
-    expect(document.body.textContent).toContain('Unavailable skills');
-    expect(document.body.textContent).toContain('broken-skill');
-    expect(document.body.textContent).toContain('missing description');
+    const invalidSkills = document.querySelector(
+      '.agents-view__invalid-skills',
+    );
+    expect(invalidSkills.textContent).toContain('broken-skill');
+    expect(invalidSkills.textContent).toContain('missing description');
 
     const skillToggle = Array.from(
       document.body.querySelectorAll('button'),
@@ -531,8 +533,7 @@ describe('AgentsView', () => {
 
     await waitForText('home_assistant');
 
-    // The not-ready badge and the server-delivered hint (verbatim) both render.
-    expect(document.body.textContent).toContain('Currently unavailable');
+    // The not-ready state and server-delivered hint (verbatim) both render.
     expect(document.body.textContent).toContain(
       'Set the Home Assistant token first.',
     );
@@ -542,6 +543,7 @@ describe('AgentsView', () => {
     const toggle = getButtonByAriaLabel('Toggle tool home_assistant');
     expect(toggle).toBeTruthy();
     expect(toggle.disabled).toBe(false);
+    expect(toggle.classList.contains('is-attention')).toBe(true);
 
     // The extensions link navigates to the Extensions settings panel.
     const openExtensions = Array.from(

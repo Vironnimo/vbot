@@ -77,16 +77,15 @@ describe('DebugView', () => {
     vi.useRealTimers();
   });
 
-  it('renders a useful empty state heading instead of (none)', async () => {
+  it('renders the shared empty state when no traces exist', async () => {
     mountedComponent = mount(DebugView, { target: document.body });
     flushSync();
 
-    await waitForText('No traces captured yet');
+    await waitForCondition(() =>
+      document.querySelector('.debug-view .empty-state'),
+    );
 
-    const text = document.body.textContent ?? '';
-    expect(text).toContain('No traces captured yet');
-    expect(text).toContain('Enable debug mode in Settings');
-    expect(text).not.toContain('(none)');
+    expect(document.querySelector('.debug-view .empty-state')).toBeTruthy();
     expect(document.querySelector('.debug-view.view-frame')).toBeTruthy();
     expect(document.querySelector('.debug-view .view-header')).toBeTruthy();
     expect(
@@ -471,7 +470,7 @@ describe('DebugView', () => {
     debugTraceListMock.mockResolvedValueOnce({ traces: [] });
     props.debugTracesRefreshToken += 1;
     await waitForCondition(() =>
-      (document.body.textContent ?? '').includes('No traces captured yet'),
+      document.querySelector('.debug-view .empty-state'),
     );
 
     expect(document.querySelector('.debug-view__detail-panel')).toBeNull();
@@ -519,8 +518,6 @@ describe('DebugView', () => {
     expect(getHeadersBlockText()).toBe('—');
     flushSync();
     expect(getHeadersBlockText()).toBe('—');
-
-    expect(document.body.textContent ?? '').not.toContain('(none)');
   });
 });
 

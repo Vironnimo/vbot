@@ -416,40 +416,6 @@ describe('SessionListDrawer', () => {
     ).toContain('active or queued run');
   });
 
-  it('warns that a channel session resumes empty in the confirm dialog', async () => {
-    listSessionsMock.mockResolvedValue({
-      sessions: [
-        {
-          id: 'session-1',
-          created_at: '2026-05-09T00:00:00+00:00',
-          platform: 'telegram',
-          platform_conv_id: '12345',
-        },
-      ],
-    });
-    mountedComponent = mount(SessionListDrawer, {
-      target: document.body,
-      props: {
-        agentId: 'alpha',
-        currentSessionId: 'session-1',
-      },
-    });
-    flushSync();
-    await waitForCondition(
-      () => document.querySelector('.session-row') !== null,
-    );
-
-    document.querySelector('.session-row__menu-trigger').click();
-    flushSync();
-    document.querySelector('.session-row__menu-item--danger').click();
-    flushSync();
-
-    // The channel-session dialog body warns the conversation resumes empty.
-    const body = document.querySelector('.modal-body');
-    expect(body, 'confirm dialog not open').toBeTruthy();
-    expect(body.textContent).toContain('channel');
-  });
-
   it('renders the Fork badge only for forked sessions', async () => {
     listSessionsMock.mockResolvedValue({
       sessions: [

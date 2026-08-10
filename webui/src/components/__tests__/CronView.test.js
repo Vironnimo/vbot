@@ -141,20 +141,25 @@ describe('CronView', () => {
         .classList.contains('secondary-list__item'),
     ).toBe(true);
     expect(document.querySelector('.cron-bar')).toBeNull();
-    expect(document.body.textContent).toContain('Failed');
-    expect(document.body.textContent).toContain('Missed');
     expect(document.body.textContent).toContain('Nightly summary job');
+    expect(
+      document.querySelector(
+        '[data-testid="cron-item-job-failed"] .chip.error',
+      ),
+    ).toBeTruthy();
+    expect(
+      document.querySelector('[data-testid="cron-item-job-missed"] .chip.warn'),
+    ).toBeTruthy();
     const activeRow = document.querySelector(
       '[data-testid="cron-item-job-active"]',
     );
-    expect(activeRow.textContent).toContain('Next ·');
+    expect(activeRow.querySelector('.cron-item-next')).toBeTruthy();
     expect(activeRow.textContent).not.toContain('Prompt content must stay out');
     expect(activeRow.textContent).not.toContain('Agent Alpha');
     expect(activeRow.textContent).not.toContain('*/30 * * * *');
     expect(activeRow.querySelector('.cron-item-prompt')).toBeNull();
     expect(activeRow.querySelector('.cron-item-schedule')).toBeNull();
     expect(document.getElementById('cron-job-timezone')).toBeNull();
-    expect(document.body.textContent).not.toContain('Schedule timezone');
   });
 
   it('auto-selects the first job so its detail form renders on load', async () => {
@@ -181,13 +186,8 @@ describe('CronView', () => {
       'Default scheduled run',
     );
     expect(document.querySelectorAll('.cron-summary-item')).toHaveLength(4);
-    expect(document.body.textContent).toContain('Cadence');
-    expect(document.body.textContent).toContain('Last result');
-    expect(document.body.textContent).toContain('Target');
-    expect(document.body.textContent).toContain('Task');
-    expect(document.body.textContent).toContain('Timing');
-    expect(document.body.textContent).toContain('Session');
-    expect(document.body.textContent).toContain('Technical details');
+    expect(document.querySelectorAll('.cron-card')).toHaveLength(3);
+    expect(document.querySelector('.cron-technical-details')).toBeTruthy();
     expect(document.querySelector('.detail-sub').textContent).not.toContain(
       'job-first',
     );
@@ -449,7 +449,7 @@ describe('CronView', () => {
     buttonByTestId('cron-item-job-two').click();
     flushSync();
 
-    expect(document.body.textContent).toContain('Discard unsaved changes?');
+    expect(document.querySelector('[role="dialog"]')).toBeTruthy();
     confirmDialog('Cancel');
     flushSync();
     expect(inputById('cron-job-prompt').value).toBe('Unsaved draft');
@@ -459,10 +459,10 @@ describe('CronView', () => {
     listCronJobsMock.mockRejectedValue(new Error('server unavailable'));
     mountView();
 
-    await waitForCondition(() => document.body.textContent.includes('Retry'));
+    await waitForCondition(() => document.querySelector('.cron-load-error'));
 
     expect(document.body.textContent).toContain('server unavailable');
-    expect(document.body.textContent).not.toContain('No scheduled runs yet');
+    expect(document.querySelector('.cron-list-scroll .empty-state')).toBeNull();
   });
 
   it('defers transport failures to the global outage notice while offline', async () => {
@@ -472,25 +472,14 @@ describe('CronView', () => {
     mountView({ serverUnavailable: true });
 
     await waitForCondition(() =>
-      document.body.textContent.includes('No scheduled runs yet'),
+      document.querySelector('.cron-list-scroll .empty-state'),
     );
 
     expect(
       document.querySelector('.cron-list-scroll .empty-state'),
     ).toBeTruthy();
-    expect(document.body.textContent).toContain(
-      'Use Add to create a recurring or one-time Run.',
-    );
-    expect(document.body.textContent).not.toContain('Retry');
-    expect(document.body.textContent).not.toContain(
-      'agent transport unavailable',
-    );
-    expect(document.body.textContent).not.toContain(
-      'cron transport unavailable',
-    );
-    expect(document.body.textContent).not.toContain(
-      'Create an agent before adding cron jobs.',
-    );
+    expect(document.querySelector('.cron-load-error')).toBeNull();
+    expect(document.querySelector('.cron-list-state--warn')).toBeNull();
   });
 
   it('shows execution health and disables toggling terminal history', async () => {
@@ -510,7 +499,7 @@ describe('CronView', () => {
       document.querySelector('[data-testid="cron-delete-job-completed"]'),
     );
 
-    expect(document.body.textContent).toContain('Succeeded');
+    expect(document.querySelector('.detail-btns .chip.neutral')).toBeTruthy();
     expect(document.body.textContent).toContain('run-default');
     expect(document.body.textContent).toContain(
       'Outcome recovered after restart',

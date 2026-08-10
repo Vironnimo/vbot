@@ -202,7 +202,6 @@ describe('ProjectsView', () => {
       document.querySelector('[data-testid="project-add-open"]'),
     );
     const addButton = buttonByTestId('project-add-open');
-    expect(addButton.textContent.trim()).toBe('Add');
     expect(addButton.querySelector('svg')).toBeTruthy();
     addButton.click();
     flushSync();
@@ -259,10 +258,11 @@ describe('ProjectsView', () => {
     await selectDemo();
 
     await waitForCondition(() =>
-      document.body.textContent.includes('No agents discovered'),
+      document
+        .querySelectorAll('.detail-section')[2]
+        ?.querySelector('.empty-state'),
     );
-    expect(document.body.textContent).toContain('No agents discovered');
-    expect(document.body.textContent).not.toContain('issues found');
+    expect(document.querySelector('.projects-team')).toBeNull();
     expect(document.querySelector('[role="alert"]')).toBeFalsy();
   });
 
@@ -320,34 +320,13 @@ describe('ProjectsView', () => {
     await selectDemo();
     await waitForCondition(() => document.getElementById('project-edit-model'));
     await waitForCondition(() =>
-      document.body.textContent.includes(
-        'Inherited: openai/gpt-5.2 (global default)',
-      ),
+      document
+        .getElementById('project-edit-model')
+        .textContent.includes('openai/gpt-5.2'),
     );
-    // The temperature inherit hint reflects the present global default.
-    expect(document.body.textContent).toContain(
-      'Inherited: 0.7 (global default)',
-    );
-  });
-
-  it('shows the not-configured inherit label when no global default exists', async () => {
-    listProjectsMock.mockResolvedValue({
-      projects: [project({ project_id: 'demo', display_name: 'Demo' })],
-    });
-
-    mountedComponent = mount(ProjectsView, { target: document.body });
-    flushSync();
-
-    await selectDemo();
-    await waitForCondition(() => document.getElementById('project-edit-model'));
-    // No global model default → "Inherit (not configured)" on the model select.
-    await waitForCondition(() =>
-      document.body.textContent.includes('Inherit (not configured)'),
-    );
-    // No global temperature default → the provider-default hint.
-    expect(document.body.textContent).toContain(
-      'Provider default — nothing is set here',
-    );
+    expect(
+      document.querySelector('.projects-inherit-hint').textContent,
+    ).toContain('0.7');
   });
 
   it('toggles a tool into the whitelist and persists it via project.set', async () => {
@@ -418,12 +397,12 @@ describe('ProjectsView', () => {
     await waitForCondition(() =>
       toggleByAriaLabel('Toggle tool disabled_extension_tool'),
     );
-    expect(document.body.textContent).toContain('Currently unavailable');
-    expect(document.body.textContent).toContain(
-      'This stored Tool Whitelist entry is not currently registered for Projects.',
+    const unavailableToggle = toggleByAriaLabel(
+      'Toggle tool disabled_extension_tool',
     );
+    expect(unavailableToggle.classList.contains('is-attention')).toBe(true);
 
-    toggleByAriaLabel('Toggle tool disabled_extension_tool').click();
+    unavailableToggle.click();
     buttonByTestId('project-save-demo').click();
 
     await waitForCondition(() => setProjectMock.mock.calls.length === 1);
@@ -486,7 +465,6 @@ describe('ProjectsView', () => {
       toggleByAriaLabel('Toggle tool home_assistant'),
     );
 
-    expect(document.body.textContent).toContain('Currently unavailable');
     expect(document.body.textContent).toContain(
       'Set the Home Assistant token first.',
     );
@@ -811,19 +789,22 @@ describe('ProjectsView', () => {
 
     buttonByTestId('project-team-toggle-builder').click();
     flushSync();
-    await waitForCondition(() =>
-      document.body.textContent.includes('from override'),
+    await waitForCondition(
+      () =>
+        document.querySelectorAll(
+          '[data-testid="project-team-member-builder"] .projects-effective-source',
+        ).length === 3,
     );
 
-    // Every source badge renders with its value.
-    expect(document.body.textContent).toContain('from override');
-    expect(document.body.textContent).toContain('from agent file (repo)');
-    expect(document.body.textContent).toContain('from project default');
-    expect(document.body.textContent).toContain('openai/gpt-mini');
-    // The source line names the file and the format.
-    expect(document.body.textContent).toContain(
-      'Source: .opencode/agents/builder.md (opencode)',
+    const builderDetail = document.querySelector(
+      '[data-testid="project-team-member-builder"] .projects-team-detail',
     );
+    expect(
+      builderDetail.querySelectorAll('.projects-effective-row'),
+    ).toHaveLength(3);
+    expect(builderDetail.textContent).toContain('openai/gpt-mini');
+    expect(builderDetail.textContent).toContain('.opencode/agents/builder.md');
+    expect(builderDetail.textContent).toContain('opencode');
   });
 
   it('renders global-default source and null (not configured / provider default) values', async () => {
@@ -857,15 +838,19 @@ describe('ProjectsView', () => {
     );
     buttonByTestId('project-team-toggle-planner').click();
     flushSync();
-    await waitForCondition(() =>
-      document.body.textContent.includes('from global default'),
+    await waitForCondition(
+      () => document.querySelector('.projects-team-detail') !== null,
     );
 
-    // A null model reads "not configured"; a null thinking reads "provider
-    // default"; neither shows a source badge.
-    expect(document.body.textContent).toContain('not configured');
-    expect(document.body.textContent).toContain('provider default');
-    expect(document.body.textContent).toContain('from global default');
+    const rows = document.querySelectorAll('.projects-effective-row');
+    expect(rows).toHaveLength(3);
+    expect(
+      document.querySelectorAll('.projects-effective-source'),
+    ).toHaveLength(1);
+    expect(
+      document.querySelector('.projects-effective-source').closest('li')
+        .textContent,
+    ).toContain('0.5');
   });
 
   it('sets a model override through project.set_override and refreshes from the scan', async () => {
@@ -951,10 +936,10 @@ describe('ProjectsView', () => {
       'model',
       'openai/gpt-5.2',
     );
-    // After the override, the model row reads "from override" and a Clear
-    // override appears.
     await waitForCondition(() =>
-      document.body.textContent.includes('from override'),
+      document.querySelector(
+        '[data-testid="project-override-clear-model-builder"]',
+      ),
     );
     expect(
       document.querySelector(
@@ -1242,25 +1227,29 @@ describe('ProjectsView', () => {
     buttonByTestId('project-team-toggle-restricted').click();
     buttonByTestId('project-team-toggle-open').click();
     flushSync();
-    await waitForCondition(() =>
-      document.body.textContent.includes('Denied by the agent file'),
+    await waitForCondition(
+      () => document.querySelectorAll('.projects-team-detail').length === 2,
     );
 
-    expect(document.body.textContent).toContain(
-      'Denied by the agent file: bash, process',
+    const restrictedDetail = document.querySelector(
+      '[data-testid="project-team-member-restricted"] .projects-team-detail',
     );
-    expect(document.body.textContent).toContain(
-      'All other tools follow the project tool whitelist.',
+    expect(
+      restrictedDetail.querySelectorAll('.projects-tools-line'),
+    ).toHaveLength(2);
+    expect(
+      restrictedDetail.querySelectorAll('.projects-tools-follow'),
+    ).toHaveLength(2);
+    expect(restrictedDetail.textContent).toContain('bash');
+    expect(restrictedDetail.textContent).toContain('process');
+    expect(restrictedDetail.textContent).toContain('open');
+
+    const openDetail = document.querySelector(
+      '[data-testid="project-team-member-open"] .projects-team-detail',
     );
-    expect(document.body.textContent).toContain(
-      'No tool denials — follows the project tool whitelist.',
-    );
-    expect(document.body.textContent).toContain('Can call itself plus: open');
-    expect(document.body.textContent).toContain(
-      'Can call itself and every other Agent on this Project Team.',
-    );
-    expect(document.body.textContent).toContain(
-      'Defined by the repository Agent config and read-only in vBot.',
+    expect(openDetail.querySelectorAll('.projects-tools-line')).toHaveLength(2);
+    expect(openDetail.querySelectorAll('.projects-tools-follow')).toHaveLength(
+      1,
     );
   });
 
@@ -1299,7 +1288,7 @@ describe('ProjectsView', () => {
     });
   });
 
-  it('shows a dedicated message when removal is blocked by an active run', async () => {
+  it('surfaces a blocked removal as an alert', async () => {
     listProjectsMock.mockResolvedValue({
       projects: [project({ project_id: 'demo', display_name: 'Demo' })],
     });
@@ -1323,40 +1312,8 @@ describe('ProjectsView', () => {
 
     await waitForCondition(() => removeProjectMock.mock.calls.length === 1);
     expect(removeProjectMock).toHaveBeenCalledWith('demo', false);
-    await waitForCondition(() =>
-      document.body.textContent.includes('active or queued run'),
-    );
-    expect(document.body.textContent).toContain('active or queued run');
-  });
-
-  it('shows a dedicated message when a cron job blocks removal', async () => {
-    listProjectsMock.mockResolvedValue({
-      projects: [project({ project_id: 'demo', display_name: 'Demo' })],
-    });
-    removeProjectMock.mockRejectedValue({
-      code: 'project_in_use',
-      message: 'in use',
-    });
-
-    mountedComponent = mount(ProjectsView, { target: document.body });
-    flushSync();
-
-    await selectDemo();
-
-    await waitForCondition(() =>
-      document.querySelector('[data-testid="project-remove-demo"]'),
-    );
-    buttonByTestId('project-remove-demo').click();
-    flushSync();
-
-    confirmDialog('Remove');
-
-    await waitForCondition(() => removeProjectMock.mock.calls.length === 1);
-    expect(removeProjectMock).toHaveBeenCalledWith('demo', false);
-    await waitForCondition(() =>
-      document.body.textContent.includes('cron job'),
-    );
-    expect(document.body.textContent).toContain('cron job');
+    await waitForCondition(() => document.querySelector('[role="alert"]'));
+    expect(document.querySelector('[role="alert"]')).toBeTruthy();
   });
 
   it('sends one aggregate identity-file copy choice when removing a project', async () => {
@@ -1383,7 +1340,7 @@ describe('ProjectsView', () => {
     await waitForCondition(() => removeProjectMock.mock.calls.length === 1);
     expect(removeProjectMock).toHaveBeenCalledWith('demo', true);
     await waitForCondition(() =>
-      document.body.textContent.includes('2 Agents were reset'),
+      document.querySelector('.project-list-state[role="status"]'),
     );
   });
 

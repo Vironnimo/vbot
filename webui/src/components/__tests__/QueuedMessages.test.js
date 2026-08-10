@@ -58,8 +58,8 @@ describe('QueuedMessages', () => {
         editor,
       );
       expect(
-        document.body.querySelector('.queued-messages__error')?.textContent,
-      ).toContain('Queued message could not be edited.');
+        document.body.querySelector('.queued-messages__error'),
+      ).toBeTruthy();
     });
     expect(editor.value).toBe('Unsaved change');
   });

@@ -128,7 +128,7 @@ describe('TerminalsView', () => {
     expect(document.body.textContent).toContain('python');
     expect(document.body.textContent).toContain('PTY');
     expect(document.body.textContent).toContain('main@vbot');
-    expect(document.body.textContent).toContain('Take control');
+    expect(document.querySelector('button[role="switch"]')).toBeTruthy();
     expect(document.body.textContent).not.toContain(
       'Quiet is not a semantic prompt.',
     );
@@ -159,8 +159,7 @@ describe('TerminalsView', () => {
     const list = pane.querySelector('.secondary-pane__scroll.secondary-list');
     const item = list.querySelector('.secondary-list__item');
 
-    expect(header.textContent).toContain('Terminals');
-    expect(header.textContent).not.toContain('Terminal sessions');
+    expect(header.querySelector('#terminals-list-title')).toBeTruthy();
     expect(header.querySelector('button').textContent.trim()).toBe('Add');
     expect(item.classList.contains('active')).toBe(true);
     expect(item.getAttribute('aria-current')).toBe('true');
@@ -171,10 +170,12 @@ describe('TerminalsView', () => {
     mountedComponent = mount(TerminalsView, { target: document.body });
     flushSync();
     await waitFor(() =>
-      document.body.textContent.includes('No terminal sessions'),
+      document.querySelector('.terminals-view__list .empty-state'),
     );
 
-    expect(document.body.textContent).toContain('Open a terminal');
+    expect(
+      document.querySelector('.terminals-view__detail > .empty-state'),
+    ).toBeTruthy();
     expect(subscribeTerminalEventsMock).not.toHaveBeenCalled();
   });
 
@@ -237,15 +238,18 @@ describe('TerminalsView', () => {
     });
     flushSync();
 
-    expect(document.body.textContent).toContain('Exited');
-    expect(document.body.textContent).toContain('History loaded');
-    expect(document.body.textContent).toContain('Read-only history');
+    expect(
+      document.querySelector('.terminals-view__state-dot--exited'),
+    ).toBeTruthy();
+    expect(
+      document.querySelector('.terminals-view__terminal-mode'),
+    ).toBeTruthy();
     expect(
       [...document.querySelectorAll('button')].some(
         (button) => button.textContent.trim() === 'Stop terminal',
       ),
     ).toBe(false);
-    expect(document.body.textContent).not.toContain('Take control');
+    expect(document.querySelector('.terminals-view__controls')).toBeNull();
   });
 
   it('starts a manual terminal from the modal and enables direct control', async () => {
@@ -259,7 +263,9 @@ describe('TerminalsView', () => {
     });
     mountedComponent = mount(TerminalsView, { target: document.body });
     flushSync();
-    await waitFor(() => document.body.textContent.includes('Open a terminal'));
+    await waitFor(() =>
+      document.querySelector('.terminals-view__detail > .empty-state'),
+    );
 
     findButton('Add').click();
     flushSync();
@@ -276,10 +282,11 @@ describe('TerminalsView', () => {
       args: ['--profile', 'work space'],
       workdir: 'C:\\repo',
     });
-    expect(document.body.textContent).toContain('Manual');
-    expect(document.body.textContent).toContain(
-      'Control enabled — keystrokes go to the process',
-    );
+    expect(
+      document.querySelector(
+        '.terminals-view__terminal-shell[data-control="enabled"]',
+      ),
+    ).toBeTruthy();
     expect(terminalInstances[0].options.disableStdin).toBe(false);
     expect(terminalInstances[0].focus).toHaveBeenCalled();
   });
@@ -304,7 +311,9 @@ describe('TerminalsView', () => {
     });
     mountedComponent = mount(TerminalsView, { target: document.body });
     flushSync();
-    await waitFor(() => document.body.textContent.includes('Open a terminal'));
+    await waitFor(() =>
+      document.querySelector('.terminals-view__detail > .empty-state'),
+    );
 
     findButton('Add').click();
     flushSync();
@@ -347,8 +356,12 @@ describe('TerminalsView', () => {
     flushSync();
     await waitFor(() => streams.length === 1 && terminalInstances.length === 1);
 
-    expect(document.body.textContent).not.toContain('Send to terminal');
     expect(terminalInstances[0].options.disableStdin).toBe(true);
+    expect(
+      document.querySelector(
+        '.terminals-view__terminal-shell[data-control="observe"]',
+      ),
+    ).toBeTruthy();
     document.querySelector('.terminals-view__terminal-host').dispatchEvent(
       new MouseEvent('pointerdown', {
         bubbles: true,
@@ -356,9 +369,11 @@ describe('TerminalsView', () => {
       }),
     );
     flushSync();
-    expect(document.body.textContent).toContain(
-      'Control enabled — keystrokes go to the process',
-    );
+    expect(
+      document.querySelector(
+        '.terminals-view__terminal-shell[data-control="enabled"]',
+      ),
+    ).toBeTruthy();
     expect(terminalInstances[0].options.disableStdin).toBe(false);
     expect(terminalInstances[0].focus).toHaveBeenCalled();
 

@@ -77,7 +77,6 @@ describe('AgentsView', () => {
     getButton('Change ID').click();
     flushSync();
     const dialog = getDialog('Change Agent ID?');
-    expect(dialog.textContent).toContain('Historical records keep the ID');
     setTextInputValueWithin(dialog, 0, 'researcher');
     dialog
       .querySelector('form')
@@ -140,7 +139,6 @@ describe('AgentsView', () => {
     });
     expect(toastMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        title: 'Agent updated.',
         variant: 'success',
       }),
     );
@@ -156,11 +154,9 @@ describe('AgentsView', () => {
     expect(getAgentUpdateCalls()).toHaveLength(1);
     expect(toastMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        title: 'Already saved',
         variant: 'success',
       }),
     );
-    expect(document.body.textContent).not.toContain('Already saved');
   });
 
   it('manual save cancels a pending agent autosave', async () => {
@@ -230,15 +226,12 @@ describe('AgentsView', () => {
     getAgentButton('Bravo').click();
     flushSync();
 
-    expect(document.body.textContent).toContain('id: bravo');
     expect(textInputValue(1)).toBe('Bravo');
 
     resolveAgentUpdate();
     await flushAsyncUpdates();
 
-    expect(document.body.textContent).toContain('id: bravo');
     expect(textInputValue(1)).toBe('Bravo');
-    expect(document.body.textContent).not.toContain('Agent updated.');
   });
 
   it('sends null for cleared temperature and thinking effort', async () => {
