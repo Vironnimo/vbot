@@ -8,6 +8,7 @@
     matchMentionCandidates,
   } from '$lib/fileMentions.js';
   import { t } from '$lib/i18n.js';
+  import { parseModelSelectionValue } from '$lib/modelSelection.js';
   import { agentNeedsModel } from '$lib/onboarding.js';
   import { parseAgentAddress } from '$lib/agentAddress.js';
   import { tooltip } from '$lib/tooltip.js';
@@ -392,6 +393,13 @@
         (member) => member.agent_id === selectedProjectAgentId,
       ) ?? null
     );
+  }
+
+  function agentActivityTooltip(activityLabel, modelValue) {
+    const { model } = parseModelSelectionValue(
+      typeof modelValue === 'string' ? modelValue.trim() : '',
+    );
+    return model ? `${activityLabel}\n${model}` : activityLabel;
   }
 
   // The outside address of the agent that owns the non-override ("current")
@@ -1809,12 +1817,16 @@
                   : t('chat.agentActivity.idle', '{name}: Idle', {
                       name: memberName,
                     })}
+            {@const memberActivityTooltip = agentActivityTooltip(
+              memberActivityLabel,
+              member.effective?.model?.value,
+            )}
             <button
               type="button"
               class="agent-tab chat-view__project-tab"
               class:active={member.agent_id === displayedProjectAgentId}
               aria-label={memberActivityLabel}
-              use:tooltip={memberActivityLabel}
+              use:tooltip={memberActivityTooltip}
               onclick={() => handleSelectProjectAgent(member.agent_id)}
             >
               <span

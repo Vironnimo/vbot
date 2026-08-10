@@ -7,6 +7,7 @@ import {
   createChatRpcMock,
   expect,
   flushSync,
+  hoveredTooltipText,
   it,
   listQueueMock,
   listSessionsMock,
@@ -20,6 +21,63 @@ import {
 
 describe('ChatView', () => {
   const chatViewTest = setupChatViewTestSuite();
+
+  it('shows each agent effective provider/model in the activity hover', async () => {
+    rpcMock.mockImplementation(createChatRpcMock());
+    showProjectMock.mockResolvedValue({
+      project: { project_id: 'vbot', default_agent: 'builder' },
+      scan: {
+        team: [
+          {
+            agent_id: 'builder',
+            display_name: 'Builder',
+            model: 'anthropic/claude-sonnet-4',
+            effective: {
+              model: {
+                value: 'openai/gpt-5.2::subscription',
+                source: 'override',
+              },
+            },
+          },
+        ],
+        report: { clean: true, findings: [] },
+      },
+    });
+
+    chatViewTest.mount({
+      target: document.body,
+      props: {
+        sharedAgents: [
+          createAgent({
+            model: 'openrouter/anthropic/claude-sonnet-4::api-key:work',
+          }),
+        ],
+        sharedSelectedAgentId: 'alpha',
+        projects: [{ project_id: 'vbot', display_name: 'vBot' }],
+        selectedProjectId: 'vbot',
+      },
+    });
+    flushSync();
+
+    await waitForCondition(
+      () =>
+        document.querySelector('.chat-view__project-team .agent-tab') !== null,
+      100,
+    );
+
+    expect(
+      await hoveredTooltipText(
+        document.querySelector('.chat-header .agent-tab'),
+        'Alpha: Idle\nopenrouter/anthropic/claude-sonnet-4',
+      ),
+    ).toBe('Alpha: Idle\nopenrouter/anthropic/claude-sonnet-4');
+    expect(
+      await hoveredTooltipText(
+        document.querySelector('.chat-view__project-team .agent-tab'),
+        'Builder: Idle\nopenai/gpt-5.2',
+      ),
+    ).toBe('Builder: Idle\nopenai/gpt-5.2');
+  });
 
   it('renders the project dropdown with no project selected and identity chat unchanged', async () => {
     rpcMock.mockImplementation(createChatRpcMock());
