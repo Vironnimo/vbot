@@ -761,6 +761,80 @@ async def test_stream_typed_list_delta_thinking_yields_reasoning_delta(
 
 @respx.mock
 @pytest.mark.asyncio
+async def test_stream_typed_content_preserves_following_tool_call_deltas(
+    mistral_adapter: MistralAdapter,
+) -> None:
+    chunks = [
+        {
+            "choices": [
+                {
+                    "delta": {
+                        "content": [
+                            {"type": "thinking", "thinking": "Need a tool."},
+                        ]
+                    }
+                }
+            ]
+        },
+        {
+            "choices": [
+                {
+                    "delta": {
+                        "tool_calls": [
+                            {
+                                "index": 0,
+                                "id": "call_123",
+                                "function": {
+                                    "name": "status",
+                                    "arguments": "{}",
+                                },
+                            }
+                        ]
+                    }
+                }
+            ]
+        },
+        {"choices": [{"delta": {}, "finish_reason": "stop"}]},
+    ]
+    sse_body = "".join(f"data: {json.dumps(chunk)}\n\n" for chunk in chunks)
+    sse_body += "data: [DONE]\n\n"
+    respx.post(MISTRAL_URL).mock(
+        return_value=httpx.Response(
+            200,
+            text=sse_body,
+            headers={"content-type": "text/event-stream"},
+        )
+    )
+
+    normalized = []
+    async for stream_chunk in mistral_adapter.stream(
+        SAMPLE_MESSAGES, model_id="mistral-large-latest"
+    ):
+        normalized.append(stream_chunk)
+
+    assert normalized == [
+        {"type": "reasoning_delta", "text": "Need a tool."},
+        {
+            "type": "tool_call_delta",
+            "slot": 0,
+            "name_delta": "status",
+            "arguments_delta": "{}",
+            "id": "call_123",
+        },
+        {
+            "type": "reasoning_meta",
+            "reasoning_meta": {
+                "content_chunks": [
+                    {"type": "thinking", "thinking": "Need a tool."},
+                ]
+            },
+        },
+        {"type": "finish", "reason": "tool_calls"},
+    ]
+
+
+@respx.mock
+@pytest.mark.asyncio
 async def test_stream_typed_list_delta_text_yields_content_delta(
     mistral_adapter: MistralAdapter,
 ) -> None:

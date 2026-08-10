@@ -529,6 +529,55 @@ describe('LogsView', () => {
       { cursor: 'cursor-reconnect' },
     );
   });
+
+  it('keeps reconnecting after a reconnect attempt fails during a server restart', async () => {
+    vi.useFakeTimers();
+    vi.spyOn(Math, 'random').mockReturnValue(0.5);
+
+    listLogsMock
+      .mockResolvedValueOnce({
+        files: ['2026-05-11'],
+        default_file: '2026-05-11',
+      })
+      .mockRejectedValueOnce(new Error('server unavailable'))
+      .mockResolvedValue({
+        files: ['2026-05-11'],
+        default_file: '2026-05-11',
+      });
+    readLogFileMock
+      .mockResolvedValueOnce({
+        file: '2026-05-11',
+        entries: [entry({ message: 'Before restart' })],
+        cursor: 'cursor-before-restart',
+      })
+      .mockResolvedValue({
+        file: '2026-05-11',
+        entries: [entry({ message: 'After restart' })],
+        cursor: 'cursor-after-restart',
+      });
+
+    mountedComponent = mount(LogsView, { target: document.body });
+    flushSync();
+    await waitForCondition(() => streamConnections.length === 1, 40, true);
+
+    streamConnections[0].emitClose();
+    await vi.advanceTimersByTimeAsync(1000);
+    flushSync();
+    expect(listLogsMock).toHaveBeenCalledTimes(2);
+    expect(document.body.textContent).toContain('Reconnecting…');
+
+    await vi.advanceTimersByTimeAsync(2000);
+    flushSync();
+    await waitForCondition(() => streamConnections.length === 2, 40, true);
+
+    expect(listLogsMock).toHaveBeenCalledTimes(3);
+    expect(document.body.textContent).toContain('After restart');
+    expect(subscribeLogEventsMock).toHaveBeenLastCalledWith(
+      '2026-05-11',
+      expect.any(Object),
+      { cursor: 'cursor-after-restart' },
+    );
+  });
 });
 
 function createStreamConnection(file, handlers) {

@@ -130,11 +130,52 @@ describe('ChatComposer', () => {
     document.body
       .querySelector('.skill-autocomplete__option')
       .dispatchEvent(new MouseEvent('click', { bubbles: true }));
-    await Promise.resolve();
-    flushSync();
+    await flushComposerAsyncWork();
 
     expect(onSendMessage).toHaveBeenCalledWith('/status');
     expect(input.value).toBe('');
+  });
+
+  it('does not run an immediate command while another submit is in flight', async () => {
+    let resolveSend;
+    const onSendMessage = vi.fn(
+      () =>
+        new Promise((resolve) => {
+          resolveSend = resolve;
+        }),
+    );
+    mountedComponent = mount(ChatComposer, {
+      target: document.body,
+      props: {
+        onSendMessage,
+        availableSkills: [
+          {
+            name: 'status',
+            description: 'Show current session and runtime status.',
+            type: 'command',
+            argument: 'none',
+          },
+        ],
+      },
+    });
+    flushSync();
+
+    typeInComposer(composerInput(), 'first');
+    submitComposer();
+    expect(onSendMessage).toHaveBeenCalledTimes(1);
+
+    typeInComposer(composerInput(), '/stat');
+    document.body
+      .querySelector('.skill-autocomplete__option')
+      .dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await Promise.resolve();
+    flushSync();
+
+    expect(onSendMessage).toHaveBeenCalledTimes(1);
+    expect(composerInput().value).toBe('/stat');
+
+    resolveSend(true);
+    await flushComposerAsyncWork();
   });
 
   it('inserts an argument-bearing command instead of running it', async () => {

@@ -541,6 +541,41 @@ async def test_cron_service_aclose_awaits_cancelled_job_tasks(
 
 
 @pytest.mark.asyncio
+async def test_unexpected_scheduler_task_failure_marks_job_failed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    service, _trigger_service = make_service(tmp_path)
+    job = service.create_job(
+        agent_id="agent-one",
+        prompt="Cron active",
+        schedule_type="cron",
+        cron_expression="* * * * *",
+    )
+
+    async def fail_scheduler_task(_job: object) -> None:
+        raise RuntimeError("scheduler invariant failed")
+
+    monkeypatch.setattr(service, "_run_cron_job", fail_scheduler_task)
+
+    with caplog.at_level(logging.ERROR, logger="vbot.automation.cron"):
+        service.start()
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+
+    failed = service.get_job(job.id)
+    persisted = json.loads((tmp_path / "cron" / "jobs.json").read_text(encoding="utf-8"))
+    assert failed.status == "failed"
+    assert failed.last_outcome == "failed"
+    assert failed.last_error == "scheduler invariant failed"
+    assert failed.consecutive_failures == 1
+    assert job.id not in service._job_tasks
+    assert persisted[0]["status"] == "failed"
+    assert any("Cron job task failed" in record.getMessage() for record in caplog.records)
+
+
+@pytest.mark.asyncio
 async def test_run_once_job_fires_and_marks_completed(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

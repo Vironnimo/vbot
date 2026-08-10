@@ -17,6 +17,7 @@ from core.providers.openai_compatible import (
     _extract_stream_usage,
     _first_choice_message,
     _normalize_openai_finish_reason,
+    _normalize_openai_tool_call_deltas,
     _parse_optional_int,
     _read_optional_non_empty_string,
     _read_string,
@@ -315,6 +316,7 @@ class MistralAdapter(OpenAICompatibleAdapter):
                             text = item.get("text")
                             if isinstance(text, str) and text:
                                 normalized_deltas.append({"type": "content_delta", "text": text})
+                normalized_deltas.extend(_normalize_openai_tool_call_deltas(delta, tool_call_slots))
 
             finish_reason = choice.get("finish_reason")
             if finish_reason is not None:

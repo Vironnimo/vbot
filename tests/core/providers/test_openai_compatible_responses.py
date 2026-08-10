@@ -493,7 +493,7 @@ class TestNormalizeResponseUsage:
         assert normalized["usage"] == {"input_tokens": 42, "output_tokens": 13}
 
     def test_usage_included_when_only_prompt_tokens_present(self, openai_adapter):
-        """usage is present with output_tokens defaulting to 0 when only prompt_tokens is given."""
+        """A missing completion counter remains absent instead of becoming a measured zero."""
         response = {
             "choices": [
                 {
@@ -510,7 +510,26 @@ class TestNormalizeResponseUsage:
 
         normalized = openai_adapter.normalize_response(response)
 
-        assert normalized["usage"] == {"input_tokens": 100, "output_tokens": 0}
+        assert normalized["usage"] == {"input_tokens": 100}
+
+    def test_usage_included_when_only_completion_tokens_present(self, openai_adapter):
+        response = {
+            "choices": [
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": "Hi",
+                    }
+                }
+            ],
+            "usage": {
+                "completion_tokens": 7,
+            },
+        }
+
+        normalized = openai_adapter.normalize_response(response)
+
+        assert normalized["usage"] == {"output_tokens": 7}
 
     def test_usage_preserves_reported_token_details(self, openai_adapter):
         """Prompt cache and output Reasoning subsets remain canonical Usage details."""

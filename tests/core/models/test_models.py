@@ -1639,6 +1639,47 @@ class TestModelRegistryRealResources:
 
 
 class TestCustomModelOverlay:
+    @staticmethod
+    def _custom_provider(model_name: str) -> dict[str, dict[str, object]]:
+        return {
+            model_name: {
+                "models": {
+                    "chat-model": {
+                        "name": model_name,
+                        "capabilities": {
+                            "vision": False,
+                            "tools": True,
+                            "json_mode": False,
+                            "reasoning": False,
+                            "input_modalities": ["text"],
+                            "output_modalities": ["text"],
+                            "supported_parameters": [],
+                            "supported_voices": [],
+                            "task_types": ["chat"],
+                            "task_options": {},
+                        },
+                    }
+                }
+            }
+        }
+
+    def test_custom_provider_registries_do_not_share_the_path_cache(self, tmp_path: Path) -> None:
+        first = ModelRegistry.load(
+            tmp_path,
+            custom_providers=self._custom_provider("first"),
+        )
+        second = ModelRegistry.load(
+            tmp_path,
+            custom_providers=self._custom_provider("second"),
+        )
+        bundled_only = ModelRegistry.load(tmp_path)
+
+        assert first is not second
+        assert first.get("first", "chat-model").name == "first"
+        assert second.get("second", "chat-model").name == "second"
+        assert bundled_only.list_for_provider("first") == []
+        assert bundled_only.list_for_provider("second") == []
+
     def test_manual_custom_model_overlays_discovered_record(self, tmp_path: Path) -> None:
         models_dir = tmp_path / "models"
         models_dir.mkdir()

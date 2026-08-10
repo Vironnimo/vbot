@@ -825,9 +825,15 @@ async def _validate_public_target(scheme: str, host: str | None, port: int) -> t
 
 
 async def _request_with_retry(session: AsyncSession, url: str) -> _FetchResult:
-    """Fetch a URL and retry retryable status codes with backoff and jitter."""
+    """Fetch a URL and retry transient transport/status failures with backoff."""
     for attempt in range(MAX_RETRIES + 1):
-        result = await _http_get(session, url)
+        try:
+            result = await _http_get(session, url)
+        except RequestException:
+            if attempt >= MAX_RETRIES:
+                raise
+            await sleep_for_retry(attempt)
+            continue
         # GET is idempotent — safe to repeat (includes a transient 500).
         if (
             result.status_code >= 400
@@ -1113,14 +1119,12 @@ def make_web_fetch_handler(attachment_store: Any) -> ToolHandler:
             _LOGGER.warning("web_fetch redirect limit exceeded for %s", url)
             return tool_failure("request_error", str(error), retryable=False)
         except RequestException as error:
-            # Transport errors are not retried by web_fetch's status-only retry loop,
-            # so the tool made a single attempt; the failure is still transient.
             _LOGGER.warning("web_fetch request failed for %s: %s", url, error)
             return tool_failure(
                 "request_error",
                 f"request failed while fetching URL: {error}",
                 retryable=True,
-                attempts_made=1,
+                attempts_made=MAX_RETRIES + 1,
             )
 
         if result.status_code >= 400:

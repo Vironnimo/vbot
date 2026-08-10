@@ -519,18 +519,15 @@
     })),
   });
 
-  const submit = async () => {
-    const snapshot = createSubmitSnapshot();
-    const trimmedContent = content.trim();
-    const hasPendingAttachments = pendingAttachments.length > 0;
+  const submitBlocked = (snapshot) =>
+    disabled ||
+    submitInFlight ||
+    hasUploadingAttachments ||
+    voiceBusy ||
+    (!snapshot.trimmedContent && snapshot.attachments.length === 0);
 
-    if (
-      disabled ||
-      submitInFlight ||
-      hasUploadingAttachments ||
-      voiceBusy ||
-      (!trimmedContent && !hasPendingAttachments)
-    ) {
+  const submit = async (snapshot = createSubmitSnapshot()) => {
+    if (submitBlocked(snapshot)) {
       return;
     }
 
@@ -1039,26 +1036,38 @@
   };
 
   // A no-argument built-in command runs the instant it is chosen from the `/`
-  // popup — no token is inserted and no second Enter is needed. The partial
-  // token the user typed (e.g. `/stat`) is cleared first, mirroring submit()'s
-  // reset block, then the canonical command is sent. Backend command dispatch
-  // runs before the run path, so this never enters the busy-session queue.
+  // popup — no second Enter is needed. Replace the partial token with the
+  // canonical command before using the regular guarded submit path so failures
+  // leave a retryable draft and successful admission clears it normally.
   const executeImmediateCommand = (skill) => {
     const normalizedName = String(skill.name).replace(/^\/+/, '');
     if (!normalizedName) {
       return;
     }
-    content = '';
+    const command = `/${normalizedName}`;
+    const candidateSnapshot = {
+      ...createSubmitSnapshot(),
+      content: command,
+      trimmedContent: command,
+      inputOrigin: '',
+      mentionTokens: [],
+      attachments: [],
+    };
+    if (submitBlocked(candidateSnapshot)) {
+      return;
+    }
+
+    content = command;
+    setDraft(draftKey, command);
     inputOrigin = '';
     triggerContext = null;
     activeSkillIndex = 0;
     _triggerClosed = true;
     isDragOver = false;
-    clearDraft(draftKey);
     historyCursor = -1;
     navWorkingCopies = {};
     resetInputHeight();
-    onSendMessage?.(`/${normalizedName}`);
+    void submit(candidateSnapshot);
   };
 
   const selectFile = async (file) => {

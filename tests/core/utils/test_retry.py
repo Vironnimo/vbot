@@ -39,9 +39,9 @@ def test_compute_retry_delay_backoff_without_hint():
 
 
 def test_compute_retry_delay_honors_retry_after_as_floor():
-    """A hint above the computed backoff becomes the delay and is flagged."""
+    """A hint above base backoff becomes a jittered floor and is flagged."""
     delay, honored = compute_retry_delay(0, retry_after=30.0)
-    assert delay == 30.0
+    assert 30.0 <= delay <= 30.0 + INITIAL_DELAY_SECONDS * JITTER_FACTOR
     assert honored is True
 
 
@@ -56,7 +56,19 @@ def test_compute_retry_delay_ignores_smaller_retry_after():
 def test_compute_retry_delay_caps_retry_after():
     """An excessive hint is clamped to ``MAX_RETRY_AFTER_SECONDS``."""
     delay, honored = compute_retry_delay(0, retry_after=10_000.0)
-    assert delay == MAX_RETRY_AFTER_SECONDS
+    assert (
+        MAX_RETRY_AFTER_SECONDS
+        <= delay
+        <= (MAX_RETRY_AFTER_SECONDS + INITIAL_DELAY_SECONDS * JITTER_FACTOR)
+    )
+    assert honored is True
+
+
+def test_compute_retry_delay_adds_jitter_above_retry_after_floor():
+    with patch("core.utils.retry.random.uniform", return_value=0.25):
+        delay, honored = compute_retry_delay(0, retry_after=30.0)
+
+    assert delay == 30.25
     assert honored is True
 
 

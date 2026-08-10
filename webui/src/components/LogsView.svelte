@@ -113,16 +113,26 @@
       }
 
       if (shouldLoadSelectedFile) {
-        await loadSelectedFile(selectedFile);
+        await loadSelectedFile(selectedFile, {
+          reconnecting: options.reconnecting === true,
+        });
       }
     } catch (error) {
       viewState.catalogError = `${t('logs.catalogLoadError', 'Log files could not be loaded.')} ${errorMessageText(error, t('common.unknown', 'Unknown'))}`;
+      if (
+        options.reconnecting === true &&
+        !destroyed &&
+        viewState.selectedFile === previousSelection
+      ) {
+        viewState.streamStatus = LOGS_STREAM_STATUS_RECONNECTING;
+        scheduleReconnect(previousSelection);
+      }
     } finally {
       viewState.loadingCatalog = false;
     }
   }
 
-  async function loadSelectedFile(file) {
+  async function loadSelectedFile(file, options = {}) {
     const requestId = activeReadRequest + 1;
     activeReadRequest = requestId;
     viewState.loadingEntries = true;
@@ -151,7 +161,12 @@
       }
 
       viewState.readError = `${t('logs.readError', 'Log file could not be loaded.')} ${errorMessageText(error, t('common.unknown', 'Unknown'))}`;
-      viewState.streamStatus = LOGS_STREAM_STATUS_IDLE;
+      if (options.reconnecting === true && viewState.selectedFile === file) {
+        viewState.streamStatus = LOGS_STREAM_STATUS_RECONNECTING;
+        scheduleReconnect(file);
+      } else {
+        viewState.streamStatus = LOGS_STREAM_STATUS_IDLE;
+      }
     } finally {
       if (requestId === activeReadRequest) {
         viewState.loadingEntries = false;
@@ -232,7 +247,11 @@
       if (destroyed || viewState.selectedFile !== file) {
         return;
       }
-      loadCatalogAndMaybeFile({ silent: true, forceReload: true });
+      loadCatalogAndMaybeFile({
+        silent: true,
+        forceReload: true,
+        reconnecting: true,
+      });
     }, delay);
   }
 
