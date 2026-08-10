@@ -603,6 +603,31 @@ class _RunRequest:
 
 
 @dataclass(frozen=True)
+class _QueuedRunExecutor:
+    """Editable queued executor retaining every immutable admission input."""
+
+    loop: ChatLoop
+    request: _RunRequest
+
+    async def __call__(self, run: Run) -> ChatMessage:
+        return await self.loop._execute_run(run, self.request)
+
+    def with_edited_content(
+        self,
+        content: str | list[ContentBlock],
+        input_origin: InputOrigin | None,
+    ) -> _QueuedRunExecutor:
+        return replace(
+            self,
+            request=replace(
+                self.request,
+                content=content,
+                input_origin=input_origin,
+            ),
+        )
+
+
+@dataclass(frozen=True)
 class _ModelTarget:
     """One resolved Provider target used for Model steps in a Run."""
 
@@ -1192,7 +1217,7 @@ class ChatLoop:
         return await manager.enqueue(
             agent_id=agent_id,
             session_id=session.id,
-            executor=lambda run: self._execute_run(run, request),
+            executor=_QueuedRunExecutor(self, request),
             display_content=_display_content_preview(content),
             editable=queue_content_is_editable(content),
             internal=internal,
@@ -1208,8 +1233,8 @@ class ChatLoop:
         agent_id: str,
         session_id: str,
         content: str | list[ContentBlock],
+        queued_item: QueuedRunItem,
         input_origin: InputOrigin | None = None,
-        reply_surface: ReplySurface | None = None,
         project_id: str | None = None,
     ) -> tuple[str, RunExecutor, str]:
         """Build replacement data for a queued run without mutating queue state."""
@@ -1219,16 +1244,12 @@ class ChatLoop:
         session = self._get_session(
             agent_id, session_id, create_missing=False, project_id=project_id
         )
+        executor = queued_item.executor
+        if not isinstance(executor, _QueuedRunExecutor) or executor.loop is not self:
+            raise ChatError("queued item is not an editable chat request")
         return (
             session.id,
-            lambda run: self._execute_run(
-                run,
-                _RunRequest(
-                    content=content,
-                    input_origin=input_origin,
-                    reply_surface=reply_surface,
-                ),
-            ),
+            executor.with_edited_content(content, input_origin),
             _display_content_preview(content),
         )
 

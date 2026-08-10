@@ -921,9 +921,16 @@ class _QueueOnBusyLoop:
         return SimpleNamespace(future=future, to_dict=lambda: {"id": "q-1"})
 
     def build_queue_update(
-        self, agent_id: str, session_id: str, content: Any, **kwargs: Any
+        self, agent_id: str, session_id: str, content: Any, queued_item: Any, **kwargs: Any
     ) -> tuple[str, object, str]:
-        self.build_calls.append({"agent_id": agent_id, "session_id": session_id, **kwargs})
+        self.build_calls.append(
+            {
+                "agent_id": agent_id,
+                "session_id": session_id,
+                "queued_item": queued_item,
+                **kwargs,
+            }
+        )
         return self._resolved_session_id, object(), "display"
 
 
@@ -1107,7 +1114,7 @@ async def test_queue_update_rebuilds_against_address_project() -> None:
     )
 
     assert loop.build_calls[-1]["project_id"] == "vbot"
-    assert loop.build_calls[-1]["reply_surface"] == ReplySurface.webui()
+    assert loop.build_calls[-1]["queued_item"].item_id == "q-1"
     assert state.chat_runs.update_project_ids[-1] == "vbot"
     assert state.chat_runs.list_project_ids[-1] == "vbot"
 
@@ -1124,7 +1131,7 @@ async def test_queue_update_identity_item_rebuilds_without_project() -> None:
     )
 
     assert loop.build_calls[-1]["project_id"] is None
-    assert loop.build_calls[-1]["reply_surface"] == ReplySurface.webui()
+    assert loop.build_calls[-1]["queued_item"].item_id == "q-1"
     assert state.chat_runs.update_project_ids[-1] is None
 
 
