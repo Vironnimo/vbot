@@ -221,6 +221,7 @@ PROBE_SCENARIOS = (
 OPTIONAL_BOOLEAN_CASES = ("omit", "include_links", "raw", "both")
 ANALYZE_IMAGE_CASES = ("single", "multiple")
 BASH_CASES = (
+    "top_foreground_default",
     "top_foreground",
     "top_foreground_description",
     "top_foreground_workdir",
@@ -237,6 +238,7 @@ BASH_CASES = (
     "top_background_workdir",
     "top_background_timeout",
     "top_background_all",
+    "sub_foreground_default",
     "sub_foreground",
     "sub_foreground_description",
     "sub_foreground_all",
@@ -1426,6 +1428,7 @@ def _ha_call_service_scenario(case_name: str) -> ProbeScenario:
 
 def _bash_scenario(case_name: str) -> ProbeScenario:
     bash_arguments: dict[str, dict[str, Any]] = {
+        "top_foreground_default": {"command": "python --version"},
         "top_foreground": {"mode": "foreground", "command": "python --version"},
         "top_foreground_description": {
             "mode": "foreground",
@@ -1507,6 +1510,7 @@ def _bash_scenario(case_name: str) -> ProbeScenario:
             "workdir": "public",
             "timeout": 600,
         },
+        "sub_foreground_default": {"command": "python --version"},
         "sub_foreground": {"mode": "foreground", "command": "python --version"},
         "sub_foreground_description": {
             "mode": "foreground",
