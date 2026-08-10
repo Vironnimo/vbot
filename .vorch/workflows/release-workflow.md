@@ -14,7 +14,7 @@ git describe --tags --abbrev=0 origin/main
 gh release view --json tagName,publishedAt,url
 ```
 
-The reachable remote tag and GitHub's latest published release must agree. Resolve any mismatch before continuing. Choose the next SemVer from that confirmed remote state and the changes since the release; do not reuse an existing tag.
+The reachable remote tag and GitHub's latest published release must agree. Resolve any mismatch before continuing. If the user names a version, use that version after confirming it is a new valid SemVer. If the user does not name a version, increment only the patch component of the confirmed latest release by exactly one (`X.Y.Z` → `X.Y.(Z+1)`); do not infer a minor or major bump from the changes. Never reuse an existing tag.
 
 Model DB maintenance is independent of releases. Do not run `scripts/refresh_model_db.py`, modify `resources/models/`, or include incidental Model DB changes while cutting a release.
 
@@ -83,6 +83,7 @@ gh api repos/Vironnimo/vbot/releases/generate-notes \
 
 ## Gotchas
 
+- **Default version bump**: when the user does not name a version, bump only the patch component of the synchronized latest release by one. Change scope does not override this default.
 - **Notes**: only the auto-generated Full Changelog line — no custom prose. A custom `--notes` replaces it and breaks the convention every prior release follows.
 - **Asset is mandatory**: a release without `webui-dist.tar.gz` cannot be installed by the public Installer or reached by `vbot update`. Never skip step 6.
 - **Candidate identity**: CI builds `webui-dist.tar.gz` once; Candidate Smokes test that exact artifact, and publish downloads and attaches it without rebuilding or repackaging.
