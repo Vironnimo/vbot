@@ -460,9 +460,36 @@ describe('ChatAssistantRun tool dot state', () => {
       (row) => row.querySelector('.teb-label')?.textContent === 'Args',
     );
 
-    expect(argsRow.querySelector('.teb-code').textContent).toBe(
-      'command: "cd C:\\\\Development\\\\projects\\\\vBot; npm install"',
+    expect(argsRow.querySelector('.teb-field-key').textContent).toBe('command');
+    expect(argsRow.querySelector('.teb-field-value').textContent).toBe(
+      'cd C:\\Development\\projects\\vBot; npm install',
     );
+  });
+
+  it('adds the Rail only inside the disclosure body', () => {
+    const item = createAssistantRunItem({
+      items: [createBashToolChild({ status: 'success', includeResult: true })],
+    });
+    mountedComponent = mountRun({ item });
+
+    const details = document.querySelector('.tool-event');
+    const summary = details.querySelector('.tool-event-line');
+    const summaryMarkup = summary.innerHTML;
+    const body = details.querySelector('.tool-event-body');
+
+    expect(body.classList.contains('tool-event-details')).toBe(true);
+    expect(body.querySelectorAll('.teb-section')).toHaveLength(2);
+    expect(body.querySelector('.teb-section .teb-field-key').textContent).toBe(
+      'command',
+    );
+
+    summary.click();
+    flushSync();
+
+    expect(details.open).toBe(true);
+    expect(summary.innerHTML).toBe(summaryMarkup);
+    expect(summary.textContent).not.toContain('Args');
+    expect(summary.textContent).not.toContain('Result');
   });
 
   it('renders active Tool primary values without wrapper punctuation', () => {
@@ -606,7 +633,7 @@ describe('ChatAssistantRun copy actions', () => {
     argsRow.querySelector('.tool-detail-copy').click();
     await flushAsync();
 
-    expect(writeText).toHaveBeenCalledWith('path: "safe.txt"');
+    expect(writeText).toHaveBeenCalledWith('path: safe.txt');
     expect(writeText.mock.calls[0][0]).not.toContain('hidden file body');
   });
 });

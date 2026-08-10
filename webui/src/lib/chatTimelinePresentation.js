@@ -2,6 +2,7 @@ import { getAttachmentUrl } from '$lib/api.js';
 import { formatAgentAddress } from '$lib/agentAddress.js';
 import {
   compactToolValue,
+  toolDetailPresentation,
   toolNameHasHiddenArguments,
 } from '$lib/chatToolDetails.js';
 import { activeLocaleTag, t } from '$lib/i18n.js';
@@ -28,7 +29,7 @@ const MAX_SUBAGENT_PREVIEW_LENGTH = 96;
 const MAX_BACKGROUND_BASH_LABEL_LENGTH = 96;
 const SUBAGENT_TOOL_NAMES = new Set(['subagent']);
 
-export { compactToolValue };
+export { compactToolValue, toolDetailPresentation };
 
 export const isUserItem = (item) =>
   item.type === 'assistant_run'
