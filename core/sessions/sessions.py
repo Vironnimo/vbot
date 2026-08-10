@@ -22,6 +22,7 @@ from core.chat.errors import ChatMessageValidationError, ChatSessionError
 from core.projects.store import project_sessions_dir
 from core.runs import RunKind
 from core.settings import is_valid_agent_id, is_valid_project_id
+from core.utils.atomic import atomic_write_text
 from core.utils.logging import get_logger
 
 if TYPE_CHECKING:
@@ -786,8 +787,6 @@ class ChatSessionManager:
 
         session = self.get(agent_id, session_id, project_id)
         sidecar_path = session.sidecar_path
-        sidecar_path.parent.mkdir(parents=True, exist_ok=True)
-        temp_path = sidecar_path.with_name(f".{sidecar_path.name}.{uuid.uuid4().hex}.tmp")
 
         try:
             serialized = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
@@ -795,12 +794,9 @@ class ChatSessionManager:
             raise ChatSessionError("session metadata must be JSON-serializable") from exc
 
         try:
-            temp_path.write_text(serialized, encoding="utf-8")
-            os.replace(temp_path, sidecar_path)
+            atomic_write_text(sidecar_path, serialized)
         except OSError as exc:
             raise ChatSessionError(f"failed to write metadata for session: {session_id}") from exc
-        finally:
-            temp_path.unlink(missing_ok=True)
 
     def record_run_kind(
         self,
@@ -1407,16 +1403,11 @@ class ChatSessionManager:
 
     def _write_activity(self, session: ChatSession, data: JsonObject) -> None:
         activity_path = session.activity_path
-        activity_path.parent.mkdir(parents=True, exist_ok=True)
-        temp_path = activity_path.with_name(f".{activity_path.name}.{uuid.uuid4().hex}.tmp")
         try:
             serialized = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
-            temp_path.write_text(serialized, encoding="utf-8")
-            os.replace(temp_path, activity_path)
+            atomic_write_text(activity_path, serialized)
         except (OSError, TypeError, ValueError) as exc:
             raise ChatSessionError(f"failed to write activity for session: {session.id}") from exc
-        finally:
-            temp_path.unlink(missing_ok=True)
 
     def _activity_timestamps(self, session: ChatSession) -> tuple[str, str]:
         bookends = session.bookend_timestamps()
