@@ -648,10 +648,10 @@ describe('ChatAssistantRun compact Working blocks', () => {
     expect(
       block.querySelector('.working-block__label').textContent.trim(),
     ).toBe('done working');
-    expect(
-      block.querySelector('.working-block__activity').textContent.trim(),
-    ).toBe('read');
+    expect(block.querySelector('.working-block__activity')).toBeNull();
     const summaryText = block.querySelector('summary').textContent;
+    expect(summaryText.trim()).toBe('done working');
+    expect(summaryText).not.toContain('read');
     expect(summaryText).not.toContain('README.md');
     expect(block.querySelector('.working-block__dot')).toBeNull();
     expect(block.querySelector('.working-block__time')).toBeNull();
@@ -681,6 +681,57 @@ describe('ChatAssistantRun compact Working blocks', () => {
     expect(
       block.querySelector('.working-block__activity').textContent.trim(),
     ).toBe('bash');
+  });
+
+  it('keeps the latest Tool name while later Thinking is active', () => {
+    const item = createAssistantRunItem({
+      status: 'running',
+      items: [
+        createBashToolChild({ status: 'success' }),
+        {
+          type: 'reasoning',
+          id: 'reasoning-after-tool',
+          content: 'Interpret the result.',
+          streaming: true,
+        },
+      ],
+    });
+    mountedComponent = mountRun({ item, chatWorkingMode: 'compact' });
+
+    const block = document.querySelector('.working-block');
+    expect(
+      block.querySelector('.working-block__activity').textContent.trim(),
+    ).toBe('bash');
+    expect(block.querySelector('summary').textContent).not.toContain(
+      'Thinking',
+    );
+  });
+
+  it('shows no activity text for an active Thinking-only group', () => {
+    const item = createAssistantRunItem({
+      status: 'running',
+      items: [
+        {
+          type: 'reasoning',
+          id: 'reasoning-only-first',
+          content: 'First thought.',
+          streaming: false,
+        },
+        {
+          type: 'reasoning',
+          id: 'reasoning-only-second',
+          content: 'Second thought.',
+          streaming: true,
+        },
+      ],
+    });
+    mountedComponent = mountRun({ item, chatWorkingMode: 'compact' });
+
+    const block = document.querySelector('.working-block');
+    expect(block.querySelector('.working-block__activity')).toBeNull();
+    expect(block.querySelector('summary').textContent.trim()).toBe(
+      'working...',
+    );
   });
 
   it('ends a Working block at visible Assistant output and starts a new one', () => {
