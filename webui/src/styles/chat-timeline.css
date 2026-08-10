@@ -138,7 +138,9 @@
 }
 
 .working-block {
-  width: 100%;
+  display: flex;
+  align-self: flex-start;
+  flex-direction: column;
 }
 
 .working-block > summary {
@@ -153,82 +155,36 @@
 .working-block__summary {
   display: flex;
   min-width: 0;
-  min-height: 28px;
+  max-width: 100%;
   align-items: center;
   gap: 8px;
-  padding: 4px 8px;
-  border: 1px solid var(--border);
-  border-left: 2px solid var(--border-2);
-  border-radius: var(--r-md);
-  background: var(--surface);
-  transition:
-    border-color 120ms ease,
-    background 120ms ease;
-}
-
-.working-block__summary:hover {
-  border-color: var(--border-2);
-  background: var(--surface-2);
+  padding: 2px 0;
 }
 
 .working-block__summary:focus-visible {
-  border-color: var(--accent-40);
+  border-radius: var(--r-sm);
   outline: none;
-  box-shadow: var(--focus-ring);
-}
-
-.working-block__dot {
-  flex: 0 0 auto;
-  color: var(--text-lo);
-  font-size: 10px;
-}
-
-.working-block__dot.running {
-  animation: blink 1.2s ease-in-out infinite;
-  color: var(--amber);
-}
-
-.working-block__dot.done {
-  color: var(--green);
-}
-
-.working-block__dot.error {
-  color: var(--red);
-}
-
-.working-block__dot.cancelled {
-  color: var(--text-lo);
+  box-shadow: 0 0 0 3px var(--accent-16);
 }
 
 .working-block__label,
-.working-block__activity,
-.working-block__time {
+.working-block__activity {
   font-family: var(--font-mono);
+  font-size: 12px;
 }
 
 .working-block__label {
   flex: 0 0 auto;
   color: var(--text-med);
-  font-size: var(--fs-mono-xs);
   font-weight: 500;
-  letter-spacing: 0.07em;
-  text-transform: uppercase;
 }
 
 .working-block__activity {
   min-width: 0;
-  flex: 1 1 auto;
   overflow: hidden;
-  color: var(--text-med);
-  font-size: var(--fs-mono-sm);
+  color: var(--text-lo);
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.working-block__time {
-  flex: 0 0 auto;
-  color: var(--text-lo);
-  font-size: var(--fs-mono-xs);
 }
 
 .working-block__chevron {
@@ -246,17 +202,12 @@
   display: flex;
   flex-direction: column;
   gap: 8px;
-  margin-top: 8px;
-  padding: 2px 0 2px 16px;
-  border-left: 2px solid var(--border-2);
+  margin-top: 4px;
+  padding: 6px 0 3px 18px;
+  border-left: 1px solid var(--border-2);
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .working-block__dot.running {
-    animation: none;
-  }
-
-  .working-block__summary,
   .working-block__chevron {
     transition: none;
   }
