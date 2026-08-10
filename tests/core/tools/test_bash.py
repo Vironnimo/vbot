@@ -47,6 +47,7 @@ RUN_ID = "run-a"
 @pytest.fixture(autouse=True)
 def shell_env_cache(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(bash_module, "_cached_shell_env", {"PATH": "original-path"})
+    monkeypatch.setattr(bash_module, "_shell_env_probe_task", None)
 
 
 @pytest_asyncio.fixture
@@ -1546,6 +1547,79 @@ async def test_shell_env_probe_timeout_terminates_and_reaps_probe(
     assert env["VBOT_PROBE_FALLBACK"] == "fallback"
     assert killed_process_groups == [(12345, 9)]
     assert probe.communicate_calls == 2
+
+
+@pytest.mark.asyncio
+async def test_concurrent_shell_env_requests_share_one_probe(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    probe_started = asyncio.Event()
+    release_probe = asyncio.Event()
+    probe_calls = 0
+
+    async def probe_shell_env() -> dict[str, str]:
+        nonlocal probe_calls
+        probe_calls += 1
+        probe_started.set()
+        await release_probe.wait()
+        return {"PATH": "probed-path"}
+
+    monkeypatch.setattr(bash_module, "_cached_shell_env", None)
+    monkeypatch.setattr(bash_module, "_probe_shell_env", probe_shell_env)
+
+    first = asyncio.create_task(bash_module._get_shell_env())
+    second = asyncio.create_task(bash_module._get_shell_env())
+    await asyncio.wait_for(probe_started.wait(), timeout=1)
+    await asyncio.sleep(0)
+
+    assert probe_calls == 1
+
+    release_probe.set()
+    first_env, second_env = await asyncio.gather(first, second)
+
+    assert first_env == {"PATH": "probed-path"}
+    assert second_env == {"PATH": "probed-path"}
+    assert first_env is not second_env
+    assert bash_module._cached_shell_env == {"PATH": "probed-path"}
+    assert bash_module._shell_env_probe_task is None
+
+
+@pytest.mark.asyncio
+async def test_cancelling_shell_env_waiter_keeps_shared_probe_running(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    probe_started = asyncio.Event()
+    release_probe = asyncio.Event()
+    probe_calls = 0
+
+    async def probe_shell_env() -> dict[str, str]:
+        nonlocal probe_calls
+        probe_calls += 1
+        probe_started.set()
+        await release_probe.wait()
+        return {"PATH": "probed-path"}
+
+    monkeypatch.setattr(bash_module, "_cached_shell_env", None)
+    monkeypatch.setattr(bash_module, "_probe_shell_env", probe_shell_env)
+
+    cancelled_waiter = asyncio.create_task(bash_module._get_shell_env())
+    await asyncio.wait_for(probe_started.wait(), timeout=1)
+    surviving_waiter = asyncio.create_task(bash_module._get_shell_env())
+    await asyncio.sleep(0)
+
+    cancelled_waiter.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await cancelled_waiter
+
+    assert probe_calls == 1
+    assert bash_module._shell_env_probe_task is not None
+    assert not bash_module._shell_env_probe_task.cancelled()
+
+    release_probe.set()
+
+    assert await surviving_waiter == {"PATH": "probed-path"}
+    assert bash_module._cached_shell_env == {"PATH": "probed-path"}
+    assert bash_module._shell_env_probe_task is None
 
 
 def test_register_bash_tool() -> None:
