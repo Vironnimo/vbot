@@ -486,7 +486,6 @@ async def _dispatch_tool_calls(
                 id=tool_call.id,
                 name=tool_call.name,
                 arguments=tool_call.arguments,
-                force_serial=tool_call.argument_sequence_index is not None,
             )
             for tool_call in tool_calls
         ],

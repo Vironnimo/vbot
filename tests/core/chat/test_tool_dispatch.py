@@ -825,6 +825,65 @@ class TestExtensionDecisionWiring:
         assert executed == ["call-valid"]
 
     @pytest.mark.asyncio
+    async def test_recovered_sequence_uses_normal_parallel_policy(self, tmp_path: Path) -> None:
+        active_count = 0
+        max_active_count = 0
+        both_calls_started = asyncio.Event()
+
+        async def handler(context: ToolContext, _arguments: JsonObject) -> JsonObject:
+            nonlocal active_count, max_active_count
+            active_count += 1
+            max_active_count = max(max_active_count, active_count)
+            if active_count == 2:
+                both_calls_started.set()
+            try:
+                await asyncio.wait_for(both_calls_started.wait(), timeout=1)
+                return tool_success({"ran": context.tool_call_id})
+            finally:
+                active_count -= 1
+
+        tools = ToolRegistry()
+        tools.register(
+            "echo",
+            "Echo input.",
+            {"type": "object", "additionalProperties": False},
+            handler,
+        )
+        runtime, agent = _build_runtime_and_agent(tmp_path, tools)
+        session = _build_session(tmp_path)
+        run = Run(run_id="run-one", agent_id=agent.id, session_id=session.id)
+
+        messages, _ = await _dispatch_tool_calls(
+            runtime,
+            agent,
+            [
+                ToolCall(
+                    id="call-first",
+                    name="echo",
+                    arguments={},
+                    argument_sequence_index=0,
+                    argument_sequence_length=2,
+                ),
+                ToolCall(
+                    id="call-second",
+                    name="echo",
+                    arguments={},
+                    argument_sequence_index=1,
+                    argument_sequence_length=2,
+                ),
+            ],
+            session,
+            run,
+            nesting_depth=0,
+        )
+
+        assert max_active_count == 2
+        assert [_decode_tool_result(message.content) for message in messages] == [
+            tool_success({"ran": "call-first"}),
+            tool_success({"ran": "call-second"}),
+        ]
+
+    @pytest.mark.asyncio
     async def test_tool_hooks_serialize_without_serializing_tool_handlers(
         self, tmp_path: Path
     ) -> None:

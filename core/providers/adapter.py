@@ -84,7 +84,8 @@ def normalize_tool_call_candidates(
     Some Models encode sibling calls as consecutive top-level JSON values in one
     ``arguments`` string. A fully decodable sequence is unambiguous enough to
     preserve each value as an independently validated call. Calls reconstructed
-    this way carry scheduling metadata so Chat executes them in authored order.
+    this way carry provenance metadata for persistence and Provider replay;
+    scheduling remains identical to native sibling Tool Calls.
     """
 
     decoded_sequence = _decode_tool_argument_sequence(arguments)

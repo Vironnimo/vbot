@@ -1733,21 +1733,23 @@ class TestToolExecutor:
         ]
 
     @pytest.mark.asyncio
-    async def test_per_call_serial_override_orders_parallel_safe_calls(self) -> None:
+    async def test_unknown_tool_does_not_split_parallel_safe_siblings(self) -> None:
         registry = ToolRegistry()
-        events: list[str] = []
         active_count = 0
         max_active_count = 0
+        both_safe_calls_started = asyncio.Event()
 
         async def handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
             nonlocal active_count, max_active_count
             active_count += 1
             max_active_count = max(max_active_count, active_count)
-            events.append(f"start:{context.tool_call_id}")
-            await asyncio.sleep(0.01)
-            events.append(f"end:{context.tool_call_id}")
-            active_count -= 1
-            return tool_success({"id": context.tool_call_id})
+            if active_count == 2:
+                both_safe_calls_started.set()
+            try:
+                await asyncio.wait_for(both_safe_calls_started.wait(), timeout=1)
+                return tool_success({"id": context.tool_call_id})
+            finally:
+                active_count -= 1
 
         registry.register(
             "safe",
@@ -1756,19 +1758,21 @@ class TestToolExecutor:
             handler,
             parallel_safe=True,
         )
-        executor = ToolExecutor(registry, per_run_limit=2, global_limit=2)
+        executor = ToolExecutor(registry, per_run_limit=3, global_limit=3)
 
         results = await executor.execute_many(
             [
-                ToolCall(id="call-1", name="safe", arguments={}, force_serial=True),
-                ToolCall(id="call-2", name="safe", arguments={}, force_serial=True),
+                ToolCall(id="call-1", name="safe", arguments={}),
+                ToolCall(id="call-unknown", name="missing", arguments={}),
+                ToolCall(id="call-2", name="safe", arguments={}),
             ],
             make_execution_config(allowed_tools=["*"]),
         )
 
-        assert max_active_count == 1
-        assert events == ["start:call-1", "end:call-1", "start:call-2", "end:call-2"]
-        assert [result["data"]["id"] for result in results] == ["call-1", "call-2"]
+        assert max_active_count == 2
+        assert results[0] == tool_success({"id": "call-1"})
+        assert results[1]["error"]["code"] == "tool_not_found"
+        assert results[2] == tool_success({"id": "call-2"})
 
     @pytest.mark.asyncio
     async def test_semaphore_queues_overflow_with_lowered_limits(self) -> None:

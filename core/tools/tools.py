@@ -624,7 +624,6 @@ class ToolCall:
     id: str
     name: str
     arguments: Any
-    force_serial: bool = False
 
 
 @dataclass(frozen=True)
@@ -926,9 +925,13 @@ class ToolRegistry:
             self._definition_profile_cache.pop(cache_key, None)
 
     def is_parallel_safe(self, name: str) -> bool:
-        """Return whether a registered Tool may overlap a sibling call."""
+        """Return whether a requested Tool Call may overlap a sibling call.
+
+        Unknown Tools fail before invoking a handler, so they are safe to keep
+        in the same parallel group instead of becoming accidental barriers.
+        """
         tool = self._tools.get(name)
-        return bool(tool is not None and tool.parallel_safe)
+        return tool is None or tool.parallel_safe
 
     def schema_fingerprint(self, name: str) -> str:
         """Return the deterministic canonical schema fingerprint for a Tool."""
@@ -1347,7 +1350,7 @@ class ToolExecutor:
             parallel_group.clear()
 
         for index, tool_call in enumerate(tool_calls):
-            if not tool_call.force_serial and self._registry.is_parallel_safe(tool_call.name):
+            if self._registry.is_parallel_safe(tool_call.name):
                 parallel_group.append((index, tool_call))
                 continue
             await flush_parallel_group()
