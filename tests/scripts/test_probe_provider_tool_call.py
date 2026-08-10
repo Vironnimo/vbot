@@ -567,6 +567,12 @@ def test_bash_cases_use_production_profiles_and_exact_arguments() -> None:
     top = PROBE._bash_scenario("top_auto_default")
     sub = PROBE._bash_scenario("sub_auto_default")
     assert top.tools[0]["parameters"] is PROBE.BASH_TOOL_PARAMETERS
+    assert PROBE._bash_scenario("top_foreground_default").expected_arguments == {
+        "command": "python --version"
+    }
+    assert PROBE._bash_scenario("sub_foreground_default").expected_arguments == {
+        "command": "python --version"
+    }
     assert top.expected_arguments == {
         "mode": "auto",
         "command": "python -m pytest tests/core/tools/test_bash.py -q",

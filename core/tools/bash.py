@@ -99,7 +99,8 @@ BASH_SUBAGENT_TOOL_DESCRIPTION = (
     f"{BASH_MODEL_OUTPUT_CAP_CHARS} characters; when output is truncated, the result includes a "
     "log_file path to the complete combined stdout/stderr stream." + _shell_syntax_notes()
 )
-BASH_EXECUTION_MODES = ("foreground", "auto", "background")
+DEFAULT_EXECUTION_MODE = "foreground"
+BASH_EXECUTION_MODES = (DEFAULT_EXECUTION_MODE, "auto", "background")
 VBOT_RUN_AGENT_ID_ENV = "VBOT_RUN_AGENT_ID"
 VBOT_RUN_SESSION_ID_ENV = "VBOT_RUN_SESSION_ID"
 VBOT_RUN_PROJECT_ID_ENV = "VBOT_RUN_PROJECT_ID"
@@ -145,13 +146,14 @@ def _bash_tool_parameters(*, subagent: bool) -> JsonObject:
         DEFAULT_SUBAGENT_YIELD_AFTER_SECONDS if subagent else DEFAULT_YIELD_AFTER_SECONDS
     )
     mode_description = (
-        "Execution behavior: foreground waits for completion; auto waits until yield_after, "
+        "Execution behavior. Omit for foreground, which waits for completion; auto waits until "
+        "yield_after, "
         "then kills a still-running command because handoff is unavailable — yield_after "
         "applies only to auto."
         if subagent
-        else "Execution behavior: foreground waits for completion; auto waits up to "
-        "yield_after (default 30s), then hands a still-running command off to vBot; background "
-        "hands off immediately — yield_after applies only to auto."
+        else "Execution behavior. Omit for foreground, which waits for completion; auto waits "
+        "until yield_after, then hands a still-running command off to vBot; background hands off "
+        "immediately. yield_after applies only to auto."
     )
     yield_after_description = (
         'Only valid when mode is "auto". Seconds auto waits before the command is killed '
@@ -182,7 +184,7 @@ def _bash_tool_parameters(*, subagent: bool) -> JsonObject:
             "timeout": _BASH_TIMEOUT_PARAMETER,
             "env_keys": _BASH_ENV_KEYS_PARAMETER,
         },
-        "required": ["mode", "command"],
+        "required": ["command"],
     }
 
 
@@ -671,7 +673,7 @@ def _parse_arguments(arguments: JsonObject) -> JsonObject | str:
     if not isinstance(command, str) or not command:
         return "command must be a non-empty string"
 
-    mode = arguments.get("mode")
+    mode = arguments.get("mode", DEFAULT_EXECUTION_MODE)
     if not isinstance(mode, str) or mode not in BASH_EXECUTION_MODES:
         return "mode must be one of: foreground, auto, background"
     if mode != "auto" and "yield_after" in arguments:

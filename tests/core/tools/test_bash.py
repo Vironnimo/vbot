@@ -885,20 +885,42 @@ async def test_yield_after_is_rejected_outside_auto_mode(
 
 
 @pytest.mark.asyncio
-async def test_execution_mode_is_required(
+@pytest.mark.parametrize("nesting_depth", [0, 1])
+async def test_omitted_execution_mode_defaults_to_foreground(
     manager: ProcessManager,
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    nesting_depth: int,
 ) -> None:
-    context = make_context(tmp_path)
+    monkeypatch.setattr(bash_module, "_shell_argv", python_command)
+    context = make_context(tmp_path, nesting_depth=nesting_depth)
 
     result = await bash_handler(
         context,
-        {"command": "print('never runs')"},
+        {"command": "print('default-foreground')"},
+        manager,
+    )
+
+    assert result["ok"] is True
+    assert result["data"]["status"] == "completed"
+    assert result["data"]["mode"] == "foreground"
+    assert result["data"]["output"].strip() == "default-foreground"
+
+
+@pytest.mark.asyncio
+async def test_invalid_execution_mode_is_rejected_before_spawn(
+    manager: ProcessManager,
+    tmp_path: Path,
+) -> None:
+    result = await bash_handler(
+        make_context(tmp_path),
+        {"command": "print('never runs')", "mode": "front"},
         manager,
     )
 
     assert result["ok"] is False
     assert result["error"]["code"] == "invalid_arguments"
+    assert manager.list_sessions(AGENT_ID) == []
 
 
 @pytest.mark.asyncio
@@ -1643,7 +1665,7 @@ def test_register_bash_tool() -> None:
         "timeout",
         "env_keys",
     }
-    assert tool.parameters["required"] == ["mode", "command"]
+    assert tool.parameters["required"] == ["command"]
     properties = tool.parameters["properties"]
     assert properties["description"]["type"] == "string"
     assert "maxLength" not in tool.parameters["properties"]["description"]
@@ -1700,6 +1722,7 @@ def test_subagent_projection_exposes_only_non_handoff_bash_modes() -> None:
     parameters = bash_definition["parameters"]
     assert "oneOf" not in parameters
     assert "additionalProperties" not in parameters
+    assert parameters["required"] == ["command"]
     assert parameters["properties"]["mode"]["enum"] == ["foreground", "auto"]
     assert parameters["properties"]["yield_after"]["default"] == 1800
     assert projected[1] is definitions[1]
