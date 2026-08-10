@@ -7,10 +7,11 @@ import json
 import logging
 import os
 from collections import OrderedDict
-from collections.abc import AsyncGenerator, AsyncIterator, Callable
+from collections.abc import AsyncGenerator, AsyncIterator, Callable, MutableMapping
 from contextlib import aclosing, asynccontextmanager, suppress
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, TypedDict, cast
+from urllib.parse import SplitResult, urlsplit
 
 from core.attachments.attachments import (
     AttachmentNotFoundError,
@@ -108,6 +109,106 @@ REPLAY_STATUS_FRESH = "fresh"
 REPLAY_STATUS_RESUMED = "resumed"
 REPLAY_STATUS_GAP = "gap"
 REPLAY_STATUS_EPOCH_CHANGED = "epoch_changed"
+HTTP_ORIGIN_REJECTED_STATUS_CODE = 403
+WEBSOCKET_POLICY_VIOLATION_CODE = 1008
+JSON_MEDIA_TYPE = "application/json"
+HTTP_ORIGIN_SCHEMES = frozenset({"http", "https"})
+ORIGIN_HEADER_NAME = b"origin"
+HOST_HEADER_NAME = b"host"
+
+
+class _BrowserOriginGuardMiddleware:
+    """Reject browser transports whose Origin differs from the request target."""
+
+    def __init__(self, app: Any) -> None:
+        self._app = app
+
+    async def __call__(self, scope: MutableMapping[str, Any], receive: Any, send: Any) -> None:
+        scope_type = scope.get("type")
+        if scope_type not in {"http", "websocket"} or _scope_has_allowed_origin(scope):
+            await self._app(scope, receive, send)
+            return
+        if scope_type == "http":
+            response = Response(status_code=HTTP_ORIGIN_REJECTED_STATUS_CODE)
+            await response(scope, receive, send)
+            return
+        await send(
+            {
+                "type": "websocket.close",
+                "code": WEBSOCKET_POLICY_VIOLATION_CODE,
+                "reason": "Cross-origin WebSocket connections are forbidden",
+            }
+        )
+
+
+def _scope_has_allowed_origin(scope: MutableMapping[str, Any]) -> bool:
+    origin_values = _scope_header_values(scope, ORIGIN_HEADER_NAME)
+    if not origin_values:
+        return True
+    if len(origin_values) != 1:
+        return False
+    target_scheme = _http_scheme(scope.get("scheme"))
+    host_values = _scope_header_values(scope, HOST_HEADER_NAME)
+    if target_scheme is None or len(host_values) != 1:
+        return False
+    origin = _parse_origin(origin_values[0])
+    target = _parse_origin(f"{target_scheme}://{host_values[0]}")
+    return origin is not None and origin == target
+
+
+def _scope_header_values(scope: MutableMapping[str, Any], name: bytes) -> list[str]:
+    headers = scope.get("headers")
+    if not isinstance(headers, list):
+        return []
+    return [
+        value.decode("latin-1")
+        for key, value in headers
+        if isinstance(key, bytes) and isinstance(value, bytes) and key.lower() == name
+    ]
+
+
+def _http_scheme(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    return {"http": "http", "https": "https", "ws": "http", "wss": "https"}.get(value.casefold())
+
+
+def _parse_origin(value: str) -> tuple[str, str, int] | None:
+    if value == "null":
+        return None
+    try:
+        parsed = urlsplit(value)
+        port = parsed.port
+    except ValueError:
+        return None
+    if not _is_serialized_origin(parsed):
+        return None
+    scheme = parsed.scheme.casefold()
+    default_port = 443 if scheme == "https" else 80
+    effective_port = default_port if port is None else port
+    return scheme, cast(str, parsed.hostname).casefold(), effective_port
+
+
+def _is_serialized_origin(parsed: SplitResult) -> bool:
+    return (
+        parsed.scheme.casefold() in HTTP_ORIGIN_SCHEMES
+        and parsed.hostname is not None
+        and parsed.username is None
+        and parsed.password is None
+        and not parsed.path
+        and not parsed.query
+        and not parsed.fragment
+    )
+
+
+def _require_json_media_type(request: Request) -> None:
+    content_type = request.headers.get("content-type")
+    media_type = content_type.partition(";")[0].strip().casefold() if content_type else ""
+    if media_type != JSON_MEDIA_TYPE:
+        raise HTTPException(
+            status_code=415,
+            detail="Content-Type must be application/json",
+        )
 
 
 def create_app(
@@ -175,6 +276,7 @@ def create_app(
             await _shutdown_runtime(app_runtime)
 
     app = FastAPI(lifespan=lifespan)
+    app.add_middleware(_BrowserOriginGuardMiddleware)
 
     @app.get("/health")
     async def health() -> JsonObject:
@@ -192,6 +294,7 @@ def create_app(
 
     @app.post("/api/rpc")
     async def rpc(request: Request) -> JsonObject:
+        _require_json_media_type(request)
         try:
             payload = await request.json()
         except (json.JSONDecodeError, UnicodeDecodeError):
@@ -268,6 +371,7 @@ def create_app(
 
     @app.post("/api/speech/synthesize")
     async def synthesize_speech(request: Request) -> Response:
+        _require_json_media_type(request)
         speech_service = request.app.state.runtime.speech
         try:
             payload = await request.json()

@@ -28,6 +28,48 @@ from server.rpc.event_bridge import (
 from tests.server.test_rpc import StubAdapter, StubRuntime
 
 
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/ws",
+        "/ws/logs?file=2026-08-10",
+        "/ws/terminals/term-1",
+    ],
+)
+def test_websocket_transport_rejects_cross_origin_browser_connections(
+    tmp_path: Path,
+    path: str,
+) -> None:
+    app = create_app(runtime=cast(Any, StubRuntime(tmp_path, StubAdapter())))
+
+    with (
+        TestClient(app) as client,
+        pytest.raises(WebSocketDisconnect) as exc_info,
+        client.websocket_connect(
+            path,
+            headers={"origin": "https://attacker.example"},
+        ),
+    ):
+        pass
+
+    assert exc_info.value.code == 1008
+
+
+def test_websocket_transport_allows_same_origin_browser_connection(tmp_path: Path) -> None:
+    app = create_app(runtime=cast(Any, StubRuntime(tmp_path, StubAdapter())))
+
+    with (
+        TestClient(app) as client,
+        client.websocket_connect(
+            "/ws",
+            headers={"origin": "http://testserver"},
+        ) as websocket,
+    ):
+        hello = websocket.receive_json()
+
+    assert hello["type"] == "connection_ready"
+
+
 def test_terminal_websocket_sends_snapshot_then_live_output_and_terminal_state(
     tmp_path: Path,
 ) -> None:

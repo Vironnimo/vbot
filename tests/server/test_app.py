@@ -292,6 +292,73 @@ def test_webui_serving_keeps_api_routes_precedence(monkeypatch, tmp_path: Path) 
     assert rpc_response.json()["ok"] is False
 
 
+@pytest.mark.parametrize(
+    "origin",
+    [
+        "https://attacker.example",
+        "http://testserver:8420",
+        "https://testserver",
+        "null",
+    ],
+)
+def test_http_transport_rejects_non_same_origin_browser_requests(
+    tmp_path: Path,
+    origin: str,
+) -> None:
+    app = create_app(runtime=Runtime(Config(data_dir=tmp_path / "data")))
+
+    with TestClient(app) as client:
+        response = client.get("/health", headers={"origin": origin})
+
+    assert response.status_code == 403
+
+
+def test_http_transport_allows_same_origin_and_non_browser_requests(tmp_path: Path) -> None:
+    app = create_app(runtime=Runtime(Config(data_dir=tmp_path / "data")))
+
+    with TestClient(app) as client:
+        same_origin = client.get("/health", headers={"origin": "http://testserver"})
+        without_origin = client.get("/health")
+
+    assert same_origin.status_code == 200
+    assert without_origin.status_code == 200
+
+
+def test_rpc_rejects_non_json_media_type_before_dispatch(monkeypatch, tmp_path: Path) -> None:
+    import server.app as server_app
+
+    dispatch_calls: list[object] = []
+
+    async def record_dispatch(_state: Any, payload: object) -> dict[str, object]:
+        dispatch_calls.append(payload)
+        return {"ok": True, "result": {}}
+
+    monkeypatch.setattr(server_app, "dispatch_rpc", record_dispatch)
+    app = create_app(runtime=Runtime(Config(data_dir=tmp_path / "data")))
+
+    with TestClient(app) as client:
+        cross_origin_response = client.post(
+            "/api/rpc",
+            content='{"method":"terminal.start"}',
+            headers={
+                "content-type": "text/plain",
+                "origin": "https://attacker.example",
+            },
+        )
+        wrong_media_type_response = client.post(
+            "/api/rpc",
+            content='{"method":"terminal.start"}',
+            headers={
+                "content-type": "text/plain",
+                "origin": "http://testserver",
+            },
+        )
+
+    assert cross_origin_response.status_code == 403
+    assert wrong_media_type_response.status_code == 415
+    assert dispatch_calls == []
+
+
 @pytest.mark.parametrize("content", ["{", b"\xff"])
 def test_rpc_endpoint_returns_error_envelope_for_malformed_json(
     tmp_path: Path, content: str | bytes
