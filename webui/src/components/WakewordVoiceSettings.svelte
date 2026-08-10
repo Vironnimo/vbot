@@ -66,6 +66,7 @@
   let lastSaved = $state(null);
   let loaded = $state(false);
   let cleanupStatusPoll = null;
+  let destroyed = false;
   let microphones = $state([]);
   let wakewordModels = $state([]);
   let saveState = $state('idle');
@@ -313,6 +314,7 @@
   }
 
   onDestroy(() => {
+    destroyed = true;
     unregisterVoiceAutosave();
     if (cleanupStatusPoll) {
       cleanupStatusPoll();
@@ -328,6 +330,9 @@
       const [status, availableMicrophones, availableModels] = await Promise.all(
         [getWakewordStatus(), listMicrophones(), listWakewordModels()],
       );
+      if (destroyed) {
+        return;
+      }
       voiceState = applyWakewordStatus(voiceState, status);
       if (status?.calibration?.active) {
         calibrationBaselineSensitivities = {
@@ -339,6 +344,9 @@
       lastSaved = snapshotVoiceSettings(voiceState);
     } catch {
       // Bridge not available; keep defaults
+    }
+    if (destroyed) {
+      return;
     }
     loaded = true;
     // The poll only carries observed runtime fields (live state, mock flag) into

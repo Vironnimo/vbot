@@ -479,6 +479,52 @@ def test_set_wakeword_enabled_uses_worker_factory(tmp_path: Path) -> None:
     assert bridge.getWakewordStatus()["enabled"] is True
 
 
+def test_parallel_wakeword_enable_disable_is_one_serialized_worker_lifecycle(
+    tmp_path: Path,
+) -> None:
+    settings_file = tmp_path / "settings.json"
+    _write_settings(settings_file, {"enabled": False})
+    factory_entered = threading.Event()
+    release_factory = threading.Event()
+    workers: list[FakeWorker] = []
+    failures: list[BaseException] = []
+
+    def worker_factory(_bridge: DesktopBridge) -> FakeWorker:
+        worker = FakeWorker()
+        workers.append(worker)
+        factory_entered.set()
+        assert release_factory.wait(timeout=1)
+        return worker
+
+    bridge = DesktopBridge(settings_path=settings_file, worker_factory=worker_factory)
+
+    def invoke(enabled: bool) -> None:
+        try:
+            bridge.setWakewordEnabled(enabled)
+        except BaseException as error:
+            failures.append(error)
+
+    enable_thread = threading.Thread(target=invoke, args=(True,))
+    disable_thread = threading.Thread(target=invoke, args=(False,))
+    enable_thread.start()
+    assert factory_entered.wait(timeout=1)
+    disable_thread.start()
+
+    assert disable_thread.is_alive()
+    assert len(workers) == 1
+
+    release_factory.set()
+    enable_thread.join(timeout=1)
+    disable_thread.join(timeout=1)
+
+    assert failures == []
+    assert not enable_thread.is_alive()
+    assert not disable_thread.is_alive()
+    assert len(workers) == 1
+    assert workers[0].stopped is True
+    assert bridge.getWakewordStatus()["enabled"] is False
+
+
 def test_set_wakeword_config_recreates_running_worker(tmp_path: Path) -> None:
     settings_file = tmp_path / "settings.json"
     _write_settings(settings_file, {"enabled": True})

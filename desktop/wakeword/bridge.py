@@ -188,6 +188,10 @@ class DesktopBridge:
         # threads without coupling to the wakeword config lock (a different
         # invariant, held while reading settings during status polls).
         self._connection_lock = threading.Lock()
+        # Worker construction/start/stop/replacement is one lifecycle. pywebview
+        # may invoke bridge methods on different threads, so serialize the full
+        # transition (including the config write that decides its final state).
+        self._worker_lifecycle_lock = threading.RLock()
         self._status_event = threading.Event()
 
     # -- Capabilities --------------------------------------------------------
@@ -306,21 +310,27 @@ class DesktopBridge:
                 logger.warning("Wakeword activation rejected (reason=%s)", readiness_error)
                 self.publish_state(_WAKEWORD_STATE_ERROR, readiness_error)
                 return {"enabled": False, "error_code": readiness_error}
-        with self._lock:
-            config = read_wakeword_settings(self._settings_path)
-            config["enabled"] = enabled
-            write_wakeword_settings(config, self._settings_path)
-        if enabled:
-            self._start_worker()
-        else:
-            self._stop_worker()
-            self.publish_state(_WAKEWORD_STATE_OFF)
+        with self._worker_lifecycle_lock:
+            with self._lock:
+                config = read_wakeword_settings(self._settings_path)
+                config["enabled"] = enabled
+                write_wakeword_settings(config, self._settings_path)
+            if enabled:
+                self._start_worker()
+            else:
+                self._stop_worker()
+                self.publish_state(_WAKEWORD_STATE_OFF)
         return {"enabled": enabled, "error_code": None}
 
     def setWakewordConfig(self, config: dict[str, Any]) -> None:  # noqa: N802
         """Apply a partial wakeword configuration update from the WebUI."""
         if not isinstance(config, dict):
             return
+        with self._worker_lifecycle_lock:
+            self._apply_wakeword_config(config)
+
+    def _apply_wakeword_config(self, config: dict[str, Any]) -> None:
+        """Persist one validated config update and apply its worker transition."""
         with self._lock:
             current = read_wakeword_settings(self._settings_path)
             changed = False
@@ -372,17 +382,18 @@ class DesktopBridge:
 
     def retryWakeword(self) -> None:  # noqa: N802
         """Rebuild and restart the worker after a visible recoverable error."""
-        with self._lock:
-            enabled = bool(read_wakeword_settings(self._settings_path).get("enabled", False))
-        if not enabled:
-            return
-        self._stop_worker()
-        self._worker = None
-        if self._mode == "real":
-            from desktop.wakeword.worker import refresh_microphone_devices
+        with self._worker_lifecycle_lock:
+            with self._lock:
+                enabled = bool(read_wakeword_settings(self._settings_path).get("enabled", False))
+            if not enabled:
+                return
+            self._stop_worker()
+            self._worker = None
+            if self._mode == "real":
+                from desktop.wakeword.worker import refresh_microphone_devices
 
-            refresh_microphone_devices()
-        self._start_worker()
+                refresh_microphone_devices()
+            self._start_worker()
 
     def startWakewordCalibration(self) -> dict[str, Any]:  # noqa: N802
         """Pause command activation and expose raw per-model detector scores."""
@@ -570,39 +581,42 @@ class DesktopBridge:
         worker already pointed at that server).
         """
         normalized = (url or "").rstrip("/")
-        with self._lock:
-            if normalized == self._server_url:
-                return
-            self._server_url = normalized
-            enabled = bool(read_wakeword_settings(self._settings_path).get("enabled", False))
-        if enabled:
-            self._stop_worker()
-            self._worker = None
-            self._start_worker()
+        with self._worker_lifecycle_lock:
+            with self._lock:
+                if normalized == self._server_url:
+                    return
+                self._server_url = normalized
+                enabled = bool(read_wakeword_settings(self._settings_path).get("enabled", False))
+            if enabled:
+                self._stop_worker()
+                self._worker = None
+                self._start_worker()
 
     # -- Internal ------------------------------------------------------------
 
     def _start_worker(self) -> None:
-        if self._worker is None and self._worker_factory is not None:
-            try:
-                self._worker = self._worker_factory(self)
-            except WakewordModelError as exc:
-                logger.warning("Wakeword model is unavailable: %s", exc)
-                self.publish_state(_WAKEWORD_STATE_ERROR, exc.error_code)
+        with self._worker_lifecycle_lock:
+            if self._worker is None and self._worker_factory is not None:
+                try:
+                    self._worker = self._worker_factory(self)
+                except WakewordModelError as exc:
+                    logger.warning("Wakeword model is unavailable: %s", exc)
+                    self.publish_state(_WAKEWORD_STATE_ERROR, exc.error_code)
+                    return
+                except Exception:
+                    logger.warning("Failed to create wakeword worker", exc_info=True)
+                    self.publish_state(_WAKEWORD_STATE_ERROR, "engine_start_failed")
+                    return
+            if self._worker is None:
+                self.publish_state(_WAKEWORD_STATE_ERROR)
                 return
-            except Exception:
-                logger.warning("Failed to create wakeword worker", exc_info=True)
-                self.publish_state(_WAKEWORD_STATE_ERROR, "engine_start_failed")
-                return
-        if self._worker is None:
-            self.publish_state(_WAKEWORD_STATE_ERROR)
-            return
-        self._worker.start()
+            self._worker.start()
 
     def _stop_worker(self) -> None:
-        self._end_calibration()
-        if self._worker:
-            self._worker.stop()
+        with self._worker_lifecycle_lock:
+            self._end_calibration()
+            if self._worker:
+                self._worker.stop()
 
     def worker_config(self) -> dict[str, Any]:
         """Return the global Voice config plus this server's safe routing profile."""
@@ -649,14 +663,15 @@ class DesktopBridge:
 
     def _restart_worker(self, enabled: bool) -> None:
         """Rebuild a running worker or start a newly enabled configuration."""
-        if self._worker and self._worker.is_running():
-            self._stop_worker()
-            self._worker = None
-            if enabled:
+        with self._worker_lifecycle_lock:
+            if self._worker and self._worker.is_running():
+                self._stop_worker()
+                self._worker = None
+                if enabled:
+                    self._start_worker()
+            elif enabled:
+                self._worker = None
                 self._start_worker()
-        elif enabled:
-            self._worker = None
-            self._start_worker()
 
     def _calibration_status_locked(self) -> dict[str, Any]:
         active = self._calibration_active_locked()
