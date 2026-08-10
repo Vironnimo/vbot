@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import asyncio
+from dataclasses import dataclass
 from typing import Any, cast
 
 from core.chat import (
@@ -20,6 +20,7 @@ from core.chat.file_mentions import expand_file_mentions, resolve_mention_root
 from core.projects import format_agent_address
 from core.runs import ActiveRunError, ChatRunManager, QueuedRunItem, Run, RunCancelledError
 from core.tools.bash import background_bash_statuses
+from core.utils.workers import BoundedWorkerPool
 from server.events import RESOURCE_KIND_QUEUE
 from server.rpc.dispatcher import RpcMethodHandler
 from server.rpc.error_mapping import _map_expected_error
@@ -59,8 +60,18 @@ from server.rpc.validation import (
 
 JsonObject = dict[str, Any]
 MAX_CHAT_HISTORY_LIMIT = 500
+_CHAT_RPC_WORKERS = BoundedWorkerPool(name="chat-rpc", max_workers=4)
 
 WEBUI_REPLY_SURFACE = ReplySurface.webui()
+
+
+@dataclass(frozen=True)
+class _ChatHistoryProjection:
+    messages: list[JsonObject]
+    has_more: bool
+    background_bash_statuses: JsonObject
+    session_usage: JsonObject
+    context_usage: JsonObject | None
 
 
 def _publish_queue_changed(state: Any, agent_id: str, session_id: str) -> None:
@@ -79,7 +90,7 @@ def _publish_queue_changed(state: Any, agent_id: str, session_id: str) -> None:
     )
 
 
-def _chat_history(state: Any, params: JsonObject) -> JsonObject:
+async def _chat_history(state: Any, params: JsonObject) -> JsonObject:
     supported_fields = {"agent_id", "session_id", "limit", "before"}
     _reject_unsupported(params, supported_fields, "chat.history")
 
@@ -88,15 +99,27 @@ def _chat_history(state: Any, params: JsonObject) -> JsonObject:
     limit = _optional_positive_integer(params, "limit", max_value=MAX_CHAT_HISTORY_LIMIT)
     before = _optional_string(params, "before")
     try:
-        active_session_id = _resolve_history_session_id(state, agent_id, session_id, project_id)
-        session = state.runtime.chat_sessions.get(agent_id, active_session_id, project_id)
-        loaded_messages = session.load()
-        visible_messages = [
-            _visible_message(message, file_delivery=getattr(state, "file_delivery", None))
-            for message in loaded_messages
-            if _is_visible_history_message(message)
-        ]
-        messages, has_more = _history_page(visible_messages, limit=limit, before=before)
+        active_session_id = await _CHAT_RPC_WORKERS.run(
+            _resolve_history_session_id,
+            state,
+            agent_id,
+            session_id,
+            project_id,
+        )
+        session = await _CHAT_RPC_WORKERS.run(
+            state.runtime.chat_sessions.get,
+            agent_id,
+            active_session_id,
+            project_id,
+        )
+        loaded_messages = await _CHAT_RPC_WORKERS.run(session.load)
+        projection = await _CHAT_RPC_WORKERS.run(
+            _project_chat_history,
+            loaded_messages,
+            file_delivery=getattr(state, "file_delivery", None),
+            limit=limit,
+            before=before,
+        )
         active_run_object = _state_chat_runs(state).active_run(
             agent_id=agent_id,
             session_id=active_session_id,
@@ -116,12 +139,12 @@ def _chat_history(state: Any, params: JsonObject) -> JsonObject:
     response: JsonObject = {
         "agent_id": agent_id,
         "session_id": active_session_id,
-        "messages": messages,
-        "has_more": has_more,
-        "background_bash_statuses": background_bash_statuses(loaded_messages),
+        "messages": projection.messages,
+        "has_more": projection.has_more,
+        "background_bash_statuses": projection.background_bash_statuses,
         # Whole-session provider-reported token fields — the page above may be a
         # slice, but these always cover the full transcript.
-        "session_usage": aggregate_session_usage(loaded_messages),
+        "session_usage": projection.session_usage,
     }
     context_usage = (
         active_run_object.terminal_payload_extras.get("context_usage")
@@ -129,12 +152,34 @@ def _chat_history(state: Any, params: JsonObject) -> JsonObject:
         else None
     )
     if not isinstance(context_usage, dict):
-        context_usage = latest_session_context_usage(loaded_messages)
+        context_usage = projection.context_usage
     if context_usage is not None:
         response["context_usage"] = context_usage
     if active_run is not None:
         response["active_run"] = active_run
     return response
+
+
+def _project_chat_history(
+    loaded_messages: list[Any],
+    *,
+    file_delivery: Any,
+    limit: int | None,
+    before: str | None,
+) -> _ChatHistoryProjection:
+    visible_messages = [
+        _visible_message(message, file_delivery=file_delivery)
+        for message in loaded_messages
+        if _is_visible_history_message(message)
+    ]
+    messages, has_more = _history_page(visible_messages, limit=limit, before=before)
+    return _ChatHistoryProjection(
+        messages=messages,
+        has_more=has_more,
+        background_bash_statuses=background_bash_statuses(loaded_messages),
+        session_usage=aggregate_session_usage(loaded_messages),
+        context_usage=latest_session_context_usage(loaded_messages),
+    )
 
 
 def _resolve_history_session_id(
@@ -315,7 +360,7 @@ async def _expand_content_file_mentions(
     runtime = state.runtime
     try:
         root = resolve_mention_root(runtime, agent_id, project_id)
-        return await asyncio.to_thread(
+        return await _CHAT_RPC_WORKERS.run(
             expand_file_mentions,
             content,
             file_mentions,

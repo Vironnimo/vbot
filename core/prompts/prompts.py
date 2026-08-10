@@ -60,8 +60,15 @@ from core.tools.availability import (
 from core.tools.tools import ToolDefinitionProfileContext
 from core.utils.logging import get_logger
 from core.utils.paths import model_path
+from core.utils.workers import BoundedWorkerPool
 
 JsonObject = dict[str, Any]
+
+PROMPT_WORKER_LIMIT = 4
+_PROMPT_WORKERS = BoundedWorkerPool(
+    name="prompt",
+    max_workers=PROMPT_WORKER_LIMIT,
+)
 
 # --- Block model: core/data block ids, owners, and the scope key ------------
 #
@@ -1063,6 +1070,20 @@ class SystemPromptManager:
             replacements=self._runtime_replacements(agent),
         )
 
+    async def build_system_prompt_async(
+        self,
+        agent: PromptAgent,
+        scope: Any = None,
+        **build_options: Any,
+    ) -> str:
+        """Build the prompt through the bounded prompt worker boundary."""
+        return await _PROMPT_WORKERS.run(
+            self.build_system_prompt,
+            agent,
+            scope,
+            **build_options,
+        )
+
     def _collect_block_definitions(
         self,
         agent: PromptAgent,
@@ -1266,6 +1287,19 @@ class SystemPromptManager:
             },
         ).strip()
 
+    async def render_working_project_context_async(
+        self,
+        project_context: ProjectPromptContext,
+        *,
+        on_read: Callable[[Path], None] | None = None,
+    ) -> str:
+        """Render Working Project files through the prompt worker boundary."""
+        return await _PROMPT_WORKERS.run(
+            self.render_working_project_context,
+            project_context,
+            on_read=on_read,
+        )
+
     def _runtime_replacements(self, agent: PromptAgent) -> dict[str, str]:
         """Return the build-time runtime-variable substitutions.
 
@@ -1454,6 +1488,19 @@ class SystemPromptManager:
         (empty ``workspace``) even under a wildcard allow-list.
         """
         return self._provider_definitions_for_agent(agent, session_tool_grants)
+
+    async def provider_tool_definitions_async(
+        self,
+        agent: PromptAgent,
+        *,
+        session_tool_grants: Sequence[str] = (),
+    ) -> list[dict[str, Any]]:
+        """Build provider Tool schemas without running profile work on the Event Loop."""
+        return await _PROMPT_WORKERS.run(
+            self.provider_tool_definitions,
+            agent,
+            session_tool_grants=session_tool_grants,
+        )
 
     def _resolve_skill_registry(
         self, skill_registry: SkillPromptRegistry | None

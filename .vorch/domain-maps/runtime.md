@@ -2,6 +2,8 @@
 
 Bootstrap entry point. Wires services and manages start/stop lifecycle.
 
+Blocking in-process work crosses named `BoundedWorkerPool` boundaries from `core/utils/workers.py`. Each pool owns a dedicated executor, admits at most its configured worker count per Event Loop before submission, and defers cancellation until an already-started mutation settles; continuous Terminal backend I/O remains on its separate executor path so it cannot consume parser, prompt, Session, or Tool capacity.
+
 ## Interfaces
 
 `core/runtime/interfaces.py` — `typing.Protocol` DI contracts. Only `ConfigProtocol` is constructor-injected; the rest are structural typings used for DI/testing. `core/runtime/__init__.py` re-exports `ConfigProtocol`, `LoggerProtocol`, and `RuntimeServices` plus the `Runtime` class; `ProviderCredentialResolverProtocol` is imported directly from `interfaces.py` where needed, not re-exported.

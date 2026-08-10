@@ -175,7 +175,8 @@ def test_title_projection_bounds_text_and_excludes_attached_content() -> None:
     )
 
 
-def test_disabled_generation_keeps_local_title_without_adapter(tmp_path) -> None:
+@pytest.mark.asyncio
+async def test_disabled_generation_keeps_local_title_without_adapter(tmp_path) -> None:
     runtime = StubRuntime(tmp_path, enabled=False, adapters=[])
     _append_first_user(runtime, "  Investigate\n login   failures in production  ")
     service = SessionTitleService(cast(Any, runtime))
@@ -188,6 +189,7 @@ def test_disabled_generation_keeps_local_title_without_adapter(tmp_path) -> None
         content="  Investigate\n login   failures in production  ",
         run_id="run-one",
     )
+    await _wait_for_background(service)
 
     metadata = runtime.chat_sessions.get_metadata("coder", "session-one")
     assert metadata["auto_title"] == "Investigate login failures in production"
@@ -377,7 +379,8 @@ async def test_failed_configured_model_keeps_local_title_without_agent_retry(tmp
     )
 
 
-def test_existing_session_is_marked_without_backfill_or_model_request(tmp_path) -> None:
+@pytest.mark.asyncio
+async def test_existing_session_is_marked_without_backfill_or_model_request(tmp_path) -> None:
     runtime = StubRuntime(tmp_path, enabled=True, adapters=[])
     session = runtime.chat_sessions.create("coder", session_id="session-one")
     session.append(ChatMessage.user("Old first request"))
@@ -393,6 +396,7 @@ def test_existing_session_is_marked_without_backfill_or_model_request(tmp_path) 
         content="New request",
         run_id="run-two",
     )
+    await _wait_for_background(service)
 
     metadata = runtime.chat_sessions.get_metadata("coder", "session-one")
     assert metadata["auto_title_initialized"] is True
@@ -400,7 +404,8 @@ def test_existing_session_is_marked_without_backfill_or_model_request(tmp_path) 
     assert runtime.adapter_calls == []
 
 
-def test_manual_name_skips_model_but_preserves_local_title_underneath(tmp_path) -> None:
+@pytest.mark.asyncio
+async def test_manual_name_skips_model_but_preserves_local_title_underneath(tmp_path) -> None:
     runtime = StubRuntime(tmp_path, enabled=True, adapters=[])
     _append_first_user(runtime, "Investigate login failure")
     runtime.chat_sessions.set_title("coder", "session-one", "Manual name")
@@ -414,6 +419,7 @@ def test_manual_name_skips_model_but_preserves_local_title_underneath(tmp_path) 
         content="Investigate login failure",
         run_id="run-one",
     )
+    await _wait_for_background(service)
 
     metadata = runtime.chat_sessions.get_metadata("coder", "session-one")
     assert metadata["title"] == "Manual name"

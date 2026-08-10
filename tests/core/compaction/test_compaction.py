@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import threading
 from typing import Any
 
 import pytest
@@ -18,7 +19,12 @@ from core.compaction import (
     find_tail_boundary,
     is_compacted_tool_result_content,
 )
-from core.compaction.compaction import _plan_working_tail, _tail_soft_limit, _tail_token_span
+from core.compaction.compaction import (
+    CompactionPlan,
+    _plan_working_tail,
+    _tail_soft_limit,
+    _tail_token_span,
+)
 from core.utils.tokens import NATIVE_MEDIA_TOKEN_RESERVE
 
 TIMESTAMP = "2026-05-19T12:00:00+00:00"
@@ -176,6 +182,48 @@ async def test_summary_tail_executes_one_call_and_materializes_projection() -> N
     assert effective[0].role == "note"
     assert effective[0].content == f"{COMPACTION_SUMMARY_NOTE_PREFIX}NEW SUMMARY"
     assert [item.id for item in effective[1:]] == ["u2", "a2"]
+
+
+@pytest.mark.asyncio
+async def test_compaction_keeps_sync_transforms_off_loop_and_model_io_on_loop() -> None:
+    loop_thread = threading.get_ident()
+    strategy_threads: list[int] = []
+    send_threads: list[int] = []
+    normalize_threads: list[int] = []
+
+    class RecordingStrategy:
+        id = "recording"
+
+        def plan(self, context: Any, settings: Any) -> CompactionPlan:
+            strategy_threads.append(threading.get_ident())
+            return CompactionPlan(
+                model_messages=({"role": "user", "content": "compact"},),
+                model_target="summary",
+                compacted_token_count=1,
+            )
+
+    class RecordingAdapter:
+        async def send(self, messages: list[dict], **kwargs: Any) -> dict[str, Any]:
+            send_threads.append(threading.get_ident())
+            return {"content": "summary"}
+
+        def normalize_response(self, response: dict[str, Any]) -> dict[str, Any]:
+            normalize_threads.append(threading.get_ident())
+            return response
+
+    adapter = RecordingAdapter()
+    await CompactionService(RecordingStrategy()).compact(
+        [user("u1", "old context")],
+        agent=object(),
+        summary_adapter=adapter,
+        summary_model_id="openai/summary",
+        storage=StubStorage(),
+        settings=CompactionSettings(strategy="recording"),
+    )
+
+    assert strategy_threads and strategy_threads != [loop_thread]
+    assert send_threads == [loop_thread]
+    assert normalize_threads and normalize_threads != [loop_thread]
 
 
 @pytest.mark.asyncio

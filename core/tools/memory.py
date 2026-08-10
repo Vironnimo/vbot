@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import threading
 from collections import OrderedDict
 
@@ -16,6 +15,7 @@ from core.tools.tools import (
     ToolDisplayPart,
     ToolRegistry,
     result_count_fact_builder,
+    run_tool_worker,
     tool_failure,
     tool_success,
 )
@@ -118,7 +118,7 @@ def make_memory_handler(memory_service: MemoryService):
     tracker = _MemoryThrashTracker()
 
     async def handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
-        return await asyncio.to_thread(memory_handler, context, arguments, memory_service, tracker)
+        return await run_tool_worker(memory_handler, context, arguments, memory_service, tracker)
 
     return handler
 

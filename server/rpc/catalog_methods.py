@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 from typing import Any
 
 from core.chat.file_mentions import list_mention_files, resolve_mention_root
@@ -13,6 +12,7 @@ from core.projects import (
     resolve_working_project_id,
 )
 from core.projects.projects import PROJECT_DEFAULT_ALLOWED_TOOLS
+from core.utils.workers import BoundedWorkerPool
 from server.rpc.dispatcher import RpcMethodHandler
 from server.rpc.error_mapping import _map_expected_error
 from server.rpc.errors import RPC_ERROR_INVALID_REQUEST, RpcError
@@ -26,6 +26,7 @@ _COMMAND_CATALOG_OUTPUT = {
     "detail": "transient",
     "state_change": "action",
 }
+_CATALOG_WORKERS = BoundedWorkerPool(name="catalog", max_workers=4)
 
 
 def _list_tools(state: Any, params: JsonObject) -> JsonObject:
@@ -151,7 +152,7 @@ async def _list_files(state: Any, params: JsonObject) -> JsonObject:
     agent_id, project_id = _required_agent_address(params, "agent_id")
     try:
         root = resolve_mention_root(state.runtime, agent_id, project_id)
-        files, truncated = await asyncio.to_thread(list_mention_files, root)
+        files, truncated = await _CATALOG_WORKERS.run(list_mention_files, root)
     except Exception as exc:
         raise _map_expected_error(exc) from exc
     return {"root": str(root), "files": files, "truncated": truncated}

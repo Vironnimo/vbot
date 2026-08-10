@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import re
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from core.chat.content_blocks import (
@@ -24,11 +25,18 @@ from core.sessions.sessions import (
     SESSION_TITLE_KEY,
 )
 from core.utils.logging import get_logger
+from core.utils.workers import BoundedWorkerPool
 
 if TYPE_CHECKING:
     from core.runtime.interfaces import RuntimeServices
 
 _LOGGER = get_logger("sessions.titles")
+
+SESSION_TITLE_WORKER_LIMIT = 2
+_SESSION_TITLE_WORKERS = BoundedWorkerPool(
+    name="session-title",
+    max_workers=SESSION_TITLE_WORKER_LIMIT,
+)
 
 LOCAL_TITLE_MAX_CHARACTERS = 40
 GENERATED_TITLE_MAX_CHARACTERS = 60
@@ -72,6 +80,12 @@ TITLE_SYSTEM_PROMPT = (
 )
 
 
+@dataclass(frozen=True)
+class _TitleGenerationRequest:
+    model: str
+    title_input: str
+
+
 class SessionTitleService:
     """Set a local title immediately and optionally improve it in the background."""
 
@@ -93,8 +107,8 @@ class SessionTitleService:
         """Handle the first visible user message without delaying its Run."""
         if self._closed:
             return
-        try:
-            self._initialize_title(
+        task = asyncio.create_task(
+            self._initialize_title_async(
                 agent_id=agent_id,
                 session_id=session_id,
                 project_id=project_id,
@@ -102,15 +116,11 @@ class SessionTitleService:
                 content=content,
                 run_id=run_id,
             )
-        except Exception:
-            _LOGGER.warning(
-                "Session title initialization failed (agent=%s session=%s)",
-                agent_id,
-                session_id,
-                exc_info=True,
-            )
+        )
+        self._background_tasks.add(task)
+        task.add_done_callback(self._on_background_task_done)
 
-    def _initialize_title(
+    async def _initialize_title_async(
         self,
         *,
         agent_id: str,
@@ -120,12 +130,47 @@ class SessionTitleService:
         content: str | list[ContentBlock],
         run_id: str,
     ) -> None:
+        try:
+            generation = await _SESSION_TITLE_WORKERS.run(
+                self._prepare_title,
+                agent_id=agent_id,
+                session_id=session_id,
+                project_id=project_id,
+                agent=agent,
+                content=content,
+            )
+            if generation is not None:
+                await self._generate_title(
+                    agent_id=agent_id,
+                    session_id=session_id,
+                    project_id=project_id,
+                    model=generation.model,
+                    title_input=generation.title_input,
+                    run_id=run_id,
+                )
+        except Exception:
+            _LOGGER.warning(
+                "Session title initialization failed (agent=%s session=%s)",
+                agent_id,
+                session_id,
+                exc_info=True,
+            )
+
+    def _prepare_title(
+        self,
+        *,
+        agent_id: str,
+        session_id: str,
+        project_id: str | None,
+        agent: Any,
+        content: str | list[ContentBlock],
+    ) -> _TitleGenerationRequest | None:
         sessions = self._runtime.chat_sessions
         metadata = sessions.get_metadata(agent_id, session_id, project_id)
         if metadata.get(SESSION_AUTO_TITLE_INITIALIZED_KEY) is True:
-            return
+            return None
         if metadata.get(_SUBAGENT_SESSION_METADATA_FLAG) is True:
-            return
+            return None
         has_manual_title = isinstance(metadata.get(SESSION_TITLE_KEY), str) and bool(
             metadata[SESSION_TITLE_KEY].strip()
         )
@@ -139,36 +184,25 @@ class SessionTitleService:
                     break
         if user_message_count != 1:
             sessions.mark_auto_title_initialized(agent_id, session_id, project_id)
-            return
+            return None
 
         text, attachment_lines = _title_source_parts(content)
         local_title = _local_title(text, attachment_lines)
         sessions.set_auto_title(agent_id, session_id, local_title, project_id)
 
         if has_manual_title:
-            return
+            return None
 
         settings = self._runtime.storage.load_session_title_settings()
         if not settings["enabled"]:
-            return
+            return None
         title_input = _title_input(text, attachment_lines)
         if not title_input:
-            return
+            return None
 
         configured_model = settings["model"]
         model = configured_model or str(agent.model)
-        task = asyncio.create_task(
-            self._generate_title(
-                agent_id=agent_id,
-                session_id=session_id,
-                project_id=project_id,
-                model=model,
-                title_input=title_input,
-                run_id=run_id,
-            )
-        )
-        self._background_tasks.add(task)
-        task.add_done_callback(self._on_background_task_done)
+        return _TitleGenerationRequest(model=model, title_input=title_input)
 
     def _on_background_task_done(self, task: asyncio.Task[None]) -> None:
         self._background_tasks.discard(task)
@@ -224,9 +258,14 @@ class SessionTitleService:
                 temperature=0.0,
                 thinking_effort="none",
             )
-            normalized = adapter.normalize_response(response, model_id=model_id)
-            title = _generated_title(normalized)
-            self._runtime.chat_sessions.set_auto_title(
+            title = await _SESSION_TITLE_WORKERS.run(
+                _normalize_generated_title,
+                adapter,
+                response,
+                model_id,
+            )
+            await _SESSION_TITLE_WORKERS.run(
+                self._runtime.chat_sessions.set_auto_title,
                 agent_id,
                 session_id,
                 title,
@@ -254,6 +293,15 @@ class SessionTitleService:
                     await adapter.aclose()
                 except Exception:
                     _LOGGER.warning("Failed to close Session title adapter", exc_info=True)
+
+
+def _normalize_generated_title(
+    adapter: Any,
+    response: dict[str, Any],
+    model_id: str,
+) -> str:
+    normalized = adapter.normalize_response(response, model_id=model_id)
+    return _generated_title(normalized)
 
 
 def _resolve_model_target(runtime: RuntimeServices, model: str) -> tuple[str, str, str]:

@@ -17,11 +17,13 @@ from core.tools.contracts import ToolContract, compile_tool_contract
 from core.utils.errors import VBotError
 from core.utils.logging import get_logger
 from core.utils.paths import model_path
+from core.utils.workers import BoundedWorkerPool
 
 _LOGGER = get_logger("tools")
 
 TOOL_ALLOWLIST_WILDCARD = "*"
 DEFAULT_TOOL_CONCURRENCY_LIMIT = 50
+DEFAULT_TOOL_WORKER_LIMIT = 8
 
 JsonObject = dict[str, Any]
 ToolEmitHook = Callable[[str, JsonObject], None | Awaitable[None]]
@@ -52,6 +54,11 @@ TOOL_DISPLAY_TRUNCATION_MODES = frozenset({"start", "end", "middle", "never"})
 TOOL_DISPLAY_TOOLTIP_MODES = frozenset({"always", "none", "truncated"})
 TOOL_DISPLAY_FACT_UNITS = frozenset({"matches", "results"})
 TOOL_DISPLAY_LINE_CHANGES = frozenset({"added", "removed"})
+
+_TOOL_WORKERS = BoundedWorkerPool(
+    name="tool",
+    max_workers=DEFAULT_TOOL_WORKER_LIMIT,
+)
 
 
 class ToolError(VBotError):
@@ -138,18 +145,20 @@ ToolDisplayPartBuilder = Callable[[JsonObject], Sequence[ToolDisplayPart]]
 
 
 async def run_tool_worker(
-    function: Callable[..., _ToolWorkerResult], *arguments: Any
+    function: Callable[..., _ToolWorkerResult],
+    *arguments: Any,
+    **keyword_arguments: Any,
 ) -> _ToolWorkerResult:
-    """Run blocking Tool work off-loop and settle it before cancellation escapes."""
-    task = asyncio.create_task(asyncio.to_thread(function, *arguments))
-    try:
-        return await asyncio.shield(task)
-    except asyncio.CancelledError:
-        try:
-            await task
-        except Exception:
-            raise
-        raise
+    """Run blocking Tool work through the dedicated backpressured worker pool."""
+    return await _TOOL_WORKERS.run(function, *arguments, **keyword_arguments)
+
+
+def _invoke_sync_tool_handler(
+    handler: ToolHandler,
+    context: ToolContext,
+    arguments: JsonObject,
+) -> Any:
+    return handler(context, arguments)
 
 
 def offload_tool_handler(handler: ToolHandler) -> ToolHandler:
@@ -1107,7 +1116,19 @@ class ToolRegistry:
         normalized_arguments = input_contract.normalize_arguments(arguments)
         input_contract.validate_arguments(normalized_arguments)
 
-        result = tool.handler(context, normalized_arguments)
+        if tool.extension is not None and not inspect.iscoroutinefunction(tool.handler):
+            result = await run_tool_worker(
+                _invoke_sync_tool_handler,
+                tool.handler,
+                context,
+                normalized_arguments,
+            )
+        else:
+            result = _invoke_sync_tool_handler(
+                tool.handler,
+                context,
+                normalized_arguments,
+            )
         if inspect.isawaitable(result):
             result = await result
         return self.validate_result(context.tool_name, result)

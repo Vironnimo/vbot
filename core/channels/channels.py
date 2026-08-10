@@ -44,6 +44,7 @@ from core.settings import is_valid_agent_id
 from core.utils.atomic import atomic_write_text
 from core.utils.errors import VBotError
 from core.utils.logging import get_logger
+from core.utils.workers import BoundedWorkerPool
 
 if TYPE_CHECKING:
     from core.agents.agents import AgentStore
@@ -52,6 +53,7 @@ if TYPE_CHECKING:
     from core.sessions import ChatSessionManager
 
 _LOGGER = get_logger("channels")
+_CHANNEL_IO_WORKERS = BoundedWorkerPool(name="channel-io", max_workers=4)
 
 _CHANNEL_CONFIG_FILENAME = "channel.json"
 _CHANNEL_ACCESS_FILENAME = "access.json"
@@ -1059,28 +1061,14 @@ class ChannelService:
         if normalized_message is None and not normalized_files:
             raise ChannelConfigError("at least one of message or files must be provided")
 
-        adapter = self._active_adapter(normalized_id)
-        binding: RunButtonBinding | None = None
-        outbound_buttons = normalized_buttons
-        if run_origin is not None and normalized_buttons is not None:
-            config = self._storage.get(normalized_id)
-            if run_origin.agent_id != config.agent_id:
-                raise ChannelConfigError(
-                    f"Run-button origin agent {run_origin.agent_id} does not own Channel "
-                    f"{normalized_id}"
-                )
-            if not self._chat_sessions.exists(run_origin.agent_id, run_origin.session_id):
-                raise ChannelConfigError(
-                    f"Run-button origin Session does not exist: {run_origin.session_id}"
-                )
-            outbound_buttons, binding = _bind_outbound_run_buttons(
-                normalized_buttons,
-                platform_target=platform_target,
-                thread_id=thread_id,
-                origin_session_id=run_origin.session_id,
-            )
-            if binding is not None:
-                self._storage.save_run_button_binding(normalized_id, binding)
+        adapter, outbound_buttons, binding = await _CHANNEL_IO_WORKERS.run(
+            self._prepare_outbound_dispatch,
+            normalized_id,
+            normalized_buttons,
+            platform_target,
+            thread_id,
+            run_origin,
+        )
 
         try:
             await adapter.send(
@@ -1093,7 +1081,11 @@ class ChannelService:
         except BaseException:
             if binding is not None:
                 try:
-                    self._storage.discard_run_button_binding(normalized_id, binding.id)
+                    await _CHANNEL_IO_WORKERS.run(
+                        self._storage.discard_run_button_binding,
+                        normalized_id,
+                        binding.id,
+                    )
                 except Exception as cleanup_error:
                     _LOGGER.warning(
                         "Could not discard unsent Run-button binding (channel=%s): %s",
@@ -1106,6 +1098,42 @@ class ChannelService:
                         ),
                     )
             raise
+
+    def _prepare_outbound_dispatch(
+        self,
+        channel_id: str,
+        buttons: list[list[InteractionButton]] | None,
+        platform_target: str,
+        thread_id: str | None,
+        run_origin: RouteFacts | None,
+    ) -> tuple[
+        ChannelAdapter,
+        list[list[InteractionButton]] | None,
+        RunButtonBinding | None,
+    ]:
+        adapter = self._active_adapter(channel_id)
+        binding: RunButtonBinding | None = None
+        outbound_buttons = buttons
+        if run_origin is not None and buttons is not None:
+            config = self._storage.get(channel_id)
+            if run_origin.agent_id != config.agent_id:
+                raise ChannelConfigError(
+                    f"Run-button origin agent {run_origin.agent_id} does not own Channel "
+                    f"{channel_id}"
+                )
+            if not self._chat_sessions.exists(run_origin.agent_id, run_origin.session_id):
+                raise ChannelConfigError(
+                    f"Run-button origin Session does not exist: {run_origin.session_id}"
+                )
+            outbound_buttons, binding = _bind_outbound_run_buttons(
+                buttons,
+                platform_target=platform_target,
+                thread_id=thread_id,
+                origin_session_id=run_origin.session_id,
+            )
+            if binding is not None:
+                self._storage.save_run_button_binding(channel_id, binding)
+        return adapter, outbound_buttons, binding
 
     def ensure_outbound_session(self, channel_id: str, platform_target: str) -> RouteFacts:
         """Ensure the Session mirroring an outbound target chat exists and return its route."""

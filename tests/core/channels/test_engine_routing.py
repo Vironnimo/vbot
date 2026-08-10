@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
+import threading
+from typing import Any
+
 from .engine_test_support import (
     CHANNEL_REPLY_SURFACE,
     SESSION_ID,
@@ -45,6 +49,37 @@ def test_derive_session_id(
     )
 
     assert session_id == expected
+
+
+@pytest.mark.asyncio
+async def test_async_route_preparation_keeps_session_io_off_event_loop(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    engine, _sessions, _trigger, _transport = make_engine(tmp_path)
+    started = threading.Event()
+    release = threading.Event()
+    worker_threads: list[int] = []
+
+    def blocking_prepare(conversation: Any):
+        worker_threads.append(threading.get_ident())
+        started.set()
+        assert release.wait(timeout=2)
+        return RouteFacts(agent_id="assistant", session_id=SESSION_ID), engine._reply_plan_for(
+            conversation
+        )
+
+    monkeypatch.setattr(engine, "prepare_inbound_route", blocking_prepare)
+    loop_thread = threading.get_ident()
+    route_task = asyncio.create_task(engine._prepare_inbound_route_async(make_conversation()))
+    assert await asyncio.to_thread(started.wait, 2)
+    await asyncio.sleep(0)
+
+    assert worker_threads and worker_threads != [loop_thread]
+    assert route_task.done() is False
+    release.set()
+    route, _reply_plan = await route_task
+    assert route.session_id == SESSION_ID
 
 
 @pytest.mark.asyncio

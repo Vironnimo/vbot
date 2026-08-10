@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 from typing import Any, cast
 
 from core.projects import (
@@ -14,6 +15,7 @@ from core.prompts import ProjectPromptContext, PromptError, SystemPromptManager
 from core.utils.log_viewer import LogViewer
 from core.utils.logging import get_logger
 from core.utils.tokens import estimate_json_tokens, estimate_tokens
+from core.utils.workers import BoundedWorkerPool
 from server.rpc.dispatcher import RpcMethodHandler
 from server.rpc.error_mapping import _map_expected_error
 from server.rpc.errors import RPC_ERROR_DOMAIN, RPC_ERROR_INVALID_REQUEST, RpcError
@@ -26,6 +28,25 @@ from server.rpc.validation import (
 
 JsonObject = dict[str, Any]
 _LOGGER = get_logger("server.rpc.prompts")
+_PROMPT_RPC_WORKERS = BoundedWorkerPool(name="prompt-rpc", max_workers=4)
+
+
+async def _run_prompt_method(
+    manager: Any,
+    async_name: str,
+    sync_name: str,
+    *arguments: Any,
+    **keyword_arguments: Any,
+) -> Any:
+    """Prefer Prompt's async facade while keeping lightweight sync substitutes valid."""
+    async_method = getattr(manager, async_name, None)
+    if callable(async_method) and inspect.iscoroutinefunction(async_method):
+        return await async_method(*arguments, **keyword_arguments)
+    return await _PROMPT_RPC_WORKERS.run(
+        getattr(manager, sync_name),
+        *arguments,
+        **keyword_arguments,
+    )
 
 
 def _list_logs(state: Any, params: JsonObject) -> JsonObject:
@@ -226,16 +247,16 @@ async def _preview_prompt(state: Any, params: JsonObject) -> JsonObject:
     else:
         agent_id, project_id = _required_agent_address(params, "agent_id")
 
+    def resolve_preview_agent() -> tuple[Any, Any | None]:
+        resolved_agent = state.runtime.agent_resolver.resolve_agent(project_id, agent_id)
+        working_project_id = resolve_working_project_id(project_id, resolved_agent)
+        return resolved_agent, resolve_prompt_project(
+            state.runtime.projects,
+            working_project_id,
+        )
+
     try:
-        agent = state.runtime.agent_resolver.resolve_agent(project_id, agent_id)
-        working_project_id = resolve_working_project_id(project_id, agent)
-        # The preview resolves through the same shared rooting policy a run uses
-        # (:func:`core.projects.resolve_prompt_project`), so it matches what is
-        # actually sent: a project-qualified preview carries that project's cwd and
-        # auto-load list; a bare identity preview carries the files of the project
-        # the Identity Agent explicitly selected, or nothing —
-        # in which case the Working Project block collapses.
-        prompt_project = resolve_prompt_project(state.runtime.projects, working_project_id)
+        agent, prompt_project = await _PROMPT_RPC_WORKERS.run(resolve_preview_agent)
     except Exception as exc:
         raise _map_expected_error(exc) from exc
     project_context = (
@@ -258,29 +279,50 @@ async def _preview_prompt(state: Any, params: JsonObject) -> JsonObject:
     try:
         prompt_manager = state.runtime.system_prompts
         working_project_context = (
-            prompt_manager.render_working_project_context(
+            await _run_prompt_method(
+                prompt_manager,
+                "render_working_project_context_async",
+                "render_working_project_context",
                 project_context,
             )
             if project_id is None and prompt_project is not None and project_context is not None
             else None
         )
-        text = prompt_manager.build_system_prompt(
+        skill_registry = await _PROMPT_RPC_WORKERS.run(
+            state.runtime.skills_for,
+            skill_project_id,
+            identity_agent_id,
+        )
+        text = await _run_prompt_method(
+            prompt_manager,
+            "build_system_prompt_async",
+            "build_system_prompt",
             agent,
             scope=prompt_scope,
             agent_body=runtime_agent_body(agent),
             project_context=project_context,
             working_project_context=working_project_context,
             agent_project_id=project_id,
-            skill_registry=state.runtime.skills_for(skill_project_id, identity_agent_id),
+            skill_registry=skill_registry,
         )
     except Exception as exc:
         raise _map_expected_error(exc) from exc
     # The provider tool-definition array occupies model context alongside the
     # prompt text but is not part of it — report it separately so the preview
     # reflects the request's real prompt-side footprint.
-    tool_definitions = prompt_manager.provider_tool_definitions(agent)
-    token_count, estimated = estimate_tokens(text)
-    tool_tokens = estimate_json_tokens(tool_definitions)[0] if tool_definitions else 0
+    tool_definitions = await _run_prompt_method(
+        prompt_manager,
+        "provider_tool_definitions_async",
+        "provider_tool_definitions",
+        agent,
+    )
+
+    def estimate_preview() -> tuple[int, bool, int]:
+        token_count, estimated = estimate_tokens(text)
+        tool_tokens = estimate_json_tokens(tool_definitions)[0] if tool_definitions else 0
+        return token_count, estimated, tool_tokens
+
+    token_count, estimated, tool_tokens = await _PROMPT_RPC_WORKERS.run(estimate_preview)
     return {
         "text": text,
         "tokens": token_count,

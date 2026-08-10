@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 from contextlib import nullcontext
 from pathlib import Path
 
@@ -16,6 +15,7 @@ from core.tools.tools import (
     ToolDisplayField,
     ToolHandler,
     ToolRegistry,
+    run_tool_worker,
     tool_failure,
     tool_success,
 )
@@ -171,7 +171,7 @@ def make_write_handler(file_state: FileReadState) -> ToolHandler:
     """Create a write handler bound to the read-before-write guard registry."""
 
     async def write_handler_async(context: ToolContext, arguments: JsonObject) -> JsonObject:
-        return await asyncio.to_thread(write_handler, context, arguments, file_state=file_state)
+        return await run_tool_worker(write_handler, context, arguments, file_state=file_state)
 
     return write_handler_async
 

@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import sys
+import threading
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any, cast
@@ -152,6 +153,28 @@ def test_extension_tool_dispatches_through_tool_registry(tmp_path: Path) -> None
     assert result["data"] == {"marker": "from-ext", "value": "hi"}
     assert tool_registry.get("ext_echo").parallel_safe is True
     assert _record(registry, "echo_ext").capability_errors == []
+
+
+def test_sync_extension_tool_runs_outside_event_loop_thread(tmp_path: Path) -> None:
+    root = tmp_path / "extensions"
+    _write_single_file(
+        root,
+        "thread_ext",
+        "import threading\n"
+        "from core.tools import tool_success\n"
+        "def _handler(context, arguments):\n"
+        "    return tool_success({'thread_id': threading.get_ident()})\n"
+        "def register(api):\n"
+        "    api.register_tool('ext_thread', 'desc', {'type': 'object'}, _handler)\n",
+    )
+    registry = ExtensionRegistry.load(root)
+    tool_registry = ToolRegistry()
+    registry.apply_tools(tool_registry)
+    loop_thread = threading.get_ident()
+
+    result = asyncio.run(tool_registry.dispatch(_tool_context("ext_thread", tmp_path), {}))
+
+    assert result["data"]["thread_id"] != loop_thread
 
 
 def test_extension_tool_respects_allowlist(tmp_path: Path) -> None:

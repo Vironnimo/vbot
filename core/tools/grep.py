@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import contextlib
 import re
 import shutil
@@ -41,6 +40,7 @@ from core.tools.tools import (
     ToolDisplay,
     ToolDisplayField,
     ToolRegistry,
+    run_tool_worker,
     tool_failure,
     tool_success,
 )
@@ -596,7 +596,7 @@ def _render_rg_line(raw_line: str, output_mode: str, *, base: Path, cwd: Path) -
 def grep_handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
     """Handle a grep tool call and return a stable vBot result envelope.
 
-    Sync core; registered behind an ``asyncio.to_thread`` wrapper so the
+    Sync core; registered behind the bounded Tool worker pool so the
     ripgrep subprocess and the fallback file scan never block the kernel
     event loop.
     """
@@ -781,7 +781,7 @@ def _normalize_glob_argument(value: object) -> str | None:
 
 
 async def _grep_handler_async(context: ToolContext, arguments: JsonObject) -> JsonObject:
-    return await asyncio.to_thread(grep_handler, context, arguments)
+    return await run_tool_worker(grep_handler, context, arguments)
 
 
 def register_grep_tool(registry: ToolRegistry) -> None:

@@ -13,6 +13,8 @@ Sends proactive outbound messages and every file delivery through configured cha
 
 ## Conventions
 
+- Argument normalization, Channel/config lookup, target resolution, file stat/read/MIME work, and best-effort outbound-note storage run through the bounded Tool worker pool. The actual async `ChannelService.send`/Adapter delivery remains on the Event Loop, while its durable Run-button binding preparation uses the Channel I/O pool.
+
 - The tool handles proactive outbound messages and every channel file delivery, including files sent while replying to a channel-originated turn. Final text-only replies remain automatic through channel adapters subscribing to Runs.
 - `platform_target` resolution order: explicit argument → the current Session's last Reply Target (only when its `channel_id` matches the requested Channel) → the Channel config's sole `allowed_chat_ids` entry → otherwise `invalid_arguments`.
 - At least one of `message` or `file_paths` is required. When both are present, `message` acts as caption/accompanying text.

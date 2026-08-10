@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from core.attachments.attachments import _sniff_mime
@@ -25,6 +26,7 @@ from core.tools.tools import (
     ToolDisplay,
     ToolDisplayPart,
     ToolRegistry,
+    run_tool_worker,
     tool_failure,
     tool_success,
 )
@@ -49,6 +51,17 @@ _CHANNEL_SEND_ALLOWED_ARGUMENTS = (
     _REQUIRED_CHANNEL_SEND_ARGUMENTS | _OPTIONAL_CHANNEL_SEND_ARGUMENTS
 )
 _INTERACTION_BUTTON_ARGUMENTS = frozenset(("label", "data"))
+
+
+@dataclass(frozen=True)
+class _PreparedChannelSend:
+    channel_id: str
+    message: str | None
+    files: list[FileData]
+    buttons: list[list[InteractionButton]] | None
+    platform_target: str
+    thread_id: str | None
+
 
 CHANNEL_SEND_TOOL_PARAMETERS: JsonObject = {
     "type": "object",
@@ -279,47 +292,32 @@ async def _handle_channel_send_tool(
         return tool_failure("invalid_arguments", f"Unknown argument(s): {names}")
 
     try:
-        channel_id = required_string(arguments.get("channel_id"), field_name="channel_id")
-        message = optional_string(arguments.get("message"), field_name="message")
-        files = _build_file_data(
-            arguments.get("file_paths"),
+        prepared = await run_tool_worker(
+            _prepare_channel_send,
+            channel_service,
+            chat_sessions,
             context=context,
+            arguments=arguments,
             max_size_bytes=max_attachment_size_bytes,
         )
-        buttons = _build_buttons(arguments.get("buttons"))
-        if message is None and not files:
-            return tool_failure(
-                "invalid_arguments",
-                "at least one of message or file_paths must be provided",
-            )
-        if buttons is not None and files:
-            return tool_failure(
-                "invalid_arguments",
-                "buttons cannot be combined with file_paths",
-            )
-
-        channel_config = _channel_config_for_agent(channel_service, channel_id, context.agent_id)
-        _validate_platform_arguments(arguments, channel_config)
-        platform_target, thread_id = _send_target_from_arguments_or_context(
-            arguments,
-            chat_sessions,
-            context,
-            channel_id,
-            channel_config,
-        )
         send_options: dict[str, Any] = {
-            "files": files or None,
-            "thread_id": thread_id,
-            "buttons": buttons,
+            "files": prepared.files or None,
+            "thread_id": prepared.thread_id,
+            "buttons": prepared.buttons,
         }
         # Channels route Identity Sessions. A Project Session keeps the legacy raw
         # callback instead of pretending its same-named Session lives in identity storage.
-        if _contains_run_button(buttons) and context.project_id is None:
+        if _contains_run_button(prepared.buttons) and context.project_id is None:
             send_options["run_origin"] = RouteFacts(
                 agent_id=context.agent_id,
                 session_id=context.session_id,
             )
-        await channel_service.send(channel_id, message, platform_target, **send_options)
+        await channel_service.send(
+            prepared.channel_id,
+            prepared.message,
+            prepared.platform_target,
+            **send_options,
+        )
     except ValueError as error:
         return tool_failure("invalid_arguments", str(error))
     except ChannelNotFoundError as error:
@@ -332,16 +330,59 @@ async def _handle_channel_send_tool(
     await _record_outbound_message_note(
         channel_service,
         chat_sessions,
-        channel_id,
-        platform_target,
+        prepared.channel_id,
+        prepared.platform_target,
         sender_agent_id=context.agent_id,
+        message=prepared.message,
+        files=prepared.files,
+    )
+    result: JsonObject = {
+        "channel_id": prepared.channel_id,
+        "platform_target": prepared.platform_target,
+    }
+    if prepared.thread_id is not None:
+        result["thread_id"] = prepared.thread_id
+    return tool_success(result)
+
+
+def _prepare_channel_send(
+    channel_service: ChannelService,
+    chat_sessions: ChatSessionManager,
+    *,
+    context: ToolContext,
+    arguments: JsonObject,
+    max_size_bytes: int,
+) -> _PreparedChannelSend:
+    channel_id = required_string(arguments.get("channel_id"), field_name="channel_id")
+    message = optional_string(arguments.get("message"), field_name="message")
+    files = _build_file_data(
+        arguments.get("file_paths"),
+        context=context,
+        max_size_bytes=max_size_bytes,
+    )
+    buttons = _build_buttons(arguments.get("buttons"))
+    if message is None and not files:
+        raise ValueError("at least one of message or file_paths must be provided")
+    if buttons is not None and files:
+        raise ValueError("buttons cannot be combined with file_paths")
+
+    channel_config = _channel_config_for_agent(channel_service, channel_id, context.agent_id)
+    _validate_platform_arguments(arguments, channel_config)
+    platform_target, thread_id = _send_target_from_arguments_or_context(
+        arguments,
+        chat_sessions,
+        context,
+        channel_id,
+        channel_config,
+    )
+    return _PreparedChannelSend(
+        channel_id=channel_id,
         message=message,
         files=files,
+        buttons=buttons,
+        platform_target=platform_target,
+        thread_id=thread_id,
     )
-    result: JsonObject = {"channel_id": channel_id, "platform_target": platform_target}
-    if thread_id is not None:
-        result["thread_id"] = thread_id
-    return tool_success(result)
 
 
 def _validate_platform_arguments(arguments: JsonObject, channel_config: ChannelConfig) -> None:
@@ -371,13 +412,24 @@ async def _record_outbound_message_note(
     files: list[FileData],
 ) -> None:
     try:
-        route = channel_service.ensure_outbound_session(channel_id, platform_target)
+        route = await run_tool_worker(
+            channel_service.ensure_outbound_session,
+            channel_id,
+            platform_target,
+        )
         # Serialize the outbound-context note against an open tool cycle on the
         # target session. The lock is task-reentrant, so this is safe even when
         # the sending Run targets its own session.
         async with chat_sessions.write_lock(route.agent_id, route.session_id):
-            session = chat_sessions.get_or_create(route.agent_id, route.session_id)
-            session.add_note(_outbound_message_note(sender_agent_id, message, files))
+            session = await run_tool_worker(
+                chat_sessions.get_or_create,
+                route.agent_id,
+                route.session_id,
+            )
+            await run_tool_worker(
+                session.add_note,
+                _outbound_message_note(sender_agent_id, message, files),
+            )
     except Exception as error:
         # The outbound message already went out; failing to record context into the target
         # Session must not turn a successful send into a tool failure.

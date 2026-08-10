@@ -38,6 +38,8 @@ Core cross-cutting terms live in `.vorch/GLOSSARY.md`; these terms are specific 
 
 ## Cross-task contracts
 
+Runtime callback dispatch uses `invoke_extension_handler`: synchronous lifecycle, Hook, Command, Interaction, and Extension Tool handlers run in bounded workers, while coroutine handlers stay on the Event Loop and must yield normally. Hook/lifecycle/interaction dispatch remains ordered and fail-open, and logs a warning when one handler takes at least one second wall time; the warning is diagnostic, not a timeout or cancellation mechanism.
+
 - `ExtensionAPI` is the declaration facade. `api.config` is the register-time snapshot for structural choices; `api.get_config()` and `api.resolve_credential()` are live per-call reads for values that can change without rebuilding code.
 - `ExtensionRegistry` is the sole owner of records, hook dispatch tables, interaction-prefix routing, capability application, diagnostics, startup/shutdown, and deactivation primitives. `CommandDispatcher` remains the sole owner of Command validation, recognition, scheduling, execution, and neutral outcomes after the registry applies declarations.
 - Hook, Command, lifecycle, and interaction handlers may be synchronous or asynchronous. Runtime dispatch isolates failures and continues; Extensions must not be able to take down the Run, a Channel worker, or the remaining handlers merely by raising.
