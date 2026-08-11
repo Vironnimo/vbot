@@ -36,7 +36,7 @@ class _Renderer:
         if not skills:
             return ""
         lines = [f"Skills from project '{project_name}':"]
-        lines.extend(f"- {skill.name}: {skill.description} ({skill.path})" for skill in skills)
+        lines.extend(f"- {skill.name}: {skill.description}" for skill in skills)
         return "\n".join(lines)
 
 
@@ -107,9 +107,10 @@ def test_project_tool_loads_context_skills_and_stamps_files_read(tmp_path: Path)
     assert data["status"] == "loaded"
     assert data["project_id"] == "vbot"
     assert data["display_name"] == "vBot"
-    assert data["cwd"] == model_path(repo.resolve())
+    assert data["project_path"] == model_path(repo.resolve())
+    assert "cwd" not in data
     assert "Project Context loaded for 'vBot'" in data["content"]
-    assert "This call did not change your home Workspace, cwd, Rooting" in data["content"]
+    assert "current working directory" in data["content"]
     assert "available through the `skill` Tool in this Session" in data["content"]
     assert "on every `bash` call; each call starts a new shell" in data["content"]
     assert "Follow the Project rules." in data["content"]
@@ -119,9 +120,9 @@ def test_project_tool_loads_context_skills_and_stamps_files_read(tmp_path: Path)
         {
             "name": "review",
             "description": "Review changes.",
-            "path": model_path(skill_path),
         }
     ]
+    assert model_path(skill_path) not in data["content"]
     assert file_state.check_stale("session-one", agents_file.resolve()) is None
 
 
@@ -179,7 +180,7 @@ def test_project_tool_rejects_missing_or_invalid_project_id(
     assert "project_id" in result["error"]["message"]
 
 
-def test_project_tool_rejects_unreachable_project_cwd(tmp_path: Path) -> None:
+def test_project_tool_rejects_unreachable_project_path(tmp_path: Path) -> None:
     projects = ProjectStore(tmp_path / "data")
     projects.create("missing", "Missing", tmp_path / "does-not-exist")
 
@@ -187,7 +188,7 @@ def test_project_tool_rejects_unreachable_project_cwd(tmp_path: Path) -> None:
 
     assert result["ok"] is False
     assert result["error"]["code"] == "project_unavailable"
-    assert "no reachable cwd" in result["error"]["message"]
+    assert "no reachable Project path" in result["error"]["message"]
 
 
 def test_project_tool_rejects_config_agent_even_if_called_directly(tmp_path: Path) -> None:

@@ -46,7 +46,7 @@ def test_skill_catalog_groups_skills_by_origin(tmp_path: Path) -> None:
     assert "/skills/" not in prompt
 
 
-def test_render_project_skills_lists_names_descriptions_and_paths(tmp_path: Path) -> None:
+def test_render_project_skills_lists_only_names_and_descriptions(tmp_path: Path) -> None:
     from types import SimpleNamespace
 
     manager = _manager(tmp_path)
@@ -65,7 +65,8 @@ def test_render_project_skills_lists_names_descriptions_and_paths(tmp_path: Path
     assert "vBot" in rendered
     assert "deploy" in rendered
     assert "Ship it." in rendered
-    assert model_path(deploy_path) in rendered
+    assert model_path(deploy_path) not in rendered
+    assert "SKILL.md" not in rendered
     # Sorted by name: audit before deploy.
     assert rendered.index("audit") < rendered.index("deploy")
 
