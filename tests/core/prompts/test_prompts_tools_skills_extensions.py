@@ -502,7 +502,8 @@ def test_project_block_lists_projects_only_for_identity_agent_with_tool(
     prompt = manager.build_system_prompt(identity)
 
     assert '<project id="vbot" name="vBot"' in prompt
-    assert f'cwd="{model_path(repo.resolve())}"' in prompt
+    assert f'project_path="{model_path(repo.resolve())}"' in prompt
+    assert ' cwd="' not in prompt
     assert 'available="true" active="true"' in prompt
     assert '<project id="vbot"' not in manager.build_system_prompt(denied)
     assert '<project id="vbot"' not in manager.build_system_prompt(config_agent)

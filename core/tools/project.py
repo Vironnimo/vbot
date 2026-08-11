@@ -31,7 +31,8 @@ from core.utils.paths import model_path
 
 PROJECT_TOOL_NAME = "project"
 PROJECT_TOOL_DESCRIPTION = (
-    "Load a registered Project's current instructions, absolute cwd, and Project Skills. "
+    "Load a registered Project's current instructions, absolute Project path, and Project "
+    "Skills. "
     "Call it alone and wait for the result before taking dependent actions in that Project. "
     "Loading Project Context does not change the current working directory."
 )
@@ -53,11 +54,11 @@ PROJECT_PROMPT_BLOCK_HEADER = (
     "that is not already your current working Project, call `project` with its exact id. "
     "Call it alone and wait for the result before any dependent file, search, edit, or shell "
     "Tool call; sibling Tool calls may run concurrently.\n\n"
-    "The `project` Tool loads the Project's current instructions, absolute cwd, and Project "
-    "Skills. It does not change your cwd, Rooting, Workspace, Session ownership, Skill scope, "
-    "or permissions. After loading, use absolute paths for file Tools. Set `workdir` to the "
-    "returned cwd on every `bash` call; each call starts a new shell and does not retain cwd "
-    "changes from earlier calls.\n\n"
+    "The `project` Tool loads the Project's current instructions, absolute Project path, and "
+    "Project Skills. It does not change your current working directory, Rooting, Workspace, "
+    "Session ownership, Skill scope, or permissions. After loading, use absolute paths for "
+    "file Tools. Set `workdir` to the returned `project_path` on every `bash` call; each call "
+    "starts a new shell and does not retain working-directory changes from earlier calls.\n\n"
     "Registered Projects:"
 )
 
@@ -75,7 +76,7 @@ class ProjectContextRenderer(Protocol):
         ...
 
     def render_project_skills(self, project_name: str, skills: Sequence[Any]) -> str:
-        """Render a path-bearing Project Skill list."""
+        """Render a Project Skill list containing names and descriptions."""
         ...
 
 
@@ -133,7 +134,8 @@ def make_project_handler(
         if not cwd_exists(project.cwd):
             return tool_failure(
                 "project_unavailable",
-                f"Project '{project.project_id}' has no reachable cwd: {model_path(project.cwd)}",
+                f"Project '{project.project_id}' has no reachable Project path: "
+                f"{model_path(project.cwd)}",
                 retryable=False,
             )
 
@@ -163,11 +165,11 @@ def make_project_handler(
         for path in read_paths:
             file_state.record_read(context.session_id, path)
 
-        displayed_cwd = model_path(project.cwd)
+        project_path = model_path(project.cwd)
         content = _render_project_context(
             project.project_id,
             project.display_name,
-            displayed_cwd,
+            project_path,
             rendered_files,
             rendered_skills,
         )
@@ -176,7 +178,7 @@ def make_project_handler(
                 "status": "loaded",
                 "project_id": project.project_id,
                 "display_name": project.display_name,
-                "cwd": displayed_cwd,
+                "project_path": project_path,
                 "content": content,
                 "loaded_files": [model_path(path) for path in read_paths],
                 "skills": [_skill_payload(skill) for skill in skills],
@@ -205,7 +207,7 @@ def register_project_tool(
         open_input_schema=True,
         result_schema={
             "type": "object",
-            "required": ["status", "project_id", "display_name", "cwd", "content"],
+            "required": ["status", "project_id", "display_name", "project_path", "content"],
         },
         display=ToolDisplay(
             primary_candidates=(
@@ -236,7 +238,7 @@ def _project_prompt_line(project: Any, *, active_project_id: str | None) -> str:
     attributes = [
         f'id="{escape(project.project_id, quote=True)}"',
         f'name="{escape(_single_line(project.display_name), quote=True)}"',
-        f'cwd="{escape(model_path(project.cwd), quote=True)}"',
+        f'project_path="{escape(model_path(project.cwd), quote=True)}"',
         f'available="{str(cwd_exists(project.cwd)).lower()}"',
     ]
     if project.project_id == active_project_id:
@@ -247,20 +249,21 @@ def _project_prompt_line(project: Any, *, active_project_id: str | None) -> str:
 def _render_project_context(
     project_id: str,
     display_name: str,
-    cwd: str,
+    project_path: str,
     rendered_files: str,
     rendered_skills: str,
 ) -> str:
     preamble = (
-        f"Project Context loaded for '{display_name}' (id: '{project_id}') at '{cwd}'. "
+        f"Project Context loaded for '{display_name}' (id: '{project_id}') at Project path "
+        f"'{project_path}'. "
         "The auto-loaded files below are this Project's instructions. Follow them for every "
         "action that affects this Project while this context is relevant in the Session. "
-        "They apply only to this Project. This call did not change your home Workspace, cwd, "
-        "Rooting, Session ownership, or configured permissions. The Skills enabled by this "
-        "Project are now available through the `skill` Tool in this Session while this Project "
-        "Context is active. Use absolute paths for file Tools. "
-        f"Set `workdir` to '{cwd}' on every `bash` call; each call starts a new shell and does "
-        "not retain cwd changes from an earlier call."
+        "They apply only to this Project. This call did not change your home Workspace, current "
+        "working directory, Rooting, Session ownership, or configured permissions. The Skills "
+        "enabled by this Project are now available through the `skill` Tool in this Session "
+        "while this Project Context is active. Use absolute paths for file Tools. "
+        f"Set `workdir` to '{project_path}' on every `bash` call; each call starts a new shell "
+        "and does not retain working-directory changes from an earlier call."
     )
     sections = [preamble]
     sections.extend(section for section in (rendered_files, rendered_skills) if section.strip())
@@ -271,7 +274,6 @@ def _skill_payload(skill: Any) -> JsonObject:
     return {
         "name": str(skill.name),
         "description": str(skill.description),
-        "path": model_path(skill.path),
     }
 
 

@@ -1415,7 +1415,7 @@ class SystemPromptManager:
             return ""
         lines = [f"Skills from project '{project_name}' — load one by name with the `skill` Tool:"]
         lines.extend(
-            f"- {skill.name}: {skill.description} ({model_path(skill.path)})"
+            f"- {skill.name}: {skill.description}"
             for skill in sorted(skills, key=lambda item: item.name)
         )
         return "\n".join(lines)
