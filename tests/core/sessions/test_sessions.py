@@ -425,7 +425,7 @@ class TestChatSession:
 
     def test_activated_skill_contents_uses_preloaded_messages_without_file_read(self, tmp_path):
         session = ChatSession.create(tmp_path, session_id="session-one")
-        session.activate_skill_context("demo", {"content": "Skill body", "resources": []})
+        session.activate_skill_context("demo", {"activation_content": "Skill body"})
         loaded_messages = session.load()
 
         fresh_handle = ChatSession(session.path)
@@ -435,8 +435,8 @@ class TestChatSession:
 
     def test_activated_skill_contents_preserve_activation_order(self, tmp_path):
         session = ChatSession.create(tmp_path, session_id="session-one")
-        session.activate_skill_context("zeta", {"content": "Zeta body", "resources": []})
-        session.activate_skill_context("alpha", {"content": "Alpha body", "resources": []})
+        session.activate_skill_context("zeta", {"activation_content": "Zeta body"})
+        session.activate_skill_context("alpha", {"activation_content": "Alpha body"})
 
         expected = {"zeta": "Zeta body", "alpha": "Alpha body"}
         assert session.activated_skill_contents() == expected
@@ -448,8 +448,8 @@ class TestChatSession:
     def test_activate_skill_context_dedups_and_reports(self, tmp_path):
         session = ChatSession.create(tmp_path, session_id="session-one")
 
-        assert session.activate_skill_context("demo", {"content": "Body", "resources": []}) is True
-        assert session.activate_skill_context("demo", {"content": "Body", "resources": []}) is False
+        assert session.activate_skill_context("demo", {"activation_content": "Body"}) is True
+        assert session.activate_skill_context("demo", {"activation_content": "Body"}) is False
         assert len([m for m in session.load() if is_skill_context_note(m)]) == 1
 
     def test_register_skill_activation_dedups_identical_content_and_accepts_updates(self, tmp_path):
@@ -472,14 +472,23 @@ class TestChatSession:
             {
                 "name": "docx",
                 "status": "loaded",
-                "content": '<skill_content name="docx">B</skill_content>',
+                "content": "B",
+                "resource_files": {
+                    "guidance": "Read only when instructed.",
+                    "files": ["references/b.md"],
+                },
             }
         )
         updated_loaded_envelope = tool_success(
             {
                 "name": "docx",
                 "status": "loaded",
-                "content": '<skill_content name="docx">C</skill_content>',
+                "content": "C",
+                "resource_files": {
+                    "guidance": "Read only when instructed.",
+                    "files": ["references/c.md"],
+                },
+                "environment_access": "Use the granted key through bash env_keys.",
             }
         )
         stub_envelope = tool_success(
@@ -499,7 +508,18 @@ class TestChatSession:
 
         fresh_handle = ChatSession(session.path)
         assert fresh_handle.activated_skill_contents() == {
-            "docx": '<skill_content name="docx">C</skill_content>'
+            "docx": (
+                '<skill_content name="docx">\n'
+                "<environment_access>\n"
+                "Use the granted key through bash env_keys.\n"
+                "</environment_access>\n"
+                "Read only when instructed.\n"
+                "<resources>\n"
+                "- references/c.md\n"
+                "</resources>\n"
+                "C\n"
+                "</skill_content>"
+            )
         }
 
     def test_skill_tool_carrier_literals_match_tool_constants(self):

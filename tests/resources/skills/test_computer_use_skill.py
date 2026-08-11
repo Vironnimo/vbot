@@ -64,9 +64,12 @@ def test_skill_requires_cua_driver_and_exposes_script(tmp_path: Path) -> None:
     registry = SkillRegistry.load(SKILLS_ROOT, environment={"PATH": str(tmp_path)})
     assert registry.availability_for("computer-use", ["*"]).state == "available"
 
-    activated = load_skill_content("computer-use", SKILL_ROOT / "SKILL.md")["content"]
+    loaded = load_skill_content("computer-use", SKILL_ROOT / "SKILL.md")
+    activated = loaded["activation_content"]
     assert SCRIPT_PATH.as_posix() in activated
     assert activated.startswith('<skill_content name="computer-use">')
+    assert "<skill_content" not in loaded["content"]
+    assert loaded["resource_files"]["files"] == [SCRIPT_PATH.as_posix()]
 
 
 def test_capture_normalizes_screenshot_and_accessibility_data(tmp_path: Path) -> None:

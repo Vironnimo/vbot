@@ -79,16 +79,22 @@ def test_builtin_skill_requires_hass_token_and_exposes_script() -> None:
     assert SCRIPT_PATH.is_file()
     assert (SKILL_ROOT / "references" / "dashboard-design.md").is_file()
 
-    activated = load_skill_content(
+    loaded = load_skill_content(
         "home-assistant",
         SKILL_ROOT / "SKILL.md",
         env_keys=("HASS_TOKEN",),
-    )["content"]
+    )
+    activated = loaded["activation_content"]
     assert activated.startswith('<skill_content name="home-assistant">')
     assert "<environment_access>" in activated
     assert "- `HASS_TOKEN`" in activated
     assert SCRIPT_PATH.as_posix() in activated
     assert "- references/dashboard-design.md" in activated
+    assert "<skill_content" not in loaded["content"]
+    assert loaded["resource_files"]["files"] == [
+        SCRIPT_PATH.as_posix(),
+        "references/dashboard-design.md",
+    ]
 
 
 @pytest.mark.parametrize(

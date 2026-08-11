@@ -13,6 +13,7 @@ import os
 import shutil
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
+from html import escape
 from pathlib import Path
 from typing import Any
 
@@ -60,6 +61,30 @@ SKILL_ORIGIN_BUNDLED = "bundled"
 SKILL_ORIGIN_PROJECT_PREFIX = "project:"
 
 _LOGGER = get_logger("skills")
+
+
+def format_skill_activation_context(
+    skill_name: str,
+    content: str,
+    *,
+    resource_files: Sequence[str] = (),
+    resource_guidance: str = "",
+    environment_access: str = "",
+) -> str:
+    """Render the complete provider-facing context for one activated Skill."""
+    lines = [f'<skill_content name="{escape(skill_name, quote=True)}">']
+    if environment_access:
+        lines.extend(["<environment_access>", environment_access, "</environment_access>"])
+    if resource_files:
+        if resource_guidance:
+            lines.append(resource_guidance)
+        lines.append("<resources>")
+        lines.extend(f"- {escape(file_path)}" for file_path in resource_files)
+        lines.append("</resources>")
+    if content:
+        lines.append(content)
+    lines.append("</skill_content>")
+    return "\n".join(lines)
 
 
 def project_skill_origin(project_display_name: str) -> str:
@@ -494,7 +519,11 @@ def _scan_skill_resources(skill_dir: Path) -> list[str]:
         root = skill_dir / resource_directory
         if not root.is_dir():
             continue
-        for resource_path in sorted(path for path in root.rglob("*") if path.is_file()):
+        for resource_path in sorted(
+            path
+            for path in root.rglob("*")
+            if path.is_file() and "__pycache__" not in path.relative_to(root).parts
+        ):
             resources.append(resource_path.relative_to(skill_dir).as_posix())
     return resources
 
