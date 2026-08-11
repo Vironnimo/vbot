@@ -134,7 +134,8 @@ def test_activated_skill_reinjected_ahead_of_compaction_summary(tmp_path: Path) 
 
     session.append(ChatMessage.user("Old question"))
     session.activate_skill_context(
-        "debugging", {"content": '<skill_content name="debugging">Steps</skill_content>'}
+        "debugging",
+        {"activation_content": '<skill_content name="debugging">Steps</skill_content>'},
     )
     session.append(ChatMessage.assistant(model=agent.model, content="Old answer"))
     tail_user = ChatMessage.user("Tail question")
@@ -169,7 +170,8 @@ def test_skill_carried_in_tail_not_duplicated_after_compaction(tmp_path: Path) -
     tail_user = ChatMessage.user("/debugging fix this")
     session.append(tail_user)
     session.activate_skill_context(
-        "debugging", {"content": '<skill_content name="debugging">Steps</skill_content>'}
+        "debugging",
+        {"activation_content": '<skill_content name="debugging">Steps</skill_content>'},
     )
     session.append(ChatMessage.assistant(model=agent.model, content="Tail answer"))
     session.append(
@@ -196,11 +198,13 @@ def test_updated_skill_follows_stale_tail_carrier_after_compaction(tmp_path: Pat
 
     session.append(ChatMessage.user("Old question"))
     session.activate_skill_context(
-        "debugging", {"content": '<skill_content name="debugging">Old steps</skill_content>'}
+        "debugging",
+        {"activation_content": '<skill_content name="debugging">Old steps</skill_content>'},
     )
     old_carrier = session.load()[-1]
     session.activate_skill_context(
-        "debugging", {"content": '<skill_content name="debugging">New steps</skill_content>'}
+        "debugging",
+        {"activation_content": '<skill_content name="debugging">New steps</skill_content>'},
     )
     session.append(
         ChatMessage.compaction_checkpoint(

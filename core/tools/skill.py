@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import inspect
 from collections.abc import Awaitable, Callable, Sequence
-from html import escape
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -15,6 +14,7 @@ from core.skills.skills import (
     SKILL_FILENAME,
     SkillRegistry,
     _scan_skill_resources,
+    format_skill_activation_context,
     skill_origin_sort_key,
 )
 from core.tools.bash import format_bash_env_usage
@@ -49,8 +49,9 @@ SKILL_TOOL_NAME = "skill"
 SKILL_TOOL_DESCRIPTION = (
     "Activate one Skill by its required name, or read one UTF-8 file by Skill-relative "
     "path. Omit file_path to load SKILL.md instructions; provide file_path to read that "
-    "package file without activation. Activation lists references and assets as "
-    "Skill-relative paths and scripts as absolute paths for direct execution."
+    "package file without activation. Activation returns only the SKILL.md instructions "
+    "in content and lists additional files separately in resource_files; references and "
+    "assets use Skill-relative paths, while scripts use absolute paths for direct execution."
 )
 SKILL_LIST_TOOL_NAME = "skill_list"
 SKILL_LIST_TOOL_DESCRIPTION = (
@@ -64,9 +65,9 @@ SKILL_STATUS_FILE_LOADED = "file_loaded"
 # files (e.g. ``python {baseDir}/scripts/run.py``); replaced with the absolute skill
 # directory at activation time.
 SKILL_BASE_DIR_MARKER = "{baseDir}"
-SKILL_PATH_RESOLUTION_NOTE = (
-    "Scripts are listed with absolute paths for direct bash execution. Read relative "
-    "references and assets with the skill tool using this skill name and file_path."
+SKILL_RESOURCE_FILES_GUIDANCE = (
+    "These are additional files for this Skill; read them only when the SKILL.md "
+    "instructions tell you to."
 )
 _SKILL_NAME_PARAMETER: JsonObject = {
     "type": "string",
@@ -213,15 +214,21 @@ def make_skill_handler(
             return tool_failure("skill_read_error", str(error))
 
         content = data.get("content")
-        if not isinstance(content, str) or not content:
+        activation_content = data.get("activation_content")
+        if (
+            not isinstance(content, str)
+            or not content
+            or not isinstance(activation_content, str)
+            or not activation_content
+        ):
             return tool_failure(
                 "skill_read_error",
                 f"Skill '{skill_name}' produced no loadable content.",
             )
-        newly_activated = context.activate_skill(skill_name, content)
+        newly_activated = context.activate_skill(skill_name, activation_content)
         if newly_activated is False:
             return _already_active_result(skill_name)
-        return _loaded_skill_result(skill_name, content)
+        return _loaded_skill_result(skill_name, data)
 
     return skill_handler
 
@@ -300,23 +307,41 @@ def load_skill_content(
     *,
     env_keys: Sequence[str] = (),
 ) -> JsonObject:
-    """Load and wrap activation content for one skill file."""
+    """Load the instruction body and activation metadata for one Skill file."""
     body = _read_skill_body(skill_file)
     skill_directory = skill_file.resolve().parent
     directory = skill_directory.as_posix()
     body = body.replace(SKILL_BASE_DIR_MARKER, directory)
     resources = _scan_skill_resources(skill_directory)
-    return {
-        "content": _wrap_skill_content(
-            skill_name,
-            body,
-            resources,
-            directory,
-            env_keys=env_keys,
-        ),
-        "resources": resources,
-        "directory": directory,
+    presented_resources = [_present_resource_path(resource, directory) for resource in resources]
+    environment_access = ""
+    if env_keys:
+        environment_access = format_bash_env_usage(
+            env_keys,
+            intro=(
+                "Loading this Skill makes these additional environment credentials "
+                "available to Bash calls."
+            ),
+        )
+    activation_content = format_skill_activation_context(
+        skill_name,
+        body,
+        resource_files=presented_resources,
+        resource_guidance=SKILL_RESOURCE_FILES_GUIDANCE,
+        environment_access=environment_access,
+    )
+    result: JsonObject = {
+        "content": body,
+        "activation_content": activation_content,
     }
+    if presented_resources:
+        result["resource_files"] = {
+            "guidance": SKILL_RESOURCE_FILES_GUIDANCE,
+            "files": presented_resources,
+        }
+    if environment_access:
+        result["environment_access"] = environment_access
+    return result
 
 
 def _load_skill_content_with_env(
@@ -345,22 +370,27 @@ def load_skill_file(skill_name: str, skill_file: Path, file_path: str) -> JsonOb
     return {"name": skill_name, "file_path": normalized, "content": content}
 
 
-def _loaded_skill_result(skill_name: str, content: str) -> JsonObject:
+def _loaded_skill_result(skill_name: str, loaded: JsonObject) -> JsonObject:
     """Success envelope of a fresh activation — the tool result IS the content carrier.
 
-    The full wrapped ``<skill_content>`` rides in ``data.content``, so it sits in
-    the conversation exactly where the load happened and replays verbatim like
-    any other tool result. The sessions domain parses this envelope shape
-    (``skill_tool_activation``) for dedup, statistics, and the post-compaction
-    re-injection — keep ``name``/``status``/``content`` stable.
+    The raw SKILL.md instruction body rides in ``data.content`` while optional
+    resource files and environment access stay in sibling fields. The sessions
+    domain parses this envelope shape (``skill_tool_activation``) for dedup,
+    statistics, and post-compaction re-injection — keep
+    ``name``/``status``/``content`` stable.
     """
-    return tool_success(
-        {
-            "name": skill_name,
-            "status": SKILL_STATUS_LOADED,
-            "content": content,
-        }
-    )
+    data: JsonObject = {
+        "name": skill_name,
+        "status": SKILL_STATUS_LOADED,
+        "content": loaded["content"],
+    }
+    resource_files = loaded.get("resource_files")
+    if isinstance(resource_files, dict):
+        data["resource_files"] = resource_files
+    environment_access = loaded.get("environment_access")
+    if isinstance(environment_access, str) and environment_access:
+        data["environment_access"] = environment_access
+    return tool_success(data)
 
 
 def _loaded_skill_file_result(
@@ -466,38 +496,6 @@ def _normalized_skill_file_path(file_path: str) -> str:
         allowed = ", ".join(f"{name}/" for name in RESOURCE_DIRECTORIES)
         raise ValueError(f"Skill files must be {SKILL_FILENAME} or live under {allowed}")
     return normalized
-
-
-def _wrap_skill_content(
-    skill_name: str,
-    body: str,
-    resources: list[str],
-    directory: str,
-    *,
-    env_keys: Sequence[str] = (),
-) -> str:
-    lines = [f'<skill_content name="{escape(skill_name, quote=True)}">']
-    if env_keys:
-        guidance = format_bash_env_usage(
-            env_keys,
-            intro=(
-                "Loading this Skill makes these additional environment credentials "
-                "available to Bash calls."
-            ),
-        )
-        lines.extend(["<environment_access>", guidance, "</environment_access>"])
-    lines.append(f"Skill directory: {escape(directory)}")
-    lines.append(SKILL_PATH_RESOLUTION_NOTE)
-    if resources:
-        lines.append("<resources>")
-        lines.extend(
-            f"- {escape(_present_resource_path(resource, directory))}" for resource in resources
-        )
-        lines.append("</resources>")
-    if body:
-        lines.append(body)
-    lines.append("</skill_content>")
-    return "\n".join(lines)
 
 
 def _present_resource_path(resource: str, directory: str) -> str:

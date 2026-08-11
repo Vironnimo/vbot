@@ -595,6 +595,8 @@ class TestScanSkillResources:
         (skill_dir / "assets").mkdir()
         (skill_dir / "scripts" / "run.py").write_text("", encoding="utf-8")
         (skill_dir / "scripts" / "nested" / "helper.py").write_text("", encoding="utf-8")
+        (skill_dir / "scripts" / "__pycache__").mkdir()
+        (skill_dir / "scripts" / "__pycache__" / "run.pyc").write_bytes(b"cache")
         (skill_dir / "references" / "guide.md").write_text("", encoding="utf-8")
         (skill_dir / "assets" / "template.html").write_text("", encoding="utf-8")
         (skill_dir / "notes" / "ignored.md").parent.mkdir()

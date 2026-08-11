@@ -50,7 +50,7 @@ def test_skill_tool_describes_activation_and_file_path_contract() -> None:
     }
 
 
-def test_skill_tool_result_carries_full_content(tmp_path: Path) -> None:
+def test_skill_tool_result_separates_instructions_and_resource_files(tmp_path: Path) -> None:
     registry = SkillRegistry.load(_skills_dir(tmp_path))
     tools = ToolRegistry()
     register_skill_tool(tools, _fixed_registry(registry), _no_refresh)
@@ -68,16 +68,27 @@ def test_skill_tool_result_carries_full_content(tmp_path: Path) -> None:
     assert data["name"] == "debugging"
     assert data["status"] == "loaded"
     content = cast(str, data["content"])
-    assert content.startswith('<skill_content name="debugging">')
-    assert f"Skill directory: {skill_directory}" in content
-    assert "Scripts are listed with absolute paths for direct bash execution." in content
-    assert f"- {skill_directory}/scripts/run.py" in content
-    assert "- scripts/run.py" not in content
-    assert "- references/guide.md" in content
-    assert "- assets/checklist.txt" in content
-    assert "Investigate failures methodically." in content
+    assert content == "# Debugging\n\nInvestigate failures methodically."
+    assert "<skill_content" not in content
+    assert "<resources>" not in content
     assert "frontmatter" not in content
-    assert registered == {"debugging": content}
+    assert data["resource_files"] == {
+        "guidance": (
+            "These are additional files for this Skill; read them only when the SKILL.md "
+            "instructions tell you to."
+        ),
+        "files": [
+            f"{skill_directory}/scripts/run.py",
+            "references/guide.md",
+            "assets/checklist.txt",
+        ],
+    }
+    activation_content = registered["debugging"]
+    assert activation_content.startswith('<skill_content name="debugging">')
+    assert f"- {skill_directory}/scripts/run.py" in activation_content
+    assert "- references/guide.md" in activation_content
+    assert "- assets/checklist.txt" in activation_content
+    assert content in activation_content
 
 
 def test_skill_with_env_requirements_prepends_bash_usage_guidance(tmp_path: Path) -> None:
@@ -113,14 +124,14 @@ Call the provider API.
 
     result = asyncio.run(async_dispatch(tools, _context(tmp_path), {"name": "provider-probe"}))
 
-    content = cast(str, cast(dict[str, Any], result["data"])["content"])
-    guidance_index = content.index("<environment_access>")
-    body_index = content.index("# Provider Probe")
-    assert guidance_index < body_index
-    assert "Loading this Skill makes these additional environment credentials" in content
-    assert "- `OPENAI_API_KEY`" in content
-    assert "- `OPENROUTER_API_KEY`" in content
-    assert "`env_keys` array of every `bash` call" in content
+    data = cast(dict[str, Any], result["data"])
+    assert data["content"] == "# Provider Probe\n\nCall the provider API."
+    guidance = cast(str, data["environment_access"])
+    assert "Loading this Skill makes these additional environment credentials" in guidance
+    assert "- `OPENAI_API_KEY`" in guidance
+    assert "- `OPENROUTER_API_KEY`" in guidance
+    assert "`env_keys` array of every `bash` call" in guidance
+    assert "<environment_access>" not in guidance
 
 
 def test_skill_tool_handler_rejects_unknown_arguments(tmp_path: Path) -> None:
@@ -153,8 +164,8 @@ def test_skill_tool_without_activation_hook_still_returns_content(tmp_path: Path
 
     assert result["ok"] is True
     assert data["status"] == "loaded"
-    assert cast(str, data["content"]).startswith('<skill_content name="debugging">')
-    assert "Investigate failures methodically." in cast(str, data["content"])
+    assert data["content"] == "# Debugging\n\nInvestigate failures methodically."
+    assert "<skill_content" not in cast(str, data["content"])
 
 
 def test_skill_tool_unknown_skill_rescans_once_then_fails(tmp_path: Path) -> None:
@@ -496,7 +507,7 @@ def test_skill_tool_loads_agent_own_skill_bypassing_allowlist(tmp_path: Path) ->
     assert cast(dict[str, Any], result["data"])["name"] == "private"
 
 
-def test_load_skill_content_escapes_skill_name_in_wrapper(tmp_path: Path) -> None:
+def test_load_skill_content_keeps_wrapper_out_of_content(tmp_path: Path) -> None:
     skill_dir = tmp_path / "skills" / "unsafe"
     skill_dir.mkdir(parents=True)
     skill_file = skill_dir / "SKILL.md"
@@ -513,13 +524,11 @@ Body.
 
     result = load_skill_content('bad" name><tag', skill_file)
 
-    directory = skill_file.resolve().parent.as_posix()
-    assert result["content"] == (
-        '<skill_content name="bad&quot; name&gt;&lt;tag">\n'
-        f"Skill directory: {directory}\n"
-        "Scripts are listed with absolute paths for direct bash execution. Read relative "
-        "references and assets with the skill tool using this skill name and file_path.\n"
-        "Body.\n</skill_content>"
+    assert result["content"] == "Body."
+    assert "resource_files" not in result
+    assert "environment_access" not in result
+    assert result["activation_content"] == (
+        '<skill_content name="bad&quot; name&gt;&lt;tag">\nBody.\n</skill_content>'
     )
 
 
@@ -545,7 +554,8 @@ Run `python {baseDir}/scripts/ship.py` to deploy.
     content = cast(str, result["content"])
     assert "{baseDir}" not in content
     assert f"Run `python {directory}/scripts/ship.py` to deploy." in content
-    assert result["directory"] == directory
+    resource_files = cast(dict[str, Any], result["resource_files"])
+    assert resource_files["files"] == [f"{directory}/scripts/ship.py"]
 
 
 def test_load_skill_content_uses_full_body_without_front_matter(tmp_path: Path) -> None:

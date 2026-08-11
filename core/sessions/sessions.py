@@ -22,6 +22,7 @@ from core.chat.errors import ChatMessageValidationError, ChatSessionError
 from core.projects.store import project_sessions_dir
 from core.runs import RunKind
 from core.settings import is_valid_agent_id, is_valid_project_id
+from core.skills.skills import format_skill_activation_context
 from core.utils.atomic import atomic_write_text
 from core.utils.logging import get_logger
 from core.utils.workers import BoundedWorkerPool
@@ -408,12 +409,9 @@ class ChatSession:
         activation point (right after the triggering user message), rendered in
         place as a ``<skill_content>`` context message at request build.
         """
-        content = data.get("content")
-        resources = data.get("resources", [])
+        content = data.get("activation_content")
         if not isinstance(content, str):
             raise ChatSessionError("skill activation content must be a string")
-        if not isinstance(resources, list):
-            raise ChatSessionError("skill activation resources must be a list")
 
         if not self.register_skill_activation(name, content):
             return False
@@ -1867,9 +1865,37 @@ def skill_tool_activation(message: ChatMessage) -> tuple[str, str] | None:
         return None
     name = data.get("name")
     content = data.get("content")
-    if isinstance(name, str) and name and isinstance(content, str) and content:
-        return name, content
-    return None
+    if not isinstance(name, str) or not name or not isinstance(content, str) or not content:
+        return None
+
+    resource_paths: list[str] = []
+    resource_guidance = ""
+    resource_files = data.get("resource_files")
+    if resource_files is not None:
+        if not isinstance(resource_files, dict):
+            return None
+        resource_guidance_value = resource_files.get("guidance")
+        resource_paths_value = resource_files.get("files")
+        if not isinstance(resource_guidance_value, str) or not isinstance(
+            resource_paths_value, list
+        ):
+            return None
+        if not all(isinstance(file_path, str) and file_path for file_path in resource_paths_value):
+            return None
+        resource_guidance = resource_guidance_value
+        resource_paths = resource_paths_value
+
+    environment_access_value = data.get("environment_access", "")
+    if not isinstance(environment_access_value, str):
+        return None
+    activation_content = format_skill_activation_context(
+        name,
+        content,
+        resource_files=resource_paths,
+        resource_guidance=resource_guidance,
+        environment_access=environment_access_value,
+    )
+    return name, activation_content
 
 
 def skill_tool_activation_name(message: ChatMessage) -> str | None:
