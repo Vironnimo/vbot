@@ -414,9 +414,7 @@ def test_skill_manage_cases_use_production_schema_and_exact_arguments() -> None:
     assert "scope" not in create.expected_arguments
     assert "file_path" not in patch.expected_arguments
     assert "replace_all" not in patch.expected_arguments
-    assert (
-        PROBE._skill_manage_scenario("write_asset_empty").expected_arguments["file_content"] == ""
-    )
+    assert PROBE._skill_manage_scenario("write_asset_empty").expected_arguments["content"] == ""
 
 
 def test_write_scenario_uses_production_schema_and_exact_arguments() -> None:

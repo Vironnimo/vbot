@@ -32,9 +32,7 @@ class _Harness:
     def __init__(self, tmp_path: Path) -> None:
         self.root = tmp_path
         self._homes = tmp_path / "agents"
-        self._global = tmp_path / "skills"
         self.invalidated: list[str] = []
-        self.reloaded = 0
         self.tools = ToolRegistry()
         register_skill_manage_tool(
             self.tools,
@@ -43,18 +41,10 @@ class _Harness:
             ),
             self.home,
             self.invalidated.append,
-            lambda: self._global,
-            self._on_reload,
         )
 
     def home(self, agent_id: str) -> Path:
         return self._homes / agent_id / "skills"
-
-    def global_home(self) -> Path:
-        return self._global
-
-    def _on_reload(self) -> None:
-        self.reloaded += 1
 
     def run(self, arguments: dict[str, object], agent_id: str = "main") -> dict[str, Any]:
         context = _context(agent_id, self.root)
@@ -77,14 +67,12 @@ class _Harness:
         *,
         name: str = "demo",
         content: str | None = None,
-        scope: str = "own",
     ) -> dict[str, Any]:
         return self.run(
             {
                 "action": "create",
                 "name": name,
                 "content": content if content is not None else _skill_md(name=name),
-                "scope": scope,
             }
         )
 
@@ -117,13 +105,9 @@ def test_provider_schema_is_flat_and_hermes_shaped(tmp_path: Path) -> None:
     assert set(properties) == {
         "action",
         "name",
-        "scope",
         "content",
         "file_path",
-        "file_content",
-        "old_string",
-        "new_string",
-        "replace_all",
+        "match",
     }
     assert properties["action"]["enum"] == [
         "create",
@@ -215,7 +199,7 @@ def test_write_read_and_remove_support_file(tmp_path: Path) -> None:
             "action": "write_file",
             "name": "demo",
             "file_path": "references/notes.md",
-            "file_content": "Useful notes\n",
+            "content": "Useful notes\n",
         }
     )
     removed = harness.run(
@@ -250,7 +234,7 @@ def test_write_file_rejects_removed_binary_copy_arguments(tmp_path: Path) -> Non
             "action": "write_file",
             "name": "demo",
             "file_path": "scripts/run.py",
-            "file_content": "print('ok')\n",
+            "content": "print('ok')\n",
             "executable": True,
         }
     )
@@ -286,17 +270,16 @@ def test_patch_defaults_to_skill_md_and_requires_unique_match(tmp_path: Path) ->
         {
             "action": "patch",
             "name": "demo",
-            "old_string": "old marker",
-            "new_string": "new marker",
+            "match": "old marker",
+            "content": "new marker",
         }
     )
     replaced = harness.run(
         {
             "action": "patch",
             "name": "demo",
-            "old_string": "old marker",
-            "new_string": "new marker",
-            "replace_all": True,
+            "match": "old marker\nold marker",
+            "content": "new marker\nnew marker",
         }
     )
 
@@ -316,7 +299,7 @@ def test_patch_support_file_by_relative_path(tmp_path: Path) -> None:
             "action": "write_file",
             "name": "demo",
             "file_path": "scripts/run.py",
-            "file_content": "print('old')\n",
+            "content": "print('old')\n",
         }
     )
 
@@ -325,8 +308,8 @@ def test_patch_support_file_by_relative_path(tmp_path: Path) -> None:
             "action": "patch",
             "name": "demo",
             "file_path": "scripts/run.py",
-            "old_string": "old",
-            "new_string": "new",
+            "match": "old",
+            "content": "new",
         }
     )
 
@@ -363,7 +346,7 @@ def test_non_skill_file_path_is_rejected(tmp_path: Path) -> None:
             "action": "write_file",
             "name": "demo",
             "file_path": "other/data.txt",
-            "file_content": "no",
+            "content": "no",
         }
     )
 
@@ -379,7 +362,7 @@ def test_delete_removes_complete_skill_and_invalidates(tmp_path: Path) -> None:
             "action": "write_file",
             "name": "demo",
             "file_path": "references/notes.md",
-            "file_content": "notes\n",
+            "content": "notes\n",
         }
     )
     harness.invalidated.clear()
@@ -392,14 +375,24 @@ def test_delete_removes_complete_skill_and_invalidates(tmp_path: Path) -> None:
     assert harness.invalidated == ["main"]
 
 
-def test_global_mutation_reloads_shared_pool(tmp_path: Path) -> None:
+def test_global_scope_is_not_available_to_agent_tool(tmp_path: Path) -> None:
     harness = _Harness(tmp_path)
 
-    result = harness.create(scope="global")
+    result = harness.run(
+        {
+            "action": "create",
+            "name": "demo",
+            "content": _skill_md(),
+            "scope": "global",
+        }
+    )
 
-    assert result["ok"] is True
-    assert (harness.global_home() / "demo" / "SKILL.md").is_file()
-    assert harness.reloaded == 1
+    assert result == tool_failure(
+        "invalid_arguments",
+        "Unknown create argument(s): scope",
+        retryable=False,
+    )
+    assert not harness.home("main").exists()
     assert harness.invalidated == []
 
 

@@ -14,12 +14,7 @@ from core.skills.skill_validator import (
     MAX_SKILL_NAME_LENGTH,
     SKILL_NAME_CHARSET_FRAGMENT,
 )
-from core.tools.arguments import (
-    ToolArgumentError,
-    optional_bool,
-    optional_string,
-    required_string,
-)
+from core.tools.arguments import ToolArgumentError, optional_string, required_string
 from core.tools.availability import SKILL_MANAGE_TOOL_NAME
 from core.tools.tools import (
     JsonObject,
@@ -33,34 +28,22 @@ from core.tools.tools import (
 from core.utils.logging import get_logger
 
 SKILL_MANAGE_TOOL_DESCRIPTION = (
-    "Create, edit, patch, or delete one writable vBot Skill, or write/remove one UTF-8 "
-    "support file. Omit scope for the private Skill home; use global only when the user "
-    "explicitly requests a Skill shared by all Agents. Project and bundled Skills are read-only."
+    "Create, edit, patch, or delete one private Skill, or write/remove one UTF-8 support "
+    "file. Read an existing target with skill before changing it. content is the complete "
+    "text for create, edit, and write_file, and the replacement text for patch; match is "
+    "the exact text patch replaces. Global, Project, and bundled Skills are read-only here."
 )
 
 _ACTIONS = ("create", "edit", "patch", "write_file", "remove_file", "delete")
-_OWN_SCOPE = "own"
-_GLOBAL_SCOPE = "global"
-_SCOPES = (_OWN_SCOPE, _GLOBAL_SCOPE)
 _LOGGER = get_logger("tools.skill_manage")
 
 _ACTION_FIELDS: dict[str, frozenset[str]] = {
-    "create": frozenset({"action", "name", "scope", "content"}),
-    "edit": frozenset({"action", "name", "scope", "content"}),
-    "patch": frozenset(
-        {
-            "action",
-            "name",
-            "scope",
-            "file_path",
-            "old_string",
-            "new_string",
-            "replace_all",
-        }
-    ),
-    "write_file": frozenset({"action", "name", "scope", "file_path", "file_content"}),
-    "remove_file": frozenset({"action", "name", "scope", "file_path"}),
-    "delete": frozenset({"action", "name", "scope"}),
+    "create": frozenset({"action", "name", "content"}),
+    "edit": frozenset({"action", "name", "content"}),
+    "patch": frozenset({"action", "name", "file_path", "match", "content"}),
+    "write_file": frozenset({"action", "name", "file_path", "content"}),
+    "remove_file": frozenset({"action", "name", "file_path"}),
+    "delete": frozenset({"action", "name"}),
 }
 
 _NAME_PARAMETER: JsonObject = {
@@ -73,43 +56,29 @@ _NAME_PARAMETER: JsonObject = {
         "and otherwise use only letters, digits, '-' or '_'."
     ),
 }
-_SCOPE_PARAMETER: JsonObject = {
-    "type": "string",
-    "enum": list(_SCOPES),
-    "description": (
-        "Writable Skill home. Omit for your private home. Use 'global' only when "
-        "the user explicitly requested a shared Skill."
-    ),
-}
 _CONTENT_PARAMETER: JsonObject = {
     "type": "string",
-    "description": "Complete SKILL.md content. Required for create and edit.",
+    "description": (
+        "Text to write. Complete SKILL.md for create/edit; replacement text for patch; "
+        "complete UTF-8 file for write_file. May be empty for patch or write_file."
+    ),
 }
 _FILE_PATH_PARAMETER: JsonObject = {
     "type": "string",
     "minLength": 1,
     "pattern": r"^(SKILL\.md|(?:scripts|references|assets)/.+)$",
     "description": (
-        "Skill-relative path. For patch, omit to edit SKILL.md or provide SKILL.md/a support "
-        "path. Required for write_file and remove_file under scripts, references, or assets."
+        "Skill-relative target. Omit when patching SKILL.md; required when patching, "
+        "writing, or removing a support file under scripts, references, or assets."
     ),
 }
-_FILE_CONTENT_PARAMETER: JsonObject = {
-    "type": "string",
-    "description": "Complete UTF-8 support-file text; required for write_file and may be empty.",
-}
-_OLD_STRING_PARAMETER: JsonObject = {
+_MATCH_PARAMETER: JsonObject = {
     "type": "string",
     "minLength": 1,
-    "description": "Exact non-empty text to replace. Required for patch.",
-}
-_NEW_STRING_PARAMETER: JsonObject = {
-    "type": "string",
-    "description": "Replacement text for patch; required and may be empty.",
-}
-_REPLACE_ALL_PARAMETER: JsonObject = {
-    "type": "boolean",
-    "description": "For patch, replace every match. Omit or set false to require one match.",
+    "description": (
+        "Exact non-empty text to replace once for patch. Use a larger unique passage when "
+        "the short text occurs more than once."
+    ),
 }
 
 SKILL_MANAGE_TOOL_PARAMETERS: JsonObject = {
@@ -118,16 +87,16 @@ SKILL_MANAGE_TOOL_PARAMETERS: JsonObject = {
         "action": {
             "type": "string",
             "enum": list(_ACTIONS),
-            "description": "Skill mutation action to perform.",
+            "description": (
+                "Operation to perform: create/edit use content as complete SKILL.md; patch "
+                "replaces match with content; write_file uses file_path and content; "
+                "remove_file/delete need no content."
+            ),
         },
         "name": _NAME_PARAMETER,
-        "scope": _SCOPE_PARAMETER,
         "content": _CONTENT_PARAMETER,
         "file_path": _FILE_PATH_PARAMETER,
-        "file_content": _FILE_CONTENT_PARAMETER,
-        "old_string": _OLD_STRING_PARAMETER,
-        "new_string": _NEW_STRING_PARAMETER,
-        "replace_all": _REPLACE_ALL_PARAMETER,
+        "match": _MATCH_PARAMETER,
     },
     "required": ["action", "name"],
 }
@@ -137,8 +106,6 @@ def make_skill_manage_handler(
     authoring: SkillAuthoringService,
     resolve_agent_skills_dir: Callable[[str], Path],
     invalidate_agent_skills: Callable[[str], None],
-    resolve_global_skills_dir: Callable[[], Path],
-    reload_skills: Callable[[], None],
 ) -> Callable[[ToolContext, JsonObject], JsonObject]:
     """Return the direct Skill-management handler."""
 
@@ -153,14 +120,7 @@ def make_skill_manage_handler(
                 raise ToolArgumentError(f"Unknown {action} argument(s): {names}")
 
             name = required_string(arguments.get("name"), field_name="name")
-            scope = optional_string(arguments.get("scope"), field_name="scope") or _OWN_SCOPE
-            if scope not in _SCOPES:
-                raise ToolArgumentError(f"scope must be one of: {', '.join(_SCOPES)}")
-            target_root = (
-                resolve_global_skills_dir()
-                if scope == _GLOBAL_SCOPE
-                else resolve_agent_skills_dir(context.agent_id)
-            )
+            target_root = resolve_agent_skills_dir(context.agent_id)
             result, file_path = _apply_action(
                 authoring,
                 target_root,
@@ -179,21 +139,17 @@ def make_skill_manage_handler(
         except OSError as error:
             return tool_failure("skill_write_error", str(error))
 
-        if scope == _GLOBAL_SCOPE:
-            reload_skills()
-        else:
-            invalidate_agent_skills(context.agent_id)
+        invalidate_agent_skills(context.agent_id)
         _LOGGER.info(
-            "Skill mutated (skill=%s scope=%s action=%s actor_agent=%s)",
+            "Skill mutated (skill=%s scope=own action=%s actor_agent=%s)",
             result.name,
-            scope,
             action,
             context.agent_id,
         )
         data: JsonObject = {
             "action": action,
             "name": result.name,
-            "scope": scope,
+            "scope": "own",
             "warnings": list(result.warnings),
             "message": _success_message(action, result.name),
         }
@@ -221,34 +177,25 @@ def _apply_action(
         file_path = (
             optional_string(arguments.get("file_path"), field_name="file_path") or "SKILL.md"
         )
-        old_string = required_string(
-            arguments.get("old_string"),
-            field_name="old_string",
+        match = required_string(
+            arguments.get("match"),
+            field_name="match",
             strip=False,
         )
-        new_string = _exact_string(arguments.get("new_string"), field_name="new_string")
-        replace_all = optional_bool(
-            arguments.get("replace_all"),
-            field_name="replace_all",
-            default=False,
-        )
+        content = _exact_string(arguments.get("content"), field_name="content")
         result = authoring.patch(
             target_root,
             name,
-            old_string,
-            new_string,
+            match,
+            content,
             author="agent",
             relative_path=file_path,
-            replace_all=replace_all,
         )
         return result, file_path.replace("\\", "/")
     if action == "write_file":
         file_path = required_string(arguments.get("file_path"), field_name="file_path")
-        file_content = _exact_string(
-            arguments.get("file_content"),
-            field_name="file_content",
-        )
-        result = authoring.write_file(target_root, name, file_path, file_content)
+        content = _exact_string(arguments.get("content"), field_name="content")
+        result = authoring.write_file(target_root, name, file_path, content)
         return result, file_path.replace("\\", "/")
     if action == "remove_file":
         file_path = required_string(arguments.get("file_path"), field_name="file_path")
@@ -280,8 +227,6 @@ def register_skill_manage_tool(
     authoring: SkillAuthoringService,
     resolve_agent_skills_dir: Callable[[str], Path],
     invalidate_agent_skills: Callable[[str], None],
-    resolve_global_skills_dir: Callable[[], Path],
-    reload_skills: Callable[[], None],
 ) -> None:
     """Register identity-only direct Skill management."""
     registry.register(
@@ -292,8 +237,6 @@ def register_skill_manage_tool(
             authoring,
             resolve_agent_skills_dir,
             invalidate_agent_skills,
-            resolve_global_skills_dir,
-            reload_skills,
         ),
         open_input_schema=True,
         result_schema={"type": "object", "required": ["scope"]},
@@ -306,11 +249,9 @@ def _skill_manage_display_parts(arguments: JsonObject) -> tuple[ToolDisplayPart,
     if not isinstance(action, str) or not action.strip():
         return ()
     parts = [ToolDisplayPart(action.strip(), truncate="never", tooltip="none")]
-    for field in ("name", "scope"):
-        value = arguments.get(field)
-        if isinstance(value, str) and value.strip():
-            parts.append(ToolDisplayPart(value.strip()))
-            break
+    value = arguments.get("name")
+    if isinstance(value, str) and value.strip():
+        parts.append(ToolDisplayPart(value.strip()))
     return tuple(parts)
 
 

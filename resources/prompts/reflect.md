@@ -12,10 +12,12 @@ Preference order — pick the earliest that fits:
 
 1. UPDATE A SKILL USED THIS SESSION (only if it is one of your own private Skills). If a Skill that was loaded or consulted covers the new learning, read the relevant file with `skill`, then use `skill_manage` with `patch` or `edit`.
 2. UPDATE ANOTHER OF YOUR EXISTING SKILLS. Call `skill_list` to list your Skills, read the candidate with `skill`, then add the step or pitfall and broaden its triggers when appropriate.
-3. ADD A SUPPORT FILE to an existing Skill: `references/<topic>.md` for condensed knowledge (quoted findings, API notes, error recipes — concise and task-focused), `scripts/<name>` for re-runnable text helpers, `assets/<name>` for text starter files meant to be copied and adapted. Use `write_file` with UTF-8 `file_content`, then add a one-line pointer in `SKILL.md` so future Sessions find it.
+3. ADD A SUPPORT FILE to an existing Skill: `references/<topic>.md` for condensed knowledge (quoted findings, API notes, error recipes — concise and task-focused), `scripts/<name>` only for exact executable behavior already verified in the reviewed Session, `assets/<name>` for text starter files meant to be copied and adapted. Use `write_file` with UTF-8 `content`, then add a one-line pointer in `SKILL.md` so future Sessions find it.
 4. CREATE A NEW SKILL only when nothing existing covers the class of task. Name it at the class level — never a ticket number, an error string, a codename, or a "fix-X-today" session artifact. If the name only makes sense for today's task, fall back to 1–3 instead.
 
-Each `skill_manage` action changes the Skill directly. Use flat fields such as `{"action":"patch","name":"wiki-research","old_string":"...","new_string":"..."}` and `{"action":"write_file","name":"wiki-research","file_path":"references/api.md","file_content":"..."}`. You can write your own private Skills here. If the flawed Skill is bundled, global, or Project-owned, note the problem in your final summary instead of editing it.
+Make only the change supported by the reviewed evidence. Do not add unrelated improvements, helper scripts, templates, or completeness work. Because this Reflection Run cannot execute support scripts, create or change a script only when that exact script or procedure already ran successfully in the reviewed Session; otherwise save instructions or a reference.
+
+Each `skill_manage` action changes the Skill directly. Use flat fields such as `{"action":"patch","name":"wiki-research","match":"...","content":"..."}` and `{"action":"write_file","name":"wiki-research","file_path":"references/api.md","content":"..."}`. You can write your own private Skills here. If the flawed Skill is bundled, global, or Project-owned, note the problem in your final summary instead of editing it.
 
 Do NOT capture (these harden into false constraints that bite later):
 

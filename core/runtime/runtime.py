@@ -628,9 +628,8 @@ class Runtime:
                 invalid_skill_count,
             )
         register_skill_tool(self._tools, self.skills_for, self.reload_skills_async)
-        # The agent skill-authoring write core refuses the bundled skills root; the
-        # ``skill_manage`` tool writes the calling agent's private home (default) or
-        # the shared global pool (only when the user asked).
+        # The agent skill-authoring write core refuses the bundled skills root;
+        # ``skill_manage`` writes only the calling agent's private home.
         self._skill_authoring = SkillAuthoringService(
             protected_roots=[resources_path / _SKILLS_DIRNAME],
         )
@@ -639,8 +638,6 @@ class Runtime:
             self._skill_authoring,
             self.agent_skills_dir,
             self.invalidate_agent_skills,
-            lambda: self.global_skills_dir,
-            self.reload_skills,
         )
         self._chat_sessions = ChatSessionManager(self._storage.data_dir)
         register_history_tool(self._tools, self._chat_sessions)
@@ -1853,8 +1850,6 @@ class Runtime:
                     self._skill_authoring,
                     self.agent_skills_dir,
                     self.invalidate_agent_skills,
-                    lambda: self.global_skills_dir,
-                    self.reload_skills,
                 )
         if self._system_prompts is not None:
             self._system_prompts.update_skill_registry(cast(SkillPromptRegistry, self._skills))
