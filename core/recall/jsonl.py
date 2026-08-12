@@ -62,9 +62,9 @@ SESSION_RECALL_LITERAL_TOOL_SUMMARY = (
     "Find persisted Sessions and literal matches in past conversations."
 )
 SESSION_RECALL_LITERAL_SEARCH_GUIDANCE = (
-    "Distinctive literal terms to find. Every whitespace-separated term must occur as "
-    "a case-insensitive substring; synonyms and paraphrases do not match. Omit to list "
-    "recent Sessions. Search results are newest first, not relevance-ranked."
+    "Literal terms to find. Every whitespace-separated term must occur as a case-insensitive "
+    "substring; synonyms and paraphrases do not match. Omit to list recent Sessions. Matches "
+    "are newest first."
 )
 
 # Names of the built-in recall tools whose results are persisted into sessions

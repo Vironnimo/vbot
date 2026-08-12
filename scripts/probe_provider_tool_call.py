@@ -407,23 +407,17 @@ READ_CASES = (
 )
 SESSION_READ_CASES = (
     "whole",
+    "message",
     "agent",
-    "start",
-    "end",
-    "range",
+    "offset",
     "all",
-    "cursor",
 )
 SESSION_SEARCH_CASES = (
     "list",
     "query",
     "period",
     "agent",
-    "session",
-    "limit_min",
-    "limit_max",
     "all",
-    "cursor",
 )
 SKILL_CASES = ("activate", "skill_md", "reference", "script", "asset")
 SKILL_MANAGE_CASES = (
@@ -2057,25 +2051,18 @@ def _text_to_speech_scenario(case_name: str) -> ProbeScenario:
 def _session_read_scenario(case_name: str) -> ProbeScenario:
     session_id = "session-123"
     agent_id = "tester"
-    start_message_id = "message-start"
-    end_message_id = "message-end"
-    session_read_arguments = {
+    message_id = "message-123"
+    session_read_arguments: dict[str, dict[str, Any]] = {
         "whole": {"session_id": session_id},
+        "message": {"session_id": session_id, "message_id": message_id},
         "agent": {"session_id": session_id, "agent_id": agent_id},
-        "start": {"session_id": session_id, "start_message_id": start_message_id},
-        "end": {"session_id": session_id, "end_message_id": end_message_id},
-        "range": {
-            "session_id": session_id,
-            "start_message_id": start_message_id,
-            "end_message_id": end_message_id,
-        },
+        "offset": {"session_id": session_id, "message_id": message_id, "offset": 1234},
         "all": {
             "session_id": session_id,
             "agent_id": agent_id,
-            "start_message_id": start_message_id,
-            "end_message_id": end_message_id,
+            "message_id": message_id,
+            "offset": 1234,
         },
-        "cursor": {"cursor": "session-read-cursor-token"},
     }
     expected_arguments = session_read_arguments[case_name]
     rendered_arguments = json.dumps(expected_arguments, separators=(",", ":"))
@@ -2107,17 +2094,11 @@ def _session_search_scenario(case_name: str) -> ProbeScenario:
         "query": {"query": query},
         "period": {"period": "2026-07-01/2026-07-31"},
         "agent": {"agent_id": "tester"},
-        "session": {"session_id": "session-123"},
-        "limit_min": {"limit": 1},
-        "limit_max": {"limit": 100},
         "all": {
             "query": query,
             "period": "2026-07-01/2026-07-31",
             "agent_id": "tester",
-            "session_id": "session-123",
-            "limit": 100,
         },
-        "cursor": {"cursor": "session-search-cursor-token"},
     }
     expected_arguments = session_search_arguments[case_name]
     rendered_arguments = json.dumps(expected_arguments, separators=(",", ":"))

@@ -112,9 +112,9 @@ class SqliteFtsRecallBackend(JsonlSessionRecallBackend):
 
     def search_capabilities(self) -> RecallSearchCapabilities:
         query_description = (
-            "Distinctive literal terms to find. Every whitespace-separated term must occur "
-            "as a case-insensitive substring. Omit to list recent Sessions. Search results "
-            "are ranked by text relevance."
+            "Literal terms to find. Every whitespace-separated term must occur as a "
+            "case-insensitive substring. Omit to list recent Sessions. Matches are ranked by "
+            "text relevance."
         )
         return RecallSearchCapabilities(
             result_type="message",
