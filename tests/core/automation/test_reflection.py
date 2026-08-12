@@ -720,6 +720,6 @@ def test_real_skill_maintenance_prompt_forbids_implicit_global_fallback() -> Non
     prompt = prompt_path.read_text(encoding="utf-8")
 
     assert "overrides the general requirement to scan or load relevant Skills" in prompt
-    assert "do not call `skill_list`, load a Skill, invoke any other Tool" in prompt
-    assert "provide or paraphrase proposed Skill content" in prompt
-    assert "offer a private Skill as a substitute" in prompt
+    assert "Do not call `skill_list`, load a Skill, invoke any other Tool" in prompt
+    assert "Do not provide navigation steps, commands" in prompt
+    assert "proposed or paraphrased Skill content, another scope, or follow-up offers" in prompt
