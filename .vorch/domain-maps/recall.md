@@ -36,7 +36,7 @@ The cross-cutting Session and Tool terms live in `.vorch/GLOSSARY.md`.
 - Eligible text comes from the default conversation roles (`user`, `assistant`, `error`, `compaction_checkpoint`). Tool results, ordinary notes, skill-context notes, and persisted `session_search`/`session_read` results are not Passage input.
 - Message search text is used without whitespace rewriting or a per-Message character cap. Passages are 1,500-character source windows with 200-character overlap; a long Message therefore becomes multiple Passages instead of being truncated.
 - Each Passage records its exact text, stable `passage_id`, start/end Message IDs, start/end timestamps and roles, and offsets within the boundary Messages. The ID derives from the policy version and canonical boundaries; fusion keys it together with `session_id` because forked Sessions may share Message IDs.
-- A search excerpt is presentation only. The Tool fits source-faithful excerpts adaptively to its whole-result byte budget and returns a canonical `read_ref`; it does not store excerpt text as canonical history.
+- A search excerpt is presentation only. The Tool caps each source-faithful excerpt at 800 characters within its whole-result byte budget and returns a canonical `read_ref`; it does not store excerpt text as canonical history.
 
 ## Backend Semantics
 
@@ -45,7 +45,7 @@ The cross-cutting Session and Tool terms live in `.vorch/GLOSSARY.md`.
 - Scans canonical Sessions on demand and returns every eligible matching Message, including multiple Messages from one Session.
 - Matching is case-insensitive literal substring matching. `telegram` therefore matches `Telegraminstallation`; the Agent-facing Tool uses `all_terms`.
 - Results are globally ordered by canonical Message time, newest first, with deterministic Session/message tie-breakers. Other match/order modes remain available only to internal compatibility callers.
-- Search and list snapshot both the canonical transcript and Session metadata sidecar because either can change the Agent-facing result; reads retain their canonical Message-source snapshot. A continuation fails as stale when its covered source changes.
+- Search and list snapshot both the canonical transcript and Session metadata sidecar because either can change the Agent-facing result. Agent-facing read continuations bind their position to the complete canonical selection digest, so changing the selection arguments or underlying Messages fails instead of mixing content.
 
 ### `sqlite_fts`
 
@@ -86,7 +86,7 @@ The cross-cutting Session and Tool terms live in `.vorch/GLOSSARY.md`.
 ## Constraints & Gotchas
 
 - Do not expose backend tuning merely to make backend payloads look alike. Backend capabilities must describe real behavior in the Tool summary and `query` description while the public Tool keeps one compact, backend-stable field set and uses declared defaults.
-- Do not return exact Message text through search as a second read API. Search returns adaptive discovery excerpts and single-anchor `session_read` references; `session_read` derives canonical conversation blocks and replaces large in-block Tool Results with dereferenceable previews while retaining exact single-Result access.
+- Do not return exact Message text through search as a second read API. Search returns bounded discovery excerpts and single-anchor `session_read` references and may restrict matching to one known past Session; an unanchored `session_read` returns a compact User-anchor index for navigation, `all_messages` reads the complete canonical Session, and anchored reads derive conversation blocks while replacing large in-block Tool Results with dereferenceable previews and retaining exact single-Result access.
 - Do not deduplicate Passage results by Session. Passage-level multiplicity is part of Vector and Hybrid semantics.
 - Do not move structural Vector filters after KNN. Post-filtering a global top-K can produce false empty pages even when eligible Passages exist.
 - Do not fuse raw FTS scores with vector distances; they are incomparable. Hybrid combines ranks via RRF.
