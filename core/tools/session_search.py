@@ -10,7 +10,7 @@ import inspect
 import json
 import time
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from datetime import time as datetime_time
 from typing import Any
@@ -59,6 +59,8 @@ SESSION_SEARCH_TOOL_NAME = "session_search"
 SESSION_READ_TOOL_NAME = "session_read"
 SESSION_SEARCH_DEFAULT_LIMIT = 10
 SESSION_SEARCH_MAX_LIMIT = 100
+SESSION_READ_DEFAULT_PAGE_SIZE = 50
+SESSION_READ_MAX_PAGE_SIZE = 200
 SESSION_SEARCH_RESULT_MAX_BYTES = 50 * 1024
 SESSION_SEARCH_CURSOR_VERSION = 2
 SESSION_DESCRIPTOR_EXCERPT_MAX_CHARS = 240
@@ -74,15 +76,20 @@ CHANNEL_PLATFORM_METADATA_KEY = "platform"
 _VALID_RUN_KINDS = frozenset(kind.value for kind in RunKind)
 
 _DESCRIPTION_SUFFIX = (
+    "The current Session is excluded because its conversation is already in context. "
     "Omit query to list recent Sessions; provide query to search. Results include exact "
     "session_read references. "
     "Continue a page with cursor by itself."
 )
 SESSION_SEARCH_TOOL_DESCRIPTION = f"{SESSION_RECALL_LITERAL_TOOL_SUMMARY} {_DESCRIPTION_SUFFIX}"
 SESSION_READ_TOOL_DESCRIPTION = (
-    "Read exact canonical Messages from one persisted Session. Omit both Message boundaries to "
-    "read the whole Session, provide start_message_id and/or end_message_id for an inclusive "
-    "range, and continue oversized results with cursor by itself. Records are returned losslessly."
+    "Read exact canonical Messages from one past Session; the current Session is unavailable "
+    "because its conversation is already in context. Omit all boundaries to read the whole "
+    "Session, use Message IDs or zero-based Message indexes for an inclusive range, or use "
+    "last_messages for the final N Messages. page_size limits complete Message records per page; "
+    "the 50 KiB safety limit may return fewer records or segment one oversized record further. "
+    "Each item includes its zero-based canonical message_index. Continue with cursor by itself. "
+    "Records are returned losslessly."
 )
 
 
@@ -138,7 +145,10 @@ def build_session_search_parameters(recall_backend: Any | None = None) -> JsonOb
             "session_id": {
                 "type": "string",
                 "minLength": 1,
-                "description": "Restrict discovery or search to one Session.",
+                "description": (
+                    "Restrict discovery or search to one past Session. The current Session is "
+                    "excluded."
+                ),
             },
             "limit": {
                 "type": "integer",
@@ -164,7 +174,10 @@ def build_session_read_parameters() -> JsonObject:
             "session_id": {
                 "type": "string",
                 "minLength": 1,
-                "description": "Session to read. Required for a new read; omit with cursor.",
+                "description": (
+                    "Past Session to read. The current Session is unavailable. Required for a "
+                    "new read; omit with cursor."
+                ),
             },
             "agent_id": {
                 "type": "string",
@@ -175,19 +188,58 @@ def build_session_read_parameters() -> JsonObject:
                 "type": "string",
                 "minLength": 1,
                 "description": (
-                    "First Message of a new inclusive range. Omit to start at the beginning."
+                    "First Message ID of an inclusive range. May be paired only with "
+                    "end_message_id; omit to start at the first Message."
                 ),
             },
             "end_message_id": {
                 "type": "string",
                 "minLength": 1,
-                "description": "Last Message of a new inclusive range. Omit to read to the end.",
+                "description": (
+                    "Last Message ID of an inclusive range. May be paired only with "
+                    "start_message_id; omit to read through the last Message."
+                ),
+            },
+            "start_message_index": {
+                "type": "integer",
+                "minimum": 0,
+                "description": (
+                    "Zero-based index of the first Message in an inclusive range. May be paired "
+                    "only with end_message_index; omit to start at the first Message."
+                ),
+            },
+            "end_message_index": {
+                "type": "integer",
+                "minimum": 0,
+                "description": (
+                    "Zero-based index of the last Message in an inclusive range. May be paired "
+                    "only with start_message_index; omit to read through the last Message."
+                ),
+            },
+            "last_messages": {
+                "type": "integer",
+                "minimum": 1,
+                "description": (
+                    "Select the final N Messages. Cannot be combined with Message-ID or "
+                    "Message-index boundaries."
+                ),
+            },
+            "page_size": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": SESSION_READ_MAX_PAGE_SIZE,
+                "default": SESSION_READ_DEFAULT_PAGE_SIZE,
+                "description": (
+                    "Maximum complete Message records in one page before the 50 KiB safety limit "
+                    "applies; defaults to 50 and cannot exceed 200."
+                ),
             },
             "cursor": {
                 "type": "string",
                 "minLength": 1,
                 "description": (
-                    "Previous session_read continuation. When set, omit every other field."
+                    "Previous session_read continuation. When set, omit every other field; the "
+                    "original selection and page_size are preserved."
                 ),
             },
         },
@@ -401,15 +453,19 @@ async def _list_sessions(
     limit = _limit(arguments)
     offset = cursor.offset if cursor is not None else 0
     summaries = await run_tool_worker(sessions.list_with_metadata, agent_id, context.project_id)
-    snapshot = await run_tool_worker(
-        _session_list_snapshot, sessions, agent_id, context.project_id, summaries
-    )
-    _validate_snapshot(cursor, snapshot)
+    if agent_id == context.agent_id:
+        summaries = [
+            summary for summary in summaries if str(summary.get("id")) != context.session_id
+        ]
     selected_session_id = _optional_string(arguments.get("session_id"))
     if selected_session_id is not None:
         summaries = [
             summary for summary in summaries if str(summary.get("id")) == selected_session_id
         ]
+    snapshot = await run_tool_worker(
+        _session_list_snapshot, sessions, agent_id, context.project_id, summaries
+    )
+    _validate_snapshot(cursor, snapshot)
     since, until = _parse_period(arguments.get("period"))
     period_refs: dict[str, tuple[str, str]] = {}
     if since is not None or until is not None:
@@ -457,8 +513,18 @@ async def _read_session(
 ) -> JsonObject:
     agent_id = _agent_id(arguments, context)
     session_id = _required_string(arguments, "session_id")
+    if agent_id == context.agent_id and session_id == context.session_id:
+        raise _SessionSearchError(
+            "current_session_unavailable",
+            "Current Session is unavailable through session_read; use the conversation context "
+            "or history instead.",
+        )
     start_message_id = _optional_string(arguments.get("start_message_id"))
     end_message_id = _optional_string(arguments.get("end_message_id"))
+    start_message_index = _optional_non_negative_int(arguments, "start_message_index")
+    end_message_index = _optional_non_negative_int(arguments, "end_message_index")
+    last_messages = _optional_positive_int(arguments, "last_messages")
+    page_size = _read_page_size(arguments)
     try:
         session = sessions.get(agent_id, session_id, context.project_id)
     except ChatSessionError as error:
@@ -477,11 +543,16 @@ async def _read_session(
         raise _SessionSearchError("message_not_found", f"Message not found: {start_message_id}")
     if end_message_id is not None and end_message_id not in indices:
         raise _SessionSearchError("message_not_found", f"Message not found: {end_message_id}")
-    first = indices[start_message_id] if start_message_id is not None else 0
-    last = indices[end_message_id] if end_message_id is not None else len(messages) - 1
-    if messages and last < first:
-        raise _SessionSearchError("invalid_arguments", "end_message_id precedes start_message_id")
-    source = [message.to_dict() for message in messages[first : last + 1]]
+    first, last = _read_bounds(
+        messages,
+        indices,
+        start_message_id=start_message_id,
+        end_message_id=end_message_id,
+        start_message_index=start_message_index,
+        end_message_index=end_message_index,
+        last_messages=last_messages,
+    )
+    source = [(index, messages[index].to_dict()) for index in range(first, last + 1) if messages]
     normalized: JsonObject = {
         "action": "read",
         "agent_id": agent_id,
@@ -491,6 +562,13 @@ async def _read_session(
         normalized["start_message_id"] = start_message_id
     if end_message_id is not None:
         normalized["end_message_id"] = end_message_id
+    if start_message_index is not None:
+        normalized["start_message_index"] = start_message_index
+    if end_message_index is not None:
+        normalized["end_message_index"] = end_message_index
+    if last_messages is not None:
+        normalized["last_messages"] = last_messages
+    normalized["page_size"] = page_size
     session_details = _session_details(agent_id, session_id, metadata, messages)
     next_index = cursor.offset if cursor is not None else 0
     within_offset = cursor.within_offset if cursor is not None else 0
@@ -503,7 +581,54 @@ async def _read_session(
         context,
         session_id,
         session_details,
+        page_size,
     )
+
+
+def _read_bounds(
+    messages: list[Any],
+    indices: dict[str, int],
+    *,
+    start_message_id: str | None,
+    end_message_id: str | None,
+    start_message_index: int | None,
+    end_message_index: int | None,
+    last_messages: int | None,
+) -> tuple[int, int]:
+    if start_message_index is not None and start_message_index >= len(messages):
+        raise _SessionSearchError(
+            "message_index_out_of_range",
+            f"start_message_index is outside this Session: {start_message_index}",
+        )
+    if end_message_index is not None and end_message_index >= len(messages):
+        raise _SessionSearchError(
+            "message_index_out_of_range",
+            f"end_message_index is outside this Session: {end_message_index}",
+        )
+    if last_messages is not None:
+        return max(len(messages) - last_messages, 0), len(messages) - 1
+    first = (
+        indices[start_message_id]
+        if start_message_id is not None
+        else start_message_index
+        if start_message_index is not None
+        else 0
+    )
+    last = (
+        indices[end_message_id]
+        if end_message_id is not None
+        else end_message_index
+        if end_message_index is not None
+        else len(messages) - 1
+    )
+    if messages and last < first:
+        boundary = (
+            "end_message_id precedes start_message_id"
+            if start_message_id is not None or end_message_id is not None
+            else "end_message_index precedes start_message_index"
+        )
+        raise _SessionSearchError("invalid_arguments", boundary)
+    return first, last
 
 
 async def _search_sessions(
@@ -536,9 +661,12 @@ async def _search_sessions(
         offset=offset,
         limit=limit,
         snapshot_id=cursor.snapshot_id if cursor is not None else None,
+        excluded_session_ids=(context.session_id,) if agent_id == context.agent_id else (),
     )
     if isinstance(recall_backend, SupportsRecallSearch):
         page = await _call_search_page(recall_backend, request)
+        if agent_id == context.agent_id:
+            page = _exclude_session_from_page(page, context.session_id)
         read_refs, session_contexts = await run_tool_worker(
             _search_context_for_hits,
             list(page.hits),
@@ -590,6 +718,17 @@ async def _call_search_page(backend: Any, request: RecallSearchRequest) -> Recal
             "invalid_backend_result", "Recall backend returned an invalid typed search page."
         )
     return result
+
+
+def _exclude_session_from_page(page: RecallSearchPage, session_id: str) -> RecallSearchPage:
+    hits = tuple(hit for hit in page.hits if hit.session_id != session_id)
+    if len(hits) == len(page.hits):
+        return page
+    return replace(
+        page,
+        hits=hits,
+        total_candidate_sessions=max(page.total_candidate_sessions - 1, 0),
+    )
 
 
 async def _legacy_search(
@@ -915,7 +1054,7 @@ def _excerpt_bounds(hit: RecallSearchHit, excerpt_chars: int) -> tuple[int, int]
 
 
 def _render_read_page(
-    source: list[JsonObject],
+    source: list[tuple[int, JsonObject]],
     next_index: int,
     within_offset: int,
     normalized: JsonObject,
@@ -923,13 +1062,17 @@ def _render_read_page(
     context: ToolContext,
     session_id: str,
     session_details: JsonObject,
+    page_size: int,
 ) -> JsonObject:
     items: list[JsonObject] = []
     index = next_index
-    while index < len(source):
-        message = source[index]
+    while index < len(source) and len(items) < page_size:
+        message_index, message = source[index]
         if within_offset == 0:
-            candidate_items = [*items, {"message": message}]
+            candidate_items = [
+                *items,
+                {"message_index": message_index, "message": message},
+            ]
             has_more = index + 1 < len(source)
             candidate = _read_data(
                 session_id,
@@ -942,7 +1085,7 @@ def _render_read_page(
                     "read", normalized, index + 1, 0, snapshot, context, None
                 )
             if _serialized_result_bytes(candidate) <= SESSION_SEARCH_RESULT_MAX_BYTES:
-                items.append({"message": message})
+                items.append({"message_index": message_index, "message": message})
                 index += 1
                 continue
             if items:
@@ -961,11 +1104,15 @@ def _render_read_page(
             session_id,
             session_details,
         )
+    if index < len(source):
+        data = _read_data(session_id, session_details, items, has_more=True)
+        data["next_cursor"] = _cursor_token("read", normalized, index, 0, snapshot, context, None)
+        return _with_formatted_bytes(data)
     return _with_formatted_bytes(_read_data(session_id, session_details, items, has_more=False))
 
 
 def _segmented_read_record(
-    source: list[JsonObject],
+    source: list[tuple[int, JsonObject]],
     index: int,
     offset: int,
     normalized: JsonObject,
@@ -974,7 +1121,7 @@ def _segmented_read_record(
     session_id: str,
     session_details: JsonObject,
 ) -> JsonObject:
-    message = source[index]
+    message_index, message = source[index]
     record_json = json.dumps(message, ensure_ascii=False, separators=(",", ":"))
     if offset >= len(record_json):
         raise _SessionSearchError("invalid_cursor", "Read cursor is invalid.")
@@ -987,6 +1134,7 @@ def _segmented_read_record(
         next_index = index if incomplete else index + 1
         has_more = incomplete or next_index < len(source)
         item: JsonObject = {
+            "message_index": message_index,
             "message_id": message.get("id"),
             "role": message.get("role"),
             "timestamp": message.get("timestamp"),
@@ -1343,7 +1491,16 @@ def _validate_session_search_fields(arguments: JsonObject) -> None:
 
 
 def _validate_session_read_fields(arguments: JsonObject) -> None:
-    allowed = {"session_id", "agent_id", "start_message_id", "end_message_id"}
+    allowed = {
+        "session_id",
+        "agent_id",
+        "start_message_id",
+        "end_message_id",
+        "start_message_index",
+        "end_message_index",
+        "last_messages",
+        "page_size",
+    }
     unsupported = sorted(set(arguments) - allowed)
     if unsupported:
         raise _SessionSearchError(
@@ -1354,6 +1511,20 @@ def _validate_session_read_fields(arguments: JsonObject) -> None:
     for key in ("agent_id", "start_message_id", "end_message_id"):
         if key in arguments:
             _required_string(arguments, key)
+    id_boundaries = any(key in arguments for key in ("start_message_id", "end_message_id"))
+    index_boundaries = any(key in arguments for key in ("start_message_index", "end_message_index"))
+    if id_boundaries and index_boundaries:
+        raise _SessionSearchError(
+            "invalid_arguments", "Message-ID and Message-index boundaries cannot be combined"
+        )
+    if "last_messages" in arguments and (id_boundaries or index_boundaries):
+        raise _SessionSearchError(
+            "invalid_arguments", "last_messages cannot be combined with Message boundaries"
+        )
+    for key in ("start_message_index", "end_message_index"):
+        _optional_non_negative_int(arguments, key)
+    _optional_positive_int(arguments, "last_messages")
+    _read_page_size(arguments)
 
 
 def _parse_cursor(
@@ -1588,6 +1759,36 @@ def _limit(arguments: JsonObject) -> int:
         1,
         SESSION_SEARCH_MAX_LIMIT,
     )
+
+
+def _read_page_size(arguments: JsonObject) -> int:
+    return _bounded_int(
+        arguments.get("page_size", SESSION_READ_DEFAULT_PAGE_SIZE),
+        "page_size",
+        1,
+        SESSION_READ_MAX_PAGE_SIZE,
+    )
+
+
+def _optional_non_negative_int(arguments: JsonObject, key: str) -> int | None:
+    if key not in arguments:
+        return None
+    return _minimum_int(arguments[key], key, 0)
+
+
+def _optional_positive_int(arguments: JsonObject, key: str) -> int | None:
+    if key not in arguments:
+        return None
+    return _minimum_int(arguments[key], key, 1)
+
+
+def _minimum_int(value: Any, name: str, minimum: int) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise _SessionSearchError("invalid_arguments", f"{name} must be an integer")
+    if value < minimum:
+        qualifier = "positive" if minimum == 1 else "non-negative"
+        raise _SessionSearchError("invalid_arguments", f"{name} must be {qualifier}")
+    return value
 
 
 def _required_string(arguments: JsonObject, key: str) -> str:
