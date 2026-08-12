@@ -30,8 +30,16 @@ from core.recall.jsonl import (
     SESSION_RECALL_DEFAULT_ROLES,
     SESSION_RECALL_LITERAL_SEARCH_GUIDANCE,
     SESSION_RECALL_LITERAL_TOOL_SUMMARY,
+    compact_text,
+    message_search_text,
 )
-from core.sessions import ChatSessionError, ChatSessionManager
+from core.runs import RunKind
+from core.sessions import (
+    FORK_SOURCE_META_KEY,
+    SESSION_RUN_KINDS_META_KEY,
+    ChatSessionError,
+    ChatSessionManager,
+)
 from core.tools.tools import (
     JsonObject,
     ToolContext,
@@ -53,6 +61,17 @@ SESSION_SEARCH_DEFAULT_LIMIT = 10
 SESSION_SEARCH_MAX_LIMIT = 100
 SESSION_SEARCH_RESULT_MAX_BYTES = 50 * 1024
 SESSION_SEARCH_CURSOR_VERSION = 2
+SESSION_DESCRIPTOR_EXCERPT_MAX_CHARS = 240
+SESSION_DESCRIPTOR_TITLE_MAX_CHARS = 200
+SESSION_DESCRIPTOR_PLATFORM_MAX_CHARS = 64
+SESSION_DESCRIPTOR_AGENT_ID_MAX_CHARS = 64
+SESSION_DESCRIPTOR_SESSION_ID_MAX_CHARS = 128
+SESSION_DESCRIPTOR_PROJECT_ID_MAX_CHARS = 128
+SESSION_DESCRIPTOR_TIMESTAMP_MAX_CHARS = 64
+SUBAGENT_SESSION_METADATA_FLAG = "is_subagent_session"
+SUBAGENT_PARENT_METADATA_KEY = "subagent_parent"
+CHANNEL_PLATFORM_METADATA_KEY = "platform"
+_VALID_RUN_KINDS = frozenset(kind.value for kind in RunKind)
 
 _DESCRIPTION_SUFFIX = (
     "Omit query to list recent Sessions; provide query to search. Results include exact "
@@ -80,6 +99,12 @@ class _Cursor:
     offset: int
     within_offset: int
     snapshot_id: str | None
+
+
+@dataclass(frozen=True)
+class _SearchSessionContext:
+    messages: list[Any] | None
+    descriptor: JsonObject
 
 
 def build_session_search_parameters(recall_backend: Any | None = None) -> JsonObject:
@@ -388,7 +413,7 @@ async def _list_sessions(
     since, until = _parse_period(arguments.get("period"))
     period_refs: dict[str, tuple[str, str]] = {}
     if since is not None or until is not None:
-        summaries, period_refs = await run_tool_worker(
+        summaries, period_refs, period_messages = await run_tool_worker(
             _filter_session_summaries_by_period,
             sessions,
             agent_id,
@@ -397,27 +422,31 @@ async def _list_sessions(
             since,
             until,
         )
+    else:
+        period_messages = {}
     summaries.sort(key=lambda item: str(item.get("last_active_at") or ""), reverse=True)
-    source = [
-        _session_summary(
-            agent_id,
-            summary,
-            period_ref=period_refs.get(str(summary.get("id") or "")),
-        )
-        for summary in summaries
-    ]
-    page = source[offset : offset + limit]
-    has_more = offset + len(page) < len(source)
+    selected_summaries = summaries[offset : offset + limit]
+    page = await run_tool_worker(
+        _session_summary_items,
+        sessions,
+        agent_id,
+        context.project_id,
+        selected_summaries,
+        period_refs,
+        period_messages,
+    )
     normalized = {"action": "list", "agent_id": agent_id, "limit": limit}
     for key in ("period", "session_id"):
         if key in arguments:
             normalized[key] = arguments[key]
-    data = _page_data(page, has_more=has_more)
-    if has_more:
-        data["next_cursor"] = _cursor_token(
-            "list", normalized, offset + len(page), 0, snapshot, context, None
-        )
-    return _with_formatted_bytes(data)
+    return _render_list_page(
+        page,
+        total_count=len(summaries),
+        normalized=normalized,
+        offset=offset,
+        snapshot=snapshot,
+        context=context,
+    )
 
 
 async def _read_session(
@@ -510,8 +539,8 @@ async def _search_sessions(
     )
     if isinstance(recall_backend, SupportsRecallSearch):
         page = await _call_search_page(recall_backend, request)
-        read_refs = await run_tool_worker(
-            _read_refs_for_hits,
+        read_refs, session_contexts = await run_tool_worker(
+            _search_context_for_hits,
             list(page.hits),
             agent_id=agent_id,
             project_id=context.project_id,
@@ -530,6 +559,7 @@ async def _search_sessions(
             context,
             backend_name,
             read_refs,
+            session_contexts,
         )
     return await _legacy_search(
         context,
@@ -622,6 +652,7 @@ def _render_search_page(
     context: ToolContext,
     backend_name: str,
     read_refs: list[JsonObject],
+    session_contexts: dict[str, _SearchSessionContext],
 ) -> JsonObject:
     hits = list(page.hits)
     if len(read_refs) != len(hits):
@@ -640,7 +671,13 @@ def _render_search_page(
             for index, hit in enumerate(hits[:count])
         ]
         has_more = count < len(hits) or page.has_more
-        data = _search_data(page, backend_name, items, has_more=has_more)
+        data = _search_data(
+            page,
+            backend_name,
+            items,
+            _session_descriptors_for_hits(hits[:count], session_contexts),
+            has_more=has_more,
+        )
         if has_more:
             data["next_cursor"] = _cursor_token(
                 "search",
@@ -660,7 +697,7 @@ def _render_search_page(
         )
     selected = hits[:count]
     if not selected:
-        return _with_formatted_bytes(_search_data(page, backend_name, [], has_more=False))
+        return _with_formatted_bytes(_search_data(page, backend_name, [], [], has_more=False))
 
     maximum = max(len(hit.text) for hit in selected)
     low = 1
@@ -678,7 +715,13 @@ def _render_search_page(
             for index, hit in enumerate(selected)
         ]
         has_more = count < len(hits) or page.has_more
-        candidate = _search_data(page, backend_name, items, has_more=has_more)
+        candidate = _search_data(
+            page,
+            backend_name,
+            items,
+            _session_descriptors_for_hits(selected, session_contexts),
+            has_more=has_more,
+        )
         if has_more:
             candidate["next_cursor"] = _cursor_token(
                 "search",
@@ -705,6 +748,7 @@ def _search_data(
     page: RecallSearchPage,
     backend_name: str,
     items: list[JsonObject],
+    session_descriptors: list[JsonObject],
     *,
     has_more: bool,
 ) -> JsonObject:
@@ -713,6 +757,7 @@ def _search_data(
         "result_type": page.result_type,
         "ranking": page.ranking,
         "items": items,
+        "sessions": session_descriptors,
         "has_more": has_more,
         "searched_sessions": page.total_candidate_sessions,
     }
@@ -754,27 +799,26 @@ def _hit_item(
     return item
 
 
-def _read_refs_for_hits(
+def _search_context_for_hits(
     hits: list[RecallSearchHit],
     *,
     agent_id: str,
     project_id: str | None,
     sessions: ChatSessionManager | None,
-) -> list[JsonObject]:
-    loaded: dict[str, list[Any] | None] = {}
+) -> tuple[list[JsonObject], dict[str, _SearchSessionContext]]:
+    loaded: dict[str, _SearchSessionContext] = {}
     refs: list[JsonObject] = []
     for hit in hits:
         start_message_id = hit.start_message_id or hit.message_id
         end_message_id = hit.end_message_id or hit.message_id
-        messages = loaded.get(hit.session_id)
         if hit.session_id not in loaded:
-            messages = _load_search_hit_session(
+            loaded[hit.session_id] = _load_search_hit_session_context(
                 sessions,
                 agent_id,
                 hit.session_id,
                 project_id,
             )
-            loaded[hit.session_id] = messages
+        messages = loaded[hit.session_id].messages
         derived = _conversation_range(
             messages,
             start_message_id,
@@ -790,21 +834,46 @@ def _read_refs_for_hits(
                 "end_message_id": end_message_id,
             }
         )
-    return refs
+    return refs, loaded
 
 
-def _load_search_hit_session(
+def _load_search_hit_session_context(
     sessions: ChatSessionManager | None,
     agent_id: str,
     session_id: str,
     project_id: str | None,
-) -> list[Any] | None:
+) -> _SearchSessionContext:
     if sessions is None:
-        return None
+        return _SearchSessionContext(
+            messages=None,
+            descriptor=_session_descriptor(agent_id, session_id, {}, None),
+        )
     try:
-        return sessions.get(agent_id, session_id, project_id).load()
+        messages = sessions.get(agent_id, session_id, project_id).load()
+        metadata = sessions.get_metadata(agent_id, session_id, project_id)
     except Exception:
-        return None
+        messages = None
+        metadata = {}
+    return _SearchSessionContext(
+        messages=messages,
+        descriptor=_session_descriptor(agent_id, session_id, metadata, messages),
+    )
+
+
+def _session_descriptors_for_hits(
+    hits: list[RecallSearchHit],
+    contexts: dict[str, _SearchSessionContext],
+) -> list[JsonObject]:
+    seen: set[str] = set()
+    descriptors: list[JsonObject] = []
+    for hit in hits:
+        if hit.session_id in seen:
+            continue
+        seen.add(hit.session_id)
+        context = contexts.get(hit.session_id)
+        if context is not None:
+            descriptors.append(context.descriptor)
+    return descriptors
 
 
 def _conversation_range(
@@ -975,27 +1044,204 @@ def _page_data(items: list[JsonObject], *, has_more: bool) -> JsonObject:
     return {"result_type": "session", "items": items, "has_more": has_more}
 
 
+def _render_list_page(
+    items: list[JsonObject],
+    *,
+    total_count: int,
+    normalized: JsonObject,
+    offset: int,
+    snapshot: str,
+    context: ToolContext,
+) -> JsonObject:
+    count = len(items)
+    while count > 0:
+        has_more = offset + count < total_count
+        data = _page_data(items[:count], has_more=has_more)
+        if has_more:
+            data["next_cursor"] = _cursor_token(
+                "list", normalized, offset + count, 0, snapshot, context, None
+            )
+        if _serialized_result_bytes(data) <= SESSION_SEARCH_RESULT_MAX_BYTES:
+            return _with_formatted_bytes(data)
+        count -= 1
+    if items:
+        raise _SessionSearchError(
+            "session_search_error", "Session metadata exceeds the result safety limit."
+        )
+    return _with_formatted_bytes(_page_data([], has_more=False))
+
+
+def _session_summary_items(
+    sessions: ChatSessionManager,
+    agent_id: str,
+    project_id: str | None,
+    summaries: list[JsonObject],
+    period_refs: dict[str, tuple[str, str]],
+    period_messages: dict[str, list[Any]],
+) -> list[JsonObject]:
+    items: list[JsonObject] = []
+    for summary in summaries:
+        session_id = str(summary.get("id") or "")
+        messages = period_messages.get(session_id)
+        if session_id not in period_messages:
+            messages = _load_session_messages(sessions, agent_id, session_id, project_id)
+        items.append(
+            _session_summary(
+                agent_id,
+                summary,
+                messages,
+                period_ref=period_refs.get(session_id),
+            )
+        )
+    return items
+
+
+def _load_session_messages(
+    sessions: ChatSessionManager,
+    agent_id: str,
+    session_id: str,
+    project_id: str | None,
+) -> list[Any] | None:
+    try:
+        return sessions.get(agent_id, session_id, project_id).load()
+    except Exception:
+        return None
+
+
 def _session_summary(
     agent_id: str,
     summary: JsonObject,
+    messages: list[Any] | None,
     *,
     period_ref: tuple[str, str] | None = None,
 ) -> JsonObject:
-    item: JsonObject = {
-        "agent_id": agent_id,
-        "session_id": summary.get("id"),
-        "created_at": summary.get("created_at"),
-        "last_active_at": summary.get("last_active_at"),
-        "title": summary.get("title") or summary.get("auto_title"),
-    }
+    session_id = str(summary.get("id") or "")
+    item = _session_descriptor(agent_id, session_id, summary, messages)
+    item.update(
+        {
+            "created_at": summary.get("created_at"),
+            "last_active_at": summary.get("last_active_at"),
+        }
+    )
     if period_ref is not None:
         item["read_ref"] = {
             "agent_id": agent_id,
-            "session_id": summary.get("id"),
+            "session_id": session_id,
             "start_message_id": period_ref[0],
             "end_message_id": period_ref[1],
         }
     return item
+
+
+def _session_descriptor(
+    agent_id: str,
+    session_id: str,
+    metadata: JsonObject,
+    messages: list[Any] | None,
+) -> JsonObject:
+    run_kinds = _session_run_kinds(metadata)
+    return {
+        "agent_id": agent_id,
+        "session_id": session_id,
+        "title": _descriptor_text(
+            metadata.get("title") or metadata.get("auto_title"),
+            SESSION_DESCRIPTOR_TITLE_MAX_CHARS,
+        ),
+        "run_kinds": run_kinds,
+        "is_subagent_session": _is_subagent_session(metadata, run_kinds),
+        "subagent_parent": _session_address(metadata.get(SUBAGENT_PARENT_METADATA_KEY)),
+        "platform": _descriptor_text(
+            metadata.get(CHANNEL_PLATFORM_METADATA_KEY),
+            SESSION_DESCRIPTOR_PLATFORM_MAX_CHARS,
+        ),
+        "fork_source": _fork_source(metadata.get(FORK_SOURCE_META_KEY)),
+        "message_count": len(messages) if messages is not None else None,
+        "first_user_excerpt": _first_user_excerpt(messages),
+    }
+
+
+def _session_run_kinds(metadata: JsonObject) -> list[str] | None:
+    raw = metadata.get(SESSION_RUN_KINDS_META_KEY)
+    if not isinstance(raw, list) or not raw:
+        return None
+    if any(not isinstance(value, str) or value not in _VALID_RUN_KINDS for value in raw):
+        return None
+    return list(dict.fromkeys(raw))
+
+
+def _is_subagent_session(metadata: JsonObject, run_kinds: list[str] | None) -> bool | None:
+    if run_kinds is not None and RunKind.SUBAGENT.value in run_kinds:
+        return True
+    explicit = metadata.get(SUBAGENT_SESSION_METADATA_FLAG)
+    if isinstance(explicit, bool):
+        return explicit
+    if run_kinds is not None:
+        return False
+    return None
+
+
+def _session_address(value: Any) -> JsonObject | None:
+    if not isinstance(value, dict):
+        return None
+    agent_id = _descriptor_identifier(value.get("agent_id"), SESSION_DESCRIPTOR_AGENT_ID_MAX_CHARS)
+    session_id = _descriptor_identifier(
+        value.get("session_id"), SESSION_DESCRIPTOR_SESSION_ID_MAX_CHARS
+    )
+    if agent_id is None or session_id is None:
+        return None
+    return {
+        "agent_id": agent_id,
+        "session_id": session_id,
+        "project_id": _descriptor_identifier(
+            value.get("project_id"), SESSION_DESCRIPTOR_PROJECT_ID_MAX_CHARS
+        ),
+    }
+
+
+def _fork_source(value: Any) -> JsonObject | None:
+    address = _session_address(value)
+    if address is None:
+        return None
+    assert isinstance(value, dict)
+    address["forked_at"] = _descriptor_text(
+        value.get("forked_at"), SESSION_DESCRIPTOR_TIMESTAMP_MAX_CHARS
+    )
+    return address
+
+
+def _descriptor_identifier(value: Any, max_chars: int) -> str | None:
+    if not isinstance(value, str):
+        return None
+    normalized = value.strip()
+    if not normalized or len(normalized) > max_chars:
+        return None
+    return normalized
+
+
+def _descriptor_text(value: Any, max_chars: int) -> str | None:
+    if not isinstance(value, str):
+        return None
+    normalized = compact_text(value)
+    if not normalized:
+        return None
+    return normalized[:max_chars]
+
+
+def _first_user_excerpt(messages: list[Any] | None) -> JsonObject | None:
+    if messages is None:
+        return None
+    for message in messages:
+        if str(message.role) != "user":
+            continue
+        text = compact_text(message_search_text(message))
+        if not text:
+            return None
+        end = min(len(text), SESSION_DESCRIPTOR_EXCERPT_MAX_CHARS)
+        return {
+            "text": text[:end],
+            "trailing_truncated": end < len(text),
+        }
+    return None
 
 
 def _message_ref(message: Any) -> JsonObject:
@@ -1225,9 +1471,19 @@ def _session_list_snapshot(
     parts: list[str] = []
     for summary in sorted(summaries, key=lambda item: str(item.get("id", ""))):
         session_id = str(summary["id"])
-        stat = sessions.get(agent_id, session_id, project_id).path.stat()
-        parts.append(f"{session_id}:{stat.st_mtime_ns}:{stat.st_size}")
+        session = sessions.get(agent_id, session_id, project_id)
+        stat = session.path.stat()
+        metadata_stat = _optional_file_snapshot(session.sidecar_path)
+        parts.append(f"{session_id}:{stat.st_mtime_ns}:{stat.st_size}:metadata:{metadata_stat}")
     return hashlib.sha256("\n".join(parts).encode("utf-8")).hexdigest()
+
+
+def _optional_file_snapshot(path: Any) -> str:
+    try:
+        stat = path.stat()
+    except FileNotFoundError:
+        return "absent"
+    return f"{stat.st_mtime_ns}:{stat.st_size}"
 
 
 def _filter_session_summaries_by_period(
@@ -1237,9 +1493,14 @@ def _filter_session_summaries_by_period(
     summaries: list[JsonObject],
     since: datetime | None,
     until: datetime | None,
-) -> tuple[list[JsonObject], dict[str, tuple[str, str]]]:
+) -> tuple[
+    list[JsonObject],
+    dict[str, tuple[str, str]],
+    dict[str, list[Any]],
+]:
     selected: list[JsonObject] = []
     refs: dict[str, tuple[str, str]] = {}
+    loaded: dict[str, list[Any]] = {}
     for summary in summaries:
         session_id = str(summary.get("id") or "")
         if not session_id:
@@ -1257,6 +1518,7 @@ def _filter_session_summaries_by_period(
         if not matching:
             continue
         selected.append(summary)
+        loaded[session_id] = messages
         derived = _conversation_range(
             messages,
             str(matching[0].id),
@@ -1264,7 +1526,7 @@ def _filter_session_summaries_by_period(
         )
         if derived is not None:
             refs[session_id] = derived
-    return selected, refs
+    return selected, refs, loaded
 
 
 def _timestamp_in_period(

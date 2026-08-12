@@ -24,6 +24,7 @@ from core.recall.jsonl import RECALL_TOOL_RESULT_NAMES
 from core.recall.vector import VectorRecallBackend
 from core.sessions import ChatSession, ChatSessionManager
 from core.tools.session_search import (
+    SESSION_DESCRIPTOR_EXCERPT_MAX_CHARS,
     SESSION_READ_TOOL_NAME,
     SESSION_READ_TOOL_PARAMETERS,
     SESSION_SEARCH_RESULT_MAX_BYTES,
@@ -334,6 +335,107 @@ async def test_list_supports_period_and_session_filters(tmp_path: Path) -> None:
     assert [item["session_id"] for item in selected["items"]] == ["weekday"]
 
 
+async def test_list_projects_bounded_session_context_without_internal_metadata(
+    tmp_path: Path,
+) -> None:
+    sessions = ChatSessionManager(tmp_path)
+    session = sessions.create("coder", session_id="context-rich")
+    opening = "Opening context " + ("x" * 400)
+    session.append(ChatMessage.user(opening, timestamp=timestamp(1)))
+    session.append(ChatMessage.assistant(model="test", content="Answer", timestamp=timestamp(2)))
+    sessions.set_metadata(
+        "coder",
+        "context-rich",
+        {
+            "title": "  Useful Session  ",
+            "run_kinds": ["user", "subagent", "user"],
+            "is_subagent_session": False,
+            "subagent_parent": {
+                "id": "private-work-id",
+                "agent_id": "parent-agent",
+                "session_id": "parent-session",
+                "project_id": "parent-project",
+                "run_id": "private-run-id",
+                "tool_call_id": "private-tool-call-id",
+                "tool_call_index": 7,
+            },
+            "platform": " telegram ",
+            "fork_source": {
+                "agent_id": "source-agent",
+                "session_id": "source-session",
+                "project_id": "source-project",
+                "forked_at": "2026-05-01T12:00:00+00:00",
+                "message_count": 99,
+            },
+            "private_cache_key": "private-cache-value",
+        },
+    )
+
+    data = success(
+        await session_search_handler(
+            make_context(tmp_path),
+            {"session_id": "context-rich"},
+            JsonlSessionRecallBackend(sessions),
+        )
+    )
+
+    item = data["items"][0]
+    assert item["title"] == "Useful Session"
+    assert item["run_kinds"] == ["user", "subagent"]
+    assert item["is_subagent_session"] is True
+    assert item["subagent_parent"] == {
+        "agent_id": "parent-agent",
+        "session_id": "parent-session",
+        "project_id": "parent-project",
+    }
+    assert item["platform"] == "telegram"
+    assert item["fork_source"] == {
+        "agent_id": "source-agent",
+        "session_id": "source-session",
+        "project_id": "source-project",
+        "forked_at": "2026-05-01T12:00:00+00:00",
+    }
+    assert item["message_count"] == 2
+    assert len(item["first_user_excerpt"]["text"]) == SESSION_DESCRIPTOR_EXCERPT_MAX_CHARS
+    assert item["first_user_excerpt"]["trailing_truncated"] is True
+    encoded = json.dumps(data)
+    for private_value in (
+        "private-work-id",
+        "private-run-id",
+        "private-tool-call-id",
+        "private-cache-value",
+    ):
+        assert private_value not in encoded
+
+
+async def test_list_preserves_mixed_run_origins_and_marks_legacy_origin_unknown(
+    tmp_path: Path,
+) -> None:
+    sessions = ChatSessionManager(tmp_path)
+    legacy = sessions.create("coder", session_id="legacy")
+    legacy.append(ChatMessage.user("Legacy opening", timestamp=timestamp(1)))
+    mixed = sessions.create("coder", session_id="mixed")
+    mixed.append(ChatMessage.user("Mixed opening", timestamp=timestamp(2)))
+    sessions.set_metadata("coder", "mixed", {"run_kinds": ["cron", "user"]})
+    backend = JsonlSessionRecallBackend(sessions)
+
+    legacy_data = success(
+        await session_search_handler(make_context(tmp_path), {"session_id": "legacy"}, backend)
+    )
+    mixed_data = success(
+        await session_search_handler(make_context(tmp_path), {"session_id": "mixed"}, backend)
+    )
+
+    legacy_item = legacy_data["items"][0]
+    assert legacy_item["run_kinds"] is None
+    assert legacy_item["is_subagent_session"] is None
+    assert legacy_item["subagent_parent"] is None
+    assert legacy_item["platform"] is None
+    assert legacy_item["fork_source"] is None
+    assert mixed_data["items"][0]["run_kinds"] == ["cron", "user"]
+    assert mixed_data["items"][0]["is_subagent_session"] is False
+
+
 @pytest.mark.parametrize(
     "period",
     ("weekend", "/", "2026-05-03/2026-05-02", "2026-05-01/2026-05-02/2026-05-03"),
@@ -372,6 +474,47 @@ async def test_search_applies_period_and_backend_default_ranking(tmp_path: Path)
 
     assert [item["message_id"] for item in data["items"]] == [second.id, first.id]
     assert data["ranking"] == "message_time_newest"
+
+
+async def test_search_returns_one_session_descriptor_for_repeated_hits(tmp_path: Path) -> None:
+    sessions = ChatSessionManager(tmp_path)
+    session = sessions.create("coder", session_id="repeated-context")
+    first = ChatMessage.user("needle opening context", timestamp=timestamp(1))
+    second = ChatMessage.assistant(model="test", content="needle answer", timestamp=timestamp(2))
+    session.append(first)
+    session.append(second)
+    sessions.set_metadata(
+        "coder",
+        "repeated-context",
+        {"title": "Repeated context", "run_kinds": ["user"]},
+    )
+
+    data = success(
+        await session_search_handler(
+            make_context(tmp_path),
+            {"query": "needle"},
+            JsonlSessionRecallBackend(sessions),
+        )
+    )
+
+    assert len(data["items"]) == 2
+    assert len(data["sessions"]) == 1
+    assert data["sessions"][0] == {
+        "agent_id": "coder",
+        "session_id": "repeated-context",
+        "title": "Repeated context",
+        "run_kinds": ["user"],
+        "is_subagent_session": False,
+        "subagent_parent": None,
+        "platform": None,
+        "fork_source": None,
+        "message_count": 2,
+        "first_user_excerpt": {
+            "text": "needle opening context",
+            "trailing_truncated": False,
+        },
+    }
+    assert all("title" not in item and "run_kinds" not in item for item in data["items"])
 
 
 async def test_search_cursor_continues_with_cursor_alone(tmp_path: Path) -> None:
@@ -784,6 +927,35 @@ async def test_cursors_reject_changed_source_and_cross_tool_reuse(tmp_path: Path
     failure(stale, "stale_cursor")
 
 
+async def test_list_and_search_cursors_reject_changed_session_metadata(tmp_path: Path) -> None:
+    sessions = ChatSessionManager(tmp_path)
+    first = sessions.create("coder", session_id="metadata-first")
+    second = sessions.create("coder", session_id="metadata-second")
+    first.append(ChatMessage.user("needle one", timestamp=timestamp(1)))
+    first.append(ChatMessage.user("needle two", timestamp=timestamp(2)))
+    second.append(ChatMessage.user("other", timestamp=timestamp(3)))
+    backend = JsonlSessionRecallBackend(sessions)
+
+    listed = success(await session_search_handler(make_context(tmp_path), {"limit": 1}, backend))
+    sessions.set_metadata("coder", "metadata-second", {"title": "first title"})
+    stale_list = await session_search_handler(
+        make_context(tmp_path), {"cursor": listed["next_cursor"]}, backend
+    )
+
+    searched = success(
+        await session_search_handler(
+            make_context(tmp_path), {"query": "needle", "limit": 1}, backend
+        )
+    )
+    sessions.set_metadata("coder", "metadata-first", {"title": "a much longer replacement title"})
+    stale_search = await session_search_handler(
+        make_context(tmp_path), {"cursor": searched["next_cursor"]}, backend
+    )
+
+    failure(stale_list, "stale_cursor")
+    failure(stale_search, "stale_cursor")
+
+
 async def test_multiple_large_excerpts_stay_within_result_limit(tmp_path: Path) -> None:
     sessions = ChatSessionManager(tmp_path)
     session = sessions.create("coder", session_id="large-excerpts")
@@ -805,3 +977,45 @@ async def test_multiple_large_excerpts_stay_within_result_limit(tmp_path: Path) 
     assert len(data["items"]) == 3
     encoded = json.dumps(result, ensure_ascii=False, separators=(",", ":")).encode()
     assert len(encoded) <= SESSION_SEARCH_RESULT_MAX_BYTES
+
+
+async def test_large_session_descriptor_list_paginates_within_result_limit(
+    tmp_path: Path,
+) -> None:
+    sessions = ChatSessionManager(tmp_path)
+    for index in range(100):
+        session_id = f"context-{index:03d}"
+        session = sessions.create("coder", session_id=session_id)
+        session.append(
+            ChatMessage.user("opening " + (str(index % 10) * 400), timestamp=timestamp(1))
+        )
+        sessions.set_metadata(
+            "coder",
+            session_id,
+            {
+                "title": "T" * 200,
+                "run_kinds": ["subagent"],
+                "subagent_parent": {
+                    "agent_id": "parent-agent",
+                    "session_id": "parent-" + ("s" * 100),
+                    "project_id": "project-" + ("p" * 100),
+                },
+            },
+        )
+    backend = JsonlSessionRecallBackend(sessions)
+
+    first_result = await session_search_handler(make_context(tmp_path), {"limit": 100}, backend)
+    first = success(first_result)
+    second_result = await session_search_handler(
+        make_context(tmp_path), {"cursor": first["next_cursor"]}, backend
+    )
+    second = success(second_result)
+
+    assert 0 < len(first["items"]) < 100
+    assert first["has_more"] is True
+    assert {item["session_id"] for item in first["items"]}.isdisjoint(
+        item["session_id"] for item in second["items"]
+    )
+    for result in (first_result, second_result):
+        encoded = json.dumps(result, ensure_ascii=False, separators=(",", ":")).encode()
+        assert len(encoded) <= SESSION_SEARCH_RESULT_MAX_BYTES
