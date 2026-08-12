@@ -409,7 +409,8 @@ SESSION_READ_CASES = (
     "whole",
     "message",
     "agent",
-    "offset",
+    "continuation",
+    "all_messages",
     "all",
 )
 SESSION_SEARCH_CASES = (
@@ -417,6 +418,7 @@ SESSION_SEARCH_CASES = (
     "query",
     "period",
     "agent",
+    "session",
     "all",
 )
 SKILL_CASES = ("activate", "skill_md", "reference", "script", "asset")
@@ -2052,16 +2054,22 @@ def _session_read_scenario(case_name: str) -> ProbeScenario:
     session_id = "session-123"
     agent_id = "tester"
     message_id = "message-123"
+    continuation = "r1:1234:" + ("a" * 64)
     session_read_arguments: dict[str, dict[str, Any]] = {
         "whole": {"session_id": session_id},
         "message": {"session_id": session_id, "message_id": message_id},
         "agent": {"session_id": session_id, "agent_id": agent_id},
-        "offset": {"session_id": session_id, "message_id": message_id, "offset": 1234},
+        "continuation": {
+            "session_id": session_id,
+            "message_id": message_id,
+            "continuation": continuation,
+        },
+        "all_messages": {"session_id": session_id, "all_messages": True},
         "all": {
             "session_id": session_id,
             "agent_id": agent_id,
-            "message_id": message_id,
-            "offset": 1234,
+            "all_messages": True,
+            "continuation": continuation,
         },
     }
     expected_arguments = session_read_arguments[case_name]
@@ -2089,15 +2097,18 @@ def _session_read_scenario(case_name: str) -> ProbeScenario:
 
 def _session_search_scenario(case_name: str) -> ProbeScenario:
     query = "Tool schema defaults"
+    session_id = "session-123"
     session_search_arguments: dict[str, dict[str, Any]] = {
         "list": {},
         "query": {"query": query},
         "period": {"period": "2026-07-01/2026-07-31"},
         "agent": {"agent_id": "tester"},
+        "session": {"query": query, "session_id": session_id},
         "all": {
             "query": query,
             "period": "2026-07-01/2026-07-31",
             "agent_id": "tester",
+            "session_id": session_id,
         },
     }
     expected_arguments = session_search_arguments[case_name]

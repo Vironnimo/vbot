@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import inspect
 import json
 import time
@@ -56,8 +57,10 @@ SESSION_SEARCH_TOOL_NAME = "session_search"
 SESSION_READ_TOOL_NAME = "session_read"
 SESSION_SEARCH_DEFAULT_LIMIT = 10
 SESSION_SEARCH_RESULT_MAX_BYTES = 50 * 1024
+SESSION_SEARCH_EXCERPT_MAX_CHARS = 800
 SESSION_READ_INLINE_TOOL_RESULT_MAX_BYTES = 4 * 1024
 SESSION_READ_TOOL_RESULT_PREVIEW_CHARS = 800
+SESSION_READ_USER_ANCHOR_EXCERPT_MAX_CHARS = 160
 SESSION_DESCRIPTOR_EXCERPT_MAX_CHARS = 240
 SESSION_DESCRIPTOR_TITLE_MAX_CHARS = 200
 SESSION_DESCRIPTOR_PLATFORM_MAX_CHARS = 64
@@ -72,15 +75,16 @@ _VALID_RUN_KINDS = frozenset(kind.value for kind in RunKind)
 
 _DESCRIPTION_SUFFIX = (
     "The current Session is excluded. Omit query to list recent Sessions. Returns at most "
-    "10 items; search matches include session_read references."
+    "10 items with no paging; narrow with period or session_id. Search matches include "
+    "session_read references."
 )
 SESSION_SEARCH_TOOL_DESCRIPTION = f"{SESSION_RECALL_LITERAL_TOOL_SUMMARY} {_DESCRIPTION_SUFFIX}"
 SESSION_READ_TOOL_DESCRIPTION = (
-    "Read one conversation block or Tool Result from a past Session. Omit message_id for the "
-    "latest conversation block; provide an ordinary Message ID for its conversation block or a "
-    "Tool Result Message ID for that exact Result. Large selections return lossless segments "
-    "with next_offset. The current Session is unavailable; use conversation context or history "
-    "instead."
+    "Read conversation blocks or a Tool Result from a past Session. Set all_messages for every "
+    "block, omit message_id for the latest block plus a compact User-anchor index, or provide a "
+    "Message ID for its block or exact Tool Result. Every result identifies the selected range. "
+    "Large selections return lossless segments with next_continuation. The current Session is "
+    "unavailable; use conversation context or history instead."
 )
 
 
@@ -124,6 +128,14 @@ def build_session_search_parameters(recall_backend: Any | None = None) -> JsonOb
                 "minLength": 1,
                 "description": "Agent whose Sessions to find. Omit for the current Agent.",
             },
+            "session_id": {
+                "type": "string",
+                "minLength": 1,
+                "description": (
+                    "Past Session to restrict query matching. Requires query; omit to search "
+                    "across Sessions. The current Session is unavailable."
+                ),
+            },
         },
         "required": [],
     }
@@ -142,8 +154,8 @@ def build_session_read_parameters() -> JsonObject:
                 "type": "string",
                 "minLength": 1,
                 "description": (
-                    "Message to read. Omit for the latest conversation block; an ordinary "
-                    "Message selects its conversation block and a Tool Result selects that exact "
+                    "Message to read. Omit for the latest block plus a User-anchor index; an "
+                    "ordinary Message selects its block and a Tool Result selects that exact "
                     "Result."
                 ),
             },
@@ -152,12 +164,19 @@ def build_session_read_parameters() -> JsonObject:
                 "minLength": 1,
                 "description": "Agent that owns the Session. Omit for the current Agent.",
             },
-            "offset": {
-                "type": "integer",
-                "minimum": 0,
+            "continuation": {
+                "type": "string",
+                "minLength": 1,
                 "description": (
-                    "Continuation offset returned by session_read for the same selection. Omit "
-                    "for the first read."
+                    "Continuation token returned by session_read for the same selection. Omit "
+                    "for the first read; changing message_id or all_messages invalidates it."
+                ),
+            },
+            "all_messages": {
+                "type": "boolean",
+                "description": (
+                    "Return every conversation block in canonical order. Cannot be combined "
+                    "with message_id; large Tool Results remain directly readable references."
                 ),
             },
         },
@@ -394,7 +413,8 @@ async def _read_session(
             "or history instead.",
         )
     message_id = _optional_string(arguments.get("message_id"))
-    offset = _optional_non_negative_int(arguments, "offset") or 0
+    all_messages = arguments.get("all_messages") is True
+    continuation = _optional_string(arguments.get("continuation"))
     try:
         session = sessions.get(agent_id, session_id, context.project_id)
     except ChatSessionError as error:
@@ -408,7 +428,20 @@ async def _read_session(
     indices = {str(message.id): index for index, message in enumerate(messages)}
     if message_id is not None and message_id not in indices:
         raise _SessionSearchError("message_not_found", f"Message not found: {message_id}")
-    first, last, exact_tool_result = _read_selection(messages, indices, message_id)
+    if all_messages:
+        first, last, exact_tool_result = 0, len(messages) - 1, False
+        selection_kind = "all_messages"
+        selection_key = f"{agent_id}\0{session_id}\0all_messages"
+    else:
+        first, last, exact_tool_result = _read_selection(messages, indices, message_id)
+        selection_kind = (
+            "tool_result"
+            if exact_tool_result
+            else "conversation_block"
+            if message_id is not None
+            else "latest_block"
+        )
+        selection_key = f"{agent_id}\0{session_id}\0message:{message_id or 'latest'}"
     source = _project_read_items(
         messages,
         first,
@@ -418,12 +451,22 @@ async def _read_session(
         session_id=session_id,
         current_agent_id=context.agent_id,
     )
+    user_anchors = _user_anchor_index(messages) if message_id is None and not all_messages else None
+    selection_details: JsonObject = {
+        "kind": selection_kind,
+        "first_message_index": first if last >= first else None,
+        "last_message_index": last if last >= first else None,
+        "message_count": max(last - first + 1, 0),
+    }
     session_details = _session_details(agent_id, session_id, metadata, messages)
     return _render_read_selection(
         source,
-        offset,
+        continuation,
         session_id,
         session_details,
+        selection_key=selection_key,
+        selection_details=selection_details,
+        user_anchors=user_anchors,
     )
 
 
@@ -461,6 +504,13 @@ async def _search_sessions(
 ) -> JsonObject:
     query = _required_string(arguments, "query")
     agent_id = _agent_id(arguments, context)
+    session_id = _optional_string(arguments.get("session_id"))
+    if agent_id == context.agent_id and session_id == context.session_id:
+        raise _SessionSearchError(
+            "current_session_unavailable",
+            "Current Session is unavailable through session_search; use the conversation "
+            "context or history instead.",
+        )
     roles = SESSION_RECALL_DEFAULT_ROLES
     match_mode = "all_terms"
     raw_order = capabilities.default_order
@@ -468,7 +518,7 @@ async def _search_sessions(
     request = RecallSearchRequest(
         agent_id=agent_id,
         project_id=context.project_id,
-        session_id=None,
+        session_id=session_id,
         query=query,
         since=since,
         until=until,
@@ -635,7 +685,7 @@ def _render_search_page(
 
     maximum = max(len(hit.text) for hit in selected)
     low = 1
-    high = maximum
+    high = min(maximum, SESSION_SEARCH_EXCERPT_MAX_CHARS)
     best: JsonObject | None = None
     while low <= high:
         excerpt_chars = (low + high) // 2
@@ -827,6 +877,27 @@ def _project_read_items(
     return items
 
 
+def _user_anchor_index(messages: list[Any]) -> list[JsonObject]:
+    anchors: list[JsonObject] = []
+    for message_index, message in enumerate(messages):
+        if str(message.role) != "user":
+            continue
+        text = compact_text(message_search_text(message))
+        end = min(len(text), SESSION_READ_USER_ANCHOR_EXCERPT_MAX_CHARS)
+        anchors.append(
+            {
+                "message_index": message_index,
+                "message_id": str(message.id),
+                "timestamp": str(message.timestamp),
+                "excerpt": {
+                    "text": text[:end],
+                    "trailing_truncated": end < len(text),
+                },
+            }
+        )
+    return anchors
+
+
 def _replace_large_tool_result(message: JsonObject) -> bool:
     if message.get("role") != "tool" or not isinstance(message.get("content"), str):
         return False
@@ -866,21 +937,50 @@ def _bounded_preview(value: str, limit: int) -> str:
 
 def _render_read_selection(
     items: list[JsonObject],
-    offset: int,
+    continuation: str | None,
     session_id: str,
     session_details: JsonObject,
+    *,
+    selection_key: str,
+    selection_details: JsonObject,
+    user_anchors: list[JsonObject] | None = None,
 ) -> JsonObject:
-    complete = _read_data(session_id, session_details, items, has_more=False)
-    if offset == 0 and _serialized_result_bytes(complete) <= SESSION_SEARCH_RESULT_MAX_BYTES:
+    complete = _read_data(
+        session_id,
+        session_details,
+        items,
+        has_more=False,
+        selection_details=selection_details,
+        user_anchors=user_anchors,
+    )
+    if _serialized_result_bytes(complete) <= SESSION_SEARCH_RESULT_MAX_BYTES:
+        if continuation is not None:
+            raise _SessionSearchError(
+                "invalid_continuation",
+                "Read continuation token is invalid for this selection.",
+            )
         return _with_formatted_bytes(complete)
 
-    selection_json = json.dumps(items, ensure_ascii=False, separators=(",", ":"))
+    selection: JsonObject | list[JsonObject]
+    selection = items if user_anchors is None else {"user_anchors": user_anchors, "items": items}
+    selection_json = json.dumps(selection, ensure_ascii=False, separators=(",", ":"))
+    offset = (
+        0
+        if continuation is None
+        else _read_continuation_offset(continuation, selection_key, selection_json)
+    )
     if not selection_json:
-        if offset:
-            raise _SessionSearchError("invalid_offset", "Read offset is outside the selection.")
+        if continuation is not None:
+            raise _SessionSearchError(
+                "invalid_continuation",
+                "Read continuation token is invalid for this selection.",
+            )
         return _with_formatted_bytes(complete)
     if offset >= len(selection_json):
-        raise _SessionSearchError("invalid_offset", "Read offset is outside the selection.")
+        raise _SessionSearchError(
+            "invalid_continuation",
+            "Read continuation token is invalid for this selection.",
+        )
 
     low = offset + 1
     high = len(selection_json)
@@ -902,9 +1002,12 @@ def _render_read_selection(
                 }
             ],
             has_more=has_more,
+            selection_details=selection_details,
         )
         if has_more:
-            candidate["next_offset"] = end
+            candidate["next_continuation"] = _read_continuation_token(
+                end, selection_key, selection_json
+            )
         if _serialized_result_bytes(candidate) <= SESSION_SEARCH_RESULT_MAX_BYTES:
             best = candidate
             low = end + 1
@@ -917,19 +1020,58 @@ def _render_read_selection(
     return _with_formatted_bytes(best)
 
 
+def _read_continuation_token(offset: int, selection_key: str, selection_json: str) -> str:
+    digest = _read_selection_digest(selection_key, selection_json)
+    return f"r1:{offset}:{digest}"
+
+
+def _read_continuation_offset(token: str, selection_key: str, selection_json: str) -> int:
+    parts = token.split(":")
+    expected_digest = _read_selection_digest(selection_key, selection_json)
+    if len(parts) != 3 or parts[0] != "r1" or parts[2] != expected_digest:
+        raise _SessionSearchError(
+            "invalid_continuation",
+            "Read continuation token is invalid for this selection.",
+        )
+    try:
+        offset = int(parts[1])
+    except ValueError as error:
+        raise _SessionSearchError(
+            "invalid_continuation",
+            "Read continuation token is invalid for this selection.",
+        ) from error
+    if offset < 0:
+        raise _SessionSearchError(
+            "invalid_continuation",
+            "Read continuation token is invalid for this selection.",
+        )
+    return offset
+
+
+def _read_selection_digest(selection_key: str, selection_json: str) -> str:
+    value = f"{selection_key}\0{selection_json}".encode()
+    return hashlib.sha256(value).hexdigest()
+
+
 def _read_data(
     session_id: str,
     session_details: JsonObject,
     items: list[JsonObject],
     *,
     has_more: bool,
+    selection_details: JsonObject,
+    user_anchors: list[JsonObject] | None = None,
 ) -> JsonObject:
-    return {
+    data: JsonObject = {
         "session_id": session_id,
         "session": session_details,
+        "selection": selection_details,
         "items": items,
         "has_more": has_more,
     }
+    if user_anchors is not None:
+        data["user_anchors"] = user_anchors
+    return data
 
 
 def _page_data(items: list[JsonObject], *, has_more: bool) -> JsonObject:
@@ -1170,16 +1312,18 @@ def _backend_name(backend: Any) -> str:
 
 
 def _validate_session_search_fields(arguments: JsonObject) -> None:
-    allowed = {"query", "period", "agent_id"}
+    allowed = {"query", "period", "agent_id", "session_id"}
     unsupported = sorted(set(arguments) - allowed)
     if unsupported:
         raise _SessionSearchError(
             "invalid_arguments",
             f"Unsupported session_search arguments: {', '.join(unsupported)}",
         )
-    for key in ("query", "agent_id"):
+    for key in ("query", "agent_id", "session_id"):
         if key in arguments:
             _required_string(arguments, key)
+    if "session_id" in arguments and "query" not in arguments:
+        raise _SessionSearchError("invalid_arguments", "session_id requires query")
     if "period" in arguments:
         if arguments["period"] is None:
             raise _SessionSearchError(
@@ -1189,7 +1333,7 @@ def _validate_session_search_fields(arguments: JsonObject) -> None:
 
 
 def _validate_session_read_fields(arguments: JsonObject) -> None:
-    allowed = {"session_id", "message_id", "agent_id", "offset"}
+    allowed = {"session_id", "message_id", "agent_id", "continuation", "all_messages"}
     unsupported = sorted(set(arguments) - allowed)
     if unsupported:
         raise _SessionSearchError(
@@ -1197,10 +1341,15 @@ def _validate_session_read_fields(arguments: JsonObject) -> None:
             f"Unsupported session_read arguments: {', '.join(unsupported)}",
         )
     _required_string(arguments, "session_id")
-    for key in ("agent_id", "message_id"):
+    for key in ("agent_id", "message_id", "continuation"):
         if key in arguments:
             _required_string(arguments, key)
-    _optional_non_negative_int(arguments, "offset")
+    if "all_messages" in arguments and not isinstance(arguments["all_messages"], bool):
+        raise _SessionSearchError("invalid_arguments", "all_messages must be a boolean")
+    if arguments.get("all_messages") is True and "message_id" in arguments:
+        raise _SessionSearchError(
+            "invalid_arguments", "all_messages cannot be combined with message_id"
+        )
 
 
 def _filter_session_summaries_by_period(

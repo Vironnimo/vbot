@@ -27,6 +27,7 @@ from core.tools.session_search import (
     SESSION_DESCRIPTOR_EXCERPT_MAX_CHARS,
     SESSION_READ_TOOL_NAME,
     SESSION_READ_TOOL_PARAMETERS,
+    SESSION_SEARCH_EXCERPT_MAX_CHARS,
     SESSION_SEARCH_RESULT_MAX_BYTES,
     SESSION_SEARCH_TOOL_DESCRIPTION,
     SESSION_SEARCH_TOOL_NAME,
@@ -100,12 +101,14 @@ async def test_registration_exposes_two_small_stable_tools(tmp_path: Path) -> No
         "query",
         "period",
         "agent_id",
+        "session_id",
     }
     assert set(read.parameters["properties"]) == {
         "session_id",
         "message_id",
         "agent_id",
-        "offset",
+        "continuation",
+        "all_messages",
     }
     assert search.parameters == SESSION_SEARCH_TOOL_PARAMETERS
     assert read.parameters == SESSION_READ_TOOL_PARAMETERS
@@ -174,7 +177,7 @@ async def test_registration_exposes_two_small_stable_tools(tmp_path: Path) -> No
         )
         == 4
     )
-    for field in ("period", "agent_id"):
+    for field in ("period", "agent_id", "session_id"):
         assert (
             len(
                 {
@@ -195,7 +198,10 @@ async def test_registration_exposes_two_small_stable_tools(tmp_path: Path) -> No
         {"session_id": "target", "start_message_id": "message-id"},
         {"session_id": "target", "last_messages": 2},
         {"session_id": "target", "page_size": 20},
-        {"session_id": "target", "offset": -1},
+        {"session_id": "target", "offset": 1},
+        {"session_id": "target", "continuation": ""},
+        {"session_id": "target", "all_messages": "yes"},
+        {"session_id": "target", "all_messages": True, "message_id": "message-id"},
     ),
 )
 async def test_session_read_handler_rejects_invalid_flat_combinations(
@@ -267,6 +273,34 @@ async def test_current_session_writes_never_enter_list_or_search_results(tmp_pat
     assert all(item["session_id"].startswith("past-") for item in searched["items"])
 
 
+async def test_search_can_restrict_query_to_one_past_session(tmp_path: Path) -> None:
+    sessions = ChatSessionManager(tmp_path)
+    first = sessions.create("coder", session_id="first")
+    first_message = ChatMessage.user("shared needle first", timestamp=timestamp(1))
+    first.append(first_message)
+    second = sessions.create("coder", session_id="second")
+    second.append(ChatMessage.user("shared needle second", timestamp=timestamp(2)))
+    backend = JsonlSessionRecallBackend(sessions)
+    context = make_context(tmp_path)
+
+    scoped = success(
+        await session_search_handler(
+            context,
+            {"query": "shared needle", "session_id": "first"},
+            backend,
+        )
+    )
+    current = await session_search_handler(
+        context,
+        {"query": "needle", "session_id": "current-session"},
+        backend,
+    )
+
+    assert [item["session_id"] for item in scoped["items"]] == ["first"]
+    assert scoped["items"][0]["message_id"] == first_message.id
+    failure(current, "current_session_unavailable")
+
+
 async def test_definition_explains_active_backend(tmp_path: Path) -> None:
     sessions = ChatSessionManager(tmp_path)
     context = RecallBackendContext(data_dir=tmp_path, sessions=sessions)
@@ -275,7 +309,8 @@ async def test_definition_explains_active_backend(tmp_path: Path) -> None:
         "jsonl_scan": (
             "Find persisted Sessions and literal matches in past conversations. "
             "The current Session is excluded. Omit query to list recent Sessions. Returns at "
-            "most 10 items; search matches include session_read references.",
+            "most 10 items with no paging; narrow with period or session_id. Search matches "
+            "include session_read references.",
             "Literal terms to find. Every whitespace-separated term must occur as a "
             "case-insensitive substring; synonyms and paraphrases do not match. Omit to list "
             "recent Sessions. Matches are newest first.",
@@ -283,7 +318,8 @@ async def test_definition_explains_active_backend(tmp_path: Path) -> None:
         "sqlite_fts": (
             "Find persisted Sessions and relevance-ranked literal matches in past "
             "conversations. The current Session is excluded. Omit query to list recent Sessions. "
-            "Returns at most 10 items; search matches include session_read references.",
+            "Returns at most 10 items with no paging; narrow with period or session_id. Search "
+            "matches include session_read references.",
             "Literal terms to find. Every whitespace-separated term must occur as a "
             "case-insensitive substring. Omit to list recent Sessions. Matches are ranked by "
             "text relevance.",
@@ -291,7 +327,8 @@ async def test_definition_explains_active_backend(tmp_path: Path) -> None:
         "vector": (
             "Find persisted Sessions and semantically related passages from past "
             "conversations. The current Session is excluded. Omit query to list recent Sessions. "
-            "Returns at most 10 items; search matches include session_read references.",
+            "Returns at most 10 items with no paging; narrow with period or session_id. Search "
+            "matches include session_read references.",
             "Short topic description to find by meaning. Bare keywords anchor poorly and exact "
             "occurrences may be missed. Omit to list recent Sessions. Matches are ranked by "
             "semantic relevance.",
@@ -299,7 +336,8 @@ async def test_definition_explains_active_backend(tmp_path: Path) -> None:
         "hybrid": (
             "Find persisted Sessions and relevant passages using literal and semantic search. "
             "The current Session is excluded. Omit query to list recent Sessions. Returns at "
-            "most 10 items; search matches include session_read references.",
+            "most 10 items with no paging; narrow with period or session_id. Search matches "
+            "include session_read references.",
             "Literal terms or a short topic description. Every whitespace-separated term is "
             "required by literal search; the same query is also searched by meaning. Omit to "
             "list recent Sessions. Matches combine both rankings by relevance.",
@@ -330,9 +368,9 @@ async def test_definition_explains_active_backend(tmp_path: Path) -> None:
         {"query": "needle", "match": "phrase"},
         {"query": "needle", "order": "oldest"},
         {"query": "needle", "since": "2026-05-01"},
-        {"query": "needle", "session_id": "past"},
         {"query": "needle", "limit": 1},
         {"cursor": "opaque"},
+        {"session_id": "past"},
     ),
 )
 async def test_search_rejects_retired_and_advanced_fields(
@@ -722,12 +760,73 @@ async def test_read_selects_latest_or_anchored_conversation_block_and_exact_tool
         first_answer.to_dict(),
     ]
     assert exact_tool_result["items"] == [{"message_index": 3, "message": tool_result.to_dict()}]
+    assert latest["selection"] == {
+        "kind": "latest_block",
+        "first_message_index": 2,
+        "last_message_index": 4,
+        "message_count": 3,
+    }
+    assert anchored["selection"]["kind"] == "conversation_block"
+    assert exact_tool_result["selection"] == {
+        "kind": "tool_result",
+        "first_message_index": 3,
+        "last_message_index": 3,
+        "message_count": 1,
+    }
+    assert latest["user_anchors"] == [
+        {
+            "message_index": 0,
+            "message_id": first_user.id,
+            "timestamp": str(first_user.timestamp),
+            "excerpt": {"text": "first question", "trailing_truncated": False},
+        },
+        {
+            "message_index": 2,
+            "message_id": second_user.id,
+            "timestamp": str(second_user.timestamp),
+            "excerpt": {"text": "second question", "trailing_truncated": False},
+        },
+    ]
+    assert "user_anchors" not in anchored
+    assert "user_anchors" not in exact_tool_result
     assert latest["session"]["message_count"] == 5
     assert latest["session"]["first_message"]["message_id"] == first_user.id
     assert latest["session"]["last_message"]["message_id"] == second_answer.id
 
 
-async def test_read_rejects_missing_message_and_invalid_offset(tmp_path: Path) -> None:
+async def test_read_all_messages_returns_every_block_without_anchor_index(tmp_path: Path) -> None:
+    sessions = ChatSessionManager(tmp_path)
+    session = sessions.create("coder", session_id="all-blocks")
+    messages = [
+        ChatMessage.user("first", timestamp=timestamp(1)),
+        ChatMessage.assistant(model="test", content="one", timestamp=timestamp(2)),
+        ChatMessage.user("second", timestamp=timestamp(3)),
+        ChatMessage.assistant(model="test", content="two", timestamp=timestamp(4)),
+    ]
+    for message in messages:
+        session.append(message)
+
+    data = success(
+        await session_read_handler(
+            make_context(tmp_path, tool_name=SESSION_READ_TOOL_NAME),
+            {"session_id": "all-blocks", "all_messages": True},
+            sessions,
+        )
+    )
+
+    assert [item["message"] for item in data["items"]] == [
+        message.to_dict() for message in messages
+    ]
+    assert data["selection"] == {
+        "kind": "all_messages",
+        "first_message_index": 0,
+        "last_message_index": 3,
+        "message_count": 4,
+    }
+    assert "user_anchors" not in data
+
+
+async def test_read_rejects_missing_message_and_invalid_continuation(tmp_path: Path) -> None:
     sessions = ChatSessionManager(tmp_path)
     session = sessions.create("coder", session_id="read-errors")
     message = ChatMessage.user("only Message", timestamp=timestamp(1))
@@ -739,14 +838,18 @@ async def test_read_rejects_missing_message_and_invalid_offset(tmp_path: Path) -
         {"session_id": "read-errors", "message_id": "missing"},
         sessions,
     )
-    outside = await session_read_handler(
+    invalid = await session_read_handler(
         context,
-        {"session_id": "read-errors", "message_id": message.id, "offset": 999_999},
+        {
+            "session_id": "read-errors",
+            "message_id": message.id,
+            "continuation": "r1:999999:not-the-selection",
+        },
         sessions,
     )
 
     failure(missing, "message_not_found")
-    failure(outside, "invalid_offset")
+    failure(invalid, "invalid_continuation")
 
 
 async def test_read_reports_only_a_missing_session_as_not_found(tmp_path: Path) -> None:
@@ -809,9 +912,75 @@ async def test_oversized_read_record_is_losslessly_segmented(tmp_path: Path) -> 
         segments.append(data["items"][0]["segment"]["selection_json"])
         if not data["has_more"]:
             break
-        arguments["offset"] = data["next_offset"]
+        arguments["continuation"] = data["next_continuation"]
 
     assert json.loads("".join(segments)) == [{"message_index": 0, "message": message.to_dict()}]
+
+
+async def test_oversized_unanchored_read_segments_user_anchor_index_with_selection(
+    tmp_path: Path,
+) -> None:
+    sessions = ChatSessionManager(tmp_path)
+    session = sessions.create("coder", session_id="segmented-index")
+    message = ChatMessage.user("Ü\n" * 70_000, timestamp=timestamp(1))
+    session.append(message)
+    arguments: JsonObject = {"session_id": "segmented-index"}
+    segments: list[str] = []
+
+    while True:
+        result = await session_read_handler(
+            make_context(tmp_path, tool_name=SESSION_READ_TOOL_NAME),
+            arguments,
+            sessions,
+        )
+        data = success(result)
+        encoded = json.dumps(result, ensure_ascii=False, separators=(",", ":")).encode()
+        assert len(encoded) <= SESSION_SEARCH_RESULT_MAX_BYTES
+        segments.append(data["items"][0]["segment"]["selection_json"])
+        if not data["has_more"]:
+            break
+        arguments["continuation"] = data["next_continuation"]
+
+    selection = json.loads("".join(segments))
+    assert selection["items"] == [{"message_index": 0, "message": message.to_dict()}]
+    assert selection["user_anchors"] == [
+        {
+            "message_index": 0,
+            "message_id": message.id,
+            "timestamp": str(message.timestamp),
+            "excerpt": {
+                "text": "Ü " * 80,
+                "trailing_truncated": True,
+            },
+        }
+    ]
+
+
+async def test_read_continuation_is_bound_to_the_original_selection(tmp_path: Path) -> None:
+    sessions = ChatSessionManager(tmp_path)
+    session = sessions.create("coder", session_id="bound-continuation")
+    message = ChatMessage.user("large\n" * 20_000, timestamp=timestamp(1))
+    session.append(message)
+    context = make_context(tmp_path, tool_name=SESSION_READ_TOOL_NAME)
+
+    first = success(
+        await session_read_handler(
+            context,
+            {"session_id": "bound-continuation", "message_id": message.id},
+            sessions,
+        )
+    )
+    changed_selection = await session_read_handler(
+        context,
+        {
+            "session_id": "bound-continuation",
+            "all_messages": True,
+            "continuation": first["next_continuation"],
+        },
+        sessions,
+    )
+
+    failure(changed_selection, "invalid_continuation")
 
 
 async def test_large_tool_result_is_referenced_in_block_and_exactly_dereferenced(
@@ -989,6 +1158,9 @@ async def test_multiple_large_excerpts_stay_within_result_limit(tmp_path: Path) 
     data = success(result)
 
     assert len(data["items"]) == 3
+    assert all(
+        len(item["excerpt"]["text"]) <= SESSION_SEARCH_EXCERPT_MAX_CHARS for item in data["items"]
+    )
     encoded = json.dumps(result, ensure_ascii=False, separators=(",", ":")).encode()
     assert len(encoded) <= SESSION_SEARCH_RESULT_MAX_BYTES
 
