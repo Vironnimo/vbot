@@ -27,6 +27,10 @@ TRIGGER_INPUT_TOKENS = "input_tokens"
 STRATEGY_SUMMARY_TAIL = "summary_tail"
 STRATEGY_CONTINUATION = "continuation"
 COMPACTION_POLICY_META_KEY = "compaction_policy"
+COMPACTION_TAIL_GUIDANCE = (
+    "The messages below are the most recent verbatim Session activity retained after this "
+    "Compaction checkpoint. They chronologically follow the summary above."
+)
 
 MIN_AUTO_COMPACTION_RECLAIM_TOKENS = 4_096
 TAIL_SOFT_LIMIT_PERCENT = 115
@@ -191,14 +195,18 @@ class SummarizationStrategy:
                 {"role": "user", "content": prompt},
             ),
             model_target="summary",
-            after_summary=tail_plan.retained_messages,
+            after_summary=(
+                ChatMessage.note(COMPACTION_TAIL_GUIDANCE),
+                *tail_plan.retained_messages,
+            ),
             compacted_token_count=(
                 context.previous_compacted_token_count
                 + _estimate_token_span(
                     [
                         message
                         for message in head
-                        if not _is_compaction_summary_note(message) and message.id != pinned_user_id
+                        if not _is_compaction_checkpoint_note(message)
+                        and message.id != pinned_user_id
                     ]
                 )
                 + tail_plan.payload_reclaim_tokens
@@ -308,7 +316,7 @@ class CompactionService:
         compactable_prefix = effective[: tail_plan.boundary_index]
         return (
             any(
-                not _is_compaction_summary_note(message) and message.id != pinned_user_id
+                not _is_compaction_checkpoint_note(message) and message.id != pinned_user_id
                 for message in compactable_prefix
             )
             or tail_plan.payload_reclaim_tokens >= MIN_AUTO_COMPACTION_RECLAIM_TOKENS
@@ -813,6 +821,12 @@ def _is_compaction_summary_note(message: ChatMessage) -> bool:
         message.role == "note"
         and isinstance(message.content, str)
         and message.content.startswith(COMPACTION_SUMMARY_NOTE_PREFIX)
+    )
+
+
+def _is_compaction_checkpoint_note(message: ChatMessage) -> bool:
+    return _is_compaction_summary_note(message) or (
+        message.role == "note" and message.content == COMPACTION_TAIL_GUIDANCE
     )
 
 
