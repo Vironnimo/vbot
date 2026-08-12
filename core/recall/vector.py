@@ -96,9 +96,9 @@ _KNN_FETCH_MARGIN = 4
 # Static: it describes the capability, not the current availability — actual
 # availability is surfaced per-call in the result (the degradation notices below).
 _SEMANTIC_SEARCH_GUIDANCE = (
-    "Concept or topic to find by meaning. Prefer a short descriptive phrase; a bare keyword "
-    "anchors poorly and exact occurrences may be missed. Omit to list recent Sessions. "
-    "Search results are ranked by semantic relevance."
+    "Short topic description to find by meaning. Bare keywords anchor poorly and exact "
+    "occurrences may be missed. Omit to list recent Sessions. Matches are ranked by semantic "
+    "relevance."
 )
 _SEMANTIC_TOOL_SUMMARY = (
     "Find persisted Sessions and semantically related passages from past conversations."

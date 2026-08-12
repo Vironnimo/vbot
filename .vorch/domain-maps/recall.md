@@ -4,9 +4,9 @@ Recall is the backend-selected read model for discovering content in persisted c
 
 ## Overview
 
-Session Recall has two Agent-facing Tools in one deep module. `session_search` owns backend-independent Session listing plus backend-native query discovery; `session_read` retrieves exact canonical Message ranges only through `ChatSessionManager`. This split keeps discovery compact and prevents an index or ranking backend from becoming a second source of truth for Messages.
+Session Recall has two Agent-facing Tools in one deep module. `session_search` owns backend-independent Session listing plus backend-native query discovery; `session_read` retrieves focused canonical conversation blocks or exact Tool Results only through `ChatSessionManager`. This split keeps discovery compact and prevents an index or ranking backend from becoming a second source of truth for Messages.
 
-The selected backend is fixed for a Tool registration. `Runtime.reload_recall_backend()` rebuilds the registry, resolves `settings.json` `recall.backend`, and re-registers both Session Recall Tools with the resolved backend name and canonical `ChatSessionManager`. An unknown selected name or a construction failure in a selected non-default backend falls back to `jsonl_scan` and records that resolved name, so the description, cursor identity, and behavior stay aligned. Failure to construct `jsonl_scan` itself remains fatal because no canonical fallback remains.
+The selected backend is fixed for a Tool registration. `Runtime.reload_recall_backend()` rebuilds the registry, resolves `settings.json` `recall.backend`, and re-registers both Session Recall Tools with the resolved backend name and canonical `ChatSessionManager`. An unknown selected name or a construction failure in a selected non-default backend falls back to `jsonl_scan` and records that resolved name, so the Agent-facing description and behavior stay aligned. Failure to construct `jsonl_scan` itself remains fatal because no canonical fallback remains.
 
 ## Terms
 
@@ -22,8 +22,8 @@ The cross-cutting Session and Tool terms live in `.vorch/GLOSSARY.md`.
 
 ## Search Contract
 
-- `RecallSearchCapabilities` declares the active backend's result unit, Agent-facing Tool summary and query-parameter description, internal literal-match support, supported ordering, and whether role filtering is meaningful. `session_search` uses one capability value to build both Agent-facing texts and select the backend's declared defaults; the six public field names and all non-query parameter descriptions remain stable across backends.
-- `RecallSearchRequest` is the normalized first-party query contract: agent/project scope, optional Session, excluded Session ids, query, time range, roles, literal match mode, backend-supported order, offset/limit, and optional source snapshot. `session_search` uses the exclusion field for the current Agent/Session pair so that conversation never enters candidate snapshots or ranking.
+- `RecallSearchCapabilities` declares the active backend's result unit, Agent-facing Tool summary and query-parameter description, internal literal-match support, supported ordering, and whether role filtering is meaningful. `session_search` uses one capability value to build both Agent-facing texts and select the backend's declared defaults; its three public fields remain stable across backends.
+- `RecallSearchRequest` is the normalized first-party query contract: agent/project scope, excluded Session ids, query, time range, roles, literal match mode, backend-supported order, internal offset/limit, and optional source snapshot. The Agent-facing Tool always requests the first ten results and uses the exclusion field for the current Agent/Session pair so that conversation never enters candidate snapshots or ranking; filtered and paginated variants remain lower-layer capabilities rather than public Tool controls.
 - `RecallSearchHit` is one backend-ranked Message or Passage with canonical read references. Raw backend scores stay inside Recall and are not exposed by the Tool. The Session Recall Tool hydrates canonical Session context separately and emits it once per unique Session on the returned page rather than widening or duplicating backend hits.
 - `RecallSearchPage` carries one deterministic ranking slice, result type, ranking label, source snapshot, continuation state, candidate-Session count, and optional explicit degradation.
 - `SupportsRecallSearch` is the runtime-checkable typed capability implemented by all first-party backends. The older `RecallBackend` browse/overview/search/scroll protocol remains for extension compatibility and internal legacy callers; `session_search` wraps an extension's backend-defined search payload instead of pretending it follows a first-party result shape. Synchronous extension search is moved to a worker thread.
@@ -81,12 +81,12 @@ The cross-cutting Session and Tool terms live in `.vorch/GLOSSARY.md`.
 - Canonical Messages always come from `ChatSessionManager`; Recall modules must not construct Session paths.
 - FTS and Vector files are derived, disposable indexes under `<data_dir>/recall/`. Schema, embedding-space, dimension, or index-policy changes rebuild rather than migrate them.
 - `SupportsSessionRemoval` lets `sqlite_fts`, `vector`, and `hybrid` evict a deleted Session immediately. `jsonl_scan` has no removal method because the canonical live scan already reflects deletion.
-- First-party search snapshots are derived from eligible candidate Session transcript and metadata-sidecar files; pagination refuses a changed snapshot. The current Session is excluded before snapshotting, so its normal live writes cannot invalidate discovery pagination. Index state is not treated as canonical source state.
+- First-party search snapshots remain a backend contract for deterministic lower-layer pages, although the Agent-facing Tool intentionally exposes only the first ten results and no continuation. Index state is not treated as canonical source state.
 
 ## Constraints & Gotchas
 
 - Do not expose backend tuning merely to make backend payloads look alike. Backend capabilities must describe real behavior in the Tool summary and `query` description while the public Tool keeps one compact, backend-stable field set and uses declared defaults.
-- Do not return exact Message text through search as a second read API. Search returns adaptive discovery excerpts and `session_read` references; `session_read` returns canonical Message records without per-Message truncation.
+- Do not return exact Message text through search as a second read API. Search returns adaptive discovery excerpts and single-anchor `session_read` references; `session_read` derives canonical conversation blocks and replaces large in-block Tool Results with dereferenceable previews while retaining exact single-Result access.
 - Do not deduplicate Passage results by Session. Passage-level multiplicity is part of Vector and Hybrid semantics.
 - Do not move structural Vector filters after KNN. Post-filtering a global top-K can produce false empty pages even when eligible Passages exist.
 - Do not fuse raw FTS scores with vector distances; they are incomparable. Hybrid combines ranks via RRF.

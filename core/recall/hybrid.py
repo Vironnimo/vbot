@@ -46,9 +46,9 @@ _RRF_INITIAL_DEPTH = 20
 # Static capability text — actual semantic availability is surfaced per-call via
 # the notice propagated from the vector arm.
 _HYBRID_SEARCH_GUIDANCE = (
-    "Literal terms or a short topic description to find. Every whitespace-separated term "
-    "is required by the literal arm; the same query also searches by meaning. Omit to list "
-    "recent Sessions. Search results combine both rankings by relevance."
+    "Literal terms or a short topic description. Every whitespace-separated term is required "
+    "by literal search; the same query is also searched by meaning. Omit to list recent "
+    "Sessions. Matches combine both rankings by relevance."
 )
 _HYBRID_TOOL_SUMMARY = (
     "Find persisted Sessions and relevant passages using literal and semantic search."

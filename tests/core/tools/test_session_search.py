@@ -100,31 +100,21 @@ async def test_registration_exposes_two_small_stable_tools(tmp_path: Path) -> No
         "query",
         "period",
         "agent_id",
-        "session_id",
-        "limit",
-        "cursor",
     }
     assert set(read.parameters["properties"]) == {
         "session_id",
+        "message_id",
         "agent_id",
-        "start_message_id",
-        "end_message_id",
-        "start_message_index",
-        "end_message_index",
-        "last_messages",
-        "page_size",
-        "cursor",
+        "offset",
     }
     assert search.parameters == SESSION_SEARCH_TOOL_PARAMETERS
     assert read.parameters == SESSION_READ_TOOL_PARAMETERS
     assert "oneOf" not in search.parameters
     assert "additionalProperties" not in search.parameters
     assert search.parameters["required"] == []
-    assert search.parameters["properties"]["limit"]["default"] == 10
     assert "oneOf" not in read.parameters
     assert "additionalProperties" not in read.parameters
-    assert read.parameters["required"] == []
-    assert read.parameters["properties"]["page_size"]["default"] == 50
+    assert read.parameters["required"] == ["session_id"]
     assert read.open_input_schema is True
     assert search.open_input_schema is True
     assert search.description.startswith(SESSION_SEARCH_TOOL_DESCRIPTION)
@@ -184,7 +174,7 @@ async def test_registration_exposes_two_small_stable_tools(tmp_path: Path) -> No
         )
         == 4
     )
-    for field in ("period", "agent_id", "session_id", "limit", "cursor"):
+    for field in ("period", "agent_id"):
         assert (
             len(
                 {
@@ -202,37 +192,13 @@ async def test_registration_exposes_two_small_stable_tools(tmp_path: Path) -> No
         {},
         {"session_id": "target", "unexpected": True},
         {"session_id": "target", "cursor": "opaque"},
+        {"session_id": "target", "start_message_id": "message-id"},
+        {"session_id": "target", "last_messages": 2},
+        {"session_id": "target", "page_size": 20},
+        {"session_id": "target", "offset": -1},
     ),
 )
 async def test_session_read_handler_rejects_invalid_flat_combinations(
-    tmp_path: Path, arguments: JsonObject
-) -> None:
-    sessions = ChatSessionManager(tmp_path)
-
-    result = await session_read_handler(
-        make_context(tmp_path, tool_name=SESSION_READ_TOOL_NAME),
-        arguments,
-        sessions,
-    )
-
-    failure(result, "invalid_arguments")
-
-
-@pytest.mark.parametrize(
-    "arguments",
-    (
-        {
-            "session_id": "target",
-            "start_message_id": "message-id",
-            "start_message_index": 0,
-        },
-        {"session_id": "target", "last_messages": 2, "end_message_index": 3},
-        {"session_id": "target", "start_message_index": -1},
-        {"session_id": "target", "last_messages": 0},
-        {"session_id": "target", "page_size": 201},
-    ),
-)
-async def test_session_read_rejects_incompatible_or_invalid_selection(
     tmp_path: Path, arguments: JsonObject
 ) -> None:
     sessions = ChatSessionManager(tmp_path)
@@ -263,21 +229,7 @@ async def test_current_session_is_unavailable_but_same_id_for_another_agent_is_a
     read_context = make_context(tmp_path, tool_name=SESSION_READ_TOOL_NAME)
 
     listed = success(await session_search_handler(search_context, {}, backend))
-    explicit_list = success(
-        await session_search_handler(
-            search_context,
-            {"session_id": "current-session"},
-            backend,
-        )
-    )
     searched = success(await session_search_handler(search_context, {"query": "needle"}, backend))
-    explicit_search = success(
-        await session_search_handler(
-            search_context,
-            {"query": "needle", "session_id": "current-session"},
-            backend,
-        )
-    )
     current_read = await session_read_handler(
         read_context,
         {"session_id": "current-session"},
@@ -292,14 +244,12 @@ async def test_current_session_is_unavailable_but_same_id_for_another_agent_is_a
     )
 
     assert [item["session_id"] for item in listed["items"]] == ["past-session"]
-    assert explicit_list["items"] == []
     assert [item["session_id"] for item in searched["items"]] == ["past-session"]
-    assert explicit_search["items"] == []
     failure(current_read, "current_session_unavailable")
     assert other_read["items"] == [{"message_index": 0, "message": other_message.to_dict()}]
 
 
-async def test_current_session_writes_do_not_stale_list_or_search_cursors(tmp_path: Path) -> None:
+async def test_current_session_writes_never_enter_list_or_search_results(tmp_path: Path) -> None:
     sessions = ChatSessionManager(tmp_path)
     current = sessions.create("coder", session_id="current-session")
     current.append(ChatMessage.user("needle current", timestamp=timestamp(3)))
@@ -309,26 +259,12 @@ async def test_current_session_writes_do_not_stale_list_or_search_cursors(tmp_pa
     backend = JsonlSessionRecallBackend(sessions)
     context = make_context(tmp_path)
 
-    listed = success(
-        await session_search_handler(
-            context,
-            {"period": "2026-05-01/2026-05-02", "limit": 1},
-            backend,
-        )
-    )
-    searched = success(
-        await session_search_handler(context, {"query": "needle", "limit": 1}, backend)
-    )
     current.append(ChatMessage.user("needle appended", timestamp=timestamp(4)))
-    listed_next = success(
-        await session_search_handler(context, {"cursor": listed["next_cursor"]}, backend)
-    )
-    searched_next = success(
-        await session_search_handler(context, {"cursor": searched["next_cursor"]}, backend)
-    )
+    listed = success(await session_search_handler(context, {}, backend))
+    searched = success(await session_search_handler(context, {"query": "needle"}, backend))
 
-    assert listed_next["items"][0]["session_id"].startswith("past-")
-    assert searched_next["items"][0]["session_id"].startswith("past-")
+    assert all(item["session_id"].startswith("past-") for item in listed["items"])
+    assert all(item["session_id"].startswith("past-") for item in searched["items"])
 
 
 async def test_definition_explains_active_backend(tmp_path: Path) -> None:
@@ -338,39 +274,35 @@ async def test_definition_explains_active_backend(tmp_path: Path) -> None:
     expected = {
         "jsonl_scan": (
             "Find persisted Sessions and literal matches in past conversations. "
-            "The current Session is excluded because its conversation is already in context. "
-            "Omit query to list recent Sessions; provide query to search. Results include exact "
-            "session_read references. Continue a page with cursor by itself.",
-            "Distinctive literal terms to find. Every whitespace-separated term must occur "
-            "as a case-insensitive substring; synonyms and paraphrases do not match. Omit "
-            "to list recent Sessions. Search results are newest first, not relevance-ranked.",
+            "The current Session is excluded. Omit query to list recent Sessions. Returns at "
+            "most 10 items; search matches include session_read references.",
+            "Literal terms to find. Every whitespace-separated term must occur as a "
+            "case-insensitive substring; synonyms and paraphrases do not match. Omit to list "
+            "recent Sessions. Matches are newest first.",
         ),
         "sqlite_fts": (
             "Find persisted Sessions and relevance-ranked literal matches in past "
-            "conversations. The current Session is excluded because its conversation is already "
-            "in context. Omit query to list recent Sessions; provide query to search. Results "
-            "include exact session_read references. Continue a page with cursor by itself.",
-            "Distinctive literal terms to find. Every whitespace-separated term must occur "
-            "as a case-insensitive substring. Omit to list recent Sessions. Search results "
-            "are ranked by text relevance.",
+            "conversations. The current Session is excluded. Omit query to list recent Sessions. "
+            "Returns at most 10 items; search matches include session_read references.",
+            "Literal terms to find. Every whitespace-separated term must occur as a "
+            "case-insensitive substring. Omit to list recent Sessions. Matches are ranked by "
+            "text relevance.",
         ),
         "vector": (
             "Find persisted Sessions and semantically related passages from past "
-            "conversations. The current Session is excluded because its conversation is already "
-            "in context. Omit query to list recent Sessions; provide query to search. Results "
-            "include exact session_read references. Continue a page with cursor by itself.",
-            "Concept or topic to find by meaning. Prefer a short descriptive phrase; a bare "
-            "keyword anchors poorly and exact occurrences may be missed. Omit to list recent "
-            "Sessions. Search results are ranked by semantic relevance.",
+            "conversations. The current Session is excluded. Omit query to list recent Sessions. "
+            "Returns at most 10 items; search matches include session_read references.",
+            "Short topic description to find by meaning. Bare keywords anchor poorly and exact "
+            "occurrences may be missed. Omit to list recent Sessions. Matches are ranked by "
+            "semantic relevance.",
         ),
         "hybrid": (
             "Find persisted Sessions and relevant passages using literal and semantic search. "
-            "The current Session is excluded because its conversation is already in context. "
-            "Omit query to list recent Sessions; provide query to search. Results include exact "
-            "session_read references. Continue a page with cursor by itself.",
-            "Literal terms or a short topic description to find. Every whitespace-separated "
-            "term is required by the literal arm; the same query also searches by meaning. "
-            "Omit to list recent Sessions. Search results combine both rankings by relevance.",
+            "The current Session is excluded. Omit query to list recent Sessions. Returns at "
+            "most 10 items; search matches include session_read references.",
+            "Literal terms or a short topic description. Every whitespace-separated term is "
+            "required by literal search; the same query is also searched by meaning. Omit to "
+            "list recent Sessions. Matches combine both rankings by relevance.",
         ),
     }
     backends = {
@@ -398,6 +330,9 @@ async def test_definition_explains_active_backend(tmp_path: Path) -> None:
         {"query": "needle", "match": "phrase"},
         {"query": "needle", "order": "oldest"},
         {"query": "needle", "since": "2026-05-01"},
+        {"query": "needle", "session_id": "past"},
+        {"query": "needle", "limit": 1},
+        {"cursor": "opaque"},
     ),
 )
 async def test_search_rejects_retired_and_advanced_fields(
@@ -414,7 +349,7 @@ async def test_search_rejects_retired_and_advanced_fields(
     failure(result, "invalid_arguments")
 
 
-async def test_list_supports_period_and_session_filters(tmp_path: Path) -> None:
+async def test_list_supports_period_filter(tmp_path: Path) -> None:
     sessions = ChatSessionManager(tmp_path)
     weekend = sessions.create("coder", session_id="weekend")
     weekday = sessions.create("coder", session_id="weekday")
@@ -436,23 +371,9 @@ async def test_list_supports_period_and_session_filters(tmp_path: Path) -> None:
             backend,
         )
     )
-    selected = success(
-        await session_search_handler(
-            make_context(tmp_path),
-            {"session_id": "weekday"},
-            backend,
-        )
-    )
-
     assert [item["session_id"] for item in period["items"]] == ["weekend"]
     assert period["result_type"] == "session"
-    assert period["items"][0]["read_ref"] == {
-        "agent_id": "coder",
-        "session_id": "weekend",
-        "start_message_id": weekend_question.id,
-        "end_message_id": weekend_answer.id,
-    }
-    assert [item["session_id"] for item in selected["items"]] == ["weekday"]
+    assert "read_ref" not in period["items"][0]
 
 
 async def test_list_projects_bounded_session_context_without_internal_metadata(
@@ -494,7 +415,7 @@ async def test_list_projects_bounded_session_context_without_internal_metadata(
     data = success(
         await session_search_handler(
             make_context(tmp_path),
-            {"session_id": "context-rich"},
+            {},
             JsonlSessionRecallBackend(sessions),
         )
     )
@@ -539,21 +460,16 @@ async def test_list_preserves_mixed_run_origins_and_marks_legacy_origin_unknown(
     sessions.set_metadata("coder", "mixed", {"run_kinds": ["cron", "user"]})
     backend = JsonlSessionRecallBackend(sessions)
 
-    legacy_data = success(
-        await session_search_handler(make_context(tmp_path), {"session_id": "legacy"}, backend)
-    )
-    mixed_data = success(
-        await session_search_handler(make_context(tmp_path), {"session_id": "mixed"}, backend)
-    )
-
-    legacy_item = legacy_data["items"][0]
+    data = success(await session_search_handler(make_context(tmp_path), {}, backend))
+    by_id = {item["session_id"]: item for item in data["items"]}
+    legacy_item = by_id["legacy"]
     assert legacy_item["run_kinds"] is None
     assert legacy_item["is_subagent_session"] is None
     assert legacy_item["subagent_parent"] is None
     assert legacy_item["platform"] is None
     assert legacy_item["fork_source"] is None
-    assert mixed_data["items"][0]["run_kinds"] == ["cron", "user"]
-    assert mixed_data["items"][0]["is_subagent_session"] is False
+    assert by_id["mixed"]["run_kinds"] == ["cron", "user"]
+    assert by_id["mixed"]["is_subagent_session"] is False
 
 
 @pytest.mark.parametrize(
@@ -586,7 +502,6 @@ async def test_search_applies_period_and_backend_default_ranking(tmp_path: Path)
             {
                 "query": "needle",
                 "period": "2026-05-02/2026-05-03",
-                "limit": 10,
             },
             JsonlSessionRecallBackend(sessions),
         )
@@ -637,39 +552,24 @@ async def test_search_returns_one_session_descriptor_for_repeated_hits(tmp_path:
     assert all("title" not in item and "run_kinds" not in item for item in data["items"])
 
 
-async def test_search_cursor_continues_with_cursor_alone(tmp_path: Path) -> None:
+async def test_search_returns_at_most_ten_results_without_pagination(tmp_path: Path) -> None:
     sessions = ChatSessionManager(tmp_path)
     session = sessions.create("coder", session_id="many-hits")
     messages = [
-        ChatMessage.user(f"needle {index}", timestamp=timestamp(index + 1)) for index in range(3)
+        ChatMessage.user(f"needle {index}", timestamp=timestamp(index + 1)) for index in range(12)
     ]
     for message in messages:
         session.append(message)
     backend = JsonlSessionRecallBackend(sessions)
 
-    first = success(
-        await session_search_handler(
-            make_context(tmp_path),
-            {"query": "needle", "limit": 1},
-            backend,
-        )
-    )
-    second = success(
-        await session_search_handler(
-            make_context(tmp_path),
-            {"cursor": first["next_cursor"]},
-            backend,
-        )
-    )
-    mixed = await session_search_handler(
-        make_context(tmp_path),
-        {"query": "needle", "cursor": first["next_cursor"]},
-        backend,
+    data = success(
+        await session_search_handler(make_context(tmp_path), {"query": "needle"}, backend)
     )
 
-    assert first["items"][0]["message_id"] == messages[2].id
-    assert second["items"][0]["message_id"] == messages[1].id
-    failure(mixed, "invalid_arguments")
+    assert len(data["items"]) == 10
+    assert data["items"][0]["message_id"] == messages[-1].id
+    assert data["has_more"] is True
+    assert "next_cursor" not in data
 
 
 async def test_search_read_ref_covers_complete_conversation_block(tmp_path: Path) -> None:
@@ -710,8 +610,7 @@ async def test_search_read_ref_covers_complete_conversation_block(tmp_path: Path
     assert read_ref == {
         "agent_id": "coder",
         "session_id": "multi-message-answer",
-        "start_message_id": question.id,
-        "end_message_id": second.id,
+        "message_id": first.id,
     }
     assert [item["message"] for item in read["items"]] == [
         question.to_dict(),
@@ -775,143 +674,79 @@ async def test_passage_read_ref_expands_to_complete_conversation_block(
     assert data["items"][0]["read_ref"] == {
         "agent_id": "coder",
         "session_id": "passage-answer",
-        "start_message_id": question.id,
-        "end_message_id": second.id,
+        "message_id": first.id,
     }
 
 
-async def test_read_supports_whole_session_and_open_or_closed_ranges(tmp_path: Path) -> None:
+async def test_read_selects_latest_or_anchored_conversation_block_and_exact_tool_result(
+    tmp_path: Path,
+) -> None:
     sessions = ChatSessionManager(tmp_path)
-    session = sessions.create("coder", session_id="ranges")
-    messages = [
-        ChatMessage.user(f"message {index}", timestamp=timestamp(index + 1)) for index in range(4)
-    ]
+    session = sessions.create("coder", session_id="blocks")
+    first_user = ChatMessage.user("first question", timestamp=timestamp(1))
+    first_answer = ChatMessage.assistant(
+        model="test", content="first answer", timestamp=timestamp(2)
+    )
+    second_user = ChatMessage.user("second question", timestamp=timestamp(3))
+    tool_result = ChatMessage.tool(
+        tool_call_id="call-1", name="read", content="small result", timestamp=timestamp(4)
+    )
+    second_answer = ChatMessage.assistant(
+        model="test", content="second answer", timestamp=timestamp(5)
+    )
+    messages = [first_user, first_answer, second_user, tool_result, second_answer]
     for message in messages:
         session.append(message)
     context = make_context(tmp_path, tool_name=SESSION_READ_TOOL_NAME)
 
-    whole = success(await session_read_handler(context, {"session_id": "ranges"}, sessions))
-    tail = success(
+    latest = success(await session_read_handler(context, {"session_id": "blocks"}, sessions))
+    anchored = success(
         await session_read_handler(
             context,
-            {"session_id": "ranges", "start_message_id": messages[2].id},
+            {"session_id": "blocks", "message_id": first_answer.id},
             sessions,
         )
     )
-    head = success(
+    exact_tool_result = success(
         await session_read_handler(
             context,
-            {"session_id": "ranges", "end_message_id": messages[1].id},
+            {"session_id": "blocks", "message_id": tool_result.id},
             sessions,
         )
     )
-    exact = success(
-        await session_read_handler(
-            context,
-            {
-                "session_id": "ranges",
-                "start_message_id": messages[1].id,
-                "end_message_id": messages[2].id,
-            },
-            sessions,
-        )
-    )
-
-    assert [item["message"] for item in whole["items"]] == [
-        message.to_dict() for message in messages
-    ]
-    assert [item["message"] for item in tail["items"]] == [
+    assert [item["message"] for item in latest["items"]] == [
         message.to_dict() for message in messages[2:]
     ]
-    assert [item["message"] for item in head["items"]] == [
-        message.to_dict() for message in messages[:2]
+    assert [item["message"] for item in anchored["items"]] == [
+        first_user.to_dict(),
+        first_answer.to_dict(),
     ]
-    assert [item["message"] for item in exact["items"]] == [
-        message.to_dict() for message in messages[1:3]
-    ]
-    assert whole["session"]["message_count"] == 4
-    assert whole["session"]["first_message"]["message_id"] == messages[0].id
-    assert whole["session"]["last_message"]["message_id"] == messages[-1].id
+    assert exact_tool_result["items"] == [{"message_index": 3, "message": tool_result.to_dict()}]
+    assert latest["session"]["message_count"] == 5
+    assert latest["session"]["first_message"]["message_id"] == first_user.id
+    assert latest["session"]["last_message"]["message_id"] == second_answer.id
 
 
-async def test_read_supports_index_ranges_tail_selection_and_message_pages(tmp_path: Path) -> None:
+async def test_read_rejects_missing_message_and_invalid_offset(tmp_path: Path) -> None:
     sessions = ChatSessionManager(tmp_path)
-    session = sessions.create("coder", session_id="indexed")
-    messages = [
-        ChatMessage.user(f"message {index}", timestamp=timestamp(index + 1)) for index in range(5)
-    ]
-    for message in messages:
-        session.append(message)
+    session = sessions.create("coder", session_id="read-errors")
+    message = ChatMessage.user("only Message", timestamp=timestamp(1))
+    session.append(message)
     context = make_context(tmp_path, tool_name=SESSION_READ_TOOL_NAME)
 
-    indexed = success(
-        await session_read_handler(
-            context,
-            {
-                "session_id": "indexed",
-                "start_message_index": 1,
-                "end_message_index": 3,
-            },
-            sessions,
-        )
-    )
-    tail = success(
-        await session_read_handler(
-            context,
-            {"session_id": "indexed", "last_messages": 2},
-            sessions,
-        )
-    )
-    first_page = success(
-        await session_read_handler(
-            context,
-            {"session_id": "indexed", "last_messages": 4, "page_size": 2},
-            sessions,
-        )
-    )
-    second_page = success(
-        await session_read_handler(
-            context,
-            {"cursor": first_page["next_cursor"]},
-            sessions,
-        )
-    )
-
-    assert [item["message_index"] for item in indexed["items"]] == [1, 2, 3]
-    assert [item["message"] for item in indexed["items"]] == [
-        message.to_dict() for message in messages[1:4]
-    ]
-    assert [item["message_index"] for item in tail["items"]] == [3, 4]
-    assert [item["message_index"] for item in first_page["items"]] == [1, 2]
-    assert first_page["has_more"] is True
-    assert [item["message_index"] for item in second_page["items"]] == [3, 4]
-    assert second_page["has_more"] is False
-
-
-async def test_read_rejects_out_of_range_or_reversed_message_indexes(tmp_path: Path) -> None:
-    sessions = ChatSessionManager(tmp_path)
-    session = sessions.create("coder", session_id="indexed-errors")
-    session.append(ChatMessage.user("only Message", timestamp=timestamp(1)))
-    session.append(ChatMessage.user("second Message", timestamp=timestamp(2)))
-    context = make_context(tmp_path, tool_name=SESSION_READ_TOOL_NAME)
-
-    out_of_range = await session_read_handler(
+    missing = await session_read_handler(
         context,
-        {"session_id": "indexed-errors", "start_message_index": 2},
+        {"session_id": "read-errors", "message_id": "missing"},
         sessions,
     )
-    reversed_range = await session_read_handler(
+    outside = await session_read_handler(
         context,
-        {
-            "session_id": "indexed-errors",
-            "start_message_index": 1,
-            "end_message_index": 0,
-        },
+        {"session_id": "read-errors", "message_id": message.id, "offset": 999_999},
         sessions,
     )
 
-    failure(out_of_range, "message_index_out_of_range")
-    failure(reversed_range, "invalid_arguments")
+    failure(missing, "message_not_found")
+    failure(outside, "invalid_offset")
 
 
 async def test_read_reports_only_a_missing_session_as_not_found(tmp_path: Path) -> None:
@@ -958,8 +793,7 @@ async def test_oversized_read_record_is_losslessly_segmented(tmp_path: Path) -> 
     session.append(message)
     arguments: JsonObject = {
         "session_id": "segmented-read",
-        "start_message_id": message.id,
-        "end_message_id": message.id,
+        "message_id": message.id,
     }
     segments: list[str] = []
 
@@ -972,13 +806,54 @@ async def test_oversized_read_record_is_losslessly_segmented(tmp_path: Path) -> 
         data = success(result)
         encoded = json.dumps(result, ensure_ascii=False, separators=(",", ":")).encode()
         assert len(encoded) <= SESSION_SEARCH_RESULT_MAX_BYTES
-        assert data["items"][0]["message_index"] == 0
-        segments.append(data["items"][0]["segment"]["record_json"])
+        segments.append(data["items"][0]["segment"]["selection_json"])
         if not data["has_more"]:
             break
-        arguments = {"cursor": data["next_cursor"]}
+        arguments["offset"] = data["next_offset"]
 
-    assert json.loads("".join(segments)) == message.to_dict()
+    assert json.loads("".join(segments)) == [{"message_index": 0, "message": message.to_dict()}]
+
+
+async def test_large_tool_result_is_referenced_in_block_and_exactly_dereferenced(
+    tmp_path: Path,
+) -> None:
+    sessions = ChatSessionManager(tmp_path)
+    session = sessions.create("coder", session_id="tool-result-ref")
+    user = ChatMessage.user("inspect data", timestamp=timestamp(1))
+    content = json.dumps({"rows": ["secret-value", "Ü" * 8_000]}, ensure_ascii=False)
+    tool_result = ChatMessage.tool(
+        tool_call_id="call-large",
+        name="database",
+        content=content,
+        timestamp=timestamp(2),
+    )
+    answer = ChatMessage.assistant(model="test", content="done", timestamp=timestamp(3))
+    for message in (user, tool_result, answer):
+        session.append(message)
+    context = make_context(tmp_path, tool_name=SESSION_READ_TOOL_NAME)
+
+    block = success(
+        await session_read_handler(
+            context,
+            {"session_id": "tool-result-ref", "message_id": answer.id},
+            sessions,
+        )
+    )
+    result_item = block["items"][1]
+    projected_content = json.loads(result_item["message"]["content"])
+
+    assert result_item["message_index"] == 1
+    assert result_item["message"]["tool_call_id"] == "call-large"
+    assert result_item["read_ref"] == {
+        "session_id": "tool-result-ref",
+        "message_id": tool_result.id,
+    }
+    assert projected_content["_vbot_referenced_tool_result"] is True
+    assert projected_content["original_bytes"] == len(content.encode("utf-8"))
+    assert len(projected_content["preview"]) <= 800
+
+    exact = success(await session_read_handler(context, result_item["read_ref"], sessions))
+    assert exact["items"] == [{"message_index": 1, "message": tool_result.to_dict()}]
 
 
 async def test_project_scope_is_preserved_for_search_and_read(tmp_path: Path) -> None:
@@ -1002,8 +877,7 @@ async def test_project_scope_is_preserved_for_search_and_read(tmp_path: Path) ->
             read_context,
             {
                 "session_id": "project",
-                "start_message_id": project_message.id,
-                "end_message_id": project_message.id,
+                "message_id": project_message.id,
             },
             sessions,
         )
@@ -1060,7 +934,7 @@ async def test_search_excludes_its_own_persisted_results(
     data = success(
         await session_search_handler(
             make_context(tmp_path),
-            {"query": "needle", "limit": 1},
+            {"query": "needle"},
             JsonlSessionRecallBackend(sessions),
         )
     )
@@ -1096,67 +970,6 @@ async def test_legacy_extension_search_is_adapted_without_blocking(tmp_path: Pat
     assert legacy.search_thread != caller_thread
 
 
-async def test_cursors_reject_changed_source_and_cross_tool_reuse(tmp_path: Path) -> None:
-    sessions = ChatSessionManager(tmp_path)
-    session = sessions.create("coder", session_id="changing")
-    first_message = ChatMessage.user("needle 1", timestamp=timestamp(1))
-    second_message = ChatMessage.user("needle 2", timestamp=timestamp(2))
-    session.append(first_message)
-    session.append(second_message)
-    backend = JsonlSessionRecallBackend(sessions)
-
-    search = success(
-        await session_search_handler(
-            make_context(tmp_path),
-            {"query": "needle", "limit": 1},
-            backend,
-        )
-    )
-    cross_tool = await session_read_handler(
-        make_context(tmp_path, tool_name=SESSION_READ_TOOL_NAME),
-        {"cursor": search["next_cursor"]},
-        sessions,
-    )
-    session.append(ChatMessage.user("needle changed", timestamp=timestamp(3)))
-    stale = await session_search_handler(
-        make_context(tmp_path),
-        {"cursor": search["next_cursor"]},
-        backend,
-    )
-
-    failure(cross_tool, "invalid_cursor")
-    failure(stale, "stale_cursor")
-
-
-async def test_list_and_search_cursors_reject_changed_session_metadata(tmp_path: Path) -> None:
-    sessions = ChatSessionManager(tmp_path)
-    first = sessions.create("coder", session_id="metadata-first")
-    second = sessions.create("coder", session_id="metadata-second")
-    first.append(ChatMessage.user("needle one", timestamp=timestamp(1)))
-    first.append(ChatMessage.user("needle two", timestamp=timestamp(2)))
-    second.append(ChatMessage.user("other", timestamp=timestamp(3)))
-    backend = JsonlSessionRecallBackend(sessions)
-
-    listed = success(await session_search_handler(make_context(tmp_path), {"limit": 1}, backend))
-    sessions.set_metadata("coder", "metadata-second", {"title": "first title"})
-    stale_list = await session_search_handler(
-        make_context(tmp_path), {"cursor": listed["next_cursor"]}, backend
-    )
-
-    searched = success(
-        await session_search_handler(
-            make_context(tmp_path), {"query": "needle", "limit": 1}, backend
-        )
-    )
-    sessions.set_metadata("coder", "metadata-first", {"title": "a much longer replacement title"})
-    stale_search = await session_search_handler(
-        make_context(tmp_path), {"cursor": searched["next_cursor"]}, backend
-    )
-
-    failure(stale_list, "stale_cursor")
-    failure(stale_search, "stale_cursor")
-
-
 async def test_multiple_large_excerpts_stay_within_result_limit(tmp_path: Path) -> None:
     sessions = ChatSessionManager(tmp_path)
     session = sessions.create("coder", session_id="large-excerpts")
@@ -1170,7 +983,7 @@ async def test_multiple_large_excerpts_stay_within_result_limit(tmp_path: Path) 
 
     result = await session_search_handler(
         make_context(tmp_path),
-        {"query": "needle", "limit": 3},
+        {"query": "needle"},
         JsonlSessionRecallBackend(sessions),
     )
     data = success(result)
@@ -1180,7 +993,7 @@ async def test_multiple_large_excerpts_stay_within_result_limit(tmp_path: Path) 
     assert len(encoded) <= SESSION_SEARCH_RESULT_MAX_BYTES
 
 
-async def test_large_session_descriptor_list_paginates_within_result_limit(
+async def test_large_session_descriptor_list_returns_bounded_first_ten_without_cursor(
     tmp_path: Path,
 ) -> None:
     sessions = ChatSessionManager(tmp_path)
@@ -1205,18 +1018,11 @@ async def test_large_session_descriptor_list_paginates_within_result_limit(
         )
     backend = JsonlSessionRecallBackend(sessions)
 
-    first_result = await session_search_handler(make_context(tmp_path), {"limit": 100}, backend)
-    first = success(first_result)
-    second_result = await session_search_handler(
-        make_context(tmp_path), {"cursor": first["next_cursor"]}, backend
-    )
-    second = success(second_result)
+    result = await session_search_handler(make_context(tmp_path), {}, backend)
+    data = success(result)
 
-    assert 0 < len(first["items"]) < 100
-    assert first["has_more"] is True
-    assert {item["session_id"] for item in first["items"]}.isdisjoint(
-        item["session_id"] for item in second["items"]
-    )
-    for result in (first_result, second_result):
-        encoded = json.dumps(result, ensure_ascii=False, separators=(",", ":")).encode()
-        assert len(encoded) <= SESSION_SEARCH_RESULT_MAX_BYTES
+    assert 0 < len(data["items"]) <= 10
+    assert data["has_more"] is True
+    assert "next_cursor" not in data
+    encoded = json.dumps(result, ensure_ascii=False, separators=(",", ":")).encode()
+    assert len(encoded) <= SESSION_SEARCH_RESULT_MAX_BYTES
