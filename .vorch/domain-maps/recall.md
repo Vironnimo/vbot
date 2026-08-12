@@ -24,7 +24,7 @@ The cross-cutting Session and Tool terms live in `.vorch/GLOSSARY.md`.
 
 - `RecallSearchCapabilities` declares the active backend's result unit, Agent-facing Tool summary and query-parameter description, internal literal-match support, supported ordering, and whether role filtering is meaningful. `session_search` uses one capability value to build both Agent-facing texts and select the backend's declared defaults; the six public field names and all non-query parameter descriptions remain stable across backends.
 - `RecallSearchRequest` is the normalized first-party query contract: agent/project scope, optional Session, query, time range, roles, literal match mode, backend-supported order, offset/limit, and optional source snapshot.
-- `RecallSearchHit` is one backend-ranked Message or Passage with canonical read references. Raw backend scores stay inside Recall and are not exposed by the Tool.
+- `RecallSearchHit` is one backend-ranked Message or Passage with canonical read references. Raw backend scores stay inside Recall and are not exposed by the Tool. The Session Recall Tool hydrates canonical Session context separately and emits it once per unique Session on the returned page rather than widening or duplicating backend hits.
 - `RecallSearchPage` carries one deterministic ranking slice, result type, ranking label, source snapshot, continuation state, candidate-Session count, and optional explicit degradation.
 - `SupportsRecallSearch` is the runtime-checkable typed capability implemented by all first-party backends. The older `RecallBackend` browse/overview/search/scroll protocol remains for extension compatibility and internal legacy callers; `session_search` wraps an extension's backend-defined search payload instead of pretending it follows a first-party result shape. Synchronous extension search is moved to a worker thread.
 - Every request is scoped by `ToolContext.project_id`, never by a model-supplied project argument. Derived indexes key scope, agent, and Session separately, so equal Session UUIDs in global and Project scopes cannot collide.
@@ -45,7 +45,7 @@ The cross-cutting Session and Tool terms live in `.vorch/GLOSSARY.md`.
 - Scans canonical Sessions on demand and returns every eligible matching Message, including multiple Messages from one Session.
 - Matching is case-insensitive literal substring matching. `telegram` therefore matches `Telegraminstallation`; the Agent-facing Tool uses `all_terms`.
 - Results are globally ordered by canonical Message time, newest first, with deterministic Session/message tie-breakers. Other match/order modes remain available only to internal compatibility callers.
-- Search, list, and reads use source file metadata snapshots; a continuation fails as stale when canonical source changes.
+- Search and list snapshot both the canonical transcript and Session metadata sidecar because either can change the Agent-facing result; reads retain their canonical Message-source snapshot. A continuation fails as stale when its covered source changes.
 
 ### `sqlite_fts`
 
@@ -81,7 +81,7 @@ The cross-cutting Session and Tool terms live in `.vorch/GLOSSARY.md`.
 - Canonical Messages always come from `ChatSessionManager`; Recall modules must not construct Session paths.
 - FTS and Vector files are derived, disposable indexes under `<data_dir>/recall/`. Schema, embedding-space, dimension, or index-policy changes rebuild rather than migrate them.
 - `SupportsSessionRemoval` lets `sqlite_fts`, `vector`, and `hybrid` evict a deleted Session immediately. `jsonl_scan` has no removal method because the canonical live scan already reflects deletion.
-- First-party search snapshots are derived from candidate Session files; pagination refuses a changed snapshot. Index state is not treated as canonical source state.
+- First-party search snapshots are derived from candidate Session transcript and metadata-sidecar files; pagination refuses a changed snapshot. Index state is not treated as canonical source state.
 
 ## Constraints & Gotchas
 

@@ -208,7 +208,14 @@ class JsonlSessionRecallBackend:
             session_id = str(summary["id"])
             session = self.sessions.get(request.agent_id, session_id, request.project_id)
             stat = session.path.stat()
-            fingerprint.append(f"{session_id}:{stat.st_mtime_ns}:{stat.st_size}")
+            try:
+                metadata_stat = session.sidecar_path.stat()
+                metadata_fingerprint = f"{metadata_stat.st_mtime_ns}:{metadata_stat.st_size}"
+            except FileNotFoundError:
+                metadata_fingerprint = "absent"
+            fingerprint.append(
+                f"{session_id}:{stat.st_mtime_ns}:{stat.st_size}:metadata:{metadata_fingerprint}"
+            )
         return hashlib.sha256("\n".join(fingerprint).encode("utf-8")).hexdigest()
 
     def candidate_session_summaries(self, request: RecallRequest) -> list[JsonObject]:
