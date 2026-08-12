@@ -92,6 +92,7 @@ class RecallSearchRequest:
     offset: int
     limit: int
     snapshot_id: str | None = None
+    excluded_session_ids: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

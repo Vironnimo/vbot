@@ -316,6 +316,7 @@ class VectorRecallBackend(JsonlSessionRecallBackend):
                             agent_id=request.agent_id,
                             project_id=_project_scope(request.project_id),
                             session_id=request.session_id,
+                            excluded_session_ids=request.excluded_session_ids,
                             since=request.since,
                             until=request.until,
                         )

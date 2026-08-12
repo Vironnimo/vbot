@@ -287,6 +287,23 @@ def test_vector_store_knn_search_returns_nearest_by_cosine(tmp_path: Path) -> No
     assert results[-1][1] > results[0][1]
 
 
+def test_vector_store_knn_search_excludes_sessions_before_ranking(tmp_path: Path) -> None:
+    store = VectorStore(tmp_path)
+    header = VectorHeader(provider_id="p", model_id="m", dimension=3)
+    _upsert_one(store, header=header, record=_record("excluded"), vector=[1.0, 0.0, 0.0])
+    _upsert_one(store, header=header, record=_record("included"), vector=[0.8, 0.2, 0.0])
+
+    results = store.knn_search(
+        header=header,
+        query_vector=[1.0, 0.0, 0.0],
+        limit=1,
+        excluded_session_ids=("excluded",),
+    )
+    records = store.get_chunks_by_rowids(rowid for rowid, _distance in results)
+
+    assert [records[rowid].session_id for rowid, _distance in results] == ["included"]
+
+
 def test_vector_store_get_chunks_by_rowids_round_trip(tmp_path: Path) -> None:
     store = VectorStore(tmp_path)
     header = VectorHeader(provider_id="p", model_id="m", dimension=3)

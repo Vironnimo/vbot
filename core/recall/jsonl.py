@@ -199,7 +199,8 @@ class JsonlSessionRecallBackend:
         return [
             summary
             for summary in summaries
-            if request.session_id is None or str(summary.get("id")) == request.session_id
+            if str(summary.get("id")) not in request.excluded_session_ids
+            and (request.session_id is None or str(summary.get("id")) == request.session_id)
         ]
 
     def _search_snapshot(self, request: RecallSearchRequest, summaries: list[JsonObject]) -> str:

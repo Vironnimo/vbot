@@ -568,6 +568,7 @@ class VectorStore:
         agent_id: str | None = None,
         project_id: str = "",
         session_id: str | None = None,
+        excluded_session_ids: Sequence[str] = (),
         since: datetime | None = None,
         until: datetime | None = None,
     ) -> list[tuple[int, float]]:
@@ -590,6 +591,10 @@ class VectorStore:
         if session_id is not None:
             clauses.append("session_id = ?")
             parameters.append(session_id)
+        if excluded_session_ids:
+            placeholders = ", ".join("?" for _ in excluded_session_ids)
+            clauses.append(f"session_id NOT IN ({placeholders})")
+            parameters.extend(excluded_session_ids)
         if since is not None:
             clauses.append("end_timestamp >= ?")
             parameters.append(_datetime_micros(since))
