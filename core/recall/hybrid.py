@@ -42,14 +42,16 @@ _FETCH_MARGIN = 10
 _RRF_RANK_CONSTANT = 60
 _RRF_INITIAL_DEPTH = 20
 
-# Guidance appended to the session_search tool description when this backend is
-# active (see ``describe_search``). Static capability text — actual semantic
-# availability is surfaced per-call via the notice propagated from the vector arm.
+# Agent-facing query guidance for session_search when this backend is active.
+# Static capability text — actual semantic availability is surfaced per-call via
+# the notice propagated from the vector arm.
 _HYBRID_SEARCH_GUIDANCE = (
-    "This backend combines literal keyword matching with semantic meaning-based "
-    "matching: a single keyword surfaces every exact occurrence, and a short "
-    "descriptive phrase additionally finds conceptually related sessions that share "
-    "no words. Use plain keywords to find exact mentions, or a phrase to search by topic."
+    "Literal terms or a short topic description to find. Every whitespace-separated term "
+    "is required by the literal arm; the same query also searches by meaning. Omit to list "
+    "recent Sessions. Search results combine both rankings by relevance."
+)
+_HYBRID_TOOL_SUMMARY = (
+    "Find persisted Sessions and relevant passages using literal and semantic search."
 )
 
 
@@ -70,6 +72,8 @@ class HybridRecallBackend(JsonlSessionRecallBackend):
         return RecallSearchCapabilities(
             result_type="passage",
             guidance=_HYBRID_SEARCH_GUIDANCE,
+            tool_summary=_HYBRID_TOOL_SUMMARY,
+            query_description=_HYBRID_SEARCH_GUIDANCE,
             match_argument="literal_match",
             match_modes=("all_terms", "any_term", "phrase"),
             order_modes=("relevance",),

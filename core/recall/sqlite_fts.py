@@ -111,12 +111,19 @@ class SqliteFtsRecallBackend(JsonlSessionRecallBackend):
         return await self._fallback.search(request)
 
     def search_capabilities(self) -> RecallSearchCapabilities:
+        query_description = (
+            "Distinctive literal terms to find. Every whitespace-separated term must occur "
+            "as a case-insensitive substring. Omit to list recent Sessions. Search results "
+            "are ranked by text relevance."
+        )
         return RecallSearchCapabilities(
             result_type="message",
-            guidance=(
-                "Indexed case-insensitive substring search. Results use text relevance by "
-                "default; explicit newest or oldest ordering is also available."
+            guidance=query_description,
+            tool_summary=(
+                "Find persisted Sessions and relevance-ranked literal matches in past "
+                "conversations."
             ),
+            query_description=query_description,
             match_argument="match",
             match_modes=("all_terms", "any_term", "phrase"),
             order_modes=("relevance", "newest", "oldest"),

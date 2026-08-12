@@ -92,14 +92,16 @@ _MAX_DISTANCE = 0.7
 _CHUNK_FETCH_MULTIPLIER = 8
 # Margin to over-fetch from KNN so structural filters still leave ``limit`` hits.
 _KNN_FETCH_MARGIN = 4
-# Guidance appended to the session_search tool description when this backend is
-# active (see ``describe_search``). Static: it describes the capability, not the
-# current availability — actual availability is surfaced per-call in the result
-# (the degradation notices below).
+# Agent-facing query guidance for session_search when this backend is active.
+# Static: it describes the capability, not the current availability — actual
+# availability is surfaced per-call in the result (the degradation notices below).
 _SEMANTIC_SEARCH_GUIDANCE = (
-    "This backend matches by meaning rather than literal words — describe the concept "
-    "or topic in a short phrase. A single bare keyword anchors poorly; prefer a "
-    "descriptive phrase. It will not reliably surface every literal occurrence of a word."
+    "Concept or topic to find by meaning. Prefer a short descriptive phrase; a bare keyword "
+    "anchors poorly and exact occurrences may be missed. Omit to list recent Sessions. "
+    "Search results are ranked by semantic relevance."
+)
+_SEMANTIC_TOOL_SUMMARY = (
+    "Find persisted Sessions and semantically related passages from past conversations."
 )
 # Notice attached to a degraded result when semantic search could not run. The
 # config case is actionable (configure a model); the transient case is operational.
@@ -222,6 +224,8 @@ class VectorRecallBackend(JsonlSessionRecallBackend):
         return RecallSearchCapabilities(
             result_type="passage",
             guidance=_SEMANTIC_SEARCH_GUIDANCE,
+            tool_summary=_SEMANTIC_TOOL_SUMMARY,
+            query_description=_SEMANTIC_SEARCH_GUIDANCE,
             order_modes=("relevance",),
             default_order="relevance",
         )

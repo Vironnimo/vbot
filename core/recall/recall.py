@@ -67,6 +67,8 @@ class RecallSearchCapabilities:
 
     result_type: RecallResultType
     guidance: str
+    tool_summary: str | None = None
+    query_description: str | None = None
     match_argument: str | None = None
     match_modes: tuple[RecallMatchMode, ...] = ()
     order_modes: tuple[RecallOrder, ...] = ("relevance",)

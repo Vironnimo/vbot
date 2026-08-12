@@ -31,6 +31,7 @@ from core.tools.session_search import (
     SESSION_SEARCH_TOOL_NAME,
     SESSION_SEARCH_TOOL_PARAMETERS,
     build_session_search_description,
+    build_session_search_parameters,
     register_session_search_tool,
     session_read_handler,
     session_search_handler,
@@ -153,14 +154,40 @@ async def test_registration_exposes_two_small_stable_tools(tmp_path: Path) -> No
     ]
 
     context = RecallBackendContext(data_dir=tmp_path, sessions=sessions)
-    for backend in (
-        JsonlSessionRecallBackend(sessions),
-        VectorRecallBackend(context),
-        HybridRecallBackend(context),
+    backend_definitions = {}
+    for name, backend in (
+        ("jsonl_scan", JsonlSessionRecallBackend(sessions)),
+        ("sqlite_fts", SqliteFtsRecallBackend(context)),
+        ("vector", VectorRecallBackend(context)),
+        ("hybrid", HybridRecallBackend(context)),
     ):
         backend_registry = ToolRegistry()
         register_session_search_tool(backend_registry, backend, sessions)
-        assert backend_registry.get(SESSION_SEARCH_TOOL_NAME).parameters == search.parameters
+        definition = backend_registry.get(SESSION_SEARCH_TOOL_NAME)
+        backend_definitions[name] = definition
+        assert set(definition.parameters["properties"]) == set(search.parameters["properties"])
+
+    assert backend_definitions["jsonl_scan"].parameters == SESSION_SEARCH_TOOL_PARAMETERS
+    assert len({definition.description for definition in backend_definitions.values()}) == 4
+    assert (
+        len(
+            {
+                definition.parameters["properties"]["query"]["description"]
+                for definition in backend_definitions.values()
+            }
+        )
+        == 4
+    )
+    for field in ("period", "agent_id", "session_id", "limit", "cursor"):
+        assert (
+            len(
+                {
+                    definition.parameters["properties"][field]["description"]
+                    for definition in backend_definitions.values()
+                }
+            )
+            == 1
+        )
 
 
 @pytest.mark.parametrize(
@@ -185,19 +212,60 @@ async def test_session_read_handler_rejects_invalid_flat_combinations(
     failure(result, "invalid_arguments")
 
 
-async def test_description_explains_active_backend(tmp_path: Path) -> None:
+async def test_definition_explains_active_backend(tmp_path: Path) -> None:
     sessions = ChatSessionManager(tmp_path)
     context = RecallBackendContext(data_dir=tmp_path, sessions=sessions)
 
-    descriptions = {
-        build_session_search_description(JsonlSessionRecallBackend(sessions)),
-        build_session_search_description(VectorRecallBackend(context)),
-        build_session_search_description(HybridRecallBackend(context)),
+    expected = {
+        "jsonl_scan": (
+            "Find persisted Sessions and literal matches in past conversations. Omit query "
+            "to list recent Sessions; provide query to search. Results include exact "
+            "session_read references. Continue a page with cursor by itself.",
+            "Distinctive literal terms to find. Every whitespace-separated term must occur "
+            "as a case-insensitive substring; synonyms and paraphrases do not match. Omit "
+            "to list recent Sessions. Search results are newest first, not relevance-ranked.",
+        ),
+        "sqlite_fts": (
+            "Find persisted Sessions and relevance-ranked literal matches in past "
+            "conversations. Omit query to list recent Sessions; provide query to search. "
+            "Results include exact session_read references. Continue a page with cursor by "
+            "itself.",
+            "Distinctive literal terms to find. Every whitespace-separated term must occur "
+            "as a case-insensitive substring. Omit to list recent Sessions. Search results "
+            "are ranked by text relevance.",
+        ),
+        "vector": (
+            "Find persisted Sessions and semantically related passages from past "
+            "conversations. Omit query to list recent Sessions; provide query to search. "
+            "Results include exact session_read references. Continue a page with cursor by "
+            "itself.",
+            "Concept or topic to find by meaning. Prefer a short descriptive phrase; a bare "
+            "keyword anchors poorly and exact occurrences may be missed. Omit to list recent "
+            "Sessions. Search results are ranked by semantic relevance.",
+        ),
+        "hybrid": (
+            "Find persisted Sessions and relevant passages using literal and semantic search. "
+            "Omit query to list recent Sessions; provide query to search. Results include "
+            "exact session_read references. Continue a page with cursor by itself.",
+            "Literal terms or a short topic description to find. Every whitespace-separated "
+            "term is required by the literal arm; the same query also searches by meaning. "
+            "Omit to list recent Sessions. Search results combine both rankings by relevance.",
+        ),
     }
-    assert len(descriptions) == 3
-    assert all(
-        description.startswith(SESSION_SEARCH_TOOL_DESCRIPTION) for description in descriptions
-    )
+    backends = {
+        "jsonl_scan": JsonlSessionRecallBackend(sessions),
+        "sqlite_fts": SqliteFtsRecallBackend(context),
+        "vector": VectorRecallBackend(context),
+        "hybrid": HybridRecallBackend(context),
+    }
+
+    for name, backend in backends.items():
+        description, query_description = expected[name]
+        assert build_session_search_description(backend) == description
+        assert (
+            build_session_search_parameters(backend)["properties"]["query"]["description"]
+            == query_description
+        )
 
 
 @pytest.mark.parametrize(
