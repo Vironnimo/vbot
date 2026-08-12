@@ -9,7 +9,11 @@ from typing import Any
 import pytest
 
 from core.chat import ChatMessage
-from core.chat.messages import COMPACTION_SUMMARY_NOTE_PREFIX, _effective_compaction_messages
+from core.chat.messages import (
+    COMPACTION_SUMMARY_NOTE_PREFIX,
+    _effective_compaction_messages,
+    _embed_notes_into_request,
+)
 from core.compaction import (
     MIN_AUTO_COMPACTION_RECLAIM_TOKENS,
     CompactionError,
@@ -20,6 +24,7 @@ from core.compaction import (
     is_compacted_tool_result_content,
 )
 from core.compaction.compaction import (
+    COMPACTION_TAIL_GUIDANCE,
     CompactionPlan,
     _plan_working_tail,
     _tail_soft_limit,
@@ -181,7 +186,12 @@ async def test_summary_tail_executes_one_call_and_materializes_projection() -> N
     effective = _effective_compaction_messages([*messages, result])
     assert effective[0].role == "note"
     assert effective[0].content == f"{COMPACTION_SUMMARY_NOTE_PREFIX}NEW SUMMARY"
-    assert [item.id for item in effective[1:]] == ["u2", "a2"]
+    assert effective[1].role == "note"
+    assert effective[1].content == COMPACTION_TAIL_GUIDANCE
+    assert [item.id for item in effective[2:]] == ["u2", "a2"]
+    request_projection = _embed_notes_into_request(effective)
+    assert COMPACTION_TAIL_GUIDANCE in request_projection[0]["content"]
+    assert request_projection[1]["content"] == "recent request"
 
 
 @pytest.mark.asyncio
@@ -365,7 +375,7 @@ def test_summary_tail_auto_compaction_advances_inside_retained_user_turn() -> No
 
 def test_summary_tail_auto_compaction_waits_when_only_prior_summary_is_in_head() -> None:
     retained_user = user("u1", "Previously retained turn " * 100)
-    prior = checkpoint([retained_user])
+    prior = checkpoint([ChatMessage.note(COMPACTION_TAIL_GUIDANCE), retained_user])
 
     can_compact = CompactionService().has_new_compactable_context(
         [retained_user, prior],
@@ -579,7 +589,7 @@ async def test_summary_tail_compacts_consumed_tool_batch_without_rewriting_reque
     assert compact_request[-3]["tool_calls"][0]["arguments"] == old_arguments
     assert [item.to_dict() for item in messages] == original_snapshot
     effective = _effective_compaction_messages([*messages, result])
-    assert [item.id for item in effective[1:]] == ["u1", "a-latest", "t-latest"]
+    assert [item.id for item in effective[2:]] == ["u1", "a-latest", "t-latest"]
     assert all(item.id not in {"a-old", "t-old"} for item in effective)
 
 
