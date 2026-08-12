@@ -143,7 +143,7 @@ class SkillAuthoringService:
     ) -> SkillWriteResult:
         """Replace exact text in ``SKILL.md`` or one UTF-8 support file."""
         if old_string == new_string:
-            raise SkillAuthoringError("patch old_string and new_string must differ.")
+            raise SkillAuthoringError("patch match and content must differ.")
         with self._write_lock:
             skill_dir = self._existing_skill_dir(target_root, skill_name)
             normalized = _normalized_skill_file_path(relative_path)
@@ -163,11 +163,11 @@ class SkillAuthoringService:
                 ) from error
             occurrences = current.count(old_string)
             if occurrences == 0:
-                raise SkillAuthoringError(f"patch old_string not found in {normalized}.")
+                raise SkillAuthoringError(f"patch match not found in {normalized}.")
             if occurrences > 1 and not replace_all:
                 raise SkillAuthoringError(
-                    f"patch old_string is not unique in {normalized} "
-                    f"({occurrences} matches); add more context or set replace_all=true."
+                    f"patch match is not unique in {normalized} ({occurrences} matches); "
+                    "read the target and retry with a larger unique passage."
                 )
             patched = current.replace(old_string, new_string)
             warnings: list[str] = []

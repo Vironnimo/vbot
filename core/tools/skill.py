@@ -47,11 +47,11 @@ SkillRefresh = Callable[[], None | Awaitable[None]]
 
 SKILL_TOOL_NAME = "skill"
 SKILL_TOOL_DESCRIPTION = (
-    "Activate one Skill by its required name, or read one UTF-8 file by Skill-relative "
-    "path. Omit file_path to load SKILL.md instructions; provide file_path to read that "
-    "package file without activation. Activation returns only the SKILL.md instructions "
-    "in content and lists additional files separately in resource_files; references and "
-    "assets use Skill-relative paths, while scripts use absolute paths for direct execution."
+    "Load one Skill or read one UTF-8 file from it. Call with name only before following "
+    "a Skill. Add file_path to read a package file without activation; "
+    "file_path='SKILL.md' returns the complete document including frontmatter and is the "
+    "form to inspect before skill_manage edit. Fresh activation returns the instructions "
+    "plus any on-demand file list."
 )
 SKILL_LIST_TOOL_NAME = "skill_list"
 SKILL_LIST_TOOL_DESCRIPTION = (
@@ -73,22 +73,22 @@ _SKILL_NAME_PARAMETER: JsonObject = {
     "type": "string",
     "minLength": 1,
     "pattern": r"\S",
-    "description": "Exact Skill name. Required for activate and read.",
+    "description": "Exact available Skill name.",
 }
 _SKILL_FILE_PATH_PARAMETER: JsonObject = {
     "type": "string",
     "minLength": 1,
     "pattern": r"^(SKILL\.md|(?:scripts|references|assets)/.+)$",
     "description": (
-        "Path relative to the named Skill, such as 'references/api.md'. "
-        "When present, returns that UTF-8 file without activating the Skill."
+        "Skill-relative 'SKILL.md' or a file under scripts, references, or assets. "
+        "'SKILL.md' returns the complete document including frontmatter; support-file "
+        "reads do not activate the Skill."
     ),
 }
 SKILL_TOOL_PARAMETERS: JsonObject = {
     "type": "object",
     "description": (
-        "name is required. Omit file_path to activate the Skill; provide file_path to "
-        "read one package file without activation."
+        "Use name alone to load a Skill. Add file_path to read one package file without activation."
     ),
     "properties": {
         "name": _SKILL_NAME_PARAMETER,

@@ -684,3 +684,42 @@ def test_real_reflection_prompts_define_their_tool_boundary(
     assert "every other Tool is disabled" in prompt
     assert allowed_tools in prompt
     assert "Call `skill` with no name" not in prompt
+
+
+@pytest.mark.parametrize("fragment_name", ["reflect-skill.md", "reflect.md"])
+def test_real_skill_reflection_prompts_use_compact_private_authoring_contract(
+    fragment_name: str,
+) -> None:
+    prompt_path = Path(__file__).parents[3] / "resources" / "prompts" / fragment_name
+    prompt = prompt_path.read_text(encoding="utf-8")
+
+    assert '"match":"...","content":"..."' in prompt
+    assert '"file_path":"references/api.md","content":"..."' in prompt
+    assert "old_string" not in prompt
+    assert "new_string" not in prompt
+    assert "file_content" not in prompt
+    assert "cannot execute support scripts" in prompt
+
+
+@pytest.mark.parametrize(
+    "fragment_name",
+    ["skill_maintenance.md", "reflect-skill.md", "reflect.md", "learn.md"],
+)
+def test_real_skill_authoring_prompts_do_not_teach_removed_fields(fragment_name: str) -> None:
+    prompt_path = Path(__file__).parents[3] / "resources" / "prompts" / fragment_name
+    prompt = prompt_path.read_text(encoding="utf-8")
+
+    assert "file_content" not in prompt
+    assert "old_string" not in prompt
+    assert "new_string" not in prompt
+    assert "replace_all" not in prompt
+
+
+def test_real_skill_maintenance_prompt_forbids_implicit_global_fallback() -> None:
+    prompt_path = Path(__file__).parents[3] / "resources" / "prompts" / "skill_maintenance.md"
+    prompt = prompt_path.read_text(encoding="utf-8")
+
+    assert "overrides the general requirement to scan or load relevant Skills" in prompt
+    assert "do not call `skill_list`, load a Skill, invoke any other Tool" in prompt
+    assert "provide or paraphrase proposed Skill content" in prompt
+    assert "offer a private Skill as a substitute" in prompt
