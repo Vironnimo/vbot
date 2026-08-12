@@ -931,9 +931,17 @@ def test_runtime_reload_recall_backend_creates_vector_backend(
         runtime.reload_recall_backend()
         assert isinstance(runtime.recall_backend, VectorRecallBackend)
         vector_tool = runtime.tools.get("session_search")
-        assert vector_tool.parameters == jsonl_parameters
+        assert set(vector_tool.parameters["properties"]) == set(jsonl_parameters["properties"])
+        assert (
+            vector_tool.parameters["properties"]["query"]["description"]
+            != jsonl_parameters["properties"]["query"]["description"]
+        )
+        for field in ("period", "agent_id", "session_id", "limit", "cursor"):
+            assert (
+                vector_tool.parameters["properties"][field] == jsonl_parameters["properties"][field]
+            )
         assert runtime.tools.get("session_read").name == "session_read"
-        assert "meaning" in vector_tool.description
+        assert "semantically related passages" in vector_tool.description
     finally:
         runtime.stop()
 

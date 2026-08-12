@@ -28,6 +28,8 @@ from core.recall import (
 )
 from core.recall.jsonl import (
     SESSION_RECALL_DEFAULT_ROLES,
+    SESSION_RECALL_LITERAL_SEARCH_GUIDANCE,
+    SESSION_RECALL_LITERAL_TOOL_SUMMARY,
 )
 from core.sessions import ChatSessionError, ChatSessionManager
 from core.tools.tools import (
@@ -52,12 +54,12 @@ SESSION_SEARCH_MAX_LIMIT = 100
 SESSION_SEARCH_RESULT_MAX_BYTES = 50 * 1024
 SESSION_SEARCH_CURSOR_VERSION = 2
 
-_BASE_DESCRIPTION = (
-    "Find persisted Sessions and relevant conversation passages. Omit query to list recent "
-    "Sessions; provide query to search. Results include exact session_read references. "
+_DESCRIPTION_SUFFIX = (
+    "Omit query to list recent Sessions; provide query to search. Results include exact "
+    "session_read references. "
     "Continue a page with cursor by itself."
 )
-SESSION_SEARCH_TOOL_DESCRIPTION = _BASE_DESCRIPTION
+SESSION_SEARCH_TOOL_DESCRIPTION = f"{SESSION_RECALL_LITERAL_TOOL_SUMMARY} {_DESCRIPTION_SUFFIX}"
 SESSION_READ_TOOL_DESCRIPTION = (
     "Read exact canonical Messages from one persisted Session. Omit both Message boundaries to "
     "read the whole Session, provide start_message_id and/or end_message_id for an inclusive "
@@ -80,14 +82,20 @@ class _Cursor:
     snapshot_id: str | None
 
 
-def build_session_search_parameters() -> JsonObject:
+def build_session_search_parameters(recall_backend: Any | None = None) -> JsonObject:
+    query_description = SESSION_RECALL_LITERAL_SEARCH_GUIDANCE
+    if recall_backend is not None:
+        capabilities = _search_capabilities(recall_backend)
+        query_description = capabilities.query_description or (
+            f"{capabilities.guidance} Omit to list recent Sessions."
+        )
     return {
         "type": "object",
         "properties": {
             "query": {
                 "type": "string",
                 "minLength": 1,
-                "description": "Text or meaning to find; omit to list recent Sessions.",
+                "description": query_description,
             },
             "period": {
                 "type": "string",
@@ -168,7 +176,12 @@ SESSION_READ_TOOL_PARAMETERS = build_session_read_parameters()
 
 def build_session_search_description(recall_backend: Any) -> str:
     capabilities = _search_capabilities(recall_backend)
-    return f"{_BASE_DESCRIPTION} Active search behavior: {capabilities.guidance}"
+    if capabilities.tool_summary is not None:
+        return f"{capabilities.tool_summary} {_DESCRIPTION_SUFFIX}"
+    return (
+        "Find persisted Sessions using backend-defined search behavior. "
+        f"{_DESCRIPTION_SUFFIX} Active search behavior: {capabilities.guidance}"
+    )
 
 
 def make_session_search_handler(
@@ -320,7 +333,7 @@ def register_session_search_tool(
     registry.register(
         SESSION_SEARCH_TOOL_NAME,
         build_session_search_description(recall_backend),
-        SESSION_SEARCH_TOOL_PARAMETERS,
+        build_session_search_parameters(recall_backend),
         make_session_search_handler(recall_backend, sessions, backend_name),
         open_input_schema=True,
         result_schema={

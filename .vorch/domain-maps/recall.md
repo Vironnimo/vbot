@@ -22,7 +22,7 @@ The cross-cutting Session and Tool terms live in `.vorch/GLOSSARY.md`.
 
 ## Search Contract
 
-- `RecallSearchCapabilities` declares the active backend's result unit, query guidance, internal literal-match support, supported ordering, and whether role filtering is meaningful. `session_search` uses it to select the backend's declared defaults and append accurate guidance; the public six-field schema remains stable across backends.
+- `RecallSearchCapabilities` declares the active backend's result unit, Agent-facing Tool summary and query-parameter description, internal literal-match support, supported ordering, and whether role filtering is meaningful. `session_search` uses one capability value to build both Agent-facing texts and select the backend's declared defaults; the six public field names and all non-query parameter descriptions remain stable across backends.
 - `RecallSearchRequest` is the normalized first-party query contract: agent/project scope, optional Session, query, time range, roles, literal match mode, backend-supported order, offset/limit, and optional source snapshot.
 - `RecallSearchHit` is one backend-ranked Message or Passage with canonical read references. Raw backend scores stay inside Recall and are not exposed by the Tool.
 - `RecallSearchPage` carries one deterministic ranking slice, result type, ranking label, source snapshot, continuation state, candidate-Session count, and optional explicit degradation.
@@ -85,7 +85,7 @@ The cross-cutting Session and Tool terms live in `.vorch/GLOSSARY.md`.
 
 ## Constraints & Gotchas
 
-- Do not expose backend tuning merely to make backend payloads look alike. Backend capabilities must describe real behavior while the public Tool keeps one compact, backend-stable schema and uses declared defaults.
+- Do not expose backend tuning merely to make backend payloads look alike. Backend capabilities must describe real behavior in the Tool summary and `query` description while the public Tool keeps one compact, backend-stable field set and uses declared defaults.
 - Do not return exact Message text through search as a second read API. Search returns adaptive discovery excerpts and `session_read` references; `session_read` returns canonical Message records without per-Message truncation.
 - Do not deduplicate Passage results by Session. Passage-level multiplicity is part of Vector and Hybrid semantics.
 - Do not move structural Vector filters after KNN. Post-filtering a global top-K can produce false empty pages even when eligible Passages exist.

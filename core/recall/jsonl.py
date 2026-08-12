@@ -55,15 +55,16 @@ SESSION_RECALL_SORT_MODES: tuple[RecallOrder, ...] = ("newest", "oldest")
 SESSION_RECALL_SNIPPET_CHARS = 320
 SESSION_RECALL_CONTEXT_SNIPPET_CHARS = 180
 
-# Backend-specific guidance appended to the session_search tool description so the
-# agent knows how queries behave for the active backend. Each backend returns its
-# own fragment from ``describe_search``; this is the literal-substring default
-# shared by the JSONL scan and the FTS backend (both match case-insensitive
-# substrings). The vector and hybrid backends override it.
+# Backend-specific Agent guidance used to build the session_search Tool summary
+# and query parameter description. The summary helps the Agent select the Tool;
+# the parameter description explains how to construct a query for this backend.
+SESSION_RECALL_LITERAL_TOOL_SUMMARY = (
+    "Find persisted Sessions and literal matches in past conversations."
+)
 SESSION_RECALL_LITERAL_SEARCH_GUIDANCE = (
-    "This backend matches literal case-insensitive substrings — choose distinctive "
-    "keywords from text you remember. It does not match by meaning, so synonyms or "
-    "paraphrases will not match."
+    "Distinctive literal terms to find. Every whitespace-separated term must occur as "
+    "a case-insensitive substring; synonyms and paraphrases do not match. Omit to list "
+    "recent Sessions. Search results are newest first, not relevance-ranked."
 )
 
 # Names of the built-in recall tools whose results are persisted into sessions
@@ -126,6 +127,8 @@ class JsonlSessionRecallBackend:
         return RecallSearchCapabilities(
             result_type="message",
             guidance=SESSION_RECALL_LITERAL_SEARCH_GUIDANCE,
+            tool_summary=SESSION_RECALL_LITERAL_TOOL_SUMMARY,
+            query_description=SESSION_RECALL_LITERAL_SEARCH_GUIDANCE,
             match_argument="match",
             match_modes=SESSION_RECALL_MATCH_MODES,
             order_modes=SESSION_RECALL_SORT_MODES,
