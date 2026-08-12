@@ -358,6 +358,21 @@ function selectTrackedRunTimelineSource(
     hasPersistedAssistantTurn(currentTurnMessages)
   ) {
     if (!hasPersistedRunSummary(currentTurnMessages, activeRunId)) {
+      // A History page loaded while the Run was still active can contain only
+      // the prefix persisted at that instant. Do not let the later terminal
+      // event turn that stale prefix into an authoritative completed Run: the
+      // live projection may contain several newer Assistant/Tool messages.
+      // History is safe to select only when it covers every stable live output
+      // (or replay contains neither an output message nor a streaming draft).
+      if (!historyCoversLiveRunOutput(liveAssistantRun, currentTurnMessages)) {
+        return [
+          ...prefixHistoryItems,
+          activeUserItem,
+          liveAssistantRun,
+          ...trailingHistoryItems,
+          ...remainingLiveItems,
+        ];
+      }
       const currentTurnHistoryItems = historyTimelineItems(currentTurnMessages);
       applyLiveTerminalStateToHistory(
         currentTurnHistoryItems,
@@ -381,6 +396,22 @@ function selectTrackedRunTimelineSource(
     ...trailingHistoryItems,
     ...remainingLiveItems,
   ];
+}
+
+function historyCoversLiveRunOutput(liveAssistantRun, messages) {
+  const liveEvents = liveAssistantRun?.events ?? [];
+  if (liveEvents.some((event) => isStreamingDeltaEvent(event?.type))) {
+    return false;
+  }
+  const hasStableOutputMessage = liveEvents.some(
+    (event) =>
+      ['assistant_output', 'tool_call_result'].includes(event?.type) &&
+      Boolean(event.payload?.message?.id),
+  );
+  if (!hasStableOutputMessage) {
+    return true;
+  }
+  return liveRunOutputPersistedInHistory(liveAssistantRun, messages);
 }
 
 // An active run without a user_message_persisted event cannot be spliced into

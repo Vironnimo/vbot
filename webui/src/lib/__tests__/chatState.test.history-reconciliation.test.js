@@ -437,6 +437,149 @@ describe('chat state helpers', () => {
     ]);
   });
 
+  it('keeps output streamed after a mid-run history snapshot when the run finishes', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-one',
+    );
+    startRun(sessionState, {
+      run_id: 'run-one',
+      sse_url: '/api/runs/run-one/events',
+      status: CHAT_STATUS_RUNNING,
+    });
+
+    loadHistory(sessionState, [
+      { id: 'user-one', role: 'user', content: 'Finish the investigation' },
+      {
+        id: 'assistant-at-entry',
+        role: 'assistant',
+        content: null,
+        tool_calls: [
+          {
+            id: 'call-at-entry',
+            name: 'read',
+            arguments: { path: 'before.txt' },
+          },
+        ],
+      },
+      {
+        id: 'tool-at-entry',
+        role: 'tool',
+        tool_call_id: 'call-at-entry',
+        name: 'read',
+        content: 'before',
+      },
+    ]);
+
+    appendRunEvent(sessionState, {
+      type: 'user_message_persisted',
+      run_id: 'run-one',
+      sequence: 1,
+      payload: {
+        message: {
+          id: 'user-one',
+          role: 'user',
+          content: 'Finish the investigation',
+        },
+      },
+    });
+    appendRunEvent(sessionState, {
+      type: 'tool_call_started',
+      run_id: 'run-one',
+      sequence: 2,
+      payload: {
+        tool_call: {
+          id: 'call-at-entry',
+          index: 0,
+          name: 'read',
+          arguments: { path: 'before.txt' },
+        },
+      },
+    });
+    appendRunEvent(sessionState, {
+      type: 'tool_call_result',
+      run_id: 'run-one',
+      sequence: 3,
+      payload: {
+        tool_call: { id: 'call-at-entry', name: 'read' },
+        result: 'before',
+        message: {
+          id: 'tool-at-entry',
+          role: 'tool',
+          tool_call_id: 'call-at-entry',
+          name: 'read',
+          content: 'before',
+        },
+      },
+    });
+    appendRunEvent(sessionState, {
+      type: 'tool_call_started',
+      run_id: 'run-one',
+      sequence: 4,
+      payload: {
+        tool_call: {
+          id: 'call-after-entry',
+          index: 0,
+          name: 'read',
+          arguments: { path: 'after.txt' },
+        },
+      },
+    });
+    appendRunEvent(sessionState, {
+      type: 'tool_call_result',
+      run_id: 'run-one',
+      sequence: 5,
+      payload: {
+        tool_call: { id: 'call-after-entry', name: 'read' },
+        result: 'after',
+        message: {
+          id: 'tool-after-entry',
+          role: 'tool',
+          tool_call_id: 'call-after-entry',
+          name: 'read',
+          content: 'after',
+        },
+      },
+    });
+    appendRunEvent(sessionState, {
+      type: 'assistant_output',
+      run_id: 'run-one',
+      sequence: 6,
+      payload: {
+        message: {
+          id: 'assistant-final',
+          role: 'assistant',
+          content: 'This is the final answer.',
+        },
+      },
+    });
+    appendRunEvent(sessionState, {
+      type: 'run_completed',
+      run_id: 'run-one',
+      sequence: 7,
+      payload: { status: CHAT_STATUS_COMPLETED },
+    });
+
+    const timelineItems = visibleTimelineItemsForRender(sessionState);
+
+    expect(timelineItems).toHaveLength(2);
+    expect(timelineItems[1]).toEqual(
+      expect.objectContaining({
+        id: 'assistant-run-run-one',
+        type: 'assistant_run',
+        status: CHAT_STATUS_COMPLETED,
+      }),
+    );
+    expect(timelineItems[1].tools.map((tool) => tool.toolCallId)).toEqual([
+      'call-at-entry',
+      'call-after-entry',
+    ]);
+    expect(timelineItems[1].outputs.map((output) => output.content)).toEqual([
+      'This is the final answer.',
+    ]);
+  });
+
   it('does not duplicate a note-triggered run output that history already persisted', () => {
     // Refresh while the internal follow-up run a non-blocking sub-agent
     // completion spawns is still RUNNING. That run emits no
