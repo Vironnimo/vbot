@@ -31,6 +31,14 @@ vi.mock('$lib/api.js', () => rpcBackedApiMock(rpcMock));
 
 const { default: AgentsView } = await import('../AgentsView.svelte');
 
+function toolAccessButton(name, state) {
+  const button = document.body.querySelector(
+    `[data-tool-name="${name}"] [data-tool-access-state="${state}"]`,
+  );
+  expect(button).toBeTruthy();
+  return button;
+}
+
 describe('AgentsView', () => {
   let mountedComponent;
 
@@ -289,7 +297,7 @@ describe('AgentsView', () => {
 
     vi.useFakeTimers();
 
-    getButtonByAriaLabel('Toggle tool write').click();
+    toolAccessButton('write', 'denied').click();
     flushSync();
 
     await vi.advanceTimersByTimeAsync(800);
@@ -297,8 +305,8 @@ describe('AgentsView', () => {
 
     expect(getAgentUpdateCalls()).toHaveLength(1);
     expect(getAgentUpdateCalls()[0][1]).toEqual({
-      allowed_tools: ['bash'],
       id: 'alpha',
+      tool_access: { mode: 'all', denied: ['write'] },
     });
   });
 
@@ -349,7 +357,7 @@ describe('AgentsView', () => {
         agents: [
           {
             ...baseAgent(),
-            allowed_tools: ['bash'],
+            tool_access: { mode: 'selected', allowed: ['bash'] },
             tools: { subagent: { allowed_agents: ['worker'] } },
           },
         ],
@@ -385,24 +393,28 @@ describe('AgentsView', () => {
     await waitForText('Sub-Agent settings');
 
     vi.useFakeTimers();
-    getButtonByAriaLabel('Toggle tool subagent').click();
+    toolAccessButton('subagent', 'denied').click();
     flushSync();
     await vi.advanceTimersByTimeAsync(800);
     await flushAsyncUpdates();
 
     expect(getAgentUpdateCalls()).toHaveLength(1);
     expect(getAgentUpdateCalls()[0][1]).toEqual({
-      allowed_tools: ['bash'],
       id: 'alpha',
+      tool_access: { mode: 'all', denied: ['subagent'] },
     });
   });
 
-  it('renders memory as a display-only first tool chip that is never a toggle', async () => {
+  it('renders Memory as automatic while keeping its independent block control', async () => {
     rpcMock.mockImplementation(
       createAgentsRpcMock({
         tools: [
           { name: 'bash', description: 'Run shell commands.' },
-          { name: 'memory', description: 'Manage pinned memory.' },
+          {
+            name: 'memory',
+            description: 'Manage pinned memory.',
+            activation: 'memory_mode',
+          },
           { name: 'write', description: 'Write files.' },
         ],
       }),
@@ -413,31 +425,17 @@ describe('AgentsView', () => {
 
     await waitForText('write');
 
-    // The memory tool is shown, but never as an allow-list toggle — it renders
-    // as the first, display-only "auto" chip that follows the Memory setting.
     expect(document.body.textContent).toContain('Run shell commands.');
     expect(document.body.textContent).toContain('Write files.');
     expect(document.body.textContent).toContain('Manage pinned memory.');
+    const memoryRow = document.body.querySelector('[data-tool-name="memory"]');
+    expect(memoryRow).toBeTruthy();
+    expect(memoryRow.textContent).toContain('Automatic');
+    expect(memoryRow.textContent).toContain('Memory is on');
+    expect(toolAccessButton('memory', 'denied').disabled).toBe(false);
     expect(
-      document.body.querySelector('button[aria-label="Toggle tool memory"]'),
+      memoryRow.querySelector('[data-tool-access-state="enabled"]'),
     ).toBeNull();
-
-    const memoryState = document.body.querySelector(
-      '[data-testid="access-chip-locked-note"]',
-    );
-    expect(memoryState).toBeTruthy();
-    // baseAgent() uses memory_prompt_mode 'agent_user' (not off) → available.
-    expect(
-      document
-        .querySelector('.access-chip--locked')
-        .classList.contains('is-on'),
-    ).toBe(true);
-
-    // Memory is the first chip in the tools cloud.
-    const firstChipName = document
-      .querySelector('.access-chip--locked .access-chip__name')
-      .textContent.trim();
-    expect(firstChipName).toBe('memory');
   });
 
   it('switches the memory tool row text when Memory is set to off', async () => {
@@ -446,7 +444,11 @@ describe('AgentsView', () => {
         agents: [{ ...baseAgent(), memory_prompt_mode: 'off' }],
         tools: [
           { name: 'bash', description: 'Run shell commands.' },
-          { name: 'memory', description: 'Manage pinned memory.' },
+          {
+            name: 'memory',
+            description: 'Manage pinned memory.',
+            activation: 'memory_mode',
+          },
         ],
       }),
     );
@@ -456,15 +458,10 @@ describe('AgentsView', () => {
 
     await waitForText('Run shell commands.');
 
-    const memoryState = document.body.querySelector(
-      '[data-testid="access-chip-locked-note"]',
-    );
-    expect(memoryState).toBeTruthy();
-    expect(
-      document
-        .querySelector('.access-chip--locked')
-        .classList.contains('is-on'),
-    ).toBe(false);
+    const memoryRow = document.body.querySelector('[data-tool-name="memory"]');
+    expect(memoryRow).toBeTruthy();
+    expect(memoryRow.textContent).toContain('Memory is off');
+    expect(memoryRow.textContent).toContain('Inactive');
   });
 
   it('shows both empty Memory categories while they are inactive and keeps adding available', async () => {
@@ -662,17 +659,19 @@ describe('AgentsView', () => {
       'Set the Home Assistant token first.',
     );
 
-    // The toggle for a not-ready tool still fires (allow-list is independent of
-    // readiness).
-    const toggle = getButtonByAriaLabel('Toggle tool home_assistant');
-    expect(toggle).toBeTruthy();
-    expect(toggle.disabled).toBe(false);
-    expect(toggle.classList.contains('is-attention')).toBe(true);
+    // Policy controls stay editable because access is independent of readiness.
+    const block = toolAccessButton('home_assistant', 'denied');
+    expect(block.disabled).toBe(false);
+    expect(
+      document
+        .querySelector('[data-tool-name="home_assistant"]')
+        .classList.contains('tool-access-row--unavailable'),
+    ).toBe(true);
 
     // The extensions link navigates to the Extensions settings panel.
     const openExtensions = Array.from(
       document.body.querySelectorAll('button'),
-    ).find((button) => button.textContent.trim() === 'Open Extensions');
+    ).find((button) => button.textContent.trim() === 'Configure');
     expect(openExtensions).toBeTruthy();
     openExtensions.click();
     flushSync();

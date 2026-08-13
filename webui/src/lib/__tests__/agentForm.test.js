@@ -30,7 +30,7 @@ describe('agent form helpers', () => {
       temperature: '',
       thinking_effort: '',
       memory_prompt_mode: 'agent_user',
-      allowed_tools: ['*'],
+      tool_access: { mode: 'all' },
       allowed_skills: ['*'],
       tools: {},
       compaction_policy: null,
@@ -105,7 +105,7 @@ describe('agent form helpers', () => {
       id: 'coder',
       name: 'Coder',
       workspace: 'C:/workspace-coder',
-      allowed_tools: ['*'],
+      tool_access: { mode: 'all' },
       allowed_skills: ['*'],
       config: {
         model: '',
@@ -125,7 +125,7 @@ describe('agent form helpers', () => {
     expect(result.payload).toEqual({ id: 'coder' });
   });
 
-  it('maps an agent into editable form values with allowed tools as an array', () => {
+  it('maps an agent into editable form values with a Tool policy', () => {
     const values = createAgentFormValues({
       id: 'coder',
       name: 'Coder',
@@ -135,25 +135,30 @@ describe('agent form helpers', () => {
       temperature: 0.2,
       thinking_effort: 'medium',
       memory_prompt_mode: 'agent',
-      allowed_tools: ['read', 'write'],
+      tool_access: { mode: 'selected', allowed: ['read', 'write'] },
       allowed_skills: ['debugging'],
       compaction_policy: null,
       custom_system_prompt_enabled: true,
     });
 
-    expect(values.allowed_tools).toEqual(['read', 'write']);
+    expect(values.tool_access).toEqual({
+      mode: 'selected',
+      allowed: ['read', 'write'],
+    });
     expect(values.allowed_skills).toEqual(['debugging']);
     expect(values.temperature).toBe('0.2');
     expect(values.memory_prompt_mode).toBe('agent');
     expect(values.custom_system_prompt_enabled).toBe(true);
   });
 
-  it('removes memory from editable allowed tools because memory mode owns it', () => {
+  it('keeps Memory prompt visibility and Memory Tool denial independent', () => {
     const values = createAgentFormValues({
-      allowed_tools: ['read', 'memory', 'write'],
+      memory_prompt_mode: 'agent_user',
+      tool_access: { mode: 'all', denied: ['memory'] },
     });
 
-    expect(values.allowed_tools).toEqual(['read', 'write']);
+    expect(values.memory_prompt_mode).toBe('agent_user');
+    expect(values.tool_access).toEqual({ mode: 'all', denied: ['memory'] });
   });
 
   it('normalizes create payloads with trimmed scalar fields and array-based access lists', () => {
@@ -166,7 +171,10 @@ describe('agent form helpers', () => {
       temperature: '0.25',
       thinking_effort: ' low ',
       memory_prompt_mode: ' off ',
-      allowed_tools: [' read ', '', 'write '],
+      tool_access: {
+        mode: 'selected',
+        allowed: [' read ', '', 'write '],
+      },
       allowed_skills: [' debugging ', ''],
       tools: {
         subagent: { allowed_agents: [' worker ', 'builder@vbot'] },
@@ -183,7 +191,7 @@ describe('agent form helpers', () => {
       temperature: 0.25,
       thinking_effort: 'low',
       memory_prompt_mode: 'off',
-      allowed_tools: ['read', 'write'],
+      tool_access: { mode: 'selected', allowed: ['read', 'write'] },
       allowed_skills: ['debugging'],
       tools: {
         subagent: { allowed_agents: ['worker', 'builder@vbot'] },
@@ -199,7 +207,7 @@ describe('agent form helpers', () => {
       id: 'coder',
       name: 'Coder',
       temperature: '0,25',
-      allowed_tools: ['*'],
+      tool_access: { mode: 'all' },
       allowed_skills: ['*'],
     });
 
@@ -235,17 +243,20 @@ describe('agent form helpers', () => {
     ]);
   });
 
-  it('removes memory from allowed tool payloads', () => {
+  it('keeps a Memory Tool denial in the payload', () => {
     const result = normalizeAgentForm({
       id: 'coder',
       name: 'Coder',
       temperature: '0.1',
-      allowed_tools: ['read', 'memory'],
+      tool_access: { mode: 'all', denied: ['memory'] },
       allowed_skills: ['*'],
     });
 
     expect(result.isValid).toBe(true);
-    expect(result.payload.allowed_tools).toEqual(['read']);
+    expect(result.payload.tool_access).toEqual({
+      mode: 'all',
+      denied: ['memory'],
+    });
   });
 
   it('normalizes cleared temperature and thinking effort to null', () => {
@@ -256,7 +267,7 @@ describe('agent form helpers', () => {
       fallback_model: '',
       temperature: '',
       thinking_effort: '',
-      allowed_tools: ['*'],
+      tool_access: { mode: 'all' },
       allowed_skills: ['*'],
     });
 
@@ -266,42 +277,48 @@ describe('agent form helpers', () => {
     expect(result.payload.memory_prompt_mode).toBe('agent_user');
   });
 
-  it('round-trips all-tools access with the wildcard array', () => {
+  it('round-trips all-Tools access without a wildcard', () => {
     const formValues = createAgentFormValues({
-      allowed_tools: ['*'],
+      tool_access: { mode: 'all', denied: ['memory'] },
     });
 
-    expect(formValues.allowed_tools).toEqual(['*']);
+    expect(formValues.tool_access).toEqual({
+      mode: 'all',
+      denied: ['memory'],
+    });
 
     const result = normalizeAgentForm({
       id: 'coder',
       name: 'Coder',
       temperature: '0.1',
-      allowed_tools: formValues.allowed_tools,
+      tool_access: formValues.tool_access,
       allowed_skills: ['*'],
     });
 
     expect(result.isValid).toBe(true);
-    expect(result.payload.allowed_tools).toEqual(['*']);
+    expect(result.payload.tool_access).toEqual({
+      mode: 'all',
+      denied: ['memory'],
+    });
   });
 
-  it('round-trips no-tools access with an empty array', () => {
+  it('round-trips no-Tools access explicitly', () => {
     const formValues = createAgentFormValues({
-      allowed_tools: [],
+      tool_access: { mode: 'none' },
     });
 
-    expect(formValues.allowed_tools).toEqual([]);
+    expect(formValues.tool_access).toEqual({ mode: 'none' });
 
     const result = normalizeAgentForm({
       id: 'coder',
       name: 'Coder',
       temperature: '0.1',
-      allowed_tools: formValues.allowed_tools,
+      tool_access: formValues.tool_access,
       allowed_skills: ['*'],
     });
 
     expect(result.isValid).toBe(true);
-    expect(result.payload.allowed_tools).toEqual([]);
+    expect(result.payload.tool_access).toEqual({ mode: 'none' });
   });
 
   it('does not parse legacy string allowed skills when creating form values', () => {
@@ -317,7 +334,7 @@ describe('agent form helpers', () => {
       id: 'coder',
       name: 'Coder',
       temperature: '0.1',
-      allowed_tools: ['*'],
+      tool_access: { mode: 'all' },
       allowed_skills: 'debugging\nctx7',
     });
 
@@ -325,7 +342,7 @@ describe('agent form helpers', () => {
     expect(result.payload.allowed_skills).toEqual(['*']);
   });
 
-  it('keeps legacy string allowed tools parsing unchanged', () => {
+  it('does not reinterpret the retired allowed_tools field', () => {
     const result = normalizeAgentForm({
       id: 'coder',
       name: 'Coder',
@@ -335,7 +352,8 @@ describe('agent form helpers', () => {
     });
 
     expect(result.isValid).toBe(true);
-    expect(result.payload.allowed_tools).toEqual(['read', 'write']);
+    expect(result.payload.tool_access).toEqual({ mode: 'all' });
+    expect(result.payload).not.toHaveProperty('allowed_tools');
   });
 
   it('omits blank workspace from create payloads', () => {
@@ -344,7 +362,7 @@ describe('agent form helpers', () => {
       name: 'Coder',
       workspace: ' ',
       temperature: '0.1',
-      allowed_tools: ['*'],
+      tool_access: { mode: 'all' },
       allowed_skills: ['*'],
     });
 
@@ -358,7 +376,7 @@ describe('agent form helpers', () => {
       name: 'Coder',
       workspace: 'C:/workspace-coder',
       temperature: '0.1',
-      allowed_tools: ['*'],
+      tool_access: { mode: 'all' },
       allowed_skills: ['*'],
     });
 
@@ -373,7 +391,7 @@ describe('agent form helpers', () => {
         name: 'Coder Prime',
         workspace: 'C:/workspace-coder',
         temperature: '0.1',
-        allowed_tools: ['*'],
+        tool_access: { mode: 'all' },
         allowed_skills: ['*'],
       },
       { mode: AGENT_FORM_MODE_EDIT },
@@ -390,7 +408,7 @@ describe('agent form helpers', () => {
       id: 'coder',
       name: 'Coder',
       workspace: 'C:/workspace-coder',
-      allowed_tools: ['*'],
+      tool_access: { mode: 'all' },
       allowed_skills: ['*'],
     });
 
@@ -422,7 +440,7 @@ describe('agent form helpers', () => {
       temperature: 0.2,
       thinking_effort: 'high',
       memory_prompt_mode: 'agent_user',
-      allowed_tools: ['*'],
+      tool_access: { mode: 'all' },
       allowed_skills: ['*'],
     });
 
@@ -449,7 +467,7 @@ describe('agent form helpers', () => {
       id: 'coder',
       name: 'Coder',
       workspace: 'C:/workspace-coder',
-      allowed_tools: ['*'],
+      tool_access: { mode: 'all' },
       allowed_skills: ['*'],
       custom_system_prompt_enabled: false,
     });
@@ -477,7 +495,7 @@ describe('agent form helpers', () => {
       id: 'coder',
       name: 'Coder',
       workspace: 'C:/workspace-coder',
-      allowed_tools: ['*'],
+      tool_access: { mode: 'all' },
       allowed_skills: ['*'],
       memory_prompt_mode: 'agent_user',
     });

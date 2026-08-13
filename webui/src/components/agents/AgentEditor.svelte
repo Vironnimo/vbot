@@ -14,6 +14,7 @@
   import TextField from '../ui/TextField.svelte';
   import Toggle from '../ui/Toggle.svelte';
   import ToggleChipList from '../ui/ToggleChipList.svelte';
+  import ToolAccessEditor from '../tools/ToolAccessEditor.svelte';
   import {
     addAgentMemory,
     createAgent,
@@ -33,7 +34,6 @@
     AGENT_MEMORY_PROMPT_MODES,
     AGENT_FORM_MODE_CREATE,
     AGENT_FORM_MODE_EDIT,
-    MEMORY_TOOL_NAME,
     agentIdValidationError,
     createAgentFormValues,
     effortOptionsForReasoning,
@@ -42,6 +42,7 @@
     subagentAllowedAgents,
     withSubagentAllowedAgents,
   } from '$lib/agentForm.js';
+  import { toolAccessIncludes } from '$lib/toolAccess.js';
   import { activeLocaleTag, t } from '$lib/i18n.js';
   import {
     buildModelSelectOptions,
@@ -146,30 +147,8 @@
           id: agent?.id ?? formValues.id,
         }),
   );
-  let visibleToolItems = $derived(toolAccessItems());
   let visibleSkillItems = $derived(skillAccessItems());
   let visibleAgentTargetItems = $derived(agentTargetAccessItems());
-  // Memory is a display-only, never-a-toggle chip (a "locked" chip with an "auto"
-  // tag): it follows the Memory setting, not the allow-list. Rendered first in the
-  // tools cloud; its hover card carries the description and the follows-setting note.
-  let memoryChipItem = $derived(
-    memoryToolItem
-      ? {
-          name: memoryToolItem.name,
-          description: memoryToolItem.description,
-          allowed: formValues.memory_prompt_mode !== 'off',
-          locked: true,
-          lockedNote: memoryToolRowText(),
-        }
-      : null,
-  );
-  // The shared chip list keys off `allowed`; the access items track it as
-  // `isAllowed`, so map it across (everything else — description, readiness,
-  // warnings — passes through unchanged). Memory (locked) leads the tools cloud.
-  let toolChipItems = $derived([
-    ...(memoryChipItem ? [memoryChipItem] : []),
-    ...visibleToolItems.map((tool) => ({ ...tool, allowed: tool.isAllowed })),
-  ]);
   let skillChipItems = $derived(
     visibleSkillItems.map((skill) => ({ ...skill, allowed: skill.isAllowed })),
   );
@@ -179,22 +158,13 @@
       allowed: target.isAllowed,
     })),
   );
-  // The memory tool from the catalog (if present), rendered as a display-only
-  // first row: it follows the Memory setting and is never an allow-list toggle.
-  let memoryToolItem = $derived(
-    availableTools.find((tool) => tool.name === MEMORY_TOOL_NAME) ?? null,
-  );
-  // The wildcard default (`["*"]`) means "everything, including future items".
-  // The toggle list renders every item as on with no signal, so a note explains
-  // that flipping any single toggle collapses the wildcard into a fixed list.
-  let toolsAreWildcard = $derived(isWildcardAccess(formValues.allowed_tools));
   let skillsAreWildcard = $derived(isWildcardAccess(formValues.allowed_skills));
   let configuredAgentTargets = $derived(
     subagentAllowedAgents(formValues.tools),
   );
   let agentsAreWildcard = $derived(isWildcardAccess(configuredAgentTargets));
   let subagentToolEnabled = $derived(
-    accessAllowsSubagent(formValues.allowed_tools),
+    toolAccessIncludes(formValues.tool_access, 'subagent'),
   );
   let showAllModels = $state(false);
   let showAllFallbackModels = $state(false);
@@ -540,9 +510,7 @@
       allowed_skills: Array.isArray(values.allowed_skills)
         ? [...values.allowed_skills]
         : [],
-      allowed_tools: Array.isArray(values.allowed_tools)
-        ? [...values.allowed_tools]
-        : [],
+      tool_access: cloneTools(values.tool_access),
       tools: cloneTools(values.tools),
     };
   }
@@ -672,11 +640,6 @@
   }
 
   function updateAccessItem(fieldName, itemName, isAllowed) {
-    if (fieldName === 'allowed_tools') {
-      updateToolAccessItem(itemName, isAllowed);
-      return;
-    }
-
     if (fieldName === 'allowed_skills') {
       updateSkillAccessItem(itemName, isAllowed);
       return;
@@ -688,11 +651,6 @@
   }
 
   function setAccessItems(fieldName, isAllowed) {
-    if (fieldName === 'allowed_tools') {
-      setAllowedTools(isAllowed ? [WILDCARD_ACCESS] : []);
-      return;
-    }
-
     if (fieldName === 'allowed_skills') {
       formValues.allowed_skills = isAllowed ? [WILDCARD_ACCESS] : [];
       return;
@@ -706,59 +664,6 @@
     }
   }
 
-  function updateToolAccessItem(itemName, isAllowed) {
-    const allToolNames = configurableTools().map((tool) => tool.name);
-
-    if (allToolNames.length === 0) {
-      setAllowedTools([]);
-      return;
-    }
-
-    const currentItems = Array.isArray(formValues.allowed_tools)
-      ? [...formValues.allowed_tools]
-      : [];
-
-    if (currentItems.includes(WILDCARD_ACCESS)) {
-      if (isAllowed) {
-        setAllowedTools([WILDCARD_ACCESS]);
-        return;
-      }
-
-      setAllowedTools(allToolNames.filter((name) => name !== itemName));
-      return;
-    }
-
-    const nextItems = currentItems.filter((item) =>
-      allToolNames.includes(item),
-    );
-    const existingIndex = nextItems.indexOf(itemName);
-
-    if (isAllowed && existingIndex === -1) {
-      nextItems.push(itemName);
-    }
-
-    if (!isAllowed && existingIndex !== -1) {
-      nextItems.splice(existingIndex, 1);
-    }
-
-    setAllowedTools(
-      allToolNames.every((name) => nextItems.includes(name))
-        ? [WILDCARD_ACCESS]
-        : nextItems,
-    );
-  }
-
-  function setAllowedTools(items) {
-    formValues.allowed_tools = items;
-  }
-
-  function accessAllowsSubagent(items) {
-    return (
-      isWildcardAccess(items) ||
-      (Array.isArray(items) && items.includes('subagent'))
-    );
-  }
-
   function cloneTools(tools) {
     return tools && typeof tools === 'object'
       ? JSON.parse(JSON.stringify(tools))
@@ -767,23 +672,6 @@
 
   function isWildcardAccess(items) {
     return Array.isArray(items) && items.includes(WILDCARD_ACCESS);
-  }
-
-  function toolAccessItems() {
-    const currentItems = Array.isArray(formValues.allowed_tools)
-      ? formValues.allowed_tools
-      : [];
-    const hasWildcard = currentItems.includes(WILDCARD_ACCESS);
-    const allowedItems = hasWildcard ? [] : currentItems;
-
-    return configurableTools().map((tool) => ({
-      ...tool,
-      isAllowed: hasWildcard || allowedItems.includes(tool.name),
-    }));
-  }
-
-  function configurableTools() {
-    return availableTools.filter((tool) => tool.name !== MEMORY_TOOL_NAME);
   }
 
   function skillAccessItems() {
@@ -1005,18 +893,6 @@
     formValues.compaction_policy = enabled
       ? structuredClone(agent?.effective_compaction_policy ?? {})
       : null;
-  }
-
-  function memoryToolRowText() {
-    return formValues.memory_prompt_mode === 'off'
-      ? t(
-          'agents.tools.memoryFollowsOff',
-          'Follows the Memory setting — currently unavailable (Memory is off).',
-        )
-      : t(
-          'agents.tools.memoryFollowsActive',
-          'Follows the Memory setting — currently available.',
-        );
   }
 
   // Turning the custom-prompt toggle off while the agent's scope owns customized
@@ -2041,22 +1917,20 @@
       <div class="tl-section">
         <div class="tl-section-header">
           <span class="tl-section-label">
-            {t('agents.form.allowedTools', 'Allowed tools')}
+            {t('agents.form.toolAccess', 'Tool access')}
           </span>
+          <InfoHint
+            text={t(
+              'agents.form.toolAccessHelp',
+              'Choose the overall intent first. Tool families are only presentation and bulk controls; individual Tools remain the stored policy. Automatic Tools follow their source or Session condition and can always be blocked.',
+            )}
+          />
         </div>
-        <ToggleChipList
-          items={toolChipItems}
-          note={toolsAreWildcard && visibleToolItems.length > 0
-            ? t(
-                'agents.form.wildcardNote',
-                'Currently all are allowed, including ones added in the future. Turning any single item off switches to a fixed list.',
-              )
-            : ''}
-          ariaToggleLabel={(name) =>
-            t('agents.access.toggleTool', 'Toggle tool {name}', { name })}
-          onToggle={(name, next) =>
-            updateAccessItem('allowed_tools', name, next)}
-          onSetAll={(next) => setAccessItems('allowed_tools', next)}
+        <ToolAccessEditor
+          value={formValues.tool_access}
+          tools={availableTools}
+          memoryPromptMode={formValues.memory_prompt_mode}
+          onChange={(next) => (formValues.tool_access = next)}
           onOpenExtensions={navigateToExtensions}
         />
       </div>

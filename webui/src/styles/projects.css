@@ -513,6 +513,27 @@
   line-height: 1.4;
 }
 
+.projects-view .projects-tool-access-override {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-left: 2px solid var(--border-2);
+  border-radius: 10px;
+  background: var(--surface-2);
+}
+
+.projects-view .projects-tool-access-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.projects-view .projects-tool-access-heading > div {
+  min-width: 0;
+}
+
 .projects-view .projects-tools-line,
 .projects-view .projects-source-line {
   margin: 0;

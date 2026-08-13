@@ -1,5 +1,6 @@
 import { normalizeCompactionPolicy } from './compactionPolicy.js';
 import { SURFACE_FORM, shouldApplyReloadNow } from './resourceInvalidation.js';
+import { normalizeToolAccess } from './toolAccess.js';
 import {
   addProject as requestAddProject,
   clearOverride as requestClearOverride,
@@ -16,6 +17,7 @@ import {
 } from './api.js';
 
 const PROJECT_AUTO_SAVE_DEBOUNCE_MS = 800;
+const TOOL_ACCESS_OVERRIDE_AUTO_SAVE_DEBOUNCE_MS = 800;
 const PROJECT_DETECT_DEBOUNCE_MS = 500;
 const PROJECT_BUSY_CODE = 'project_busy';
 const PROJECT_IN_USE_CODE = 'project_in_use';
@@ -124,6 +126,7 @@ export function createProjectsController({
   state = createProjectsState(),
   operations = defaultProjectOperations(),
   autoSaveDelayMs = PROJECT_AUTO_SAVE_DEBOUNCE_MS,
+  toolAccessOverrideAutoSaveDelayMs = TOOL_ACCESS_OVERRIDE_AUTO_SAVE_DEBOUNCE_MS,
   detectDelayMs = PROJECT_DETECT_DEBOUNCE_MS,
   translate = (_key, fallback, values = {}) =>
     String(fallback).replace(/\{(\w+)\}/g, (_match, key) => values[key] ?? ''),
@@ -134,6 +137,7 @@ export function createProjectsController({
   let listRequestId = 0;
   let scanRequestId = 0;
   let autoSaveTimer = null;
+  let toolAccessOverrideAutoSaveTimer = null;
   let detectTimer = null;
   let pendingProjectList = null;
 
@@ -179,6 +183,7 @@ export function createProjectsController({
   }
 
   function resetSelectionState(project = null) {
+    clearToolAccessOverrideAutoSave({ flushPending: false });
     state.editForm = createProjectEditForm(project);
     state.autoLoadDraft = '';
     state.editError = '';
@@ -242,7 +247,9 @@ export function createProjectsController({
         draft.temperature !== savedDraft.temperature ||
         draft.thinking_effort !== savedDraft.thinking_effort ||
         JSON.stringify(draft.compaction_policy) !==
-          JSON.stringify(savedDraft.compaction_policy)
+          JSON.stringify(savedDraft.compaction_policy) ||
+        JSON.stringify(draft.tool_access) !==
+          JSON.stringify(savedDraft.tool_access)
       );
     });
   }
@@ -258,6 +265,7 @@ export function createProjectsController({
         overrideDraftsHaveChanges(),
       savePending:
         autoSaveTimer !== null ||
+        toolAccessOverrideAutoSaveTimer !== null ||
         state.addingProject ||
         state.editSaving ||
         Boolean(state.overrideBusyKey) ||
@@ -479,6 +487,16 @@ export function createProjectsController({
     }
   }
 
+  function clearToolAccessOverrideAutoSave({ flushPending = true } = {}) {
+    if (toolAccessOverrideAutoSaveTimer !== null) {
+      clearTimeout(toolAccessOverrideAutoSaveTimer);
+      toolAccessOverrideAutoSaveTimer = null;
+    }
+    if (flushPending) {
+      flushPendingProjects();
+    }
+  }
+
   function scheduleAutoSave(save) {
     clearAutoSave();
     autoSaveTimer = setTimeout(() => {
@@ -487,6 +505,16 @@ export function createProjectsController({
         void save();
       }
     }, autoSaveDelayMs);
+  }
+
+  function scheduleToolAccessOverrideAutoSave(save) {
+    clearToolAccessOverrideAutoSave();
+    toolAccessOverrideAutoSaveTimer = setTimeout(() => {
+      toolAccessOverrideAutoSaveTimer = null;
+      if (active) {
+        void save();
+      }
+    }, toolAccessOverrideAutoSaveDelayMs);
   }
 
   function clearDetect() {
@@ -699,6 +727,7 @@ export function createProjectsController({
         temperature: '',
         thinking_effort: '',
         compaction_policy: null,
+        tool_access: { mode: 'all' },
       }
     );
   }
@@ -731,6 +760,9 @@ export function createProjectsController({
     if (field === 'compaction_policy') {
       return draft.compaction_policy;
     }
+    if (field === 'tool_access') {
+      return normalizeToolAccess(draft.tool_access);
+    }
     return draft.thinking_effort;
   }
 
@@ -748,13 +780,49 @@ export function createProjectsController({
     if (field === 'compaction_policy') {
       return draft.compaction_policy !== null;
     }
+    if (field === 'tool_access') {
+      return draft.tool_access !== null;
+    }
     return typeof draft.thinking_effort === 'string';
   }
 
-  async function setMemberOverride(agentId, field) {
+  function pendingToolAccessOverrideChanges() {
+    return state.activeTeam.flatMap((member) => {
+      const draft = state.overrideDrafts[member.agent_id];
+      if (!draft) {
+        return [];
+      }
+      const value = normalizeToolAccess(draft.tool_access);
+      const saved = normalizeToolAccess(
+        seedTeamOverrideDraft(member).tool_access,
+      );
+      return JSON.stringify(value) === JSON.stringify(saved)
+        ? []
+        : [{ agentId: member.agent_id, value }];
+    });
+  }
+
+  async function savePendingToolAccessOverrides() {
+    clearToolAccessOverrideAutoSave({ flushPending: false });
+    const changes = pendingToolAccessOverrideChanges();
+    for (const change of changes) {
+      if (
+        !(await setMemberOverride(change.agentId, 'tool_access', change.value))
+      ) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  async function setMemberOverride(agentId, field, explicitValue = undefined) {
     const project = selectedProject();
-    if (!project || state.overrideBusyKey || !canSetOverride(agentId, field)) {
-      return;
+    if (
+      !project ||
+      state.overrideBusyKey ||
+      (explicitValue === undefined && !canSetOverride(agentId, field))
+    ) {
+      return false;
     }
     state.overrideBusyKey = overrideKey(agentId, field);
     state.editError = '';
@@ -763,16 +831,19 @@ export function createProjectsController({
         project.project_id,
         agentId,
         field,
-        overrideValueForField(agentId, field),
+        explicitValue === undefined
+          ? overrideValueForField(agentId, field)
+          : explicitValue,
       );
       if (!active) {
-        return;
+        return false;
       }
       applyScan(result?.scan, { replaceDrafts: true });
       onToast({
         title: translate('projects.team.overrideSaved', 'Override saved.'),
         variant: 'success',
       });
+      return true;
     } catch (error) {
       if (active) {
         onToast({
@@ -781,6 +852,7 @@ export function createProjectsController({
           sticky: true,
         });
       }
+      return false;
     } finally {
       if (active) {
         state.overrideBusyKey = '';
@@ -793,6 +865,9 @@ export function createProjectsController({
     const project = selectedProject();
     if (!project || state.overrideBusyKey) {
       return;
+    }
+    if (field === 'tool_access') {
+      clearToolAccessOverrideAutoSave({ flushPending: false });
     }
     state.overrideBusyKey = overrideKey(agentId, field);
     state.editError = '';
@@ -979,6 +1054,7 @@ export function createProjectsController({
     scanRequestId += 1;
     pendingProjectList = null;
     clearAutoSave();
+    clearToolAccessOverrideAutoSave();
     clearDetect();
   }
 
@@ -987,6 +1063,7 @@ export function createProjectsController({
     cancelRemove,
     canSetOverride,
     clearAutoSave,
+    clearToolAccessOverrideAutoSave,
     clearDetect,
     clearMemberOverride,
     clearSelectedProject,
@@ -1005,10 +1082,13 @@ export function createProjectsController({
     openRePoint,
     overrideDraft,
     pendingChanges,
+    pendingToolAccessOverrideChanges,
     flushPendingProjects,
     refreshScan,
     replaceListField,
     scheduleAutoSave,
+    scheduleToolAccessOverrideAutoSave,
+    savePendingToolAccessOverrides,
     saveSelectedProject,
     selectProject,
     selectedProject,
@@ -1258,6 +1338,7 @@ export function buildToolToggleList({ catalog = [], allowedTools = [] } = {}) {
     }
     byName.set(name, {
       name,
+      family: isObject ? (tool.family ?? null) : null,
       description: isObject ? (tool.description ?? '') : '',
       enabled: enabled.has(name),
       ready: isObject ? tool.ready !== false : true,
@@ -1279,6 +1360,7 @@ export function buildToolToggleList({ catalog = [], allowedTools = [] } = {}) {
     }
     byName.set(name, {
       name,
+      family: null,
       description: '',
       enabled: true,
       ready: false,
@@ -1605,6 +1687,9 @@ function normalizeOverrides(overrides) {
       overrides.compaction_policy,
     );
   }
+  if (isPlainObject(overrides.tool_access)) {
+    normalized.tool_access = normalizeToolAccess(overrides.tool_access);
+  }
   return Object.keys(normalized).length > 0 ? normalized : null;
 }
 
@@ -1622,6 +1707,13 @@ function normalizeEffective(effective) {
       source: stringOrNull(entry.source),
     };
   }
+  const toolAccessEntry = isPlainObject(source.tool_access)
+    ? source.tool_access
+    : {};
+  normalized.tool_access = {
+    value: normalizeToolAccess(toolAccessEntry.value),
+    source: stringOrNull(toolAccessEntry.source),
+  };
   return normalized;
 }
 
@@ -1631,6 +1723,9 @@ function normalizeEffective(effective) {
 export function memberFieldIsOverridden(member, field) {
   if (field === 'compaction_policy') {
     return isPlainObject(member?.overrides?.compaction_policy);
+  }
+  if (field === 'tool_access') {
+    return isPlainObject(member?.overrides?.tool_access);
   }
   return member?.effective?.[field]?.source === EFFECTIVE_SOURCE_OVERRIDE;
 }
@@ -1662,6 +1757,9 @@ export function seedTeamOverrideDraft(member) {
     compaction_policy: isPlainObject(overrides.compaction_policy)
       ? normalizeCompactionPolicy(overrides.compaction_policy)
       : null,
+    tool_access: isPlainObject(overrides.tool_access)
+      ? normalizeToolAccess(overrides.tool_access)
+      : normalizeToolAccess(effective.tool_access?.value),
   };
 }
 

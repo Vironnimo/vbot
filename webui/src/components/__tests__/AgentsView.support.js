@@ -480,7 +480,7 @@ export function baseAgent() {
     temperature: '0.1',
     thinking_effort: '',
     memory_prompt_mode: 'agent_user',
-    allowed_tools: ['*'],
+    tool_access: { mode: 'all' },
     allowed_skills: ['*'],
     tools: {},
     custom_system_prompt_enabled: false,
