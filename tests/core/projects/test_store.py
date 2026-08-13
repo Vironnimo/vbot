@@ -80,7 +80,9 @@ def test_create_does_not_duplicate_agents_file(data_dir: Path, repo: Path) -> No
     assert project.auto_load == ["agents.md", "CONTEXT.md"]
 
 
-def test_create_seeds_base_tool_whitelist_and_empty_skill_lists(data_dir: Path, repo: Path) -> None:
+def test_create_seeds_base_tool_whitelist_and_empty_skill_allowlists(
+    data_dir: Path, repo: Path
+) -> None:
     # A new project starts at the base Tool Whitelist ceiling; the Skill Whitelist
     # rule lists start empty (only the project's own scanned skills are active).
     store = ProjectStore(data_dir)

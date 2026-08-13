@@ -1473,7 +1473,7 @@ class SystemPromptManager:
         """
         registry = self._resolve_skill_registry(skill_registry)
         skills = registry.filter_allowed(agent.allowed_skills)
-        return PinnedSkillCatalog(catalog_text=_format_skill_list(skills))
+        return PinnedSkillCatalog(catalog_text=_format_skill_catalog(skills))
 
     def provider_tool_definitions(
         self,
@@ -1524,12 +1524,12 @@ class SystemPromptManager:
 
         Each producer is a closure over the registries the manager already holds
         (and the per-call skill-registry override), so the list-formatting logic
-        lives in one place. ``tool_list``/``channel_list``/``skill_list`` feed the
+        lives in one place. ``tool_list``/``channel_list``/``skill_catalog`` feed the
         core tools/channels/skills blocks; ``memory_files`` renders the
         ``USER.md``/``MEMORY.md`` ``<file>`` contents per the agent's memory mode
         (the embedded data half of the ``memory:guidance`` block — the file reading
         itself lives in the memory domain's :func:`read_memory_files`). When a
-        prompt-epoch ``skill_catalog`` is given, ``skill_list`` returns its frozen
+        prompt-epoch ``skill_catalog`` is given, its producer returns the frozen
         text instead of re-filtering the live registry.
         """
         active_skill_registry = self._resolve_skill_registry(skill_registry)
@@ -1546,10 +1546,10 @@ class SystemPromptManager:
         def channel_list(context: BlockRenderContext) -> str:
             return _format_channel_list(self._agent_enabled_channels(context.agent))
 
-        def skill_list(context: BlockRenderContext) -> str:
+        def skill_catalog_text(context: BlockRenderContext) -> str:
             if skill_catalog is not None:
                 return skill_catalog.catalog_text
-            return _format_skill_list(
+            return _format_skill_catalog(
                 active_skill_registry.filter_allowed(context.agent.allowed_skills)
             )
 
@@ -1570,7 +1570,7 @@ class SystemPromptManager:
         return {
             "tool_list": tool_list,
             "channel_list": channel_list,
-            "skill_list": skill_list,
+            "skill_catalog": skill_catalog_text,
             MEMORY_FILES_PRODUCER_NAME: memory_files,
         }
 
@@ -1839,7 +1839,7 @@ def _format_channel_list(channels: list[ChannelPromptMetadata]) -> str:
     return "\n".join(lines)
 
 
-def _format_skill_list(skills: Sequence[SkillPromptMetadata]) -> str:
+def _format_skill_catalog(skills: Sequence[SkillPromptMetadata]) -> str:
     grouped: dict[str | None, list[SkillPromptMetadata]] = {}
     for skill in skills:
         grouped.setdefault(skill.origin, []).append(skill)

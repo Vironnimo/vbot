@@ -11,8 +11,8 @@ from cli.rpc_client import rpc_call as _rpc_call
 from cli.server_management import CommandResult, ServerInstance
 
 
-def skill_list(instance: ServerInstance) -> CommandResult:
-    """Return formatted skill list output from `skill.list` RPC."""
+def list_skills(instance: ServerInstance) -> CommandResult:
+    """Return formatted Skill catalog output from `skill.list` RPC."""
 
     payload = _rpc_call(instance, "skill.list", {})
     if not payload.ok:

@@ -564,7 +564,6 @@ async def test_reflect_forks_and_runs_restricted_review(monkeypatch: pytest.Monk
     assert captured[0]["tool_restriction"] == (
         "memory",
         "skill",
-        "skill_list",
         "skill_manage",
     )
     assert "tool_grants" not in captured[0]

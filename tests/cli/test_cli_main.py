@@ -709,7 +709,7 @@ def test_run_model_refresh_dispatches_provider_and_prints_plain_output(
     ]
 
 
-def test_run_skill_list_dispatches_and_prints_plain_output(
+def test_run_skill_catalog_dispatches_and_prints_plain_output(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:

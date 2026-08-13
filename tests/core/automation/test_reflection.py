@@ -671,8 +671,8 @@ def test_review_scope_shapes() -> None:
     ("fragment_name", "allowed_tools"),
     [
         ("reflect-memory.md", "Use only `memory`"),
-        ("reflect-skill.md", "Use only `skill`, `skill_list`, and `skill_manage`"),
-        ("reflect.md", "Use only `memory`, `skill`, `skill_list`, and `skill_manage`"),
+        ("reflect-skill.md", "Use only `skill` and `skill_manage`"),
+        ("reflect.md", "Use only `memory`, `skill`, and `skill_manage`"),
     ],
 )
 def test_real_reflection_prompts_define_their_tool_boundary(
@@ -683,7 +683,8 @@ def test_real_reflection_prompts_define_their_tool_boundary(
 
     assert "every other Tool is disabled" in prompt
     assert allowed_tools in prompt
-    assert "Call `skill` with no name" not in prompt
+    if fragment_name != "reflect-memory.md":
+        assert "Call `skill` with no arguments to list your Skills" in prompt
 
 
 @pytest.mark.parametrize("fragment_name", ["reflect-skill.md", "reflect.md"])
@@ -720,6 +721,6 @@ def test_real_skill_maintenance_prompt_forbids_implicit_global_fallback() -> Non
     prompt = prompt_path.read_text(encoding="utf-8")
 
     assert "overrides the general requirement to scan or load relevant Skills" in prompt
-    assert "Do not call `skill_list`, load a Skill, invoke any other Tool" in prompt
+    assert "Do not call `skill` or any other Tool" in prompt
     assert "Do not provide navigation steps, commands" in prompt
     assert "proposed or paraphrased Skill content, another scope, or follow-up offers" in prompt

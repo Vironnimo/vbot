@@ -25,7 +25,7 @@ def make_instance(tmp_path: Path, *, port: int = 8420) -> ServerInstance:
     )
 
 
-def test_parse_args_supports_skill_list() -> None:
+def test_parse_args_supports_skill_catalog_command() -> None:
     args = cli_main.parse_args(
         ["skill", "list", "--host", "localhost", "--port", "8700", "--data-dir", "dev"]
     )
@@ -37,7 +37,7 @@ def test_parse_args_supports_skill_list() -> None:
     assert args.data_dir == "dev"
 
 
-def test_skill_list_posts_skill_list_rpc(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_list_skills_posts_catalog_rpc(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     instance = make_instance(tmp_path)
     calls: list[dict[str, Any]] = []
 
@@ -58,7 +58,7 @@ def test_skill_list_posts_skill_list_rpc(tmp_path: Path, monkeypatch: pytest.Mon
 
     monkeypatch.setattr(skill_management.httpx, "post", fake_post)
 
-    result = skill_management.skill_list(instance)
+    result = skill_management.list_skills(instance)
 
     assert result.ok is True
     assert result.instance is instance
@@ -72,7 +72,7 @@ def test_skill_list_posts_skill_list_rpc(tmp_path: Path, monkeypatch: pytest.Mon
     ]
 
 
-def test_skill_list_formats_skills(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_list_skills_formats_skills(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     instance = make_instance(tmp_path)
 
     def fake_post(
@@ -97,7 +97,7 @@ def test_skill_list_formats_skills(tmp_path: Path, monkeypatch: pytest.MonkeyPat
 
     monkeypatch.setattr(skill_management.httpx, "post", fake_post)
 
-    result = skill_management.skill_list(instance)
+    result = skill_management.list_skills(instance)
 
     assert result.ok is True
     assert result.instance == instance
@@ -107,7 +107,7 @@ def test_skill_list_formats_skills(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     ]
 
 
-def test_skill_list_returns_empty_message(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_list_skills_returns_empty_message(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     instance = make_instance(tmp_path)
 
     def fake_post(
@@ -120,14 +120,14 @@ def test_skill_list_returns_empty_message(tmp_path: Path, monkeypatch: pytest.Mo
 
     monkeypatch.setattr(skill_management.httpx, "post", fake_post)
 
-    result = skill_management.skill_list(instance)
+    result = skill_management.list_skills(instance)
 
     assert result.ok is True
     assert result.instance is instance
     assert result.message.strip()
 
 
-def test_skill_list_formats_requirement_status(
+def test_list_skills_formats_requirement_status(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -159,7 +159,7 @@ def test_skill_list_formats_requirement_status(
 
     monkeypatch.setattr(skill_management.httpx, "post", fake_post)
 
-    result = skill_management.skill_list(instance)
+    result = skill_management.list_skills(instance)
 
     assert result.ok is True
     assert result.message.splitlines()[1:] == [
@@ -168,7 +168,7 @@ def test_skill_list_formats_requirement_status(
     ]
 
 
-def test_skill_list_includes_invalid_section_when_present(
+def test_list_skills_includes_invalid_section_when_present(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -198,7 +198,7 @@ def test_skill_list_includes_invalid_section_when_present(
 
     monkeypatch.setattr(skill_management.httpx, "post", fake_post)
 
-    result = skill_management.skill_list(instance)
+    result = skill_management.list_skills(instance)
 
     assert result.ok is True
     assert result.instance == instance
@@ -207,7 +207,7 @@ def test_skill_list_includes_invalid_section_when_present(
     assert "- broken-skill (C:/skills/broken-skill/SKILL.md): missing description" in result.message
 
 
-def test_skill_list_returns_error_on_rpc_failure(
+def test_list_skills_returns_error_on_rpc_failure(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -226,7 +226,7 @@ def test_skill_list_returns_error_on_rpc_failure(
 
     monkeypatch.setattr(skill_management.httpx, "post", fake_post)
 
-    result = skill_management.skill_list(instance)
+    result = skill_management.list_skills(instance)
 
     assert result.ok is False
     assert result.instance is instance

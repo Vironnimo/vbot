@@ -138,14 +138,10 @@ from core.tools.session_search import (
     session_search_handler,
 )
 from core.tools.skill import (
-    SKILL_LIST_TOOL_DESCRIPTION,
-    SKILL_LIST_TOOL_NAME,
-    SKILL_LIST_TOOL_PARAMETERS,
     SKILL_TOOL_DESCRIPTION,
     SKILL_TOOL_NAME,
     SKILL_TOOL_PARAMETERS,
     make_skill_handler,
-    make_skill_list_handler,
     register_skill_tool,
 )
 from core.tools.skill_manage import (
@@ -301,9 +297,6 @@ __all__ = [
     "SKILL_MANAGE_TOOL_DESCRIPTION",
     "SKILL_MANAGE_TOOL_NAME",
     "SKILL_MANAGE_TOOL_PARAMETERS",
-    "SKILL_LIST_TOOL_DESCRIPTION",
-    "SKILL_LIST_TOOL_NAME",
-    "SKILL_LIST_TOOL_PARAMETERS",
     "SKILL_TOOL_DESCRIPTION",
     "SKILL_TOOL_NAME",
     "SKILL_TOOL_PARAMETERS",
@@ -384,7 +377,6 @@ __all__ = [
     "make_process_handler",
     "make_project_handler",
     "make_skill_handler",
-    "make_skill_list_handler",
     "make_skill_manage_handler",
     "make_text_to_speech_handler",
     "make_terminal_handler",

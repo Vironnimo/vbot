@@ -14,11 +14,11 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from core.tools.availability import normalize_tool_access  # noqa: E402
+from core.tools.availability import ToolAccess, normalize_tool_access  # noqa: E402
 from core.utils.atomic import atomic_write_text  # noqa: E402
 
 JsonObject = dict[str, Any]
-_LEGACY_RUNTIME_DERIVED_TOOLS = frozenset({"history", "memory", "session_read", "skill_list"})
+_LEGACY_RUNTIME_DERIVED_TOOLS = frozenset({"history", "memory", "session_read"})
 
 
 class AgentToolAccessConversionError(Exception):
@@ -37,16 +37,19 @@ class AgentToolAccessConversionResult:
 class _ConversionCandidate:
     path: Path
     payload: JsonObject
-    policy: JsonObject
+    policy: ToolAccess
+    legacy: bool
 
 
 def convert_agent_tool_access(
     data_dir: Path,
     *,
     apply: bool = False,
+    remove_tools: tuple[str, ...] = (),
 ) -> AgentToolAccessConversionResult:
     """Preflight and optionally convert every Identity Agent in one data directory."""
 
+    retired_tools = frozenset(name.strip() for name in remove_tools if name.strip())
     agents_dir = data_dir.expanduser().resolve() / "agents"
     if not agents_dir.exists():
         return AgentToolAccessConversionResult(0, 0, 0, ())
@@ -82,21 +85,37 @@ def convert_agent_tool_access(
             )
         if has_current:
             try:
-                normalize_tool_access(payload["tool_access"])
+                policy = normalize_tool_access(payload["tool_access"])
             except ValueError as exc:
                 raise AgentToolAccessConversionError(
                     f"Invalid tool_access in {agent_path}: {exc}"
                 ) from exc
+            cleaned_policy = _remove_policy_tools(policy, retired_tools)
+            if cleaned_policy != policy:
+                candidates.append(
+                    _ConversionCandidate(agent_path, payload, cleaned_policy, legacy=False)
+                )
+                continue
             already_converted += 1
             continue
 
-        policy = _convert_legacy_policy(payload.get("allowed_tools"), agent_path)
-        candidates.append(_ConversionCandidate(agent_path, payload, policy))
+        policy = _convert_legacy_policy(
+            payload.get("allowed_tools"),
+            agent_path,
+            retired_tools=retired_tools,
+        )
+        candidates.append(_ConversionCandidate(agent_path, payload, policy, legacy=True))
 
-    changes = tuple(f"{candidate.path}: {json.dumps(candidate.policy)}" for candidate in candidates)
+    changes = tuple(
+        f"{candidate.path}: {json.dumps(candidate.policy.to_dict())}" for candidate in candidates
+    )
     if apply:
         for candidate in candidates:
-            converted = _replace_legacy_field(candidate.payload, candidate.policy)
+            converted = _replace_policy_field(
+                candidate.payload,
+                candidate.policy,
+                legacy=candidate.legacy,
+            )
             try:
                 atomic_write_text(
                     candidate.path,
@@ -127,9 +146,14 @@ def _load_agent(path: Path) -> JsonObject:
     return payload
 
 
-def _convert_legacy_policy(value: Any, path: Path) -> JsonObject:
+def _convert_legacy_policy(
+    value: Any,
+    path: Path,
+    *,
+    retired_tools: frozenset[str] = frozenset(),
+) -> ToolAccess:
     if value is None:
-        return {"mode": "all"}
+        return normalize_tool_access({"mode": "all"})
     if not isinstance(value, list) or not all(
         isinstance(item, str) and bool(item.strip()) for item in value
     ):
@@ -141,27 +165,47 @@ def _convert_legacy_policy(value: Any, path: Path) -> JsonObject:
             raise AgentToolAccessConversionError(
                 f"allowed_tools mixes '*' with explicit names: {path}"
             )
-        return {"mode": "all"}
+        return normalize_tool_access({"mode": "all"})
 
     allowed = list(
-        dict.fromkeys(name for name in value if name not in _LEGACY_RUNTIME_DERIVED_TOOLS)
+        dict.fromkeys(
+            name
+            for name in value
+            if name not in _LEGACY_RUNTIME_DERIVED_TOOLS and name not in retired_tools
+        )
     )
-    return {"mode": "selected", "allowed": allowed}
+    return normalize_tool_access({"mode": "selected", "allowed": allowed})
 
 
-def _replace_legacy_field(payload: JsonObject, policy: JsonObject) -> JsonObject:
-    """Replace the legacy field in place while preserving surrounding key order."""
+def _remove_policy_tools(policy: ToolAccess, retired_tools: frozenset[str]) -> ToolAccess:
+    if not retired_tools:
+        return policy
+    return ToolAccess(
+        mode=policy.mode,
+        allowed=tuple(name for name in policy.allowed if name not in retired_tools),
+        denied=tuple(name for name in policy.denied if name not in retired_tools),
+    )
+
+
+def _replace_policy_field(
+    payload: JsonObject,
+    policy: ToolAccess,
+    *,
+    legacy: bool,
+) -> JsonObject:
+    """Write the explicit policy in place while preserving surrounding key order."""
 
     converted: JsonObject = {}
     inserted = False
+    source_field = "allowed_tools" if legacy else "tool_access"
     for key, value in payload.items():
-        if key == "allowed_tools":
-            converted["tool_access"] = policy
+        if key == source_field:
+            converted["tool_access"] = policy.to_dict()
             inserted = True
         else:
             converted[key] = value
     if not inserted:
-        converted["tool_access"] = policy
+        converted["tool_access"] = policy.to_dict()
     return converted
 
 
@@ -178,13 +222,24 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Write the preflighted conversions atomically",
     )
+    parser.add_argument(
+        "--remove-tool",
+        action="append",
+        default=[],
+        metavar="NAME",
+        help="Remove one retired Tool name from explicit allow and deny lists",
+    )
     return parser.parse_args(argv)
 
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     try:
-        result = convert_agent_tool_access(args.data_dir, apply=args.apply)
+        result = convert_agent_tool_access(
+            args.data_dir,
+            apply=args.apply,
+            remove_tools=tuple(args.remove_tool),
+        )
     except AgentToolAccessConversionError as exc:
         print(f"agent-tool-access.............. ERROR: {exc}", file=sys.stderr)
         return 1
