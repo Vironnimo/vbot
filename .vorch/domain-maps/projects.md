@@ -28,7 +28,7 @@ Core terms such as Project, Agent, Session, Tool, Skill, and Provider live in `.
 
 ### Project Tool Whitelist
 
-**Definition:** The Project-owned `allowed_tools` set that defines the maximum Tools available to every Project Agent; repository-level denials may only remove Tools from it.
+**Definition:** The Project-owned `allowed_tools` set that defines the maximum directly configurable Tools available to every Project Agent. Repository denials narrow the default policy, while an explicit vBot per-Agent Tool override may replace those denials but can never exceed this ceiling; automatic companions may follow an in-ceiling Tool.
 
 ### Project Skill Whitelist
 
@@ -41,7 +41,7 @@ Core terms such as Project, Agent, Session, Tool, Skill, and Provider live in `.
 - A Project selects exactly one supported `source_format` (`opencode` or `claude`) for Agent and Project Skill discovery. Format detection may report multiple candidates but does not make a Project multi-format.
 - `project.json` owns Project defaults, capability ceilings, Skill selections, and per-Agent overrides. Runtime resolution combines those values with freshly read repository Agent configuration and global defaults; it does not copy repository Agent files into the Project Anchor.
 - Project Agent Session paths are anchored at `<data-dir>/projects/<project-id>/agents/<agent-id>/sessions/`. Agent and Project identifiers crossing filesystem boundaries must pass the shared path-segment validation.
-- Tool access is the Project Tool Whitelist minus repository Agent denials. Skill access follows `(project skills ∪ enabled bundled skills ∪ enabled global skills) − disabled project skills − {"*"}`; neither repository configuration nor an Agent override may exceed these Project ceilings.
+- Without a vBot Tool override, Tool access starts from the Project Tool Whitelist and repository Agent denials remove names. A present `overrides.<agent_id>.tool_access` completely replaces that repository Tool policy and may intentionally re-enable a repo-denied Tool, while still remaining inside the Project Tool Whitelist; mode `none` can remove everything and `selected` can narrow the Project Agent to one Tool. Skill access follows `(project skills ∪ enabled bundled skills ∪ enabled global skills) − disabled project skills − {"*"}`; neither repository configuration nor an Agent override may exceed Project ceilings.
 - Models, temperature, thinking effort, and compaction policy use the same canonical validators as global settings. Do not create Project-local validation rules or bypass the shared usable-model gate.
 
 ## Ownership Routing

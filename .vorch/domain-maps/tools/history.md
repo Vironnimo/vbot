@@ -32,4 +32,4 @@ Session-scoped, lossless access to canonical messages hidden by Compaction.
 
 - Existing checkpoints activate History without being rewritten. Only newly created checkpoints receive the guidance text.
 - Failed Compaction appends no checkpoint and therefore cannot activate History.
-- Agent allowlists and Project Tool Whitelists never store or expose `history`; the ephemeral Session grant is the only model-visible capability source. A Run restriction can still deny execution after the Tool has been advertised.
+- Agent policies and Project Tool Whitelists never independently select `history`; the ephemeral Session Grant is its only activation source. `tool.list` still exposes the Tool as automatic so configuration surfaces can explain and explicitly deny it; an absolute Tool-policy denial wins over a current grant, and a Run restriction can still deny execution after advertisement.

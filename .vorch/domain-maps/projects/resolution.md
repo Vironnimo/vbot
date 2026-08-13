@@ -36,13 +36,19 @@ Compaction policy is a supported per-Agent Project override passed into the synt
 
 Project capability configuration is a ceiling, not another fallback chain.
 
-Effective Tools are:
+Without a vBot Tool override, effective Tool policy is:
 
 ```text
 Project allowed_tools − repository Agent denied_tools
 ```
 
-The repository Agent cannot grant a Tool omitted by the Project. Keep source-format permission parsing in scanners and the final set computation in the resolver.
+With `overrides.<agent_id>.tool_access`, effective Tool policy is instead:
+
+```text
+vBot Tool Access Policy ∩ Project allowed_tools
+```
+
+The override fully replaces repository denials and may therefore re-enable a repo-denied Tool, but it cannot grant a directly configurable Tool omitted by the Project. `mode: all` means the complete Project Tool Whitelist, `selected` may narrow it to exactly one or zero named Tools, and `none` disables every direct and automatic activation path. Automatic companions may follow an active in-ceiling lead and absolute `denied` names apply after every activation source. Keep source-format permission parsing in scanners and this final policy construction in the resolver.
 
 Effective Skills are:
 
@@ -56,7 +62,7 @@ The disabled-name subtraction applies to the combined set, so a disabled Project
 
 The same exact effective names form the temporary Skill grant when an Identity Agent works through Rooting or explicitly loaded Project Context. Runtime layers those names into the Identity-scoped `SkillRegistry.always_allowed` set beside the Agent's private Skills, so an empty personal `allowed_skills` cannot prevent the Agent or its Self-Subagent from using what the Project requires; the persisted Agent configuration is not mutated.
 
-Effective additional Agent targets are the current Project Team, excluding the calling Agent, filtered by the repository Agent's ordered `AgentTargetRule` list, with the last matching rule winning. No target rules means every other Team member; a result with no members means self-only, not that either Sub-Agent Tool is unavailable. When a Sub-Agent Tool is available, the resolver projects these additional targets into the synthesized config Agent's root `tools.subagent.allowed_agents` block; Tool availability remains owned by the effective `allowed_tools`, and disabling the Tool omits that runtime block without altering the repository target rules that will be applied again when the Tool returns. A Project Agent cannot address an Identity Agent or another Project even if its source policy is a wildcard, because Project scope is the hard outer boundary.
+Effective additional Agent targets are the current Project Team, excluding the calling Agent, filtered by the repository Agent's ordered `AgentTargetRule` list, with the last matching rule winning. No target rules means every other Team member; a result with no members means self-only, not that either Sub-Agent Tool is unavailable. When a Sub-Agent Tool is available, the resolver projects these additional targets into the synthesized config Agent's root `tools.subagent.allowed_agents` block; Tool availability remains owned by the effective `tool_access`, and disabling the Tool omits that runtime block without altering the repository target rules that will be applied again when the Tool returns. A Project Agent cannot address an Identity Agent or another Project even if its source policy is broad, because Project scope is the hard outer boundary.
 
 ## Working-Project Helpers
 
