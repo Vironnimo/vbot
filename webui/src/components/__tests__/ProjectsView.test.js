@@ -1047,19 +1047,12 @@ describe('ProjectsView', () => {
 
     await waitForCondition(() =>
       document.querySelector(
-        '[data-tool-name="read"] [data-tool-access-state="enabled"]',
+        '[data-tool-name="read"][data-tool-access-toggle]',
       ),
     );
-    document
-      .querySelector(
-        '[data-tool-name="bash"] [data-tool-access-state="default"]',
-      )
-      .click();
-    document
-      .querySelector(
-        '[data-tool-name="read"] [data-tool-access-state="enabled"]',
-      )
-      .click();
+    document.querySelector('[data-tool-name="bash"]').click();
+    flushSync();
+    document.querySelector('[data-tool-name="read"]').click();
     flushSync();
     await wait(AUTO_SAVE_WAIT_MS);
     await waitForCondition(() => setOverrideMock.mock.calls.length === 1);

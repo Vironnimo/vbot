@@ -1,7 +1,7 @@
 <script>
   import Button from '../ui/Button.svelte';
   import EmptyState from '../ui/EmptyState.svelte';
-  import StatusChip from '../ui/StatusChip.svelte';
+  import ToolReadinessNotice from '../ui/ToolReadinessNotice.svelte';
   import {
     TOOL_ACCESS_MODE_ALL,
     TOOL_ACCESS_MODE_NONE,
@@ -10,14 +10,23 @@
     groupToolCatalog,
     normalizeToolAccess,
     policyNamesNotInCatalog,
-    setToolAccessState,
-    setToolFamilyState,
-    toolAccessState,
+    setToolAccessPreference,
+    setToolFamilyPreference,
+    toolAccessPreferenceEnabled,
     toolIsConfigurable,
   } from '$lib/toolAccess.js';
   import { t } from '$lib/i18n.js';
+  import { floatingHoverCard } from '$lib/tooltip.js';
 
   const noop = () => {};
+  const FAMILY_ORDER = [
+    'files',
+    'execution',
+    'web',
+    'sessions',
+    'skills',
+    'media',
+  ];
 
   let {
     value = { mode: TOOL_ACCESS_MODE_ALL },
@@ -43,27 +52,15 @@
   const modeOptions = [
     {
       mode: TOOL_ACCESS_MODE_ALL,
-      label: () => t('toolAccess.mode.all', 'All Tools'),
-      description: () =>
-        t(
-          'toolAccess.mode.allHelp',
-          'Includes current and future Tools. Individual Tools can still be blocked.',
-        ),
+      label: () => t('toolAccess.mode.all', 'All'),
     },
     {
       mode: TOOL_ACCESS_MODE_SELECTED,
-      label: () => t('toolAccess.mode.selected', 'Selected Tools'),
-      description: () =>
-        t(
-          'toolAccess.mode.selectedHelp',
-          'Only the Tools you choose are included. Automatic companion Tools follow their source.',
-        ),
+      label: () => t('toolAccess.mode.selected', 'Choose'),
     },
     {
       mode: TOOL_ACCESS_MODE_NONE,
-      label: () => t('toolAccess.mode.none', 'No Tools'),
-      description: () =>
-        t('toolAccess.mode.noneHelp', 'Turns off every Tool for this Agent.'),
+      label: () => t('toolAccess.mode.none', 'None'),
     },
   ];
 
@@ -73,10 +70,6 @@
     for (const name of unknown) {
       catalog.push({
         name,
-        description: t(
-          'toolAccess.unregisteredDescription',
-          'Stored in this policy, but not registered right now.',
-        ),
         family: null,
         activation: 'configurable',
         ready: false,
@@ -93,31 +86,52 @@
         ...group,
         members: needle
           ? group.members.filter((tool) =>
-              `${tool.name} ${tool.description ?? ''}`
-                .toLocaleLowerCase()
-                .includes(needle),
+              tool.name.toLocaleLowerCase().includes(needle),
             )
           : group.members,
       }))
-      .filter((group) => group.members.length > 0);
+      .filter((group) => group.members.length > 0)
+      .sort((left, right) => familyOrder(left.id) - familyOrder(right.id));
   }
 
   function updateMode(mode) {
     onChange(changeToolAccessMode(policy, mode, completeCatalog, ceiling));
   }
 
-  function updateTool(tool, state) {
+  function preferenceEnabled(tool) {
+    return toolAccessPreferenceEnabled(policy, tool);
+  }
+
+  function updateTool(tool) {
+    if (policy.mode === TOOL_ACCESS_MODE_NONE) return;
     onChange(
-      setToolAccessState(policy, tool.name, state, completeCatalog, ceiling),
+      setToolAccessPreference(
+        policy,
+        tool,
+        !preferenceEnabled(tool),
+        completeCatalog,
+        ceiling,
+      ),
     );
   }
 
-  function updateGroup(group, state) {
+  function groupState(group) {
+    const configurable = group.members.filter(toolIsConfigurable);
+    const controlledMembers =
+      configurable.length > 0 ? configurable : group.members;
+    const enabled = controlledMembers.filter(preferenceEnabled).length;
+    if (enabled === 0) return 'off';
+    if (enabled === controlledMembers.length) return 'on';
+    return 'mixed';
+  }
+
+  function updateGroup(group) {
+    if (policy.mode === TOOL_ACCESS_MODE_NONE) return;
     onChange(
-      setToolFamilyState(
+      setToolFamilyPreference(
         policy,
         group.members,
-        state,
+        groupState(group) !== 'on',
         completeCatalog,
         ceiling,
       ),
@@ -139,133 +153,65 @@
     return labels[group.id] ?? humanize(group.id);
   }
 
-  function groupSummary(group) {
-    const states = group.members.map((tool) => accessState(tool));
-    const denied = states.filter((state) => state === 'denied').length;
-    const included = states.filter(
-      (state) =>
-        state === 'included' || state === 'enabled' || state === 'automatic',
-    ).length;
-    if (denied > 0) {
-      return t(
-        'toolAccess.family.summaryBlocked',
-        '{included} included · {denied} blocked',
-        { included, denied },
-      );
-    }
-    return t('toolAccess.family.summary', '{included} of {total} included', {
-      included,
-      total: states.length,
-    });
+  function groupToggleLabel(group) {
+    return groupState(group) === 'on'
+      ? t('toolAccess.family.disable', 'Turn off {family}', {
+          family: familyLabel(group),
+        })
+      : t('toolAccess.family.enable', 'Turn on {family}', {
+          family: familyLabel(group),
+        });
   }
 
-  function accessState(tool) {
-    return toolAccessState(policy, tool, completeCatalog, {
-      memoryPromptMode,
-    });
+  function toolToggleLabel(tool) {
+    return preferenceEnabled(tool)
+      ? t('toolAccess.disableTool', 'Turn off {name}', { name: tool.name })
+      : t('toolAccess.enableTool', 'Turn on {name}', { name: tool.name });
   }
 
-  function stateLabel(tool) {
-    const state = accessState(tool);
-    if (state === 'denied') {
-      return t('toolAccess.state.denied', 'Blocked');
-    }
-    if (state === 'enabled') {
-      return t('toolAccess.state.enabled', 'On');
-    }
-    if (state === 'included') {
-      return t('toolAccess.state.included', 'Included');
-    }
-    if (state === 'automatic') {
-      return t('toolAccess.state.automatic', 'Automatic');
-    }
-    if (state === 'inactive') {
-      return t('toolAccess.state.inactive', 'Inactive');
-    }
-    return t('toolAccess.state.off', 'Off');
-  }
-
-  function stateVariant(tool) {
-    const state = accessState(tool);
-    if (state === 'denied') return 'error';
-    if (state === 'enabled') return 'success';
-    if (state === 'included' || state === 'automatic') return 'info';
-    return 'neutral';
-  }
-
-  function automaticNote(tool) {
+  function toolNotes(tool) {
+    const notes = [];
     if (tool.activation === 'follows') {
-      if (accessState(tool) === 'inactive') {
-        return t(
-          'toolAccess.activation.followsInactive',
-          'Inactive · waiting for {source}',
-          { source: tool.activation_source },
-        );
-      }
-      return t('toolAccess.activation.follows', 'Follows {source}', {
-        source: tool.activation_source,
-      });
-    }
-    if (tool.activation === 'memory_mode') {
-      return memoryPromptMode === 'off'
-        ? t('toolAccess.activation.memoryOff', 'Inactive · Memory is off')
-        : t('toolAccess.activation.memoryOn', 'Automatic · Memory is on');
-    }
-    if (tool.activation === 'session_grant') {
-      return t(
-        'toolAccess.activation.session',
-        'Appears automatically when the Session grants it',
+      notes.push(
+        t('toolAccess.activation.follows', 'Automatic with {source}', {
+          source: tool.activation_source,
+        }),
+      );
+    } else if (tool.activation === 'memory_mode') {
+      notes.push(
+        memoryPromptMode === 'off'
+          ? t('toolAccess.activation.memoryOff', 'Memory is currently off')
+          : t('toolAccess.activation.memoryOn', 'Automatic while Memory is on'),
+      );
+    } else if (tool.activation === 'session_grant') {
+      notes.push(
+        t(
+          'toolAccess.activation.session',
+          'Available automatically when the Session grants it',
+        ),
       );
     }
     if ((tool.constraints ?? []).includes('identity_agent')) {
-      return t('toolAccess.constraint.identity', 'Identity Agents only');
+      notes.push(t('toolAccess.constraint.identity', 'Identity Agents only'));
     }
     if ((tool.constraints ?? []).includes('image_fallback_route')) {
-      return t(
-        'toolAccess.constraint.imageFallback',
-        'Used only when the main Model cannot analyze images directly',
+      notes.push(
+        t(
+          'toolAccess.constraint.imageFallback',
+          'Used only when the main Model cannot analyze images directly',
+        ),
       );
     }
-    return '';
-  }
-
-  function readinessNote(tool) {
     if (tool.registered === false) {
-      return t('toolAccess.readiness.unregistered', 'Not registered right now');
-    }
-    if (tool.ready === false) {
-      return (
-        tool.readiness_hint ??
-        t('toolAccess.readiness.unavailable', 'Currently unavailable')
+      notes.push(
+        t('toolAccess.readiness.unregistered', 'Not registered right now'),
       );
     }
-    return '';
+    return notes;
   }
 
-  function defaultStateSelected(tool) {
-    const state = accessState(tool);
-    return (
-      state === 'included' ||
-      state === 'automatic' ||
-      state === 'inactive' ||
-      state === 'off'
-    );
-  }
-
-  function defaultChoiceLabel(tool) {
-    if (!toolIsConfigurable(tool)) {
-      return t('toolAccess.choice.auto', 'Auto');
-    }
-    return policy.mode === TOOL_ACCESS_MODE_ALL
-      ? t('toolAccess.choice.included', 'Included')
-      : t('toolAccess.choice.off', 'Off');
-  }
-
-  function familyActionLabel(group, action) {
-    return t('toolAccess.family.actionFor', '{action} {family}', {
-      action,
-      family: familyLabel(group),
-    });
+  function hasToolDetails(tool) {
+    return toolNotes(tool).length > 0 || tool.ready === false;
   }
 
   function humanize(value) {
@@ -273,43 +219,37 @@
       .replaceAll('_', ' ')
       .replace(/\b\w/g, (letter) => letter.toUpperCase());
   }
+
+  function familyOrder(family) {
+    if (!family) return FAMILY_ORDER.length + 1;
+    const index = FAMILY_ORDER.indexOf(family);
+    return index === -1 ? FAMILY_ORDER.length : index;
+  }
 </script>
 
 <div class="tool-access-editor">
-  <div
-    class="tool-access-intent"
-    role="radiogroup"
-    aria-label={t('toolAccess.intentLabel', 'Tool access')}
-  >
-    {#each modeOptions as option (option.mode)}
-      <button
-        type="button"
-        class:tool-access-intent-card--selected={policy.mode === option.mode}
-        class="tool-access-intent-card"
-        role="radio"
-        aria-checked={policy.mode === option.mode}
-        {disabled}
-        onclick={() => updateMode(option.mode)}
-      >
-        <span class="tool-access-intent-radio" aria-hidden="true"></span>
-        <span class="tool-access-intent-copy">
-          <strong>{option.label()}</strong>
-          <span>{option.description()}</span>
-        </span>
-      </button>
-    {/each}
-  </div>
-
   <div class="tool-access-toolbar">
+    <div
+      class="tool-access-modes"
+      role="radiogroup"
+      aria-label={t('toolAccess.modeLabel', 'Tool access')}
+    >
+      {#each modeOptions as option (option.mode)}
+        <button
+          type="button"
+          class:is-selected={policy.mode === option.mode}
+          role="radio"
+          aria-checked={policy.mode === option.mode}
+          {disabled}
+          onclick={() => updateMode(option.mode)}
+        >
+          {option.label()}
+        </button>
+      {/each}
+    </div>
+
     <label class="tool-access-search">
-      <span class="sr-only">{t('toolAccess.searchLabel', 'Search Tools')}</span>
-      <svg
-        class="tool-access-search-icon"
-        viewBox="0 0 16 16"
-        width="16"
-        height="16"
-        aria-hidden="true"
-      >
+      <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
         <circle
           cx="7"
           cy="7"
@@ -329,10 +269,12 @@
       <input
         type="search"
         value={search}
-        placeholder={t('toolAccess.searchPlaceholder', 'Find a Tool…')}
+        placeholder={t('toolAccess.searchPlaceholder', 'Filter Tools…')}
+        aria-label={t('toolAccess.searchLabel', 'Filter Tools')}
         oninput={(event) => (search = event.currentTarget.value)}
       />
     </label>
+
     {#if showReset}
       <Button variant="tertiary" {disabled} onClick={onReset}>
         {resetLabel ||
@@ -349,147 +291,71 @@
   {:else}
     <div class="tool-access-groups">
       {#each groups as group (group.id ?? 'individual')}
-        <section class="tool-access-group">
+        <section
+          class="tool-access-group"
+          class:tool-access-group--individual={!group.family}
+        >
           <header class="tool-access-group-header">
-            <div>
+            <div class="tool-access-group-title">
               <h4>{familyLabel(group)}</h4>
-              <p>{groupSummary(group)}</p>
             </div>
-            <div
-              class="tool-access-family-actions"
-              aria-label={t('toolAccess.family.actions', 'Family actions')}
-            >
+            {#if group.family}
               <button
                 type="button"
-                {disabled}
-                aria-label={familyActionLabel(
-                  group,
-                  t('toolAccess.family.allow', 'Allow current'),
-                )}
-                onclick={() => updateGroup(group, 'enabled')}
+                class="tool-access-family-toggle"
+                class:is-on={groupState(group) === 'on'}
+                class:is-mixed={groupState(group) === 'mixed'}
+                role="checkbox"
+                aria-checked={groupState(group) === 'mixed'
+                  ? 'mixed'
+                  : groupState(group) === 'on'}
+                aria-label={groupToggleLabel(group)}
+                data-tool-family={group.id}
+                disabled={disabled || policy.mode === TOOL_ACCESS_MODE_NONE}
+                onclick={() => updateGroup(group)}
               >
-                {t('toolAccess.family.allow', 'Allow current')}
+                <span aria-hidden="true"></span>
               </button>
-              <button
-                type="button"
-                {disabled}
-                aria-label={familyActionLabel(
-                  group,
-                  t('toolAccess.family.block', 'Block current'),
-                )}
-                onclick={() => updateGroup(group, 'denied')}
-              >
-                {t('toolAccess.family.block', 'Block current')}
-              </button>
-              <button
-                type="button"
-                {disabled}
-                aria-label={familyActionLabel(
-                  group,
-                  t('toolAccess.family.reset', 'Reset current'),
-                )}
-                onclick={() => updateGroup(group, 'default')}
-              >
-                {t('toolAccess.family.reset', 'Reset current')}
-              </button>
-            </div>
+            {/if}
           </header>
 
-          <div class="tool-access-rows">
+          <div class="tool-access-cloud">
             {#each group.members as tool (tool.name)}
-              <div
-                class:tool-access-row--unavailable={Boolean(
-                  readinessNote(tool),
-                )}
-                class="tool-access-row"
-                data-tool-name={tool.name}
-              >
-                <div class="tool-access-tool-copy">
-                  <div class="tool-access-tool-heading">
-                    <code>{tool.name}</code>
-                    <StatusChip variant={stateVariant(tool)}>
-                      {stateLabel(tool)}
-                    </StatusChip>
-                  </div>
-                  {#if tool.description}
-                    <p>{tool.description}</p>
-                  {/if}
-                  {#if automaticNote(tool) || readinessNote(tool)}
-                    <div class="tool-access-notes">
-                      {#if automaticNote(tool)}<span>{automaticNote(tool)}</span
-                        >{/if}
-                      {#if readinessNote(tool)}
-                        <span class="tool-access-unavailable-note"
-                          >{readinessNote(tool)}</span
-                        >
-                        {#if tool.extension}
-                          <button
-                            type="button"
-                            onclick={() => onOpenExtensions(tool.extension)}
-                          >
-                            {t('toolAccess.configureExtension', 'Configure')}
-                          </button>
-                        {/if}
-                      {/if}
-                    </div>
-                  {/if}
-                </div>
-
-                <div
-                  class="tool-access-state-control"
-                  aria-label={t('toolAccess.stateFor', 'Access for {name}', {
-                    name: tool.name,
-                  })}
+              <div class="tool-access-chip-wrap">
+                <button
+                  type="button"
+                  class="tool-access-chip"
+                  class:is-on={preferenceEnabled(tool)}
+                  class:is-automatic={!toolIsConfigurable(tool)}
+                  class:is-unavailable={tool.ready === false}
+                  role="switch"
+                  aria-checked={preferenceEnabled(tool)}
+                  aria-label={toolToggleLabel(tool)}
+                  data-tool-name={tool.name}
+                  data-tool-access-toggle
+                  disabled={disabled || policy.mode === TOOL_ACCESS_MODE_NONE}
+                  onclick={() => updateTool(tool)}
                 >
-                  <button
-                    type="button"
-                    class:tool-access-choice--selected={defaultStateSelected(
-                      tool,
-                    )}
-                    data-tool-access-state="default"
-                    aria-pressed={defaultStateSelected(tool)}
-                    aria-label={t(
-                      'toolAccess.setDefaultFor',
-                      'Use default access for {name}',
-                      { name: tool.name },
-                    )}
-                    {disabled}
-                    onclick={() => updateTool(tool, 'default')}
+                  <span>{tool.name}</span>
+                </button>
+
+                {#if hasToolDetails(tool)}
+                  <div
+                    class="tool-access-tip"
+                    role="tooltip"
+                    use:floatingHoverCard
                   >
-                    {defaultChoiceLabel(tool)}
-                  </button>
-                  {#if toolIsConfigurable(tool)}
-                    <button
-                      type="button"
-                      class:tool-access-choice--selected={accessState(tool) ===
-                        'enabled'}
-                      data-tool-access-state="enabled"
-                      aria-pressed={accessState(tool) === 'enabled'}
-                      aria-label={t('toolAccess.enableFor', 'Enable {name}', {
-                        name: tool.name,
-                      })}
-                      disabled={disabled ||
-                        policy.mode === TOOL_ACCESS_MODE_ALL}
-                      onclick={() => updateTool(tool, 'enabled')}
-                    >
-                      {t('toolAccess.choice.on', 'On')}
-                    </button>
-                  {/if}
-                  <button
-                    type="button"
-                    class:tool-access-choice--danger={accessState(tool) ===
-                      'denied'}
-                    data-tool-access-state="denied"
-                    aria-pressed={accessState(tool) === 'denied'}
-                    aria-label={t('toolAccess.denyFor', 'Block {name}', {
-                      name: tool.name,
-                    })}
-                    {disabled}
-                    onclick={() => updateTool(tool, 'denied')}
-                  >
-                    {t('toolAccess.choice.block', 'Block')}
-                  </button>
-                </div>
+                    {#each toolNotes(tool) as note (`${tool.name}-${note}`)}
+                      <p>{note}</p>
+                    {/each}
+                    <ToolReadinessNotice
+                      ready={tool.ready}
+                      readinessHint={tool.readiness_hint}
+                      extension={tool.extension}
+                      {onOpenExtensions}
+                    />
+                  </div>
+                {/if}
               </div>
             {/each}
           </div>
@@ -502,245 +368,27 @@
 <style>
   .tool-access-editor {
     display: grid;
-    gap: 14px;
-  }
-
-  .tool-access-intent {
-    display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 8px;
-  }
-
-  .tool-access-intent-card {
-    display: flex;
     gap: 10px;
-    min-width: 0;
-    padding: 12px;
-    text-align: left;
-    color: var(--text-med);
-    border: 1px solid var(--border);
-    border-radius: 9px;
-    background: var(--surface);
-    cursor: pointer;
-  }
-
-  .tool-access-intent-card:hover:not(:disabled) {
-    border-color: var(--border-2);
-    background: var(--surface-2);
-  }
-
-  .tool-access-intent-card:focus-visible,
-  .tool-access-family-actions button:focus-visible,
-  .tool-access-notes button:focus-visible,
-  .tool-access-state-control button:focus-visible {
-    outline: 0;
-    box-shadow: var(--focus-ring);
-  }
-
-  .tool-access-intent-card--selected {
-    border-color: var(--accent);
-    box-shadow: inset 0 0 0 1px var(--accent-40);
-    background: var(--accent-dim);
-  }
-
-  .tool-access-intent-radio {
-    flex: 0 0 auto;
-    width: 14px;
-    height: 14px;
-    margin-top: 2px;
-    border: 1px solid var(--border-2);
-    border-radius: 50%;
-    box-shadow: inset 0 0 0 3px var(--surface);
-    background: transparent;
-  }
-
-  .tool-access-intent-card--selected .tool-access-intent-radio {
-    border-color: var(--accent);
-    background: var(--accent);
-  }
-
-  .tool-access-intent-copy {
-    display: grid;
-    gap: 3px;
-    min-width: 0;
-  }
-
-  .tool-access-intent-copy strong {
-    color: var(--text-hi);
-    font-size: var(--fs-label-md);
-  }
-
-  .tool-access-intent-copy span {
-    font-size: var(--fs-body-sm);
-    line-height: 1.4;
   }
 
   .tool-access-toolbar {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 10px;
-  }
-
-  .tool-access-search {
-    display: flex;
-    align-items: center;
-    width: min(330px, 100%);
-    padding: 0 10px;
-    border: 1px solid var(--border);
-    border-radius: 7px;
-    background: var(--surface-2);
-  }
-
-  .tool-access-search:focus-within {
-    border-color: var(--accent);
-    box-shadow: var(--focus-ring);
-  }
-
-  .tool-access-search-icon {
-    color: var(--text-lo);
-  }
-
-  .tool-access-search input {
-    width: 100%;
-    min-width: 0;
-    padding: 8px;
-    color: var(--text-hi);
-    border: 0;
-    outline: 0;
-    background: transparent;
-    font: inherit;
-    font-size: var(--fs-mono-body);
-  }
-
-  .tool-access-groups {
     display: grid;
-    gap: 10px;
-  }
-
-  .tool-access-group {
-    overflow: hidden;
-    border: 1px solid var(--border);
-    border-radius: 9px;
-    background: var(--surface);
-  }
-
-  .tool-access-group-header {
-    display: flex;
+    grid-template-columns: auto minmax(150px, 1fr) auto;
     align-items: center;
-    justify-content: space-between;
-    gap: 12px;
-    padding: 10px 12px;
-    border-bottom: 1px solid var(--border);
-    background: var(--surface-2);
+    gap: 8px;
   }
 
-  .tool-access-group-header h4,
-  .tool-access-group-header p,
-  .tool-access-tool-copy p {
-    margin: 0;
-  }
-
-  .tool-access-group-header h4 {
-    color: var(--text-hi);
-    font-size: var(--fs-label-sm);
-    letter-spacing: 0.02em;
-  }
-
-  .tool-access-group-header p {
-    margin-top: 2px;
-    color: var(--text-lo);
-    font-size: var(--fs-mono-xs);
-  }
-
-  .tool-access-family-actions {
-    display: flex;
-    gap: 2px;
-  }
-
-  .tool-access-family-actions button,
-  .tool-access-notes button {
-    padding: 3px 6px;
-    color: var(--text-med);
-    border: 0;
-    border-radius: 4px;
-    background: transparent;
-    cursor: pointer;
-    font: inherit;
-    font-size: var(--fs-mono-xs);
-  }
-
-  .tool-access-family-actions button:hover:not(:disabled),
-  .tool-access-notes button:hover:not(:disabled) {
-    color: var(--text-hi);
-    background: var(--surface);
-  }
-
-  .tool-access-row {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) auto;
-    align-items: center;
-    gap: 14px;
-    min-height: 60px;
-    padding: 10px 12px;
-    border-top: 1px solid var(--border);
-  }
-
-  .tool-access-row:first-child {
-    border-top: 0;
-  }
-
-  .tool-access-row--unavailable {
-    background: color-mix(in srgb, var(--surface-2) 45%, transparent);
-  }
-
-  .tool-access-tool-copy {
-    display: grid;
-    gap: 4px;
-    min-width: 0;
-  }
-
-  .tool-access-tool-heading,
-  .tool-access-notes {
-    display: flex;
-    align-items: center;
-    flex-wrap: wrap;
-    gap: 6px;
-  }
-
-  .tool-access-tool-heading code {
-    color: var(--text-hi);
-    font-size: var(--fs-mono-body);
-  }
-
-  .tool-access-tool-copy > p {
-    overflow: hidden;
-    color: var(--text-med);
-    font-size: var(--fs-body-sm);
-    line-height: 1.35;
-    text-overflow: ellipsis;
-  }
-
-  .tool-access-notes {
-    color: var(--text-lo);
-    font-size: var(--fs-mono-xs);
-  }
-
-  .tool-access-unavailable-note {
-    color: var(--amber);
-  }
-
-  .tool-access-state-control {
+  .tool-access-modes {
     display: inline-flex;
     overflow: hidden;
-    border: 1px solid var(--border);
+    width: max-content;
+    border: 1px solid var(--border-2);
     border-radius: 6px;
     background: var(--surface-2);
   }
 
-  .tool-access-state-control button {
-    min-width: 45px;
-    padding: 6px 7px;
+  .tool-access-modes button {
+    padding: 7px 11px;
     color: var(--text-lo);
     border: 0;
     border-left: 1px solid var(--border);
@@ -750,67 +398,258 @@
     font-size: var(--fs-mono-xs);
   }
 
-  .tool-access-state-control button:first-child {
+  .tool-access-modes button:first-child {
     border-left: 0;
   }
 
-  .tool-access-state-control button:hover:not(:disabled) {
+  .tool-access-modes button:hover:not(:disabled) {
     color: var(--text-hi);
-    background: var(--surface);
+    background: var(--surface-3);
   }
 
-  .tool-access-state-control button:disabled {
-    cursor: not-allowed;
-    opacity: 0.45;
-  }
-
-  .tool-access-state-control .tool-access-choice--selected {
+  .tool-access-modes button.is-selected {
     color: var(--accent);
     background: var(--accent-dim);
   }
 
-  .tool-access-state-control .tool-access-choice--danger {
-    color: var(--red);
-    background: color-mix(in srgb, var(--red) 8%, transparent);
+  .tool-access-search {
+    display: flex;
+    justify-self: end;
+    align-items: center;
+    width: min(230px, 100%);
+    gap: 6px;
+    padding: 0 8px;
+    color: var(--text-lo);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--surface-2);
   }
 
-  .sr-only {
-    position: absolute;
-    overflow: hidden;
-    width: 1px;
-    height: 1px;
-    padding: 0;
-    margin: -1px;
-    clip: rect(0, 0, 0, 0);
-    white-space: nowrap;
+  .tool-access-search:focus-within {
+    border-color: var(--accent-40);
+    box-shadow: var(--focus-ring);
+  }
+
+  .tool-access-search input {
+    width: 100%;
+    min-width: 0;
+    padding: 7px 0;
+    color: var(--text-hi);
     border: 0;
+    outline: 0;
+    background: transparent;
+    font: inherit;
+    font-family: var(--font-mono);
+    font-size: 11px;
   }
 
-  @media (max-width: 760px) {
-    .tool-access-intent {
-      grid-template-columns: 1fr;
-    }
+  .tool-access-groups {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 270px), 1fr));
+    align-items: start;
+    gap: 8px;
+  }
 
-    .tool-access-toolbar,
-    .tool-access-group-header {
-      align-items: stretch;
-      flex-direction: column;
+  .tool-access-group {
+    min-width: 0;
+    border: 1px solid var(--border);
+    border-radius: 7px;
+    background: var(--surface);
+  }
+
+  .tool-access-group--individual {
+    grid-column: 1 / -1;
+  }
+
+  .tool-access-group-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    min-height: 32px;
+    padding: 6px 9px;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface-2);
+  }
+
+  .tool-access-group-title {
+    display: flex;
+    align-items: baseline;
+    gap: 7px;
+    min-width: 0;
+  }
+
+  .tool-access-group-title h4 {
+    margin: 0;
+    color: var(--text-hi);
+    font-size: var(--fs-label-sm);
+  }
+
+  .tool-access-family-toggle {
+    position: relative;
+    flex: 0 0 auto;
+    width: 30px;
+    height: 17px;
+    padding: 0;
+    border: 1px solid var(--border-2);
+    border-radius: 999px;
+    background: var(--surface-3);
+    cursor: pointer;
+  }
+
+  .tool-access-family-toggle span {
+    position: absolute;
+    top: 3px;
+    left: 3px;
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    background: var(--text-lo);
+    transition:
+      left 0.12s ease,
+      background 0.12s ease;
+  }
+
+  .tool-access-family-toggle.is-on {
+    border-color: var(--accent-40);
+    background: var(--accent-dim);
+  }
+
+  .tool-access-family-toggle.is-on span {
+    left: 16px;
+    background: var(--accent);
+  }
+
+  .tool-access-family-toggle.is-mixed span {
+    left: 9px;
+    width: 10px;
+    border-radius: 3px;
+    background: var(--amber);
+  }
+
+  .tool-access-cloud {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    padding: 9px;
+  }
+
+  .tool-access-chip-wrap {
+    position: relative;
+  }
+
+  .tool-access-chip {
+    display: inline-flex;
+    align-items: center;
+    max-width: 100%;
+    padding: 5px 10px;
+    color: var(--text-lo);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    background: transparent;
+    cursor: pointer;
+    font-family: var(--font-mono);
+    font-size: 11.5px;
+    line-height: 1;
+  }
+
+  .tool-access-chip:hover:not(:disabled) {
+    color: var(--text-med);
+    border-color: var(--border-2);
+  }
+
+  .tool-access-chip.is-on {
+    color: var(--accent);
+    border-color: var(--accent-30);
+    background: var(--accent-10);
+  }
+
+  .tool-access-chip.is-on:hover:not(:disabled) {
+    color: var(--accent);
+    border-color: var(--accent-40);
+    background: var(--accent-16);
+  }
+
+  .tool-access-chip.is-automatic {
+    border-style: dashed;
+  }
+
+  .tool-access-chip.is-automatic.is-on {
+    color: var(--text-med);
+    border-color: var(--border-2);
+    background: var(--surface-2);
+  }
+
+  .tool-access-chip.is-automatic.is-on:hover:not(:disabled) {
+    color: var(--text-hi);
+    border-color: var(--border-2);
+    background: var(--surface-3);
+  }
+
+  .tool-access-chip.is-unavailable {
+    opacity: 0.6;
+  }
+
+  .tool-access-chip:disabled,
+  .tool-access-family-toggle:disabled,
+  .tool-access-modes button:disabled {
+    cursor: default;
+    opacity: 0.45;
+  }
+
+  .tool-access-chip:focus-visible,
+  .tool-access-family-toggle:focus-visible,
+  .tool-access-modes button:focus-visible {
+    outline: 0;
+    box-shadow: var(--focus-ring);
+  }
+
+  .tool-access-tip {
+    position: fixed;
+    z-index: var(--z-floating);
+    width: max-content;
+    max-width: min(300px, calc(100vw - 16px));
+    padding: 8px 10px;
+    color: var(--text-med);
+    border: 1px solid var(--border-2);
+    border-radius: 6px;
+    background: var(--surface-3);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
+    font-size: 11px;
+    line-height: 1.4;
+  }
+
+  .tool-access-tip:global([data-floating-open='true']) {
+    opacity: 1;
+    visibility: visible;
+    pointer-events: auto;
+  }
+
+  .tool-access-tip p {
+    margin: 0;
+  }
+
+  .tool-access-tip p + p {
+    margin-top: 4px;
+  }
+
+  @media (max-width: 900px) {
+    .tool-access-toolbar {
+      grid-template-columns: 1fr auto;
     }
 
     .tool-access-search {
+      grid-column: 1 / -1;
+      grid-row: 2;
+      justify-self: stretch;
       width: 100%;
     }
 
-    .tool-access-row {
+    .tool-access-groups {
       grid-template-columns: 1fr;
-    }
-
-    .tool-access-state-control {
-      width: 100%;
-    }
-
-    .tool-access-state-control button {
-      flex: 1;
     }
   }
 </style>

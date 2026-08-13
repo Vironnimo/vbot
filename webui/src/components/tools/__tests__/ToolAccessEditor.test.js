@@ -15,12 +15,14 @@ const { default: ToolAccessEditor } =
 const tools = [
   {
     name: 'read',
+    description: 'Read a file from disk.',
     family: 'files',
     activation: 'configurable',
     ready: true,
   },
   {
     name: 'write',
+    description: 'Write a file to disk.',
     family: 'files',
     activation: 'configurable',
     ready: true,
@@ -76,7 +78,7 @@ describe('ToolAccessEditor', () => {
     document.body.innerHTML = '';
   });
 
-  it('keeps automatic Tools visible and explains when their gate is inactive', () => {
+  it('renders a compact name-only chip cloud and keeps automatic details out of the list', () => {
     mountedComponent = mount(ToolAccessEditor, {
       target: document.body,
       props: {
@@ -87,24 +89,24 @@ describe('ToolAccessEditor', () => {
     });
     flushSync();
 
-    const sessionRead = toolRow('session_read');
-    expect(sessionRead.textContent).toContain('Inactive');
-    expect(sessionRead.textContent).toContain(
-      'Inactive · waiting for session_search',
-    );
-    expect(
-      sessionRead.querySelector('[data-tool-access-state="enabled"]'),
-    ).toBeNull();
+    const sessionRead = toolChip('session_read');
+    expect(sessionRead.textContent).toBe('session_read');
+    expect(sessionRead.getAttribute('aria-checked')).toBe('true');
+    expect(sessionRead.classList.contains('is-automatic')).toBe(true);
+    expect(toolChip('read').textContent).toBe('read');
+    expect(document.body.textContent).not.toContain('Read a file from disk.');
+    expect(document.body.textContent).not.toContain('Write a file to disk.');
 
-    const memory = toolRow('memory');
-    expect(memory.textContent).toContain('Inactive · Memory is off');
-    expect(toolRow('analyze_image').textContent).toContain(
+    expect(document.body.textContent).toContain('Memory is currently off');
+    expect(document.body.textContent).toContain(
       'Used only when the main Model cannot analyze images directly',
     );
     expect(document.body.textContent).toContain('Individual Tools');
+    expect(document.body.textContent).not.toContain('Allow current');
+    expect(document.body.textContent).not.toContain('Block current');
   });
 
-  it('applies one family action to every current member', () => {
+  it('uses one family switch for every member', () => {
     const onChange = vi.fn();
     mountedComponent = mount(ToolAccessEditor, {
       target: document.body,
@@ -116,11 +118,25 @@ describe('ToolAccessEditor', () => {
     });
     flushSync();
 
-    buttonByAriaLabel('Block current Files').click();
+    buttonByAriaLabel('Turn on Files').click();
     expect(onChange).toHaveBeenCalledWith({
       mode: 'selected',
-      allowed: [],
-      denied: ['read', 'write'],
+      allowed: ['read', 'write'],
+    });
+  });
+
+  it('uses one binary Tool switch while preserving all-mode denials', () => {
+    const onChange = vi.fn();
+    mountedComponent = mount(ToolAccessEditor, {
+      target: document.body,
+      props: { value: { mode: 'all' }, tools, onChange },
+    });
+    flushSync();
+
+    toolChip('read').click();
+    expect(onChange).toHaveBeenCalledWith({
+      mode: 'all',
+      denied: ['read'],
     });
   });
 
@@ -135,7 +151,7 @@ describe('ToolAccessEditor', () => {
     search.value = 'session';
     search.dispatchEvent(new Event('input', { bubbles: true }));
     flushSync();
-    expect(toolRow('session_search')).toBeTruthy();
+    expect(toolChip('session_search')).toBeTruthy();
     expect(document.querySelector('[data-tool-name="read"]')).toBeNull();
 
     const selectedMode = document.querySelector('[role="radio"]');
@@ -144,10 +160,10 @@ describe('ToolAccessEditor', () => {
   });
 });
 
-function toolRow(name) {
-  const row = document.querySelector(`[data-tool-name="${name}"]`);
-  expect(row, name).toBeTruthy();
-  return row;
+function toolChip(name) {
+  const chip = document.querySelector(`[data-tool-name="${name}"]`);
+  expect(chip, name).toBeTruthy();
+  return chip;
 }
 
 function buttonByAriaLabel(label) {

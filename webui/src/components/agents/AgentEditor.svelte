@@ -1922,7 +1922,7 @@
           <InfoHint
             text={t(
               'agents.form.toolAccessHelp',
-              'Choose the overall intent first. Tool families are only presentation and bulk controls; individual Tools remain the stored policy. Automatic Tools follow their source or Session condition and can always be blocked.',
+              'Choose all Tools, your own selection, or none. Click a Tool name or a family switch to change access. Dashed Tools activate automatically when their condition is met.',
             )}
           />
         </div>

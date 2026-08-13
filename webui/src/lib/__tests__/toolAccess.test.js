@@ -4,9 +4,12 @@ import {
   changeToolAccessMode,
   groupToolCatalog,
   normalizeToolAccess,
+  setToolAccessPreference,
+  setToolFamilyPreference,
   setToolAccessState,
   setToolFamilyState,
   toolAccessIncludes,
+  toolAccessPreferenceEnabled,
   toolAccessState,
 } from '../toolAccess.js';
 
@@ -129,6 +132,56 @@ describe('Tool Access Policy UI helpers', () => {
     expect(
       setToolFamilyState(blocked, catalog.slice(0, 2), 'default', catalog),
     ).toEqual({ mode: 'all' });
+  });
+
+  it('maps one compact off switch to the policy semantics of the active mode', () => {
+    expect(
+      setToolAccessPreference({ mode: 'all' }, catalog[0], false, catalog),
+    ).toEqual({ mode: 'all', denied: ['read'] });
+    expect(
+      setToolAccessPreference(
+        { mode: 'selected', allowed: ['read', 'write'] },
+        catalog[0],
+        false,
+        catalog,
+      ),
+    ).toEqual({ mode: 'selected', allowed: ['write'] });
+  });
+
+  it('shows automatic Tools as permitted independently of their current gate', () => {
+    expect(
+      toolAccessPreferenceEnabled(
+        { mode: 'selected', allowed: [] },
+        catalog[3],
+      ),
+    ).toBe(true);
+    const denied = setToolAccessPreference(
+      { mode: 'selected', allowed: [] },
+      catalog[3],
+      false,
+      catalog,
+    );
+    expect(denied).toEqual({
+      mode: 'selected',
+      allowed: [],
+      denied: ['session_read'],
+    });
+    expect(toolAccessPreferenceEnabled(denied, catalog[3])).toBe(false);
+    expect(setToolAccessPreference(denied, catalog[3], true, catalog)).toEqual({
+      mode: 'selected',
+      allowed: [],
+    });
+  });
+
+  it('uses one family switch without persisting a family permission', () => {
+    expect(
+      setToolFamilyPreference(
+        { mode: 'selected', allowed: ['read'] },
+        catalog.slice(0, 2),
+        true,
+        catalog,
+      ),
+    ).toEqual({ mode: 'selected', allowed: ['read', 'write'] });
   });
 
   it('groups actual families while keeping unrelated Tools in one individual section', () => {
