@@ -55,7 +55,7 @@ There's no orchestrator here to keep these current — that's on you. When a cha
 - A **project-specific term** in play could plausibly be misread (non-obvious meaning here).
 - A term seems to cause **friction** because you and the user may mean different things by it.
 
-Only project-specific terms — never standard programming terms or anything self-evident. When a term may matter, you may suggest adding or updating it and briefly explain why, but do not load the `glossary` skill and do not edit either term home yet. Load the skill only when the user explicitly asks for it or explicitly agrees after your suggestion. Once authorized, the skill handles triage (including which home), the interview, and writing the entry into the glossary or the domain map's `## Terms` section.
+Only project-specific terms — never standard programming terms or anything self-evident. When a term may matter, you may suggest adding or updating it and briefly explain why, but do not load the `glossary` skill and do not edit either term home yet. Load the skill only when the user explicitly asks for it or explicitly agrees after your suggestion. **Exception: when the current implementation makes an existing `.vorch/GLOSSARY.md` entry factually stale, correcting that entry is required project maintenance — load the `glossary` skill, update the entry, and commit it as part of the same work without seeking separate approval.** This exception does not authorize adding a term, choosing among ambiguous meanings, or making a judgment-heavy redefinition; those still require explicit user agreement. Once authorized, the skill handles triage (including which home), the interview, and writing the entry into the glossary or the domain map's `## Terms` section.
 
 ## Git
 
