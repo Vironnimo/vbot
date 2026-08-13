@@ -1926,13 +1926,15 @@
             )}
           />
         </div>
-        <ToolAccessEditor
-          value={formValues.tool_access}
-          tools={availableTools}
-          memoryPromptMode={formValues.memory_prompt_mode}
-          onChange={(next) => (formValues.tool_access = next)}
-          onOpenExtensions={navigateToExtensions}
-        />
+        <div class="agents-view__tool-access-content">
+          <ToolAccessEditor
+            value={formValues.tool_access}
+            tools={availableTools}
+            memoryPromptMode={formValues.memory_prompt_mode}
+            onChange={(next) => (formValues.tool_access = next)}
+            onOpenExtensions={navigateToExtensions}
+          />
+        </div>
       </div>
 
       {#if subagentToolEnabled}
