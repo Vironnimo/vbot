@@ -25,8 +25,8 @@ Discovers persisted Sessions through backend-native search and retrieves focused
 
 ## Availability
 
-- `session_search` is the single persisted/configurable capability. Runtime availability derives `session_read` whenever `session_search` is allowed, so existing allowlists gain the companion automatically and a search result never advertises an unavailable reader.
-- `session_read` is not independently Project-configurable and is removed from persisted Agent allowlists. Wildcard allowlists expose both registered Tools.
+- `session_search` is the directly configurable lead. Declarative `follows` activation adds `session_read` only while `session_search` is active, so a search result never advertises an unavailable reader.
+- `session_read` is not independently enabled or Project-configurable, but it stays visible as automatic in `tool.list` and may be explicitly denied without removing search. Removing or denying `session_search` also removes the now-orphaned reader.
 
 ## Constraints & Gotchas
 
