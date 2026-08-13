@@ -10,6 +10,7 @@ Requirements:
 - Preserve the current task status and the immediate next concrete step.
 - Keep important technical decisions, constraints, and blockers.
 - Preserve important Tool outcomes, but omit raw Tool protocol and bulky output that the continuation no longer needs.
+- Do not preserve or reproduce Skill instructions, Skill resource guidance, or Skill environment-access guidance; vBot records activated Skill names separately at the checkpoint. Preserve only task decisions, constraints, progress, and outcomes that remain relevant.
 - Do not add facts that are not present in the conversation.
 
 Write the output as continuation context, not as a retrospective summary.

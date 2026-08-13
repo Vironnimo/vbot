@@ -10,6 +10,7 @@ import pytest
 
 from core.chat import ChatMessage
 from core.chat.messages import (
+    COMPACTION_SKILL_NOTE_PREFIX,
     COMPACTION_SUMMARY_NOTE_PREFIX,
     _effective_compaction_messages,
     _embed_notes_into_request,
@@ -30,6 +31,8 @@ from core.compaction.compaction import (
     _tail_soft_limit,
     _tail_token_span,
 )
+from core.sessions.sessions import _skill_context_note_content
+from core.tools import tool_success
 from core.utils.tokens import NATIVE_MEDIA_TOKEN_RESERVE
 
 TIMESTAMP = "2026-05-19T12:00:00+00:00"
@@ -52,6 +55,20 @@ class StubAdapter:
 
     def normalize_response(self, response: dict[str, Any]) -> dict[str, Any]:
         return response
+
+
+class RetainContextStrategy:
+    id = "retain-context"
+
+    def plan(self, context: Any, settings: Any) -> CompactionPlan:
+        del settings
+        return CompactionPlan(
+            model_messages=None,
+            model_target="summary",
+            summary_text="RETAINED",
+            after_summary=tuple(context.messages),
+            compacted_token_count=1,
+        )
 
 
 def message(message_id: str, role: str, content: str, **extra: Any) -> ChatMessage:
@@ -83,6 +100,141 @@ def provider_request(messages: list[ChatMessage]) -> list[dict[str, Any]]:
         {"id": "system-1", "role": "system", "content": "system"},
         *(item.to_dict() for item in messages),
     ]
+
+
+@pytest.mark.asyncio
+async def test_compaction_reports_only_the_immediately_completed_skill_epoch() -> None:
+    service = CompactionService(RetainContextStrategy())
+    alpha_content = '<skill_content name="alpha">Alpha instructions</skill_content>'
+    alpha_note = ChatMessage.note(_skill_context_note_content("alpha", alpha_content))
+    first_messages = [
+        user("u1", "First task"),
+        alpha_note,
+        assistant("a1", "First result"),
+    ]
+
+    first = await service.compact(
+        first_messages,
+        agent=object(),
+        summary_adapter=StubAdapter(),
+        summary_model_id="openai/summary",
+        storage=StubStorage(),
+        settings=CompactionSettings(strategy="retain-context"),
+    )
+    first_effective = _effective_compaction_messages([*first_messages, first])
+    first_guidance = [
+        item
+        for item in first_effective
+        if item.role == "note"
+        and isinstance(item.content, str)
+        and item.content.startswith(COMPACTION_SKILL_NOTE_PREFIX)
+    ]
+
+    assert len(first_guidance) == 1
+    assert '["alpha"]' in str(first_guidance[0].content)
+    assert all("Alpha instructions" not in str(item.content) for item in first_effective)
+
+    beta_content = '<skill_content name="beta">Beta instructions</skill_content>'
+    beta_note = ChatMessage.note(_skill_context_note_content("beta", beta_content))
+    second_messages = [*first_messages, first, beta_note, assistant("a2", "Second result")]
+    second = await service.compact(
+        second_messages,
+        agent=object(),
+        summary_adapter=StubAdapter(),
+        summary_model_id="openai/summary",
+        storage=StubStorage(),
+        settings=CompactionSettings(strategy="retain-context"),
+    )
+    second_effective = _effective_compaction_messages([*second_messages, second])
+    second_guidance = [
+        item
+        for item in second_effective
+        if item.role == "note"
+        and isinstance(item.content, str)
+        and item.content.startswith(COMPACTION_SKILL_NOTE_PREFIX)
+    ]
+
+    assert len(second_guidance) == 1
+    assert '["beta"]' in str(second_guidance[0].content)
+    assert '["alpha"]' not in str(second_guidance[0].content)
+    assert all("Beta instructions" not in str(item.content) for item in second_effective)
+    rendered_second = _embed_notes_into_request(second_effective)
+    assert COMPACTION_SKILL_NOTE_PREFIX not in json.dumps(rendered_second)
+
+    third_messages = [*second_messages, second, assistant("a3", "Third result")]
+    third = await service.compact(
+        third_messages,
+        agent=object(),
+        summary_adapter=StubAdapter(),
+        summary_model_id="openai/summary",
+        storage=StubStorage(),
+        settings=CompactionSettings(strategy="retain-context"),
+    )
+    third_effective = _effective_compaction_messages([*third_messages, third])
+
+    assert all(
+        not (
+            item.role == "note"
+            and isinstance(item.content, str)
+            and item.content.startswith(COMPACTION_SKILL_NOTE_PREFIX)
+        )
+        for item in third_effective
+    )
+
+
+@pytest.mark.asyncio
+async def test_compaction_compacts_skill_tool_carrier_without_breaking_its_cycle() -> None:
+    skill_result_content = json.dumps(
+        tool_success(
+            {
+                "name": "docx",
+                "status": "loaded",
+                "content": "Full document instructions",
+                "environment_access": "Use DOCX_KEY through bash env_keys.",
+            }
+        ),
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+    messages = [
+        user("u1", "Create a document"),
+        message(
+            "a-tools",
+            "assistant",
+            "",
+            model="openai/gpt-5",
+            tool_calls=[{"id": "call-skill", "name": "skill", "arguments": {"name": "docx"}}],
+        ),
+        message(
+            "t-skill",
+            "tool",
+            skill_result_content,
+            tool_call_id="call-skill",
+            name="skill",
+        ),
+        assistant("a2", "Used the Skill"),
+    ]
+
+    result = await CompactionService(RetainContextStrategy()).compact(
+        messages,
+        agent=object(),
+        summary_adapter=StubAdapter(),
+        summary_model_id="openai/summary",
+        storage=StubStorage(),
+        settings=CompactionSettings(strategy="retain-context"),
+    )
+    effective = _effective_compaction_messages([*messages, result])
+    projected_result = next(item for item in effective if item.id == "t-skill")
+    projected_payload = json.loads(str(projected_result.content))
+
+    assert is_compacted_tool_result_content(projected_result.content)
+    assert projected_payload["outcome"] == {
+        "name": "docx",
+        "status": "loaded",
+        "compacted": True,
+    }
+    assert "Full document instructions" not in str(projected_result.content)
+    assert "DOCX_KEY" not in str(projected_result.content)
 
 
 def test_find_tail_boundary_can_split_one_user_turn_at_assistant_boundary() -> None:

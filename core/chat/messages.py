@@ -39,6 +39,7 @@ from core.sessions import (
     is_channel_message_note,
     is_skill_context_note,
     skill_context_note_payload,
+    skill_tool_activation,
 )
 from core.tools import tool_failure
 from core.utils.tokens import estimate_message_tokens, estimate_request_input_tokens
@@ -85,6 +86,8 @@ UTC_Z_SUFFIX = "Z"
 SYSTEM_REMINDER_OPEN_TAG = "<system-reminder>"
 SYSTEM_REMINDER_CLOSE_TAG = "</system-reminder>"
 COMPACTION_SUMMARY_NOTE_PREFIX = "[compaction-summary] "
+COMPACTION_SKILL_NOTE_PREFIX = "[compaction-skills] "
+TOOL_RESULT_COMPACTED_FIELD = "_vbot_compacted_tool_result"
 HISTORY_COMPACTION_GUIDANCE = (
     "This is Compaction checkpoint {ordinal}. Some earlier original messages are no longer "
     "directly present in active Context. If current work depends on earlier decisions, "
@@ -380,6 +383,76 @@ def _compaction_projection_without_provider_state(
     return projected
 
 
+def _compaction_projection_without_active_skills(
+    projection: Sequence[ChatMessage],
+    *,
+    activation_result_names: Mapping[str, str] | None = None,
+) -> list[ChatMessage]:
+    """Expire Skill instructions while preserving complete Tool-call cycles."""
+    known_result_names = activation_result_names or {}
+    projected: list[ChatMessage] = []
+    for message in projection:
+        if is_skill_context_note(message):
+            continue
+        activation = skill_tool_activation(message)
+        skill_name = known_result_names.get(message.id)
+        if skill_name is None and activation is not None:
+            skill_name = activation[0]
+        if skill_name is not None:
+            projected.append(
+                replace(
+                    message,
+                    content=_compacted_skill_activation_result(message, skill_name),
+                )
+            )
+            continue
+        projected.append(message)
+    return projected
+
+
+def _compacted_skill_activation_result(message: ChatMessage, skill_name: str) -> str:
+    content = message.content if isinstance(message.content, str) else ""
+    return json.dumps(
+        {
+            TOOL_RESULT_COMPACTED_FIELD: True,
+            "message_id": message.id,
+            "tool": message.name,
+            "original_chars": len(content),
+            "outcome": {
+                "name": skill_name,
+                "status": "loaded",
+                "compacted": True,
+            },
+        },
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+
+
+def has_unconsumed_skill_activation(messages: Sequence[ChatMessage]) -> bool:
+    """Return whether the latest Assistant Tool batch freshly loaded a Skill."""
+    assistant_index = next(
+        (
+            index
+            for index in range(len(messages) - 1, -1, -1)
+            if messages[index].role == "assistant"
+        ),
+        None,
+    )
+    if assistant_index is None:
+        return False
+    assistant_message = messages[assistant_index]
+    pending_call_ids = {call.id for call in assistant_message.tool_calls or []}
+    if not pending_call_ids:
+        return False
+    return any(
+        message.role == "tool"
+        and message.tool_call_id in pending_call_ids
+        and skill_tool_activation(message) is not None
+        for message in messages[assistant_index + 1 :]
+    )
+
+
 @dataclass(frozen=True)
 class ChatMessage:
     """Canonical message persisted to session JSONL files."""
@@ -575,8 +648,21 @@ class ChatMessage:
                 "compaction checkpoints require both context token counts or neither"
             )
         summary_note = f"{COMPACTION_SUMMARY_NOTE_PREFIX}{summary}"
-        projected = _compaction_projection_without_provider_state(projection)
-        if not (projected and projected[0].role == "note" and projected[0].content == summary_note):
+        projected = _compaction_projection_without_provider_state(
+            _compaction_projection_without_active_skills(projection)
+        )
+        leading_summary = (
+            projected[0].content
+            if projected and projected[0].role == "note" and isinstance(projected[0].content, str)
+            else None
+        )
+        if not (
+            leading_summary == summary_note
+            or (
+                isinstance(leading_summary, str)
+                and leading_summary.startswith(f"{summary_note}\n\n")
+            )
+        ):
             projected.insert(0, cls.note(summary_note, timestamp=timestamp))
         usage = {"compacted_token_count": compacted_token_count}
         if context_tokens_before is not None and context_tokens_after is not None:
@@ -1515,6 +1601,7 @@ def _system_reminder_block(message: ChatMessage) -> str:
         for prefix in (
             SKILL_AVAILABLE_NOTE_PREFIX,
             COMPACTION_SUMMARY_NOTE_PREFIX,
+            COMPACTION_SKILL_NOTE_PREFIX,
         ):
             if content.startswith(prefix):
                 content = content.removeprefix(prefix)

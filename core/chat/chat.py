@@ -87,7 +87,6 @@ from core.chat.messages import (
     _embed_notes_into_request,
     _last_user_message,
     _last_user_message_with_content_blocks,
-    _latest_compaction_checkpoint,
     _message_to_request_dict,
     _notes_to_request_messages,
     _restore_in_run_assistant_reasoning,
@@ -95,6 +94,7 @@ from core.chat.messages import (
     _strip_assistant_reasoning_fields,
     checkpoint_ordinal,
     finalize_checkpoint_history_guidance,
+    has_unconsumed_skill_activation,
     history_available,
     queue_content_is_editable,
 )
@@ -109,6 +109,9 @@ from core.chat.messages import (
 )
 from core.chat.messages import (
     ToolCallRejection as ToolCallRejection,
+)
+from core.chat.messages import (
+    _latest_compaction_checkpoint as _latest_compaction_checkpoint,
 )
 from core.chat.messages import (
     _validate_assistant_message as _validate_assistant_message,
@@ -209,7 +212,6 @@ from core.sessions import (
     SessionReadCursor,
     latest_project_tool_context_id,
     project_tool_context_id,
-    skill_activation_contents,
 )
 from core.tools import (
     ANALYZE_IMAGE_TOOL_NAME,
@@ -319,7 +321,6 @@ def _prepare_request_messages(
     *,
     system_prompt: str,
     agent_model: str,
-    session: ChatSession,
     session_messages: list[ChatMessage],
     replay_policy: ReasoningReplayPolicy,
     reasoning_scope_model: str,
@@ -328,29 +329,16 @@ def _prepare_request_messages(
     system_messages = (
         [ChatMessage.system(system_prompt, agent_model).to_dict()] if system_prompt.strip() else []
     )
-    checkpoint = _latest_compaction_checkpoint(session_messages)
     effective_messages = _effective_compaction_messages(session_messages)
     history = _embed_notes_into_request(
         effective_messages,
         replay_policy=replay_policy,
         agent_model=reasoning_scope_model,
     )
-    missing_skill_contexts: list[JsonObject] = []
-    updated_skill_contexts: list[JsonObject] = []
-    if checkpoint is not None:
-        projected_skills = skill_activation_contents(effective_messages)
-        for name, content in session.activated_skill_contents(session_messages).items():
-            projected_content = projected_skills.get(name)
-            if projected_content is None:
-                missing_skill_contexts.append({"role": "user", "content": content})
-            elif projected_content != content:
-                updated_skill_contexts.append({"role": "user", "content": content})
     return _PreparedRequestMessages(
         messages=[
             *system_messages,
-            *missing_skill_contexts,
             *history,
-            *updated_skill_contexts,
         ],
         effective_messages=effective_messages,
     )
@@ -2646,7 +2634,6 @@ class ChatLoop:
             _prepare_request_messages,
             system_prompt=system_prompt,
             agent_model=agent.model,
-            session=session,
             session_messages=session_messages,
             replay_policy=replay_policy,
             reasoning_scope_model=reasoning_scope_model or agent.model,
@@ -3424,6 +3411,10 @@ class ChatLoop:
         if not should_compact:
             return current_state
         session_messages, snapshot_cursor = await self._load_compaction_snapshot(run, session)
+        if settings.strategy == "summary_tail" and has_unconsumed_skill_activation(
+            session_messages
+        ):
+            return current_state
         has_new_context = await _CHAT_TRANSFORM_WORKERS.run(
             self._compaction_service.has_new_compactable_context,
             session_messages,
