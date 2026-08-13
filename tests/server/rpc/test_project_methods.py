@@ -114,7 +114,14 @@ class _FakeTools:
 
     def list_tools(self, *, include_session_scoped: bool = True) -> list[SimpleNamespace]:
         del include_session_scoped
-        return [SimpleNamespace(name=name) for name in sorted(self.names)]
+        return [
+            SimpleNamespace(
+                name=name,
+                activation="memory_mode" if name == "memory" else "configurable",
+                constraints=("identity_agent",) if name in {"project", "skill_manage"} else (),
+            )
+            for name in sorted(self.names)
+        ]
 
 
 class _FakeTerminalManager:
@@ -915,6 +922,82 @@ def test_set_override_thinking_effort_writes_override(tmp_path: Path) -> None:
     )
 
     assert state.runtime.projects.get("vbot").overrides == {"builder": {"thinking_effort": "high"}}
+
+
+def test_set_tool_access_override_replaces_repository_policy(tmp_path: Path) -> None:
+    state = _make_state(tmp_path)
+    repo = tmp_path / "repos" / "vbot"
+    repo.mkdir(parents=True)
+    _write_agent(repo, "builder.md", permission={"task": "deny"})
+    _add_project(state, {"cwd": str(repo), "display_name": "vBot"})
+
+    result = _set_override(
+        state,
+        {
+            "project_id": "vbot",
+            "agent_id": "builder",
+            "field": "tool_access",
+            "value": {"mode": "selected", "allowed": ["subagent"]},
+        },
+    )
+
+    member = next(m for m in result["scan"]["team"] if m["agent_id"] == "builder")
+    assert member["denied_tools"] == ["subagent"]
+    assert member["overrides"] == {"tool_access": {"mode": "selected", "allowed": ["subagent"]}}
+    assert member["effective"]["tool_access"] == {
+        "value": {"mode": "selected", "allowed": ["subagent"]},
+        "source": "override",
+    }
+    assert member["tools"] == {"subagent": {"allowed_agents": []}}
+
+
+def test_set_tool_access_override_rejects_overlap_and_out_of_ceiling_names(
+    tmp_path: Path,
+) -> None:
+    state = _make_state(tmp_path)
+    repo = _make_repo(tmp_path, "vbot", "builder.md")
+    _add_project(state, {"cwd": str(repo), "display_name": "vBot"})
+
+    for value in (
+        {"mode": "selected", "allowed": ["read"], "denied": ["read"]},
+        {"mode": "selected", "allowed": ["missing_tool"]},
+    ):
+        with pytest.raises(RpcError) as exc_info:
+            _set_override(
+                state,
+                {
+                    "project_id": "vbot",
+                    "agent_id": "builder",
+                    "field": "tool_access",
+                    "value": value,
+                },
+            )
+
+        assert exc_info.value.code == "invalid_request"
+
+
+def test_clear_tool_access_override_restores_repository_policy(tmp_path: Path) -> None:
+    state = _make_state(tmp_path)
+    repo = tmp_path / "repos" / "vbot"
+    repo.mkdir(parents=True)
+    _write_agent(repo, "builder.md", permission={"task": "deny"})
+    _add_project(state, {"cwd": str(repo), "display_name": "vBot"})
+    state.runtime.projects.set_override(
+        "vbot",
+        "builder",
+        "tool_access",
+        {"mode": "selected", "allowed": ["subagent"]},
+    )
+
+    result = _clear_override(
+        state,
+        {"project_id": "vbot", "agent_id": "builder", "field": "tool_access"},
+    )
+
+    member = next(m for m in result["scan"]["team"] if m["agent_id"] == "builder")
+    assert member["overrides"] is None
+    assert member["effective"]["tool_access"]["source"] == "agent"
+    assert member["tools"] == {}
 
 
 def test_set_override_rejects_agent_outside_project_team(tmp_path: Path) -> None:

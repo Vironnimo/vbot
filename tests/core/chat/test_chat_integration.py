@@ -486,7 +486,7 @@ async def test_read_image_degrades_to_note_for_non_vision_model(
             "coder",
             "Coder Agent",
             model="fake-provider/fake-model-v1",
-            allowed_tools=["read"],
+            tool_access={"mode": "selected", "allowed": ["read"]},
         )
         Path(agent.workspace).joinpath("diagram.png").write_bytes(_PNG_BYTES)
 
@@ -716,7 +716,7 @@ def test_runtime_prompt_includes_workspace_files_and_filtered_tool_skill_metadat
             "coder",
             "Coder Agent",
             model="fake-provider/fake-model-v1",
-            allowed_tools=["read_file"],
+            tool_access={"mode": "selected", "allowed": ["read_file"]},
             allowed_skills=["agent-cli"],
         )
 
@@ -736,14 +736,14 @@ def test_runtime_prompt_includes_workspace_files_and_filtered_tool_skill_metadat
         assert "news" not in prompt
         assert tool_definitions == [
             {
-                "name": "read_file",
-                "description": "Read a workspace file.",
-                "parameters": {"type": "object"},
-            },
-            {
                 "name": "memory",
                 "description": MEMORY_TOOL_DESCRIPTION,
                 "parameters": MEMORY_TOOL_PARAMETERS,
+            },
+            {
+                "name": "read_file",
+                "description": "Read a workspace file.",
+                "parameters": {"type": "object"},
             },
         ]
         # skill/skill_manage are ordinary tools now: this agent allows only read_file,

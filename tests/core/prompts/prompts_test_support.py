@@ -4,6 +4,7 @@ import logging
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -31,6 +32,7 @@ from core.prompts.prompts import (
     SystemPromptManager,
 )
 from core.tools import HISTORY_TOOL_NAME, ToolRegistry, tool_success
+from core.tools.availability import ToolAccess
 
 _RESOURCES_PROMPTS_DIR = Path(__file__).resolve().parents[3] / "resources" / "prompts"
 
@@ -99,6 +101,59 @@ class StubTools:
         self.prompt_profile_agent_ids: list[str | None] = []
         self.provider_profile_agent_ids: list[str | None] = []
 
+    def list_tools(self) -> list[Any]:
+        return [
+            SimpleNamespace(
+                name="read_file",
+                internal=False,
+                activation="configurable",
+                constraints=(),
+            ),
+            SimpleNamespace(
+                name="shell",
+                internal=False,
+                activation="configurable",
+                constraints=(),
+            ),
+            SimpleNamespace(
+                name="memory",
+                internal=False,
+                activation="memory_mode",
+                constraints=("identity_agent",),
+            ),
+            SimpleNamespace(
+                name="skill",
+                internal=False,
+                activation="configurable",
+                constraints=(),
+            ),
+            SimpleNamespace(
+                name="skill_manage",
+                internal=False,
+                activation="configurable",
+                constraints=("identity_agent",),
+            ),
+            SimpleNamespace(
+                name="session_read",
+                internal=False,
+                activation="follows",
+                activation_source="session_search",
+                constraints=(),
+            ),
+            SimpleNamespace(
+                name="session_search",
+                internal=False,
+                activation="configurable",
+                constraints=(),
+            ),
+            SimpleNamespace(
+                name="history",
+                internal=False,
+                activation="session_grant",
+                constraints=(),
+            ),
+        ]
+
     def prompt_definitions(
         self,
         allowed_tools: Sequence[str] | None = None,
@@ -120,6 +175,9 @@ class StubTools:
             {"name": "memory", "description": "Manage pinned memory"},
             {"name": "skill", "description": "Load a skill"},
             {"name": "skill_manage", "description": "Author a skill"},
+            {"name": "session_read", "description": "Read a Session"},
+            {"name": "session_search", "description": "Search Sessions"},
+            {"name": "history", "description": "Read compacted history"},
         ]
         return _filter_by_allowlist(tools, allowed_tools)
 
@@ -158,6 +216,21 @@ class StubTools:
             {
                 "name": "skill_manage",
                 "description": "Author a skill",
+                "parameters": {"type": "object"},
+            },
+            {
+                "name": "session_read",
+                "description": "Read a Session",
+                "parameters": {"type": "object"},
+            },
+            {
+                "name": "session_search",
+                "description": "Search Sessions",
+                "parameters": {"type": "object"},
+            },
+            {
+                "name": "history",
+                "description": "Read compacted history",
                 "parameters": {"type": "object"},
             },
         ]
@@ -318,7 +391,11 @@ def _agent(
         temperature=0.1,
         thinking_effort=thinking_effort,
         memory_prompt_mode=memory_prompt_mode,
-        allowed_tools=["*"] if allowed_tools is None else allowed_tools,
+        tool_access=(
+            ToolAccess(mode="all")
+            if allowed_tools is None or "*" in allowed_tools
+            else ToolAccess(mode="selected", allowed=tuple(allowed_tools))
+        ),
         allowed_skills=["*"] if allowed_skills is None else allowed_skills,
         tools={} if tools is None else tools,
         custom_system_prompt_enabled=custom_system_prompt_enabled,

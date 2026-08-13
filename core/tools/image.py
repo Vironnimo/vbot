@@ -266,6 +266,8 @@ def register_analyze_image_tool(registry: ToolRegistry, image_service: Any) -> N
         ANALYZE_IMAGE_TOOL_DESCRIPTION,
         ANALYZE_IMAGE_TOOL_PARAMETERS,
         make_analyze_image_handler(image_service),
+        family="media",
+        constraints=("image_fallback_route",),
         open_input_schema=True,
         result_schema=_ANALYZE_IMAGE_RESULT_SCHEMA,
         display=ToolDisplay(
@@ -346,6 +348,7 @@ def register_image_generation_tool(registry: ToolRegistry, image_service: Any) -
         IMAGE_GENERATION_TOOL_DESCRIPTION,
         IMAGE_GENERATION_TOOL_PARAMETERS,
         make_image_generation_handler(image_service),
+        family="media",
         open_input_schema=True,
         result_schema={"type": "object", "required": ["images"]},
         display=ToolDisplay(

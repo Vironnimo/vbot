@@ -542,6 +542,9 @@ def dispatch_agent_command(
         return list_agents(instance)
     if args.command == "show":
         return show_agent(instance, args.id)
+    tool_access_error = _agent_tool_access_args_error(args)
+    if tool_access_error is not None:
+        return CommandResult(ok=False, message=tool_access_error, instance=instance)
     if args.command == "create":
         return create_agent(instance, args.id, args.name, _agent_changes_from_args(args))
     if args.command == "update":
@@ -551,6 +554,17 @@ def dispatch_agent_command(
     if args.command == "delete":
         return delete_agent(instance, args.id)
     raise ValueError(f"Unsupported agent command: {args.command}")
+
+
+def _agent_tool_access_args_error(args: argparse.Namespace) -> str | None:
+    mode = getattr(args, "tool_access_mode", None)
+    allowed = getattr(args, "tool_allow", None)
+    denied = getattr(args, "tool_deny", None)
+    if mode is None and (allowed is not None or denied is not None):
+        return "--tool-allow and --tool-deny require --tool-access-mode"
+    if allowed is not None and mode != "selected":
+        return "--tool-allow is valid only with --tool-access-mode selected"
+    return None
 
 
 def _agent_changes_from_args(args: argparse.Namespace) -> dict[str, Any]:
@@ -577,8 +591,21 @@ def _agent_changes_from_args(args: argparse.Namespace) -> dict[str, Any]:
         changes["memory_prompt_mode"] = args.memory_prompt_mode
     if args.custom_system_prompt is not None:
         changes["custom_system_prompt_enabled"] = args.custom_system_prompt == "true"
-    if args.allowed_tools is not None:
-        changes["allowed_tools"] = list(args.allowed_tools)
+    if (
+        args.tool_access_mode is not None
+        or args.tool_allow is not None
+        or args.tool_deny is not None
+    ):
+        tool_access: dict[str, Any] = {}
+        if args.tool_access_mode is not None:
+            tool_access["mode"] = args.tool_access_mode
+        if args.tool_access_mode == "selected":
+            tool_access["allowed"] = list(args.tool_allow or [])
+        elif args.tool_allow is not None:
+            tool_access["allowed"] = list(args.tool_allow)
+        if args.tool_deny is not None:
+            tool_access["denied"] = list(args.tool_deny)
+        changes["tool_access"] = tool_access
     if args.allowed_skills is not None:
         changes["allowed_skills"] = list(args.allowed_skills)
     if args.subagent_allow is not None:

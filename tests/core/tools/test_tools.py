@@ -34,7 +34,6 @@ from core.tools import (
     tool_is_ready,
     tool_success,
 )
-from core.tools.availability import effective_agent_allowed_tools, sanitize_configured_allowed_tools
 from core.tools.tools import run_tool_worker
 
 JsonObject = dict[str, Any]
@@ -782,39 +781,37 @@ class TestToolRegistryAllowlistFiltering:
         assert tools == []
 
 
-class TestAgentToolAvailability:
-    def test_sanitizes_runtime_derived_tools(self) -> None:
-        assert sanitize_configured_allowed_tools(["read_file", "memory", "session_read"]) == [
-            "read_file"
-        ]
+def test_registry_preserves_declarative_tool_relationship_metadata() -> None:
+    registry = ToolRegistry()
 
-    def test_memory_mode_adds_memory_to_explicit_allowlist(self) -> None:
-        allowed_tools = effective_agent_allowed_tools(
-            ["read_file"],
-            "agent",
-            registered_tool_names=["memory", "read_file", "write_file"],
+    tool = registry.register(
+        "session_read",
+        "Read a Session.",
+        READ_FILE_SCHEMA,
+        read_file_handler,
+        family="sessions",
+        activation="follows",
+        activation_source="session_search",
+        constraints=("identity_agent",),
+    )
+
+    assert tool.family == "sessions"
+    assert tool.activation == "follows"
+    assert tool.activation_source == "session_search"
+    assert tool.constraints == ("identity_agent",)
+
+
+def test_registry_rejects_invalid_activation_metadata() -> None:
+    registry = ToolRegistry()
+
+    with pytest.raises(ValueError, match="activation"):
+        registry.register(
+            "read_file",
+            "Read a file.",
+            READ_FILE_SCHEMA,
+            read_file_handler,
+            activation="mystery",
         )
-
-        assert allowed_tools == ["read_file", "memory"]
-
-    def test_memory_off_removes_memory_from_wildcard_allowlist(self) -> None:
-        allowed_tools = effective_agent_allowed_tools(
-            ["*"],
-            "off",
-            registered_tool_names=["memory", "read_file", "write_file"],
-        )
-
-        assert allowed_tools == ["read_file", "write_file"]
-
-    def test_session_grant_overrides_empty_agent_allowlist(self) -> None:
-        allowed_tools = effective_agent_allowed_tools(
-            [],
-            "off",
-            registered_tool_names=["history", "read_file"],
-            session_tool_grants=["history"],
-        )
-
-        assert allowed_tools == ["history"]
 
 
 class TestToolRegistryDefinitions:

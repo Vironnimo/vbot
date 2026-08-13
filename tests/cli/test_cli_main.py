@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
+from unittest.mock import Mock
 
 import pytest
 
@@ -348,9 +349,13 @@ def test_parse_args_supports_agent_update_fields() -> None:
             "agent",
             "--custom-system-prompt",
             "true",
-            "--allowed-tools",
+            "--tool-access-mode",
+            "selected",
+            "--tool-allow",
             "read_file",
             "edit_file",
+            "--tool-deny",
+            "memory",
             "--allowed-skills",
             "debugging",
             "vbot-cli",
@@ -373,7 +378,9 @@ def test_parse_args_supports_agent_update_fields() -> None:
     assert args.thinking_effort == "none"
     assert args.memory_prompt_mode == "agent"
     assert args.custom_system_prompt == "true"
-    assert args.allowed_tools == ["read_file", "edit_file"]
+    assert args.tool_access_mode == "selected"
+    assert args.tool_allow == ["read_file", "edit_file"]
+    assert args.tool_deny == ["memory"]
     assert args.allowed_skills == ["debugging", "vbot-cli"]
     assert args.workspace == "C:/agents/coder"
     assert args.copy_workspace_files is True
@@ -507,8 +514,12 @@ def test_run_agent_update_dispatches_changes_and_prints_plain_output(
             "--name",
             "Coder Two",
             "--clear-temperature",
-            "--allowed-tools",
+            "--tool-access-mode",
+            "selected",
+            "--tool-allow",
             "read_file",
+            "--tool-deny",
+            "memory",
             "--allowed-skills",
             "debugging",
             "--default-workspace",
@@ -536,7 +547,11 @@ def test_run_agent_update_dispatches_changes_and_prints_plain_output(
                 {
                     "name": "Coder Two",
                     "temperature": None,
-                    "allowed_tools": ["read_file"],
+                    "tool_access": {
+                        "mode": "selected",
+                        "allowed": ["read_file"],
+                        "denied": ["memory"],
+                    },
                     "allowed_skills": ["debugging"],
                     "workspace": None,
                     "copy_workspace_identity_files": True,
@@ -545,6 +560,40 @@ def test_run_agent_update_dispatches_changes_and_prints_plain_output(
             ),
         ),
     ]
+
+
+def test_run_agent_update_builds_an_explicit_empty_selected_policy(
+    tmp_path: Path,
+) -> None:
+    instance = make_instance(tmp_path)
+    update_agent = Mock(return_value=CommandResult(ok=True, message="updated", instance=instance))
+
+    exit_code = cli_main.run(
+        ["agent", "update", "coder", "--tool-access-mode", "selected"],
+        resolve=lambda **_kwargs: instance,
+        update_agent=update_agent,
+    )
+
+    assert exit_code == 0
+    assert update_agent.call_args.args[2] == {"tool_access": {"mode": "selected", "allowed": []}}
+
+
+def test_run_agent_update_rejects_tool_names_without_an_explicit_mode(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    instance = make_instance(tmp_path)
+    update_agent = Mock()
+
+    exit_code = cli_main.run(
+        ["agent", "update", "coder", "--tool-deny", "memory"],
+        resolve=lambda **_kwargs: instance,
+        update_agent=update_agent,
+    )
+
+    assert exit_code == 1
+    assert "require --tool-access-mode" in capsys.readouterr().out
+    update_agent.assert_not_called()
 
 
 def test_run_agent_rename_dispatches_ids_and_prints_plain_output(

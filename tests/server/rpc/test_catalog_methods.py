@@ -221,6 +221,10 @@ def _tool_stub(
     ready: Any = None,
     readiness_hint: str | None = None,
     extension: str | None = None,
+    family: str | None = None,
+    activation: str = "configurable",
+    activation_source: str | None = None,
+    constraints: tuple[str, ...] = (),
 ) -> SimpleNamespace:
     """A tool stub exposing the fields ``_tool_response`` reads.
 
@@ -233,6 +237,11 @@ def _tool_stub(
         ready=ready,
         readiness_hint=readiness_hint,
         extension=extension,
+        family=family,
+        activation=activation,
+        activation_source=activation_source,
+        constraints=constraints,
+        session_scoped=activation == "session_grant",
         contract=SimpleNamespace(schema_fingerprint=f"fingerprint:{name}"),
         parallel_safe=False,
     )
@@ -271,9 +280,9 @@ def test_tool_list_projects_server_owned_configurability_policy() -> None:
         tools=_ToolRegistry(
             [
                 _tool_stub("read"),
-                _tool_stub("memory"),
-                _tool_stub("project"),
-                _tool_stub("skill_manage"),
+                _tool_stub("memory", activation="memory_mode"),
+                _tool_stub("project", constraints=("identity_agent",)),
+                _tool_stub("skill_manage", constraints=("identity_agent",)),
             ]
         )
     )
@@ -290,13 +299,13 @@ def test_tool_list_projects_server_owned_configurability_policy() -> None:
     }
     assert policy_by_name == {
         "read": (True, None),
-        "memory": (False, "controlled_by_agent_memory_mode"),
+        "memory": (False, "activated_by_memory_mode"),
         "project": (False, "requires_identity_agent"),
-        "skill_manage": (False, "requires_identity_agent_workspace"),
+        "skill_manage": (False, "requires_identity_agent"),
     }
 
 
-def test_tool_list_omits_session_scoped_tools() -> None:
+def test_tool_list_includes_session_scoped_tools_with_activation_metadata() -> None:
     registry = ToolRegistry()
     registry.register(
         name="read",
@@ -310,12 +319,17 @@ def test_tool_list_omits_session_scoped_tools() -> None:
         parameters={"type": "object"},
         handler=lambda _context, _arguments: tool_success({}),
         session_scoped=True,
+        activation="session_grant",
     )
     state = SimpleNamespace(runtime=SimpleNamespace(tools=registry))
 
     result = _list_tools(state, {})
 
-    assert [tool["name"] for tool in result["tools"]] == ["read"]
+    assert [tool["name"] for tool in result["tools"]] == ["history", "read"]
+    history = result["tools"][0]
+    assert history["session_scoped"] is True
+    assert history["activation"] == "session_grant"
+    assert history["project_configurable"] is False
     assert result["default_project_tools"] == list(PROJECT_DEFAULT_ALLOWED_TOOLS)
 
 

@@ -204,6 +204,7 @@ def register_project_tool(
         offload_tool_handler(
             make_project_handler(projects, get_renderer, list_project_skills, file_state)
         ),
+        constraints=("identity_agent",),
         open_input_schema=True,
         result_schema={
             "type": "object",

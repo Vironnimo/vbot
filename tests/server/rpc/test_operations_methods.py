@@ -26,6 +26,7 @@ from core.prompts import (
     PromptAgentStore,
     SystemPromptManager,
 )
+from core.tools import ToolAccess
 from core.utils.paths import model_path
 from server.rpc.errors import RPC_ERROR_INVALID_REQUEST, RpcError
 from server.rpc.operations_methods import (
@@ -54,7 +55,7 @@ class StubAgent:
     root_project_id: str | None = None
     thinking_effort: str | None = "high"
     memory_prompt_mode: str = "off"
-    allowed_tools: tuple[str, ...] = ()
+    tool_access: ToolAccess = ToolAccess(mode="all")
     allowed_skills: tuple[str, ...] = ()
     custom_system_prompt_enabled: bool = False
 
@@ -105,6 +106,16 @@ class StubStorage:
 
 
 class StubTools:
+    def list_tools(self) -> list[Any]:
+        return [
+            SimpleNamespace(
+                name="read",
+                internal=False,
+                activation="configurable",
+                constraints=(),
+            )
+        ]
+
     def prompt_definitions(
         self,
         allowed_tools: Sequence[str] | None = None,

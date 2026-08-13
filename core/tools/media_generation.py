@@ -358,6 +358,7 @@ def register_generate_video_tool(registry: ToolRegistry, video_service: Any) -> 
         GENERATE_VIDEO_TEXT_ONLY_DESCRIPTION,
         GENERATE_VIDEO_PARAMETERS,
         make_generate_video_handler(video_service),
+        family="media",
         open_input_schema=True,
         result_schema={
             "type": "object",
@@ -396,6 +397,7 @@ def register_generate_music_tool(registry: ToolRegistry, music_service: Any) -> 
         GENERATE_MUSIC_DESCRIPTION,
         GENERATE_MUSIC_PARAMETERS,
         make_generate_music_handler(music_service),
+        family="media",
         open_input_schema=True,
         result_schema={
             "type": "object",

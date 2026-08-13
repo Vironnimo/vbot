@@ -1167,6 +1167,7 @@ def register_web_fetch_tool(registry: ToolRegistry, *, attachment_store: Any) ->
         WEB_FETCH_TOOL_DESCRIPTION,
         WEB_FETCH_TOOL_PARAMETERS,
         make_web_fetch_handler(attachment_store),
+        family="web",
         result_schema={"type": "object", "required": ["content"]},
         display=ToolDisplay(
             primary_candidates=(ToolDisplayField("url", kind="url", truncate="middle"),)

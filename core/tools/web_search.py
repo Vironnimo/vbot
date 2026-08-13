@@ -760,6 +760,7 @@ def register_web_search_tool(
         WEB_SEARCH_TOOL_DESCRIPTION,
         WEB_SEARCH_TOOL_PARAMETERS,
         _handler,
+        family="web",
         open_input_schema=True,
         result_schema={"type": "object", "required": ["query", "results"]},
         display=ToolDisplay(

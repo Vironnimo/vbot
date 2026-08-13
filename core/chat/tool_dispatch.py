@@ -39,7 +39,7 @@ from core.tools import (
 from core.tools import ToolCall as ScheduledToolCall
 from core.tools.availability import (
     agent_tool_settings,
-    effective_agent_allowed_tools,
+    resolve_tool_access,
 )
 from core.tools.skill import load_skill_content
 from core.utils.logging import get_logger
@@ -509,6 +509,7 @@ async def _dispatch_tool_calls(
                 context.registry,
                 context.tool_restriction,
                 base_allowed_tools=context.base_allowed_tools,
+                session_tool_grants=context.session_tool_grants,
             ),
             session_tool_grants=context.session_tool_grants,
             allowed_skills=getattr(agent, "allowed_skills", ["*"]),
@@ -852,13 +853,19 @@ def _unavailable_skill_reason(
     return "; ".join(missing) if missing else str(availability.state)
 
 
-def _runtime_allowed_tools(agent: Any, tool_registry: ToolRegistry) -> Sequence[str] | None:
-    return effective_agent_allowed_tools(
-        getattr(agent, "allowed_tools", ["*"]),
+def _runtime_allowed_tools(
+    agent: Any,
+    tool_registry: ToolRegistry,
+    *,
+    session_tool_grants: Sequence[str] = (),
+) -> Sequence[str]:
+    return resolve_tool_access(
+        agent.tool_access,
+        tool_registry.list_tools(),
         getattr(agent, "memory_prompt_mode", "agent_user"),
-        registered_tool_names=[tool.name for tool in tool_registry.list_tools()],
         workspace=getattr(agent, "workspace", "") or "",
-    )
+        session_tool_grants=session_tool_grants,
+    ).allowed_tools
 
 
 def _dispatch_allowed_tools(
@@ -867,6 +874,7 @@ def _dispatch_allowed_tools(
     tool_restriction: Sequence[str] | None,
     *,
     base_allowed_tools: Sequence[str] | None = None,
+    session_tool_grants: Sequence[str] = (),
 ) -> Sequence[str] | None:
     """Return the dispatch allowlist, narrowed by an optional per-run restriction.
 
@@ -887,7 +895,11 @@ def _dispatch_allowed_tools(
     effective = (
         list(base_allowed_tools)
         if base_allowed_tools is not None
-        else _runtime_allowed_tools(agent, tool_registry)
+        else _runtime_allowed_tools(
+            agent,
+            tool_registry,
+            session_tool_grants=session_tool_grants,
+        )
     )
     if tool_restriction is None:
         return effective

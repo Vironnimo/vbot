@@ -461,7 +461,21 @@ def _add_agent_change_arguments(
         choices=("true", "false"),
         help="Enable or disable the agent's own editable prompt fragments",
     )
-    parser.add_argument("--allowed-tools", nargs="*", help="Replace the full tool allowlist")
+    parser.add_argument(
+        "--tool-access-mode",
+        choices=("all", "selected", "none"),
+        help="Replace the Agent Tool access mode",
+    )
+    parser.add_argument(
+        "--tool-allow",
+        nargs="*",
+        help="Tool names for selected mode; empty selects no direct Tools",
+    )
+    parser.add_argument(
+        "--tool-deny",
+        nargs="*",
+        help="Absolute Tool denials; empty clears denials",
+    )
     parser.add_argument("--allowed-skills", nargs="*", help="Replace the full skill allowlist")
     parser.add_argument(
         "--subagent-allow",
@@ -655,11 +669,19 @@ def _add_project_parsers(subparsers: argparse._SubParsersAction[argparse.Argumen
     set_override_parser.add_argument("agent", metavar="<agent-id>", help="Team agent id")
     set_override_parser.add_argument(
         "field",
-        choices=("model", "temperature", "thinking_effort", "compaction_policy"),
+        choices=(
+            "model",
+            "temperature",
+            "thinking_effort",
+            "compaction_policy",
+            "tool_access",
+        ),
         help="Override field",
     )
     set_override_parser.add_argument(
-        "value", metavar="<value>", help="Field value; compaction_policy takes a JSON object"
+        "value",
+        metavar="<value>",
+        help="Field value; compaction_policy and tool_access take a JSON object",
     )
 
     clear_override_parser = _add_command_parser(
@@ -672,7 +694,13 @@ def _add_project_parsers(subparsers: argparse._SubParsersAction[argparse.Argumen
     clear_override_parser.add_argument("agent", metavar="<agent-id>", help="Team agent id")
     clear_override_parser.add_argument(
         "field",
-        choices=("model", "temperature", "thinking_effort", "compaction_policy"),
+        choices=(
+            "model",
+            "temperature",
+            "thinking_effort",
+            "compaction_policy",
+            "tool_access",
+        ),
         help="Override field to clear",
     )
 

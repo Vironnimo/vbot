@@ -52,6 +52,7 @@ from core.settings import (
     validate_thinking_effort,
 )
 from core.skills import SKILL_ORIGIN_GLOBAL
+from core.tools.availability import normalize_tool_access
 from core.utils.logging import get_logger
 from server.events import RESOURCE_KIND_AGENTS, RESOURCE_KIND_PROJECTS
 from server.rpc.agent_refs import _agent_reference_lock
@@ -305,8 +306,13 @@ def _set_override(state: Any, params: JsonObject) -> JsonObject:
     field = _required_override_field(params)
 
     try:
-        value = _validate_override_value(state, field, params.get("value"))
         current_project = _projects(state).get(project_id)
+        value = _validate_override_value(
+            state,
+            field,
+            params.get("value"),
+            project=current_project,
+        )
         previous_value = current_project.overrides.get(agent_id, {}).get(field, _MISSING)
         team = _agent_resolver(state).scan_project_report(current_project).team
         if agent_id not in {member.agent_id for member in team}:
@@ -375,7 +381,13 @@ def _required_override_field(params: JsonObject) -> str:
     return field
 
 
-def _validate_override_value(state: Any, field: str, value: Any) -> Any:
+def _validate_override_value(
+    state: Any,
+    field: str,
+    value: Any,
+    *,
+    project: Project,
+) -> Any:
     """Validate an override value against the field's rule; raise ``invalid_request`` on error.
 
     ``model`` reuses the ``/model`` usable-model gate (configured in this instance +
@@ -403,6 +415,19 @@ def _validate_override_value(state: Any, field: str, value: Any) -> Any:
             return normalize_compaction_policy(value)
         except Exception as exc:
             raise RpcError(RPC_ERROR_INVALID_REQUEST, str(exc)) from exc
+    if field == "tool_access":
+        try:
+            policy = normalize_tool_access(value)
+        except ValueError as exc:
+            raise RpcError(RPC_ERROR_INVALID_REQUEST, str(exc)) from exc
+        outside = sorted(set(policy.allowed) - set(project.allowed_tools))
+        if outside:
+            raise RpcError(
+                RPC_ERROR_INVALID_REQUEST,
+                "params.value.allowed contains Tools outside the Project Tool Whitelist: "
+                + ", ".join(outside),
+            )
+        return policy.to_dict()
     try:
         return validate_thinking_effort(value, label="params.value", allow_none=False)
     except SettingsValidationError as exc:
@@ -556,13 +581,19 @@ def _scan_preview(state: Any, project: Project) -> JsonObject:
 def _registered_project_tool_names(state: Any) -> frozenset[str]:
     """Return the live registry names eligible for a Project Tool Whitelist.
 
-    This matches the Project editor's catalog boundary: registered normal tools,
-    including not-ready tools, excluding Session-scoped tools and the two
-    Agent-owned capabilities that a config/project agent cannot configure.
+    This matches the Project editor's catalog boundary: registered normal Tools,
+    including not-ready Tools, with declarative activation and constraints deciding
+    whether a Project Agent may configure each entry.
     """
     registered = state.runtime.tools.list_tools(include_session_scoped=False)
     return frozenset(
-        tool.name for tool in registered if project_tool_configurability_reason(tool.name) is None
+        tool.name
+        for tool in registered
+        if project_tool_configurability_reason(
+            activation=tool.activation,
+            constraints=tool.constraints,
+        )
+        is None
     )
 
 

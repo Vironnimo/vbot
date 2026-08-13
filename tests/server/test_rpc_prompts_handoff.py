@@ -10,6 +10,7 @@ from typing import Any
 import pytest
 
 from core.projects.resolver import ConfigAgent
+from core.tools.availability import ToolAccess
 from server.rpc.methods import dispatch_rpc
 from tests.server.rpc_test_support import (
     StubAdapter,
@@ -135,7 +136,7 @@ def _register_project_agent(state: SimpleNamespace, repo: Path) -> None:
             name="Builder",
             model="openai/gpt-5",
             temperature=None,
-            allowed_tools=["*"],
+            tool_access=ToolAccess(mode="all"),
             allowed_skills=["*"],
             tools={},
             body="Imported builder body",

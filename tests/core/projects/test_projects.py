@@ -117,7 +117,7 @@ def test_build_project_rejects_unknown_source_format(tmp_path: Path) -> None:
 
 def test_override_fields_constant_contains_all_overridable_fields() -> None:
     assert (
-        frozenset({"model", "temperature", "thinking_effort", "compaction_policy"})
+        frozenset({"model", "temperature", "thinking_effort", "compaction_policy", "tool_access"})
         == OVERRIDE_FIELDS
     )
 
@@ -145,6 +145,48 @@ def test_build_project_accepts_overrides(tmp_path: Path) -> None:
         },
         "planner": {"model": "anthropic/claude-sonnet-4"},
     }
+
+
+def test_build_project_accepts_project_agent_tool_access_override(tmp_path: Path) -> None:
+    project = build_project(
+        "vbot",
+        "vBot",
+        tmp_path,
+        allowed_tools=["read", "grep"],
+        overrides={
+            "reviewer": {
+                "tool_access": {
+                    "mode": "selected",
+                    "allowed": ["read"],
+                    "denied": ["session_read"],
+                }
+            }
+        },
+    )
+
+    assert project.overrides["reviewer"]["tool_access"] == {
+        "mode": "selected",
+        "allowed": ["read"],
+        "denied": ["session_read"],
+    }
+
+
+def test_build_project_rejects_tool_override_outside_project_ceiling(tmp_path: Path) -> None:
+    with pytest.raises(ProjectError, match="outside the Project Tool Whitelist"):
+        build_project(
+            "vbot",
+            "vBot",
+            tmp_path,
+            allowed_tools=["read"],
+            overrides={
+                "reviewer": {
+                    "tool_access": {
+                        "mode": "selected",
+                        "allowed": ["bash"],
+                    }
+                }
+            },
+        )
 
 
 def test_build_project_overrides_survive_to_dict_round_trip(tmp_path: Path) -> None:

@@ -658,6 +658,7 @@ def register_terminal_tool(
         TERMINAL_TOOL_DESCRIPTION,
         TERMINAL_TOOL_PARAMETERS,
         make_terminal_handler(terminal_manager, projects),
+        family="execution",
         open_input_schema=True,
         result_schema={"type": "object"},
         display=ToolDisplay(

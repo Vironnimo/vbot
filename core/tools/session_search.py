@@ -328,6 +328,7 @@ def register_session_search_tool(
         build_session_search_description(recall_backend),
         build_session_search_parameters(recall_backend),
         make_session_search_handler(recall_backend, sessions, backend_name),
+        family="sessions",
         open_input_schema=True,
         result_schema={
             "type": "object",
@@ -345,6 +346,9 @@ def register_session_search_tool(
         SESSION_READ_TOOL_DESCRIPTION,
         SESSION_READ_TOOL_PARAMETERS,
         make_session_read_handler(resolved_sessions),
+        family="sessions",
+        activation="follows",
+        activation_source=SESSION_SEARCH_TOOL_NAME,
         open_input_schema=True,
         result_schema={
             "type": "object",

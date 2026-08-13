@@ -367,13 +367,13 @@ def _coerce_override_value(field: str, raw_value: str) -> object:
             return float(raw_value)
         except ValueError as exc:
             raise ValueError("temperature override must be a number") from exc
-    if field == "compaction_policy":
+    if field in {"compaction_policy", "tool_access"}:
         try:
             value = json.loads(raw_value)
         except json.JSONDecodeError as exc:
-            raise ValueError(f"compaction_policy override is invalid JSON: {exc.msg}") from exc
+            raise ValueError(f"{field} override is invalid JSON: {exc.msg}") from exc
         if not isinstance(value, dict):
-            raise ValueError("compaction_policy override must be a JSON object")
+            raise ValueError(f"{field} override must be a JSON object")
         return value
     return raw_value
 

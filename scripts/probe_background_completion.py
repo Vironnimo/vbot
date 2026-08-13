@@ -34,7 +34,7 @@ from core.chat import ChatLoop, ChatLoopDependencies, ChatSessionManager
 from core.prompts import PinnedSkillCatalog
 from core.runs import ChatRunManager, Run
 from core.runtime.runtime import Runtime
-from core.tools import ToolContext, ToolRegistry, tool_success
+from core.tools import ToolAccess, ToolContext, ToolRegistry, tool_success
 from core.tools.file_state import FileReadState
 from core.utils.config import Config
 
@@ -119,7 +119,7 @@ class _ProbePromptManager:
         **_kwargs: Any,
     ) -> list[JsonObject]:
         return self._tools.provider_definitions(
-            agent.allowed_tools,
+            list(agent.tool_access.allowed),
             session_grants=session_tool_grants,
         )
 
@@ -279,7 +279,7 @@ def _probe_agent(target: ProbeTarget, workspace: Path) -> Agent:
         workspace=str(workspace),
         temperature=0.0,
         thinking_effort="high",
-        allowed_tools=[PROBE_TOOL_NAME],
+        tool_access=ToolAccess(mode="selected", allowed=(PROBE_TOOL_NAME,)),
         allowed_skills=[],
         created_at=timestamp,
         updated_at=timestamp,
@@ -395,6 +395,9 @@ async def _run_case(
         wrapped_adapters.append(wrapped)
         return wrapped
 
+    async def image_understanding_available() -> bool:
+        return False
+
     dependencies = ChatLoopDependencies(
         agent_resolver=cast(Any, _ProbeAgentResolver(agent)),
         projects=cast(Any, _EmptyProjects()),
@@ -413,7 +416,7 @@ async def _run_case(
         resolve_skills=cast(Any, lambda _project_id, _agent_id: skills),
         refresh_skills=cast(Any, lambda _project_id, _agent_id: skills),
         get_local_context_windows=source_runtime.local_context_windows,
-        task_model_available=lambda _task_type: False,
+        image_understanding_available=image_understanding_available,
         deliver_background_completions=deliver_background_completions,
     )
     chat_loop = ChatLoop(dependencies, streaming=streaming)

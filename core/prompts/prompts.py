@@ -48,13 +48,12 @@ from core.skills.skills import (
     skill_origin_sort_key,
 )
 from core.tools.availability import (
-    IDENTITY_ONLY_TOOLS,
-    MEMORY_TOOL_NAME,
     SKILL_MANAGE_TOOL_NAME,
+    ToolAccess,
     agent_tool_settings,
     apply_agent_target_tool_visibility,
-    expand_companion_tools,
     memory_tool_enabled,
+    resolve_tool_access,
     subagent_allowed_agents,
 )
 from core.tools.tools import ToolDefinitionProfileContext
@@ -88,9 +87,9 @@ CORE_TOOLS_LIST_BLOCK_ID = "core:tools_list"
 CORE_CHANNELS_BLOCK_ID = "core:channels"
 CORE_SKILLS_BLOCK_ID = "core:skills"
 # Owner-gated on the ``skill_manage`` tool (owner ``tool:skill_manage``): it renders
-# only for identity agents that may author skills, so a config/project agent — which
-# has no private skill home and gets ``skill_manage`` stripped by IDENTITY_ONLY_TOOLS —
-# never sees it, even under a wildcard allow-list.
+# only for identity agents that may author Skills, so a config/project agent — which
+# has no private Skill home and fails the Tool's ``identity_agent`` constraint —
+# never sees it, regardless of its Tool Access Policy.
 CORE_SKILL_MAINTENANCE_BLOCK_ID = "core:skill_maintenance"
 CORE_SOUL_BLOCK_ID = "core:soul"
 CORE_WORKING_PROJECT_BLOCK_ID = "core:working_project"
@@ -218,8 +217,8 @@ class PromptAgent(Protocol):
         ...
 
     @property
-    def allowed_tools(self) -> list[str]:
-        """Tool allowlist for prompt and provider schemas."""
+    def tool_access(self) -> ToolAccess:
+        """Explicit Tool policy for prompt and provider schemas."""
         ...
 
     @property
@@ -264,6 +263,10 @@ class PromptAgentStore(Protocol):
 
 class ToolPromptRegistry(Protocol):
     """Tool registry methods needed for prompt and provider definitions."""
+
+    def list_tools(self) -> list[Any]:
+        """Return registered non-internal Tools, including Session-scoped Tools."""
+        ...
 
     def prompt_definitions(
         self,
@@ -1642,20 +1645,18 @@ class SystemPromptManager:
         session_tool_grants: Sequence[str] = (),
     ) -> list[JsonObject]:
         profile_context = ToolDefinitionProfileContext(agent_id=agent.id)
+        resolution = resolve_tool_access(
+            agent.tool_access,
+            self._tool_registry.list_tools(),
+            agent.memory_prompt_mode,
+            workspace=agent.workspace,
+            session_tool_grants=session_tool_grants,
+        )
         definitions = self._tool_registry.provider_definitions(
-            expand_companion_tools(agent.allowed_tools),
-            session_grants=session_tool_grants,
+            resolution.allowed_tools,
+            session_grants=resolution.session_tool_grants,
             profile_context=profile_context,
         )
-        definitions = self._apply_memory_tool_visibility(
-            definitions,
-            agent,
-            lambda allowed: self._tool_registry.provider_definitions(
-                allowed,
-                profile_context=profile_context,
-            ),
-        )
-        definitions = self._apply_identity_only_tool_visibility(definitions, agent)
         return apply_agent_target_tool_visibility(
             definitions,
             agent_id=agent.id,
@@ -1678,20 +1679,18 @@ class SystemPromptManager:
                 session_grants=session_tool_grants,
                 profile_context=profile_context,
             )
+        resolution = resolve_tool_access(
+            agent.tool_access,
+            self._tool_registry.list_tools(),
+            agent.memory_prompt_mode,
+            workspace=agent.workspace,
+            session_tool_grants=session_tool_grants,
+        )
         definitions = self._tool_registry.prompt_definitions(
-            expand_companion_tools(agent.allowed_tools),
-            session_grants=session_tool_grants,
+            resolution.allowed_tools,
+            session_grants=resolution.session_tool_grants,
             profile_context=profile_context,
         )
-        definitions = self._apply_memory_tool_visibility(
-            definitions,
-            agent,
-            lambda allowed: self._tool_registry.prompt_definitions(
-                allowed,
-                profile_context=profile_context,
-            ),
-        )
-        definitions = self._apply_identity_only_tool_visibility(definitions, agent)
         return apply_agent_target_tool_visibility(
             definitions,
             agent_id=agent.id,
@@ -1699,45 +1698,6 @@ class SystemPromptManager:
                 agent_tool_settings(getattr(agent, "tools", {}))
             ),
         )
-
-    def _apply_identity_only_tool_visibility(
-        self,
-        definitions: list[JsonObject],
-        agent: PromptAgent,
-    ) -> list[JsonObject]:
-        """Strip identity-only tools (skill authoring) for config/project agents.
-
-        An identity agent (non-empty ``workspace``) keeps whatever its allow-list
-        grants; a config/project agent never owns a private skill home, so
-        ``IDENTITY_ONLY_TOOLS`` are removed even when a wildcard allow-list would
-        otherwise include them — the same shape as memory's mode gate.
-        """
-        if agent.workspace:
-            return definitions
-        return [
-            definition
-            for definition in definitions
-            if definition.get("name") not in IDENTITY_ONLY_TOOLS
-        ]
-
-    def _apply_memory_tool_visibility(
-        self,
-        definitions: list[JsonObject],
-        agent: PromptAgent,
-        definition_loader: Callable[[Sequence[str]], list[JsonObject]],
-    ) -> list[JsonObject]:
-        mode = getattr(agent, "memory_prompt_mode", DEFAULT_MEMORY_PROMPT_MODE)
-        if not memory_tool_enabled(mode):
-            return [
-                definition
-                for definition in definitions
-                if definition.get("name") != MEMORY_TOOL_NAME
-            ]
-
-        if any(definition.get("name") == MEMORY_TOOL_NAME for definition in definitions):
-            return definitions
-
-        return [*definitions, *definition_loader([MEMORY_TOOL_NAME])]
 
     def _resolve_build_scope(self, agent: PromptAgent, scope: Any = None) -> PromptScope:
         if scope is None:

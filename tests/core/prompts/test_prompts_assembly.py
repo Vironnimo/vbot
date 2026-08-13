@@ -116,7 +116,7 @@ def test_identity_agent_prompt_assembles_blocks_in_default_layout_order(
     positions = [prompt.index(section) for section in order]
     assert positions == sorted(positions)
     # Same agent allowlist drives prompt tools and gate 2's memory-tool check.
-    assert tools.prompt_allowlist_calls[0] == ["read_file"]
+    assert tools.prompt_allowlist_calls[0] == ["read_file", "memory"]
     assert skills.allowlist == ["agent-cli"]
 
 

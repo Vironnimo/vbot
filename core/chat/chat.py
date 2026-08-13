@@ -2599,6 +2599,10 @@ class ChatLoop:
             for definition in tools
             if isinstance(definition.get("name"), str)
         )
+        allowed_tool_name_set = set(allowed_tool_names)
+        session_tool_grants = tuple(
+            name for name in session_tool_grants if name in allowed_tool_name_set
+        )
         tool_contracts = await _CHAT_TRANSFORM_WORKERS.run(
             self._dependencies.tools.contracts_for_provider_definitions,
             tools,

@@ -612,6 +612,36 @@ async def test_agent_update_accepts_memory_prompt_mode(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_agent_update_accepts_explicit_tool_access_policy(tmp_path: Path) -> None:
+    state = make_state(tmp_path, StubAdapter())
+
+    response = await dispatch_rpc(
+        state,
+        {
+            "method": "agent.update",
+            "params": {
+                "id": "coder",
+                "tool_access": {
+                    "mode": "selected",
+                    "allowed": ["read"],
+                    "denied": ["memory"],
+                },
+            },
+        },
+    )
+
+    assert response["ok"] is True
+    assert response["result"]["tool_access"] == {
+        "mode": "selected",
+        "allowed": ["read"],
+        "denied": ["memory"],
+    }
+    assert (
+        state.runtime.agents.get("coder").tool_access.to_dict() == response["result"]["tool_access"]
+    )
+
+
+@pytest.mark.asyncio
 async def test_agent_get_reflects_configured_default_model(tmp_path: Path) -> None:
     state = make_state(tmp_path, StubAdapter())
     state.runtime.storage.update_settings_sections(
@@ -742,6 +772,18 @@ async def test_agent_create_returns_resolved_defaults_and_signals_agents_reload(
         ("agent.create", {"id": "writer", "name": "Writer", "thinking_effort": "extreme"}),
         ("agent.update", {"id": "coder", "allowed_tools": "read_file"}),
         ("agent.update", {"id": "coder", "allowed_tools": ["read_file", 1]}),
+        ("agent.update", {"id": "coder", "tool_access": {"mode": "selected"}}),
+        (
+            "agent.update",
+            {
+                "id": "coder",
+                "tool_access": {
+                    "mode": "selected",
+                    "allowed": ["read"],
+                    "denied": ["read"],
+                },
+            },
+        ),
         ("agent.update", {"id": "coder", "allowed_skills": "debugging"}),
         ("agent.update", {"id": "coder", "allowed_skills": ["debugging", None]}),
         ("agent.update", {"id": "coder", "tools": "worker"}),

@@ -640,8 +640,9 @@ class StubPrompts:
         skill_catalog: object = None,
         session_tool_grants: tuple[str, ...] = (),
     ) -> list[JsonObject]:
+        assert _agent.tool_access is not None
         return self._tools.provider_definitions(
-            _agent.allowed_tools,
+            ["*"] if _agent.tool_access.mode == "all" else list(_agent.tool_access.allowed),
             session_grants=session_tool_grants,
         )
 

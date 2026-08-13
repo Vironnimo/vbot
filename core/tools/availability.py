@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 from collections.abc import Mapping, Sequence
 from copy import deepcopy
+from dataclasses import dataclass
 from typing import Any
 
 from core.memory import MEMORY_PROMPT_MODE_OFF, MemoryPromptMode
@@ -22,11 +23,55 @@ SUBAGENT_ALLOWED_AGENTS_KEY = "allowed_agents"
 DEFAULT_SUBAGENT_ALLOWED_AGENTS: tuple[str, ...] = ("*",)
 ENV_KEY_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
-# Tools usable only by an identity agent (one with a Workspace). ``project`` loads
-# context for work outside that Workspace, while ``skill_manage`` writes to the agent's
-# private skill home. A config/project agent owns neither capability, so both are
-# withheld even under a wildcard allow-list, like ``memory`` under its mode gate.
-IDENTITY_ONLY_TOOLS: frozenset[str] = frozenset({PROJECT_TOOL_NAME, SKILL_MANAGE_TOOL_NAME})
+TOOL_ACCESS_MODE_ALL = "all"
+TOOL_ACCESS_MODE_SELECTED = "selected"
+TOOL_ACCESS_MODE_NONE = "none"
+TOOL_ACCESS_MODES: frozenset[str] = frozenset(
+    {TOOL_ACCESS_MODE_ALL, TOOL_ACCESS_MODE_SELECTED, TOOL_ACCESS_MODE_NONE}
+)
+
+TOOL_ACTIVATION_CONFIGURABLE = "configurable"
+TOOL_ACTIVATION_FOLLOWS = "follows"
+TOOL_ACTIVATION_MEMORY_MODE = "memory_mode"
+TOOL_ACTIVATION_SESSION_GRANT = "session_grant"
+TOOL_ACTIVATION_KINDS: frozenset[str] = frozenset(
+    {
+        TOOL_ACTIVATION_CONFIGURABLE,
+        TOOL_ACTIVATION_FOLLOWS,
+        TOOL_ACTIVATION_MEMORY_MODE,
+        TOOL_ACTIVATION_SESSION_GRANT,
+    }
+)
+
+TOOL_CONSTRAINT_IDENTITY_AGENT = "identity_agent"
+TOOL_CONSTRAINT_IMAGE_FALLBACK_ROUTE = "image_fallback_route"
+
+
+@dataclass(frozen=True, slots=True)
+class ToolAccess:
+    """One Agent's explicit Tool policy, independent of runtime availability."""
+
+    mode: str = TOOL_ACCESS_MODE_ALL
+    allowed: tuple[str, ...] = ()
+    denied: tuple[str, ...] = ()
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return the canonical persisted/public JSON representation."""
+
+        result: dict[str, Any] = {"mode": self.mode}
+        if self.mode == TOOL_ACCESS_MODE_SELECTED:
+            result["allowed"] = list(self.allowed)
+        if self.denied:
+            result["denied"] = list(self.denied)
+        return result
+
+
+@dataclass(frozen=True, slots=True)
+class ToolAccessResolution:
+    """Effective Tool names and the Session Grants that survived policy."""
+
+    allowed_tools: tuple[str, ...]
+    session_tool_grants: tuple[str, ...]
 
 
 def memory_tool_enabled(memory_prompt_mode: MemoryPromptMode) -> bool:
@@ -34,75 +79,155 @@ def memory_tool_enabled(memory_prompt_mode: MemoryPromptMode) -> bool:
     return memory_prompt_mode != MEMORY_PROMPT_MODE_OFF
 
 
-def sanitize_configured_allowed_tools(allowed_tools: Sequence[str]) -> list[str]:
-    """Return persisted/configurable tools without runtime-derived companions."""
-    return [
-        tool_name
-        for tool_name in allowed_tools
-        if tool_name not in {MEMORY_TOOL_NAME, SESSION_READ_TOOL_NAME}
-    ]
+def normalize_tool_access(value: ToolAccess | Mapping[str, Any] | None) -> ToolAccess:
+    """Validate and normalize one Tool access policy.
+
+    A missing policy is the product default (all configurable Tools). A supplied
+    mapping is strict: ``selected`` requires ``allowed`` while the other modes
+    reject it. Denials may be retained in any mode because they are an absolute
+    cross-mode preference, even though ``none`` already disables every Tool.
+    Wildcards are retired from Agent Tool access entirely.
+    """
+
+    if value is None:
+        return ToolAccess()
+    if isinstance(value, ToolAccess):
+        value = {
+            "mode": value.mode,
+            **({"allowed": list(value.allowed)} if value.mode == TOOL_ACCESS_MODE_SELECTED else {}),
+            **({"denied": list(value.denied)} if value.denied else {}),
+        }
+    if not isinstance(value, Mapping):
+        raise ValueError("tool_access must be an object")
+
+    unsupported = sorted(set(value) - {"mode", "allowed", "denied"})
+    if unsupported:
+        raise ValueError(f"unsupported tool_access fields: {', '.join(unsupported)}")
+    mode = value.get("mode")
+    if not isinstance(mode, str) or mode not in TOOL_ACCESS_MODES:
+        raise ValueError("tool_access.mode must be one of: all, selected, none")
+
+    has_allowed = "allowed" in value
+    if mode == TOOL_ACCESS_MODE_SELECTED and not has_allowed:
+        raise ValueError("tool_access.allowed is required when mode is selected")
+    if mode != TOOL_ACCESS_MODE_SELECTED and has_allowed:
+        raise ValueError("tool_access.allowed is only valid when mode is selected")
+
+    allowed = _normalize_tool_name_list(value.get("allowed", ()), "tool_access.allowed")
+    denied = _normalize_tool_name_list(value.get("denied", ()), "tool_access.denied")
+    overlap = sorted(set(allowed) & set(denied))
+    if overlap:
+        names = ", ".join(overlap)
+        raise ValueError(f"tool_access.allowed and tool_access.denied overlap: {names}")
+    return ToolAccess(mode=mode, allowed=allowed, denied=denied)
 
 
-def expand_companion_tools(allowed_tools: Sequence[str] | None) -> list[str] | None:
-    """Derive companion Tools from their one persisted/configurable capability."""
-    if allowed_tools is None:
-        return None
-    configured = [tool_name for tool_name in allowed_tools if tool_name != SESSION_READ_TOOL_NAME]
-    expanded: list[str] = []
-    for tool_name in configured:
-        expanded.append(tool_name)
-        if tool_name == SESSION_SEARCH_TOOL_NAME:
-            expanded.append(SESSION_READ_TOOL_NAME)
-    return list(dict.fromkeys(expanded))
-
-
-def effective_agent_allowed_tools(
-    allowed_tools: Sequence[str] | None,
+def resolve_tool_access(
+    tool_access: ToolAccess,
+    tools: Sequence[Any],
     memory_prompt_mode: MemoryPromptMode,
     *,
-    registered_tool_names: Sequence[str],
     workspace: str = "",
     session_tool_grants: Sequence[str] = (),
-) -> list[str] | None:
-    """Return the runtime allowlist after applying Agent memory mode and identity-only gating.
+) -> ToolAccessResolution:
+    """Resolve policy, automatic activation, constraints, grants, and denials once."""
 
-    A config/project agent (empty ``workspace``) never gets an ``IDENTITY_ONLY_TOOLS``
-    member (``project`` or ``skill_manage``) in its effective set, even under a
-    wildcard allow-list — the same shape as the ``memory`` mode gate below. This is
-    the dispatch-time allowlist ``ToolRegistry.dispatch`` actually enforces, so it
-    must not grant more than what the prompt layer already advertises to the agent;
-    the prompt-layer
-    visibility pass alone (``_apply_identity_only_tool_visibility``) only hides the
-    tool definition from the model, it does not block a call that reaches dispatch.
-    """
-    excluded: set[str] = set() if workspace else set(IDENTITY_ONLY_TOOLS)
-    if not memory_tool_enabled(memory_prompt_mode):
-        excluded.add(MEMORY_TOOL_NAME)
-    grants = [tool_name for tool_name in session_tool_grants if tool_name in registered_tool_names]
+    if tool_access.mode == TOOL_ACCESS_MODE_NONE:
+        return ToolAccessResolution(allowed_tools=(), session_tool_grants=())
 
-    if allowed_tools is None:
-        if not excluded and not grants:
-            return None
-        return sorted(set(_without(registered_tool_names, excluded)) | set(grants))
+    catalog = {tool.name: tool for tool in tools if not getattr(tool, "internal", False)}
+    if tool_access.mode == TOOL_ACCESS_MODE_ALL:
+        active = {
+            name
+            for name, tool in catalog.items()
+            if _activation_kind(tool) == TOOL_ACTIVATION_CONFIGURABLE
+            and _constraints_allow(tool, workspace=workspace)
+        }
+    else:
+        active = {
+            name
+            for name in tool_access.allowed
+            if name in catalog
+            and _activation_kind(catalog[name]) == TOOL_ACTIVATION_CONFIGURABLE
+            and _constraints_allow(catalog[name], workspace=workspace)
+        }
 
-    configured_tools = expand_companion_tools(
-        [
-            tool_name
-            for tool_name in sanitize_configured_allowed_tools(allowed_tools)
-            if tool_name not in excluded
-        ]
+    requested_grants = set(session_tool_grants)
+    for name, tool in catalog.items():
+        activation = _activation_kind(tool)
+        if not _constraints_allow(tool, workspace=workspace):
+            continue
+        memory_activated = activation == TOOL_ACTIVATION_MEMORY_MODE and memory_tool_enabled(
+            memory_prompt_mode
+        )
+        session_granted = activation == TOOL_ACTIVATION_SESSION_GRANT and name in requested_grants
+        if memory_activated or session_granted:
+            active.add(name)
+
+    _add_followed_tools(active, catalog, workspace=workspace)
+    active.difference_update(tool_access.denied)
+    _remove_orphaned_followers(active, catalog)
+
+    ordered_active = tuple(tool.name for tool in tools if tool.name in active)
+    effective_grants = tuple(
+        name
+        for name in session_tool_grants
+        if name in active
+        and name in catalog
+        and _activation_kind(catalog[name]) == TOOL_ACTIVATION_SESSION_GRANT
     )
-    assert configured_tools is not None
-    if "*" in configured_tools:
-        effective = configured_tools if not excluded else _without(registered_tool_names, excluded)
-        if "*" in effective:
-            return effective
-        return sorted(set(effective) | set(grants))
+    return ToolAccessResolution(
+        allowed_tools=ordered_active,
+        session_tool_grants=tuple(dict.fromkeys(effective_grants)),
+    )
 
-    if memory_tool_enabled(memory_prompt_mode):
-        return list(dict.fromkeys([*configured_tools, MEMORY_TOOL_NAME, *grants]))
 
-    return list(dict.fromkeys([*configured_tools, *grants]))
+def _normalize_tool_name_list(value: Any, field_name: str) -> tuple[str, ...]:
+    if not isinstance(value, (list, tuple)) or not all(isinstance(item, str) for item in value):
+        raise ValueError(f"{field_name} must be a list of strings")
+    names = tuple(dict.fromkeys(value))
+    if len(names) != len(value):
+        raise ValueError(f"{field_name} must not contain duplicate names")
+    if any(not name.strip() for name in names):
+        raise ValueError(f"{field_name} must not contain empty names")
+    if "*" in names:
+        raise ValueError(f"{field_name} cannot contain the retired wildcard '*'")
+    return names
+
+
+def _activation_kind(tool: Any) -> str:
+    return str(getattr(tool, "activation", TOOL_ACTIVATION_CONFIGURABLE))
+
+
+def _constraints_allow(tool: Any, *, workspace: str) -> bool:
+    constraints = tuple(getattr(tool, "constraints", ()))
+    return TOOL_CONSTRAINT_IDENTITY_AGENT not in constraints or bool(workspace)
+
+
+def _add_followed_tools(active: set[str], catalog: Mapping[str, Any], *, workspace: str) -> None:
+    changed = True
+    while changed:
+        changed = False
+        for name, tool in catalog.items():
+            if name in active or _activation_kind(tool) != TOOL_ACTIVATION_FOLLOWS:
+                continue
+            source = getattr(tool, "activation_source", None)
+            if source in active and _constraints_allow(tool, workspace=workspace):
+                active.add(name)
+                changed = True
+
+
+def _remove_orphaned_followers(active: set[str], catalog: Mapping[str, Any]) -> None:
+    changed = True
+    while changed:
+        changed = False
+        for name in tuple(active):
+            tool = catalog[name]
+            if _activation_kind(tool) != TOOL_ACTIVATION_FOLLOWS:
+                continue
+            if getattr(tool, "activation_source", None) not in active:
+                active.remove(name)
+                changed = True
 
 
 def apply_agent_target_tool_visibility(
@@ -204,28 +329,37 @@ def subagent_allowed_agents(tool_settings: Mapping[str, Any] | None) -> list[str
     return list(allowed)
 
 
-def _without(tool_names: Sequence[str], excluded: set[str]) -> list[str]:
-    return sorted({tool_name for tool_name in tool_names if tool_name not in excluded})
-
-
 __all__ = [
     "BASH_ALLOWED_ENV_KEY",
     "BASH_TOOL_SETTINGS_KEY",
-    "IDENTITY_ONLY_TOOLS",
+    "DEFAULT_SUBAGENT_ALLOWED_AGENTS",
     "MEMORY_TOOL_NAME",
     "PROJECT_TOOL_NAME",
+    "SESSION_READ_TOOL_NAME",
+    "SESSION_SEARCH_TOOL_NAME",
     "SKILL_MANAGE_TOOL_NAME",
-    "DEFAULT_SUBAGENT_ALLOWED_AGENTS",
     "SUBAGENT_ALLOWED_AGENTS_KEY",
     "SUBAGENT_TOOL_SETTINGS_KEY",
     "SUBAGENT_TOOL_NAMES",
+    "TOOL_ACCESS_MODE_ALL",
+    "TOOL_ACCESS_MODE_NONE",
+    "TOOL_ACCESS_MODE_SELECTED",
+    "TOOL_ACCESS_MODES",
+    "TOOL_ACTIVATION_CONFIGURABLE",
+    "TOOL_ACTIVATION_FOLLOWS",
+    "TOOL_ACTIVATION_KINDS",
+    "TOOL_ACTIVATION_MEMORY_MODE",
+    "TOOL_ACTIVATION_SESSION_GRANT",
+    "TOOL_CONSTRAINT_IDENTITY_AGENT",
+    "TOOL_CONSTRAINT_IMAGE_FALLBACK_ROUTE",
+    "ToolAccess",
+    "ToolAccessResolution",
     "agent_tool_settings",
     "apply_agent_target_tool_visibility",
     "bash_allowed_env_keys",
-    "effective_agent_allowed_tools",
-    "expand_companion_tools",
     "memory_tool_enabled",
     "normalize_env_keys",
-    "sanitize_configured_allowed_tools",
+    "normalize_tool_access",
+    "resolve_tool_access",
     "subagent_allowed_agents",
 ]

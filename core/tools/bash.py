@@ -433,6 +433,7 @@ def register_bash_tool(
         BASH_TOOL_DESCRIPTION,
         BASH_TOOL_PARAMETERS,
         handler,
+        family="execution",
         open_input_schema=True,
         result_schema={"type": "object", "required": ["status"]},
         display=ToolDisplay(

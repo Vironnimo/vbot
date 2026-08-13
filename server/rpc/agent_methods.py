@@ -34,6 +34,7 @@ from core.tools.availability import (
     BASH_ALLOWED_ENV_KEY,
     BASH_TOOL_SETTINGS_KEY,
     normalize_env_keys,
+    normalize_tool_access,
 )
 from core.tools.terminal_manager import TerminalOwner
 from core.utils.errors import StorageError
@@ -969,7 +970,7 @@ def _agent_changes(params: JsonObject, *, blocked: set[str], for_create: bool) -
         "memory_prompt_mode",
         "temperature",
         "thinking_effort",
-        "allowed_tools",
+        "tool_access",
         "allowed_skills",
         "tools",
         "custom_system_prompt_enabled",
@@ -1049,7 +1050,12 @@ def _validate_agent_field(key: str, value: Any) -> Any:
         return _validate_thinking_effort(value, allow_none=True)
     if key == "memory_prompt_mode":
         return _validate_memory_prompt_mode(value)
-    if key in {"allowed_tools", "allowed_skills"}:
+    if key == "tool_access":
+        try:
+            return normalize_tool_access(value)
+        except ValueError as exc:
+            raise RpcError(RPC_ERROR_INVALID_REQUEST, str(exc)) from exc
+    if key == "allowed_skills":
         return _validate_string_list(key, value)
     if key == "tools":
         if not isinstance(value, dict):
