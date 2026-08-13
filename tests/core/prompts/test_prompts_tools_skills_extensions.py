@@ -59,8 +59,8 @@ def test_provider_tool_definitions_use_same_agent_allowlist(
             "parameters": {"type": "object"},
         },
     ]
-    assert tools.provider_allowlist_calls == [["read_file"], ["memory"]]
-    assert tools.provider_profile_agent_ids == ["coder", "coder"]
+    assert tools.provider_allowlist_calls == [["read_file", "memory"]]
+    assert tools.provider_profile_agent_ids == ["coder"]
 
 
 def test_prompt_tool_definitions_use_agent_configuration_profile(
@@ -135,6 +135,8 @@ def test_provider_tool_definitions_derive_session_read_from_session_search(
             description=f"{name} description",
             parameters={"type": "object", "additionalProperties": False},
             handler=lambda _context, _arguments: tool_success({}),
+            activation="follows" if name == "session_read" else "configurable",
+            activation_source="session_search" if name == "session_read" else None,
         )
     manager = _manager(tmp_path, tools=registry)
     agent = _agent(
@@ -546,6 +548,7 @@ def test_session_grant_drives_provider_and_enabled_live_tool_list(
         parameters={"type": "object", "additionalProperties": False},
         handler=lambda _context, _arguments: tool_success({}),
         session_scoped=True,
+        activation="session_grant",
     )
     store = StubBlockStore(
         layouts={"default": [LayoutEntry(id="core:tools_list", enabled=True, source="core")]}

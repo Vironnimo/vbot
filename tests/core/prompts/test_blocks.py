@@ -33,6 +33,7 @@ from core.prompts.blocks import (
     validate_workspace_include,
     wrap_include_file,
 )
+from core.tools.availability import ToolAccess
 
 
 @dataclass(frozen=True)
@@ -49,6 +50,12 @@ class StubAgent:
     allowed_skills: list[str] = field(default_factory=lambda: ["*"])
     tools: dict[str, object] = field(default_factory=dict)
     custom_system_prompt_enabled: bool = False
+
+    @property
+    def tool_access(self) -> ToolAccess:
+        if "*" in self.allowed_tools:
+            return ToolAccess(mode="all")
+        return ToolAccess(mode="selected", allowed=tuple(self.allowed_tools))
 
 
 def _context(agent: StubAgent | None = None, *, scope: str = "default") -> BlockRenderContext:

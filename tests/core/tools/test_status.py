@@ -23,7 +23,7 @@ from core.models.models import Capabilities, Model, ModelRegistry, ReasoningCapa
 from core.projects import AgentResolutionError, AgentResolver, ConfigAgent, ProjectStore
 from core.runs import ChatRunManager, Run
 from core.sessions import ChatSessionManager
-from core.tools import ToolContext, ToolRegistry, tool_failure
+from core.tools import ToolAccess, ToolContext, ToolRegistry, tool_failure
 from core.tools.status import STATUS_TOOL_NAME, STATUS_TOOL_PARAMETERS, register_status_tool
 
 
@@ -36,7 +36,7 @@ def _make_agent(*, model: str = "openai/gpt-5.2") -> Agent:
         workspace="workspace",
         temperature=0.3,
         thinking_effort="none",
-        allowed_tools=["*"],
+        tool_access=ToolAccess(mode="all"),
         allowed_skills=["*"],
         tools={},
         created_at="2026-05-18T10:00:00+00:00",
@@ -533,7 +533,7 @@ def test_status_tool_splits_selected_and_actual_thinking_effort(tmp_path: Path) 
         workspace="workspace",
         temperature=0.3,
         thinking_effort="max",
-        allowed_tools=["*"],
+        tool_access=ToolAccess(mode="all"),
         allowed_skills=["*"],
         tools={},
         created_at="2026-05-18T10:00:00+00:00",
@@ -581,7 +581,7 @@ def _make_config_agent() -> ConfigAgent:
         name="Orchestrator",
         model="openai/gpt-5.2",
         temperature=None,
-        allowed_tools=["*"],
+        tool_access=ToolAccess(mode="all"),
         allowed_skills=["*"],
         tools={},
         body="You orchestrate the team.",

@@ -26,6 +26,7 @@ from core.runs import (
 from core.tools import (
     ToolRegistry,
 )
+from core.tools.availability import ToolAccess
 from core.tools.file_state import FileReadState
 
 JsonObject = dict[str, Any]
@@ -92,6 +93,12 @@ class StubAgent:
     allowed_skills: list[str] | None = None
     workspace: Path | None = None
     root_project_id: str | None = None
+
+    @property
+    def tool_access(self) -> ToolAccess:
+        if self.allowed_tools is None or "*" in self.allowed_tools:
+            return ToolAccess(mode="all")
+        return ToolAccess(mode="selected", allowed=tuple(self.allowed_tools))
 
 
 class StubAgents:
@@ -320,7 +327,9 @@ class StubPrompts:
         session_tool_grants: Any = (),
     ) -> list[JsonObject]:
         self.agent_for_tools = agent
-        allowed = agent.allowed_tools
+        policy = agent.tool_access
+        allowed = ["*"] if policy.mode == "all" else list(policy.allowed)
+        allowed = [name for name in allowed if name not in policy.denied]
         definitions = (
             self.tool_registry.provider_definitions(
                 allowed,

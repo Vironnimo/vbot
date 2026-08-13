@@ -34,6 +34,7 @@ from core.tools import (
     tool_failure,
     tool_success,
 )
+from core.tools.availability import ToolAccess
 
 CANCELLED_BY_USER_MESSAGE = "Command aborted by the user"
 
@@ -46,6 +47,12 @@ class _StubAgent:
     allowed_skills: list[str] | None = None
     tools: dict[str, object] | None = None
     memory_prompt_mode: str = "agent_user"
+
+    @property
+    def tool_access(self) -> ToolAccess:
+        if self.allowed_tools is None or "*" in self.allowed_tools:
+            return ToolAccess(mode="all")
+        return ToolAccess(mode="selected", allowed=tuple(self.allowed_tools))
 
 
 class _StubRuntime:

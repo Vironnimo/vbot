@@ -27,6 +27,7 @@ from core.models.models import ModelRegistry
 from core.projects import ProjectNotFoundError
 from core.projects.paths import cwd_identity_key
 from core.projects.resolver import AgentResolutionError, ConfigAgent
+from core.tools.availability import ToolAccess
 from server.rpc import (
     connection_methods,
 )
@@ -68,6 +69,7 @@ class StubAgent:
     thinking_effort: str | None = ""
     memory_prompt_mode: str = DEFAULT_MEMORY_PROMPT_MODE
     allowed_tools: list[str] | None = None
+    tool_access: ToolAccess | None = None
     allowed_skills: list[str] | None = None
     tools: JsonObject | None = None
     custom_system_prompt_enabled: bool = False
@@ -78,6 +80,15 @@ class StubAgent:
     def __post_init__(self) -> None:
         if self.allowed_tools is None:
             object.__setattr__(self, "allowed_tools", ["*"])
+        if self.tool_access is None:
+            allowed_tools = self.allowed_tools or []
+            object.__setattr__(
+                self,
+                "tool_access",
+                ToolAccess(mode="all")
+                if "*" in allowed_tools
+                else ToolAccess(mode="selected", allowed=tuple(allowed_tools)),
+            )
         if self.allowed_skills is None:
             object.__setattr__(self, "allowed_skills", ["*"])
         if self.tools is None:

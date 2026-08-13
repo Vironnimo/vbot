@@ -24,6 +24,7 @@ from core.chat import ChatError
 from core.projects.resolver import ConfigAgent
 from core.prompts import ProjectPromptContext
 from core.tools import ToolContext, ToolRegistry, tool_success
+from core.tools.availability import ToolAccess
 from tests.core.chat.chat_loop_support import build_chat_loop
 from tests.core.chat.test_chat_loop import (
     StubAdapter,
@@ -45,7 +46,7 @@ def _config_agent(body: str) -> ConfigAgent:
         name="Orchestrator",
         model=MODEL,
         temperature=0.1,
-        allowed_tools=["*"],
+        tool_access=ToolAccess(mode="all"),
         allowed_skills=["*"],
         tools={},
         body=body,

@@ -21,6 +21,7 @@ from core.agents import (
 from core.agents import agents as agents_module
 from core.chat import ChatMessage
 from core.sessions import ChatSessionManager
+from core.tools.availability import ToolAccess
 
 # The agent domain seeds only SOUL.md; USER.md/MEMORY.md are the memory system's and
 # are created lazily on first write, never by workspace seeding.
@@ -52,7 +53,7 @@ def test_agent_dataclass_is_frozen() -> None:
         workspace="C:/workspace",
         temperature=0.1,
         thinking_effort="",
-        allowed_tools=["*"],
+        tool_access=ToolAccess(mode="all"),
         allowed_skills=["*"],
         tools={},
         memory_prompt_mode="agent_user",
@@ -81,7 +82,7 @@ def test_create_writes_agent_json_sessions_and_workspace(store: AgentStore) -> N
     assert data["temperature"] is None
     assert data["thinking_effort"] is None
     assert data["memory_prompt_mode"] == "agent_user"
-    assert data["allowed_tools"] == ["*"]
+    assert data["tool_access"] == {"mode": "all"}
     assert data["allowed_skills"] == ["*"]
     assert "tools" not in data
     assert data["custom_system_prompt_enabled"] is False
@@ -166,7 +167,7 @@ def test_minimal_agent_config_loads_all_optional_field_defaults(store: AgentStor
     assert agent.fallback_model == ""
     assert agent.temperature is None
     assert agent.thinking_effort is None
-    assert agent.allowed_tools == ["*"]
+    assert agent.tool_access == ToolAccess(mode="all")
     assert agent.allowed_skills == ["*"]
     assert agent.tools == {}
     assert agent.memory_prompt_mode == "agent_user"
@@ -217,7 +218,7 @@ def test_create_with_custom_values_persists_schema(store: AgentStore, tmp_path: 
         temperature=0.7,
         thinking_effort="high",
         memory_prompt_mode="agent",
-        allowed_tools=[],
+        tool_access={"mode": "selected", "allowed": []},
         allowed_skills=["memory"],
         tools={
             "bash": {"allowed_env": ["OPENAI_API_KEY", "OPENAI_API_KEY"]},
@@ -227,7 +228,7 @@ def test_create_with_custom_values_persists_schema(store: AgentStore, tmp_path: 
     )
 
     assert agent.workspace == str(custom_workspace.resolve())
-    assert agent.allowed_tools == []
+    assert agent.tool_access == ToolAccess(mode="selected")
     assert agent.allowed_skills == ["memory"]
     assert agent.tools == {
         "bash": {"allowed_env": ["OPENAI_API_KEY"]},
@@ -252,7 +253,10 @@ def test_disabling_subagent_tools_preserves_their_settings(store: AgentStore) ->
         tools={"subagent": {"allowed_agents": ["worker"]}},
     )
 
-    updated = store.update("orchestrator", allowed_tools=["read"])
+    updated = store.update(
+        "orchestrator",
+        tool_access={"mode": "selected", "allowed": ["read"]},
+    )
 
     assert updated.tools == {"subagent": {"allowed_agents": ["worker"]}}
     agent_path = store.data_dir / "agents" / "orchestrator" / "agent.json"
@@ -290,21 +294,33 @@ def test_relative_default_workspace_follows_moved_data_dir(
     assert Path(loaded.workspace, "MEMORY.md").read_text(encoding="utf-8") == "portable memory"
 
 
-def test_create_removes_runtime_derived_memory_tool_from_allowed_tools(
+def test_create_persists_memory_as_an_explicit_denial(
     store: AgentStore,
 ) -> None:
     agent = store.create(
         "coder",
         "Coder Agent",
-        allowed_tools=["read_file", "memory"],
+        tool_access={
+            "mode": "selected",
+            "allowed": ["read_file"],
+            "denied": ["memory"],
+        },
         memory_prompt_mode="agent_user",
     )
 
     agent_path = store.data_dir / "agents" / "coder" / "agent.json"
     data = json.loads(agent_path.read_text(encoding="utf-8"))
 
-    assert agent.allowed_tools == ["read_file"]
-    assert data["allowed_tools"] == ["read_file"]
+    assert agent.tool_access == ToolAccess(
+        mode="selected",
+        allowed=("read_file",),
+        denied=("memory",),
+    )
+    assert data["tool_access"] == {
+        "mode": "selected",
+        "allowed": ["read_file"],
+        "denied": ["memory"],
+    }
 
 
 @pytest.mark.parametrize(
@@ -319,8 +335,12 @@ def test_create_removes_runtime_derived_memory_tool_from_allowed_tools(
         ("thinking_effort", "extreme", "thinking_effort must be one of"),
         ("memory_prompt_mode", "sometimes", "memory_prompt_mode must be one of"),
         ("memory_prompt_mode", True, "memory_prompt_mode must be a string"),
-        ("allowed_tools", "read_file", "allowed_tools must be a list of strings"),
-        ("allowed_tools", ["read_file", 1], "allowed_tools must be a list of strings"),
+        ("tool_access", "read_file", "tool_access must be an object"),
+        (
+            "tool_access",
+            {"mode": "selected", "allowed": ["read_file", 1]},
+            "tool_access.allowed must be a list of strings",
+        ),
         ("allowed_skills", "debugging", "allowed_skills must be a list of strings"),
         ("allowed_skills", ["debugging", None], "allowed_skills must be a list of strings"),
         ("tools", [], "tools must be an object"),
@@ -397,7 +417,7 @@ def test_get_rejects_invalid_agent_json_schema(store: AgentStore) -> None:
     store.create("broken", "Broken Agent")
     agent_path = store.data_dir / "agents" / "broken" / "agent.json"
     data = json.loads(agent_path.read_text(encoding="utf-8"))
-    data["allowed_tools"] = "read_file"
+    data["tool_access"] = {"mode": "selected"}
     agent_path.write_text(json.dumps(data), encoding="utf-8")
 
     with pytest.raises(AgentError):
@@ -475,7 +495,7 @@ def test_update_changes_mutable_fields_and_preserves_id(store: AgentStore) -> No
         "coder",
         name="Updated Coder",
         model="openai/gpt-5.2",
-        allowed_tools=["read_file"],
+        tool_access={"mode": "selected", "allowed": ["read_file"]},
         tools={"subagent": {"allowed_agents": []}},
         memory_prompt_mode="off",
         custom_system_prompt_enabled=True,
@@ -486,7 +506,7 @@ def test_update_changes_mutable_fields_and_preserves_id(store: AgentStore) -> No
     assert updated.updated_at >= original.updated_at
     assert updated.name == "Updated Coder"
     assert updated.model == "openai/gpt-5.2"
-    assert updated.allowed_tools == ["read_file"]
+    assert updated.tool_access == ToolAccess(mode="selected", allowed=("read_file",))
     assert updated.tools == {"subagent": {"allowed_agents": []}}
     assert updated.memory_prompt_mode == "off"
     assert updated.custom_system_prompt_enabled is True
@@ -506,14 +526,20 @@ def test_update_empty_optional_name_restores_id_default(
     assert updated.name == "coder"
 
 
-def test_update_removes_runtime_derived_memory_tool_from_allowed_tools(
+def test_update_rejects_allowed_and_denied_overlap(
     store: AgentStore,
 ) -> None:
     store.create("coder", "Coder Agent")
 
-    updated = store.update("coder", allowed_tools=["read_file", "memory"])
-
-    assert updated.allowed_tools == ["read_file"]
+    with pytest.raises(AgentError, match="overlap"):
+        store.update(
+            "coder",
+            tool_access={
+                "mode": "selected",
+                "allowed": ["read_file"],
+                "denied": ["read_file"],
+            },
+        )
 
 
 def test_update_changes_workspace_and_seeds_templates(
@@ -763,8 +789,12 @@ def test_retarget_allowed_agent_references_is_exact_and_reversible(store: AgentS
         ("thinking_effort", "turbo", "thinking_effort must be one of"),
         ("memory_prompt_mode", "sometimes", "memory_prompt_mode must be one of"),
         ("memory_prompt_mode", 1, "memory_prompt_mode must be a string"),
-        ("allowed_tools", "read_file", "allowed_tools must be a list of strings"),
-        ("allowed_tools", ["read_file", False], "allowed_tools must be a list of strings"),
+        ("tool_access", "read_file", "tool_access must be an object"),
+        (
+            "tool_access",
+            {"mode": "selected", "allowed": ["read_file", False]},
+            "tool_access.allowed must be a list of strings",
+        ),
         ("allowed_skills", "debugging", "allowed_skills must be a list of strings"),
         ("allowed_skills", ["debugging", {}], "allowed_skills must be a list of strings"),
         ("tools", [], "tools must be an object"),

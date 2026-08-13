@@ -238,6 +238,8 @@ def register_skill_manage_tool(
             resolve_agent_skills_dir,
             invalidate_agent_skills,
         ),
+        family="skills",
+        constraints=("identity_agent",),
         open_input_schema=True,
         result_schema={"type": "object", "required": ["scope"]},
         display=ToolDisplay(parts_builder=_skill_manage_display_parts),

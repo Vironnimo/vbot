@@ -918,6 +918,7 @@ def register_read_tool(
             file_state,
             speech_max_size_bytes=speech_max_size_bytes,
         ),
+        family="files",
         result_schema={"type": "object", "required": ["content"]},
         display=ToolDisplay(
             primary_candidates=(

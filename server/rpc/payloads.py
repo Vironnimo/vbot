@@ -127,7 +127,7 @@ def _agent_response(state: Any, agent: Any) -> JsonObject:
         "temperature": agent.temperature,
         "thinking_effort": agent.thinking_effort,
         "memory_prompt_mode": agent.memory_prompt_mode,
-        "allowed_tools": list(agent.allowed_tools),
+        "tool_access": agent.tool_access.to_dict(),
         "allowed_skills": list(agent.allowed_skills),
         "tools": dict(getattr(agent, "tools", {})),
         "custom_system_prompt_enabled": bool(agent.custom_system_prompt_enabled),
@@ -280,6 +280,11 @@ def _tool_response(tool: Any) -> JsonObject:
         "ready": tool_is_ready(tool),
         # Optional English hint explaining the readiness precondition, or null.
         "readiness_hint": getattr(tool, "readiness_hint", None),
+        "family": getattr(tool, "family", None),
+        "activation": getattr(tool, "activation", "configurable"),
+        "activation_source": getattr(tool, "activation_source", None),
+        "constraints": list(getattr(tool, "constraints", ())),
+        "session_scoped": bool(getattr(tool, "session_scoped", False)),
         # The owning extension name, or null for a built-in tool.
         "extension": getattr(tool, "extension", None),
         # Stable contract diagnostics. The fingerprint changes whenever the

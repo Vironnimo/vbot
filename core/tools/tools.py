@@ -13,6 +13,11 @@ from functools import wraps
 from pathlib import Path
 from typing import Any, ClassVar, TypeVar
 
+from core.tools.availability import (
+    TOOL_ACTIVATION_CONFIGURABLE,
+    TOOL_ACTIVATION_FOLLOWS,
+    TOOL_ACTIVATION_KINDS,
+)
 from core.tools.contracts import ToolContract, compile_tool_contract
 from core.utils.errors import VBotError
 from core.utils.logging import get_logger
@@ -688,6 +693,16 @@ class Tool:
     # A Session-scoped tool is configurable nowhere and model-visible only when
     # the current Session supplies a matching persisted-state grant.
     session_scoped: bool = False
+    # Optional presentation grouping. Standalone Tools leave this unset; a family
+    # is useful only when multiple Tools share one user-recognizable capability.
+    family: str | None = None
+    # How policy activates this Tool. Configurable Tools are selected directly;
+    # followed, memory-mode, and Session-grant Tools are automatic.
+    activation: str = TOOL_ACTIVATION_CONFIGURABLE
+    activation_source: str | None = None
+    # Stable machine-readable preconditions. Runtime readiness and Chat route
+    # availability remain separate live projections.
+    constraints: tuple[str, ...] = ()
     display: ToolDisplay = field(default_factory=ToolDisplay)
     # Optional readiness predicate (zero-arg, cheap, I/O-free) — e.g. "the token
     # is a non-empty string", never a network ping, since it runs on every
@@ -716,6 +731,17 @@ class Tool:
     )
 
     def __post_init__(self) -> None:
+        if self.activation not in TOOL_ACTIVATION_KINDS:
+            raise ValueError(f"Unsupported Tool activation: {self.activation}")
+        if self.activation == TOOL_ACTIVATION_FOLLOWS:
+            if not self.activation_source:
+                raise ValueError("A followed Tool requires activation_source")
+        elif self.activation_source is not None:
+            raise ValueError("activation_source is only valid for a followed Tool")
+        if self.family is not None and not self.family.strip():
+            raise ValueError("Tool family must be a non-empty string or None")
+        if any(not isinstance(item, str) or not item.strip() for item in self.constraints):
+            raise ValueError("Tool constraints must be non-empty strings")
         contract = compile_tool_contract(
             name=self.name,
             input_schema=self.parameters,
@@ -853,6 +879,10 @@ class ToolRegistry:
         *,
         internal: bool = False,
         session_scoped: bool = False,
+        family: str | None = None,
+        activation: str = TOOL_ACTIVATION_CONFIGURABLE,
+        activation_source: str | None = None,
+        constraints: Sequence[str] = (),
         display: ToolDisplay | None = None,
         ready: ToolReadinessPredicate | None = None,
         readiness_hint: str | None = None,
@@ -890,6 +920,10 @@ class ToolRegistry:
             result_schema=result_schema,
             internal=internal,
             session_scoped=session_scoped,
+            family=family,
+            activation=activation,
+            activation_source=activation_source,
+            constraints=tuple(dict.fromkeys(constraints)),
             display=display or ToolDisplay(),
             ready=ready,
             readiness_hint=readiness_hint,

@@ -35,6 +35,7 @@ from core.projects import AgentResolver, ProjectStore
 from core.providers.providers import ProviderConfig
 from core.runs import ChatRunManager, Run, RunCancelledError
 from core.sessions import ChatSessionManager
+from core.tools.availability import ToolAccess
 
 
 def _prepared(dispatcher: CommandDispatcher, message: str) -> PreparedCommand:
@@ -96,7 +97,7 @@ def _make_agent(
         workspace="workspace",
         temperature=temperature,
         thinking_effort=thinking_effort,
-        allowed_tools=["*"],
+        tool_access=ToolAccess(mode="all"),
         allowed_skills=["*"],
         tools={},
         created_at="2026-05-18T10:00:00+00:00",

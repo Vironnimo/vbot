@@ -274,6 +274,7 @@ def register_skill_tool(
         SKILL_TOOL_DESCRIPTION,
         SKILL_TOOL_PARAMETERS,
         make_skill_handler(resolve_registry, refresh_skills),
+        family="skills",
         result_schema={"type": "object"},
         display=ToolDisplay(
             primary_candidates=(
@@ -294,6 +295,8 @@ def register_skill_tool(
         SKILL_LIST_TOOL_DESCRIPTION,
         SKILL_LIST_TOOL_PARAMETERS,
         make_skill_list_handler(resolve_registry),
+        family="skills",
+        activation="session_grant",
         result_schema={"type": "object"},
         session_scoped=True,
         open_input_schema=True,

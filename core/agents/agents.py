@@ -55,8 +55,9 @@ from core.settings.validation import (
 from core.tools.availability import (
     BASH_ALLOWED_ENV_KEY,
     BASH_TOOL_SETTINGS_KEY,
+    ToolAccess,
     normalize_env_keys,
-    sanitize_configured_allowed_tools,
+    normalize_tool_access,
 )
 from core.utils.atomic import atomic_write_text
 from core.utils.logging import get_logger
@@ -80,7 +81,6 @@ WORKSPACE_IDENTITY_FILES = ("SOUL.md", "USER.md", "MEMORY.md")
 _AGENT_CONFIG_FIELDS = frozenset(
     {
         "allowed_skills",
-        "allowed_tools",
         "compaction_policy",
         "created_at",
         "current_session_id",
@@ -94,6 +94,7 @@ _AGENT_CONFIG_FIELDS = frozenset(
         "tools",
         "temperature",
         "thinking_effort",
+        "tool_access",
         "updated_at",
         "workspace",
     }
@@ -192,6 +193,12 @@ def validate_agent_data(data: Any) -> list[JsonDiagnostic]:
         return [error_diagnostic("$", f"Expected a JSON object, got {type(data).__name__}")]
 
     warn_unknown_keys(diagnostics, "$", data, _AGENT_CONFIG_FIELDS, "agent field")
+    if "allowed_tools" in data:
+        add_error(
+            diagnostics,
+            "$.allowed_tools",
+            "retired Identity Agent field; run the agent Tool-access converter",
+        )
     _validate_agent_config_id(diagnostics, "$.id", data.get("id"))
     validate_non_empty_string(diagnostics, "$.name", data.get("name"), required=False)
     validate_string(diagnostics, "$.model", data.get("model"), required=False)
@@ -219,8 +226,11 @@ def validate_agent_data(data: Any) -> list[JsonDiagnostic]:
             data["memory_prompt_mode"],
             frozenset(MEMORY_PROMPT_MODES),
         )
-    if data.get("allowed_tools") is not None:
-        validate_string_list(diagnostics, "$.allowed_tools", data["allowed_tools"])
+    if data.get("tool_access") is not None:
+        try:
+            normalize_tool_access(data["tool_access"])
+        except ValueError as error:
+            add_error(diagnostics, "$.tool_access", str(error))
     if data.get("allowed_skills") is not None:
         validate_string_list(diagnostics, "$.allowed_skills", data["allowed_skills"])
     if data.get("tools") is not None:
@@ -327,7 +337,7 @@ class Agent:
     workspace: str
     temperature: float | None
     thinking_effort: str | None
-    allowed_tools: list[str]
+    tool_access: ToolAccess
     allowed_skills: list[str]
     created_at: str
     updated_at: str
@@ -422,7 +432,7 @@ class AgentStore:
         temperature: float | None = DEFAULT_TEMPERATURE,
         thinking_effort: str | None = DEFAULT_THINKING_EFFORT,
         memory_prompt_mode: MemoryPromptMode = DEFAULT_MEMORY_PROMPT_MODE,
-        allowed_tools: list[str] | None = None,
+        tool_access: ToolAccess | Mapping[str, Any] | None = None,
         allowed_skills: list[str] | None = None,
         tools: Mapping[str, Any] | None = None,
         custom_system_prompt_enabled: bool = DEFAULT_CUSTOM_SYSTEM_PROMPT_ENABLED,
@@ -442,7 +452,7 @@ class AgentStore:
         validated_temperature = _validate_temperature(temperature)
         validated_thinking_effort = _validate_thinking_effort(thinking_effort)
         validated_memory_prompt_mode = _validate_memory_prompt_mode(memory_prompt_mode)
-        validated_allowed_tools = _validate_allowed_items("allowed_tools", allowed_tools)
+        validated_tool_access = _validate_tool_access(tool_access)
         validated_allowed_skills = _validate_allowed_items("allowed_skills", allowed_skills)
         validated_tools = _normalize_agent_tools(tools)
         validated_custom_system_prompt_enabled = _validate_bool_field(
@@ -473,7 +483,7 @@ class AgentStore:
             temperature=validated_temperature,
             thinking_effort=validated_thinking_effort,
             memory_prompt_mode=validated_memory_prompt_mode,
-            allowed_tools=validated_allowed_tools,
+            tool_access=validated_tool_access,
             allowed_skills=validated_allowed_skills,
             tools=validated_tools,
             custom_system_prompt_enabled=validated_custom_system_prompt_enabled,
@@ -744,10 +754,8 @@ class AgentStore:
             changes["memory_prompt_mode"] = _validate_memory_prompt_mode(
                 changes["memory_prompt_mode"]
             )
-        if "allowed_tools" in changes:
-            changes["allowed_tools"] = _validate_allowed_items(
-                "allowed_tools", changes["allowed_tools"]
-            )
+        if "tool_access" in changes:
+            changes["tool_access"] = _validate_tool_access(changes["tool_access"])
         if "allowed_skills" in changes:
             changes["allowed_skills"] = _validate_allowed_items(
                 "allowed_skills", changes["allowed_skills"]
@@ -1086,6 +1094,7 @@ class AgentStore:
     def _write_agent(self, agent: Agent) -> None:
         agent_path = self._agent_path(agent.id)
         persisted = asdict(agent)
+        persisted["tool_access"] = agent.tool_access.to_dict()
         if not persisted["tools"]:
             persisted.pop("tools")
         persisted["workspace"] = _workspace_for_storage(
@@ -1309,9 +1318,14 @@ def _validate_allowed_items(field: str, items: list[str] | None) -> list[str]:
         raise AgentError(f"{field} must be a list of strings")
     if not all(isinstance(item, str) for item in items):
         raise AgentError(f"{field} must be a list of strings")
-    if field == "allowed_tools":
-        return sanitize_configured_allowed_tools(items)
     return list(items)
+
+
+def _validate_tool_access(value: ToolAccess | Mapping[str, Any] | None) -> ToolAccess:
+    try:
+        return normalize_tool_access(value)
+    except ValueError as error:
+        raise AgentError(str(error)) from error
 
 
 def _normalize_agent_tools(tools: Mapping[str, Any] | None) -> dict[str, Any]:
@@ -1459,9 +1473,7 @@ def _agent_from_dict(
         temperature=None if temperature is None else float(temperature),
         thinking_effort=data.get("thinking_effort"),
         memory_prompt_mode=cast(MemoryPromptMode, memory_prompt_mode or DEFAULT_MEMORY_PROMPT_MODE),
-        allowed_tools=sanitize_configured_allowed_tools(
-            _validate_allowed_items("allowed_tools", data.get("allowed_tools"))
-        ),
+        tool_access=_validate_tool_access(data.get("tool_access")),
         allowed_skills=_validate_allowed_items("allowed_skills", data.get("allowed_skills")),
         tools=_normalize_agent_tools(data.get("tools")),
         custom_system_prompt_enabled=bool(

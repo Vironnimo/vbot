@@ -14,7 +14,7 @@ def _valid_agent_data() -> dict[str, object]:
         "temperature": None,
         "thinking_effort": None,
         "memory_prompt_mode": "agent_user",
-        "allowed_tools": ["*"],
+        "tool_access": {"mode": "all"},
         "allowed_skills": ["*"],
         "custom_system_prompt_enabled": False,
         "created_at": "2026-05-03T12:00:00Z",

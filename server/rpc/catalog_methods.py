@@ -37,7 +37,8 @@ def _list_tools(state: Any, params: JsonObject) -> JsonObject:
         # Whitelist editor see every tool and style a not-ready one from the per-tool
         # ``ready``/``readiness_hint`` fields, rather than the tool vanishing. The
         # model-facing surfaces (provider/prompt definitions) still filter readiness.
-        tools = state.runtime.tools.list_tools(include_session_scoped=False)
+        tools = state.runtime.tools.list_tools(include_session_scoped=True)
+        _validate_tool_relationships(tools)
     except Exception as exc:
         raise _map_expected_error(exc) from exc
     # ``default_project_tools`` is the project Tool Whitelist base list — the editor
@@ -52,10 +53,35 @@ def _list_tools(state: Any, params: JsonObject) -> JsonObject:
 def _project_annotated_tool_response(tool: Any) -> JsonObject:
     """Project the generic Tool plus server-owned Project configurability policy."""
     response = _tool_response(tool)
-    reason = project_tool_configurability_reason(tool.name)
+    reason = project_tool_configurability_reason(
+        activation=tool.activation,
+        constraints=tool.constraints,
+    )
     response["project_configurable"] = reason is None
     response["project_configurability_reason"] = reason
     return response
+
+
+def _validate_tool_relationships(tools: list[Any]) -> None:
+    """Reject incomplete declarative families or follower references."""
+
+    names = {tool.name for tool in tools}
+    family_counts: dict[str, int] = {}
+    for tool in tools:
+        family = getattr(tool, "family", None)
+        if family is not None:
+            family_counts[family] = family_counts.get(family, 0) + 1
+        if (
+            getattr(tool, "activation", "configurable") == "follows"
+            and getattr(tool, "activation_source", None) not in names
+        ):
+            raise ValueError(
+                f"Tool '{tool.name}' follows an unregistered Tool: "
+                f"{getattr(tool, 'activation_source', None)}"
+            )
+    singletons = sorted(family for family, count in family_counts.items() if count < 2)
+    if singletons:
+        raise ValueError("Tool families require at least two members: " + ", ".join(singletons))
 
 
 def _list_skills(state: Any, params: JsonObject) -> JsonObject:

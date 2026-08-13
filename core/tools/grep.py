@@ -793,6 +793,7 @@ def register_grep_tool(registry: ToolRegistry) -> None:
         GREP_TOOL_DESCRIPTION,
         GREP_TOOL_PARAMETERS,
         _grep_handler_async,
+        family="files",
         result_schema={"type": "object", "required": ["content"]},
         display=ToolDisplay(
             primary_candidates=(

@@ -17,7 +17,7 @@ constructing the entity. The on-disk anchor lifecycle and CRUD live in
 from __future__ import annotations
 
 import os
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -68,11 +68,10 @@ DEFAULT_DEFAULT_THINKING_EFFORT: str | None = None
 # old ``project.json`` missing the field loads at (decision 2 / decision 10). This
 # is the SINGLE source for the creation seed, the missing-field fallback, and the
 # UI "reset to defaults" — change the base list here and all three move together.
-# The default-off-but-UI-toggleable tools (``session_search``, ``image_generation``,
+# The default-off-but-UI-toggleable Tools (``session_search``, ``image_generation``,
 # ``text_to_speech``, ``cron``, ``channel_send``, the Home-Assistant tools) are
-# deliberately absent. ``memory`` (runtime-derived from memory mode) and the
-# identity-only ``project`` / ``skill_manage`` capabilities are never project tools
-# at all; ``skill`` itself is an ordinary project tool, default-on.
+# deliberately absent. Automatic and Identity-only Tools are never directly
+# configurable Project Tools; ``skill`` itself is directly configurable and default-on.
 PROJECT_DEFAULT_ALLOWED_TOOLS: tuple[str, ...] = (
     "read",
     "write",
@@ -89,26 +88,26 @@ PROJECT_DEFAULT_ALLOWED_TOOLS: tuple[str, ...] = (
     "skill",
 )
 
-# Registered normal tools that are not configurable through a Project Tool
-# Whitelist. Keep the machine-readable reason here with the policy: RPC catalogs
-# project this metadata so accessors never need to mirror tool names or semantics.
-_PROJECT_TOOL_NON_CONFIGURABLE_REASONS: dict[str, str] = {
-    "memory": "controlled_by_agent_memory_mode",
-    "project": "requires_identity_agent",
-    "session_read": "granted_with_session_search",
-    "skill_manage": "requires_identity_agent_workspace",
-}
 
-
-def project_tool_configurability_reason(tool_name: str) -> str | None:
-    """Return why a registered Tool is not Project-configurable, if applicable."""
-    return _PROJECT_TOOL_NON_CONFIGURABLE_REASONS.get(tool_name)
+def project_tool_configurability_reason(
+    *, activation: str, constraints: Sequence[str]
+) -> str | None:
+    """Return why declarative Tool metadata excludes Project configuration."""
+    if activation == "follows":
+        return "follows_another_tool"
+    if activation == "memory_mode":
+        return "activated_by_memory_mode"
+    if activation == "session_grant":
+        return "requires_session_grant"
+    if "identity_agent" in constraints:
+        return "requires_identity_agent"
+    return None
 
 
 # The optional fields a per-agent override may carry. Each maps to the top tier of
 # the matching config-agent resolver chain (model / temperature / thinking effort).
 OVERRIDE_FIELDS: frozenset[str] = frozenset(
-    {"model", "temperature", "thinking_effort", "compaction_policy"}
+    {"model", "temperature", "thinking_effort", "compaction_policy", "tool_access"}
 )
 
 _PROJECT_CONFIG_FIELDS = frozenset(
@@ -236,6 +235,11 @@ def validate_project_data(data: Any) -> list[JsonDiagnostic]:
         diagnostics, "$.skills_project_disabled", data.get("skills_project_disabled")
     )
     _validate_override_schema(diagnostics, "$.overrides", data.get("overrides"))
+    _validate_override_ceiling_diagnostics(
+        diagnostics,
+        data.get("overrides"),
+        data.get("allowed_tools"),
+    )
     validate_string(diagnostics, "$.created_at", data.get("created_at"), required=False)
     validate_string(diagnostics, "$.updated_at", data.get("updated_at"), required=False)
     return diagnostics
@@ -314,6 +318,39 @@ def _validate_one_override_schema(
             override["compaction_policy"],
             child_path(path, "compaction_policy"),
         )
+    if "tool_access" in override:
+        try:
+            _normalize_tool_access_policy(override["tool_access"])
+        except ValueError as error:
+            add_error(diagnostics, child_path(path, "tool_access"), str(error))
+
+
+def _validate_override_ceiling_diagnostics(
+    diagnostics: list[JsonDiagnostic],
+    overrides: Any,
+    allowed_tools: Any,
+) -> None:
+    if not isinstance(overrides, Mapping):
+        return
+    ceiling = set(
+        allowed_tools if isinstance(allowed_tools, list) else PROJECT_DEFAULT_ALLOWED_TOOLS
+    )
+    for agent_id, override in overrides.items():
+        if not isinstance(agent_id, str) or not isinstance(override, Mapping):
+            continue
+        raw_policy = override.get("tool_access")
+        try:
+            policy = _normalize_tool_access_policy(raw_policy) if raw_policy is not None else None
+        except ValueError:
+            continue
+        if policy is None:
+            continue
+        for tool_name in sorted(set(policy.allowed) - ceiling):
+            add_error(
+                diagnostics,
+                child_path(child_path("$.overrides", agent_id), "tool_access.allowed"),
+                f"Tool is outside the Project Tool Whitelist: {tool_name}",
+            )
 
 
 @dataclass(frozen=True)
@@ -431,6 +468,7 @@ def build_project(
         "skills_project_disabled", skills_project_disabled
     )
     validated_overrides = _validate_overrides(overrides)
+    _validate_tool_access_override_ceilings(validated_overrides, validated_allowed_tools)
     now = _utc_now()
     return Project(
         project_id=validated_id,
@@ -663,7 +701,34 @@ def _validate_override(agent_id: str, override: Any) -> dict[str, Any]:
             )
         except Exception as exc:
             raise ProjectError(str(exc)) from exc
+    if "tool_access" in override:
+        try:
+            policy = _normalize_tool_access_policy(override["tool_access"])
+        except ValueError as exc:
+            raise ProjectError(str(exc)) from exc
+        validated["tool_access"] = policy.to_dict()
     return validated
+
+
+def _validate_tool_access_override_ceilings(
+    overrides: Mapping[str, Mapping[str, Any]],
+    allowed_tools: list[str],
+) -> None:
+    """Reject selected Project Agent Tools outside the Project Tool Whitelist."""
+
+    ceiling = set(allowed_tools)
+    for agent_id, override in overrides.items():
+        raw_policy = override.get("tool_access")
+        if raw_policy is None:
+            continue
+        policy = _normalize_tool_access_policy(raw_policy)
+        outside = sorted(set(policy.allowed) - ceiling)
+        if outside:
+            names = ", ".join(outside)
+            raise ProjectError(
+                f"overrides[{agent_id!r}].tool_access.allowed contains Tools outside "
+                f"the Project Tool Whitelist: {names}"
+            )
 
 
 def _validate_override_temperature(agent_id: str, value: Any) -> float:
@@ -706,3 +771,11 @@ def _overrides_from_data(value: Any) -> dict[str, dict[str, Any]]:
 
 def _utc_now() -> str:
     return datetime.now(UTC).isoformat().replace("+00:00", "Z")
+
+
+def _normalize_tool_access_policy(value: Any) -> Any:
+    """Import the Tools-owned policy validator lazily to avoid package cycles."""
+
+    from core.tools.availability import normalize_tool_access
+
+    return normalize_tool_access(value)

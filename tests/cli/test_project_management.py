@@ -160,6 +160,25 @@ def test_parse_args_supports_project_clear_default_knobs() -> None:
     assert args.clear_default_thinking_effort is True
 
 
+def test_parse_args_supports_project_tool_access_overrides() -> None:
+    set_args = cli_main.parse_args(
+        [
+            "project",
+            "set-override",
+            "vbot",
+            "builder",
+            "tool_access",
+            '{"mode":"selected","allowed":["read"]}',
+        ]
+    )
+    clear_args = cli_main.parse_args(
+        ["project", "clear-override", "vbot", "builder", "tool_access"]
+    )
+
+    assert set_args.field == "tool_access"
+    assert clear_args.field == "tool_access"
+
+
 # --- project add -------------------------------------------------------------
 
 
@@ -976,6 +995,44 @@ def test_project_set_override_coerces_value_and_returns_refreshed_project(
             },
         }
     ]
+
+
+def test_project_set_override_coerces_tool_access_json(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    instance = make_instance(tmp_path)
+    calls: list[dict[str, Any]] = []
+
+    def fake_post(
+        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
+    ) -> httpx.Response:
+        calls.append(json)
+        return httpx.Response(
+            200,
+            json={
+                "ok": True,
+                "result": {
+                    "project": _project_response(),
+                    "scan": {"team": [], "report": {"clean": True, "findings": []}},
+                },
+            },
+        )
+
+    monkeypatch.setattr(project_management.httpx, "post", fake_post)
+
+    result = project_management.project_set_override(
+        instance,
+        "vbot",
+        "builder",
+        "tool_access",
+        '{"mode":"selected","allowed":["read"]}',
+    )
+
+    assert result.ok is True
+    assert calls[0]["params"]["value"] == {
+        "mode": "selected",
+        "allowed": ["read"],
+    }
 
 
 def test_project_remove_can_preserve_rooted_agent_files_and_reports_side_effects(

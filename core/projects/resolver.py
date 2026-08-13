@@ -16,7 +16,7 @@ Every run path resolves an agent through one entry point —
 Both branches return a :class:`RuntimeAgent` — a structural protocol the store
 ``Agent`` already satisfies field-for-field, so a later run-path migration just
 re-types its parameter from ``Agent`` to ``RuntimeAgent`` and keeps reading the
-same attributes (model, allowed_tools, temperature, thinking_effort,
+same attributes (model, tool_access, temperature, thinking_effort,
 allowed_skills, fallback_model, memory_prompt_mode, workspace, id, …).
 
 **Two freshness levels** (decision in the plan, "zwei Frische-Ebenen"):
@@ -74,6 +74,7 @@ if TYPE_CHECKING:
     from core.projects.store import ProjectStore
     from core.providers.providers import ProviderRegistry
     from core.runtime.interfaces import ProviderCredentialResolverProtocol
+    from core.tools.availability import ToolAccess
 
 # Config agents are workspace-less and memory-tool-less in v1 (plan: "Config-Agent
 # = kein Workspace, kein Memory-Tool"). The empty workspace path makes that
@@ -111,8 +112,9 @@ class RuntimeAgent(Protocol):
     - ``fallback_model`` — secondary model (empty for a config agent in v1).
     - ``workspace`` — identity/memory home; **empty** for a config agent.
     - ``temperature`` / ``thinking_effort`` — run knobs (may be ``None``).
-    - ``allowed_tools`` / ``allowed_skills`` — allow-lists; ``tools`` carries
-      optional Tool-owned settings (for a config agent, Project-derived).
+    - ``tool_access`` — explicit Tool Access Policy; ``allowed_skills`` remains
+      an allow-list and ``tools`` carries optional Tool-owned settings (for a
+      config agent, Project-derived).
     - ``memory_prompt_mode`` — pinned-memory selection (``"off"`` for config).
     - ``custom_system_prompt_enabled`` — private prompt scope (``False`` for config).
     - ``current_session_id`` — the agent's active session (empty for config; the
@@ -138,7 +140,7 @@ class RuntimeAgent(Protocol):
     @property
     def thinking_effort(self) -> str | None: ...
     @property
-    def allowed_tools(self) -> list[str]: ...
+    def tool_access(self) -> ToolAccess: ...
     @property
     def allowed_skills(self) -> list[str]: ...
     @property
@@ -187,7 +189,7 @@ class ConfigAgent:
     Field set mirrors the store :class:`Agent` so it satisfies
     :class:`RuntimeAgent`; the values come from the :class:`ScannedAgent` profile
     (verbatim ``body`` becomes the system prompt later) plus the model resolved
-    through the chain and the project-derived ``allowed_tools``/``allowed_skills``.
+    through the chain and the project-derived ``tool_access``/``allowed_skills``.
     It carries the scanned ``body`` and
     ``source_path`` so the prompt builder (a later task) can insert the body
     verbatim and so callers can point at the source repo file.
@@ -197,7 +199,7 @@ class ConfigAgent:
     name: str
     model: str
     temperature: float | None
-    allowed_tools: list[str]
+    tool_access: ToolAccess
     allowed_skills: list[str]
     tools: dict[str, Any]
     body: str
@@ -584,18 +586,18 @@ class AgentResolver:
         resolved_model = self._resolve_model_or_raise(scanned, project, global_defaults)
         resolved_temperature = _resolve_temperature(scanned, project, global_defaults)
         resolved_thinking_effort = _resolve_thinking_effort(scanned, project, global_defaults)
-        allowed_tools = _effective_allowed_tools(project, scanned)
+        tool_access = _project_agent_tool_access(project, scanned)
         allowed_skills = effective_project_allowed_skills(
             project, self._project_skill_names(project_id)
         )
         allowed_agents = _effective_allowed_agents(scanned, team)
-        tools = _project_agent_tools(allowed_tools, allowed_agents)
+        tools = _project_agent_tools(tool_access, allowed_agents)
         return _build_config_agent(
             scanned,
             resolved_model,
             resolved_temperature,
             resolved_thinking_effort,
-            allowed_tools,
+            tool_access,
             allowed_skills,
             tools,
             project.overrides.get(agent_id, {}).get("compaction_policy"),
@@ -631,9 +633,9 @@ class AgentResolver:
 
     def effective_tools_for_member(self, project: Project, member: ScannedAgent) -> dict[str, Any]:
         """Project repository-owned Tool settings for one current Team member."""
-        allowed_tools = _effective_allowed_tools(project, member)
+        tool_access = _project_agent_tool_access(project, member)
         allowed_agents = _effective_allowed_agents(member, self._project_team(project))
-        return _project_agent_tools(allowed_tools, allowed_agents)
+        return _project_agent_tools(tool_access, allowed_agents)
 
     def effective_config_for_member(
         self, project: Project, scanned: ScannedAgent
@@ -684,6 +686,7 @@ class AgentResolver:
             "model": self._config_model_source(project, scanned, global_defaults),
             "temperature": _config_temperature_source(project, scanned, global_defaults),
             "thinking_effort": _config_thinking_effort_source(project, scanned, global_defaults),
+            "tool_access": _config_tool_access_source(project, scanned),
         }
 
     def _config_model_source(
@@ -948,15 +951,36 @@ def resolve_skill_scope(
     return rooted_project_id, agent_id
 
 
-def _effective_allowed_tools(project: Project, scanned: ScannedAgent) -> list[str]:
-    """Return the config agent's tools: the project ceiling minus the agent's denials.
+def _project_agent_tool_access(project: Project, scanned: ScannedAgent) -> ToolAccess:
+    """Return the Project-scoped Tool policy for one Project Agent.
 
-    The Project Tool Whitelist (``project.allowed_tools``) is the hard ceiling; the
-    agent's scanned ``denied_tools`` can only remove from it, never add. Order
-    follows the project list so the result is deterministic, and an empty ceiling
-    yields no tools regardless of what the agent denies.
+    A vBot override replaces the repository-scanned Tool policy. ``all`` is
+    materialized against the Project Tool Whitelist so the shared runtime resolver
+    never interprets it as every Tool registered in the whole vBot instance.
     """
-    return [tool for tool in project.allowed_tools if tool not in scanned.denied_tools]
+
+    from core.tools.availability import ToolAccess, normalize_tool_access
+
+    raw_override = project.overrides.get(scanned.agent_id, {}).get("tool_access")
+    if raw_override is not None:
+        override = normalize_tool_access(raw_override)
+        if override.mode == "none":
+            return override
+        if override.mode == "all":
+            return ToolAccess(
+                mode="selected",
+                allowed=tuple(project.allowed_tools),
+                denied=override.denied,
+            )
+        return override
+
+    denied = tuple(sorted(scanned.denied_tools))
+    allowed = tuple(tool for tool in project.allowed_tools if tool not in scanned.denied_tools)
+    return ToolAccess(
+        mode="selected",
+        allowed=allowed,
+        denied=denied,
+    )
 
 
 def effective_project_allowed_skills(
@@ -1009,9 +1033,13 @@ def _effective_allowed_agents(scanned: ScannedAgent, team: list[ScannedAgent]) -
     return sorted(allowed)
 
 
-def _project_agent_tools(allowed_tools: list[str], allowed_agents: list[str]) -> dict[str, Any]:
+def _project_agent_tools(tool_access: ToolAccess, allowed_agents: list[str]) -> dict[str, Any]:
     """Project effective targets into the optional root Tool-settings block."""
-    if "subagent" not in allowed_tools:
+    if (
+        tool_access.mode == "none"
+        or "subagent" not in tool_access.allowed
+        or "subagent" in tool_access.denied
+    ):
         return {}
     return {"subagent": {"allowed_agents": allowed_agents}}
 
@@ -1021,7 +1049,7 @@ def _build_config_agent(
     resolved_model: str,
     resolved_temperature: float | None,
     resolved_thinking_effort: str | None,
-    allowed_tools: list[str],
+    tool_access: ToolAccess,
     allowed_skills: list[str],
     tools: dict[str, Any],
     compaction_policy: Any,
@@ -1035,7 +1063,7 @@ def _build_config_agent(
         body=scanned.body,
         source_path=scanned.source_path,
         source_format=scanned.source_format,
-        allowed_tools=allowed_tools,
+        tool_access=tool_access,
         allowed_skills=allowed_skills,
         tools=tools,
         compaction_policy=(
@@ -1172,6 +1200,21 @@ def _global_default_temperature(global_defaults: Mapping[str, Any]) -> float | N
 def _global_default_thinking_effort(global_defaults: Mapping[str, Any]) -> str | None:
     value = global_defaults.get("thinking_effort")
     return value if isinstance(value, str) else None
+
+
+def _config_tool_access_source(project: Project, scanned: ScannedAgent) -> dict[str, Any]:
+    """Return the editable Project Agent Tool policy and its winning source."""
+
+    from core.tools.availability import normalize_tool_access
+
+    raw_override = project.overrides.get(scanned.agent_id, {}).get("tool_access")
+    if raw_override is not None:
+        return {
+            "value": normalize_tool_access(raw_override).to_dict(),
+            "source": "override",
+        }
+    policy = _project_agent_tool_access(project, scanned)
+    return {"value": policy.to_dict(), "source": "agent"}
 
 
 def _overridden_model(project: Project, agent_id: str) -> str:

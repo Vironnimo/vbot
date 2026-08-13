@@ -274,6 +274,7 @@ def register_process_tool(registry: ToolRegistry, process_manager: ProcessManage
         PROCESS_TOOL_DESCRIPTION,
         PROCESS_TOOL_PARAMETERS,
         make_process_handler(process_manager),
+        family="execution",
         result_schema={"type": "object"},
         display=ToolDisplay(
             parts_builder=_process_display_parts,

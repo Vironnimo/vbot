@@ -238,6 +238,8 @@ def register_history_tool(registry: ToolRegistry, sessions: ChatSessionManager) 
         description=HISTORY_TOOL_DESCRIPTION,
         parameters=HISTORY_TOOL_PARAMETERS,
         handler=offload_tool_handler(make_history_handler(sessions)),
+        family="sessions",
+        activation="session_grant",
         result_schema={
             "type": "object",
             "required": ["action", "items", "has_more", "formatted_bytes"],

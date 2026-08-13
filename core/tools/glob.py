@@ -228,6 +228,7 @@ def register_glob_tool(registry: ToolRegistry) -> None:
         GLOB_TOOL_DESCRIPTION,
         GLOB_TOOL_PARAMETERS,
         _glob_handler_async,
+        family="files",
         result_schema={"type": "object", "required": ["content"]},
         display=ToolDisplay(
             primary_candidates=(ToolDisplayField("pattern", kind="query", quote=True),)

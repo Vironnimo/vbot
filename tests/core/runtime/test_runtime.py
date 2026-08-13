@@ -25,6 +25,7 @@ from core.skills.skills import SKILL_ORIGIN_GLOBAL, SkillRegistry
 from core.storage.layout import DATA_DIRECTORY_RELATIVE_PATHS
 from core.storage.storage import StorageManager
 from core.subagents import SubAgentCoordinator
+from core.tools import ToolAccess
 from core.tools.file_state import FileReadState
 from core.tools.process_manager import ProcessManager
 from core.tools.terminal_manager import TerminalManager
@@ -1112,7 +1113,7 @@ def test_reload_skills_keeps_provider_tool_set_stable(config: Config, tmp_path: 
     runtime.start()
     agent = runtime.agents.update(
         "main",
-        allowed_tools=["skill", "skill_manage"],
+        tool_access={"mode": "selected", "allowed": ["skill", "skill_manage"]},
         allowed_skills=[RELOADED_SKILL_NAME],
     )
     skill_root = tmp_path / "team-skills"
@@ -1128,7 +1129,7 @@ def test_reload_skills_keeps_provider_tool_set_stable(config: Config, tmp_path: 
     runtime.reload_skills()
     definitions_after_reload = runtime.system_prompts.provider_tool_definitions(agent)
 
-    expected_tools = ["skill", "skill_manage", "memory"]
+    expected_tools = ["memory", "skill", "skill_manage"]
     assert [definition["name"] for definition in definitions_before_reload] == expected_tools
     assert [definition["name"] for definition in definitions_after_reload] == expected_tools
 
@@ -1698,7 +1699,7 @@ class _StubAgents:
             model="provider/model::default",
             temperature=0.0,
             thinking_effort="",
-            allowed_tools=["*"],
+            tool_access=ToolAccess(mode="all"),
             allowed_skills=["*"],
             workspace="",
         )

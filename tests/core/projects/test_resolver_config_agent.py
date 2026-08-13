@@ -1,5 +1,7 @@
 """Config-Agent Tool and Skill resolution tests."""
 
+from core.tools.availability import ToolAccess
+
 from .resolver_test_support import (
     PROJECT_DEFAULT_ALLOWED_TOOLS,
     AgentRunOverrides,
@@ -40,7 +42,10 @@ def test_config_agent_resolves_to_runnable_runtime_agent(
     # skills stay wildcard until Phase 3 wires the project skill rule.
     assert runtime_agent.workspace == ""
     assert runtime_agent.memory_prompt_mode == "off"
-    assert runtime_agent.allowed_tools == list(PROJECT_DEFAULT_ALLOWED_TOOLS)
+    assert runtime_agent.tool_access == ToolAccess(
+        mode="selected",
+        allowed=tuple(PROJECT_DEFAULT_ALLOWED_TOOLS),
+    )
     # No project skills and nothing opted in → the agent has zero skills.
     assert runtime_agent.allowed_skills == []
     assert runtime_agent.tools == {"subagent": {"allowed_agents": []}}
@@ -76,7 +81,7 @@ def test_config_agent_run_overrides_change_only_the_runtime_view(
     assert overridden.thinking_effort == ""
     assert configured.model == "openai/gpt-5.2"
     assert configured.thinking_effort == "low"
-    assert overridden.allowed_tools == configured.allowed_tools
+    assert overridden.tool_access == configured.tool_access
     assert overridden.body == configured.body
 
 
@@ -98,10 +103,11 @@ def test_effective_tools_drop_explorer_denials(
     runtime_agent = resolver.resolve_agent(project.project_id, "explorer")
 
     denied = {"write", "edit", "web_fetch", "web_search", "subagent"}
-    assert set(runtime_agent.allowed_tools).isdisjoint(denied)
-    assert runtime_agent.allowed_tools == [
+    assert set(runtime_agent.tool_access.allowed).isdisjoint(denied)
+    assert runtime_agent.tool_access.allowed == tuple(
         tool for tool in PROJECT_DEFAULT_ALLOWED_TOOLS if tool not in denied
-    ]
+    )
+    assert set(runtime_agent.tool_access.denied) == denied
 
 
 def test_effective_tools_drop_only_subagent_for_builder(
@@ -119,10 +125,11 @@ def test_effective_tools_drop_only_subagent_for_builder(
 
     runtime_agent = resolver.resolve_agent(project.project_id, "builder")
 
-    assert "subagent" not in runtime_agent.allowed_tools
-    assert runtime_agent.allowed_tools == [
+    assert "subagent" not in runtime_agent.tool_access.allowed
+    assert runtime_agent.tool_access.allowed == tuple(
         tool for tool in PROJECT_DEFAULT_ALLOWED_TOOLS if tool != "subagent"
-    ]
+    )
+    assert runtime_agent.tool_access.denied == ("subagent",)
 
 
 def test_effective_tools_no_denials_equal_project_ceiling(
@@ -134,7 +141,9 @@ def test_effective_tools_no_denials_equal_project_ceiling(
 
     runtime_agent = resolver.resolve_agent(project.project_id, "writer")
 
-    assert runtime_agent.allowed_tools == list(project.allowed_tools)
+    assert runtime_agent.tool_access == ToolAccess(
+        mode="selected", allowed=tuple(project.allowed_tools)
+    )
 
 
 def test_project_ceiling_omitting_a_tool_wins_over_no_denial(
@@ -149,7 +158,63 @@ def test_project_ceiling_omitting_a_tool_wins_over_no_denial(
 
     runtime_agent = resolver.resolve_agent(project.project_id, "writer")
 
-    assert runtime_agent.allowed_tools == ["read", "grep"]
+    assert runtime_agent.tool_access == ToolAccess(mode="selected", allowed=("read", "grep"))
+
+
+def test_vbot_tool_override_replaces_repository_denials_and_can_select_one_tool(
+    agents: AgentStore, projects: ProjectStore, repo: Path
+) -> None:
+    _write_agent(
+        repo,
+        "builder.md",
+        model="openai/gpt-5.2",
+        permission={"task": "deny"},
+    )
+    project = _project(projects, repo)
+    projects.set_override(
+        project.project_id,
+        "builder",
+        "tool_access",
+        {"mode": "selected", "allowed": ["subagent"]},
+    )
+    resolver = _resolver(agents, projects, _openai_configured())
+
+    runtime_agent = resolver.resolve_agent(project.project_id, "builder")
+    effective = resolver.effective_config(project.project_id, "builder")["tool_access"]
+
+    assert runtime_agent.tool_access == ToolAccess(mode="selected", allowed=("subagent",))
+    assert runtime_agent.tools == {"subagent": {"allowed_agents": []}}
+    assert effective == {
+        "value": {"mode": "selected", "allowed": ["subagent"]},
+        "source": "override",
+    }
+
+
+def test_clearing_vbot_tool_override_restores_repository_policy(
+    agents: AgentStore, projects: ProjectStore, repo: Path
+) -> None:
+    _write_agent(
+        repo,
+        "builder.md",
+        model="openai/gpt-5.2",
+        permission={"task": "deny"},
+    )
+    project = _project(projects, repo)
+    projects.set_override(
+        project.project_id,
+        "builder",
+        "tool_access",
+        {"mode": "none"},
+    )
+    projects.clear_override(project.project_id, "builder", "tool_access")
+    resolver = _resolver(agents, projects, _openai_configured())
+
+    runtime_agent = resolver.resolve_agent(project.project_id, "builder")
+    effective = resolver.effective_config(project.project_id, "builder")["tool_access"]
+
+    assert "subagent" not in runtime_agent.tool_access.allowed
+    assert runtime_agent.tool_access.denied == ("subagent",)
+    assert effective["source"] == "agent"
 
 
 def test_effective_agent_targets_are_materialized_from_current_project_team(

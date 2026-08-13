@@ -96,7 +96,7 @@ def test_doctor_config_reports_all_config_files(tmp_path: Path) -> None:
                 "fallback_model": "",
                 "temperature": None,
                 "thinking_effort": None,
-                "allowed_tools": "read_file",
+                "allowed_tools": ["read_file"],
                 "allowed_skills": ["*"],
                 "custom_system_prompt_enabled": False,
                 "created_at": "2026-05-03T12:00:00Z",

@@ -376,6 +376,7 @@ def register_edit_tool(registry: ToolRegistry, *, file_state: FileReadState) -> 
         EDIT_TOOL_DESCRIPTION,
         EDIT_TOOL_PARAMETERS,
         offload_tool_handler(make_edit_handler(file_state)),
+        family="files",
         open_input_schema=True,
         result_schema={
             "type": "object",

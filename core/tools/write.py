@@ -183,6 +183,7 @@ def register_write_tool(registry: ToolRegistry, *, file_state: FileReadState) ->
         WRITE_TOOL_DESCRIPTION,
         WRITE_TOOL_PARAMETERS,
         make_write_handler(file_state),
+        family="files",
         result_schema={"type": "object", "required": ["path", "bytes", "message"]},
         display=ToolDisplay(
             primary_candidates=(
