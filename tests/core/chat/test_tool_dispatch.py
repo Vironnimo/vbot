@@ -12,7 +12,7 @@ from typing import Any, cast
 
 import pytest
 
-from core.chat.messages import JsonObject, ToolCall, ToolCallRejection
+from core.chat.messages import ChatMessage, JsonObject, ToolCall, ToolCallRejection
 from core.chat.tool_dispatch import (
     ToolDispatchContext,
     _activate_triggered_skills,
@@ -201,6 +201,58 @@ async def test_dispatch_exposes_current_active_skill_env_grants(tmp_path: Path) 
     )
 
     assert seen == [("OPENAI_API_KEY",)]
+
+
+@pytest.mark.asyncio
+async def test_dispatch_revokes_skill_env_grants_after_compaction(tmp_path: Path) -> None:
+    seen: list[tuple[str, ...]] = []
+    tools = ToolRegistry()
+
+    def probe(context: ToolContext, _arguments: JsonObject) -> JsonObject:
+        seen.append(tuple(context.skill_env_keys))
+        return tool_success({"status": "completed"})
+
+    tools.register(
+        "probe",
+        "Probe ToolContext",
+        {"type": "object", "properties": {}},
+        probe,
+        open_input_schema=True,
+    )
+    runtime, agent = _build_runtime_and_agent(tmp_path, tools)
+    session = _build_session(tmp_path)
+    session.activate_skill_context("provider-probe", {"activation_content": "active content"})
+    session.append(
+        ChatMessage.compaction_checkpoint(
+            summary="Compacted",
+            projection=[ChatMessage.user("Tail")],
+            compacted_token_count=10,
+        )
+    )
+    registry = _env_skill_registry(tmp_path)
+    run = Run(run_id="run-one", agent_id=agent.id, session_id=session.id)
+
+    await _dispatch_tool_calls(
+        runtime,
+        agent,
+        [ToolCall(id="call-one", name="probe", arguments={})],
+        session,
+        run,
+        nesting_depth=0,
+        skill_registry=registry,
+    )
+    session.register_skill_activation("provider-probe", "reloaded content")
+    await _dispatch_tool_calls(
+        runtime,
+        agent,
+        [ToolCall(id="call-two", name="probe", arguments={})],
+        session,
+        run,
+        nesting_depth=0,
+        skill_registry=registry,
+    )
+
+    assert seen == [(), ("OPENAI_API_KEY",)]
 
 
 @pytest.mark.asyncio

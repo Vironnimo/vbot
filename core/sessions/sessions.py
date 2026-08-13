@@ -176,8 +176,8 @@ class ChatSession:
         self._pending_notes: deque[ChatMessage] = deque()
         self._defer_notes = False
         self._deferred_note_messages: list[ChatMessage] = []
-        self._activated_skill_names: set[str] = set()
         self._activated_skill_contents: dict[str, str] = {}
+        self._activated_skill_cache_loaded = False
         self._state_lock = threading.RLock()
 
     @classmethod
@@ -232,6 +232,11 @@ class ChatSession:
             _append_bytes(self.path, b"".join(encoded_lines))
         except OSError as exc:
             raise ChatSessionError(f"failed to append message to session: {self.id}") from exc
+        if any(message.role == "compaction_checkpoint" for message in messages):
+            active_contents = current_skill_activation_contents(messages)
+            with self._state_lock:
+                self._activated_skill_contents = active_contents
+                self._activated_skill_cache_loaded = True
 
     async def append_async(self, message: ChatMessage) -> None:
         """Append one message without running durable filesystem I/O on the event loop."""
@@ -398,8 +403,8 @@ class ChatSession:
         with self._state_lock:
             if activated_contents.get(name) == content:
                 return False
-            self._activated_skill_names.add(name)
             self._activated_skill_contents[name] = content
+            self._activated_skill_cache_loaded = True
             return True
 
     def activate_skill_context(self, name: str, data: JsonObject) -> bool:
@@ -434,16 +439,17 @@ class ChatSession:
         self,
         preloaded_messages: list[ChatMessage] | None = None,
     ) -> dict[str, str]:
-        with self._state_lock:
-            if self._activated_skill_contents:
-                return dict(self._activated_skill_contents)
+        if preloaded_messages is None:
+            with self._state_lock:
+                if self._activated_skill_cache_loaded:
+                    return dict(self._activated_skill_contents)
 
         source_messages = self.load() if preloaded_messages is None else preloaded_messages
-        activated_contents = _skill_contexts_from_messages(source_messages)
+        activated_contents = current_skill_activation_contents(source_messages)
         with self._state_lock:
-            if not self._activated_skill_contents:
-                self._activated_skill_names = set(activated_contents)
+            if preloaded_messages is not None or not self._activated_skill_cache_loaded:
                 self._activated_skill_contents = dict(activated_contents)
+                self._activated_skill_cache_loaded = True
             return dict(self._activated_skill_contents)
 
     def _persist_skill_context_note(self, name: str, content: str) -> None:
@@ -1952,6 +1958,19 @@ def skill_activation_names(messages: list[ChatMessage]) -> frozenset[str]:
 def skill_activation_contents(messages: list[ChatMessage]) -> dict[str, str]:
     """Return the latest carried content for each activated Skill in *messages*."""
     return _skill_contexts_from_messages(messages)
+
+
+def current_skill_activation_contents(messages: list[ChatMessage]) -> dict[str, str]:
+    """Return Skill activations after the newest committed Compaction checkpoint."""
+    latest_checkpoint_index = next(
+        (
+            index
+            for index in range(len(messages) - 1, -1, -1)
+            if messages[index].role == "compaction_checkpoint"
+        ),
+        -1,
+    )
+    return _skill_contexts_from_messages(messages[latest_checkpoint_index + 1 :])
 
 
 def is_channel_message_note(message: ChatMessage) -> bool:

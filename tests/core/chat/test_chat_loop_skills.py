@@ -124,10 +124,7 @@ async def test_inline_skill_trigger_preserves_original_message(tmp_path: Path) -
     assert request_messages[2]["content"].startswith('<skill_content name="debugging">')
 
 
-def test_activated_skill_reinjected_ahead_of_compaction_summary(tmp_path: Path) -> None:
-    # A skill whose carrier was folded into the summarized region stays loaded:
-    # its content is re-injected ahead of the summary reminder in the rebuilt
-    # request instead of being lost with the summarized history.
+def test_compaction_checkpoint_expires_triggered_skill_content(tmp_path: Path) -> None:
     agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=StubAdapter([]))
     session = runtime.chat_sessions.create("coder", session_id="session-one")
@@ -152,15 +149,13 @@ def test_activated_skill_reinjected_ahead_of_compaction_summary(tmp_path: Path) 
     request_messages = asyncio.run(build_chat_loop(runtime)._build_request_messages(agent, session))
 
     contents = [message.get("content", "") or "" for message in request_messages]
-    assert contents[1] == '<skill_content name="debugging">Steps</skill_content>'
-    assert contents[2] == "<system-reminder>\nCompacted historical context.\n</system-reminder>"
-    assert contents[3] == "Tail question"
-    assert sum("<skill_content" in content for content in contents) == 1
+    assert contents[1] == "<system-reminder>\nCompacted historical context.\n</system-reminder>"
+    assert contents[2] == "Tail question"
+    assert all("<skill_content" not in content for content in contents)
+    assert session.activated_skill_contents() == {}
 
 
-def test_skill_carried_in_tail_not_duplicated_after_compaction(tmp_path: Path) -> None:
-    # A skill activated inside the preserved tail keeps its chronological carrier
-    # and must not additionally be re-injected ahead of the summary.
+def test_skill_carried_in_checkpoint_tail_is_expired(tmp_path: Path) -> None:
     agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=StubAdapter([]))
     session = runtime.chat_sessions.create("coder", session_id="session-one")
@@ -187,11 +182,10 @@ def test_skill_carried_in_tail_not_duplicated_after_compaction(tmp_path: Path) -
     contents = [message.get("content", "") or "" for message in request_messages]
     assert contents[1] == "<system-reminder>\nCompacted historical context.\n</system-reminder>"
     assert contents[2] == "/debugging fix this"
-    assert contents[3] == '<skill_content name="debugging">Steps</skill_content>'
-    assert sum("<skill_content" in content for content in contents) == 1
+    assert all("<skill_content" not in content for content in contents)
 
 
-def test_updated_skill_follows_stale_tail_carrier_after_compaction(tmp_path: Path) -> None:
+def test_changed_skill_versions_do_not_cross_compaction(tmp_path: Path) -> None:
     agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=StubAdapter([]))
     session = runtime.chat_sessions.create("coder", session_id="session-one")
@@ -217,8 +211,8 @@ def test_updated_skill_follows_stale_tail_carrier_after_compaction(tmp_path: Pat
     request_messages = asyncio.run(build_chat_loop(runtime)._build_request_messages(agent, session))
 
     contents = [message.get("content", "") or "" for message in request_messages]
-    assert '<skill_content name="debugging">Old steps</skill_content>' in contents
-    assert contents[-1] == '<skill_content name="debugging">New steps</skill_content>'
+    assert all("<skill_content" not in content for content in contents)
+    assert all("Old steps" not in content and "New steps" not in content for content in contents)
 
 
 @pytest.mark.asyncio

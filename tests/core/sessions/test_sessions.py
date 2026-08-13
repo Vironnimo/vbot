@@ -463,6 +463,44 @@ class TestChatSession:
         assert session.load() == []
         assert session.activated_skill_contents() == {"demo": "other"}
 
+    def test_compaction_starts_a_fresh_skill_activation_epoch(self, tmp_path):
+        session = ChatSession.create(tmp_path, session_id="session-one")
+        session.activate_skill_context("demo", {"activation_content": "Skill body"})
+        checkpoint = ChatMessage.compaction_checkpoint(
+            summary="Compacted",
+            projection=[ChatMessage.user("Tail")],
+            compacted_token_count=10,
+        )
+
+        session.append(checkpoint)
+
+        assert session.activated_skill_contents() == {}
+        assert ChatSession(session.path).activated_skill_contents() == {}
+        assert session.activate_skill_context("demo", {"activation_content": "Skill body"}) is True
+        assert session.activated_skill_contents() == {"demo": "Skill body"}
+
+    def test_each_compaction_reports_only_the_current_activation_epoch(self, tmp_path):
+        session = ChatSession.create(tmp_path, session_id="session-one")
+        session.activate_skill_context("alpha", {"activation_content": "Alpha"})
+        first = ChatMessage.compaction_checkpoint(
+            summary="First",
+            projection=[ChatMessage.user("First tail")],
+            compacted_token_count=10,
+        )
+        session.append(first)
+        session.activate_skill_context("beta", {"activation_content": "Beta"})
+
+        assert session.activated_skill_contents() == {"beta": "Beta"}
+
+        second = ChatMessage.compaction_checkpoint(
+            summary="Second",
+            projection=[ChatMessage.user("Second tail")],
+            compacted_token_count=20,
+        )
+        session.append(second)
+
+        assert session.activated_skill_contents() == {}
+
     def test_activated_skill_contents_scans_skill_tool_results(self, tmp_path):
         # The ``skill`` tool result is the durable carrier of a tool-loaded skill:
         # a fresh handle recovers name+content from the persisted envelope, while

@@ -7,20 +7,22 @@ from dataclasses import dataclass, replace
 from typing import Any, Literal, Protocol, cast
 
 from core.chat.messages import (
+    COMPACTION_SKILL_NOTE_PREFIX,
     COMPACTION_SUMMARY_NOTE_PREFIX,
+    TOOL_RESULT_COMPACTED_FIELD,
     ChatMessage,
     JsonObject,
     ToolCall,
+    _compaction_projection_without_active_skills,
     _compaction_projection_without_provider_state,
     _effective_compaction_messages,
     _latest_compaction_checkpoint,
 )
 from core.debug.redaction import redact_json_body
+from core.sessions import current_skill_activation_contents, skill_tool_activation
 from core.utils.errors import VBotError
 from core.utils.tokens import estimate_message_tokens, estimate_request_input_tokens
 from core.utils.workers import BoundedWorkerPool
-
-TOOL_RESULT_COMPACTED_FIELD = "_vbot_compacted_tool_result"
 
 TRIGGER_CONTEXT_RATIO = "context_ratio"
 TRIGGER_INPUT_TOKENS = "input_tokens"
@@ -30,6 +32,11 @@ COMPACTION_POLICY_META_KEY = "compaction_policy"
 COMPACTION_TAIL_GUIDANCE = (
     "The messages below are the most recent verbatim Session activity retained after this "
     "Compaction checkpoint. They chronologically follow the summary above."
+)
+SKILL_COMPACTION_GUIDANCE = (
+    "Skills active before this Compaction: {skill_names_json}. Their instructions and "
+    "environment access are no longer active after this checkpoint. If a Skill is still "
+    "relevant, load it again by name with the `skill` Tool before following it."
 )
 
 MIN_AUTO_COMPACTION_RECLAIM_TOKENS = 4_096
@@ -144,6 +151,8 @@ class _PreparedCompaction:
     plan: CompactionPlan
     effective_messages: list[ChatMessage]
     strategy_id: str
+    active_skill_names: tuple[str, ...]
+    activation_result_names: tuple[tuple[str, str], ...]
 
 
 class CompactionStrategy(Protocol):
@@ -415,10 +424,18 @@ class CompactionService:
         )
         plan = strategy.plan(context, settings)
         _validate_plan(plan)
+        active_skill_names = tuple(current_skill_activation_contents(messages))
+        activation_result_names = tuple(
+            (message.id, activation[0])
+            for message in messages
+            if (activation := skill_tool_activation(message)) is not None
+        )
         return _PreparedCompaction(
             plan=plan,
             effective_messages=effective,
             strategy_id=strategy.id,
+            active_skill_names=active_skill_names,
+            activation_result_names=activation_result_names,
         )
 
     def estimate_messages_tokens(self, messages: list[dict]) -> int:
@@ -455,6 +472,27 @@ def _finalize_compaction(
     if summary:
         projection.append(ChatMessage.note(f"{COMPACTION_SUMMARY_NOTE_PREFIX}{summary}"))
     projection.extend(plan.after_summary)
+    projection = _compaction_projection_without_active_skills(
+        [
+            message
+            for message in projection
+            if not (
+                message.role == "note"
+                and isinstance(message.content, str)
+                and message.content.startswith(COMPACTION_SKILL_NOTE_PREFIX)
+            )
+        ],
+        activation_result_names=dict(prepared.activation_result_names),
+    )
+    if prepared.active_skill_names:
+        guidance = SKILL_COMPACTION_GUIDANCE.format(
+            skill_names_json=json.dumps(
+                list(prepared.active_skill_names),
+                ensure_ascii=False,
+                separators=(",", ":"),
+            )
+        )
+        projection = _append_compaction_skill_guidance(projection, guidance)
     _validate_projection(projection)
     reclaimed_tokens = _estimate_token_span(prepared.effective_messages) - _estimate_token_span(
         projection
@@ -472,6 +510,24 @@ def _finalize_compaction(
         policy=prepared.strategy_id,
         strategy=prepared.strategy_id,
     )
+
+
+def _append_compaction_skill_guidance(
+    projection: list[ChatMessage],
+    guidance: str,
+) -> list[ChatMessage]:
+    guided = list(projection)
+    summary_index = next(
+        (index for index, message in enumerate(guided) if _is_compaction_summary_note(message)),
+        None,
+    )
+    if summary_index is None:
+        return guided
+    guided.insert(
+        summary_index + 1,
+        ChatMessage.note(f"{COMPACTION_SKILL_NOTE_PREFIX}{guidance}"),
+    )
+    return guided
 
 
 def _plan_working_tail(messages: list[ChatMessage], tail_tokens: int) -> _TailPlan:
@@ -826,7 +882,14 @@ def _is_compaction_summary_note(message: ChatMessage) -> bool:
 
 def _is_compaction_checkpoint_note(message: ChatMessage) -> bool:
     return _is_compaction_summary_note(message) or (
-        message.role == "note" and message.content == COMPACTION_TAIL_GUIDANCE
+        message.role == "note"
+        and (
+            message.content == COMPACTION_TAIL_GUIDANCE
+            or (
+                isinstance(message.content, str)
+                and message.content.startswith(COMPACTION_SKILL_NOTE_PREFIX)
+            )
+        )
     )
 
 

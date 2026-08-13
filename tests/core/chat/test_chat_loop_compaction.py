@@ -12,6 +12,7 @@ import pytest
 from core.chat import (
     ChatLoop,
     ChatMessage,
+    ToolCall,
 )
 from core.chat.chat import (
     PINNED_SKILL_CATALOG_META_KEY,
@@ -438,6 +439,79 @@ async def test_compaction_maybe_auto_compact_skips_without_new_compactable_conte
     assert len(compaction_service.compactable_context_calls) == 1
     assert compaction_service.should_auto_calls == [(90, 100, 0.8)]
     assert compaction_service.compact_calls == []
+
+
+@pytest.mark.asyncio
+async def test_summary_tail_waits_until_a_loaded_skill_result_is_consumed(tmp_path: Path) -> None:
+    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
+    adapter = StubAdapter([])
+    runtime: Any = StubRuntime(
+        data_dir=tmp_path,
+        agent=agent,
+        adapter=adapter,
+        storage=StubStorage(
+            {"auto": True, "threshold": 0.8, "tail_tokens": 15_000, "summary_model": None}
+        ),
+        models=StubModels({("openai", "gpt-5.2"): 100}),
+    )
+    session = runtime.chat_sessions.create("coder", session_id="session-one")
+    session.append(ChatMessage.user("Use the document workflow"))
+    session.append(
+        ChatMessage.assistant(
+            model=agent.model,
+            content=None,
+            tool_calls=[ToolCall(id="call-skill", name="skill", arguments={"name": "docx"})],
+        )
+    )
+    session.append(
+        ChatMessage.tool(
+            tool_call_id="call-skill",
+            name="skill",
+            content=json.dumps(
+                tool_success({"name": "docx", "status": "loaded", "content": "Instructions"}),
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ),
+        )
+    )
+    checkpoint = ChatMessage.compaction_checkpoint(
+        summary="Compacted after consumption.",
+        projection=[ChatMessage.user("Tail")],
+        compacted_token_count=20,
+    )
+    compaction_service = StubCompactionService(should_auto=True, checkpoint=checkpoint)
+    loop = build_chat_loop(runtime, compaction_service=cast(Any, compaction_service))
+    messages = await loop._build_request_messages(agent, session)
+
+    first = await _maybe_auto_compact(
+        loop,
+        agent,
+        adapter,
+        "gpt-5.2",
+        session,
+        messages,
+        usage={"input_tokens": 90},
+        run=Run(run_id="run-1", agent_id=agent.id, session_id=session.id),
+    )
+
+    assert first == messages
+    assert compaction_service.compact_calls == []
+    assert compaction_service.compactable_context_calls == []
+
+    session.append(ChatMessage.assistant(model=agent.model, content="Skill result consumed"))
+    consumed_messages = await loop._build_request_messages(agent, session)
+    await _maybe_auto_compact(
+        loop,
+        agent,
+        adapter,
+        "gpt-5.2",
+        session,
+        consumed_messages,
+        usage={"input_tokens": 90},
+        run=Run(run_id="run-2", agent_id=agent.id, session_id=session.id),
+    )
+
+    assert len(compaction_service.compact_calls) == 1
 
 
 @pytest.mark.asyncio
