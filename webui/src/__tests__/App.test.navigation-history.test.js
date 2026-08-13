@@ -447,17 +447,23 @@ describe('App', () => {
     sidebarNavButton('Agents')?.click();
     await waitForCondition(() => {
       expect(
-        document.querySelector('button[aria-label="Toggle tool write"]'),
+        document.querySelector(
+          '[data-tool-name="write"] [data-tool-access-state="denied"]',
+        ),
       ).toBeTruthy();
     });
-    document.querySelector('button[aria-label="Toggle tool write"]')?.click();
+    document
+      .querySelector(
+        '[data-tool-name="write"] [data-tool-access-state="denied"]',
+      )
+      ?.click();
     flushSync();
     sidebarNavButton('Chat')?.click();
 
     await waitForCondition(() => {
       expect(rpcMock).toHaveBeenCalledWith('agent.update', {
         id: 'alpha',
-        allowed_tools: ['bash'],
+        tool_access: { mode: 'all', denied: ['write'] },
       });
     });
     expect(sidebarNavButton('Agents')?.getAttribute('aria-current')).toBe(

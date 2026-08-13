@@ -129,7 +129,7 @@ function mainAgent() {
     temperature: null,
     thinking_effort: '',
     memory_prompt_mode: 'agent_user',
-    allowed_tools: ['*'],
+    tool_access: { mode: 'all' },
     allowed_skills: ['*'],
     custom_system_prompt_enabled: false,
     current_session_id: '',

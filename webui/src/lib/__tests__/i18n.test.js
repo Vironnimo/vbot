@@ -255,7 +255,9 @@ describe('i18n t()', () => {
       'Agent + user notes (MEMORY.md + USER.md)',
     );
     expect(t('agents.form.customPromptHelp')).toContain('System Prompt tab');
-    expect(t('agents.form.memoryModeHelp')).toContain('memory tool follows');
+    expect(t('agents.form.memoryModeHelp')).toContain(
+      'Tool access is independent',
+    );
     expect(
       t('agents.form.modelUnavailableOption', undefined, {
         model: 'custom/provider-model',

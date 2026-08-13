@@ -426,6 +426,9 @@ export const englishCatalog = Object.freeze({
   'agents.form.temperature': 'Temperature',
   'agents.form.thinkingEffort': 'Thinking effort',
   'agents.form.allowedTools': 'Allowed tools',
+  'agents.form.toolAccess': 'Tool access',
+  'agents.form.toolAccessHelp':
+    'Choose the overall intent first. Tool families are only presentation and bulk controls; individual Tools remain the stored policy. Automatic Tools follow their source or Session condition and can always be blocked.',
   'agents.form.allowedSkills': 'Allowed skills',
   'agents.form.customSystemPrompt': 'Custom system prompt',
   'agents.form.customPromptHelp':
@@ -434,7 +437,7 @@ export const englishCatalog = Object.freeze({
   'agents.form.memoryPromptModeHelp':
     'Which memory notes are shown to the model: the agent’s own notes (MEMORY.md), or additionally what it knows about you (USER.md).',
   'agents.form.memoryModeHelp':
-    'Which memory files are pinned into the System Prompt. The memory tool follows this setting — it is available to the agent unless this is off.',
+    'Which memory files are pinned into the System Prompt. Tool access is independent: blocking the memory Tool keeps these notes visible but makes Memory read-only.',
   'agents.form.fallbackModelHelp':
     'Used automatically when the primary model fails or is unavailable.',
   'agents.form.temperatureHelp':
@@ -443,6 +446,63 @@ export const englishCatalog = Object.freeze({
     'How much internal reasoning the model may spend before answering. Leave at — for the default.',
   'agents.form.wildcardNote':
     'Currently all are allowed, including ones added in the future. Turning any single item off switches to a fixed list.',
+
+  'toolAccess.intentLabel': 'Tool access',
+  'toolAccess.mode.all': 'All Tools',
+  'toolAccess.mode.allHelp':
+    'Includes current and future Tools. Individual Tools can still be blocked.',
+  'toolAccess.mode.selected': 'Selected Tools',
+  'toolAccess.mode.selectedHelp':
+    'Only the Tools you choose are included. Automatic companion Tools follow their source.',
+  'toolAccess.mode.none': 'No Tools',
+  'toolAccess.mode.noneHelp': 'Turns off every Tool for this Agent.',
+  'toolAccess.searchLabel': 'Search Tools',
+  'toolAccess.searchPlaceholder': 'Find a Tool…',
+  'toolAccess.resetOverride': 'Reset to repository policy',
+  'toolAccess.empty': 'No matching Tools.',
+  'toolAccess.unregisteredDescription':
+    'Stored in this policy, but not registered right now.',
+  'toolAccess.family.individual': 'Individual Tools',
+  'toolAccess.family.files': 'Files',
+  'toolAccess.family.execution': 'Execution',
+  'toolAccess.family.web': 'Web',
+  'toolAccess.family.sessions': 'Sessions',
+  'toolAccess.family.skills': 'Skills',
+  'toolAccess.family.media': 'Media',
+  'toolAccess.family.actions': 'Family actions',
+  'toolAccess.family.actionFor': '{action} {family}',
+  'toolAccess.family.allow': 'Allow current',
+  'toolAccess.family.block': 'Block current',
+  'toolAccess.family.reset': 'Reset current',
+  'toolAccess.family.summary': '{included} of {total} included',
+  'toolAccess.family.summaryBlocked': '{included} included · {denied} blocked',
+  'toolAccess.state.denied': 'Blocked',
+  'toolAccess.state.enabled': 'On',
+  'toolAccess.state.included': 'Included',
+  'toolAccess.state.automatic': 'Automatic',
+  'toolAccess.state.inactive': 'Inactive',
+  'toolAccess.state.off': 'Off',
+  'toolAccess.stateFor': 'Access for {name}',
+  'toolAccess.choice.auto': 'Auto',
+  'toolAccess.choice.included': 'Included',
+  'toolAccess.choice.off': 'Off',
+  'toolAccess.choice.on': 'On',
+  'toolAccess.choice.block': 'Block',
+  'toolAccess.setDefaultFor': 'Use default access for {name}',
+  'toolAccess.enableFor': 'Enable {name}',
+  'toolAccess.denyFor': 'Block {name}',
+  'toolAccess.activation.follows': 'Follows {source}',
+  'toolAccess.activation.followsInactive': 'Inactive · waiting for {source}',
+  'toolAccess.activation.memoryOff': 'Inactive · Memory is off',
+  'toolAccess.activation.memoryOn': 'Automatic · Memory is on',
+  'toolAccess.activation.session':
+    'Appears automatically when the Session grants it',
+  'toolAccess.constraint.identity': 'Identity Agents only',
+  'toolAccess.constraint.imageFallback':
+    'Used only when the main Model cannot analyze images directly',
+  'toolAccess.readiness.unregistered': 'Not registered right now',
+  'toolAccess.readiness.unavailable': 'Currently unavailable',
+  'toolAccess.configureExtension': 'Configure',
   'agents.form.idHelp': 'Agent IDs are immutable after creation.',
   'agents.form.modelPlaceholder': 'Default (no model selected)',
   'agents.form.fallbackModelPlaceholder': 'None',
@@ -813,6 +873,14 @@ export const englishCatalog = Object.freeze({
   'projects.team.overrideClearError': 'The override could not be cleared.',
   'projects.team.overrideHelp':
     'An override replaces the agent file and all defaults for this agent in this project. The model override can also be set with /model in chat.',
+  'projects.team.toolAccessOverride': 'Tool access override',
+  'projects.team.toolAccessOverrideHelp':
+    'This replaces the repository Agent policy completely. It may allow a Tool blocked by the Agent file, but it can never exceed the Project Tool Whitelist.',
+  'projects.team.toolOverrideActive': 'Override active',
+  'projects.team.repositoryPolicyActive': 'Repository policy',
+  'projects.team.deniedToolsBaseline': 'Repository baseline blocks: {tools}',
+  'projects.team.deniedToolsBaselineHelp':
+    'These blocks apply only while the repository policy is active. A vBot Tool override replaces them.',
   'projects.team.overrideModelPlaceholder': 'No override',
   'projects.team.overrideTemperaturePlaceholder': 'e.g. 0.7',
   'projects.team.deniedTools': 'Denied by the agent file: {tools}',

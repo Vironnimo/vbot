@@ -5,13 +5,13 @@ import {
   buildAgentTargetOptions,
 } from './agentTargetOptions.js';
 import { parseAgentAddress } from './agentAddress.js';
+import { normalizeToolAccess } from './toolAccess.js';
 
 export const AGENT_FORM_MODE_CREATE = 'create';
 export const AGENT_FORM_MODE_EDIT = 'edit';
 
 const DEFAULT_AGENT_TEMPERATURE = '';
 const DEFAULT_AGENT_ALLOWED_LIST = '*';
-const DEFAULT_AGENT_ALLOWED_TOOLS = Object.freeze([DEFAULT_AGENT_ALLOWED_LIST]);
 const DEFAULT_AGENT_ALLOWED_SKILLS = Object.freeze([
   DEFAULT_AGENT_ALLOWED_LIST,
 ]);
@@ -46,7 +46,7 @@ const EDITABLE_AGENT_FIELDS = Object.freeze([
   'memory_prompt_mode',
   'workspace',
   'root_project_id',
-  'allowed_tools',
+  'tool_access',
   'allowed_skills',
   'tools',
   'custom_system_prompt_enabled',
@@ -77,10 +77,7 @@ export function createAgentFormValues(agent = {}) {
       : DEFAULT_AGENT_TEMPERATURE,
     thinking_effort: asText(raw.thinking_effort),
     memory_prompt_mode: normalizeMemoryPromptMode(agent.memory_prompt_mode),
-    allowed_tools: normalizeList(
-      agent.allowed_tools,
-      DEFAULT_AGENT_ALLOWED_TOOLS,
-    ),
+    tool_access: normalizeToolAccess(agent.tool_access),
     allowed_skills: normalizeArrayList(
       agent.allowed_skills,
       DEFAULT_AGENT_ALLOWED_SKILLS,
@@ -202,7 +199,7 @@ function normalizeValues(values = {}) {
     temperature: asText(values.temperature).trim(),
     thinking_effort: asText(values.thinking_effort).trim(),
     memory_prompt_mode: normalizeMemoryPromptMode(values.memory_prompt_mode),
-    allowed_tools: normalizeList(values.allowed_tools),
+    tool_access: normalizeToolAccess(values.tool_access),
     allowed_skills: normalizeArrayList(values.allowed_skills),
     tools: normalizeAgentTools(values.tools),
     custom_system_prompt_enabled: Boolean(values.custom_system_prompt_enabled),
@@ -210,20 +207,6 @@ function normalizeValues(values = {}) {
       ? normalizeCompactionPolicy(values.compaction_policy)
       : null,
   };
-}
-
-function normalizeList(items, fallback = []) {
-  if (typeof items === 'string') {
-    return textToList(items);
-  }
-
-  if (!Array.isArray(items)) {
-    return [...fallback];
-  }
-
-  return items
-    .map((item) => asText(item).trim())
-    .filter((item) => item.length > 0 && item !== MEMORY_TOOL_NAME);
 }
 
 function normalizeArrayList(items, fallback = DEFAULT_AGENT_ALLOWED_SKILLS) {
@@ -260,7 +243,7 @@ function buildAgentPayload(normalized, temperature, options = {}) {
     temperature,
     thinking_effort: normalized.thinking_effort || null,
     memory_prompt_mode: normalized.memory_prompt_mode,
-    allowed_tools: normalized.allowed_tools,
+    tool_access: normalized.tool_access,
     allowed_skills: normalized.allowed_skills,
     custom_system_prompt_enabled: normalized.custom_system_prompt_enabled,
     compaction_policy: normalized.compaction_policy,

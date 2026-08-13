@@ -13,6 +13,7 @@
   import TextField from './ui/TextField.svelte';
   import Toggle from './ui/Toggle.svelte';
   import ToggleChipList from './ui/ToggleChipList.svelte';
+  import ToolAccessEditor from './tools/ToolAccessEditor.svelte';
   import {
     PROJECT_SOURCE_FORMATS,
     PROJECT_THINKING_EFFORT_NO_DEFAULT,
@@ -57,6 +58,25 @@
 
   function formatLabel(formatKey) {
     return FORMAT_LABELS[formatKey] ? FORMAT_LABELS[formatKey]() : formatKey;
+  }
+
+  function projectToolGroupLabel(family) {
+    const labels = {
+      files: t('toolAccess.family.files', 'Files'),
+      execution: t('toolAccess.family.execution', 'Execution'),
+      web: t('toolAccess.family.web', 'Web'),
+      sessions: t('toolAccess.family.sessions', 'Sessions'),
+      skills: t('toolAccess.family.skills', 'Skills'),
+      media: t('toolAccess.family.media', 'Media'),
+    };
+    return (
+      labels[family] ??
+      (family
+        ? String(family)
+            .replaceAll('_', ' ')
+            .replace(/\b\w/g, (letter) => letter.toUpperCase())
+        : t('toolAccess.family.individual', 'Individual Tools'))
+    );
   }
 
   function agentTargetPolicyText(member) {
@@ -220,17 +240,38 @@
   // The sparse project.set changes the open form represents versus the saved
   // project — empty when the form matches what the server already holds.
   let pendingChanges = $derived(projectsController.pendingChanges());
+  let pendingToolAccessOverrides = $derived(
+    projectsController.pendingToolAccessOverrideChanges(),
+  );
   let saveDisabled = $derived(
     projectsState.editSaving || !hasManageChanges(pendingChanges),
   );
   const autosaveContext = useAutosaveContext();
   const projectAutosave = createAutosaveParticipant({
-    cancelPending: () =>
-      projectsController.clearAutoSave({ flushPending: false }),
-    getSnapshot: () => pendingChanges,
-    hasChanges: () => hasManageChanges(projectsController.pendingChanges()),
-    save: (reason) =>
-      projectsController.saveSelectedProject({ manual: reason === 'manual' }),
+    cancelPending: () => {
+      projectsController.clearAutoSave({ flushPending: false });
+      projectsController.clearToolAccessOverrideAutoSave({
+        flushPending: false,
+      });
+    },
+    getSnapshot: () => ({
+      project: pendingChanges,
+      toolAccessOverrides: pendingToolAccessOverrides,
+    }),
+    hasChanges: () =>
+      hasManageChanges(projectsController.pendingChanges()) ||
+      projectsController.pendingToolAccessOverrideChanges().length > 0,
+    save: async (reason) => {
+      if (
+        hasManageChanges(projectsController.pendingChanges()) &&
+        !(await projectsController.saveSelectedProject({
+          manual: reason === 'manual',
+        }))
+      ) {
+        return false;
+      }
+      return projectsController.savePendingToolAccessOverrides();
+    },
   });
   const unregisterProjectAutosave = autosaveContext.register(projectAutosave);
 
@@ -590,6 +631,13 @@
 
   function applySetOverride(agentId, field) {
     void projectsController.setMemberOverride(agentId, field);
+  }
+
+  function updateToolAccessOverride(agentId, value) {
+    updateOverrideDraft(agentId, 'tool_access', value);
+    projectsController.scheduleToolAccessOverrideAutoSave(() =>
+      projectAutosave.runSave(),
+    );
   }
 
   function applyClearOverride(agentId, field) {
@@ -1600,6 +1648,71 @@
                                 {/if}
                               </div>
 
+                              <div class="projects-tool-access-override">
+                                <div class="projects-tool-access-heading">
+                                  <div>
+                                    <span class="projects-label">
+                                      {t(
+                                        'projects.team.toolAccessOverride',
+                                        'Tool access override',
+                                      )}
+                                    </span>
+                                    <p class="projects-tools-follow">
+                                      {t(
+                                        'projects.team.toolAccessOverrideHelp',
+                                        'This replaces the repository Agent policy completely. It may allow a Tool blocked by the Agent file, but it can never exceed the Project Tool Whitelist.',
+                                      )}
+                                    </p>
+                                  </div>
+                                  <StatusChip
+                                    variant={memberFieldIsOverridden(
+                                      member,
+                                      'tool_access',
+                                    )
+                                      ? 'info'
+                                      : 'neutral'}
+                                  >
+                                    {memberFieldIsOverridden(
+                                      member,
+                                      'tool_access',
+                                    )
+                                      ? t(
+                                          'projects.team.toolOverrideActive',
+                                          'Override active',
+                                        )
+                                      : t(
+                                          'projects.team.repositoryPolicyActive',
+                                          'Repository policy',
+                                        )}
+                                  </StatusChip>
+                                </div>
+                                <ToolAccessEditor
+                                  value={overrideDraft(member.agent_id)
+                                    .tool_access}
+                                  tools={projectsState.toolCatalog}
+                                  ceiling={projectsState.editForm.allowed_tools}
+                                  disabled={isOverrideBusy(
+                                    member.agent_id,
+                                    'tool_access',
+                                  )}
+                                  showReset={memberFieldIsOverridden(
+                                    member,
+                                    'tool_access',
+                                  )}
+                                  onChange={(value) =>
+                                    updateToolAccessOverride(
+                                      member.agent_id,
+                                      value,
+                                    )}
+                                  onReset={() =>
+                                    applyClearOverride(
+                                      member.agent_id,
+                                      'tool_access',
+                                    )}
+                                  onOpenExtensions={navigateToExtensions}
+                                />
+                              </div>
+
                               <p class="projects-override-help">
                                 {t(
                                   'projects.team.overrideHelp',
@@ -1620,30 +1733,23 @@
                               </p>
                             </div>
 
-                            <div>
-                              {#if member.denied_tools.length > 0}
+                            {#if member.denied_tools.length > 0}
+                              <div>
                                 <p class="projects-tools-line">
                                   {t(
-                                    'projects.team.deniedTools',
-                                    'Denied by the agent file: {tools}',
+                                    'projects.team.deniedToolsBaseline',
+                                    'Repository baseline blocks: {tools}',
                                     { tools: member.denied_tools.join(', ') },
                                   )}
                                 </p>
                                 <p class="projects-tools-follow">
                                   {t(
-                                    'projects.team.toolsFollowWhitelist',
-                                    'All other tools follow the project tool whitelist.',
+                                    'projects.team.deniedToolsBaselineHelp',
+                                    'These blocks apply only while the repository policy is active. A vBot Tool override replaces them.',
                                   )}
                                 </p>
-                              {:else}
-                                <p class="projects-tools-line">
-                                  {t(
-                                    'projects.team.deniedToolsNone',
-                                    'No tool denials — follows the project tool whitelist.',
-                                  )}
-                                </p>
-                              {/if}
-                            </div>
+                              </div>
+                            {/if}
 
                             {#if member.source_path}
                               <p class="projects-source-line">
@@ -1684,6 +1790,8 @@
                   </p>
                   <ToggleChipList
                     items={toolChipItems}
+                    grouped
+                    groupLabel={projectToolGroupLabel}
                     disabled={projectsState.editSaving}
                     emptyLabel={t(
                       'projects.manage.toolsEmpty',

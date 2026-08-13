@@ -359,6 +359,34 @@ describe('ProjectsView', () => {
     });
   });
 
+  it('groups the Project Tool Whitelist by real registry families', async () => {
+    listProjectsMock.mockResolvedValue({
+      projects: [project({ project_id: 'demo', allowed_tools: ['read'] })],
+    });
+    showProjectMock.mockResolvedValue({
+      project: project({ project_id: 'demo', allowed_tools: ['read'] }),
+      scan: { team: [], report: { clean: true, findings: [] }, skills: {} },
+    });
+    mockToolCatalog(
+      [
+        { name: 'read', family: 'files' },
+        { name: 'bash', family: 'execution' },
+        { name: 'status', family: null },
+      ],
+      ['read'],
+    );
+
+    mountedComponent = mount(ProjectsView, { target: document.body });
+    flushSync();
+    await selectDemo();
+    await waitForCondition(() => toggleByAriaLabel('Toggle tool read'));
+
+    const headings = Array.from(
+      document.querySelectorAll('.access-chips__group-title'),
+    ).map((heading) => heading.textContent.trim());
+    expect(headings).toEqual(['Execution', 'Files', 'Individual Tools']);
+  });
+
   it('shows a persisted unavailable tool and lets the user remove it', async () => {
     listProjectsMock.mockResolvedValue({
       projects: [
@@ -948,6 +976,116 @@ describe('ProjectsView', () => {
     ).toBeTruthy();
   });
 
+  it('sets an exact Project Agent Tool override and resets to the repository policy', async () => {
+    const configuredProject = project({
+      project_id: 'demo',
+      display_name: 'Demo',
+      allowed_tools: ['bash', 'read'],
+    });
+    listProjectsMock.mockResolvedValue({ projects: [configuredProject] });
+    showProjectMock.mockResolvedValue({
+      project: configuredProject,
+      scan: {
+        team: [
+          member({
+            agent_id: 'builder',
+            display_name: 'Builder',
+            denied_tools: ['read'],
+            effective: {
+              model: { value: null, source: null },
+              temperature: { value: null, source: null },
+              thinking_effort: { value: null, source: null },
+              tool_access: {
+                value: {
+                  mode: 'selected',
+                  allowed: ['bash'],
+                  denied: ['read'],
+                },
+                source: 'agent',
+              },
+            },
+          }),
+        ],
+        report: { clean: true, findings: [] },
+      },
+    });
+    mockToolCatalog(['bash', 'read'], ['bash', 'read']);
+    setOverrideMock.mockResolvedValue({
+      project: configuredProject,
+      scan: {
+        team: [
+          member({
+            agent_id: 'builder',
+            display_name: 'Builder',
+            denied_tools: ['read'],
+            overrides: {
+              tool_access: { mode: 'selected', allowed: ['read'] },
+            },
+            effective: {
+              model: { value: null, source: null },
+              temperature: { value: null, source: null },
+              thinking_effort: { value: null, source: null },
+              tool_access: {
+                value: { mode: 'selected', allowed: ['read'] },
+                source: 'override',
+              },
+            },
+          }),
+        ],
+        report: { clean: true, findings: [] },
+      },
+    });
+
+    mountedComponent = mount(ProjectsView, { target: document.body });
+    flushSync();
+    await selectDemo();
+    await waitForCondition(() =>
+      document.querySelector('[data-testid="project-team-toggle-builder"]'),
+    );
+    buttonByTestId('project-team-toggle-builder').click();
+    flushSync();
+
+    await waitForCondition(() =>
+      document.querySelector(
+        '[data-tool-name="read"] [data-tool-access-state="enabled"]',
+      ),
+    );
+    document
+      .querySelector(
+        '[data-tool-name="bash"] [data-tool-access-state="default"]',
+      )
+      .click();
+    document
+      .querySelector(
+        '[data-tool-name="read"] [data-tool-access-state="enabled"]',
+      )
+      .click();
+    flushSync();
+    await wait(AUTO_SAVE_WAIT_MS);
+    await waitForCondition(() => setOverrideMock.mock.calls.length === 1);
+    expect(setOverrideMock).toHaveBeenCalledWith(
+      'demo',
+      'builder',
+      'tool_access',
+      { mode: 'selected', allowed: ['read'] },
+    );
+    await waitForCondition(() =>
+      document.body.textContent.includes('Override active'),
+    );
+
+    const reset = Array.from(document.body.querySelectorAll('button')).find(
+      (button) => button.textContent.trim() === 'Reset to repository policy',
+    );
+    expect(reset).toBeTruthy();
+    reset.click();
+    await waitForCondition(() => clearOverrideMock.mock.calls.length === 1);
+    expect(clearOverrideMock).toHaveBeenCalledWith(
+      'demo',
+      'builder',
+      'tool_access',
+    );
+  });
+
   it('sets a temperature override with the comma-tolerant value', async () => {
     listProjectsMock.mockResolvedValue({
       projects: [project({ project_id: 'demo', display_name: 'Demo' })],
@@ -1234,12 +1372,12 @@ describe('ProjectsView', () => {
     const restrictedDetail = document.querySelector(
       '[data-testid="project-team-member-restricted"] .projects-team-detail',
     );
-    expect(
-      restrictedDetail.querySelectorAll('.projects-tools-line'),
-    ).toHaveLength(2);
-    expect(
-      restrictedDetail.querySelectorAll('.projects-tools-follow'),
-    ).toHaveLength(2);
+    expect(restrictedDetail.textContent).toContain(
+      'Repository baseline blocks',
+    );
+    expect(restrictedDetail.textContent).toContain(
+      'A vBot Tool override replaces them',
+    );
     expect(restrictedDetail.textContent).toContain('bash');
     expect(restrictedDetail.textContent).toContain('process');
     expect(restrictedDetail.textContent).toContain('open');
@@ -1247,10 +1385,8 @@ describe('ProjectsView', () => {
     const openDetail = document.querySelector(
       '[data-testid="project-team-member-open"] .projects-team-detail',
     );
-    expect(openDetail.querySelectorAll('.projects-tools-line')).toHaveLength(2);
-    expect(openDetail.querySelectorAll('.projects-tools-follow')).toHaveLength(
-      1,
-    );
+    expect(openDetail.textContent).not.toContain('Repository baseline blocks');
+    expect(openDetail.textContent).toContain('Tool access override');
   });
 
   it('re-points a project with a missing cwd through project.set with the new cwd', async () => {
@@ -1429,6 +1565,7 @@ function member(overrides = {}) {
       model: { value: null, source: null },
       temperature: { value: null, source: null },
       thinking_effort: { value: null, source: null },
+      tool_access: { value: { mode: 'all' }, source: 'agent' },
     },
     ...overrides,
   };
@@ -1528,7 +1665,11 @@ function mockToolCatalog(toolNames, defaultProjectTools) {
     }
     if (method === 'tool.list') {
       return Promise.resolve({
-        tools: toolNames.map((name) => ({ name, description: '' })),
+        tools: toolNames.map((tool) =>
+          typeof tool === 'string'
+            ? { name: tool, description: '' }
+            : { description: '', ...tool },
+        ),
         default_project_tools: defaultProjectTools,
       });
     }

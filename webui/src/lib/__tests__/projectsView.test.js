@@ -520,6 +520,7 @@ describe('projectTeam', () => {
           model: { value: 'openai/gpt-mini', source: 'override' },
           temperature: { value: 0.2, source: 'agent' },
           thinking_effort: { value: 'high', source: 'agent' },
+          tool_access: { value: { mode: 'all' }, source: null },
         },
       },
       {
@@ -539,6 +540,7 @@ describe('projectTeam', () => {
           model: { value: null, source: null },
           temperature: { value: null, source: null },
           thinking_effort: { value: null, source: null },
+          tool_access: { value: { mode: 'all' }, source: null },
         },
       },
     ]);
@@ -606,6 +608,13 @@ describe('memberFieldIsOverridden', () => {
     expect(memberFieldIsOverridden(member, 'model')).toBe(true);
     expect(memberFieldIsOverridden(member, 'temperature')).toBe(false);
     expect(memberFieldIsOverridden(member, 'thinking_effort')).toBe(false);
+    expect(memberFieldIsOverridden(member, 'tool_access')).toBe(false);
+    expect(
+      memberFieldIsOverridden(
+        { ...member, overrides: { tool_access: { mode: 'none' } } },
+        'tool_access',
+      ),
+    ).toBe(true);
     expect(memberFieldIsOverridden(undefined, 'model')).toBe(false);
   });
 });
@@ -629,6 +638,7 @@ describe('seedTeamOverrideDraft', () => {
       temperature: '0.3',
       thinking_effort: 'low',
       compaction_policy: null,
+      tool_access: { mode: 'all' },
     });
   });
 
@@ -646,6 +656,7 @@ describe('seedTeamOverrideDraft', () => {
       temperature: '',
       thinking_effort: 'high',
       compaction_policy: null,
+      tool_access: { mode: 'all' },
     });
   });
 });
@@ -743,6 +754,7 @@ describe('buildToolToggleList', () => {
     expect(rows).toEqual([
       {
         name: 'edit',
+        family: null,
         description: '',
         enabled: false,
         ready: true,
@@ -751,6 +763,7 @@ describe('buildToolToggleList', () => {
       },
       {
         name: 'read',
+        family: null,
         description: '',
         enabled: true,
         ready: true,
@@ -759,6 +772,7 @@ describe('buildToolToggleList', () => {
       },
       {
         name: 'skill',
+        family: null,
         description: '',
         enabled: true,
         ready: true,
@@ -785,6 +799,7 @@ describe('buildToolToggleList', () => {
     expect(rows).toEqual([
       {
         name: 'home_assistant',
+        family: null,
         description: 'Talk to Home Assistant.',
         enabled: false,
         ready: false,
@@ -803,6 +818,7 @@ describe('buildToolToggleList', () => {
     expect(rows).toEqual([
       {
         name: 'disabled_extension_tool',
+        family: null,
         description: '',
         enabled: true,
         ready: false,
@@ -812,6 +828,7 @@ describe('buildToolToggleList', () => {
       },
       {
         name: 'read',
+        family: null,
         description: '',
         enabled: true,
         ready: true,

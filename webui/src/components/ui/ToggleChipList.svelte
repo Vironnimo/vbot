@@ -1,15 +1,15 @@
 <script>
-  // Shared compact allow-list for tools and skills. Renders each item as a
+  // Shared compact allow-list for Project tools and skills. Renders each item as a
   // toggle chip (the chip itself is the on/off control — accent-filled = allowed)
   // in a wrapping cloud, with an always-present toolbar: a live search filter, an
   // "on / total" tally, and "all on" / "all off" bulk actions. The item's
   // description (plus any not-ready hint or skill warnings) shows on plain hover.
   //
-  // Used by the Agent editor (Allowed tools / Allowed skills) and the Projects
-  // Tool- and Skill-Whitelist editors, so all four surfaces look and behave the
-  // same and scale to large, ever-changing lists (skills can grow past 100).
+  // Used by the Project Tool- and Skill-Whitelist editors and the Agent Skill
+  // editor, so those surfaces scale to large, ever-changing lists (skills can
+  // grow past 100). Tool rows can optionally be grouped by registry family.
   //
-  // Item shape: { name, allowed, description?, ready?, readiness_hint?,
+  // Item shape: { name, allowed, family?, description?, ready?, readiness_hint?,
   // extension?, warnings? }. The chip is a plain toggle; wildcard/ceiling
   // semantics stay in the caller (it decides each item's `allowed` and handles
   // the toggle/set-all callbacks).
@@ -29,6 +29,8 @@
     searchPlaceholder = '',
     emptyLabel = '',
     note = '',
+    grouped = false,
+    groupLabel = (family) => family ?? '',
     ariaToggleLabel = (name) => t('access.toggle', 'Toggle {name}', { name }),
     onToggle = noop,
     onSetAll = noop,
@@ -47,12 +49,30 @@
   let totalCount = $derived(toggleableItems.length);
   let onCount = $derived(countAllowed(toggleableItems));
   let visibleItems = $derived(filterChipsByQuery(normalizedItems, query));
+  let visibleGroups = $derived(groupVisibleItems());
   let placeholder = $derived(
     searchPlaceholder || t('access.searchPlaceholder', 'Filter…'),
   );
 
   function attentionNeeded(item) {
     return item?.ready === false || (item?.warnings?.length ?? 0) > 0;
+  }
+
+  function groupVisibleItems() {
+    if (!grouped) {
+      return [{ family: null, items: visibleItems }];
+    }
+    const groups = [];
+    for (const item of visibleItems) {
+      const family = item?.family || null;
+      const group = groups.find((candidate) => candidate.family === family);
+      if (group) {
+        group.items.push(item);
+      } else {
+        groups.push({ family, items: [item] });
+      }
+    }
+    return groups;
   }
 
   // A chip gets a hover card only when there is something to show — its
@@ -118,75 +138,87 @@
     {#if visibleItems.length === 0}
       <p class="access-chips__empty">{t('access.noMatches', 'No matches.')}</p>
     {:else}
-      <div class="access-chips__cloud">
-        {#each visibleItems as item (item.name)}
-          <div class="access-chip-wrap">
-            {#if item.locked}
-              <div
-                class="access-chip access-chip--locked"
-                class:is-on={item.allowed}
-              >
-                <span class="access-chip__name">{item.name}</span>
-                <span class="access-chip__auto">
-                  {item.lockedLabel ?? t('access.lockedAuto', 'auto')}
-                </span>
-              </div>
-            {:else}
-              <button
-                type="button"
-                class="access-chip"
-                class:is-on={item.allowed}
-                class:is-attention={attentionNeeded(item)}
-                role="switch"
-                aria-checked={item.allowed}
-                aria-label={ariaToggleLabel(item.name)}
-                {disabled}
-                onclick={() => onToggle(item.name, !item.allowed)}
-              >
-                <span class="access-chip__name">{item.name}</span>
-                {#if attentionNeeded(item)}
-                  <span class="access-chip__dot" aria-hidden="true"></span>
-                {/if}
-              </button>
+      <div class="access-chips__groups">
+        {#each visibleGroups as group (group.family ?? 'individual')}
+          <section class="access-chips__group">
+            {#if grouped}
+              <h4 class="access-chips__group-title">
+                {groupLabel(group.family)}
+              </h4>
             {/if}
-            {#if hasTip(item)}
-              <div
-                class="access-chip__tip"
-                role="tooltip"
-                use:floatingHoverCard
-              >
-                {#if item.description}
-                  <p class="access-chip__desc">{item.description}</p>
-                {/if}
-                {#if item.lockedNote}
-                  <p
-                    class="access-chip__locked-note"
-                    data-testid="access-chip-locked-note"
-                  >
-                    {item.lockedNote}
-                  </p>
-                {/if}
-                <ToolReadinessNotice
-                  ready={item.ready}
-                  readinessHint={item.readiness_hint}
-                  extension={item.extension}
-                  {onOpenExtensions}
-                />
-                {#if item.warnings?.length}
-                  <div class="access-chip__warnings">
-                    <span class="access-chip__warnings-label">
-                      {t('agents.access.skillWarnings', 'Warnings')}
-                    </span>
-                    <ul>
-                      {#each item.warnings as warning, index (`${item.name}-warning-${index}`)}
-                        <li>{warning}</li>
-                      {/each}
-                    </ul>
-                  </div>
-                {/if}
-              </div>
-            {/if}
-          </div>
+            <div class="access-chips__cloud">
+              {#each group.items as item (item.name)}
+                <div class="access-chip-wrap">
+                  {#if item.locked}
+                    <div
+                      class="access-chip access-chip--locked"
+                      class:is-on={item.allowed}
+                    >
+                      <span class="access-chip__name">{item.name}</span>
+                      <span class="access-chip__auto">
+                        {item.lockedLabel ?? t('access.lockedAuto', 'auto')}
+                      </span>
+                    </div>
+                  {:else}
+                    <button
+                      type="button"
+                      class="access-chip"
+                      class:is-on={item.allowed}
+                      class:is-attention={attentionNeeded(item)}
+                      role="switch"
+                      aria-checked={item.allowed}
+                      aria-label={ariaToggleLabel(item.name)}
+                      {disabled}
+                      onclick={() => onToggle(item.name, !item.allowed)}
+                    >
+                      <span class="access-chip__name">{item.name}</span>
+                      {#if attentionNeeded(item)}
+                        <span class="access-chip__dot" aria-hidden="true"
+                        ></span>
+                      {/if}
+                    </button>
+                  {/if}
+                  {#if hasTip(item)}
+                    <div
+                      class="access-chip__tip"
+                      role="tooltip"
+                      use:floatingHoverCard
+                    >
+                      {#if item.description}
+                        <p class="access-chip__desc">{item.description}</p>
+                      {/if}
+                      {#if item.lockedNote}
+                        <p
+                          class="access-chip__locked-note"
+                          data-testid="access-chip-locked-note"
+                        >
+                          {item.lockedNote}
+                        </p>
+                      {/if}
+                      <ToolReadinessNotice
+                        ready={item.ready}
+                        readinessHint={item.readiness_hint}
+                        extension={item.extension}
+                        {onOpenExtensions}
+                      />
+                      {#if item.warnings?.length}
+                        <div class="access-chip__warnings">
+                          <span class="access-chip__warnings-label">
+                            {t('agents.access.skillWarnings', 'Warnings')}
+                          </span>
+                          <ul>
+                            {#each item.warnings as warning, index (`${item.name}-warning-${index}`)}
+                              <li>{warning}</li>
+                            {/each}
+                          </ul>
+                        </div>
+                      {/if}
+                    </div>
+                  {/if}
+                </div>
+              {/each}
+            </div>
+          </section>
         {/each}
       </div>
     {/if}
@@ -267,11 +299,22 @@
     font-style: italic;
   }
 
+  .access-chips__groups {
+    display: grid;
+    gap: 10px;
+    padding: 2px 16px 14px;
+  }
+
+  .access-chips__group-title {
+    margin: 0 0 6px;
+    color: var(--text-med);
+    font-size: var(--fs-label-sm);
+  }
+
   .access-chips__cloud {
     display: flex;
     flex-wrap: wrap;
     gap: 6px;
-    padding: 2px 16px 14px;
   }
 
   .access-chip-wrap {

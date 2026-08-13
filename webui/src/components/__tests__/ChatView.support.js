@@ -317,7 +317,7 @@ export function createAgent(overrides = {}) {
     workspace: 'C:/agents/alpha',
     temperature: '',
     thinking_effort: '',
-    allowed_tools: ['*'],
+    tool_access: { mode: 'all' },
     allowed_skills: ['*'],
     current_session_id: 'session-1',
     context_window: 262144,
