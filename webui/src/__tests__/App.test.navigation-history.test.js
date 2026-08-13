@@ -448,14 +448,12 @@ describe('App', () => {
     await waitForCondition(() => {
       expect(
         document.querySelector(
-          '[data-tool-name="write"] [data-tool-access-state="denied"]',
+          '[data-tool-name="write"][data-tool-access-toggle]',
         ),
       ).toBeTruthy();
     });
     document
-      .querySelector(
-        '[data-tool-name="write"] [data-tool-access-state="denied"]',
-      )
+      .querySelector('[data-tool-name="write"][data-tool-access-toggle]')
       ?.click();
     flushSync();
     sidebarNavButton('Chat')?.click();

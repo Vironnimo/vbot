@@ -31,9 +31,9 @@ vi.mock('$lib/api.js', () => rpcBackedApiMock(rpcMock));
 
 const { default: AgentsView } = await import('../AgentsView.svelte');
 
-function toolAccessButton(name, state) {
+function toolAccessToggle(name) {
   const button = document.body.querySelector(
-    `[data-tool-name="${name}"] [data-tool-access-state="${state}"]`,
+    `[data-tool-name="${name}"][data-tool-access-toggle]`,
   );
   expect(button).toBeTruthy();
   return button;
@@ -297,7 +297,7 @@ describe('AgentsView', () => {
 
     vi.useFakeTimers();
 
-    toolAccessButton('write', 'denied').click();
+    toolAccessToggle('write').click();
     flushSync();
 
     await vi.advanceTimersByTimeAsync(800);
@@ -393,7 +393,7 @@ describe('AgentsView', () => {
     await waitForText('Sub-Agent settings');
 
     vi.useFakeTimers();
-    toolAccessButton('subagent', 'denied').click();
+    toolAccessToggle('subagent').click();
     flushSync();
     await vi.advanceTimersByTimeAsync(800);
     await flushAsyncUpdates();
@@ -425,17 +425,15 @@ describe('AgentsView', () => {
 
     await waitForText('write');
 
-    expect(document.body.textContent).toContain('Run shell commands.');
-    expect(document.body.textContent).toContain('Write files.');
-    expect(document.body.textContent).toContain('Manage pinned memory.');
-    const memoryRow = document.body.querySelector('[data-tool-name="memory"]');
-    expect(memoryRow).toBeTruthy();
-    expect(memoryRow.textContent).toContain('Automatic');
-    expect(memoryRow.textContent).toContain('Memory is on');
-    expect(toolAccessButton('memory', 'denied').disabled).toBe(false);
-    expect(
-      memoryRow.querySelector('[data-tool-access-state="enabled"]'),
-    ).toBeNull();
+    expect(document.body.textContent).not.toContain('Run shell commands.');
+    expect(document.body.textContent).not.toContain('Write files.');
+    expect(document.body.textContent).not.toContain('Manage pinned memory.');
+    const memoryChip = toolAccessToggle('memory');
+    expect(memoryChip.textContent).toBe('memory');
+    expect(memoryChip.getAttribute('aria-checked')).toBe('true');
+    expect(memoryChip.classList.contains('is-automatic')).toBe(true);
+    expect(memoryChip.disabled).toBe(false);
+    expect(document.body.textContent).toContain('Automatic while Memory is on');
   });
 
   it('switches the memory tool row text when Memory is set to off', async () => {
@@ -456,12 +454,12 @@ describe('AgentsView', () => {
     mountedComponent = mount(AgentsView, { target: document.body });
     flushSync();
 
-    await waitForText('Run shell commands.');
+    await waitForText('bash');
 
-    const memoryRow = document.body.querySelector('[data-tool-name="memory"]');
-    expect(memoryRow).toBeTruthy();
-    expect(memoryRow.textContent).toContain('Memory is off');
-    expect(memoryRow.textContent).toContain('Inactive');
+    const memoryChip = toolAccessToggle('memory');
+    expect(memoryChip.textContent).toBe('memory');
+    expect(memoryChip.getAttribute('aria-checked')).toBe('true');
+    expect(document.body.textContent).toContain('Memory is currently off');
   });
 
   it('shows both empty Memory categories while they are inactive and keeps adding available', async () => {
@@ -660,18 +658,14 @@ describe('AgentsView', () => {
     );
 
     // Policy controls stay editable because access is independent of readiness.
-    const block = toolAccessButton('home_assistant', 'denied');
-    expect(block.disabled).toBe(false);
-    expect(
-      document
-        .querySelector('[data-tool-name="home_assistant"]')
-        .classList.contains('tool-access-row--unavailable'),
-    ).toBe(true);
+    const toolToggle = toolAccessToggle('home_assistant');
+    expect(toolToggle.disabled).toBe(false);
+    expect(toolToggle.classList.contains('is-unavailable')).toBe(true);
 
     // The extensions link navigates to the Extensions settings panel.
     const openExtensions = Array.from(
       document.body.querySelectorAll('button'),
-    ).find((button) => button.textContent.trim() === 'Configure');
+    ).find((button) => button.textContent.trim() === 'Open Extensions');
     expect(openExtensions).toBeTruthy();
     openExtensions.click();
     flushSync();

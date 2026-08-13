@@ -121,6 +121,70 @@ export function setToolFamilyState(
   return next;
 }
 
+// The compact editor exposes one permission switch per Tool. The persisted
+// representation still differs by mode: an off configurable Tool is an
+// exclusion in `all`, but simply absent from `selected`; automatic Tools use an
+// absolute denial because they have no direct selection entry of their own.
+export function toolAccessPreferenceEnabled(value, tool) {
+  const policy = normalizeToolAccess(value);
+  if (
+    policy.mode === TOOL_ACCESS_MODE_NONE ||
+    (policy.denied ?? []).includes(tool?.name)
+  ) {
+    return false;
+  }
+  if (!toolIsConfigurable(tool)) {
+    return true;
+  }
+  return (
+    policy.mode === TOOL_ACCESS_MODE_ALL ||
+    (policy.mode === TOOL_ACCESS_MODE_SELECTED &&
+      (policy.allowed ?? []).includes(tool?.name))
+  );
+}
+
+export function setToolAccessPreference(
+  value,
+  tool,
+  enabled,
+  catalog = [],
+  ceiling = null,
+) {
+  const policy = normalizeToolAccess(value);
+  if (enabled) {
+    return setToolAccessState(
+      policy,
+      tool?.name,
+      toolIsConfigurable(tool) ? 'enabled' : 'default',
+      catalog,
+      ceiling,
+    );
+  }
+  return setToolAccessState(
+    policy,
+    tool?.name,
+    toolIsConfigurable(tool) && policy.mode === TOOL_ACCESS_MODE_SELECTED
+      ? 'default'
+      : 'denied',
+    catalog,
+    ceiling,
+  );
+}
+
+export function setToolFamilyPreference(
+  value,
+  members,
+  enabled,
+  catalog = [],
+  ceiling = null,
+) {
+  let next = normalizeToolAccess(value);
+  for (const member of members) {
+    next = setToolAccessPreference(next, member, enabled, catalog, ceiling);
+  }
+  return next;
+}
+
 export function toolAccessState(value, tool, catalog = [], context = {}) {
   const policy = normalizeToolAccess(value);
   if ((policy.denied ?? []).includes(tool.name)) {
