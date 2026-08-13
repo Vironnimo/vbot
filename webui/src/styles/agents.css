@@ -287,6 +287,10 @@
   padding: 10px 16px 8px;
 }
 
+.agents-view .agents-view__tool-access-content {
+  padding: 0 16px 16px;
+}
+
 .agents-view .btn-tertiary {
   padding: 2px 8px;
   font-family: var(--font-mono);
