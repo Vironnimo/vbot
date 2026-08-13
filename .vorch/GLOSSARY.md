@@ -3,8 +3,8 @@
 Core, cross-cutting vocabulary every agent needs regardless of what it touches. Domain-specific terms live in a `## Terms` section inside their domain map (e.g. the Model-DB internals in `models.md`, the prompt-block internals in `prompts.md`, the project/whitelist internals in `projects.md`). **A term lives in exactly one place — this file *or* one map, never both.** When you define a new term, decide by this rule: a core cross-cutting term, or one the user says in conversation → here; a term you only need once you are already working inside one domain → that domain's map.
 
 ## Agent
-**Definition:** A file-based configuration stored at `<datadir>/agents/<agent-id>/agent.json`. Every agent has a Workspace and stores its chat history in Sessions.
-**Not:** A chatbot, a background process, or a chat session. The agent is the configuration — a session is an interaction with it, not the agent itself.
+**Definition:** The common runtime participant in a vBot Session, addressed by an Agent id and resolved as either a stored Identity Agent or a repository-discovered Project Agent. Both forms expose the same runtime configuration surface, but only an Identity Agent owns an `agent.json` and Workspace.
+**Not:** A background process or a Session. The Agent supplies runtime identity and configuration; the Session is the persisted conversation container in which it participates.
 
 ## Agentic Loop
 **Definition:** The central processing cycle of a chat. The model receives a user message, responds with text and/or tool calls. If tools are called, they execute and results feed back to the model. This repeats until the model returns a final response with no tool calls. The loop runs entirely in the kernel, with streaming via SSE.
@@ -23,11 +23,11 @@ Core, cross-cutting vocabulary every agent needs regardless of what it touches. 
 **Not:** Chain of Thought. Reasoning is the capability and its configuration; CoT is the opaque output it produces (defined in `providers.md`).
 
 ## Session
-**Definition:** A system-owned chat container under `<datadir>/agents/<agent-id>/sessions/`, persisted as one JSONL file per session. A Session belongs to exactly one Agent and owns the persisted message history. At the product/server level, starting a new Session is an explicit action; once it exists, its file and history are created and maintained by the system.
+**Definition:** A system-owned persisted chat container that belongs to exactly one Agent within its Identity or Project scope and owns the message history. Identity Agent Sessions live under `<datadir>/agents/<agent-id>/sessions/`; Project Agent Sessions live under `<datadir>/projects/<project-id>/agents/<agent-id>/sessions/`, with one JSONL file per Session.
 **Not:** The agent itself, the currently executing work, or the agent's Workspace files. The Session is the persisted conversation container; the Run is the active execution inside it.
 
 ## Memory
-**Definition:** Curated, durable facts stored in Workspace Markdown files and managed through the memory service/tool. User-scope memory lives in `USER.md`; agent-scope memory lives in `MEMORY.md`. An Agent's `memory_prompt_mode` decides which of those files, if any, become prompt-visible.
+**Definition:** Curated, durable facts stored in an Identity Agent's Workspace Markdown files and managed through the Memory service and, when permitted, the `memory` Tool. User-scope Memory lives in `USER.md`; Agent-scope Memory lives in `MEMORY.md`; `memory_prompt_mode` independently decides which files, if any, become prompt-visible.
 **Not:** Session history, scratch notes, or a broad search index. Searchable conversation recall belongs to Sessions and recall tools such as `session_search`.
 
 ## Run
@@ -59,7 +59,7 @@ Core, cross-cutting vocabulary every agent needs regardless of what it touches. 
 **Not:** A system prompt, a real user turn, or a server/UI notification.
 
 ## Tool
-**Definition:** A function with a name, a description, and a parameter schema (JSON Schema) that an agent can call during a chat. The agent decides via the agentic loop whether a tool call is needed; the runtime executes it and returns the result to the model. File tools resolve relative paths against the **cwd** by default (the project repo for a project Session, else the agent's Workspace); the `memory` tool stays on the Workspace.
+**Definition:** A function with a name, a description, and a parameter schema (JSON Schema) that an Agent can call during a chat when its Tool Access Policy and runtime conditions permit it. File Tools resolve relative paths against the **cwd** by default: the Project repo for a Project Agent or Rooted Identity Agent, otherwise the Identity Agent's Workspace; the `memory` Tool always stays on the Workspace.
 
 ## Workspace
 **Definition:** An Identity Agent's freely editable identity and Memory home, containing `SOUL.md`, `USER.md`, and `MEMORY.md`; its Default Workspace is `<datadir>/agents/<agent-id>/workspace/`, but a custom absolute path is valid. Workspace remains the `memory` tool's home while cwd separately controls relative file and shell work.
@@ -74,12 +74,12 @@ Core, cross-cutting vocabulary every agent needs regardless of what it touches. 
 **Not:** The global Agent store. Team membership is project-scoped and lives in the repo, not in the data-dir agent store. An Identity Agent with explicitly loaded Project Context is **not** a team member.
 
 ## Config Agent
-**Definition:** An Agent that is *only* a profile — model, tools, prompt body, temperature, thinking effort — with **no Workspace and no identity** (and, in v1, **no memory tool**). Its temperature and thinking effort resolve through the same Agent → Project default → global → Provider-default chain as its model. The typical Project Agent: a scanned OpenCode or Claude Code agent. At runtime it is a `ConfigAgent` synthesized from the scan (`workspace=""`, `memory_prompt_mode="off"`, plus a verbatim prompt `body`); its `allowed_tools`/`allowed_skills` are computed from the project's whitelists (see `projects.md`), not the old `["*"]`. If it wants durable notes it writes a normal file in its cwd (the repo), via the file tools — agent work, not vBot runtime state.
-**Not:** An Identity Agent. A Config Agent has no SOUL/USER/MEMORY home and no memory tool; it is interchangeable run-config, not a persistent identity.
+**Definition:** The workspace-less runtime representation synthesized when a Project Agent is resolved from its scanned Project Team profile, with no identity or Memory Tool. Its model, Run settings, Skills, and Tool Access Policy resolve from repository configuration plus Project defaults and vBot overrides; a vBot Tool override fully replaces the repository Tool policy inside the Project Tool Whitelist, so it may narrow access to one Tool or re-enable a repo-denied Tool.
+**Not:** An Identity Agent or a separately stored Agent configuration. A Config Agent has no SOUL/USER/MEMORY home and is interchangeable Run configuration rather than a persistent identity.
 
 ## Identity Agent
-**Definition:** An Agent with a Workspace (`SOUL.md`/`USER.md`/`MEMORY.md`) and a memory tool — the existing store-backed agent under `<datadir>/agents/<id>/`. It carries durable identity/memory across sessions and brings its own model (model → global default). Both Config and Identity agents resolve through the same `resolve_agent` seam into the uniform `RuntimeAgent`.
-**Not:** A Config Agent. The Identity Agent is the persistent self with a memory home; a Config Agent is a bare profile.
+**Definition:** A stored Agent under `<datadir>/agents/<id>/` with its own `agent.json`, Workspace, durable identity, and Memory files across Sessions. The Workspace provides its Memory home, while `memory_prompt_mode` and the Tool Access Policy independently decide prompt visibility and whether the `memory` Tool is callable.
+**Not:** A Config Agent. The Identity Agent is the persistent self with a Memory home; a Config Agent is a workspace-less Project profile synthesized for a Run.
 
 ## Rooted Agent
 **Definition:** An Identity Agent whose nullable saved `Project` selection names a registered Project. It keeps its own Workspace, Memory, private Skills, Sessions, permissions, and bare addressing while relative file/shell work, Project Files, and Project Skills use the selected Project.
