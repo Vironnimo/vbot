@@ -1339,6 +1339,7 @@ export function buildToolToggleList({ catalog = [], allowedTools = [] } = {}) {
     byName.set(name, {
       name,
       family: isObject ? (tool.family ?? null) : null,
+      family_label: isObject ? (tool.family_label ?? null) : null,
       description: isObject ? (tool.description ?? '') : '',
       enabled: enabled.has(name),
       ready: isObject ? tool.ready !== false : true,
@@ -1361,6 +1362,7 @@ export function buildToolToggleList({ catalog = [], allowedTools = [] } = {}) {
     byName.set(name, {
       name,
       family: null,
+      family_label: null,
       description: '',
       enabled: true,
       ready: false,

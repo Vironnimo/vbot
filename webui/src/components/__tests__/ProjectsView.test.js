@@ -370,7 +370,9 @@ describe('ProjectsView', () => {
     mockToolCatalog(
       [
         { name: 'read', family: 'files' },
+        { name: 'edit', family: 'files' },
         { name: 'bash', family: 'execution' },
+        { name: 'process', family: 'execution' },
         { name: 'status', family: null },
       ],
       ['read'],

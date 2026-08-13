@@ -192,6 +192,68 @@ def test_extension_tool_respects_allowlist(tmp_path: Path) -> None:
     assert "ext_echo" not in excluded
 
 
+def test_extension_declares_namespaced_tool_family(tmp_path: Path) -> None:
+    root = tmp_path / "extensions"
+    _write_single_file(
+        root,
+        "weather",
+        (
+            "from core.tools import tool_success\n"
+            "def _handler(context, arguments):\n"
+            "    return tool_success({})\n"
+            "def register(api):\n"
+            "    api.register_tool_family('forecast', 'Weather Forecast')\n"
+            "    api.register_tool('weather_today', 'Today.', {'type': 'object'}, "
+            "_handler, family='forecast')\n"
+            "    api.register_tool('weather_week', 'Week.', {'type': 'object'}, "
+            "_handler, family='forecast')\n"
+        ),
+    )
+
+    registry = ExtensionRegistry.load(root)
+    tool_registry = ToolRegistry()
+    registry.apply_tools(tool_registry)
+
+    expected_id = "extension:weather:forecast"
+    assert tool_registry.get("weather_today").family == expected_id
+    assert tool_registry.get("weather_week").family == expected_id
+    assert tool_registry.get("weather_today").family_label == "Weather Forecast"
+    assert tool_registry.get_family(expected_id).extension == "weather"
+    assert _record(registry, "weather").capability_errors == []
+
+    registry.remove_applied_tools(tool_registry)
+
+    assert tool_registry.list_tools() == []
+    with pytest.raises(ValueError, match="not found"):
+        tool_registry.get_family(expected_id)
+
+
+def test_extension_tool_with_undeclared_family_stays_standalone(tmp_path: Path) -> None:
+    root = tmp_path / "extensions"
+    _write_single_file(
+        root,
+        "weather",
+        (
+            "from core.tools import tool_success\n"
+            "def _handler(context, arguments):\n"
+            "    return tool_success({})\n"
+            "def register(api):\n"
+            "    api.register_tool('weather_today', 'Today.', {'type': 'object'}, "
+            "_handler, family='missing')\n"
+        ),
+    )
+
+    registry = ExtensionRegistry.load(root)
+    tool_registry = ToolRegistry()
+    registry.apply_tools(tool_registry)
+
+    assert tool_registry.get("weather_today").family is None
+    assert any(
+        "undeclared tool family" in message
+        for message in _record(registry, "weather").capability_errors
+    )
+
+
 def test_extension_tool_with_readiness_predicate_lands_in_registry(tmp_path: Path) -> None:
     root = tmp_path / "extensions"
     _write_single_file(root, "ready_ext", _ready_tool_extension_source("ext_ready", ready=True))

@@ -59,6 +59,20 @@ const tools = [
     activation: 'configurable',
     ready: true,
   },
+  {
+    name: 'ha_get_state',
+    family: 'extension:homeassistant:home_assistant',
+    family_label: 'Home Assistant',
+    activation: 'configurable',
+    ready: true,
+  },
+  {
+    name: 'ha_call_service',
+    family: 'extension:homeassistant:home_assistant',
+    family_label: 'Home Assistant',
+    activation: 'configurable',
+    ready: true,
+  },
 ];
 
 describe('ToolAccessEditor', () => {
@@ -122,6 +136,26 @@ describe('ToolAccessEditor', () => {
     expect(onChange).toHaveBeenCalledWith({
       mode: 'selected',
       allowed: ['read', 'write'],
+    });
+  });
+
+  it('renders an Extension-declared family label and controls its Tools together', () => {
+    const onChange = vi.fn();
+    mountedComponent = mount(ToolAccessEditor, {
+      target: document.body,
+      props: {
+        value: { mode: 'selected', allowed: [] },
+        tools,
+        onChange,
+      },
+    });
+    flushSync();
+
+    expect(document.body.textContent).toContain('Home Assistant');
+    buttonByAriaLabel('Turn on Home Assistant').click();
+    expect(onChange).toHaveBeenCalledWith({
+      mode: 'selected',
+      allowed: ['ha_call_service', 'ha_get_state'],
     });
   });
 

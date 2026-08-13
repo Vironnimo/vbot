@@ -64,4 +64,48 @@ describe('ToggleChipList', () => {
     expect(card.style.left).not.toBe('');
     expect(card.style.top).not.toBe('');
   });
+
+  it('uses Extension family labels and folds singleton families into Individual Tools', () => {
+    mountedComponent = mount(ToggleChipList, {
+      target: clippedHost,
+      props: {
+        grouped: true,
+        items: [
+          {
+            name: 'ha_get_state',
+            family: 'extension:homeassistant:home_assistant',
+            family_label: 'Home Assistant',
+          },
+          {
+            name: 'ha_call_service',
+            family: 'extension:homeassistant:home_assistant',
+            family_label: 'Home Assistant',
+          },
+          {
+            name: 'weather_today',
+            family: 'extension:weather:forecast',
+            family_label: 'Weather Forecast',
+          },
+        ],
+        groupLabel: (family, items) =>
+          family ? items[0].family_label : 'Individual Tools',
+      },
+    });
+    flushSync();
+
+    const headings = Array.from(
+      document.querySelectorAll('.access-chips__group-title'),
+    ).map((heading) => heading.textContent.trim());
+    expect(headings).toEqual(['Home Assistant', 'Individual Tools']);
+
+    const search = document.querySelector('.access-chips__search-input');
+    search.value = 'get_state';
+    search.dispatchEvent(new Event('input', { bubbles: true }));
+    flushSync();
+
+    const filteredHeadings = Array.from(
+      document.querySelectorAll('.access-chips__group-title'),
+    ).map((heading) => heading.textContent.trim());
+    expect(filteredHeadings).toEqual(['Home Assistant']);
+  });
 });

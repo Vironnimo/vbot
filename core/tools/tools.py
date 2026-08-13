@@ -29,6 +29,14 @@ _LOGGER = get_logger("tools")
 TOOL_ALLOWLIST_WILDCARD = "*"
 DEFAULT_TOOL_CONCURRENCY_LIMIT = 50
 DEFAULT_TOOL_WORKER_LIMIT = 8
+BUILTIN_TOOL_FAMILY_LABELS = {
+    "files": "Files",
+    "execution": "Execution",
+    "web": "Web",
+    "sessions": "Sessions",
+    "skills": "Skills",
+    "media": "Media",
+}
 
 JsonObject = dict[str, Any]
 ToolEmitHook = Callable[[str, JsonObject], None | Awaitable[None]]
@@ -93,6 +101,21 @@ class InvalidToolResultError(ValueError):
 
 class DuplicateToolError(ToolError):
     """Raised when registering a tool name more than once."""
+
+
+@dataclass(frozen=True)
+class ToolFamily:
+    """Presentation metadata for a user-recognizable group of Tools."""
+
+    id: str
+    label: str
+    extension: str | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.id, str) or not self.id.strip():
+            raise ValueError("Tool family id must be a non-empty string")
+        if not isinstance(self.label, str) or not self.label.strip():
+            raise ValueError("Tool family label must be a non-empty string")
 
 
 @dataclass(frozen=True)
@@ -696,6 +719,9 @@ class Tool:
     # Optional presentation grouping. Standalone Tools leave this unset; a family
     # is useful only when multiple Tools share one user-recognizable capability.
     family: str | None = None
+    # Human-facing label from the registry declaration. This lets transport
+    # surfaces render Extension families without understanding their ids.
+    family_label: str | None = None
     # How policy activates this Tool. Configurable Tools are selected directly;
     # followed, memory-mode, and Session-grant Tools are automatic.
     activation: str = TOOL_ACTIVATION_CONFIGURABLE
@@ -865,6 +891,10 @@ class ToolRegistry:
 
     def __init__(self) -> None:
         self._tools: dict[str, Tool] = {}
+        self._families: dict[str, ToolFamily] = {
+            family_id: ToolFamily(id=family_id, label=label)
+            for family_id, label in BUILTIN_TOOL_FAMILY_LABELS.items()
+        }
         self._definition_profile_cache: dict[
             tuple[str, str],
             tuple[str, ToolContract],
@@ -901,6 +931,11 @@ class ToolRegistry:
         precondition (surfaced by ``tool.list``); ``extension`` names the owning
         extension (``None`` for a built-in), set at extension-tool apply time.
         """
+        family_definition = None
+        if family is not None:
+            family_definition = self._families.get(family)
+            if family_definition is None:
+                raise ValueError(f"Tool family is not registered: {family}")
         self._validate_tool(
             name,
             description,
@@ -921,6 +956,7 @@ class ToolRegistry:
             internal=internal,
             session_scoped=session_scoped,
             family=family,
+            family_label=family_definition.label if family_definition is not None else None,
             activation=activation,
             activation_source=activation_source,
             constraints=tuple(dict.fromkeys(constraints)),
@@ -934,6 +970,42 @@ class ToolRegistry:
         )
         self._tools[name] = tool
         return tool
+
+    def register_family(
+        self,
+        family_id: str,
+        label: str,
+        *,
+        extension: str | None = None,
+    ) -> ToolFamily:
+        """Register presentation metadata for Tools that share one family."""
+        family = ToolFamily(id=family_id, label=label, extension=extension)
+        if family.id in self._families:
+            raise ValueError(f"Tool family already registered: {family.id}")
+        self._families[family.id] = family
+        return family
+
+    def unregister_family(self, family_id: str, *, extension: str | None = None) -> None:
+        """Remove an Extension-owned family after its Tools are removed."""
+        if extension is None:
+            return
+        family = self._families.get(family_id)
+        if family is None or family.extension != extension:
+            return
+        if any(tool.family == family_id for tool in self._tools.values()):
+            return
+        self._families.pop(family_id, None)
+
+    def get_family(self, family_id: str) -> ToolFamily:
+        """Return one registered family definition."""
+        try:
+            return self._families[family_id]
+        except KeyError:
+            raise ValueError(f"Tool family not found: {family_id}") from None
+
+    def list_families(self) -> list[ToolFamily]:
+        """Return registered family definitions in stable id order."""
+        return sorted(self._families.values(), key=lambda family: family.id)
 
     def display_for_call(
         self,

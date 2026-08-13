@@ -801,6 +801,45 @@ def test_registry_preserves_declarative_tool_relationship_metadata() -> None:
     assert tool.constraints == ("identity_agent",)
 
 
+def test_registry_owns_family_labels_and_rejects_unknown_membership() -> None:
+    registry = ToolRegistry()
+    family = registry.register_family(
+        "extension:weather:forecast",
+        "Weather Forecast",
+        extension="weather",
+    )
+
+    tool = registry.register(
+        "weather_today",
+        "Read today's forecast.",
+        READ_FILE_SCHEMA,
+        read_file_handler,
+        family=family.id,
+        extension="weather",
+    )
+
+    assert tool.family == "extension:weather:forecast"
+    assert tool.family_label == "Weather Forecast"
+    assert registry.get_family(family.id) == family
+
+    with pytest.raises(ValueError, match="not registered"):
+        registry.register(
+            "weather_tomorrow",
+            "Read tomorrow's forecast.",
+            READ_FILE_SCHEMA,
+            read_file_handler,
+            family="extension:weather:missing",
+        )
+
+
+def test_registry_never_unregisters_builtin_family_metadata() -> None:
+    registry = ToolRegistry()
+
+    registry.unregister_family("files")
+
+    assert registry.get_family("files").label == "Files"
+
+
 def test_registry_rejects_invalid_activation_metadata() -> None:
     registry = ToolRegistry()
 

@@ -46,6 +46,7 @@ _HASS_URL = "http://homeassistant.local:8123"
 _TOKEN = "test-ha-token"
 _EXTENSION_NAME = "homeassistant"
 _EXTENSION_MODULE = "vbot_ext.homeassistant"
+_FAMILY_ID = "extension:homeassistant:home_assistant"
 
 
 class _State:
@@ -90,6 +91,19 @@ def _tools_with_token() -> ToolRegistry:
     state.credentials["HASS_TOKEN"] = _TOKEN
     _, tools = _load_registry(state)
     return tools
+
+
+def test_homeassistant_tools_share_extension_family() -> None:
+    _, tools = _load_registry(_State())
+
+    for tool_name in _HA_TOOL_NAMES:
+        tool = tools.get(tool_name)
+        assert tool.family == _FAMILY_ID
+        assert tool.family_label == "Home Assistant"
+
+    family = tools.get_family(_FAMILY_ID)
+    assert family.label == "Home Assistant"
+    assert family.extension == _EXTENSION_NAME
 
 
 def _no_sleep(monkeypatch: pytest.MonkeyPatch) -> list[int]:

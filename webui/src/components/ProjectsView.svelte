@@ -60,7 +60,7 @@
     return FORMAT_LABELS[formatKey] ? FORMAT_LABELS[formatKey]() : formatKey;
   }
 
-  function projectToolGroupLabel(family) {
+  function projectToolGroupLabel(family, items = []) {
     const labels = {
       files: t('toolAccess.family.files', 'Files'),
       execution: t('toolAccess.family.execution', 'Execution'),
@@ -71,6 +71,7 @@
     };
     return (
       labels[family] ??
+      items.find((item) => item?.family_label)?.family_label ??
       (family
         ? String(family)
             .replaceAll('_', ' ')

@@ -200,6 +200,29 @@ describe('Tool Access Policy UI helpers', () => {
     ]);
   });
 
+  it('keeps a one-member declared family in Individual Tools', () => {
+    const extensionTool = {
+      name: 'weather_today',
+      family: 'extension:weather:forecast',
+      family_label: 'Weather Forecast',
+      activation: 'configurable',
+    };
+
+    expect(groupToolCatalog([...catalog, extensionTool])).toEqual([
+      { id: 'files', family: true, members: catalog.slice(0, 2) },
+      {
+        id: 'sessions',
+        family: true,
+        members: [catalog[3], catalog[2]],
+      },
+      {
+        id: null,
+        family: false,
+        members: [catalog[4], catalog[5], extensionTool],
+      },
+    ]);
+  });
+
   it('computes direct Tool inclusion without confusing it with current readiness', () => {
     expect(toolAccessIncludes({ mode: 'all' }, 'subagent')).toBe(true);
     expect(

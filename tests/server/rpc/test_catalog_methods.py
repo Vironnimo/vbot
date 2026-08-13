@@ -222,6 +222,7 @@ def _tool_stub(
     readiness_hint: str | None = None,
     extension: str | None = None,
     family: str | None = None,
+    family_label: str | None = None,
     activation: str = "configurable",
     activation_source: str | None = None,
     constraints: tuple[str, ...] = (),
@@ -238,6 +239,7 @@ def _tool_stub(
         readiness_hint=readiness_hint,
         extension=extension,
         family=family,
+        family_label=family_label,
         activation=activation,
         activation_source=activation_source,
         constraints=constraints,
@@ -366,6 +368,8 @@ def test_tool_list_surfaces_ready_hint_and_extension_fields() -> None:
                     ready=lambda: False,
                     readiness_hint="hint",
                     extension="homeassistant",
+                    family="extension:homeassistant:home_assistant",
+                    family_label="Home Assistant",
                 ),
                 _tool_stub("read"),
                 _tool_stub("boom", ready=_raise_ready),
@@ -380,6 +384,8 @@ def test_tool_list_surfaces_ready_hint_and_extension_fields() -> None:
     assert by_name["ha_call_service"]["ready"] is False
     assert by_name["ha_call_service"]["readiness_hint"] == "hint"
     assert by_name["ha_call_service"]["extension"] == "homeassistant"
+    assert by_name["ha_call_service"]["family"] == "extension:homeassistant:home_assistant"
+    assert by_name["ha_call_service"]["family_label"] == "Home Assistant"
     assert by_name["read"]["ready"] is True
     assert by_name["read"]["readiness_hint"] is None
     assert by_name["read"]["extension"] is None

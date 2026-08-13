@@ -63,14 +63,10 @@ def _project_annotated_tool_response(tool: Any) -> JsonObject:
 
 
 def _validate_tool_relationships(tools: list[Any]) -> None:
-    """Reject incomplete declarative families or follower references."""
+    """Reject follower references that cannot activate at runtime."""
 
     names = {tool.name for tool in tools}
-    family_counts: dict[str, int] = {}
     for tool in tools:
-        family = getattr(tool, "family", None)
-        if family is not None:
-            family_counts[family] = family_counts.get(family, 0) + 1
         if (
             getattr(tool, "activation", "configurable") == "follows"
             and getattr(tool, "activation_source", None) not in names
@@ -79,9 +75,6 @@ def _validate_tool_relationships(tools: list[Any]) -> None:
                 f"Tool '{tool.name}' follows an unregistered Tool: "
                 f"{getattr(tool, 'activation_source', None)}"
             )
-    singletons = sorted(family for family, count in family_counts.items() if count < 2)
-    if singletons:
-        raise ValueError("Tool families require at least two members: " + ", ".join(singletons))
 
 
 def _list_skills(state: Any, params: JsonObject) -> JsonObject:

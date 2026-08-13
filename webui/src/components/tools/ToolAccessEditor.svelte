@@ -150,7 +150,11 @@
       skills: t('toolAccess.family.skills', 'Skills'),
       media: t('toolAccess.family.media', 'Media'),
     };
-    return labels[group.id] ?? humanize(group.id);
+    return (
+      labels[group.id] ??
+      group.members.find((tool) => tool.family_label)?.family_label ??
+      humanize(group.id)
+    );
   }
 
   function groupToggleLabel(group) {
