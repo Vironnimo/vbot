@@ -29,7 +29,7 @@ def _write_agent(data_dir: Path, agent_id: str, **fields: object) -> Path:
         (["*"], {"mode": "all"}),
         ([], {"mode": "selected", "allowed": []}),
         (
-            ["read", "memory", "session_read", "history", "skill_list", "read"],
+            ["read", "memory", "session_read", "history", "read"],
             {"mode": "selected", "allowed": ["read"]},
         ),
     ],
@@ -74,6 +74,33 @@ def test_converter_is_idempotent_for_current_policy(tmp_path: Path) -> None:
     assert result.converted == 0
     assert result.already_converted == 1
     assert path.read_text(encoding="utf-8") == before
+
+
+def test_converter_removes_retired_tools_from_current_policy(tmp_path: Path) -> None:
+    path = _write_agent(
+        tmp_path,
+        "main",
+        tool_access={
+            "mode": "selected",
+            "allowed": ["read", "retired_allowed"],
+            "denied": ["write", "retired_denied"],
+        },
+    )
+
+    result = convert_agent_tool_access(
+        tmp_path,
+        apply=True,
+        remove_tools=("retired_allowed", "retired_denied"),
+    )
+
+    assert result.planned == 1
+    assert result.converted == 1
+    assert result.already_converted == 0
+    assert json.loads(path.read_text(encoding="utf-8"))["tool_access"] == {
+        "mode": "selected",
+        "allowed": ["read"],
+        "denied": ["write"],
+    }
 
 
 @pytest.mark.parametrize(

@@ -1,4 +1,4 @@
-Review this Session for durable improvements to your private Skill library. Extract reusable ways of working, not a narrative of this Run. Be active but evidence-based: a correction, a non-trivial technique, or an outdated instruction is enough reason to improve a Skill. From now on, every other Tool is disabled. Use only `skill`, `skill_list`, and `skill_manage`; do not attempt any other Tool call.
+Review this Session for durable improvements to your private Skill library. Extract reusable ways of working, not a narrative of this Run. Be active but evidence-based: a correction, a non-trivial technique, or an outdated instruction is enough reason to improve a Skill. From now on, every other Tool is disabled. Use only `skill` and `skill_manage`; do not attempt any other Tool call.
 
 Signals that warrant a Skill update include:
 
@@ -9,7 +9,7 @@ Signals that warrant a Skill update include:
 Prefer the smallest durable change in this order:
 
 1. Update a private Skill used in this Session. Read the relevant file with `skill`, then use `skill_manage` with `patch` or `edit`.
-2. Update another existing private Skill. Call `skill_list`, inspect the best candidate with `skill`, and add the lesson where it naturally belongs.
+2. Update another existing private Skill. Call `skill` with no arguments to list your Skills, inspect the best candidate with `skill`, and add the lesson where it naturally belongs.
 3. Add a focused support file to an existing Skill under `references/`, `scripts/`, or `assets/`, then point to it briefly from `SKILL.md`.
 4. Create a new private Skill only when no existing Skill owns this class of work. Name it for the reusable task class, never for today's ticket, error string, or codename.
 

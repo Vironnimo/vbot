@@ -6,6 +6,6 @@ Users may explicitly request a skill with `/skill-name` at the start of a messag
 
 Loaded Skill content lists files under `scripts/` with absolute paths so they can be passed directly to `bash`. Files under `references/` and `assets/` remain relative; read one only when needed by calling `skill` again with the same `name` and that relative `file_path`. To inspect a script as text instead of executing it, `skill(name, file_path)` also accepts its relative `scripts/...` path.
 
-{generated:skill_list}
+{generated:skill_catalog}
 
 Only proceed without a skill when genuinely none is relevant to the task.

@@ -347,9 +347,9 @@ def test_generated_marker_unknown_renders_empty_and_warns(
 
 
 def test_generated_marker_empty_producer_leaves_no_residue() -> None:
-    producers = {"skill_list": lambda ctx: ""}
+    producers = {"skill_catalog": lambda ctx: ""}
 
-    result = expand_generated_markers("{generated:skill_list}", producers, _context())
+    result = expand_generated_markers("{generated:skill_catalog}", producers, _context())
 
     assert result == ""
 

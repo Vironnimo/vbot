@@ -747,7 +747,7 @@ async def test_same_scope_fork_reuses_cache_affinity_but_not_session_context(
 
 
 @pytest.mark.asyncio
-async def test_skill_list_is_present_from_first_run_and_restriction_keeps_definitions(
+async def test_skill_catalog_call_uses_stable_definition_during_restriction(
     tmp_path: Path,
 ) -> None:
     from tests.core.chat.test_chat_loop import StubAdapter, StubAgent, StubRuntime
@@ -756,7 +756,7 @@ async def test_skill_list_is_present_from_first_run_and_restriction_keeps_defini
         ran: list[str] = []
 
         def list_skills(_context: ToolContext, _arguments: dict) -> dict:
-            ran.append("skill_list")
+            ran.append("skill")
             return tool_success({"skill_groups": [], "count": 0})
 
         tools = ToolRegistry()
@@ -766,29 +766,17 @@ async def test_skill_list_is_present_from_first_run_and_restriction_keeps_defini
             {
                 "type": "object",
                 "properties": {"name": {"type": "string"}},
-                "required": ["name"],
-                "additionalProperties": False,
-            },
-            lambda _context, _arguments: tool_success({"loaded": True}),
-        )
-        tools.register(
-            "skill_list",
-            "List Skills.",
-            {
-                "type": "object",
-                "properties": {},
                 "required": [],
                 "additionalProperties": False,
             },
             list_skills,
-            session_scoped=True,
         )
         agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["skill"])
         responses = (
             [
                 {
                     "content": None,
-                    "tool_calls": [{"id": "list-call", "name": "skill_list", "arguments": {}}],
+                    "tool_calls": [{"id": "list-call", "name": "skill", "arguments": {}}],
                 },
                 {"content": "done", "tool_calls": []},
             ]
@@ -811,22 +799,22 @@ async def test_skill_list_is_present_from_first_run_and_restriction_keeps_defini
         "coder",
         "Reflect",
         session_id="reflection",
-        tool_restriction=("skill_list",),
+        tool_restriction=("skill",),
     )
     await reflection_run.wait()
 
     normal_definitions = normal_adapter.requests[0]["kwargs"]["tools"]
     reflection_definitions = reflection_adapter.requests[0]["kwargs"]["tools"]
-    assert [definition["name"] for definition in normal_definitions] == ["skill", "skill_list"]
+    assert [definition["name"] for definition in normal_definitions] == ["skill"]
     assert reflection_definitions == normal_definitions
     assert (
         normal_adapter.requests[0]["messages"][0]["content"]
         == (reflection_adapter.requests[0]["messages"][0]["content"])
     )
-    assert normal_runtime.system_prompts.effective_tool_name_calls == [("skill", "skill_list")]
-    assert reflection_runtime.system_prompts.effective_tool_name_calls == [("skill", "skill_list")]
+    assert normal_runtime.system_prompts.effective_tool_name_calls == [("skill",)]
+    assert reflection_runtime.system_prompts.effective_tool_name_calls == [("skill",)]
     assert normal_ran == []
-    assert reflection_ran == ["skill_list"]
+    assert reflection_ran == ["skill"]
 
 
 @pytest.mark.asyncio

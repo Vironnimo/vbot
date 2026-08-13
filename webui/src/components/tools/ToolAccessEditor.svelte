@@ -215,7 +215,11 @@
   }
 
   function hasToolDetails(tool) {
-    return toolNotes(tool).length > 0 || tool.ready === false;
+    return (
+      Boolean(tool.description) ||
+      toolNotes(tool).length > 0 ||
+      tool.ready === false
+    );
   }
 
   function humanize(value) {
@@ -349,6 +353,11 @@
                     role="tooltip"
                     use:floatingHoverCard
                   >
+                    {#if tool.description}
+                      <p class="tool-access-description">
+                        {tool.description}
+                      </p>
+                    {/if}
                     {#each toolNotes(tool) as note (`${tool.name}-${note}`)}
                       <p>{note}</p>
                     {/each}
@@ -638,6 +647,10 @@
 
   .tool-access-tip p + p {
     margin-top: 4px;
+  }
+
+  .tool-access-description {
+    color: var(--text-hi);
   }
 
   @media (max-width: 900px) {

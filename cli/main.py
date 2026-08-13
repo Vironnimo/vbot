@@ -137,9 +137,9 @@ from cli.session_management import (
     session_set_compaction_policy,
 )
 from cli.skill_management import (
+    list_skills,
     skill_create,
     skill_delete,
-    skill_list,
     skill_read,
     skill_remove_file,
     skill_update,
@@ -274,7 +274,7 @@ def run(
     list_models_fn: Callable[[ServerInstance, dict[str, Any]], CommandResult] = model_list,
     show_model_fn: Callable[[ServerInstance, str], CommandResult] = model_show,
     refresh_models_fn: Callable[[ServerInstance, str | None], CommandResult] = model_refresh,
-    list_skills_fn: Callable[[ServerInstance], CommandResult] = skill_list,
+    list_skills_fn: Callable[[ServerInstance], CommandResult] = list_skills,
     statistics_report_fn: Callable[
         [ServerInstance, str, str | None, str | None], CommandResult
     ] = _statistics_report_adapter,

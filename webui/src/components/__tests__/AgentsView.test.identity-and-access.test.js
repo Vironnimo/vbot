@@ -425,9 +425,6 @@ describe('AgentsView', () => {
 
     await waitForText('write');
 
-    expect(document.body.textContent).not.toContain('Run shell commands.');
-    expect(document.body.textContent).not.toContain('Write files.');
-    expect(document.body.textContent).not.toContain('Manage pinned memory.');
     const memoryChip = toolAccessToggle('memory');
     expect(memoryChip.textContent).toBe('memory');
     expect(memoryChip.getAttribute('aria-checked')).toBe('true');

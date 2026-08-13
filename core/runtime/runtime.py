@@ -129,7 +129,6 @@ from core.storage.storage import StorageManager
 from core.subagents import SubAgentCoordinator
 from core.tools import (
     SESSION_READ_TOOL_NAME,
-    SKILL_LIST_TOOL_NAME,
     FileReadState,
     register_analyze_image_tool,
     register_bash_tool,
@@ -1841,7 +1840,6 @@ class Runtime:
                 )
         if self._tools is not None:
             self._tools.unregister("skill")
-            self._tools.unregister(SKILL_LIST_TOOL_NAME)
             register_skill_tool(self._tools, self.skills_for, self.reload_skills_async)
             if self._skill_authoring is not None:
                 self._tools.unregister("skill_manage")

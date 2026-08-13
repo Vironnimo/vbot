@@ -92,7 +92,7 @@ describe('ToolAccessEditor', () => {
     document.body.innerHTML = '';
   });
 
-  it('renders a compact name-only chip cloud and keeps automatic details out of the list', () => {
+  it('renders name-only chips and restores each Tool description on hover', () => {
     mountedComponent = mount(ToolAccessEditor, {
       target: document.body,
       props: {
@@ -108,8 +108,14 @@ describe('ToolAccessEditor', () => {
     expect(sessionRead.getAttribute('aria-checked')).toBe('true');
     expect(sessionRead.classList.contains('is-automatic')).toBe(true);
     expect(toolChip('read').textContent).toBe('read');
-    expect(document.body.textContent).not.toContain('Read a file from disk.');
-    expect(document.body.textContent).not.toContain('Write a file to disk.');
+    const readTip = toolTipWithText('Read a file from disk.');
+    expect(readTip.textContent).toContain('Read a file from disk.');
+    expect(readTip.dataset.floatingOpen).toBe('false');
+
+    toolChip('read')
+      .closest('.tool-access-chip-wrap')
+      .dispatchEvent(new Event('pointerenter'));
+    expect(readTip.dataset.floatingOpen).toBe('true');
 
     expect(document.body.textContent).toContain('Memory is currently off');
     expect(document.body.textContent).toContain(
@@ -198,6 +204,14 @@ function toolChip(name) {
   const chip = document.querySelector(`[data-tool-name="${name}"]`);
   expect(chip, name).toBeTruthy();
   return chip;
+}
+
+function toolTipWithText(text) {
+  const tip = [...document.querySelectorAll('.tool-access-tip')].find(
+    (candidate) => candidate.textContent?.includes(text),
+  );
+  expect(tip, text).toBeTruthy();
+  return tip;
 }
 
 function buttonByAriaLabel(label) {

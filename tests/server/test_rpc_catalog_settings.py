@@ -108,7 +108,7 @@ async def test_tool_list_omits_internal_skill_tool(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_skill_list_returns_loadable_and_invalid_diagnostics(tmp_path: Path) -> None:
+async def test_skill_catalog_returns_loadable_and_invalid_diagnostics(tmp_path: Path) -> None:
     state = make_state(tmp_path, StubAdapter())
 
     response = await dispatch_rpc(state, {"method": "skill.list", "params": {}})
@@ -520,7 +520,7 @@ async def test_settings_update_rejects_unknown_defaults_agent_field(tmp_path: Pa
 
 
 @pytest.mark.asyncio
-async def test_settings_update_reloads_runtime_skills_for_immediate_skill_list(
+async def test_settings_update_reloads_runtime_skills_for_immediate_catalog(
     tmp_path: Path,
 ) -> None:
     state = make_state(tmp_path, StubAdapter())

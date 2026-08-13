@@ -94,7 +94,7 @@ class StubStorage:
             ),
             "tools.md": "## Tools\n{generated:tool_list}",
             "channels.md": "## Channels\n{generated:channel_list}",
-            "skills.md": "## Skills\n{generated:skill_list}",
+            "skills.md": "## Skills\n{generated:skill_catalog}",
         }
         self._agent_fragments: dict[tuple[str, str], str] = {}
 

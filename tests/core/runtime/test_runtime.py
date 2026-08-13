@@ -51,7 +51,6 @@ CANONICAL_BUILTIN_TOOLS = [
     "session_read",
     "session_search",
     "skill",
-    "skill_list",
     "skill_manage",
     "status",
     "subagent",
@@ -499,7 +498,7 @@ def test_builtin_provider_definitions_expose_model_visible_metadata_only(config:
     definitions_by_name = {definition["name"]: definition for definition in definitions}
 
     assert sorted(definitions_by_name) == [
-        name for name in CANONICAL_BUILTIN_TOOLS if name not in {"history", "skill_list"}
+        name for name in CANONICAL_BUILTIN_TOOLS if name != "history"
     ]
     for tool_name, definition in definitions_by_name.items():
         tool = runtime.tools.get(tool_name)

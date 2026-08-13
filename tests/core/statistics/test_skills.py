@@ -219,7 +219,7 @@ def test_usage_for_name_absent_from_inventory_is_dropped() -> None:
     assert section.total_skills == 1
 
 
-def test_never_used_inventory_skill_listed_with_zero_counts() -> None:
+def test_never_used_inventory_skill_has_zero_counts() -> None:
     accumulator = _accumulator()
     accumulator.observe_session(
         display_key="main",

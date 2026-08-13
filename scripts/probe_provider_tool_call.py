@@ -108,9 +108,6 @@ from core.tools.session_search import (
     SESSION_SEARCH_TOOL_PARAMETERS,
 )
 from core.tools.skill import (
-    SKILL_LIST_TOOL_DESCRIPTION,
-    SKILL_LIST_TOOL_NAME,
-    SKILL_LIST_TOOL_PARAMETERS,
     SKILL_TOOL_DESCRIPTION,
     SKILL_TOOL_NAME,
     SKILL_TOOL_PARAMETERS,
@@ -208,7 +205,6 @@ PROBE_SCENARIOS = (
     "session_read",
     "session_search",
     "skill",
-    "skill_list",
     "skill_manage",
     "status",
     "subagent",
@@ -421,7 +417,7 @@ SESSION_SEARCH_CASES = (
     "session",
     "all",
 )
-SKILL_CASES = ("activate", "skill_md", "reference", "script", "asset")
+SKILL_CASES = ("list", "activate", "skill_md", "reference", "script", "asset")
 SKILL_MANAGE_CASES = (
     "create_own",
     "edit",
@@ -2213,6 +2209,7 @@ def _web_search_scenario(case_name: str) -> ProbeScenario:
 def _skill_scenario(case_name: str) -> ProbeScenario:
     name = "vbot-cli"
     skill_arguments: dict[str, dict[str, Any]] = {
+        "list": {},
         "activate": {"name": name},
         "skill_md": {"name": name, "file_path": "SKILL.md"},
         "reference": {"name": name, "file_path": "references/commands.md"},
@@ -2328,28 +2325,6 @@ def _skill_manage_scenario(case_name: str) -> ProbeScenario:
         ],
         _probe_messages(instruction),
         SKILL_MANAGE_TOOL_NAME,
-        require_closed_input=False,
-        expected_arguments=expected_arguments,
-    )
-
-
-def _skill_list_scenario() -> ProbeScenario:
-    expected_arguments: dict[str, Any] = {}
-    instruction = (
-        f"Call {SKILL_LIST_TOOL_NAME} exactly once with an empty JSON object as its "
-        "arguments. Do not add any field."
-    )
-    return ProbeScenario(
-        "skill_list",
-        [
-            {
-                "name": SKILL_LIST_TOOL_NAME,
-                "description": SKILL_LIST_TOOL_DESCRIPTION,
-                "parameters": SKILL_LIST_TOOL_PARAMETERS,
-            }
-        ],
-        _probe_messages(instruction),
-        SKILL_LIST_TOOL_NAME,
         require_closed_input=False,
         expected_arguments=expected_arguments,
     )
@@ -2552,8 +2527,6 @@ def _scenario(args: argparse.Namespace) -> ProbeScenario:
         return _session_search_scenario(str(args.session_search_case))
     if name == "skill":
         return _skill_scenario(str(args.skill_case))
-    if name == "skill_list":
-        return _skill_list_scenario()
     if name == "skill_manage":
         return _skill_manage_scenario(str(args.skill_manage_case))
     if name == "status":

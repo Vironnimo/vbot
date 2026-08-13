@@ -33,7 +33,6 @@ from core.runs import RunKind
 from core.sessions import SESSION_FORK_ALWAYS_STRIP_META_KEYS
 from core.subagents.subagents import SUBAGENT_SESSION_METADATA_FLAG
 from core.tools.availability import MEMORY_TOOL_NAME, memory_tool_enabled
-from core.tools.skill import SKILL_LIST_TOOL_NAME
 from core.utils.logging import get_logger
 
 if TYPE_CHECKING:
@@ -48,12 +47,12 @@ REFLECT_FRAGMENT_NAMES: dict[ReflectionScope, str] = {
     "skill": "reflect-skill.md",
     "combined": "reflect.md",
 }
-# The restriction is the Reflection Run's dispatch boundary. ``skill_list`` is
-# already part of every Session whose Agent can use ``skill``, so Reflection
-# never changes the provider-visible Tool set at the fork boundary.
-REFLECTION_TOOL_RESTRICTION = ("memory", "skill", SKILL_LIST_TOOL_NAME, "skill_manage")
+# The restriction is the Reflection Run's dispatch boundary. Listing and loading
+# Skills share one stable ``skill`` definition, so Reflection never changes the
+# provider-visible Tool set at the fork boundary.
+REFLECTION_TOOL_RESTRICTION = ("memory", "skill", "skill_manage")
 MEMORY_REFLECTION_TOOL_RESTRICTION = (MEMORY_TOOL_NAME,)
-SKILL_REFLECTION_TOOL_RESTRICTION = ("skill", SKILL_LIST_TOOL_NAME, "skill_manage")
+SKILL_REFLECTION_TOOL_RESTRICTION = ("skill", "skill_manage")
 REFLECTION_TOOL_RESTRICTIONS: dict[ReflectionScope, tuple[str, ...]] = {
     "memory": MEMORY_REFLECTION_TOOL_RESTRICTION,
     "skill": SKILL_REFLECTION_TOOL_RESTRICTION,

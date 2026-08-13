@@ -216,8 +216,6 @@ from core.sessions import (
 from core.tools import (
     ANALYZE_IMAGE_TOOL_NAME,
     HISTORY_TOOL_NAME,
-    SKILL_LIST_TOOL_NAME,
-    SKILL_TOOL_NAME,
     ToolContract,
     ToolNotFoundError,
     project_bash_tool_definitions,
@@ -2565,14 +2563,10 @@ class ChatLoop:
             "provider_tool_definitions",
             agent,
         )
-        base_tool_names = {
-            str(definition["name"])
-            for definition in base_tools
-            if isinstance(definition.get("name"), str)
-        }
-        skill_list_grants = (SKILL_LIST_TOOL_NAME,) if SKILL_TOOL_NAME in base_tool_names else ()
-        history_grants = (HISTORY_TOOL_NAME,) if history_available(session_messages) else ()
-        session_tool_grants = (*skill_list_grants, *history_grants)
+        history_grants: tuple[str, ...] = (
+            (HISTORY_TOOL_NAME,) if history_available(session_messages) else ()
+        )
+        session_tool_grants = history_grants
         effective_input_modalities = (
             input_modalities
             if input_modalities is not None

@@ -9,10 +9,7 @@ import pytest
 
 from core.skills.skills import SkillRegistry
 from core.tools import (
-    SKILL_LIST_TOOL_NAME,
-    SKILL_LIST_TOOL_PARAMETERS,
     SKILL_TOOL_NAME,
-    SessionToolUnavailableError,
     ToolContext,
     ToolContractError,
     ToolRegistry,
@@ -41,14 +38,9 @@ def test_skill_tool_describes_activation_and_file_path_contract() -> None:
     assert properties["name"]["minLength"] == 1
     assert properties["name"]["pattern"] == r"\S"
     assert properties["file_path"]["type"] == "string"
-    assert SKILL_TOOL_PARAMETERS["required"] == ["name"]
+    assert SKILL_TOOL_PARAMETERS["required"] == []
     assert "additionalProperties" not in SKILL_TOOL_PARAMETERS
-    assert SKILL_LIST_TOOL_PARAMETERS == {
-        "type": "object",
-        "properties": {},
-        "required": [],
-    }
-    assert "complete document including frontmatter" in SKILL_TOOL_DESCRIPTION
+    assert "no arguments to list the live catalog" in SKILL_TOOL_DESCRIPTION
     assert "complete document including frontmatter" in properties["file_path"]["description"]
 
 
@@ -343,14 +335,18 @@ def test_skill_tool_file_path_requires_name(tmp_path: Path) -> None:
         _no_refresh,
     )
 
-    with pytest.raises(ToolContractError, match="name"):
-        asyncio.run(
-            async_dispatch(
-                tools,
-                _context(tmp_path),
-                {"file_path": "references/guide.md"},
-            )
+    result = asyncio.run(
+        async_dispatch(
+            tools,
+            _context(tmp_path),
+            {"file_path": "references/guide.md"},
         )
+    )
+
+    assert result == tool_failure(
+        "invalid_arguments",
+        "file_path requires a non-empty name",
+    )
 
 
 def test_skill_tool_rejects_missing_relative_file(tmp_path: Path) -> None:
@@ -421,9 +417,9 @@ def test_skill_tool_resolves_registry_from_project_id(tmp_path: Path) -> None:
     assert identity_result == tool_failure("skill_not_found", "Skill not found: proj-skill")
 
 
-def test_skill_list_tool_returns_grouped_skills_with_session_grant(tmp_path: Path) -> None:
-    # The live, agent-aware catalog is grouped by origin through Chat-derived
-    # Session state, independently of the Agent's ordinary Tool allowlist.
+def test_skill_tool_without_arguments_returns_grouped_live_catalog(tmp_path: Path) -> None:
+    # The same Tool that loads a Skill lists the live, agent-aware catalog when
+    # called without arguments.
     agent_dir = tmp_path / "agent"
     (agent_dir / "mine").mkdir(parents=True)
     (agent_dir / "mine" / "SKILL.md").write_text(
@@ -435,12 +431,8 @@ def test_skill_list_tool_returns_grouped_skills_with_session_grant(tmp_path: Pat
     tools = ToolRegistry()
     register_skill_tool(tools, _fixed_registry(registry), _no_refresh)
 
-    context = _context(
-        tmp_path,
-        tool_name=SKILL_LIST_TOOL_NAME,
-        session_tool_grants=(SKILL_LIST_TOOL_NAME,),
-    )
-    result = asyncio.run(async_dispatch(tools, context, {}, tool_name=SKILL_LIST_TOOL_NAME))
+    context = _context(tmp_path)
+    result = asyncio.run(async_dispatch(tools, context, {}))
     data = cast(dict[str, Any], result["data"])
 
     assert result["ok"] is True
@@ -449,7 +441,7 @@ def test_skill_list_tool_returns_grouped_skills_with_session_grant(tmp_path: Pat
     }
     assert groups == {"agent": ["mine"], "global": ["debugging"]}
     assert data["count"] == 2
-    display = tools.display_for_call(SKILL_LIST_TOOL_NAME, {}, result=result)
+    display = tools.display_for_call(SKILL_TOOL_NAME, {}, result=result)
     assert display["facts"] == [{"kind": "count", "value": 2, "unit": "results", "at_least": False}]
     # Sort order: global before agent.
     origins_in_order = [group["origin"] for group in data["skill_groups"]]
@@ -466,7 +458,7 @@ def test_skill_tool_requires_non_blank_name(tmp_path: Path) -> None:
         asyncio.run(async_dispatch(tools, _context(tmp_path), {"name": "  "}))
 
 
-def test_skill_list_tool_is_hidden_and_rejected_without_session_grant(tmp_path: Path) -> None:
+def test_skill_registration_exposes_one_configurable_tool(tmp_path: Path) -> None:
     tools = ToolRegistry()
     register_skill_tool(
         tools,
@@ -477,14 +469,6 @@ def test_skill_list_tool_is_hidden_and_rejected_without_session_grant(tmp_path: 
     assert [definition["name"] for definition in tools.provider_definitions(["*"])] == [
         SKILL_TOOL_NAME
     ]
-    assert [
-        definition["name"]
-        for definition in tools.provider_definitions([], session_grants=(SKILL_LIST_TOOL_NAME,))
-    ] == [SKILL_LIST_TOOL_NAME]
-
-    context = _context(tmp_path, tool_name=SKILL_LIST_TOOL_NAME)
-    with pytest.raises(SessionToolUnavailableError, match="skill_list"):
-        asyncio.run(async_dispatch(tools, context, {}, tool_name=SKILL_LIST_TOOL_NAME))
 
 
 def test_skill_tool_loads_agent_own_skill_bypassing_allowlist(tmp_path: Path) -> None:
