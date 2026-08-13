@@ -52,7 +52,7 @@ _EXTENSION_WORKERS = BoundedWorkerPool(
 
 # Public extension API version. Bumped when the extension contract changes in a
 # way third-party extensions can detect via their manifest ``api_version``.
-API_VERSION = 2
+API_VERSION = 3
 
 HookHandler = Callable[..., Any]
 LifecycleHandler = Callable[[], Any]
@@ -207,6 +207,17 @@ class ToolDeclaration:
     result_schema: dict[str, Any] | None = None
     parallel_safe: bool = True
     open_input_schema: bool = False
+    # Local family id declared through ``register_tool_family``. The apply phase
+    # namespaces it by Extension identity before it reaches ToolRegistry.
+    family: str | None = None
+
+
+@dataclass(frozen=True)
+class ToolFamilyDeclaration:
+    """One Extension-local Tool family id and its human-facing label."""
+
+    id: str
+    label: str
 
 
 @dataclass(frozen=True)
@@ -272,6 +283,7 @@ class ExtensionDeclarations:
     startup: list[LifecycleHandler] = field(default_factory=list)
     shutdown: list[LifecycleHandler] = field(default_factory=list)
     tools: list[ToolDeclaration] = field(default_factory=list)
+    tool_families: list[ToolFamilyDeclaration] = field(default_factory=list)
     commands: list[CommandDeclaration] = field(default_factory=list)
     recall_backends: list[RecallBackendDeclaration] = field(default_factory=list)
     prompt_blocks: list[PromptBlockDeclaration] = field(default_factory=list)
@@ -401,6 +413,7 @@ class ExtensionAPI:
         result_schema: dict[str, Any] | None = None,
         parallel_safe: bool = True,
         open_input_schema: bool = False,
+        family: str | None = None,
     ) -> None:
         """Declare an agent tool, mirroring ``ToolRegistry.register``.
 
@@ -410,7 +423,9 @@ class ExtensionAPI:
         and diagnosed on this extension's record — extensions never override
         an existing tool.
 
-        ``ready`` is an optional zero-arg readiness predicate (cheap, I/O-free):
+        ``family`` references an Extension-local id declared through
+        :meth:`register_tool_family`. ``ready`` is an optional zero-arg readiness
+        predicate (cheap, I/O-free):
         a not-ready tool stays registered but is hidden from the System Prompt,
         the provider tool definitions, and the tool picker until it is ready
         (e.g. once the extension's credential is set). ``None`` means always
@@ -430,8 +445,18 @@ class ExtensionAPI:
                 result_schema=result_schema,
                 parallel_safe=parallel_safe,
                 open_input_schema=open_input_schema,
+                family=family,
             )
         )
+
+    def register_tool_family(self, family_id: str, label: str) -> None:
+        """Declare a presentation family that this Extension's Tools may join.
+
+        The id is local to this Extension. The apply phase namespaces it by the
+        Extension identity so unrelated Extensions cannot merge families by
+        accidentally choosing the same id.
+        """
+        self._declarations.tool_families.append(ToolFamilyDeclaration(id=family_id, label=label))
 
     def register_command(
         self,
@@ -688,13 +713,61 @@ class ExtensionRegistry:
             for declaration in record.declarations.tools:
                 declarers[declaration.name].append(record.name)
 
+        applied_families = self._apply_tool_families(tool_registry, loaded)
         builtin_names = {tool.name for tool in tool_registry.list_tools(include_internal=True)}
         applied: set[str] = set()
         for record in loaded:
             for declaration in record.declarations.tools:
                 self._apply_one_tool(
-                    tool_registry, record, declaration, declarers, builtin_names, applied
+                    tool_registry,
+                    record,
+                    declaration,
+                    declarers,
+                    builtin_names,
+                    applied,
+                    applied_families.get(record.name, {}),
                 )
+
+    def _apply_tool_families(
+        self,
+        tool_registry: ToolRegistry,
+        loaded: list[ExtensionRecord],
+    ) -> dict[str, dict[str, str]]:
+        """Register namespaced Extension family declarations, isolating failures."""
+        applied: dict[str, dict[str, str]] = {}
+        for record in loaded:
+            local_families: dict[str, str] = {}
+            for declaration in record.declarations.tool_families:
+                if not isinstance(declaration.id, str) or not declaration.id.strip():
+                    self._diagnose_capability(
+                        record, "tool family skipped: id must be a non-empty string"
+                    )
+                    continue
+                local_id = declaration.id.strip()
+                if local_id in local_families:
+                    self._diagnose_capability(
+                        record, f"tool family {local_id!r} duplicate declaration skipped"
+                    )
+                    continue
+                qualified_id = self._extension_tool_family_id(record.name, local_id)
+                try:
+                    tool_registry.register_family(
+                        qualified_id,
+                        declaration.label,
+                        extension=record.name,
+                    )
+                except Exception as exc:
+                    self._diagnose_capability(
+                        record, f"tool family {local_id!r} registration failed: {exc}"
+                    )
+                    continue
+                local_families[local_id] = qualified_id
+            applied[record.name] = local_families
+        return applied
+
+    @staticmethod
+    def _extension_tool_family_id(extension_name: str, local_id: str) -> str:
+        return f"extension:{extension_name}:{local_id}"
 
     def apply_commands(self, command_dispatcher: CommandDispatcher) -> None:
         """Apply loaded Extensions' commands to the canonical Chat dispatcher.
@@ -767,6 +840,7 @@ class ExtensionRegistry:
         declarers: dict[str, list[str]],
         builtin_names: set[str],
         applied: set[str],
+        applied_families: dict[str, str],
     ) -> None:
         name = declaration.name
         other_declarers = [other for other in declarers[name] if other != record.name]
@@ -781,6 +855,16 @@ class ExtensionRegistry:
                 record, f"tool {name!r} skipped: name already declared by extension {winner}"
             )
             return
+        family = None
+        if declaration.family is not None:
+            local_family = declaration.family.strip() if isinstance(declaration.family, str) else ""
+            family = applied_families.get(local_family)
+            if family is None:
+                self._diagnose_capability(
+                    record,
+                    f"tool {name!r} references undeclared tool family {declaration.family!r}; "
+                    "registered without a family",
+                )
         try:
             tool_registry.register(
                 name,
@@ -792,6 +876,7 @@ class ExtensionRegistry:
                 ready=declaration.ready,
                 readiness_hint=declaration.readiness_hint,
                 extension=record.name,
+                family=family,
                 result_schema=declaration.result_schema,
                 parallel_safe=declaration.parallel_safe,
                 open_input_schema=declaration.open_input_schema,
@@ -967,6 +1052,9 @@ class ExtensionRegistry:
         self._remove_interaction_handlers(name)
         if tool_registry is not None:
             self._unregister_extension_tools(tool_registry, declarations.tools)
+            self._unregister_extension_tool_families(
+                tool_registry, name, declarations.tool_families
+            )
         if command_dispatcher is not None:
             command_dispatcher.unregister_extension_commands(name)
         for handler in declarations.shutdown:
@@ -992,6 +1080,9 @@ class ExtensionRegistry:
             if record.status != "loaded":
                 continue
             self._unregister_extension_tools(tool_registry, record.declarations.tools)
+            self._unregister_extension_tool_families(
+                tool_registry, record.name, record.declarations.tool_families
+            )
 
     def remove_applied_commands(self, command_dispatcher: CommandDispatcher) -> None:
         """Remove every loaded Extension's commands from the live dispatcher."""
@@ -1030,6 +1121,21 @@ class ExtensionRegistry:
                 continue
             if registered.handler is declaration.handler:
                 tool_registry.unregister(declaration.name)
+
+    def _unregister_extension_tool_families(
+        self,
+        tool_registry: ToolRegistry,
+        extension_name: str,
+        families: list[ToolFamilyDeclaration],
+    ) -> None:
+        """Remove only namespaced family metadata owned by this Extension."""
+        for declaration in families:
+            if not isinstance(declaration.id, str) or not declaration.id.strip():
+                continue
+            tool_registry.unregister_family(
+                self._extension_tool_family_id(extension_name, declaration.id.strip()),
+                extension=extension_name,
+            )
 
     def _diagnose_capability(self, record: ExtensionRecord, message: str) -> None:
         """Record a non-fatal capability diagnostic and log it at ``warning``."""
@@ -1641,6 +1747,7 @@ __all__ = [
     "PromptBlockDeclaration",
     "Replace",
     "ToolCallDecision",
+    "ToolFamilyDeclaration",
     "ToolResultValidator",
     "purge_extension_modules",
 ]

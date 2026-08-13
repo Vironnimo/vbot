@@ -4,7 +4,7 @@ The first shipped **bundled extension** (`resources/extensions/homeassistant/`):
 
 ## Overview
 
-Lives in the install tree at `resources/extensions/homeassistant/` (`extension.py` + `extension.json`), so it is scanned as the last extension root and is default-on (see `.vorch/domain-maps/extensions.md` → Loading and identity invariants). It is a **normal extension** after loading — its `register(api)` declares a settings schema and registers the four tools through `api.register_tool`, which the runtime's `apply_tools` folds into the same `ToolRegistry` as the built-ins (`.vorch/domain-maps/tools.md`). There is no kernel built-in anymore; `core/tools/homeassistant.py` is gone.
+Lives in the install tree at `resources/extensions/homeassistant/` (`extension.py` + `extension.json`), so it is scanned as the last extension root and is default-on (see `.vorch/domain-maps/extensions.md` → Loading and identity invariants). It is a **normal extension** after loading — its `register(api)` declares a settings schema, declares the `home_assistant` Tool Family labeled `Home Assistant`, and registers the four Tools into that family through `api.register_tool`, which the runtime's `apply_tools` folds into the same `ToolRegistry` as the built-ins (`.vorch/domain-maps/tools.md`). There is no kernel built-in anymore; `core/tools/homeassistant.py` is gone.
 
 The four tools are **always registered** regardless of configuration. A shared readiness predicate keeps them out of the prompt, the provider definitions, and every tool picker until `HASS_TOKEN` resolves to a non-empty string; the Extensions tab then shows the extension as loaded and `ready_state="waiting"` until it does.
 

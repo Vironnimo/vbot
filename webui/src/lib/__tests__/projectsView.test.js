@@ -755,6 +755,7 @@ describe('buildToolToggleList', () => {
       {
         name: 'edit',
         family: null,
+        family_label: null,
         description: '',
         enabled: false,
         ready: true,
@@ -764,6 +765,7 @@ describe('buildToolToggleList', () => {
       {
         name: 'read',
         family: null,
+        family_label: null,
         description: '',
         enabled: true,
         ready: true,
@@ -773,6 +775,7 @@ describe('buildToolToggleList', () => {
       {
         name: 'skill',
         family: null,
+        family_label: null,
         description: '',
         enabled: true,
         ready: true,
@@ -800,6 +803,7 @@ describe('buildToolToggleList', () => {
       {
         name: 'home_assistant',
         family: null,
+        family_label: null,
         description: 'Talk to Home Assistant.',
         enabled: false,
         ready: false,
@@ -819,6 +823,7 @@ describe('buildToolToggleList', () => {
       {
         name: 'disabled_extension_tool',
         family: null,
+        family_label: null,
         description: '',
         enabled: true,
         ready: false,
@@ -829,6 +834,7 @@ describe('buildToolToggleList', () => {
       {
         name: 'read',
         family: null,
+        family_label: null,
         description: '',
         enabled: true,
         ready: true,
@@ -847,6 +853,23 @@ describe('buildToolToggleList', () => {
     expect(rows.map((row) => row.name)).toEqual(['bash', 'grep']);
     // A bare-name entry has no readiness metadata, so it defaults to ready.
     expect(rows[0]).toMatchObject({ ready: true, readiness_hint: null });
+  });
+
+  it('preserves an Extension family label for grouped project Tools', () => {
+    const rows = buildToolToggleList({
+      catalog: [
+        {
+          name: 'ha_get_state',
+          family: 'extension:homeassistant:home_assistant',
+          family_label: 'Home Assistant',
+        },
+      ],
+    });
+
+    expect(rows[0]).toMatchObject({
+      family: 'extension:homeassistant:home_assistant',
+      family_label: 'Home Assistant',
+    });
   });
 });
 

@@ -281,6 +281,7 @@ def _tool_response(tool: Any) -> JsonObject:
         # Optional English hint explaining the readiness precondition, or null.
         "readiness_hint": getattr(tool, "readiness_hint", None),
         "family": getattr(tool, "family", None),
+        "family_label": getattr(tool, "family_label", None),
         "activation": getattr(tool, "activation", "configurable"),
         "activation_source": getattr(tool, "activation_source", None),
         "constraints": list(getattr(tool, "constraints", ())),

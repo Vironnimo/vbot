@@ -267,11 +267,18 @@ export function groupToolCatalog(catalog = [], ceiling = null) {
     members.push(tool);
     groups.set(tool.family, members);
   }
-  const result = [...groups.entries()].map(([id, members]) => ({
-    id,
-    family: true,
-    members: sortTools(members),
-  }));
+  const result = [];
+  for (const [id, members] of groups.entries()) {
+    if (members.length < 2) {
+      singles.push(...members);
+      continue;
+    }
+    result.push({
+      id,
+      family: true,
+      members: sortTools(members),
+    });
+  }
   if (singles.length > 0) {
     result.push({ id: null, family: false, members: sortTools(singles) });
   }

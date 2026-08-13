@@ -62,9 +62,15 @@
     if (!grouped) {
       return [{ family: null, items: visibleItems }];
     }
+    const familyCounts = Object.create(null);
+    for (const item of normalizedItems) {
+      if (!item?.family) continue;
+      familyCounts[item.family] = (familyCounts[item.family] ?? 0) + 1;
+    }
     const groups = [];
     for (const item of visibleItems) {
-      const family = item?.family || null;
+      const family =
+        item?.family && familyCounts[item.family] >= 2 ? item.family : null;
       const group = groups.find((candidate) => candidate.family === family);
       if (group) {
         group.items.push(item);
@@ -143,7 +149,7 @@
           <section class="access-chips__group">
             {#if grouped}
               <h4 class="access-chips__group-title">
-                {groupLabel(group.family)}
+                {groupLabel(group.family, group.items)}
               </h4>
             {/if}
             <div class="access-chips__cloud">

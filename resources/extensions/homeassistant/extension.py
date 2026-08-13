@@ -120,6 +120,7 @@ HA_CALL_SERVICE_NAME = "ha_call_service"
 HA_CALL_SERVICE_DESCRIPTION = (
     "Call a Home Assistant service. Use ha_list_services to discover names and parameters."
 )
+HA_TOOL_FAMILY = "home_assistant"
 HA_CALL_SERVICE_PARAMETERS: JsonObject = {
     "type": "object",
     "properties": {
@@ -682,6 +683,8 @@ def register(api: Any) -> None:
             return _missing_token_failure()
         return await _handle_call_service(context, arguments, _resolve_url(api), token, api.logger)
 
+    api.register_tool_family(HA_TOOL_FAMILY, "Home Assistant")
+
     api.register_tool(
         HA_LIST_ENTITIES_NAME,
         HA_LIST_ENTITIES_DESCRIPTION,
@@ -692,6 +695,7 @@ def register(api: Any) -> None:
         open_input_schema=True,
         ready=_is_ready,
         readiness_hint=_HASS_READINESS_HINT,
+        family=HA_TOOL_FAMILY,
     )
     api.register_tool(
         HA_GET_STATE_NAME,
@@ -707,6 +711,7 @@ def register(api: Any) -> None:
         open_input_schema=True,
         ready=_is_ready,
         readiness_hint=_HASS_READINESS_HINT,
+        family=HA_TOOL_FAMILY,
     )
     api.register_tool(
         HA_LIST_SERVICES_NAME,
@@ -718,6 +723,7 @@ def register(api: Any) -> None:
         open_input_schema=True,
         ready=_is_ready,
         readiness_hint=_HASS_READINESS_HINT,
+        family=HA_TOOL_FAMILY,
     )
     api.register_tool(
         HA_CALL_SERVICE_NAME,
@@ -729,4 +735,5 @@ def register(api: Any) -> None:
         open_input_schema=True,
         ready=_is_ready,
         readiness_hint=_HASS_READINESS_HINT,
+        family=HA_TOOL_FAMILY,
     )

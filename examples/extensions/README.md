@@ -35,7 +35,7 @@ def register(api):
 - **hooks** — `api.on(event, handler)` for `run_start`, `context`, `tool_call`,
   `tool_result`, `run_end`
 - **commands** — `api.register_command(name, description, handler)` for deterministic slash-command entry points and optional follow-up Runs
-- **Tools** — `api.register_tool(name, description, parameters, handler, result_schema=..., parallel_safe=True)`; registration compiles the closed canonical input contract, successful `data` is checked against the optional result schema, and sibling calls run concurrently unless the Tool explicitly opts into a serial barrier
+- **Tools** — `api.register_tool(name, description, parameters, handler, result_schema=..., parallel_safe=True, family=...)`; registration compiles the closed canonical input contract, successful `data` is checked against the optional result schema, and sibling calls run concurrently unless the Tool explicitly opts into a serial barrier; declare a shared presentation group first with `api.register_tool_family(family_id, label)` when at least two Tools form one user-recognizable capability
 - **recall backends** — `api.register_recall_backend(name, factory)`
 - **prompt blocks** — `api.register_prompt_block(slug, *, default_text=…)` (or
   `render=…`) to add standing content to the System Prompt

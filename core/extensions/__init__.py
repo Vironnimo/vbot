@@ -13,6 +13,7 @@ from core.extensions.extensions import (
     PromptBlockDeclaration,
     Replace,
     ToolCallDecision,
+    ToolFamilyDeclaration,
     ToolResultValidator,
     purge_extension_modules,
 )
@@ -50,6 +51,7 @@ __all__ = [
     "Replace",
     "SettingsFieldDeclaration",
     "ToolCallDecision",
+    "ToolFamilyDeclaration",
     "ToolResultValidator",
     "parse_settings_fields",
     "purge_extension_modules",

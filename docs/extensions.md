@@ -11,7 +11,7 @@ for runnable samples see [`examples/extensions/`](../examples/extensions/).
 > extensions you would run by hand. This is intentional: vBot is a single-user,
 > technical-user tool.
 
-`API_VERSION` is currently **2**. The extension API is vBot's first public surface; it is designed conservatively and is not yet declared stable. Manifests requiring API v1 remain compatible; a command-contributing Extension should declare API v2 so older vBot versions reject it cleanly.
+`API_VERSION` is currently **3**. The extension API is vBot's first public surface; it is designed conservatively and is not yet declared stable. Manifests requiring API v1 or v2 remain compatible; an Extension that declares Tool Families should require API v3 so older vBot versions reject it cleanly.
 
 ## Install and discovery
 
@@ -57,7 +57,8 @@ The `api` object (`ExtensionAPI`) offers:
 |---|---|
 | `api.on(event, handler)` | a hook handler for one event |
 | `api.register_command(name, description, handler, *, argument="optional", catalog_result="notice", execution_mode="serialized", argument_execution_mode=None, unavailable_surfaces=())` | a slash command |
-| `api.register_tool(name, description, parameters, handler, *, internal=False, display=None, ready=None, readiness_hint=None, result_schema=None, parallel_safe=True, open_input_schema=False)` | an agent tool |
+| `api.register_tool_family(family_id, label)` | a Tool Family owned by this Extension |
+| `api.register_tool(name, description, parameters, handler, *, internal=False, display=None, ready=None, readiness_hint=None, result_schema=None, parallel_safe=True, open_input_schema=False, family=None)` | an agent tool |
 | `api.register_recall_backend(name, factory)` | a session-recall backend |
 | `api.register_prompt_block(slug, *, default_text=None, render=None)` | a System Prompt block |
 | `api.register_interaction_handler(prefix, handler)` | a channel button-tap handler (see [Channel interaction handlers](#channel-interaction-handlers)) |
@@ -127,7 +128,16 @@ def guard(ctx, *, tool_name, tool_call_id, input):
 
 ## Tools
 
-`api.register_tool` mirrors the built-in `ToolRegistry.register`. A registered Extension Tool is a **normal Tool**: it appears in Provider Tool definitions and is filtered by an Agent's `allowed_tools` like any other. The handler signature `(context, arguments)` and the result envelope are identical to built-ins. Registration compiles the canonical input schema; dispatch uses that schema to normalize a copied argument object for common unambiguous Model encodings before validation and the handler, then validates successful `data` against `result_schema`. Set `open_input_schema=True` for a model-facing schema that follows the repository-root `TOOLS.md` rules and omits `additionalProperties`; its handler must independently reject unknown and conditionally invalid arguments. The default remains closed for existing Extensions and requires fixed-shape objects to declare `additionalProperties: false`. Sibling calls are parallel by default within the shared limits; declare `parallel_safe=False` only when the Tool requires a whole-Tool ordering barrier. Provider strict Tool calling is always disabled; Runtime validation remains authoritative.
+`api.register_tool` mirrors the built-in `ToolRegistry.register`. A registered Extension Tool is a **normal Tool**: it appears in Provider Tool definitions and is filtered by an Agent's Tool Access Policy like any other. The handler signature `(context, arguments)` and the result envelope are identical to built-ins. Registration compiles the canonical input schema; dispatch uses that schema to normalize a copied argument object for common unambiguous Model encodings before validation and the handler, then validates successful `data` against `result_schema`. Set `open_input_schema=True` for a model-facing schema that follows the repository-root `TOOLS.md` rules and omits `additionalProperties`; its handler must independently reject unknown and conditionally invalid arguments. The default remains closed for existing Extensions and requires fixed-shape objects to declare `additionalProperties: false`. Sibling calls are parallel by default within the shared limits; declare `parallel_safe=False` only when the Tool requires a whole-Tool ordering barrier. Provider strict Tool calling is always disabled; Runtime validation remains authoritative.
+
+When at least two Tools form one user-recognizable capability, declare a Family once with `api.register_tool_family(family_id, label)` and pass its local id as `family=` on each Tool. Family ids are local to the Extension; vBot namespaces them automatically, so another Extension can use the same local id without merging the groups. A Family changes only how current Tools are grouped and switched in configuration screens. It does not grant access or change activation. A group with fewer than two members in the current catalog or Project ceiling falls back to Individual Tools; a search filter does not dissolve an established Family.
+
+```python
+def register(api):
+    api.register_tool_family("weather", "Weather")
+    api.register_tool("weather_now", "Read current weather.", NOW_PARAMETERS, read_now, family="weather")
+    api.register_tool("weather_forecast", "Read a forecast.", FORECAST_PARAMETERS, read_forecast, family="weather")
+```
 
 ```python
 from core.tools import tool_failure, tool_success
@@ -440,7 +450,7 @@ Directory/package extensions may add an `extension.json` to enrich identity
   "name": "Bash Guard",
   "version": "1.2.0",
   "description": "Refuses obviously destructive shell commands.",
-  "api_version": 2
+  "api_version": 3
 }
 ```
 
@@ -503,8 +513,7 @@ handlers idempotent (see [Lifecycle](#lifecycle-startup-and-shutdown)). Edit a
 2. Load it: `vbot extensions reload`.
 3. Confirm it loaded: `vbot extensions list` shows
    `word_count  loaded  …  tools: word_count`.
-4. Allow the tool on an agent (`allowed_tools`) and ask it to count words — the
-   model calls `word_count` like any built-in tool.
+4. Allow the Tool in the Agent's Tool Access Policy and ask it to count words — the Model calls `word_count` like any Built-in Tool.
 
 To turn the same idea into a hook instead, copy
 [`examples/extensions/guard_bash.py`](../examples/extensions/guard_bash.py),

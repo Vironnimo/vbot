@@ -2,5 +2,5 @@
   "name": "Home Assistant",
   "description": "Control and inspect a Home Assistant instance via its REST API.",
   "version": "1.0.0",
-  "api_version": 1
+  "api_version": 3
 }
