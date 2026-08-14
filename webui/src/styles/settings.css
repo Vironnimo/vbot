@@ -1052,36 +1052,6 @@
   width: 100%;
 }
 
-/* Disambiguation help for the two similarly-named Extensions header actions
-   (Refresh vs Reload extensions). Each term is paired with its one-line
-   explanation so the difference is legible without hovering. */
-.s-ext-actions-help {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px 20px;
-  margin-top: 8px;
-  color: var(--text-lo);
-  font-size: var(--fs-mono-sm);
-  line-height: 1.35;
-}
-
-.s-ext-actions-help-item {
-  display: flex;
-  gap: 6px;
-  min-width: 0;
-}
-
-.s-ext-actions-help dt {
-  flex-shrink: 0;
-  color: var(--text-med);
-  font-weight: 500;
-}
-
-.s-ext-actions-help dd {
-  margin: 0;
-  min-width: 0;
-}
-
 .s-channel-form {
   margin: 14px 0 20px;
   padding: 14px;
@@ -1265,6 +1235,14 @@
 
 /* --- Extensions panel --- */
 
+.s-ext-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-sm);
+  padding: var(--space-md) 0;
+}
+
 .s-ext-list {
   display: flex;
   flex-direction: column;
@@ -1273,7 +1251,7 @@
 }
 
 .s-ext-card {
-  padding: 12px;
+  padding: var(--space-md);
   border: 1px solid var(--border);
   border-radius: var(--r-md);
   background: rgba(255, 255, 255, 0.015);
@@ -1284,6 +1262,16 @@
   align-items: flex-start;
   justify-content: space-between;
   gap: 16px;
+}
+
+.s-ext-head .s-row-info {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.s-ext-head .s-row-desc {
+  margin-top: 0;
 }
 
 .s-ext-name-row {
@@ -1299,7 +1287,7 @@
 
 .s-ext-capabilities {
   font-family: var(--font-mono);
-  font-size: 11.5px;
+  font-size: var(--fs-mono-sm);
 }
 
 .s-ext-error-text {
@@ -1317,8 +1305,33 @@
   min-width: fit-content;
 }
 
-.s-ext-config {
-  margin-top: 0;
+.s-ext-card .s-disclosure-sub {
+  gap: var(--space-md);
+  margin: var(--space-md) 0 0 6px;
+  padding: 2px 0 2px var(--space-lg);
+}
+
+.s-ext-schema {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-lg);
+  width: 100%;
+}
+
+.s-ext-secret {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+}
+
+.s-ext-secret .chip {
+  align-self: flex-start;
+}
+
+.s-ext-secret-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-sm);
 }
 
 .s-ext-config-actions {

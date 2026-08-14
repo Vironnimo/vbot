@@ -295,7 +295,7 @@ The prefix `run` is reserved for waking the agent rather than an extension. Emit
 
 ## Settings schema
 
-An extension can declare a **settings schema** so the WebUI renders a real form for it (Settings → Extensions), instead of the raw-JSON editor. Declare it at register time — the same declaration pattern as hooks, tools, and recall backends — so single-file extensions (which carry no manifest) can use it too:
+An extension declares a **settings schema** when it has user-editable configuration. The WebUI then renders the corresponding form under Settings → Extensions; without a schema, the extension row has no configuration disclosure. Declare the schema at register time — the same declaration pattern as hooks, tools, and recall backends — so single-file extensions (which carry no manifest) can use it too:
 
 ```python
 def register(api):
@@ -323,7 +323,7 @@ Any violation raises `ValueError` inside `register()`, so the extension loads as
 
 **What the WebUI renders:** a `text` field is a text input (its `default` is shown as the placeholder), `number` a number input, `toggle` a checkbox, and `secret` a write-only password input with a Set/Not-set indicator and Save/Clear actions. Non-secret fields save together through a single "Save settings" button; a secret saves on its own (see [Secrets](#secrets-in-env)).
 
-**Server-side validation on save:** for a loaded extension with a schema, the `settings.update` RPC validates the submitted config against the schema before persisting — unknown keys are rejected, a key naming a `secret` field is rejected (secrets live in `.env`, never in config), types must match, and a `required` non-secret field must be present and non-empty. An extension **without** a schema keeps the raw-JSON pass-through.
+**Server-side validation on save:** for a loaded extension with a schema, the `settings.update` RPC validates the submitted config against the schema before persisting — unknown keys are rejected, a key naming a `secret` field is rejected (secrets live in `.env`, never in config), types must match, and a `required` non-secret field must be present and non-empty. The generic backend config object remains part of the Extension API, but the WebUI exposes it only through a declared schema.
 
 **Live values.** A non-secret setting change (URL, a toggle, a number) is read **live** on the next tool call — no restart. Read your config through `api.get_config()` rather than the register-time `api.config` snapshot (see [Config and logging](#config-and-logging)). Enabling, disabling, or reloading a whole extension also applies live (see [Reloading extensions](#reloading-extensions)).
 
@@ -469,12 +469,7 @@ Extensions surface through the normal management flow:
   vbot extensions disable guard_bash   # applied live
   vbot extensions enable guard_bash    # applied live (reloads the layer)
   ```
-- **WebUI**: Settings → **Extensions** lists every extension with its status,
-  version, capabilities, and failure reason, offers a "Reload extensions" button
-  and a per-extension enable/disable toggle, and — for a schema'd extension — a
-  real settings form (raw-JSON editor as the fallback for schema-less ones).
-  Secret fields are write-only. Every change applies live; there is no restart
-  notice.
+- **WebUI**: Settings → **Extensions** lists every extension with its status, version, capabilities, and failure reason, offers a "Reload extensions" button and a per-extension enable/disable toggle, and renders a settings disclosure only for an extension that declares a schema. Secret fields are write-only. Every change applies live; there is no restart notice.
 - **RPC**: `extensions.list` returns the records (with any declared settings
   schema and live secret state); `extensions.reload` rebuilds the layer and
   returns the same shape; `settings.update` accepts the `extensions` section (all

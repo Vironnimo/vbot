@@ -7,10 +7,8 @@ import {
   buildSchemaFormState,
   describeExtensionWaiting,
   extensionStatusChipVariant,
-  formatExtensionConfig,
   hasSettingsSchema,
   normalizeSchemaFields,
-  parseExtensionConfigDraft,
   summarizeExtensionCapabilities,
 } from '../settingsView.js';
 
@@ -199,33 +197,6 @@ describe('describeExtensionWaiting', () => {
       hint: 'On, waiting for configuration',
       waitingFor: null,
     });
-  });
-});
-
-describe('formatExtensionConfig', () => {
-  it('pretty-prints a non-empty config and empties an empty one', () => {
-    expect(formatExtensionConfig({ a: 1 })).toBe('{\n  "a": 1\n}');
-    expect(formatExtensionConfig({})).toBe('');
-    expect(formatExtensionConfig(null)).toBe('');
-  });
-});
-
-describe('parseExtensionConfigDraft', () => {
-  it('accepts an empty draft as an empty object', () => {
-    expect(parseExtensionConfigDraft('   ')).toEqual({ ok: true, value: {} });
-  });
-
-  it('parses a JSON object', () => {
-    expect(parseExtensionConfigDraft('{"a": 1}')).toEqual({
-      ok: true,
-      value: { a: 1 },
-    });
-  });
-
-  it('rejects invalid JSON and non-object JSON', () => {
-    expect(parseExtensionConfigDraft('{bad}').ok).toBe(false);
-    expect(parseExtensionConfigDraft('[1, 2]').ok).toBe(false);
-    expect(parseExtensionConfigDraft('42').ok).toBe(false);
   });
 });
 

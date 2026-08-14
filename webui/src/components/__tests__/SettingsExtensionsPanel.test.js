@@ -61,6 +61,13 @@ function buttonByText(text) {
   );
 }
 
+function extensionWithSchema(fields) {
+  return {
+    ...extensionsResult().extensions[0],
+    settings_schema: fields,
+  };
+}
+
 async function flushAsync() {
   await Promise.resolve();
   await Promise.resolve();
@@ -312,10 +319,67 @@ describe('SettingsExtensionsPanel', () => {
     expect(listCallsAfter).toBeGreaterThan(listCallsBefore);
   });
 
-  it('auto-saves non-secret config 800 ms after the last edit', async () => {
+  it('shows the reload action once and keeps its explanation in an info hint', async () => {
+    rpcMock.mockResolvedValue(extensionsResult());
+
+    mountedComponent = mount(SettingsExtensionsPanel, {
+      target: document.body,
+    });
+    flushSync();
+    await flushAsync();
+
+    expect(document.body.textContent.match(/Reload extensions/g)).toHaveLength(
+      1,
+    );
+
+    const infoHint = document.querySelector(
+      'button[aria-label="About reloading extensions"]',
+    );
+    expect(infoHint).toBeTruthy();
+    infoHint.click();
+    flushSync();
+
+    expect(document.body.textContent).toContain(
+      'Rebuilds all extensions from disk',
+    );
+  });
+
+  it('shows configuration controls only for extensions declaring a schema', async () => {
+    const homeAssistant = extensionWithSchema([
+      { key: 'url', type: 'text', label: 'Server URL' },
+    ]);
+    homeAssistant.name = 'homeassistant';
+    rpcMock.mockResolvedValue({
+      extensions: [extensionsResult().extensions[0], homeAssistant],
+    });
+
+    mountedComponent = mount(SettingsExtensionsPanel, {
+      target: document.body,
+    });
+    flushSync();
+    await flushAsync();
+
+    expect(
+      document.querySelector(
+        'button[aria-label="Configuration for extension guard_bash"]',
+      ),
+    ).toBeNull();
+    expect(
+      document.querySelector(
+        'button[aria-label="Configuration for extension homeassistant"]',
+      ),
+    ).toBeTruthy();
+    expect(document.querySelector('textarea')).toBeNull();
+    expect(document.body.textContent).not.toContain('Config (JSON)');
+  });
+
+  it('auto-saves a declared text setting 800 ms after the last edit', async () => {
+    const withTextSetting = extensionWithSchema([
+      { key: 'level', type: 'text', label: 'Level' },
+    ]);
     rpcMock.mockImplementation((method) => {
       if (method === 'extensions.list') {
-        return Promise.resolve(extensionsResult());
+        return Promise.resolve({ extensions: [withTextSetting] });
       }
       return Promise.resolve({});
     });
@@ -328,9 +392,9 @@ describe('SettingsExtensionsPanel', () => {
 
     vi.useFakeTimers();
 
-    const textarea = document.body.querySelector('textarea');
-    textarea.value = '{"level": "warn"}';
-    textarea.dispatchEvent(new Event('input', { bubbles: true }));
+    const input = document.body.querySelector('input[type="text"]');
+    input.value = 'warn';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
     flushSync();
 
     // No save before the debounce elapses.
@@ -403,11 +467,14 @@ describe('SettingsExtensionsPanel', () => {
     vi.useRealTimers();
   });
 
-  it('shows Already saved when Save config is clicked with no changes', async () => {
+  it('shows Already saved when Save settings is clicked with no changes', async () => {
     const toastMock = vi.fn();
+    const withTextSetting = extensionWithSchema([
+      { key: 'level', type: 'text', label: 'Level' },
+    ]);
     rpcMock.mockImplementation((method) => {
       if (method === 'extensions.list') {
-        return Promise.resolve(extensionsResult());
+        return Promise.resolve({ extensions: [withTextSetting] });
       }
       return Promise.resolve({});
     });
@@ -419,38 +486,12 @@ describe('SettingsExtensionsPanel', () => {
     flushSync();
     await flushAsync();
 
-    buttonByText('Save config').click();
+    buttonByText('Save settings').click();
     await flushAsync();
 
     expect(toastMock).toHaveBeenCalledWith(
       expect.objectContaining({ title: 'Already saved', variant: 'success' }),
     );
-    expect(
-      rpcMock.mock.calls.some((call) => call[0] === 'settings.update'),
-    ).toBe(false);
-  });
-
-  it('rejects invalid config JSON without calling settings.update', async () => {
-    rpcMock.mockResolvedValue(extensionsResult());
-
-    mountedComponent = mount(SettingsExtensionsPanel, {
-      target: document.body,
-    });
-    flushSync();
-    await flushAsync();
-
-    const textarea = document.body.querySelector('textarea');
-    textarea.value = '{not json}';
-    textarea.dispatchEvent(new Event('input', { bubbles: true }));
-    flushSync();
-
-    buttonByText('Save config').click();
-    await flushAsync();
-
-    expect(textarea.getAttribute('aria-invalid')).toBe('true');
-    expect(
-      document.querySelector('.form-field__error[role="alert"]'),
-    ).toBeTruthy();
     expect(
       rpcMock.mock.calls.some((call) => call[0] === 'settings.update'),
     ).toBe(false);
