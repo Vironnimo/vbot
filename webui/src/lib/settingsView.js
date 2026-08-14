@@ -635,34 +635,6 @@ export function describeExtensionWaiting(extension, translate) {
   };
 }
 
-export function formatExtensionConfig(config) {
-  const value = config && typeof config === 'object' ? config : {};
-  if (Object.keys(value).length === 0) {
-    return '';
-  }
-  return JSON.stringify(value, null, 2);
-}
-
-export function parseExtensionConfigDraft(text) {
-  const trimmed = typeof text === 'string' ? text.trim() : '';
-  if (trimmed.length === 0) {
-    return { ok: true, value: {} };
-  }
-
-  let parsed;
-  try {
-    parsed = JSON.parse(trimmed);
-  } catch (error) {
-    return { ok: false, error: error.message };
-  }
-
-  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-    return { ok: false, error: 'not-object' };
-  }
-
-  return { ok: true, value: parsed };
-}
-
 export function buildExtensionsUpdatePayload(extensions, override = {}) {
   const items = Array.isArray(extensions) ? extensions : [];
   const disabled = [];
@@ -811,7 +783,7 @@ function parseSchemaNumber(text) {
   return Number.isFinite(value) ? value : null;
 }
 
-/** Whether an extension list entry should render the schema form (vs raw JSON). */
+/** Whether an extension list entry declares an editable settings surface. */
 export function hasSettingsSchema(extension) {
   return (
     extension &&

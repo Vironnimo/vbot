@@ -7,8 +7,8 @@
   import Button from '../ui/Button.svelte';
   import EmptyState from '../ui/EmptyState.svelte';
   import FormField from '../ui/FormField.svelte';
+  import InfoHint from '../ui/InfoHint.svelte';
   import StatusChip from '../ui/StatusChip.svelte';
-  import TextArea from '../ui/TextArea.svelte';
   import TextField from '../ui/TextField.svelte';
   import Toggle from '../ui/Toggle.svelte';
   import {
@@ -29,9 +29,7 @@
     buildSchemaFormState,
     describeExtensionWaiting,
     extensionStatusChipVariant,
-    formatExtensionConfig,
     hasSettingsSchema,
-    parseExtensionConfigDraft,
     summarizeExtensionCapabilities,
   } from '$lib/settingsView.js';
 
@@ -46,8 +44,6 @@
   let reloading = $state(false);
   let actionName = $state('');
   let savingConfigName = $state('');
-  let configDrafts = $state({});
-  let configErrors = $state({});
   let formStates = $state({});
   let formFieldErrors = $state({});
   let secretDrafts = $state({});
@@ -111,27 +107,21 @@
     autoSaveTimers.clear();
   }
 
-  // Whether the extension's editable non-secret config differs from what is
+  // Whether the extension's declared non-secret settings differ from what is
   // persisted — the dirty test that gates autosave and the "Already saved"
-  // toast. Invalid drafts (bad JSON, unparseable number) are never dirty here;
-  // their local validation error surfaces on an explicit Save instead.
+  // toast. Extensions without a schema expose no configuration surface.
   function extensionConfigDirty(extension) {
-    if (hasSettingsSchema(extension)) {
-      const built = buildSchemaConfigFromForm(
-        extension.settingsSchema,
-        formStates[extension.name] ?? {},
-      );
-      if (!built.ok) {
-        return false;
-      }
-      return !configsMatch(built.config, extension.config);
-    }
-
-    const parsed = parseExtensionConfigDraft(configDrafts[extension.name]);
-    if (!parsed.ok) {
+    if (!hasSettingsSchema(extension)) {
       return false;
     }
-    return !configsMatch(parsed.value, extension.config);
+    const built = buildSchemaConfigFromForm(
+      extension.settingsSchema,
+      formStates[extension.name] ?? {},
+    );
+    if (!built.ok) {
+      return false;
+    }
+    return !configsMatch(built.config, extension.config);
   }
 
   function configsMatch(left, right) {
@@ -142,26 +132,21 @@
   }
 
   function extensionDraftHasChanges(extension) {
-    if (hasSettingsSchema(extension)) {
-      return (
-        JSON.stringify(formStates[extension.name] ?? {}) !==
-        JSON.stringify(
-          buildSchemaFormState(extension.settingsSchema, extension.config),
-        )
-      );
+    if (!hasSettingsSchema(extension)) {
+      return false;
     }
     return (
-      (configDrafts[extension.name] ?? '') !==
-      formatExtensionConfig(extension.config)
+      JSON.stringify(formStates[extension.name] ?? {}) !==
+      JSON.stringify(
+        buildSchemaFormState(extension.settingsSchema, extension.config),
+      )
     );
   }
 
   function extensionAutosaveSnapshot() {
     return extensions.filter(extensionDraftHasChanges).map((extension) => ({
       name: extension.name,
-      value: hasSettingsSchema(extension)
-        ? (formStates[extension.name] ?? {})
-        : (configDrafts[extension.name] ?? ''),
+      value: formStates[extension.name] ?? {},
     }));
   }
 
@@ -192,12 +177,6 @@
     try {
       const result = await listExtensions();
       extensions = applyExtensionsPanelList(result);
-      configDrafts = Object.fromEntries(
-        extensions.map((extension) => [
-          extension.name,
-          formatExtensionConfig(extension.config),
-        ]),
-      );
       formStates = Object.fromEntries(
         extensions
           .filter((extension) => hasSettingsSchema(extension))
@@ -206,7 +185,6 @@
             buildSchemaFormState(extension.settingsSchema, extension.config),
           ]),
       );
-      configErrors = {};
       formFieldErrors = {};
       secretDrafts = {};
     } catch (error) {
@@ -307,44 +285,24 @@
     let invalid = false;
     let hasPersistentChanges = false;
     const nextFormFieldErrors = { ...formFieldErrors };
-    const nextConfigErrors = { ...configErrors };
     const nextConfigs = new SvelteMap();
 
     for (const extension of changedExtensions) {
-      if (hasSettingsSchema(extension)) {
-        const built = buildSchemaConfigFromForm(
-          extension.settingsSchema,
-          formStates[extension.name] ?? {},
-        );
-        if (!built.ok) {
-          nextFormFieldErrors[extension.name] = built.errors;
-          invalid = true;
-          continue;
-        }
-        delete nextFormFieldErrors[extension.name];
-        nextConfigs.set(extension.name, built.config);
-        hasPersistentChanges ||= !configsMatch(built.config, extension.config);
-        continue;
-      }
-
-      const parsed = parseExtensionConfigDraft(
-        configDrafts[extension.name] ?? '',
+      const built = buildSchemaConfigFromForm(
+        extension.settingsSchema,
+        formStates[extension.name] ?? {},
       );
-      if (!parsed.ok) {
-        nextConfigErrors[extension.name] = t(
-          'settings.extensions.configInvalid',
-          'Config must be a JSON object.',
-        );
+      if (!built.ok) {
+        nextFormFieldErrors[extension.name] = built.errors;
         invalid = true;
         continue;
       }
-      delete nextConfigErrors[extension.name];
-      nextConfigs.set(extension.name, parsed.value);
-      hasPersistentChanges ||= !configsMatch(parsed.value, extension.config);
+      delete nextFormFieldErrors[extension.name];
+      nextConfigs.set(extension.name, built.config);
+      hasPersistentChanges ||= !configsMatch(built.config, extension.config);
     }
 
     formFieldErrors = nextFormFieldErrors;
-    configErrors = nextConfigErrors;
     if (invalid) {
       return false;
     }
@@ -364,8 +322,8 @@
       await updateSettings(buildExtensionsUpdatePayload(nextExtensions));
       onToast({
         title: t(
-          'settings.extensions.configSaveSuccess',
-          'Extension config saved.',
+          'settings.extensions.settingsSaveSuccess',
+          'Extension settings saved.',
         ),
         variant: 'success',
       });
@@ -428,19 +386,6 @@
     return status;
   }
 
-  function setConfigDraft(name, value) {
-    configDrafts = { ...configDrafts, [name]: value };
-    if (configErrors[name]) {
-      const next = { ...configErrors };
-      delete next[name];
-      configErrors = next;
-    }
-    const extension = extensionByName(name);
-    if (extension) {
-      scheduleExtensionAutoSave(extension);
-    }
-  }
-
   async function toggleExtension(extension) {
     if (panelBusy) {
       return;
@@ -471,59 +416,22 @@
       actionName = '';
     }
   }
-
-  // Explicit Save on the raw-JSON config: same "Already saved" trust-confirm as
-  // the schema form, with a local parse error for invalid JSON.
-  function handleManualExtensionConfigSave(extension) {
-    if (panelBusy) {
-      return;
-    }
-    const parsed = parseExtensionConfigDraft(configDrafts[extension.name]);
-    if (!parsed.ok) {
-      configErrors = {
-        ...configErrors,
-        [extension.name]: t(
-          'settings.extensions.configInvalid',
-          'Config must be a JSON object.',
-        ),
-      };
-      return;
-    }
-    if (!extensionConfigDirty(extension)) {
-      onToast({
-        title: t('common.alreadySaved', 'Already saved'),
-        variant: 'success',
-      });
-      return;
-    }
-    clearAutoSaveTimer(extension.name);
-    void extensionConfigAutosave.runSave('manual');
-  }
 </script>
 
-<div class="s-row s-row--stacked s-row--channels-header">
-  <div class="s-row-control">
-    <div class="s-row-actions s-row-actions--channel-header">
-      <Button
-        variant="secondary"
-        disabled={panelBusy}
-        onClick={reloadExtensions}
-      >
-        {t('settings.extensions.reload', 'Reload extensions')}
-      </Button>
-    </div>
-    <dl class="s-ext-actions-help">
-      <div class="s-ext-actions-help-item">
-        <dt>{t('settings.extensions.reload', 'Reload extensions')}</dt>
-        <dd>
-          {t(
-            'settings.extensions.reloadHelp',
-            'Rebuilds all extensions from disk — picks up code edits, new and removed extensions.',
-          )}
-        </dd>
-      </div>
-    </dl>
-  </div>
+<div class="s-ext-toolbar">
+  <Button variant="secondary" disabled={panelBusy} onClick={reloadExtensions}>
+    {t('settings.extensions.reload', 'Reload extensions')}
+  </Button>
+  <InfoHint
+    ariaLabel={t(
+      'settings.extensions.reloadInfoAria',
+      'About reloading extensions',
+    )}
+    text={t(
+      'settings.extensions.reloadHelp',
+      'Rebuilds all extensions from disk — picks up code edits, new and removed extensions.',
+    )}
+  />
 </div>
 
 {#if loading}
@@ -625,20 +533,22 @@
                   ? t('settings.extensions.enable', 'Enable')
                   : t('settings.extensions.disable', 'Disable')}
               </Button>
-              <Button
-                variant="tertiary"
-                icon
-                class="s-disclosure-btn"
-                ariaLabel={t(
-                  'settings.extensions.configToggleAria',
-                  'Configuration for extension {name}',
-                  { name: extension.name },
-                )}
-                aria-expanded={expandedConfigNames.has(extension.name)}
-                onClick={() => toggleConfigDetails(extension)}
-              >
-                ▸
-              </Button>
+              {#if hasSettingsSchema(extension)}
+                <Button
+                  variant="tertiary"
+                  icon
+                  class="s-disclosure-btn"
+                  ariaLabel={t(
+                    'settings.extensions.configToggleAria',
+                    'Configuration for extension {name}',
+                    { name: extension.name },
+                  )}
+                  aria-expanded={expandedConfigNames.has(extension.name)}
+                  onClick={() => toggleConfigDetails(extension)}
+                >
+                  ▸
+                </Button>
+              {/if}
             </div>
           {/if}
         </div>
@@ -773,50 +683,6 @@
                 </Button>
               </div>
             </div>
-          </div>
-        {:else if !isOverridden}
-          <div
-            class="s-disclosure-sub"
-            hidden={!expandedConfigNames.has(extension.name)}
-          >
-            <FormField
-              controlId={`extension-${extension.name}-config`}
-              full
-              class="s-ext-config"
-              label={t('settings.extensions.config', 'Config (JSON)')}
-              error={configErrors[extension.name] ?? ''}
-            >
-              {#snippet children(formField)}
-                <TextArea
-                  id={formField.controlId}
-                  code
-                  invalid={formField.invalid}
-                  aria-describedby={formField.describedBy}
-                  spellcheck="false"
-                  value={configDrafts[extension.name] ?? ''}
-                  disabled={rowBusy}
-                  ariaLabel={t(
-                    'settings.extensions.configAria',
-                    'Config for extension {name}',
-                    { name: extension.name },
-                  )}
-                  onInput={(value) => setConfigDraft(extension.name, value)}
-                />
-              {/snippet}
-              {#snippet actions()}
-                <div class="s-ext-config-actions">
-                  <Button
-                    variant="primary"
-                    disabled={rowBusy}
-                    onClick={() => handleManualExtensionConfigSave(extension)}
-                  >
-                    {savingConfigName === extension.name
-                      ? t('common.saving', 'Saving…')
-                      : t('settings.extensions.saveConfig', 'Save config')}
-                  </Button>
-                </div>
-              {/snippet}
-            </FormField>
           </div>
         {/if}
       </div>
