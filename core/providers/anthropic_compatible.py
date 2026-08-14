@@ -201,10 +201,8 @@ class AnthropicMessagesStreamDecoder:
         usage = message.get("usage")
         if not isinstance(usage, dict):
             return
-        input_tokens = usage.get("input_tokens")
-        if isinstance(input_tokens, int):
-            usage_from_start: dict[str, Any] = {"input_tokens": input_tokens}
-            apply_anthropic_cache_usage(usage_from_start, usage)
+        usage_from_start = _extract_anthropic_stream_input_usage(usage)
+        if usage_from_start is not None:
             self.usage_from_start = usage_from_start
 
     def _normalize_content_block_start(self, event: dict[str, Any]) -> list[dict[str, Any]]:
@@ -301,14 +299,17 @@ class AnthropicMessagesStreamDecoder:
         usage = event.get("usage")
         if isinstance(usage, dict):
             output_tokens = usage.get("output_tokens")
-            if isinstance(output_tokens, int) and (
-                self.usage_from_start is not None or self._emit_usage_without_start
+            terminal_input_usage = _extract_anthropic_stream_input_usage(usage)
+            input_usage = terminal_input_usage or self.usage_from_start
+            if (
+                isinstance(output_tokens, int)
+                and not isinstance(output_tokens, bool)
+                and output_tokens >= 0
+                and (input_usage is not None or self._emit_usage_without_start)
             ):
-                normalized_usage = {
-                    "type": "usage",
-                    **(self.usage_from_start or {"input_tokens": 0}),
-                    "output_tokens": output_tokens,
-                }
+                normalized_usage = {"type": "usage", "output_tokens": output_tokens}
+                if input_usage is not None:
+                    normalized_usage.update(input_usage)
                 apply_anthropic_reasoning_usage(normalized_usage, usage)
                 normalized_deltas.append(normalized_usage)
         return normalized_deltas
@@ -1471,6 +1472,23 @@ def _extract_anthropic_usage(response: dict[str, Any]) -> dict[str, Any] | None:
     apply_anthropic_cache_usage(normalized, usage)
     apply_anthropic_reasoning_usage(normalized, usage)
     return normalized
+
+
+def _extract_anthropic_stream_input_usage(usage: dict[str, Any]) -> dict[str, Any] | None:
+    """Normalize a usable input snapshot from one Messages stream event.
+
+    Native Anthropic streams report input/cache counters at ``message_start``.
+    Compatible gateways may instead repeat a complete, more authoritative
+    snapshot in the terminal ``message_delta``. A zero total is not usable for
+    vBot's non-empty Chat requests and remains absent so Chat can estimate it.
+    """
+
+    input_tokens = usage.get("input_tokens")
+    if isinstance(input_tokens, bool) or not isinstance(input_tokens, int) or input_tokens < 0:
+        return None
+    normalized: dict[str, Any] = {"input_tokens": input_tokens}
+    apply_anthropic_cache_usage(normalized, usage)
+    return normalized if normalized["input_tokens"] > 0 else None
 
 
 def apply_anthropic_reasoning_usage(normalized: dict[str, Any], usage: dict[str, Any]) -> None:
