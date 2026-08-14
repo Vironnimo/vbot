@@ -1538,6 +1538,13 @@ class TestModelRegistryRealResources:
         assert all(model.metadata.get("ollama", {}).get("remote") is True for model in models)
         assert all(model.metadata.get("ollama", {}).get("local") is not True for model in models)
 
+    def test_ollama_cloud_deepseek_output_override_is_effective(self):
+        registry = ModelRegistry.load(RESOURCES_DIR)
+
+        deepseek = registry.get("ollama-cloud", "deepseek-v4-flash:0731")
+
+        assert deepseek.max_output_tokens == 65_536
+
     def test_overrides_are_applied_at_load(self):
         """``<provider>.overrides.json`` is now merged at LOAD (it used to only
         apply at refresh). The openai overrides add override-only task models —

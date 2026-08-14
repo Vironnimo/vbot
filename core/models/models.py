@@ -320,9 +320,10 @@ class ModelRegistry:
     """Registry of model data, indexed by (provider_id, model_id).
 
     The single public read surface for model data. ``load()`` assembles each
-    effective model at load time from the canonical, provider, and override
-    layers (see :mod:`core.models.assembly`); ``get()`` / ``list_for_provider()``
-    / ``query()`` read the assembled result. Caches after first load —
+    effective model at load time from the selected canonical/provider catalog
+    plus the current bundled override layers (see :mod:`core.models.assembly`);
+    ``get()`` / ``list_for_provider()`` / ``query()`` read the assembled result.
+    Caches after first load —
     subsequent calls with the same system/runtime root pair return the cached
     instance until ``invalidate()`` clears it (e.g. after a refresh publishes a
     new complete database).
@@ -355,16 +356,18 @@ class ModelRegistry:
                 the bundled complete ``models/`` database.
             runtime_models_dir: Optional complete data-dir Model DB. When it
                 has a newer compatible refresh manifest than the system DB,
-                this whole root is loaded instead; files are never mixed.
+                its generated catalog is loaded while bundled system overrides
+                remain authoritative.
 
         Returns:
             A populated ModelRegistry instance.
         """
         resolved = resources_dir.resolve()
         resolved_runtime = runtime_models_dir.resolve() if runtime_models_dir is not None else None
+        bundled_models_dir = resolved / "models"
         if custom_providers is not None:
             models_dir = select_model_database_dir(resolved, resolved_runtime)
-            registry = cls(cls._assemble_models(models_dir, custom_providers))
+            registry = cls(cls._assemble_models(models_dir, bundled_models_dir, custom_providers))
             registry._active_models_dir = models_dir
             return registry
 
@@ -373,7 +376,7 @@ class ModelRegistry:
             return cls._cache[cache_key]
 
         models_dir = select_model_database_dir(resolved, resolved_runtime)
-        registry = cls(cls._assemble_models(models_dir, {}))
+        registry = cls(cls._assemble_models(models_dir, bundled_models_dir, {}))
         registry._active_models_dir = models_dir
         cls._cache[cache_key] = registry
         return registry
@@ -398,7 +401,11 @@ class ModelRegistry:
         resolved = resources_dir.resolve()
         resolved_runtime = runtime_models_dir.resolve() if runtime_models_dir is not None else None
         models_dir = select_model_database_dir(resolved, resolved_runtime)
-        self._models = self._assemble_models(models_dir, custom_providers or {})
+        self._models = self._assemble_models(
+            models_dir,
+            resolved / "models",
+            custom_providers or {},
+        )
         self._active_models_dir = models_dir
         if custom_providers is None:
             type(self)._cache[(resolved, resolved_runtime)] = self
@@ -407,16 +414,20 @@ class ModelRegistry:
     def _assemble_models(
         cls,
         models_dir: Path,
+        bundled_models_dir: Path,
         custom_providers: Mapping[str, Mapping[str, Any]],
     ) -> dict[tuple[str, str], Model]:
         """Assemble every effective model from the on-disk layers (no cache).
 
-        ``models_dir`` is one already-selected complete database root. Shared
-        by ``load`` and ``reload`` so both paths assemble identically without
-        combining system and runtime files.
+        ``models_dir`` is the selected generated catalog root and
+        ``bundled_models_dir`` owns the authoritative hand-maintained overrides.
+        Shared by ``load`` and ``reload`` so both paths assemble identically.
         """
 
-        canonical_layer = load_canonical_layer(models_dir)
+        canonical_layer = load_canonical_layer(
+            models_dir,
+            overrides_models_dir=bundled_models_dir,
+        )
         models: dict[tuple[str, str], Model] = {}
         provider_layers: dict[str, dict[str, Any]] = {}
         provider_sources: dict[str, Path] = {}
@@ -450,9 +461,13 @@ class ModelRegistry:
         # an empty generated ``<provider>.json`` file just to make the override
         # discoverable.
         try:
-            override_files = sorted(models_dir.glob(f"*{OVERRIDES_FILE_SUFFIX}"))
+            override_files = sorted(bundled_models_dir.glob(f"*{OVERRIDES_FILE_SUFFIX}"))
         except OSError as exc:
-            _LOGGER.warning("Could not scan Model DB override files in '%s': %s", models_dir, exc)
+            _LOGGER.warning(
+                "Could not scan Model DB override files in '%s': %s",
+                bundled_models_dir,
+                exc,
+            )
             override_files = []
 
         for overrides_file in override_files:

@@ -1,9 +1,10 @@
 """Whole-root storage contract for the bundled and runtime Model DBs.
 
 Each Model DB is a complete ``models/`` directory: generated canonical and
-Provider projections, raw inspection dumps, and every ``*.overrides.json``
-input. Load never combines files from the two roots; it selects the newer
-schema-compatible root as a whole from its manifest.
+Provider projections, raw inspection dumps, and a snapshot of every bundled
+``*.overrides.json`` input. Load selects the newer schema-compatible generated
+catalog root as a whole, while the current bundled overrides remain the
+authoritative hand layer even when the runtime catalog is newer.
 """
 
 from __future__ import annotations
@@ -177,6 +178,7 @@ def begin_runtime_model_database_refresh(
         staging_models_dir.mkdir(parents=True)
     else:
         shutil.copytree(active_models_dir, staging_models_dir)
+    _synchronize_bundled_overrides(system_resources_dir, staging_models_dir)
     return ModelDatabaseRefresh(
         resources_dir=staging_resources_dir,
         target_models_dir=runtime_models_dir,
@@ -202,6 +204,22 @@ def begin_system_model_database_refresh(system_resources_dir: Path) -> ModelData
         target_models_dir=system_models_dir,
         source=MODEL_DATABASE_SOURCE_SYSTEM,
     )
+
+
+def _synchronize_bundled_overrides(
+    system_resources_dir: Path,
+    staging_models_dir: Path,
+) -> None:
+    """Replace a runtime staging root's override snapshot with the bundled set."""
+
+    for override_path in staging_models_dir.glob("*.overrides.json"):
+        override_path.unlink()
+
+    system_models_dir = system_resources_dir / MODEL_DATABASE_DIRECTORY_NAME
+    if not system_models_dir.is_dir():
+        return
+    for override_path in system_models_dir.glob("*.overrides.json"):
+        shutil.copy2(override_path, staging_models_dir / override_path.name)
 
 
 def _replace_directory(
