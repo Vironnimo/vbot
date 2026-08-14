@@ -1,16 +1,39 @@
-"""Tests for token estimation utilities.
+"""Tests for model-neutral token estimation utilities."""
 
-Verifies the 4-chars/token heuristic, including edge cases like empty
-strings, exact divisions, remainders, and multi-byte (CJK) characters.
-"""
+import math
+from typing import Any
 
+import pytest
+
+from core.utils import tokens as token_utils
 from core.utils.tokens import (
+    FALLBACK_CHARS_PER_TOKEN,
     NATIVE_MEDIA_TOKEN_RESERVE,
+    TOKEN_ESTIMATE_ENCODING,
     estimate_json_tokens,
     estimate_message_tokens,
     estimate_request_input_tokens,
     estimate_tokens,
 )
+
+
+class _DeterministicEncoding:
+    """Small test double whose UTF-8 chunks expose multilingual differences."""
+
+    @staticmethod
+    def encode_ordinary(text: str) -> list[int]:
+        token_count = math.ceil(len(text.encode("utf-8")) / 4)
+        return list(range(token_count))
+
+
+@pytest.fixture(autouse=True)
+def _stub_tiktoken_encoding(monkeypatch: pytest.MonkeyPatch):
+    encoding = _DeterministicEncoding()
+    monkeypatch.setattr(token_utils.tiktoken, "get_encoding", lambda _name: encoding)
+    token_utils._load_estimation_encoding.cache_clear()
+    yield
+    token_utils._load_estimation_encoding.cache_clear()
+
 
 # ----- Empty input -----
 
@@ -32,7 +55,7 @@ def test_estimate_tokens_returns_zero_for_empty_string():
 
 
 def test_estimate_tokens_simple_ascii_text():
-    """Plain ASCII text is estimated by dividing character count by 4."""
+    """Plain ASCII text is delegated to the shared estimation encoding."""
     # Arrange
     text = "Hello, world!"  # 13 characters
 
@@ -56,11 +79,11 @@ def test_estimate_tokens_always_returns_estimate_flag():
     assert is_estimate is True
 
 
-# ----- Non-evenly-divisible text (rounds up) -----
+# ----- Tokenizer delegation -----
 
 
 def test_estimate_tokens_rounds_up_on_remainder():
-    """A length not evenly divisible by 4 still rounds up."""
+    """The deterministic encoding controls the returned token count."""
     # Arrange
     text = "a" * 5  # 5 chars → ceil(5/4) = 2 tokens
 
@@ -72,7 +95,7 @@ def test_estimate_tokens_rounds_up_on_remainder():
 
 
 def test_estimate_tokens_exact_division():
-    """A length evenly divisible by 4 produces an exact token count."""
+    """The tokenizer result is returned without an additional adjustment."""
     # Arrange
     text = "a" * 8  # 8 chars → 8/4 = 2 tokens
 
@@ -84,7 +107,7 @@ def test_estimate_tokens_exact_division():
 
 
 def test_estimate_tokens_one_char_rounds_up():
-    """Even a single character counts as one token (ceil)."""
+    """A non-empty tokenizer result remains non-zero."""
     # Arrange
     text = "x"  # 1 char → ceil(1/4) = 1 token
 
@@ -99,22 +122,34 @@ def test_estimate_tokens_one_char_rounds_up():
 
 
 def test_estimate_tokens_cjk_characters():
-    """CJK characters are counted by Python str length (code points)."""
+    """Multibyte CJK text no longer follows Python character count divided by four."""
     # Arrange
-    text = "你好世界"  # 4 CJK characters → ceil(4/4) = 1 token
+    text = "你好世界"
 
     # Act
     count, is_estimate = estimate_tokens(text)
 
     # Assert
-    assert count == 1
+    assert count == 3
     assert is_estimate is True
 
 
 def test_estimate_tokens_mixed_unicode_and_ascii():
-    """Mixed Unicode and ASCII text is estimated by total character count."""
+    """Mixed Unicode and ASCII text is delegated unchanged to the tokenizer."""
     # Arrange
-    text = "Hello世界!"  # 8 characters → ceil(8/4) = 2 tokens
+    text = "Hello世界!"
+
+    # Act
+    count, _ = estimate_tokens(text)
+
+    # Assert
+    assert count == 3
+
+
+def test_estimate_tokens_emoji():
+    """Emoji no longer collapse to one token solely because Python sees two characters."""
+    # Arrange
+    text = "🎉🎊"
 
     # Act
     count, _ = estimate_tokens(text)
@@ -123,16 +158,42 @@ def test_estimate_tokens_mixed_unicode_and_ascii():
     assert count == 2
 
 
-def test_estimate_tokens_emoji():
-    """Emoji are counted by code-point length, not byte length."""
-    # Arrange
-    text = "🎉🎊"  # 2 characters → ceil(2/4) = 1 token
+def test_estimation_encoding_is_fixed_and_cached(monkeypatch: pytest.MonkeyPatch):
+    """Every estimate shares one cached o200k_base encoding instance."""
+    calls: list[str] = []
+    encoding = _DeterministicEncoding()
 
-    # Act
-    count, _ = estimate_tokens(text)
+    def load_encoding(name: str) -> _DeterministicEncoding:
+        calls.append(name)
+        return encoding
 
-    # Assert
-    assert count == 1
+    monkeypatch.setattr(token_utils.tiktoken, "get_encoding", load_encoding)
+    token_utils._load_estimation_encoding.cache_clear()
+
+    first, _ = estimate_tokens("first")
+    second, _ = estimate_tokens("second")
+
+    assert first > 0
+    assert second > 0
+    assert calls == [TOKEN_ESTIMATE_ENCODING]
+
+
+def test_estimate_tokens_uses_character_fallback_when_encoding_is_unavailable(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+):
+    """A tokenizer-data failure retains the previous fail-soft estimate."""
+
+    def fail_to_load(_name: str) -> Any:
+        raise OSError("offline")
+
+    monkeypatch.setattr(token_utils.tiktoken, "get_encoding", fail_to_load)
+    token_utils._load_estimation_encoding.cache_clear()
+
+    count, is_estimate = estimate_tokens("x" * 5)
+
+    assert count == math.ceil(5 / FALLBACK_CHARS_PER_TOKEN)
+    assert is_estimate is True
+    assert "Token estimation encoding unavailable" in caplog.text
 
 
 def test_estimate_message_tokens_counts_structured_tool_call_payloads():
@@ -161,7 +222,7 @@ def test_estimate_message_tokens_counts_structured_tool_call_payloads():
 
 
 def test_estimate_json_tokens_counts_compact_json_size():
-    """A JSON-serializable value is estimated by its compact serialization."""
+    """A JSON-serializable value sends its compact serialization to the tokenizer."""
     # Arrange
     tool_definitions = [
         {"name": "read", "description": "Read a file", "parameters": {"type": "object"}}
@@ -174,7 +235,7 @@ def test_estimate_json_tokens_counts_compact_json_size():
     count, is_estimate = estimate_json_tokens(tool_definitions)
 
     # Assert
-    assert count == -(-compact_length // 4)  # ceil(chars / 4)
+    assert count == -(-compact_length // 4)
     assert is_estimate is True
 
 
