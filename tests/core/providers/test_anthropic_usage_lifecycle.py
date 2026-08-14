@@ -135,6 +135,49 @@ class TestStreamUsageDelta:
 
     @respx.mock
     @pytest.mark.asyncio
+    async def test_stream_usage_prefers_complete_terminal_input_snapshot(self, anthropic_adapter):
+        """A compatible gateway's terminal input/cache snapshot replaces start zeros."""
+        sse_body = (
+            "event: message_start\n"
+            'data: {"type":"message_start","message":{"id":"msg_01",'
+            '"usage":{"input_tokens":0,"output_tokens":0}}}\n'
+            "\n"
+            "event: message_delta\n"
+            'data: {"type":"message_delta",'
+            '"delta":{"stop_reason":"end_turn"},'
+            '"usage":{"input_tokens":648,"output_tokens":1180,'
+            '"cache_read_input_tokens":125568,'
+            '"output_tokens_details":{"thinking_tokens":44}}}\n'
+            "\n"
+            "event: message_stop\n"
+            'data: {"type":"message_stop"}\n'
+            "\n"
+        )
+        respx.post(ANTHROPIC_URL).mock(
+            return_value=httpx.Response(
+                200,
+                text=sse_body,
+                headers={"content-type": "text/event-stream"},
+            )
+        )
+
+        chunks = []
+        async for chunk in anthropic_adapter.stream(SAMPLE_MESSAGES, model_id="minimax-m3"):
+            chunks.append(chunk)
+
+        usage_deltas = [chunk for chunk in chunks if chunk.get("type") == "usage"]
+        assert usage_deltas == [
+            {
+                "type": "usage",
+                "input_tokens": 126216,
+                "output_tokens": 1180,
+                "cache_read_tokens": 125568,
+                "reasoning_tokens": 44,
+            }
+        ]
+
+    @respx.mock
+    @pytest.mark.asyncio
     async def test_stream_usage_delta_ordering_with_finish(self, anthropic_adapter):
         """The usage delta comes after the finish delta from the same message_delta event."""
         # Arrange
@@ -185,11 +228,10 @@ class TestStreamUsageDelta:
 
     @respx.mock
     @pytest.mark.asyncio
-    async def test_stream_usage_delta_degrades_to_zero_input_without_start_usage(
+    async def test_stream_usage_delta_preserves_output_without_fabricating_input(
         self, anthropic_adapter
     ):
-        """stream() still yields a usage delta when message_start lacks input_tokens,
-        degrading input to 0 rather than dropping the run's output accounting."""
+        """A missing input count stays absent while output accounting survives."""
         # Arrange — message_start without usage data
         sse_body = (
             "event: message_start\n"
@@ -230,9 +272,9 @@ class TestStreamUsageDelta:
         ):
             chunks.append(chunk)
 
-        # Assert — output accounting is preserved by degrading input to 0
+        # Assert — Chat will estimate the absent input field independently.
         usage_deltas = [c for c in chunks if c.get("type") == "usage"]
-        assert usage_deltas == [{"type": "usage", "input_tokens": 0, "output_tokens": 10}]
+        assert usage_deltas == [{"type": "usage", "output_tokens": 10}]
 
     @respx.mock
     @pytest.mark.asyncio

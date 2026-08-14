@@ -202,6 +202,34 @@ async def test_partial_provider_usage_estimates_only_missing_input(
 
 
 @pytest.mark.asyncio
+async def test_zero_provider_input_on_nonempty_request_is_estimated(
+    tmp_path: Path,
+) -> None:
+    agent = StubAgent(id="coder", model="compatible/reasoning-model", allowed_tools=["*"])
+    adapter = StubAdapter(
+        [],
+        stream_responses=[
+            [
+                {"type": "content_delta", "text": "Hello"},
+                {"type": "usage", "input_tokens": 0, "output_tokens": 12},
+                {"type": "finish", "reason": "stop"},
+            ]
+        ],
+    )
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+
+    assistant = await build_chat_loop(runtime, streaming=True).send(
+        "coder", "Hi", session_id="session-one"
+    )
+
+    assert assistant.usage is not None
+    assert assistant.usage["input_tokens"] > 0
+    assert assistant.usage["input_tokens_estimated"] is True
+    assert assistant.usage["output_tokens"] == 12
+    assert assistant.usage["estimated"] is True
+
+
+@pytest.mark.asyncio
 async def test_response_without_usage_applies_estimation(
     tmp_path: Path,
 ) -> None:

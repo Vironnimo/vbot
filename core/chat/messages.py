@@ -1646,7 +1646,8 @@ def _complete_usage_with_estimates(
     has_specific_provenance = any(field in usage for field in _USAGE_ESTIMATION_FIELDS.values())
     legacy_estimated = usage.get("estimated") is True and not has_specific_provenance
 
-    if _optional_usage_token_count(usage.get("input_tokens")) is None:
+    reported_input_tokens = _optional_usage_token_count(usage.get("input_tokens"))
+    if reported_input_tokens is None or (reported_input_tokens == 0 and request_messages):
         estimated_input, _ = estimate_request_input_tokens(request_messages)
         usage["input_tokens"] = estimated_input
         usage[USAGE_INPUT_TOKENS_ESTIMATED_FIELD] = True
