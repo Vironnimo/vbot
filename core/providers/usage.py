@@ -59,6 +59,7 @@ OPENAI_USAGE_CONNECTION = "openai:subscription"
 COPILOT_USAGE_CONNECTION = "github-copilot:oauth"
 OLLAMA_USAGE_CONNECTION = "ollama-cloud:api-key"
 MINIMAX_USAGE_CONNECTION = "minimax:api-key"
+OPENROUTER_USAGE_CONNECTION = "openrouter:api-key"
 
 OPENAI_USAGE_PATH = "/wham/usage"
 # GitHub's own host, not the Copilot API host: the usage endpoint authenticates
@@ -66,6 +67,8 @@ OPENAI_USAGE_PATH = "/wham/usage"
 COPILOT_USAGE_URL = "https://api.github.com/copilot_internal/user"
 OLLAMA_USAGE_PATH = "/api/usage"
 MINIMAX_USAGE_PATH = "/token_plan/remains"
+OPENROUTER_CREDITS_PATH = "/credits"
+OPENROUTER_KEY_PATH = "/key"
 
 # Candidate field names for the MiniMax remaining/total counts. The shape is
 # implemented blind from openclaw's verified field names (no live credentials);
@@ -304,6 +307,7 @@ _SUPPORTED_CONNECTIONS: tuple[_SupportedConnection, ...] = (
     _SupportedConnection("github-copilot", "oauth"),
     _SupportedConnection("ollama-cloud", "api-key"),
     _SupportedConnection("minimax", "api-key"),
+    _SupportedConnection("openrouter", "api-key"),
 )
 
 _Fetcher = Callable[[_SupportedConnection], Awaitable[ProviderUsageSnapshot]]
@@ -352,6 +356,7 @@ class ProviderUsageService:
             COPILOT_USAGE_CONNECTION: self._fetch_copilot,
             OLLAMA_USAGE_CONNECTION: self._fetch_ollama,
             MINIMAX_USAGE_CONNECTION: self._fetch_minimax,
+            OPENROUTER_USAGE_CONNECTION: self._fetch_openrouter,
         }
 
     def start(self) -> None:
@@ -667,6 +672,30 @@ class ProviderUsageService:
             account=connection.account_id,
         )
 
+    async def _fetch_openrouter(self, connection: _SupportedConnection) -> ProviderUsageSnapshot:
+        provider = self._runtime.providers.get(connection.provider_id)
+        connection_config = provider.get_connection(connection.local_connection_id)
+        base_url = connection_config.base_url or provider.base_url
+
+        token_getter = self._runtime.get_connection_token_getter(
+            connection.provider_id, connection.target_id
+        )
+        token = await token_getter()
+        headers = {connection_config.auth.header: f"{connection_config.auth.prefix}{token}"}
+        credits_body = await self._get_json(_join_url(base_url, OPENROUTER_CREDITS_PATH), headers)
+        # The key spending-cap endpoint is supplementary: when it fails, degrade
+        # to a credits-only snapshot instead of failing the whole fetch.
+        key_body: Any = None
+        with suppress(UsageFetchError):
+            key_body = await self._get_json(_join_url(base_url, OPENROUTER_KEY_PATH), headers)
+        return _parse_openrouter_usage(
+            connection.connection_id,
+            self._display_name(connection),
+            credits_body,
+            key_body,
+            account=connection.account_id,
+        )
+
     async def _get_json(self, url: str, headers: Mapping[str, str]) -> Any:
         response = await self._transport.get(url, headers=headers, timeout=self._timeout)
         if response.status_code >= 400:
@@ -967,6 +996,65 @@ def _minimax_reset_at(entry: Mapping[str, Any]) -> str | None:
 
 
 # ---------------------------------------------------------------------------
+# OpenRouter parsing (credits + key spending cap)
+# ---------------------------------------------------------------------------
+
+
+def _parse_openrouter_usage(
+    connection_id: str,
+    display_name: str,
+    credits_body: Any,
+    key_body: Any,
+    *,
+    account: str = DEFAULT_ACCOUNT_ID,
+) -> ProviderUsageSnapshot:
+    credits_data = credits_body.get("data") if isinstance(credits_body, Mapping) else None
+    total_credits = (
+        _as_number(credits_data.get("total_credits")) if isinstance(credits_data, Mapping) else None
+    )
+    total_usage = (
+        _as_number(credits_data.get("total_usage")) if isinstance(credits_data, Mapping) else None
+    )
+    credits = (
+        UsageCredits(enabled=True, balance=total_credits - total_usage)
+        if total_credits is not None and total_usage is not None
+        else None
+    )
+
+    key_data = key_body.get("data") if isinstance(key_body, Mapping) else None
+    windows: list[UsageWindow] = []
+    if isinstance(key_data, Mapping):
+        window = _openrouter_window(key_data)
+        if window is not None:
+            windows.append(window)
+    return ProviderUsageSnapshot(
+        connection=connection_id,
+        account=account,
+        display_name=display_name,
+        windows=windows,
+        credits=credits,
+    )
+
+
+def _openrouter_window(key_data: Mapping[str, Any]) -> UsageWindow | None:
+    limit = _as_number(key_data.get("limit"))
+    remaining = _as_number(key_data.get("limit_remaining"))
+    # remaining > limit means OpenRouter rolled the cap over (credits added
+    # mid-period); the ratio is then no longer a meaningful quota window.
+    if limit is None or limit <= 0 or remaining is None or not 0 <= remaining <= limit:
+        return None
+    return UsageWindow(
+        label="API key spending cap",
+        used_percent=clamp_percent((limit - remaining) / limit * 100.0),
+        reset_at=_date_to_iso(key_data.get("limit_reset")),
+        used_units=limit - remaining,
+        remaining_units=remaining,
+        total_units=limit,
+        unit="USD",
+    )
+
+
+# ---------------------------------------------------------------------------
 # Shared helpers
 # ---------------------------------------------------------------------------
 
@@ -1061,7 +1149,10 @@ def _positive_int(value: Any) -> int | None:
 
 
 def _is_meaningful(snapshot: ProviderUsageSnapshot) -> bool:
-    return bool(snapshot.windows) or bool(snapshot.error)
+    # Enabled credits alone are meaningful: OpenRouter keys without a spending
+    # cap (or with a failed /key probe) still report a credits balance.
+    credits_meaningful = snapshot.credits is not None and snapshot.credits.enabled
+    return bool(snapshot.windows) or credits_meaningful or bool(snapshot.error)
 
 
 def _join_url(base_url: str, path: str) -> str:
