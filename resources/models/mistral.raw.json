@@ -1,5 +1,5 @@
 {
-  "fetched_at": "2026-08-01T14:33:51.902066+00:00",
+  "fetched_at": "2026-08-14T13:51:08.232540+00:00",
   "provider_id": "mistral",
   "raw_response": {
     "data": [
@@ -21,7 +21,7 @@
           "unified_resources": false,
           "vision": true
         },
-        "created": 1785594832,
+        "created": 1786715488,
         "default_model_temperature": 0.3,
         "deprecation": "2026-08-31T12:00:00Z",
         "deprecation_replacement_model": "mistral-medium-3-5",
@@ -51,7 +51,7 @@
           "unified_resources": false,
           "vision": true
         },
-        "created": 1785594832,
+        "created": 1786715488,
         "default_model_temperature": 0.3,
         "deprecation": "2026-08-31T12:00:00Z",
         "deprecation_replacement_model": "mistral-medium-3-5",
@@ -85,7 +85,7 @@
           "unified_resources": false,
           "vision": false
         },
-        "created": 1785594832,
+        "created": 1786715488,
         "default_model_temperature": 0.3,
         "deprecation": null,
         "deprecation_replacement_model": null,
@@ -119,7 +119,7 @@
           "unified_resources": false,
           "vision": false
         },
-        "created": 1785594832,
+        "created": 1786715488,
         "default_model_temperature": 0.3,
         "deprecation": null,
         "deprecation_replacement_model": null,
@@ -153,7 +153,7 @@
           "unified_resources": false,
           "vision": false
         },
-        "created": 1785594832,
+        "created": 1786715488,
         "default_model_temperature": 0.3,
         "deprecation": null,
         "deprecation_replacement_model": null,
@@ -187,7 +187,7 @@
           "unified_resources": false,
           "vision": false
         },
-        "created": 1785594832,
+        "created": 1786715488,
         "default_model_temperature": 0.3,
         "deprecation": null,
         "deprecation_replacement_model": null,
@@ -221,7 +221,7 @@
           "unified_resources": false,
           "vision": false
         },
-        "created": 1785594832,
+        "created": 1786715488,
         "default_model_temperature": 0.2,
         "deprecation": "2026-08-31T12:00:00Z",
         "deprecation_replacement_model": "mistral-medium-3-5",
@@ -255,7 +255,7 @@
           "unified_resources": false,
           "vision": false
         },
-        "created": 1785594832,
+        "created": 1786715488,
         "default_model_temperature": 0.2,
         "deprecation": "2026-08-31T12:00:00Z",
         "deprecation_replacement_model": "mistral-medium-3-5",
@@ -289,7 +289,7 @@
           "unified_resources": false,
           "vision": false
         },
-        "created": 1785594832,
+        "created": 1786715488,
         "default_model_temperature": 0.2,
         "deprecation": "2026-08-31T12:00:00Z",
         "deprecation_replacement_model": "mistral-medium-3-5",
@@ -323,7 +323,7 @@
           "unified_resources": false,
           "vision": false
         },
-        "created": 1785594832,
+        "created": 1786715488,
         "default_model_temperature": 0.2,
         "deprecation": "2026-08-31T12:00:00Z",
         "deprecation_replacement_model": "mistral-medium-3-5",
@@ -357,7 +357,7 @@
           "unified_resources": false,
           "vision": true
         },
-        "created": 1785594832,
+        "created": 1786715488,
         "default_model_temperature": 0.3,
         "deprecation": null,
         "deprecation_replacement_model": null,
@@ -391,7 +391,7 @@
           "unified_resources": false,
           "vision": true
         },
-        "created": 1785594832,
+        "created": 1786715488,
         "default_model_temperature": 0.3,
         "deprecation": null,
         "deprecation_replacement_model": null,
@@ -425,7 +425,7 @@
           "unified_resources": false,
           "vision": true
         },
-        "created": 1785594832,
+        "created": 1786715488,
         "default_model_temperature": 0.3,
         "deprecation": null,
         "deprecation_replacement_model": null,
@@ -459,7 +459,7 @@
           "unified_resources": false,
           "vision": true
         },
-        "created": 1785594832,
+        "created": 1786715488,
         "default_model_temperature": 0.3,
         "deprecation": null,
         "deprecation_replacement_model": null,
@@ -491,7 +491,7 @@
           "unified_resources": false,
           "vision": false
         },
-        "created": 1785594832,
+        "created": 1786715488,
         "default_model_temperature": 0.2,
         "deprecation": null,
         "deprecation_replacement_model": null,
@@ -523,7 +523,7 @@
           "unified_resources": false,
           "vision": false
         },
-        "created": 1785594832,
+        "created": 1786715488,
         "default_model_temperature": 0.2,
         "deprecation": null,
         "deprecation_replacement_model": null,
@@ -555,7 +555,7 @@
           "unified_resources": true,
           "vision": true
         },
-        "created": 1785594832,
+        "created": 1786715488,
         "default_model_temperature": 1.0,
         "deprecation": null,
         "deprecation_replacement_model": null,
@@ -587,7 +587,7 @@
           "unified_resources": true,
           "vision": true
         },
-        "created": 1785594832,
+        "created": 1786715488,
         "default_model_temperature": 1.0,
         "deprecation": null,
         "deprecation_replacement_model": null,
@@ -619,7 +619,7 @@
           "unified_resources": false,
           "vision": true
         },
-        "created": 1785594832,
+        "created": 1786715488,
         "default_model_temperature": 0.3,
         "deprecation": null,
         "deprecation_replacement_model": null,
@@ -651,7 +651,7 @@
           "unified_resources": false,
           "vision": true
         },
-        "created": 1785594832,
+        "created": 1786715488,
         "default_model_temperature": 0.3,
         "deprecation": null,
         "deprecation_replacement_model": null,
@@ -683,7 +683,7 @@
           "unified_resources": false,
           "vision": true
         },
-        "created": 1785594832,
+        "created": 1786715488,
         "default_model_temperature": 0.3,
         "deprecation": null,
         "deprecation_replacement_model": null,
@@ -715,7 +715,7 @@
           "unified_resources": false,
           "vision": true
         },
-        "created": 1785594832,
+        "created": 1786715488,
         "default_model_temperature": 0.3,
         "deprecation": null,
         "deprecation_replacement_model": null,
@@ -747,7 +747,7 @@
           "unified_resources": false,
           "vision": true
         },
-        "created": 1785594832,
+        "created": 1786715488,
         "default_model_temperature": 0.3,
         "deprecation": null,
         "deprecation_replacement_model": null,
@@ -779,7 +779,7 @@
           "unified_resources": false,
           "vision": true
         },
-        "created": 1785594832,
+        "created": 1786715488,
         "default_model_temperature": 0.3,
         "deprecation": null,
         "deprecation_replacement_model": null,
@@ -811,7 +811,7 @@
           "unified_resources": false,
           "vision": true
         },
-        "created": 1785594832,
+        "created": 1786715488,
         "default_model_temperature": 0.3,
         "deprecation": null,
         "deprecation_replacement_model": null,
@@ -843,7 +843,7 @@
           "unified_resources": false,
           "vision": true
         },
-        "created": 1785594832,
+        "created": 1786715488,
         "default_model_temperature": 0.3,
         "deprecation": null,
         "deprecation_replacement_model": null,
@@ -881,7 +881,7 @@
           "unified_resources": false,
           "vision": true
         },
-        "created": 1785594832,
+        "created": 1786715488,
         "default_model_temperature": 1.0,
         "deprecation": null,
         "deprecation_replacement_model": null,
@@ -919,7 +919,7 @@
           "unified_resources": false,
           "vision": true
         },
-        "created": 1785594832,
+        "created": 1786715488,
         "default_model_temperature": 1.0,
         "deprecation": null,
         "deprecation_replacement_model": null,
@@ -957,7 +957,7 @@
           "unified_resources": false,
           "vision": true
         },
-        "created": 1785594832,
+        "created": 1786715488,
         "default_model_temperature": 1.0,
         "deprecation": null,
         "deprecation_replacement_model": null,
@@ -995,7 +995,7 @@
           "unified_resources": false,
           "vision": true
         },
-        "created": 1785594832,
+        "created": 1786715488,
         "default_model_temperature": 1.0,
         "deprecation": null,
         "deprecation_replacement_model": null,
@@ -1033,7 +1033,7 @@
           "unified_resources": false,
           "vision": true
         },
-        "created": 1785594832,
+        "created": 1786715488,
         "default_model_temperature": 1.0,
         "deprecation": null,
         "deprecation_replacement_model": null,
@@ -1071,7 +1071,7 @@
           "unified_resources": false,
           "vision": true
         },
-        "created": 1785594832,
+        "created": 1786715488,
         "default_model_temperature": 1.0,
         "deprecation": null,
         "deprecation_replacement_model": null,
@@ -1109,7 +1109,7 @@
           "unified_resources": false,
           "vision": true
         },
-        "created": 1785594832,
+        "created": 1786715488,
         "default_model_temperature": 1.0,
         "deprecation": null,
         "deprecation_replacement_model": null,
@@ -1147,7 +1147,7 @@
           "unified_resources": false,
           "vision": true
         },
-        "created": 1785594832,
+        "created": 1786715488,
         "default_model_temperature": 1.0,
         "deprecation": null,
         "deprecation_replacement_model": null,
@@ -1155,6 +1155,70 @@
         "id": "mistral-vibe-cli-with-tools",
         "max_context_length": 262144,
         "name": "mistral-medium-latest",
+        "object": "model",
+        "owned_by": "mistralai",
+        "type": "base"
+      },
+      {
+        "aliases": [
+          "zai-glm-5-2"
+        ],
+        "capabilities": {
+          "audio": false,
+          "audio_speech": false,
+          "audio_transcription": false,
+          "audio_transcription_realtime": false,
+          "classification": false,
+          "completion_chat": true,
+          "completion_fim": false,
+          "fine_tuning": false,
+          "function_calling": true,
+          "moderation": false,
+          "ocr": false,
+          "reasoning": true,
+          "unified_resources": false,
+          "vision": false
+        },
+        "created": 1786715488,
+        "default_model_temperature": null,
+        "deprecation": null,
+        "deprecation_replacement_model": null,
+        "description": "Official Z.ai GLM 5.2 model",
+        "id": "glm-5-2",
+        "max_context_length": 1048576,
+        "name": "glm-5-2",
+        "object": "model",
+        "owned_by": "mistralai",
+        "type": "base"
+      },
+      {
+        "aliases": [
+          "glm-5-2"
+        ],
+        "capabilities": {
+          "audio": false,
+          "audio_speech": false,
+          "audio_transcription": false,
+          "audio_transcription_realtime": false,
+          "classification": false,
+          "completion_chat": true,
+          "completion_fim": false,
+          "fine_tuning": false,
+          "function_calling": true,
+          "moderation": false,
+          "ocr": false,
+          "reasoning": true,
+          "unified_resources": false,
+          "vision": false
+        },
+        "created": 1786715488,
+        "default_model_temperature": null,
+        "deprecation": null,
+        "deprecation_replacement_model": null,
+        "description": "Official Z.ai GLM 5.2 model",
+        "id": "zai-glm-5-2",
+        "max_context_length": 1048576,
+        "name": "glm-5-2",
         "object": "model",
         "owned_by": "mistralai",
         "type": "base"
@@ -1179,7 +1243,7 @@
           "unified_resources": false,
           "vision": false
         },
-        "created": 1785594832,
+        "created": 1786715488,
         "default_model_temperature": null,
         "deprecation": null,
         "deprecation_replacement_model": null,
@@ -1211,7 +1275,7 @@
           "unified_resources": false,
           "vision": false
         },
-        "created": 1785594832,
+        "created": 1786715488,
         "default_model_temperature": null,
         "deprecation": null,
         "deprecation_replacement_model": null,
@@ -1243,7 +1307,7 @@
           "unified_resources": false,
           "vision": false
         },
-        "created": 1785594832,
+        "created": 1786715488,
         "default_model_temperature": null,
         "deprecation": null,
         "deprecation_replacement_model": null,
@@ -1275,7 +1339,7 @@
           "unified_resources": false,
           "vision": false
         },
-        "created": 1785594832,
+        "created": 1786715488,
         "default_model_temperature": null,
         "deprecation": null,
         "deprecation_replacement_model": null,
@@ -1305,7 +1369,7 @@
           "unified_resources": false,
           "vision": false
         },
-        "created": 1785594832,
+        "created": 1786715488,
         "default_model_temperature": null,
         "deprecation": null,
         "deprecation_replacement_model": null,
@@ -1338,7 +1402,7 @@
           "unified_resources": false,
           "vision": true
         },
-        "created": 1785594832,
+        "created": 1786715488,
         "default_model_temperature": 0.0,
         "deprecation": null,
         "deprecation_replacement_model": null,
@@ -1371,7 +1435,7 @@
           "unified_resources": false,
           "vision": true
         },
-        "created": 1785594832,
+        "created": 1786715488,
         "default_model_temperature": 0.0,
         "deprecation": null,
         "deprecation_replacement_model": null,
@@ -1404,7 +1468,7 @@
           "unified_resources": false,
           "vision": true
         },
-        "created": 1785594832,
+        "created": 1786715488,
         "default_model_temperature": 0.0,
         "deprecation": null,
         "deprecation_replacement_model": null,
@@ -1417,9 +1481,39 @@
         "type": "base"
       },
       {
+        "aliases": [],
+        "capabilities": {
+          "audio": false,
+          "audio_speech": false,
+          "audio_transcription": false,
+          "audio_transcription_realtime": false,
+          "classification": false,
+          "completion_chat": false,
+          "completion_fim": false,
+          "fine_tuning": false,
+          "function_calling": true,
+          "moderation": false,
+          "ocr": true,
+          "reasoning": false,
+          "unified_resources": false,
+          "vision": true
+        },
+        "created": 1786715488,
+        "default_model_temperature": 0.0,
+        "deprecation": null,
+        "deprecation_replacement_model": null,
+        "description": "Official mistral-ocr-4-0 Mistral AI model",
+        "id": "mistral-ocr-4-0",
+        "max_context_length": 16384,
+        "name": "mistral-ocr-4-0",
+        "object": "model",
+        "owned_by": "mistralai",
+        "type": "base"
+      },
+      {
         "aliases": [
-          "mistral-ocr-4-0",
-          "mistral-ocr-4"
+          "mistral-ocr-4",
+          "mistral-ocr-4-1"
         ],
         "capabilities": {
           "audio": false,
@@ -1437,7 +1531,7 @@
           "unified_resources": false,
           "vision": true
         },
-        "created": 1785594832,
+        "created": 1786715488,
         "default_model_temperature": 0.0,
         "deprecation": null,
         "deprecation_replacement_model": null,
@@ -1452,6 +1546,39 @@
       {
         "aliases": [
           "mistral-ocr-latest",
+          "mistral-ocr-4-1"
+        ],
+        "capabilities": {
+          "audio": false,
+          "audio_speech": false,
+          "audio_transcription": false,
+          "audio_transcription_realtime": false,
+          "classification": false,
+          "completion_chat": false,
+          "completion_fim": false,
+          "fine_tuning": false,
+          "function_calling": true,
+          "moderation": false,
+          "ocr": true,
+          "reasoning": false,
+          "unified_resources": false,
+          "vision": true
+        },
+        "created": 1786715488,
+        "default_model_temperature": 0.0,
+        "deprecation": null,
+        "deprecation_replacement_model": null,
+        "description": "Official mistral-ocr-latest Mistral AI model",
+        "id": "mistral-ocr-4",
+        "max_context_length": 16384,
+        "name": "mistral-ocr-latest",
+        "object": "model",
+        "owned_by": "mistralai",
+        "type": "base"
+      },
+      {
+        "aliases": [
+          "mistral-ocr-latest",
           "mistral-ocr-4"
         ],
         "capabilities": {
@@ -1470,45 +1597,12 @@
           "unified_resources": false,
           "vision": true
         },
-        "created": 1785594832,
+        "created": 1786715488,
         "default_model_temperature": 0.0,
         "deprecation": null,
         "deprecation_replacement_model": null,
         "description": "Official mistral-ocr-latest Mistral AI model",
-        "id": "mistral-ocr-4-0",
-        "max_context_length": 16384,
-        "name": "mistral-ocr-latest",
-        "object": "model",
-        "owned_by": "mistralai",
-        "type": "base"
-      },
-      {
-        "aliases": [
-          "mistral-ocr-latest",
-          "mistral-ocr-4-0"
-        ],
-        "capabilities": {
-          "audio": false,
-          "audio_speech": false,
-          "audio_transcription": false,
-          "audio_transcription_realtime": false,
-          "classification": false,
-          "completion_chat": false,
-          "completion_fim": false,
-          "fine_tuning": false,
-          "function_calling": true,
-          "moderation": false,
-          "ocr": true,
-          "reasoning": false,
-          "unified_resources": false,
-          "vision": true
-        },
-        "created": 1785594832,
-        "default_model_temperature": 0.0,
-        "deprecation": null,
-        "deprecation_replacement_model": null,
-        "description": "Official mistral-ocr-latest Mistral AI model",
-        "id": "mistral-ocr-4",
+        "id": "mistral-ocr-4-1",
         "max_context_length": 16384,
         "name": "mistral-ocr-latest",
         "object": "model",
@@ -1535,7 +1629,7 @@
           "unified_resources": false,
           "vision": false
         },
-        "created": 1785594832,
+        "created": 1786715488,
         "default_model_temperature": 0.0,
         "deprecation": null,
         "deprecation_replacement_model": null,
@@ -1567,7 +1661,7 @@
           "unified_resources": false,
           "vision": false
         },
-        "created": 1785594832,
+        "created": 1786715488,
         "default_model_temperature": 0.0,
         "deprecation": null,
         "deprecation_replacement_model": null,
@@ -1600,7 +1694,7 @@
           "unified_resources": false,
           "vision": false
         },
-        "created": 1785594832,
+        "created": 1786715488,
         "default_model_temperature": 0.0,
         "deprecation": null,
         "deprecation_replacement_model": null,
@@ -1633,7 +1727,7 @@
           "unified_resources": false,
           "vision": false
         },
-        "created": 1785594832,
+        "created": 1786715488,
         "default_model_temperature": 0.0,
         "deprecation": null,
         "deprecation_replacement_model": null,
@@ -1666,7 +1760,7 @@
           "unified_resources": false,
           "vision": false
         },
-        "created": 1785594832,
+        "created": 1786715488,
         "default_model_temperature": 0.0,
         "deprecation": null,
         "deprecation_replacement_model": null,
@@ -1698,7 +1792,7 @@
           "unified_resources": false,
           "vision": false
         },
-        "created": 1785594832,
+        "created": 1786715488,
         "default_model_temperature": 0.3,
         "deprecation": null,
         "deprecation_replacement_model": null,
@@ -1730,7 +1824,7 @@
           "unified_resources": false,
           "vision": false
         },
-        "created": 1785594832,
+        "created": 1786715488,
         "default_model_temperature": 0.3,
         "deprecation": null,
         "deprecation_replacement_model": null,

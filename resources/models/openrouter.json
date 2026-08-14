@@ -1,5 +1,5 @@
 {
-  "fetched_at": "2026-08-08T20:45:54.224775+00:00",
+  "fetched_at": "2026-08-14T13:51:34.310560+00:00",
   "models": {
     "ai21/jamba-large-1.7": {
       "capabilities": {
@@ -941,8 +941,8 @@
       "connections": [
         "api-key"
       ],
-      "context_window": 16384,
-      "max_output_tokens": 2048,
+      "context_window": 32768,
+      "max_output_tokens": 4096,
       "metadata": {
         "openrouter": {
           "modality": "text->text"
@@ -2527,9 +2527,6 @@
         "output_modalities": [
           "text"
         ],
-        "reasoning": {
-          "supported": true
-        },
         "supported_parameters": [
           "frequency_penalty",
           "include_reasoning",
@@ -3327,6 +3324,117 @@
       },
       "name": "ByteDance Seed: Seed 1.6 Flash"
     },
+    "bytedance-seed/seed-2-1-turbo": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "video"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "frequency_penalty",
+          "include_reasoning",
+          "max_tokens",
+          "reasoning",
+          "response_format",
+          "stop",
+          "structured_outputs",
+          "temperature",
+          "tool_choice",
+          "tools",
+          "top_p"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding",
+          "video_input",
+          "video_understanding"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 262144,
+      "family": "seed",
+      "max_output_tokens": 262144,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image+video->text"
+        }
+      },
+      "name": "ByteDance Seed: Seed 2.1 Turbo"
+    },
+    "bytedance-seed/seed-2.0-code": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "video"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "control": "levels",
+          "levels": [
+            "low",
+            "medium",
+            "high"
+          ],
+          "supported": true
+        },
+        "supported_parameters": [
+          "frequency_penalty",
+          "include_reasoning",
+          "max_tokens",
+          "reasoning",
+          "reasoning_effort",
+          "response_format",
+          "stop",
+          "structured_outputs",
+          "temperature",
+          "tool_choice",
+          "tools",
+          "top_p"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding",
+          "video_input",
+          "video_understanding"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 262144,
+      "family": "seed",
+      "max_output_tokens": 131072,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image+video->text"
+        }
+      },
+      "name": "ByteDance Seed: Seed-2.0-Code"
+    },
     "bytedance-seed/seed-2.0-lite": {
       "capabilities": {
         "input_modalities": [
@@ -3535,6 +3643,182 @@
         }
       },
       "name": "ByteDance Seed: Seedream 4.5"
+    },
+    "bytedance-seed/seedream-5-0-lite": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "image"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [
+          "frequency_penalty",
+          "max_tokens",
+          "temperature",
+          "top_p"
+        ],
+        "supported_voices": [],
+        "task_options": {
+          "image_generation": {
+            "parameters": {
+              "aspect_ratio": {
+                "type": "enum",
+                "values": [
+                  "1:1",
+                  "1:2",
+                  "2:1",
+                  "2:3",
+                  "3:2",
+                  "3:4",
+                  "4:3",
+                  "4:5",
+                  "5:4",
+                  "9:16",
+                  "16:9",
+                  "9:19.5",
+                  "19.5:9",
+                  "9:20",
+                  "20:9",
+                  "9:21",
+                  "21:9",
+                  "auto"
+                ]
+              },
+              "input_references": {
+                "max": 14,
+                "min": 0,
+                "type": "range"
+              },
+              "n": {
+                "max": 4,
+                "min": 1,
+                "type": "range"
+              },
+              "resolution": {
+                "type": "enum",
+                "values": [
+                  "2K",
+                  "4K"
+                ]
+              },
+              "seed": {
+                "type": "boolean"
+              }
+            }
+          }
+        },
+        "task_types": [
+          "image_input",
+          "image_generation"
+        ],
+        "tools": false,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": null,
+      "max_output_tokens": 0,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image->image"
+        }
+      },
+      "name": "ByteDance Seed: Seedream 5.0 Lite"
+    },
+    "bytedance-seed/seedream-5-0-pro": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "image"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [
+          "frequency_penalty",
+          "max_tokens",
+          "temperature",
+          "top_p"
+        ],
+        "supported_voices": [],
+        "task_options": {
+          "image_generation": {
+            "parameters": {
+              "aspect_ratio": {
+                "type": "enum",
+                "values": [
+                  "1:1",
+                  "1:2",
+                  "2:1",
+                  "2:3",
+                  "3:2",
+                  "3:4",
+                  "4:3",
+                  "4:5",
+                  "5:4",
+                  "9:16",
+                  "16:9",
+                  "9:19.5",
+                  "19.5:9",
+                  "9:20",
+                  "20:9",
+                  "9:21",
+                  "21:9",
+                  "auto"
+                ]
+              },
+              "input_references": {
+                "max": 14,
+                "min": 0,
+                "type": "range"
+              },
+              "n": {
+                "max": 1,
+                "min": 1,
+                "type": "range"
+              },
+              "resolution": {
+                "type": "enum",
+                "values": [
+                  "1K",
+                  "2K"
+                ]
+              },
+              "seed": {
+                "type": "boolean"
+              }
+            }
+          }
+        },
+        "task_types": [
+          "image_input",
+          "image_generation"
+        ],
+        "tools": false,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": null,
+      "max_output_tokens": 0,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image->image"
+        }
+      },
+      "name": "ByteDance Seed: Seedream 5.0 Pro"
     },
     "bytedance/seedance-1-5-pro": {
       "capabilities": {
@@ -3893,6 +4177,249 @@
         }
       },
       "name": "ByteDance: Seedance 2.0 Fast"
+    },
+    "bytedance/seedance-2.0-mini": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "video",
+          "audio"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "video"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [
+          "frequency_penalty"
+        ],
+        "supported_voices": [],
+        "task_options": {
+          "video_generation": {
+            "frame_images": [
+              "first_frame",
+              "last_frame"
+            ],
+            "parameters": {
+              "aspect_ratio": {
+                "type": "enum",
+                "values": [
+                  "1:1",
+                  "3:4",
+                  "9:16",
+                  "4:3",
+                  "16:9",
+                  "21:9",
+                  "9:21"
+                ]
+              },
+              "duration": {
+                "type": "enum",
+                "values": [
+                  "4",
+                  "5",
+                  "6",
+                  "7",
+                  "8",
+                  "9",
+                  "10",
+                  "11",
+                  "12",
+                  "13",
+                  "14",
+                  "15"
+                ]
+              },
+              "generate_audio": {
+                "type": "boolean"
+              },
+              "resolution": {
+                "type": "enum",
+                "values": [
+                  "480p",
+                  "720p"
+                ]
+              },
+              "seed": {
+                "type": "boolean"
+              },
+              "size": {
+                "type": "enum",
+                "values": [
+                  "480x480",
+                  "480x640",
+                  "480x854",
+                  "640x480",
+                  "854x480",
+                  "1120x480",
+                  "720x720",
+                  "720x960",
+                  "720x1280",
+                  "720x1680",
+                  "960x720",
+                  "1280x720",
+                  "1680x720"
+                ]
+              }
+            },
+            "passthrough_parameters": [
+              "watermark",
+              "req_key",
+              "return_last_frame"
+            ]
+          }
+        },
+        "task_types": [
+          "image_input",
+          "audio_input",
+          "video_input",
+          "video_generation"
+        ],
+        "tools": false,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": null,
+      "max_output_tokens": null,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image+audio+video->video"
+        }
+      },
+      "name": "ByteDance: Seedance 2.0 Mini"
+    },
+    "bytedance/seedance-2.5": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "video",
+          "audio"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "video"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [
+          "frequency_penalty"
+        ],
+        "supported_voices": [],
+        "task_options": {
+          "video_generation": {
+            "frame_images": [
+              "first_frame",
+              "last_frame"
+            ],
+            "parameters": {
+              "aspect_ratio": {
+                "type": "enum",
+                "values": [
+                  "16:9",
+                  "4:3",
+                  "1:1",
+                  "3:4",
+                  "9:16",
+                  "21:9"
+                ]
+              },
+              "duration": {
+                "type": "enum",
+                "values": [
+                  "4",
+                  "5",
+                  "6",
+                  "7",
+                  "8",
+                  "9",
+                  "10",
+                  "11",
+                  "12",
+                  "13",
+                  "14",
+                  "15",
+                  "16",
+                  "17",
+                  "18",
+                  "19",
+                  "20",
+                  "21",
+                  "22",
+                  "23",
+                  "24",
+                  "25",
+                  "26",
+                  "27",
+                  "28",
+                  "29",
+                  "30"
+                ]
+              },
+              "generate_audio": {
+                "type": "boolean"
+              },
+              "resolution": {
+                "type": "enum",
+                "values": [
+                  "480p",
+                  "720p"
+                ]
+              },
+              "seed": {
+                "type": "boolean"
+              },
+              "size": {
+                "type": "enum",
+                "values": [
+                  "854x480",
+                  "752x560",
+                  "640x640",
+                  "560x752",
+                  "480x854",
+                  "992x432",
+                  "1280x720",
+                  "1112x834",
+                  "960x960",
+                  "834x1112",
+                  "720x1280",
+                  "1470x630"
+                ]
+              }
+            },
+            "passthrough_parameters": [
+              "watermark",
+              "req_key",
+              "output_format"
+            ]
+          }
+        },
+        "task_types": [
+          "image_input",
+          "audio_input",
+          "video_input",
+          "video_generation"
+        ],
+        "tools": false,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": null,
+      "max_output_tokens": null,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image+audio+video->video"
+        }
+      },
+      "name": "ByteDance: Seedance 2.5"
     },
     "bytedance/ui-tars-1.5-7b": {
       "capabilities": {
@@ -4436,6 +4963,76 @@
       },
       "name": "Deepgram: Aura-2"
     },
+    "deepgram/flux-tts:free": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "speech"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [],
+        "supported_voices": [
+          "flux-alexis-en",
+          "flux-bree-en",
+          "flux-brittany-en",
+          "flux-brooke-en",
+          "flux-bruce-en",
+          "flux-cliff-en",
+          "flux-cole-en",
+          "flux-colin-en",
+          "flux-conor-en",
+          "flux-donovan-en",
+          "flux-drew-en",
+          "flux-elise-en",
+          "flux-gemma-en",
+          "flux-haley-en",
+          "flux-hannah-en",
+          "flux-heather-en",
+          "flux-jack-en",
+          "flux-kai-en",
+          "flux-kelsey-en",
+          "flux-kit-en",
+          "flux-maeve-en",
+          "flux-marcelo-en",
+          "flux-marcus-en",
+          "flux-meena-en",
+          "flux-meghan-en",
+          "flux-miles-en",
+          "flux-naveen-en",
+          "flux-paige-en",
+          "flux-priya-en",
+          "flux-rufus-en",
+          "flux-sean-en",
+          "flux-sharon-en",
+          "flux-sienna-en",
+          "flux-tanner-en",
+          "flux-wade-en",
+          "flux-wes-en"
+        ],
+        "task_types": [
+          "audio_generation",
+          "text_to_speech"
+        ],
+        "tools": false,
+        "vision": false
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": null,
+      "max_output_tokens": null,
+      "metadata": {
+        "openrouter": {
+          "modality": "text->speech"
+        }
+      },
+      "name": "Deepgram: Flux TTS (free)"
+    },
     "deepgram/nova-3": {
       "capabilities": {
         "input_modalities": [
@@ -4634,7 +5231,6 @@
         "supported_parameters": [
           "frequency_penalty",
           "include_reasoning",
-          "max_completion_tokens",
           "max_tokens",
           "presence_penalty",
           "reasoning",
@@ -4660,7 +5256,7 @@
       "connections": [
         "api-key"
       ],
-      "context_window": 163840,
+      "context_window": 64000,
       "family": "deepseek-thinking",
       "max_output_tokens": 16000,
       "metadata": {
@@ -5020,6 +5616,7 @@
           "logprobs",
           "max_tokens",
           "min_p",
+          "parallel_tool_calls",
           "presence_penalty",
           "reasoning",
           "reasoning_effort",
@@ -5049,7 +5646,7 @@
       ],
       "context_window": 1048576,
       "family": "deepseek-flash",
-      "max_output_tokens": 384000,
+      "max_output_tokens": 393216,
       "metadata": {
         "openrouter": {
           "modality": "text->text"
@@ -5109,7 +5706,7 @@
       ],
       "context_window": 1048576,
       "family": "deepseek-thinking",
-      "max_output_tokens": 384000,
+      "max_output_tokens": 393216,
       "metadata": {
         "openrouter": {
           "modality": "text->text",
@@ -5117,6 +5714,67 @@
         }
       },
       "name": "DeepSeek: DeepSeek V4 Pro"
+    },
+    "deepseek/deepseek-v4-pro-0813": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "control": "levels",
+          "levels": [
+            "low",
+            "high",
+            "max"
+          ],
+          "supported": true
+        },
+        "supported_parameters": [
+          "frequency_penalty",
+          "include_reasoning",
+          "logit_bias",
+          "logprobs",
+          "max_tokens",
+          "min_p",
+          "presence_penalty",
+          "reasoning",
+          "reasoning_effort",
+          "repetition_penalty",
+          "response_format",
+          "seed",
+          "stop",
+          "structured_outputs",
+          "temperature",
+          "tool_choice",
+          "tools",
+          "top_k",
+          "top_logprobs",
+          "top_p"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
+        "tools": true,
+        "vision": false
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 1048576,
+      "family": "deepseek-thinking",
+      "max_output_tokens": 384000,
+      "metadata": {
+        "openrouter": {
+          "modality": "text->text"
+        }
+      },
+      "name": "DeepSeek: DeepSeek V4 Pro 0813"
     },
     "fish-audio/s1": {
       "capabilities": {
@@ -6554,7 +7212,7 @@
       ],
       "context_window": 65536,
       "family": "gemini-flash-lite",
-      "max_output_tokens": 65536,
+      "max_output_tokens": 66000,
       "metadata": {
         "openrouter": {
           "modality": "text+image->text+image"
@@ -7309,6 +7967,127 @@
       },
       "name": "Google: Gemini 3.6 Flash (batch)"
     },
+    "google/gemini-3.7-flash": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "video",
+          "file",
+          "audio"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "control": "levels",
+          "levels": [
+            "low",
+            "medium",
+            "high"
+          ],
+          "supported": true
+        },
+        "supported_parameters": [
+          "include_reasoning",
+          "max_tokens",
+          "reasoning",
+          "reasoning_effort",
+          "response_format",
+          "seed",
+          "stop",
+          "structured_outputs",
+          "temperature",
+          "tool_choice",
+          "tools",
+          "top_p"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding",
+          "file_input",
+          "file_understanding",
+          "audio_input",
+          "speech_to_text",
+          "video_input",
+          "video_understanding"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 1048576,
+      "family": "gemini-flash",
+      "max_output_tokens": 65536,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image+file+audio+video->text"
+        }
+      },
+      "name": "Google: Gemini 3.7 Flash"
+    },
+    "google/gemini-3.7-flash:batch": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "video",
+          "file",
+          "audio"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "include_reasoning",
+          "max_tokens",
+          "reasoning",
+          "reasoning_effort",
+          "response_format",
+          "seed",
+          "stop",
+          "structured_outputs",
+          "tool_choice",
+          "tools"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding",
+          "file_input",
+          "file_understanding",
+          "audio_input",
+          "speech_to_text",
+          "video_input",
+          "video_understanding"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 1048576,
+      "max_output_tokens": 65536,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image+file+audio+video->text"
+        }
+      },
+      "name": "Google: Gemini 3.7 Flash (batch)"
+    },
     "google/gemini-embedding-001": {
       "capabilities": {
         "input_modalities": [
@@ -7737,7 +8516,7 @@
       ],
       "context_window": 262144,
       "family": "gemma",
-      "max_output_tokens": 16384,
+      "max_output_tokens": 262144,
       "metadata": {
         "openrouter": {
           "modality": "text+image+video->text"
@@ -8745,56 +9524,6 @@
       },
       "name": "Ling-3.0-flash"
     },
-    "inclusionai/ling-3.0-tiny:free": {
-      "capabilities": {
-        "input_modalities": [
-          "text"
-        ],
-        "json_mode": false,
-        "output_modalities": [
-          "text"
-        ],
-        "reasoning": {
-          "supported": true
-        },
-        "supported_parameters": [
-          "frequency_penalty",
-          "include_reasoning",
-          "logprobs",
-          "max_tokens",
-          "presence_penalty",
-          "reasoning",
-          "repetition_penalty",
-          "seed",
-          "stop",
-          "temperature",
-          "tool_choice",
-          "tools",
-          "top_k",
-          "top_logprobs",
-          "top_p"
-        ],
-        "supported_voices": [],
-        "task_types": [
-          "chat",
-          "text_output"
-        ],
-        "tools": true,
-        "vision": false
-      },
-      "connections": [
-        "api-key"
-      ],
-      "context_window": 262144,
-      "family": "ling",
-      "max_output_tokens": 32768,
-      "metadata": {
-        "openrouter": {
-          "modality": "text->text"
-        }
-      },
-      "name": "inclusionAI: Ling 3.0 Tiny (free)"
-    },
     "inclusionai/ring-2.6-1t": {
       "capabilities": {
         "input_modalities": [
@@ -9229,7 +9958,6 @@
           "supported": false
         },
         "supported_parameters": [
-          "frequency_penalty",
           "logprobs",
           "max_tokens",
           "presence_penalty",
@@ -9328,7 +10056,6 @@
           "supported": false
         },
         "supported_parameters": [
-          "frequency_penalty",
           "logprobs",
           "max_tokens",
           "presence_penalty",
@@ -9634,6 +10361,60 @@
         }
       },
       "name": "Kling: Video O1"
+    },
+    "liquid/lfm-2.5-2.6b:free": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "frequency_penalty",
+          "include_reasoning",
+          "logprobs",
+          "max_completion_tokens",
+          "max_tokens",
+          "min_p",
+          "presence_penalty",
+          "reasoning",
+          "repetition_penalty",
+          "response_format",
+          "seed",
+          "stop",
+          "structured_outputs",
+          "temperature",
+          "tool_choice",
+          "tools",
+          "top_k",
+          "top_logprobs",
+          "top_p"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
+        "tools": true,
+        "vision": false
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 128000,
+      "family": "liquid",
+      "max_output_tokens": 8192,
+      "metadata": {
+        "openrouter": {
+          "modality": "text->text"
+        }
+      },
+      "name": "LiquidAI: LFM2.5-2.6B (free)"
     },
     "mancer/weaver": {
       "capabilities": {
@@ -10187,6 +10968,71 @@
         }
       },
       "name": "Meta: Llama Guard 4 12B"
+    },
+    "meta/muse-glimmer-30b": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "control": "levels",
+          "levels": [
+            "low",
+            "medium",
+            "high",
+            "xhigh"
+          ],
+          "supported": true
+        },
+        "supported_parameters": [
+          "frequency_penalty",
+          "include_reasoning",
+          "logit_bias",
+          "logprobs",
+          "max_tokens",
+          "min_p",
+          "presence_penalty",
+          "reasoning",
+          "reasoning_effort",
+          "repetition_penalty",
+          "response_format",
+          "seed",
+          "stop",
+          "structured_outputs",
+          "temperature",
+          "tool_choice",
+          "tools",
+          "top_k",
+          "top_logprobs",
+          "top_p"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 131072,
+      "family": "muse",
+      "max_output_tokens": 131072,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image->text"
+        }
+      },
+      "name": "Meta: Muse Glimmer 30B"
     },
     "meta/muse-spark-1.1": {
       "capabilities": {
@@ -12327,6 +13173,52 @@
       },
       "name": "Mistral: Mixtral 8x22B Instruct"
     },
+    "mistralai/voxtral-mini-3b-2507": {
+      "capabilities": {
+        "input_modalities": [
+          "audio"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "transcription"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [
+          "frequency_penalty",
+          "max_tokens",
+          "min_p",
+          "presence_penalty",
+          "repetition_penalty",
+          "response_format",
+          "seed",
+          "stop",
+          "temperature",
+          "top_k",
+          "top_p"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "text_output",
+          "audio_input",
+          "speech_to_text"
+        ],
+        "tools": false,
+        "vision": false
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": null,
+      "max_output_tokens": null,
+      "metadata": {
+        "openrouter": {
+          "modality": "audio->transcription"
+        }
+      },
+      "name": "Mistral: Voxtral Mini 3B 2507"
+    },
     "mistralai/voxtral-mini-transcribe": {
       "capabilities": {
         "input_modalities": [
@@ -12496,6 +13388,52 @@
         }
       },
       "name": "Mistral: Voxtral Small 24B 2507"
+    },
+    "mistralai/voxtral-small-24b-2507-stt": {
+      "capabilities": {
+        "input_modalities": [
+          "audio"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "transcription"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [
+          "frequency_penalty",
+          "max_tokens",
+          "min_p",
+          "presence_penalty",
+          "repetition_penalty",
+          "response_format",
+          "seed",
+          "stop",
+          "temperature",
+          "top_k",
+          "top_p"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "text_output",
+          "audio_input",
+          "speech_to_text"
+        ],
+        "tools": false,
+        "vision": false
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": null,
+      "max_output_tokens": null,
+      "metadata": {
+        "openrouter": {
+          "modality": "audio->transcription"
+        }
+      },
+      "name": "Mistral: Voxtral Small 24B 2507 STT"
     },
     "moonshotai/kimi-k2": {
       "capabilities": {
@@ -12902,7 +13840,8 @@
       "capabilities": {
         "input_modalities": [
           "text",
-          "image"
+          "image",
+          "video"
         ],
         "json_mode": true,
         "output_modalities": [
@@ -12944,7 +13883,9 @@
           "chat",
           "text_output",
           "image_input",
-          "image_understanding"
+          "image_understanding",
+          "video_input",
+          "video_understanding"
         ],
         "tools": true,
         "vision": true
@@ -12957,7 +13898,7 @@
       "max_output_tokens": 1048576,
       "metadata": {
         "openrouter": {
-          "modality": "text+image->text"
+          "modality": "text+image+video->text"
         }
       },
       "name": "MoonshotAI: Kimi K3"
@@ -13488,7 +14429,7 @@
       ],
       "context_window": 262144,
       "family": "nemotron",
-      "max_output_tokens": 262144,
+      "max_output_tokens": 228000,
       "metadata": {
         "openrouter": {
           "modality": "text->text"
@@ -13861,6 +14802,52 @@
       },
       "name": "NVIDIA: Nemotron 3 Ultra (free)"
     },
+    "nvidia/nemotron-3.5-asr-streaming-multilingual-0.6b": {
+      "capabilities": {
+        "input_modalities": [
+          "audio"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "transcription"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [
+          "frequency_penalty",
+          "max_tokens",
+          "min_p",
+          "presence_penalty",
+          "repetition_penalty",
+          "response_format",
+          "seed",
+          "stop",
+          "temperature",
+          "top_k",
+          "top_p"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "text_output",
+          "audio_input",
+          "speech_to_text"
+        ],
+        "tools": false,
+        "vision": false
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": null,
+      "max_output_tokens": null,
+      "metadata": {
+        "openrouter": {
+          "modality": "audio->transcription"
+        }
+      },
+      "name": "NVIDIA: Nemotron 3.5 ASR Streaming Multilingual 0.6B"
+    },
     "nvidia/nemotron-3.5-content-safety:free": {
       "capabilities": {
         "input_modalities": [
@@ -13904,6 +14891,105 @@
         }
       },
       "name": "NVIDIA: Nemotron 3.5 Content Safety (free)"
+    },
+    "nvidia/nemotron-3.5-lightning": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "control": "on_off",
+          "supported": true
+        },
+        "supported_parameters": [
+          "frequency_penalty",
+          "include_reasoning",
+          "logit_bias",
+          "logprobs",
+          "max_tokens",
+          "min_p",
+          "presence_penalty",
+          "reasoning",
+          "repetition_penalty",
+          "response_format",
+          "seed",
+          "stop",
+          "structured_outputs",
+          "temperature",
+          "tool_choice",
+          "tools",
+          "top_k",
+          "top_logprobs",
+          "top_p"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
+        "tools": true,
+        "vision": false
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 1000000,
+      "family": "nemotron",
+      "max_output_tokens": 262144,
+      "metadata": {
+        "openrouter": {
+          "modality": "text->text"
+        }
+      },
+      "name": "NVIDIA: Nemotron 3.5 Lightning"
+    },
+    "nvidia/nemotron-3.5-lightning:free": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "control": "on_off",
+          "supported": true
+        },
+        "supported_parameters": [
+          "include_reasoning",
+          "max_tokens",
+          "reasoning",
+          "seed",
+          "temperature",
+          "tool_choice",
+          "tools",
+          "top_p"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
+        "tools": true,
+        "vision": false
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 1000000,
+      "family": "nemotron",
+      "max_output_tokens": 65536,
+      "metadata": {
+        "openrouter": {
+          "modality": "text->text"
+        }
+      },
+      "name": "NVIDIA: Nemotron 3.5 Lightning (free)"
     },
     "nvidia/nemotron-nano-12b-v2-vl:free": {
       "capabilities": {
@@ -16311,7 +17397,6 @@
         },
         "supported_parameters": [
           "max_completion_tokens",
-          "max_tokens",
           "response_format",
           "seed",
           "structured_outputs",
@@ -16335,7 +17420,7 @@
       ],
       "context_window": 128000,
       "family": "gpt-codex",
-      "max_output_tokens": 16384,
+      "max_output_tokens": 32000,
       "metadata": {
         "openrouter": {
           "modality": "text+image+file->text"
@@ -16550,53 +17635,6 @@
         }
       },
       "name": "OpenAI: GPT-5.2 (batch)"
-    },
-    "openai/gpt-5.3-chat": {
-      "capabilities": {
-        "input_modalities": [
-          "text",
-          "image",
-          "file"
-        ],
-        "json_mode": true,
-        "output_modalities": [
-          "text"
-        ],
-        "reasoning": {
-          "supported": false
-        },
-        "supported_parameters": [
-          "max_tokens",
-          "response_format",
-          "seed",
-          "structured_outputs",
-          "tool_choice",
-          "tools"
-        ],
-        "supported_voices": [],
-        "task_types": [
-          "chat",
-          "text_output",
-          "image_input",
-          "image_understanding",
-          "file_input",
-          "file_understanding"
-        ],
-        "tools": true,
-        "vision": true
-      },
-      "connections": [
-        "api-key"
-      ],
-      "context_window": 128000,
-      "family": "gpt",
-      "max_output_tokens": 16384,
-      "metadata": {
-        "openrouter": {
-          "modality": "text+image+file->text"
-        }
-      },
-      "name": "OpenAI: GPT-5.3 Chat"
     },
     "openai/gpt-5.3-codex": {
       "capabilities": {
@@ -20054,11 +21092,16 @@
           "transcription"
         ],
         "supported_parameters": [
+          "frequency_penalty",
           "max_tokens",
+          "min_p",
+          "presence_penalty",
+          "repetition_penalty",
           "response_format",
           "seed",
           "stop",
           "temperature",
+          "top_k",
           "top_p"
         ],
         "supported_voices": [],
@@ -20275,7 +21318,9 @@
           "frequency_penalty",
           "include_reasoning",
           "logprobs",
+          "max_completion_tokens",
           "max_tokens",
+          "min_p",
           "presence_penalty",
           "reasoning",
           "reasoning_effort",
@@ -21538,7 +22583,7 @@
       ],
       "context_window": 131072,
       "family": "qwen",
-      "max_output_tokens": 8192,
+      "max_output_tokens": 16384,
       "metadata": {
         "openrouter": {
           "modality": "text->text"
@@ -21956,6 +23001,98 @@
       },
       "name": "Qwen: Qwen3 8B"
     },
+    "qwen/qwen3-asr-0.6b": {
+      "capabilities": {
+        "input_modalities": [
+          "audio"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "transcription"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [
+          "frequency_penalty",
+          "max_tokens",
+          "min_p",
+          "presence_penalty",
+          "repetition_penalty",
+          "response_format",
+          "seed",
+          "stop",
+          "temperature",
+          "top_k",
+          "top_p"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "text_output",
+          "audio_input",
+          "speech_to_text"
+        ],
+        "tools": false,
+        "vision": false
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": null,
+      "max_output_tokens": null,
+      "metadata": {
+        "openrouter": {
+          "modality": "audio->transcription"
+        }
+      },
+      "name": "Qwen: Qwen3 ASR 0.6B"
+    },
+    "qwen/qwen3-asr-1.7b": {
+      "capabilities": {
+        "input_modalities": [
+          "audio"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "transcription"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [
+          "frequency_penalty",
+          "max_tokens",
+          "min_p",
+          "presence_penalty",
+          "repetition_penalty",
+          "response_format",
+          "seed",
+          "stop",
+          "temperature",
+          "top_k",
+          "top_p"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "text_output",
+          "audio_input",
+          "speech_to_text"
+        ],
+        "tools": false,
+        "vision": false
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": null,
+      "max_output_tokens": null,
+      "metadata": {
+        "openrouter": {
+          "modality": "audio->transcription"
+        }
+      },
+      "name": "Qwen: Qwen3 ASR 1.7B"
+    },
     "qwen/qwen3-asr-flash-2026-02-10": {
       "capabilities": {
         "input_modalities": [
@@ -22091,7 +23228,7 @@
       ],
       "context_window": 262144,
       "family": "qwen",
-      "max_output_tokens": 32768,
+      "max_output_tokens": 262144,
       "metadata": {
         "openrouter": {
           "modality": "text->text"
@@ -22484,7 +23621,7 @@
       ],
       "context_window": 262144,
       "family": "qwen",
-      "max_output_tokens": 16384,
+      "max_output_tokens": 262144,
       "metadata": {
         "openrouter": {
           "modality": "text->text"
@@ -22537,7 +23674,7 @@
       ],
       "context_window": 262144,
       "family": "qwen",
-      "max_output_tokens": 262144,
+      "max_output_tokens": 32768,
       "metadata": {
         "openrouter": {
           "modality": "text->text"
@@ -22702,7 +23839,7 @@
       ],
       "context_window": 262144,
       "family": "qwen",
-      "max_output_tokens": 16384,
+      "max_output_tokens": 32768,
       "metadata": {
         "openrouter": {
           "modality": "text+image->text"
@@ -23099,7 +24236,7 @@
       ],
       "context_window": 262144,
       "family": "qwen",
-      "max_output_tokens": 262144,
+      "max_output_tokens": 65536,
       "metadata": {
         "openrouter": {
           "modality": "text+image+video->text"
@@ -23160,7 +24297,7 @@
       ],
       "context_window": 262144,
       "family": "qwen",
-      "max_output_tokens": 65536,
+      "max_output_tokens": 262144,
       "metadata": {
         "openrouter": {
           "modality": "text+image+video->text"
@@ -23859,6 +24996,67 @@
         }
       },
       "name": "Qwen: Qwen3.7 Plus"
+    },
+    "qwen/qwen3.8-2.4t-a95b": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "control": "levels",
+          "levels": [
+            "low",
+            "medium",
+            "xhigh"
+          ],
+          "supported": true
+        },
+        "supported_parameters": [
+          "frequency_penalty",
+          "include_reasoning",
+          "logit_bias",
+          "logprobs",
+          "max_tokens",
+          "min_p",
+          "presence_penalty",
+          "reasoning",
+          "reasoning_effort",
+          "repetition_penalty",
+          "response_format",
+          "seed",
+          "stop",
+          "structured_outputs",
+          "temperature",
+          "tool_choice",
+          "tools",
+          "top_k",
+          "top_logprobs",
+          "top_p"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
+        "tools": true,
+        "vision": false
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 1010000,
+      "family": "qwen",
+      "max_output_tokens": 262144,
+      "metadata": {
+        "openrouter": {
+          "modality": "text->text"
+        }
+      },
+      "name": "Qwen: Qwen3.8 2.4T A95B"
     },
     "qwen/qwen3.8-max": {
       "capabilities": {
@@ -25050,6 +26248,58 @@
         }
       },
       "name": "Sakana: Fugu Ultra"
+    },
+    "sakana/sakana-namazu": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "file"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "control": "levels",
+          "levels": [
+            "none",
+            "high"
+          ],
+          "supported": true
+        },
+        "supported_parameters": [
+          "include_reasoning",
+          "reasoning",
+          "reasoning_effort",
+          "structured_outputs",
+          "tool_choice",
+          "tools",
+          "web_search_options"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding",
+          "file_input",
+          "file_understanding"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 262144,
+      "max_output_tokens": 65536,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image+file->text"
+        }
+      },
+      "name": "Sakana: Sakana Namazu"
     },
     "sao10k/l3-lunaris-8b": {
       "capabilities": {
@@ -26500,7 +27750,7 @@
           "image",
           "audio"
         ],
-        "json_mode": false,
+        "json_mode": true,
         "output_modalities": [
           "text"
         ],
@@ -26529,6 +27779,7 @@
           "repetition_penalty",
           "seed",
           "stop",
+          "structured_outputs",
           "temperature",
           "tool_choice",
           "tools",
@@ -26712,6 +27963,52 @@
       },
       "name": "Upstage: Solar Pro 3"
     },
+    "upstage/solar-pro4": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "frequency_penalty",
+          "include_reasoning",
+          "max_tokens",
+          "presence_penalty",
+          "reasoning",
+          "response_format",
+          "structured_outputs",
+          "temperature",
+          "tool_choice",
+          "tools",
+          "top_p"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
+        "tools": true,
+        "vision": false
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 524288,
+      "family": "solar",
+      "max_output_tokens": 131072,
+      "metadata": {
+        "openrouter": {
+          "modality": "text->text"
+        }
+      },
+      "name": "Upstage: Solar Pro 4"
+    },
     "voyageai/voyage-4": {
       "capabilities": {
         "input_modalities": [
@@ -26807,6 +28104,38 @@
         }
       },
       "name": "VoyageAI by MongoDB: voyage-4-lite"
+    },
+    "voyageai/voyage-code-4": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "embeddings"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [],
+        "supported_voices": [],
+        "task_types": [
+          "text_embedding"
+        ],
+        "tools": false,
+        "vision": false
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 32000,
+      "max_output_tokens": null,
+      "metadata": {
+        "openrouter": {
+          "modality": "text->embeddings"
+        }
+      },
+      "name": "VoyageAI by MongoDB: voyage-code-4"
     },
     "voyageai/voyage-multimodal-3.5": {
       "capabilities": {
@@ -27121,6 +28450,70 @@
       },
       "name": "SpaceXAI: Grok 4.5"
     },
+    "x-ai/grok-4.6": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "file"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "control": "levels",
+          "levels": [
+            "low",
+            "medium",
+            "high",
+            "xhigh"
+          ],
+          "supported": true
+        },
+        "supported_parameters": [
+          "frequency_penalty",
+          "include_reasoning",
+          "logprobs",
+          "max_tokens",
+          "presence_penalty",
+          "reasoning",
+          "reasoning_effort",
+          "response_format",
+          "seed",
+          "stop",
+          "structured_outputs",
+          "temperature",
+          "tool_choice",
+          "tools",
+          "top_logprobs",
+          "top_p"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding",
+          "file_input",
+          "file_understanding"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 500000,
+      "family": "grok",
+      "max_output_tokens": 500000,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image+file->text"
+        }
+      },
+      "name": "SpaceXAI: Grok 4.6"
+    },
     "x-ai/grok-build-0.1": {
       "capabilities": {
         "input_modalities": [
@@ -27176,6 +28569,100 @@
         }
       },
       "name": "SpaceXAI: Grok Build 0.1"
+    },
+    "x-ai/grok-imagine-image-2.0": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "image"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [
+          "frequency_penalty",
+          "logprobs",
+          "max_tokens",
+          "presence_penalty",
+          "response_format",
+          "seed",
+          "stop",
+          "temperature",
+          "top_logprobs",
+          "top_p"
+        ],
+        "supported_voices": [],
+        "task_options": {
+          "image_generation": {
+            "parameters": {
+              "aspect_ratio": {
+                "type": "enum",
+                "values": [
+                  "1:1",
+                  "3:4",
+                  "4:3",
+                  "9:16",
+                  "16:9",
+                  "2:3",
+                  "3:2",
+                  "9:19.5",
+                  "19.5:9",
+                  "9:20",
+                  "20:9",
+                  "1:2",
+                  "2:1",
+                  "auto"
+                ]
+              },
+              "input_references": {
+                "max": 3,
+                "min": 0,
+                "type": "range"
+              },
+              "n": {
+                "max": 1,
+                "min": 1,
+                "type": "range"
+              },
+              "quality": {
+                "type": "enum",
+                "values": [
+                  "low",
+                  "medium"
+                ]
+              },
+              "resolution": {
+                "type": "enum",
+                "values": [
+                  "1K",
+                  "2K"
+                ]
+              }
+            }
+          }
+        },
+        "task_types": [
+          "image_input",
+          "image_generation"
+        ],
+        "tools": false,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 65536,
+      "max_output_tokens": null,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image->image"
+        }
+      },
+      "name": "xAI: Grok Imagine Image 2.0"
     },
     "x-ai/grok-imagine-image-quality": {
       "capabilities": {
@@ -28333,7 +29820,7 @@
       ],
       "context_window": 1048576,
       "family": "glm",
-      "max_output_tokens": 128000,
+      "max_output_tokens": 131072,
       "metadata": {
         "openrouter": {
           "modality": "text->text",
@@ -28442,108 +29929,6 @@
         }
       },
       "name": "Z.ai: GLM 5V Turbo"
-    },
-    "zyphra/zonos-v0.1-hybrid": {
-      "capabilities": {
-        "input_modalities": [
-          "text"
-        ],
-        "json_mode": true,
-        "output_modalities": [
-          "speech"
-        ],
-        "reasoning": {
-          "supported": false
-        },
-        "supported_parameters": [
-          "frequency_penalty",
-          "max_tokens",
-          "min_p",
-          "presence_penalty",
-          "repetition_penalty",
-          "response_format",
-          "seed",
-          "stop",
-          "temperature",
-          "top_k",
-          "top_p"
-        ],
-        "supported_voices": [
-          "american_female",
-          "american_male",
-          "british_female",
-          "british_male",
-          "random"
-        ],
-        "task_types": [
-          "audio_generation",
-          "text_to_speech"
-        ],
-        "tools": false,
-        "vision": false
-      },
-      "connections": [
-        "api-key"
-      ],
-      "context_window": 4096,
-      "max_output_tokens": null,
-      "metadata": {
-        "openrouter": {
-          "modality": "text->speech"
-        }
-      },
-      "name": "Zyphra: Zonos v0.1 Hybrid"
-    },
-    "zyphra/zonos-v0.1-transformer": {
-      "capabilities": {
-        "input_modalities": [
-          "text"
-        ],
-        "json_mode": true,
-        "output_modalities": [
-          "speech"
-        ],
-        "reasoning": {
-          "supported": false
-        },
-        "supported_parameters": [
-          "frequency_penalty",
-          "max_tokens",
-          "min_p",
-          "presence_penalty",
-          "repetition_penalty",
-          "response_format",
-          "seed",
-          "stop",
-          "temperature",
-          "top_k",
-          "top_p"
-        ],
-        "supported_voices": [
-          "american_female",
-          "american_male",
-          "british_female",
-          "british_male",
-          "random"
-        ],
-        "task_types": [
-          "audio_generation",
-          "text_to_speech"
-        ],
-        "tools": false,
-        "vision": false
-      },
-      "connections": [
-        "api-key"
-      ],
-      "context_window": 4096,
-      "max_output_tokens": null,
-      "metadata": {
-        "openrouter": {
-          "modality": "text->speech"
-        }
-      },
-      "name": "Zyphra: Zonos v0.1 Transformer"
     },
     "~anthropic/claude-fable-latest": {
       "capabilities": {
@@ -28806,6 +30191,7 @@
           "logprobs",
           "max_tokens",
           "min_p",
+          "parallel_tool_calls",
           "presence_penalty",
           "reasoning",
           "reasoning_effort",
@@ -28835,7 +30221,7 @@
       ],
       "context_window": 1048576,
       "family": "deepseek",
-      "max_output_tokens": 131072,
+      "max_output_tokens": 262144,
       "metadata": {
         "openrouter": {
           "modality": "text->text"
@@ -28859,7 +30245,6 @@
         "reasoning": {
           "control": "levels",
           "levels": [
-            "minimal",
             "low",
             "medium",
             "high"
@@ -28978,7 +30363,8 @@
       "capabilities": {
         "input_modalities": [
           "text",
-          "image"
+          "image",
+          "video"
         ],
         "json_mode": true,
         "output_modalities": [
@@ -29020,7 +30406,9 @@
           "chat",
           "text_output",
           "image_input",
-          "image_understanding"
+          "image_understanding",
+          "video_input",
+          "video_understanding"
         ],
         "tools": true,
         "vision": true
@@ -29033,7 +30421,7 @@
       "max_output_tokens": 1048576,
       "metadata": {
         "openrouter": {
-          "modality": "text+image->text"
+          "modality": "text+image+video->text"
         }
       },
       "name": "MoonshotAI Kimi Latest"
@@ -29173,7 +30561,8 @@
           "levels": [
             "low",
             "medium",
-            "high"
+            "high",
+            "xhigh"
           ],
           "supported": true
         },

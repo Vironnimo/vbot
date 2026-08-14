@@ -1,5 +1,5 @@
 {
-  "fetched_at": "2026-08-01T14:33:51.274135+00:00",
+  "fetched_at": "2026-08-14T13:50:49.179001+00:00",
   "models": {
     "claude-fable-5": {
       "canonical": "anthropic/claude-fable-5",
@@ -72,42 +72,6 @@
         }
       },
       "name": "Claude Haiku 4.5"
-    },
-    "claude-opus-4-1-20250805": {
-      "canonical": "anthropic/claude-opus-4-1-20250805",
-      "capabilities": {
-        "input_modalities": [
-          "text",
-          "image",
-          "pdf"
-        ],
-        "json_mode": true,
-        "output_modalities": [
-          "text"
-        ],
-        "supported_parameters": [],
-        "supported_voices": [],
-        "task_types": [
-          "chat",
-          "text_output",
-          "image_input",
-          "image_understanding"
-        ],
-        "tools": true,
-        "vision": true
-      },
-      "connections": [
-        "api-key"
-      ],
-      "context_window": 200000,
-      "family": "claude-opus",
-      "max_output_tokens": 32000,
-      "metadata": {
-        "anthropic": {
-          "supports_temperature": true
-        }
-      },
-      "name": "Claude Opus 4.1"
     },
     "claude-opus-4-5-20251101": {
       "canonical": "anthropic/claude-opus-4-5-20251101",

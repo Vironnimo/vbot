@@ -1,5 +1,5 @@
 {
-  "fetched_at": "2026-08-01T14:33:51.902066+00:00",
+  "fetched_at": "2026-08-14T13:51:08.232540+00:00",
   "models": {
     "codestral-2508": {
       "capabilities": {
@@ -153,6 +153,38 @@
       "family": "devstral",
       "max_output_tokens": 262144,
       "name": "devstral-2512"
+    },
+    "glm-5-2": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "reasoning",
+          "response_format",
+          "tools"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
+        "tools": true,
+        "vision": false
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 1048576,
+      "max_output_tokens": null,
+      "name": "glm-5-2"
     },
     "labs-leanstral-1-5": {
       "capabilities": {
@@ -1139,7 +1171,8 @@
     "voxtral-small-latest": {
       "capabilities": {
         "input_modalities": [
-          "text"
+          "text",
+          "audio"
         ],
         "json_mode": true,
         "output_modalities": [
@@ -1164,8 +1197,41 @@
         "api-key"
       ],
       "context_window": 32768,
-      "max_output_tokens": null,
+      "family": "voxtral",
+      "max_output_tokens": 32000,
       "name": "voxtral-small-2507"
+    },
+    "zai-glm-5-2": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "reasoning",
+          "response_format",
+          "tools"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
+        "tools": true,
+        "vision": false
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 1048576,
+      "max_output_tokens": null,
+      "name": "glm-5-2"
     }
   },
   "provider_id": "mistral",
