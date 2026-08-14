@@ -1,5 +1,5 @@
 {
-  "fetched_at": "2026-08-01T14:33:53.383853+00:00",
+  "fetched_at": "2026-08-14T13:51:33.684783+00:00",
   "models": {
     "deepseek-v4-flash": {
       "capabilities": {
@@ -13,6 +13,7 @@
         "reasoning": {
           "control": "levels",
           "levels": [
+            "low",
             "high",
             "max"
           ],
@@ -185,6 +186,46 @@
         }
       },
       "name": "glm-5.2"
+    },
+    "glm-5.3": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "control": "levels",
+          "levels": [
+            "low",
+            "high",
+            "max"
+          ],
+          "supported": true
+        },
+        "supported_parameters": [],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
+        "tools": true,
+        "vision": false
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 1000000,
+      "family": "glm",
+      "max_output_tokens": 131072,
+      "metadata": {
+        "opencode_go": {
+          "reasoning_response_field": "reasoning_content"
+        }
+      },
+      "name": "glm-5.3"
     },
     "gpt-5.6-luna": {
       "capabilities": {
@@ -735,6 +776,39 @@
       "family": "qwen3.7-plus",
       "max_output_tokens": 65536,
       "name": "qwen3.7-plus"
+    },
+    "qwen3.8-max": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "video"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "budget_max": 262144,
+          "control": "budget",
+          "supported": true
+        },
+        "supported_parameters": [],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 1000000,
+      "family": "qwen3.8-max",
+      "max_output_tokens": 131072,
+      "name": "qwen3.8-max"
     }
   },
   "provider_id": "opencode-go",
