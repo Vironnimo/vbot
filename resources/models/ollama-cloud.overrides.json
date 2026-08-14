@@ -1,0 +1,8 @@
+{
+    "provider_id": "ollama-cloud",
+    "models": {
+        "deepseek-v4-flash:0731": {
+            "max_output_tokens": 65536
+        }
+    }
+}
