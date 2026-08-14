@@ -137,6 +137,48 @@ def test_runtime_refresh_copies_and_publishes_every_model_file(tmp_path: Path) -
     ]
 
 
+def test_runtime_refresh_replaces_stale_override_snapshot_with_bundled_set(
+    tmp_path: Path,
+) -> None:
+    resources_dir = tmp_path / "resources"
+    system_models_dir = resources_dir / "models"
+    data_dir = tmp_path / "data"
+    runtime_models_dir = DataDirectoryLayout(data_dir).models
+    system_models_dir.mkdir(parents=True)
+    runtime_models_dir.mkdir(parents=True)
+    system_models_dir.joinpath("openai.overrides.json").write_text(
+        "current bundled override",
+        encoding="utf-8",
+    )
+    runtime_models_dir.joinpath("openai.overrides.json").write_text(
+        "stale runtime override",
+        encoding="utf-8",
+    )
+    runtime_models_dir.joinpath("removed.overrides.json").write_text(
+        "removed bundled override",
+        encoding="utf-8",
+    )
+    write_model_database_manifest(
+        system_models_dir,
+        source=MODEL_DATABASE_SOURCE_SYSTEM,
+        refreshed_at=datetime(2026, 7, 20, tzinfo=UTC),
+    )
+    write_model_database_manifest(
+        runtime_models_dir,
+        source=MODEL_DATABASE_SOURCE_RUNTIME,
+        refreshed_at=datetime(2026, 7, 21, tzinfo=UTC),
+    )
+
+    refresh = begin_runtime_model_database_refresh(resources_dir, data_dir)
+    staged_models_dir = refresh.resources_dir / "models"
+
+    assert (
+        staged_models_dir.joinpath("openai.overrides.json").read_text(encoding="utf-8")
+        == "current bundled override"
+    )
+    assert not staged_models_dir.joinpath("removed.overrides.json").exists()
+
+
 def test_discarded_runtime_refresh_leaves_published_database_untouched(tmp_path: Path) -> None:
     resources_dir = tmp_path / "resources"
     data_dir = tmp_path / "data"
@@ -181,7 +223,7 @@ def test_system_refresh_is_unpublished_until_complete_commit(tmp_path: Path) -> 
     assert manifest.source == MODEL_DATABASE_SOURCE_SYSTEM
 
 
-def test_registry_loads_only_the_newer_root_including_its_override(tmp_path: Path) -> None:
+def test_newer_runtime_catalog_uses_current_bundled_override(tmp_path: Path) -> None:
     resources_dir = tmp_path / "resources"
     system_models_dir = resources_dir / "models"
     runtime_models_dir = tmp_path / "data" / "models"
@@ -204,8 +246,42 @@ def test_registry_loads_only_the_newer_root_including_its_override(tmp_path: Pat
 
     registry = ModelRegistry.load(resources_dir, runtime_models_dir=runtime_models_dir)
 
-    assert registry.get("openai", "gpt-test").name == "Runtime override"
+    assert registry.get("openai", "gpt-test").name == "System override"
     assert registry.list_for_provider("system-only") == []
+
+
+def test_bundled_override_only_provider_needs_no_registration(tmp_path: Path) -> None:
+    resources_dir = tmp_path / "resources"
+    system_models_dir = resources_dir / "models"
+    runtime_models_dir = tmp_path / "data" / "models"
+    system_models_dir.mkdir(parents=True)
+    runtime_models_dir.mkdir(parents=True)
+    system_models_dir.joinpath("hand-only.overrides.json").write_text(
+        json.dumps(
+            {
+                "models": {
+                    "manual-model": json.loads(
+                        _provider_payload("hand-only", "manual-model", "Manual")
+                    )["models"]["manual-model"]
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    write_model_database_manifest(
+        system_models_dir,
+        source=MODEL_DATABASE_SOURCE_SYSTEM,
+        refreshed_at=datetime(2026, 7, 20, tzinfo=UTC),
+    )
+    write_model_database_manifest(
+        runtime_models_dir,
+        source=MODEL_DATABASE_SOURCE_RUNTIME,
+        refreshed_at=datetime(2026, 7, 21, tzinfo=UTC),
+    )
+
+    registry = ModelRegistry.load(resources_dir, runtime_models_dir=runtime_models_dir)
+
+    assert registry.get("hand-only", "manual-model").name == "Manual"
 
 
 def _write_provider_database(

@@ -16,7 +16,9 @@ layers + the join). Callers outside ``core/models/`` should not import this modu
 THE ON-DISK FILE-FORMAT CONTRACT  (Phase 3 must produce exactly this shape)
 ================================================================================
 
-All files live together inside one already-selected complete ``models/`` root.
+Generated files live in one already-selected ``models/`` root. Hand-maintained
+override files come from the bundled system ``models/`` root so a newer runtime
+catalog cannot hide a correction shipped or edited after that catalog refresh.
 
 Three layers, each a different home with a clear responsibility:
 
@@ -140,7 +142,11 @@ CANONICAL_OVERRIDES_FILE_NAME = "models.overrides.json"
 CAPABILITIES_FIELD = "capabilities"
 
 
-def load_canonical_layer(models_dir: Path) -> dict[str, dict[str, Any]]:
+def load_canonical_layer(
+    models_dir: Path,
+    *,
+    overrides_models_dir: Path | None = None,
+) -> dict[str, dict[str, Any]]:
     """Load and merge the canonical base + canonical overrides, keyed by canonical id.
 
     Reads ``models.json`` and applies ``models.overrides.json`` on top (override
@@ -151,15 +157,19 @@ def load_canonical_layer(models_dir: Path) -> dict[str, dict[str, Any]]:
     files, and assembly must still load every provider model without error.
 
     Args:
-        models_dir: The already-selected complete Model DB directory.
+        models_dir: The selected Model DB directory containing ``models.json``.
+        overrides_models_dir: The authoritative directory containing
+            ``models.overrides.json``. Defaults to ``models_dir`` for standalone
+            assembly and validation callers.
 
     Returns:
         A mapping ``canonical_id -> canonical record`` (plain dicts). Empty when
         no canonical file exists.
     """
 
+    overrides_dir = overrides_models_dir or models_dir
     base = _read_models_map(models_dir / CANONICAL_FILE_NAME)
-    overrides = _read_models_map(models_dir / CANONICAL_OVERRIDES_FILE_NAME)
+    overrides = _read_models_map(overrides_dir / CANONICAL_OVERRIDES_FILE_NAME)
 
     canonical: dict[str, dict[str, Any]] = {
         canonical_id: dict(record) for canonical_id, record in base.items()
