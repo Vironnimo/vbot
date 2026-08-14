@@ -1,9 +1,10 @@
 """Token estimation utilities.
 
-Provides heuristic-based token counting for cases where a provider does
-not report actual usage.  The estimate is deliberately conservative —
-it uses a simple characters-per-token ratio and signals to consumers
-that the number is approximate, not exact.
+Provides model-neutral token counting for cases where a Provider does not
+report actual Usage. The estimate uses one fixed ``o200k_base`` tokenizer and
+signals to consumers that the number remains approximate rather than claiming
+Provider- or Model-specific precision. A character heuristic remains available
+only when the tokenizer data cannot be loaded.
 
 Usage::
 
@@ -11,11 +12,18 @@ Usage::
 """
 
 import json
+import logging
 import math
 from collections.abc import Mapping, Sequence
+from functools import lru_cache
 from typing import Any
 
-CHARS_PER_TOKEN = 4
+import tiktoken
+
+_LOGGER = logging.getLogger("vbot.utils.tokens")
+
+TOKEN_ESTIMATE_ENCODING = "o200k_base"
+FALLBACK_CHARS_PER_TOKEN = 4
 MESSAGE_TOKEN_ESTIMATE_FIELDS = (
     "role",
     "content",
@@ -40,10 +48,14 @@ NATIVE_MEDIA_TOKEN_RESERVE = 4096
 
 
 def estimate_tokens(text: str) -> tuple[int, bool]:
-    """Estimate the number of tokens in *text* using a character heuristic.
+    """Estimate the number of tokens in *text* with one fixed tokenizer.
 
-    Divides the character count by ``CHARS_PER_TOKEN`` (4 chars/token) and
-    rounds up so that any remainder counts as a full token.
+    ``o200k_base`` is deliberately used for every estimate: this path exists
+    only when Provider Usage is unavailable, so model-neutral consistency and
+    materially better multilingual/code estimates matter more than pretending
+    to reproduce each Provider's private tokenizer. If the encoding cannot be
+    loaded, the prior four-characters-per-token heuristic is retained as a
+    fail-soft fallback.
 
     Args:
         text: The string to estimate token count for.
@@ -54,7 +66,25 @@ def estimate_tokens(text: str) -> tuple[int, bool]:
     """
     if not text:
         return 0, True
-    return math.ceil(len(text) / CHARS_PER_TOKEN), True
+    encoding = _load_estimation_encoding()
+    if encoding is not None:
+        return len(encoding.encode_ordinary(text)), True
+    return math.ceil(len(text) / FALLBACK_CHARS_PER_TOKEN), True
+
+
+@lru_cache(maxsize=1)
+def _load_estimation_encoding() -> tiktoken.Encoding | None:
+    """Load and cache the single model-neutral estimation encoding."""
+
+    try:
+        return tiktoken.get_encoding(TOKEN_ESTIMATE_ENCODING)
+    except (OSError, ValueError) as exc:
+        _LOGGER.warning(
+            "Token estimation encoding unavailable; using character fallback (encoding=%s): %s",
+            TOKEN_ESTIMATE_ENCODING,
+            exc,
+        )
+        return None
 
 
 def estimate_message_tokens(message: Mapping[str, Any]) -> tuple[int, bool]:

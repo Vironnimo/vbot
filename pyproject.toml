@@ -21,7 +21,7 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
     "Topic :: Software Development :: Libraries :: Application Frameworks",
 ]
-dependencies = ["httpx", "idna>=3,<4", "curl_cffi>=0.7,<1", "pyyaml", "croniter", "tzdata", "tzlocal>=5,<6", "beautifulsoup4", "pypdf>=4,<6", "sqlite-vec>=0.1.9,<0.2", "pathspec>=1.1", "jsonschema>=4.25,<5", "websockets>=14,<17", "pyte>=0.8.2,<0.9", "pywinpty>=3,<4; sys_platform == 'win32'", "ptyprocess>=0.7,<1; sys_platform != 'win32'"]
+dependencies = ["httpx", "idna>=3,<4", "curl_cffi>=0.7,<1", "pyyaml", "croniter", "tzdata", "tzlocal>=5,<6", "beautifulsoup4", "pypdf>=4,<6", "sqlite-vec>=0.1.9,<0.2", "pathspec>=1.1", "jsonschema>=4.25,<5", "tiktoken>=0.13,<1", "websockets>=14,<17", "pyte>=0.8.2,<0.9", "pywinpty>=3,<4; sys_platform == 'win32'", "ptyprocess>=0.7,<1; sys_platform != 'win32'"]
 
 [project.scripts]
 vbot = "cli.main:main"
