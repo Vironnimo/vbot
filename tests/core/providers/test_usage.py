@@ -25,6 +25,7 @@ from core.providers.usage import (
     _parse_minimax_usage,
     _parse_ollama_usage,
     _parse_openai_usage,
+    _parse_openrouter_usage,
     _secondary_window_label,
     clamp_percent,
 )
@@ -216,6 +217,35 @@ def _ollama_cloud_runtime() -> FakeRuntime:
         providers=FakeProviders({"ollama-cloud": _ollama_cloud_provider_config()}),
         credentials=FakeCredentials({"ollama-cloud:api-key"}),
         tokens={"ollama-cloud:api-key:default": "ollama-secret"},
+    )
+
+
+def _openrouter_provider_config() -> ProviderConfig:
+    return ProviderConfig(
+        id="openrouter",
+        name="OpenRouter",
+        adapter="openrouter",
+        base_url="https://openrouter.ai/api/v1",
+        connections=[
+            ConnectionConfig(
+                id="api-key",
+                type="api_key",
+                label="API key",
+                auth=AuthConfig(
+                    header="Authorization",
+                    prefix="Bearer ",
+                    credential_key="OPENROUTER_API_KEY",
+                ),
+            )
+        ],
+    )
+
+
+def _openrouter_runtime() -> FakeRuntime:
+    return FakeRuntime(
+        providers=FakeProviders({"openrouter": _openrouter_provider_config()}),
+        credentials=FakeCredentials({"openrouter:api-key"}),
+        tokens={"openrouter:api-key:default": "or-secret"},
     )
 
 
@@ -733,19 +763,174 @@ def test_parse_minimax_usage_no_chat_model_raises_fetch_error() -> None:
 
 
 # ---------------------------------------------------------------------------
+# OpenRouter parsing and fetch (credits + key spending cap)
+# ---------------------------------------------------------------------------
+
+
+_OPENROUTER_CREDITS_BODY: dict[str, Any] = {"data": {"total_credits": 50.0, "total_usage": 12.5}}
+
+_OPENROUTER_KEY_BODY: dict[str, Any] = {
+    "data": {
+        "limit": 100.0,
+        "limit_remaining": 25.0,
+        "limit_reset": "2026-08-20T00:00:00Z",
+        "usage": 12.5,
+        "usage_daily": 1.5,
+        "usage_weekly": 8.0,
+        "usage_monthly": 12.5,
+    }
+}
+
+
+def test_parse_openrouter_usage_builds_cap_window_and_credits() -> None:
+    # Act
+    snapshot = _parse_openrouter_usage(
+        "openrouter:api-key",
+        "OpenRouter",
+        _OPENROUTER_CREDITS_BODY,
+        _OPENROUTER_KEY_BODY,
+    )
+
+    # Assert — used = (100 - 25) / 100 = 75%, balance = 50 - 12.5 = 37.5.
+    assert snapshot.plan is None
+    assert snapshot.error is None
+    assert snapshot.credits == UsageCredits(enabled=True, balance=37.5)
+    assert snapshot.windows == [
+        UsageWindow(
+            label="API key spending cap",
+            used_percent=75.0,
+            reset_at="2026-08-20T00:00:00+00:00",
+            used_units=75.0,
+            remaining_units=25.0,
+            total_units=100.0,
+            unit="USD",
+        )
+    ]
+
+
+@pytest.mark.parametrize("limit", [None, 0])
+def test_parse_openrouter_usage_without_cap_limit_yields_credits_only(limit: Any) -> None:
+    key_body = {"data": {**_OPENROUTER_KEY_BODY["data"], "limit": limit}}
+
+    snapshot = _parse_openrouter_usage(
+        "openrouter:api-key", "OpenRouter", _OPENROUTER_CREDITS_BODY, key_body
+    )
+
+    assert snapshot.windows == []
+    assert snapshot.credits == UsageCredits(enabled=True, balance=37.5)
+
+
+def test_parse_openrouter_usage_rollover_remaining_skips_window() -> None:
+    # remaining > limit means the cap rolled over; the ratio is meaningless.
+    key_body = {"data": {**_OPENROUTER_KEY_BODY["data"], "limit_remaining": 120.0}}
+
+    snapshot = _parse_openrouter_usage(
+        "openrouter:api-key", "OpenRouter", _OPENROUTER_CREDITS_BODY, key_body
+    )
+
+    assert snapshot.windows == []
+    assert snapshot.credits == UsageCredits(enabled=True, balance=37.5)
+
+
+def test_parse_openrouter_usage_non_iso_reset_omits_reset_at() -> None:
+    key_body = {"data": {**_OPENROUTER_KEY_BODY["data"], "limit_reset": "not-a-date"}}
+
+    snapshot = _parse_openrouter_usage(
+        "openrouter:api-key", "OpenRouter", _OPENROUTER_CREDITS_BODY, key_body
+    )
+
+    assert len(snapshot.windows) == 1
+    assert snapshot.windows[0].reset_at is None
+
+
+def test_parse_openrouter_usage_degrades_to_credits_without_key_body() -> None:
+    snapshot = _parse_openrouter_usage(
+        "openrouter:api-key", "OpenRouter", _OPENROUTER_CREDITS_BODY, None
+    )
+
+    assert snapshot.windows == []
+    assert snapshot.credits == UsageCredits(enabled=True, balance=37.5)
+    assert snapshot.error is None
+
+
+@pytest.mark.asyncio
+async def test_report_fetches_openrouter_credits_and_key_cap() -> None:
+    # Arrange
+    transport = RoutingTransport(
+        {
+            "/credits": FakeResponse(payload=_OPENROUTER_CREDITS_BODY),
+            "/key": FakeResponse(payload=_OPENROUTER_KEY_BODY),
+        }
+    )
+    service = ProviderUsageService(_openrouter_runtime(), transport=transport)
+
+    # Act
+    report = await service.report(connections=["openrouter:api-key"])
+
+    # Assert
+    assert len(report.providers) == 1
+    snapshot = report.providers[0]
+    assert snapshot.connection == "openrouter:api-key"
+    assert snapshot.account == "default"
+    assert snapshot.windows[0].used_percent == 75.0
+    assert snapshot.credits == UsageCredits(enabled=True, balance=37.5)
+    assert [(url, headers) for url, headers in transport.calls] == [
+        ("https://openrouter.ai/api/v1/credits", {"Authorization": "Bearer or-secret"}),
+        ("https://openrouter.ai/api/v1/key", {"Authorization": "Bearer or-secret"}),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_report_openrouter_degrades_to_credits_when_key_endpoint_fails() -> None:
+    transport = RoutingTransport(
+        {
+            "/credits": FakeResponse(payload=_OPENROUTER_CREDITS_BODY),
+            "/key": FakeResponse(status_code=500),
+        }
+    )
+    service = ProviderUsageService(_openrouter_runtime(), transport=transport)
+
+    report = await service.report()
+
+    assert len(report.providers) == 1
+    snapshot = report.providers[0]
+    assert snapshot.error is None
+    assert snapshot.windows == []
+    assert snapshot.credits == UsageCredits(enabled=True, balance=37.5)
+
+
+@pytest.mark.asyncio
+async def test_report_openrouter_credits_failure_is_error_snapshot() -> None:
+    transport = RoutingTransport(
+        {
+            "/credits": FakeResponse(status_code=500),
+            "/key": FakeResponse(payload=_OPENROUTER_KEY_BODY),
+        }
+    )
+    service = ProviderUsageService(_openrouter_runtime(), transport=transport)
+
+    report = await service.report()
+
+    assert len(report.providers) == 1
+    assert report.providers[0].error == "HTTP 500"
+
+
+# ---------------------------------------------------------------------------
 # Service fan-out across providers
 # ---------------------------------------------------------------------------
 
 
 class RoutingTransport:
-    """Returns a different response per URL substring; records failures."""
+    """Returns a different response per URL substring; records calls."""
 
     def __init__(self, responses: dict[str, FakeResponse]) -> None:
         self._responses = responses
+        self.calls: list[tuple[str, dict[str, str]]] = []
 
     async def get(
         self, url: str, *, headers: Any, timeout: float, params: Any = None
     ) -> FakeResponse:
+        self.calls.append((url, dict(headers)))
         for marker, response in self._responses.items():
             if marker in url:
                 return response

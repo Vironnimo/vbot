@@ -54,6 +54,14 @@ OpenAI-compatible Provider with OpenRouter-specific reasoning, per-Model Chat Co
 - If `top_provider.max_completion_tokens` is missing or `null`, normalized `max_output_tokens` stays `null` instead of copying request defaults.
 - Normalized capabilities preserve input/output modalities, supported parameters, derived task types, and small runtime metadata under `metadata.openrouter`.
 
+## Usage
+
+- `ProviderUsageService` (see `providers/usage.md`) probes two documented endpoints with the Connection's Bearer key against the Provider `base_url`:
+  - `GET /credits` → `data.total_credits` / `data.total_usage` (USD) → `UsageCredits` balance = `total_credits - total_usage`. A `/credits` failure is an error snapshot.
+  - `GET /key` → `data.limit` / `data.limit_remaining` / `data.limit_reset` → one `"API key spending cap"` window, only when `limit > 0` and `0 <= limit_remaining <= limit` (`limit_remaining > limit` is a rollover — no window). A `/key` failure degrades to a credits-only snapshot instead of an error.
+- Live-verified 2026-08-14: `/credits` shape confirmed (`total_credits: 20`, `total_usage: 15.81…`). The probe key had **no cap set** (`limit`/`limit_remaining`/`limit_reset` all null), so the cap-window path and ISO `limit_reset` parsing are unit-tested, not live-verified.
+- `/key` returns undocumented fields (`label`, `is_management_key`, `is_provisioning_key`, `include_byok_in_limit`, `byok_usage` + daily/weekly/monthly, `is_free_tier`, `expires_at`, `creator_user_id`, `rate_limit`) — all ignored; the usage snapshot schema is frozen. `key.data.usage` is key-scoped and differs from the account-wide `credits.data.total_usage`; only the latter feeds the balance.
+
 ## Constraints & Gotchas
 
 - Streaming usage behavior is inherited from the generic OpenAI-compatible adapter.

@@ -16,7 +16,7 @@ The frozen serializable projection is:
 - `ProviderUsageSnapshot`: base Connection id, exact Account id, display name, optional plan, optional structured credits, windows, and optional error.
 - `UsageReport`: generation timestamp and Provider snapshots.
 
-`report(connections=None)` supports an optional Connection filter. Only Connections with registered fetchers and `is_usable()` are targets; disabled or uncredentialed Connections are never probed. A snapshot with neither windows nor an error is omitted. The CLI exposes this as `provider usage [--connection <provider:connection-id>]...`; repeated filters are passed as one `connections` list and output includes used and derived remaining percentages, reset timestamps, and per-Provider errors.
+`report(connections=None)` supports an optional Connection filter. Only Connections with registered fetchers and `is_usable()` are targets; disabled or uncredentialed Connections are never probed. A snapshot with neither windows, enabled credits, nor an error is omitted. The CLI exposes this as `provider usage [--connection <provider:connection-id>]...`; repeated filters are passed as one `connections` list and output includes used and derived remaining percentages, reset timestamps, and per-Provider errors.
 
 ## Automatic history
 
@@ -42,8 +42,9 @@ The hourly sampler isolates each automatic attempt. An unexpected collection fai
 - `github-copilot:oauth`: Copilot entitlement/usage using stored GitHub OAuth extra; details in `providers/github-copilot.md`.
 - `ollama-cloud:api-key`: Ollama Cloud session/weekly quota ratios and observed per-Model request counts; details in `providers/ollama.md`.
 - `minimax:api-key`: MiniMax token-plan remains projection; details in `providers/minimax.md`.
+- `openrouter:api-key`: account credits balance plus an optional API-key spending-cap window; a failed `/key` probe degrades to a credits-only snapshot. Verified endpoint details in `providers/openrouter.md`.
 
-OpenAI and Ollama Cloud are live-verified as documented in their maps. Ollama Cloud's endpoint is not publicly documented and must remain strict and fail-open. Copilot and MiniMax parsing is intentionally fail-open against inferred upstream shapes; a mismatch must remain an error snapshot, not break the report.
+OpenAI and Ollama Cloud are live-verified as documented in their maps. Ollama Cloud's endpoint is not publicly documented and must remain strict and fail-open. Copilot and MiniMax parsing is intentionally fail-open against inferred upstream shapes; a mismatch must remain an error snapshot, not break the report. OpenRouter's `/credits` shape is live-verified; the spending-cap window path is unit-tested only (the probe key had no cap set).
 
 ## Source and tests
 
