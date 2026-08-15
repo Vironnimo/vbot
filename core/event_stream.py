@@ -22,6 +22,10 @@ _LAGGED_SUBSCRIBER = _LaggedSubscriberSentinel()
 class _Subscriber(Generic[EventT]):
     queue: asyncio.Queue[EventT | _LaggedSubscriberSentinel]
     closed: bool = False
+    # While True, publish drops on a full queue instead of evicting. Catch-up
+    # re-reads the retention buffer, so live traffic during a slow historical
+    # replay must not silently kill the subscriber mid-stream.
+    catching_up: bool = True
 
 
 class ReplayEventStream(Generic[EventT]):
@@ -81,24 +85,55 @@ class ReplayEventStream(Generic[EventT]):
         """Replay newer retained events, then optionally stream live events."""
 
         subscriber: _Subscriber[EventT] | None = None
-        if live:
-            subscriber = _Subscriber(queue=asyncio.Queue(maxsize=self._subscriber_queue_limit))
-            self._subscribers.append(subscriber)
-
         try:
-            for event in list(self._events):
-                if subscriber is not None and subscriber.closed:
-                    return
-                sequence = self._sequence_of(event)
-                if sequence <= after_sequence:
-                    continue
+            # Historical replay happens before live registration so a slow
+            # consumer cannot fill its live queue (and get evicted) while
+            # walking a large retained window. Events published during that
+            # walk stay in retention and are picked up by catch-up below.
+            async for event in self._iter_retained(after_sequence=after_sequence):
                 yield event
-                after_sequence = sequence
+                after_sequence = self._sequence_of(event)
                 if self._is_terminal(event):
                     return
 
-            if subscriber is None:
+            if not live:
                 return
+
+            subscriber = _Subscriber(queue=asyncio.Queue(maxsize=self._subscriber_queue_limit))
+            self._subscribers.append(subscriber)
+
+            # Catch up anything published during historical replay or between
+            # registration and the live wait. Dropped full-queue publishes
+            # during this phase are safe: retention still holds them.
+            while True:
+                progressed = False
+                async for event in self._iter_retained(
+                    after_sequence=after_sequence,
+                    subscriber=subscriber,
+                ):
+                    yield event
+                    after_sequence = self._sequence_of(event)
+                    progressed = True
+                    if self._is_terminal(event):
+                        return
+
+                drained = self._drain_subscriber_queue(subscriber)
+                for event in drained:
+                    sequence = self._sequence_of(event)
+                    if sequence <= after_sequence:
+                        continue
+                    yield event
+                    after_sequence = sequence
+                    progressed = True
+                    if self._is_terminal(event):
+                        return
+
+                if subscriber.closed:
+                    return
+                if not progressed:
+                    break
+
+            subscriber.catching_up = False
 
             while True:
                 item = await subscriber.queue.get()
@@ -116,6 +151,37 @@ class ReplayEventStream(Generic[EventT]):
             if subscriber is not None:
                 self._remove_subscriber(subscriber)
 
+    async def _iter_retained(
+        self,
+        *,
+        after_sequence: int,
+        subscriber: _Subscriber[EventT] | None = None,
+    ) -> AsyncGenerator[EventT, None]:
+        for event in list(self._events):
+            if subscriber is not None and subscriber.closed:
+                return
+            sequence = self._sequence_of(event)
+            if sequence <= after_sequence:
+                continue
+            yield event
+            after_sequence = sequence
+            if self._is_terminal(event):
+                return
+
+    def _drain_subscriber_queue(self, subscriber: _Subscriber[EventT]) -> list[EventT]:
+        drained: list[EventT] = []
+        while True:
+            try:
+                item = subscriber.queue.get_nowait()
+            except asyncio.QueueEmpty:
+                return drained
+            if item is _LAGGED_SUBSCRIBER:
+                # Lag eviction is disabled during catch-up; treat a sentinel as
+                # a closed subscriber if it ever appears.
+                subscriber.closed = True
+                return drained
+            drained.append(cast(EventT, item))
+
     def _is_terminal(self, event: EventT) -> bool:
         return self._terminal_when is not None and self._terminal_when(event)
 
@@ -125,6 +191,9 @@ class ReplayEventStream(Generic[EventT]):
         try:
             subscriber.queue.put_nowait(event)
         except asyncio.QueueFull:
+            if subscriber.catching_up:
+                # Retention still holds the event for the catch-up rescan.
+                return
             self._evict_lagging_subscriber(subscriber)
 
     def _evict_lagging_subscriber(self, subscriber: _Subscriber[EventT]) -> None:
