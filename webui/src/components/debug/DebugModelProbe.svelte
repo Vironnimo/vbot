@@ -4,6 +4,7 @@
   import { debugModelProbe } from '$lib/api.js';
   import {
     applyModelProbeResult,
+    formattedBodyText,
     modelProbeCanProbe,
     modelProbeConnectionOptions,
     rawBodyText,
@@ -129,8 +130,9 @@
           {t('debug.modelProbe.rawResponse', 'Raw Response')}
         </h4>
         <pre
-          class="debug-view__code-block debug-view__code-block--raw">{viewState
-            .modelProbeResult.raw || '—'}</pre>
+          class="debug-view__code-block debug-view__code-block--formatted">{formattedBodyText(
+            viewState.modelProbeResult.raw,
+          ) || '—'}</pre>
       </div>
 
       <div class="debug-view__probe-result-section">
@@ -271,12 +273,6 @@
     line-height: 1.55;
     user-select: text;
     -webkit-user-select: text;
-  }
-
-  .debug-view__code-block--raw {
-    overflow-wrap: normal;
-    white-space: pre;
-    word-break: normal;
   }
 
   .debug-view__code-block--formatted {
