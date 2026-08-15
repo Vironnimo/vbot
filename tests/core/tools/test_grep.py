@@ -986,3 +986,37 @@ def test_grep_glob_filter_matches_case_insensitively(
 
     data = assert_success_envelope(result)
     assert data["content"] == "keep.py:1: needle"
+
+
+def test_grep_glob_filter_expands_brace_alternations(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # rg --glob semantics: '{py,js}' is an alternation, not a literal name —
+    # the fnmatch-based fallback must expand it instead of matching nothing.
+    force_python_fallback(monkeypatch)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    workspace.joinpath("keep.py").write_text("needle\n", encoding="utf-8")
+    workspace.joinpath("also.js").write_text("needle\n", encoding="utf-8")
+    workspace.joinpath("skip.txt").write_text("needle\n", encoding="utf-8")
+
+    result = grep_handler(make_context(workspace), {"pattern": "needle", "glob": "**/*.{py,js}"})
+
+    data = assert_success_envelope(result)
+    assert data["content"] == "also.js:1: needle\nkeep.py:1: needle"
+
+
+def test_grep_bare_name_brace_filter_matches_at_any_depth(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    force_python_fallback(monkeypatch)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    workspace.joinpath("src").mkdir()
+    workspace.joinpath("src", "app.py").write_text("needle\n", encoding="utf-8")
+    workspace.joinpath("src", "app.ts").write_text("needle\n", encoding="utf-8")
+
+    result = grep_handler(make_context(workspace), {"pattern": "needle", "glob": "*.{py,ts}"})
+
+    data = assert_success_envelope(result)
+    assert data["content"] == "src/app.py:1: needle\nsrc/app.ts:1: needle"

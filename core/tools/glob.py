@@ -37,7 +37,8 @@ MAX_GLOB_OFFSET = 10_000
 GLOB_TOOL_NAME = "glob"
 GLOB_TOOL_DESCRIPTION = (
     "Find paths by glob pattern (case-insensitive; '*.py' matches top level only, "
-    "'**/*.py' any depth). Returns matching file and directory paths sorted by "
+    "'**/*.py' any depth; '{py,js}' alternation expands like ripgrep globs). Returns "
+    "matching file and directory paths sorted by "
     "modification time (newest first), relative to the working directory (absolute "
     "when outside it). Directory entries end with '/'. Skips .gitignore'd paths "
     "unless include_ignored=true. Results beyond the limit (default 100) are cut "
