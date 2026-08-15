@@ -37,6 +37,9 @@
     // Roster of addressable agents ({ address, name }) the "All agents"
     // filter lists sessions for — the same set the Chat agent bars show.
     agents = [],
+    // Called with (sessionId, agentAddress, isSubAgentSession) when a row is
+    // picked — the address routes cross-agent selections, the flag drives the
+    // sub-agent footer banner in ChatView.
     onSessionSelected = () => {},
     // Called after a successful delete with { deletedSessionId, nextSessionId,
     // agentAddress } so ChatView can navigate if it was viewing the removed
@@ -285,7 +288,14 @@
 
   const handleSelectSession = (session) => {
     sessionState = selectSession(sessionState, session.id);
-    onSessionSelected?.(session.id, session.agent_address || asText(agentId));
+    // The row's real sub-agent flag decides the footer banner in ChatView:
+    // a foreign agent's ordinary session is a normal override view, not a
+    // sub-agent session.
+    onSessionSelected?.(
+      session.id,
+      session.agent_address || asText(agentId),
+      session.is_subagent_session === true,
+    );
   };
 
   // -- filter dropdown -------------------------------------------------------

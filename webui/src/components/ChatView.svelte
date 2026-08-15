@@ -1225,7 +1225,11 @@
     return changed;
   };
 
-  const handleSessionSelected = async (sessionId, sessionAgentAddress) => {
+  const handleSessionSelected = async (
+    sessionId,
+    sessionAgentAddress,
+    isSubAgentSession,
+  ) => {
     // The drawer may list sessions of other agents (All-agents filter); the
     // row's owning address wins, otherwise the displayed agent's own address.
     const agentAddress =
@@ -1248,7 +1252,11 @@
         : (selectedAgent(chatState)?.current_session_id ?? '')
       : '';
     viewingSessionAgentId = isOwnAgent ? '' : agentAddress;
-    viewingSubAgentSession = !isOwnAgent;
+    // The sub-agent notice follows the picked row's real sub-agent flag,
+    // not cross-agent-ness: a foreign agent's ordinary session is a normal
+    // override view, while the banner (and its parent-return button) stay
+    // reserved for actual sub-agent sessions.
+    viewingSubAgentSession = isSubAgentSession === true;
     viewingSessionId =
       isOwnAgent && normalizedSessionId === ownCurrentSessionId
         ? ''
