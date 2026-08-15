@@ -24,6 +24,7 @@ from server.app import (
     _bus_epoch,
     _bus_last_sequence,
     _connection_replay_status,
+    _is_reserved_server_path,
     _parse_query_string,
     _queues_snapshot,
     _register_cron_change_bridge,
@@ -529,6 +530,16 @@ async def _wait_for_events(event_bus: ServerEventBus, count: int) -> None:
 
 
 # -- Unit tests for the /ws connection-ready handshake helpers --
+
+
+def test_reserved_server_paths_include_websocket_and_control_prefixes() -> None:
+    assert _is_reserved_server_path("health")
+    assert _is_reserved_server_path("ws")
+    assert _is_reserved_server_path("ws/logs")
+    assert _is_reserved_server_path("ws/terminals/term-1")
+    assert _is_reserved_server_path("api/rpc")
+    assert not _is_reserved_server_path("chat")
+    assert not _is_reserved_server_path("settings")
 
 
 def test_parse_query_string_returns_blank_for_missing_or_whitespace() -> None:

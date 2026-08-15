@@ -490,7 +490,12 @@ def create_app(
                 file_delivery=request.app.state.file_delivery,
             ),
             media_type="text/event-stream",
-            headers={"Cache-Control": "no-cache"},
+            headers={
+                "Cache-Control": "no-cache",
+                # Prevent reverse proxies (e.g. nginx) from buffering the
+                # incremental Run timeline into one late flush.
+                "X-Accel-Buffering": "no",
+            },
         )
 
     @app.websocket("/ws")
@@ -1071,7 +1076,7 @@ async def _close_log_stream(stream: Any) -> None:
 
 
 def _is_reserved_server_path(path: str) -> bool:
-    return path == "health" or path == "ws" or path.startswith("api/")
+    return path == "health" or path == "ws" or path.startswith("ws/") or path.startswith("api/")
 
 
 def _parse_after_sequence(raw: str | None) -> int:
