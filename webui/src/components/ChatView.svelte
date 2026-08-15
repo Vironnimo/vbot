@@ -218,6 +218,24 @@
   // `agent@projekt` otherwise) — what address-parsing RPCs like session.list
   // need (trap 2). The session drawer lists sessions through it.
   let activeAgentAddress = $derived(activeAddressing().agentAddress);
+  // Roster the session drawer's All-agents filter lists sessions for: every
+  // identity agent plus the selected project's team — the same addresses the
+  // Chat agent bars offer.
+  let sessionDrawerAgents = $derived.by(() => {
+    const roster = chatState.agents.map((agent) => ({
+      address: agent.id,
+      name: agent.name || agent.id,
+    }));
+    if (isProjectSelected(selectedProjectId)) {
+      for (const member of projectTeam) {
+        roster.push({
+          address: formatAgentAddress(member.agent_id, selectedProjectId),
+          name: member.display_name || member.agent_id,
+        });
+      }
+    }
+    return roster;
+  });
   // Agent-bar selection follows the owner of the displayed Session, while the
   // underlying selected Agent remains the return target for an override. This
   // keeps nested Sub-Agent navigation truthful without losing the root context.
@@ -1207,8 +1225,12 @@
     return changed;
   };
 
-  const handleSessionSelected = async (sessionId) => {
-    const agentAddress = activeAddressing().agentAddress;
+  const handleSessionSelected = async (sessionId, sessionAgentAddress) => {
+    // The drawer may list sessions of other agents (All-agents filter); the
+    // row's owning address wins, otherwise the displayed agent's own address.
+    const agentAddress =
+      String(sessionAgentAddress ?? '').trim() ||
+      activeAddressing().agentAddress;
     const normalizedSessionId = String(sessionId ?? '').trim();
     if (!agentAddress || !normalizedSessionId) {
       return;
@@ -1245,6 +1267,7 @@
   const handleSessionDeleted = async ({
     deletedSessionId,
     nextSessionId,
+    agentAddress,
   } = {}) => {
     const removedId = String(deletedSessionId ?? '').trim();
     const landingId = String(nextSessionId ?? '').trim();
@@ -1254,7 +1277,7 @@
     const agent = activeAgent;
     const viewedSessionId = viewingSessionId || agent?.current_session_id || '';
     if (viewedSessionId === removedId && landingId) {
-      await handleSessionSelected(landingId);
+      await handleSessionSelected(landingId, agentAddress);
     }
   };
 
@@ -1863,6 +1886,7 @@
           agentId={activeAgentAddress}
           currentSessionId={viewingSessionId || activeAgent.current_session_id}
           reloadToken={sessionsRefreshToken}
+          agents={sessionDrawerAgents}
           onSessionSelected={handleSessionSelected}
           onSessionDeleted={handleSessionDeleted}
         />

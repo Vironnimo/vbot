@@ -351,6 +351,7 @@ describe('SessionListDrawer', () => {
     expect(onSessionDeleted).toHaveBeenCalledWith({
       deletedSessionId: 'session-1',
       nextSessionId: 'session-2',
+      agentAddress: 'alpha',
     });
     // A successful delete re-fetches so the removed row disappears.
     await waitForCondition(
@@ -553,7 +554,7 @@ describe('SessionListDrawer', () => {
     expect(tooltipText).toContain('Parent: orchestrator/parent-session');
   });
 
-  it('shows important sessions by default and reveals labelled execution sessions', async () => {
+  it('shows important sessions by default and reveals labelled execution sessions through the filters', async () => {
     listSessionsMock.mockResolvedValue({
       sessions: [
         {
@@ -598,8 +599,11 @@ describe('SessionListDrawer', () => {
     expect(document.body.textContent).not.toContain('reflection-session');
     expect(document.body.textContent).not.toContain('subagent-session');
 
-    document.querySelector('[role="switch"]').click();
-    flushSync();
+    openFilterMenu();
+    for (const label of ['Subagent runs', 'Memory reflections', 'Cron runs']) {
+      filterSwitch(label).click();
+      flushSync();
+    }
 
     await waitForCondition(
       () => document.querySelectorAll('.session-row').length === 4,
@@ -616,6 +620,95 @@ describe('SessionListDrawer', () => {
           marker.textContent.trim() === '' && marker.querySelector('svg'),
       ),
     ).toBe(true);
+  });
+
+  it('labels memory and skill reflection sessions with their own markers', async () => {
+    listSessionsMock.mockResolvedValue({
+      sessions: [
+        {
+          id: 'memory-review',
+          created_at: '2026-05-09T00:00:00+00:00',
+          run_kinds: ['memory_reflection'],
+        },
+        {
+          id: 'skill-review',
+          created_at: '2026-05-10T00:00:00+00:00',
+          run_kinds: ['skill_reflection'],
+        },
+      ],
+    });
+    mountedComponent = mount(SessionListDrawer, {
+      target: document.body,
+      props: {
+        agentId: 'alpha',
+        currentSessionId: '',
+      },
+    });
+    flushSync();
+
+    openFilterMenu();
+    filterSwitch('Memory reflections').click();
+    flushSync();
+    filterSwitch('Skill reflections').click();
+    flushSync();
+
+    await waitForCondition(
+      () => document.querySelectorAll('.session-row').length === 2,
+    );
+    const markerLabels = Array.from(
+      document.querySelectorAll('[data-session-marker]'),
+    ).map((marker) => marker.getAttribute('aria-label'));
+    expect(markerLabels).toContain('Memory reflection');
+    expect(markerLabels).toContain('Skill reflection');
+  });
+
+  it('lists sessions for every roster agent when the All-agents filter is on', async () => {
+    listSessionsMock.mockImplementation(async (address) => ({
+      sessions: [
+        {
+          id: `session-${address}`,
+          title: `Session ${address}`,
+          created_at: '2026-05-09T00:00:00+00:00',
+        },
+      ],
+    }));
+    const onSessionSelected = vi.fn();
+    mountedComponent = mount(SessionListDrawer, {
+      target: document.body,
+      props: {
+        agentId: 'alpha',
+        currentSessionId: 'session-alpha',
+        agents: [
+          { address: 'alpha', name: 'Alpha' },
+          { address: 'beta', name: 'Beta' },
+        ],
+        onSessionSelected,
+      },
+    });
+    flushSync();
+    await waitForCondition(
+      () => document.querySelectorAll('.session-row').length === 1,
+    );
+    expect(listSessionsMock).toHaveBeenCalledWith('alpha');
+    expect(document.body.textContent).not.toContain('Beta');
+
+    openFilterMenu();
+    filterSwitch('All agents').click();
+    flushSync();
+
+    await waitForCondition(() => listSessionsMock.mock.calls.length === 3);
+    expect(listSessionsMock).toHaveBeenCalledWith('beta');
+    await waitForCondition(
+      () => document.querySelectorAll('.session-row').length === 2,
+    );
+
+    // Merged rows carry their owning agent's name, and selecting one passes
+    // that agent's address so ChatView can navigate across agents.
+    expect(document.body.textContent).toContain('Alpha');
+    expect(document.body.textContent).toContain('Beta');
+    sessionRowButton('Session beta').click();
+    flushSync();
+    expect(onSessionSelected).toHaveBeenCalledWith('session-beta', 'beta');
   });
 });
 
@@ -636,6 +729,37 @@ function buttonByText(text) {
       (button) => button.textContent.trim() === text,
     ) ?? null
   );
+}
+
+// Opens the header filter dropdown and waits for its portaled panel.
+function openFilterMenu() {
+  const trigger = document.querySelector('.session-drawer__filter-trigger');
+  expect(trigger, 'filter trigger not rendered').toBeTruthy();
+  trigger.click();
+  flushSync();
+  const menu = document.querySelector('.session-drawer__filter-menu');
+  expect(menu, 'filter menu did not open').toBeTruthy();
+  return menu;
+}
+
+// Returns the filter dropdown's switch toggle for one filter label.
+function filterSwitch(label) {
+  const toggle = [
+    ...document.querySelectorAll(
+      '.session-drawer__filter-menu [role="switch"]',
+    ),
+  ].find((candidate) => candidate.getAttribute('aria-label') === label);
+  expect(toggle, `filter switch not found: ${label}`).toBeTruthy();
+  return toggle;
+}
+
+// Returns the row-select button of the session row showing the given title.
+function sessionRowButton(title) {
+  const button = [...document.querySelectorAll('.session-row__select')].find(
+    (candidate) => candidate.textContent.includes(title),
+  );
+  expect(button, `session row not found: ${title}`).toBeTruthy();
+  return button;
 }
 
 // Clicks a button in the open ConfirmDialog by its label (Delete / Cancel).

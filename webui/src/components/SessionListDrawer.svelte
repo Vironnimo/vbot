@@ -21,6 +21,7 @@
   import { tooltip } from '$lib/tooltip.js';
   import {
     applySessionList,
+    createSessionListFilters,
     createSessionListState,
     selectSession,
     sessionDisplayName,
@@ -33,9 +34,13 @@
     // Bumped by ChatView on `resource_changed(kind:"sessions")` so a new or
     // switched session created in another window appears here automatically.
     reloadToken = 0,
+    // Roster of addressable agents ({ address, name }) the "All agents"
+    // filter lists sessions for — the same set the Chat agent bars show.
+    agents = [],
     onSessionSelected = () => {},
-    // Called after a successful delete with { deletedSessionId, nextSessionId }
-    // so ChatView can navigate if it was viewing the removed session (#2).
+    // Called after a successful delete with { deletedSessionId, nextSessionId,
+    // agentAddress } so ChatView can navigate if it was viewing the removed
+    // session (#2).
     onSessionDeleted = () => {},
   } = $props();
 
@@ -45,13 +50,35 @@
   });
 
   let sessionState = $state(createSessionListState());
-  let showAllSessions = $state(false);
+  let filters = $state(createSessionListFilters());
   let visibleSessions = $derived(
     visibleSessionsForSelection(sessionState.sessions, {
-      showAll: showAllSessions,
+      filters,
       selectedSessionId: currentSessionId,
     }),
   );
+  let activeFilterCount = $derived(
+    Number(filters.allAgents) +
+      Number(filters.subagents) +
+      Number(filters.memoryReflections) +
+      Number(filters.skillReflections) +
+      Number(filters.cron),
+  );
+
+  // Deduplicated roster the All-agents filter loads sessions for.
+  let rosterAgents = $derived.by(() => {
+    const seenAddresses = [];
+    const roster = [];
+    for (const entry of Array.isArray(agents) ? agents : []) {
+      const address = asText(entry?.address);
+      if (!address || seenAddresses.includes(address)) {
+        continue;
+      }
+      seenAddresses.push(address);
+      roster.push({ address, name: asText(entry?.name) || address });
+    }
+    return roster;
+  });
 
   // Row-action state: which row's "…" menu is open, which row is being renamed
   // inline, the draft title, and any rename error. Only ever one of each at a
@@ -62,9 +89,17 @@
   let menuStyle = $state('visibility: hidden;');
   let menuPlacement = $state('bottom');
   let editingSessionId = $state(null);
+  let editingAgentAddress = $state('');
   let editValue = $state('');
   let renameError = $state(null);
   let renameSaving = $state(false);
+  // Filter-dropdown state: the header button's portaled panel, positioned like
+  // the row action menu.
+  let filterMenuOpen = $state(false);
+  let filterMenuTriggerElement = $state(null);
+  let filterMenuElement = $state(null);
+  let filterMenuStyle = $state('visibility: hidden;');
+  let filterMenuPlacement = $state('bottom');
   // Row-delete state: a transient error surfaced when a delete is refused (for
   // example a busy session, #4) and an in-flight guard against double-clicks.
   let actionError = $state(null);
@@ -80,24 +115,63 @@
 
   const SESSION_TITLE_MAX_LENGTH = 200;
   const SESSION_ACTION_MENU_FALLBACK_WIDTH = 160;
+  const SESSION_FILTER_MENU_WIDTH = 230;
+  const SESSION_FILTER_ROWS = [
+    {
+      key: 'allAgents',
+      labelKey: 'sessions.filters.allAgents',
+      labelFallback: 'All agents',
+    },
+    {
+      key: 'subagents',
+      labelKey: 'sessions.filters.subagents',
+      labelFallback: 'Subagent runs',
+    },
+    {
+      key: 'memoryReflections',
+      labelKey: 'sessions.filters.memoryReflections',
+      labelFallback: 'Memory reflections',
+    },
+    {
+      key: 'skillReflections',
+      labelKey: 'sessions.filters.skillReflections',
+      labelFallback: 'Skill reflections',
+    },
+    {
+      key: 'cron',
+      labelKey: 'sessions.filters.cron',
+      labelFallback: 'Cron runs',
+    },
+  ];
 
-  let loadedAgentId = '';
+  let loadedListKey = '';
   let loadVersion = 0;
 
+  // The list reloads when the addressed agent changes, when the All-agents
+  // filter changes which addresses are loaded, or when the roster itself
+  // changes while that filter is on.
+  let listSourceKey = $derived(
+    [
+      asText(agentId),
+      filters.allAgents
+        ? rosterAgents.map((entry) => entry.address).join('|')
+        : '',
+    ].join('||'),
+  );
+
   $effect(() => {
-    const normalizedAgentId = asText(agentId);
-    if (normalizedAgentId === loadedAgentId) {
+    if (listSourceKey === loadedListKey) {
       return;
     }
 
-    loadedAgentId = normalizedAgentId;
+    loadedListKey = listSourceKey;
 
-    if (!normalizedAgentId) {
+    if (!asText(agentId)) {
       sessionState = createSessionListState();
       return;
     }
 
-    loadSessions(normalizedAgentId);
+    loadSessions();
   });
 
   $effect(() => {
@@ -151,12 +225,12 @@
     };
 
     try {
-      const result = await listSessions(targetAgentId);
+      const rawSessions = await loadRawSessions(targetAgentId);
       if (requestVersion !== loadVersion) {
         return;
       }
 
-      sessionState = applySessionList(sessionState, result?.sessions ?? []);
+      sessionState = applySessionList(sessionState, rawSessions);
       const normalizedCurrentSessionId = asText(currentSessionId);
       if (normalizedCurrentSessionId) {
         sessionState = selectSession(sessionState, normalizedCurrentSessionId);
@@ -174,9 +248,94 @@
     }
   };
 
-  const handleSelectSession = (sessionId) => {
-    sessionState = selectSession(sessionState, sessionId);
-    onSessionSelected?.(sessionId);
+  // One session.list call for the selected agent, or one per roster address
+  // when the All-agents filter is on. Each merged row is tagged with its
+  // owning address and display name so rows stay attributable and actions
+  // address the right agent.
+  const loadRawSessions = async (targetAgentId) => {
+    if (!filters.allAgents || rosterAgents.length === 0) {
+      const result = await listSessions(targetAgentId);
+      return result?.sessions ?? [];
+    }
+
+    const results = await Promise.allSettled(
+      rosterAgents.map((entry) => listSessions(entry.address)),
+    );
+    const merged = [];
+    let firstError = null;
+    results.forEach((result, index) => {
+      if (result.status === 'fulfilled') {
+        const entry = rosterAgents[index];
+        for (const session of result.value?.sessions ?? []) {
+          merged.push({
+            ...session,
+            agent_address: entry.address,
+            agent_name: entry.name,
+          });
+        }
+      } else if (firstError === null) {
+        firstError = result.reason;
+      }
+    });
+    if (merged.length === 0 && firstError !== null) {
+      throw firstError;
+    }
+    return merged;
+  };
+
+  const handleSelectSession = (session) => {
+    sessionState = selectSession(sessionState, session.id);
+    onSessionSelected?.(session.id, session.agent_address || asText(agentId));
+  };
+
+  // -- filter dropdown -------------------------------------------------------
+
+  const toggleFilterMenu = async (triggerElement) => {
+    if (filterMenuOpen) {
+      closeFilterMenu();
+      return;
+    }
+
+    closeMenu();
+    filterMenuOpen = true;
+    filterMenuTriggerElement = triggerElement;
+    filterMenuStyle = 'visibility: hidden;';
+    await tick();
+    updateFilterMenuPosition();
+  };
+
+  const closeFilterMenu = () => {
+    filterMenuOpen = false;
+    filterMenuTriggerElement = null;
+    filterMenuElement = null;
+    filterMenuStyle = 'visibility: hidden;';
+    filterMenuPlacement = 'bottom';
+  };
+
+  const updateFilterMenuPosition = () => {
+    if (!filterMenuOpen || !filterMenuTriggerElement || !filterMenuElement) {
+      return;
+    }
+
+    const panelRect = filterMenuElement.getBoundingClientRect();
+    const { placement, left, width, verticalRule, optionsMaxHeight } =
+      computePanelPosition(filterMenuTriggerElement, {
+        contentHeight: filterMenuElement.scrollHeight || panelRect.height,
+        panelWidth: panelRect.width || SESSION_FILTER_MENU_WIDTH,
+        horizontalAlign: 'end',
+      });
+
+    filterMenuPlacement = placement;
+    filterMenuStyle = [
+      `left: ${left}px`,
+      verticalRule,
+      `width: ${width}px`,
+      `max-height: ${optionsMaxHeight}px`,
+    ].join('; ');
+  };
+
+  const setFilter = (key, checked) => {
+    filters = { ...filters, [key]: checked };
   };
 
   const toggleMenu = async (sessionId, triggerElement) => {
@@ -228,19 +387,21 @@
   const startRename = (session) => {
     closeMenu();
     editingSessionId = session.id;
+    editingAgentAddress = session.agent_address || asText(agentId);
     editValue = session.title ?? '';
     renameError = null;
   };
 
   const cancelRename = () => {
     editingSessionId = null;
+    editingAgentAddress = '';
     editValue = '';
     renameError = null;
   };
 
   const submitRename = async () => {
     const sessionId = editingSessionId;
-    const targetAgentId = asText(agentId);
+    const targetAgentId = editingAgentAddress || asText(agentId);
     if (!sessionId || !targetAgentId || renameSaving) {
       return;
     }
@@ -250,6 +411,7 @@
     try {
       await renameSession(targetAgentId, sessionId, editValue);
       editingSessionId = null;
+      editingAgentAddress = '';
       editValue = '';
       // Re-fetch so the row reflects the server-normalized title (and the
       // fallback label when the name was cleared).
@@ -295,7 +457,7 @@
   };
 
   const savePolicy = async () => {
-    const targetAgentId = asText(agentId);
+    const targetAgentId = policySession?.agent_address || asText(agentId);
     if (!targetAgentId || !policySession || policySaving) return;
     policySaving = true;
     policyError = null;
@@ -348,7 +510,7 @@
   const confirmDelete = async () => {
     const session = deleteConfirmSession;
     deleteConfirmSession = null;
-    const targetAgentId = asText(agentId);
+    const targetAgentId = session?.agent_address || asText(agentId);
     if (!session || !targetAgentId || deleting) {
       return;
     }
@@ -360,6 +522,7 @@
       onSessionDeleted?.({
         deletedSessionId: session.id,
         nextSessionId: asText(result?.next_session_id),
+        agentAddress: targetAgentId,
       });
       // Re-fetch so the deleted row disappears immediately, without waiting for
       // the resource_changed round-trip.
@@ -383,41 +546,47 @@
     }
   };
 
-  // Close an open row menu on an outside click or Escape, mirroring the
-  // Dropdown primitive. The menu is portaled, so both its original action
-  // area and its document-root panel must count as inside.
+  // Close an open row menu or the filter dropdown on an outside click or
+  // Escape, mirroring the Dropdown primitive. Both panels are portaled, so
+  // their original trigger areas and document-root panels must count as
+  // inside.
   const handleDocumentMouseDown = (event) => {
-    if (openMenuSessionId === null) {
-      return;
-    }
     if (
       event.target instanceof Element &&
-      (event.target.closest('.session-row__actions') ||
-        menuElement?.contains(event.target))
+      ((filterMenuOpen &&
+        (event.target.closest('.session-drawer__filter') ||
+          filterMenuElement?.contains(event.target))) ||
+        (openMenuSessionId !== null &&
+          (event.target.closest('.session-row__actions') ||
+            menuElement?.contains(event.target))))
     ) {
       return;
     }
     closeMenu();
+    closeFilterMenu();
   };
 
   const handleDocumentKeyDown = (event) => {
     if (event.key === 'Escape') {
       closeMenu();
+      closeFilterMenu();
     }
   };
 
   const handleWindowScroll = (event) => {
-    if (openMenuSessionId === null) {
-      return;
-    }
-    if (event.target instanceof Node && menuElement?.contains(event.target)) {
+    if (
+      event.target instanceof Node &&
+      (filterMenuElement?.contains(event.target) ||
+        menuElement?.contains(event.target))
+    ) {
       return;
     }
     closeMenu();
+    closeFilterMenu();
   };
 
   $effect(() => {
-    if (openMenuSessionId === null) {
+    if (openMenuSessionId === null && !filterMenuOpen) {
       return undefined;
     }
 
@@ -448,10 +617,15 @@
   };
 
   const sessionHoverDetails = (session) => {
-    const lines = [
-      session.display_name || sessionDisplayName(session),
+    const lines = [session.display_name || sessionDisplayName(session)];
+
+    if (session.agent_name) {
+      lines.push(`${t('sessions.agent', 'Agent')}: ${session.agent_name}`);
+    }
+
+    lines.push(
       `${t('sessions.last_active', 'Last active')}: ${formatTimestamp(session.last_active_at ?? session.created_at)}`,
-    ];
+    );
 
     if (session.source_channel_id) {
       lines.push(
@@ -482,6 +656,18 @@
     return `${normalizedPlatform.slice(0, 1).toUpperCase()}${normalizedPlatform.slice(1)}`;
   };
 
+  const REFLECTION_BADGE_RUN_KINDS = [
+    'memory_reflection',
+    'skill_reflection',
+    'reflection',
+  ];
+
+  function reflectionBadgeKinds(session) {
+    return REFLECTION_BADGE_RUN_KINDS.filter((runKind) =>
+      session.run_kinds.includes(runKind),
+    );
+  }
+
   function asText(value) {
     if (value === null || value === undefined) {
       return '';
@@ -502,13 +688,63 @@
   <div class="session-drawer__header">
     <h3 class="session-drawer__title">{t('sessions.title', 'Sessions')}</h3>
     <div class="session-drawer__filter">
-      <span>{t('sessions.showAll', 'Show all')}</span>
-      <Toggle
-        size="sm"
-        checked={showAllSessions}
-        ariaLabel={t('sessions.showAllAria', 'Show all sessions')}
-        onChange={(checked) => (showAllSessions = checked)}
-      />
+      <button
+        type="button"
+        class="session-drawer__filter-trigger"
+        class:session-drawer__filter-trigger--active={activeFilterCount > 0}
+        class:session-drawer__filter-trigger--open={filterMenuOpen}
+        aria-label={t('sessions.filtersAria', 'Session list filters')}
+        aria-haspopup="menu"
+        aria-expanded={filterMenuOpen}
+        onclick={(event) => toggleFilterMenu(event.currentTarget)}
+      >
+        <svg viewBox="0 0 16 16" aria-hidden="true">
+          <path
+            d="M1.75 2.75h12.5M3.75 8h8.5M6.25 13.25h3.5"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.6"
+            stroke-linecap="round"
+          />
+        </svg>
+        {#if activeFilterCount > 0}
+          <span
+            class="session-drawer__filter-count"
+            aria-label={t('sessions.filtersActive', '{count} active filters', {
+              count: activeFilterCount,
+            })}
+          >
+            {activeFilterCount}
+          </span>
+        {/if}
+      </button>
+      {#if filterMenuOpen}
+        <div
+          bind:this={filterMenuElement}
+          use:portal
+          class="session-drawer__filter-menu"
+          role="menu"
+          data-placement={filterMenuPlacement}
+          data-positioning="fixed"
+          style={filterMenuStyle}
+        >
+          {#each SESSION_FILTER_ROWS as filterRow (filterRow.key)}
+            <div
+              class="session-drawer__filter-row"
+              role="menuitemcheckbox"
+              aria-checked={filters[filterRow.key]}
+            >
+              <span>{t(filterRow.labelKey, filterRow.labelFallback)}</span>
+              <Toggle
+                size="sm"
+                checked={filters[filterRow.key]}
+                ariaLabel={t(filterRow.labelKey, filterRow.labelFallback)}
+                onChange={(checked) => setFilter(filterRow.key, checked)}
+              />
+            </div>
+          {/each}
+        </div>
+      {/if}
     </div>
   </div>
 
@@ -538,10 +774,9 @@
       density="compact"
       class="session-drawer__empty-layout"
       title={t('chat.sessions.emptyTitle', 'No sessions yet')}
-      description={t(
-        'sessions.no_sessions',
-        'No sessions found for this agent.',
-      )}
+      description={filters.allAgents
+        ? t('sessions.no_sessions_all', 'No sessions found.')
+        : t('sessions.no_sessions', 'No sessions found for this agent.')}
     />
   {:else if visibleSessions.length === 0}
     <EmptyState
@@ -550,7 +785,7 @@
       title={t('sessions.noImportantTitle', 'No important sessions')}
       description={t(
         'sessions.noImportantDescription',
-        'Turn on Show all to browse Cron, Reflection, and Subagent sessions.',
+        'Use the filters to browse Subagent, Reflection, and Cron sessions.',
       )}
     />
   {:else}
@@ -586,7 +821,7 @@
               class:session-row__select--active={sessionState.selectedSessionId ===
                 session.id}
               class="session-row__select"
-              onclick={() => handleSelectSession(session.id)}
+              onclick={() => handleSelectSession(session)}
               use:tooltip={sessionHoverDetails(session)}
             >
               <div class="session-row__heading">
@@ -790,22 +1025,16 @@
                       </Badge>
                     </span>
                   {/if}
-                  {#if session.run_kinds.includes('reflection')}
+                  {#each reflectionBadgeKinds(session) as runKind (runKind)}
                     <span
                       class="tooltip-anchor session-row__marker-anchor"
-                      use:tooltip={t(
-                        'sessions.runKind.reflection',
-                        'Reflection',
-                      )}
+                      use:tooltip={t(`sessions.runKind.${runKind}`, runKind)}
                     >
                       <Badge
                         variant="neutral"
                         class="session-row__badge session-row__badge--icon"
-                        aria-label={t(
-                          'sessions.runKind.reflection',
-                          'Reflection',
-                        )}
-                        data-session-marker="reflection"
+                        aria-label={t(`sessions.runKind.${runKind}`, runKind)}
+                        data-session-marker={runKind}
                       >
                         <svg
                           viewBox="0 0 14 14"
@@ -824,9 +1053,12 @@
                         </svg>
                       </Badge>
                     </span>
-                  {/if}
+                  {/each}
                 </span>
               </div>
+              {#if session.agent_name}
+                <span class="session-row__agent">{session.agent_name}</span>
+              {/if}
             </button>
             <div class="session-row__actions">
               <button
@@ -1022,6 +1254,104 @@
     color: var(--text-med);
     font-family: var(--font-ui);
     font-size: var(--fs-body-sm);
+    white-space: nowrap;
+  }
+
+  .session-drawer__filter-trigger {
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 26px;
+    height: 26px;
+    padding: 0;
+    border: 1px solid var(--border);
+    border-radius: var(--r-sm);
+    background: transparent;
+    color: var(--text-med);
+    cursor: pointer;
+    transition:
+      background 150ms ease,
+      color 150ms ease,
+      border-color 150ms ease;
+  }
+
+  .session-drawer__filter-trigger:hover,
+  .session-drawer__filter-trigger:focus-visible,
+  .session-drawer__filter-trigger--open {
+    outline: none;
+    background: var(--accent-12);
+    color: var(--text-hi);
+    border-color: var(--accent-40);
+  }
+
+  .session-drawer__filter-trigger--active {
+    color: var(--accent);
+    border-color: var(--accent-40);
+  }
+
+  .session-drawer__filter-trigger svg {
+    width: 14px;
+    height: 14px;
+  }
+
+  .session-drawer__filter-count {
+    position: absolute;
+    top: -5px;
+    right: -5px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 13px;
+    height: 13px;
+    padding: 0 3px;
+    border-radius: 7px;
+    background: var(--accent);
+    color: var(--surface);
+    font-family: var(--font-ui);
+    font-size: 9px;
+    font-weight: 600;
+    line-height: 1;
+  }
+
+  .session-drawer__filter-menu {
+    position: fixed;
+    z-index: var(--z-floating);
+    width: max-content;
+    min-width: 230px;
+    max-width: calc(100vw - 16px);
+    overflow-y: auto;
+    padding: 6px;
+    border: 1px solid var(--border);
+    border-radius: var(--r-md);
+    background: var(--surface-3);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  }
+
+  .session-drawer__filter-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 7px 9px;
+    border-radius: var(--r-sm);
+    color: var(--text-hi);
+    font-family: var(--font-ui);
+    font-size: var(--fs-body-sm);
+  }
+
+  .session-drawer__filter-row:hover {
+    background: var(--accent-08);
+  }
+
+  .session-row__agent {
+    margin-top: 2px;
+    color: var(--text-med);
+    font-family: var(--font-ui);
+    font-size: var(--fs-label-sm);
+    line-height: 1.25;
+    overflow: hidden;
+    text-overflow: ellipsis;
     white-space: nowrap;
   }
 

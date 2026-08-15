@@ -1,5 +1,23 @@
 const SESSION_FALLBACK_NAME = 'Session';
-const BACKGROUND_ONLY_RUN_KINDS = new Set(['cron', 'reflection']);
+const BACKGROUND_ONLY_RUN_KINDS = new Set([
+  'cron',
+  'reflection',
+  'memory_reflection',
+  'skill_reflection',
+]);
+
+// Category toggles that reveal hidden-by-default sessions. `allAgents` is a
+// filter-dropdown toggle too, but it changes which sessions are loaded rather
+// than how the loaded list is classified, so the view helpers ignore it.
+export function createSessionListFilters() {
+  return {
+    allAgents: false,
+    subagents: false,
+    memoryReflections: false,
+    skillReflections: false,
+    cron: false,
+  };
+}
 
 export function createSessionListState() {
   return {
@@ -70,14 +88,15 @@ export function sessionDisplayName(session) {
 
 export function visibleSessionsForSelection(
   sessions,
-  { showAll = false, selectedSessionId = null } = {},
+  { filters = null, selectedSessionId = null } = {},
 ) {
+  const normalizedFilters = normalizeFilters(filters);
   const normalizedSelectedSessionId = asOptionalText(selectedSessionId);
   return (Array.isArray(sessions) ? sessions : []).filter(
     (session) =>
-      showAll ||
       session?.id === normalizedSelectedSessionId ||
-      !isSessionHiddenByDefault(session),
+      !isSessionHiddenByDefault(session) ||
+      isHiddenCategoryEnabled(session, normalizedFilters),
   );
 }
 
@@ -95,6 +114,39 @@ export function isBackgroundOnlySession(session) {
     runKinds.length > 0 &&
     runKinds.every((runKind) => BACKGROUND_ONLY_RUN_KINDS.has(runKind))
   );
+}
+
+// A hidden session becomes visible when every category that hides it is
+// enabled. A combined reflection review covers both dimensions, so it matches
+// either reflection toggle.
+function isHiddenCategoryEnabled(session, filters) {
+  if (isSubAgentSession(session)) {
+    return filters.subagents;
+  }
+  if (!isBackgroundOnlySession(session)) {
+    return true;
+  }
+  return (Array.isArray(session?.run_kinds) ? session.run_kinds : []).every(
+    (runKind) =>
+      (runKind === 'cron' && filters.cron) ||
+      (runKind === 'memory_reflection' && filters.memoryReflections) ||
+      (runKind === 'skill_reflection' && filters.skillReflections) ||
+      (runKind === 'reflection' &&
+        (filters.memoryReflections || filters.skillReflections)),
+  );
+}
+
+function normalizeFilters(filters) {
+  if (!isPlainObject(filters)) {
+    return createSessionListFilters();
+  }
+  return {
+    allAgents: filters.allAgents === true,
+    subagents: filters.subagents === true,
+    memoryReflections: filters.memoryReflections === true,
+    skillReflections: filters.skillReflections === true,
+    cron: filters.cron === true,
+  };
 }
 
 function normalizeSessions(sessions) {
@@ -128,6 +180,9 @@ function normalizeSession(session) {
     id,
     title: asOptionalText(session?.title),
     auto_title: asOptionalText(session?.auto_title),
+    // Owning agent for merged all-agents lists (null in single-agent mode).
+    agent_address: asOptionalText(session?.agent_address),
+    agent_name: asOptionalText(session?.agent_name),
     created_at: asOptionalText(session?.created_at),
     last_active_at: asOptionalText(session?.last_active_at),
     has_unread_completion: session?.has_unread_completion === true,

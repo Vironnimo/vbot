@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   applySessionList,
+  createSessionListFilters,
   createSessionListState,
   isSessionHiddenByDefault,
   selectSession,
@@ -211,11 +212,13 @@ describe('sessionListView helpers', () => {
     });
   });
 
-  it('hides background-only and sub-agent sessions unless all sessions are requested', () => {
+  it('hides background-only and sub-agent sessions until their filter is enabled', () => {
     const next = applySessionList(createSessionListState(), [
       { id: 'user-session', run_kinds: ['user'] },
       { id: 'cron-session', run_kinds: ['cron'] },
       { id: 'reflection-session', run_kinds: ['reflection'] },
+      { id: 'memory-reflection-session', run_kinds: ['memory_reflection'] },
+      { id: 'skill-reflection-session', run_kinds: ['skill_reflection'] },
       { id: 'subagent-session', is_subagent_session: true },
       {
         id: 'linked-subagent-session',
@@ -236,17 +239,109 @@ describe('sessionListView helpers', () => {
     expect(
       visibleSessionsForSelection(next.sessions).map((session) => session.id),
     ).toEqual(['channel-session', 'mixed-session', 'user-session']);
+
     expect(
-      visibleSessionsForSelection(next.sessions, { showAll: true }).map(
-        (session) => session.id,
-      ),
-    ).toHaveLength(7);
+      visibleSessionsForSelection(next.sessions, {
+        filters: createSessionListFilters(),
+      }).map((session) => session.id),
+    ).toEqual(['channel-session', 'mixed-session', 'user-session']);
 
     expect(
       isSessionHiddenByDefault(
         next.sessions.find((session) => session.id === 'subagent-session'),
       ),
     ).toBe(true);
+  });
+
+  it('reveals each hidden category through its own filter toggle', () => {
+    const next = applySessionList(createSessionListState(), [
+      { id: 'user-session', run_kinds: ['user'] },
+      { id: 'cron-session', run_kinds: ['cron'] },
+      { id: 'reflection-session', run_kinds: ['reflection'] },
+      { id: 'memory-reflection-session', run_kinds: ['memory_reflection'] },
+      { id: 'skill-reflection-session', run_kinds: ['skill_reflection'] },
+      { id: 'subagent-session', is_subagent_session: true },
+    ]);
+
+    const visibleIds = (filters) =>
+      visibleSessionsForSelection(next.sessions, { filters }).map(
+        (session) => session.id,
+      );
+
+    expect(visibleIds({ ...createSessionListFilters(), cron: true })).toEqual([
+      'cron-session',
+      'user-session',
+    ]);
+    expect(
+      visibleIds({ ...createSessionListFilters(), subagents: true }),
+    ).toEqual(['subagent-session', 'user-session']);
+    // A combined reflection review covers both dimensions, so either
+    // reflection toggle reveals it alongside its specific kind.
+    expect(
+      visibleIds({ ...createSessionListFilters(), memoryReflections: true }),
+    ).toEqual([
+      'memory-reflection-session',
+      'reflection-session',
+      'user-session',
+    ]);
+    expect(
+      visibleIds({ ...createSessionListFilters(), skillReflections: true }),
+    ).toEqual([
+      'reflection-session',
+      'skill-reflection-session',
+      'user-session',
+    ]);
+
+    const everyFilter = {
+      ...createSessionListFilters(),
+      subagents: true,
+      memoryReflections: true,
+      skillReflections: true,
+      cron: true,
+    };
+    expect(visibleIds(everyFilter)).toHaveLength(6);
+  });
+
+  it('requires every hiding category before a mixed background session appears', () => {
+    const next = applySessionList(createSessionListState(), [
+      { id: 'combined-session', run_kinds: ['cron', 'memory_reflection'] },
+    ]);
+
+    expect(
+      visibleSessionsForSelection(next.sessions, {
+        filters: { ...createSessionListFilters(), cron: true },
+      }),
+    ).toHaveLength(0);
+    expect(
+      visibleSessionsForSelection(next.sessions, {
+        filters: {
+          ...createSessionListFilters(),
+          cron: true,
+          memoryReflections: true,
+        },
+      }),
+    ).toHaveLength(1);
+  });
+
+  it('carries the owning agent through normalization for merged lists', () => {
+    const next = applySessionList(createSessionListState(), [
+      {
+        id: 'session-1',
+        title: 'Release planning',
+        agent_address: 'nabu',
+        agent_name: 'Nabu',
+      },
+      { id: 'session-2', title: 'Untouched' },
+    ]);
+
+    expect(next.sessions[0]).toMatchObject({
+      agent_address: 'nabu',
+      agent_name: 'Nabu',
+    });
+    expect(next.sessions[1]).toMatchObject({
+      agent_address: null,
+      agent_name: null,
+    });
   });
 
   it('keeps the selected background session visible in the important view', () => {

@@ -66,9 +66,14 @@ ITERATIONS_SINCE_SKILL_REVIEW_KEY = "iterations_since_skill_review"
 # A manual reset advances this generation so a concurrent background review
 # cannot consume activity recorded after that reset.
 COUNTER_GENERATION_KEY = "generation"
-# Display title stamped onto review forks so they are recognizable in the
-# session list (a fork would otherwise inherit the source session's title).
-REFLECTION_FORK_TITLE = "Reflection"
+# Scope-specific Run origins so accessors can filter memory and skill reviews
+# independently; the combined scope (manual ``/reflect``) keeps the generic
+# reflection kind.
+REFLECTION_RUN_KINDS: dict[ReflectionScope, RunKind] = {
+    "memory": RunKind.MEMORY_REFLECTION,
+    "skill": RunKind.SKILL_REFLECTION,
+    "combined": RunKind.REFLECTION,
+}
 _SUMMARY_LOG_LIMIT = 200
 
 _LOGGER = get_logger("automation.reflection")
@@ -281,7 +286,8 @@ class ReflectionService:
         """Fork the session and run the reflection brief inside the fork.
 
         The fork stays on the same agent (prompt-cache-warm, pinned catalog
-        kept) and is titled so it is recognizable in the session list.
+        kept) and is titled with the agent's display name so it is
+        recognizable in the session list.
         ``review_scope`` selects the memory-only, skill-only, or combined brief
         and dispatch boundary. ``extra_instruction`` is appended to that brief;
         ``on_fork_created`` fires with the fork id before the review run
@@ -303,11 +309,14 @@ class ReflectionService:
             target_project_id=project_id,
             strip_meta_keys=SESSION_FORK_ALWAYS_STRIP_META_KEYS,
         )
-        title = (
-            f"{REFLECTION_FORK_TITLE}: {source_title}" if source_title else REFLECTION_FORK_TITLE
-        )
+        # The fork is titled with the agent's display name so review forks stay
+        # distinguishable in a session list that spans agents; the run-kind
+        # marker on the row already says "reflection" (a fork would otherwise
+        # inherit the source session's title).
+        title = f"{agent.name}: {source_title}" if source_title else agent.name
         sessions.set_title(agent_id, fork.id, title, project_id)
-        sessions.record_run_kind(agent_id, fork.id, RunKind.REFLECTION, project_id)
+        run_kind = REFLECTION_RUN_KINDS[review_scope]
+        sessions.record_run_kind(agent_id, fork.id, run_kind, project_id)
         if on_fork_created is not None:
             on_fork_created(fork.id)
         # The fork is fresh and never busy — start directly, no queueing needed.
@@ -320,7 +329,7 @@ class ReflectionService:
             reply_surface=reply_surface,
             project_id=project_id,
             tool_restriction=REFLECTION_TOOL_RESTRICTIONS[review_scope],
-            run_kind=RunKind.REFLECTION,
+            run_kind=run_kind,
             contributes_to_agent_activity=False,
         )
         final_message = await review_run.wait()
