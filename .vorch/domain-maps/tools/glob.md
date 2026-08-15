@@ -5,14 +5,14 @@ Discovers filesystem paths by glob-style pattern.
 ## Interfaces
 
 - Tool name: `glob`
-- Registration: `register_glob_tool(registry)` — registers an async wrapper that runs the sync `glob_handler` via `asyncio.to_thread`, so a large tree walk never blocks the kernel event loop.
+- Registration: `register_glob_tool(registry)` — registers an async wrapper that runs the sync `glob_handler` through the bounded Tool worker pool (`run_tool_worker` in `core/tools/tools.py`), so a large tree walk never blocks the kernel event loop.
 - Schema: required `pattern`; optional `path`, `limit` (default 100, range 1–1,000), `offset` (default 0, range 0–10,000), and `include_ignored` (default false). Defaults are handler-owned and stated only in descriptions; the model-facing schema omits `additionalProperties`, and the handler rejects unknown fields including legacy/camelCase spellings.
 - Success data returns textual matches under `data.content`.
 - Display: the primary is the quoted `pattern`. Every successful page publishes its displayed path count as a presentation-only `results` fact; a limited or timed-out non-empty page sets `at_least: true`, while failures publish no count. The Agent-visible success envelope remains unchanged.
 
 ## Conventions
 
-- Pattern matching is **anchored** standard glob (`glob_path_matches` in `core/tools/search.py`): `*.py` matches top-level entries only, `**/*.py` at any depth — unlike grep's `glob` filter, which matches bare names at any depth. `{py,js}` brace alternations expand rg-`--glob`-style (`_expand_brace_alternations`; comma-less/unmatched braces stay literal). Matching is **case-insensitive on every platform** (deliberate: identical behavior on Windows dev and Linux deployment).
+- Pattern matching is **anchored** standard glob (`glob_path_matches` in `core/tools/search.py`): `*.py` matches top-level entries only, `**/*.py` at any depth — unlike grep's `glob` filter, which matches bare names at any depth. `{py,js}` brace alternations expand rg-`--glob`-style (`_expand_brace_alternations`; comma-less/unmatched braces stay literal, as do braces inside a character class `[...]`). Matching is **case-insensitive on every platform** (deliberate: identical behavior on Windows dev and Linux deployment). Unlike grep's `glob` filter, `glob_path_matches` has no `!` exclusion support — a leading `!` is an ordinary literal character (a search pattern, not a filter).
 - Relative `path` resolves from `ToolContext.effective_cwd` (the working directory); absolute search roots are allowed.
 - Result paths are rendered relative to the **working directory** when the match lies under it, absolute otherwise (`display_search_path`) — so every result round-trips directly into a follow-up `read`/`edit` call regardless of the search root.
 - Matches are sorted by modification time, newest first; equal mtimes tie-break alphabetically. Directory entries end with `/`.
