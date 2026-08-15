@@ -113,7 +113,11 @@ _CAPABILITY_EMBEDDING = "embedding"
 # ``on_off`` render is binary, so the snapped level never reaches the wire.
 OLLAMA_EFFORT_FLOOR = ("low", "medium", "high")
 OLLAMA_GPT_OSS_EFFORTS = ("low", "medium", "high")
-OLLAMA_FULL_HISTORY_MODEL_PREFIXES = ("glm-4.7",)
+# GLM templates retain historical thinking, so their reasoning must replay
+# across turns (verified for GLM-4.7; GLM-5.x shares the same template family
+# and Z.AI — the backend behind Ollama Cloud GLM — requires the full historical
+# ``reasoning_content`` to be replayed, see OpenClaw Z.AI docs).
+OLLAMA_FULL_HISTORY_MODEL_PREFIXES = ("glm-4.7", "glm-5")
 OLLAMA_CLOUD_REASONING_EFFORTS = ("none", "low", "medium", "high", "max")
 _OLLAMA_CLOUD_OPENAI_PATH = "/v1"
 _OLLAMA_CLOUD_REASONING_PARAMETERS = (
@@ -223,6 +227,51 @@ class OllamaCloudAdapter(OpenAICompatibleAdapter):
             # switch as an effort even when native /api/show describes the Model
             # as a binary on/off thinker.
             payload["reasoning_effort"] = "none"
+
+    def reasoning_replay_policy(self, model_id: str) -> ReasoningReplayPolicy:
+        """Resolve Cloud reasoning replay from the discovered Model profile.
+
+        Mirrors :meth:`OllamaAdapter.reasoning_replay_policy`: the direct Cloud
+        wire is OpenAI-compatible, but the underlying GLM templates retain
+        historical thinking exactly like their local counterparts, so the same
+        ``metadata.ollama.reasoning_replay`` stamp decides the replay scope.
+        """
+
+        if self._model_lookup is not None:
+            model = self._model_lookup(model_id.split("::", 1)[0])
+            if model is not None:
+                metadata = model.metadata.get(OLLAMA_METADATA_KEY)
+                if (
+                    isinstance(metadata, Mapping)
+                    and metadata.get(REASONING_REPLAY_METADATA_FIELD)
+                    == REASONING_REPLAY_FULL_HISTORY
+                ):
+                    return REASONING_REPLAY_FULL_HISTORY
+        return REASONING_REPLAY_CURRENT_RUN
+
+    def _format_assistant_message(self, message: dict[str, Any]) -> dict[str, Any]:
+        """Replay readable reasoning under the Model's declared wire field.
+
+        Ollama Cloud's OpenAI-compatible endpoint returns reasoning in a
+        provider-specific field: ``reasoning_content`` (DeepSeek/GLM/Kimi style)
+        or ``reasoning`` (MiniMax M3). The GLM and Kimi backends require the
+        full historical reasoning to be replayed for multi-turn quality, and
+        MiniMax documents that preserving the reasoning chain is essential for
+        best performance. The base class only writes opaque ``reasoning_meta``
+        back, so readable reasoning would be dropped on replay. Gated on the
+        Model's catalog ``reasoning_response_field`` so only Models whose wire
+        actually carries the field get it injected.
+        """
+
+        formatted = super()._format_assistant_message(message)
+        model_id = str(message.get("model") or "").rsplit("/", 1)[-1]
+        field = self._reasoning_response_field(model_id)
+        if field not in ("reasoning_content", "reasoning"):
+            return formatted
+        reasoning = message.get("reasoning")
+        if isinstance(reasoning, str) and reasoning:
+            formatted[field] = reasoning
+        return formatted
 
     def normalize_response(
         self, response: dict[str, Any], *, model_id: str | None = None
