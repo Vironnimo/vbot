@@ -415,7 +415,7 @@ async def test_web_fetch_handler_rejects_redirect_to_private_host(
 
     result = await web_fetch_handler(make_context(workspace), web_fetch_arguments(start_url))
 
-    error = assert_failure_envelope(result, "validation_error")
+    error = assert_failure_envelope(result, "request_error")
     assert "blocked" in error["message"].lower()
     assert blocked_redirect not in fetched
 
@@ -1288,3 +1288,114 @@ def test_extract_content_skips_javascript_links_case_insensitively() -> None:
     assert "fragment" in text
     assert "javascript:" not in text
     assert "alert(1)" not in text
+
+
+def test_format_output_clamps_negative_reduction_to_zero() -> None:
+    """Markdown link targets can expand text beyond raw HTML size (B3)."""
+    from core.tools.web_fetch import _format_output
+
+    # raw_size=100, clean_size=120 → reduction would be -20% without clamping.
+    output = _format_output(
+        "https://example.com/page",
+        {"title": "Test"},
+        "content",
+        raw_size=100,
+        clean_size=120,
+    )
+    assert "(-" not in output
+    assert "0% reduced" in output
+
+
+def test_build_truncated_output_reports_delivered_size_not_full_size(
+    tmp_path: Path,
+) -> None:
+    """Content-Size must reflect the post-truncation text size (B3)."""
+    from core.tools.web_fetch import _build_truncated_output
+
+    # Build text large enough to require truncation.
+    large_text = "A" * 200_000
+    output = _build_truncated_output(
+        "https://example.com/page",
+        {"title": "Big Page"},
+        large_text,
+        raw_size=300_000,
+    )
+
+    assert len(output.encode("utf-8")) <= web_fetch_module._MAX_URL_BYTES
+    # The Content-Size line must not claim 200,000 bytes when the agent
+    # receives ~100 KB. Parse the delivered size from the header.
+    content_size_line = [
+        line for line in output.split("\n") if line.startswith("Content-Size:")
+    ][0]
+    # Extract the "-> X bytes" portion.
+    delivered_part = content_size_line.split("->")[1]
+    delivered_size_str = delivered_part.split("bytes")[0].strip().replace(",", "")
+    delivered_size = int(delivered_size_str)
+    assert delivered_size < 200_000, (
+        f"Content-Size should report truncated size, got {delivered_size}"
+    )
+    assert "[... content truncated ...]" in output
+
+
+@pytest.mark.asyncio
+async def test_web_fetch_uses_final_url_for_notebook_detection_after_redirect(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A redirect to a .ipynb URL must be detected as a notebook (B4)."""
+    import json
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    start_url = "https://example.com/download"
+    final_url = "https://example.com/notebook.ipynb"
+
+    notebook_content = json.dumps({
+        "cells": [
+            {"cell_type": "code", "source": ["print('hello')\n"]},
+            {"cell_type": "markdown", "source": ["# Title\n"]},
+        ]
+    }).encode("utf-8")
+
+    def responder(url: str) -> _FetchResult:
+        if url == start_url:
+            return make_result(
+                status_code=302,
+                headers={"Location": final_url},
+                url=start_url,
+            )
+        return make_result(
+            status_code=200,
+            headers={"Content-Type": "application/json"},
+            content=notebook_content,
+            text=notebook_content.decode("utf-8"),
+            url=final_url,
+        )
+
+    install_http_get(monkeypatch, responder)
+
+    result = await web_fetch_handler(make_context(workspace), web_fetch_arguments(start_url))
+
+    data = assert_success_envelope(result)
+    content = data["content"]
+    assert isinstance(content, str)
+    assert "[Extracted text from" in content
+    assert "Jupyter notebook" in content
+    assert "print('hello')" in content
+    assert "# Title" in content
+
+
+@pytest.mark.asyncio
+async def test_web_fetch_handler_first_hop_blocked_is_validation_error(
+    tmp_path: Path,
+) -> None:
+    """A first-hop private URL must still be validation_error (B5 boundary)."""
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    result = await web_fetch_handler(
+        make_context(workspace),
+        web_fetch_arguments("http://127.0.0.1/admin"),
+    )
+
+    error = assert_failure_envelope(result, "validation_error")
+    assert "blocked" in error["message"].lower()

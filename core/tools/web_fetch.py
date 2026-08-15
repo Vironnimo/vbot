@@ -180,6 +180,16 @@ class _RedirectLimitExceededError(Exception):
     """Raised when a redirect chain exceeds ``_MAX_REDIRECTS`` hops."""
 
 
+class _RedirectTargetBlockedError(Exception):
+    """Raised when a server redirect targets a blocked (private/non-http) address.
+
+    Distinct from a plain ``ValueError`` so the handler can map it to
+    ``request_error`` (the agent's input URL was valid; the server chose the
+    redirect target) instead of ``validation_error`` (which implies the agent
+    should fix its arguments).
+    """
+
+
 class _ResponseTooLargeError(Exception):
     """Raised when a fetched response exceeds the bounded in-memory transfer limit."""
 
@@ -636,7 +646,7 @@ def _format_output(
     if metadata.get("description"):
         lines.append(f"Description: {metadata['description']}")
 
-    reduction = ((raw_size - clean_size) / raw_size * 100) if raw_size > 0 else 0
+    reduction = max(0, ((raw_size - clean_size) / raw_size * 100)) if raw_size > 0 else 0
     lines.append(f"Content-Size: {raw_size:,} -> {clean_size:,} bytes ({reduction:.0f}% reduced)")
     lines.append("---")
     lines.append(text)
@@ -644,23 +654,51 @@ def _format_output(
     return "\n".join(lines)
 
 
-def _truncate_formatted_output(output: str, text: str) -> str:
-    """Truncate formatted output while preserving the metadata header."""
-    if len(output.encode("utf-8")) <= _MAX_URL_BYTES:
-        return output
+def _build_truncated_output(
+    url: str,
+    metadata: dict[str, str],
+    text: str,
+    raw_size: int,
+) -> str:
+    """Build a truncated text output with an accurate Content-Size header.
 
+    The Content-Size line reports the size of the text the agent actually
+    receives (after truncation), not the pre-truncation extracted size, so the
+    header never claims a larger payload than what follows it. The reduction
+    percentage is clamped to a non-negative value (markdown link targets can
+    expand the text beyond the raw HTML size).
+    """
+    full_clean_size = len(text.encode("utf-8"))
+    full_output = _format_output(url, metadata, text, raw_size, full_clean_size)
+
+    if len(full_output.encode("utf-8")) <= _MAX_URL_BYTES:
+        return full_output
+
+    # Measure the header footprint (everything up to and including the "---"
+    # separator) by building with an empty body, then truncate the text to
+    # the remaining budget and rebuild with the actual delivered size.
+    header_template = _format_output(url, metadata, "", raw_size, full_clean_size)
     header_marker = "---\n"
-    header_end = output.find(header_marker)
+    header_end = header_template.find(header_marker)
     if header_end < 0:
-        return _truncate_utf8_with_suffix(output, _MAX_URL_BYTES, _CONTENT_TRUNCATED_MARKER)
+        return _truncate_utf8_with_suffix(full_output, _MAX_URL_BYTES, _CONTENT_TRUNCATED_MARKER)
 
-    header = output[: header_end + len(header_marker)]
+    header = header_template[: header_end + len(header_marker)]
     header_size = len(header.encode("utf-8"))
     if header_size >= _MAX_URL_BYTES:
         return _truncate_utf8_with_suffix(header, _MAX_URL_BYTES, _CONTENT_TRUNCATED_MARKER)
 
-    remaining = _MAX_URL_BYTES - header_size
-    return header + _truncate_utf8_with_suffix(text, remaining, _CONTENT_TRUNCATED_MARKER)
+    text_budget = _MAX_URL_BYTES - header_size
+    truncated_text = _truncate_utf8_with_suffix(text, text_budget, _CONTENT_TRUNCATED_MARKER)
+    delivered_size = len(truncated_text.encode("utf-8"))
+    output = _format_output(url, metadata, truncated_text, raw_size, delivered_size)
+
+    # Safety: if the delivered-size digits shifted the header length, the
+    # output might be a few bytes over the budget.
+    if len(output.encode("utf-8")) > _MAX_URL_BYTES:
+        output = _truncate_utf8_with_suffix(output, _MAX_URL_BYTES, _CONTENT_TRUNCATED_MARKER)
+
+    return output
 
 
 def _default_port_for_scheme(scheme: str) -> int:
@@ -869,9 +907,16 @@ async def _fetch_with_retry(
     for redirect_count in range(_MAX_REDIRECTS + 1):
         parsed = urlparse(current_url)
         port = parsed.port if parsed.port is not None else _default_port_for_scheme(parsed.scheme)
-        normalized_host, pinned_ip = await _validate_public_target(
-            parsed.scheme, parsed.hostname, port
-        )
+        try:
+            normalized_host, pinned_ip = await _validate_public_target(
+                parsed.scheme, parsed.hostname, port
+            )
+        except ValueError as error:
+            if redirect_count > 0:
+                # The agent's input URL was valid; a server redirect targeted
+                # a blocked address. This is not a validation error.
+                raise _RedirectTargetBlockedError(str(error)) from error
+            raise
         resolve_map[(normalized_host, port)] = pinned_ip
         # curl's RESOLVE is an slist option and accepts a list; the type stub
         # narrows the dict value to str, so the assignment is annotated away.
@@ -1018,30 +1063,33 @@ def _fetch_document_result(url: str, sniffed: str, data: bytes) -> JsonObject | 
 def _shape_success(
     attachment_store: Any,
     result: _FetchResult,
-    url: str,
     *,
     output_mode: WebFetchOutput,
 ) -> JsonObject:
     """Turn a successful fetch into an image / binary-notice / text envelope."""
     media_type = _response_media_type(result.headers)
-    sniffed = sniff_media_type(result.content, _filename_from_url(url))
+    # Derive the filename from the final URL (after redirects) so
+    # extension-based detection (.ipynb, legacy .doc/.xls) works when the
+    # start URL was extensionless but the redirect target was not.
+    final_url = result.url
+    sniffed = sniff_media_type(result.content, _filename_from_url(final_url))
 
     # Images are shown to the model regardless of the HTML output mode; there is no
     # textual "raw" form of an image.
     if sniffed.startswith("image/"):
-        return _fetch_image_result(attachment_store, url, result.content)
+        return _fetch_image_result(attachment_store, final_url, result.content)
 
     # A PDF/Word/Excel document becomes readable text instead of a binary notice.
     # Detection is by sniffed type first (a fetched URL often has no usable
     # extension), and a malformed file falls through to the binary/text path below.
-    document = _fetch_document_result(url, sniffed, result.content)
+    document = _fetch_document_result(final_url, sniffed, result.content)
     if document is not None:
         return document
 
     # Binary payloads (executable, archive, media) would decode to mojibake;
     # a short notice — also regardless of the HTML output mode — replaces the garbage.
     if _is_binary_payload(media_type, sniffed, result.content):
-        return _binary_notice(url, sniffed, len(result.content))
+        return _binary_notice(final_url, sniffed, len(result.content))
 
     raw_body = result.text
     raw_size = len(raw_body.encode("utf-8"))
@@ -1053,16 +1101,13 @@ def _shape_success(
         )
         return tool_success({"content": content})
 
-    final_url = result.url
     text, metadata = extract_content(
         raw_body,
         final_url,
         include_links=output_mode == "markdown",
     )
-    clean_size = len(text.encode("utf-8"))
 
-    output = _format_output(final_url, metadata, text, raw_size, clean_size)
-    output = _truncate_formatted_output(output, text)
+    output = _build_truncated_output(final_url, metadata, text, raw_size)
     return tool_success({"content": output})
 
 
@@ -1116,6 +1161,9 @@ def make_web_fetch_handler(attachment_store: Any) -> ToolHandler:
             resolve_map: dict[tuple[str, int], str] = {}
             async with _make_session() as session:
                 result = await _fetch_with_retry(session, url, resolve_map)
+        except _RedirectTargetBlockedError as error:
+            _LOGGER.warning("web_fetch redirect to blocked target for %s", url)
+            return tool_failure("request_error", str(error), retryable=False)
         except ValueError as error:
             return tool_failure("validation_error", str(error), retryable=False)
         except _ResponseTooLargeError as error:
@@ -1149,7 +1197,6 @@ def make_web_fetch_handler(attachment_store: Any) -> ToolHandler:
             _shape_success_for_mode,
             attachment_store,
             result,
-            url,
             output_mode,
         )
 
@@ -1159,10 +1206,9 @@ def make_web_fetch_handler(attachment_store: Any) -> ToolHandler:
 def _shape_success_for_mode(
     attachment_store: Any,
     result: _FetchResult,
-    url: str,
     output_mode: WebFetchOutput,
 ) -> JsonObject:
-    return _shape_success(attachment_store, result, url, output_mode=output_mode)
+    return _shape_success(attachment_store, result, output_mode=output_mode)
 
 
 def register_web_fetch_tool(registry: ToolRegistry, *, attachment_store: Any) -> None:

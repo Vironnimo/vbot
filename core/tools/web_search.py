@@ -54,6 +54,14 @@ _SEARXNG_DOMAIN_WARNING = (
     "returned results are still restricted to applied_domains"
 )
 _SEARXNG_RECENCY_WARNING = "recency enforcement depends on the configured SearXNG engines"
+_SEARXNG_PAGINATION_WARNING = (
+    "SearXNG page size is instance-configured and may exceed count; "
+    "results between pages may be unreachable"
+)
+_BRAVE_DOMAIN_PAGING_WARNING = (
+    "more_results_available is omitted with domain filters because it reflects "
+    "the unfiltered result space; paging may return empty pages"
+)
 
 _BROWSER_HEADERS: dict[str, str] = {
     "User-Agent": (
@@ -110,7 +118,8 @@ WEB_SEARCH_TOOL_PARAMETERS: JsonObject = {
         "page": {
             "type": "integer",
             "description": (
-                "Result page to fetch. Request the next page when more results are available."
+                "Result page to fetch. Request the next page when more results are "
+                "available. Page size is provider-dependent and may exceed count."
             ),
             "minimum": 1,
             "maximum": MAX_WEB_SEARCH_PAGE,
@@ -462,7 +471,13 @@ async def _search_brave(
                 normalized_payload["applied_domains"] = domains
             if recency:
                 normalized_payload["recency"] = recency
-            if isinstance(payload, dict) and isinstance(payload.get("query"), dict):
+            # more_results_available reflects Brave's unfiltered result space.
+            # With domain filters applied, result_count can be 0 while
+            # more_results_available is true, luring the agent into paging
+            # through empty results. Suppress it and warn instead.
+            if domains:
+                normalized_payload["warnings"] = [_BRAVE_DOMAIN_PAGING_WARNING]
+            elif isinstance(payload, dict) and isinstance(payload.get("query"), dict):
                 more_results = payload.get("query", {}).get("more_results_available")
                 if isinstance(more_results, bool):
                     normalized_payload["more_results_available"] = more_results
@@ -577,6 +592,8 @@ async def _search_searxng(
                 warnings.append(_SEARXNG_DOMAIN_WARNING)
             if recency:
                 warnings.append(_SEARXNG_RECENCY_WARNING)
+            if page > 1:
+                warnings.append(_SEARXNG_PAGINATION_WARNING)
             if warnings:
                 normalized_payload["warnings"] = warnings
             return normalized_payload, None
