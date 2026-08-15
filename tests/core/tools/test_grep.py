@@ -1020,3 +1020,41 @@ def test_grep_bare_name_brace_filter_matches_at_any_depth(
 
     data = assert_success_envelope(result)
     assert data["content"] == "src/app.py:1: needle\nsrc/app.ts:1: needle"
+
+
+def test_grep_glob_filter_negation_excludes_matching_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # rg --glob semantics: a leading '!' turns the filter into an exclusion,
+    # so '!*.py' keeps every file that is not a .py file. The fnmatch-based
+    # fallback must not treat the '!' as a literal pattern character (which
+    # would silently match nothing).
+    force_python_fallback(monkeypatch)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    workspace.joinpath("keep.py").write_text("needle\n", encoding="utf-8")
+    workspace.joinpath("skip.txt").write_text("needle\n", encoding="utf-8")
+
+    result = grep_handler(make_context(workspace), {"pattern": "needle", "glob": "!*.py"})
+
+    data = assert_success_envelope(result)
+    assert data["content"] == "skip.txt:1: needle"
+
+
+def test_grep_glob_filter_character_class_braces_stay_literal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # rg --glob semantics: braces inside a character class are literal class
+    # members, never alternations. '*[{,}]*' must match files whose name
+    # contains '{', ',' or '}', not expand into the empty class '*[]*' and
+    # silently match nothing.
+    force_python_fallback(monkeypatch)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    workspace.joinpath("a{b,c}.txt").write_text("needle\n", encoding="utf-8")
+    workspace.joinpath("plain.txt").write_text("needle\n", encoding="utf-8")
+
+    result = grep_handler(make_context(workspace), {"pattern": "needle", "glob": "*[{,}]*"})
+
+    data = assert_success_envelope(result)
+    assert data["content"] == "a{b,c}.txt:1: needle"

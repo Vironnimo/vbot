@@ -314,6 +314,40 @@ def _relative_path_segments(relative_path: str) -> tuple[str, ...]:
     )
 
 
+def _character_class_end(pattern: str, start: int) -> int | None:
+    """Return the index just past a character class at ``start``, or ``None``.
+
+    A ``[`` opens a class only when a closing ``]`` follows; without one the
+    bracket is an ordinary literal character. A ``]`` directly after ``[`` (or
+    after ``[!``/``[^``) is a literal class member (fnmatch ``[]]``), so the
+    first *closing* bracket is searched from the position after it.
+    """
+    index = start + 1
+    if index < len(pattern) and pattern[index] in "!^":
+        index += 1
+    if index < len(pattern) and pattern[index] == "]":
+        index += 1
+    closing = pattern.find("]", index)
+    if closing == -1:
+        return None
+    return closing + 1
+
+
+def _first_expandable_brace(pattern: str) -> int:
+    """Return the first ``{`` that is not inside a character class, or -1."""
+    index = 0
+    while index < len(pattern):
+        if pattern[index] == "[":
+            class_end = _character_class_end(pattern, index)
+            if class_end is not None:
+                index = class_end
+                continue
+        if pattern[index] == "{":
+            return index
+        index += 1
+    return -1
+
+
 def _expand_brace_alternations(pattern: str) -> list[str]:
     """Expand ``{a,b}`` alternations in a glob pattern, rg ``--glob`` style.
 
@@ -321,16 +355,24 @@ def _expand_brace_alternations(pattern: str) -> list[str]:
     ``**/*.{py,js}`` would require a literal ``{py,js}`` in the file name and
     silently match nothing. Only groups containing a top-level comma expand;
     comma-less braces (far more likely a literal file name) stay as-is, as do
-    unmatched braces. Nested groups expand recursively.
+    unmatched braces. Braces inside a character class ``[...]`` are literal
+    class members (rg semantics) and never open or close a group. Nested
+    groups expand recursively.
     """
-    start = pattern.find("{")
+    start = _first_expandable_brace(pattern)
     if start == -1:
         return [pattern]
 
     depth = 0
     group_start = start
-    for index in range(start, len(pattern)):
+    index = start
+    while index < len(pattern):
         char = pattern[index]
+        if char == "[":
+            class_end = _character_class_end(pattern, index)
+            if class_end is not None:
+                index = class_end
+                continue
         if char == "{":
             if depth == 0:
                 group_start = index
@@ -340,14 +382,24 @@ def _expand_brace_alternations(pattern: str) -> list[str]:
             if depth < 0:
                 return [pattern]
             if depth != 0:
+                index += 1
                 continue
             group = pattern[group_start + 1 : index]
             if "," not in group:
+                index += 1
                 continue
             alternatives: list[str] = []
             segment = ""
             segment_depth = 0
-            for group_char in group:
+            group_index = 0
+            while group_index < len(group):
+                group_char = group[group_index]
+                if group_char == "[":
+                    class_end = _character_class_end(group, group_index)
+                    if class_end is not None:
+                        segment += group[group_index:class_end]
+                        group_index = class_end
+                        continue
                 if group_char == "{":
                     segment_depth += 1
                 elif group_char == "}":
@@ -357,6 +409,7 @@ def _expand_brace_alternations(pattern: str) -> list[str]:
                     segment = ""
                 else:
                     segment += group_char
+                group_index += 1
             alternatives.append(segment)
 
             expanded: list[str] = []
@@ -367,6 +420,7 @@ def _expand_brace_alternations(pattern: str) -> list[str]:
                     if candidate not in expanded:
                         expanded.append(candidate)
             return expanded
+        index += 1
     return [pattern]
 
 
@@ -375,8 +429,18 @@ def file_filter_matches(relative_path: str, pattern: str) -> bool:
 
     A pattern without ``/`` matches the file name at any depth (rg ``--glob``
     semantics); matching is case-insensitive on every platform. ``{a,b}``
-    alternations expand like rg ``--glob``.
+    alternations expand like rg ``--glob``. A leading ``!`` negates the whole
+    filter (``!*.py`` keeps every file that is not ``*.py``), mirroring
+    ripgrep's exclusion globs; the negation applies after brace expansion.
     """
+    if pattern.startswith("!"):
+        excluded_pattern = pattern[1:]
+        if not excluded_pattern:
+            return True
+        return not any(
+            _file_filter_matches_single(relative_path, expanded)
+            for expanded in _expand_brace_alternations(excluded_pattern)
+        )
     return any(
         _file_filter_matches_single(relative_path, expanded)
         for expanded in _expand_brace_alternations(pattern)

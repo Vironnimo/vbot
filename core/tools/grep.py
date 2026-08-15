@@ -74,11 +74,12 @@ GREP_TOOL_DESCRIPTION = (
     "orient in a codebase or quickly locate relevant files, symbols, references, or "
     "matching text across a directory. Set literal=true for fixed-string matching, "
     "multiline=true for patterns spanning lines. Optional glob filters candidate "
-    "files (case-insensitive; '{py,js}' alternation expands like ripgrep globs). "
-    "Skips .gitignore'd files and .git internals unless "
-    "include_ignored=true. Returns path:line:text rows unless output_mode requests "
-    "matching files or counts; paths are relative to the working directory "
-    "(absolute when outside it). Page with offset."
+    "files (case-insensitive; '{py,js}' alternation expands like ripgrep globs, a "
+    "leading '!' excludes matches). Skips .gitignore'd files unless "
+    "include_ignored=true; .git internals are always skipped. Returns path:line:text "
+    "rows unless output_mode requests matching files or counts; paths are relative "
+    "to the working directory (absolute when outside it). Lines longer than 500 "
+    "characters are cut with a '[truncated]' marker. Page with offset."
 )
 _GREP_COMMON_PARAMETERS: JsonObject = {
     "pattern": {
