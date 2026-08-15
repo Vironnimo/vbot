@@ -517,6 +517,7 @@ def _make_reflect_state(
         agent_resolver=SimpleNamespace(
             resolve_agent=lambda project_id, agent_id: SimpleNamespace(
                 id=agent_id,
+                name="Builder",
                 workspace=workspace,
                 memory_prompt_mode=memory_prompt_mode,
             )
@@ -570,8 +571,9 @@ async def test_reflect_forks_and_runs_restricted_review(monkeypatch: pytest.Monk
     assert captured[0]["reply_surface"] == ReplySurface.webui()
     # The caller-provided focus survives prompt construction unchanged.
     assert "focus on the memory side" in captured[0]["message"]
-    # The fork is titled recognizably instead of inheriting the source title.
-    assert titles == [("fork-1", "Reflection")]
+    # The fork is titled with the agent's display name instead of inheriting
+    # the source title.
+    assert titles == [("fork-1", "Builder")]
     # A manual review covers both dimensions, so the cadence counters reset on
     # the SOURCE session.
     assert metadata_writes == [

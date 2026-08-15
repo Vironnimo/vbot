@@ -85,6 +85,8 @@ class RunKind(StrEnum):
     CHANNEL = "channel"
     CRON = "cron"
     REFLECTION = "reflection"
+    MEMORY_REFLECTION = "memory_reflection"
+    SKILL_REFLECTION = "skill_reflection"
     SUBAGENT = "subagent"
     SYSTEM = "system"
 

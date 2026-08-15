@@ -583,12 +583,22 @@ describe('ChatView', () => {
     sessionsButton.click();
 
     await waitForCondition(
-      () => document.querySelector('.session-drawer__filter [role="switch"]'),
+      () => document.querySelector('.session-drawer__filter-trigger'),
       100,
     );
     expect(document.body.textContent).not.toContain('child-session');
 
-    document.querySelector('.session-drawer__filter [role="switch"]').click();
+    document.querySelector('.session-drawer__filter-trigger').click();
+    flushSync();
+    const subagentSwitch = [
+      ...document.querySelectorAll(
+        '.session-drawer__filter-menu [role="switch"]',
+      ),
+    ].find(
+      (candidate) => candidate.getAttribute('aria-label') === 'Subagent runs',
+    );
+    expect(subagentSwitch).toBeTruthy();
+    subagentSwitch.click();
     flushSync();
 
     await waitForCondition(

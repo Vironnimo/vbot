@@ -163,6 +163,7 @@ def _counter_generation(sessions: _FakeSessions, session_id: str = "s1") -> int:
 def _identity_agent(*, memory_prompt_mode: str = "agent_user") -> Any:
     return SimpleNamespace(
         id="main",
+        name="Main Agent",
         workspace="/data/workspace-main",
         memory_prompt_mode=memory_prompt_mode,
     )
@@ -499,6 +500,7 @@ async def test_memory_tool_call_suppresses_memory_dimension_when_skill_is_due() 
     }
     assert loop.started[0]["message"] == REFLECT_BRIEFS["reflect-skill.md"]
     assert loop.started[0]["tool_restriction"] == SKILL_REFLECTION_TOOL_RESTRICTION
+    assert loop.started[0]["run_kind"] is RunKind.SKILL_REFLECTION
 
 
 @pytest.mark.asyncio
@@ -512,7 +514,9 @@ async def test_review_fork_is_stripped_and_titled() -> None:
     await _drain(service)
 
     assert sessions.forks[0]["strip_meta_keys"] == SESSION_FORK_ALWAYS_STRIP_META_KEYS
-    assert sessions.titles == [("fork-1", "Reflection: Refactor plan")]
+    assert sessions.titles == [("fork-1", "Main Agent: Refactor plan")]
+    assert loop.started[0]["run_kind"] is RunKind.MEMORY_REFLECTION
+    assert sessions.metadata["fork-1"]["run_kinds"] == ["memory_reflection"]
 
 
 @pytest.mark.asyncio
@@ -629,7 +633,7 @@ async def test_run_review_reports_fork_before_run_and_returns_summary() -> None:
     assert fork_seen_before_run == [("fork-1", 0)]
     assert result.session_id == "fork-1"
     assert result.summary == "Patched the deploy skill."
-    assert sessions.titles == [("fork-1", "Reflection")]
+    assert sessions.titles == [("fork-1", "Main Agent")]
     assert loop.started[0]["message"] == (
         f"{REFLECT_BRIEFS['reflect.md']}\n\nThe user asked you to focus this reflection on:\nskills"
     )
@@ -638,6 +642,21 @@ async def test_run_review_reports_fork_before_run_and_returns_summary() -> None:
     assert loop.started[0]["run_kind"] is RunKind.REFLECTION
     assert loop.started[0]["contributes_to_agent_activity"] is False
     assert sessions.metadata["fork-1"]["run_kinds"] == ["reflection"]
+
+
+@pytest.mark.asyncio
+async def test_run_review_records_scope_specific_run_kinds() -> None:
+    service, sessions, loop = _make_service()
+
+    await service.run_review("main", "s1", review_scope="memory")
+    await service.run_review("main", "s1", review_scope="skill")
+
+    assert [call["run_kind"] for call in loop.started] == [
+        RunKind.MEMORY_REFLECTION,
+        RunKind.SKILL_REFLECTION,
+    ]
+    assert sessions.metadata["fork-1"]["run_kinds"] == ["memory_reflection"]
+    assert sessions.metadata["fork-2"]["run_kinds"] == ["skill_reflection"]
 
 
 @pytest.mark.asyncio
