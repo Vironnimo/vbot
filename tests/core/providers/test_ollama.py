@@ -207,12 +207,98 @@ MINIMAX_CLOUD_MODEL = Model(
     metadata={"ollama": {"remote": True}},
 )
 
+GLM_CLOUD_MODEL = Model(
+    model_id="glm-5.2",
+    name="GLM 5.2",
+    capabilities=Capabilities(
+        vision=False,
+        tools=True,
+        json_mode=False,
+        reasoning=ReasoningCapabilities(
+            supported=True,
+            control=REASONING_CONTROL_LEVELS,
+            levels=("high", "max"),
+        ),
+    ),
+    context_window=1_000_000,
+    max_output_tokens=None,
+    metadata={
+        "ollama": {"remote": True, "reasoning_replay": "full_history"},
+        "ollama_cloud": {"reasoning_response_field": "reasoning_content"},
+    },
+)
+
+DEEPSEEK_CLOUD_FULL_HISTORY_MODEL = Model(
+    model_id="deepseek-v4-flash:0731",
+    name="DeepSeek V4 Flash",
+    capabilities=Capabilities(
+        vision=False,
+        tools=True,
+        json_mode=False,
+        reasoning=ReasoningCapabilities(
+            supported=True,
+            control=REASONING_CONTROL_LEVELS,
+            levels=("high", "max"),
+        ),
+    ),
+    context_window=1_048_576,
+    max_output_tokens=65536,
+    metadata={
+        "ollama": {"remote": True, "reasoning_replay": "full_history"},
+        "ollama_cloud": {"reasoning_response_field": "reasoning_content"},
+    },
+)
+
+KIMI_CLOUD_MODEL = Model(
+    model_id="kimi-k2.6",
+    name="Kimi K2.6",
+    capabilities=Capabilities(
+        vision=False,
+        tools=True,
+        json_mode=False,
+        reasoning=ReasoningCapabilities(
+            supported=True,
+            control=REASONING_CONTROL_ON_OFF,
+        ),
+    ),
+    context_window=262_144,
+    max_output_tokens=None,
+    metadata={
+        "ollama": {"remote": True, "reasoning_replay": "full_history"},
+        "ollama_cloud": {"reasoning_response_field": "reasoning_content"},
+    },
+)
+
+MINIMAX_M3_FULL_HISTORY_MODEL = Model(
+    model_id="minimax-m3",
+    name="MiniMax M3",
+    capabilities=Capabilities(
+        vision=False,
+        tools=True,
+        json_mode=False,
+        reasoning=ReasoningCapabilities(
+            supported=True,
+            control=REASONING_CONTROL_LEVELS,
+            levels=("low", "medium", "high", "max"),
+        ),
+    ),
+    context_window=524_288,
+    max_output_tokens=None,
+    metadata={
+        "ollama": {"remote": True, "reasoning_replay": "full_history"},
+        "ollama_cloud": {"reasoning_response_field": "reasoning"},
+    },
+)
+
 _MODELS = {
     "thinking-model": THINKING_MODEL,
     "plain-model": PLAIN_MODEL,
     "gpt-oss:20b": GPT_OSS_MODEL,
     "deepseek-v4-flash": DEEPSEEK_CLOUD_MODEL,
-    "minimax-m3": MINIMAX_CLOUD_MODEL,
+    "minimax-m3": MINIMAX_M3_FULL_HISTORY_MODEL,
+    "glm-5.2": GLM_CLOUD_MODEL,
+    "deepseek-v4-flash:0731": DEEPSEEK_CLOUD_FULL_HISTORY_MODEL,
+    "kimi-k2.6": KIMI_CLOUD_MODEL,
 }
 
 
@@ -479,6 +565,174 @@ class TestOllamaCloudChatWire:
         assistant_tool_call = payload_messages[-2]["tool_calls"][0]
         assert assistant_tool_call["function"]["arguments"] == '{"city":"Berlin"}'
         assert payload_messages[-1]["tool_call_id"] == "call_weather"
+        await cloud_adapter.aclose()
+
+    def test_glm_cloud_reasoning_replay_policy_is_full_history(
+        self,
+        cloud_adapter: OllamaCloudAdapter,
+    ) -> None:
+        """GLM-5.x Cloud Models replay reasoning across turns (template retains thinking)."""
+
+        assert cloud_adapter.reasoning_replay_policy("glm-5.2") == "full_history"
+
+    def test_non_replay_cloud_reasoning_replay_stays_current_run(
+        self,
+        cloud_adapter: OllamaCloudAdapter,
+    ) -> None:
+        """Cloud Models without a replay profile keep the conservative active-Run scope."""
+
+        assert cloud_adapter.reasoning_replay_policy("minimax-m2.7") == "current_run"
+
+    def test_deepseek_cloud_reasoning_replay_is_full_history(
+        self,
+        cloud_adapter: OllamaCloudAdapter,
+    ) -> None:
+        """DeepSeek V4 Cloud Models replay reasoning across turns (API requires it)."""
+
+        assert cloud_adapter.reasoning_replay_policy("deepseek-v4-flash:0731") == "full_history"
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_deepseek_cloud_replays_reasoning_as_reasoning_content(
+        self,
+        cloud_adapter: OllamaCloudAdapter,
+    ) -> None:
+        """DeepSeek's thinking-mode contract requires reasoning_content on replay."""
+
+        route = respx.post(OLLAMA_CLOUD_CHAT_URL).mock(
+            return_value=httpx.Response(200, json=CLOUD_TEXT_RESPONSE)
+        )
+        messages: list[dict[str, Any]] = [
+            *SAMPLE_MESSAGES,
+            {
+                "role": "assistant",
+                "model": "deepseek-v4-flash:0731",
+                "content": "OK",
+                "reasoning": "The user requested exactly OK.",
+            },
+        ]
+
+        await cloud_adapter.send(
+            messages, model_id="deepseek-v4-flash:0731", thinking_effort="high"
+        )
+
+        payload_messages = _last_request_payload(route)["messages"]
+        assistant_message = payload_messages[-1]
+        assert assistant_message["reasoning_content"] == "The user requested exactly OK."
+        await cloud_adapter.aclose()
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_glm_cloud_replays_reasoning_as_reasoning_content(
+        self,
+        cloud_adapter: OllamaCloudAdapter,
+    ) -> None:
+        """Readable reasoning replays as ``reasoning_content`` on the Cloud wire."""
+
+        route = respx.post(OLLAMA_CLOUD_CHAT_URL).mock(
+            return_value=httpx.Response(200, json=CLOUD_TEXT_RESPONSE)
+        )
+        messages: list[dict[str, Any]] = [
+            *SAMPLE_MESSAGES,
+            {
+                "role": "assistant",
+                "model": "glm-5.2",
+                "content": "OK",
+                "reasoning": "The user requested exactly OK.",
+            },
+        ]
+
+        await cloud_adapter.send(messages, model_id="glm-5.2", thinking_effort="high")
+
+        payload_messages = _last_request_payload(route)["messages"]
+        assistant_message = payload_messages[-1]
+        assert assistant_message["reasoning_content"] == "The user requested exactly OK."
+        await cloud_adapter.aclose()
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_unprofiled_cloud_omits_reasoning_replay_fields(
+        self,
+        cloud_adapter: OllamaCloudAdapter,
+    ) -> None:
+        """Cloud Models without a replay profile get no reasoning field injected."""
+
+        route = respx.post(OLLAMA_CLOUD_CHAT_URL).mock(
+            return_value=httpx.Response(200, json=CLOUD_TEXT_RESPONSE)
+        )
+        messages: list[dict[str, Any]] = [
+            *SAMPLE_MESSAGES,
+            {
+                "role": "assistant",
+                "model": "minimax-m2.7",
+                "content": "OK",
+                "reasoning": "The user requested exactly OK.",
+            },
+        ]
+
+        await cloud_adapter.send(messages, model_id="minimax-m2.7", thinking_effort="high")
+
+        payload_messages = _last_request_payload(route)["messages"]
+        assistant_message = payload_messages[-1]
+        assert "reasoning_content" not in assistant_message
+        assert "reasoning" not in assistant_message
+        await cloud_adapter.aclose()
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_kimi_cloud_replays_reasoning_as_reasoning_content(
+        self,
+        cloud_adapter: OllamaCloudAdapter,
+    ) -> None:
+        """Moonshot's replay contract requires reasoning_content on multi-turn tool use."""
+
+        route = respx.post(OLLAMA_CLOUD_CHAT_URL).mock(
+            return_value=httpx.Response(200, json=CLOUD_TEXT_RESPONSE)
+        )
+        messages: list[dict[str, Any]] = [
+            *SAMPLE_MESSAGES,
+            {
+                "role": "assistant",
+                "model": "kimi-k2.6",
+                "content": "OK",
+                "reasoning": "The user requested exactly OK.",
+            },
+        ]
+
+        await cloud_adapter.send(messages, model_id="kimi-k2.6", thinking_effort="high")
+
+        payload_messages = _last_request_payload(route)["messages"]
+        assistant_message = payload_messages[-1]
+        assert assistant_message["reasoning_content"] == "The user requested exactly OK."
+        await cloud_adapter.aclose()
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_minimax_m3_cloud_replays_reasoning_as_reasoning_field(
+        self,
+        cloud_adapter: OllamaCloudAdapter,
+    ) -> None:
+        """MiniMax M3 returns reasoning as ``reasoning`` and requires it for continuity."""
+
+        route = respx.post(OLLAMA_CLOUD_CHAT_URL).mock(
+            return_value=httpx.Response(200, json=CLOUD_TEXT_RESPONSE)
+        )
+        messages: list[dict[str, Any]] = [
+            *SAMPLE_MESSAGES,
+            {
+                "role": "assistant",
+                "model": "minimax-m3",
+                "content": "OK",
+                "reasoning": "The user requested exactly OK.",
+            },
+        ]
+
+        await cloud_adapter.send(messages, model_id="minimax-m3", thinking_effort="high")
+
+        payload_messages = _last_request_payload(route)["messages"]
+        assistant_message = payload_messages[-1]
+        assert assistant_message["reasoning"] == "The user requested exactly OK."
+        assert "reasoning_content" not in assistant_message
         await cloud_adapter.aclose()
 
 
@@ -1491,6 +1745,26 @@ class TestEnrichment:
 
         assert model.metadata["ollama"]["reasoning_replay"] == "full_history"
         assert adapter.reasoning_replay_policy("glm-4.7:latest") == "full_history"
+        await adapter.aclose()
+
+    @pytest.mark.asyncio
+    async def test_glm_5_2_discovery_profiles_full_history_thinking_replay(self) -> None:
+        base = OllamaAdapter.normalize_catalog_entry({"model": "glm-5.2"})
+        show = {"capabilities": ["completion", "thinking"], "model_info": {}}
+
+        async def post_json(endpoint: str, payload: dict[str, Any]) -> Any:
+            return show
+
+        enriched = await OllamaAdapter.enrich_discovered_models(
+            {"glm-5.2": base},
+            post_json,
+        )
+        model = enriched["glm-5.2"]
+        lookup = {"glm-5.2": model}.get
+        adapter = OllamaAdapter(OLLAMA_CONFIG, "", model_lookup=lookup)
+
+        assert model.metadata["ollama"]["reasoning_replay"] == "full_history"
+        assert adapter.reasoning_replay_policy("glm-5.2") == "full_history"
         await adapter.aclose()
 
     @pytest.mark.asyncio
