@@ -99,35 +99,34 @@ _GREP_COMMON_PARAMETERS: JsonObject = {
     },
     "ignore_case": {
         "type": "boolean",
-        "description": "Case-insensitive search (default: false).",
+        "description": "Case-insensitive search.",
     },
     "literal": {
         "type": "boolean",
-        "description": "Treat pattern as fixed text instead of regex (default: false).",
+        "description": "Treat pattern as fixed text instead of regex.",
     },
     "multiline": {
         "type": "boolean",
-        "description": (
-            "Match across lines: '.' matches newlines and patterns can span lines (default: false)."
-        ),
+        "description": ("Match across lines: '.' matches newlines and patterns can span lines."),
     },
     "limit": {
         "type": "integer",
         "minimum": 1,
+        "default": DEFAULT_LIMIT,
         "description": (
-            "Maximum results (default: 100). content limits matches; "
+            "Maximum results; omit for the default (100). content limits matches; "
             "files_with_matches/count limit returned file rows."
         ),
     },
     "offset": {
         "type": "integer",
         "minimum": 0,
-        "description": "Skip the first N results before applying limit (default: 0).",
+        "description": "Skip the first N results before applying limit.",
     },
     "include_ignored": {
         "type": "boolean",
         "description": (
-            "Also search .gitignore'd files (default: false). Hidden dotfiles are "
+            "Also search .gitignore'd files. Hidden dotfiles are "
             "always searched; .git internals never."
         ),
     },
@@ -144,7 +143,7 @@ GREP_TOOL_PARAMETERS: JsonObject = {
             "type": "string",
             "enum": ["content", "files_with_matches", "count"],
             "description": (
-                "Result shape: content (default), files_with_matches, or count. "
+                "Result shape: content, files_with_matches, or count. "
                 "context is valid only for content."
             ),
         },
@@ -152,7 +151,7 @@ GREP_TOOL_PARAMETERS: JsonObject = {
             "type": "integer",
             "minimum": 0,
             "description": (
-                "For content output, include this many lines before and after matches; default 0."
+                "For content output, include this many lines before and after matches."
             ),
         },
     },

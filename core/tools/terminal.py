@@ -137,7 +137,7 @@ TERMINAL_TOOL_PARAMETERS: JsonObject = {
             "type": "array",
             "items": {"type": "string"},
             "description": (
-                "Exact argument tokens for start; default no arguments. vBot does not add, remove, "
+                "Exact argument tokens for start. vBot does not add, remove, "
                 "or rewrite program arguments."
             ),
         },
@@ -195,8 +195,8 @@ TERMINAL_TOOL_PARAMETERS: JsonObject = {
             "maximum": TERMINAL_STATUS_MAX_LINES,
             "default": TERMINAL_STATUS_DEFAULT_LINES,
             "description": (
-                f"Prior scrollback lines for status; default {TERMINAL_STATUS_DEFAULT_LINES}, "
-                f"maximum {TERMINAL_STATUS_MAX_LINES}. May be used with or without cursor. The "
+                f"Prior scrollback lines for status; default {TERMINAL_STATUS_DEFAULT_LINES}. "
+                "May be used with or without cursor. The "
                 "current rendered screen is returned separately."
             ),
         },
@@ -223,8 +223,8 @@ TERMINAL_TOOL_PARAMETERS: JsonObject = {
             "maximum": TERMINAL_MAX_WAIT_MS,
             "default": TERMINAL_DEFAULT_WAIT_MS,
             "description": (
-                f"Maximum same-Run wait in milliseconds; default {TERMINAL_DEFAULT_WAIT_MS}, "
-                f"maximum {TERMINAL_MAX_WAIT_MS}. The terminal continues after timeout."
+                f"Maximum same-Run wait in milliseconds; default {TERMINAL_DEFAULT_WAIT_MS}. "
+                "The terminal continues after timeout."
             ),
         },
         "key": {
@@ -238,7 +238,7 @@ TERMINAL_TOOL_PARAMETERS: JsonObject = {
         "enter": {
             "type": "boolean",
             "default": False,
-            "description": "For input, append Enter after text/key. Default false.",
+            "description": "For input, append Enter after text/key.",
         },
         "expected_screen_revision": {
             "type": "integer",

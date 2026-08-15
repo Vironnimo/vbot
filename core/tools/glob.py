@@ -41,7 +41,7 @@ GLOB_TOOL_DESCRIPTION = (
     "matching file and directory paths sorted by "
     "modification time (newest first), relative to the working directory (absolute "
     "when outside it). Directory entries end with '/'. Skips .gitignore'd paths "
-    "unless include_ignored=true. Results beyond the limit (default 100) are cut "
+    "unless include_ignored=true. Results beyond the limit are cut "
     "and marked; page with offset."
 )
 GLOB_TOOL_PARAMETERS: JsonObject = {
@@ -60,24 +60,21 @@ GLOB_TOOL_PARAMETERS: JsonObject = {
             "type": "integer",
             "minimum": 1,
             "maximum": MAX_GLOB_LIMIT,
+            "default": DEFAULT_GLOB_LIMIT,
             "description": (
-                f"Maximum results (default: {DEFAULT_GLOB_LIMIT}, maximum: {MAX_GLOB_LIMIT}). "
-                "Excess matches are cut and marked."
+                "Maximum results; omit for the default (100). Excess matches are cut and marked."
             ),
         },
         "offset": {
             "type": "integer",
             "minimum": 0,
             "maximum": MAX_GLOB_OFFSET,
-            "description": (
-                "Skip the first N results before applying limit "
-                f"(default: 0, maximum: {MAX_GLOB_OFFSET})."
-            ),
+            "description": ("Skip the first N results before applying limit."),
         },
         "include_ignored": {
             "type": "boolean",
             "description": (
-                "Also match .gitignore'd paths (default: false). Hidden dotfiles are "
+                "Also match .gitignore'd paths. Hidden dotfiles are "
                 "always matched; .git internals never."
             ),
         },

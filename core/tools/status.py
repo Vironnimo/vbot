@@ -34,8 +34,8 @@ _LOGGER = get_logger("tools.status")
 
 STATUS_TOOL_NAME = "status"
 STATUS_TOOL_DESCRIPTION = (
-    "Show status informations for the current or a targeted chat Session, including infos "
-    "about model, usage, runtime, and activity."
+    "Show status information for the current or a targeted chat Session, including model, "
+    "usage, runtime, and activity details."
 )
 _STATUS_SESSION_ID_PARAMETER: JsonObject = {
     "type": "string",
