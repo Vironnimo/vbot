@@ -431,20 +431,68 @@ def file_filter_matches(relative_path: str, pattern: str) -> bool:
     semantics); matching is case-insensitive on every platform. ``{a,b}``
     alternations expand like rg ``--glob``. A leading ``!`` negates the whole
     filter (``!*.py`` keeps every file that is not ``*.py``), mirroring
-    ripgrep's exclusion globs; the negation applies after brace expansion.
+    ripgrep's exclusion globs; the negation applies after brace expansion. A
+    trailing-slash glob names a directory (rg semantics): positively it never
+    matches a file candidate, while ``!build/`` excludes the whole subtree.
     """
     if pattern.startswith("!"):
         excluded_pattern = pattern[1:]
         if not excluded_pattern:
             return True
+        if excluded_pattern.endswith("/"):
+            return not _file_lies_under_directory_glob(relative_path, excluded_pattern)
         return not any(
-            _file_filter_matches_single(relative_path, expanded)
+            _file_filter_matches_with_directories(relative_path, expanded)
             for expanded in _expand_brace_alternations(excluded_pattern)
         )
+    if pattern.endswith("/"):
+        # A trailing-slash glob matches directories only; no file candidate
+        # ever matches it positively (rg --glob semantics).
+        return False
     return any(
         _file_filter_matches_single(relative_path, expanded)
         for expanded in _expand_brace_alternations(pattern)
     )
+
+
+def _file_filter_matches_with_directories(relative_path: str, pattern: str) -> bool:
+    """Match a file filter against the file *or* any directory on its path.
+
+    ripgrep evaluates a negative ``--glob`` against directory candidates too
+    and prunes an excluded directory's whole subtree, so ``!build`` removes
+    ``build/x.txt`` just like a file named ``build``. Positive filters still
+    match file names only (rg lists no directories), which is why this helper
+    is used exclusively for exclusions.
+    """
+    path_segments = _relative_path_segments(relative_path)
+    for length in range(1, len(path_segments) + 1):
+        if _file_filter_matches_single("/".join(path_segments[:length]), pattern):
+            return True
+    return False
+
+
+def _file_lies_under_directory_glob(relative_path: str, pattern: str) -> bool:
+    """Return whether a file path lies *under* a trailing-slash directory glob.
+
+    rg semantics: ``build/`` names the directory itself, so excluding it
+    removes the whole subtree while a file candidate is never the directory
+    (a file named ``build`` stays included). The prefix comparison reuses the
+    segment matcher, so ``**`` and ``{a,b}`` alternations behave like rg
+    (``!**/build/`` excludes every ``build`` directory at any depth).
+    """
+    path_segments = _relative_path_segments(relative_path)
+    for expanded in _expand_brace_alternations(pattern):
+        normalized = normalize_file_filter_pattern(expanded, allow_empty=True)
+        pattern_segments = tuple(segment for segment in normalized.split("/") if segment)
+        if not pattern_segments:
+            continue
+        # Only strict prefixes: the candidate lies below the named directory.
+        # A path equal to the pattern is a file with the directory's name and
+        # stays included.
+        for prefix_length in range(1, len(path_segments)):
+            if _match_glob_path_segments(path_segments[:prefix_length], pattern_segments):
+                return True
+    return False
 
 
 def _file_filter_matches_single(relative_path: str, pattern: str) -> bool:

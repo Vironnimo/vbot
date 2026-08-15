@@ -1058,3 +1058,38 @@ def test_grep_glob_filter_character_class_braces_stay_literal(
 
     data = assert_success_envelope(result)
     assert data["content"] == "a{b,c}.txt:1: needle"
+
+
+def test_grep_glob_filter_directory_exclusion_removes_subtree(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # rg --glob semantics: '!build/' names the directory, so it excludes the
+    # whole subtree; a file *named* 'build' is not a directory and stays.
+    force_python_fallback(monkeypatch)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    workspace.joinpath("build").mkdir()
+    workspace.joinpath("build", "x.txt").write_text("needle\n", encoding="utf-8")
+    workspace.joinpath("top.txt").write_text("needle\n", encoding="utf-8")
+    workspace.joinpath("build2").write_text("needle\n", encoding="utf-8")
+
+    result = grep_handler(make_context(workspace), {"pattern": "needle", "glob": "!build/"})
+
+    data = assert_success_envelope(result)
+    assert data["content"] == "build2:1: needle\ntop.txt:1: needle"
+
+
+def test_grep_glob_filter_directory_matching_semantics() -> None:
+    # rg --glob semantics for directory candidates: a trailing-slash glob
+    # names a directory only (a file with that name stays), while a bare-name
+    # exclusion also prunes directories of that name and their subtree.
+    assert not search_module.file_filter_matches("build/x.txt", "!build/")
+    assert search_module.file_filter_matches("build", "!build/")
+    assert not search_module.file_filter_matches("build/x.txt", "!build")
+    assert not search_module.file_filter_matches("a/build/x.txt", "!build")
+    assert search_module.file_filter_matches("build2/x.txt", "!build")
+    assert not search_module.file_filter_matches("src/generated/x.txt", "!src/generated")
+    assert search_module.file_filter_matches("src/other.txt", "!src/generated")
+    # Positive filters still match file names only — never directories.
+    assert not search_module.file_filter_matches("build/x.txt", "build")
+    assert search_module.file_filter_matches("build", "build")

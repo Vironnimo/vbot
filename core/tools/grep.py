@@ -780,8 +780,14 @@ def _normalize_glob_argument(value: object) -> str | None:
         return None
     if not isinstance(value, str):
         raise ValueError("glob must be a string")
-    normalized = normalize_file_filter_pattern(value, field_name="glob", allow_empty=True)
-    return normalized or None
+    raw = value.strip().replace("\\", "/")
+    directory_glob = raw.endswith("/")
+    normalized = normalize_file_filter_pattern(raw, field_name="glob", allow_empty=True)
+    if not normalized:
+        return None
+    # Keep the trailing slash: it marks a directory glob (rg semantics), which
+    # the fallback needs to match `build/` against directory prefixes only.
+    return f"{normalized}/" if directory_glob else normalized
 
 
 async def _grep_handler_async(context: ToolContext, arguments: JsonObject) -> JsonObject:
