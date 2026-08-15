@@ -1268,3 +1268,23 @@ def test_extract_content_strips_scripts_and_styles() -> None:
     assert "console.log" not in text
     assert "display: none" not in text
     assert metadata["title"] == "Metadata Title"
+
+
+def test_extract_content_skips_javascript_links_case_insensitively() -> None:
+    html = """
+    <html>
+      <body>
+        <p>Read <a href="javascript:alert(1)">lowercase</a> and
+        <a href="JaVaScRiPt:alert(1)">mixed case</a> and
+        <a href="#section">fragment</a>.</p>
+      </body>
+    </html>
+    """
+
+    text, _metadata = extract_content(html, "https://example.com")
+
+    assert "lowercase" in text
+    assert "mixed case" in text
+    assert "fragment" in text
+    assert "javascript:" not in text
+    assert "alert(1)" not in text
