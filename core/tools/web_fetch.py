@@ -113,6 +113,11 @@ _CHILD_BLOCK_NAMES: frozenset[str] = (
 
 _SELF_RENDERED_TAGS: frozenset[str] = _HEADING_NAMES | frozenset({"a", "img", "pre", "tr", "li"})
 
+# Link targets that must never surface as Markdown links: fragment-only and
+# javascript: URIs. URL schemes are case-insensitive, so the prefix check is
+# lower-cased — a mixed-case "JaVaScRiPt:" would otherwise slip through.
+_SKIP_LINK_PREFIXES: tuple[str, ...] = ("#", "javascript:")
+
 _CONNECT_TIMEOUT_SECONDS = 5.0
 _TOTAL_TIMEOUT_SECONDS = 30.0
 _REQUEST_TIMEOUT = (_CONNECT_TIMEOUT_SECONDS, _TOTAL_TIMEOUT_SECONDS)
@@ -332,7 +337,7 @@ def _render_inline(node: Tag, base_url: str, include_links: bool) -> str:
                     parts.append(inner)
                 continue
             href = _attr_to_text(child.get("href", "")).strip()
-            if href and not href.startswith(("#", "javascript:")):
+            if href and not href.lower().startswith(_SKIP_LINK_PREFIXES):
                 absolute = urljoin(base_url, href)
                 if inner and inner != absolute:
                     parts.append(f"[{inner}]({absolute})")
@@ -395,7 +400,7 @@ def _render_tag(tag: Tag, base_url: str, include_links: bool) -> str:
         if not include_links:
             return inner or ""
         href = _attr_to_text(tag.get("href", "")).strip()
-        if href and not href.startswith(("#", "javascript:")):
+        if href and not href.lower().startswith(_SKIP_LINK_PREFIXES):
             absolute = urljoin(base_url, href)
             if inner and inner != absolute:
                 return f"[{inner}]({absolute})"
