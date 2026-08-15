@@ -521,6 +521,106 @@ describe('DebugView', () => {
     flushSync();
     expect(getHeadersBlockText()).toBe('—');
   });
+
+  it('pretty-prints the probe raw response when it is JSON', async () => {
+    const rawBlock = await runModelProbe(
+      '{"data":[{"id":"gpt-5.2","object":"model"}]}',
+    );
+
+    expect(
+      rawBlock?.classList.contains('debug-view__code-block--formatted'),
+    ).toBe(true);
+    expect(rawBlock?.textContent).toBe(
+      '{\n  "data": [\n    {\n      "id": "gpt-5.2",\n      "object": "model"\n    }\n  ]\n}',
+    );
+  });
+
+  it('keeps a non-JSON probe raw response unchanged', async () => {
+    const rawBlock = await runModelProbe('plain text response');
+
+    expect(rawBlock?.textContent).toBe('plain text response');
+  });
+
+  // Selects the first probe provider and connection, runs the probe, and
+  // returns the raw-response code block once the results are rendered.
+  async function runModelProbe(rawResponse) {
+    rpcMock.mockImplementation(async (method) => {
+      if (method === 'settings.get') {
+        return {
+          general: { server: { listen_host: '127.0.0.1', listen_port: 8420 } },
+          providers: {
+            items: [
+              {
+                id: 'openai',
+                name: 'OpenAI',
+                models_endpoint: '/v1/models',
+                connections: [{ id: 'default', name: 'Default' }],
+              },
+            ],
+          },
+        };
+      }
+      throw new Error(`Unexpected RPC method: ${method}`);
+    });
+    debugModelProbeMock.mockResolvedValue({
+      raw_response: rawResponse,
+      status_code: 200,
+      duration_ms: 120,
+      trace_id: 'probe-trace',
+      model_preview: {
+        model_count: 0,
+        models: [],
+      },
+    });
+
+    mountedComponent = mount(DebugView, { target: document.body });
+    flushSync();
+
+    await waitForCondition(() =>
+      document.querySelector(
+        '.debug-view__probe-select option[value="openai"]',
+      ),
+    );
+
+    const providerSelect = document.querySelectorAll(
+      '.debug-view__probe-select',
+    )[0];
+    providerSelect.value = 'openai';
+    providerSelect.dispatchEvent(new Event('change', { bubbles: true }));
+    flushSync();
+
+    const connectionSelect = document.querySelectorAll(
+      '.debug-view__probe-select',
+    )[1];
+    if (connectionSelect.disabled) {
+      throw new Error(
+        `Connection select still disabled after provider change (value=${providerSelect.value})`,
+      );
+    }
+    const defaultOption = document.querySelector(
+      '.debug-view__probe-select option[value="default"]',
+    );
+    if (!defaultOption) {
+      throw new Error('Connection option "default" not rendered');
+    }
+    connectionSelect.value = 'default';
+    connectionSelect.dispatchEvent(new Event('change', { bubbles: true }));
+    flushSync();
+
+    const probeButton = document.querySelector('.debug-view__probe-btn');
+    if (probeButton?.disabled) {
+      throw new Error(
+        `Probe button still disabled after connection change (value=${connectionSelect.value})`,
+      );
+    }
+    probeButton?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    flushSync();
+
+    await waitForCondition(() =>
+      document.querySelector('.debug-view__probe-results'),
+    );
+    return document.querySelector('.debug-view__probe-result-section pre');
+  }
 });
 
 function traceListEntry(overrides = {}) {
