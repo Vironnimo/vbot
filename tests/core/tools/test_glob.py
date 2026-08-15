@@ -439,6 +439,20 @@ def test_glob_brace_expansion_edge_cases() -> None:
     assert not search_module.glob_path_matches("core/tools/grep.py", "**/*.{md,ts}")
 
 
+def test_glob_character_class_braces_stay_literal() -> None:
+    # rg --glob semantics: braces inside a character class are literal class
+    # members, never alternations. Expanding them would turn '*[{,}]*' into
+    # the empty class '*[]*' and silently match nothing.
+    assert search_module.glob_path_matches("a{b,c}.txt", "*[{,}]*")
+    assert not search_module.glob_path_matches("plain.txt", "*[{,}]*")
+    assert search_module.glob_path_matches("x{y,z}.txt", "*[{a,b}]*")
+    assert search_module.glob_path_matches("plain.txt", "*[{a,b}]*")
+    # A comma inside a class is a class member, not an alternation separator:
+    # '{a,[b,c]}.x' must keep '[b,c]' whole and match 'b.x' through the class.
+    assert search_module.glob_path_matches("b.x", "{a,[b,c]}.x")
+    assert not search_module.glob_path_matches("d.x", "{a,[b,c]}.x")
+
+
 def test_glob_skips_gitignored_paths_by_default(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
