@@ -1097,6 +1097,124 @@ async def test_web_search_handler_searxng_page_and_published_date(tmp_path: Path
 
 @respx.mock
 @pytest.mark.asyncio
+async def test_web_search_handler_searxng_page_warns_about_pagination_gap(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    respx.get(_SEARXNG_ENDPOINT).mock(
+        return_value=httpx.Response(200, json={"results": []})
+    )
+
+    result = await web_search_handler(
+        make_context(workspace),
+        {"query": "vbot", "page": 2},
+        lambda key: "",
+        lambda: {
+            "provider": "searxng",
+            "searxng": {"base_url": "http://localhost:8888"},
+        },
+    )
+
+    data = assert_success_envelope(result)
+    warnings = data.get("warnings", [])
+    assert any("page size" in w.lower() for w in warnings), (
+        f"expected a pagination warning, got {warnings}"
+    )
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_web_search_handler_searxng_page1_has_no_pagination_warning(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    respx.get(_SEARXNG_ENDPOINT).mock(
+        return_value=httpx.Response(200, json={"results": []})
+    )
+
+    result = await web_search_handler(
+        make_context(workspace),
+        {"query": "vbot"},
+        lambda key: "",
+        lambda: {
+            "provider": "searxng",
+            "searxng": {"base_url": "http://localhost:8888"},
+        },
+    )
+
+    data = assert_success_envelope(result)
+    assert "warnings" not in data
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_web_search_handler_brave_domain_filter_suppresses_more_results(tmp_path: Path) -> None:
+    """more_results_available must be suppressed with domain filters (B2)."""
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    respx.get(_BRAVE_ENDPOINT).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "web": {
+                    "results": [
+                        {
+                            "title": "Example result",
+                            "url": "https://example.com/vbot",
+                            "description": "Matching",
+                        }
+                    ]
+                },
+                "query": {"more_results_available": True},
+            },
+        )
+    )
+
+    result = await web_search_handler(
+        make_context(workspace),
+        {"query": "vbot", "domains": ["example.com"]},
+        _fake_credential_resolver,
+    )
+
+    data = assert_success_envelope(result)
+    assert "more_results_available" not in data
+    warnings = data.get("warnings", [])
+    assert any("more_results_available" in w for w in warnings), (
+        f"expected a domain-paging warning, got {warnings}"
+    )
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_web_search_handler_brave_without_domains_keeps_more_results(tmp_path: Path) -> None:
+    """more_results_available is preserved when no domain filter is applied."""
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    respx.get(_BRAVE_ENDPOINT).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "web": {"results": []},
+                "query": {"more_results_available": True},
+            },
+        )
+    )
+
+    result = await web_search_handler(
+        make_context(workspace),
+        {"query": "vbot"},
+        _fake_credential_resolver,
+    )
+
+    data = assert_success_envelope(result)
+    assert data["more_results_available"] is True
+    assert "warnings" not in data
+
+
+@respx.mock
+@pytest.mark.asyncio
 async def test_web_search_handler_honors_retry_after_hint(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
