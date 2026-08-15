@@ -314,12 +314,76 @@ def _relative_path_segments(relative_path: str) -> tuple[str, ...]:
     )
 
 
+def _expand_brace_alternations(pattern: str) -> list[str]:
+    """Expand ``{a,b}`` alternations in a glob pattern, rg ``--glob`` style.
+
+    ``fnmatch`` has no brace support, so without expansion a pattern like
+    ``**/*.{py,js}`` would require a literal ``{py,js}`` in the file name and
+    silently match nothing. Only groups containing a top-level comma expand;
+    comma-less braces (far more likely a literal file name) stay as-is, as do
+    unmatched braces. Nested groups expand recursively.
+    """
+    start = pattern.find("{")
+    if start == -1:
+        return [pattern]
+
+    depth = 0
+    group_start = start
+    for index in range(start, len(pattern)):
+        char = pattern[index]
+        if char == "{":
+            if depth == 0:
+                group_start = index
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth < 0:
+                return [pattern]
+            if depth != 0:
+                continue
+            group = pattern[group_start + 1 : index]
+            if "," not in group:
+                continue
+            alternatives: list[str] = []
+            segment = ""
+            segment_depth = 0
+            for group_char in group:
+                if group_char == "{":
+                    segment_depth += 1
+                elif group_char == "}":
+                    segment_depth -= 1
+                if group_char == "," and segment_depth == 0:
+                    alternatives.append(segment)
+                    segment = ""
+                else:
+                    segment += group_char
+            alternatives.append(segment)
+
+            expanded: list[str] = []
+            prefix = pattern[:group_start]
+            suffix = pattern[index + 1 :]
+            for alternative in alternatives:
+                for candidate in _expand_brace_alternations(prefix + alternative + suffix):
+                    if candidate not in expanded:
+                        expanded.append(candidate)
+            return expanded
+    return [pattern]
+
+
 def file_filter_matches(relative_path: str, pattern: str) -> bool:
     """Return whether a relative path matches a file filter pattern.
 
     A pattern without ``/`` matches the file name at any depth (rg ``--glob``
-    semantics); matching is case-insensitive on every platform.
+    semantics); matching is case-insensitive on every platform. ``{a,b}``
+    alternations expand like rg ``--glob``.
     """
+    return any(
+        _file_filter_matches_single(relative_path, expanded)
+        for expanded in _expand_brace_alternations(pattern)
+    )
+
+
+def _file_filter_matches_single(relative_path: str, pattern: str) -> bool:
     path_segments = _relative_path_segments(relative_path)
     normalized_pattern = normalize_file_filter_pattern(pattern)
 
@@ -338,8 +402,16 @@ def glob_path_matches(relative_path: str, pattern: str) -> bool:
 
     Unlike ``file_filter_matches`` there is no bare-name shortcut: ``*.py``
     matches top-level entries only, ``**/*.py`` matches at any depth —
-    standard glob semantics. Case-insensitive on every platform.
+    standard glob semantics. Case-insensitive on every platform. ``{a,b}``
+    alternations expand like rg ``--glob``.
     """
+    return any(
+        _glob_path_matches_single(relative_path, expanded)
+        for expanded in _expand_brace_alternations(pattern)
+    )
+
+
+def _glob_path_matches_single(relative_path: str, pattern: str) -> bool:
     path_segments = _relative_path_segments(relative_path)
     normalized_pattern = normalize_file_filter_pattern(pattern)
     pattern_segments = tuple(segment for segment in normalized_pattern.split("/") if segment)

@@ -415,6 +415,30 @@ def test_glob_pattern_matches_case_insensitively(tmp_path: Path) -> None:
     assert get_success_content(result) == "app.py"
 
 
+def test_glob_pattern_expands_brace_alternations(tmp_path: Path) -> None:
+    # rg --glob semantics: '{py,js}' is an alternation, not a literal name —
+    # the fnmatch-based matcher must expand it instead of matching nothing.
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    workspace.joinpath("main.py").write_text("", encoding="utf-8")
+    workspace.joinpath("app.js").write_text("", encoding="utf-8")
+    workspace.joinpath("notes.txt").write_text("", encoding="utf-8")
+
+    result = glob_handler(make_context(workspace), {"pattern": "**/*.{py,js}"})
+
+    assert sorted(get_success_content(result).splitlines()) == ["app.js", "main.py"]
+
+
+def test_glob_brace_expansion_edge_cases() -> None:
+    # Comma-less braces and unmatched braces stay literal (fnmatch treats
+    # them as ordinary characters); nested groups expand recursively.
+    assert search_module.glob_path_matches("a{b}.py", "*{b}.py")
+    assert not search_module.glob_path_matches("ab.py", "*{b}.py")
+    assert search_module.glob_path_matches("weird{py.py", "weird{py.py")
+    assert search_module.glob_path_matches("core/tools/grep.py", "**/*.{md,{py,js}}")
+    assert not search_module.glob_path_matches("core/tools/grep.py", "**/*.{md,ts}")
+
+
 def test_glob_skips_gitignored_paths_by_default(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()

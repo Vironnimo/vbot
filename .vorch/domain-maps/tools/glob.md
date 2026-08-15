@@ -12,7 +12,7 @@ Discovers filesystem paths by glob-style pattern.
 
 ## Conventions
 
-- Pattern matching is **anchored** standard glob (`glob_path_matches` in `core/tools/search.py`): `*.py` matches top-level entries only, `**/*.py` at any depth — unlike grep's `glob` filter, which matches bare names at any depth. Matching is **case-insensitive on every platform** (deliberate: identical behavior on Windows dev and Linux deployment).
+- Pattern matching is **anchored** standard glob (`glob_path_matches` in `core/tools/search.py`): `*.py` matches top-level entries only, `**/*.py` at any depth — unlike grep's `glob` filter, which matches bare names at any depth. `{py,js}` brace alternations expand rg-`--glob`-style (`_expand_brace_alternations`; comma-less/unmatched braces stay literal). Matching is **case-insensitive on every platform** (deliberate: identical behavior on Windows dev and Linux deployment).
 - Relative `path` resolves from `ToolContext.effective_cwd` (the working directory); absolute search roots are allowed.
 - Result paths are rendered relative to the **working directory** when the match lies under it, absolute otherwise (`display_search_path`) — so every result round-trips directly into a follow-up `read`/`edit` call regardless of the search root.
 - Matches are sorted by modification time, newest first; equal mtimes tie-break alphabetically. Directory entries end with `/`.
