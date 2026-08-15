@@ -708,7 +708,49 @@ describe('SessionListDrawer', () => {
     expect(document.body.textContent).toContain('Beta');
     sessionRowButton('Session beta').click();
     flushSync();
-    expect(onSessionSelected).toHaveBeenCalledWith('session-beta', 'beta');
+    expect(onSessionSelected).toHaveBeenCalledWith(
+      'session-beta',
+      'beta',
+      false,
+    );
+  });
+
+  it('passes the row sub-agent flag so foreign sessions do not pose as sub-agent views', async () => {
+    listSessionsMock.mockResolvedValue({
+      sessions: [
+        {
+          id: 'child-session',
+          title: 'Child session',
+          is_subagent_session: true,
+          created_at: '2026-05-09T00:00:00+00:00',
+        },
+      ],
+    });
+    const onSessionSelected = vi.fn();
+    mountedComponent = mount(SessionListDrawer, {
+      target: document.body,
+      props: {
+        agentId: 'alpha',
+        currentSessionId: '',
+        onSessionSelected,
+      },
+    });
+    flushSync();
+
+    openFilterMenu();
+    filterSwitch('Subagent runs').click();
+    flushSync();
+    await waitForCondition(
+      () => document.querySelectorAll('.session-row').length === 1,
+    );
+
+    sessionRowButton('Child session').click();
+    flushSync();
+    expect(onSessionSelected).toHaveBeenCalledWith(
+      'child-session',
+      'alpha',
+      true,
+    );
   });
 });
 
