@@ -84,9 +84,7 @@ PROCESS_TOOL_PARAMETERS: JsonObject = {
         },
         "eof": {
             "type": "boolean",
-            "description": (
-                "For input, close stdin after sending text and the optional newline; default false."
-            ),
+            "description": ("For input, close stdin after sending text and the optional newline."),
         },
     },
     "required": ["action"],

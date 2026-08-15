@@ -96,7 +96,8 @@ READ_TOOL_PARAMETERS: JsonObject = {
         "limit": {
             "type": "integer",
             "minimum": 1,
-            "description": "Maximum lines to read; default 2000.",
+            "default": DEFAULT_LINE_LIMIT,
+            "description": "Maximum lines to read; omit for the default (2000).",
         },
     },
     "required": ["path"],
