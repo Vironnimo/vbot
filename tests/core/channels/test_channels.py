@@ -160,6 +160,39 @@ class FailingAdapter(ChannelAdapter):
         raise NotImplementedError
 
 
+class RunThenCrashAdapter(ChannelAdapter):
+    """Adapter that starts, runs briefly, and then crashes."""
+
+    platform = "telegram"
+
+    def __init__(self, *, run_seconds: float) -> None:
+        self._run_seconds = run_seconds
+        self.started = asyncio.Event()
+        self.stopped = asyncio.Event()
+
+    async def start(self) -> None:
+        self.started.set()
+        await asyncio.sleep(self._run_seconds)
+        raise RuntimeError("crashed after healthy run")
+
+    async def stop(self) -> None:
+        self.stopped.set()
+
+    async def send(
+        self,
+        message: str | None,
+        platform_target: str,
+        *,
+        files: list[FileData] | None = None,
+        thread_id: str | None = None,
+        buttons: list[list[InteractionButton]] | None = None,
+    ) -> None:
+        return
+
+    def ensure_outbound_session(self, platform_target: str) -> RouteFacts:
+        raise NotImplementedError
+
+
 class DelayedStopAdapter(ChannelAdapter):
     platform = "telegram"
 
@@ -1372,7 +1405,7 @@ async def test_channel_service_restarts_failed_adapter_with_backoff(
 
 
 @pytest.mark.asyncio
-async def test_channel_service_marks_channel_failed_after_max_restart_retries(
+async def test_channel_service_keeps_retrying_failed_adapter_after_max_restart_retries(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1399,17 +1432,178 @@ async def test_channel_service_marks_channel_failed_after_max_restart_retries(
     monkeypatch.setattr(service, "_restart_delay_seconds", immediate_restart_delay)
 
     service.start()
-    await wait_until(
-        lambda: (
-            config.id in service._failed_channels
-            and config.id not in service._adapter_tasks
-            and config.id not in service._adapter_restart_tasks
-        )
-    )
+    # Exhausting the fast-retry budget marks the channel failed …
+    await wait_until(lambda: config.id in service._failed_channels)
+    # … but recovery attempts continue at the capped backoff interval instead
+    # of giving up (a channel is the operator's lifeline and must self-heal).
+    await wait_until(lambda: len(created) >= 7)
 
-    assert delays == [1.0, 2.0, 4.0]
-    assert len(created) == 4
-    assert service.has_active_channels() is False
-    assert service._adapter_restart_attempts[config.id] == 3
+    assert delays[:4] == [1.0, 2.0, 4.0, 8.0]
+    assert all(delay >= 16.0 for delay in delays[4:])
+    assert all(delay <= 30.0 for delay in delays)
+    # The raw failure marker stays set while recovery attempts continue; the
+    # public is_failed() view flaps with the in-flight restart task, so the
+    # deterministic assertion is on the marker itself.
+    assert config.id in service._failed_channels
+    assert service._adapter_restart_attempts[config.id] >= 4
 
     service.stop()
+
+
+@pytest.mark.asyncio
+async def test_channel_service_recovers_and_clears_failed_marker_after_exhausted_retries(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    storage = ChannelStorage(tmp_path)
+    config = make_config(enabled=True)
+    storage.save(config)
+
+    service = make_service(tmp_path)
+    created: list[FailingAdapter] = []
+    starts = 0
+
+    def create_adapter(_config: ChannelConfig) -> ChannelAdapter:
+        nonlocal starts
+        starts += 1
+        adapter = FailingAdapter(fail_on_start=starts <= 4)
+        created.append(adapter)
+        return adapter
+
+    delays: list[float] = []
+    original_restart_delay = service._restart_delay_seconds
+
+    def immediate_restart_delay(attempt: int) -> float:
+        delays.append(original_restart_delay(attempt))
+        return 0.0
+
+    monkeypatch.setattr(service, "_create_adapter", create_adapter)
+    monkeypatch.setattr(service, "_restart_delay_seconds", immediate_restart_delay)
+
+    service.start()
+    await wait_until(lambda: config.id in service._failed_channels)
+    await wait_until(lambda: len(created) >= 5)
+    await asyncio.wait_for(created[4].started.wait(), timeout=1)
+
+    assert delays == [1.0, 2.0, 4.0, 8.0]
+    assert service._is_running(config.id) is True
+    assert service.is_failed(config.id) is False
+    assert service.failure_reason(config.id) is None
+
+    service.stop()
+    await asyncio.wait_for(created[-1].stopped.wait(), timeout=1)
+    await asyncio.sleep(0)
+
+
+@pytest.mark.asyncio
+async def test_channel_service_resets_restart_attempts_after_healthy_run(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("core.channels.channels._ADAPTER_HEALTHY_RUN_RESET_SECONDS", 0.02)
+    storage = ChannelStorage(tmp_path)
+    config = make_config(enabled=True)
+    storage.save(config)
+
+    service = make_service(tmp_path)
+    created: list[ChannelAdapter] = []
+    blocking: list[BlockingAdapter] = []
+    mode = {"phase": "chronic"}
+
+    def create_adapter(_config: ChannelConfig) -> ChannelAdapter:
+        if mode["phase"] == "chronic":
+            adapter: ChannelAdapter = FailingAdapter(fail_on_start=True)
+        elif mode["phase"] == "healthy-run":
+            adapter = RunThenCrashAdapter(run_seconds=0.05)
+        else:
+            adapter = BlockingAdapter()
+            blocking.append(adapter)
+        created.append(adapter)
+        return adapter
+
+    delays: list[float] = []
+    original_restart_delay = service._restart_delay_seconds
+
+    def immediate_restart_delay(attempt: int) -> float:
+        delays.append(original_restart_delay(attempt))
+        return 0.0
+
+    monkeypatch.setattr(service, "_create_adapter", create_adapter)
+    monkeypatch.setattr(service, "_restart_delay_seconds", immediate_restart_delay)
+
+    service.start()
+    await wait_until(lambda: config.id in service._failed_channels)
+    # Next adapter runs briefly and crashes: that healthy run must reset the
+    # restart-attempt counter …
+    mode["phase"] = "healthy-run"
+    await wait_until(lambda: any(isinstance(a, RunThenCrashAdapter) for a in created))
+    # … so the following restart starts a fresh cycle (delay 1.0 again) and the
+    # blocking adapter keeps it running, clearing the failed marker.
+    mode["phase"] = "blocking"
+    await wait_until(
+        lambda: any(isinstance(a, BlockingAdapter) and a.started.is_set() for a in created)
+    )
+
+    assert delays[-1] == 1.0
+    assert service._adapter_restart_attempts[config.id] == 1
+    assert service.is_failed(config.id) is False
+    assert service._is_running(config.id) is True
+
+    service.stop()
+    await asyncio.wait_for(blocking[-1].stopped.wait(), timeout=1)
+    await asyncio.sleep(0)
+
+
+@pytest.mark.asyncio
+async def test_channel_service_keeps_attempt_count_without_healthy_run(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("core.channels.channels._ADAPTER_HEALTHY_RUN_RESET_SECONDS", 3600.0)
+    storage = ChannelStorage(tmp_path)
+    config = make_config(enabled=True)
+    storage.save(config)
+
+    service = make_service(tmp_path)
+    created: list[ChannelAdapter] = []
+    blocking: list[BlockingAdapter] = []
+    mode = {"phase": "chronic"}
+
+    def create_adapter(_config: ChannelConfig) -> ChannelAdapter:
+        if mode["phase"] == "chronic":
+            adapter: ChannelAdapter = FailingAdapter(fail_on_start=True)
+        elif mode["phase"] == "short-run":
+            adapter = RunThenCrashAdapter(run_seconds=0.05)
+        else:
+            adapter = BlockingAdapter()
+            blocking.append(adapter)
+        created.append(adapter)
+        return adapter
+
+    delays: list[float] = []
+    original_restart_delay = service._restart_delay_seconds
+
+    def immediate_restart_delay(attempt: int) -> float:
+        delays.append(original_restart_delay(attempt))
+        return 0.0
+
+    monkeypatch.setattr(service, "_create_adapter", create_adapter)
+    monkeypatch.setattr(service, "_restart_delay_seconds", immediate_restart_delay)
+
+    service.start()
+    await wait_until(lambda: config.id in service._failed_channels)
+    # A crash after only a short run is NOT healthy: no attempt-counter reset,
+    # the backoff continues from the chronic cycle instead of restarting at 1.0s.
+    mode["phase"] = "short-run"
+    await wait_until(lambda: any(isinstance(a, RunThenCrashAdapter) for a in created))
+    mode["phase"] = "blocking"
+    await wait_until(
+        lambda: any(isinstance(a, BlockingAdapter) and a.started.is_set() for a in created)
+    )
+
+    assert delays[-1] >= 8.0
+    assert service._adapter_restart_attempts[config.id] >= 5
+
+    service.stop()
+    await asyncio.wait_for(blocking[-1].stopped.wait(), timeout=1)
+    await asyncio.sleep(0)

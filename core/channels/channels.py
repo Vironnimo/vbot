@@ -7,6 +7,7 @@ import json
 import re
 import shutil
 import threading
+import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
@@ -71,7 +72,15 @@ MANAGED_CHANNEL_TOKEN_ENV_PREFIX = "VBOT_CHANNEL_TOKEN__"
 _CHANNEL_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
 _ADAPTER_RESTART_INITIAL_DELAY_SECONDS = 1.0
 _ADAPTER_RESTART_MAX_DELAY_SECONDS = 30.0
+# Fast-retry budget before a channel is marked failed. Exhausting it does NOT
+# stop recovery: the channel keeps retrying at the capped backoff interval for
+# as long as it is enabled — a channel is the operator's lifeline (e.g. Telegram
+# control of the whole server), so a transient network blip at startup must
+# never require manual intervention.
 _ADAPTER_RESTART_MAX_RETRIES = 3
+# An adapter that stayed up at least this long was healthy: its next crash
+# starts a fresh restart cycle instead of counting toward chronic failure.
+_ADAPTER_HEALTHY_RUN_RESET_SECONDS = 300.0
 # Telegram caps an inline button's callback_data at 64 UTF-8 bytes; validated on
 # send so an over-long payload fails cleanly rather than at the Bot API.
 _MAX_CALLBACK_DATA_BYTES = 64
@@ -842,6 +851,7 @@ class ChannelService:
         self._storage = ChannelStorage(Path(data_root))
         self._adapters: dict[str, ChannelAdapter] = {}
         self._adapter_tasks: dict[str, asyncio.Task[None]] = {}
+        self._adapter_task_created: dict[str, float] = {}
         self._adapter_stop_tasks: dict[str, asyncio.Task[None]] = {}
         self._adapter_restart_attempts: dict[str, int] = {}
         self._adapter_restart_tasks: dict[str, asyncio.Task[None]] = {}
@@ -887,6 +897,7 @@ class ChannelService:
         for channel_id in list(self._adapter_tasks):
             self.stop_channel(channel_id)
         self._adapter_restart_attempts.clear()
+        self._adapter_task_created.clear()
         self._failed_channels.clear()
         self._failure_reasons.clear()
         self._started = False
@@ -960,6 +971,7 @@ class ChannelService:
         )
         self._adapters[normalized_id] = adapter
         self._adapter_tasks[normalized_id] = task
+        self._adapter_task_created[normalized_id] = time.monotonic()
 
         def on_done(completed_task: asyncio.Task[None], channel: str = normalized_id) -> None:
             self._on_adapter_task_done(channel, completed_task)
@@ -978,6 +990,7 @@ class ChannelService:
 
         task = self._adapter_tasks.pop(normalized_id, None)
         self._adapters.pop(normalized_id, None)
+        self._adapter_task_created.pop(normalized_id, None)
 
         if task is not None and not task.done():
             task.cancel()
@@ -1312,13 +1325,22 @@ class ChannelService:
         return self._is_running(_normalize_channel_id(channel_id))
 
     def is_failed(self, channel_id: str) -> bool:
-        """Return whether one channel is currently marked failed."""
+        """Return whether one channel is currently marked failed.
+
+        A running adapter is never reported failed: after a failed cycle the
+        recovery loop keeps retrying, and a successful attempt must show as
+        healthy immediately (the raw marker stays for the next crash).
+        """
         normalized_id = _normalize_channel_id(channel_id)
+        if self._is_running(normalized_id):
+            return False
         return normalized_id in self._failed_channels
 
     def failure_reason(self, channel_id: str) -> str | None:
         """Return the latest failure reason for one failed channel, if any."""
         normalized_id = _normalize_channel_id(channel_id)
+        if self._is_running(normalized_id):
+            return None
         return self._failure_reasons.get(normalized_id)
 
     def denied_chats(self, channel_id: str) -> list[DeniedChatFacts]:
@@ -1538,6 +1560,7 @@ class ChannelService:
 
         self._adapter_tasks.pop(channel_id, None)
         self._adapters.pop(channel_id, None)
+        created_at = self._adapter_task_created.pop(channel_id, None)
 
         if task.cancelled():
             return
@@ -1547,6 +1570,15 @@ class ChannelService:
             self._failed_channels.discard(channel_id)
             self._failure_reasons.pop(channel_id, None)
             return
+
+        if created_at is not None:
+            runtime_seconds = time.monotonic() - created_at
+            if runtime_seconds >= _ADAPTER_HEALTHY_RUN_RESET_SECONDS:
+                # The adapter was up long enough to count as healthy: treat the
+                # crash as a fresh incident instead of chronic failure.
+                self._adapter_restart_attempts.pop(channel_id, None)
+                self._failed_channels.discard(channel_id)
+                self._failure_reasons.pop(channel_id, None)
 
         self._failure_reasons[channel_id] = str(error)
 
@@ -1593,25 +1625,34 @@ class ChannelService:
         if attempt >= _ADAPTER_RESTART_MAX_RETRIES:
             reason = self._failure_reasons.get(channel_id, "adapter restart attempts exhausted")
             self._mark_channel_failed(channel_id, reason)
-            _LOGGER.error(
-                "Channel adapter exceeded max restart attempts and is marked failed "
-                "(channel=%s, retries=%s)",
-                channel_id,
-                _ADAPTER_RESTART_MAX_RETRIES,
-            )
-            return
+            if attempt == _ADAPTER_RESTART_MAX_RETRIES:
+                _LOGGER.error(
+                    "Channel adapter exceeded max restart attempts and is marked failed; "
+                    "recovery attempts continue at the capped backoff interval "
+                    "(channel=%s, retries=%s)",
+                    channel_id,
+                    _ADAPTER_RESTART_MAX_RETRIES,
+                )
 
         next_attempt = attempt + 1
         self._adapter_restart_attempts[channel_id] = next_attempt
 
         delay_seconds = self._restart_delay_seconds(next_attempt)
-        _LOGGER.warning(
-            "Restarting channel adapter after %.1fs (channel=%s, attempt=%s/%s)",
-            delay_seconds,
-            channel_id,
-            next_attempt,
-            _ADAPTER_RESTART_MAX_RETRIES,
-        )
+        if next_attempt <= _ADAPTER_RESTART_MAX_RETRIES:
+            _LOGGER.warning(
+                "Restarting channel adapter after %.1fs (channel=%s, attempt=%s/%s)",
+                delay_seconds,
+                channel_id,
+                next_attempt,
+                _ADAPTER_RESTART_MAX_RETRIES,
+            )
+        else:
+            _LOGGER.warning(
+                "Retrying failed channel adapter after %.1fs (channel=%s, recovery attempt=%s)",
+                delay_seconds,
+                channel_id,
+                next_attempt,
+            )
         await asyncio.sleep(delay_seconds)
 
         if not self._can_restart_channel(channel_id):
