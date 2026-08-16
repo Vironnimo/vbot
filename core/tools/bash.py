@@ -1342,5 +1342,4 @@ __all__ = [
     "format_bash_env_usage",
     "project_bash_tool_definitions",
     "register_bash_tool",
-    "reset_shell_env_cache",
 ]
