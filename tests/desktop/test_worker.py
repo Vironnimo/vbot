@@ -121,7 +121,7 @@ class DetectOnceEngine:
     def stop(self) -> None:
         pass
 
-    def detect(self, _chunk: bytes) -> WakewordMatch | None:
+    def detect(self, _chunk: bytes, *, speech_present: bool = True) -> WakewordMatch | None:
         self.calls += 1
         if self.calls == 1:
             return WakewordMatch("builtin/okay_nabu", 1.0, 0.5)
@@ -141,7 +141,7 @@ class SequenceEngine:
     def stop(self) -> None:
         pass
 
-    def detect(self, _chunk: bytes) -> WakewordMatch | None:
+    def detect(self, _chunk: bytes, *, speech_present: bool = True) -> WakewordMatch | None:
         self.calls += 1
         if callable(self._on_detect):
             self._on_detect(self.calls)
@@ -321,7 +321,7 @@ def test_detection_loop_passes_the_last_four_chunks_as_pre_roll(
         def stop(self) -> None:
             pass
 
-        def detect(self, _chunk: bytes) -> WakewordMatch | None:
+        def detect(self, _chunk: bytes, *, speech_present: bool = True) -> WakewordMatch | None:
             self.calls += 1
             if self.calls == 5:
                 return WakewordMatch("builtin/hey_nabu", 0.8, 0.5)
@@ -445,6 +445,103 @@ def test_pre_roll_alone_does_not_become_a_command(
     assert worker._record_until_silence(wake_phrase_audio) is None
 
 
+def test_detection_gate_requires_two_speech_frames_per_chunk() -> None:
+    from desktop.wakeword.worker import _chunk_contains_speech
+
+    class ScriptedVad:
+        def __init__(self, speech_frames: set[int]) -> None:
+            self._speech_frames = speech_frames
+            self.frame_index = 0
+
+        def is_speech(self, _frame: bytes, _sample_rate: int) -> bool:
+            is_speech = self.frame_index in self._speech_frames
+            self.frame_index += 1
+            return is_speech
+
+    chunk = b"\x10\x20" * 1280  # 2560 bytes = eight 10 ms frames
+
+    assert _chunk_contains_speech(ScriptedVad({0}), chunk) is False
+    assert _chunk_contains_speech(ScriptedVad({0, 3}), chunk) is True
+
+
+def test_detection_gate_fails_open_when_it_cannot_judge() -> None:
+    from desktop.wakeword.worker import _chunk_contains_speech
+
+    class RaisingVad:
+        @staticmethod
+        def is_speech(_frame: bytes, _sample_rate: int) -> bool:
+            raise RuntimeError("vad exploded")
+
+    chunk = b"\x10\x20" * 1280
+
+    assert _chunk_contains_speech(None, chunk) is True
+    assert _chunk_contains_speech(RaisingVad(), b"\x10\x20" * 10) is True
+    assert _chunk_contains_speech(RaisingVad(), chunk) is True
+
+
+def test_detection_gate_matches_silence_and_speech_with_real_vad() -> None:
+    pytest.importorskip("webrtcvad")
+    from desktop.wakeword.worker import _chunk_contains_speech, _create_detection_vad
+
+    vad = _create_detection_vad()
+
+    assert vad is not None
+    assert _chunk_contains_speech(vad, _make_silence_chunk()) is False
+    assert _chunk_contains_speech(vad, _make_speech_chunk(1280)) is True
+
+
+def test_detection_loop_gates_engine_detection_on_speech_presence(
+    fake_bridge: FakeBridge,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from unittest.mock import MagicMock
+
+    from desktop.wakeword import worker as worker_module
+    from desktop.wakeword.worker import WakewordWorker
+
+    class AlternatingVad:
+        """Opens the gate from the second detection chunk onward."""
+
+        call_count = 0
+
+        @classmethod
+        def is_speech(cls, _frame: bytes, _sample_rate: int) -> bool:
+            cls.call_count += 1
+            return cls.call_count > 8  # one full 80 ms chunk = eight frames
+
+    monkeypatch.setattr(worker_module, "_create_detection_vad", lambda: AlternatingVad)
+    engine = MagicMock()
+    engine.detect.return_value = None
+    worker = WakewordWorker(
+        engine=engine,
+        bridge=fake_bridge,
+        server_url="http://127.0.0.1:8420",
+    )
+    worker._read_config = lambda: {"target_agent_id": "main"}  # type: ignore[method-assign]
+    worker._target_agent_available = lambda _agent_id: True  # type: ignore[assignment,method-assign]
+    reads = {"count": 0}
+
+    def stop_after_second_read() -> None:
+        reads["count"] += 1
+        if reads["count"] >= 2:
+            worker._running.clear()
+
+    worker._open_stream = lambda: setattr(  # type: ignore[method-assign]
+        worker,
+        "_stream",
+        FakeSounddeviceStream(
+            [_make_silence_chunk(), _make_speech_chunk(1280)],
+            on_read=stop_after_second_read,
+        ),
+    )
+    worker._running.set()
+
+    worker._run()
+
+    gate_flags = [call.kwargs["speech_present"] for call in engine.detect.call_args_list]
+    assert gate_flags == [False, True]
+
+
 @pytest.mark.parametrize(
     ("transcript", "cancelled"),
     [
@@ -463,6 +560,7 @@ def test_voice_cancel_phrase_requires_reserved_ending(transcript: str, cancelled
 def test_resampling_stream_normalizes_native_rate_to_wakeword_pcm() -> None:
     import numpy as np
 
+    pytest.importorskip("soxr")
     from desktop.wakeword.worker import CaptureFormat, ResamplingInputStream
 
     class NativeStream:
@@ -483,6 +581,99 @@ def test_resampling_stream_normalizes_native_rate_to_wakeword_pcm() -> None:
     samples = np.frombuffer(frame.detection_pcm16, dtype=np.int16)
     assert samples[0] < 0
     assert samples[-1] > 0
+
+
+def test_resampling_stream_attenuates_out_of_band_tones() -> None:
+    import numpy as np
+
+    pytest.importorskip("soxr")
+    from desktop.wakeword.worker import CaptureFormat, ResamplingInputStream
+
+    class SineNativeStream:
+        def __init__(self, frequency: int, rate: int, amplitude: float = 0.5) -> None:
+            self._frequency = frequency
+            self._rate = rate
+            self._amplitude = amplitude
+            self._position = 0
+
+        def read(self, frame_count: int) -> tuple[object, bool]:
+            end = self._position + frame_count
+            samples = (
+                np.sin(2 * np.pi * self._frequency * np.arange(self._position, end) / self._rate)
+                * self._amplitude
+            )
+            self._position = end
+            return samples.astype(np.float32)[:, None], False
+
+    def detection_rms(pcm16: bytes) -> float:
+        samples = np.frombuffer(pcm16, dtype=np.int16).astype(np.float64)
+        return float(np.sqrt(np.mean(samples**2)))
+
+    def read_detection_rms(frequency: int) -> float:
+        stream = ResamplingInputStream(
+            SineNativeStream(frequency, 48000),  # type: ignore[arg-type]
+            CaptureFormat(device=4, name="Studio mic", sample_rate=48000, dtype="float32"),
+        )
+        frames = [stream.read_capture_frame(1280) for _ in range(12)]
+        # Skip the resampler's startup latency before measuring.
+        return detection_rms(b"".join(frame.detection_pcm16 for frame in frames[2:]))
+
+    # A 10 kHz tone is out of band for the 16 kHz detector and must be filtered
+    # away instead of aliasing into the detector's spectrum; 1 kHz must survive.
+    out_of_band_rms = read_detection_rms(10000)
+    in_band_rms = read_detection_rms(1000)
+
+    assert in_band_rms > 8000
+    assert out_of_band_rms < in_band_rms / 8
+
+
+def test_resampling_stream_returns_exact_detection_length_every_read() -> None:
+    import numpy as np
+
+    pytest.importorskip("soxr")
+    from desktop.wakeword.worker import CaptureFormat, ResamplingInputStream
+
+    class NoisyNativeStream:
+        def __init__(self, rate: int) -> None:
+            self._rate = rate
+            self._position = 0
+
+        def read(self, frame_count: int) -> tuple[object, bool]:
+            end = self._position + frame_count
+            samples = np.sin(2 * np.pi * 440 * np.arange(self._position, end) / self._rate)
+            self._position = end
+            return samples.astype(np.float32)[:, None], False
+
+    stream = ResamplingInputStream(
+        NoisyNativeStream(44100),  # type: ignore[arg-type]
+        CaptureFormat(device=4, name="Studio mic", sample_rate=44100, dtype="float32"),
+    )
+
+    lengths = {len(stream.read_capture_frame(1280).detection_pcm16) for _ in range(24)}
+
+    assert lengths == {1280 * 2}
+
+
+def test_resample_pcm16_filters_out_of_band_audio() -> None:
+    import numpy as np
+
+    pytest.importorskip("soxr")
+    from desktop.wakeword.worker import _resample_pcm16
+
+    def sine_pcm16(frequency: int, rate: int) -> bytes:
+        samples = (np.sin(2 * np.pi * frequency * np.arange(rate) / rate) * 12000).astype(np.int16)
+        return samples.tobytes()
+
+    def rms(pcm16: bytes) -> float:
+        samples = np.frombuffer(pcm16, dtype=np.int16).astype(np.float64)
+        return float(np.sqrt(np.mean(samples**2)))
+
+    in_band = _resample_pcm16(sine_pcm16(1000, 48000), 48000, 16000)
+    out_of_band = _resample_pcm16(sine_pcm16(10000, 48000), 48000, 16000)
+
+    assert len(in_band) == 16000 * 2
+    assert rms(in_band) > 8000
+    assert rms(out_of_band) < rms(in_band) / 8
 
 
 def test_command_audio_keeps_native_capture_rate_before_server_normalization() -> None:
@@ -1305,7 +1496,7 @@ def test_mock_worker_walks_full_state_cycle_on_spike(
         def start(self) -> None:
             pass
 
-        def detect(self, _chunk: bytes) -> WakewordMatch | None:
+        def detect(self, _chunk: bytes, *, speech_present: bool = True) -> WakewordMatch | None:
             calls["n"] += 1
             if calls["n"] == 1:
                 return WakewordMatch("builtin/okay_nabu", 1.0, 0.5)

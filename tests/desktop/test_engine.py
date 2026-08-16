@@ -287,6 +287,91 @@ def test_engine_rearms_only_after_all_scores_drop_below_threshold(
     assert engine.detect(b"second") is not None
 
 
+def _scripted_engine(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    scores: list[list[float]],
+    *,
+    score_listener=None,
+):
+    catalog = WakewordModelCatalog(tmp_path / "settings.json")
+    features = Mock()
+    features.process_streaming.return_value = ["features"]
+    model = Mock()
+    model.process_streaming.side_effect = scores
+    monkeypatch.setattr(
+        engine_module, "_create_pyopenwakeword_features", Mock(return_value=features)
+    )
+    monkeypatch.setattr(engine_module, "_create_pyopenwakeword_model", Mock(return_value=model))
+    engine = catalog.create_engine([DEFAULT_WAKEWORD_MODEL_IDS[0]], score_listener=score_listener)
+    engine.start()
+    return engine
+
+
+def test_engine_detects_a_confident_single_window_score(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    engine = _scripted_engine(tmp_path, monkeypatch, [[0.68]])
+
+    assert engine.detect(b"audio") == WakewordMatch(DEFAULT_WAKEWORD_MODEL_IDS[0], 0.68, 0.5)
+
+
+def test_engine_filters_an_isolated_marginal_score_spike(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    engine = _scripted_engine(tmp_path, monkeypatch, [[0.55], [0.0], [0.0], [0.0], [0.0], [0.0]])
+
+    for _ in range(6):
+        assert engine.detect(b"audio") is None
+
+
+def test_engine_confirms_a_repeated_marginal_score(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    engine = _scripted_engine(tmp_path, monkeypatch, [[0.55], [0.0], [0.55]])
+
+    assert engine.detect(b"audio") is None
+    assert engine.detect(b"audio") is None
+    assert engine.detect(b"audio") == WakewordMatch(DEFAULT_WAKEWORD_MODEL_IDS[0], 0.55, 0.5)
+
+
+def test_engine_ignores_marginal_scores_beyond_the_confirmation_window(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    engine = _scripted_engine(tmp_path, monkeypatch, [[0.55], [0.0], [0.0], [0.0], [0.0], [0.55]])
+
+    for _ in range(5):
+        engine.detect(b"audio")
+    assert engine.detect(b"audio") is None
+
+
+def test_engine_zeroes_scores_when_no_speech_is_present(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    observed_scores: list[dict[str, float]] = []
+    engine = _scripted_engine(
+        tmp_path,
+        monkeypatch,
+        [[0.9], [0.9]],
+        score_listener=observed_scores.append,
+    )
+
+    assert engine.detect(b"audio", speech_present=False) is None
+    assert engine.detect(b"audio", speech_present=False) is None
+
+    assert observed_scores == [{DEFAULT_WAKEWORD_MODEL_IDS[0]: 0.0}] * 2
+
+
+def test_engine_does_not_count_gated_chunks_toward_confirmation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    engine = _scripted_engine(tmp_path, monkeypatch, [[0.55], [0.9], [0.55]])
+
+    assert engine.detect(b"audio") is None
+    assert engine.detect(b"audio", speech_present=False) is None
+    assert engine.detect(b"audio") is not None
+
+
 def test_custom_model_validation_closes_a_loadable_detector(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

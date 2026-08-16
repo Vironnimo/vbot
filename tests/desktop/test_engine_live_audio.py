@@ -60,7 +60,19 @@ def test_two_active_nabu_models_ignore_unrelated_wakeword_audio() -> None:
     assert matches == []
 
 
-def _detect_file(engine: WakewordEngine, path: Path) -> list[WakewordMatch]:
+def test_gated_positive_audio_never_activates_the_models() -> None:
+    engine = WakewordModelCatalog(_FIXTURE_DIRECTORY / "settings.json").create_engine(
+        list(DEFAULT_WAKEWORD_MODEL_IDS)
+    )
+
+    matches = _detect_file(engine, _FIXTURE_DIRECTORY / "okay_nabu.wav", speech_present=False)
+
+    assert matches == []
+
+
+def _detect_file(
+    engine: WakewordEngine, path: Path, *, speech_present: bool = True
+) -> list[WakewordMatch]:
     audio = _read_pcm16_mono(path)
     padding = np.zeros(_SAMPLE_RATE, dtype=np.int16).tobytes()
     stream = padding + audio + padding
@@ -69,7 +81,7 @@ def _detect_file(engine: WakewordEngine, path: Path) -> list[WakewordMatch]:
     try:
         for offset in range(0, len(stream), _CHUNK_BYTES):
             chunk = stream[offset : offset + _CHUNK_BYTES].ljust(_CHUNK_BYTES, b"\0")
-            match = engine.detect(chunk)
+            match = engine.detect(chunk, speech_present=speech_present)
             if match is not None:
                 matches.append(match)
     finally:

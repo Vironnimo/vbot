@@ -6,7 +6,8 @@ import json
 import logging
 import os
 import tempfile
-from collections.abc import Callable
+from collections import deque
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
@@ -21,6 +22,15 @@ MIN_WAKEWORD_SENSITIVITY = 0.05
 MAX_WAKEWORD_SENSITIVITY = 0.95
 MAX_ACTIVE_WAKEWORD_MODELS = 2
 MAX_CUSTOM_WAKEWORD_MODEL_BYTES = 20 * 1024 * 1024
+
+# pyopen-wakeword emits raw, unsmoothed per-window scores, and the bundled heads
+# differ in shape: okay_nabu sustains ~10 windows above threshold while hey_nabu
+# peaks for a single one, so a fixed multi-window rule would drop genuine
+# activations. A score clearly above the threshold confirms immediately; a
+# marginal crossing must repeat within a short recent-score window so an
+# isolated noise spike can never trigger detection on its own.
+CONFIDENT_SCORE_MARGIN = 0.15
+MARGINAL_CONFIRMATION_CHUNKS = 5
 
 _CUSTOM_MODEL_PREFIX = "custom/"
 _CUSTOM_MODEL_DIRECTORY_NAME = "wakewords"
@@ -319,7 +329,7 @@ class WakewordEngine(Protocol):
         """Release native inference resources."""
         ...
 
-    def detect(self, audio_chunk: bytes) -> WakewordMatch | None:
+    def detect(self, audio_chunk: bytes, *, speech_present: bool = True) -> WakewordMatch | None:
         """Return at most one winning wakeword match for an audio chunk."""
         ...
 
@@ -349,7 +359,7 @@ class MockWakewordEngine:
     def stop(self) -> None:
         self._running = False
 
-    def detect(self, audio_chunk: bytes) -> WakewordMatch | None:
+    def detect(self, audio_chunk: bytes, *, speech_present: bool = True) -> WakewordMatch | None:
         """Return a match when the next configured score reaches the threshold."""
         if not self._running:
             return None
@@ -390,6 +400,8 @@ class MultiWakewordEngine:
         self._features: Any = None
         self._armed = True
         self._score_listener = score_listener
+        self._recent_scores: dict[str, deque[float]] = {}
+        self._reset_recent_scores()
 
     @property
     def active_model_ids(self) -> tuple[str, ...]:
@@ -418,6 +430,7 @@ class MultiWakewordEngine:
         self._features = features
         self._models = models
         self._armed = True
+        self._reset_recent_scores()
 
     def stop(self) -> None:
         """Release all native TensorFlow Lite resources."""
@@ -426,14 +439,21 @@ class MultiWakewordEngine:
         self._models = []
         self._features = None
         self._armed = True
+        self._reset_recent_scores()
         try:
             _close_models(models)
         finally:
             if features is not None:
                 features.close()
 
-    def detect(self, audio_chunk: bytes) -> WakewordMatch | None:
-        """Return the strongest threshold-normalized model match for one chunk."""
+    def detect(self, audio_chunk: bytes, *, speech_present: bool = True) -> WakewordMatch | None:
+        """Return the strongest confirmed model match for one chunk.
+
+        ``speech_present=False`` mirrors upstream openWakeWord's VAD threshold:
+        model scores for windows without speech are zeroed before they can enter
+        confirmation or reach the score listener, so idle room noise cannot
+        accumulate toward a detection.
+        """
         if self._features is None or not self._models:
             return None
         feature_batches = list(self._features.process_streaming(audio_chunk))
@@ -450,11 +470,16 @@ class MultiWakewordEngine:
                 ),
                 default=0.0,
             )
+            if not speech_present:
+                score = 0.0
             scores[descriptor.id] = score
+            self._recent_scores[descriptor.id].append(score)
             threshold = self._thresholds[descriptor.id]
             if score < threshold:
                 continue
             all_below_threshold = False
+            if not _score_is_confirmed(self._recent_scores[descriptor.id], score, threshold):
+                continue
             ratio = score / threshold
             if best_match is None or ratio > best_ratio:
                 best_match = WakewordMatch(descriptor.id, score, threshold)
@@ -468,6 +493,15 @@ class MultiWakewordEngine:
         if best_match is not None:
             self._armed = False
         return best_match
+
+    def _reset_recent_scores(self) -> None:
+        self._recent_scores = {
+            descriptor.id: deque(
+                (0.0 for _ in range(MARGINAL_CONFIRMATION_CHUNKS)),
+                maxlen=MARGINAL_CONFIRMATION_CHUNKS,
+            )
+            for descriptor in self._descriptors
+        }
 
 
 def _create_pyopenwakeword_features() -> Any:
@@ -514,6 +548,14 @@ def _threshold_for_sensitivity(sensitivity: float) -> float:
         min(MAX_WAKEWORD_SENSITIVITY, float(sensitivity)),
     )
     return 1.0 - normalized_sensitivity
+
+
+def _score_is_confirmed(recent_scores: Iterable[float], score: float, threshold: float) -> bool:
+    """Whether one threshold crossing is strong enough to become a detection."""
+    if score >= threshold + CONFIDENT_SCORE_MARGIN:
+        return True
+    crossings = sum(1 for recent_score in recent_scores if recent_score >= threshold)
+    return crossings >= 2
 
 
 def _clamp_score(score: float) -> float:
