@@ -34,6 +34,12 @@ _VAD_MODE = 1  # Moderate aggressiveness
 _VAD_FRAME_DURATION_MS = 30
 _VAD_FRAME_SIZE = int(_SAMPLE_RATE * _VAD_FRAME_DURATION_MS / 1000)  # 480 samples
 
+# The detection gate runs the same WebRTC VAD over 10 ms slices of each 80 ms
+# detection chunk; two speech slices (20 ms) open the gate so isolated blips
+# cannot, while real speech beginning mid-chunk still passes.
+_DETECTION_VAD_FRAME_BYTES = int(_SAMPLE_RATE * 0.010) * _SAMPLE_WIDTH  # 320 bytes
+_DETECTION_VAD_MIN_SPEECH_FRAMES = 2
+
 _SILENCE_DURATION_SECONDS = 1.5
 _SILENCE_FRAME_COUNT = int(_SILENCE_DURATION_SECONDS / (_VAD_FRAME_DURATION_MS / 1000))
 _SPEECH_START_TIMEOUT_SECONDS = 4.0
@@ -167,11 +173,17 @@ def check_speech_to_text_readiness(
 
 
 class ResamplingInputStream:
-    """Read a native sounddevice stream as 16 kHz mono signed PCM frames."""
+    """Read a native sounddevice stream as 16 kHz mono signed PCM frames.
+
+    Native-rate command audio is preserved untouched; the 16 kHz detection
+    projection is produced by a stateful soxr stream whose anti-aliasing filter
+    keeps out-of-band device noise (fans, hiss) out of the detector's spectrum.
+    """
 
     def __init__(self, stream: Any, capture_format: CaptureFormat) -> None:
         self._stream = stream
         self.capture_format = capture_format
+        self._resampler = _create_soxr_resampler(capture_format.sample_rate)
 
     def start(self) -> None:
         self._stream.start()
@@ -196,15 +208,14 @@ class ResamplingInputStream:
             normalized = samples.astype(np.float32) / 32768.0
 
         native_pcm = np.clip(normalized * 32767.0, -32768, 32767).astype(np.int16)
-        detection_samples = normalized
-        if native_frames != target_frames:
-            source_positions = np.linspace(0.0, 1.0, num=native_frames, endpoint=False)
-            target_positions = np.linspace(0.0, 1.0, num=target_frames, endpoint=False)
-            detection_samples = np.interp(target_positions, source_positions, normalized).astype(
-                np.float32
+        if self._resampler is None:
+            detection_pcm = native_pcm
+        else:
+            detection_pcm = _fit_resampled_length(
+                self._resampler.resample_chunk(native_pcm),
+                target_frames,
             )
 
-        detection_pcm = np.clip(detection_samples * 32767.0, -32768, 32767).astype(np.int16)
         return CapturedAudioFrame(
             detection_pcm16=bytes(detection_pcm.tobytes()),
             recording_pcm16=bytes(native_pcm.tobytes()),
@@ -325,6 +336,7 @@ class WakewordWorker:
             return
         consecutive_read_errors = 0
         detection_pre_roll: deque[CapturedAudioFrame] = deque(maxlen=_DETECTION_PRE_ROLL_CHUNKS)
+        detection_vad = _create_detection_vad()
 
         try:
             while self._running.is_set():
@@ -354,7 +366,13 @@ class WakewordWorker:
                 calibrating = self._calibration_checker()
 
                 try:
-                    match = self._engine.detect(captured_frame.detection_pcm16)
+                    match = self._engine.detect(
+                        captured_frame.detection_pcm16,
+                        speech_present=_chunk_contains_speech(
+                            detection_vad,
+                            captured_frame.detection_pcm16,
+                        ),
+                    )
                 except Exception:
                     logger.warning("Wakeword detection failed", exc_info=True)
                     self._fail("detection_failed")
@@ -836,16 +854,41 @@ def _resample_pcm16(audio: bytes, source_rate: int, target_rate: int) -> bytes:
         return audio
 
     import numpy as np
+    import soxr  # type: ignore[import-untyped]
 
     samples = np.frombuffer(audio, dtype=np.int16)
-    target_count = max(1, round(len(samples) * target_rate / source_rate))
-    if len(samples) == 1:
-        converted = np.repeat(samples, target_count)
-    else:
-        source_positions = np.linspace(0.0, 1.0, num=len(samples), endpoint=False)
-        target_positions = np.linspace(0.0, 1.0, num=target_count, endpoint=False)
-        converted = np.interp(target_positions, source_positions, samples).astype(np.int16)
-    return bytes(converted.tobytes())
+    return bytes(soxr.resample(samples, source_rate, target_rate).tobytes())
+
+
+def _create_soxr_resampler(source_rate: int) -> Any | None:
+    """Create a stateful int16 resampler, or None when capture is already 16 kHz."""
+    if source_rate == _SAMPLE_RATE:
+        return None
+
+    import soxr  # type: ignore[import-untyped]
+
+    return soxr.ResampleStream(source_rate, _SAMPLE_RATE, _CHANNELS, dtype="int16")
+
+
+def _fit_resampled_length(samples: Any, target_frames: int) -> Any:
+    """Pad or trim one resampler output to the exact requested frame count.
+
+    soxr's per-call output length wanders around the exact ratio by a sample
+    while its streaming state keeps the long-run rate exact, but downstream
+    contracts (1280-sample engine chunks, 480-sample VAD frames) need fixed
+    lengths, so the rare off-by-one is padded from the last sample.
+    """
+
+    import numpy as np
+
+    if len(samples) == target_frames:
+        return samples
+    if len(samples) > target_frames:
+        return samples[:target_frames]
+    if len(samples) == 0:
+        return np.zeros(target_frames, dtype=np.int16)
+    padding = np.repeat(samples[-1:], target_frames - len(samples))
+    return np.concatenate([samples, padding])
 
 
 def _encode_wav(raw_frames: bytes, *, sample_rate: int = _SAMPLE_RATE) -> bytes:
@@ -869,6 +912,44 @@ def _end_aligned_vad_frames(audio: bytes) -> list[bytes]:
         complete_audio[offset : offset + frame_bytes]
         for offset in range(0, len(complete_audio), frame_bytes)
     ]
+
+
+def _create_detection_vad() -> Any | None:
+    """Create the VAD that gates detection scores, or None when unavailable."""
+    try:
+        import webrtcvad  # type: ignore[import-untyped]
+
+        return webrtcvad.Vad(_VAD_MODE)
+    except Exception:
+        # A missing or broken VAD must not silently disable wake word
+        # detection — the gate fails open and scores stay ungated.
+        logger.warning("Detection VAD unavailable; wakeword scores stay ungated", exc_info=True)
+        return None
+
+
+def _chunk_contains_speech(vad: Any | None, detection_pcm16: bytes) -> bool:
+    """Whether one detection chunk carries enough speech to trust model scores.
+
+    Chunks shorter than a single 10 ms VAD frame cannot be judged and VAD errors
+    fail open, so the gate can never turn into an accidental mute.
+    """
+    if vad is None or len(detection_pcm16) < _DETECTION_VAD_FRAME_BYTES:
+        return True
+    speech_frames = 0
+    frame_count = len(detection_pcm16) // _DETECTION_VAD_FRAME_BYTES
+    for frame_index in range(frame_count):
+        offset = frame_index * _DETECTION_VAD_FRAME_BYTES
+        try:
+            if vad.is_speech(
+                detection_pcm16[offset : offset + _DETECTION_VAD_FRAME_BYTES],
+                _SAMPLE_RATE,
+            ):
+                speech_frames += 1
+        except Exception:
+            return True
+        if speech_frames >= _DETECTION_VAD_MIN_SPEECH_FRAMES:
+            return True
+    return False
 
 
 def _backoff_sleep(attempt: int, running: threading.Event | None = None) -> None:

@@ -590,15 +590,16 @@ def _create_wakeword_bridge(
 def _real_wakeword_available() -> bool:
     """Whether the on-device wakeword stack can be imported.
 
-    The detector, microphone capture, and VAD modules must import for the real
-    worker; a missing dependency selects unavailable mode. The worker factory calls this
-    lazily only when Voice is enabled or explicitly retried, keeping the stack
-    out of the normal Desktop startup path.
+    The detector, microphone capture, anti-aliasing resampler, and VAD modules
+    must import for the real worker; a missing dependency selects unavailable
+    mode. The worker factory calls this lazily only when Voice is enabled or
+    explicitly retried, keeping the stack out of the normal Desktop startup path.
     """
 
     try:
         import pyopen_wakeword  # type: ignore[import-untyped]  # noqa: F401
         import sounddevice  # type: ignore[import-untyped]  # noqa: F401
+        import soxr  # type: ignore[import-untyped]  # noqa: F401
         import webrtcvad  # type: ignore[import-untyped]  # noqa: F401
     except ImportError:
         return False

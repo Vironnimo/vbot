@@ -16,6 +16,10 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 
 `tests/fixtures/wakeword/hey_nabu.wav` is a generated test fixture containing the spoken phrase "Hey Naboo", synthesized with the Microsoft Zira Desktop voice at rate -2. Its SHA-256 is `2bc6ddba7c57e6451de96d621bba95479b24085677f58fc933861e102e966679`.
 
+## Wakeword audio dependencies
+
+The Desktop wakeword pipeline uses [python-soxr](https://github.com/dofuuz/python-soxr), distributed under the GNU Lesser General Public License v2.1 or later (following its underlying libsoxr), for anti-aliased streaming resampling of native microphone rates to the detector's 16 kHz contract. It remains a separately installed dependency; its source distribution and license text are available from the linked upstream project and installed package metadata.
+
 ## Interactive terminal dependencies
 
 The `terminal` Tool uses [pyte](https://github.com/selectel/pyte), distributed under the GNU Lesser General Public License v3, as an in-memory VT terminal emulator. It uses [pywinpty](https://github.com/andfoy/pywinpty), distributed under the MIT License, for ConPTY access on Windows and [ptyprocess](https://github.com/pexpect/ptyprocess), distributed under the ISC License, for PTY process control on POSIX systems. The WebUI Terminals surface uses [xterm.js](https://github.com/xtermjs/xterm.js), including `@xterm/xterm` and `@xterm/addon-fit`, distributed under the MIT License, for browser-side VT rendering and responsive fitting. These libraries remain separately installed dependencies; their source distributions and license texts are available from the linked upstream projects and installed package metadata.
