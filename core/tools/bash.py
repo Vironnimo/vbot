@@ -9,6 +9,7 @@ import os
 import signal
 import subprocess
 import sys
+import time
 from collections.abc import Callable, Sequence
 from copy import deepcopy
 from pathlib import Path
@@ -194,6 +195,13 @@ BASH_SUBAGENT_TOOL_PARAMETERS = _bash_tool_parameters(subagent=True)
 FOREGROUND_POLL_INTERVAL_SECONDS = 0.05
 SHELL_ENV_PROBE_TIMEOUT_SECONDS = 5.0
 SHELL_ENV_PROBE_REAP_TIMEOUT_SECONDS = 1.0
+# A freshly installed program does not appear in a shell spawned by Bash until
+# the cached environment is re-probed. On Windows the vBot process never sees
+# the registry-broadcast PATH change, and the one-time probe inherits that
+# frozen PATH, so without re-probing the only remedy was a full restart. The
+# TTL bounds staleness automatically; an explicit invalidation is exposed for
+# the runtime and for the spawn-failure safety-net.
+SHELL_ENV_CACHE_TTL_SECONDS = 300.0
 HARD_KILL_SIGNAL = getattr(signal, "SIGKILL", 9)
 USER_CANCELLED_FAILURE_CODE = "cancelled_by_user"
 USER_CANCELLED_FAILURE_MESSAGE = "Command aborted by the user"
@@ -218,7 +226,23 @@ BACKGROUND_AT_DEPTH_EXPLICIT_MESSAGE = (
 _LOGGER = get_logger("tools.bash")
 
 _cached_shell_env: dict[str, str] | None = None
+_shell_env_cache_time: float = 0.0
 _shell_env_probe_task: asyncio.Task[dict[str, str]] | None = None
+
+
+def reset_shell_env_cache() -> None:
+    """Invalidate the cached shell environment so the next Bash call re-probes.
+
+    Exposed as the seam behind ``Runtime.reload_shell_env()``. After a program
+    is installed (or PATH otherwise mutates outside vBot), a call here makes the
+    next Bash command see the fresh environment without restarting the server.
+    """
+    global _cached_shell_env, _shell_env_cache_time, _shell_env_probe_task
+    _cached_shell_env = None
+    _shell_env_cache_time = 0.0
+    # An in-flight probe is harmless to leave running — it still populates the
+    # cache when it finishes, and the TTL check on the next call will refresh
+    # again if the result is already stale by then.
 
 
 def project_bash_tool_definitions(
@@ -325,6 +349,35 @@ async def bash_handler(
             env=env,
             cwd=workdir,
         )
+    except FileNotFoundError:
+        # The shell binary itself (pwsh/bash) was not found. This is not a
+        # user-command failure — it means the shell executable disappeared or
+        # PATH is stale. Re-probe the environment once in case PATH changed,
+        # then retry the spawn before giving up.
+        _LOGGER.info(
+            "Shell spawn failed with FileNotFoundError; refreshing shell "
+            "environment cache and retrying once.",
+        )
+        reset_shell_env_cache()
+        env = await _get_shell_env()
+        for key in requested_env_keys:
+            env[key] = resolve_credential(key)
+        env[VBOT_RUN_AGENT_ID_ENV] = context.agent_id
+        env[VBOT_RUN_SESSION_ID_ENV] = context.session_id
+        if context.project_id is None:
+            env.pop(VBOT_RUN_PROJECT_ID_ENV, None)
+        else:
+            env[VBOT_RUN_PROJECT_ID_ENV] = context.project_id
+        try:
+            session_id = await process_manager.spawn(
+                context.run_id,
+                context.agent_id,
+                argv,
+                env=env,
+                cwd=workdir,
+            )
+        except (OSError, ValueError) as error:
+            return tool_failure("process_spawn_failed", _spawn_failure_message(argv, error))
     except (OSError, ValueError) as error:
         return tool_failure("process_spawn_failed", _spawn_failure_message(argv, error))
 
@@ -729,9 +782,13 @@ def _shell_argv(command: str) -> list[str]:
 
 
 async def _get_shell_env() -> dict[str, str]:
-    global _cached_shell_env, _shell_env_probe_task
+    global _cached_shell_env, _shell_env_cache_time, _shell_env_probe_task
+
+    if _cached_shell_env is not None and _is_shell_env_cache_fresh():
+        return dict(_cached_shell_env)
 
     if _cached_shell_env is None:
+        # First-ever probe — same concurrent-dedup logic as before.
         probe_task = _shell_env_probe_task
         if probe_task is None:
             probe_task = asyncio.create_task(_probe_shell_env())
@@ -748,9 +805,23 @@ async def _get_shell_env() -> dict[str, str]:
             raise
         if _cached_shell_env is None:
             _cached_shell_env = probed_env
+            _shell_env_cache_time = time.monotonic()
         if _shell_env_probe_task is probe_task:
             _shell_env_probe_task = None
+    else:
+        # Cache exists but is stale — re-probe directly. The TTL makes this
+        # infrequent (default 5 min), and concurrent callers each get their own
+        # refresh copy. An in-flight first-probe task is left untouched.
+        _cached_shell_env = await _probe_shell_env()
+        _shell_env_cache_time = time.monotonic()
+
     return dict(_cached_shell_env)
+
+
+def _is_shell_env_cache_fresh() -> bool:
+    if SHELL_ENV_CACHE_TTL_SECONDS <= 0:
+        return True
+    return (time.monotonic() - _shell_env_cache_time) < SHELL_ENV_CACHE_TTL_SECONDS
 
 
 async def _probe_shell_env() -> dict[str, str]:
@@ -768,8 +839,9 @@ async def _probe_shell_env() -> dict[str, str]:
             )
             stdout = await _communicate_with_probe_timeout(proc)
             if proc.returncode != 0:
-                return os.environ.copy()
-            return _parse_line_env(stdout.decode("utf-8", errors="replace"))
+                return _overlay_registry_path(os.environ.copy())
+            env = _parse_line_env(stdout.decode("utf-8", errors="replace"))
+            return _overlay_registry_path(env)
 
         proc = await asyncio.create_subprocess_exec(
             "bash",
@@ -786,6 +858,8 @@ async def _probe_shell_env() -> dict[str, str]:
             return os.environ.copy()
         return _parse_null_env(stdout.decode("utf-8", errors="replace"))
     except (OSError, TimeoutError):
+        if sys.platform == "win32":
+            return _overlay_registry_path(os.environ.copy())
         return os.environ.copy()
 
 
@@ -795,6 +869,58 @@ def _probe_creationflags() -> int:
 
 def _probe_start_new_session() -> bool:
     return sys.platform != "win32"
+
+
+def _overlay_registry_path(env: dict[str, str]) -> dict[str, str]:
+    """Overlay the current Windows registry PATH onto a probed environment.
+
+    On Windows, a headless process never receives the ``WM_SETTINGCHANGE``
+    broadcast that follows a PATH edit, so ``os.environ['PATH']`` — and thus
+    the probe — stays frozen at vBot start time. Reading the machine and user
+    PATH values directly from the registry gives the probe the live value
+    without a restart, mirroring what Chocolatey's ``refreshenv`` does.
+    """
+    registry_path = _read_registry_path()
+    if registry_path is not None:
+        env["PATH"] = registry_path
+    return env
+
+
+def _read_registry_path() -> str | None:
+    """Read the effective PATH from the Windows registry (machine + user).
+
+    Returns ``None`` when the registry cannot be read, so the caller keeps the
+    probed value unchanged instead of clobbering it with an empty string.
+    """
+    if sys.platform != "win32":
+        return None
+    try:
+        import winreg
+    except ImportError:
+        return None
+
+    segments: list[str] = []
+    with (
+        contextlib.suppress(OSError),
+        winreg.OpenKey(
+            winreg.HKEY_LOCAL_MACHINE,
+            r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment",
+        ) as key,
+    ):
+        machine_path, _regtype = winreg.QueryValueEx(key, "PATH")
+        if machine_path:
+            segments.append(machine_path)
+    with (
+        contextlib.suppress(OSError),
+        winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Environment") as key,
+    ):
+        user_path, _regtype = winreg.QueryValueEx(key, "PATH")
+        if user_path:
+            segments.append(user_path)
+
+    if not segments:
+        return None
+    return ";".join(segments)
 
 
 async def _communicate_with_probe_timeout(proc: asyncio.subprocess.Process) -> bytes:
@@ -1216,4 +1342,5 @@ __all__ = [
     "format_bash_env_usage",
     "project_bash_tool_definitions",
     "register_bash_tool",
+    "reset_shell_env_cache",
 ]

@@ -151,6 +151,7 @@ from core.tools import (
     register_web_fetch_tool,
     register_web_search_tool,
     register_write_tool,
+    reset_shell_env_cache,
 )
 from core.tools.cron import register_cron_tool
 from core.tools.process_manager import ProcessManager
@@ -1912,6 +1913,20 @@ class Runtime:
         data_dir_credentials = self.storage.load_environment()
         self._fallback_environment = dict(data_dir_credentials)
         self.provider_credentials.reload_fallback_credentials(data_dir_credentials)
+
+    def reload_shell_env(self) -> None:
+        """Invalidate the cached Bash shell environment so the next call re-probes.
+
+        On Windows a headless process never sees registry-broadcast PATH
+        changes, so a freshly installed program is invisible to Bash until the
+        server restarts. This seam drops the cache so the next Bash command
+        re-probes (including a live registry PATH read on Windows) without a
+        restart. The Bash tool also self-heals on a shell-binary
+        ``FileNotFoundError``, but this method covers the general case.
+        """
+
+        self._ensure_started()
+        reset_shell_env_cache()
 
     def reload_custom_providers(self) -> None:
         """Reload Settings-owned Provider and Model overlays in place."""
