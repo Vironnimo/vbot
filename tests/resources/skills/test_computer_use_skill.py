@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import importlib.util
 import json
+import subprocess
 import sys
 from pathlib import Path
 from types import ModuleType
@@ -133,13 +134,52 @@ def test_click_is_dry_run_without_apply(tmp_path: Path) -> None:
     )
 
     assert result["applied"] is False
-    assert result["dry_run"]["element_index"] == 14
+    assert result["dry_run"]["element"] == "14"
+    assert "element_token" not in result["dry_run"]
     assert client.calls == []
 
 
-def test_applied_click_calls_exact_window_and_element(tmp_path: Path) -> None:
-    client = FakeClient([{"ok": True}])
+def test_applied_click_resolves_element_index_to_token(tmp_path: Path) -> None:
+    screenshot = base64.b64encode(b"fake-png").decode("ascii")
+    client = FakeClient(
+        [
+            {
+                "structuredContent": {
+                    "screenshot_png_b64": screenshot,
+                    "snapshot_id": "s00000042",
+                    "elements": [
+                        {
+                            "element_index": 14,
+                            "element_token": "s00000042:14",
+                            "role": "Button",
+                            "label": "Debug",
+                        }
+                    ],
+                }
+            },
+            {
+                "delivery": {"mode": "background"},
+                "effect": "unverifiable",
+                "route": "accessibility",
+            },
+        ]
+    )
 
+    COMPUTER_USE._execute(
+        [
+            "--session",
+            "desktop-test",
+            "capture",
+            "--pid",
+            "1234",
+            "--window-id",
+            "5678",
+            "--mode",
+            "som",
+        ],
+        client=client,
+        cwd=tmp_path,
+    )
     result = COMPUTER_USE._execute(
         [
             "--session",
@@ -158,18 +198,198 @@ def test_applied_click_calls_exact_window_and_element(tmp_path: Path) -> None:
     )
 
     assert result["applied"] is True
-    assert client.calls == [
-        (
+    assert result["backend"] == {
+        "delivery": {"mode": "background"},
+        "effect": "unverifiable",
+        "route": "accessibility",
+    }
+    tool, arguments = client.calls[1]
+    assert tool == "click"
+    assert arguments["element_token"] == "s00000042:14"
+    assert "element_index" not in arguments
+    assert arguments["pid"] == 1234
+    assert arguments["window_id"] == 5678
+
+
+def test_applied_click_accepts_element_token_directly(tmp_path: Path) -> None:
+    client = FakeClient([{"delivery": {"mode": "background"}, "effect": "unverifiable"}])
+
+    result = COMPUTER_USE._execute(
+        [
+            "--session",
+            "desktop-test",
             "click",
-            {
-                "session": "desktop-test",
-                "pid": 1234,
-                "window_id": 5678,
-                "element_index": 14,
-                "button": "left",
-            },
+            "--pid",
+            "1234",
+            "--window-id",
+            "5678",
+            "--element",
+            "s00000042:14",
+            "--apply",
+        ],
+        client=client,
+        cwd=tmp_path,
+    )
+
+    assert result["applied"] is True
+    tool, arguments = client.calls[0]
+    assert tool == "click"
+    assert arguments["element_token"] == "s00000042:14"
+
+
+def test_applied_click_element_index_requires_prior_capture(tmp_path: Path) -> None:
+    client = FakeClient()
+
+    with pytest.raises(COMPUTER_USE.ComputerUseError) as excinfo:
+        COMPUTER_USE._execute(
+            [
+                "--session",
+                "desktop-test",
+                "click",
+                "--pid",
+                "1234",
+                "--window-id",
+                "5678",
+                "--element",
+                "14",
+                "--apply",
+            ],
+            client=client,
+            cwd=tmp_path,
         )
-    ]
+
+    assert "no matching capture" in str(excinfo.value)
+    assert client.calls == []
+
+
+def test_applied_click_rejects_element_from_different_window(tmp_path: Path) -> None:
+    screenshot = base64.b64encode(b"fake-png").decode("ascii")
+    client = FakeClient(
+        [
+            {
+                "structuredContent": {
+                    "screenshot_png_b64": screenshot,
+                    "elements": [
+                        {"element_index": 14, "element_token": "s00000042:14", "role": "Button"}
+                    ],
+                }
+            }
+        ]
+    )
+
+    COMPUTER_USE._execute(
+        [
+            "--session",
+            "desktop-test",
+            "capture",
+            "--pid",
+            "1234",
+            "--window-id",
+            "5678",
+            "--mode",
+            "som",
+        ],
+        client=client,
+        cwd=tmp_path,
+    )
+    with pytest.raises(COMPUTER_USE.ComputerUseError) as excinfo:
+        COMPUTER_USE._execute(
+            [
+                "--session",
+                "desktop-test",
+                "click",
+                "--pid",
+                "1234",
+                "--window-id",
+                "9999",
+                "--element",
+                "14",
+                "--apply",
+            ],
+            client=client,
+            cwd=tmp_path,
+        )
+
+    assert "different window" in str(excinfo.value)
+    assert len(client.calls) == 1
+
+
+def test_applied_scroll_resolves_element_index_to_token(tmp_path: Path) -> None:
+    screenshot = base64.b64encode(b"fake-png").decode("ascii")
+    client = FakeClient(
+        [
+            {
+                "structuredContent": {
+                    "screenshot_png_b64": screenshot,
+                    "elements": [
+                        {"element_index": 3, "element_token": "s00000042:3", "role": "Pane"}
+                    ],
+                }
+            },
+            {"delivery": {"mode": "background"}, "effect": "unverifiable"},
+        ]
+    )
+
+    COMPUTER_USE._execute(
+        [
+            "--session",
+            "desktop-test",
+            "capture",
+            "--pid",
+            "1234",
+            "--window-id",
+            "5678",
+            "--mode",
+            "som",
+        ],
+        client=client,
+        cwd=tmp_path,
+    )
+    result = COMPUTER_USE._execute(
+        [
+            "--session",
+            "desktop-test",
+            "scroll",
+            "--pid",
+            "1234",
+            "--window-id",
+            "5678",
+            "down",
+            "--element",
+            "3",
+            "--apply",
+        ],
+        client=client,
+        cwd=tmp_path,
+    )
+
+    assert result["applied"] is True
+    tool, arguments = client.calls[1]
+    assert tool == "scroll"
+    assert arguments["element_token"] == "s00000042:3"
+    assert "element_index" not in arguments
+
+
+def test_refused_backend_call_raises_instead_of_reporting_success(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cli = COMPUTER_USE.CuaDriverCli("cua-driver", 5)
+    refusal = {
+        "status": "refused",
+        "refusal": {
+            "code": "snapshot_id_required",
+            "message": "click: bare element_index is not accepted",
+        },
+    }
+    completed = subprocess.CompletedProcess(
+        args=[], returncode=0, stdout=json.dumps(refusal), stderr=""
+    )
+    monkeypatch.setattr(cli, "_invoke", lambda _arguments: completed)
+
+    with pytest.raises(COMPUTER_USE.ComputerUseError) as excinfo:
+        cli.call("click", {"element_index": 14})
+
+    assert "snapshot_id_required" in str(excinfo.value)
 
 
 def test_type_does_not_echo_text_in_result(tmp_path: Path) -> None:

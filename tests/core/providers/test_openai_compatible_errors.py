@@ -210,9 +210,7 @@ class TestSendRetry:
 
         # Act
         with caplog.at_level(logging.WARNING, logger=_OPENAI_COMPATIBLE_LOGGER):
-            result = await openai_adapter.send(
-                SAMPLE_MESSAGES, model_id="gpt-5.2", temperature=0.2
-            )
+            result = await openai_adapter.send(SAMPLE_MESSAGES, model_id="gpt-5.2", temperature=0.2)
 
         # Assert
         assert result == SUCCESS_RESPONSE
@@ -230,9 +228,7 @@ class TestSendRetry:
 
     @respx.mock
     @pytest.mark.asyncio
-    async def test_send_rejection_of_unsent_sampling_parameter_still_raises(
-        self, openai_adapter
-    ):
+    async def test_send_rejection_of_unsent_sampling_parameter_still_raises(self, openai_adapter):
         """A rejection naming a parameter the payload never carried is fatal."""
         # Arrange
         route = respx.post(OPENAI_URL).mock(

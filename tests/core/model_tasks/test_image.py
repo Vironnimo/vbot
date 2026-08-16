@@ -610,9 +610,7 @@ class _BlockingUnderstandingAdapter(_UnderstandingAdapter):
 
 
 class _UnderstandingModels:
-    def __init__(
-        self, recommended: dict[tuple[str, str], float] | None = None
-    ) -> None:
+    def __init__(self, recommended: dict[tuple[str, str], float] | None = None) -> None:
         self._recommended = recommended or {}
 
     def get(self, provider_id: str, model_id: str) -> Any:

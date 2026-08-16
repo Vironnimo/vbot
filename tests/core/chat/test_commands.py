@@ -1145,13 +1145,9 @@ async def test_dispatch_status_reports_active_run_timestamps() -> None:
 def test_dispatch_status_reports_resolved_model_recommended_temperature() -> None:
     dispatcher = CommandDispatcher(
         ChatRunManager(),
-        agent_resolver=cast(
-            AgentResolver, _StubResolver(_make_agent(temperature=None))
-        ),
+        agent_resolver=cast(AgentResolver, _StubResolver(_make_agent(temperature=None))),
         sessions=cast(ChatSessionManager, _StubSessions([])),
-        models=cast(
-            ModelRegistry, _StubModels(_make_model(recommended_temperature=1.0))
-        ),
+        models=cast(ModelRegistry, _StubModels(_make_model(recommended_temperature=1.0))),
     )
 
     result = _execute_sync(dispatcher, "/status")

@@ -390,20 +390,14 @@ def test_unsupported_sampling_parameter_matches_provider_rejection_wordings() ->
     """Marker plus parameter name identifies the blamed sampling parameter."""
 
     assert (
-        unsupported_sampling_parameter("400 Unsupported parameter: 'temperature'")
-        == "temperature"
+        unsupported_sampling_parameter("400 Unsupported parameter: 'temperature'") == "temperature"
     )
     assert (
-        unsupported_sampling_parameter(
-            "400 temperature is not supported when thinking is enabled"
-        )
+        unsupported_sampling_parameter("400 temperature is not supported when thinking is enabled")
         == "temperature"
     )
     assert unsupported_sampling_parameter("400 Unknown parameter: top_k") == "top_k"
-    assert (
-        unsupported_sampling_parameter("400 Unrecognized request argument: top_p")
-        == "top_p"
-    )
+    assert unsupported_sampling_parameter("400 Unrecognized request argument: top_p") == "top_p"
 
 
 def test_unsupported_sampling_parameter_ignores_incomplete_or_foreign_details() -> None:
