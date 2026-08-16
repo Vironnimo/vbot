@@ -87,9 +87,7 @@ class TestStreamConnectRetryRebuildsHeaders:
         )
 
         # Act
-        async for _ in adapter.stream(
-            SAMPLE_MESSAGES, model_id="gpt-5.2", temperature=0.2
-        ):
+        async for _ in adapter.stream(SAMPLE_MESSAGES, model_id="gpt-5.2", temperature=0.2):
             pass
 
         # Assert

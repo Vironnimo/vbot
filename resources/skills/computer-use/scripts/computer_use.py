@@ -18,6 +18,12 @@ from pathlib import Path
 from typing import Any, NoReturn
 
 SESSION_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
+# cua-driver element references look like "s00000042:14" (snapshot id + index).
+# Since cua-driver 0.17 a bare element index is refused; only a token (or a
+# snapshot-scoped index) identifies an element, so the wrapper resolves indexes
+# against the session's latest capture before sending anything.
+ELEMENT_TOKEN_PATTERN = re.compile(r"^[A-Za-z0-9_-]+:[0-9]+$")
+LATEST_CAPTURE_FILE = "latest-capture.json"
 MAX_SCREENSHOT_BYTES = 32 * 1024 * 1024
 MAX_TREE_CHARS = 20_000
 MAX_ELEMENTS = 200
@@ -119,11 +125,19 @@ class CuaDriverCli:
         payload = json.dumps(arguments, ensure_ascii=False, separators=(",", ":"))
         completed = self._invoke(["call", tool, payload])
         result = _parse_json_output(completed.stdout)
-        if isinstance(result, dict) and (
-            result.get("isError") is True or result.get("is_error") is True
-        ):
-            detail = result.get("error") or result.get("message") or result
-            raise ComputerUseError(f"cua-driver reported an error: {_diagnostic(str(detail))}")
+        if isinstance(result, dict):
+            if result.get("isError") is True or result.get("is_error") is True:
+                detail = result.get("error") or result.get("message") or result
+                raise ComputerUseError(f"cua-driver reported an error: {_diagnostic(str(detail))}")
+            if result.get("status") == "refused":
+                # A refusal means the driver did NOT perform the action; treating
+                # it as success would report an applied input that never happened.
+                refusal = result.get("refusal")
+                if isinstance(refusal, dict):
+                    code = refusal.get("code") or "refused"
+                    message = refusal.get("message") or "request refused"
+                    raise ComputerUseError(f"cua-driver refused the call ({code}): {message}")
+                raise ComputerUseError("cua-driver refused the call")
         return result
 
     def _invoke(self, arguments: list[str]) -> subprocess.CompletedProcess[str]:
@@ -231,8 +245,100 @@ def _dry_run(
     }
 
 
-def _applied(action: str, session: str) -> dict[str, Any]:
-    return {"ok": True, "action": action, "session": session, "applied": True}
+def _applied(action: str, session: str, response: Any = None) -> dict[str, Any]:
+    result: dict[str, Any] = {"ok": True, "action": action, "session": session, "applied": True}
+    unwrapped = _unwrap_payload(response)
+    if isinstance(unwrapped, dict):
+        # The driver reports how an input was delivered and whether it could
+        # verify the effect; surfacing that lets the caller decide to re-capture
+        # instead of trusting "applied" blindly.
+        metadata = {
+            key: unwrapped[key] for key in ("delivery", "effect", "route") if key in unwrapped
+        }
+        if metadata:
+            result["backend"] = metadata
+    return result
+
+
+def _write_element_token_map(
+    directory: Path,
+    target: dict[str, int],
+    snapshot_id: Any,
+    elements: list[Any],
+) -> None:
+    """Persist the latest capture's element index → token map for later actions.
+
+    The wrapper process is one-shot, so a later ``click --element 14`` cannot
+    ask the driver for "element 14 of your last snapshot" — bare indexes are
+    refused since cua-driver 0.17. This file is the session-local bridge: it
+    remembers which token each displayed index resolved to, and which window
+    was captured, so element actions can target exactly that snapshot.
+    """
+    tokens: dict[str, str] = {}
+    for element in elements:
+        if not isinstance(element, dict):
+            continue
+        index = element.get("element_index")
+        token = element.get("element_token")
+        if isinstance(index, int) and isinstance(token, str):
+            tokens[str(index)] = token
+    if not tokens:
+        return
+    state: dict[str, Any] = {"target": target, "element_tokens": tokens}
+    if isinstance(snapshot_id, str):
+        state["snapshot_id"] = snapshot_id
+    (directory / LATEST_CAPTURE_FILE).write_text(
+        json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+
+
+def _load_latest_capture(directory: Path) -> dict[str, Any] | None:
+    path = directory / LATEST_CAPTURE_FILE
+    if not path.is_file():
+        return None
+    try:
+        state = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return state if isinstance(state, dict) else None
+
+
+def _resolve_element_reference(
+    reference: str,
+    directory: Path,
+    target: dict[str, int],
+    *,
+    strict: bool,
+) -> str | None:
+    """Return the element token for an index or token reference.
+
+    A token reference passes straight through. A bare index resolves through
+    the session's latest capture; ``strict`` (applied actions) fails loudly when
+    no capture matches or the capture targeted a different window, while a
+    dry-run merely reports the unresolved reference.
+    """
+    text = reference.strip()
+    if ELEMENT_TOKEN_PATTERN.fullmatch(text):
+        return text
+    if not text.isdigit():
+        raise ComputerUseError(
+            "element must be a non-negative index or an element_token like s00000001:12"
+        )
+    state = _load_latest_capture(directory)
+    tokens = state.get("element_tokens") if state is not None else None
+    token = tokens.get(text) if isinstance(tokens, dict) else None
+    if not isinstance(token, str):
+        if not strict:
+            return None
+        raise ComputerUseError(
+            f"element index {text} has no matching capture; run capture for this session "
+            "first, or pass an element_token from a fresh capture"
+        )
+    if state is not None and state.get("target") != target:
+        raise ComputerUseError(
+            "element reference belongs to a different window; capture the target pid/window first"
+        )
+    return token
 
 
 def _write_screenshot(payload: dict[str, Any], path: Path) -> bool:
@@ -253,6 +359,7 @@ def _capture_result(
     mode: str,
     directory: Path,
     screenshot_path: Path,
+    target: dict[str, int],
 ) -> dict[str, Any]:
     unwrapped = _unwrap_payload(raw_payload)
     if not isinstance(unwrapped, dict):
@@ -260,6 +367,10 @@ def _capture_result(
     payload = dict(unwrapped)
     has_screenshot = _write_screenshot(payload, screenshot_path)
     payload.pop("screenshot_file_path", None)
+
+    raw_elements = payload.get("elements")
+    if isinstance(raw_elements, list):
+        _write_element_token_map(directory, target, payload.get("snapshot_id"), raw_elements)
 
     result: dict[str, Any] = {}
     artifacts: list[dict[str, str]] = []
@@ -281,7 +392,7 @@ def _capture_result(
                 artifacts.append({"type": "text", "path": str(tree_path)})
             else:
                 result["tree"] = tree
-        elements = payload.get("elements")
+        elements = raw_elements
         if isinstance(elements, list):
             if len(elements) > MAX_ELEMENTS:
                 elements_path = _artifact_path(directory, "elements", ".json")
@@ -340,7 +451,7 @@ def _build_parser() -> JsonArgumentParser:
 
     click = subparsers.add_parser("click")
     _add_target(click)
-    click.add_argument("--element", type=int)
+    click.add_argument("--element")
     click.add_argument("--x", type=int)
     click.add_argument("--y", type=int)
     click.add_argument("--button", choices=("left", "right", "middle"), default="left")
@@ -361,7 +472,7 @@ def _build_parser() -> JsonArgumentParser:
     _add_target(scroll)
     scroll.add_argument("direction", choices=("up", "down", "left", "right"))
     scroll.add_argument("--amount", type=int, default=3, choices=range(1, 101))
-    scroll.add_argument("--element", type=int)
+    scroll.add_argument("--element")
     _add_mutation_options(scroll)
 
     subparsers.add_parser("close")
@@ -436,7 +547,7 @@ def _execute(
             "session": session,
             "target": target,
             "mode": args.mode,
-            **_capture_result(raw, args.mode, directory, screenshot_path),
+            **_capture_result(raw, args.mode, directory, screenshot_path, target),
         }
 
     target = _target_arguments(args) if args.action in {"click", "type", "key", "scroll"} else {}
@@ -446,21 +557,27 @@ def _execute(
         has_coordinates = args.x is not None or args.y is not None
         if has_element == has_coordinates:
             raise ComputerUseError("click requires either --element or both --x and --y")
-        if has_element and args.element < 0:
-            raise ComputerUseError("element must be zero or greater")
         if has_coordinates and (args.x is None or args.y is None):
             raise ComputerUseError("coordinate clicks require both --x and --y")
+        element_token: str | None = None
         click_target: dict[str, Any]
         if has_element:
-            click_target = {"element_index": args.element}
+            element_token = _resolve_element_reference(
+                args.element, directory, target, strict=args.apply
+            )
+            click_target = {"element_token": element_token} if element_token else {}
         else:
             click_target = {"x": args.x, "y": args.y}
-        details = {
-            **click_target,
-            "button": args.button,
-            "count": args.count,
-            "delivery_mode": "foreground" if args.foreground else "background",
-        }
+        details: dict[str, Any] = dict(click_target)
+        if has_element:
+            details["element"] = args.element
+        details.update(
+            {
+                "button": args.button,
+                "count": args.count,
+                "delivery_mode": "foreground" if args.foreground else "background",
+            }
+        )
         if not args.apply:
             return _dry_run("click", session, target, details)
         tool = "double_click" if args.count == 2 else "click"
@@ -471,8 +588,8 @@ def _execute(
             "button": args.button,
             **_delivery_arguments(args),
         }
-        client.call(tool, payload)
-        return _applied("click", session)
+        response = client.call(tool, payload)
+        return _applied("click", session, response)
 
     if args.action == "type":
         details = {
@@ -481,7 +598,7 @@ def _execute(
         }
         if not args.apply:
             return _dry_run("type", session, target, details)
-        client.call(
+        response = client.call(
             "type_text",
             {
                 "session": session,
@@ -490,7 +607,7 @@ def _execute(
                 **_delivery_arguments(args),
             },
         )
-        return _applied("type", session)
+        return _applied("type", session, response)
 
     if args.action == "key":
         keys = [key.strip().lower() for key in args.shortcut.split("+") if key.strip()]
@@ -510,7 +627,7 @@ def _execute(
         else:
             tool = "hotkey"
             key_arguments = {"keys": keys}
-        client.call(
+        response = client.call(
             tool,
             {
                 "session": session,
@@ -519,18 +636,22 @@ def _execute(
                 **_delivery_arguments(args),
             },
         )
-        return _applied("key", session)
-
+        return _applied("key", session, response)
     if args.action == "scroll":
-        if args.element is not None and args.element < 0:
-            raise ComputerUseError("element must be zero or greater")
+        scroll_element_token: str | None = None
+        if args.element is not None:
+            scroll_element_token = _resolve_element_reference(
+                args.element, directory, target, strict=args.apply
+            )
         scroll_details: dict[str, Any] = {
             "direction": args.direction,
             "amount": args.amount,
             "delivery_mode": "foreground" if args.foreground else "background",
         }
         if args.element is not None:
-            scroll_details["element_index"] = args.element
+            scroll_details["element"] = args.element
+            if scroll_element_token is not None:
+                scroll_details["element_token"] = scroll_element_token
         if not args.apply:
             return _dry_run("scroll", session, target, scroll_details)
         scroll_payload: dict[str, Any] = {
@@ -540,10 +661,10 @@ def _execute(
             "amount": args.amount,
             **_delivery_arguments(args),
         }
-        if args.element is not None:
-            scroll_payload["element_index"] = args.element
-        client.call("scroll", scroll_payload)
-        return _applied("scroll", session)
+        if scroll_element_token is not None:
+            scroll_payload["element_token"] = scroll_element_token
+        response = client.call("scroll", scroll_payload)
+        return _applied("scroll", session, response)
 
     if args.action == "close":
         return {
