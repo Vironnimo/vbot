@@ -30,6 +30,7 @@
     startWakewordCalibration,
     stopWakewordCalibration,
     restartWakewordCalibration,
+    retryWakewordModelCalibration,
     isDesktop,
   } from '$lib/desktopBridge.js';
   import {
@@ -76,6 +77,8 @@
   let deleteConfirmModel = $state(null);
   let calibrationBaselineSensitivities = $state(null);
   let calibrationActionState = $state('idle');
+  let calibrationDiscardConfirm = $state(false);
+  let calibrationRetryModelId = $state(null);
   let transcriptionAudio = $state(
     untrack(() => normalizeTranscriptionAudio(settings)),
   );
@@ -135,6 +138,17 @@
       !modelActionBusy &&
       !calibrationSessionActive,
   );
+  let calibrationNoiseHigh = $derived(
+    Boolean(voiceState.calibration?.noise_high),
+  );
+  let calibrationModelProgress = $derived(() => {
+    const activeIds = voiceState.active_model_ids || [];
+    const targetIndex = activeIds.indexOf(
+      voiceState.calibration?.target_model_id,
+    );
+    if (targetIndex < 0) return null;
+    return { index: targetIndex + 1, total: activeIds.length };
+  });
   let transcriptionProfileOptions = $derived(
     TRANSCRIPTION_AUDIO_PROFILES.map((profile) => ({
       value: profile,
@@ -814,7 +828,27 @@
     }
   }
 
+  async function handleRetryModelCalibration(modelId) {
+    calibrationRetryModelId = modelId;
+    try {
+      const status = await retryWakewordModelCalibration(modelId);
+      voiceState = applyRuntimeStatus(voiceState, status);
+    } catch (error) {
+      onToast({
+        title: t(
+          'settings.voice.calibrationRetryModelFailed',
+          'Could not retry this phrase.',
+        ),
+        message: error?.message || '',
+        variant: 'error',
+      });
+    } finally {
+      calibrationRetryModelId = null;
+    }
+  }
+
   async function handleDiscardCalibration() {
+    calibrationDiscardConfirm = false;
     calibrationActionState = 'discarding';
     try {
       const status = await stopWakewordCalibration();
@@ -1246,6 +1280,15 @@
                 <div class="voice-calibration-instruction">
                   {calibrationInstruction()}
                 </div>
+                {#if calibrationModelProgress() && voiceState.calibration?.phase === 'phrases'}
+                  <div class="voice-calibration-model-progress">
+                    {t(
+                      'settings.voice.calibrationOverallProgress',
+                      'Model {index} of {total}',
+                      calibrationModelProgress(),
+                    )}
+                  </div>
+                {/if}
               </div>
               <StatusChip
                 variant={calibrationReady
@@ -1270,6 +1313,22 @@
                       )}
               </StatusChip>
             </div>
+
+            {#if calibrationNoiseHigh}
+              <div class="voice-calibration-noise-warning" role="alert">
+                {t(
+                  'settings.voice.calibrationNoiseHighWarning',
+                  'Room noise is high ({level}). Consider moving to a quieter environment or reducing background noise for better results.',
+                  {
+                    level: Math.max(
+                      ...Object.values(
+                        voiceState.calibration?.noise_levels || {},
+                      ),
+                    ).toFixed(2),
+                  },
+                )}
+              </div>
+            {/if}
 
             <ol
               class="voice-calibration-steps"
@@ -1301,23 +1360,32 @@
                 {@const requiredSamples = calibrationRequiredSamples()}
                 {@const recommendation = calibrationRecommendation(model.id)}
                 {@const threshold = calibrationThreshold(model.id)}
+                {@const currentSensitivity =
+                  calibrationBaselineSensitivities?.[model.id] ?? 0.5}
+                {@const isTarget =
+                  voiceState.calibration?.target_model_id === model.id}
+                {@const isCompleted = recommendation !== null}
                 <div
-                  class:voice-calibration-model--target={voiceState.calibration
-                    ?.target_model_id === model.id}
-                  class:voice-calibration-model--complete={recommendation !==
-                    null}
+                  class:voice-calibration-model--target={isTarget}
+                  class:voice-calibration-model--complete={isCompleted}
                   class="voice-calibration-model"
                 >
                   <div class="voice-calibration-model__header">
                     <span class="voice-calibration-model__identity">
                       {model.label}
-                      {#if voiceState.calibration?.target_model_id === model.id}
+                      {#if isTarget}
                         <span class="voice-calibration-model__target">
                           {t(
                             'settings.voice.calibrationSayNow',
                             'Say this now',
                           )}
                         </span>
+                      {/if}
+                      {#if isCompleted}
+                        <span
+                          class="voice-calibration-model__check"
+                          aria-hidden="true">✓</span
+                        >
                       {/if}
                     </span>
                     <span class="voice-calibration-model__values">
@@ -1366,8 +1434,13 @@
                         { count: sampleCount, required: requiredSamples },
                       )}
                     </span>
-                    {#if recommendation !== null}
+                    {#if isCompleted}
                       <strong>
+                        {t(
+                          'settings.voice.calibrationCurrentSensitivity',
+                          'Current',
+                        )}
+                        {Math.round(currentSensitivity * 100)}% →
                         {t(
                           'settings.voice.calibrationRecommendation',
                           'Recommended sensitivity {value}%',
@@ -1381,6 +1454,22 @@
                       </span>
                     {/if}
                   </div>
+                  {#if !isCompleted && sampleCount > 0}
+                    <div class="voice-calibration-model__retry">
+                      <Button
+                        variant="tertiary"
+                        disabled={calibrationActionBusy ||
+                          calibrationRetryModelId === model.id}
+                        loading={calibrationRetryModelId === model.id}
+                        onClick={() => handleRetryModelCalibration(model.id)}
+                      >
+                        {t(
+                          'settings.voice.calibrationRetryModel',
+                          'Retry this phrase',
+                        )}
+                      </Button>
+                    </div>
+                  {/if}
                 </div>
               {/each}
             </div>
@@ -1408,7 +1497,7 @@
                 <Button
                   variant="secondary"
                   disabled={calibrationActionBusy}
-                  onClick={handleDiscardCalibration}
+                  onClick={() => (calibrationDiscardConfirm = true)}
                 >
                   {t('settings.voice.calibrationDiscard', 'Discard and stop')}
                 </Button>
@@ -1556,6 +1645,22 @@
     confirmLabel={t('common.delete', 'Delete')}
     onConfirm={confirmDeleteWakewordModel}
     onCancel={() => (deleteConfirmModel = null)}
+  />
+{/if}
+
+{#if calibrationDiscardConfirm}
+  <ConfirmDialog
+    title={t(
+      'settings.voice.calibrationDiscardConfirmTitle',
+      'Discard calibration?',
+    )}
+    body={t(
+      'settings.voice.calibrationDiscardConfirm',
+      'All measurements will be discarded. You will need to start calibration again from the beginning.',
+    )}
+    confirmLabel={t('settings.voice.calibrationDiscard', 'Discard and stop')}
+    onConfirm={handleDiscardCalibration}
+    onCancel={() => (calibrationDiscardConfirm = false)}
   />
 {/if}
 
@@ -1851,6 +1956,31 @@
     font-family: var(--font-mono);
     font-size: var(--fs-mono-xs);
     font-weight: 500;
+  }
+  .voice-calibration-model__check {
+    color: var(--green);
+    font-size: var(--fs-body-md);
+    font-weight: 600;
+  }
+  .voice-calibration-model__retry {
+    display: flex;
+    justify-content: flex-end;
+    padding-top: 4px;
+  }
+  .voice-calibration-model-progress {
+    margin-top: 4px;
+    color: var(--accent);
+    font-family: var(--font-mono);
+    font-size: var(--fs-mono-xs);
+  }
+  .voice-calibration-noise-warning {
+    padding: 10px 12px;
+    border: 1px solid rgba(245, 158, 11, 0.22);
+    border-radius: var(--r-md);
+    background: rgba(245, 158, 11, 0.12);
+    font-size: var(--fs-body-sm);
+    color: var(--text-hi);
+    line-height: 1.4;
   }
   .voice-calibration-model__values {
     color: var(--text-med);

@@ -24,10 +24,11 @@ const VOICE_SETTINGS_DEFAULTS = Object.freeze({
     peaks: Object.freeze({}),
     noise_levels: Object.freeze({}),
     sample_counts: Object.freeze({}),
-    required_samples: 3,
+    required_samples: 5,
     target_model_id: null,
     recommended_sensitivities: Object.freeze({}),
     noise_seconds_remaining: 0,
+    noise_high: false,
   }),
 });
 
@@ -81,7 +82,8 @@ const sameCalibration = (left, right) =>
     left?.recommended_sensitivities,
     right?.recommended_sensitivities,
   ) &&
-  left?.noise_seconds_remaining === right?.noise_seconds_remaining;
+  left?.noise_seconds_remaining === right?.noise_seconds_remaining &&
+  left?.noise_high === right?.noise_high;
 
 function normalizeCalibration(calibration) {
   return {
@@ -106,7 +108,7 @@ function normalizeCalibration(calibration) {
         : {},
     required_samples: Number.isInteger(calibration?.required_samples)
       ? calibration.required_samples
-      : 3,
+      : 5,
     target_model_id:
       typeof calibration?.target_model_id === 'string'
         ? calibration.target_model_id
@@ -121,6 +123,7 @@ function normalizeCalibration(calibration) {
     )
       ? Math.max(0, calibration.noise_seconds_remaining)
       : 0,
+    noise_high: Boolean(calibration?.noise_high),
   };
 }
 

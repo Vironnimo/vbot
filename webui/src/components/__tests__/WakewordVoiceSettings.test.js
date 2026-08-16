@@ -22,6 +22,7 @@ vi.mock('$lib/desktopBridge.js', () => ({
   startWakewordCalibration: vi.fn(),
   stopWakewordCalibration: vi.fn(),
   restartWakewordCalibration: vi.fn(),
+  retryWakewordModelCalibration: vi.fn(),
   isDesktop: vi.fn(() => true),
 }));
 vi.mock('$lib/api.js', () => ({
@@ -79,6 +80,7 @@ describe('WakewordVoiceSettings', () => {
     desktopBridge.setWakewordEnabled.mockResolvedValue(undefined);
     desktopBridge.deleteWakewordModel.mockResolvedValue({ deleted: true });
     desktopBridge.retryWakeword.mockResolvedValue(undefined);
+    desktopBridge.retryWakewordModelCalibration.mockResolvedValue(undefined);
     desktopBridge.startWakewordCalibration.mockResolvedValue({
       ...baseStatus(),
       enabled: true,
@@ -99,16 +101,17 @@ describe('WakewordVoiceSettings', () => {
           'builtin/hey_nabu': 0.02,
         },
         sample_counts: {
-          'builtin/okay_nabu': 3,
-          'builtin/hey_nabu': 3,
+          'builtin/okay_nabu': 5,
+          'builtin/hey_nabu': 5,
         },
-        required_samples: 3,
+        required_samples: 5,
         target_model_id: null,
         recommended_sensitivities: {
-          'builtin/okay_nabu': 0.7,
-          'builtin/hey_nabu': 0.75,
+          'builtin/okay_nabu': 0.65,
+          'builtin/hey_nabu': 0.65,
         },
         noise_seconds_remaining: 0,
+        noise_high: false,
       },
     });
     desktopBridge.stopWakewordCalibration.mockResolvedValue({
@@ -136,10 +139,11 @@ describe('WakewordVoiceSettings', () => {
           'builtin/okay_nabu': 0,
           'builtin/hey_nabu': 0,
         },
-        required_samples: 3,
+        required_samples: 5,
         target_model_id: null,
         recommended_sensitivities: {},
         noise_seconds_remaining: 3,
+        noise_high: false,
       },
     });
     updateSettings.mockImplementation(async (payload) => payload);
@@ -409,7 +413,7 @@ describe('WakewordVoiceSettings', () => {
     expect(
       calibrationPanel.querySelector('.voice-calibration-model__result')
         .textContent,
-    ).toContain('70%');
+    ).toContain('65%');
 
     const slider = document.getElementById(
       'voice-sensitivity-builtin/okay_nabu',
@@ -425,8 +429,8 @@ describe('WakewordVoiceSettings', () => {
     expect(desktopBridge.stopWakewordCalibration).toHaveBeenCalledOnce();
     expect(desktopBridge.setWakewordConfig).toHaveBeenCalledWith({
       model_sensitivities: {
-        'builtin/okay_nabu': 0.7,
-        'builtin/hey_nabu': 0.75,
+        'builtin/okay_nabu': 0.65,
+        'builtin/hey_nabu': 0.65,
       },
     });
   });
@@ -461,10 +465,11 @@ describe('WakewordVoiceSettings', () => {
           'builtin/okay_nabu': 1,
           'builtin/hey_nabu': 0,
         },
-        required_samples: 3,
+        required_samples: 5,
         target_model_id: 'builtin/okay_nabu',
         recommended_sensitivities: {},
         noise_seconds_remaining: 0,
+        noise_high: false,
       },
     });
     await mountPanel();
@@ -504,6 +509,22 @@ describe('WakewordVoiceSettings', () => {
 
     buttonByText('Discard and stop').click();
     await settle();
+
+    // Confirm the discard dialog — the dialog's confirm button is the second
+    // "Discard and stop" button in the DOM (after the panel button)
+    const dialog = document.querySelector('[role="dialog"]');
+    expect(dialog).not.toBeNull();
+    const dialogButtons = [...dialog.querySelectorAll('button')];
+    const confirmButton = dialogButtons.find(
+      (button) => button.textContent.trim() === 'Discard and stop',
+    );
+    confirmButton.click();
+    await waitForCondition(
+      () => desktopBridge.stopWakewordCalibration.mock.calls.length > 0,
+    );
+    await waitForCondition(
+      () => document.querySelector('.voice-calibration-panel') === null,
+    );
 
     expect(desktopBridge.setWakewordConfig).not.toHaveBeenCalled();
     expect(
@@ -615,10 +636,11 @@ function baseStatus() {
       peaks: {},
       noise_levels: {},
       sample_counts: {},
-      required_samples: 3,
+      required_samples: 5,
       target_model_id: null,
       recommended_sensitivities: {},
       noise_seconds_remaining: 0,
+      noise_high: false,
     },
   };
 }
