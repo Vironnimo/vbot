@@ -30,7 +30,7 @@ RPC maps `detail` to the existing transient response, `notice` to toast, and typ
 
 ## Built-in Command behavior
 
-- `/help` returns the catalog as detail feedback. `/status` returns the shared status rendering used by the status Tool. `/stop` cancels the active Run for the addressed Session or reports that none exists.
+- `/help` returns the catalog as detail feedback. `/status` returns the shared status rendering used by the status Tool; its Temperature line reports the resolved value with its source (`(agent)` / `(model recommendation)` / `(provider default)` / `default`) via `resolve_status_temperature` over `StatusModelDetails`. `/stop` cancels the active Run for the addressed Session or reports that none exists.
 - `/compact [instruction]` calls `TriggerService.start_compaction_run` with the addressed Project and optional instruction and returns that dedicated Compaction Run as the outcome's `primary` Run. Unavailable or already-busy Sessions still return immediate notice feedback; once admitted, success, failure, and cancellation are Run lifecycle outcomes.
 - `/new` refuses while the current Session has an active Run, resolves the Agent, creates a Session (honoring a validated preferred id when supplied), updates the identity Agent's current pointer, and returns `continue_in_session` navigation plus a Sessions change. Project Config Agents have no identity current pointer.
 - `/rename [title]` writes the Session title; no argument clears it. Session-title resource publication remains owned by the existing Session title callback rather than a duplicate command change.

@@ -23,12 +23,14 @@ from core.chat.commands import (
     STATUS_PLACEHOLDER,
     AgentArgument,
     HandoffArgument,
+    StatusModelDetails,
     build_status_text,
     parse_agent_argument,
     parse_handoff_argument,
     resolve_actual_thinking_effort,
     resolve_status_model_details,
     resolve_status_project_label,
+    resolve_status_temperature,
 )
 from core.models.models import Capabilities, Model, ModelRegistry, ReasoningCapabilities
 from core.projects import AgentResolver, ProjectStore
@@ -105,7 +107,12 @@ def _make_agent(
     )
 
 
-def _make_model(*, model_id: str = "gpt-5.2", name: str = "GPT-5.2") -> Model:
+def _make_model(
+    *,
+    model_id: str = "gpt-5.2",
+    name: str = "GPT-5.2",
+    recommended_temperature: float | None = None,
+) -> Model:
     return Model(
         model_id=model_id,
         name=name,
@@ -117,6 +124,7 @@ def _make_model(*, model_id: str = "gpt-5.2", name: str = "GPT-5.2") -> Model:
         ),
         context_window=200_000,
         max_output_tokens=8_192,
+        recommended_temperature=recommended_temperature,
     )
 
 
@@ -1091,6 +1099,7 @@ def test_dispatch_status_with_full_deps_returns_reply_with_expected_fields() -> 
     reply = result.feedback.text
     assert "Agent: Coder (openai/gpt-5.2)" in reply
     assert "Model display name: GPT-5.2" in reply
+    assert "Temperature: 0.3 (agent)" in reply
     assert "Activity: idle" in reply
     assert f"Run created at: {STATUS_PLACEHOLDER}" in reply
     assert f"Run updated at: {STATUS_PLACEHOLDER}" in reply
@@ -1131,6 +1140,24 @@ async def test_dispatch_status_reports_active_run_timestamps() -> None:
     assert "Activity: running" in result.feedback.text
     assert f"Run created at: {run.created_at}" in result.feedback.text
     assert f"Run updated at: {expected_updated_at}" in result.feedback.text
+
+
+def test_dispatch_status_reports_resolved_model_recommended_temperature() -> None:
+    dispatcher = CommandDispatcher(
+        ChatRunManager(),
+        agent_resolver=cast(
+            AgentResolver, _StubResolver(_make_agent(temperature=None))
+        ),
+        sessions=cast(ChatSessionManager, _StubSessions([])),
+        models=cast(
+            ModelRegistry, _StubModels(_make_model(recommended_temperature=1.0))
+        ),
+    )
+
+    result = _execute_sync(dispatcher, "/status")
+
+    assert result.feedback is not None
+    assert "Temperature: 1 (model recommendation)" in result.feedback.text
 
 
 def test_dispatch_status_strips_pinned_suffix_before_registry_lookup() -> None:
@@ -1472,3 +1499,66 @@ def test_resolve_status_model_details_falls_back_to_global_floor() -> None:
     )
 
     assert details.context_window == GLOBAL_CONTEXT_WINDOW_FLOOR
+
+
+def test_resolve_status_model_details_surfaces_temperature_tiers() -> None:
+    """The model recommendation and the provider default feed the status line."""
+    model = _make_model(recommended_temperature=1.0)
+
+    class _Models:
+        def get(self, _provider_id: str, _model_id: str) -> Model:
+            return model
+
+    class _Providers:
+        def get(self, _provider_id: str) -> Any:
+            return ProviderConfig(
+                id="warm",
+                name="Warm",
+                adapter="openai_compatible",
+                base_url="https://example.test/v1",
+                defaults={"temperature": 0.7},
+            )
+
+    details = resolve_status_model_details(
+        _make_agent(model="warm/gpt-5.2"),
+        cast(ModelRegistry, _Models()),
+        cast(Any, _Providers()),
+    )
+
+    assert details.recommended_temperature == 1.0
+    assert details.provider_default_temperature == 0.7
+
+
+def test_resolve_status_temperature_reports_tier_sources() -> None:
+    """Each tier of the resolution chain renders its value with its source."""
+    details = StatusModelDetails(
+        context_window=None,
+        display_name=None,
+        recommended_temperature=1.0,
+        provider_default_temperature=0.7,
+    )
+
+    assert resolve_status_temperature(0.2, details) == "0.2 (agent)"
+    assert resolve_status_temperature(None, details) == "1 (model recommendation)"
+
+    provider_only = StatusModelDetails(
+        context_window=None,
+        display_name=None,
+        provider_default_temperature=0.7,
+    )
+    assert resolve_status_temperature(None, provider_only) == "0.7 (provider default)"
+
+    empty = StatusModelDetails(context_window=None, display_name=None)
+    assert resolve_status_temperature(None, empty) == "default"
+
+
+def test_build_status_text_renders_resolved_temperature_status() -> None:
+    text = build_status_text(
+        _make_agent(temperature=None),
+        messages=[],
+        context_window=None,
+        started_at=None,
+        temperature_status="1 (model recommendation)",
+    )
+
+    assert "Temperature: 1 (model recommendation)" in text

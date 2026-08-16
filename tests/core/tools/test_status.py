@@ -572,6 +572,55 @@ def test_status_tool_splits_selected_and_actual_thinking_effort(tmp_path: Path) 
     text = cast(str, data["text"])
     assert "Selected thinking effort: max" in text
     assert "Actual model thinking effort: high" in text
+    assert "Temperature: 0.3 (agent)" in text
+
+
+def test_status_tool_reports_resolved_model_recommended_temperature(
+    tmp_path: Path,
+) -> None:
+    """Without an agent temperature, the tool reports the model recommendation."""
+    agent = Agent(
+        id="coder",
+        name="Coder",
+        model="openai/gpt-5.2",
+        fallback_model="openai/gpt-5.1",
+        workspace="workspace",
+        temperature=None,
+        thinking_effort=None,
+        tool_access=ToolAccess(mode="all"),
+        allowed_skills=["*"],
+        tools={},
+        created_at="2026-05-18T10:00:00+00:00",
+        updated_at="2026-05-18T10:00:00+00:00",
+    )
+    model = Model(
+        model_id="gpt-5.2",
+        name="GPT-5.2",
+        capabilities=Capabilities(
+            vision=True,
+            tools=True,
+            json_mode=True,
+            reasoning=ReasoningCapabilities(supported=False),
+        ),
+        context_window=200_000,
+        max_output_tokens=8_192,
+        recommended_temperature=1.0,
+    )
+
+    registry = ToolRegistry()
+    register_status_tool(
+        registry,
+        cast(AgentResolver, _StubResolver(agent)),
+        cast(ChatSessionManager, _StubSessions([])),
+        cast(ModelRegistry, _StubModels(model)),
+        ChatRunManager(),
+        None,
+    )
+
+    result = asyncio.run(_dispatch(registry, tmp_path))
+
+    data = cast(dict[str, Any], result["data"])
+    assert "Temperature: 1 (model recommendation)" in cast(str, data["text"])
 
 
 def _make_config_agent() -> ConfigAgent:

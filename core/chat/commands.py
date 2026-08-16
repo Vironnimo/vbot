@@ -1522,6 +1522,10 @@ class CommandDispatcher:
                 model_details.reasoning_budget_max,
             ),
             project_label=resolve_status_project_label(self._projects, context.project_id),
+            temperature_status=resolve_status_temperature(
+                agent.temperature if agent is not None else None,
+                model_details,
+            ),
         )
         return CommandOutcome(
             command="status",
@@ -1631,6 +1635,10 @@ class StatusModelDetails:
     Together they let ``resolve_actual_thinking_effort`` report the *actual*
     reasoning sent on the wire — a snapped effort for a ladder, ``on``/``off`` for
     a toggle, or the rendered token budget for a budget model.
+
+    ``recommended_temperature`` and ``provider_default_temperature`` feed
+    ``resolve_status_temperature`` so the temperature line reports the resolved
+    value with its source rather than only the configured agent field.
     """
 
     context_window: int | None
@@ -1638,6 +1646,8 @@ class StatusModelDetails:
     reasoning_levels: tuple[str, ...] = ()
     reasoning_control: str | None = None
     reasoning_budget_max: int | None = None
+    recommended_temperature: float | None = None
+    provider_default_temperature: float | None = None
 
 
 def resolve_status_model_details(
@@ -1683,10 +1693,11 @@ def resolve_status_model_details(
         )
         return StatusModelDetails(context_window=None, display_name=None)
 
+    provider_config = _status_provider_config(providers, provider_id)
     return StatusModelDetails(
         context_window=resolve_effective_context_window(
             model.context_window,
-            _status_provider_config(providers, provider_id),
+            provider_config,
             model_metadata=model.metadata,
             model_key=f"{provider_id}/{model_id}",
             local_context_windows=local_context_windows,
@@ -1695,7 +1706,21 @@ def resolve_status_model_details(
         reasoning_levels=tuple(model.capabilities.reasoning.levels),
         reasoning_control=model.capabilities.reasoning.control,
         reasoning_budget_max=model.capabilities.reasoning.budget_max,
+        recommended_temperature=model.recommended_temperature,
+        provider_default_temperature=_provider_default_temperature(provider_config),
     )
+
+
+def _provider_default_temperature(provider_config: Any) -> float | None:
+    """Read the provider-config ``defaults.temperature``, None when absent."""
+
+    defaults = getattr(provider_config, "defaults", None)
+    if not isinstance(defaults, Mapping):
+        return None
+    value = defaults.get("temperature")
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        return None
+    return float(value)
 
 
 def _status_provider_config(providers: ProviderRegistry | None, provider_id: str) -> Any:
@@ -1772,6 +1797,26 @@ def resolve_actual_thinking_effort(
     return intent.effort_level
 
 
+def resolve_status_temperature(
+    agent_temperature: float | None,
+    model_details: StatusModelDetails,
+) -> str:
+    """Render the resolved temperature with the tier that supplied it.
+
+    Mirrors the chat resolution chain — explicit agent value, then the model's
+    recommended temperature, then the provider-config default — and reports the
+    API default when no tier has a value. Adapter-level sampling drops (active
+    thinking, sampling-free models) are wire policy and stay invisible here.
+    """
+    if agent_temperature is not None:
+        return f"{agent_temperature:g} (agent)"
+    if model_details.recommended_temperature is not None:
+        return f"{model_details.recommended_temperature:g} (model recommendation)"
+    if model_details.provider_default_temperature is not None:
+        return f"{model_details.provider_default_temperature:g} (provider default)"
+    return "default"
+
+
 def build_status_reply(
     agent: RuntimeAgent | None,
     messages: list[ChatMessage],
@@ -1781,6 +1826,7 @@ def build_status_reply(
     activity: StatusActivity | None = None,
     actual_thinking_effort: str | None = None,
     project_label: str | None = None,
+    temperature_status: str | None = None,
 ) -> str:
     """Build status text while applying an optional model-display override."""
     token = _STATUS_MODEL_DISPLAY_OVERRIDE.set(model_display_name)
@@ -1793,6 +1839,7 @@ def build_status_reply(
             activity,
             actual_thinking_effort=actual_thinking_effort,
             project_label=project_label,
+            temperature_status=temperature_status,
         )
     finally:
         _STATUS_MODEL_DISPLAY_OVERRIDE.reset(token)
@@ -1806,12 +1853,16 @@ def build_status_text(
     activity: StatusActivity | None = None,
     actual_thinking_effort: str | None = None,
     project_label: str | None = None,
+    temperature_status: str | None = None,
 ) -> str:
     """Build human-readable status text for the current session and runtime state.
 
     ``actual_thinking_effort`` is what reaches the wire after the model's ladder
     snaps the agent's selection (see :func:`resolve_actual_thinking_effort`); it
     is rendered alongside the selected effort so the two can differ visibly.
+    ``temperature_status`` is the resolved temperature with its source (see
+    :func:`resolve_status_temperature`); without it the line degrades to the
+    configured agent value alone.
     ``project_label`` names the session's project (``None`` for an identity
     session, rendered as the placeholder).
     """
@@ -1830,7 +1881,11 @@ def build_status_text(
         model_display = _STATUS_MODEL_DISPLAY_OVERRIDE.get() or _model_display_name(model_string)
         fallback_model = agent.fallback_model.strip() or STATUS_PLACEHOLDER
         selected_thinking_effort = _thinking_effort_text(agent.thinking_effort)
-        temperature = _temperature_text(agent.temperature)
+        temperature = (
+            temperature_status
+            if temperature_status is not None
+            else _temperature_text(agent.temperature)
+        )
 
     actual_thinking_effort_text = _actual_thinking_effort_text(actual_thinking_effort)
     context_usage = _context_usage_text(messages, context_window)
