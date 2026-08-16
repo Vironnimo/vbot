@@ -1324,9 +1324,7 @@ def test_build_truncated_output_reports_delivered_size_not_full_size(
     assert len(output.encode("utf-8")) <= web_fetch_module._MAX_URL_BYTES
     # The Content-Size line must not claim 200,000 bytes when the agent
     # receives ~100 KB. Parse the delivered size from the header.
-    content_size_line = [
-        line for line in output.split("\n") if line.startswith("Content-Size:")
-    ][0]
+    content_size_line = [line for line in output.split("\n") if line.startswith("Content-Size:")][0]
     # Extract the "-> X bytes" portion.
     delivered_part = content_size_line.split("->")[1]
     delivered_size_str = delivered_part.split("bytes")[0].strip().replace(",", "")
@@ -1349,12 +1347,14 @@ async def test_web_fetch_uses_final_url_for_notebook_detection_after_redirect(
     start_url = "https://example.com/download"
     final_url = "https://example.com/notebook.ipynb"
 
-    notebook_content = json.dumps({
-        "cells": [
-            {"cell_type": "code", "source": ["print('hello')\n"]},
-            {"cell_type": "markdown", "source": ["# Title\n"]},
-        ]
-    }).encode("utf-8")
+    notebook_content = json.dumps(
+        {
+            "cells": [
+                {"cell_type": "code", "source": ["print('hello')\n"]},
+                {"cell_type": "markdown", "source": ["# Title\n"]},
+            ]
+        }
+    ).encode("utf-8")
 
     def responder(url: str) -> _FetchResult:
         if url == start_url:
