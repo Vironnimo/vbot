@@ -14,6 +14,7 @@ from .openai_compatible_test_support import (
     ProviderRateLimitError,
     ProviderTimeoutError,
     httpx,
+    json,
     logging,
     patch,
     pytest,
@@ -191,6 +192,59 @@ class TestSendErrorClassification:
 
 class TestSendRetry:
     """Verify that send() retries on retryable errors and not on auth errors."""
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_send_rejected_temperature_retries_once_without_it(
+        self, openai_adapter, caplog: Any
+    ):
+        """A 400 blaming temperature strips it and retries once; the default never refills."""
+        # Arrange — the test config carries a provider default temperature 0.7,
+        # so a rebuild would put the key back; the retry must use the stripped payload.
+        route = respx.post(OPENAI_URL).mock(
+            side_effect=[
+                httpx.Response(400, text="Unsupported parameter: 'temperature'"),
+                httpx.Response(200, json=SUCCESS_RESPONSE),
+            ]
+        )
+
+        # Act
+        with caplog.at_level(logging.WARNING, logger=_OPENAI_COMPATIBLE_LOGGER):
+            result = await openai_adapter.send(
+                SAMPLE_MESSAGES, model_id="gpt-5.2", temperature=0.2
+            )
+
+        # Assert
+        assert result == SUCCESS_RESPONSE
+        assert route.call_count == 2
+        first_body = json.loads(route.calls[0].request.content)
+        second_body = json.loads(route.calls[1].request.content)
+        assert first_body["temperature"] == 0.2
+        assert "temperature" not in second_body
+        warnings = [
+            record.getMessage()
+            for record in caplog.records
+            if record.levelno == logging.WARNING and "temperature" in record.getMessage()
+        ]
+        assert len(warnings) == 1
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_send_rejection_of_unsent_sampling_parameter_still_raises(
+        self, openai_adapter
+    ):
+        """A rejection naming a parameter the payload never carried is fatal."""
+        # Arrange
+        route = respx.post(OPENAI_URL).mock(
+            return_value=httpx.Response(400, text="Unsupported parameter: 'top_k'")
+        )
+
+        # Act / Assert
+        with pytest.raises(ProviderError) as exc_info:
+            await openai_adapter.send(SAMPLE_MESSAGES, model_id="gpt-5.2")
+
+        assert exc_info.value.retryable is False
+        assert route.call_count == 1
 
     @respx.mock
     @pytest.mark.asyncio

@@ -63,6 +63,45 @@ class TestStreamConnectRetryRebuildsHeaders:
         assert route.calls[0].request.headers.get("x-api-key") == "stale-token"
         assert route.calls[1].request.headers.get("x-api-key") == "fresh-token"
 
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_stream_rejected_temperature_retries_once_without_it(
+        self, anthropic_adapter
+    ) -> None:
+        """A stream-connect 400 blaming temperature strips it and reconnects once."""
+        # Arrange — thinking disabled so the proactive strip does not apply.
+        sse_body = 'event: message_stop\ndata: {"type":"message_stop"}\n\n'
+        route = respx.post(ANTHROPIC_URL).mock(
+            side_effect=[
+                httpx.Response(
+                    400,
+                    json={
+                        "error": {
+                            "type": "invalid_request_error",
+                            "message": "temperature is not supported for this model",
+                        }
+                    },
+                ),
+                httpx.Response(200, text=sse_body, headers={"content-type": "text/event-stream"}),
+            ]
+        )
+
+        # Act
+        async for _ in anthropic_adapter.stream(
+            SAMPLE_MESSAGES,
+            model_id="claude-sonnet-4-20250219",
+            temperature=0.5,
+            thinking_effort="none",
+        ):
+            pass
+
+        # Assert
+        assert route.call_count == 2
+        first_body = _strip_cache_control(json.loads(route.calls[0].request.content))
+        second_body = _strip_cache_control(json.loads(route.calls[1].request.content))
+        assert first_body["temperature"] == 0.5
+        assert "temperature" not in second_body
+
 
 # ---------------------------------------------------------------------------
 # stream() — SSE parsing

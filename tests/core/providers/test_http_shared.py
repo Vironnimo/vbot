@@ -11,6 +11,8 @@ malformed JSON becomes a non-retryable ``ProviderError``).
 from __future__ import annotations
 
 import json
+import logging
+from typing import Any
 
 import httpx
 import pytest
@@ -21,9 +23,11 @@ from core.providers._http_shared import (
     build_streaming_request,
     classify_http_status,
     decode_response_json,
+    execute_with_sampling_fallback,
     parse_sse_json_data,
     provider_chat_timeout,
     provider_streaming_timeout,
+    unsupported_sampling_parameter,
     wrap_network_error,
 )
 from core.providers.errors import (
@@ -380,3 +384,96 @@ def test_classify_http_status_auth_error_ignores_retry_after() -> None:
         )
 
     assert exc_info.value.retry_after is None
+
+
+def test_unsupported_sampling_parameter_matches_provider_rejection_wordings() -> None:
+    """Marker plus parameter name identifies the blamed sampling parameter."""
+
+    assert (
+        unsupported_sampling_parameter("400 Unsupported parameter: 'temperature'")
+        == "temperature"
+    )
+    assert (
+        unsupported_sampling_parameter(
+            "400 temperature is not supported when thinking is enabled"
+        )
+        == "temperature"
+    )
+    assert unsupported_sampling_parameter("400 Unknown parameter: top_k") == "top_k"
+    assert (
+        unsupported_sampling_parameter("400 Unrecognized request argument: top_p")
+        == "top_p"
+    )
+
+
+def test_unsupported_sampling_parameter_ignores_incomplete_or_foreign_details() -> None:
+    """Neither a marker nor a parameter alone is evidence; other parameters are ignored."""
+
+    assert unsupported_sampling_parameter("") is None
+    assert unsupported_sampling_parameter("400 temperature") is None
+    assert unsupported_sampling_parameter("400 Unsupported parameter: 'max_tokens'") is None
+    assert unsupported_sampling_parameter("Rate limited: too many requests") is None
+
+
+@pytest.mark.asyncio
+async def test_execute_with_sampling_fallback_strips_blamed_parameter_and_retries_once() -> None:
+    """A fatal rejection of a sent sampling parameter triggers exactly one stripped retry."""
+
+    payload = {"model": "m", "temperature": 0.7, "top_p": 0.9}
+    attempts: list[dict[str, Any]] = []
+
+    async def attempt() -> str:
+        attempts.append(dict(payload))
+        if len(attempts) == 1:
+            raise ProviderError(
+                "Provider error: 400 Unsupported parameter: 'temperature'",
+                retryable=False,
+            )
+        return "ok"
+
+    result = await execute_with_sampling_fallback(
+        attempt, payload, logger=logging.getLogger("test"), provider_label="stub"
+    )
+
+    assert result == "ok"
+    assert attempts == [
+        {"model": "m", "temperature": 0.7, "top_p": 0.9},
+        {"model": "m", "top_p": 0.9},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_execute_with_sampling_fallback_reraises_when_parameter_not_sent() -> None:
+    """A rejection of a parameter the payload never carried is not retried."""
+
+    payload = {"model": "m"}
+    attempts: list[dict[str, Any]] = []
+
+    async def attempt() -> str:
+        attempts.append(dict(payload))
+        raise ProviderError(
+            "Provider error: 400 Unsupported parameter: 'temperature'",
+            retryable=False,
+        )
+
+    with pytest.raises(ProviderError):
+        await execute_with_sampling_fallback(
+            attempt, payload, logger=logging.getLogger("test"), provider_label="stub"
+        )
+
+    assert len(attempts) == 1
+
+
+@pytest.mark.asyncio
+async def test_execute_with_sampling_fallback_reraises_unrelated_errors() -> None:
+    """Auth and other errors pass through untouched."""
+
+    payload = {"model": "m", "temperature": 0.7}
+
+    async def attempt() -> str:
+        raise ProviderAuthError("Authentication error: 401 no key")
+
+    with pytest.raises(ProviderAuthError):
+        await execute_with_sampling_fallback(
+            attempt, payload, logger=logging.getLogger("test"), provider_label="stub"
+        )
