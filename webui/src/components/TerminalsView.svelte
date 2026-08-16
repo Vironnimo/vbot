@@ -39,6 +39,7 @@
   let controlledTerminalId = $state('');
   let terminalScrolledBack = $state(false);
   let stopDialogOpen = $state(false);
+  let dismissDialogOpen = $state(false);
   let startDialogOpen = $state(false);
   let selectedLaunchHistoryId = $state('');
   let startCommand = $state('');
@@ -330,6 +331,21 @@
     }
   }
 
+  async function confirmDismiss() {
+    const dismissed = await controller.forgetSelected();
+    dismissDialogOpen = false;
+    if (dismissed) {
+      onToast({
+        title: t('terminals.dismissedTitle', 'Terminal dismissed'),
+        message: t(
+          'terminals.dismissedMessage',
+          'The retained Terminal Session was removed from the list.',
+        ),
+        variant: 'success',
+      });
+    }
+  }
+
   function openStartDialog() {
     applyLaunchHistory(viewState.launchHistory[0] ?? null);
     viewState.startError = '';
@@ -444,6 +460,15 @@
       fish: 'Fish',
     };
     return labels[executable] || command || 'Terminal';
+  }
+
+  function terminalFullCommand(item) {
+    const command = String(item?.command || '').trim();
+    const args = Array.isArray(item?.arguments) ? item.arguments : [];
+    if (!command && args.length === 0) {
+      return '';
+    }
+    return [command, ...args].join(' ');
   }
 
   function terminalSession(item) {
@@ -688,9 +713,30 @@
             >
           </span>
           <span class="terminals-view__identity-meta">
-            <span use:tooltip={terminal.command}>{terminal.command}</span>
+            <span use:tooltip={terminalFullCommand(terminal)}
+              >{terminal.command}</span
+            >
+            {#if Array.isArray(terminal.arguments) && terminal.arguments.length > 0}
+              <span
+                use:tooltip={terminal.arguments.join(' ')}
+                class="terminals-view__identity-args"
+              >
+                {terminal.arguments.length}
+                {terminal.arguments.length === 1 ? 'arg' : 'args'}
+              </span>
+            {/if}
             <span>PID {terminal.pid}</span>
             <span>{terminal.columns}×{terminal.rows}</span>
+            {#if terminalFinished && terminal.exit_code != null}
+              <span
+                class="terminals-view__exit-code"
+                class:terminals-view__exit-code--nonzero={terminal.exit_code !==
+                  0}
+              >
+                {t('terminals.exitCode', 'Exit code')}
+                {terminal.exit_code}
+              </span>
+            {/if}
             <span use:tooltip={terminal.workdir}>{terminal.workdir}</span>
           </span>
         </div>
@@ -711,6 +757,16 @@
               onClick={() => (stopDialogOpen = true)}
             >
               {t('terminals.stop', 'Stop terminal')}
+            </Button>
+          </div>
+        {:else}
+          <div class="terminals-view__controls">
+            <Button
+              variant="secondary"
+              loading={viewState.forgetting}
+              onClick={() => (dismissDialogOpen = true)}
+            >
+              {t('terminals.dismiss', 'Dismiss')}
             </Button>
           </div>
         {/if}
@@ -972,6 +1028,19 @@
   />
 {/if}
 
+{#if dismissDialogOpen && terminal && terminalFinished}
+  <ConfirmDialog
+    title={t('terminals.dismissConfirmTitle', 'Dismiss this Terminal Session?')}
+    body={t(
+      'terminals.dismissConfirmBody',
+      'The retained history will be removed from this list immediately. The Terminal Session cannot be resumed afterward.',
+    )}
+    confirmLabel={t('terminals.dismiss', 'Dismiss')}
+    onConfirm={confirmDismiss}
+    onCancel={() => (dismissDialogOpen = false)}
+  />
+{/if}
+
 <style>
   .terminals-view {
     display: flex;
@@ -1113,6 +1182,19 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+
+  .terminals-view__identity-args {
+    color: var(--text-lo);
+  }
+
+  .terminals-view__exit-code {
+    font-weight: 500;
+    color: var(--text-med);
+  }
+
+  .terminals-view__exit-code--nonzero {
+    color: var(--red);
   }
 
   .terminals-view__controls {

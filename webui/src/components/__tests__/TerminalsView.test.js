@@ -10,6 +10,7 @@ const startTerminalMock = vi.fn();
 const sendTerminalInputMock = vi.fn();
 const resizeTerminalMock = vi.fn();
 const killTerminalMock = vi.fn();
+const forgetTerminalMock = vi.fn();
 const subscribeTerminalEventsMock = vi.fn();
 const streams = [];
 const terminalInstances = [];
@@ -24,6 +25,7 @@ vi.mock('$lib/api.js', () => ({
   sendTerminalInput: (...args) => sendTerminalInputMock(...args),
   resizeTerminal: (...args) => resizeTerminalMock(...args),
   killTerminal: (...args) => killTerminalMock(...args),
+  forgetTerminal: (...args) => forgetTerminalMock(...args),
   subscribeTerminalEvents: (...args) => subscribeTerminalEventsMock(...args),
 }));
 
@@ -84,6 +86,7 @@ describe('TerminalsView', () => {
     sendTerminalInputMock.mockReset().mockResolvedValue({});
     resizeTerminalMock.mockReset().mockResolvedValue({});
     killTerminalMock.mockReset().mockResolvedValue({});
+    forgetTerminalMock.mockReset().mockResolvedValue({});
     subscribeTerminalEventsMock
       .mockReset()
       .mockImplementation((_id, handlers) => {
@@ -249,7 +252,46 @@ describe('TerminalsView', () => {
         (button) => button.textContent.trim() === 'Stop terminal',
       ),
     ).toBe(false);
-    expect(document.querySelector('.terminals-view__controls')).toBeNull();
+    expect(
+      [...document.querySelectorAll('button')].some(
+        (button) => button.textContent.trim() === 'Dismiss',
+      ),
+    ).toBe(true);
+  });
+
+  it('dismisses a finished Terminal Session and removes it from the list', async () => {
+    listTerminalsMock.mockResolvedValue({
+      terminals: [terminal({ state: 'exited', exit_code: 0 })],
+    });
+    mountedComponent = mount(TerminalsView, { target: document.body });
+    flushSync();
+    await waitFor(() => streams.length === 1 && terminalInstances.length === 1);
+    streams[0].handlers.onEvent({
+      type: 'terminal_ready',
+      sequence: 6,
+      terminal: terminal({ state: 'exited', exit_code: 0 }),
+      ansi: '\\u001b[2Jretained final answer',
+    });
+    flushSync();
+
+    expect(
+      document.querySelector('.terminals-view__exit-code'),
+    ).toBeTruthy();
+    const exitCodeEl = document.querySelector('.terminals-view__exit-code');
+    expect(exitCodeEl.textContent).toContain('Exit code');
+    expect(exitCodeEl.textContent).toContain('0');
+
+    findButton('Dismiss').click();
+    flushSync();
+    const dialog = document.querySelector('[role="dialog"][aria-modal="true"]');
+    expect(dialog).toBeTruthy();
+    const confirmButton = [...dialog.querySelectorAll('button')].find(
+      (b) => b.textContent.trim() === 'Dismiss',
+    );
+    expect(confirmButton).toBeTruthy();
+    confirmButton.click();
+    await waitFor(() => forgetTerminalMock.mock.calls.length > 0);
+    expect(forgetTerminalMock).toHaveBeenCalledWith('term-1');
   });
 
   it('starts a manual terminal from the modal and enables direct control', async () => {

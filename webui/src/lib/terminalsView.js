@@ -1,4 +1,5 @@
 import {
+  forgetTerminal,
   killTerminal,
   listTerminals,
   resizeTerminal,
@@ -35,6 +36,7 @@ export function createTerminalsViewState() {
     streamStatus: TERMINAL_STREAM_IDLE,
     lastSequence: 0,
     killing: false,
+    forgetting: false,
     startingTerminal: false,
     startError: '',
   };
@@ -108,6 +110,7 @@ export function createTerminalsController({
   onOutput = () => {},
   onClear = () => {},
   api = {
+    forgetTerminal,
     killTerminal,
     listTerminals,
     resizeTerminal,
@@ -466,6 +469,41 @@ export function createTerminalsController({
     }
   }
 
+  async function forgetSelected() {
+    const terminalId = state.selectedTerminalId;
+    if (
+      !terminalId ||
+      state.forgetting ||
+      !terminalIsFinished(selectedTerminal(state))
+    ) {
+      return false;
+    }
+    state.forgetting = true;
+    state.actionError = '';
+    try {
+      await api.forgetTerminal(terminalId);
+      const wasSelected = state.selectedTerminalId === terminalId;
+      if (wasSelected) {
+        switchStream('');
+      }
+      state.terminals = state.terminals.filter(
+        (item) => item.terminal_id !== terminalId,
+      );
+      if (wasSelected) {
+        state.selectedTerminalId = state.terminals[0]?.terminal_id ?? '';
+        if (state.selectedTerminalId) {
+          switchStream(state.selectedTerminalId);
+        }
+      }
+      return true;
+    } catch (error) {
+      state.actionError = errorMessage(error);
+      return false;
+    } finally {
+      state.forgetting = false;
+    }
+  }
+
   async function startManualTerminal(params = {}) {
     if (state.startingTerminal || serverUnavailable) {
       return null;
@@ -552,6 +590,7 @@ export function createTerminalsController({
 
   return {
     destroy,
+    forgetSelected,
     killSelected,
     loadTerminals,
     queueInput,
