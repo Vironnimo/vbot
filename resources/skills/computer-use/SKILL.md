@@ -20,7 +20,9 @@ The wrapper uses `cua-driver`'s one-shot CLI transport. It requests background d
 - Treat stdout JSON as data. Exit code zero with `"ok": true` means the operation completed. A nonzero exit or `"ok": false` means it did not.
 - The script never installs or upgrades `cua-driver`. Report a missing or incompatible driver and ask before installing anything.
 - Captures and oversized accessibility data are written below `tmp/computer-use/<session>/` in the effective cwd. Load screenshot paths with vBot's `read` Tool.
+- Element actions (`click`/`scroll` with `--element`) accept an element index or an `element_token` (e.g. `s00000001:12`) from a capture. An index resolves against the session's latest capture of the same `pid`/`window_id`; capture the target window first, and re-capture when the UI changed since your last capture.
 - Mutating commands require the explicit `--apply` flag. Without it, the script returns a dry-run description and performs no input action.
+- Applied actions report the driver's `delivery`, `effect`, and `route` metadata. `effect: "unverifiable"` is normal — it means the driver sent the input but could not confirm the outcome, so verify by re-capturing.
 - The wrapper invokes `cua-driver` without a shell and removes credential-like environment variables from its child environment.
 
 ## Inspect, act, verify
@@ -28,7 +30,7 @@ The wrapper uses `cua-driver`'s one-shot CLI transport. It requests background d
 1. Call `start`, then `windows`. Identify the intended app and exact `pid` plus `window_id`; never guess a target.
 2. Call `capture` with that exact pair. Use `--mode som` for screenshot plus accessibility elements, `vision` for pixels only, or `ax` for accessibility data only.
 3. For `som` or `vision`, call vBot's `read` Tool on the returned screenshot. The screenshot itself is not automatically visible to the Model through Bash output.
-4. Prefer an accessibility `element` index from the latest capture. Use coordinates only when no usable element exists.
+4. Prefer an accessibility `element` reference — an index from the latest capture or its `element_token`. Use coordinates only when no usable element exists.
 5. Execute one user-authorized input action with `--apply`.
 6. Capture the same `pid` and `window_id` again and verify the result. Never assume a click or keystroke landed.
 7. Call `close` when the task is complete.
@@ -42,6 +44,7 @@ python {baseDir}/scripts/computer_use.py --session <session> apps
 python {baseDir}/scripts/computer_use.py --session <session> windows
 python {baseDir}/scripts/computer_use.py --session <session> capture --pid 1234 --window-id 5678 --mode som
 python {baseDir}/scripts/computer_use.py --session <session> click --pid 1234 --window-id 5678 --element 14 --apply
+python {baseDir}/scripts/computer_use.py --session <session> click --pid 1234 --window-id 5678 --element s00000001:14 --apply
 python {baseDir}/scripts/computer_use.py --session <session> click --pid 1234 --window-id 5678 --x 420 --y 260 --apply
 python {baseDir}/scripts/computer_use.py --session <session> type --pid 1234 --window-id 5678 "text" --apply
 python {baseDir}/scripts/computer_use.py --session <session> key --pid 1234 --window-id 5678 "ctrl+s" --apply
