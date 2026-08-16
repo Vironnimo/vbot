@@ -20,6 +20,9 @@ test("session_search finds content persisted by an earlier Run", async ({
     chat.getByText("Stored sapphire beacon 7319.", { exact: true }),
   ).toBeVisible();
 
+  await chat.getByRole("button", { exact: true, name: "New session" }).click();
+  await expect(chat.getByText("No messages yet", { exact: true })).toBeVisible();
+
   await runToolScenario(chat, {
     prompt: "E2E_TOOL_SESSION_SEARCH Find the seeded response",
     finalText: "Session search tool completed.",
