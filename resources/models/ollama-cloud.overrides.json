@@ -36,6 +36,7 @@
             }
         },
         "glm-5.1": {
+            "recommended_temperature": 1.0,
             "metadata": {
                 "ollama": {
                     "remote": true,
@@ -47,6 +48,7 @@
             }
         },
         "glm-5.2": {
+            "recommended_temperature": 1.0,
             "metadata": {
                 "ollama": {
                     "remote": true,

@@ -237,6 +237,7 @@ def _model_detail_response(
     capabilities["supported_voices"] = list(model.capabilities.supported_voices)
     capabilities["task_options"] = _json_compatible(model.capabilities.task_options)
     response["family"] = model.family
+    response["recommended_temperature"] = model.recommended_temperature
     response["metadata"] = _json_compatible(model.metadata)
     return response
 

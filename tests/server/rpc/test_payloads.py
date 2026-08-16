@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 from core.models.models import Capabilities, Model, ReasoningCapabilities
 from core.providers.providers import LOCAL_CONTEXT_DEFAULT_CAP
-from server.rpc.payloads import _model_response, _resolve_context_window
+from server.rpc.payloads import _model_detail_response, _model_response, _resolve_context_window
 
 
 def _model(
@@ -88,6 +88,30 @@ class TestModelResponseEffectiveContextWindow:
 
         # Assert — no cap, no knob for cloud models.
         assert payload["effective_context_window"] == 262144
+
+
+class TestModelDetailResponseRecommendedTemperature:
+    def test_recommended_temperature_is_projected(self) -> None:
+        model = Model(
+            model_id="glm-5.2",
+            name="GLM-5.2",
+            capabilities=Capabilities(
+                vision=False,
+                tools=True,
+                json_mode=False,
+                reasoning=ReasoningCapabilities(supported=True),
+            ),
+            context_window=976000,
+            max_output_tokens=65536,
+            recommended_temperature=1.0,
+        )
+        payload = _model_detail_response("ollama-cloud", model)
+        assert payload["recommended_temperature"] == 1.0
+
+    def test_none_recommended_temperature_is_projected_as_none(self) -> None:
+        model = _model("gpt-5.2", context_window=128000)
+        payload = _model_detail_response("openai", model)
+        assert payload["recommended_temperature"] is None
 
 
 class TestResolveContextWindowForAgentPayload:

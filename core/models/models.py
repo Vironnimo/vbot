@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -300,6 +301,7 @@ class Model:
     family: str = ""
     metadata: Mapping[str, Any] = field(default_factory=lambda: MappingProxyType({}))
     connections: tuple[str, ...] = ()
+    recommended_temperature: float | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "metadata", _freeze_metadata_value(self.metadata))
@@ -727,7 +729,34 @@ def _model_from_record(model_id: str, record: Mapping[str, Any]) -> Model:
         family=record.get("family", ""),
         metadata=record.get("metadata", {}),
         connections=tuple(record.get("connections", ())),
+        recommended_temperature=_coerce_recommended_temperature(
+            record.get("recommended_temperature")
+        ),
     )
+
+
+def _coerce_recommended_temperature(value: Any) -> float | None:
+    """Coerce a ``recommended_temperature`` record value into a valid float or None.
+
+    Like ``context_window`` and ``max_output_tokens``, this is an optional
+    model fact that stays ``None`` when absent. A non-numeric or out-of-range
+    value is logged and treated as unknown rather than failing assembly, so one
+    bad override never hides valid sibling models.
+    """
+    if value is None:
+        return None
+    if isinstance(value, bool | int | float) and not isinstance(value, bool):
+        temperature = float(value)
+    else:
+        _LOGGER.warning("recommended_temperature is not a number (%r); ignoring", value)
+        return None
+    if not math.isfinite(temperature):
+        _LOGGER.warning("recommended_temperature is not finite (%r); ignoring", value)
+        return None
+    if temperature < 0.0 or temperature > 2.0:
+        _LOGGER.warning("recommended_temperature %g is outside [0.0, 2.0]; ignoring", temperature)
+        return None
+    return temperature
 
 
 def _freeze_metadata_value(value: Any) -> Any:
