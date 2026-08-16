@@ -12,6 +12,7 @@ from core.chat.commands import (
     resolve_status_activity,
     resolve_status_model_details,
     resolve_status_project_label,
+    resolve_status_temperature,
 )
 from core.chat.errors import ChatSessionError
 from core.models.models import ModelRegistry
@@ -140,6 +141,10 @@ def make_status_handler(
                     model_details.reasoning_budget_max,
                 ),
                 project_label=resolve_status_project_label(projects, context.project_id),
+                temperature_status=resolve_status_temperature(
+                    agent.temperature,
+                    model_details,
+                ),
             )
         except Exception:
             _LOGGER.error("Failed to build status tool reply", exc_info=True)
