@@ -824,6 +824,34 @@ def _resolve_request_context_kwargs(
     return {}
 
 
+def _resolve_chat_temperature(
+    agent_temperature: float | None,
+    models: Any,
+    provider_id: str,
+    model_id: str,
+) -> float | None:
+    """Resolve the temperature to send on the wire for one chat request.
+
+    Priority (highest wins):
+    1. ``agent.temperature`` — an explicit per-agent or baked-global-default value.
+    2. ``Model.recommended_temperature`` — a per-model fallback from the Model DB
+       (e.g. GLM-5.2 recommends 1.0 to avoid low-temperature reasoning loops).
+    3. ``None`` — let the provider-config defaults or the API decide.
+
+    The model recommendation only applies when the agent did not set a
+    temperature. An explicit agent value always wins, preserving user intent.
+    """
+    if agent_temperature is not None:
+        return agent_temperature
+    if provider_id and model_id:
+        try:
+            model = models.get(provider_id, model_id)
+        except (KeyError, AttributeError):
+            return None
+        return cast("float | None", model.recommended_temperature)
+    return None
+
+
 def _connection_local_id(provider_id: str, connection_id: str) -> str | None:
     """Extract the provider-local connection id from a ``<provider>:<conn>[:<account>]`` id.
 
@@ -2950,6 +2978,7 @@ class ChatLoop:
                 chunk_timeout_seconds=target.chunk_timeout_seconds,
                 continuation_tracker=context.continuation_tracker,
                 output_cwd=output_cwd,
+                provider_id=target.provider_id,
             )
             # This is the sole mutation point for the Iteration count: one
             # completed request/response pair, independent of how many Tool
@@ -3834,11 +3863,19 @@ class ChatLoop:
         output_cwd: Path | None,
         chunk_timeout_seconds: float | None = STREAM_CHUNK_TIMEOUT_SECONDS,
         continuation_tracker: ContinuationTracker | None = None,
+        *,
+        provider_id: str = "",
     ) -> _AssistantStep:
         request_context = _resolve_request_context_kwargs(
             adapter,
             run,
             prompt_cache_affinity_id,
+        )
+        temperature = _resolve_chat_temperature(
+            agent.temperature,
+            self._dependencies.models,
+            provider_id,
+            model_id,
         )
         if self._streaming:
             return await self._send_streaming_assistant_request(
@@ -3853,6 +3890,7 @@ class ChatLoop:
                 request_context=request_context,
                 continuation_tracker=continuation_tracker,
                 output_cwd=output_cwd,
+                temperature=temperature,
             )
 
         return await self._send_non_streaming_assistant_request(
@@ -3863,6 +3901,7 @@ class ChatLoop:
             messages,
             tools,
             request_context=request_context,
+            temperature=temperature,
         )
 
     async def _send_non_streaming_assistant_request(
@@ -3875,11 +3914,12 @@ class ChatLoop:
         tools: list[JsonObject],
         *,
         request_context: dict[str, Any],
+        temperature: float | None,
     ) -> _AssistantStep:
         response = await adapter.send(
             messages,
             model_id=model_id,
-            temperature=agent.temperature,
+            temperature=temperature,
             thinking_effort=agent.thinking_effort,
             tools=tools,
             **request_context,
@@ -3906,6 +3946,8 @@ class ChatLoop:
         chunk_timeout_seconds: float | None = STREAM_CHUNK_TIMEOUT_SECONDS,
         request_context: dict[str, Any] | None = None,
         continuation_tracker: ContinuationTracker | None = None,
+        *,
+        temperature: float | None,
     ) -> _AssistantStep:
         # A transient drop before answer text is replayed as a full stream
         # restart. Readable Reasoning and any unexecuted Tool Call preview are
@@ -3926,6 +3968,7 @@ class ChatLoop:
                     request_context=request_context or {},
                     continuation_tracker=continuation_tracker,
                     output_cwd=output_cwd,
+                    temperature=temperature,
                 )
             except _StreamRestartNeeded as restart:
                 _LOGGER.warning(
@@ -3955,13 +3998,14 @@ class ChatLoop:
         chunk_timeout_seconds: float | None = STREAM_CHUNK_TIMEOUT_SECONDS,
         request_context: dict[str, Any] | None = None,
         continuation_tracker: ContinuationTracker | None = None,
+        temperature: float | None = None,
     ) -> _AssistantStep:
         accumulator = StreamingAccumulator()
         delta_emitter = _StreamingRunDeltaEmitter(run)
         stream = adapter.stream(
             messages,
             model_id=model_id,
-            temperature=agent.temperature,
+            temperature=temperature,
             thinking_effort=agent.thinking_effort,
             tools=tools,
             **(request_context or {}),
@@ -4033,6 +4077,7 @@ class ChatLoop:
                     messages,
                     tools,
                     request_context=request_context or {},
+                    temperature=temperature,
                 )
                 assistant_step = replace(
                     assistant_step,
