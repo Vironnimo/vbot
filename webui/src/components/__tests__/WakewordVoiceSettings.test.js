@@ -153,11 +153,11 @@ describe('WakewordVoiceSettings', () => {
     document.body.innerHTML = '';
   });
 
-  it('shows an actionable microphone error and compatible device picker', async () => {
+  it('shows a microphone warning and compatible device picker', async () => {
     desktopBridge.getWakewordStatus.mockResolvedValue({
       ...baseStatus(),
       enabled: true,
-      state: 'error',
+      state: 'microphone_disconnected',
       error_code: 'microphone_unavailable',
     });
 
@@ -165,9 +165,10 @@ describe('WakewordVoiceSettings', () => {
 
     expect(
       document.querySelector(
-        '.voice-attention-banner.banner--error[role="alert"]',
+        '.voice-attention-banner.banner--warn[role="status"]',
       ),
     ).not.toBeNull();
+    expect(document.querySelector('.banner--error')).toBeNull();
     expect(buttonByText('Retry listening')).not.toBeNull();
 
     buttonByLabel('Microphone').click();
@@ -223,7 +224,7 @@ describe('WakewordVoiceSettings', () => {
     desktopBridge.getWakewordStatus.mockResolvedValue({
       ...baseStatus(),
       enabled: true,
-      state: 'error',
+      state: 'microphone_disconnected',
       error_code: 'microphone_unavailable',
     });
     desktopBridge.listMicrophones

@@ -255,7 +255,7 @@
       ),
       microphone_unavailable: t(
         'settings.voice.error.microphone',
-        'The selected microphone cannot provide compatible audio. Choose another input device or check microphone permissions.',
+        'No compatible microphone is available. Connect a microphone or choose another input device, then retry.',
       ),
       microphone_read_failed: t(
         'settings.voice.error.microphoneRead',

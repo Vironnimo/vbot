@@ -851,9 +851,11 @@ def test_worker_stop_during_target_validation_never_opens_engine(
     assert "error" not in fake_bridge.states
 
 
-def test_microphone_start_failure_releases_loaded_engine(
+def test_microphone_start_failure_enters_recovery_instead_of_error(
     fake_bridge: FakeBridge,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    from desktop.wakeword import worker as worker_module
     from desktop.wakeword.worker import MicrophoneUnavailableError, WakewordWorker
 
     engine = MagicMock()
@@ -867,13 +869,74 @@ def test_microphone_start_failure_releases_loaded_engine(
     worker._open_stream = MagicMock(  # type: ignore[method-assign]
         side_effect=MicrophoneUnavailableError("unsupported")
     )
+
+    def stop_while_waiting(_running, _duration_seconds: float) -> None:
+        worker._running.clear()
+
+    monkeypatch.setattr(worker_module, "_sleep_while_running", stop_while_waiting)
     worker._running.set()
 
     worker._run()
 
     engine.start.assert_called_once()
     engine.stop.assert_called_once()
-    assert fake_bridge.errors[-1] == "microphone_unavailable"
+    assert fake_bridge.states == ["microphone_disconnected"]
+    assert fake_bridge.errors == ["microphone_unavailable"]
+    assert "error" not in fake_bridge.states
+
+
+def test_microphone_start_failure_recovers_when_microphone_appears(
+    fake_bridge: FakeBridge,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from desktop.wakeword import worker as worker_module
+    from desktop.wakeword.worker import MicrophoneUnavailableError, WakewordWorker
+
+    engine = MagicMock()
+    worker = WakewordWorker(
+        engine=engine,
+        bridge=fake_bridge,
+        server_url="http://127.0.0.1:8420",
+    )
+    open_attempts = 0
+    refresh_calls = 0
+    reconnect_waits: list[float] = []
+
+    def open_stream() -> None:
+        nonlocal open_attempts
+        open_attempts += 1
+        if open_attempts == 1:
+            raise MicrophoneUnavailableError("unsupported")
+        worker._stream = FakeSounddeviceStream(
+            [_make_silence_chunk()],
+            on_read=worker._running.clear,
+        )
+
+    def refresh_microphone_devices() -> bool:
+        nonlocal refresh_calls
+        refresh_calls += 1
+        return True
+
+    def wait_for_reconnect(_running, duration_seconds: float) -> None:
+        reconnect_waits.append(duration_seconds)
+
+    worker._open_stream = open_stream  # type: ignore[method-assign]
+    worker._read_config = lambda: {"target_agent_id": "main"}  # type: ignore[method-assign]
+    worker._target_agent_available = lambda _agent_id: True  # type: ignore[assignment,method-assign]
+    monkeypatch.setattr(worker_module, "_sleep_while_running", wait_for_reconnect)
+    monkeypatch.setattr(worker_module, "refresh_microphone_devices", refresh_microphone_devices)
+    worker._running.set()
+
+    worker._run()
+
+    engine.start.assert_called_once()
+    engine.stop.assert_called_once()
+    assert open_attempts == 2
+    assert refresh_calls == 1
+    assert reconnect_waits == [30.0]
+    assert fake_bridge.states == ["microphone_disconnected", "listening"]
+    assert fake_bridge.errors == ["microphone_unavailable", None]
+    assert "error" not in fake_bridge.states
 
 
 def test_handle_detection_closes_microphone_before_network_calls(
