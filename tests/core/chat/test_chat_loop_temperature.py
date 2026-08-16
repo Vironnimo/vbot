@@ -12,7 +12,7 @@ from typing import Any
 
 import pytest
 
-from core.chat.chat import _resolve_chat_temperature
+from core.chat.model_resolution import resolve_request_temperature
 from tests.core.chat.chat_loop_support import (
     StubAdapter,
     StubAgent,
@@ -30,7 +30,7 @@ class TestResolveChatTemperature:
             {("ollama-cloud", "glm-5.2"): 200000},
             recommended_temperatures={("ollama-cloud", "glm-5.2"): 1.0},
         )
-        result = _resolve_chat_temperature(0.1, models, "ollama-cloud", "glm-5.2")
+        result = resolve_request_temperature(0.1, models, "ollama-cloud", "glm-5.2")
         assert result == 0.1
 
     def test_none_agent_temperature_uses_model_recommendation(self):
@@ -38,12 +38,12 @@ class TestResolveChatTemperature:
             {("ollama-cloud", "glm-5.2"): 200000},
             recommended_temperatures={("ollama-cloud", "glm-5.2"): 1.0},
         )
-        result = _resolve_chat_temperature(None, models, "ollama-cloud", "glm-5.2")
+        result = resolve_request_temperature(None, models, "ollama-cloud", "glm-5.2")
         assert result == 1.0
 
     def test_none_agent_and_no_recommendation_yields_none(self):
         models = StubModels({("openai", "gpt-5.2"): 128000})
-        result = _resolve_chat_temperature(None, models, "openai", "gpt-5.2")
+        result = resolve_request_temperature(None, models, "openai", "gpt-5.2")
         assert result is None
 
     def test_zero_agent_temperature_is_respected(self):
@@ -52,17 +52,17 @@ class TestResolveChatTemperature:
             {("ollama-cloud", "glm-5.2"): 200000},
             recommended_temperatures={("ollama-cloud", "glm-5.2"): 1.0},
         )
-        result = _resolve_chat_temperature(0.0, models, "ollama-cloud", "glm-5.2")
+        result = resolve_request_temperature(0.0, models, "ollama-cloud", "glm-5.2")
         assert result == 0.0
 
     def test_empty_provider_id_yields_none(self):
         models = StubModels({})
-        result = _resolve_chat_temperature(None, models, "", "glm-5.2")
+        result = resolve_request_temperature(None, models, "", "glm-5.2")
         assert result is None
 
     def test_unknown_model_yields_none(self):
         models = StubModels({})
-        result = _resolve_chat_temperature(None, models, "ollama-cloud", "unknown")
+        result = resolve_request_temperature(None, models, "ollama-cloud", "unknown")
         assert result is None
 
 

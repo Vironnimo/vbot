@@ -922,6 +922,8 @@ class StubCompactionService:
                     dict(message) for message in kwargs.get("request_messages") or []
                 ],
                 "active_tools": [dict(tool) for tool in kwargs.get("active_tools") or []],
+                "summary_temperature": kwargs.get("summary_temperature"),
+                "active_temperature": kwargs.get("active_temperature"),
             }
         )
         if self._compact_error is not None:

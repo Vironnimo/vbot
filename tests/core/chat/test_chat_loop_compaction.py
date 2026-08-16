@@ -628,6 +628,8 @@ async def test_compaction_maybe_auto_compact_appends_checkpoint_and_rebuilds_mes
     assert compaction_service.compact_calls[0]["summary_model_id"] == "gpt-5.2"
     assert compaction_service.compact_calls[0]["summary_adapter"] is adapter
     assert compaction_service.compact_calls[0]["request_messages"] == messages
+    assert compaction_service.compact_calls[0]["summary_temperature"] is None
+    assert compaction_service.compact_calls[0]["active_temperature"] is None
     assert (
         compaction_service.compact_calls[0]["minimum_reclaim_tokens"]
         == MIN_AUTO_COMPACTION_RECLAIM_TOKENS
@@ -682,6 +684,57 @@ async def test_compaction_maybe_auto_compact_appends_checkpoint_and_rebuilds_mes
         "context_tokens_before": 90,
         "context_tokens_after": expected_context_tokens_after,
     }
+
+
+@pytest.mark.asyncio
+async def test_compaction_resolves_model_recommended_temperatures_for_both_targets(
+    tmp_path: Path,
+) -> None:
+    agent = StubAgent(id="coder", model="ollama-cloud/glm-5.2", allowed_tools=["*"])
+    adapter = StubAdapter([])
+    runtime: Any = StubRuntime(
+        data_dir=tmp_path,
+        agent=agent,
+        adapter=adapter,
+        storage=StubStorage(
+            {
+                "auto": True,
+                "threshold": 0.8,
+                "tail_tokens": 15_000,
+                "summary_model": "ollama-cloud/qwen3",
+            }
+        ),
+        models=StubModels(
+            {("ollama-cloud", "glm-5.2"): 100, ("ollama-cloud", "qwen3"): 100},
+            recommended_temperatures={("ollama-cloud", "glm-5.2"): 1.0},
+        ),
+    )
+    session = runtime.chat_sessions.create("coder", session_id="session-one")
+    session.append(ChatMessage.user("Tail user"))
+    session.append(ChatMessage.assistant(model=agent.model, content="Tail assistant"))
+    checkpoint = ChatMessage.compaction_checkpoint(
+        summary="Compacted tail context.",
+        projection=session.load()[-2:],
+        compacted_token_count=42,
+    )
+    compaction_service = StubCompactionService(should_auto=True, checkpoint=checkpoint)
+    loop = build_chat_loop(runtime, compaction_service=cast(Any, compaction_service))
+    messages = await loop._build_request_messages(agent, session)
+    run = Run(run_id="run-1", agent_id=agent.id, session_id=session.id)
+
+    await _maybe_auto_compact(
+        loop,
+        agent,
+        adapter,
+        "glm-5.2",
+        session,
+        messages,
+        usage={"input_tokens": 90},
+        run=run,
+    )
+
+    assert compaction_service.compact_calls[0]["summary_temperature"] is None
+    assert compaction_service.compact_calls[0]["active_temperature"] == 1.0
 
 
 @pytest.mark.asyncio
