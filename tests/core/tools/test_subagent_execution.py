@@ -123,7 +123,7 @@ async def test_subagent_tool_forwards_run_local_model_and_thinking_overrides(
     await asyncio.sleep(0)
 
 
-async def test_subagent_tool_preserves_explicit_provider_default_thinking_effort(
+async def test_subagent_tool_treats_empty_thinking_effort_as_no_override(
     tmp_path: Path,
 ) -> None:
     FakeChatLoop.seen_agent_overrides = []
@@ -140,8 +140,7 @@ async def test_subagent_tool_preserves_explicit_provider_default_thinking_effort
 
     assert result["ok"] is True
     overrides = FakeChatLoop.seen_agent_overrides[0]
-    assert overrides is not None
-    assert overrides.thinking_effort == ""
+    assert overrides is None
     manager.started[0][3].mark_completed(
         ChatMessage.assistant(model="openai/gpt-5.2", content="done")
     )

@@ -75,7 +75,6 @@ async def test_register_subagent_tools_registers_one_flat_public_tool() -> None:
     assert "maxLength" not in properties["description"]
     assert "description" not in subagent.parameters["required"]
     assert properties["thinking_effort"]["enum"] == [
-        "",
         "high",
         "low",
         "max",

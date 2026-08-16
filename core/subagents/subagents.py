@@ -1455,18 +1455,27 @@ def _positive_int(value: Any, default: int) -> int:
 
 
 def _parse_agent_run_overrides(arguments: JsonObject) -> AgentRunOverrides | None:
-    """Parse the Run-only fields without collapsing explicit Provider default."""
+    """Parse the Run-only override fields.
+
+    An empty ``thinking_effort`` string is the internal ``provider default``
+    sentinel used by the Agent configuration chain. As a Tool override it is
+    meaningless — omitting the field already inherits the target Agent's value —
+    so it is collapsed to ``None`` (no override) rather than treated as an
+    explicit request to clear the Agent's configured level.
+    """
     model = optional_string(arguments.get("model"), field_name="model")
     thinking_effort: str | None = None
     if "thinking_effort" in arguments:
-        thinking_effort = cast(
-            str,
-            validate_thinking_effort(
-                arguments["thinking_effort"],
-                label="thinking_effort",
-                allow_none=False,
-            ),
-        )
+        raw = arguments["thinking_effort"]
+        if isinstance(raw, str) and raw:
+            thinking_effort = cast(
+                str,
+                validate_thinking_effort(
+                    raw,
+                    label="thinking_effort",
+                    allow_none=False,
+                ),
+            )
     overrides = AgentRunOverrides(
         model=model,
         thinking_effort=thinking_effort,

@@ -438,7 +438,6 @@ SUBAGENT_CASES = (
     "run_model",
     "run_description",
     "run_all",
-    "thinking_default",
     "thinking_minimal",
     "thinking_low",
     "thinking_medium",
@@ -1949,11 +1948,6 @@ def _subagent_scenario(case_name: str) -> ProbeScenario:
             "session_id": "session-123",
             "model": "openai/gpt-5.6-luna",
             "thinking_effort": "high",
-        },
-        "thinking_default": {
-            "action": "run",
-            "content": "Inspect the Tool contract and report concise findings.",
-            "thinking_effort": "",
         },
         "thinking_minimal": {
             "action": "run",
