@@ -7,6 +7,8 @@ import json
 import logging
 import os
 import sys
+import time
+import types
 from collections.abc import AsyncIterator, Callable
 from pathlib import Path
 from typing import Any
@@ -47,6 +49,7 @@ RUN_ID = "run-a"
 @pytest.fixture(autouse=True)
 def shell_env_cache(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(bash_module, "_cached_shell_env", {"PATH": "original-path"})
+    monkeypatch.setattr(bash_module, "_shell_env_cache_time", time.monotonic())
     monkeypatch.setattr(bash_module, "_shell_env_probe_task", None)
 
 
@@ -1642,6 +1645,295 @@ async def test_cancelling_shell_env_waiter_keeps_shared_probe_running(
     assert await surviving_waiter == {"PATH": "probed-path"}
     assert bash_module._cached_shell_env == {"PATH": "probed-path"}
     assert bash_module._shell_env_probe_task is None
+
+
+@pytest.mark.asyncio
+async def test_shell_env_cache_expires_after_ttl(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A stale cache triggers a fresh re-probe on the next call."""
+    probe_calls = 0
+
+    async def probe_shell_env() -> dict[str, str]:
+        nonlocal probe_calls
+        probe_calls += 1
+        return {"PATH": f"probe-{probe_calls}"}
+
+    monkeypatch.setattr(bash_module, "_probe_shell_env", probe_shell_env)
+    monkeypatch.setattr(bash_module, "SHELL_ENV_CACHE_TTL_SECONDS", 0.01)
+
+    # Seed the cache with a pre-existing value and a fresh timestamp.
+    monkeypatch.setattr(bash_module, "_cached_shell_env", {"PATH": "old"})
+    monkeypatch.setattr(bash_module, "_shell_env_cache_time", time.monotonic())
+
+    env_first = await bash_module._get_shell_env()
+    assert env_first == {"PATH": "old"}
+    assert probe_calls == 0  # cache still fresh
+
+    await asyncio.sleep(0.02)  # exceed TTL
+
+    env_second = await bash_module._get_shell_env()
+    assert env_second == {"PATH": "probe-1"}
+    assert probe_calls == 1  # re-probed after expiry
+
+
+@pytest.mark.asyncio
+async def test_shell_env_cache_ttl_zero_never_expires(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A TTL of zero means the cache never expires (disables refresh)."""
+    probe_calls = 0
+
+    async def probe_shell_env() -> dict[str, str]:
+        nonlocal probe_calls
+        probe_calls += 1
+        return {"PATH": "fresh"}
+
+    monkeypatch.setattr(bash_module, "_probe_shell_env", probe_shell_env)
+    monkeypatch.setattr(bash_module, "SHELL_ENV_CACHE_TTL_SECONDS", 0)
+    monkeypatch.setattr(bash_module, "_cached_shell_env", {"PATH": "cached"})
+    monkeypatch.setattr(bash_module, "_shell_env_cache_time", 0.0)
+
+    env = await bash_module._get_shell_env()
+    assert env == {"PATH": "cached"}
+    assert probe_calls == 0
+
+
+def test_reset_shell_env_cache_clears_cache(monkeypatch: pytest.MonkeyPatch) -> None:
+    """reset_shell_env_cache sets the cache to None so the next call re-probes."""
+    monkeypatch.setattr(bash_module, "_cached_shell_env", {"PATH": "stale"})
+    monkeypatch.setattr(bash_module, "_shell_env_cache_time", time.monotonic())
+
+    bash_module.reset_shell_env_cache()
+
+    assert bash_module._cached_shell_env is None
+    assert bash_module._shell_env_cache_time == 0.0
+
+
+@pytest.mark.asyncio
+async def test_reset_shell_env_cache_forces_reprobe_on_next_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """After reset, the next _get_shell_env call re-probes even if TTL hasn't elapsed."""
+    probe_calls = 0
+
+    async def probe_shell_env() -> dict[str, str]:
+        nonlocal probe_calls
+        probe_calls += 1
+        return {"PATH": f"probe-{probe_calls}"}
+
+    monkeypatch.setattr(bash_module, "_probe_shell_env", probe_shell_env)
+    monkeypatch.setattr(bash_module, "SHELL_ENV_CACHE_TTL_SECONDS", 999.0)
+    monkeypatch.setattr(bash_module, "_cached_shell_env", None)
+
+    env_first = await bash_module._get_shell_env()
+    assert env_first == {"PATH": "probe-1"}
+    assert probe_calls == 1
+
+    # Without reset, the cache is fresh (TTL=999) so no re-probe.
+    env_cached = await bash_module._get_shell_env()
+    assert env_cached == {"PATH": "probe-1"}
+    assert probe_calls == 1
+
+    bash_module.reset_shell_env_cache()
+    env_after_reset = await bash_module._get_shell_env()
+    assert env_after_reset == {"PATH": "probe-2"}
+    assert probe_calls == 2
+
+
+def test_overlay_registry_path_overwrites_path_on_windows(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """_overlay_registry_path replaces PATH with the registry value when available."""
+    monkeypatch.setattr(bash_module.sys, "platform", "win32")
+    monkeypatch.setattr(bash_module, "_read_registry_path", lambda: "C:\\new;C:\\fresh")
+
+    env = {"PATH": "C:\\old", "OTHER": "keep"}
+    result = bash_module._overlay_registry_path(env)
+
+    assert result["PATH"] == "C:\\new;C:\\fresh"
+    assert result["OTHER"] == "keep"
+
+
+def test_overlay_registry_path_preserves_path_when_registry_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When the registry read returns None, the existing PATH is kept."""
+    monkeypatch.setattr(bash_module.sys, "platform", "win32")
+    monkeypatch.setattr(bash_module, "_read_registry_path", lambda: None)
+
+    env = {"PATH": "C:\\original"}
+    result = bash_module._overlay_registry_path(env)
+
+    assert result["PATH"] == "C:\\original"
+
+
+def test_overlay_registry_path_is_noop_on_posix(monkeypatch: pytest.MonkeyPatch) -> None:
+    """On non-Windows, _overlay_registry_path returns the env unchanged."""
+    monkeypatch.setattr(bash_module.sys, "platform", "linux")
+
+    env = {"PATH": "/usr/bin:/bin", "HOME": "/home/user"}
+    result = bash_module._overlay_registry_path(env)
+
+    assert result == env
+
+
+def test_read_registry_path_returns_none_on_posix(monkeypatch: pytest.MonkeyPatch) -> None:
+    """_read_registry_path returns None on non-Windows without importing winreg."""
+    monkeypatch.setattr(bash_module.sys, "platform", "linux")
+    assert bash_module._read_registry_path() is None
+
+
+def test_read_registry_path_combines_machine_and_user(monkeypatch: pytest.MonkeyPatch) -> None:
+    """On Windows, _read_registry_path joins machine and user PATH segments."""
+    monkeypatch.setattr(bash_module.sys, "platform", "win32")
+
+    class FakeKey:
+        def __init__(self, path_value: str) -> None:
+            self._path_value = path_value
+
+        def __enter__(self) -> FakeKey:
+            return self
+
+        def __exit__(self, *args: Any) -> None:
+            pass
+
+    fake_winreg: Any = types.ModuleType("winreg")
+    fake_winreg.HKEY_LOCAL_MACHINE = 1
+    fake_winreg.HKEY_CURRENT_USER = 2
+
+    open_key_calls: list[tuple[int, str]] = []
+
+    def fake_open_key(hkey: int, subkey: str) -> FakeKey:
+        open_key_calls.append((hkey, subkey))
+        if hkey == fake_winreg.HKEY_LOCAL_MACHINE:
+            return FakeKey("C:\\system32;C:\\windows")
+        return FakeKey("C:\\user\\bin")
+
+    def fake_query_value_ex(key: FakeKey, name: str) -> tuple[str, int]:
+        assert name == "PATH"
+        return key._path_value, 2  # REG_EXPAND_SZ
+
+    fake_winreg.OpenKey = fake_open_key
+    fake_winreg.QueryValueEx = fake_query_value_ex
+    monkeypatch.setitem(sys.modules, "winreg", fake_winreg)
+
+    result = bash_module._read_registry_path()
+    assert result == "C:\\system32;C:\\windows;C:\\user\\bin"
+    assert len(open_key_calls) == 2
+
+
+def test_read_registry_path_returns_none_when_both_empty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When both machine and user PATH are empty, _read_registry_path returns None."""
+    monkeypatch.setattr(bash_module.sys, "platform", "win32")
+
+    class FakeKey:
+        def __enter__(self) -> FakeKey:
+            return self
+
+        def __exit__(self, *args: Any) -> None:
+            pass
+
+    fake_winreg: Any = types.ModuleType("winreg")
+    fake_winreg.HKEY_LOCAL_MACHINE = 1
+    fake_winreg.HKEY_CURRENT_USER = 2
+
+    def fake_open_key(hkey: int, subkey: str) -> FakeKey:
+        return FakeKey()
+
+    def fake_query_value_ex(key: FakeKey, name: str) -> tuple[str, int]:
+        return "", 2
+
+    fake_winreg.OpenKey = fake_open_key
+    fake_winreg.QueryValueEx = fake_query_value_ex
+    monkeypatch.setitem(sys.modules, "winreg", fake_winreg)
+
+    assert bash_module._read_registry_path() is None
+
+
+def test_read_registry_path_returns_none_on_oserror(monkeypatch: pytest.MonkeyPatch) -> None:
+    """When the registry key cannot be opened, _read_registry_path returns None."""
+    monkeypatch.setattr(bash_module.sys, "platform", "win32")
+
+    fake_winreg: Any = types.ModuleType("winreg")
+    fake_winreg.HKEY_LOCAL_MACHINE = 1
+    fake_winreg.HKEY_CURRENT_USER = 2
+
+    def fake_open_key(hkey: int, subkey: str) -> Any:
+        raise OSError("registry unavailable")
+
+    fake_winreg.OpenKey = fake_open_key
+    fake_winreg.QueryValueEx = lambda *_args: ("", 2)
+    monkeypatch.setitem(sys.modules, "winreg", fake_winreg)
+
+    assert bash_module._read_registry_path() is None
+
+
+@pytest.mark.asyncio
+async def test_spawn_filenotfounderror_triggers_env_refresh_and_retry(
+    manager: ProcessManager,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A FileNotFoundError on spawn resets the env cache and retries once."""
+    from core.tools.process_manager import ProcessManager as _ProcMgr
+
+    spawn_calls = 0
+    original_spawn = _ProcMgr.spawn
+
+    async def tracking_spawn(self: _ProcMgr, *args: Any, **kwargs: Any) -> str:
+        nonlocal spawn_calls
+        spawn_calls += 1
+        if spawn_calls == 1:
+            raise FileNotFoundError("pwsh not found")
+        return await original_spawn(self, *args, **kwargs)
+
+    monkeypatch.setattr(_ProcMgr, "spawn", tracking_spawn)
+    monkeypatch.setattr(bash_module, "_shell_argv", python_command)
+    reset_calls: list[bool] = []
+    original_reset = bash_module.reset_shell_env_cache
+
+    def tracking_reset() -> None:
+        reset_calls.append(True)
+        original_reset()
+
+    monkeypatch.setattr(bash_module, "reset_shell_env_cache", tracking_reset)
+    context = make_context(tmp_path)
+
+    result = await bash_handler(
+        context,
+        {"command": "print('recovered')", "mode": "foreground"},
+        manager,
+    )
+
+    assert result["ok"] is True
+    assert result["data"]["output"].strip() == "recovered"
+    assert spawn_calls == 2
+    assert reset_calls == [True]
+
+
+@pytest.mark.asyncio
+async def test_spawn_filenotfounderror_retry_failure_returns_failure_envelope(
+    manager: ProcessManager,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When the retry also fails with FileNotFoundError, a failure envelope is returned."""
+    from core.tools.process_manager import ProcessManager as _ProcMgr
+
+    async def always_fail(self: _ProcMgr, *args: Any, **kwargs: Any) -> str:
+        raise FileNotFoundError("still not found")
+
+    monkeypatch.setattr(_ProcMgr, "spawn", always_fail)
+    monkeypatch.setattr(bash_module, "reset_shell_env_cache", lambda: None)
+    context = make_context(tmp_path)
+
+    result = await bash_handler(
+        context,
+        {"command": "ignored", "mode": "foreground"},
+        manager,
+    )
+
+    assert result["ok"] is False
+    assert result["error"]["code"] == "process_spawn_failed"
 
 
 def test_register_bash_tool() -> None:
