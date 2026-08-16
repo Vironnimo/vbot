@@ -1201,7 +1201,10 @@ def test_subagent_cases_use_production_schema_and_exact_arguments() -> None:
         "action": "run",
         "content": "Inspect the Tool contract and report concise findings.",
     }
-    assert PROBE._subagent_scenario("thinking_default").expected_arguments["thinking_effort"] == ""
+    assert (
+        PROBE._subagent_scenario("thinking_minimal").expected_arguments["thinking_effort"]
+        == "minimal"
+    )
 
 
 def test_probe_runtime_suppresses_background_service_start_hooks() -> None:

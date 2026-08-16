@@ -110,10 +110,9 @@ _SUBAGENT_MODEL_PARAMETER: JsonObject = {
 }
 _SUBAGENT_THINKING_PARAMETER: JsonObject = {
     "type": "string",
-    "enum": sorted(ALLOWED_THINKING_EFFORTS),
+    "enum": sorted(e for e in ALLOWED_THINKING_EFFORTS if e),
     "description": (
-        "Thinking effort for run. Omit to inherit the target Agent; an empty string selects "
-        "the Provider default. Applies only to this Run."
+        "Thinking effort for run. Omit to inherit the target Agent. Applies only to this Run."
     ),
 }
 _SUBAGENT_SESSION_ID_PARAMETER: JsonObject = {
