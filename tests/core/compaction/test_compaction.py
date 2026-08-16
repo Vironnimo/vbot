@@ -331,6 +331,7 @@ async def test_summary_tail_executes_one_call_and_materializes_projection() -> N
     assert summary_adapter.requests[0]["model_id"] == "openai/summary"
     assert summary_adapter.requests[0]["messages"][:-1] == request[:4]
     assert summary_adapter.requests[0]["tools"] == tools
+    assert summary_adapter.requests[0]["temperature"] is None
     assert "Compact" not in summary_adapter.requests[0]["messages"][1]["content"]
     assert summary_adapter.requests[0]["messages"][-1]["content"] == (
         "Preserve decisions and unfinished work."
@@ -809,6 +810,34 @@ async def test_compaction_engine_leaves_context_projection_for_chat() -> None:
 
 
 @pytest.mark.asyncio
+async def test_summary_target_uses_summary_temperature_not_active_temperature() -> None:
+    summary_adapter = StubAdapter("NEW SUMMARY")
+    active_adapter = StubAdapter("must not be used")
+    messages = [
+        user("u1", "old request " * 100),
+        assistant("a1", "old response " * 100),
+        user("u2", "recent request"),
+        assistant("a2", "recent response"),
+    ]
+
+    await CompactionService().compact(
+        messages,
+        agent=object(),
+        summary_adapter=summary_adapter,
+        summary_model_id="openai/summary",
+        storage=StubStorage(),
+        settings=CompactionSettings(tail_tokens=_tail_token_span(messages[2:])),
+        request_messages=provider_request(messages),
+        active_adapter=active_adapter,
+        active_model_id="openai/active",
+        summary_temperature=1.0,
+        active_temperature=0.2,
+    )
+
+    assert summary_adapter.requests[0]["temperature"] == 1.0
+
+
+@pytest.mark.asyncio
 async def test_continuation_preserves_request_prefix_and_active_tools() -> None:
     active = StubAdapter("ACTIVE SUMMARY")
     summary = StubAdapter("must not be used")
@@ -830,6 +859,8 @@ async def test_continuation_preserves_request_prefix_and_active_tools() -> None:
         active_adapter=active,
         active_model_id="openai/active",
         active_tools=tools,
+        summary_temperature=1.0,
+        active_temperature=0.2,
     )
 
     assert summary.requests == []
@@ -837,6 +868,7 @@ async def test_continuation_preserves_request_prefix_and_active_tools() -> None:
     assert active.requests[0]["messages"][:-1] == request
     assert "checkpoint" in active.requests[0]["messages"][-1]["content"]
     assert active.requests[0]["tools"] == tools
+    assert active.requests[0]["temperature"] == 0.2
     assert result.projection is not None
     assert len(result.projection) == 1
 

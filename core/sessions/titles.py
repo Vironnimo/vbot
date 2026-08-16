@@ -18,6 +18,7 @@ from core.chat.model_resolution import (
     _first_usable_connection_id,
     _model_connection_allowlist,
     parse_model_with_connection,
+    resolve_request_temperature,
 )
 from core.debug import DebugContext
 from core.sessions.sessions import (
@@ -255,7 +256,12 @@ class SessionTitleService:
                     {"role": "user", "content": title_input},
                 ],
                 model_id=model_id,
-                temperature=0.0,
+                temperature=resolve_request_temperature(
+                    None,
+                    self._runtime.models,
+                    provider_id,
+                    model_id,
+                ),
                 thinking_effort="none",
             )
             title = await _SESSION_TITLE_WORKERS.run(

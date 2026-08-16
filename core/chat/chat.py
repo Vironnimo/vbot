@@ -128,6 +128,7 @@ from core.chat.model_resolution import (
     _resolve_agent_connection,
     _resolve_fallback,
     _split_agent_model,
+    resolve_request_temperature,
 )
 from core.chat.model_resolution import (
     parse_bare_model as parse_bare_model,
@@ -824,34 +825,6 @@ def _resolve_request_context_kwargs(
     return {}
 
 
-def _resolve_chat_temperature(
-    agent_temperature: float | None,
-    models: Any,
-    provider_id: str,
-    model_id: str,
-) -> float | None:
-    """Resolve the temperature to send on the wire for one chat request.
-
-    Priority (highest wins):
-    1. ``agent.temperature`` — an explicit per-agent or baked-global-default value.
-    2. ``Model.recommended_temperature`` — a per-model fallback from the Model DB
-       (e.g. GLM-5.2 recommends 1.0 to avoid low-temperature reasoning loops).
-    3. ``None`` — let the provider-config defaults or the API decide.
-
-    The model recommendation only applies when the agent did not set a
-    temperature. An explicit agent value always wins, preserving user intent.
-    """
-    if agent_temperature is not None:
-        return agent_temperature
-    if provider_id and model_id:
-        try:
-            model = models.get(provider_id, model_id)
-        except (KeyError, AttributeError):
-            return None
-        return cast("float | None", model.recommended_temperature)
-    return None
-
-
 def _connection_local_id(provider_id: str, connection_id: str) -> str | None:
     """Extract the provider-local connection id from a ``<provider>:<conn>[:<account>]`` id.
 
@@ -1366,11 +1339,14 @@ class ChatLoop:
                 provider_id, connection_id = _resolve_agent_connection(self._dependencies, agent)
                 adapter = self._dependencies.get_adapter(provider_id, connection_id)
                 _model_provider_id, model_id = _split_agent_model(agent.model)
-                summary_adapter, summary_model_id = self._resolve_summary_adapter(
-                    agent,
-                    adapter,
-                    model_id,
-                    settings,
+                summary_adapter, summary_model_id, summary_provider_id = (
+                    self._resolve_summary_adapter(
+                        agent,
+                        adapter,
+                        model_id,
+                        settings,
+                        active_provider_id=provider_id,
+                    )
                 )
                 prompt_project = resolve_prompt_project(
                     self._dependencies.projects,
@@ -1463,6 +1439,18 @@ class ChatLoop:
                     active_adapter=adapter,
                     active_model_id=model_id,
                     active_tools=request_state.tools,
+                    summary_temperature=resolve_request_temperature(
+                        None,
+                        self._dependencies.models,
+                        summary_provider_id,
+                        summary_model_id,
+                    ),
+                    active_temperature=resolve_request_temperature(
+                        None,
+                        self._dependencies.models,
+                        provider_id,
+                        model_id,
+                    ),
                 )
             finally:
                 if adapter is not None:
@@ -3460,11 +3448,12 @@ class ChatLoop:
             context_window,
             settings.threshold,
         )
-        summary_adapter, summary_model_id = self._resolve_summary_adapter(
+        summary_adapter, summary_model_id, summary_provider_id = self._resolve_summary_adapter(
             agent,
             target.adapter,
             target.model_id,
             settings,
+            active_provider_id=target.provider_id,
         )
         close_summary_adapter = summary_adapter is not target.adapter
         run.emit(
@@ -3487,6 +3476,18 @@ class ChatLoop:
                 active_model_id=target.model_id,
                 active_tools=tools,
                 minimum_reclaim_tokens=MIN_AUTO_COMPACTION_RECLAIM_TOKENS,
+                summary_temperature=resolve_request_temperature(
+                    None,
+                    self._dependencies.models,
+                    summary_provider_id,
+                    summary_model_id,
+                ),
+                active_temperature=resolve_request_temperature(
+                    None,
+                    self._dependencies.models,
+                    target.provider_id,
+                    target.model_id,
+                ),
             )
         except CompactionInsufficientReclaimError as exc:
             run.emit(
@@ -3819,13 +3820,15 @@ class ChatLoop:
         adapter: Any,
         model_id: str,
         settings: Any,
-    ) -> tuple[Any, str]:
-        """Resolve compaction summary adapter/model, defaulting to active run target."""
+        *,
+        active_provider_id: str,
+    ) -> tuple[Any, str, str]:
+        """Resolve compaction summary adapter/model/provider, defaulting to active."""
         del agent
 
         summary_model = settings.summary_model
         if not isinstance(summary_model, str) or not summary_model:
-            return adapter, model_id
+            return adapter, model_id, active_provider_id
 
         try:
             provider_id, summary_model_id, connection_suffix = parse_model_with_connection(
@@ -3846,9 +3849,9 @@ class ChatLoop:
                 summary_model,
                 exc_info=True,
             )
-            return adapter, model_id
+            return adapter, model_id, active_provider_id
 
-        return summary_adapter, summary_model_id
+        return summary_adapter, summary_model_id, provider_id
 
     async def _send_assistant_request(
         self,
@@ -3871,7 +3874,7 @@ class ChatLoop:
             run,
             prompt_cache_affinity_id,
         )
-        temperature = _resolve_chat_temperature(
+        temperature = resolve_request_temperature(
             agent.temperature,
             self._dependencies.models,
             provider_id,

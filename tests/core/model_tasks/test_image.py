@@ -609,9 +609,27 @@ class _BlockingUnderstandingAdapter(_UnderstandingAdapter):
             self.active_requests -= 1
 
 
+class _UnderstandingModels:
+    def __init__(
+        self, recommended: dict[tuple[str, str], float] | None = None
+    ) -> None:
+        self._recommended = recommended or {}
+
+    def get(self, provider_id: str, model_id: str) -> Any:
+        recommended = self._recommended.get((provider_id, model_id))
+        if recommended is None:
+            raise KeyError(model_id)
+        return SimpleNamespace(recommended_temperature=recommended)
+
+
 class _UnderstandingRuntime:
-    def __init__(self, adapter: _UnderstandingAdapter | Exception) -> None:
+    def __init__(
+        self,
+        adapter: _UnderstandingAdapter | Exception,
+        models: _UnderstandingModels | None = None,
+    ) -> None:
         self.adapter = adapter
+        self.models = models or _UnderstandingModels()
         self.calls: list[tuple[str, str]] = []
 
     def get_adapter(self, provider_id: str, connection_id: str) -> _UnderstandingAdapter:
@@ -727,7 +745,7 @@ async def test_analyze_sends_fixed_isolated_prompt_and_ordered_images(
     assert runtime.calls == [("openrouter", "openrouter:api-key")]
     request = adapter.requests[0]
     assert request["model_id"] == "vision-model"
-    assert request["kwargs"] == {"temperature": 0.0, "tools": []}
+    assert request["kwargs"] == {"temperature": None, "tools": []}
     assert request["messages"][0]["role"] == "system"
     assert request["messages"][0]["content"]
     user_content = request["messages"][1]["content"]
@@ -753,6 +771,24 @@ async def test_analyze_sends_fixed_isolated_prompt_and_ordered_images(
             iteration_number=3,
         )
     ]
+
+
+@pytest.mark.asyncio
+async def test_analyze_uses_model_recommended_temperature(tmp_path: Path) -> None:
+    image = _png(tmp_path / "image.png")
+    adapter = _UnderstandingAdapter()
+    runtime = _UnderstandingRuntime(
+        adapter,
+        models=_UnderstandingModels({("openrouter", "vision-model"): 1.0}),
+    )
+    service = ImageService(
+        _UnderstandingModelTasks(task_types=("chat", "text_output")),
+        cast(Any, runtime),
+    )
+
+    await service.analyze("List the ingredients.", image_paths=[image])
+
+    assert adapter.requests[0]["kwargs"]["temperature"] == 1.0
 
 
 @pytest.mark.asyncio

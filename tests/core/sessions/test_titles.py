@@ -60,6 +60,19 @@ class StubAdapter:
         self.closed = True
 
 
+class StubModels:
+    def __init__(
+        self, recommended: dict[tuple[str, str], float] | None = None
+    ) -> None:
+        self._recommended = recommended or {}
+
+    def get(self, provider_id: str, model_id: str) -> Any:
+        recommended = self._recommended.get((provider_id, model_id))
+        if recommended is None:
+            raise KeyError(model_id)
+        return SimpleNamespace(recommended_temperature=recommended)
+
+
 class StubRuntime:
     def __init__(
         self,
@@ -68,9 +81,11 @@ class StubRuntime:
         enabled: bool,
         configured_model: str = "",
         adapters: list[StubAdapter] | None = None,
+        recommended_temperatures: dict[tuple[str, str], float] | None = None,
     ) -> None:
         self.chat_sessions = ChatSessionManager(tmp_path)
         self.storage = StubStorage(enabled=enabled, model=configured_model)
+        self.models = StubModels(recommended_temperatures)
         self._adapters = list(adapters or [StubAdapter()])
         self.adapter_calls: list[tuple[str, str]] = []
 
@@ -229,11 +244,38 @@ async def test_configured_title_model_replaces_local_title_with_bounded_request(
     assert TITLE_OMISSION_MARKER in request["messages"][1]["content"]
     assert "max_tokens" not in request
     assert request["thinking_effort"] == "none"
+    assert request["temperature"] is None
     assert runtime.chat_sessions.get_metadata("coder", "session-one")["auto_title"] == (
         "Review report"
     )
     assert adapter.closed is True
     assert adapter.debug_context.run_id == "title-run-one"
+
+
+@pytest.mark.asyncio
+async def test_generated_title_uses_model_recommended_temperature(tmp_path) -> None:
+    adapter = StubAdapter('Title: "Audit".')
+    runtime = StubRuntime(
+        tmp_path,
+        enabled=True,
+        configured_model="ollama-cloud/glm-5.2::cloud",
+        adapters=[adapter],
+        recommended_temperatures={("ollama-cloud", "glm-5.2"): 1.0},
+    )
+    _append_first_user(runtime, "Audit the workspace")
+    service = SessionTitleService(cast(Any, runtime))
+
+    service.notify_user_message(
+        agent_id="coder",
+        session_id="session-one",
+        project_id=None,
+        agent=SimpleNamespace(model="openai/agent::main"),
+        content="Audit the workspace",
+        run_id="run-one",
+    )
+    await _wait_for_background(service)
+
+    assert adapter.requests[0]["temperature"] == 1.0
 
 
 def test_generated_title_uses_final_content_and_ignores_reasoning() -> None:
