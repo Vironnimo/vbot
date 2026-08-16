@@ -110,15 +110,16 @@ _KNOWN_WAKEWORD_KEYS = frozenset(
 
 _SERVER_PROFILE_KEYS = frozenset(["target_agent_id", "session_behavior"])
 _WAKEWORD_EVENT_HISTORY_LIMIT = 24
-_CALIBRATION_TIMEOUT_SECONDS = 5 * 60
+_CALIBRATION_TIMEOUT_SECONDS = 3 * 60
 _CALIBRATION_NOISE_SECONDS = 3.0
-_CALIBRATION_REQUIRED_SAMPLES = 3
+_CALIBRATION_REQUIRED_SAMPLES = 5
 _CALIBRATION_RELEASE_FRAMES = 2
 _CALIBRATION_NOISE_PERCENTILE = 0.95
 _CALIBRATION_NOISE_MARGIN = 0.02
 _CALIBRATION_PHRASE_MARGIN = 0.02
-_CALIBRATION_THRESHOLD_GAP_RATIO = 0.4
+_CALIBRATION_THRESHOLD_GAP_RATIO = 0.5
 _CALIBRATION_SENSITIVITY_STEP = 0.05
+_CALIBRATION_NOISE_WARNING_LEVEL = 0.30
 
 
 class DesktopBridge:
@@ -428,6 +429,21 @@ class DesktopBridge:
         logger.info("Wakeword calibration restarted")
         return self.getWakewordStatus()
 
+    def retryWakewordModelCalibration(self, model_id: str) -> dict[str, Any]:  # noqa: N802
+        """Discard samples for one model and recapture from its current target position."""
+        with self._lock:
+            if not self._calibration_active_locked():
+                raise RuntimeError("Wakeword calibration is not active")
+            if model_id not in self._calibration_model_ids:
+                raise WakewordModelError("Model is not part of the active calibration")
+            self._calibration_sample_peaks[model_id] = []
+            self._calibration_recommendations.pop(model_id, None)
+            self._calibration_target_index = self._calibration_model_ids.index(model_id)
+            self._calibration_phase = "phrases"
+            self._reset_calibration_candidate_locked()
+        logger.info("Wakeword calibration retry for model %s", model_id)
+        return self.getWakewordStatus()
+
     # -- Connection (server selection) ---------------------------------------
 
     def connect(self, host: str, port: Any) -> dict[str, str]:
@@ -688,6 +704,14 @@ class DesktopBridge:
             and self._calibration_target_index < len(self._calibration_model_ids)
             else None
         )
+        noise_high = (
+            any(
+                level >= _CALIBRATION_NOISE_WARNING_LEVEL
+                for level in self._calibration_noise_levels.values()
+            )
+            if active and self._calibration_phase != "noise"
+            else False
+        )
         return {
             "active": active,
             "phase": self._calibration_phase if active else None,
@@ -708,6 +732,7 @@ class DesktopBridge:
                 dict(self._calibration_recommendations) if active else {}
             ),
             "noise_seconds_remaining": noise_seconds_remaining,
+            "noise_high": noise_high,
         }
 
     def _calibration_active_locked(self) -> bool:
@@ -859,10 +884,24 @@ def _percentile(values: list[float], percentile: float) -> float:
     return ordered[lower_index] + ((ordered[upper_index] - ordered[lower_index]) * fraction)
 
 
+def _median(values: list[float]) -> float:
+    """Return the linearly interpolated median without a numeric dependency."""
+    if not values:
+        return 0.0
+    ordered = sorted(values)
+    mid = (len(ordered) - 1) / 2
+    lower_index = math.floor(mid)
+    upper_index = math.ceil(mid)
+    if lower_index == upper_index:
+        return ordered[lower_index]
+    fraction = mid - lower_index
+    return ordered[lower_index] + ((ordered[upper_index] - ordered[lower_index]) * fraction)
+
+
 def _recommended_sensitivity(noise_level: float, phrase_peaks: list[float]) -> float:
-    """Place a quantized threshold safely between noise and the weakest phrase."""
-    weakest_phrase = min(phrase_peaks)
-    separation = max(0.0, weakest_phrase - noise_level)
+    """Place a quantized threshold safely between noise and the median phrase."""
+    reference_phrase = _median(phrase_peaks)
+    separation = max(0.0, reference_phrase - noise_level)
     minimum_threshold = 1.0 - MAX_WAKEWORD_SENSITIVITY
     maximum_threshold = 1.0 - MIN_WAKEWORD_SENSITIVITY
     minimum_reliable_threshold = max(
@@ -871,7 +910,7 @@ def _recommended_sensitivity(noise_level: float, phrase_peaks: list[float]) -> f
     )
     maximum_reliable_threshold = min(
         maximum_threshold,
-        weakest_phrase - _CALIBRATION_PHRASE_MARGIN,
+        reference_phrase - _CALIBRATION_PHRASE_MARGIN,
     )
     target_threshold = noise_level + (separation * _CALIBRATION_THRESHOLD_GAP_RATIO)
     supported_thresholds = [

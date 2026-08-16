@@ -17,10 +17,11 @@ function calibrationStatus(overrides = {}) {
     peaks: {},
     noise_levels: {},
     sample_counts: {},
-    required_samples: 3,
+    required_samples: 5,
     target_model_id: null,
     recommended_sensitivities: {},
     noise_seconds_remaining: 0,
+    noise_high: false,
     ...overrides,
   };
 }

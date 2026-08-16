@@ -221,6 +221,11 @@ export async function restartWakewordCalibration() {
   return callBridge('restartWakewordCalibration');
 }
 
+/** Retry calibration for one specific model, discarding only its samples. */
+export async function retryWakewordModelCalibration(modelId) {
+  return callBridge('retryWakewordModelCalibration', modelId);
+}
+
 /**
  * Play a short non-verbal Voice cue inside the Desktop WebView.
  * Failures are deliberately silent: visual state remains authoritative when

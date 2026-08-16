@@ -1764,7 +1764,7 @@ export const englishCatalog = Object.freeze({
   'settings.voice.moreSensitive': 'More sensitive',
   'settings.voice.calibrationTitle': 'Wakeword calibration',
   'settings.voice.calibrationDescription':
-    'Measure room noise and three natural repetitions per phrase to calculate a reliable sensitivity automatically.',
+    'Measure room noise and five natural repetitions per phrase to calculate a reliable sensitivity automatically.',
   'settings.voice.calibrationAnalyzer': 'Guided calibration',
   'settings.voice.calibrationNoiseInstruction':
     'Stay quiet for {seconds} seconds while vBot measures the room.',
@@ -1790,10 +1790,14 @@ export const englishCatalog = Object.freeze({
     'Recommended sensitivity {value}%',
   'settings.voice.calibrationMeterAria': '{name} detector score',
   'settings.voice.calibrationReset': 'Restart calibration',
+  'settings.voice.calibrationRetryModel': 'Retry this phrase',
   'settings.voice.calibrationDiscard': 'Discard and stop',
+  'settings.voice.calibrationDiscardConfirmTitle': 'Discard calibration?',
+  'settings.voice.calibrationDiscardConfirm':
+    'All measurements will be discarded. You will need to start calibration again from the beginning.',
   'settings.voice.calibrationApply': 'Apply calibrated values',
   'settings.voice.calibrationReady':
-    'Calibration takes about 15 seconds. Wakeword commands are paused while it runs.',
+    'Calibration takes about 30–60 seconds. Wakeword commands are paused while it runs.',
   'settings.voice.calibrationEnableFirst':
     'Enable wakeword listening before starting calibration.',
   'settings.voice.calibrationStart': 'Start calibration',
@@ -1802,6 +1806,13 @@ export const englishCatalog = Object.freeze({
   'settings.voice.calibrationStopFailed': 'Calibration could not stop.',
   'settings.voice.calibrationApplied': 'Wakeword sensitivity applied.',
   'settings.voice.calibrationApplyFailed': 'Calibration could not be applied.',
+  'settings.voice.calibrationNoiseHighWarning':
+    'Room noise is high ({level}). Consider moving to a quieter environment or reducing background noise for better results.',
+  'settings.voice.calibrationCurrentSensitivity': 'Current',
+  'settings.voice.calibrationSensitivityTooltip':
+    'Higher sensitivity detects quieter speech but may cause false triggers. Lower sensitivity reduces false triggers but requires clearer speech.',
+  'settings.voice.calibrationOverallProgress': 'Model {index} of {total}',
+  'settings.voice.calibrationRetryModelFailed': 'Could not retry this phrase.',
   'settings.voice.desktopOnly':
     'Wakeword listening is configured in the vBot Desktop app. The transcription audio settings above are server-wide.',
   'settings.voice.mockWarning':
