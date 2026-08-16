@@ -34,11 +34,9 @@ Runs host shell commands and streams foreground stdout/stderr into the Run timel
   that shared initialization. On Windows the probe overlays the live PATH from
   the registry (`HKLM` + `HKCU`), because a headless process never receives the
   `WM_SETTINGCHANGE` broadcast that follows a PATH edit. When the cache is
-  stale the next call re-probes directly. `reset_shell_env_cache()` (exposed as
-  `Runtime.reload_shell_env()`) invalidates the cache immediately — the seam
-  for making a freshly installed program visible without restarting vBot. A
-  shell-binary `FileNotFoundError` also self-heals: the handler logs, resets,
-  re-probes, and retries the spawn once before failing.
+  stale the next call re-probes directly. A shell-binary `FileNotFoundError`
+  also self-heals: the handler logs, resets the cache, re-probes, and retries
+  the spawn once before failing.
 - Env grants keep values out of Provider-bound prompts and Tool arguments but are not a shell sandbox: a command with an injected credential can print, transform, write, or transmit it. Granting a name authorizes Bash use; this layer does not claim secrecy from the executing Agent and does not redact process output.
 - Spawn failures and tool-enforced timeouts are failure envelopes. A `process_timeout` is reported only when the timeout actually killed a still-running process (terminal status `killed`); a process that exits on its own as the deadline elapses keeps its completed/failed result instead of being masked as a timeout.
 - Timeout-style failures (`process_timeout` and the sub-agent yield_after kill) append the output tail (`FAILURE_OUTPUT_TAIL_CHARS`, 10k) and the complete-log path to the error message, so diagnostics printed before the kill reach the model. A spawn `FileNotFoundError` names the missing shell, with an explicit PowerShell 7 hint when `pwsh` is absent on Windows.

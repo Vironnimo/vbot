@@ -26,7 +26,6 @@ from core.tools.bash import (
     bash_handler,
     project_bash_tool_definitions,
     register_bash_tool,
-    reset_shell_env_cache,
 )
 from core.tools.contracts import (
     ToolContract,
@@ -391,7 +390,6 @@ __all__ = [
     "register_analyze_image_tool",
     "register_glob_tool",
     "register_bash_tool",
-    "reset_shell_env_cache",
     "register_cron_tool",
     "register_grep_tool",
     "register_history_tool",
