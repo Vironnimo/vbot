@@ -184,6 +184,34 @@ describe('terminal live controller', () => {
     );
     controller.destroy();
   });
+
+  it('forgets a finished terminal and selects the next one', async () => {
+    const state = createTerminalsViewState();
+    const streams = [];
+    const api = fakeApi({ streams });
+    const controller = createTerminalsController({ state, api });
+
+    await controller.start();
+    expect(state.selectedTerminalId).toBe('term-1');
+
+    api.listTerminals.mockResolvedValueOnce({
+      terminals: [
+        terminal('term-1', { state: 'exited' }),
+        terminal('term-2', { state: 'ready' }),
+      ],
+    });
+    await controller.loadTerminals();
+    state.selectedTerminalId = 'term-1';
+    controller.selectTerminal('term-1');
+
+    const forgotten = await controller.forgetSelected();
+
+    expect(forgotten).toBe(true);
+    expect(api.forgetTerminal).toHaveBeenCalledWith('term-1');
+    expect(state.terminals.map((t) => t.terminal_id)).toEqual(['term-2']);
+    expect(state.selectedTerminalId).toBe('term-2');
+    controller.destroy();
+  });
 });
 
 function fakeApi({ streams }) {
@@ -195,6 +223,7 @@ function fakeApi({ streams }) {
     startTerminal: vi.fn().mockResolvedValue({}),
     resizeTerminal: vi.fn().mockResolvedValue({}),
     killTerminal: vi.fn().mockResolvedValue({}),
+    forgetTerminal: vi.fn().mockResolvedValue({}),
     subscribeTerminalEvents: vi.fn((_terminalId, handlers) => {
       const connection = { close: vi.fn() };
       streams.push({

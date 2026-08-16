@@ -940,6 +940,15 @@ export function killTerminal(terminalId, options = {}) {
   return rpc('terminal.kill', { terminal_id: terminalId }, options);
 }
 
+export function forgetTerminal(terminalId, options = {}) {
+  requireNonEmptyString(
+    terminalId,
+    'Terminal id must be a non-empty string',
+    'terminal.forget',
+  );
+  return rpc('terminal.forget', { terminal_id: terminalId }, options);
+}
+
 export function listCronJobs(options = {}) {
   return rpc('cron.list', {}, options);
 }

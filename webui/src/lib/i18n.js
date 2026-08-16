@@ -89,6 +89,14 @@ export const englishCatalog = Object.freeze({
   'terminals.state.working': 'Working',
   'terminals.state.exited': 'Exited',
   'terminals.state.error': 'Error',
+  'terminals.dismiss': 'Dismiss',
+  'terminals.dismissConfirmTitle': 'Dismiss this Terminal Session?',
+  'terminals.dismissConfirmBody':
+    'The retained history will be removed from this list immediately. The Terminal Session cannot be resumed afterward.',
+  'terminals.dismissedTitle': 'Terminal dismissed',
+  'terminals.dismissedMessage':
+    'The retained Terminal Session was removed from the list.',
+  'terminals.exitCode': 'Exit code',
 
   'common.alreadySaved': 'Already saved',
   'common.add': 'Add',
