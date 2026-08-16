@@ -316,7 +316,13 @@ class MistralAdapter(OpenAICompatibleAdapter):
                             text = item.get("text")
                             if isinstance(text, str) and text:
                                 normalized_deltas.append({"type": "content_delta", "text": text})
-                normalized_deltas.extend(_normalize_openai_tool_call_deltas(delta, tool_call_slots))
+                normalized_deltas.extend(
+                    _normalize_openai_tool_call_deltas(
+                        delta,
+                        tool_call_slots,
+                        normalization_state=normalization_state,
+                    )
+                )
 
             finish_reason = choice.get("finish_reason")
             if finish_reason is not None:

@@ -9,6 +9,7 @@ and usage rides in ``prompt_eval_count``/``eval_count``.
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -1796,3 +1797,97 @@ class TestEnrichment:
 
         # Assert — honest unknown, never a guessed window.
         assert enriched["odd-model"].context_window is None
+
+
+# ---------------------------------------------------------------------------
+# Output-limit default: Ollama's OpenAI-compatible layer truncates at an
+# internal num_predict of 128 when no max_tokens reaches the wire.
+# ---------------------------------------------------------------------------
+
+
+class TestCloudOutputLimitDefault:
+    """The provider default max_tokens must reach every Cloud payload."""
+
+    @staticmethod
+    def _cloud_adapter_with_default() -> OllamaCloudAdapter:
+        config = ProviderConfig(
+            id="ollama-cloud",
+            name="Ollama Cloud",
+            adapter="ollama_cloud",
+            base_url="https://ollama.com",
+            models_endpoint="/api/tags",
+            defaults={"max_tokens": 65536},
+            connections=[
+                ConnectionConfig(
+                    id="api-key",
+                    type="api_key",
+                    label="API key",
+                    auth=AuthConfig(
+                        header="Authorization", prefix="Bearer ", credential_key="OLLAMA_API_KEY"
+                    ),
+                    mode=OLLAMA_CLOUD_MODE,
+                    catalog_requires_credentials=False,
+                )
+            ],
+        )
+        return OllamaCloudAdapter(
+            config,
+            "ollama-secret",
+            model_lookup=_model_lookup,
+            connection_mode=OLLAMA_CLOUD_MODE,
+        )
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_payload_sends_default_max_tokens_without_catalog_ceiling(self) -> None:
+        """A model with no catalog ceiling still gets a positive max_tokens."""
+        # Arrange — plain-model has max_output_tokens None and a 32768 window.
+        route = respx.post(OLLAMA_CLOUD_CHAT_URL).mock(
+            return_value=httpx.Response(
+                200, json={"choices": [{"message": {"role": "assistant", "content": "Hi"}}]}
+            )
+        )
+        adapter = self._cloud_adapter_with_default()
+
+        # Act
+        await adapter.send(SAMPLE_MESSAGES, model_id="plain-model")
+
+        # Assert — without the default, no max_tokens would be sent and the
+        # Cloud compat layer truncates after ~128 tokens.
+        payload = _last_request_payload(route)
+        max_tokens = payload.get("max_tokens")
+        assert isinstance(max_tokens, int) and 0 < max_tokens <= 65536
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_explicit_caller_max_tokens_wins_over_default(self) -> None:
+        # Arrange
+        route = respx.post(OLLAMA_CLOUD_CHAT_URL).mock(
+            return_value=httpx.Response(
+                200, json={"choices": [{"message": {"role": "assistant", "content": "Hi"}}]}
+            )
+        )
+        adapter = self._cloud_adapter_with_default()
+
+        # Act
+        await adapter.send(SAMPLE_MESSAGES, model_id="plain-model", max_tokens=512)
+
+        # Assert — the caller allowance survives, context-clamped at most.
+        payload = _last_request_payload(route)
+        assert isinstance(payload.get("max_tokens"), int)
+        assert payload["max_tokens"] <= 512
+
+    def test_bundled_provider_json_ships_the_output_default(self) -> None:
+        """The shipped ollama-cloud.json pins the anti-truncation default."""
+        # Arrange
+        bundled_path = (
+            Path(__file__).resolve().parents[3] / "resources" / "providers" / "ollama-cloud.json"
+        )
+
+        # Act
+        bundled = json.loads(bundled_path.read_text(encoding="utf-8"))
+
+        # Assert
+        assert isinstance(bundled.get("defaults"), dict)
+        assert isinstance(bundled["defaults"].get("max_tokens"), int)
+        assert bundled["defaults"]["max_tokens"] > 0

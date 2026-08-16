@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import uuid
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
@@ -1609,6 +1610,66 @@ def _system_reminder_block(message: ChatMessage) -> str:
     return f"{SYSTEM_REMINDER_OPEN_TAG}\n{content}\n{SYSTEM_REMINDER_CLOSE_TAG}"
 
 
+def _sanitize_unpaired_surrogates(text: str) -> str:
+    """Replace unpaired UTF-16 surrogate code points a Model may emit.
+
+    Models served via Ollama (Kimi, GLM, Qwen) can return lone surrogates
+    (U+D800–U+DFFF) in their output; those crash ``json.dumps`` with
+    ``ensure_ascii=False`` at the session persistence boundary. A Python
+    ``str`` never carries paired surrogates — an astral character is one code
+    point — so every ``U+D800–U+DFFF`` code point in a str is lone by
+    definition and becomes exactly one replacement character.
+    """
+
+    return _UNPAIRED_SURROGATE_PATTERN.sub("\ufffd", text)
+
+
+# Lone surrogate code points: impossible to encode to UTF-8 and illegal in JSON
+# written with ensure_ascii=False.
+_UNPAIRED_SURROGATE_PATTERN = re.compile("[\ud800-\udfff]")
+
+
+# Inline reasoning tag names some Models emit at the start of their content
+# instead of using a dedicated reasoning field (observed behind Ollama).
+_INLINE_THINKING_TAG_NAMES = ("think", "thinking", "reasoning")
+
+
+def _split_leading_inline_thinking(content: str | None) -> tuple[str | None, str | None]:
+    """Split leading inline ``<think>…</think>`` blocks out of assistant content.
+
+    Only blocks at the very start of the content are extracted — the shape
+    Models actually emit — so literal tag text inside a normal answer survives
+    untouched. An unclosed leading block is treated as thinking up to the
+    truncation point. Returns ``(content, thinking)`` with ``None`` for absent
+    parts; an empty block changes nothing.
+    """
+
+    if not content:
+        return (content, None)
+    remaining = content
+    thinking_parts: list[str] = []
+    while True:
+        stripped = remaining.lstrip()
+        tag = next(
+            (name for name in _INLINE_THINKING_TAG_NAMES if stripped.startswith(f"<{name}>")),
+            None,
+        )
+        if tag is None:
+            break
+        inner_start = len(remaining) - len(stripped) + len(tag) + 2
+        close_index = remaining.find(f"</{tag}>", inner_start)
+        if close_index == -1:
+            thinking_parts.append(remaining[inner_start:])
+            remaining = ""
+            break
+        thinking_parts.append(remaining[inner_start:close_index])
+        remaining = remaining[close_index + len(tag) + 3 :]
+    thinking = "\n".join(part for part in thinking_parts if part.strip())
+    if not thinking.strip():
+        return (content, None)
+    return (remaining.strip() or None, thinking)
+
+
 def _assistant_message_from_response(
     model: str,
     response: JsonObject,
@@ -1620,10 +1681,15 @@ def _assistant_message_from_response(
     tool_calls = _parse_response_tool_calls(response.get("tool_calls"))
     reasoning = _nullable_response_string(response, "reasoning")
     reasoning_meta = _response_reasoning_meta(response)
+    content, inline_thinking = _split_leading_inline_thinking(
+        _nullable_response_string(response, "content")
+    )
+    if inline_thinking is not None:
+        reasoning = f"{reasoning}\n{inline_thinking}" if reasoning else inline_thinking
     return ChatMessage.assistant(
         model=model,
-        content=_nullable_response_string(response, "content"),
-        reasoning=reasoning,
+        content=_sanitize_unpaired_surrogates(content) if content else content,
+        reasoning=_sanitize_unpaired_surrogates(reasoning) if reasoning else reasoning,
         reasoning_meta=reasoning_meta,
         reasoning_scope=(
             reasoning_scope if reasoning is not None or reasoning_meta is not None else None

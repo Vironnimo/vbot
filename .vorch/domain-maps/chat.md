@@ -48,6 +48,9 @@ Exact role fields, request rendering, Content Blocks, Continuation state, events
 
 ## Constraints & Gotchas
 
+- Assistant ingestion hygiene (`_assistant_message_from_response`) applies to every provider: a leading inline `<think>`/`<thinking>`/`<reasoning>` block in content (Ollama models may embed reasoning inline instead of using a reasoning field) is moved into `reasoning` — only complete or truncated-leading blocks at the very start, literal tags inside an answer stay untouched — and unpaired UTF-16 surrogates (Kimi/GLM/Qwen behind Ollama can emit them; they crash `ensure_ascii=False` persistence) are replaced with U+FFFD in content and reasoning.
+
+
 - Public history must hide notes and opaque reasoning metadata while retaining visible errors, Compaction separators, run summaries, and Agent-takeover dividers according to the server contract. A requested message `limit` is a target rather than a hard cut: `chat.history` expands the oldest boundary backward to the previous Run Summary boundary when the page would otherwise begin inside a completed or active persisted Run segment; legacy transcripts with no Run Summaries retain ordinary fixed-size pagination.
 - The public `model` field persisted in messages uses user-facing `<provider>/<model-id>` form; adapters receive only their Provider-specific Model id. A reasoning-bearing Assistant message additionally persists an internal exact `reasoning_scope` containing Provider, Model, Connection, and Account identity so a later configuration change cannot replay opaque state across a hard boundary.
 - The direct `ChatLoop.send()` compatibility path can still create a Session when none is supplied; server/product paths require explicit Session creation.
