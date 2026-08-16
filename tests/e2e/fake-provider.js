@@ -351,7 +351,7 @@ function plannedToolResponse(prompt, results, offeredTools) {
           skillManageCall("write_file", {
             name: "e2e-authored",
             file_path: "references/evidence.txt",
-            file_content: "temporary support-file evidence",
+            content: "temporary support-file evidence",
           }),
         ],
       };
@@ -361,8 +361,8 @@ function plannedToolResponse(prompt, results, offeredTools) {
         calls: [
           skillManageCall("patch", {
             name: "e2e-authored",
-            old_string: "Original instruction marker.",
-            new_string: "Updated instruction marker.",
+            match: "Original instruction marker.",
+            content: "Updated instruction marker.",
           }),
         ],
       };
@@ -446,7 +446,6 @@ function plannedToolResponse(prompt, results, offeredTools) {
         calls: [
           toolCall("session_search", {
             query: "stored sapphire beacon 7319",
-            limit: 10,
           }),
         ],
       };

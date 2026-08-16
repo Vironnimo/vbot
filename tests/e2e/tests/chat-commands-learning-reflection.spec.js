@@ -28,7 +28,13 @@ test("learn authors a private Skill and reflect creates a review Fork", async ({
     chat.getByText("Learned command Skill cleaned up.", { exact: true }),
   ).toBeVisible();
 
-  await drawer.getByRole("switch", { name: "Show all sessions" }).click();
+  await drawer
+    .getByRole("button", { name: "Session list filters" })
+    .click();
+  await page
+    .getByRole("menu")
+    .getByRole("switch", { name: "Skill reflections" })
+    .click();
   const previousSessionCount = await drawer.getByRole("listitem").count();
   await sendChatMessage(chat, "/reflect E2E reflection focus");
   await expect(

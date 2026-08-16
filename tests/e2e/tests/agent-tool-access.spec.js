@@ -25,13 +25,26 @@ test("an Agent Tool allowlist constrains the Provider catalog", async ({
 
   const toolAccess = agents
     .locator(".tl-section")
-    .filter({ hasText: "Allowed tools" })
+    .filter({ hasText: "Tool access" })
     .first();
-  await toolAccess.getByRole("button", { name: "all off" }).click();
-  await toolAccess.getByRole("switch", { name: "Toggle tool status" }).click();
+  await toolAccess
+    .getByRole("radiogroup", { name: "Tool access" })
+    .getByRole("radio", { name: "Choose" })
+    .click();
+  const familyToggles = toolAccess.locator("[data-tool-family]");
+  await expect(familyToggles.first()).toBeVisible();
+  for (const toggle of await familyToggles.all()) {
+    await toggle.click();
+  }
   await expect(
-    toolAccess.getByRole("switch", { name: "Toggle tool status" }),
-  ).toHaveAttribute("aria-checked", "true");
+    toolAccess.getByRole("switch", { name: "Turn off status" }),
+  ).toBeVisible();
+  await expect(
+    toolAccess.getByRole("switch", { name: "Turn on bash" }),
+  ).toBeVisible();
+  await expect(
+    toolAccess.getByRole("switch", { name: "Turn on write" }),
+  ).toBeVisible();
   await agents.getByRole("button", { name: "Save changes" }).click();
   await expect(page.getByText("Agent updated.", { exact: true })).toBeVisible();
 
