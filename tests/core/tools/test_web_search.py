@@ -1101,9 +1101,7 @@ async def test_web_search_handler_searxng_page_warns_about_pagination_gap(tmp_pa
     workspace = tmp_path / "workspace"
     workspace.mkdir()
 
-    respx.get(_SEARXNG_ENDPOINT).mock(
-        return_value=httpx.Response(200, json={"results": []})
-    )
+    respx.get(_SEARXNG_ENDPOINT).mock(return_value=httpx.Response(200, json={"results": []}))
 
     result = await web_search_handler(
         make_context(workspace),
@@ -1128,9 +1126,7 @@ async def test_web_search_handler_searxng_page1_has_no_pagination_warning(tmp_pa
     workspace = tmp_path / "workspace"
     workspace.mkdir()
 
-    respx.get(_SEARXNG_ENDPOINT).mock(
-        return_value=httpx.Response(200, json={"results": []})
-    )
+    respx.get(_SEARXNG_ENDPOINT).mock(return_value=httpx.Response(200, json={"results": []}))
 
     result = await web_search_handler(
         make_context(workspace),
@@ -1148,7 +1144,9 @@ async def test_web_search_handler_searxng_page1_has_no_pagination_warning(tmp_pa
 
 @respx.mock
 @pytest.mark.asyncio
-async def test_web_search_handler_brave_domain_filter_suppresses_more_results(tmp_path: Path) -> None:
+async def test_web_search_handler_brave_domain_filter_suppresses_more_results(
+    tmp_path: Path,
+) -> None:
     """more_results_available must be suppressed with domain filters (B2)."""
     workspace = tmp_path / "workspace"
     workspace.mkdir()
