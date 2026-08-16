@@ -321,19 +321,19 @@ class WakewordWorker:
             self._open_stream()
         except MicrophoneUnavailableError:
             logger.warning("No compatible microphone is available", exc_info=True)
-            self._stop_engine()
-            self._fail("microphone_unavailable")
-            return
+            if not self._recover_microphone("microphone_unavailable"):
+                self._stop_engine()
+                return
         except Exception:
             logger.warning("Failed to open microphone stream", exc_info=True)
-            self._stop_engine()
-            self._fail("microphone_unavailable")
-            return
-
-        if not self._publish_state_if_running("listening"):
-            self._close_stream()
-            self._stop_engine()
-            return
+            if not self._recover_microphone("microphone_unavailable"):
+                self._stop_engine()
+                return
+        else:
+            if not self._publish_state_if_running("listening"):
+                self._close_stream()
+                self._stop_engine()
+                return
         consecutive_read_errors = 0
         detection_pre_roll: deque[CapturedAudioFrame] = deque(maxlen=_DETECTION_PRE_ROLL_CHUNKS)
         detection_vad = _create_detection_vad()
