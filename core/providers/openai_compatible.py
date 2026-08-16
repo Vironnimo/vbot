@@ -24,6 +24,7 @@ from core.providers._http_shared import (
     build_streaming_request,
     classify_http_status,
     decode_response_json,
+    execute_with_sampling_fallback,
     iter_sse_events,
     parse_sse_json_data,
     wrap_network_error,
@@ -611,9 +612,12 @@ class OpenAICompatibleAdapter(ProviderAdapter):
         # Capture the agent-selected effort before ``_build_payload`` consumes the
         # reasoning kwargs, so the observability signals below can name it.
         selected_effort = _selected_thinking_effort(kwargs)
+        # Built before the retry loop so the sampling fallback below can strip a
+        # rejected parameter from the exact payload — provider ``defaults`` would
+        # otherwise refill the key on a rebuild.
+        payload = self._build_payload(messages, model_id, **kwargs)
 
         async def _do_request() -> dict[str, Any]:
-            payload = self._build_payload(messages, model_id, **kwargs)
             headers = await self._build_request_headers(messages, payload)
             try:
                 response = await self._client.post(
@@ -653,7 +657,12 @@ class OpenAICompatibleAdapter(ProviderAdapter):
             )
             return parsed
 
-        return await retry_async(_do_request)
+        return await execute_with_sampling_fallback(
+            lambda: retry_async(_do_request),
+            payload,
+            logger=_LOGGER,
+            provider_label=self._config.id,
+        )
 
     # ------------------------------------------------------------------
     # stream() — SSE streaming
@@ -741,7 +750,12 @@ class OpenAICompatibleAdapter(ProviderAdapter):
 
             return response
 
-        response = await retry_async(_connect_stream)
+        response = await execute_with_sampling_fallback(
+            lambda: retry_async(_connect_stream),
+            payload,
+            logger=_LOGGER,
+            provider_label=self._config.id,
+        )
 
         tool_call_slots: set[int] = set()
         normalization_state: dict[str, Any] = {}

@@ -31,6 +31,7 @@ from core.providers._http_shared import (
     build_streaming_request,
     classify_http_status,
     decode_response_json,
+    execute_with_sampling_fallback,
     iter_sse_data,
     parse_sse_json_data,
     wrap_network_error,
@@ -892,9 +893,13 @@ class AnthropicCompatibleAdapter(ProviderAdapter):
             ProviderError: Other HTTP errors.
         """
 
+        # Built before the retry loop so the sampling fallback below can strip a
+        # rejected parameter from the exact payload — provider ``defaults`` would
+        # otherwise refill the key on a rebuild.
+        payload = self._build_payload(messages, model_id, **kwargs)
+
         async def _do_request() -> dict[str, Any]:
             headers = await self._build_headers()
-            payload = self._build_payload(messages, model_id, **kwargs)
             try:
                 response = await self._client.post(
                     MESSAGES_ENDPOINT,
@@ -912,7 +917,12 @@ class AnthropicCompatibleAdapter(ProviderAdapter):
             )
             return dict(decode_response_json(response, f"{self._config.name} provider"))
 
-        return await retry_async(_do_request)
+        return await execute_with_sampling_fallback(
+            lambda: retry_async(_do_request),
+            payload,
+            logger=_LOGGER,
+            provider_label=self._config.id,
+        )
 
     # ------------------------------------------------------------------
     # stream() — SSE streaming
@@ -992,7 +1002,12 @@ class AnthropicCompatibleAdapter(ProviderAdapter):
 
             return response
 
-        response = await retry_async(_connect_stream)
+        response = await execute_with_sampling_fallback(
+            lambda: retry_async(_connect_stream),
+            payload,
+            logger=_LOGGER,
+            provider_label=self._config.id,
+        )
 
         stream_decoder = AnthropicMessagesStreamDecoder()
         seen_message_stop = False

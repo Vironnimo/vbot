@@ -1061,6 +1061,44 @@ class TestSendRequestFormat:
 
     @respx.mock
     @pytest.mark.asyncio
+    async def test_send_rejected_sampling_parameter_retries_once_without_it(
+        self, anthropic_adapter
+    ):
+        """A Messages-style 400 blaming temperature strips it and retries once."""
+        # Arrange — thinking disabled so the proactive strip does not apply and
+        # the reactive fallback is what removes the parameter.
+        route = respx.post(ANTHROPIC_URL).mock(
+            side_effect=[
+                httpx.Response(
+                    400,
+                    json={
+                        "error": {
+                            "type": "invalid_request_error",
+                            "message": "temperature is not supported for this model",
+                        }
+                    },
+                ),
+                httpx.Response(200, json=SUCCESS_RESPONSE),
+            ]
+        )
+
+        # Act
+        await anthropic_adapter.send(
+            SAMPLE_MESSAGES,
+            model_id="claude-sonnet-4-20250219",
+            temperature=0.5,
+            thinking_effort="none",
+        )
+
+        # Assert
+        assert route.call_count == 2
+        first_body = _strip_cache_control(json.loads(route.calls[0].request.content))
+        second_body = _strip_cache_control(json.loads(route.calls[1].request.content))
+        assert first_body["temperature"] == 0.5
+        assert "temperature" not in second_body
+
+    @respx.mock
+    @pytest.mark.asyncio
     async def test_send_suppresses_reasoning_when_catalog_disables_it(self):
         """Catalog-known non-reasoning models do not receive Anthropic thinking controls."""
         route = respx.post(ANTHROPIC_URL).mock(
