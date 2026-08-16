@@ -86,6 +86,11 @@ OPENAI_NONE_REASONING_PROVIDER_IDS = {"openai"}
 OPENAI_REASONING_KEYS = ("reasoning", "reasoning_content", "reasoning_text", "thinking")
 OPENAI_REASONING_META_KEYS = ("encrypted_content", "reasoning_details")
 _OPENAI_STREAM_REASONING_DETAILS_STATE_KEY = "openai_reasoning_details"
+# Tracks the last Provider id seen per raw wire index plus the virtual slot it
+# was redirected to, so an endpoint that reuses one index for every parallel
+# Tool Call (observed on Ollama-compatible servers, distinguished only by id)
+# does not collapse the batch into a single accumulator slot.
+_OPENAI_TOOL_CALL_INDEX_IDS_STATE_KEY = "openai_tool_call_index_ids"
 # The provider-scoped metadata field naming WHICH wire field carries the
 # response reasoning (Phase 5, projected from models.dev ``interleaved``):
 # ``{field: "reasoning_content"}`` → visible text, ``{field: "reasoning_details"}``
@@ -864,13 +869,21 @@ def _normalize_openai_message_delta(
         )
         normalized_deltas.append({"type": "reasoning_meta", "reasoning_meta": reasoning_meta})
 
-    normalized_deltas.extend(_normalize_openai_tool_call_deltas(delta, tool_call_slots))
+    normalized_deltas.extend(
+        _normalize_openai_tool_call_deltas(
+            delta,
+            tool_call_slots,
+            normalization_state=normalization_state,
+        )
+    )
     return normalized_deltas
 
 
 def _normalize_openai_tool_call_deltas(
     delta: dict[str, Any],
     tool_call_slots: set[int],
+    *,
+    normalization_state: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     raw_tool_calls = delta.get("tool_calls")
     if not isinstance(raw_tool_calls, list):
@@ -881,10 +894,16 @@ def _normalize_openai_tool_call_deltas(
         if not isinstance(raw_tool_call, dict):
             continue
         tool_call_index = _openai_tool_call_index(raw_tool_call, position)
-        tool_call_slots.add(tool_call_index)
         provider_id = raw_tool_call.get("id")
         if not isinstance(provider_id, str) or not provider_id:
             provider_id = None
+        tool_call_index = _redirect_reused_tool_call_index(
+            tool_call_index,
+            provider_id,
+            tool_call_slots,
+            normalization_state,
+        )
+        tool_call_slots.add(tool_call_index)
         function = raw_tool_call.get("function", {})
         if not isinstance(function, dict):
             function = {}
@@ -911,6 +930,48 @@ def _normalize_openai_tool_call_deltas(
 def _openai_tool_call_index(raw_tool_call: dict[str, Any], position: int) -> int:
     index = raw_tool_call.get("index")
     return index if isinstance(index, int) else position
+
+
+def _redirect_reused_tool_call_index(
+    raw_index: int,
+    provider_id: str | None,
+    tool_call_slots: set[int],
+    normalization_state: dict[str, Any] | None,
+) -> int:
+    """Return the accumulator slot for a raw wire Tool-call index.
+
+    Ollama-compatible endpoints may reuse one index (typically ``0``) for every
+    Tool Call in a parallel batch, distinguishing the calls only by ``id``. A
+    same-index delta carrying a *different* id therefore starts a new call and
+    is redirected to a fresh virtual slot instead of being merged into the
+    previous call's fragments. An id-less fragment keeps the tracked virtual
+    slot of its raw index. Requires the per-stream ``normalization_state``
+    mapping; without it the raw index wins.
+    """
+
+    if normalization_state is None:
+        return raw_index
+    tracked = normalization_state.get(_OPENAI_TOOL_CALL_INDEX_IDS_STATE_KEY)
+    if not isinstance(tracked, dict):
+        tracked = {}
+        normalization_state[_OPENAI_TOOL_CALL_INDEX_IDS_STATE_KEY] = tracked
+    entry = tracked.get(raw_index)
+    if isinstance(entry, list) and len(entry) == 2:
+        last_id, virtual_index = entry
+        if (
+            isinstance(last_id, str)
+            and isinstance(virtual_index, int)
+            and not isinstance(virtual_index, bool)
+        ):
+            if provider_id is None or provider_id == last_id:
+                return virtual_index
+            fresh_index = max(tool_call_slots, default=raw_index) + 1
+            tracked[raw_index] = [provider_id, fresh_index]
+            return fresh_index
+    if provider_id is None:
+        return raw_index
+    tracked[raw_index] = [provider_id, raw_index]
+    return raw_index
 
 
 def _normalize_openai_finish_reason(

@@ -4,6 +4,9 @@
   "adapter": "ollama_cloud",
   "base_url": "https://ollama.com",
   "models_endpoint": "/api/tags",
+  "defaults": {
+    "max_tokens": 65536
+  },
   "connections": [
     {
       "id": "api-key",

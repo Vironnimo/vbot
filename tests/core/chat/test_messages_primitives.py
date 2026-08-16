@@ -1,6 +1,6 @@
 """Tool call, sender, reply-surface, factory, and parsing tests."""
 
-from core.chat.messages import ToolCallRejection
+from core.chat.messages import ToolCallRejection, _assistant_message_from_response
 from core.chat.output_files import AssistantFileReference
 
 from .messages_test_support import (
@@ -1099,3 +1099,91 @@ class TestChatMessageParsing:
                     "usage": [1, 2, 3],
                 }
             )
+
+
+# ---------------------------------------------------------------------------
+# Assistant ingestion hygiene: inline <think> extraction and surrogate removal.
+# Models behind Ollama may embed reasoning inline in content and emit lone
+# surrogates that would crash ensure_ascii=False persistence.
+# ---------------------------------------------------------------------------
+
+
+class TestInlineThinkingExtraction:
+    def test_leading_think_block_moves_to_reasoning(self):
+        message = _assistant_message_from_response(
+            "ollama-cloud/qwen",
+            {"content": "<think>weigh options</think>The answer is 4."},
+            reasoning_scope="ollama-cloud/qwen::api-key",
+        )
+
+        assert message.content == "The answer is 4."
+        assert message.reasoning == "weigh options"
+
+    def test_leading_block_appends_to_existing_reasoning(self):
+        message = _assistant_message_from_response(
+            "ollama-cloud/qwen",
+            {"content": "<think>inline</think>Answer", "reasoning": "field reasoning"},
+        )
+
+        assert message.content == "Answer"
+        assert message.reasoning == "field reasoning\ninline"
+
+    def test_unclosed_leading_block_is_all_thinking(self):
+        message = _assistant_message_from_response(
+            "ollama-cloud/qwen",
+            {"content": "<thinking>partial trace"},
+        )
+
+        assert message.content is None
+        assert message.reasoning == "partial trace"
+
+    def test_thinking_only_response_has_no_content(self):
+        message = _assistant_message_from_response(
+            "ollama-cloud/qwen",
+            {"content": "<think>only thoughts</think>"},
+        )
+
+        assert message.content is None
+        assert message.reasoning == "only thoughts"
+
+    def test_tag_inside_answer_stays_in_content(self):
+        content = "Wrap your answer in <think>tags</think> like this."
+        message = _assistant_message_from_response("ollama-cloud/qwen", {"content": content})
+
+        assert message.content == content
+        assert message.reasoning is None
+
+    def test_empty_block_changes_nothing(self):
+        content = "<think></think>Answer"
+        message = _assistant_message_from_response("ollama-cloud/qwen", {"content": content})
+
+        assert message.content == content
+        assert message.reasoning is None
+
+
+class TestSurrogateSanitization:
+    def test_lone_surrogate_in_content_is_replaced(self):
+        message = _assistant_message_from_response(
+            "ollama-cloud/kimi-k2.6",
+            {"content": "bad \ud800 pair"},
+        )
+
+        assert message.content == "bad \ufffd pair"
+
+    def test_lone_surrogate_in_reasoning_is_replaced(self):
+        message = _assistant_message_from_response(
+            "ollama-cloud/kimi-k2.6",
+            {"reasoning": "trace \udfff end", "content": "ok"},
+        )
+
+        assert message.reasoning == "trace \ufffd end"
+        assert message.content == "ok"
+
+    def test_clean_text_passes_through_unchanged(self):
+        message = _assistant_message_from_response(
+            "ollama-cloud/kimi-k2.6",
+            {"content": "héllo wörld 🎉", "reasoning": "cléan"},
+        )
+
+        assert message.content == "héllo wörld 🎉"
+        assert message.reasoning == "cléan"
