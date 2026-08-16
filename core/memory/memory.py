@@ -76,7 +76,8 @@ _MEMORY_GUIDANCE = (
     '"User prefers concise answers" (good), not "Always answer concisely" (bad); '
     '"Project uses pytest with xdist" (good), not "Run tests with pytest -n 4" (bad). '
     "Imperative notes get re-read as standing directives in later sessions and can override "
-    "the user's current request."
+    "the user's current request. Saying \"I'll remember that\" is not remembering — make the "
+    "memory tool call in the same turn."
 )
 # The ``memory:guidance`` block id and owner. The owner ``memory`` is gate 2's
 # input: the block renders only when the memory tool is enabled for the agent
