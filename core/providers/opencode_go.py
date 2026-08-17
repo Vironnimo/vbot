@@ -19,10 +19,7 @@ from core.providers.anthropic_compatible import (
 from core.providers.errors import ProviderError
 from core.providers.openai_compatible import OpenAICompatibleAdapter, _to_openai_assistant_message
 from core.providers.providers import AuthConfig, ProviderConfig
-from core.providers.reasoning import (
-    normalize_thinking_effort,
-    strip_leading_reasoning_history_markup,
-)
+from core.providers.reasoning import normalize_thinking_effort
 from core.providers.token_getter import TokenGetter
 from core.utils.logging import get_logger
 
@@ -43,8 +40,6 @@ THINKING_CONTROL_METADATA_KEY = "thinking_control"
 THINKING_CONTROL_TOGGLE = "toggle"
 THINKING_CONTROL_ALWAYS_ENABLED = "always_enabled"
 MINIMUM_REASONING_EFFORT_METADATA_KEY = "minimum_reasoning_effort"
-REASONING_REQUEST_FORMAT_METADATA_KEY = "reasoning_request_format"
-REASONING_REQUEST_FORMAT_CONTENT_THINK_AND_HISTORY = "content_think_and_history"
 # The endpoint returns bare ids with no protocol, so a model the override does
 # not mark is unknown: route it the SAFE default (OpenAI chat/completions) and
 # warn, so a newly added model is never silently misrouted onto the wrong wire.
@@ -224,22 +219,7 @@ class OpenCodeGoAdapter(OpenAICompatibleAdapter):
         wire = _to_openai_assistant_message(message)
         reasoning = message.get("reasoning")
         if isinstance(reasoning, str) and reasoning:
-            target_model_id = model_id or str(message.get("model") or "")
-            if (
-                self._profile_value(target_model_id, REASONING_REQUEST_FORMAT_METADATA_KEY)
-                == REASONING_REQUEST_FORMAT_CONTENT_THINK_AND_HISTORY
-            ):
-                # Drop echoed request-only markup before re-wrapping so polluted
-                # historical content cannot nest ``<reasoning_history>`` copies.
-                content = strip_leading_reasoning_history_markup(
-                    wire.get("content") if isinstance(wire.get("content"), str) else None
-                )
-                wire["content"] = (
-                    f"<reasoning_history>\n{reasoning}\n</reasoning_history>\n"
-                    f"<think>\n{reasoning}\n</think>\n{content or ''}"
-                )
-            else:
-                wire["reasoning_content"] = reasoning
+            wire["reasoning_content"] = reasoning
         return wire
 
     def _classify_http_status(

@@ -78,7 +78,6 @@ from core.providers.reasoning import (
     normalize_thinking_effort,
     remove_reasoning_kwargs,
     resolve_reasoning_intent,
-    strip_leading_reasoning_history_markup,
 )
 from core.providers.token_getter import StaticTokenGetter, TokenGetter
 from core.providers.tool_schema import render_tool_definitions
@@ -118,9 +117,6 @@ _OLLAMA_CLOUD_REASONING_PARAMETERS = (
     "reasoning",
     "include_reasoning",
 )
-_OLLAMA_CLOUD_METADATA_KEY = "ollama_cloud"
-_REASONING_REQUEST_FORMAT_METADATA_KEY = "reasoning_request_format"
-_REASONING_REQUEST_FORMAT_NATIVE_AND_HISTORY = "native_and_history"
 
 # Per-model ``/api/show`` enrichment calls run concurrently but bounded, so a
 # host with many installed models is not hit with dozens of simultaneous
@@ -252,31 +248,7 @@ class OllamaCloudAdapter(OpenAICompatibleAdapter):
             if field != "reasoning_content":
                 formatted.pop("reasoning_content", None)
             formatted[field] = reasoning
-            if (
-                self._cloud_profile_value(
-                    target_model_id,
-                    _REASONING_REQUEST_FORMAT_METADATA_KEY,
-                )
-                == _REASONING_REQUEST_FORMAT_NATIVE_AND_HISTORY
-            ):
-                # Drop echoed request-only markup before re-wrapping so polluted
-                # historical content cannot nest ``<reasoning_history>`` copies.
-                content = strip_leading_reasoning_history_markup(
-                    formatted.get("content") if isinstance(formatted.get("content"), str) else None
-                )
-                formatted["content"] = (
-                    f"<reasoning_history>\n{reasoning}\n</reasoning_history>\n{content or ''}"
-                )
         return formatted
-
-    def _cloud_profile_value(self, model_id: str, key: str) -> Any:
-        if self._model_lookup is None:
-            return None
-        model = self._model_lookup(model_id.split("::", 1)[0])
-        if model is None:
-            return None
-        metadata = model.metadata.get(_OLLAMA_CLOUD_METADATA_KEY)
-        return metadata.get(key) if isinstance(metadata, Mapping) else None
 
     def normalize_response(
         self, response: dict[str, Any], *, model_id: str | None = None
