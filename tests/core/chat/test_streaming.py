@@ -334,6 +334,85 @@ async def test_preserves_reasoning_meta_without_public_delta() -> None:
     }
 
 
+async def test_reasoning_meta_item_lists_accumulate_and_keep_encrypted_content() -> None:
+    accumulator = StreamingAccumulator()
+
+    accumulator.add_delta(
+        {
+            "type": "reasoning_meta",
+            "reasoning_meta": {
+                "reasoning_items": [
+                    {
+                        "type": "reasoning",
+                        "id": "rs_1",
+                        "summary": [{"type": "summary_text", "text": "first"}],
+                    }
+                ]
+            },
+        }
+    )
+    accumulator.add_delta(
+        {
+            "type": "reasoning_meta",
+            "reasoning_meta": {
+                "reasoning_items": [
+                    {
+                        "type": "reasoning",
+                        "id": "rs_2",
+                        "summary": [{"type": "summary_text", "text": "second"}],
+                    }
+                ]
+            },
+        }
+    )
+    accumulator.add_delta(
+        {
+            "type": "reasoning_meta",
+            "reasoning_meta": {
+                "reasoning_items": [
+                    {
+                        "type": "reasoning",
+                        "id": "rs_1",
+                        "encrypted_content": "secret-1",
+                    }
+                ],
+                "response_output": [
+                    {
+                        "type": "reasoning",
+                        "id": "rs_1",
+                        "encrypted_content": "secret-1",
+                        "summary": [{"type": "summary_text", "text": "first"}],
+                    },
+                    {
+                        "type": "reasoning",
+                        "id": "rs_2",
+                        "encrypted_content": "secret-2",
+                        "summary": [{"type": "summary_text", "text": "second"}],
+                    },
+                ],
+            },
+        }
+    )
+
+    fields = accumulator.finalize_assistant_fields()
+    assert fields.reasoning_meta is not None
+    assert fields.reasoning_meta["reasoning_items"] == [
+        {
+            "type": "reasoning",
+            "id": "rs_1",
+            "summary": [{"type": "summary_text", "text": "first"}],
+            "encrypted_content": "secret-1",
+        },
+        {
+            "type": "reasoning",
+            "id": "rs_2",
+            "summary": [{"type": "summary_text", "text": "second"}],
+        },
+    ]
+    assert fields.reasoning_meta["response_output"][0]["encrypted_content"] == "secret-1"
+    assert fields.reasoning_meta["response_output"][1]["encrypted_content"] == "secret-2"
+
+
 async def test_suppresses_parsed_tool_arguments_until_finalization() -> None:
     accumulator = StreamingAccumulator()
 
