@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator, Mapping
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any
 
 import httpx
 
@@ -20,10 +20,8 @@ from core.providers.errors import ProviderError
 from core.providers.openai_compatible import OpenAICompatibleAdapter, _to_openai_assistant_message
 from core.providers.providers import AuthConfig, ProviderConfig
 from core.providers.reasoning import (
-    REASONING_REPLAY_CURRENT_RUN,
-    REASONING_REPLAY_POLICIES,
-    ReasoningReplayPolicy,
     normalize_thinking_effort,
+    strip_leading_reasoning_history_markup,
 )
 from core.providers.token_getter import TokenGetter
 from core.utils.logging import get_logger
@@ -39,13 +37,14 @@ OPENCODE_GO_METADATA_KEY = "opencode_go"
 PROTOCOL_METADATA_KEY = "protocol"
 PROTOCOL_ANTHROPIC = "anthropic"
 PROTOCOL_OPENAI = "openai"
-REASONING_REPLAY_METADATA_KEY = "reasoning_replay"
 THINKING_KEEP_METADATA_KEY = "thinking_keep"
 THINKING_KEEP_ALL = "all"
 THINKING_CONTROL_METADATA_KEY = "thinking_control"
 THINKING_CONTROL_TOGGLE = "toggle"
 THINKING_CONTROL_ALWAYS_ENABLED = "always_enabled"
 MINIMUM_REASONING_EFFORT_METADATA_KEY = "minimum_reasoning_effort"
+REASONING_REQUEST_FORMAT_METADATA_KEY = "reasoning_request_format"
+REASONING_REQUEST_FORMAT_CONTENT_THINK_AND_HISTORY = "content_think_and_history"
 # The endpoint returns bare ids with no protocol, so a model the override does
 # not mark is unknown: route it the SAFE default (OpenAI chat/completions) and
 # warn, so a newly added model is never silently misrouted onto the wrong wire.
@@ -112,11 +111,9 @@ class OpenCodeGoAdapter(OpenAICompatibleAdapter):
     Models with reasoning capability (DeepSeek, Kimi, GLM, ...) return
     ``reasoning_content`` in assistant messages.
 
-    Replay scope and request controls are explicit per-Model facts. Both wire
-    routes can carry historical reasoning, but acceptance by a protocol does
-    not prove that every underlying Model uses reasoning from earlier Runs.
-    History shaping is owned by the chat layer; this adapter translates only
-    the reasoning that survives the selected Model profile.
+    Replay scope follows the shared System → Provider → Model hierarchy. Wire
+    controls remain explicit per-Model facts because some gateway backends need
+    a different request representation than the field they return.
     """
 
     def __init__(
@@ -168,19 +165,6 @@ class OpenCodeGoAdapter(OpenAICompatibleAdapter):
         await self._messages.aclose()
         await super().aclose()
 
-    def reasoning_replay_policy(self, model_id: str) -> ReasoningReplayPolicy:
-        """Replay persisted reasoning only for explicitly profiled Models.
-
-        ``metadata.opencode_go.reasoning_replay`` is independent of the wire
-        protocol: two Models on the same endpoint may have different history
-        semantics. An absent or malformed profile keeps only active-Run
-        reasoning instead of inheriting a Provider-wide assumption.
-        """
-        replay = self._profile_value(model_id, REASONING_REPLAY_METADATA_KEY)
-        if replay in REASONING_REPLAY_POLICIES:
-            return cast(ReasoningReplayPolicy, replay)
-        return REASONING_REPLAY_CURRENT_RUN
-
     def wire_media_support(self, model_id: str) -> frozenset[str]:
         """Resolve media support from the wire selected for this model."""
 
@@ -231,11 +215,31 @@ class OpenCodeGoAdapter(OpenAICompatibleAdapter):
             return super().normalize_response(response, model_id=model_id)
         return self._messages.normalize_response(response, model_id=model_id)
 
-    def _format_assistant_message(self, message: dict[str, Any]) -> dict[str, Any]:
+    def _format_assistant_message(
+        self,
+        message: dict[str, Any],
+        *,
+        model_id: str | None = None,
+    ) -> dict[str, Any]:
         wire = _to_openai_assistant_message(message)
         reasoning = message.get("reasoning")
         if isinstance(reasoning, str) and reasoning:
-            wire["reasoning_content"] = reasoning
+            target_model_id = model_id or str(message.get("model") or "")
+            if (
+                self._profile_value(target_model_id, REASONING_REQUEST_FORMAT_METADATA_KEY)
+                == REASONING_REQUEST_FORMAT_CONTENT_THINK_AND_HISTORY
+            ):
+                # Drop echoed request-only markup before re-wrapping so polluted
+                # historical content cannot nest ``<reasoning_history>`` copies.
+                content = strip_leading_reasoning_history_markup(
+                    wire.get("content") if isinstance(wire.get("content"), str) else None
+                )
+                wire["content"] = (
+                    f"<reasoning_history>\n{reasoning}\n</reasoning_history>\n"
+                    f"<think>\n{reasoning}\n</think>\n{content or ''}"
+                )
+            else:
+                wire["reasoning_content"] = reasoning
         return wire
 
     def _classify_http_status(
@@ -364,10 +368,11 @@ class OpenCodeGoAdapter(OpenAICompatibleAdapter):
         return value if isinstance(value, str) else None
 
     def _profile_value(self, model_id: str, key: str) -> Any:
-        if self._model_lookup is None:
+        model_lookup = getattr(self, "_model_lookup", None)
+        if model_lookup is None:
             return None
         for candidate in _model_lookup_candidates(model_id):
-            model = self._model_lookup(candidate)
+            model = model_lookup(candidate)
             if model is None:
                 continue
             opencode_go = model.metadata.get(OPENCODE_GO_METADATA_KEY)

@@ -736,6 +736,7 @@ def test_reasoning_replay_policy_is_model_specific(
             ),
             context_window=1_000_000,
             max_output_tokens=64_000,
+            reasoning_replay="none",
         ),
         "openai/gpt-4o": Model(
             model_id="openai/gpt-4o",
@@ -748,6 +749,7 @@ def test_reasoning_replay_policy_is_model_specific(
             ),
             context_window=128_000,
             max_output_tokens=16_384,
+            reasoning_replay="current_run",
         ),
     }
     adapter = OpenRouterAdapter(
@@ -756,9 +758,9 @@ def test_reasoning_replay_policy_is_model_specific(
         model_lookup=models.get,
     )
 
-    assert adapter.reasoning_replay_policy("google/gemini-2.5-pro") == "full_history"
+    assert adapter.reasoning_replay_policy("google/gemini-2.5-pro") == "none"
     assert adapter.reasoning_replay_policy("openai/gpt-4o") == "current_run"
-    assert adapter.reasoning_replay_policy("unknown/new-model") == "current_run"
+    assert adapter.reasoning_replay_policy("unknown/new-model") == "full_history"
 
 
 @respx.mock

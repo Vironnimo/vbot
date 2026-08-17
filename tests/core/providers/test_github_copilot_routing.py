@@ -158,12 +158,12 @@ async def test_send_routes_claude_to_messages_from_metadata(
     [
         ("gpt-5-mini", "full_history"),
         ("claude-sonnet-4.6", "full_history"),
-        ("gpt-5.4", "current_run"),
-        ("claude-haiku-4.5", "current_run"),
-        ("gemini-3.1-pro-preview", "current_run"),
+        ("gpt-5.4", "full_history"),
+        ("claude-haiku-4.5", "full_history"),
+        ("gemini-3.1-pro-preview", "full_history"),
     ],
 )
-def test_reasoning_replay_policy_is_scoped_to_verified_model(
+def test_reasoning_replay_policy_defaults_to_full_history(
     metadata_copilot_adapter: GitHubCopilotAdapter,
     model_id: str,
     expected_policy: str,
@@ -171,10 +171,10 @@ def test_reasoning_replay_policy_is_scoped_to_verified_model(
     assert metadata_copilot_adapter.reasoning_replay_policy(model_id) == expected_policy
 
 
-def test_reasoning_replay_policy_defaults_to_current_run_without_metadata(
+def test_reasoning_replay_policy_defaults_to_full_history_without_metadata(
     copilot_adapter: GitHubCopilotAdapter,
 ) -> None:
-    assert copilot_adapter.reasoning_replay_policy("unknown-model") == "current_run"
+    assert copilot_adapter.reasoning_replay_policy("unknown-model") == "full_history"
 
 
 @pytest.mark.parametrize("model_id", ["gpt-5.4", "claude-haiku-4.5", "gemini-3.1-pro-preview"])

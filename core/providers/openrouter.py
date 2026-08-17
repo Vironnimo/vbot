@@ -44,10 +44,7 @@ from core.providers.reasoning import (
     REASONING_INTENT_EFFORT,
     REASONING_INTENT_OFF,
     REASONING_INTENT_ON,
-    REASONING_REPLAY_CURRENT_RUN,
-    REASONING_REPLAY_FULL_HISTORY,
     ReasoningIntent,
-    ReasoningReplayPolicy,
     closest_supported_effort,
     model_reasoning_budget_max,
     model_reasoning_control,
@@ -137,19 +134,6 @@ class OpenRouterAdapter(OpenAICompatibleAdapter):
     ) -> None:
         super().__init__(*args, **kwargs)
         self._routing = parse_openrouter_routing(routing or {})
-
-    def reasoning_replay_policy(self, model_id: str) -> ReasoningReplayPolicy:
-        """Replay complete reasoning details for catalog-known reasoning Models.
-
-        OpenRouter documents unchanged multi-turn ``reasoning`` /
-        ``reasoning_details`` replay as its gateway contract. Unknown Models do
-        not inherit that guarantee: they remain active-Run only until discovery
-        confirms reasoning support.
-        """
-
-        if self._model_reasoning_supported(model_id) is True:
-            return REASONING_REPLAY_FULL_HISTORY
-        return REASONING_REPLAY_CURRENT_RUN
 
     async def send(
         self,

@@ -30,7 +30,6 @@ def test_openai_like_model_prefers_responses_from_metadata() -> None:
     policy = copilot_model_policy("gpt-5.2", copilot_metadata())
 
     assert policy.endpoint_path == RESPONSES_ENDPOINT
-    assert policy.reasoning_replay == "current_run"
     assert policy.allows_reasoning_effort("xhigh") is True
     assert policy.supports_tools is True
     assert policy.supports_structured_outputs is True
@@ -52,7 +51,6 @@ def test_claude_like_model_prefers_messages_from_metadata() -> None:
     )
 
     assert policy.endpoint_path == MESSAGES_ENDPOINT
-    assert policy.reasoning_replay == "full_history"
     assert policy.supports_adaptive_thinking is True
     assert policy.supports_thinking_budget is True
     assert policy.supports_request_parameter("max_tokens") is True
@@ -80,7 +78,6 @@ def test_metadata_driven_routing_wins_over_static_fallback() -> None:
     )
 
     assert policy.endpoint_path == RESPONSES_ENDPOINT
-    assert policy.reasoning_replay == "full_history"
     assert policy.allows_reasoning_effort("low") is True
     assert policy.allows_reasoning_effort("high") is False
 

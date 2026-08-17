@@ -1088,6 +1088,19 @@ def test_runtime_wires_openai_compatible_adapter_for_ollama_cloud(
     assert isinstance(adapter, OllamaCloudAdapter)
 
 
+def test_runtime_wires_provider_and_model_reasoning_replay_precedence(runtime: Runtime) -> None:
+    runtime._provider_credentials = ProviderCredentialResolver(  # type: ignore[attr-defined]
+        runtime.providers,
+        process_env={"OLLAMA_API_KEY": "ollama-secret"},
+    )
+    runtime.models._provider_reasoning_replay["ollama-cloud"] = "current_run"  # type: ignore[attr-defined]
+
+    adapter = runtime.get_adapter("ollama-cloud", "ollama-cloud:api-key")
+
+    assert adapter.reasoning_replay_policy("unprofiled-model") == "current_run"
+    assert adapter.reasoning_replay_policy("glm-5.2") == "full_history"
+
+
 def test_get_adapter_rejects_disabled_connection(runtime: Runtime) -> None:
     """A disabled connection never reaches adapter construction."""
     # Act / Assert — ollama:local is keyless and therefore disabled by default.

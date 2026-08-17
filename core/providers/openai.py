@@ -47,10 +47,6 @@ from core.providers.openai_compatible import OpenAICompatibleAdapter
 from core.providers.openai_subscription_auth import extract_chatgpt_account_id
 from core.providers.providers import AuthConfig, ProviderConfig
 from core.providers.reasoning import (
-    REASONING_REPLAY_CURRENT_RUN,
-    REASONING_REPLAY_FULL_HISTORY,
-    REASONING_REPLAY_NONE,
-    ReasoningReplayPolicy,
     closest_supported_effort,
     model_reasoning_levels,
     normalize_thinking_effort,
@@ -187,25 +183,6 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
         """Close the cached Codex WebSocket and inherited HTTP client."""
         await self._close_codex_websocket()
         await super().aclose()
-
-    def reasoning_replay_policy(self, model_id: str) -> ReasoningReplayPolicy:
-        """Resolve replay scope from the selected Connection/Wire and Model.
-
-        OpenAI's semantics are not Provider-global: GPT-5.6 can render compatible
-        reasoning from earlier turns, while GPT-5.5 keeps reasoning scoped to the
-        active Run and separately requires assistant ``phase`` fidelity. The
-        catalog policy is keyed by Connection because the public Responses API
-        and private Codex Responses backend are distinct contracts.
-        """
-
-        value = self._model_wire_policy(model_id).get("reasoning_replay")
-        if value in {
-            REASONING_REPLAY_NONE,
-            REASONING_REPLAY_CURRENT_RUN,
-            REASONING_REPLAY_FULL_HISTORY,
-        }:
-            return cast(ReasoningReplayPolicy, value)
-        return REASONING_REPLAY_CURRENT_RUN
 
     @classmethod
     def discovery_headers(

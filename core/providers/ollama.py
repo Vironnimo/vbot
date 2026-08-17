@@ -71,9 +71,6 @@ from core.providers.reasoning import (
     REASONING_INTENT_DEFAULT,
     REASONING_INTENT_EFFORT,
     REASONING_INTENT_OFF,
-    REASONING_REPLAY_CURRENT_RUN,
-    REASONING_REPLAY_FULL_HISTORY,
-    ReasoningReplayPolicy,
     model_reasoning_budget_max,
     model_reasoning_control,
     model_reasoning_levels,
@@ -81,6 +78,7 @@ from core.providers.reasoning import (
     normalize_thinking_effort,
     remove_reasoning_kwargs,
     resolve_reasoning_intent,
+    strip_leading_reasoning_history_markup,
 )
 from core.providers.token_getter import StaticTokenGetter, TokenGetter
 from core.providers.tool_schema import render_tool_definitions
@@ -100,7 +98,6 @@ OLLAMA_CLOUD_MODE = "cloud"
 OLLAMA_METADATA_KEY = "ollama"
 LOCAL_METADATA_FIELD = "local"
 REMOTE_METADATA_FIELD = "remote"
-REASONING_REPLAY_METADATA_FIELD = "reasoning_replay"
 
 # ``/api/show`` capability strings.
 _CAPABILITY_TOOLS = "tools"
@@ -113,11 +110,6 @@ _CAPABILITY_EMBEDDING = "embedding"
 # ``on_off`` render is binary, so the snapped level never reaches the wire.
 OLLAMA_EFFORT_FLOOR = ("low", "medium", "high")
 OLLAMA_GPT_OSS_EFFORTS = ("low", "medium", "high")
-# GLM templates retain historical thinking, so their reasoning must replay
-# across turns (verified for GLM-4.7; GLM-5.x shares the same template family
-# and Z.AI — the backend behind Ollama Cloud GLM — requires the full historical
-# ``reasoning_content`` to be replayed, see OpenClaw Z.AI docs).
-OLLAMA_FULL_HISTORY_MODEL_PREFIXES = ("glm-4.7", "glm-5")
 OLLAMA_CLOUD_REASONING_EFFORTS = ("none", "low", "medium", "high", "max")
 _OLLAMA_CLOUD_OPENAI_PATH = "/v1"
 _OLLAMA_CLOUD_REASONING_PARAMETERS = (
@@ -126,6 +118,9 @@ _OLLAMA_CLOUD_REASONING_PARAMETERS = (
     "reasoning",
     "include_reasoning",
 )
+_OLLAMA_CLOUD_METADATA_KEY = "ollama_cloud"
+_REASONING_REQUEST_FORMAT_METADATA_KEY = "reasoning_request_format"
+_REASONING_REQUEST_FORMAT_NATIVE_AND_HISTORY = "native_and_history"
 
 # Per-model ``/api/show`` enrichment calls run concurrently but bounded, so a
 # host with many installed models is not hit with dozens of simultaneous
@@ -228,33 +223,17 @@ class OllamaCloudAdapter(OpenAICompatibleAdapter):
             # as a binary on/off thinker.
             payload["reasoning_effort"] = "none"
 
-    def reasoning_replay_policy(self, model_id: str) -> ReasoningReplayPolicy:
-        """Resolve Cloud reasoning replay from the discovered Model profile.
-
-        Mirrors :meth:`OllamaAdapter.reasoning_replay_policy`: the direct Cloud
-        wire is OpenAI-compatible, but the underlying GLM templates retain
-        historical thinking exactly like their local counterparts, so the same
-        ``metadata.ollama.reasoning_replay`` stamp decides the replay scope.
-        """
-
-        if self._model_lookup is not None:
-            model = self._model_lookup(model_id.split("::", 1)[0])
-            if model is not None:
-                metadata = model.metadata.get(OLLAMA_METADATA_KEY)
-                if (
-                    isinstance(metadata, Mapping)
-                    and metadata.get(REASONING_REPLAY_METADATA_FIELD)
-                    == REASONING_REPLAY_FULL_HISTORY
-                ):
-                    return REASONING_REPLAY_FULL_HISTORY
-        return REASONING_REPLAY_CURRENT_RUN
-
-    def _format_assistant_message(self, message: dict[str, Any]) -> dict[str, Any]:
+    def _format_assistant_message(
+        self,
+        message: dict[str, Any],
+        *,
+        model_id: str | None = None,
+    ) -> dict[str, Any]:
         """Replay readable reasoning under the Model's declared wire field.
 
         Ollama Cloud's OpenAI-compatible endpoint returns reasoning in a
-        provider-specific field: ``reasoning_content`` (DeepSeek/GLM/Kimi style)
-        or ``reasoning`` (MiniMax M3). The GLM and Kimi backends require the
+        provider-specific ``reasoning_content`` or ``reasoning`` field. The
+        GLM and Kimi backends require the
         full historical reasoning to be replayed for multi-turn quality, and
         MiniMax documents that preserving the reasoning chain is essential for
         best performance. The base class only writes opaque ``reasoning_meta``
@@ -263,15 +242,41 @@ class OllamaCloudAdapter(OpenAICompatibleAdapter):
         actually carries the field get it injected.
         """
 
-        formatted = super()._format_assistant_message(message)
-        model_id = str(message.get("model") or "").rsplit("/", 1)[-1]
-        field = self._reasoning_response_field(model_id)
+        formatted = super()._format_assistant_message(message, model_id=model_id)
+        target_model_id = (model_id or str(message.get("model") or "")).rsplit("/", 1)[-1]
+        field = self._reasoning_response_field(target_model_id) or "reasoning"
         if field not in ("reasoning_content", "reasoning"):
             return formatted
         reasoning = message.get("reasoning")
         if isinstance(reasoning, str) and reasoning:
+            if field != "reasoning_content":
+                formatted.pop("reasoning_content", None)
             formatted[field] = reasoning
+            if (
+                self._cloud_profile_value(
+                    target_model_id,
+                    _REASONING_REQUEST_FORMAT_METADATA_KEY,
+                )
+                == _REASONING_REQUEST_FORMAT_NATIVE_AND_HISTORY
+            ):
+                # Drop echoed request-only markup before re-wrapping so polluted
+                # historical content cannot nest ``<reasoning_history>`` copies.
+                content = strip_leading_reasoning_history_markup(
+                    formatted.get("content") if isinstance(formatted.get("content"), str) else None
+                )
+                formatted["content"] = (
+                    f"<reasoning_history>\n{reasoning}\n</reasoning_history>\n{content or ''}"
+                )
         return formatted
+
+    def _cloud_profile_value(self, model_id: str, key: str) -> Any:
+        if self._model_lookup is None:
+            return None
+        model = self._model_lookup(model_id.split("::", 1)[0])
+        if model is None:
+            return None
+        metadata = model.metadata.get(_OLLAMA_CLOUD_METADATA_KEY)
+        return metadata.get(key) if isinstance(metadata, Mapping) else None
 
     def normalize_response(
         self, response: dict[str, Any], *, model_id: str | None = None
@@ -336,7 +341,11 @@ class OllamaAdapter(ProviderAdapter):
         self._auth_config = auth_config or config.connections[0].auth
         self._local_context_resolver = local_context_resolver
         self._connection_mode = connection_mode or OLLAMA_LOCAL_MODE
-        super().__init__(model_lookup=model_lookup, debug_recorder=debug_recorder)
+        super().__init__(
+            model_lookup=model_lookup,
+            debug_recorder=debug_recorder,
+            reasoning_replay_default=config.reasoning_replay,
+        )
         self._base_url = base_url or config.base_url
         self._client = build_async_client(
             base_url=self._base_url,
@@ -576,21 +585,6 @@ class OllamaAdapter(ProviderAdapter):
         if options:
             payload["options"] = options
         return payload
-
-    def reasoning_replay_policy(self, model_id: str) -> ReasoningReplayPolicy:
-        """Resolve native Thinking replay from the discovered Model profile."""
-
-        if self._model_lookup is not None:
-            model = self._model_lookup(model_id.split("::", 1)[0])
-            if model is not None:
-                metadata = model.metadata.get(OLLAMA_METADATA_KEY)
-                if (
-                    isinstance(metadata, Mapping)
-                    and metadata.get(REASONING_REPLAY_METADATA_FIELD)
-                    == REASONING_REPLAY_FULL_HISTORY
-                ):
-                    return REASONING_REPLAY_FULL_HISTORY
-        return REASONING_REPLAY_CURRENT_RUN
 
     def _resolve_enforced_context(self, model_id: str) -> int | None:
         """Return the enforced ``num_ctx`` for flagged-local models, else ``None``."""
@@ -1104,9 +1098,6 @@ def _ollama_enriched_metadata(model: Model) -> dict[str, Any]:
     }
     ollama_metadata = metadata.get(OLLAMA_METADATA_KEY)
     provider_metadata = dict(ollama_metadata) if isinstance(ollama_metadata, Mapping) else {}
-    bare_id = model.model_id.split(":", 1)[0].lower()
-    if bare_id.startswith(OLLAMA_FULL_HISTORY_MODEL_PREFIXES):
-        provider_metadata[REASONING_REPLAY_METADATA_FIELD] = REASONING_REPLAY_FULL_HISTORY
     metadata[OLLAMA_METADATA_KEY] = provider_metadata
     return metadata
 
