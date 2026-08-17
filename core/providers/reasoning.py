@@ -66,12 +66,6 @@ DEFAULT_REASONING_REPLAY_POLICY: ReasoningReplayPolicy = REASONING_REPLAY_FULL_H
 _REASONING_META_ITEM_LIST_KEYS = frozenset({"reasoning_items", "response_output"})
 _REASONING_META_SCALAR_LIST_KEYS = frozenset({"encrypted_content"})
 
-# Request-only markup adapters inject into historical Assistant ``content`` when a
-# Model cannot see native reasoning fields on replay. Never a response carrier.
-REASONING_HISTORY_TAG = "reasoning_history"
-REASONING_HISTORY_OPEN_TAG = f"<{REASONING_HISTORY_TAG}>"
-REASONING_HISTORY_CLOSE_TAG = f"</{REASONING_HISTORY_TAG}>"
-
 
 def merge_reasoning_meta(
     existing: Mapping[str, Any] | None,
@@ -173,43 +167,6 @@ def _prefer_richer_reasoning_item(
     if existing_summary and not incoming_summary:
         merged["summary"] = existing_summary
     return merged
-
-
-def strip_leading_reasoning_history_markup(content: str | None) -> str | None:
-    """Remove leading request-only ``<reasoning_history>`` wrappers from content.
-
-    Adapters inject this marker only on the wire when replaying readable
-    Reasoning for Models that ignore native historical reasoning fields. Models
-    sometimes echo the marker into new Assistant content; strip it on ingest and
-    before re-wrapping so users never see the encoding and request payloads do
-    not nest copies. Unclosed leading markers drop the remainder — the bytes are
-    request-encoding junk, not answer text.
-    """
-
-    if not isinstance(content, str) or not content:
-        return content
-    remaining = content
-    changed = False
-    while True:
-        stripped = remaining.lstrip()
-        if not stripped.startswith(REASONING_HISTORY_OPEN_TAG):
-            break
-        changed = True
-        inner_start = len(remaining) - len(stripped) + len(REASONING_HISTORY_OPEN_TAG)
-        close_index = remaining.find(REASONING_HISTORY_CLOSE_TAG, inner_start)
-        if close_index == -1:
-            return None
-        remaining = remaining[close_index + len(REASONING_HISTORY_CLOSE_TAG) :]
-    if not changed:
-        return content
-    return remaining.strip() or None
-
-
-# Opaque reasoning metadata list keys that must accumulate across stream deltas
-# instead of being replaced by a shallow dict update (which drops earlier items
-# and can lose ``encrypted_content`` before the terminal response arrives).
-_REASONING_META_ITEM_LIST_KEYS = frozenset({"reasoning_items", "response_output"})
-_REASONING_META_SCALAR_LIST_KEYS = frozenset({"encrypted_content"})
 
 
 def normalize_thinking_effort(value: Any) -> str:

@@ -54,14 +54,6 @@ _PROFILE_BY_MODEL: dict[str, dict[str, object]] = {
     "deepseek-v4-pro": {"protocol": "openai"},
     "glm-5.2": {"protocol": "openai", "reasoning_response_field": "reasoning_content"},
     "glm-5.3": {"protocol": "openai", "reasoning_response_field": "reasoning_content"},
-    # Synthetic profile: no real model carries the content-injection request
-    # format anymore (GLM-5.3 was live-verified native), but the adapter
-    # mechanism stays covered.
-    "injection-format-model": {
-        "protocol": "openai",
-        "reasoning_request_format": "content_think_and_history",
-        "reasoning_response_field": "reasoning_content",
-    },
     "grok-4.5": {
         "minimum_reasoning_effort": "low",
         "protocol": "openai",
@@ -246,31 +238,6 @@ class TestOpenCodeGoAdapter:
         assistant_message = payload["messages"][1]
         assert assistant_message["reasoning_content"] == reasoning
         assert "<reasoning_history>" not in (assistant_message.get("content") or "")
-
-    def test_injection_format_replay_strips_echoed_reasoning_history_before_rewrap(
-        self,
-        opencode_go_adapter: OpenCodeGoAdapter,
-    ) -> None:
-        reasoning = "prior trace"
-        payload = opencode_go_adapter._build_payload(
-            [
-                {"role": "user", "content": "First turn"},
-                {
-                    "role": "assistant",
-                    "content": (
-                        f"<reasoning_history>\n{reasoning}\n</reasoning_history>\nFirst answer"
-                    ),
-                    "reasoning": reasoning,
-                },
-                {"role": "user", "content": "Second turn"},
-            ],
-            "injection-format-model",
-        )
-
-        assert payload["messages"][1]["content"] == (
-            f"<reasoning_history>\n{reasoning}\n</reasoning_history>\n"
-            f"<think>\n{reasoning}\n</think>\nFirst answer"
-        )
 
     def test_kimi_k2_6_enables_full_history_rendering(
         self,
