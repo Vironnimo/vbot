@@ -34,7 +34,7 @@ from core.providers.errors import (
     ProviderRateLimitError,
     ProviderTimeoutError,
 )
-from core.providers.reasoning import reasoning_token_count
+from core.providers.reasoning import merge_reasoning_meta, reasoning_token_count
 from core.providers.tool_schema import render_tool_definitions
 
 RESPONSES_DONE_MARKER = "[DONE]"
@@ -570,7 +570,10 @@ def _apply_responses_reasoning(
         safe_effort = policy.closest_reasoning_effort(effort)
         if safe_effort is not None and safe_effort != "none":
             payload["reasoning"] = {"effort": safe_effort, "summary": "auto"}
-    if payload.get("reasoning") or include_reasoning is True:
+    # Reasoning-capable Responses wires always need encrypted continuity bytes on
+    # the next turn, including always-on Models that omit an effort object and
+    # tool-loop turns that only replay prior items. Gate only on capability.
+    if payload.get("reasoning") or include_reasoning is not False:
         _append_include(payload, REASONING_ENCRYPTED_CONTENT_INCLUDE)
 
 
@@ -1031,10 +1034,7 @@ def _ordered_stream_output_items(state: ResponsesStreamState) -> list[Mapping[st
 
 
 def _record_reasoning_meta(meta: Mapping[str, Any], state: ResponsesStreamState) -> None:
-    if state.reasoning_meta is None:
-        state.reasoning_meta = dict(meta)
-        return
-    state.reasoning_meta.update(meta)
+    state.reasoning_meta = merge_reasoning_meta(state.reasoning_meta, meta)
 
 
 def _text_backfill_delta(text: str | None, emitted_text: str) -> str | None:

@@ -160,6 +160,19 @@ def test_build_payload_includes_allowed_reasoning_encrypted_content_request() ->
     assert payload["include"] == ["reasoning.encrypted_content"]
 
 
+def test_build_payload_requests_encrypted_content_even_without_effort_object() -> None:
+    """Always-on / default-effort Models still need encrypted continuity bytes."""
+
+    payload = build_responses_payload(
+        [{"role": "user", "content": "Continue"}],
+        model_id="gpt-5.4",
+        policy=responses_policy(),
+    )
+
+    assert "reasoning" not in payload
+    assert payload["include"] == ["reasoning.encrypted_content"]
+
+
 @pytest.mark.parametrize("model_id", ["gpt-5.4", "gpt-5-mini"])
 def test_build_payload_omits_temperature_for_gpt5_responses_models(model_id: str) -> None:
     payload = build_responses_payload(
@@ -177,7 +190,9 @@ def test_build_payload_omits_temperature_for_gpt5_responses_models(model_id: str
         parallel_tool_calls=True,
     )
 
-    assert "include" not in payload
+    # Caller-supplied include is ignored; reasoning-capable Models always get the
+    # encrypted continuity request, never arbitrary include values.
+    assert payload["include"] == ["reasoning.encrypted_content"]
     assert "cache_control" not in payload
     assert "prompt_cache_key" not in payload
     assert "prompt_cache_retention" not in payload
