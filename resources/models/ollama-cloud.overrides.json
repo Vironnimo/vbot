@@ -56,7 +56,7 @@
                     "reasoning_replay": "full_history"
                 },
                 "ollama_cloud": {
-                    "reasoning_response_field": "reasoning_content"
+                    "reasoning_response_field": "reasoning"
                 }
             }
         },
