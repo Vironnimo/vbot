@@ -15,10 +15,6 @@ from core.providers.errors import ProviderError
 from core.providers.openai_compatible import OpenAICompatibleAdapter
 from core.providers.providers import AuthConfig, ProviderConfig
 from core.providers.reasoning import (
-    REASONING_REPLAY_CURRENT_RUN,
-    REASONING_REPLAY_FULL_HISTORY,
-    REASONING_REPLAY_NONE,
-    ReasoningReplayPolicy,
     model_reasoning_supported,
     normalize_thinking_effort,
     remove_reasoning_kwargs,
@@ -184,16 +180,13 @@ class KimiAdapter(OpenAICompatibleAdapter):
         conversation_id = f"{agent_id}:{session_id}"
         return {"prompt_cache_key": prompt_cache_affinity_id or conversation_id}
 
-    def reasoning_replay_policy(self, model_id: str) -> ReasoningReplayPolicy:
-        reasoning_supported = model_reasoning_supported(self._model_lookup, model_id)
-        if reasoning_supported is True:
-            return REASONING_REPLAY_FULL_HISTORY
-        if reasoning_supported is False:
-            return REASONING_REPLAY_NONE
-        return REASONING_REPLAY_CURRENT_RUN
-
-    def _format_assistant_message(self, message: dict[str, Any]) -> dict[str, Any]:
-        formatted = super()._format_assistant_message(message)
+    def _format_assistant_message(
+        self,
+        message: dict[str, Any],
+        *,
+        model_id: str | None = None,
+    ) -> dict[str, Any]:
+        formatted = super()._format_assistant_message(message, model_id=model_id)
         reasoning = message.get("reasoning")
         if isinstance(reasoning, str) and reasoning:
             formatted["reasoning_content"] = reasoning

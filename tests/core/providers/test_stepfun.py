@@ -204,11 +204,11 @@ def test_catalog_is_exact_and_carries_current_capabilities() -> None:
         StepFunAdapter.normalize_catalog_entry({"id": "stepaudio-2.5-chat"}, {})
 
 
-def test_media_and_reasoning_replay_stay_on_documented_wire(
+def test_media_and_reasoning_replay_use_system_defaults(
     direct_adapter: StepFunAdapter,
 ) -> None:
     assert direct_adapter.wire_media_support("step-3.7-flash") == IMAGE_WIRE_MEDIA_TYPES
-    assert direct_adapter.reasoning_replay_policy("step-3.7-flash") == "current_run"
+    assert direct_adapter.reasoning_replay_policy("step-3.7-flash") == "full_history"
 
 
 def test_response_normalizes_reasoning_tools_cache_and_terminal_outcome(

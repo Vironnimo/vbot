@@ -18,7 +18,7 @@ OpenCode Zen is a hosted gateway whose one Model namespace spans OpenAI Response
 
 ## Exact Model Routing
 
-- `metadata.opencode_zen.protocol` is mandatory and has one of `responses`, `messages`, `chat_completions`, or `gemini_generate_content`. `send`, `stream`, response normalization, media support, and reasoning replay all resolve the same metadata. Unknown or vendor-prefixed ids fail locally; vBot never guesses by prefix, silently aliases an id, or falls back to another Model.
+- `metadata.opencode_zen.protocol` is mandatory and has one of `responses`, `messages`, `chat_completions`, or `gemini_generate_content`. `send`, `stream`, response normalization, and media support resolve that metadata; replay scope separately follows the shared Model → Provider → system hierarchy. Unknown or vendor-prefixed ids fail locally; vBot never guesses by prefix, silently aliases an id, or falls back to another Model.
 - Responses Models use `POST /responses` through the deep `OpenAIAdapter`; the Provider override hook classifies Zen errors on both non-streaming and streaming Responses paths.
 - Messages Models use `POST /messages` through a borrowed `AnthropicCompatibleAdapter`, `x-api-key`, `anthropic-version: 2023-06-01`, non-strict Tool schemas, PDF/images, prompt-caching breakpoints, and the outer connection-scoped HTTP client/token getter.
 - Chat Models use `POST /chat/completions` through `OpenAICompatibleAdapter` with bearer auth and the shared Tool, usage, terminal-outcome, and SSE contracts.
@@ -35,7 +35,7 @@ OpenCode's gateway may fail over between upstream suppliers serving the same req
 
 ## Reasoning, Replay, and Prompt Caching
 
-- Responses, Messages, and Chat use the shared reasoning controls and current-Run replay unless a reviewed profile says otherwise. Gemini uses the Model's exact models.dev effort ladder, maps Agent effort to the closest supported level, requests visible thoughts, and declares `full_history` replay because Google requires opaque `thoughtSignature` parts to accompany later turns and Function responses.
+- Responses, Messages, Chat, and Gemini inherit the shared `full_history` replay default unless an explicit top-level override narrows it. Gemini uses the Model's exact models.dev effort ladder, maps Agent effort to the closest supported level, and requests visible thoughts because Google requires opaque `thoughtSignature` parts to accompany later turns and Function responses. Legacy `metadata.opencode_zen.reasoning_replay` values in an older generated snapshot are ignored by runtime policy and disappear on the next catalog refresh.
 - Gemini normalization persists the complete native parts in `reasoning_meta.gemini_parts`; replay sends those parts unchanged so signatures are not reconstructed or lost. Streaming emits progressively complete reasoning metadata before the terminal outcome. A stream without a Gemini `finishReason` is an unknown transport outcome and fails rather than inventing success.
 - Messages enables explicit compatible cache breakpoints. Responses and Chat retain their shared automatic-cache accounting. Gemini reports `cachedContentTokenCount` as `cache_read_tokens`; vBot does not invent a `cachedContent` resource or claim cache creation when Zen returned none. Live cache effectiveness remains Provider/upstream-dependent.
 

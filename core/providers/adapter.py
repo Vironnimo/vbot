@@ -21,7 +21,11 @@ if TYPE_CHECKING:
     from core.providers.providers import ConnectionConfig
 
 from core.models.models import Model
-from core.providers.reasoning import REASONING_REPLAY_CURRENT_RUN, ReasoningReplayPolicy
+from core.providers.reasoning import (
+    DEFAULT_REASONING_REPLAY_POLICY,
+    REASONING_REPLAY_POLICIES,
+    ReasoningReplayPolicy,
+)
 
 JsonObject = dict[str, Any]
 ModelLookup = Callable[[str], "Model | None"]
@@ -679,10 +683,12 @@ class ProviderAdapter(ABC):
         self,
         model_lookup: ModelLookup | None = None,
         debug_recorder: ProviderDebugRecorder | None = None,
+        reasoning_replay_default: ReasoningReplayPolicy = DEFAULT_REASONING_REPLAY_POLICY,
     ) -> None:
-        """Store the model lookup contract and optional debug recorder."""
+        """Store model policy lookup, Provider replay default, and debug recorder."""
         self._model_lookup = model_lookup
         self._debug_recorder = debug_recorder
+        self._reasoning_replay_default = reasoning_replay_default
 
     # ------------------------------------------------------------------
     # Debug hooks
@@ -711,13 +717,18 @@ class ProviderAdapter(ABC):
 
         The chat layer queries this once per request build and shapes the
         request history accordingly; adapters must not re-implement
-        history-wide reasoning strips on top of it.  ``model_id`` is part of
-        the contract because one adapter can route different models to
-        different wires.  The default keeps the historical behavior: only the
-        active run's assistant turns carry reasoning fields.
+        history-wide reasoning strips on top of it. The effective precedence is
+        Model Override, then Provider Override, then the system
+        ``full_history`` default. ``model_id`` is part of the contract because
+        one Provider can explicitly narrow an individual older Model without
+        reducing every other Model on the same Adapter.
         """
-        del model_id
-        return REASONING_REPLAY_CURRENT_RUN
+        model_lookup = getattr(self, "_model_lookup", None)
+        if model_lookup is not None:
+            model = model_lookup(model_id.split("::", 1)[0])
+            if model is not None and model.reasoning_replay in REASONING_REPLAY_POLICIES:
+                return cast(ReasoningReplayPolicy, model.reasoning_replay)
+        return getattr(self, "_reasoning_replay_default", DEFAULT_REASONING_REPLAY_POLICY)
 
     # ------------------------------------------------------------------
     # Wire media capability

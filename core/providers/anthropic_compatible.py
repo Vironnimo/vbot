@@ -66,9 +66,7 @@ from core.providers.reasoning import (
     REASONING_INTENT_EFFORT,
     REASONING_INTENT_OFF,
     REASONING_INTENT_ON,
-    REASONING_REPLAY_FULL_HISTORY,
     ReasoningIntent,
-    ReasoningReplayPolicy,
     model_reasoning_budget_max,
     model_reasoning_control,
     model_reasoning_levels,
@@ -452,7 +450,11 @@ class AnthropicCompatibleAdapter(ProviderAdapter):
         # ``connection_mode`` is accepted for parity with the unified
         # ``get_adapter`` call site but is not used by the Messages wire.
         del connection_mode
-        super().__init__(model_lookup=model_lookup, debug_recorder=debug_recorder)
+        super().__init__(
+            model_lookup=model_lookup,
+            debug_recorder=debug_recorder,
+            reasoning_replay_default=config.reasoning_replay,
+        )
         self._owns_client = client is None
         self._client = client or build_async_client(
             base_url=base_url or config.base_url,
@@ -473,21 +475,6 @@ class AnthropicCompatibleAdapter(ProviderAdapter):
 
     async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
         await self.aclose()
-
-    # ------------------------------------------------------------------
-    # History shaping policy
-    # ------------------------------------------------------------------
-
-    def reasoning_replay_policy(self, model_id: str) -> ReasoningReplayPolicy:
-        """Replay persisted thinking blocks across runs on compatible wires.
-
-        Anthropic expects thinking blocks passed back unchanged for the whole
-        same-model conversation, not just the active tool loop; stripping them
-        risks signature/ordering 400s and breaks provider-side prompt caching.
-        Cross-model entries are stripped by the chat layer's same-model gate.
-        """
-        del model_id
-        return REASONING_REPLAY_FULL_HISTORY
 
     # ------------------------------------------------------------------
     # Wire media capability

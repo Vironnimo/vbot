@@ -11,6 +11,7 @@ from typing import get_type_hints
 
 import pytest
 
+from core.models.models import Capabilities, Model, ReasoningCapabilities
 from core.providers.adapter import (
     IMAGE_WIRE_MEDIA_TYPES,
     TOOL_CALL_ARGUMENT_SEQUENCE_INDEX_FIELD,
@@ -22,7 +23,11 @@ from core.providers.adapter import (
     normalize_tool_call_candidates,
     project_tool_result_content_fallbacks,
 )
-from core.providers.reasoning import REASONING_REPLAY_CURRENT_RUN
+from core.providers.reasoning import (
+    REASONING_REPLAY_CURRENT_RUN,
+    REASONING_REPLAY_FULL_HISTORY,
+    REASONING_REPLAY_NONE,
+)
 
 # ---------------------------------------------------------------------------
 # Helper: minimal concrete subclass that satisfies the ABC
@@ -109,11 +114,37 @@ class TestProviderAdapterABC:
         adapter = _StubAdapter(model_lookup=lookup)
         assert adapter._model_lookup is lookup
 
-    def test_reasoning_replay_policy_defaults_to_current_run(self) -> None:
-        """Unmigrated adapters keep the historical current-run history shaping."""
+    def test_reasoning_replay_policy_defaults_to_full_history(self) -> None:
+        """Every adapter inherits lossless replay unless an override narrows it."""
         adapter = _StubAdapter()
 
+        assert adapter.reasoning_replay_policy("any-model") == REASONING_REPLAY_FULL_HISTORY
+
+    def test_reasoning_replay_provider_override_replaces_system_default(self) -> None:
+        adapter = _StubAdapter(reasoning_replay_default=REASONING_REPLAY_CURRENT_RUN)
+
         assert adapter.reasoning_replay_policy("any-model") == REASONING_REPLAY_CURRENT_RUN
+
+    def test_reasoning_replay_model_override_wins_over_provider_override(self) -> None:
+        model = Model(
+            model_id="any-model",
+            name="Any Model",
+            capabilities=Capabilities(
+                vision=False,
+                tools=False,
+                json_mode=False,
+                reasoning=ReasoningCapabilities(supported=True),
+            ),
+            context_window=None,
+            max_output_tokens=None,
+            reasoning_replay=REASONING_REPLAY_NONE,
+        )
+        adapter = _StubAdapter(
+            model_lookup=lambda _model_id: model,
+            reasoning_replay_default=REASONING_REPLAY_CURRENT_RUN,
+        )
+
+        assert adapter.reasoning_replay_policy("any-model") == REASONING_REPLAY_NONE
 
     def test_wire_media_support_defaults_to_empty(self) -> None:
         """The ABC carries nothing by default: a forgotten declaration degrades."""

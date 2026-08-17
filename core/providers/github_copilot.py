@@ -45,24 +45,13 @@ from core.providers.openai_compatible import (
     _read_optional_mapping,
     _read_string,
 )
-from core.providers.reasoning import THINKING_EFFORT_RANKS, ReasoningReplayPolicy
+from core.providers.reasoning import THINKING_EFFORT_RANKS
 from core.utils.retry import retry_async
 from core.utils.tokens import estimate_request_input_tokens
 
 
 class GitHubCopilotAdapter(OpenAICompatibleAdapter):
     """Routing adapter for GitHub Copilot endpoint families."""
-
-    def reasoning_replay_policy(self, model_id: str) -> ReasoningReplayPolicy:
-        """Return the exact Model's verified replay scope on Copilot's wire.
-
-        Copilot exposes several upstream-shaped endpoint families but does not
-        publish a provider-wide cross-Run replay contract. The policy therefore
-        opts in only exact Models with live verification and leaves every new or
-        unprobed Model on the conservative active-Run scope.
-        """
-
-        return self._policy_for_model(model_id).reasoning_replay
 
     def wire_media_support(self, model_id: str) -> frozenset[str]:
         """Return the exact catalog-advertised image formats for this Model.

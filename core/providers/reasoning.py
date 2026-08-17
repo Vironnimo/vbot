@@ -40,7 +40,7 @@ ReasoningReplayPolicy = Literal["none", "current_run", "full_history"]
 - ``none`` — assistant request entries never carry reasoning fields, not even
   the live in-run continuation turn.
 - ``current_run`` — only the active run's assistant turns keep their reasoning
-  fields; history from earlier runs is stripped (the historical default).
+  fields; history from earlier runs is stripped.
 - ``full_history`` — assistant entries whose persisted model passes the chat
   layer's same-model gate keep their reasoning fields across runs.
 
@@ -57,6 +57,8 @@ REASONING_REPLAY_POLICIES: tuple[ReasoningReplayPolicy, ...] = (
     REASONING_REPLAY_CURRENT_RUN,
     REASONING_REPLAY_FULL_HISTORY,
 )
+DEFAULT_REASONING_REPLAY_POLICY: ReasoningReplayPolicy = REASONING_REPLAY_FULL_HISTORY
+"""Performance-first system default for native same-route Reasoning replay."""
 
 
 def normalize_thinking_effort(value: Any) -> str:

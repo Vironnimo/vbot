@@ -9,12 +9,10 @@
           "wire_policies": {
             "api-key": {
               "protocol": "responses",
-              "reasoning_replay": "full_history",
               "reasoning_context": "all_turns"
             },
             "subscription": {
-              "protocol": "responses",
-              "reasoning_replay": "full_history"
+              "protocol": "responses"
             }
           }
         }
@@ -26,12 +24,10 @@
         "openai": {
           "wire_policies": {
             "api-key": {
-              "protocol": "responses",
-              "reasoning_replay": "current_run"
+              "protocol": "responses"
             },
             "subscription": {
-              "protocol": "responses",
-              "reasoning_replay": "current_run"
+              "protocol": "responses"
             }
           }
         }
@@ -44,12 +40,10 @@
           "wire_policies": {
             "api-key": {
               "protocol": "responses",
-              "reasoning_replay": "full_history",
               "reasoning_context": "all_turns"
             },
             "subscription": {
-              "protocol": "responses",
-              "reasoning_replay": "full_history"
+              "protocol": "responses"
             }
           }
         }
@@ -62,12 +56,10 @@
           "wire_policies": {
             "api-key": {
               "protocol": "responses",
-              "reasoning_replay": "full_history",
               "reasoning_context": "all_turns"
             },
             "subscription": {
-              "protocol": "responses",
-              "reasoning_replay": "full_history"
+              "protocol": "responses"
             }
           }
         }
@@ -80,12 +72,10 @@
           "wire_policies": {
             "api-key": {
               "protocol": "responses",
-              "reasoning_replay": "full_history",
               "reasoning_context": "all_turns"
             },
             "subscription": {
-              "protocol": "responses",
-              "reasoning_replay": "full_history"
+              "protocol": "responses"
             }
           }
         }

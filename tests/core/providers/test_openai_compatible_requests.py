@@ -53,9 +53,8 @@ def test_client_timeout_bounds_non_streaming_generation_reads(openai_adapter):
     assert timeout.pool == 60.0
 
 
-def test_reasoning_replay_policy_stays_current_run(openai_adapter):
-    """Deliberate Phase-3 choice: the generic wire keeps the conservative default."""
-    assert openai_adapter.reasoning_replay_policy("gpt-4o") == "current_run"
+def test_reasoning_replay_policy_defaults_to_full_history(openai_adapter):
+    assert openai_adapter.reasoning_replay_policy("gpt-4o") == "full_history"
 
 
 def test_wire_media_support_is_images_plus_openai_audio(openai_adapter):

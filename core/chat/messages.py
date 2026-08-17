@@ -28,7 +28,7 @@ from core.providers.adapter import (
     normalize_tool_call_candidates,
 )
 from core.providers.reasoning import (
-    REASONING_REPLAY_CURRENT_RUN,
+    DEFAULT_REASONING_REPLAY_POLICY,
     REASONING_REPLAY_FULL_HISTORY,
     REASONING_REPLAY_NONE,
     ReasoningReplayPolicy,
@@ -1024,7 +1024,7 @@ def _session_has_any_content_blocks(messages: list[ChatMessage]) -> bool:
 def _message_to_request_dict(
     message: ChatMessage,
     *,
-    replay_policy: ReasoningReplayPolicy = REASONING_REPLAY_CURRENT_RUN,
+    replay_policy: ReasoningReplayPolicy = DEFAULT_REASONING_REPLAY_POLICY,
     agent_model: str | None = None,
 ) -> JsonObject:
     data = message.to_dict()
@@ -1137,7 +1137,7 @@ def _sanitize_sender_tag_part(value: str) -> str:
 def _assistant_continuation_dict(
     message: ChatMessage,
     *,
-    replay_policy: ReasoningReplayPolicy = REASONING_REPLAY_CURRENT_RUN,
+    replay_policy: ReasoningReplayPolicy = DEFAULT_REASONING_REPLAY_POLICY,
 ) -> JsonObject:
     """Return the live current-turn assistant dict for provider continuation.
 
@@ -1349,7 +1349,7 @@ def _legacy_checkpoint_projection(
 def _embed_notes_into_request(
     messages: list[ChatMessage],
     *,
-    replay_policy: ReasoningReplayPolicy = REASONING_REPLAY_CURRENT_RUN,
+    replay_policy: ReasoningReplayPolicy = DEFAULT_REASONING_REPLAY_POLICY,
     agent_model: str | None = None,
 ) -> list[JsonObject]:
     request_messages = _assemble_request_history(
@@ -1363,7 +1363,7 @@ def _embed_notes_into_request(
 def _assemble_request_history(
     messages: list[ChatMessage],
     *,
-    replay_policy: ReasoningReplayPolicy = REASONING_REPLAY_CURRENT_RUN,
+    replay_policy: ReasoningReplayPolicy = DEFAULT_REASONING_REPLAY_POLICY,
     agent_model: str | None = None,
 ) -> list[JsonObject]:
     request_messages: list[JsonObject] = []
@@ -1583,7 +1583,7 @@ def _escape_untrusted_channel_quote(content: str) -> str:
 def _is_empty_assistant_history_message(
     message: ChatMessage,
     *,
-    replay_policy: ReasoningReplayPolicy = REASONING_REPLAY_CURRENT_RUN,
+    replay_policy: ReasoningReplayPolicy = DEFAULT_REASONING_REPLAY_POLICY,
     agent_model: str | None = None,
 ) -> bool:
     if message.role != "assistant" or message.content is not None or message.tool_calls:
