@@ -20,7 +20,7 @@ This supplementary map covers Kimi Coding Plan and Moonshot Platform Connections
 - Kimi's current Models have Model-specific sampling constraints, so `temperature`, `top_p`, and `n` are omitted rather than forwarding generic Provider defaults.
 - K3 uses `reasoning_effort: low|high|max`: vBot `minimal|low` maps to `low`, `medium|high` to `high`, and `xhigh|max` to `max`. Platform K3 always reasons, so `none` degrades to `low`; Coding Plan `none` sends `thinking.type: disabled`, which Kimi documents as routing the request to K2.6.
 - K2.6 uses `thinking.type: enabled|disabled`; enabled requests set `thinking.keep: all` so persisted `reasoning_content` remains valid across turns. Platform K2.7 Code is fixed to enabled/all. Coding Plan's K2.7 aliases honor `none` by disabling thinking, with the same documented K2.6 routing consequence.
-- Reasoning-capable Models replay canonical Assistant reasoning as `reasoning_content` across same-Model history. A non-reasoning Model strips replay; an unprofiled discovered Model keeps only current-Run reasoning until its behavior is known.
+- Reasoning-capable Models replay canonical Assistant reasoning as `reasoning_content` across same-Model history. A non-reasoning Model strips replay; an unprofiled discovered Model inherits the shared `full_history` default unless a Provider or Model override narrows it.
 - `prompt_cache_key` is derived from the cache-affinity id, falling back to stable Agent/Session identity. Keep it on Coding Plan requests: Kimi requires it for effective Subscription caching and recommends it for coding agents generally.
 
 ## Multimodal policy

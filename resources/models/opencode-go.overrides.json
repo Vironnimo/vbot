@@ -63,15 +63,6 @@
         }
       }
     },
-    "glm-5.3": {
-      "metadata": {
-        "opencode_go": {
-          "protocol": "openai",
-          "reasoning_replay": "full_history",
-          "reasoning_response_field": "reasoning_content"
-        }
-      }
-    },
     "grok-4.5": {
       "metadata": {
         "opencode_go": {
