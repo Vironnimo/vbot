@@ -1733,7 +1733,7 @@ class TestModelRegistryRealResources:
         if provider_id == "opencode-go":
             assert metadata["protocol"] == "openai"
         if (provider_id, model_id) == ("opencode-go", "glm-5.3"):
-            assert metadata["reasoning_request_format"] == "content_think_and_history"
+            assert "reasoning_request_format" not in metadata
 
     def test_overrides_are_applied_at_load(self):
         """``<provider>.overrides.json`` is now merged at LOAD (it used to only
