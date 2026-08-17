@@ -99,12 +99,14 @@ class XAIAdapter(OpenAIAdapter):
         stream: bool = False,
         **kwargs: Any,
     ) -> dict[str, Any]:
+        request_kwargs = dict(kwargs)
+        self._apply_model_output_limit(request_kwargs, model_id, messages)
         payload = build_responses_payload(
             messages,
             model_id=model_id,
             policy=self._responses_policy_for_model(model_id),
             stream=stream,
-            **kwargs,
+            **request_kwargs,
         )
         if model_reasoning_supported(self._model_lookup, model_id) is True:
             include = payload.setdefault("include", [])
