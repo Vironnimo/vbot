@@ -274,9 +274,7 @@ describe('TerminalsView', () => {
     });
     flushSync();
 
-    expect(
-      document.querySelector('.terminals-view__exit-code'),
-    ).toBeTruthy();
+    expect(document.querySelector('.terminals-view__exit-code')).toBeTruthy();
     const exitCodeEl = document.querySelector('.terminals-view__exit-code');
     expect(exitCodeEl.textContent).toContain('Exit code');
     expect(exitCodeEl.textContent).toContain('0');
