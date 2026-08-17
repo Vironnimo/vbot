@@ -58,7 +58,6 @@
       "metadata": {
         "opencode_go": {
           "protocol": "openai",
-          "reasoning_request_format": "content_think_and_history",
           "reasoning_response_field": "reasoning_content"
         }
       }

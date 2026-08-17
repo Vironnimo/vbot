@@ -53,7 +53,11 @@ _PROFILE_BY_MODEL: dict[str, dict[str, object]] = {
     "deepseek-v4-flash": {"protocol": "openai"},
     "deepseek-v4-pro": {"protocol": "openai"},
     "glm-5.2": {"protocol": "openai", "reasoning_response_field": "reasoning_content"},
-    "glm-5.3": {
+    "glm-5.3": {"protocol": "openai", "reasoning_response_field": "reasoning_content"},
+    # Synthetic profile: no real model carries the content-injection request
+    # format anymore (GLM-5.3 was live-verified native), but the adapter
+    # mechanism stays covered.
+    "injection-format-model": {
         "protocol": "openai",
         "reasoning_request_format": "content_think_and_history",
         "reasoning_response_field": "reasoning_content",
@@ -240,16 +244,10 @@ class TestOpenCodeGoAdapter:
 
         assert opencode_go_adapter.reasoning_replay_policy(model_id) == "full_history"
         assistant_message = payload["messages"][1]
-        if model_id == "glm-5.3":
-            assert assistant_message["content"] == (
-                f"<reasoning_history>\n{reasoning}\n</reasoning_history>\n"
-                f"<think>\n{reasoning}\n</think>\nFirst answer"
-            )
-            assert "reasoning_content" not in assistant_message
-        else:
-            assert assistant_message["reasoning_content"] == reasoning
+        assert assistant_message["reasoning_content"] == reasoning
+        assert "<reasoning_history>" not in (assistant_message.get("content") or "")
 
-    def test_glm_5_3_replay_strips_echoed_reasoning_history_before_rewrap(
+    def test_injection_format_replay_strips_echoed_reasoning_history_before_rewrap(
         self,
         opencode_go_adapter: OpenCodeGoAdapter,
     ) -> None:
@@ -266,7 +264,7 @@ class TestOpenCodeGoAdapter:
                 },
                 {"role": "user", "content": "Second turn"},
             ],
-            "glm-5.3",
+            "injection-format-model",
         )
 
         assert payload["messages"][1]["content"] == (
