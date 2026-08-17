@@ -941,6 +941,169 @@ class TestModelRegistryLoad:
         assert model.name == "Corrected Model A"
         assert model.context_window == 1000
 
+    def test_reasoning_replay_provider_and_model_overrides_load(self, tmp_path: Path):
+        models_dir = tmp_path / "models"
+        models_dir.mkdir()
+        models_dir.joinpath("provider.json").write_text(
+            json.dumps(
+                {
+                    "provider_id": "provider",
+                    "models": {
+                        model_id: {
+                            "name": model_id,
+                            "capabilities": {
+                                "vision": False,
+                                "tools": False,
+                                "json_mode": False,
+                                "reasoning": {"supported": True},
+                            },
+                        }
+                        for model_id in ("inherited", "overridden")
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+        models_dir.joinpath("provider.overrides.json").write_text(
+            json.dumps(
+                {
+                    "reasoning_replay": "current_run",
+                    "models": {"overridden": {"reasoning_replay": "full_history"}},
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        registry = ModelRegistry.load(tmp_path)
+
+        assert registry.provider_reasoning_replay("provider") == "current_run"
+        assert registry.get("provider", "inherited").reasoning_replay is None
+        assert registry.get("provider", "overridden").reasoning_replay == "full_history"
+
+    def test_reload_updates_reasoning_replay_overrides_in_place(self, tmp_path: Path):
+        models_dir = tmp_path / "models"
+        models_dir.mkdir()
+        models_dir.joinpath("provider.json").write_text(
+            json.dumps(
+                {
+                    "provider_id": "provider",
+                    "models": {
+                        "model": {
+                            "name": "Model",
+                            "capabilities": {
+                                "vision": False,
+                                "tools": False,
+                                "json_mode": False,
+                                "reasoning": {"supported": True},
+                            },
+                        }
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+        override_path = models_dir / "provider.overrides.json"
+        override_path.write_text(
+            json.dumps(
+                {
+                    "reasoning_replay": "current_run",
+                    "models": {"model": {"reasoning_replay": "none"}},
+                }
+            ),
+            encoding="utf-8",
+        )
+        registry = ModelRegistry.load(tmp_path)
+
+        override_path.write_text(
+            json.dumps(
+                {
+                    "reasoning_replay": "full_history",
+                    "models": {"model": {"reasoning_replay": "current_run"}},
+                }
+            ),
+            encoding="utf-8",
+        )
+        registry.reload(tmp_path)
+
+        assert registry.provider_reasoning_replay("provider") == "full_history"
+        assert registry.get("provider", "model").reasoning_replay == "current_run"
+
+    def test_invalid_provider_reasoning_replay_rejects_override_file(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        models_dir = tmp_path / "models"
+        models_dir.mkdir()
+        models_dir.joinpath("provider.json").write_text(
+            json.dumps(
+                {
+                    "provider_id": "provider",
+                    "models": {
+                        "model": {
+                            "name": "Model",
+                            "capabilities": {
+                                "vision": False,
+                                "tools": False,
+                                "json_mode": False,
+                                "reasoning": {"supported": True},
+                            },
+                        }
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+        models_dir.joinpath("provider.overrides.json").write_text(
+            json.dumps({"reasoning_replay": "conservative", "models": {}}),
+            encoding="utf-8",
+        )
+
+        registry = ModelRegistry.load(tmp_path)
+
+        assert registry.provider_reasoning_replay("provider") is None
+        assert registry.get("provider", "model").name == "Model"
+        assert "reasoning_replay must be one of" in caplog.text
+
+    def test_invalid_model_reasoning_replay_isolates_model(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        models_dir = tmp_path / "models"
+        models_dir.mkdir()
+        models_dir.joinpath("provider.json").write_text(
+            json.dumps(
+                {
+                    "provider_id": "provider",
+                    "models": {
+                        model_id: {
+                            "name": model_id,
+                            "capabilities": {
+                                "vision": False,
+                                "tools": False,
+                                "json_mode": False,
+                                "reasoning": {"supported": True},
+                            },
+                        }
+                        for model_id in ("healthy", "invalid")
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+        models_dir.joinpath("provider.overrides.json").write_text(
+            json.dumps(
+                {
+                    "models": {"invalid": {"reasoning_replay": "conservative"}},
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        registry = ModelRegistry.load(tmp_path)
+
+        assert registry.get("provider", "healthy").name == "healthy"
+        with pytest.raises(KeyError):
+            registry.get("provider", "invalid")
+        assert "reasoning_replay must be one of" in caplog.text
+
     def test_override_only_model_loads_at_load(self, tmp_path: Path):
         """A wire-id present only in the override file (a manual override-only
         model with the full shape) is assembled and loaded."""
@@ -1544,6 +1707,33 @@ class TestModelRegistryRealResources:
         deepseek = registry.get("ollama-cloud", "deepseek-v4-flash:0731")
 
         assert deepseek.max_output_tokens == 65_536
+
+    @pytest.mark.parametrize(
+        ("provider_id", "model_id", "reasoning_field"),
+        [
+            ("ollama-cloud", "glm-5.2", "reasoning"),
+            ("opencode-go", "glm-5.2", "reasoning_content"),
+            ("opencode-go", "glm-5.3", "reasoning_content"),
+        ],
+    )
+    def test_glm_targets_load_explicit_full_history_profiles(
+        self,
+        provider_id: str,
+        model_id: str,
+        reasoning_field: str,
+    ) -> None:
+        registry = ModelRegistry.load(RESOURCES_DIR)
+
+        model = registry.get(provider_id, model_id)
+        metadata = model.metadata[provider_id.replace("-", "_")]
+
+        assert registry.provider_reasoning_replay(provider_id) == "full_history"
+        assert model.reasoning_replay == "full_history"
+        assert metadata["reasoning_response_field"] == reasoning_field
+        if provider_id == "opencode-go":
+            assert metadata["protocol"] == "openai"
+        if (provider_id, model_id) == ("opencode-go", "glm-5.3"):
+            assert metadata["reasoning_request_format"] == "content_think_and_history"
 
     def test_overrides_are_applied_at_load(self):
         """``<provider>.overrides.json`` is now merged at LOAD (it used to only

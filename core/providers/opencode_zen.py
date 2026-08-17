@@ -50,10 +50,6 @@ from core.providers.openai import OPENAI_RESPONSES_PROTOCOL, OpenAIAdapter
 from core.providers.openai_compatible import OpenAICompatibleAdapter
 from core.providers.providers import AuthConfig, ProviderConfig
 from core.providers.reasoning import (
-    REASONING_REPLAY_CURRENT_RUN,
-    REASONING_REPLAY_FULL_HISTORY,
-    REASONING_REPLAY_POLICIES,
-    ReasoningReplayPolicy,
     closest_supported_effort,
     model_reasoning_levels,
     normalize_thinking_effort,
@@ -64,7 +60,6 @@ from core.utils.retry import retry_async
 
 OPENCODE_ZEN_METADATA_KEY = "opencode_zen"
 PROTOCOL_METADATA_KEY = "protocol"
-REASONING_REPLAY_METADATA_KEY = "reasoning_replay"
 PRIVACY_METADATA_KEY = "privacy"
 DEPRECATES_AT_METADATA_KEY = "deprecates_at"
 
@@ -355,14 +350,7 @@ class OpenCodeZenAdapter(OpenAIAdapter):
             raise CatalogEntrySkipped(
                 f"OpenCode Zen Model {model.model_id!r} has no reviewed endpoint protocol"
             )
-        profile: dict[str, Any] = {
-            PROTOCOL_METADATA_KEY: protocol,
-            REASONING_REPLAY_METADATA_KEY: (
-                REASONING_REPLAY_FULL_HISTORY
-                if protocol == PROTOCOL_GEMINI
-                else REASONING_REPLAY_CURRENT_RUN
-            ),
-        }
+        profile: dict[str, Any] = {PROTOCOL_METADATA_KEY: protocol}
         if model.model_id in _FREE_MODELS:
             profile[PRIVACY_METADATA_KEY] = "free_model_data_collection"
         if deprecates_at := _IMMINENT_DEPRECATIONS.get(model.model_id):
@@ -371,12 +359,6 @@ class OpenCodeZenAdapter(OpenAIAdapter):
             model,
             metadata={**model.metadata, OPENCODE_ZEN_METADATA_KEY: profile},
         )
-
-    def reasoning_replay_policy(self, model_id: str) -> ReasoningReplayPolicy:
-        replay = self._profile_value(model_id, REASONING_REPLAY_METADATA_KEY)
-        if replay in REASONING_REPLAY_POLICIES:
-            return cast(ReasoningReplayPolicy, replay)
-        return REASONING_REPLAY_CURRENT_RUN
 
     def request_context_kwargs(
         self,
@@ -461,12 +443,7 @@ class OpenCodeZenAdapter(OpenAIAdapter):
 
     def _model_wire_policy(self, model_id: str) -> Mapping[str, Any]:
         protocol = self._model_protocol(model_id)
-        policy: dict[str, Any] = {
-            "reasoning_replay": self._profile_value(
-                model_id,
-                REASONING_REPLAY_METADATA_KEY,
-            )
-        }
+        policy: dict[str, Any] = {}
         if protocol == PROTOCOL_RESPONSES:
             policy["protocol"] = OPENAI_RESPONSES_PROTOCOL
         return policy

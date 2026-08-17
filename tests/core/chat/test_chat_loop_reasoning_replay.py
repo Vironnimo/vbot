@@ -12,6 +12,7 @@ from core.chat import (
     ToolCall,
 )
 from core.providers.reasoning import (
+    REASONING_REPLAY_CURRENT_RUN,
     REASONING_REPLAY_FULL_HISTORY,
     REASONING_REPLAY_NONE,
 )
@@ -34,12 +35,14 @@ JsonObject = dict[str, Any]
 
 
 @pytest.mark.asyncio
-@pytest.mark.asyncio
-async def test_fresh_follow_up_omits_old_reasoning_and_reasoning_meta_from_request(
+async def test_explicit_current_run_omits_old_reasoning_and_reasoning_meta_from_request(
     tmp_path: Path,
 ) -> None:
     agent = StubAgent(id="coder", model="anthropic/claude-sonnet-4", allowed_tools=["*"])
-    adapter = StubAdapter([{"content": "Fresh answer", "tool_calls": None}])
+    adapter = PolicyStubAdapter(
+        [{"content": "Fresh answer", "tool_calls": None}],
+        policy=REASONING_REPLAY_CURRENT_RUN,
+    )
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
     session = runtime.chat_sessions.create("coder", session_id="session-one")
     session.append(ChatMessage.user("Previous question"))
@@ -72,11 +75,14 @@ async def test_fresh_follow_up_omits_old_reasoning_and_reasoning_meta_from_reque
 
 
 @pytest.mark.asyncio
-async def test_fresh_follow_up_skips_reasoning_only_assistant_history_message(
+async def test_explicit_current_run_skips_reasoning_only_assistant_history_message(
     tmp_path: Path,
 ) -> None:
     agent = StubAgent(id="coder", model="anthropic/claude-sonnet-4", allowed_tools=["*"])
-    adapter = StubAdapter([{"content": "Fresh answer", "tool_calls": None}])
+    adapter = PolicyStubAdapter(
+        [{"content": "Fresh answer", "tool_calls": None}],
+        policy=REASONING_REPLAY_CURRENT_RUN,
+    )
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
     session = runtime.chat_sessions.create("coder", session_id="session-one")
     session.append(ChatMessage.user("Previous question"))
@@ -101,6 +107,31 @@ async def test_fresh_follow_up_skips_reasoning_only_assistant_history_message(
     assert persisted[1].content is None
     assert persisted[1].reasoning == "Old readable reasoning"
     assert persisted[1].reasoning_meta == {"opaque": "provider-signed"}
+
+
+@pytest.mark.asyncio
+async def test_hookless_adapter_defaults_to_exact_full_history_reasoning_replay(
+    tmp_path: Path,
+) -> None:
+    agent = StubAgent(id="coder", model="anthropic/claude-sonnet-4", allowed_tools=["*"])
+    adapter = StubAdapter([{"content": "Fresh answer", "tool_calls": None}])
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+    session = runtime.chat_sessions.create("coder", session_id="session-one")
+    session.append(ChatMessage.user("Previous question"))
+    session.append(
+        ChatMessage.assistant(
+            model="anthropic/claude-sonnet-4::api-key",
+            content="Previous answer",
+            reasoning="EXACT prior Reasoning: äöü\nsecond line\n",
+            reasoning_meta={"opaque": {"signature": "provider-signed"}},
+        )
+    )
+
+    await build_chat_loop(runtime).send("coder", "Follow up", session_id="session-one")
+
+    replayed = adapter.requests[0]["messages"][2]
+    assert replayed["reasoning"] == "EXACT prior Reasoning: äöü\nsecond line\n"
+    assert replayed["reasoning_meta"] == {"opaque": {"signature": "provider-signed"}}
 
 
 @pytest.mark.asyncio

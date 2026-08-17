@@ -1,5 +1,6 @@
 """Dangling tool-result repair and reasoning replay shaping tests."""
 
+from core.providers.reasoning import REASONING_REPLAY_CURRENT_RUN
 from tests.core.chat.chat_loop_support import build_chat_loop
 
 from .messages_test_support import (
@@ -710,13 +711,17 @@ class TestReasoningReplayShaping:
         assert "Use the Tool output after Compaction." in request[3]["content"]
         assert "foreign-signature" not in json.dumps(request)
 
-    def test_current_run_default_strips_reasoning_even_for_same_model(self) -> None:
+    def test_explicit_current_run_strips_reasoning_even_for_same_model(self) -> None:
         messages = [
             ChatMessage.user("Question", timestamp=FIXED_TIMESTAMP),
             self._assistant_with_reasoning("anthropic/claude-sonnet-4", "Answer"),
         ]
 
-        request = _embed_notes_into_request(messages, agent_model="anthropic/claude-sonnet-4")
+        request = _embed_notes_into_request(
+            messages,
+            agent_model="anthropic/claude-sonnet-4",
+            replay_policy=REASONING_REPLAY_CURRENT_RUN,
+        )
 
         assert "reasoning" not in request[1]
         assert "reasoning_meta" not in request[1]
@@ -734,7 +739,11 @@ class TestReasoningReplayShaping:
             ),
         ]
 
-        request = _embed_notes_into_request(messages, agent_model="openai/gpt-5.5")
+        request = _embed_notes_into_request(
+            messages,
+            agent_model="openai/gpt-5.5",
+            replay_policy=REASONING_REPLAY_CURRENT_RUN,
+        )
 
         assert request[1]["phase"] == "commentary"
         assert "reasoning" not in request[1]

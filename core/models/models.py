@@ -53,6 +53,7 @@ _NON_PROVIDER_FILE_NAMES = frozenset(
         MODEL_DATABASE_MANIFEST_FILE_NAME,
     }
 )
+_REASONING_REPLAY_POLICIES = frozenset({"none", "current_run", "full_history"})
 
 
 def is_provider_file(file_name: str) -> bool:
@@ -302,6 +303,7 @@ class Model:
     metadata: Mapping[str, Any] = field(default_factory=lambda: MappingProxyType({}))
     connections: tuple[str, ...] = ()
     recommended_temperature: float | None = None
+    reasoning_replay: str | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "metadata", _freeze_metadata_value(self.metadata))
@@ -333,8 +335,13 @@ class ModelRegistry:
 
     _cache: ClassVar[dict[tuple[Path, Path | None], ModelRegistry]] = {}
 
-    def __init__(self, models: dict[tuple[str, str], Model]) -> None:
+    def __init__(
+        self,
+        models: dict[tuple[str, str], Model],
+        provider_reasoning_replay: Mapping[str, str] | None = None,
+    ) -> None:
         self._models = models
+        self._provider_reasoning_replay = dict(provider_reasoning_replay or {})
 
     @classmethod
     def load(
@@ -369,7 +376,12 @@ class ModelRegistry:
         bundled_models_dir = resolved / "models"
         if custom_providers is not None:
             models_dir = select_model_database_dir(resolved, resolved_runtime)
-            registry = cls(cls._assemble_models(models_dir, bundled_models_dir, custom_providers))
+            models, provider_reasoning_replay = cls._assemble_models(
+                models_dir,
+                bundled_models_dir,
+                custom_providers,
+            )
+            registry = cls(models, provider_reasoning_replay)
             registry._active_models_dir = models_dir
             return registry
 
@@ -378,7 +390,12 @@ class ModelRegistry:
             return cls._cache[cache_key]
 
         models_dir = select_model_database_dir(resolved, resolved_runtime)
-        registry = cls(cls._assemble_models(models_dir, bundled_models_dir, {}))
+        models, provider_reasoning_replay = cls._assemble_models(
+            models_dir,
+            bundled_models_dir,
+            {},
+        )
+        registry = cls(models, provider_reasoning_replay)
         registry._active_models_dir = models_dir
         cls._cache[cache_key] = registry
         return registry
@@ -403,7 +420,7 @@ class ModelRegistry:
         resolved = resources_dir.resolve()
         resolved_runtime = runtime_models_dir.resolve() if runtime_models_dir is not None else None
         models_dir = select_model_database_dir(resolved, resolved_runtime)
-        self._models = self._assemble_models(
+        self._models, self._provider_reasoning_replay = self._assemble_models(
             models_dir,
             resolved / "models",
             custom_providers or {},
@@ -418,7 +435,7 @@ class ModelRegistry:
         models_dir: Path,
         bundled_models_dir: Path,
         custom_providers: Mapping[str, Mapping[str, Any]],
-    ) -> dict[tuple[str, str], Model]:
+    ) -> tuple[dict[tuple[str, str], Model], dict[str, str]]:
         """Assemble every effective model from the on-disk layers (no cache).
 
         ``models_dir`` is the selected generated catalog root and
@@ -435,6 +452,7 @@ class ModelRegistry:
         provider_sources: dict[str, Path] = {}
         override_layers: dict[str, dict[str, Any]] = {}
         override_sources: dict[str, Path] = {}
+        provider_reasoning_replay: dict[str, str] = {}
 
         try:
             provider_files = sorted(models_dir.glob("*.json"))
@@ -476,7 +494,9 @@ class ModelRegistry:
             if overrides_file.name == CANONICAL_OVERRIDES_FILE_NAME:
                 continue
             try:
-                provider_id, override_models = cls._read_override_file(overrides_file)
+                provider_id, override_models, replay_policy = cls._read_override_file(
+                    overrides_file
+                )
             except _MODEL_DATA_ERRORS as exc:
                 _LOGGER.warning(
                     "Ignoring invalid Model DB override file '%s': %s",
@@ -486,6 +506,8 @@ class ModelRegistry:
                 continue
             override_layers[provider_id] = override_models
             override_sources[provider_id] = overrides_file
+            if replay_policy is not None:
+                provider_reasoning_replay[provider_id] = replay_policy
             provider_layers.setdefault(provider_id, {})
 
         for provider_id, provider_models in sorted(provider_layers.items()):
@@ -557,7 +579,7 @@ class ModelRegistry:
                         exc,
                     )
 
-        return models
+        return models, provider_reasoning_replay
 
     @staticmethod
     def _custom_model_record(model: Mapping[str, Any]) -> dict[str, Any]:
@@ -599,7 +621,7 @@ class ModelRegistry:
         return provider_id, provider_models
 
     @staticmethod
-    def _read_override_file(path: Path) -> tuple[str, dict[str, Any]]:
+    def _read_override_file(path: Path) -> tuple[str, dict[str, Any], str | None]:
         """Read and validate one optional Provider override layer."""
 
         data = json.loads(path.read_text(encoding="utf-8"))
@@ -611,7 +633,8 @@ class ModelRegistry:
         override_models = data.get("models", {})
         if not isinstance(override_models, dict):
             raise ValueError("'models' must be an object")
-        return provider_id, override_models
+        replay_policy = _coerce_reasoning_replay(data.get("reasoning_replay"))
+        return provider_id, override_models, replay_policy
 
     @classmethod
     def invalidate(
@@ -648,6 +671,11 @@ class ModelRegistry:
         if key not in self._models:
             raise KeyError(f"Model not found: {provider_id}/{model_id}")
         return self._models[key]
+
+    def provider_reasoning_replay(self, provider_id: str) -> str | None:
+        """Return the Provider-level hand replay policy, or ``None`` when absent."""
+
+        return self._provider_reasoning_replay.get(provider_id)
 
     def list_for_provider(self, provider_id: str) -> list[Model]:
         """Return all models for a given provider, sorted by model_id.
@@ -732,7 +760,19 @@ def _model_from_record(model_id: str, record: Mapping[str, Any]) -> Model:
         recommended_temperature=_coerce_recommended_temperature(
             record.get("recommended_temperature")
         ),
+        reasoning_replay=_coerce_reasoning_replay(record.get("reasoning_replay")),
     )
+
+
+def _coerce_reasoning_replay(value: Any) -> str | None:
+    """Validate an optional Model-DB native Reasoning replay policy."""
+
+    if value is None:
+        return None
+    if isinstance(value, str) and value in _REASONING_REPLAY_POLICIES:
+        return value
+    allowed = ", ".join(sorted(_REASONING_REPLAY_POLICIES))
+    raise ValueError(f"reasoning_replay must be one of: {allowed}")
 
 
 def _coerce_recommended_temperature(value: Any) -> float | None:

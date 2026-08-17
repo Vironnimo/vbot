@@ -40,7 +40,7 @@ ReasoningReplayPolicy = Literal["none", "current_run", "full_history"]
 - ``none`` — assistant request entries never carry reasoning fields, not even
   the live in-run continuation turn.
 - ``current_run`` — only the active run's assistant turns keep their reasoning
-  fields; history from earlier runs is stripped (the historical default).
+  fields; history from earlier runs is stripped.
 - ``full_history`` — assistant entries whose persisted model passes the chat
   layer's same-model gate keep their reasoning fields across runs.
 
@@ -57,6 +57,152 @@ REASONING_REPLAY_POLICIES: tuple[ReasoningReplayPolicy, ...] = (
     REASONING_REPLAY_CURRENT_RUN,
     REASONING_REPLAY_FULL_HISTORY,
 )
+DEFAULT_REASONING_REPLAY_POLICY: ReasoningReplayPolicy = REASONING_REPLAY_FULL_HISTORY
+"""Performance-first system default for native same-route Reasoning replay."""
+
+# Opaque reasoning metadata list keys that must accumulate across stream deltas
+# instead of being replaced by a shallow dict update (which drops earlier items
+# and can lose ``encrypted_content`` before the terminal response arrives).
+_REASONING_META_ITEM_LIST_KEYS = frozenset({"reasoning_items", "response_output"})
+_REASONING_META_SCALAR_LIST_KEYS = frozenset({"encrypted_content"})
+
+# Request-only markup adapters inject into historical Assistant ``content`` when a
+# Model cannot see native reasoning fields on replay. Never a response carrier.
+REASONING_HISTORY_TAG = "reasoning_history"
+REASONING_HISTORY_OPEN_TAG = f"<{REASONING_HISTORY_TAG}>"
+REASONING_HISTORY_CLOSE_TAG = f"</{REASONING_HISTORY_TAG}>"
+
+
+def merge_reasoning_meta(
+    existing: Mapping[str, Any] | None,
+    incoming: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Merge opaque reasoning metadata without dropping earlier stream items.
+
+    Stream adapters often emit partial ``reasoning_items`` / ``response_output``
+    snapshots before the terminal response carries ``encrypted_content``. A plain
+    ``dict.update`` replaces those lists and can permanently lose continuity
+    bytes the Model needs on the next turn.
+    """
+
+    if existing is None:
+        return {key: _copy_reasoning_meta_value(value) for key, value in incoming.items()}
+    merged = {key: _copy_reasoning_meta_value(value) for key, value in existing.items()}
+    for key, value in incoming.items():
+        if key in _REASONING_META_ITEM_LIST_KEYS and isinstance(value, list):
+            merged[key] = _merge_reasoning_item_lists(merged.get(key), value)
+            continue
+        if key in _REASONING_META_SCALAR_LIST_KEYS and isinstance(value, list):
+            merged[key] = _merge_unique_scalar_lists(merged.get(key), value)
+            continue
+        merged[key] = _copy_reasoning_meta_value(value)
+    return merged
+
+
+def _copy_reasoning_meta_value(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return dict(value)
+    if isinstance(value, list):
+        return [dict(item) if isinstance(item, Mapping) else item for item in value]
+    return value
+
+
+def _merge_unique_scalar_lists(existing: Any, incoming: list[Any]) -> list[Any]:
+    merged: list[Any] = []
+    seen: set[str] = set()
+    for value in (
+        *(existing if isinstance(existing, list) else ()),
+        *incoming,
+    ):
+        marker = repr(value)
+        if marker in seen:
+            continue
+        seen.add(marker)
+        merged.append(value)
+    return merged
+
+
+def _merge_reasoning_item_lists(existing: Any, incoming: list[Any]) -> list[Any]:
+    merged_by_key: dict[str, dict[str, Any]] = {}
+    order: list[str] = []
+    next_anonymous = 0
+
+    def _add(item: Any) -> None:
+        nonlocal next_anonymous
+        if not isinstance(item, Mapping):
+            return
+        item_dict = dict(item)
+        item_id = item_dict.get("id")
+        if not isinstance(item_id, str) or not item_id:
+            call_id = item_dict.get("call_id")
+            item_id = call_id if isinstance(call_id, str) and call_id else None
+        if item_id is None:
+            key = f"__anonymous_{next_anonymous}"
+            next_anonymous += 1
+        else:
+            key = item_id
+        previous = merged_by_key.get(key)
+        if previous is None:
+            merged_by_key[key] = item_dict
+            order.append(key)
+            return
+        merged_by_key[key] = _prefer_richer_reasoning_item(previous, item_dict)
+
+    if isinstance(existing, list):
+        for item in existing:
+            _add(item)
+    for item in incoming:
+        _add(item)
+    return [merged_by_key[key] for key in order]
+
+
+def _prefer_richer_reasoning_item(
+    existing: Mapping[str, Any],
+    incoming: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Keep encrypted/signature-bearing fields when a later partial omits them."""
+
+    merged = dict(existing)
+    merged.update(incoming)
+    existing_encrypted = existing.get("encrypted_content")
+    incoming_encrypted = incoming.get("encrypted_content")
+    if existing_encrypted and not incoming_encrypted:
+        merged["encrypted_content"] = existing_encrypted
+    existing_summary = existing.get("summary")
+    incoming_summary = incoming.get("summary")
+    if existing_summary and not incoming_summary:
+        merged["summary"] = existing_summary
+    return merged
+
+
+def strip_leading_reasoning_history_markup(content: str | None) -> str | None:
+    """Remove leading request-only ``<reasoning_history>`` wrappers from content.
+
+    Adapters inject this marker only on the wire when replaying readable
+    Reasoning for Models that ignore native historical reasoning fields. Models
+    sometimes echo the marker into new Assistant content; strip it on ingest and
+    before re-wrapping so users never see the encoding and request payloads do
+    not nest copies. Unclosed leading markers drop the remainder — the bytes are
+    request-encoding junk, not answer text.
+    """
+
+    if not isinstance(content, str) or not content:
+        return content
+    remaining = content
+    changed = False
+    while True:
+        stripped = remaining.lstrip()
+        if not stripped.startswith(REASONING_HISTORY_OPEN_TAG):
+            break
+        changed = True
+        inner_start = len(remaining) - len(stripped) + len(REASONING_HISTORY_OPEN_TAG)
+        close_index = remaining.find(REASONING_HISTORY_CLOSE_TAG, inner_start)
+        if close_index == -1:
+            return None
+        remaining = remaining[close_index + len(REASONING_HISTORY_CLOSE_TAG) :]
+    if not changed:
+        return content
+    return remaining.strip() or None
 
 # Opaque reasoning metadata list keys that must accumulate across stream deltas
 # instead of being replaced by a shallow dict update (which drops earlier items

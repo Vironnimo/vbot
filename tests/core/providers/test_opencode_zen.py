@@ -488,7 +488,7 @@ def test_catalog_policy_is_exact_and_marks_privacy_and_deprecation() -> None:
     assert messages.metadata["opencode_zen"]["protocol"] == "messages"
     assert messages.metadata["opencode_zen"]["deprecates_at"] == "2026-08-05"
     assert gemini.metadata["opencode_zen"]["protocol"] == "gemini_generate_content"
-    assert gemini.metadata["opencode_zen"]["reasoning_replay"] == "full_history"
+    assert "reasoning_replay" not in gemini.metadata["opencode_zen"]
     assert free.metadata["opencode_zen"]["privacy"] == "free_model_data_collection"
 
     with pytest.raises(CatalogEntrySkipped):

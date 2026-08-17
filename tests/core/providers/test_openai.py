@@ -266,12 +266,10 @@ def _messages_with_codex_tool_result(normalized: dict[str, Any]) -> list[dict[st
 
 
 def _model_lookup_with_openai_wire_policies(model_id: str) -> Model:
-    replay = "full_history" if model_id.startswith("gpt-5.6") else "current_run"
     api_key_policy: dict[str, str] = {
         "protocol": "responses",
-        "reasoning_replay": replay,
     }
-    if replay == "full_history":
+    if model_id.startswith("gpt-5.6"):
         api_key_policy["reasoning_context"] = "all_turns"
     return Model(
         model_id=model_id,
@@ -297,7 +295,6 @@ def _model_lookup_with_openai_wire_policies(model_id: str) -> Model:
                     "api-key": api_key_policy,
                     "subscription": {
                         "protocol": "responses",
-                        "reasoning_replay": replay,
                     },
                 }
             }
@@ -1037,14 +1034,14 @@ async def test_chat_completions_send_ignores_conversation_id() -> None:
 @pytest.mark.parametrize(
     ("model_id", "expected"),
     [
-        ("gpt-5.5", "current_run"),
+        ("gpt-5.5", "full_history"),
         ("gpt-5.6", "full_history"),
         ("gpt-5.6-sol", "full_history"),
         ("gpt-5.6-terra", "full_history"),
         ("gpt-5.6-luna", "full_history"),
     ],
 )
-def test_reasoning_replay_policy_is_connection_and_model_specific(
+def test_reasoning_replay_policy_defaults_to_full_history_across_connections(
     model_id: str,
     expected: str,
 ) -> None:

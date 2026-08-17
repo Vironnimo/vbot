@@ -863,7 +863,7 @@ class TestRefreshModels:
 
         model = ModelRegistry.load(tmp_path / "resources").get("ollama-cloud", "glm-5.1")
         assert result["model_count"] == 1
-        assert model.metadata["ollama"] == {"remote": True, "reasoning_replay": "full_history"}
+        assert model.metadata["ollama"] == {"remote": True}
         assert model.connections == ("api-key",)
         assert model.context_window == 202752
         assert "Authorization" not in tags_route.calls.last.request.headers
