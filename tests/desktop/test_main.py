@@ -88,9 +88,29 @@ class FakeWindowEvents:
 
 
 @dataclass
+class FakeFrame:
+    """Minimal work-area rectangle double (Windows PascalCase convention)."""
+
+    X: int = 0
+    Y: int = 0
+    Width: int = 1600
+    Height: int = 1000
+
+
+@dataclass
 class FakeScreen:
+    """pywebview Screen double with origin, scale, and optional work area."""
+
     width: int = 1600
     height: int = 1000
+    x: int = 0
+    y: int = 0
+    scale: float = 1.0
+    frame: Any = None
+
+    def __post_init__(self) -> None:
+        if self.frame is None:
+            self.frame = FakeFrame(Width=self.width, Height=self.height)
 
 
 class FakeWebview:
@@ -421,28 +441,78 @@ def test_launch_creates_window_before_loop_with_html_and_bridge_js_api(tmp_path:
     assert kwargs["width"] == 1280
     assert kwargs["height"] == 800
     assert kwargs["min_size"] == (800, 600)
+    # The window is explicitly placed on the primary screen so DPI scaling and
+    # multi-monitor layouts don't push it off-screen.
+    assert kwargs["screen"] is not None
     assert hasattr(kwargs["js_api"], "connect")
     assert hasattr(kwargs["js_api"], "getWakewordStatus")
 
 
 def test_resolve_window_layout_uses_screen_aware_first_run_size() -> None:
-    layout = desktop_main.resolve_window_layout(None, (1920, 1080))
+    screen = FakeScreen(width=1920, height=1080)
+    layout = desktop_main.resolve_window_layout(None, screen)
 
     assert (layout.width, layout.height) == (1440, 864)
     assert (layout.minimum_width, layout.minimum_height) == (800, 600)
 
 
 def test_resolve_window_layout_keeps_remembered_size_that_fits() -> None:
-    layout = desktop_main.resolve_window_layout((1380, 900), (1920, 1080))
+    screen = FakeScreen(width=1920, height=1080)
+    layout = desktop_main.resolve_window_layout((1380, 900), screen)
 
     assert (layout.width, layout.height) == (1380, 900)
 
 
 def test_resolve_window_layout_clamps_remembered_size_to_smaller_screen() -> None:
-    layout = desktop_main.resolve_window_layout((1800, 1100), (1280, 720))
+    screen = FakeScreen(width=1280, height=720)
+    layout = desktop_main.resolve_window_layout((1800, 1100), screen)
 
-    assert (layout.width, layout.height) == (1200, 640)
+    assert (layout.width, layout.height) == (1280, 720)
     assert (layout.minimum_width, layout.minimum_height) == (800, 600)
+
+
+def test_resolve_window_layout_clamps_to_work_area_excluding_taskbar() -> None:
+    """The work area (Screen.frame) excludes the taskbar, so a saved size that
+    fits the full screen bounds but exceeds the work area is clamped down."""
+    screen = FakeScreen(width=2048, height=1152, frame=FakeFrame(Width=2048, Height=1104))
+    layout = desktop_main.resolve_window_layout((2048, 1152), screen)
+
+    assert (layout.width, layout.height) == (2048, 1104)
+
+
+def test_resolve_window_layout_passes_screen_through_for_placement() -> None:
+    screen = FakeScreen(width=1920, height=1080)
+    layout = desktop_main.resolve_window_layout(None, screen)
+
+    assert layout.screen is screen
+
+
+def test_resolve_window_layout_with_no_screen_uses_fallback_and_no_placement() -> None:
+    layout = desktop_main.resolve_window_layout(None, None)
+
+    assert layout.width > 0
+    assert layout.height > 0
+    assert layout.screen is None
+
+
+def test_resolve_window_layout_clamps_against_primary_not_first_screen() -> None:
+    """screens[0] may be a secondary monitor; the primary contains (0,0)."""
+    # Secondary screen on the left, screens[0] by WinForms enumeration order
+    secondary = FakeScreen(width=1920, height=1080, x=-1920, y=270)
+    primary = FakeScreen(width=2048, height=1152, x=0, y=0, scale=1.25)
+    assert (
+        desktop_main._primary_screen(types.SimpleNamespace(screens=[secondary, primary])) is primary
+    )
+
+
+def test_primary_screen_falls_back_to_first_when_origin_not_contained() -> None:
+    only = FakeScreen(width=1920, height=1080, x=-1920, y=0)
+    result = desktop_main._primary_screen(types.SimpleNamespace(screens=[only]))
+    assert result is only
+
+
+def test_primary_screen_returns_none_when_no_screens() -> None:
+    assert desktop_main._primary_screen(types.SimpleNamespace(screens=[])) is None
 
 
 def test_launch_restores_remembered_window_size(tmp_path: Path) -> None:
