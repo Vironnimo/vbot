@@ -226,7 +226,6 @@ GLM_CLOUD_MODEL = Model(
     metadata={
         "ollama": {"remote": True},
         "ollama_cloud": {
-            "reasoning_request_format": "native_and_history",
             "reasoning_response_field": "reasoning",
         },
     },
@@ -650,17 +649,17 @@ class TestOllamaCloudChatWire:
         payload_messages = _last_request_payload(route)["messages"]
         assistant_message = payload_messages[-1]
         assert assistant_message["reasoning"] == "The user requested exactly OK."
-        assert assistant_message["content"] == (
-            "<reasoning_history>\nThe user requested exactly OK.\n</reasoning_history>\nOK"
-        )
+        assert assistant_message["content"] == "OK"
         await cloud_adapter.aclose()
 
     @respx.mock
     @pytest.mark.asyncio
-    async def test_glm_cloud_replay_strips_echoed_reasoning_history_before_rewrap(
+    async def test_glm_cloud_replay_reasoning_native_field_only(
         self,
         cloud_adapter: OllamaCloudAdapter,
     ) -> None:
+        """GLM-5.2 replays reasoning via the native field without content injection."""
+
         route = respx.post(OLLAMA_CLOUD_CHAT_URL).mock(
             return_value=httpx.Response(200, json=CLOUD_TEXT_RESPONSE)
         )
@@ -669,9 +668,7 @@ class TestOllamaCloudChatWire:
             {
                 "role": "assistant",
                 "model": "glm-5.2",
-                "content": (
-                    "<reasoning_history>\nThe user requested exactly OK.\n</reasoning_history>\nOK"
-                ),
+                "content": "OK",
                 "reasoning": "The user requested exactly OK.",
             },
         ]
@@ -679,9 +676,9 @@ class TestOllamaCloudChatWire:
         await cloud_adapter.send(messages, model_id="glm-5.2", thinking_effort="high")
 
         assistant_message = _last_request_payload(route)["messages"][-1]
-        assert assistant_message["content"] == (
-            "<reasoning_history>\nThe user requested exactly OK.\n</reasoning_history>\nOK"
-        )
+        assert assistant_message["reasoning"] == "The user requested exactly OK."
+        assert assistant_message["content"] == "OK"
+        assert "<reasoning_history>" not in assistant_message["content"]
         await cloud_adapter.aclose()
 
     @respx.mock
