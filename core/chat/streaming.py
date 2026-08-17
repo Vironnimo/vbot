@@ -19,6 +19,7 @@ from core.providers.adapter import (
     terminal_outcome_from_response,
 )
 from core.providers.errors import ProviderStreamingUnsupportedError
+from core.providers.reasoning import merge_reasoning_meta
 from core.runs import (
     ASSISTANT_OUTPUT_DELTA_EVENT,
     REASONING_DELTA_EVENT,
@@ -498,10 +499,7 @@ class StreamingAccumulator:
         reasoning_meta = delta.get("reasoning_meta")
         if not isinstance(reasoning_meta, dict):
             raise StreamingDeltaError("reasoning_meta delta must include an object")
-        if self._reasoning_meta is None:
-            self._reasoning_meta = dict(reasoning_meta)
-            return
-        self._reasoning_meta.update(reasoning_meta)
+        self._reasoning_meta = merge_reasoning_meta(self._reasoning_meta, reasoning_meta)
 
     def _add_usage(self, delta: JsonObject) -> None:
         usage = dict(self._usage or {})
