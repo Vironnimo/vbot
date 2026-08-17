@@ -133,7 +133,7 @@ async def test_grok_45_maps_none_to_low_and_sends_xai_responses_fields(
     assert body["include"] == ["reasoning.encrypted_content"]
     assert body["prompt_cache_key"] == "cache-affinity"
     assert body["service_tier"] == "priority"
-    assert body["max_output_tokens"] == 8192
+    assert body["max_output_tokens"] == 30000
     assert body["store"] is False
 
 

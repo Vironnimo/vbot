@@ -485,6 +485,15 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
         if self._config.defaults:
             request_kwargs.update(self._config.defaults)
         request_kwargs.update(kwargs)
+        # Output-limit defaults are resolved by _apply_model_output_limit in
+        # _build_responses_payload, which honors the full precedence chain:
+        # explicit caller limit → model ceiling → provider default. Leaving the
+        # flat provider default here would make it look like an explicit caller
+        # value and skip the model ceiling — the bug that capped Grok-4.5 at
+        # 8192 instead of its 500000-token ceiling.
+        for key in ("max_tokens", "max_output_tokens"):
+            if kwargs.get(key) is None:
+                request_kwargs.pop(key, None)
         return request_kwargs
 
     def _build_responses_payload(
@@ -495,6 +504,8 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
         stream: bool = False,
         **kwargs: Any,
     ) -> dict[str, Any]:
+        request_kwargs = dict(kwargs)
+        self._apply_model_output_limit(request_kwargs, model_id, messages)
         payload = build_responses_payload(
             messages,
             model_id=model_id,
@@ -505,7 +516,7 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
                 if self._uses_platform_responses(model_id)
                 else frozenset()
             ),
-            **kwargs,
+            **request_kwargs,
         )
         if self._connection_mode == CODEX_RESPONSES_MODE:
             self._ensure_required_instructions(payload)
