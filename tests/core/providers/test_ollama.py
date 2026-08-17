@@ -348,6 +348,21 @@ CLOUD_TEXT_RESPONSE: dict[str, Any] = {
     "usage": {"prompt_tokens": 0, "completion_tokens": 9, "total_tokens": 9},
 }
 
+CLOUD_REASONING_CONTENT_RESPONSE: dict[str, Any] = {
+    **CLOUD_TEXT_RESPONSE,
+    "choices": [
+        {
+            "index": 0,
+            "message": {
+                "role": "assistant",
+                "content": "OK",
+                "reasoning_content": "The user requested exactly OK.",
+            },
+            "finish_reason": "stop",
+        }
+    ],
+}
+
 
 class TestOllamaCloudChatWire:
     @respx.mock
@@ -599,7 +614,12 @@ class TestOllamaCloudChatWire:
         self,
         cloud_adapter: OllamaCloudAdapter,
     ) -> None:
-        """DeepSeek's thinking-mode contract requires reasoning_content on replay."""
+        """DeepSeek's thinking-mode contract requires reasoning_content on replay.
+
+        The mocked response carries ``reasoning``, so the response scan would
+        pick that field — the Model's ``reasoning_content`` profile override
+        must win over the scanned field.
+        """
 
         route = respx.post(OLLAMA_CLOUD_CHAT_URL).mock(
             return_value=httpx.Response(200, json=CLOUD_TEXT_RESPONSE)
@@ -683,10 +703,12 @@ class TestOllamaCloudChatWire:
 
     @respx.mock
     @pytest.mark.asyncio
-    async def test_unprofiled_cloud_uses_reasoning_fallback(
+    async def test_unprofiled_cloud_replay_defaults_to_reasoning_content(
         self,
         cloud_adapter: OllamaCloudAdapter,
     ) -> None:
+        """The first replay of an unprofiled Model uses the de-facto standard field."""
+
         route = respx.post(OLLAMA_CLOUD_CHAT_URL).mock(
             return_value=httpx.Response(200, json=CLOUD_TEXT_RESPONSE)
         )
@@ -704,8 +726,134 @@ class TestOllamaCloudChatWire:
 
         payload_messages = _last_request_payload(route)["messages"]
         assistant_message = payload_messages[-1]
+        assert assistant_message["reasoning_content"] == "EXACT old Reasoning: äöü\nline two\n"
+        assert "reasoning" not in assistant_message
+        await cloud_adapter.aclose()
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_unprofiled_cloud_replay_uses_scanned_reasoning_content_field(
+        self,
+        cloud_adapter: OllamaCloudAdapter,
+    ) -> None:
+        """An unprofiled Model whose response carries reasoning_content replays it there."""
+
+        route = respx.post(OLLAMA_CLOUD_CHAT_URL).mock(
+            return_value=httpx.Response(200, json=CLOUD_REASONING_CONTENT_RESPONSE)
+        )
+        raw_response = await cloud_adapter.send(
+            SAMPLE_MESSAGES, model_id="minimax-m2.7", thinking_effort="high"
+        )
+        # Chat normalizes every send() response before the next request.
+        cloud_adapter.normalize_response(raw_response, model_id="minimax-m2.7")
+
+        route.mock(return_value=httpx.Response(200, json=CLOUD_TEXT_RESPONSE))
+        messages: list[dict[str, Any]] = [
+            *SAMPLE_MESSAGES,
+            {
+                "role": "assistant",
+                "model": "minimax-m2.7",
+                "content": "OK",
+                "reasoning": "EXACT old Reasoning: äöü\nline two\n",
+            },
+        ]
+        await cloud_adapter.send(messages, model_id="minimax-m2.7", thinking_effort="high")
+
+        payload_messages = _last_request_payload(route)["messages"]
+        assistant_message = payload_messages[-1]
+        assert assistant_message["reasoning_content"] == "EXACT old Reasoning: äöü\nline two\n"
+        assert "reasoning" not in assistant_message
+        await cloud_adapter.aclose()
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_unprofiled_cloud_replay_uses_scanned_reasoning_field(
+        self,
+        cloud_adapter: OllamaCloudAdapter,
+    ) -> None:
+        """An unprofiled Model whose response carries reasoning replays it there."""
+
+        route = respx.post(OLLAMA_CLOUD_CHAT_URL).mock(
+            return_value=httpx.Response(200, json=CLOUD_TEXT_RESPONSE)
+        )
+        raw_response = await cloud_adapter.send(
+            SAMPLE_MESSAGES, model_id="minimax-m2.7", thinking_effort="high"
+        )
+        # Chat normalizes every send() response before the next request.
+        cloud_adapter.normalize_response(raw_response, model_id="minimax-m2.7")
+
+        route.mock(return_value=httpx.Response(200, json=CLOUD_TEXT_RESPONSE))
+        messages: list[dict[str, Any]] = [
+            *SAMPLE_MESSAGES,
+            {
+                "role": "assistant",
+                "model": "minimax-m2.7",
+                "content": "OK",
+                "reasoning": "EXACT old Reasoning: äöü\nline two\n",
+            },
+        ]
+        await cloud_adapter.send(messages, model_id="minimax-m2.7", thinking_effort="high")
+
+        payload_messages = _last_request_payload(route)["messages"]
+        assistant_message = payload_messages[-1]
         assert assistant_message["reasoning"] == "EXACT old Reasoning: äöü\nline two\n"
         assert "reasoning_content" not in assistant_message
+        await cloud_adapter.aclose()
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_unprofiled_cloud_stream_scan_drives_replay_field(
+        self,
+        cloud_adapter: OllamaCloudAdapter,
+    ) -> None:
+        """A streamed reasoning_content response steers the next replay's field."""
+
+        sse_body = "".join(
+            (
+                'data: {"choices":[{"delta":{"reasoning_content":"Check."}}]}\n\n',
+                'data: {"choices":[{"delta":{"content":"OK"},"finish_reason":"stop"}]}\n\n',
+                'data: {"choices":[],"usage":{"prompt_tokens":0,'
+                '"completion_tokens":22,"total_tokens":0}}\n\n',
+                "data: [DONE]\n\n",
+            )
+        )
+        route = respx.post(OLLAMA_CLOUD_CHAT_URL).mock(
+            return_value=httpx.Response(
+                200,
+                text=sse_body,
+                headers={"content-type": "text/event-stream"},
+            )
+        )
+
+        deltas = [
+            delta
+            async for delta in cloud_adapter.stream(
+                SAMPLE_MESSAGES,
+                model_id="minimax-m2.7",
+                thinking_effort="high",
+            )
+        ]
+
+        assert {"type": "reasoning_delta", "text": "Check."} in deltas
+        assert {"type": "content_delta", "text": "OK"} in deltas
+        assert {"type": "usage", "output_tokens": 22} in deltas
+
+        route.mock(return_value=httpx.Response(200, json=CLOUD_TEXT_RESPONSE))
+        replay_messages: list[dict[str, Any]] = [
+            *SAMPLE_MESSAGES,
+            {
+                "role": "assistant",
+                "model": "minimax-m2.7",
+                "content": "OK",
+                "reasoning": "EXACT old Reasoning: äöü\nline two\n",
+            },
+        ]
+        await cloud_adapter.send(replay_messages, model_id="minimax-m2.7", thinking_effort="high")
+
+        payload_messages = _last_request_payload(route)["messages"]
+        assistant_message = payload_messages[-1]
+        assert assistant_message["reasoning_content"] == "EXACT old Reasoning: äöü\nline two\n"
+        assert "reasoning" not in assistant_message
         await cloud_adapter.aclose()
 
     @respx.mock
