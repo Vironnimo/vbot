@@ -73,8 +73,12 @@ def _shell_syntax_notes() -> str:
         return (
             " Commands use PowerShell 7 (pwsh), not cmd or bash: use $env:VAR, redirect "
             "stderr with 2>$null, and assign environment variables separately. PowerShell "
-            "is non-interactive: Read-Host is unavailable; raw stdin requires "
-            "[Console]::In.ReadLine(), [Console]::In.ReadToEnd(), or a native child process."
+            "is non-interactive and its stdin never reaches EOF: Read-Host is unavailable; "
+            "$input in double-quoted strings expands and hangs the command forever "
+            "(single-quote it or escape as `$input); raw stdin requires "
+            "[Console]::In.ReadLine() or a native child process. The outer shell is "
+            "already PowerShell — pipe into cmdlets directly instead of a nested "
+            "pwsh -Command."
         )
     return " Commands run in bash on this host."
 
