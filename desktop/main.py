@@ -127,12 +127,14 @@ class DesktopProbeResult:
 
 @dataclass(frozen=True)
 class DesktopWindowLayout:
-    """Initial Desktop window size and its screen-safe resize floor."""
+    """Initial Desktop window size, its screen-safe resize floor, and the
+    pywebview Screen to center the window on (or None for OS-default centering)."""
 
     width: int
     height: int
     minimum_width: int
     minimum_height: int
+    screen: Any = None
 
 
 class _DesktopLogFormatter(logging.Formatter):
@@ -357,7 +359,7 @@ def launch_desktop(
     initial_html = build_connection_html(servers=controller.list_servers())
     window_layout = resolve_window_layout(
         read_window_size(settings_file),
-        _primary_screen_size(webview),
+        _primary_screen(webview),
     )
     window = webview.create_window(
         WINDOW_TITLE,
@@ -367,6 +369,7 @@ def launch_desktop(
         width=window_layout.width,
         height=window_layout.height,
         min_size=(window_layout.minimum_width, window_layout.minimum_height),
+        screen=window_layout.screen,
     )
     controller.attach_window(window)
 
@@ -406,18 +409,34 @@ def launch_desktop(
 
 def resolve_window_layout(
     saved_size: tuple[int, int] | None,
-    screen_size: tuple[int, int],
+    screen: Any | None,
 ) -> DesktopWindowLayout:
     """Return a useful initial size bounded to the current primary display.
 
     A fresh install uses roughly 80% of the display with a desktop-sized cap.
     A remembered size wins when present, but is clamped so a former large
     monitor cannot produce an unreachable or unusable window on a smaller one.
+
+    DPI-aware: the clamp uses the screen's work area in logical pixels, so a
+    window that fits logically also fits physically after the monitor's DPI
+    scale is applied. The returned screen is passed to pywebview's
+    create_window so the window centers on the correct monitor with correct
+    DPI conversion, instead of WinForms' CenterScreen default which can
+    center on the wrong monitor or mismatch logical/physical dimensions.
     """
 
-    screen_width, screen_height = screen_size
-    available_width = max(1, screen_width - WINDOW_SCREEN_EDGE_ALLOWANCE)
-    available_height = max(1, screen_height - WINDOW_SCREEN_EDGE_ALLOWANCE)
+    if screen is None:
+        screen_width = FALLBACK_SCREEN_WIDTH
+        screen_height = FALLBACK_SCREEN_HEIGHT
+        available_width = max(1, screen_width - WINDOW_SCREEN_EDGE_ALLOWANCE)
+        available_height = max(1, screen_height - WINDOW_SCREEN_EDGE_ALLOWANCE)
+        placement_screen: Any = None
+    else:
+        _, _, screen_width, screen_height = _screen_work_area(screen)
+        available_width = max(1, screen_width)
+        available_height = max(1, screen_height)
+        placement_screen = screen
+
     minimum_width = min(MINIMUM_WINDOW_WIDTH, available_width)
     minimum_height = min(MINIMUM_WINDOW_HEIGHT, available_height)
 
@@ -434,22 +453,66 @@ def resolve_window_layout(
         height=max(minimum_height, min(height, available_height)),
         minimum_width=minimum_width,
         minimum_height=minimum_height,
+        screen=placement_screen,
     )
 
 
-def _primary_screen_size(webview: WebviewModule) -> tuple[int, int]:
-    """Return primary-screen logical pixels, with a stable fallback."""
+def _primary_screen(webview: WebviewModule) -> Any | None:
+    """Return the pywebview Screen that contains the desktop origin (0, 0).
+
+    WinForms does not guarantee screens[0] is the primary monitor; the list
+    order is arbitrary. The primary screen is the one whose bounds include the
+    origin. Falls back to screens[0] when no screen contains the origin or when
+    screen discovery fails.
+    """
 
     try:
         screens = webview.screens
-        primary_screen = screens[0]
-        width = int(primary_screen.width)
-        height = int(primary_screen.height)
+        if not screens:
+            return None
+        for candidate in screens:
+            cx = int(getattr(candidate, "x", 0))
+            cy = int(getattr(candidate, "y", 0))
+            cw = int(getattr(candidate, "width", 0))
+            ch = int(getattr(candidate, "height", 0))
+            if cx <= 0 < cx + cw and cy <= 0 < cy + ch:
+                return candidate
+        return screens[0]
     except (AttributeError, IndexError, OSError, RuntimeError, TypeError, ValueError):
-        return FALLBACK_SCREEN_WIDTH, FALLBACK_SCREEN_HEIGHT
-    if width <= 0 or height <= 0:
-        return FALLBACK_SCREEN_WIDTH, FALLBACK_SCREEN_HEIGHT
-    return width, height
+        return None
+
+
+def _screen_work_area(screen: Any) -> tuple[int, int, int, int]:
+    """Return (x, y, width, height) of the screen's usable work area in logical pixels.
+
+    The work area excludes OS chrome like the taskbar. pywebview's Screen.frame
+    holds the platform-native work-area rectangle, whose attribute casing differs
+    by platform (Windows uses PascalCase, GTK uses lowercase). Both are tried.
+    Falls back to the full screen bounds when the frame is unavailable.
+    """
+
+    frame = getattr(screen, "frame", None)
+    if frame is not None:
+        for width_attr, height_attr, x_attr, y_attr in (
+            ("Width", "Height", "X", "Y"),
+            ("width", "height", "x", "y"),
+        ):
+            if hasattr(frame, width_attr) and hasattr(frame, height_attr):
+                try:
+                    work_width = int(getattr(frame, width_attr))
+                    work_height = int(getattr(frame, height_attr))
+                    if work_width > 0 and work_height > 0:
+                        work_x = int(getattr(frame, x_attr, getattr(screen, "x", 0)))
+                        work_y = int(getattr(frame, y_attr, getattr(screen, "y", 0)))
+                        return work_x, work_y, work_width, work_height
+                except (TypeError, ValueError, AttributeError):
+                    continue
+    return (
+        int(getattr(screen, "x", 0)),
+        int(getattr(screen, "y", 0)),
+        int(getattr(screen, "width", FALLBACK_SCREEN_WIDTH)),
+        int(getattr(screen, "height", FALLBACK_SCREEN_HEIGHT)),
+    )
 
 
 def _select_launch_entry(
