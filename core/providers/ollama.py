@@ -78,6 +78,7 @@ from core.providers.reasoning import (
     normalize_thinking_effort,
     remove_reasoning_kwargs,
     resolve_reasoning_intent,
+    strip_leading_reasoning_history_markup,
 )
 from core.providers.token_getter import StaticTokenGetter, TokenGetter
 from core.providers.tool_schema import render_tool_definitions
@@ -258,7 +259,11 @@ class OllamaCloudAdapter(OpenAICompatibleAdapter):
                 )
                 == _REASONING_REQUEST_FORMAT_NATIVE_AND_HISTORY
             ):
-                content = formatted.get("content")
+                # Drop echoed request-only markup before re-wrapping so polluted
+                # historical content cannot nest ``<reasoning_history>`` copies.
+                content = strip_leading_reasoning_history_markup(
+                    formatted.get("content") if isinstance(formatted.get("content"), str) else None
+                )
                 formatted["content"] = (
                     f"<reasoning_history>\n{reasoning}\n</reasoning_history>\n{content or ''}"
                 )

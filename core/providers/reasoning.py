@@ -60,6 +60,42 @@ REASONING_REPLAY_POLICIES: tuple[ReasoningReplayPolicy, ...] = (
 DEFAULT_REASONING_REPLAY_POLICY: ReasoningReplayPolicy = REASONING_REPLAY_FULL_HISTORY
 """Performance-first system default for native same-route Reasoning replay."""
 
+# Request-only markup adapters inject into historical Assistant ``content`` when a
+# Model cannot see native reasoning fields on replay. Never a response carrier.
+REASONING_HISTORY_TAG = "reasoning_history"
+REASONING_HISTORY_OPEN_TAG = f"<{REASONING_HISTORY_TAG}>"
+REASONING_HISTORY_CLOSE_TAG = f"</{REASONING_HISTORY_TAG}>"
+
+
+def strip_leading_reasoning_history_markup(content: str | None) -> str | None:
+    """Remove leading request-only ``<reasoning_history>`` wrappers from content.
+
+    Adapters inject this marker only on the wire when replaying readable
+    Reasoning for Models that ignore native historical reasoning fields. Models
+    sometimes echo the marker into new Assistant content; strip it on ingest and
+    before re-wrapping so users never see the encoding and request payloads do
+    not nest copies. Unclosed leading markers drop the remainder — the bytes are
+    request-encoding junk, not answer text.
+    """
+
+    if not isinstance(content, str) or not content:
+        return content
+    remaining = content
+    changed = False
+    while True:
+        stripped = remaining.lstrip()
+        if not stripped.startswith(REASONING_HISTORY_OPEN_TAG):
+            break
+        changed = True
+        inner_start = len(remaining) - len(stripped) + len(REASONING_HISTORY_OPEN_TAG)
+        close_index = remaining.find(REASONING_HISTORY_CLOSE_TAG, inner_start)
+        if close_index == -1:
+            return None
+        remaining = remaining[close_index + len(REASONING_HISTORY_CLOSE_TAG) :]
+    if not changed:
+        return content
+    return remaining.strip() or None
+
 
 def normalize_thinking_effort(value: Any) -> str:
     """Return a canonical vBot thinking effort or an empty string."""

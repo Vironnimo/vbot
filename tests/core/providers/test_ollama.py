@@ -657,6 +657,35 @@ class TestOllamaCloudChatWire:
 
     @respx.mock
     @pytest.mark.asyncio
+    async def test_glm_cloud_replay_strips_echoed_reasoning_history_before_rewrap(
+        self,
+        cloud_adapter: OllamaCloudAdapter,
+    ) -> None:
+        route = respx.post(OLLAMA_CLOUD_CHAT_URL).mock(
+            return_value=httpx.Response(200, json=CLOUD_TEXT_RESPONSE)
+        )
+        messages: list[dict[str, Any]] = [
+            *SAMPLE_MESSAGES,
+            {
+                "role": "assistant",
+                "model": "glm-5.2",
+                "content": (
+                    "<reasoning_history>\nThe user requested exactly OK.\n</reasoning_history>\nOK"
+                ),
+                "reasoning": "The user requested exactly OK.",
+            },
+        ]
+
+        await cloud_adapter.send(messages, model_id="glm-5.2", thinking_effort="high")
+
+        assistant_message = _last_request_payload(route)["messages"][-1]
+        assert assistant_message["content"] == (
+            "<reasoning_history>\nThe user requested exactly OK.\n</reasoning_history>\nOK"
+        )
+        await cloud_adapter.aclose()
+
+    @respx.mock
+    @pytest.mark.asyncio
     async def test_unprofiled_cloud_uses_reasoning_fallback(
         self,
         cloud_adapter: OllamaCloudAdapter,
