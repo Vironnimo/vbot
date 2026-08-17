@@ -65,7 +65,11 @@ from core.providers.adapter import (
     project_tool_result_content_fallbacks,
 )
 from core.providers.errors import NetworkError, ProviderError
-from core.providers.openai_compatible import OpenAICompatibleAdapter
+from core.providers.openai_compatible import (
+    OpenAICompatibleAdapter,
+    _first_choice_message,
+    _stream_choices,
+)
 from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig
 from core.providers.reasoning import (
     REASONING_INTENT_DEFAULT,
@@ -118,6 +122,13 @@ _OLLAMA_CLOUD_REASONING_PARAMETERS = (
     "include_reasoning",
 )
 
+# Reasoning carrier fields Ollama Cloud backends use on the compatible wire;
+# the response scan picks the one that actually carries text.
+_OLLAMA_CLOUD_REASONING_FIELDS = ("reasoning_content", "reasoning")
+# De-facto standard carrier for the first replay of an unprofiled Model,
+# before any real response has been scanned.
+_OLLAMA_CLOUD_REASONING_FIELD_DEFAULT = "reasoning_content"
+
 # Per-model ``/api/show`` enrichment calls run concurrently but bounded, so a
 # host with many installed models is not hit with dozens of simultaneous
 # requests during a refresh.
@@ -153,6 +164,9 @@ class OllamaCloudAdapter(OpenAICompatibleAdapter):
     ) -> None:
         native_base_url = base_url or config.base_url
         self._cloud_base_url = _ollama_cloud_openai_base_url(native_base_url)
+        # Run-local carrier observation: the first real response of an
+        # unprofiled Model decides which reasoning field replay uses.
+        self._scanned_reasoning_field: str | None = None
         super().__init__(
             config,
             token_getter,
@@ -240,8 +254,8 @@ class OllamaCloudAdapter(OpenAICompatibleAdapter):
 
         formatted = super()._format_assistant_message(message, model_id=model_id)
         target_model_id = (model_id or str(message.get("model") or "")).rsplit("/", 1)[-1]
-        field = self._reasoning_response_field(target_model_id) or "reasoning"
-        if field not in ("reasoning_content", "reasoning"):
+        field = self._reasoning_replay_field(target_model_id)
+        if field not in _OLLAMA_CLOUD_REASONING_FIELDS:
             return formatted
         reasoning = message.get("reasoning")
         if isinstance(reasoning, str) and reasoning:
@@ -250,11 +264,47 @@ class OllamaCloudAdapter(OpenAICompatibleAdapter):
             formatted[field] = reasoning
         return formatted
 
+    def _reasoning_replay_field(self, model_id: str) -> str:
+        """Resolve the wire field for replaying readable reasoning.
+
+        Precedence: the Model's catalog ``reasoning_response_field`` (the
+        verified profile wins), then the field observed on this Run's real
+        provider responses (the scan), then the de-facto standard
+        ``reasoning_content`` for the first replay of an unprofiled Model.
+        """
+
+        profiled = self._reasoning_response_field(model_id)
+        if profiled in _OLLAMA_CLOUD_REASONING_FIELDS:
+            return profiled
+        if self._scanned_reasoning_field in _OLLAMA_CLOUD_REASONING_FIELDS:
+            return self._scanned_reasoning_field
+        return _OLLAMA_CLOUD_REASONING_FIELD_DEFAULT
+
+    def _scan_reasoning_field(self, raw_message: Any) -> None:
+        """Remember which reasoning carrier this Run's responses actually use.
+
+        Unprofiled Models cannot be trusted to a guessed field, so the first
+        real response decides: the first non-empty carrier among
+        ``reasoning_content`` and ``reasoning`` wins for the rest of the Run.
+        Profiled Models never reach the scan — their override already won.
+        """
+
+        if self._scanned_reasoning_field in _OLLAMA_CLOUD_REASONING_FIELDS:
+            return
+        if not isinstance(raw_message, Mapping):
+            return
+        for field in _OLLAMA_CLOUD_REASONING_FIELDS:
+            value = raw_message.get(field)
+            if isinstance(value, str) and value:
+                self._scanned_reasoning_field = field
+                return
+
     def normalize_response(
         self, response: dict[str, Any], *, model_id: str | None = None
     ) -> dict[str, Any]:
         """Normalize a Cloud response without trusting impossible zero input usage."""
 
+        self._scan_reasoning_field(_first_choice_message(response))
         normalized = super().normalize_response(response, model_id=model_id)
         _drop_ollama_cloud_zero_prompt_tokens(normalized.get("usage"), response.get("usage"))
         return normalized
@@ -274,6 +324,10 @@ class OllamaCloudAdapter(OpenAICompatibleAdapter):
         for delta in deltas:
             if delta.get("type") == "usage":
                 _drop_ollama_cloud_zero_prompt_tokens(delta, raw_usage)
+        for choice in _stream_choices(raw_chunk):
+            raw_delta = choice.get("delta")
+            if isinstance(raw_delta, dict):
+                self._scan_reasoning_field(raw_delta)
         return deltas
 
 
