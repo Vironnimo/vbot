@@ -533,12 +533,18 @@ describe('ChatTimeline', () => {
       configurable: true,
       get: () => scrollHeight,
     });
+    Object.defineProperty(messages, 'offsetHeight', {
+      configurable: true,
+      get: () => 500,
+    });
     Object.defineProperty(messages, 'scrollTop', {
       configurable: true,
       writable: true,
       value: 0,
     });
 
+    await tick();
+    messages.dispatchEvent(new WheelEvent('wheel', { deltaY: -120 }));
     messages.dispatchEvent(new Event('scroll'));
 
     await waitForCondition(

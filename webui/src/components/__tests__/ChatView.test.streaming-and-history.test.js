@@ -19,6 +19,7 @@ import {
   vi,
   waitForCondition,
 } from './ChatView.support.js';
+import { tick } from 'svelte';
 
 describe('ChatView', () => {
   const chatViewTest = setupChatViewTestSuite();
@@ -441,12 +442,18 @@ describe('ChatView', () => {
       configurable: true,
       get: () => scrollHeight,
     });
+    Object.defineProperty(messages, 'offsetHeight', {
+      configurable: true,
+      get: () => 500,
+    });
     Object.defineProperty(messages, 'scrollTop', {
       configurable: true,
       writable: true,
       value: 0,
     });
 
+    await tick();
+    messages.dispatchEvent(new WheelEvent('wheel', { deltaY: -120 }));
     messages.dispatchEvent(new Event('scroll'));
     scrollHeight = 1400;
 

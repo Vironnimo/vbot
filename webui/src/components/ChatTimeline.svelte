@@ -330,6 +330,8 @@
       anchorId: '',
       anchorOffset: 0,
       fallbackTop: 0,
+      fallbackScrollHeight: 0,
+      restoreFromOlderHistory: false,
     };
   }
 
@@ -428,23 +430,69 @@
     const mode =
       viewport.mode === 'restoring' ? viewport.restoreMode : viewport.mode;
     if (mode === 'follow') {
-      scrollContainer.scrollTop = scrollContainer.scrollHeight;
+      // Only scroll to the bottom when content actually fills the viewport.
+      // During initial load or a session switch before history arrives,
+      // scrollHeight is at most offsetHeight (loading banner / empty state),
+      // so scrollTop = scrollHeight collapses to 0 — the top. Skipping the
+      // flush keeps the viewport in follow mode; the next content-change
+      // sync scrolls to the bottom once there is something to scroll to.
+      if (scrollContainer.scrollHeight > scrollContainer.offsetHeight) {
+        scrollContainer.scrollTop = scrollContainer.scrollHeight;
+      }
+      viewport.mode = 'follow';
     } else {
-      restoreViewportAnchor(viewport);
+      const anchorFound = restoreViewportAnchor(viewport);
+      if (anchorFound) {
+        viewport.mode = 'reading';
+      } else if (viewport.restoreFromOlderHistory) {
+        // The older-history load path already adjusted fallbackTop by the
+        // exact content-height delta, so the corrected pixel restore is
+        // safe even though the height changed. This is the one case where
+        // a height-changed pixel fallback is intentional and correct.
+        // Update the recorded height so later flushes see a stable height
+        // and keep the reading position instead of falling to the bottom.
+        viewport.mode = 'reading';
+        viewport.fallbackScrollHeight = scrollContainer.scrollHeight;
+        viewport.restoreFromOlderHistory = false;
+      } else if (fallbackHeightUnchanged(viewport)) {
+        // The anchor could not be restored, but content height is unchanged
+        // since capture (e.g. jsdom has no layout, or content was stable).
+        // A same-height absolute pixel restore is still safe here.
+        viewport.mode = 'reading';
+      } else {
+        // The saved anchor no longer exists AND content height has changed
+        // (different history page, reload, new messages). A stale absolute
+        // pixel fallback would land mid-text; the bottom is the only safe,
+        // non-surprising position. Switch to follow so future syncs track
+        // new content until the user scrolls.
+        viewport.mode = 'follow';
+        viewport.restoreMode = 'follow';
+        viewport.anchorId = '';
+        if (scrollContainer.scrollHeight > scrollContainer.offsetHeight) {
+          scrollContainer.scrollTop = scrollContainer.scrollHeight;
+        }
+      }
     }
-    viewport.mode = mode;
     syncJumpToLatestVisibility();
+  }
+
+  function fallbackHeightUnchanged(viewport) {
+    if (viewport.fallbackScrollHeight <= 0) {
+      return false;
+    }
+    return scrollContainer.scrollHeight === viewport.fallbackScrollHeight;
   }
 
   function restoreViewportAnchor(viewport) {
     const anchor = timelineItemElement(viewport.anchorId);
     if (!anchor || !elementHasLayout(anchor)) {
       scrollContainer.scrollTop = viewport.fallbackTop;
-      return;
+      return false;
     }
     const containerTop = scrollContainer.getBoundingClientRect().top;
     const currentOffset = anchor.getBoundingClientRect().top - containerTop;
     scrollContainer.scrollTop += currentOffset - viewport.anchorOffset;
+    return true;
   }
 
   function captureViewportAnchor(viewport) {
@@ -452,6 +500,7 @@
       return;
     }
     viewport.fallbackTop = scrollContainer.scrollTop;
+    viewport.fallbackScrollHeight = scrollContainer.scrollHeight;
     const containerTop = scrollContainer.getBoundingClientRect().top;
     const anchor = timelineItemElements().find(
       (element) =>
@@ -617,11 +666,14 @@
   }
 
   function handleMessagesScroll() {
-    if (Date.now() <= userScrollIntentUntil) {
+    const userOwned = Date.now() <= userScrollIntentUntil;
+    if (userOwned) {
       updateViewportFromUserScroll();
     }
     syncJumpToLatestVisibility();
-    void loadOlderHistoryFromScroll();
+    if (userOwned) {
+      void loadOlderHistoryFromScroll();
+    }
   }
 
   function syncJumpToLatestVisibility() {
@@ -692,6 +744,7 @@
           viewport.fallbackTop +=
             scrollContainer.scrollHeight - previousScrollHeight;
         }
+        viewport.restoreFromOlderHistory = true;
         applySessionViewport(key);
       }
     } finally {

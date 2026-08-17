@@ -11,6 +11,7 @@ vi.mock('svelte', async () => {
 
 const { default: ChatTimeline } = await import('../ChatTimeline.svelte');
 const { reactiveProps } = await import('./reactiveProps.svelte.js');
+import { createChatState, ensureSessionState } from '../../lib/chatState.js';
 import {
   mockScrollGeometry,
   scrollMemorySessions,
@@ -446,5 +447,171 @@ describe('ChatTimeline', () => {
 
     resolveOlder(true);
     await waitForCondition(() => currentScrollTop() === 2000);
+  });
+
+  // Regression: during app start / initial session load, the History has not
+  // arrived yet, so the timeline is empty or only as tall as the loading
+  // banner. A naive `scrollTop = scrollHeight` flush collapses to 0 — the top.
+  // The follow flush must skip while content does not exceed the viewport and
+  // re-assert to the bottom once real content arrives.
+  it('lands at the bottom, not the top, when content arrives after mount', async () => {
+    const chatState = createChatState();
+    const session = ensureSessionState(
+      chatState,
+      'alpha',
+      'session-initial-load-bottom',
+    );
+    session.historyLoaded = false;
+    const props = reactiveProps({
+      sessionState: session,
+      agentName: 'Alpha',
+      loadingHistory: true,
+    });
+    mountedComponent = mount(ChatTimeline, {
+      target: document.body,
+      props,
+    });
+    flushSync();
+
+    const container = document.querySelector('.messages');
+    const { currentScrollTop, setScrollHeight } = mockScrollGeometry(container);
+    // Empty timeline: scrollHeight equals offsetHeight (500). The follow flush
+    // must not collapse to scrollTop = 500 (which clamps to 0 / top).
+    await waitForCondition(() => true);
+    expect(currentScrollTop()).toBe(0);
+
+    // History arrives: content now exceeds the viewport.
+    session.historyLoaded = true;
+    session.messages = [
+      {
+        id: 'initial-user',
+        role: 'user',
+        content: 'First message',
+        timestamp: '2026-05-10T09:00:00',
+      },
+      {
+        id: 'initial-assistant',
+        role: 'assistant',
+        content: 'First answer',
+        timestamp: '2026-05-10T09:01:00',
+      },
+    ];
+    setScrollHeight(2000);
+    flushSync();
+    notifyContentResize();
+
+    await waitForCondition(() => currentScrollTop() === 2000);
+  });
+
+  // Regression: when a previously saved reading anchor can no longer be found
+  // (content structurally changed, different history page, reload), the
+  // viewport must fall to the bottom (follow) rather than reusing a stale
+  // absolute-pixel fallback that lands mid-text after content height changes.
+  it('falls to the bottom when a saved reading anchor no longer exists', async () => {
+    const { parentSession, childSession } = scrollMemorySessions();
+    const props = reactiveProps({
+      sessionState: parentSession,
+      agentName: 'Alpha',
+    });
+    mountedComponent = mount(ChatTimeline, {
+      target: document.body,
+      props,
+    });
+    flushSync();
+
+    const container = document.querySelector('.messages');
+    const { setScrollTop, currentScrollTop, setScrollHeight } =
+      mockScrollGeometry(container);
+    await waitForCondition(() => true);
+
+    // Scroll up to a mid-history reading position, then leave.
+    setScrollTop(700);
+    props.sessionState = childSession;
+    flushSync();
+    await waitForCondition(() => currentScrollTop() === 2000);
+
+    // Back to the parent: the saved anchor exists, so it restores to 700.
+    props.sessionState = parentSession;
+    flushSync();
+    await waitForCondition(() => currentScrollTop() === 700);
+
+    // Now mutate the parent content so the previously captured anchor id is
+    // gone, and grow the content. Returning from the child must not land at
+    // the stale pixel fallback (700); it must fall to the bottom (2600).
+    props.sessionState.messages = [
+      {
+        id: 'parent-user-replaced',
+        role: 'user',
+        content: 'Replaced question',
+        timestamp: '2026-05-10T10:00:00',
+      },
+      {
+        id: 'parent-assistant-replaced',
+        role: 'assistant',
+        content: 'Replaced answer',
+        timestamp: '2026-05-10T10:01:00',
+      },
+    ];
+    flushSync();
+    props.sessionState = childSession;
+    flushSync();
+    await waitForCondition(() => currentScrollTop() === 2000);
+    // Grow the parent content so the saved fallbackScrollHeight no longer
+    // matches — the stale-pixel fallback path is now unsafe and must be
+    // skipped in favor of the bottom.
+    setScrollHeight(2600);
+    props.sessionState = parentSession;
+    flushSync();
+    // The saved anchor id is gone and content height changed, so the restore
+    // must fall to the bottom (follow), not the stale pixel fallback (700).
+    await waitForCondition(() => currentScrollTop() === 2600);
+  });
+
+  // Regression: a programmatic scroll to the top during a session switch must
+  // not permanently pin the viewport into reading mode via the older-history
+  // load path. Only genuine user scroll intent may trigger that transition.
+  it('does not pin reading mode when a programmatic scroll reaches the top during a switch', async () => {
+    const { parentSession, childSession } = scrollMemorySessions();
+    const props = reactiveProps({
+      sessionState: parentSession,
+      agentName: 'Alpha',
+      hasOlderHistory: true,
+    });
+    mountedComponent = mount(ChatTimeline, {
+      target: document.body,
+      props,
+    });
+    flushSync();
+
+    const container = document.querySelector('.messages');
+    const { setScrollTop, currentScrollTop, setScrollHeight } =
+      mockScrollGeometry(container);
+    await waitForCondition(() => currentScrollTop() === 2000);
+
+    // Leave the parent at the bottom (follow). Switch to the child; during the
+    // transition the container briefly reports scrollTop 0 without any user
+    // input event. The viewport must stay follow, not reading.
+    props.sessionState = childSession;
+    flushSync();
+    setScrollTop(0);
+    container.dispatchEvent(new Event('scroll'));
+    await waitForCondition(() => currentScrollTop() === 2000);
+
+    // New content arrives in the child; follow mode must track it to the
+    // bottom. If the programmatic top-scroll had pinned reading, the viewport
+    // would have stayed at 0 instead.
+    childSession.messages = [
+      ...childSession.messages,
+      {
+        id: 'child-assistant-late',
+        role: 'assistant',
+        content: 'Late child answer',
+        timestamp: '2026-05-10T09:03:00',
+      },
+    ];
+    setScrollHeight(2400);
+    flushSync();
+    notifyContentResize();
+    await waitForCondition(() => currentScrollTop() === 2400);
   });
 });
