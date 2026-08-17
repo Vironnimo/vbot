@@ -11,10 +11,6 @@ from core.providers.github_copilot_responses import (
 )
 from core.providers.openai import OpenAIAdapter, OpenAISubscriptionResponsesPolicy
 from core.providers.reasoning import (
-    REASONING_REPLAY_CURRENT_RUN,
-    REASONING_REPLAY_FULL_HISTORY,
-    REASONING_REPLAY_NONE,
-    ReasoningReplayPolicy,
     closest_supported_effort,
     model_reasoning_levels,
     model_reasoning_supported,
@@ -69,16 +65,6 @@ class XAIAdapter(OpenAIAdapter):
 
         del model_id
         return XAI_IMAGE_MEDIA_TYPES
-
-    def reasoning_replay_policy(self, model_id: str) -> ReasoningReplayPolicy:
-        """Replay encrypted reasoning items for reasoning Models only."""
-
-        reasoning_supported = model_reasoning_supported(self._model_lookup, model_id)
-        if reasoning_supported is True:
-            return REASONING_REPLAY_FULL_HISTORY
-        if reasoning_supported is False:
-            return REASONING_REPLAY_NONE
-        return REASONING_REPLAY_CURRENT_RUN
 
     def _uses_platform_responses(self, model_id: str) -> bool:
         del model_id

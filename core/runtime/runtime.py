@@ -11,7 +11,7 @@ import sqlite3
 import time
 import tomllib
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as _installed_package_version
@@ -83,6 +83,7 @@ from core.providers.providers import (
     model_is_local,
     resolve_effective_context_window,
 )
+from core.providers.reasoning import ReasoningReplayPolicy
 from core.providers.stepfun import StepFunAdapter
 from core.providers.token_getter import (
     COPILOT_API_ENDPOINT_EXTRA_KEY,
@@ -2307,6 +2308,12 @@ class Runtime:
             raise RuntimeError("Runtime not started — call start() first")
 
         provider_config = self.providers.get(provider_id)
+        provider_replay_override = self.models.provider_reasoning_replay(provider_id)
+        if provider_replay_override is not None:
+            provider_config = replace(
+                provider_config,
+                reasoning_replay=cast(ReasoningReplayPolicy, provider_replay_override),
+            )
         connection, account_id = self._get_connection_config(provider_config, connection_id)
         if not self.provider_credentials.is_connection_enabled(provider_id, connection_id):
             raise ConfigError(

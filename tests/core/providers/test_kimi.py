@@ -287,13 +287,13 @@ def test_unknown_catalog_entry_preserves_discovered_media_and_reasoning_flags() 
     assert model.capabilities.reasoning.supported is True
 
 
-def test_media_and_reasoning_replay_are_model_scoped(
+def test_media_is_model_scoped_and_reasoning_replay_defaults_to_full_history(
     direct_adapter: KimiAdapter,
 ) -> None:
     assert direct_adapter.wire_media_support("kimi-k3") == KIMI_IMAGE_VIDEO_MEDIA_TYPES
     assert direct_adapter.reasoning_replay_policy("kimi-k3") == "full_history"
-    assert direct_adapter.reasoning_replay_policy("plain-model") == "none"
-    assert direct_adapter.reasoning_replay_policy("future-model") == "current_run"
+    assert direct_adapter.reasoning_replay_policy("plain-model") == "full_history"
+    assert direct_adapter.reasoning_replay_policy("future-model") == "full_history"
 
 
 def test_request_context_uses_stable_prompt_cache_affinity(

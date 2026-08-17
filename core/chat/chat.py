@@ -189,7 +189,10 @@ from core.providers.adapter import (
 )
 from core.providers.errors import NetworkError
 from core.providers.providers import resolve_effective_context_window
-from core.providers.reasoning import REASONING_REPLAY_CURRENT_RUN, ReasoningReplayPolicy
+from core.providers.reasoning import (
+    DEFAULT_REASONING_REPLAY_POLICY,
+    ReasoningReplayPolicy,
+)
 from core.runs import (
     COMPACTION_ABORTED_EVENT,
     COMPACTION_COMPLETED_EVENT,
@@ -783,11 +786,11 @@ def _resolve_reasoning_replay_policy(adapter: Any, model_id: str) -> ReasoningRe
     """Resolve the adapter's reasoning replay policy for one request build.
 
     Mirrors the ``set_debug_context`` probe: adapters and test doubles that do
-    not expose the hook get the historical ``current_run`` shaping.
+    not expose the hook receive the system ``full_history`` default.
     """
     if hasattr(adapter, "reasoning_replay_policy"):
         return cast(ReasoningReplayPolicy, adapter.reasoning_replay_policy(model_id))
-    return REASONING_REPLAY_CURRENT_RUN
+    return DEFAULT_REASONING_REPLAY_POLICY
 
 
 def _resolve_wire_media_support(adapter: Any, model_id: str) -> frozenset[str]:
@@ -2517,7 +2520,7 @@ class ChatLoop:
         agent: Any,
         session: ChatSession,
         *,
-        replay_policy: ReasoningReplayPolicy = REASONING_REPLAY_CURRENT_RUN,
+        replay_policy: ReasoningReplayPolicy = DEFAULT_REASONING_REPLAY_POLICY,
         reasoning_scope_model: str | None = None,
         input_modalities: frozenset[str] | None = None,
         wire_media_types: frozenset[str] = frozenset(),
@@ -2549,7 +2552,7 @@ class ChatLoop:
         agent: Any,
         session: ChatSession,
         *,
-        replay_policy: ReasoningReplayPolicy = REASONING_REPLAY_CURRENT_RUN,
+        replay_policy: ReasoningReplayPolicy = DEFAULT_REASONING_REPLAY_POLICY,
         reasoning_scope_model: str | None = None,
         input_modalities: frozenset[str] | None = None,
         wire_media_types: frozenset[str] = frozenset(),

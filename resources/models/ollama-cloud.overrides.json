@@ -1,12 +1,12 @@
 {
     "provider_id": "ollama-cloud",
+    "reasoning_replay": "full_history",
     "models": {
         "deepseek-v4-flash:0731": {
             "max_output_tokens": 65536,
             "metadata": {
                 "ollama": {
-                    "remote": true,
-                    "reasoning_replay": "full_history"
+                    "remote": true
                 },
                 "ollama_cloud": {
                     "reasoning_response_field": "reasoning_content"
@@ -16,8 +16,7 @@
         "deepseek-v4-flash:preview": {
             "metadata": {
                 "ollama": {
-                    "remote": true,
-                    "reasoning_replay": "full_history"
+                    "remote": true
                 },
                 "ollama_cloud": {
                     "reasoning_response_field": "reasoning_content"
@@ -27,8 +26,7 @@
         "deepseek-v4-pro:preview": {
             "metadata": {
                 "ollama": {
-                    "remote": true,
-                    "reasoning_replay": "full_history"
+                    "remote": true
                 },
                 "ollama_cloud": {
                     "reasoning_response_field": "reasoning_content"
@@ -39,8 +37,7 @@
             "recommended_temperature": 1.0,
             "metadata": {
                 "ollama": {
-                    "remote": true,
-                    "reasoning_replay": "full_history"
+                    "remote": true
                 },
                 "ollama_cloud": {
                     "reasoning_response_field": "reasoning_content"
@@ -48,22 +45,22 @@
             }
         },
         "glm-5.2": {
+            "reasoning_replay": "full_history",
             "recommended_temperature": 1.0,
             "metadata": {
                 "ollama": {
-                    "remote": true,
-                    "reasoning_replay": "full_history"
+                    "remote": true
                 },
                 "ollama_cloud": {
-                    "reasoning_response_field": "reasoning_content"
+                    "reasoning_request_format": "native_and_history",
+                    "reasoning_response_field": "reasoning"
                 }
             }
         },
         "kimi-k2.6": {
             "metadata": {
                 "ollama": {
-                    "remote": true,
-                    "reasoning_replay": "full_history"
+                    "remote": true
                 },
                 "ollama_cloud": {
                     "reasoning_response_field": "reasoning_content"
@@ -73,8 +70,7 @@
         "kimi-k2.7-code": {
             "metadata": {
                 "ollama": {
-                    "remote": true,
-                    "reasoning_replay": "full_history"
+                    "remote": true
                 },
                 "ollama_cloud": {
                     "reasoning_response_field": "reasoning_content"
@@ -84,8 +80,7 @@
         "kimi-k3": {
             "metadata": {
                 "ollama": {
-                    "remote": true,
-                    "reasoning_replay": "full_history"
+                    "remote": true
                 },
                 "ollama_cloud": {
                     "reasoning_response_field": "reasoning_content"
@@ -95,8 +90,7 @@
         "minimax-m3": {
             "metadata": {
                 "ollama": {
-                    "remote": true,
-                    "reasoning_replay": "full_history"
+                    "remote": true
                 },
                 "ollama_cloud": {
                     "reasoning_response_field": "reasoning"

@@ -23,12 +23,8 @@ from core.providers.openai_compatible import (
     _read_string,
 )
 from core.providers.reasoning import (
-    REASONING_REPLAY_CURRENT_RUN,
-    REASONING_REPLAY_FULL_HISTORY,
-    ReasoningReplayPolicy,
     closest_supported_effort,
     model_reasoning_levels,
-    model_reasoning_supported,
 )
 
 MISTRAL_REASONING_EFFORTS = {"none", "high"}
@@ -186,24 +182,15 @@ class MistralAdapter(OpenAICompatibleAdapter):
             return False
         return mistral_metadata.get(PROMPT_MODE_METADATA_KEY) == PROMPT_MODE_REASONING
 
-    def reasoning_replay_policy(self, model_id: str) -> ReasoningReplayPolicy:
-        """Replay reasoning across runs — Mistral requires it and the API accepts it.
-
-        Mistral's guidance is explicit and cross-turn: always replay the full
-        assistant message including the thinking trace; dropping it degrades
-        output quality. Verified against the live API (2026-06-13): replaying a
-        reconstructed ThinkChunk on a same-model follow-up returns 200, including
-        when the new request sets ``reasoning_effort: "none"`` — so no
-        thinking-disabled guard is needed. The chat layer's same-model gate
-        strips cross-model entries.
-        """
-        if model_reasoning_supported(self._model_lookup, model_id) is True:
-            return REASONING_REPLAY_FULL_HISTORY
-        return REASONING_REPLAY_CURRENT_RUN
-
-    def _format_assistant_message(self, message: dict[str, Any]) -> dict[str, Any]:
+    def _format_assistant_message(
+        self,
+        message: dict[str, Any],
+        *,
+        model_id: str | None = None,
+    ) -> dict[str, Any]:
         """Replay the original Mistral content chunks whenever they are available."""
-        wire = super()._format_assistant_message(message)
+        wire = super()._format_assistant_message(message, model_id=model_id)
+        wire.pop("reasoning_content", None)
         reasoning_meta = message.get("reasoning_meta")
         if isinstance(reasoning_meta, Mapping):
             stored_chunks = reasoning_meta.get(MISTRAL_CONTENT_CHUNKS_META_KEY)

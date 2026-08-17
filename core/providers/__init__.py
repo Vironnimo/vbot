@@ -45,6 +45,7 @@ from core.providers.providers import (
     resolve_effective_context_window,
 )
 from core.providers.reasoning import (
+    DEFAULT_REASONING_REPLAY_POLICY,
     REASONING_REPLAY_CURRENT_RUN,
     REASONING_REPLAY_FULL_HISTORY,
     REASONING_REPLAY_NONE,
@@ -56,6 +57,7 @@ from core.providers.xai import XAIAdapter
 
 __all__ = [
     "DEFAULT_ACCOUNT_ID",
+    "DEFAULT_REASONING_REPLAY_POLICY",
     "GLOBAL_CONTEXT_WINDOW_FLOOR",
     "LOCAL_CONTEXT_DEFAULT_CAP",
     "REASONING_REPLAY_CURRENT_RUN",

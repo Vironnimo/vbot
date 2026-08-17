@@ -44,44 +44,44 @@ ANTHROPIC_MESSAGES_MODELS: tuple[str, ...] = (
 # Small per-model profiles mirroring the independent facts carried by
 # ``metadata.opencode_go``. Models absent here are unknown to the adapter.
 _PROFILE_BY_MODEL: dict[str, dict[str, object]] = {
-    "minimax-m2.7": {"protocol": "anthropic", "reasoning_replay": "full_history"},
-    "minimax-m2.5": {"protocol": "anthropic", "reasoning_replay": "full_history"},
-    "minimax-m3": {"protocol": "anthropic", "reasoning_replay": "full_history"},
-    "qwen3.7-plus": {"protocol": "anthropic", "reasoning_replay": "full_history"},
-    "qwen3.7-max": {"protocol": "anthropic", "reasoning_replay": "full_history"},
-    "qwen3.6-plus": {"protocol": "anthropic", "reasoning_replay": "full_history"},
-    "deepseek-v4-flash": {"protocol": "openai", "reasoning_replay": "full_history"},
-    "deepseek-v4-pro": {"protocol": "openai", "reasoning_replay": "full_history"},
+    "minimax-m2.7": {"protocol": "anthropic"},
+    "minimax-m2.5": {"protocol": "anthropic"},
+    "minimax-m3": {"protocol": "anthropic"},
+    "qwen3.7-plus": {"protocol": "anthropic"},
+    "qwen3.7-max": {"protocol": "anthropic"},
+    "qwen3.6-plus": {"protocol": "anthropic"},
+    "deepseek-v4-flash": {"protocol": "openai"},
+    "deepseek-v4-pro": {"protocol": "openai"},
+    "glm-5.2": {"protocol": "openai", "reasoning_response_field": "reasoning_content"},
+    "glm-5.3": {
+        "protocol": "openai",
+        "reasoning_request_format": "content_think_and_history",
+        "reasoning_response_field": "reasoning_content",
+    },
     "grok-4.5": {
         "minimum_reasoning_effort": "low",
         "protocol": "openai",
-        "reasoning_replay": "full_history",
     },
-    "hy3": {"protocol": "openai", "reasoning_replay": "full_history"},
+    "hy3": {"protocol": "openai"},
     "kimi-k2.5": {
         "protocol": "openai",
-        "reasoning_replay": "current_run",
         "thinking_control": "toggle",
     },
     "kimi-k2.6": {
         "protocol": "openai",
-        "reasoning_replay": "full_history",
         "thinking_control": "toggle",
         "thinking_keep": "all",
     },
     "kimi-k2.7-code": {
         "protocol": "openai",
-        "reasoning_replay": "current_run",
         "thinking_control": "always_enabled",
     },
     "kimi-k3": {
         "minimum_reasoning_effort": "low",
         "protocol": "openai",
-        "reasoning_replay": "full_history",
     },
     "qwen3.6-plus-openai": {
         "protocol": "openai",
-        "reasoning_replay": "full_history",
     },
 }
 
@@ -203,19 +203,51 @@ class TestOpenCodeGoAdapter:
     ) -> None:
         assert opencode_go_adapter.reasoning_replay_policy(model_id) == "full_history"
 
-    def test_unknown_model_reasoning_replay_is_current_run(
+    def test_unknown_model_reasoning_replay_is_full_history(
         self,
         opencode_go_adapter: OpenCodeGoAdapter,
     ) -> None:
-        assert opencode_go_adapter.reasoning_replay_policy("new-unprofiled-model") == "current_run"
+        assert opencode_go_adapter.reasoning_replay_policy("new-unprofiled-model") == "full_history"
 
     @pytest.mark.parametrize("model_id", ["kimi-k2.5", "kimi-k2.7-code"])
-    def test_kimi_models_without_verified_cross_run_semantics_keep_current_run_replay(
+    def test_kimi_models_inherit_full_history_replay(
         self,
         opencode_go_adapter: OpenCodeGoAdapter,
         model_id: str,
     ) -> None:
-        assert opencode_go_adapter.reasoning_replay_policy(model_id) == "current_run"
+        assert opencode_go_adapter.reasoning_replay_policy(model_id) == "full_history"
+
+    @pytest.mark.parametrize("model_id", ["glm-5.2", "glm-5.3"])
+    def test_glm_reasoning_is_replayed_byte_for_byte_in_request_payload(
+        self,
+        opencode_go_adapter: OpenCodeGoAdapter,
+        model_id: str,
+    ) -> None:
+        reasoning = "EXACT old Reasoning: äöü\nline two\n"
+
+        payload = opencode_go_adapter._build_payload(
+            [
+                {"role": "user", "content": "First turn"},
+                {
+                    "role": "assistant",
+                    "content": "First answer",
+                    "reasoning": reasoning,
+                },
+                {"role": "user", "content": "Second turn"},
+            ],
+            model_id,
+        )
+
+        assert opencode_go_adapter.reasoning_replay_policy(model_id) == "full_history"
+        assistant_message = payload["messages"][1]
+        if model_id == "glm-5.3":
+            assert assistant_message["content"] == (
+                f"<reasoning_history>\n{reasoning}\n</reasoning_history>\n"
+                f"<think>\n{reasoning}\n</think>\nFirst answer"
+            )
+            assert "reasoning_content" not in assistant_message
+        else:
+            assert assistant_message["reasoning_content"] == reasoning
 
     def test_kimi_k2_6_enables_full_history_rendering(
         self,
@@ -378,7 +410,7 @@ class TestOpenCodeGoAdapter:
         assert route.called
         assert assistant_wire["reasoning_content"] == reasoning_text
 
-    def test_base_adapter_build_payload_does_not_add_reasoning_content(
+    def test_base_adapter_build_payload_uses_reasoning_content_fallback(
         self,
         opencode_go_config: ProviderConfig,
     ) -> None:
@@ -397,7 +429,7 @@ class TestOpenCodeGoAdapter:
             model_id="deepseek/deepseek-v4-flash",
         )
 
-        assert "reasoning_content" not in payload["messages"][0]
+        assert payload["messages"][0]["reasoning_content"] == "I think..."
 
     def test_build_payload_replays_reasoning_for_all_assistants_on_openai_path(
         self,

@@ -216,11 +216,13 @@ def test_request_context_uses_shared_prompt_cache_affinity(xai_adapter: XAIAdapt
     ) == {"prompt_cache_key": "shared-prefix"}
 
 
-def test_xai_media_and_reasoning_replay_are_model_scoped(xai_adapter: XAIAdapter) -> None:
+def test_xai_media_is_model_scoped_and_reasoning_defaults_to_full_history(
+    xai_adapter: XAIAdapter,
+) -> None:
     assert xai_adapter.wire_media_support("grok-4.5") == {
         "image/jpeg",
         "image/png",
     }
     assert xai_adapter.reasoning_replay_policy("grok-4.5") == "full_history"
-    assert xai_adapter.reasoning_replay_policy("grok-4.20-0309-non-reasoning") == "none"
-    assert xai_adapter.reasoning_replay_policy("future-model") == "current_run"
+    assert xai_adapter.reasoning_replay_policy("grok-4.20-0309-non-reasoning") == "full_history"
+    assert xai_adapter.reasoning_replay_policy("future-model") == "full_history"

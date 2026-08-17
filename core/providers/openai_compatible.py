@@ -152,7 +152,11 @@ class OpenAICompatibleAdapter(ProviderAdapter):
         )
         self._auth_config = auth_config or config.connections[0].auth
         self._connection_mode = connection_mode
-        super().__init__(model_lookup=model_lookup, debug_recorder=debug_recorder)
+        super().__init__(
+            model_lookup=model_lookup,
+            debug_recorder=debug_recorder,
+            reasoning_replay_default=config.reasoning_replay,
+        )
         self._client = build_async_client(
             base_url=base_url or config.base_url,
             debug_recorder=debug_recorder,
@@ -323,18 +327,37 @@ class OpenAICompatibleAdapter(ProviderAdapter):
         field_name = provider_metadata.get(REASONING_RESPONSE_FIELD_METADATA_KEY)
         return field_name if isinstance(field_name, str) and field_name else None
 
-    def _format_assistant_message(self, message: dict[str, Any]) -> dict[str, Any]:
+    def _format_assistant_message(
+        self,
+        message: dict[str, Any],
+        *,
+        model_id: str | None = None,
+    ) -> dict[str, Any]:
         """Convert an internal assistant message to its wire representation.
 
         Subclasses may override this to inject provider-specific fields
         (e.g. ``reasoning_content`` for DeepSeek-compatible endpoints).
         """
-        return _to_openai_assistant_message(message)
+        del model_id
+        wire = _to_openai_assistant_message(message)
+        reasoning = message.get("reasoning")
+        if isinstance(reasoning, str) and reasoning:
+            # ``reasoning_content`` is the de-facto readable-reasoning field on
+            # OpenAI-compatible chat wires. Keeping it as the lossless fallback
+            # prevents an unprofiled Model from silently losing historical
+            # Reasoning; adapters with a different native shape replace it.
+            wire["reasoning_content"] = reasoning
+        return wire
 
-    def _format_message(self, message: dict[str, Any]) -> dict[str, Any]:
+    def _format_message(
+        self,
+        message: dict[str, Any],
+        *,
+        model_id: str | None = None,
+    ) -> dict[str, Any]:
         """Convert one internal message to its wire representation."""
         if message.get("role") == "assistant":
-            return self._format_assistant_message(message)
+            return self._format_assistant_message(message, model_id=model_id)
         if message.get("role") == "user" and isinstance(message.get("content"), list):
             return {
                 "role": "user",
@@ -361,7 +384,9 @@ class OpenAICompatibleAdapter(ProviderAdapter):
         projected_messages = project_tool_result_content_fallbacks(messages)
         payload: dict[str, Any] = {
             "model": model_id,
-            "messages": [self._format_message(message) for message in projected_messages],
+            "messages": [
+                self._format_message(message, model_id=model_id) for message in projected_messages
+            ],
         }
         _apply_openai_tools(
             payload,

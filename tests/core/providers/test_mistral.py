@@ -147,7 +147,7 @@ def raw_mistral_model(
     return raw
 
 
-def test_reasoning_replay_policy_requires_reasoning_model_profile(
+def test_reasoning_replay_policy_defaults_to_full_history(
     mistral_adapter_with_prompt_mode_lookup: MistralAdapter,
     mistral_adapter: MistralAdapter,
 ) -> None:
@@ -156,7 +156,7 @@ def test_reasoning_replay_policy_requires_reasoning_model_profile(
         mistral_adapter_with_prompt_mode_lookup.reasoning_replay_policy("mistral-medium-3-5")
         == "full_history"
     )
-    assert mistral_adapter.reasoning_replay_policy("unknown-model") == "current_run"
+    assert mistral_adapter.reasoning_replay_policy("unknown-model") == "full_history"
 
 
 def test_normalize_catalog_entry_maps_chat_model_capabilities() -> None:

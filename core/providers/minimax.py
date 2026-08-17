@@ -22,10 +22,7 @@ from core.providers.providers import AuthConfig, ProviderConfig
 from core.providers.reasoning import (
     REASONING_INTENT_DEFAULT,
     REASONING_INTENT_OFF,
-    REASONING_REPLAY_CURRENT_RUN,
-    REASONING_REPLAY_FULL_HISTORY,
     ReasoningIntent,
-    ReasoningReplayPolicy,
     model_reasoning_control,
     model_reasoning_levels,
     remove_reasoning_kwargs,
@@ -313,24 +310,6 @@ class MiniMaxAdapter(OpenAICompatibleAdapter):
         _render_minimax_m3_thinking(payload, intent)
         _validate_minimax_temperature(payload.get("temperature"))
         return payload
-
-    def reasoning_replay_policy(self, model_id: str) -> ReasoningReplayPolicy:
-        """Replay reasoning across runs — MiniMax's own guidance requires it.
-
-        MiniMax documents that preserving the reasoning trace across multi-turn
-        interactions is essential and that discarding it measurably degrades
-        quality. ``_build_payload`` defaults ``reasoning_split: true`` so the
-        trace is captured as ``reasoning_details``; the generic request builder
-        then replays ``reasoning_meta.reasoning_details`` on same-model history
-        (the chat layer's gate strips cross-model entries).
-
-        Not yet probed against the live MiniMax API (no credentials in this
-        environment); the implemented behavior is pinned by unit tests and the
-        deferred live verification is recorded in ``.vorch/FLAGGED.md``.
-        """
-        if model_id.split("::", 1)[0] in MINIMAX_MODEL_FACTS:
-            return REASONING_REPLAY_FULL_HISTORY
-        return REASONING_REPLAY_CURRENT_RUN
 
     def normalize_response(
         self, response: dict[str, Any], *, model_id: str | None = None
