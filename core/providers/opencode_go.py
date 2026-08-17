@@ -21,6 +21,7 @@ from core.providers.openai_compatible import OpenAICompatibleAdapter, _to_openai
 from core.providers.providers import AuthConfig, ProviderConfig
 from core.providers.reasoning import (
     normalize_thinking_effort,
+    strip_leading_reasoning_history_markup,
 )
 from core.providers.token_getter import TokenGetter
 from core.utils.logging import get_logger
@@ -228,7 +229,11 @@ class OpenCodeGoAdapter(OpenAICompatibleAdapter):
                 self._profile_value(target_model_id, REASONING_REQUEST_FORMAT_METADATA_KEY)
                 == REASONING_REQUEST_FORMAT_CONTENT_THINK_AND_HISTORY
             ):
-                content = wire.get("content")
+                # Drop echoed request-only markup before re-wrapping so polluted
+                # historical content cannot nest ``<reasoning_history>`` copies.
+                content = strip_leading_reasoning_history_markup(
+                    wire.get("content") if isinstance(wire.get("content"), str) else None
+                )
                 wire["content"] = (
                     f"<reasoning_history>\n{reasoning}\n</reasoning_history>\n"
                     f"<think>\n{reasoning}\n</think>\n{content or ''}"

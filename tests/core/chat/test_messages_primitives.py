@@ -1160,6 +1160,58 @@ class TestInlineThinkingExtraction:
         assert message.content == content
         assert message.reasoning is None
 
+    def test_leading_reasoning_history_is_discarded_not_promoted(self):
+        message = _assistant_message_from_response(
+            "opencode-go/glm-5.3",
+            {
+                "content": (
+                    "<reasoning_history>\nLet me look at the adapter changes.\n"
+                    "</reasoning_history>\n"
+                    "Lass mich die Provider-Adapter-Änderungen anschauen."
+                ),
+                "reasoning": "Let me look at the adapter changes.",
+            },
+        )
+
+        assert message.content == "Lass mich die Provider-Adapter-Änderungen anschauen."
+        assert message.reasoning == "Let me look at the adapter changes."
+
+    def test_reasoning_history_before_think_is_stripped(self):
+        message = _assistant_message_from_response(
+            "opencode-go/glm-5.3",
+            {
+                "content": (
+                    "<reasoning_history>\nechoed history\n</reasoning_history>\n"
+                    "<think>real trace</think>Answer"
+                ),
+            },
+        )
+
+        assert message.content == "Answer"
+        assert message.reasoning == "real trace"
+
+    def test_think_before_reasoning_history_is_stripped(self):
+        message = _assistant_message_from_response(
+            "opencode-go/glm-5.3",
+            {
+                "content": (
+                    "<think>real trace</think>"
+                    "<reasoning_history>\nechoed history\n</reasoning_history>\n"
+                    "Answer"
+                ),
+            },
+        )
+
+        assert message.content == "Answer"
+        assert message.reasoning == "real trace"
+
+    def test_reasoning_history_inside_answer_stays_in_content(self):
+        content = "Do not wrap answers in <reasoning_history>tags</reasoning_history>."
+        message = _assistant_message_from_response("opencode-go/glm-5.3", {"content": content})
+
+        assert message.content == content
+        assert message.reasoning is None
+
 
 class TestSurrogateSanitization:
     def test_lone_surrogate_in_content_is_replaced(self):

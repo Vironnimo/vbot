@@ -249,6 +249,31 @@ class TestOpenCodeGoAdapter:
         else:
             assert assistant_message["reasoning_content"] == reasoning
 
+    def test_glm_5_3_replay_strips_echoed_reasoning_history_before_rewrap(
+        self,
+        opencode_go_adapter: OpenCodeGoAdapter,
+    ) -> None:
+        reasoning = "prior trace"
+        payload = opencode_go_adapter._build_payload(
+            [
+                {"role": "user", "content": "First turn"},
+                {
+                    "role": "assistant",
+                    "content": (
+                        f"<reasoning_history>\n{reasoning}\n</reasoning_history>\nFirst answer"
+                    ),
+                    "reasoning": reasoning,
+                },
+                {"role": "user", "content": "Second turn"},
+            ],
+            "glm-5.3",
+        )
+
+        assert payload["messages"][1]["content"] == (
+            f"<reasoning_history>\n{reasoning}\n</reasoning_history>\n"
+            f"<think>\n{reasoning}\n</think>\nFirst answer"
+        )
+
     def test_kimi_k2_6_enables_full_history_rendering(
         self,
         opencode_go_adapter: OpenCodeGoAdapter,
