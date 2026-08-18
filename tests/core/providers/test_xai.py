@@ -226,3 +226,30 @@ def test_xai_media_is_model_scoped_and_reasoning_defaults_to_full_history(
     assert xai_adapter.reasoning_replay_policy("grok-4.5") == "full_history"
     assert xai_adapter.reasoning_replay_policy("grok-4.20-0309-non-reasoning") == "full_history"
     assert xai_adapter.reasoning_replay_policy("future-model") == "full_history"
+
+
+def test_xai_discovery_headers_keep_connection_header_without_account_routing() -> None:
+    config = ProviderConfig(
+        id="xai",
+        name="xAI",
+        adapter="xai",
+        base_url="https://api.x.ai/v1",
+        connections=[],
+        defaults={},
+    )
+    headers = XAIAdapter.discovery_headers(
+        config,
+        "xai-access-token",
+        {"Authorization": "Bearer xai-access-token"},
+    )
+    assert headers == {"Authorization": "Bearer xai-access-token"}
+    assert XAIAdapter.discovery_params() == {}
+
+
+@pytest.mark.asyncio
+async def test_xai_resolve_discovery_params_makes_no_network_call() -> None:
+    async def _fetch_json(url: str) -> object:
+        raise AssertionError("xAI discovery must not fetch external metadata")
+
+    resolved = await XAIAdapter.resolve_discovery_params(_fetch_json)
+    assert resolved == {}

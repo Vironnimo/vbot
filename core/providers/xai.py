@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -10,6 +11,7 @@ from core.providers.github_copilot_responses import (
     build_responses_payload,
 )
 from core.providers.openai import OpenAIAdapter, OpenAISubscriptionResponsesPolicy
+from core.providers.providers import ProviderConfig
 from core.providers.reasoning import (
     closest_supported_effort,
     model_reasoning_levels,
@@ -45,6 +47,31 @@ class XAIResponsesPolicy(OpenAISubscriptionResponsesPolicy):
 
 class XAIAdapter(OpenAIAdapter):
     """Translate vBot requests to xAI's stateless ``/responses`` protocol."""
+
+    @classmethod
+    def discovery_headers(
+        cls,
+        _provider_config: ProviderConfig,
+        _credential_value: str,
+        headers: Mapping[str, str],
+    ) -> dict[str, str]:
+        """Keep the selected xAI Connection header without OpenAI account routing."""
+
+        del cls
+        return dict(headers)
+
+    @classmethod
+    def discovery_params(cls) -> dict[str, str]:
+        """xAI's Model listing needs no query parameters."""
+
+        return {}
+
+    @classmethod
+    async def resolve_discovery_params(cls, fetch_json: Any) -> dict[str, str]:
+        """xAI's public Model listing has no Codex client-version query."""
+
+        del cls, fetch_json
+        return {}
 
     def request_context_kwargs(
         self,
