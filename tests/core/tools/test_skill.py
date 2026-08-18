@@ -36,7 +36,7 @@ def test_skill_tool_describes_activation_and_file_path_contract() -> None:
     assert set(properties) == {"name", "file_path"}
     assert properties["name"]["type"] == "string"
     assert properties["name"]["minLength"] == 1
-    assert properties["name"]["pattern"] == r"\S"
+    assert properties["name"]["pattern"] == r"^\S+$"
     assert properties["file_path"]["type"] == "string"
     assert SKILL_TOOL_PARAMETERS["required"] == []
     assert "additionalProperties" not in SKILL_TOOL_PARAMETERS
