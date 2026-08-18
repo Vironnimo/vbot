@@ -1492,3 +1492,83 @@ class TestRefreshModels:
 
         assert (resources_dir / "models" / "stub-provider.raw.json").exists()
         assert not (resources_dir / "models" / "stub-provider.json").exists()
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_refresh_models_xai_subscription_uses_plain_oauth_discovery(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        """xAI discovery must not run OpenAI Codex account routing.
+
+        The xAI subscription OAuth token carries no ``chatgpt_account_id``
+        claim, so the inherited OpenAI Subscription ``discovery_headers``
+        would abort the refresh. xAI's ``/language-models`` catalog needs
+        only the plain Bearer header and no ``client_version`` query.
+        """
+
+        resources_dir = tmp_path / "resources"
+        config = ProviderConfig(
+            id="xai",
+            name="xAI",
+            adapter="xai",
+            base_url="https://api.x.ai/v1",
+            connections=[
+                ConnectionConfig(
+                    id="api-key",
+                    type="api_key",
+                    label="API Key",
+                    auth=AuthConfig(
+                        header="Authorization",
+                        prefix="Bearer ",
+                        credential_key="XAI_API_KEY",
+                    ),
+                    models_endpoint="/language-models",
+                ),
+                ConnectionConfig(
+                    id="subscription",
+                    type="oauth",
+                    label="SuperGrok Login (Subscription)",
+                    auth=AuthConfig(header="Authorization", prefix="Bearer "),
+                    models_endpoint="/language-models",
+                ),
+            ],
+            defaults={"max_tokens": 8192},
+            models_dev_id="xai",
+        )
+        access_token = "xai-subscription-token-without-chatgpt-claim"
+        models_url = "https://api.x.ai/v1/language-models"
+        route = respx.get(models_url).mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "data": [
+                        {
+                            "id": "grok-4.5",
+                            "name": "Grok 4.5",
+                            "input_modalities": ["text", "image"],
+                            "output_modalities": ["text"],
+                            "context_window": 500000,
+                        }
+                    ]
+                },
+            )
+        )
+
+        result = await refresh_models(
+            config,
+            access_token,
+            resources_dir,
+            credential_connection=config.connections[1],
+        )
+
+        request = route.calls.last.request
+        assert request.headers["Authorization"] == f"Bearer {access_token}"
+        assert "chatgpt-account-id" not in request.headers
+        assert "client_version" not in request.url.params
+        catalog_data = json.loads(
+            (resources_dir / "models" / "xai.json").read_text(encoding="utf-8")
+        )
+        assert catalog_data["models"]["grok-4.5"]["connections"] == ["subscription"]
+        assert result["provider_id"] == "xai"
+        assert result["model_count"] == 1
