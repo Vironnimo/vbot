@@ -1711,7 +1711,7 @@ class TestModelRegistryRealResources:
     @pytest.mark.parametrize(
         ("provider_id", "model_id", "reasoning_field", "provider_replay", "model_replay"),
         [
-            ("ollama-cloud", "glm-5.2", "reasoning", "current_run", None),
+            ("ollama-cloud", "glm-5.2", "reasoning", "full_history", None),
             ("opencode-go", "glm-5.2", "reasoning_content", "full_history", "full_history"),
             ("opencode-go", "glm-5.3", "reasoning_content", "full_history", "full_history"),
         ],
@@ -1768,16 +1768,19 @@ class TestModelRegistryRealResources:
         assert pro.recommended_top_p is None
 
     def test_ollama_cloud_reasoning_replay_policies(self):
-        """Ollama Cloud defaults to current_run; DeepSeek V4 models opt out.
+        """Ollama Cloud defaults to full_history; DeepSeek V4 models opt out.
 
-        Live-verified 2026-08: the Cloud engine ignores replayed reasoning for
-        DeepSeek V4 (``none``), while GLM-5.2 reads the carrier within a run
-        (``current_run`` provider default, no per-model override).
+        Live-verified 2026-08 with the probe (number and instruction
+        carriers): GLM-5.2 reads replayed reasoning across turns and within
+        the run, so it inherits the full_history default. DeepSeek V4 Flash
+        ignores the carrier entirely — number, instruction, and tool-loop
+        probes all fail with the carrier and succeed only from visible
+        content — so it pins ``none``. MiniMax M3 stays unprofiled.
         """
 
         registry = ModelRegistry.load(RESOURCES_DIR)
 
-        assert registry.provider_reasoning_replay("ollama-cloud") == "current_run"
+        assert registry.provider_reasoning_replay("ollama-cloud") == "full_history"
         assert registry.get("ollama-cloud", "glm-5.2").reasoning_replay is None
         assert registry.get("ollama-cloud", "deepseek-v4-flash:0731").reasoning_replay == "none"
         assert registry.get("ollama-cloud", "deepseek-v4-flash:preview").reasoning_replay == "none"

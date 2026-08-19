@@ -1093,14 +1093,13 @@ def test_runtime_wires_provider_and_model_reasoning_replay_precedence(runtime: R
         runtime.providers,
         process_env={"OLLAMA_API_KEY": "ollama-secret"},
     )
+    # Provider override applies to every model without a Model-level override.
     runtime.models._provider_reasoning_replay["ollama-cloud"] = "current_run"  # type: ignore[attr-defined]
 
     adapter = runtime.get_adapter("ollama-cloud", "ollama-cloud:api-key")
 
     assert adapter.reasoning_replay_policy("unprofiled-model") == "current_run"
-    # glm-5.2 carries no Model-level override anymore — it inherits the
-    # Provider policy (live-verified: the Cloud engine reads replayed
-    # reasoning only within the active run).
+    # GLM-5.2 has no Model-level override anymore — it inherits the Provider policy.
     assert adapter.reasoning_replay_policy("glm-5.2") == "current_run"
     # The DeepSeek V4 Model override still wins over the Provider policy.
     assert adapter.reasoning_replay_policy("deepseek-v4-flash:0731") == "none"
