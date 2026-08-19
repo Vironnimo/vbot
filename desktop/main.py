@@ -47,6 +47,7 @@ DEFAULT_PORT = 8420
 WINDOW_TITLE = "vBot"
 DEFAULT_ICON_FILE_NAME = "icon.png"
 WINDOWS_ICON_FILE_NAME = "icon.ico"
+WEBVIEW_STORAGE_DIR_NAME = "webview"
 FALLBACK_SCREEN_WIDTH = 1600
 FALLBACK_SCREEN_HEIGHT = 1000
 DEFAULT_WINDOW_SCREEN_RATIO = 0.8
@@ -378,6 +379,19 @@ def launch_desktop(
     if resolved_icon_path.exists():
         # pywebview icon support varies by backend/platform, so custom icons are optional.
         start_kwargs["icon"] = str(resolved_icon_path)
+
+    # Persist the WebView2 profile (localStorage, cookies) across Desktop
+    # restarts. pywebview defaults to private_mode=True, which points the
+    # user-data folder at a temp dir and deletes it on window close — that
+    # would wipe the WebUI's remembered agent/project selection on every
+    # launch. private_mode=False keeps the profile, and the explicit
+    # storage_path pins it beside the Desktop settings file instead of the
+    # shared %APPDATA%\pywebview folder.
+    start_kwargs["private_mode"] = False
+    start_kwargs["storage_path"] = str(
+        (settings_file.parent if settings_file is not None else config_dir())
+        / WEBVIEW_STORAGE_DIR_NAME
+    )
 
     connection_entry = _select_launch_entry(controller, override)
 

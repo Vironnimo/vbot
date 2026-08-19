@@ -745,6 +745,27 @@ def test_launch_starts_without_native_menu(tmp_path: Path) -> None:
     assert "icon" not in fake_webview.start_calls[0]
 
 
+def test_launch_persists_webview_profile_beside_settings(tmp_path: Path) -> None:
+    fake_webview = FakeWebview()
+    settings_file = tmp_path / "settings.json"
+
+    desktop_main.launch_desktop(
+        [],
+        settings_file=settings_file,
+        probe=lambda target: DesktopProbeResult(desktop_main.PROBE_WEBUI_AVAILABLE, target),
+        webview_module=fake_webview,
+        app_icon_path=tmp_path / "missing-icon.png",
+    )
+
+    # The WebView2 profile must survive Desktop restarts: private mode off
+    # (pywebview would otherwise delete the user-data folder on close) and a
+    # stable storage path next to the Desktop settings file.
+    assert fake_webview.start_calls[0]["private_mode"] is False
+    assert fake_webview.start_calls[0]["storage_path"] == str(
+        tmp_path / desktop_main.WEBVIEW_STORAGE_DIR_NAME
+    )
+
+
 def test_launch_passes_icon_only_when_icon_exists(tmp_path: Path) -> None:
     fake_webview = FakeWebview()
     icon_file = tmp_path / "icon.ico"
