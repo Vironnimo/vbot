@@ -1,6 +1,6 @@
 {
     "provider_id": "ollama-cloud",
-    "reasoning_replay": "current_run",
+    "reasoning_replay": "full_history",
     "models": {
         "deepseek-v4-flash:0731": {
             "max_output_tokens": 65536,
