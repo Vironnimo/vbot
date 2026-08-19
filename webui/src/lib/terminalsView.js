@@ -68,8 +68,8 @@ export function createTerminalsViewState() {
     listError: '',
     actionError: '',
     streams: {},
-    killing: false,
-    forgetting: false,
+    killing: '',
+    forgetting: '',
     startingTerminal: false,
     startError: '',
   };
@@ -538,16 +538,17 @@ export function createTerminalsController({
       });
   }
 
-  async function killSelected() {
-    const terminalId = state.selectedTerminalId;
+  async function killTerminal(terminalId) {
     if (
       !terminalId ||
-      state.killing ||
-      terminalIsFinished(selectedTerminal(state))
+      state.killing === terminalId ||
+      terminalIsFinished(
+        state.terminals.find((item) => item.terminal_id === terminalId),
+      )
     ) {
       return false;
     }
-    state.killing = true;
+    state.killing = terminalId;
     state.actionError = '';
     try {
       await api.killTerminal(terminalId);
@@ -557,20 +558,27 @@ export function createTerminalsController({
       state.actionError = errorMessage(error);
       return false;
     } finally {
-      state.killing = false;
+      if (state.killing === terminalId) {
+        state.killing = '';
+      }
     }
   }
 
-  async function forgetSelected() {
-    const terminalId = state.selectedTerminalId;
+  async function killSelected() {
+    return killTerminal(state.selectedTerminalId);
+  }
+
+  async function forgetTerminal(terminalId) {
     if (
       !terminalId ||
-      state.forgetting ||
-      !terminalIsFinished(selectedTerminal(state))
+      state.forgetting === terminalId ||
+      !terminalIsFinished(
+        state.terminals.find((item) => item.terminal_id === terminalId),
+      )
     ) {
       return false;
     }
-    state.forgetting = true;
+    state.forgetting = terminalId;
     state.actionError = '';
     try {
       await api.forgetTerminal(terminalId);
@@ -589,8 +597,14 @@ export function createTerminalsController({
       state.actionError = errorMessage(error);
       return false;
     } finally {
-      state.forgetting = false;
+      if (state.forgetting === terminalId) {
+        state.forgetting = '';
+      }
     }
+  }
+
+  async function forgetSelected() {
+    return forgetTerminal(state.selectedTerminalId);
   }
 
   async function startManualTerminal(params = {}) {
@@ -685,7 +699,9 @@ export function createTerminalsController({
   return {
     destroy,
     forgetSelected,
+    forgetTerminal,
     killSelected,
+    killTerminal,
     loadTerminals,
     queueInput,
     resize,
