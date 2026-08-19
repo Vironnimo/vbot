@@ -1709,26 +1709,28 @@ class TestModelRegistryRealResources:
         assert deepseek.max_output_tokens == 65_536
 
     @pytest.mark.parametrize(
-        ("provider_id", "model_id", "reasoning_field"),
+        ("provider_id", "model_id", "reasoning_field", "provider_replay", "model_replay"),
         [
-            ("ollama-cloud", "glm-5.2", "reasoning"),
-            ("opencode-go", "glm-5.2", "reasoning_content"),
-            ("opencode-go", "glm-5.3", "reasoning_content"),
+            ("ollama-cloud", "glm-5.2", "reasoning", "current_run", None),
+            ("opencode-go", "glm-5.2", "reasoning_content", "full_history", "full_history"),
+            ("opencode-go", "glm-5.3", "reasoning_content", "full_history", "full_history"),
         ],
     )
-    def test_glm_targets_load_explicit_full_history_profiles(
+    def test_glm_targets_load_reasoning_profiles(
         self,
         provider_id: str,
         model_id: str,
         reasoning_field: str,
+        provider_replay: str,
+        model_replay: str | None,
     ) -> None:
         registry = ModelRegistry.load(RESOURCES_DIR)
 
         model = registry.get(provider_id, model_id)
         metadata = model.metadata[provider_id.replace("-", "_")]
 
-        assert registry.provider_reasoning_replay(provider_id) == "full_history"
-        assert model.reasoning_replay == "full_history"
+        assert registry.provider_reasoning_replay(provider_id) == provider_replay
+        assert model.reasoning_replay == model_replay
         assert metadata["reasoning_response_field"] == reasoning_field
         if provider_id == "opencode-go":
             assert metadata["protocol"] == "openai"
@@ -1764,6 +1766,23 @@ class TestModelRegistryRealResources:
 
         pro = registry.get("ollama-cloud", "deepseek-v4-pro:preview")
         assert pro.recommended_top_p is None
+
+    def test_ollama_cloud_reasoning_replay_policies(self):
+        """Ollama Cloud defaults to current_run; DeepSeek V4 models opt out.
+
+        Live-verified 2026-08: the Cloud engine ignores replayed reasoning for
+        DeepSeek V4 (``none``), while GLM-5.2 reads the carrier within a run
+        (``current_run`` provider default, no per-model override).
+        """
+
+        registry = ModelRegistry.load(RESOURCES_DIR)
+
+        assert registry.provider_reasoning_replay("ollama-cloud") == "current_run"
+        assert registry.get("ollama-cloud", "glm-5.2").reasoning_replay is None
+        assert registry.get("ollama-cloud", "deepseek-v4-flash:0731").reasoning_replay == "none"
+        assert registry.get("ollama-cloud", "deepseek-v4-flash:preview").reasoning_replay == "none"
+        assert registry.get("ollama-cloud", "deepseek-v4-pro:preview").reasoning_replay == "none"
+        assert registry.get("ollama-cloud", "minimax-m3").reasoning_replay is None
 
     def test_openai_task_model_overrides_are_limited_to_working_connections(self):
         """OpenAI task models without a subscription wire are api-key only, while
