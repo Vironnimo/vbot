@@ -12,7 +12,7 @@ from typing import Any
 
 import pytest
 
-from core.chat.model_resolution import resolve_request_temperature
+from core.chat.model_resolution import resolve_request_temperature, resolve_request_top_p
 from tests.core.chat.chat_loop_support import (
     StubAdapter,
     StubAgent,
@@ -63,6 +63,31 @@ class TestResolveChatTemperature:
     def test_unknown_model_yields_none(self):
         models = StubModels({})
         result = resolve_request_temperature(None, models, "ollama-cloud", "unknown")
+        assert result is None
+
+
+class TestResolveChatTopP:
+    def test_model_recommendation_is_used(self):
+        models = StubModels(
+            {("ollama-cloud", "deepseek-v4-flash:0731"): 1048576},
+            recommended_top_ps={("ollama-cloud", "deepseek-v4-flash:0731"): 0.95},
+        )
+        result = resolve_request_top_p(models, "ollama-cloud", "deepseek-v4-flash:0731")
+        assert result == 0.95
+
+    def test_no_recommendation_yields_none(self):
+        models = StubModels({("openai", "gpt-5.2"): 128000})
+        result = resolve_request_top_p(models, "openai", "gpt-5.2")
+        assert result is None
+
+    def test_empty_provider_id_yields_none(self):
+        models = StubModels({})
+        result = resolve_request_top_p(models, "", "deepseek-v4-flash:0731")
+        assert result is None
+
+    def test_unknown_model_yields_none(self):
+        models = StubModels({})
+        result = resolve_request_top_p(models, "ollama-cloud", "unknown")
         assert result is None
 
 
@@ -142,3 +167,53 @@ async def test_none_temperature_with_no_recommendation_sends_none(tmp_path: Path
     await build_chat_loop(runtime).send("coder", "Hello", session_id="session-one")
 
     assert adapter.requests[0]["kwargs"]["temperature"] is None
+
+
+@pytest.mark.asyncio
+async def test_model_recommended_top_p_reaches_adapter(tmp_path: Path) -> None:
+    """The model's recommended top_p is what the adapter sees on the wire."""
+
+    agent = StubAgent(
+        id="coder",
+        model="ollama-cloud/deepseek-v4-flash:0731",
+        allowed_tools=["*"],
+        temperature=None,  # type: ignore[arg-type]
+    )
+    adapter = StubAdapter([{"content": "Hi", "reasoning": None, "tool_calls": None}])
+    runtime: Any = StubRuntime(
+        data_dir=tmp_path,
+        agent=agent,
+        adapter=adapter,
+        models=StubModels(
+            {("ollama-cloud", "deepseek-v4-flash:0731"): 1048576},
+            recommended_top_ps={("ollama-cloud", "deepseek-v4-flash:0731"): 0.95},
+        ),
+    )
+
+    await build_chat_loop(runtime).send("coder", "Hello", session_id="session-one")
+
+    assert adapter.requests[0]["kwargs"]["top_p"] == 0.95
+
+
+@pytest.mark.asyncio
+async def test_no_top_p_recommendation_sends_none(tmp_path: Path) -> None:
+    """Without a model recommendation, None reaches the adapter so the
+    provider-config default or API default applies."""
+
+    agent = StubAgent(
+        id="coder",
+        model="openai/gpt-5.2",
+        allowed_tools=["*"],
+        temperature=None,  # type: ignore[arg-type]
+    )
+    adapter = StubAdapter([{"content": "Hi", "reasoning": None, "tool_calls": None}])
+    runtime: Any = StubRuntime(
+        data_dir=tmp_path,
+        agent=agent,
+        adapter=adapter,
+        models=StubModels({("openai", "gpt-5.2"): 128000}),
+    )
+
+    await build_chat_loop(runtime).send("coder", "Hello", session_id="session-one")
+
+    assert adapter.requests[0]["kwargs"]["top_p"] is None

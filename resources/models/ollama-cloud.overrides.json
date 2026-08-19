@@ -2,9 +2,53 @@
     "provider_id": "ollama-cloud",
     "reasoning_replay": "full_history",
     "models": {
+        "deepseek-v4-flash": {
+            "name": "deepseek-v4-flash",
+            "capabilities": {
+                "input_modalities": [
+                    "text"
+                ],
+                "json_mode": false,
+                "output_modalities": [
+                    "text"
+                ],
+                "reasoning": {
+                    "control": "levels",
+                    "levels": [
+                        "high",
+                        "max"
+                    ],
+                    "supported": true
+                },
+                "supported_parameters": [],
+                "supported_voices": [],
+                "task_types": [
+                    "chat",
+                    "text_output"
+                ],
+                "tools": true,
+                "vision": false
+            },
+            "context_window": 1048576,
+            "max_output_tokens": 65536,
+            "recommended_temperature": 1.0,
+            "recommended_top_p": 0.95,
+            "connections": [
+                "api-key"
+            ],
+            "metadata": {
+                "ollama": {
+                    "remote": true
+                },
+                "ollama_cloud": {
+                    "reasoning_response_field": "reasoning_content"
+                }
+            }
+        },
         "deepseek-v4-flash:0731": {
             "max_output_tokens": 65536,
             "recommended_temperature": 1.0,
+            "recommended_top_p": 0.95,
             "metadata": {
                 "ollama": {
                     "remote": true

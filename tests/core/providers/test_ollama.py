@@ -586,6 +586,23 @@ class TestOllamaCloudChatWire:
         assert payload_messages[-1]["tool_call_id"] == "call_weather"
         await cloud_adapter.aclose()
 
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_top_p_rides_in_cloud_payload(self, cloud_adapter: OllamaCloudAdapter) -> None:
+        """top_p reaches the OpenAI-compatible Cloud request body."""
+        # Arrange
+        route = respx.post(OLLAMA_CLOUD_CHAT_URL).mock(
+            return_value=httpx.Response(200, json=CLOUD_TEXT_RESPONSE)
+        )
+
+        # Act
+        await cloud_adapter.send(SAMPLE_MESSAGES, model_id="deepseek-v4-flash:0731", top_p=0.95)
+
+        # Assert
+        payload = _last_request_payload(route)
+        assert payload["top_p"] == 0.95
+        await cloud_adapter.aclose()
+
     def test_glm_cloud_reasoning_replay_policy_is_full_history(
         self,
         cloud_adapter: OllamaCloudAdapter,
@@ -1028,6 +1045,22 @@ class TestPayloadBuilding:
         # Assert
         payload = _last_request_payload(route)
         assert payload["options"] == {"temperature": 0.2}
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_top_p_rides_under_options(self, adapter: OllamaAdapter) -> None:
+        """top_p translates onto Ollama's options object like temperature."""
+        # Arrange
+        route = respx.post(OLLAMA_CHAT_URL).mock(
+            return_value=httpx.Response(200, json=TEXT_RESPONSE)
+        )
+
+        # Act
+        await adapter.send(SAMPLE_MESSAGES, model_id="ministral-3:8b", top_p=0.95)
+
+        # Assert
+        payload = _last_request_payload(route)
+        assert payload["options"] == {"top_p": 0.95}
 
     @respx.mock
     @pytest.mark.asyncio

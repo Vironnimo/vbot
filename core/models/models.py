@@ -303,6 +303,7 @@ class Model:
     metadata: Mapping[str, Any] = field(default_factory=lambda: MappingProxyType({}))
     connections: tuple[str, ...] = ()
     recommended_temperature: float | None = None
+    recommended_top_p: float | None = None
     reasoning_replay: str | None = None
 
     def __post_init__(self) -> None:
@@ -760,6 +761,7 @@ def _model_from_record(model_id: str, record: Mapping[str, Any]) -> Model:
         recommended_temperature=_coerce_recommended_temperature(
             record.get("recommended_temperature")
         ),
+        recommended_top_p=_coerce_recommended_top_p(record.get("recommended_top_p")),
         reasoning_replay=_coerce_reasoning_replay(record.get("reasoning_replay")),
     )
 
@@ -797,6 +799,30 @@ def _coerce_recommended_temperature(value: Any) -> float | None:
         _LOGGER.warning("recommended_temperature %g is outside [0.0, 2.0]; ignoring", temperature)
         return None
     return temperature
+
+
+def _coerce_recommended_top_p(value: Any) -> float | None:
+    """Coerce a ``recommended_top_p`` record value into a valid float or None.
+
+    Like ``recommended_temperature``, this is an optional model fact that stays
+    ``None`` when absent. A non-numeric or out-of-range value is logged and
+    treated as unknown rather than failing assembly, so one bad override never
+    hides valid sibling models.
+    """
+    if value is None:
+        return None
+    if isinstance(value, bool | int | float) and not isinstance(value, bool):
+        top_p = float(value)
+    else:
+        _LOGGER.warning("recommended_top_p is not a number (%r); ignoring", value)
+        return None
+    if not math.isfinite(top_p):
+        _LOGGER.warning("recommended_top_p is not finite (%r); ignoring", value)
+        return None
+    if top_p < 0.0 or top_p > 1.0:
+        _LOGGER.warning("recommended_top_p %g is outside [0.0, 1.0]; ignoring", top_p)
+        return None
+    return top_p
 
 
 def _freeze_metadata_value(value: Any) -> Any:
