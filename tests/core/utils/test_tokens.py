@@ -13,6 +13,7 @@ from core.utils.tokens import (
     estimate_json_tokens,
     estimate_message_tokens,
     estimate_request_input_tokens,
+    estimate_structured_tokens,
     estimate_tokens,
 )
 
@@ -246,6 +247,38 @@ def test_estimate_json_tokens_plain_string_counts_verbatim():
 
     # Assert
     assert count == 1
+
+
+def test_estimate_structured_tokens_counts_compact_json_size():
+    """A structured value sends its compact serialization to the tokenizer."""
+    # Arrange
+    value = [{"type": "reasoning", "id": "rs_1", "encrypted_content": "opaque"}]
+    compact_length = len('[{"encrypted_content":"opaque","id":"rs_1","type":"reasoning"}]')
+
+    # Act
+    count, is_estimate = estimate_structured_tokens(value)
+
+    # Assert
+    assert count == -(-compact_length // 4)
+    assert is_estimate is True
+
+
+def test_estimate_structured_tokens_reserves_native_media_without_counting_base64():
+    """Encoded media uses the fixed semantic reserve, not transport-byte size."""
+    # Arrange
+    value = [
+        {
+            "type": "input_image",
+            "image_url": f"data:image/png;base64,{'A' * 100_000}",
+        }
+    ]
+
+    # Act
+    count, _ = estimate_structured_tokens(value)
+
+    # Assert
+    assert count >= NATIVE_MEDIA_TOKEN_RESERVE
+    assert count < NATIVE_MEDIA_TOKEN_RESERVE + 100
 
 
 def test_estimate_message_tokens_ignores_storage_metadata():

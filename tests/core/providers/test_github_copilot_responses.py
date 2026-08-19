@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from typing import Any
 
 import pytest
 
@@ -17,6 +18,7 @@ from core.providers.github_copilot_policy import RESPONSES_ENDPOINT, copilot_mod
 from core.providers.github_copilot_responses import (
     ResponsesStreamState,
     build_responses_payload,
+    estimate_responses_input_tokens,
     iter_responses_sse_deltas_with_state,
     normalize_responses_response,
 )
@@ -61,6 +63,93 @@ def test_build_payload_extracts_system_instructions_and_user_input() -> None:
     assert payload["input"] == [
         {"role": "user", "content": [{"type": "input_text", "text": "Hello"}]}
     ]
+
+
+def test_estimate_responses_input_tokens_counts_wire_items_and_instructions() -> None:
+    messages = [
+        {"role": "system", "content": "Use concise answers."},
+        {"role": "user", "content": "Hello"},
+    ]
+    payload = build_responses_payload(
+        messages,
+        model_id="gpt-5.4",
+        policy=responses_policy(),
+    )
+
+    estimated = estimate_responses_input_tokens(messages)
+
+    assert estimated > 0
+    # The system instructions ride on the wire and must be budgeted.
+    assert estimated > estimate_responses_input_tokens([{"role": "user", "content": "Hello"}])
+    # The estimator counts the same items the payload carries on the wire.
+    assert estimated > len(json.dumps(payload["input"])) // 4
+
+
+def test_estimate_responses_input_tokens_counts_encrypted_reasoning_blobs() -> None:
+    reasoning_item = {
+        "type": "reasoning",
+        "id": "rs_1",
+        "encrypted_content": "opaque-continuity-bytes",
+    }
+    messages: list[dict[str, Any]] = [
+        {
+            "role": "assistant",
+            "content": "I will call a tool.",
+            "reasoning_meta": {"reasoning_items": [reasoning_item]},
+            "tool_calls": [{"id": "call_1", "name": "search", "arguments": {"q": "docs"}}],
+        },
+        {"role": "tool", "tool_call_id": "call_1", "name": "search", "content": "result"},
+    ]
+
+    estimated = estimate_responses_input_tokens(messages)
+
+    # The encrypted continuity blob rides on the wire and must be budgeted.
+    assert estimated > estimate_responses_input_tokens(
+        [
+            {
+                "role": "assistant",
+                "content": "I will call a tool.",
+                "tool_calls": [{"id": "call_1", "name": "search", "arguments": {"q": "docs"}}],
+            },
+            {"role": "tool", "tool_call_id": "call_1", "name": "search", "content": "result"},
+        ]
+    )
+
+
+def test_estimate_responses_input_tokens_counts_rendered_tools() -> None:
+    messages = [{"role": "user", "content": "Search docs"}]
+    tools = [
+        {
+            "name": "search",
+            "description": "Search the documentation",
+            "parameters": {"type": "object", "properties": {"q": {"type": "string"}}},
+        }
+    ]
+
+    with_tools = estimate_responses_input_tokens(messages, tools=tools)
+    without_tools = estimate_responses_input_tokens(messages)
+
+    assert with_tools > without_tools
+
+
+def test_estimate_responses_input_tokens_normalizes_native_media() -> None:
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "media",
+                    "media_type": "image/png",
+                    "base64": "a" * 10_000,
+                }
+            ],
+        }
+    ]
+
+    estimated = estimate_responses_input_tokens(messages)
+
+    # The base64 transport payload must not masquerade as prose tokens.
+    assert estimated < 10_000
 
 
 def test_build_payload_maps_reasoning_and_gates_tools_and_structured_output() -> None:

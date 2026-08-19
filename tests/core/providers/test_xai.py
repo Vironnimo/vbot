@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from typing import Any
 
 import httpx
 import pytest
@@ -206,6 +207,55 @@ def test_multi_agent_preserves_xhigh_effort(xai_adapter: XAIAdapter) -> None:
     )
 
     assert payload["reasoning"] == {"effort": "xhigh", "summary": "auto"}
+
+
+def test_output_limit_budgets_against_wire_items_not_persisted_meta(
+    xai_adapter: XAIAdapter,
+) -> None:
+    """A long reasoning session must not fail the local context clamp.
+
+    The persisted ``reasoning_meta`` carries redundant copies of the reasoning
+    items (``response_output``, ``reasoning_items``, ``encrypted_content``) that
+    never reach the wire. The output-limit clamp must budget against the actual
+    Responses input items, so a session that still fits the context window keeps
+    working instead of raising "leaves no output capacity".
+    """
+
+    reasoning_item = {
+        "type": "reasoning",
+        "id": "rs_1",
+        "encrypted_content": "opaque",
+    }
+    messages: list[dict[str, Any]] = []
+    for index in range(40):
+        messages.append(
+            {
+                "role": "assistant",
+                "content": f"Step {index}.",
+                "reasoning_meta": {
+                    "response_output": [dict(reasoning_item)],
+                    "reasoning_items": [dict(reasoning_item)],
+                    "encrypted_content": ["opaque"],
+                },
+                "tool_calls": [{"id": f"call_{index}", "name": "search", "arguments": {}}],
+            }
+        )
+        messages.append(
+            {
+                "role": "tool",
+                "tool_call_id": f"call_{index}",
+                "name": "search",
+                "content": "result",
+            }
+        )
+    messages.append({"role": "user", "content": "Continue"})
+
+    payload = xai_adapter._build_responses_payload(
+        messages,
+        model_id="grok-4.5",
+    )
+
+    assert payload["max_output_tokens"] == 30000
 
 
 def test_request_context_uses_shared_prompt_cache_affinity(xai_adapter: XAIAdapter) -> None:

@@ -8,7 +8,7 @@ future item kinds without reconstructing a lossy approximation.
 from __future__ import annotations
 
 import json
-from collections.abc import Iterable, Iterator, Mapping
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
@@ -36,6 +36,7 @@ from core.providers.errors import (
 )
 from core.providers.reasoning import merge_reasoning_meta, reasoning_token_count
 from core.providers.tool_schema import render_tool_definitions
+from core.utils.tokens import estimate_structured_tokens, estimate_tokens
 
 RESPONSES_DONE_MARKER = "[DONE]"
 REASONING_ENCRYPTED_CONTENT_INCLUDE = "reasoning.encrypted_content"
@@ -172,6 +173,46 @@ def build_responses_payload(
     _apply_responses_text_format(payload, request_kwargs, policy)
     _apply_remaining_kwargs(payload, request_kwargs, policy)
     return payload
+
+
+def estimate_responses_input_tokens(
+    messages: list[dict[str, Any]],
+    *,
+    document_media_types: frozenset[str] = frozenset(),
+    tools: Sequence[Mapping[str, Any]] | None = None,
+) -> int:
+    """Estimate one stateless ``/responses`` request's input footprint.
+
+    Counts the input items exactly as :func:`build_responses_payload` renders
+    them — including provider-owned reasoning items with their encrypted
+    continuity blobs, which the shared chat-message estimator would miss — plus
+    the system instructions and the rendered Tool definitions. Native media is
+    normalized like the chat estimator so transport encoding does not
+    masquerade as prose tokens.
+    """
+
+    wire_messages = normalize_tool_call_ids(messages, RESPONSES_TOOL_CALL_ID_PROFILE)
+    input_items = _messages_to_responses_input(
+        wire_messages,
+        document_media_types=document_media_types,
+    )
+    total_tokens, _ = estimate_structured_tokens(input_items)
+    instructions = _system_instructions(wire_messages)
+    if instructions:
+        instruction_tokens, _ = estimate_tokens(instructions)
+        total_tokens += instruction_tokens
+    if tools:
+        tool_tokens, _ = estimate_structured_tokens(
+            [
+                _to_responses_function_tool(tool)
+                for tool in render_tool_definitions(
+                    [tool for tool in tools if isinstance(tool, Mapping)],
+                    profile="explicit_non_strict",
+                )
+            ]
+        )
+        total_tokens += tool_tokens
+    return total_tokens
 
 
 def normalize_responses_response(response: Mapping[str, Any]) -> dict[str, Any]:

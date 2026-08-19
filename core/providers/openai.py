@@ -39,6 +39,7 @@ from core.providers.errors import (
 from core.providers.github_copilot_responses import (
     ResponsesStreamState,
     build_responses_payload,
+    estimate_responses_input_tokens,
     iter_responses_sse_deltas_with_state,
     normalize_responses_response,
     normalize_responses_stream_event,
@@ -505,17 +506,27 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
         **kwargs: Any,
     ) -> dict[str, Any]:
         request_kwargs = dict(kwargs)
-        self._apply_model_output_limit(request_kwargs, model_id, messages)
+        document_media_types = (
+            frozenset({"application/pdf"})
+            if self._uses_platform_responses(model_id)
+            else frozenset()
+        )
+        self._apply_model_output_limit(
+            request_kwargs,
+            model_id,
+            messages,
+            estimated_input_tokens=estimate_responses_input_tokens(
+                messages,
+                document_media_types=document_media_types,
+                tools=request_kwargs.get("tools"),
+            ),
+        )
         payload = build_responses_payload(
             messages,
             model_id=model_id,
             policy=self._responses_policy_for_model(model_id),
             stream=stream,
-            document_media_types=(
-                frozenset({"application/pdf"})
-                if self._uses_platform_responses(model_id)
-                else frozenset()
-            ),
+            document_media_types=document_media_types,
             **request_kwargs,
         )
         if self._connection_mode == CODEX_RESPONSES_MODE:
