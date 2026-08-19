@@ -12,9 +12,23 @@ wire shapes vBot uses in production:
 - The real adapter (``OllamaCloudAdapter`` for ollama-cloud,
   ``OpenCodeGoAdapter`` for opencode-go) with its ``send()`` /
   ``normalize_response()`` / ``_format_assistant_message()`` pipeline
-- The same ``_build_payload`` request construction the chat loop uses,
-  including the ``reasoning_replay_policy()`` history shaping (only
-  messages whose policy permits replay carry the carrier field)
+- The real history shaping via ``_assemble_request_history`` with the
+  configured replay policy (``full_history`` / ``current_run`` / ``none``),
+  so the wire messages are exactly what the chat loop would send
+
+Scenarios:
+- ``tool_loop``: an in-run tool continuation. The session history
+  (user → assistant with reasoning + tool calls → tool result → user ask)
+  is shaped with the selected replay policy and sent through the adapter.
+  Reports both the wire-shaping fact (does the reasoning carrier reach the
+  wire?) and the recall result (can the model use it?).
+- ``cross_turn``: plain two-turn continuation, same policy shaping.
+- ``instruction``: the probe plants a behavioral rule ("when the user writes
+  'now!', reply 'hello world'") into the reasoning carrier itself, then the
+  follow-up turn sends 'now!' and checks compliance.
+
+``--policy`` selects the replay policy applied by the shaping (default:
+the model's effective policy from the overrides).
 
 The probe prints measurements only: secrets, carrier lengths, per-case
 recall flags. It never prints API keys, full prompts, or full responses.
@@ -39,6 +53,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from core.chat.messages import (
+    ChatMessage,
+    _assemble_request_history,
+    _assistant_continuation_dict,
+)
 from core.models.models import ModelRegistry
 from core.providers.ollama import OllamaCloudAdapter
 from core.providers.providers import ProviderRegistry
@@ -191,70 +210,181 @@ async def _run_turn(
     return _extract_openai_message(message)
 
 
+def _shape_history(
+    messages: list[ChatMessage],
+    *,
+    replay_policy: str,
+    agent_model: str,
+) -> list[dict[str, Any]]:
+    """Shape persisted history exactly like the chat loop (``_assemble_request_history``)."""
+    return _assemble_request_history(
+        messages,
+        replay_policy=replay_policy,  # type: ignore[arg-type]
+        agent_model=agent_model,
+    )
+
+
+def _shape_live_turn(
+    message: ChatMessage,
+    *,
+    replay_policy: str,
+) -> dict[str, Any]:
+    """Shape the live current-run assistant turn (``_assistant_continuation_dict``)."""
+    return _assistant_continuation_dict(
+        message,
+        replay_policy=replay_policy,  # type: ignore[arg-type]
+    )
+
+
 async def _run_exact_probe(
     adapter: Any,
     model_id: str,
     scenario: str,
     repeats: int,
+    policy: str | None,
 ) -> None:
     # Determine the wire carrier field the adapter's model profile uses.
     try:
         carrier_field = adapter._reasoning_response_field(model_id) or "reasoning_content"
     except Exception:
         carrier_field = "reasoning_content"
-    replay_policy = adapter.reasoning_replay_policy(model_id)
-    print(f"adapter carrier field: {carrier_field} | replay policy: {replay_policy}")
+    effective_policy = adapter.reasoning_replay_policy(model_id)
+    if policy is None:
+        policy = effective_policy
+    print(
+        f"adapter carrier field: {carrier_field} | effective replay policy: "
+        f"{effective_policy} | shaping policy: {policy}"
+    )
 
     for index in range(1, repeats + 1):
         print(f"\n--- round {index} ---")
         if scenario == "tool_loop":
-            await _run_tool_loop_round(adapter, model_id, carrier_field)
+            await _run_tool_loop_round(adapter, model_id, carrier_field, policy)
         elif scenario == "instruction":
-            await _run_instruction_round(adapter, model_id, carrier_field)
+            await _run_instruction_round(adapter, model_id, carrier_field, policy)
         else:
-            await _run_cross_turn_round(adapter, model_id, carrier_field)
+            await _run_cross_turn_round(adapter, model_id, carrier_field, policy)
+
+
+def _shape_session(
+    messages: list[ChatMessage],
+    *,
+    policy: str,
+    agent_model: str,
+    live_assistant: ChatMessage | None = None,
+) -> list[dict[str, Any]]:
+    """Shape a session exactly like the chat loop does.
+
+    Persisted session history runs through ``_assemble_request_history``,
+    which strips reasoning under ``current_run``/``none``. The live
+    current-run assistant turn is the freshly generated tool-call turn: the
+    chat loop carries its continuation form (``_assistant_continuation_dict``,
+    which keeps reasoning under ``current_run``/``full_history`` and only
+    strips it under ``none``) at the assistant's position — before its tool
+    results. The history-shaped assistant entry (stripped) is replaced by the
+    continuation form, keeping the request order
+    [user, assistant, tool, user].
+    """
+    wire_messages = _assemble_request_history(
+        messages,
+        replay_policy=policy,  # type: ignore[arg-type]
+        agent_model=agent_model,
+    )
+    if live_assistant is None:
+        return wire_messages
+    live = _assistant_continuation_dict(
+        live_assistant,
+        replay_policy=policy,  # type: ignore[arg-type]
+    )
+    for index, message in enumerate(wire_messages):
+        if message.get("role") == "assistant" and message.get("tool_calls"):
+            wire_messages[index] = live
+            return wire_messages
+    return wire_messages
+
+
+def _wire_carrier_present(
+    wire_messages: list[dict[str, Any]],
+) -> bool:
+    """Report whether the shaped history carries canonical assistant reasoning.
+
+    The shaped messages are canonical (the adapter converts ``reasoning`` to
+    the provider wire field in ``_format_assistant_message``), so the check
+    looks for the canonical ``reasoning`` field.
+    """
+    for message in wire_messages:
+        if message.get("role") != "assistant":
+            continue
+        value = message.get("reasoning")
+        if isinstance(value, str) and value:
+            return True
+    return False
+
+
+def _build_tool_calls(tool_calls: list[dict[str, Any]]) -> list[Any]:
+    from core.chat.messages import ToolCall
+
+    built: list[Any] = []
+    for position, call in enumerate(tool_calls):
+        if not isinstance(call, dict):
+            continue
+        function = call.get("function", {})
+        if not isinstance(function, dict):
+            function = {}
+        arguments = function.get("arguments")
+        if isinstance(arguments, str):
+            try:
+                arguments = json.loads(arguments)
+            except json.JSONDecodeError:
+                arguments = {}
+        if not isinstance(arguments, dict):
+            arguments = {}
+        built.append(
+            ToolCall(
+                id=call.get("id") or f"call_{position}",
+                name=function.get("name") or "",
+                arguments=arguments,
+            )
+        )
+    return built
 
 
 async def _run_cross_turn_round(
     adapter: Any,
     model_id: str,
     carrier_field: str,
+    policy: str,
 ) -> None:
     secret = _make_secret()
     print(f"  planted secret: {secret}")
 
-    # Baseline turn: the model answers the plain prompt; the assistant turn
-    # below carries the secret only in the carrier (or the control).
-    await _run_turn(
-        adapter,
-        model_id,
-        [{"role": "user", "content": TURN1_PLAIN_PROMPT}],
-        tools=None,
-    )
-
-    async def turn2(assistant_msg: dict[str, Any], label: str) -> bool:
-        history = [
-            {"role": "user", "content": TURN1_PLAIN_PROMPT},
+    async def run_shaped(assistant_msg: ChatMessage, label: str) -> bool:
+        session = [
+            ChatMessage.user(TURN1_PLAIN_PROMPT),
             assistant_msg,
-            {"role": "user", "content": ASK_PROMPT},
+            ChatMessage.user(ASK_PROMPT),
         ]
-        result = await _run_turn(adapter, model_id, history, tools=None)
+        wire_messages = _shape_session(session, policy=policy, agent_model=model_id)
+        carrier_on_wire = _wire_carrier_present(wire_messages)
+        result = await _run_turn(adapter, model_id, wire_messages, tools=None)
         hit = secret in result.content or secret in result.reasoning
         print(
-            f"  {label}: answer={result.content[:45]!r} | "
+            f"  {label}: carrier_on_wire={carrier_on_wire} | "
+            f"answer={result.content[:45]!r} | "
             f"secret_in_answer={secret in result.content} | "
             f"secret_in_reasoning2={secret in result.reasoning} | "
             f"reasoning2_len={len(result.reasoning)}"
         )
         return hit
 
-    hit_a = await turn2(
-        {"role": "assistant", "content": "", carrier_field: _secret_reasoning(secret)},
-        "with carrier    ",
+    hit_a = await run_shaped(
+        ChatMessage.assistant(model=model_id, content="", reasoning=_secret_reasoning(secret)),
+        "carrier in history",
     )
-    hit_b = await turn2({"role": "assistant", "content": ""}, "without carrier")
-    hit_c = await turn2(
-        {"role": "assistant", "content": f"I recorded the secret {secret}."}, "visible control "
+    hit_b = await run_shaped(ChatMessage.assistant(model=model_id, content=""), "no carrier      ")
+    hit_c = await run_shaped(
+        ChatMessage.assistant(model=model_id, content=f"I recorded the secret {secret}."),
+        "visible control ",
     )
     print(f"  verdict: with={hit_a} without={hit_b} control={hit_c}")
 
@@ -263,6 +393,7 @@ async def _run_tool_loop_round(
     adapter: Any,
     model_id: str,
     carrier_field: str,
+    policy: str,
 ) -> None:
     secret = _make_secret()
     print(f"  planted secret: {secret}")
@@ -279,57 +410,111 @@ async def _run_tool_loop_round(
         return
     print(f"  turn1: tool_calls={len(turn1.tool_calls)} reasoning_len={len(turn1.reasoning)}")
 
-    replayed_calls = turn1.tool_calls
-    tool_result = {
-        "role": "tool",
-        "tool_call_id": replayed_calls[0].get("id", "call_1"),
-        "content": '{"temperature": 20, "condition": "sunny"}',
-    }
+    tool_calls = _build_tool_calls(turn1.tool_calls)
+    tool_result = ChatMessage.tool(
+        tool_call_id=tool_calls[0].id if tool_calls else "call_1",
+        name=tool_calls[0].name if tool_calls else "",
+        content='{"temperature": 20, "condition": "sunny"}',
+    )
 
-    async def turn2(assistant_msg: dict[str, Any], label: str) -> bool:
-        history = [
-            {"role": "user", "content": TURN1_TOOL_PROMPT},
+    async def run_persisted(assistant_msg: ChatMessage, label: str) -> bool:
+        """Case A: the assistant turn is persisted and shaped as history.
+
+        ``_assemble_request_history`` strips reasoning under
+        ``current_run``/``none``.
+        """
+        session = [
+            ChatMessage.user(TURN1_TOOL_PROMPT),
             assistant_msg,
             tool_result,
-            {"role": "user", "content": ASK_PROMPT},
+            ChatMessage.user(ASK_PROMPT),
         ]
-        result = await _run_turn(adapter, model_id, history, tools=None)
+        wire_messages = _shape_session(session, policy=policy, agent_model=model_id)
+        return await _run_case(assistant_msg, wire_messages, label)
+
+    async def run_live(live_assistant: ChatMessage, label: str) -> bool:
+        """Case B: the same assistant turn is shaped as the live continuation.
+
+        The chat loop replaces the persisted entry with
+        ``_assistant_continuation_dict``, which keeps reasoning under
+        ``current_run``/``full_history``.
+        """
+        session = [
+            ChatMessage.user(TURN1_TOOL_PROMPT),
+            live_assistant,
+            tool_result,
+            ChatMessage.user(ASK_PROMPT),
+        ]
+        wire_messages = _shape_session(
+            session,
+            policy=policy,
+            agent_model=model_id,
+            live_assistant=live_assistant,
+        )
+        return await _run_case(live_assistant, wire_messages, label)
+
+    async def _run_case(
+        assistant_msg: ChatMessage,
+        wire_messages: list[dict[str, Any]],
+        label: str,
+    ) -> bool:
+        carrier_on_wire = _wire_carrier_present(wire_messages)
+        result = await _run_turn(adapter, model_id, wire_messages, tools=None)
         hit = secret in result.content or secret in result.reasoning
         print(
-            f"  {label}: answer={result.content[:45]!r} | "
+            f"  {label}: carrier_on_wire={carrier_on_wire} | "
+            f"answer={result.content[:45]!r} | "
             f"secret_in_answer={secret in result.content} | "
             f"secret_in_reasoning2={secret in result.reasoning} | "
             f"reasoning2_len={len(result.reasoning)}"
         )
         return hit
 
-    hit_a = await turn2(
-        {
-            "role": "assistant",
-            "content": "",
-            carrier_field: _secret_reasoning(secret),
-            "tool_calls": replayed_calls,
-        },
-        "with carrier    ",
+    hit_a = await run_persisted(
+        ChatMessage.assistant(
+            model=model_id,
+            content="",
+            reasoning=_secret_reasoning(secret),
+            tool_calls=tool_calls,
+        ),
+        "A persisted w/ carrier",
     )
-    hit_b = await turn2(
-        {"role": "assistant", "content": "", "tool_calls": replayed_calls}, "without carrier"
+    hit_a2 = await run_persisted(
+        ChatMessage.assistant(model=model_id, content="", tool_calls=tool_calls),
+        "A persisted no carrier",
     )
-    hit_c = await turn2(
-        {
-            "role": "assistant",
-            "content": f"I recorded the secret {secret}.",
-            "tool_calls": replayed_calls,
-        },
-        "visible control ",
+    hit_b = await run_live(
+        ChatMessage.assistant(
+            model=model_id,
+            content="",
+            reasoning=_secret_reasoning(secret),
+            tool_calls=tool_calls,
+        ),
+        "B live w/ carrier    ",
     )
-    print(f"  verdict: with={hit_a} without={hit_b} control={hit_c}")
+    hit_b2 = await run_live(
+        ChatMessage.assistant(model=model_id, content="", tool_calls=tool_calls),
+        "B live no carrier    ",
+    )
+    hit_c = await run_persisted(
+        ChatMessage.assistant(
+            model=model_id,
+            content=f"I recorded the secret {secret}.",
+            tool_calls=tool_calls,
+        ),
+        "C visible control   ",
+    )
+    print(
+        f"  verdict: A_persisted=(with={hit_a}, without={hit_a2}) "
+        f"B_live=(with={hit_b}, without={hit_b2}) control={hit_c}"
+    )
 
 
 async def _run_instruction_round(
     adapter: Any,
     model_id: str,
     carrier_field: str,
+    policy: str,
 ) -> None:
     turn1 = await _run_turn(
         adapter,
@@ -339,31 +524,34 @@ async def _run_instruction_round(
     )
     print(f"  turn1: content={turn1.content[:40]!r} reasoning_len={len(turn1.reasoning)}")
 
-    async def follow_up(assistant_msg: dict[str, Any], label: str) -> bool:
-        history = [
-            {"role": "user", "content": INSTRUCTION_PROMPT},
+    async def follow_up(assistant_msg: ChatMessage, label: str) -> bool:
+        session = [
+            ChatMessage.user(INSTRUCTION_PROMPT),
             assistant_msg,
-            {"role": "user", "content": INSTRUCTION_TRIGGER},
+            ChatMessage.user(INSTRUCTION_TRIGGER),
         ]
-        result = await _run_turn(adapter, model_id, history, tools=None)
+        wire_messages = _shape_session(session, policy=policy, agent_model=model_id)
+        carrier_on_wire = _wire_carrier_present(wire_messages)
+        result = await _run_turn(adapter, model_id, wire_messages, tools=None)
         rule_hit = INSTRUCTION_RESPONSE in result.content
         print(
-            f"  {label}: answer={result.content[:45]!r} | rule_hit={rule_hit} "
+            f"  {label}: carrier_on_wire={carrier_on_wire} | "
+            f"answer={result.content[:45]!r} | rule_hit={rule_hit} "
             f"| reasoning2_len={len(result.reasoning)}"
         )
         return rule_hit
 
     rule_a = await follow_up(
-        {"role": "assistant", "content": "", carrier_field: INSTRUCTION_REASONING},
-        "with carrier    ",
+        ChatMessage.assistant(model=model_id, content="", reasoning=INSTRUCTION_REASONING),
+        "carrier in history",
     )
-    rule_b = await follow_up({"role": "assistant", "content": ""}, "without carrier")
+    rule_b = await follow_up(ChatMessage.assistant(model=model_id, content=""), "no carrier      ")
     rule_c = await follow_up(
-        {
-            "role": "assistant",
-            "content": f'Rule: when the user writes "{INSTRUCTION_TRIGGER}", '
+        ChatMessage.assistant(
+            model=model_id,
+            content=f'Rule: when the user writes "{INSTRUCTION_TRIGGER}", '
             f'reply with exactly "{INSTRUCTION_RESPONSE}".',
-        },
+        ),
         "visible control ",
     )
     print(f"  verdict: with={rule_a} without={rule_b} control={rule_c}")
@@ -403,6 +591,9 @@ def main(argv: list[str] | None = None) -> int:
         default="cross_turn",
     )
     parser.add_argument("--repeats", type=int, default=3)
+    parser.add_argument(
+        "--policy", choices=("auto", "none", "current_run", "full_history"), default="auto"
+    )
     parser.add_argument("--api-key-env", default="OLLAMA_API_KEY")
     parser.add_argument("--data-dir", type=Path, default=DEFAULT_DATA_DIR)
     parser.add_argument("--effort", default="max", help="reasoning_effort / think value.")
@@ -410,10 +601,14 @@ def main(argv: list[str] | None = None) -> int:
 
     api_key = _load_api_key(args.api_key_env, args.data_dir)
     print(f"api key length: {len(api_key)}")
-    print(f"provider: {args.provider} | model: {args.model} | scenario: {args.scenario}")
+    print(
+        f"provider: {args.provider} | model: {args.model} | "
+        f"scenario: {args.scenario} | policy: {args.policy}"
+    )
 
     adapter = _build_adapter(args.provider, args.model, api_key)
-    asyncio.run(_run_exact_probe(adapter, args.model, args.scenario, args.repeats))
+    policy: str | None = None if args.policy == "auto" else args.policy
+    asyncio.run(_run_exact_probe(adapter, args.model, args.scenario, args.repeats, policy))
     return 0
 
 
