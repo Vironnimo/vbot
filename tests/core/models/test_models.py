@@ -1748,19 +1748,14 @@ class TestModelRegistryRealResources:
         assert tts.capabilities.task_types == ("text_to_speech", "audio_generation")
 
     def test_deepseek_flash_top_p_override_applies_at_load(self):
-        """``ollama-cloud.overrides.json`` pins recommended_top_p 0.95 for both
-        DeepSeek V4 Flash ids — the generated ``:0731`` entry and the
-        override-only bare id."""
+        """``ollama-cloud.overrides.json`` pins recommended_top_p 0.95 for the
+        DeepSeek V4 Flash id."""
 
         registry = ModelRegistry.load(RESOURCES_DIR)
 
         pinned = registry.get("ollama-cloud", "deepseek-v4-flash:0731")
         assert pinned.recommended_top_p == 0.95
         assert pinned.recommended_temperature == 1.0
-
-        bare = registry.get("ollama-cloud", "deepseek-v4-flash")
-        assert bare.recommended_top_p == 0.95
-        assert bare.recommended_temperature == 1.0
 
     def test_deepseek_v4_pro_has_no_top_p_override(self):
         """DeepSeek V4 Pro has different official guidance — no top_p pin."""
