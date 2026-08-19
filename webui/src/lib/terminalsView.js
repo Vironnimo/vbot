@@ -23,6 +23,42 @@ const INPUT_CHUNK_CHARS = 32_768;
 const RESIZE_DEBOUNCE_MS = 100;
 const TERMINAL_STATES_FINISHED = new Set(['exited', 'error']);
 
+/**
+ * Fixed canvas grid layout for a terminal count.
+ *
+ * @param {number} count
+ * @returns {{ rows: number, columns: number, spans: Array<{ row: number, column: number, rowSpan: number, columnSpan: number }> }}
+ */
+export function layoutForCount(count) {
+  const total = Number.isInteger(count) && count > 0 ? count : 0;
+  const columns =
+    total === 0 ? 0 : total <= 2 ? total : total <= 4 ? 2 : total <= 6 ? 3 : 4;
+  const rows = total === 0 ? 0 : Math.ceil(total / columns);
+  const spans = [];
+  for (let index = 0; index < total; index += 1) {
+    let row;
+    let column;
+    if (total === 3) {
+      row = index === 0 ? 0 : 1;
+      column = index === 0 ? 0 : index - 1;
+    } else {
+      row = Math.floor(index / columns);
+      column = index % columns;
+    }
+    const span = {
+      row,
+      column,
+      rowSpan: 1,
+      columnSpan: 1,
+    };
+    if (total === 3 && index === 0) {
+      span.columnSpan = 2;
+    }
+    spans.push(span);
+  }
+  return { rows, columns, spans };
+}
+
 export function createTerminalsViewState() {
   return {
     terminals: [],
@@ -31,10 +67,7 @@ export function createTerminalsViewState() {
     loading: false,
     listError: '',
     actionError: '',
-    streamError: '',
-    streamErrorCode: '',
-    streamStatus: TERMINAL_STREAM_IDLE,
-    lastSequence: 0,
+    streams: {},
     killing: false,
     forgetting: false,
     startingTerminal: false,
@@ -124,16 +157,30 @@ export function createTerminalsController({
   let destroyed = false;
   let serverUnavailable = false;
   let listRequestId = 0;
-  let currentStream = null;
-  let reconnectTimer = null;
-  let reconnectAttempt = 0;
-  let inputTimer = null;
-  let inputBuffer = '';
-  let inputChain = Promise.resolve();
-  let resizeTimer = null;
-  let pendingResize = null;
-  let lastResize = null;
-  let resizeChain = Promise.resolve();
+  const streamRecords = new Map();
+
+  function streamView(terminalId) {
+    return (
+      state.streams[terminalId] ?? {
+        status: TERMINAL_STREAM_IDLE,
+        error: '',
+        errorCode: '',
+      }
+    );
+  }
+
+  function setStreamView(terminalId, patch) {
+    state.streams[terminalId] = { ...streamView(terminalId), ...patch };
+  }
+
+  function removeStreamView(terminalId) {
+    if (!(terminalId in state.streams)) {
+      return;
+    }
+    const next = { ...state.streams };
+    delete next[terminalId];
+    state.streams = next;
+  }
 
   async function start() {
     await loadTerminals();
@@ -150,18 +197,8 @@ export function createTerminalsController({
       if (destroyed || requestId !== listRequestId) {
         return;
       }
-      const previousSelection = state.selectedTerminalId;
-      const nextSelection = reconcileTerminalList(state, result);
-      if (nextSelection !== previousSelection) {
-        switchStream(nextSelection);
-      } else if (
-        nextSelection &&
-        !currentStream &&
-        !serverUnavailable &&
-        state.streamStatus !== TERMINAL_STREAM_SNAPSHOT
-      ) {
-        connectStream(nextSelection);
-      }
+      reconcileTerminalList(state, result);
+      reconcileStreams();
     } catch (error) {
       if (!destroyed && requestId === listRequestId && !serverUnavailable) {
         state.listError = errorMessage(error);
@@ -181,62 +218,91 @@ export function createTerminalsController({
       return;
     }
     state.selectedTerminalId = terminalId;
-    switchStream(terminalId);
+    state.actionError = '';
   }
 
-  function switchStream(terminalId) {
-    clearPendingInput();
-    clearPendingResize();
-    closeCurrentStream();
-    state.lastSequence = 0;
-    state.streamError = '';
-    state.streamErrorCode = '';
-    state.actionError = '';
-    lastResize = null;
-    onClear();
-    if (!terminalId || serverUnavailable) {
-      state.streamStatus = TERMINAL_STREAM_IDLE;
+  function reconcileStreams() {
+    const listedIds = new Set(
+      state.terminals.map((terminal) => terminal.terminal_id),
+    );
+    for (const stream of [...streamRecords.values()]) {
+      if (!listedIds.has(stream.terminalId)) {
+        closeStream(stream);
+      }
+    }
+    if (serverUnavailable) {
       return;
     }
-    connectStream(terminalId);
+    for (const terminal of state.terminals) {
+      if (!streamRecords.has(terminal.terminal_id)) {
+        connectStream(terminal.terminal_id);
+      }
+    }
   }
 
   function connectStream(terminalId) {
-    clearReconnectTimer();
-    state.streamStatus =
-      reconnectAttempt > 0
-        ? TERMINAL_STREAM_RECONNECTING
-        : TERMINAL_STREAM_CONNECTING;
-    const stream = {
-      terminalId,
-      connection: null,
-      shouldReconnect: true,
-      terminalEnded: false,
-    };
+    if (destroyed || serverUnavailable) {
+      return;
+    }
+    let stream = streamRecords.get(terminalId);
+    if (!stream) {
+      stream = {
+        terminalId,
+        connection: null,
+        shouldReconnect: true,
+        terminalEnded: false,
+        lastSequence: 0,
+        reconnectTimer: null,
+        reconnectAttempt: 0,
+        inputTimer: null,
+        inputBuffer: '',
+        inputChain: Promise.resolve(),
+        resizeTimer: null,
+        pendingResize: null,
+        lastResize: null,
+        resizeChain: Promise.resolve(),
+      };
+      streamRecords.set(terminalId, stream);
+    }
+    clearReconnectTimer(stream);
+    setStreamView(terminalId, {
+      status:
+        stream.reconnectAttempt > 0
+          ? TERMINAL_STREAM_RECONNECTING
+          : TERMINAL_STREAM_CONNECTING,
+      error: '',
+      errorCode: '',
+    });
     try {
       stream.connection = api.subscribeTerminalEvents(terminalId, {
         onEvent: (event) => handleStreamEvent(stream, event),
         onError: (error) => {
-          if (currentStream !== stream) {
+          if (streamRecords.get(terminalId) !== stream) {
             return;
           }
-          state.streamError = errorMessage(error);
-          state.streamErrorCode = '';
-          state.streamStatus = TERMINAL_STREAM_ERROR;
+          setStreamView(terminalId, {
+            error: errorMessage(error),
+            errorCode: '',
+            status: TERMINAL_STREAM_ERROR,
+          });
         },
         onClose: () => handleStreamClose(stream),
       });
-      currentStream = stream;
     } catch (error) {
-      state.streamError = errorMessage(error);
-      state.streamErrorCode = '';
-      state.streamStatus = TERMINAL_STREAM_ERROR;
+      setStreamView(terminalId, {
+        error: errorMessage(error),
+        errorCode: '',
+        status: TERMINAL_STREAM_ERROR,
+      });
       scheduleReconnect(terminalId);
     }
   }
 
   function handleStreamEvent(stream, event) {
-    if (currentStream !== stream || !event || typeof event !== 'object') {
+    if (streamRecords.get(stream.terminalId) !== stream) {
+      return;
+    }
+    if (!event || typeof event !== 'object') {
       return;
     }
     const sequence = Number.isInteger(event.sequence) ? event.sequence : null;
@@ -245,37 +311,38 @@ export function createTerminalsController({
         reconnectForGap(stream);
         return;
       }
-      state.lastSequence = sequence;
-      state.streamError = '';
-      state.streamErrorCode = '';
-      reconnectAttempt = 0;
+      stream.lastSequence = sequence;
+      stream.reconnectAttempt = 0;
       const terminal = mergeTerminalSummary(state, event.terminal);
-      state.streamStatus = terminalIsFinished(terminal)
-        ? TERMINAL_STREAM_SNAPSHOT
-        : TERMINAL_STREAM_CONNECTED;
-      onSnapshot(event.ansi, terminal);
-      if (terminalIsFinished(terminal)) {
+      const finished = terminalIsFinished(terminal);
+      setStreamView(stream.terminalId, {
+        status: finished ? TERMINAL_STREAM_SNAPSHOT : TERMINAL_STREAM_CONNECTED,
+        error: '',
+        errorCode: '',
+      });
+      onSnapshot(stream.terminalId, event.ansi, terminal);
+      if (finished) {
         stream.terminalEnded = true;
         stream.shouldReconnect = false;
         void loadTerminals({ silent: true });
       }
       return;
     }
-    if (sequence === null || sequence <= state.lastSequence) {
+    if (sequence === null || sequence <= stream.lastSequence) {
       return;
     }
-    if (sequence !== state.lastSequence + 1) {
+    if (sequence !== stream.lastSequence + 1) {
       reconnectForGap(stream);
       return;
     }
-    state.lastSequence = sequence;
+    stream.lastSequence = sequence;
     if (event.type === 'terminal_output' && typeof event.data === 'string') {
-      onOutput(event.data);
+      onOutput(stream.terminalId, event.data);
       return;
     }
     if (event.type === 'terminal_snapshot' && typeof event.ansi === 'string') {
       const terminal = mergeTerminalSummary(state, event.terminal);
-      onSnapshot(event.ansi, terminal);
+      onSnapshot(stream.terminalId, event.ansi, terminal);
       return;
     }
     if (event.type === 'terminal_state') {
@@ -283,65 +350,72 @@ export function createTerminalsController({
       if (terminalIsFinished(terminal)) {
         stream.terminalEnded = true;
         stream.shouldReconnect = false;
-        state.streamStatus = TERMINAL_STREAM_SNAPSHOT;
+        setStreamView(stream.terminalId, {
+          status: TERMINAL_STREAM_SNAPSHOT,
+        });
         void loadTerminals({ silent: true });
       }
     }
   }
 
   function reconnectForGap(stream) {
-    if (currentStream !== stream) {
+    if (streamRecords.get(stream.terminalId) !== stream) {
       return;
     }
-    state.streamStatus = TERMINAL_STREAM_RECONNECTING;
-    state.streamError = '';
-    state.streamErrorCode = 'gap';
+    setStreamView(stream.terminalId, {
+      status: TERMINAL_STREAM_RECONNECTING,
+      error: '',
+      errorCode: 'gap',
+    });
     const terminalId = stream.terminalId;
-    closeCurrentStream();
+    stream.connection?.close(1000, 'terminals-view-gap');
+    stream.connection = null;
     scheduleReconnect(terminalId, 0);
   }
 
   function handleStreamClose(stream) {
-    if (currentStream !== stream) {
+    if (streamRecords.get(stream.terminalId) !== stream) {
       return;
     }
-    currentStream = null;
+    stream.connection = null;
     if (
       destroyed ||
       serverUnavailable ||
       stream.terminalEnded ||
-      !stream.shouldReconnect ||
-      state.selectedTerminalId !== stream.terminalId
+      !stream.shouldReconnect
     ) {
       return;
     }
-    state.streamStatus = TERMINAL_STREAM_RECONNECTING;
+    if (stream.reconnectTimer !== null) {
+      return;
+    }
+    setStreamView(stream.terminalId, {
+      status: TERMINAL_STREAM_RECONNECTING,
+      error: '',
+      errorCode: '',
+    });
     scheduleReconnect(stream.terminalId);
   }
 
   function scheduleReconnect(terminalId, explicitDelay) {
-    if (
-      destroyed ||
-      serverUnavailable ||
-      state.selectedTerminalId !== terminalId
-    ) {
+    if (destroyed || serverUnavailable) {
       return;
     }
-    clearReconnectTimer();
+    const stream = streamRecords.get(terminalId);
+    if (!stream || stream.terminalEnded || !stream.shouldReconnect) {
+      return;
+    }
+    clearReconnectTimer(stream);
     const delay =
       explicitDelay ??
-      reconnectBackoffDelay(reconnectAttempt, {
+      reconnectBackoffDelay(stream.reconnectAttempt, {
         initialDelayMs: RECONNECT_INITIAL_DELAY_MS,
         maxDelayMs: RECONNECT_MAX_DELAY_MS,
       });
-    reconnectAttempt += 1;
-    reconnectTimer = setTimeoutFn(() => {
-      reconnectTimer = null;
-      if (
-        !destroyed &&
-        !serverUnavailable &&
-        state.selectedTerminalId === terminalId
-      ) {
+    stream.reconnectAttempt += 1;
+    stream.reconnectTimer = setTimeoutFn(() => {
+      stream.reconnectTimer = null;
+      if (!destroyed && !serverUnavailable && streamRecords.has(terminalId)) {
         connectStream(terminalId);
       }
     }, delay);
@@ -357,28 +431,35 @@ export function createTerminalsController({
     ) {
       return;
     }
-    inputBuffer += data;
-    if (immediate || inputBuffer.length >= INPUT_CHUNK_CHARS) {
-      flushInput();
+    const stream = streamRecords.get(state.selectedTerminalId);
+    if (!stream) {
       return;
     }
-    if (inputTimer === null) {
-      inputTimer = setTimeoutFn(flushInput, INPUT_FLUSH_DELAY_MS);
+    stream.inputBuffer += data;
+    if (immediate || stream.inputBuffer.length >= INPUT_CHUNK_CHARS) {
+      flushInput(stream);
+      return;
+    }
+    if (stream.inputTimer === null) {
+      stream.inputTimer = setTimeoutFn(
+        () => flushInput(stream),
+        INPUT_FLUSH_DELAY_MS,
+      );
     }
   }
 
-  function flushInput() {
-    if (inputTimer !== null) {
-      clearTimeoutFn(inputTimer);
-      inputTimer = null;
+  function flushInput(stream) {
+    if (stream.inputTimer !== null) {
+      clearTimeoutFn(stream.inputTimer);
+      stream.inputTimer = null;
     }
-    if (!inputBuffer || !state.selectedTerminalId) {
+    if (!stream.inputBuffer || !state.selectedTerminalId) {
       return;
     }
-    const terminalId = state.selectedTerminalId;
-    const data = inputBuffer.slice(0, INPUT_CHUNK_CHARS);
-    inputBuffer = inputBuffer.slice(data.length);
-    inputChain = inputChain
+    const terminalId = stream.terminalId;
+    const data = stream.inputBuffer.slice(0, INPUT_CHUNK_CHARS);
+    stream.inputBuffer = stream.inputBuffer.slice(data.length);
+    stream.inputChain = stream.inputChain
       .catch(() => undefined)
       .then(async () => {
         try {
@@ -392,44 +473,55 @@ export function createTerminalsController({
           }
         }
       });
-    if (inputBuffer) {
-      inputTimer = setTimeoutFn(flushInput, 0);
+    if (stream.inputBuffer) {
+      stream.inputTimer = setTimeoutFn(() => flushInput(stream), 0);
     }
   }
 
-  function resize(columns, rows) {
+  function resize(columns, rows, terminalId = state.selectedTerminalId) {
+    const item = state.terminals.find(
+      (terminal) => terminal.terminal_id === terminalId,
+    );
     if (
       !Number.isInteger(columns) ||
       !Number.isInteger(rows) ||
-      !state.selectedTerminalId ||
-      terminalIsFinished(selectedTerminal(state)) ||
+      !terminalId ||
+      !item ||
+      terminalIsFinished(item) ||
       serverUnavailable
     ) {
       return;
     }
-    pendingResize = { terminalId: state.selectedTerminalId, columns, rows };
+    const stream = streamRecords.get(terminalId);
+    if (!stream) {
+      return;
+    }
+    stream.pendingResize = { terminalId, columns, rows };
     if (
-      lastResize?.terminalId === pendingResize.terminalId &&
-      lastResize.columns === columns &&
-      lastResize.rows === rows
+      stream.lastResize?.terminalId === stream.pendingResize.terminalId &&
+      stream.lastResize.columns === columns &&
+      stream.lastResize.rows === rows
     ) {
       return;
     }
-    if (resizeTimer !== null) {
-      clearTimeoutFn(resizeTimer);
+    if (stream.resizeTimer !== null) {
+      clearTimeoutFn(stream.resizeTimer);
     }
-    resizeTimer = setTimeoutFn(flushResize, RESIZE_DEBOUNCE_MS);
+    stream.resizeTimer = setTimeoutFn(
+      () => flushResize(stream),
+      RESIZE_DEBOUNCE_MS,
+    );
   }
 
-  function flushResize() {
-    resizeTimer = null;
-    const request = pendingResize;
-    pendingResize = null;
-    if (!request || state.selectedTerminalId !== request.terminalId) {
+  function flushResize(stream) {
+    stream.resizeTimer = null;
+    const request = stream.pendingResize;
+    stream.pendingResize = null;
+    if (!request || !streamRecords.has(request.terminalId)) {
       return;
     }
-    lastResize = request;
-    resizeChain = resizeChain
+    stream.lastResize = request;
+    stream.resizeChain = stream.resizeChain
       .catch(() => undefined)
       .then(async () => {
         try {
@@ -482,18 +574,15 @@ export function createTerminalsController({
     state.actionError = '';
     try {
       await api.forgetTerminal(terminalId);
-      const wasSelected = state.selectedTerminalId === terminalId;
-      if (wasSelected) {
-        switchStream('');
+      const stream = streamRecords.get(terminalId);
+      if (stream) {
+        closeStream(stream);
       }
       state.terminals = state.terminals.filter(
         (item) => item.terminal_id !== terminalId,
       );
-      if (wasSelected) {
+      if (state.selectedTerminalId === terminalId) {
         state.selectedTerminalId = state.terminals[0]?.terminal_id ?? '';
-        if (state.selectedTerminalId) {
-          switchStream(state.selectedTerminalId);
-        }
       }
       return true;
     } catch (error) {
@@ -521,7 +610,7 @@ export function createTerminalsController({
       }
       reconcileTerminalLaunchHistory(state, result);
       state.selectedTerminalId = terminal.terminal_id;
-      switchStream(terminal.terminal_id);
+      reconcileStreams();
       return terminal;
     } catch (error) {
       if (!destroyed) {
@@ -540,52 +629,57 @@ export function createTerminalsController({
     }
     serverUnavailable = next;
     if (next) {
-      closeCurrentStream();
-      state.streamStatus = TERMINAL_STREAM_IDLE;
+      closeAllStreams();
       return;
     }
     void loadTerminals({ silent: true });
   }
 
-  function clearPendingInput() {
-    if (inputTimer !== null) {
-      clearTimeoutFn(inputTimer);
-      inputTimer = null;
+  function clearPendingInput(stream) {
+    if (stream.inputTimer !== null) {
+      clearTimeoutFn(stream.inputTimer);
+      stream.inputTimer = null;
     }
-    inputBuffer = '';
+    stream.inputBuffer = '';
   }
 
-  function clearPendingResize() {
-    if (resizeTimer !== null) {
-      clearTimeoutFn(resizeTimer);
-      resizeTimer = null;
+  function clearPendingResize(stream) {
+    if (stream.resizeTimer !== null) {
+      clearTimeoutFn(stream.resizeTimer);
+      stream.resizeTimer = null;
     }
-    pendingResize = null;
+    stream.pendingResize = null;
   }
 
-  function clearReconnectTimer() {
-    if (reconnectTimer !== null) {
-      clearTimeoutFn(reconnectTimer);
-      reconnectTimer = null;
+  function clearReconnectTimer(stream) {
+    if (stream.reconnectTimer !== null) {
+      clearTimeoutFn(stream.reconnectTimer);
+      stream.reconnectTimer = null;
     }
   }
 
-  function closeCurrentStream() {
-    clearReconnectTimer();
-    if (!currentStream) {
-      return;
-    }
-    const stream = currentStream;
-    currentStream = null;
+  function closeStream(stream) {
+    streamRecords.delete(stream.terminalId);
+    removeStreamView(stream.terminalId);
+    clearReconnectTimer(stream);
+    clearPendingInput(stream);
+    clearPendingResize(stream);
     stream.shouldReconnect = false;
-    stream.connection?.close(1000, 'terminals-view-close');
+    const connection = stream.connection;
+    stream.connection = null;
+    connection?.close(1000, 'terminals-view-close');
+    onClear(stream.terminalId);
+  }
+
+  function closeAllStreams() {
+    for (const stream of [...streamRecords.values()]) {
+      closeStream(stream);
+    }
   }
 
   function destroy() {
     destroyed = true;
-    clearPendingInput();
-    clearPendingResize();
-    closeCurrentStream();
+    closeAllStreams();
   }
 
   return {

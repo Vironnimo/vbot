@@ -1,5 +1,6 @@
 <script>
   import { onMount, tick } from 'svelte';
+  import { SvelteMap } from 'svelte/reactivity';
   import '@xterm/xterm/css/xterm.css';
 
   import Banner from './ui/Banner.svelte';
@@ -18,10 +19,12 @@
     TERMINAL_STREAM_CONNECTED,
     TERMINAL_STREAM_CONNECTING,
     TERMINAL_STREAM_ERROR,
+    TERMINAL_STREAM_IDLE,
     TERMINAL_STREAM_RECONNECTING,
     TERMINAL_STREAM_SNAPSHOT,
     createTerminalsController,
     createTerminalsViewState,
+    layoutForCount,
     selectedTerminal,
     terminalIsFinished,
   } from '$lib/terminalsView.js';
@@ -34,10 +37,11 @@
   } = $props();
 
   let viewState = $state(createTerminalsViewState());
-  let terminalHost = $state(null);
   let controlEnabled = $state(false);
   let controlledTerminalId = $state('');
-  let terminalScrolledBack = $state(false);
+  let pendingControlTerminalId = '';
+  let maximizedTerminalId = $state('');
+  let scrolledBackByTerminal = $state({});
   let stopDialogOpen = $state(false);
   let dismissDialogOpen = $state(false);
   let startDialogOpen = $state(false);
@@ -46,20 +50,29 @@
   let startArguments = $state('');
   let startWorkdir = $state('');
   let mounted = false;
-  let rendererPromise = null;
-  let pendingSnapshot = '';
-  let pendingSnapshotTerminal = null;
-  let pendingOutput = [];
-  let xterm = null;
-  let fitAddon = null;
-  let resizeObserver = null;
-  let inputDisposable = null;
-  let scrollDisposable = null;
+  let xtermModulesPromise = null;
+  const tileRegistry = new SvelteMap();
+  const tileHosts = new SvelteMap();
+  const rendererPromises = new SvelteMap();
+  const pendingSnapshots = new SvelteMap();
+  const pendingOutputs = new SvelteMap();
 
   let terminal = $derived(selectedTerminal(viewState));
   let terminalFinished = $derived(terminalIsFinished(terminal));
-  let streamStatusLabel = $derived(streamLabel(viewState.streamStatus));
-  let streamStatusVariant = $derived(streamVariant(viewState.streamStatus));
+  let focusedStream = $derived(
+    viewState.streams[viewState.selectedTerminalId] ?? {
+      status: TERMINAL_STREAM_IDLE,
+      error: '',
+      errorCode: '',
+    },
+  );
+  let streamStatusLabel = $derived(streamLabel(focusedStream.status));
+  let streamStatusVariant = $derived(streamVariant(focusedStream.status));
+  let layout = $derived(
+    maximizedTerminalId
+      ? layoutForCount(1)
+      : layoutForCount(viewState.terminals.length),
+  );
   let launchHistoryOptions = $derived(
     viewState.launchHistory.map((entry) => ({
       value: entry.id,
@@ -70,28 +83,33 @@
 
   const controller = createTerminalsController({
     state: viewState,
-    onSnapshot: (ansi, snapshotTerminal) => {
-      pendingSnapshot = ansi;
-      pendingSnapshotTerminal = snapshotTerminal;
-      pendingOutput = [];
-      if (!xterm) {
+    onSnapshot: (terminalId, ansi, snapshotTerminal) => {
+      pendingSnapshots.set(terminalId, {
+        ansi,
+        terminal: snapshotTerminal,
+      });
+      pendingOutputs.delete(terminalId);
+      const tile = tileRegistry.get(terminalId);
+      if (!tile) {
         return;
       }
-      writeSnapshot(ansi, snapshotTerminal);
+      writeSnapshot(terminalId, ansi, snapshotTerminal);
     },
-    onOutput: (data) => {
-      if (xterm) {
-        xterm.write(data);
+    onOutput: (terminalId, data) => {
+      const tile = tileRegistry.get(terminalId);
+      if (tile) {
+        tile.xterm.write(data);
       } else {
-        pendingOutput = [...pendingOutput, data].slice(-256);
+        const queued = pendingOutputs.get(terminalId) ?? [];
+        queued.push(data);
+        pendingOutputs.set(terminalId, queued.slice(-256));
       }
     },
-    onClear: () => {
-      pendingSnapshot = '';
-      pendingSnapshotTerminal = null;
-      pendingOutput = [];
-      terminalScrolledBack = false;
-      xterm?.reset();
+    onClear: (terminalId) => {
+      pendingSnapshots.delete(terminalId);
+      pendingOutputs.delete(terminalId);
+      scrolledBackByTerminal[terminalId] = false;
+      tileRegistry.get(terminalId)?.xterm?.reset();
     },
   });
 
@@ -107,12 +125,38 @@
   });
 
   $effect(() => {
+    if (
+      maximizedTerminalId &&
+      !viewState.terminals.some(
+        (item) => item.terminal_id === maximizedTerminalId,
+      )
+    ) {
+      maximizedTerminalId = '';
+    }
+  });
+
+  $effect(() => {
     const selectedId = viewState.selectedTerminalId;
-    if (selectedId !== controlledTerminalId) {
-      controlledTerminalId = selectedId;
-      setControlEnabled(false);
-      terminalScrolledBack = false;
-      stopDialogOpen = false;
+    const previous = controlledTerminalId;
+    if (selectedId === previous) {
+      return;
+    }
+    controlledTerminalId = selectedId;
+    const previousTile = tileRegistry.get(previous);
+    if (previousTile?.xterm) {
+      previousTile.xterm.options.disableStdin = true;
+      previousTile.xterm.options.cursorBlink = false;
+    }
+    stopDialogOpen = false;
+    if (pendingControlTerminalId === selectedId) {
+      pendingControlTerminalId = '';
+      return;
+    }
+    controlEnabled = false;
+    const tile = tileRegistry.get(selectedId);
+    if (tile?.xterm) {
+      tile.xterm.options.disableStdin = true;
+      tile.xterm.options.cursorBlink = false;
     }
   });
 
@@ -131,75 +175,95 @@
     return () => {
       mounted = false;
       controller.destroy();
-      disposeRenderer();
-      pendingSnapshot = '';
-      pendingSnapshotTerminal = null;
-      pendingOutput = [];
+      for (const terminalId of [...tileRegistry.keys()]) {
+        disposeTile(terminalId);
+      }
     };
   });
 
-  function mountTerminal(node) {
-    terminalHost = node;
-    ensureRenderer();
+  function mountTile(node, terminalId) {
+    tileHosts.set(terminalId, node);
+    ensureRenderer(terminalId);
     return {
       destroy() {
-        if (terminalHost === node) {
-          terminalHost = null;
-          disposeRenderer();
-        }
+        disposeTile(terminalId);
       },
     };
   }
 
-  function ensureRenderer() {
-    if (!mounted || !terminalHost || xterm || rendererPromise) {
+  function ensureRenderer(terminalId) {
+    if (
+      !mounted ||
+      !tileHosts.has(terminalId) ||
+      tileRegistry.has(terminalId) ||
+      rendererPromises.has(terminalId)
+    ) {
       return;
     }
-    const loading = initializeTerminal()
+    const loading = initializeTerminal(terminalId)
       .catch(() => {
         if (mounted) {
-          viewState.streamError = t(
-            'terminals.rendererError',
-            'The browser terminal renderer could not be loaded.',
-          );
-          viewState.streamStatus = TERMINAL_STREAM_ERROR;
+          viewState.streams = {
+            ...viewState.streams,
+            [terminalId]: {
+              status: TERMINAL_STREAM_ERROR,
+              error: t(
+                'terminals.rendererError',
+                'The browser terminal renderer could not be loaded.',
+              ),
+              errorCode: '',
+            },
+          };
         }
       })
       .finally(() => {
-        if (rendererPromise === loading && !xterm) {
-          rendererPromise = null;
+        if (rendererPromises.get(terminalId) === loading) {
+          rendererPromises.delete(terminalId);
         }
       });
-    rendererPromise = loading;
+    rendererPromises.set(terminalId, loading);
   }
 
-  function disposeRenderer() {
-    resizeObserver?.disconnect();
-    inputDisposable?.dispose();
-    scrollDisposable?.dispose();
-    xterm?.dispose();
-    resizeObserver = null;
-    inputDisposable = null;
-    scrollDisposable = null;
-    fitAddon = null;
-    xterm = null;
-    rendererPromise = null;
-  }
-
-  async function initializeTerminal() {
-    const [{ Terminal }, { FitAddon }] = await Promise.all([
-      import('@xterm/xterm'),
-      import('@xterm/addon-fit'),
-    ]);
-    if (!mounted || !terminalHost) {
+  function disposeTile(terminalId) {
+    tileHosts.delete(terminalId);
+    rendererPromises.delete(terminalId);
+    pendingSnapshots.delete(terminalId);
+    pendingOutputs.delete(terminalId);
+    const tile = tileRegistry.get(terminalId);
+    if (!tile) {
       return;
     }
-    xterm = new Terminal({
+    tileRegistry.delete(terminalId);
+    tile.resizeObserver?.disconnect();
+    tile.inputDisposable?.dispose();
+    tile.scrollDisposable?.dispose();
+    tile.xterm?.dispose();
+  }
+
+  function loadXtermModules() {
+    if (!xtermModulesPromise) {
+      xtermModulesPromise = Promise.all([
+        import('@xterm/xterm'),
+        import('@xterm/addon-fit'),
+      ]);
+    }
+    return xtermModulesPromise;
+  }
+
+  async function initializeTerminal(terminalId) {
+    const [{ Terminal }, { FitAddon }] = await loadXtermModules();
+    const host = tileHosts.get(terminalId);
+    if (!mounted || !host) {
+      return;
+    }
+    const controlled =
+      controlEnabled && terminalId === viewState.selectedTerminalId;
+    const xtermInstance = new Terminal({
       allowTransparency: false,
       convertEol: false,
-      cursorBlink: controlEnabled,
+      cursorBlink: controlled,
       cursorInactiveStyle: 'outline',
-      disableStdin: !controlEnabled,
+      disableStdin: !controlled,
       fontFamily: cssToken('--font-mono', 'IBM Plex Mono, monospace'),
       fontSize: 12,
       lineHeight: 1.12,
@@ -210,37 +274,54 @@
       smoothScrollDuration: 100,
       theme: terminalTheme(),
     });
-    fitAddon = new FitAddon();
-    xterm.loadAddon(fitAddon);
-    xterm.open(terminalHost);
-    inputDisposable = xterm.onData((data) => {
-      if (controlEnabled) {
+    const fitAddonInstance = new FitAddon();
+    xtermInstance.loadAddon(fitAddonInstance);
+    xtermInstance.open(host);
+    const inputDisposable = xtermInstance.onData((data) => {
+      if (controlEnabled && terminalId === viewState.selectedTerminalId) {
         controller.queueInput(data);
       }
     });
-    scrollDisposable = xterm.onScroll(() => {
-      terminalScrolledBack =
-        xterm.buffer.active.viewportY < xterm.buffer.active.baseY;
+    const scrollDisposable = xtermInstance.onScroll(() => {
+      scrolledBackByTerminal[terminalId] =
+        xtermInstance.buffer.active.viewportY <
+        xtermInstance.buffer.active.baseY;
     });
+    let resizeObserverInstance = null;
     if (typeof globalThis.ResizeObserver === 'function') {
-      resizeObserver = new ResizeObserver(scheduleFit);
-      resizeObserver.observe(terminalHost);
+      resizeObserverInstance = new ResizeObserver(() =>
+        scheduleFit(terminalId),
+      );
+      resizeObserverInstance.observe(host);
     }
-    if (pendingSnapshot) {
-      writeSnapshot(pendingSnapshot, pendingSnapshotTerminal);
+    tileRegistry.set(terminalId, {
+      xterm: xtermInstance,
+      fitAddon: fitAddonInstance,
+      resizeObserver: resizeObserverInstance,
+      inputDisposable,
+      scrollDisposable,
+    });
+    const pending = pendingSnapshots.get(terminalId);
+    if (pending) {
+      pendingSnapshots.delete(terminalId);
+      writeSnapshot(terminalId, pending.ansi, pending.terminal);
     }
-    for (const data of pendingOutput) {
-      xterm.write(data);
+    const queued = pendingOutputs.get(terminalId);
+    if (queued) {
+      pendingOutputs.delete(terminalId);
+      for (const data of queued) {
+        xtermInstance.write(data);
+      }
     }
-    pendingOutput = [];
-    scheduleFit();
-    if (controlEnabled) {
-      xterm.focus();
+    scheduleFit(terminalId);
+    if (controlled) {
+      xtermInstance.focus();
     }
   }
 
-  function writeSnapshot(ansi, snapshotTerminal) {
-    if (!xterm) {
+  function writeSnapshot(terminalId, ansi, snapshotTerminal) {
+    const tile = tileRegistry.get(terminalId);
+    if (!tile?.xterm) {
       return;
     }
     const columns = snapshotTerminal?.columns;
@@ -250,68 +331,86 @@
       Number.isInteger(rows) &&
       columns > 0 &&
       rows > 0 &&
-      (xterm.cols !== columns || xterm.rows !== rows)
+      (tile.xterm.cols !== columns || tile.xterm.rows !== rows)
     ) {
-      xterm.resize(columns, rows);
+      tile.xterm.resize(columns, rows);
     }
-    xterm.reset();
-    terminalScrolledBack = false;
-    xterm.write(ansi, () => {
-      xterm?.refresh(0, xterm.rows - 1);
-      scheduleFit();
+    tile.xterm.reset();
+    scrolledBackByTerminal[terminalId] = false;
+    tile.xterm.write(ansi, () => {
+      tileRegistry.get(terminalId)?.xterm?.refresh(0, tile.xterm.rows - 1);
+      scheduleFit(terminalId);
     });
   }
 
-  function scheduleFit() {
-    queueMicrotask(fitTerminal);
+  function scheduleFit(terminalId) {
+    queueMicrotask(() => fitTerminal(terminalId));
   }
 
-  function fitTerminal() {
+  function fitTerminal(terminalId) {
+    const tile = tileRegistry.get(terminalId);
+    const host = tileHosts.get(terminalId);
     if (
-      !xterm ||
-      !fitAddon ||
-      !terminalHost ||
-      terminalHost.clientWidth <= 0 ||
-      terminalHost.clientHeight <= 0
+      !tile?.xterm ||
+      !tile.fitAddon ||
+      !host ||
+      host.clientWidth <= 0 ||
+      host.clientHeight <= 0
     ) {
       return;
     }
     try {
-      fitAddon.fit();
-      controller.resize(xterm.cols, xterm.rows);
+      tile.fitAddon.fit();
+      controller.resize(tile.xterm.cols, tile.xterm.rows, terminalId);
     } catch {
       // The host may be between layout states while the view is mounting.
     }
   }
 
   function setControlEnabled(enabled) {
-    controlEnabled =
+    const terminalId = viewState.selectedTerminalId;
+    const next =
       enabled === true &&
-      Boolean(viewState.selectedTerminalId) &&
-      !terminalFinished;
-    if (!xterm) {
-      return;
+      Boolean(terminalId) &&
+      !terminalIsFinished(selectedTerminal(viewState));
+    const tile = tileRegistry.get(terminalId);
+    if (tile?.xterm) {
+      tile.xterm.options.disableStdin = !next;
+      tile.xterm.options.cursorBlink = next;
+      if (next) {
+        tile.xterm.focus();
+      }
     }
-    xterm.options.disableStdin = !controlEnabled;
-    xterm.options.cursorBlink = controlEnabled;
-    if (controlEnabled) {
-      xterm.focus();
-    }
+    controlEnabled = next;
   }
 
-  function scrollToLatest() {
-    xterm?.scrollToBottom();
-    terminalScrolledBack = false;
+  function scrollToLatest(terminalId) {
+    tileRegistry.get(terminalId)?.xterm?.scrollToBottom();
+    scrolledBackByTerminal[terminalId] = false;
   }
 
-  function takeTerminalControl(event) {
-    if (
-      event.button !== 0 ||
-      !terminal ||
-      terminalFinished ||
-      serverUnavailable
-    ) {
+  function toggleMaximize(terminalId) {
+    if (maximizedTerminalId === terminalId) {
+      maximizedTerminalId = '';
       return;
+    }
+    maximizedTerminalId = terminalId;
+    controller.selectTerminal(terminalId);
+  }
+
+  function takeTerminalControl(event, terminalId) {
+    if (event.button !== 0 || !terminalId || serverUnavailable) {
+      return;
+    }
+    const item = viewState.terminals.find(
+      (terminalItem) => terminalItem.terminal_id === terminalId,
+    );
+    if (!item || terminalIsFinished(item)) {
+      return;
+    }
+    if (terminalId !== viewState.selectedTerminalId) {
+      pendingControlTerminalId = terminalId;
+      controller.selectTerminal(terminalId);
     }
     setControlEnabled(true);
   }
@@ -772,21 +871,6 @@
         {/if}
       </div>
 
-      {#if viewState.streamError && !serverUnavailable}
-        <Banner variant="warn" class="terminals-view__feedback">
-          <span>{terminalError(viewState.streamError)}</span>
-        </Banner>
-      {/if}
-      {#if viewState.streamErrorCode === 'gap' && !serverUnavailable}
-        <Banner variant="warn" class="terminals-view__feedback">
-          <span>
-            {t(
-              'terminals.streamGap',
-              'Terminal output continuity was lost; rebuilding the live screen.',
-            )}
-          </span>
-        </Banner>
-      {/if}
       {#if viewState.actionError && !serverUnavailable}
         <Banner variant="error" class="terminals-view__feedback">
           <span>{terminalError(viewState.actionError)}</span>
@@ -794,53 +878,152 @@
       {/if}
 
       <div
-        class="terminals-view__terminal-shell"
-        data-control={controlEnabled ? 'enabled' : 'observe'}
+        class="terminals-view__canvas"
+        class:terminals-view__canvas--maximized={maximizedTerminalId !== ''}
+        role="group"
+        aria-label={t('terminals.canvasLabel', 'Terminal canvas')}
+        style="grid-template-columns: repeat({layout.columns}, minmax(0, 1fr)); grid-template-rows: repeat({layout.rows}, minmax(0, 1fr));"
       >
-        <div class="terminals-view__terminal-bar">
-          <span class="terminals-view__terminal-mode">
-            {terminalFinished
-              ? t(
-                  'terminals.mode.history',
-                  'Read-only history — retained temporarily after exit',
-                )
-              : controlEnabled
-                ? t(
-                    'terminals.mode.control',
-                    'Control enabled — keystrokes go to the process',
-                  )
-                : t(
-                    'terminals.mode.observe',
-                    'Observe mode — click terminal to take control',
-                  )}
-          </span>
-          <div class="terminals-view__terminal-bar-actions">
-            {#if terminalScrolledBack}
-              <button
-                type="button"
-                class="terminals-view__latest-action"
-                onclick={scrollToLatest}
+        {#each viewState.terminals as item, itemIndex (item.terminal_id)}
+          {@const span = layout.spans[itemIndex] ?? {
+            row: 0,
+            column: 0,
+            rowSpan: 1,
+            columnSpan: 1,
+          }}
+          {@const stream = viewState.streams[item.terminal_id] ?? {
+            status: TERMINAL_STREAM_IDLE,
+            error: '',
+            errorCode: '',
+          }}
+          {@const isMaximized = maximizedTerminalId === item.terminal_id}
+          <div
+            class="terminals-view__tile"
+            class:terminals-view__tile--hidden={maximizedTerminalId &&
+              !isMaximized}
+            class:terminals-view__tile--maximized={isMaximized}
+            data-terminal-id={item.terminal_id}
+            data-control={item.terminal_id === viewState.selectedTerminalId &&
+            controlEnabled
+              ? 'enabled'
+              : 'observe'}
+            style="grid-row: {span.row +
+              1} / span {span.rowSpan}; grid-column: {span.column +
+              1} / span {span.columnSpan};"
+          >
+            <div
+              class="terminals-view__tile-bar"
+              role="button"
+              tabindex="0"
+              aria-label={terminalTitle(item)}
+              onclick={() => controller.selectTerminal(item.terminal_id)}
+              ondblclick={() => toggleMaximize(item.terminal_id)}
+              onkeydown={(event) => {
+                if (event.key === 'Enter' || event.key === ' ') {
+                  event.preventDefault();
+                  controller.selectTerminal(item.terminal_id);
+                } else if (event.key === 'F2') {
+                  event.preventDefault();
+                  toggleMaximize(item.terminal_id);
+                }
+              }}
+            >
+              <span
+                class="terminals-view__tile-title"
+                use:tooltip={terminalTitle(item)}>{terminalTitle(item)}</span
               >
-                {t('terminals.scrollLatest', 'Jump to latest')}
-              </button>
-            {/if}
-            <span>PTY</span>
+              <span
+                class="terminals-view__tile-target"
+                use:tooltip={terminalTarget(item)}>{terminalTarget(item)}</span
+              >
+              <span
+                class="terminals-view__tile-session"
+                use:tooltip={terminalSession(item)}>{shortSession(item)}</span
+              >
+              <span class="terminals-view__tile-pid">PID {item.pid}</span>
+              {#if scrolledBackByTerminal[item.terminal_id]}
+                <button
+                  type="button"
+                  class="terminals-view__latest-action"
+                  onclick={() => scrollToLatest(item.terminal_id)}
+                >
+                  {t('terminals.scrollLatest', 'Jump to latest')}
+                </button>
+              {/if}
+              <span class="terminals-view__tile-chips">
+                <StatusChip variant={stateVariant(item.state)}>
+                  {stateLabel(item.state)}
+                </StatusChip>
+                <StatusChip variant={streamVariant(stream.status)}>
+                  {streamLabel(stream.status)}
+                </StatusChip>
+              </span>
+              <Button
+                variant="tertiary"
+                icon
+                ariaLabel={isMaximized
+                  ? t('terminals.restore', 'Restore')
+                  : t('terminals.maximize', 'Maximize')}
+                tooltip={isMaximized
+                  ? t('terminals.restore', 'Restore')
+                  : t('terminals.maximize', 'Maximize')}
+                onClick={() => toggleMaximize(item.terminal_id)}
+              >
+                {#if isMaximized}
+                  <svg
+                    viewBox="0 0 14 14"
+                    width="11"
+                    height="11"
+                    aria-hidden="true"
+                  >
+                    <path d="M5.5 5.5V2.5h6v6h-3M2.5 5.5h6v6h-6z" />
+                  </svg>
+                {:else}
+                  <svg
+                    viewBox="0 0 14 14"
+                    width="11"
+                    height="11"
+                    aria-hidden="true"
+                  >
+                    <path d="M3 3h8v8H3z" />
+                  </svg>
+                {/if}
+              </Button>
+            </div>
+            <div class="terminals-view__tile-chrome" role="presentation">
+              {#if stream.errorCode === 'gap' && !serverUnavailable}
+                <Banner variant="warn" class="terminals-view__tile-feedback">
+                  <span>
+                    {t(
+                      'terminals.streamGap',
+                      'Terminal output continuity was lost; rebuilding the live screen.',
+                    )}
+                  </span>
+                </Banner>
+              {/if}
+              {#if stream.error && !serverUnavailable}
+                <Banner variant="warn" class="terminals-view__tile-feedback">
+                  <span>{terminalError(stream.error)}</span>
+                </Banner>
+              {/if}
+              <div
+                use:mountTile={item.terminal_id}
+                class="terminals-view__tile-host"
+                role="group"
+                aria-label={t(
+                  terminalIsFinished(item)
+                    ? 'terminals.historyTerminalLabel'
+                    : 'terminals.liveTerminalLabel',
+                  terminalIsFinished(item)
+                    ? 'Retained terminal history.'
+                    : 'Live terminal. Click to take control.',
+                )}
+                onpointerdown={(event) =>
+                  takeTerminalControl(event, item.terminal_id)}
+              ></div>
+            </div>
           </div>
-        </div>
-        <div
-          use:mountTerminal
-          class="terminals-view__terminal-host"
-          role="group"
-          aria-label={t(
-            terminalFinished
-              ? 'terminals.historyTerminalLabel'
-              : 'terminals.liveTerminalLabel',
-            terminalFinished
-              ? 'Retained terminal history.'
-              : 'Live terminal. Click to take control.',
-          )}
-          onpointerdown={takeTerminalControl}
-        ></div>
+        {/each}
       </div>
     {:else}
       <EmptyState
@@ -1212,6 +1395,142 @@
     margin-bottom: 8px;
   }
 
+  .terminals-view__canvas {
+    display: grid;
+    min-width: 0;
+    min-height: 0;
+    flex: 1;
+    gap: 10px;
+  }
+
+  .terminals-view__tile {
+    display: flex;
+    min-width: 0;
+    min-height: 0;
+    flex-direction: column;
+    overflow: hidden;
+    border: 1px solid var(--border);
+    border-radius: var(--r-lg);
+    background: var(--bg);
+  }
+
+  .terminals-view__tile[data-control='enabled'] {
+    border-color: var(--accent-40);
+    box-shadow: var(--focus-ring);
+  }
+
+  .terminals-view__tile--hidden {
+    display: none;
+  }
+
+  .terminals-view__tile-bar {
+    display: flex;
+    min-width: 0;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 6px 4px 10px;
+    border-bottom: 1px solid var(--border);
+    color: var(--text-lo);
+    background: var(--surface);
+    font-family: var(--font-mono);
+    font-size: var(--fs-mono-xs);
+    letter-spacing: 0.04em;
+  }
+
+  .terminals-view__tile-title {
+    min-width: 0;
+    overflow: hidden;
+    color: var(--text-hi);
+    font-weight: 500;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .terminals-view__tile-target,
+  .terminals-view__tile-session,
+  .terminals-view__tile-pid {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .terminals-view__tile-session,
+  .terminals-view__tile-pid {
+    flex: 0 1 auto;
+  }
+
+  .terminals-view__tile-target {
+    color: var(--text-med);
+  }
+
+  .terminals-view__tile-chips {
+    display: flex;
+    flex: 0 0 auto;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .terminals-view__latest-action {
+    flex: 0 0 auto;
+    padding: 0;
+    border: 0;
+    color: var(--accent);
+    background: transparent;
+    font: inherit;
+  }
+
+  .terminals-view__latest-action:hover,
+  .terminals-view__latest-action:focus-visible {
+    color: var(--text-hi);
+    outline: none;
+    text-decoration: underline;
+    text-underline-offset: 3px;
+  }
+
+  :global(.terminals-view__tile-feedback) {
+    margin: 8px 8px 0;
+  }
+
+  .terminals-view__tile-chrome {
+    display: flex;
+    min-width: 0;
+    min-height: 0;
+    flex: 1;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  .terminals-view__tile-host {
+    min-width: 0;
+    min-height: 0;
+    flex: 1;
+    padding: 8px 10px;
+    overflow: hidden;
+  }
+
+  .terminals-view__tile-host :global(.xterm) {
+    height: 100%;
+  }
+
+  .terminals-view__tile-host :global(.xterm-viewport),
+  .terminals-view__tile-host :global(.xterm-screen) {
+    border-radius: var(--r-sm);
+  }
+
+  .terminals-view__tile-host
+    :global(.xterm-scrollable-element > .scrollbar.vertical) {
+    opacity: 1 !important;
+    pointer-events: auto !important;
+    background: var(--surface-2);
+  }
+
+  .terminals-view__tile-host
+    :global(.xterm-scrollable-element > .scrollbar.vertical > .slider) {
+    border: 2px solid var(--surface-2);
+    border-radius: var(--r-sm);
+    background: var(--text-lo);
+  }
+
   :global(.modal.terminals-view__start-modal) {
     width: 520px;
   }
@@ -1245,94 +1564,6 @@
     color: var(--text-hi);
   }
 
-  .terminals-view__terminal-shell {
-    display: flex;
-    min-height: 240px;
-    flex: 1 1 0;
-    flex-direction: column;
-    overflow: hidden;
-    border: 1px solid var(--border);
-    border-radius: var(--r-lg);
-    background: var(--bg);
-  }
-
-  .terminals-view__terminal-shell[data-control='enabled'] {
-    border-color: var(--accent-40);
-    box-shadow: var(--focus-ring);
-  }
-
-  .terminals-view__terminal-bar {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 12px;
-    padding: 6px 10px;
-    border-bottom: 1px solid var(--border);
-    color: var(--text-lo);
-    background: var(--surface);
-    font-family: var(--font-mono);
-    font-size: var(--fs-mono-xs);
-    letter-spacing: 0.04em;
-  }
-
-  .terminals-view__terminal-bar-actions {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-  }
-
-  .terminals-view__latest-action {
-    padding: 0;
-    border: 0;
-    color: var(--accent);
-    background: transparent;
-    font: inherit;
-  }
-
-  .terminals-view__latest-action:hover,
-  .terminals-view__latest-action:focus-visible {
-    color: var(--text-hi);
-    outline: none;
-    text-decoration: underline;
-    text-underline-offset: 3px;
-  }
-
-  .terminals-view__terminal-shell[data-control='enabled']
-    .terminals-view__terminal-mode {
-    color: var(--accent);
-  }
-
-  .terminals-view__terminal-host {
-    min-width: 0;
-    min-height: 0;
-    flex: 1;
-    padding: 10px 12px;
-    overflow: hidden;
-  }
-
-  .terminals-view__terminal-host :global(.xterm) {
-    height: 100%;
-  }
-
-  .terminals-view__terminal-host :global(.xterm-viewport),
-  .terminals-view__terminal-host :global(.xterm-screen) {
-    border-radius: var(--r-sm);
-  }
-
-  .terminals-view__terminal-host
-    :global(.xterm-scrollable-element > .scrollbar.vertical) {
-    opacity: 1 !important;
-    pointer-events: auto !important;
-    background: var(--surface-2);
-  }
-
-  .terminals-view__terminal-host
-    :global(.xterm-scrollable-element > .scrollbar.vertical > .slider) {
-    border: 2px solid var(--surface-2);
-    border-radius: var(--r-sm);
-    background: var(--text-lo);
-  }
-
   @media (max-width: 960px) {
     .terminals-view__detail {
       padding: 16px;
@@ -1363,10 +1594,15 @@
       width: 100%;
       justify-content: space-between;
     }
+
+    .terminals-view__tile-session,
+    .terminals-view__tile-pid {
+      display: none;
+    }
   }
 
   @media (prefers-reduced-motion: reduce) {
-    .terminals-view__terminal-host :global(.xterm-viewport) {
+    .terminals-view__tile-host :global(.xterm-viewport) {
       scroll-behavior: auto;
     }
   }

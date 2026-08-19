@@ -97,6 +97,9 @@ export const englishCatalog = Object.freeze({
   'terminals.dismissedMessage':
     'The retained Terminal Session was removed from the list.',
   'terminals.exitCode': 'Exit code',
+  'terminals.maximize': 'Maximize',
+  'terminals.restore': 'Restore',
+  'terminals.canvasLabel': 'Terminal canvas',
 
   'common.alreadySaved': 'Already saved',
   'common.add': 'Add',

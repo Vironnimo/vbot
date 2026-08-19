@@ -129,7 +129,7 @@ describe('TerminalsView', () => {
 
     expect(document.body.textContent).toContain('Auth refactor · Codex');
     expect(document.body.textContent).toContain('python');
-    expect(document.body.textContent).toContain('PTY');
+    expect(document.body.textContent).toContain('PID 4321');
     expect(document.body.textContent).toContain('main@vbot');
     expect(document.querySelector('button[role="switch"]')).toBeTruthy();
     expect(document.body.textContent).not.toContain(
@@ -245,9 +245,6 @@ describe('TerminalsView', () => {
       document.querySelector('.terminals-view__state-dot--exited'),
     ).toBeTruthy();
     expect(
-      document.querySelector('.terminals-view__terminal-mode'),
-    ).toBeTruthy();
-    expect(
       [...document.querySelectorAll('button')].some(
         (button) => button.textContent.trim() === 'Stop terminal',
       ),
@@ -257,6 +254,7 @@ describe('TerminalsView', () => {
         (button) => button.textContent.trim() === 'Dismiss',
       ),
     ).toBe(true);
+    expect(terminalInstances[0].options.disableStdin).toBe(true);
   });
 
   it('dismisses a finished Terminal Session and removes it from the list', async () => {
@@ -323,9 +321,7 @@ describe('TerminalsView', () => {
       workdir: 'C:\\repo',
     });
     expect(
-      document.querySelector(
-        '.terminals-view__terminal-shell[data-control="enabled"]',
-      ),
+      document.querySelector('.terminals-view__tile[data-control="enabled"]'),
     ).toBeTruthy();
     expect(terminalInstances[0].options.disableStdin).toBe(false);
     expect(terminalInstances[0].focus).toHaveBeenCalled();
@@ -398,11 +394,9 @@ describe('TerminalsView', () => {
 
     expect(terminalInstances[0].options.disableStdin).toBe(true);
     expect(
-      document.querySelector(
-        '.terminals-view__terminal-shell[data-control="observe"]',
-      ),
+      document.querySelector('.terminals-view__tile[data-control="observe"]'),
     ).toBeTruthy();
-    document.querySelector('.terminals-view__terminal-host').dispatchEvent(
+    document.querySelector('.terminals-view__tile-host').dispatchEvent(
       new MouseEvent('pointerdown', {
         bubbles: true,
         button: 0,
@@ -410,9 +404,7 @@ describe('TerminalsView', () => {
     );
     flushSync();
     expect(
-      document.querySelector(
-        '.terminals-view__terminal-shell[data-control="enabled"]',
-      ),
+      document.querySelector('.terminals-view__tile[data-control="enabled"]'),
     ).toBeTruthy();
     expect(terminalInstances[0].options.disableStdin).toBe(false);
     expect(terminalInstances[0].focus).toHaveBeenCalled();
@@ -427,6 +419,172 @@ describe('TerminalsView', () => {
     flushSync();
     findButton('Jump to latest').click();
     expect(terminalInstances[0].scrollToBottom).toHaveBeenCalledTimes(1);
+  });
+
+  it('renders one tile per listed terminal with title, state, and owner in the tile bar', async () => {
+    listTerminalsMock.mockResolvedValue({
+      terminals: [
+        terminal({ terminal_id: 'term-1', title: 'First terminal' }),
+        terminal({ terminal_id: 'term-2', title: 'Second terminal' }),
+      ],
+    });
+    mountedComponent = mount(TerminalsView, { target: document.body });
+    flushSync();
+    await waitFor(() => streams.length === 2);
+    expect(streams).toHaveLength(2);
+    await waitFor(() => terminalInstances.length === 2);
+    expect(terminalInstances).toHaveLength(2);
+
+    const tiles = document.querySelectorAll('.terminals-view__tile');
+    expect(tiles).toHaveLength(2);
+    const firstBar = tiles[0].querySelector('.terminals-view__tile-bar');
+    expect(firstBar.textContent).toContain('First terminal');
+    expect(firstBar.textContent).toContain('main@vbot');
+    expect(firstBar.textContent).toContain('Working');
+    expect(tiles[0].getAttribute('data-control')).toBe('observe');
+    expect(tiles[1].getAttribute('data-control')).toBe('observe');
+  });
+
+  it('shows the focused tile in the toolbar and focuses another tile via its bar', async () => {
+    listTerminalsMock.mockResolvedValue({
+      terminals: [
+        terminal({ terminal_id: 'term-1', title: 'First terminal' }),
+        terminal({ terminal_id: 'term-2', title: 'Second terminal' }),
+      ],
+    });
+    mountedComponent = mount(TerminalsView, { target: document.body });
+    flushSync();
+    await waitFor(() => streams.length === 2 && terminalInstances.length === 2);
+
+    const identity = document.querySelector('.terminals-view__identity');
+    expect(identity.textContent).toContain('First terminal');
+
+    document
+      .querySelectorAll('.terminals-view__tile-bar')[1]
+      .dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    flushSync();
+
+    expect(
+      document.querySelector('.terminals-view__identity').textContent,
+    ).toContain('Second terminal');
+    expect(
+      document
+        .querySelectorAll('.terminals-view__tile')[1]
+        .getAttribute('data-control'),
+    ).toBe('observe');
+  });
+
+  it('maximizes a tile to fill the canvas and restores the grid', async () => {
+    listTerminalsMock.mockResolvedValue({
+      terminals: [
+        terminal({ terminal_id: 'term-1', title: 'First terminal' }),
+        terminal({ terminal_id: 'term-2', title: 'Second terminal' }),
+      ],
+    });
+    mountedComponent = mount(TerminalsView, { target: document.body });
+    flushSync();
+    await waitFor(() => streams.length === 2 && terminalInstances.length === 2);
+
+    const canvas = document.querySelector('.terminals-view__canvas');
+    expect(canvas.getAttribute('style')).toContain('repeat(2, minmax(0, 1fr))');
+
+    document
+      .querySelector('button[aria-label="Maximize"]')
+      .dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    flushSync();
+
+    expect(canvas.getAttribute('style')).toContain('repeat(1, minmax(0, 1fr))');
+    expect(canvas.classList.contains('terminals-view__canvas--maximized')).toBe(
+      true,
+    );
+    const tiles = document.querySelectorAll('.terminals-view__tile');
+    expect(tiles[0].classList.contains('terminals-view__tile--maximized')).toBe(
+      true,
+    );
+    expect(tiles[1].classList.contains('terminals-view__tile--hidden')).toBe(
+      true,
+    );
+    expect(tiles[0].getAttribute('data-control')).toBe('observe');
+
+    document
+      .querySelector('button[aria-label="Restore"]')
+      .dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    flushSync();
+
+    expect(canvas.getAttribute('style')).toContain('repeat(2, minmax(0, 1fr))');
+    expect(canvas.classList.contains('terminals-view__canvas--maximized')).toBe(
+      false,
+    );
+    expect(
+      document.querySelectorAll('.terminals-view__tile--hidden'),
+    ).toHaveLength(0);
+    expect(
+      document.querySelectorAll('.terminals-view__tile--maximized'),
+    ).toHaveLength(0);
+  });
+
+  it('takes control only for the clicked tile', async () => {
+    listTerminalsMock.mockResolvedValue({
+      terminals: [
+        terminal({ terminal_id: 'term-1', title: 'First terminal' }),
+        terminal({ terminal_id: 'term-2', title: 'Second terminal' }),
+      ],
+    });
+    mountedComponent = mount(TerminalsView, { target: document.body });
+    flushSync();
+    await waitFor(() => streams.length === 2 && terminalInstances.length === 2);
+
+    document.querySelectorAll('.terminals-view__tile-host')[1].dispatchEvent(
+      new MouseEvent('pointerdown', {
+        bubbles: true,
+        button: 0,
+      }),
+    );
+    flushSync();
+
+    const tiles = document.querySelectorAll('.terminals-view__tile');
+    expect(tiles[0].getAttribute('data-control')).toBe('observe');
+    expect(tiles[1].getAttribute('data-control')).toBe('enabled');
+    expect(terminalInstances[1].options.disableStdin).toBe(false);
+    expect(terminalInstances[1].focus).toHaveBeenCalled();
+    expect(terminalInstances[0].options.disableStdin).toBe(true);
+
+    terminalInstances[1].onDataCallback('ls');
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(sendTerminalInputMock).toHaveBeenCalledWith('term-2', 'ls');
+  });
+
+  it('keeps maximized output streaming and restores without re-initializing tiles', async () => {
+    listTerminalsMock.mockResolvedValue({
+      terminals: [
+        terminal({ terminal_id: 'term-1', title: 'First terminal' }),
+        terminal({ terminal_id: 'term-2', title: 'Second terminal' }),
+      ],
+    });
+    mountedComponent = mount(TerminalsView, { target: document.body });
+    flushSync();
+    await waitFor(() => streams.length === 2 && terminalInstances.length === 2);
+
+    document
+      .querySelector('button[aria-label="Maximize"]')
+      .dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    flushSync();
+
+    streams[0].handlers.onEvent({
+      type: 'terminal_output',
+      sequence: 1,
+      data: 'more output',
+    });
+    expect(terminalInstances[0].write).toHaveBeenCalledWith('more output');
+
+    document
+      .querySelector('button[aria-label="Restore"]')
+      .dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    flushSync();
+    expect(terminalInstances).toHaveLength(2);
+    expect(
+      document.querySelectorAll('.terminals-view__tile-host'),
+    ).toHaveLength(2);
   });
 });
 
