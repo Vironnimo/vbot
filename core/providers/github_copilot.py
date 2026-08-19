@@ -35,6 +35,7 @@ from core.providers.github_copilot_policy import (
 from core.providers.github_copilot_responses import (
     ResponsesStreamState,
     build_responses_payload,
+    estimate_responses_input_tokens,
     iter_responses_sse_deltas_with_state,
     normalize_responses_response,
 )
@@ -112,7 +113,7 @@ class GitHubCopilotAdapter(OpenAICompatibleAdapter):
                 messages,
                 model_id=model_id,
                 policy=policy,
-                **self._request_kwargs_with_defaults(messages, model_id, kwargs),
+                **self._responses_request_kwargs_with_defaults(messages, model_id, kwargs),
             )
             return await self._post_json(RESPONSES_ENDPOINT, payload, messages)
         if policy.endpoint_path == MESSAGES_ENDPOINT:
@@ -159,7 +160,7 @@ class GitHubCopilotAdapter(OpenAICompatibleAdapter):
                 model_id=model_id,
                 policy=policy,
                 stream=True,
-                **self._request_kwargs_with_defaults(messages, model_id, kwargs),
+                **self._responses_request_kwargs_with_defaults(messages, model_id, kwargs),
             )
             async for delta in self._stream_responses(payload, messages):
                 yield delta
@@ -230,11 +231,34 @@ class GitHubCopilotAdapter(OpenAICompatibleAdapter):
                 request_kwargs.setdefault(key, value)
         return request_kwargs
 
+    def _responses_request_kwargs_with_defaults(
+        self,
+        messages: list[dict[str, Any]],
+        model_id: str,
+        kwargs: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        request_kwargs = {key: value for key, value in kwargs.items() if value is not None}
+        self._apply_model_output_limit(
+            request_kwargs,
+            model_id,
+            messages,
+            estimated_input_tokens=estimate_responses_input_tokens(
+                messages,
+                tools=request_kwargs.get("tools"),
+            ),
+        )
+        if self._config.defaults:
+            for key, value in self._config.defaults.items():
+                request_kwargs.setdefault(key, value)
+        return request_kwargs
+
     def _apply_model_output_limit(
         self,
         request_kwargs: dict[str, Any],
         model_id: str,
         messages: list[dict[str, Any]],
+        *,
+        estimated_input_tokens: int | None = None,
     ) -> None:
         self._validate_image_limits(model_id, _copilot_message_images(messages))
         max_prompt_tokens = self._runtime_metadata_for_model(model_id).get("max_prompt_tokens")
@@ -249,7 +273,12 @@ class GitHubCopilotAdapter(OpenAICompatibleAdapter):
                     f"max_prompt_tokens={max_prompt_tokens})",
                     retryable=False,
                 )
-        super()._apply_model_output_limit(request_kwargs, model_id, messages)
+        super()._apply_model_output_limit(
+            request_kwargs,
+            model_id,
+            messages,
+            estimated_input_tokens=estimated_input_tokens,
+        )
 
     async def _build_request_headers(
         self,

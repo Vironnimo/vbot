@@ -412,6 +412,8 @@ class OpenAICompatibleAdapter(ProviderAdapter):
         request_kwargs: dict[str, Any],
         model_id: str,
         messages: list[dict[str, Any]],
+        *,
+        estimated_input_tokens: int | None = None,
     ) -> None:
         """Resolve the output allowance and clamp it to remaining context.
 
@@ -426,6 +428,10 @@ class OpenAICompatibleAdapter(ProviderAdapter):
         the current messages, Tool definitions, and effective context window so
         a ceiling equal to the whole context cannot produce an invalid request.
         Mirrors the Anthropic adapter's context-aware ``max_tokens``.
+
+        Subclasses whose wire format differs from the chat-message shape (e.g.
+        stateless Responses items) pass a wire-accurate ``estimated_input_tokens``
+        so the context clamp budgets against what the Provider actually receives.
         """
 
         explicit_values: list[int] = []
@@ -440,7 +446,10 @@ class OpenAICompatibleAdapter(ProviderAdapter):
 
         tools = request_kwargs.get("tools")
         tool_definitions = tools if isinstance(tools, list) else None
-        estimated_input, _ = estimate_request_input_tokens(messages, tool_definitions)
+        if estimated_input_tokens is None:
+            estimated_input, _ = estimate_request_input_tokens(messages, tool_definitions)
+        else:
+            estimated_input = max(0, int(estimated_input_tokens))
         resolved = resolve_request_output_limit(
             explicit_limit=explicit_limit,
             model_output_limit=self._model_max_output_tokens(model_id),

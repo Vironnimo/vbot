@@ -116,6 +116,21 @@ def estimate_json_tokens(value: Any) -> tuple[int, bool]:
     return estimate_tokens(_render_token_estimate_value(value))
 
 
+def estimate_structured_tokens(value: Any) -> tuple[int, bool]:
+    """Estimate tokens for a structured value, normalizing native media.
+
+    Like :func:`estimate_json_tokens`, but replaces encoded base64/data-URL
+    media payloads with the fixed :data:`NATIVE_MEDIA_TOKEN_RESERVE` first, so
+    transport encoding does not masquerade as prose tokens. Used for provider
+    payloads that reach the model as structured data rather than chat messages
+    — e.g. stateless Responses input items, which carry provider-owned
+    reasoning items with large encrypted continuity blobs.
+    """
+    normalized, media_payloads = _normalize_native_media(value)
+    estimated, _ = estimate_json_tokens(normalized)
+    return estimated + media_payloads * NATIVE_MEDIA_TOKEN_RESERVE, True
+
+
 def estimate_request_input_tokens(
     messages: Sequence[Mapping[str, Any]],
     tools: Sequence[Mapping[str, Any]] | None = None,

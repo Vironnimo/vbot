@@ -9,6 +9,7 @@ from typing import Any
 from core.providers.github_copilot_responses import (
     REASONING_ENCRYPTED_CONTENT_INCLUDE,
     build_responses_payload,
+    estimate_responses_input_tokens,
 )
 from core.providers.openai import OpenAIAdapter, OpenAISubscriptionResponsesPolicy
 from core.providers.providers import ProviderConfig
@@ -127,7 +128,15 @@ class XAIAdapter(OpenAIAdapter):
         **kwargs: Any,
     ) -> dict[str, Any]:
         request_kwargs = dict(kwargs)
-        self._apply_model_output_limit(request_kwargs, model_id, messages)
+        self._apply_model_output_limit(
+            request_kwargs,
+            model_id,
+            messages,
+            estimated_input_tokens=estimate_responses_input_tokens(
+                messages,
+                tools=request_kwargs.get("tools"),
+            ),
+        )
         payload = build_responses_payload(
             messages,
             model_id=model_id,
