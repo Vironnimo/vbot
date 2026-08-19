@@ -246,12 +246,12 @@ describe('TerminalsView', () => {
     ).toBeTruthy();
     expect(
       [...document.querySelectorAll('button')].some(
-        (button) => button.textContent.trim() === 'Stop terminal',
+        (button) => button.getAttribute('aria-label') === 'Stop terminal',
       ),
     ).toBe(false);
     expect(
       [...document.querySelectorAll('button')].some(
-        (button) => button.textContent.trim() === 'Dismiss',
+        (button) => button.getAttribute('aria-label') === 'Dismiss',
       ),
     ).toBe(true);
     expect(terminalInstances[0].options.disableStdin).toBe(true);
@@ -277,7 +277,7 @@ describe('TerminalsView', () => {
     expect(exitCodeEl.textContent).toContain('Exit code');
     expect(exitCodeEl.textContent).toContain('0');
 
-    findButton('Dismiss').click();
+    findButtonByAriaLabel('Dismiss').click();
     flushSync();
     const dialog = document.querySelector('[role="dialog"][aria-modal="true"]');
     expect(dialog).toBeTruthy();
@@ -445,7 +445,7 @@ describe('TerminalsView', () => {
     expect(tiles[1].getAttribute('data-control')).toBe('observe');
   });
 
-  it('shows the focused tile in the toolbar and focuses another tile via its bar', async () => {
+  it('focuses the first tile and switches focus via a tile bar click', async () => {
     listTerminalsMock.mockResolvedValue({
       terminals: [
         terminal({ terminal_id: 'term-1', title: 'First terminal' }),
@@ -456,8 +456,13 @@ describe('TerminalsView', () => {
     flushSync();
     await waitFor(() => streams.length === 2 && terminalInstances.length === 2);
 
-    const identity = document.querySelector('.terminals-view__identity');
-    expect(identity.textContent).toContain('First terminal');
+    const tiles = document.querySelectorAll('.terminals-view__tile');
+    expect(tiles[0].classList.contains('terminals-view__tile--focused')).toBe(
+      true,
+    );
+    expect(tiles[1].classList.contains('terminals-view__tile--focused')).toBe(
+      false,
+    );
 
     document
       .querySelectorAll('.terminals-view__tile-bar')[1]
@@ -465,8 +470,15 @@ describe('TerminalsView', () => {
     flushSync();
 
     expect(
-      document.querySelector('.terminals-view__identity').textContent,
-    ).toContain('Second terminal');
+      document
+        .querySelectorAll('.terminals-view__tile')[0]
+        .classList.contains('terminals-view__tile--focused'),
+    ).toBe(false);
+    expect(
+      document
+        .querySelectorAll('.terminals-view__tile')[1]
+        .classList.contains('terminals-view__tile--focused'),
+    ).toBe(true);
     expect(
       document
         .querySelectorAll('.terminals-view__tile')[1]
@@ -637,6 +649,16 @@ function findButton(label) {
   );
   if (!button) {
     throw new Error(`button not found: ${label}`);
+  }
+  return button;
+}
+
+function findButtonByAriaLabel(ariaLabel) {
+  const button = [...document.querySelectorAll('button')].find(
+    (item) => item.getAttribute('aria-label') === ariaLabel,
+  );
+  if (!button) {
+    throw new Error(`button not found by aria-label: ${ariaLabel}`);
   }
   return button;
 }

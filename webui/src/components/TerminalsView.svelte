@@ -25,7 +25,6 @@
     createTerminalsController,
     createTerminalsViewState,
     layoutForCount,
-    selectedTerminal,
     terminalIsFinished,
   } from '$lib/terminalsView.js';
   import { tooltip } from '$lib/tooltip.js';
@@ -42,8 +41,8 @@
   let pendingControlTerminalId = '';
   let maximizedTerminalId = $state('');
   let scrolledBackByTerminal = $state({});
-  let stopDialogOpen = $state(false);
-  let dismissDialogOpen = $state(false);
+  let stopDialogTerminalId = $state('');
+  let dismissDialogTerminalId = $state('');
   let startDialogOpen = $state(false);
   let selectedLaunchHistoryId = $state('');
   let startCommand = $state('');
@@ -57,17 +56,7 @@
   const pendingSnapshots = new SvelteMap();
   const pendingOutputs = new SvelteMap();
 
-  let terminal = $derived(selectedTerminal(viewState));
-  let terminalFinished = $derived(terminalIsFinished(terminal));
-  let focusedStream = $derived(
-    viewState.streams[viewState.selectedTerminalId] ?? {
-      status: TERMINAL_STREAM_IDLE,
-      error: '',
-      errorCode: '',
-    },
-  );
-  let streamStatusLabel = $derived(streamLabel(focusedStream.status));
-  let streamStatusVariant = $derived(streamVariant(focusedStream.status));
+  let hasTerminals = $derived(viewState.terminals.length > 0);
   let layout = $derived(
     maximizedTerminalId
       ? layoutForCount(1)
@@ -147,7 +136,6 @@
       previousTile.xterm.options.disableStdin = true;
       previousTile.xterm.options.cursorBlink = false;
     }
-    stopDialogOpen = false;
     if (pendingControlTerminalId === selectedId) {
       pendingControlTerminalId = '';
       return;
@@ -161,7 +149,8 @@
   });
 
   $effect(() => {
-    if (terminalFinished && controlEnabled) {
+    const selected = findTerminal(viewState.selectedTerminalId);
+    if (terminalIsFinished(selected) && controlEnabled) {
       setControlEnabled(false);
     }
   });
@@ -372,7 +361,7 @@
     const next =
       enabled === true &&
       Boolean(terminalId) &&
-      !terminalIsFinished(selectedTerminal(viewState));
+      !terminalIsFinished(findTerminal(terminalId));
     const tile = tileRegistry.get(terminalId);
     if (tile?.xterm) {
       tile.xterm.options.disableStdin = !next;
@@ -402,9 +391,7 @@
     if (event.button !== 0 || !terminalId || serverUnavailable) {
       return;
     }
-    const item = viewState.terminals.find(
-      (terminalItem) => terminalItem.terminal_id === terminalId,
-    );
+    const item = findTerminal(terminalId);
     if (!item || terminalIsFinished(item)) {
       return;
     }
@@ -415,9 +402,46 @@
     setControlEnabled(true);
   }
 
+  function tileControlled(terminalId) {
+    return controlEnabled && viewState.selectedTerminalId === terminalId;
+  }
+
+  function toggleTileControl(terminalId) {
+    if (tileControlled(terminalId)) {
+      setControlEnabled(false);
+      return;
+    }
+    const item = findTerminal(terminalId);
+    if (!item || terminalIsFinished(item)) {
+      return;
+    }
+    if (terminalId !== viewState.selectedTerminalId) {
+      pendingControlTerminalId = terminalId;
+      controller.selectTerminal(terminalId);
+    }
+    setControlEnabled(true);
+  }
+
+  function openStopDialog(terminalId) {
+    const item = findTerminal(terminalId);
+    if (!item || terminalIsFinished(item)) {
+      return;
+    }
+    stopDialogTerminalId = terminalId;
+  }
+
+  function openDismissDialog(terminalId) {
+    const item = findTerminal(terminalId);
+    if (!item || !terminalIsFinished(item)) {
+      return;
+    }
+    dismissDialogTerminalId = terminalId;
+  }
+
   async function confirmStop() {
-    const stopped = await controller.killSelected();
-    stopDialogOpen = false;
+    const terminalId = stopDialogTerminalId;
+    const stopped = await controller.killTerminal(terminalId);
+    stopDialogTerminalId = '';
     if (stopped) {
       onToast({
         title: t('terminals.stoppedTitle', 'Terminal stopped'),
@@ -431,8 +455,9 @@
   }
 
   async function confirmDismiss() {
-    const dismissed = await controller.forgetSelected();
-    dismissDialogOpen = false;
+    const terminalId = dismissDialogTerminalId;
+    const dismissed = await controller.forgetTerminal(terminalId);
+    dismissDialogTerminalId = '';
     if (dismissed) {
       onToast({
         title: t('terminals.dismissedTitle', 'Terminal dismissed'),
@@ -443,6 +468,14 @@
         variant: 'success',
       });
     }
+  }
+
+  function findTerminal(terminalId) {
+    return (
+      viewState.terminals.find(
+        (terminal) => terminal.terminal_id === terminalId,
+      ) ?? null
+    );
   }
 
   function openStartDialog() {
@@ -788,89 +821,9 @@
           )}
         </p>
       </div>
-      <div class="view-header__actions terminals-view__header-status">
-        {#if terminal}
-          <StatusChip variant={stateVariant(terminal.state)}>
-            {stateLabel(terminal.state)}
-          </StatusChip>
-          <StatusChip variant={streamStatusVariant}>
-            {streamStatusLabel}
-          </StatusChip>
-        {/if}
-      </div>
     </header>
 
-    {#if terminal}
-      <div class="terminals-view__toolbar view-toolbar view-toolbar--split">
-        <div class="terminals-view__identity">
-          <span class="terminals-view__identity-primary">
-            <span use:tooltip={terminalTitle(terminal)}
-              >{terminalTitle(terminal)}</span
-            >
-            <span class="terminals-view__target-marker"
-              >{terminalTarget(terminal)}</span
-            >
-          </span>
-          <span class="terminals-view__identity-meta">
-            <span use:tooltip={terminalFullCommand(terminal)}
-              >{terminal.command}</span
-            >
-            {#if Array.isArray(terminal.arguments) && terminal.arguments.length > 0}
-              <span
-                use:tooltip={terminal.arguments.join(' ')}
-                class="terminals-view__identity-args"
-              >
-                {terminal.arguments.length}
-                {terminal.arguments.length === 1 ? 'arg' : 'args'}
-              </span>
-            {/if}
-            <span>PID {terminal.pid}</span>
-            <span>{terminal.columns}×{terminal.rows}</span>
-            {#if terminalFinished && terminal.exit_code != null}
-              <span
-                class="terminals-view__exit-code"
-                class:terminals-view__exit-code--nonzero={terminal.exit_code !==
-                  0}
-              >
-                {t('terminals.exitCode', 'Exit code')}
-                {terminal.exit_code}
-              </span>
-            {/if}
-            <span use:tooltip={terminal.workdir}>{terminal.workdir}</span>
-          </span>
-        </div>
-        {#if !terminalFinished}
-          <div class="terminals-view__controls">
-            <label class="terminals-view__control-toggle">
-              <span>{t('terminals.controlLabel', 'Take control')}</span>
-              <Toggle
-                size="sm"
-                checked={controlEnabled}
-                onChange={setControlEnabled}
-                ariaLabel={t('terminals.controlLabel', 'Take control')}
-              />
-            </label>
-            <Button
-              variant="danger"
-              loading={viewState.killing}
-              onClick={() => (stopDialogOpen = true)}
-            >
-              {t('terminals.stop', 'Stop terminal')}
-            </Button>
-          </div>
-        {:else}
-          <div class="terminals-view__controls">
-            <Button
-              variant="secondary"
-              loading={viewState.forgetting}
-              onClick={() => (dismissDialogOpen = true)}
-            >
-              {t('terminals.dismiss', 'Dismiss')}
-            </Button>
-          </div>
-        {/if}
-      </div>
-
+    {#if hasTerminals}
       {#if viewState.actionError && !serverUnavailable}
         <Banner variant="error" class="terminals-view__feedback">
           <span>{terminalError(viewState.actionError)}</span>
@@ -897,16 +850,17 @@
             errorCode: '',
           }}
           {@const isMaximized = maximizedTerminalId === item.terminal_id}
+          {@const isFinished = terminalIsFinished(item)}
+          {@const isFocused = item.terminal_id === viewState.selectedTerminalId}
           <div
             class="terminals-view__tile"
             class:terminals-view__tile--hidden={maximizedTerminalId &&
               !isMaximized}
             class:terminals-view__tile--maximized={isMaximized}
+            class:terminals-view__tile--focused={isFocused &&
+              !maximizedTerminalId}
             data-terminal-id={item.terminal_id}
-            data-control={item.terminal_id === viewState.selectedTerminalId &&
-            controlEnabled
-              ? 'enabled'
-              : 'observe'}
+            data-control={isFocused && controlEnabled ? 'enabled' : 'observe'}
             style="grid-row: {span.row +
               1} / span {span.rowSpan}; grid-column: {span.column +
               1} / span {span.columnSpan};"
@@ -928,67 +882,151 @@
                 }
               }}
             >
-              <span
-                class="terminals-view__tile-title"
-                use:tooltip={terminalTitle(item)}>{terminalTitle(item)}</span
-              >
-              <span
-                class="terminals-view__tile-target"
-                use:tooltip={terminalTarget(item)}>{terminalTarget(item)}</span
-              >
-              <span
-                class="terminals-view__tile-session"
-                use:tooltip={terminalSession(item)}>{shortSession(item)}</span
-              >
-              <span class="terminals-view__tile-pid">PID {item.pid}</span>
-              {#if scrolledBackByTerminal[item.terminal_id]}
-                <button
-                  type="button"
-                  class="terminals-view__latest-action"
-                  onclick={() => scrollToLatest(item.terminal_id)}
+              <div class="terminals-view__tile-bar-primary">
+                <span
+                  class="terminals-view__tile-title"
+                  use:tooltip={terminalTitle(item)}>{terminalTitle(item)}</span
                 >
-                  {t('terminals.scrollLatest', 'Jump to latest')}
-                </button>
-              {/if}
-              <span class="terminals-view__tile-chips">
-                <StatusChip variant={stateVariant(item.state)}>
-                  {stateLabel(item.state)}
-                </StatusChip>
-                <StatusChip variant={streamVariant(stream.status)}>
-                  {streamLabel(stream.status)}
-                </StatusChip>
-              </span>
-              <Button
-                variant="tertiary"
-                icon
-                ariaLabel={isMaximized
-                  ? t('terminals.restore', 'Restore')
-                  : t('terminals.maximize', 'Maximize')}
-                tooltip={isMaximized
-                  ? t('terminals.restore', 'Restore')
-                  : t('terminals.maximize', 'Maximize')}
-                onClick={() => toggleMaximize(item.terminal_id)}
-              >
-                {#if isMaximized}
-                  <svg
-                    viewBox="0 0 14 14"
-                    width="11"
-                    height="11"
-                    aria-hidden="true"
+                <span
+                  class="terminals-view__tile-target"
+                  use:tooltip={terminalTarget(item)}
+                  >{terminalTarget(item)}</span
+                >
+                {#if scrolledBackByTerminal[item.terminal_id]}
+                  <button
+                    type="button"
+                    class="terminals-view__latest-action"
+                    onclick={(event) => {
+                      event.stopPropagation();
+                      scrollToLatest(item.terminal_id);
+                    }}
                   >
-                    <path d="M5.5 5.5V2.5h6v6h-3M2.5 5.5h6v6h-6z" />
-                  </svg>
-                {:else}
-                  <svg
-                    viewBox="0 0 14 14"
-                    width="11"
-                    height="11"
-                    aria-hidden="true"
-                  >
-                    <path d="M3 3h8v8H3z" />
-                  </svg>
+                    {t('terminals.scrollLatest', 'Jump to latest')}
+                  </button>
                 {/if}
-              </Button>
+                <span class="terminals-view__tile-chips">
+                  <StatusChip variant={stateVariant(item.state)}>
+                    {stateLabel(item.state)}
+                  </StatusChip>
+                  <StatusChip variant={streamVariant(stream.status)}>
+                    {streamLabel(stream.status)}
+                  </StatusChip>
+                </span>
+                <span
+                  class="terminals-view__tile-actions"
+                  role="presentation"
+                  onclick={(event) => event.stopPropagation()}
+                  ondblclick={(event) => event.stopPropagation()}
+                  onkeydown={(event) => event.stopPropagation()}
+                >
+                  {#if !isFinished}
+                    <Toggle
+                      size="sm"
+                      checked={tileControlled(item.terminal_id)}
+                      onChange={() => toggleTileControl(item.terminal_id)}
+                      ariaLabel={t('terminals.controlLabel', 'Take control')}
+                    />
+                    <Button
+                      variant="danger"
+                      icon
+                      loading={viewState.killing === item.terminal_id}
+                      ariaLabel={t('terminals.stop', 'Stop terminal')}
+                      tooltip={t('terminals.stop', 'Stop terminal')}
+                      onClick={() => openStopDialog(item.terminal_id)}
+                    >
+                      <svg
+                        viewBox="0 0 14 14"
+                        width="10"
+                        height="10"
+                        aria-hidden="true"
+                      >
+                        <path d="M4 4h6v6H4z" />
+                      </svg>
+                    </Button>
+                  {:else}
+                    <Button
+                      variant="secondary"
+                      icon
+                      loading={viewState.forgetting === item.terminal_id}
+                      ariaLabel={t('terminals.dismiss', 'Dismiss')}
+                      tooltip={t('terminals.dismiss', 'Dismiss')}
+                      onClick={() => openDismissDialog(item.terminal_id)}
+                    >
+                      <svg
+                        viewBox="0 0 14 14"
+                        width="10"
+                        height="10"
+                        aria-hidden="true"
+                      >
+                        <path d="M3 4h8M5 4V3h4v1M4.5 4l.5 8h4l.5-8" />
+                      </svg>
+                    </Button>
+                  {/if}
+                  <Button
+                    variant="tertiary"
+                    icon
+                    ariaLabel={isMaximized
+                      ? t('terminals.restore', 'Restore')
+                      : t('terminals.maximize', 'Maximize')}
+                    tooltip={isMaximized
+                      ? t('terminals.restore', 'Restore')
+                      : t('terminals.maximize', 'Maximize')}
+                    onClick={() => toggleMaximize(item.terminal_id)}
+                  >
+                    {#if isMaximized}
+                      <svg
+                        viewBox="0 0 14 14"
+                        width="11"
+                        height="11"
+                        aria-hidden="true"
+                      >
+                        <path d="M5.5 5.5V2.5h6v6h-3M2.5 5.5h6v6h-6z" />
+                      </svg>
+                    {:else}
+                      <svg
+                        viewBox="0 0 14 14"
+                        width="11"
+                        height="11"
+                        aria-hidden="true"
+                      >
+                        <path d="M3 3h8v8H3z" />
+                      </svg>
+                    {/if}
+                  </Button>
+                </span>
+              </div>
+              <div class="terminals-view__tile-bar-meta">
+                <span
+                  class="terminals-view__tile-command"
+                  use:tooltip={terminalFullCommand(item)}
+                  >{item.command || '—'}</span
+                >
+                {#if Array.isArray(item.arguments) && item.arguments.length > 0}
+                  <span
+                    class="terminals-view__tile-args"
+                    use:tooltip={item.arguments.join(' ')}
+                  >
+                    {item.arguments.length}
+                    {item.arguments.length === 1 ? 'arg' : 'args'}
+                  </span>
+                {/if}
+                <span class="terminals-view__tile-pid">PID {item.pid}</span>
+                <span>{item.columns}×{item.rows}</span>
+                {#if isFinished && item.exit_code != null}
+                  <span
+                    class="terminals-view__exit-code"
+                    class:terminals-view__exit-code--nonzero={item.exit_code !==
+                      0}
+                  >
+                    {t('terminals.exitCode', 'Exit code')}
+                    {item.exit_code}
+                  </span>
+                {/if}
+                <span
+                  class="terminals-view__tile-workdir"
+                  use:tooltip={item.workdir}>{item.workdir}</span
+                >
+              </div>
             </div>
             <div class="terminals-view__tile-chrome" role="presentation">
               {#if stream.errorCode === 'gap' && !serverUnavailable}
@@ -1011,10 +1049,10 @@
                 class="terminals-view__tile-host"
                 role="group"
                 aria-label={t(
-                  terminalIsFinished(item)
+                  isFinished
                     ? 'terminals.historyTerminalLabel'
                     : 'terminals.liveTerminalLabel',
-                  terminalIsFinished(item)
+                  isFinished
                     ? 'Retained terminal history.'
                     : 'Live terminal. Click to take control.',
                 )}
@@ -1198,7 +1236,7 @@
   </Modal>
 {/if}
 
-{#if stopDialogOpen && terminal && !terminalFinished}
+{#if stopDialogTerminalId}
   <ConfirmDialog
     title={t('terminals.stopConfirmTitle', 'Stop this Terminal Session?')}
     body={t(
@@ -1207,11 +1245,11 @@
     )}
     confirmLabel={t('terminals.stop', 'Stop terminal')}
     onConfirm={confirmStop}
-    onCancel={() => (stopDialogOpen = false)}
+    onCancel={() => (stopDialogTerminalId = '')}
   />
 {/if}
 
-{#if dismissDialogOpen && terminal && terminalFinished}
+{#if dismissDialogTerminalId}
   <ConfirmDialog
     title={t('terminals.dismissConfirmTitle', 'Dismiss this Terminal Session?')}
     body={t(
@@ -1220,7 +1258,7 @@
     )}
     confirmLabel={t('terminals.dismiss', 'Dismiss')}
     onConfirm={confirmDismiss}
-    onCancel={() => (dismissDialogOpen = false)}
+    onCancel={() => (dismissDialogTerminalId = '')}
   />
 {/if}
 
@@ -1247,11 +1285,7 @@
   }
 
   .terminals-view__item-topline,
-  .terminals-view__item-meta,
-  .terminals-view__identity-primary,
-  .terminals-view__identity-meta,
-  .terminals-view__controls,
-  .terminals-view__control-toggle {
+  .terminals-view__item-meta {
     display: flex;
     align-items: center;
   }
@@ -1325,72 +1359,6 @@
     padding: 0 0 14px;
   }
 
-  .terminals-view__header-status {
-    align-items: center;
-  }
-
-  .terminals-view__toolbar {
-    margin-bottom: 14px;
-  }
-
-  .terminals-view__identity {
-    display: flex;
-    min-width: 0;
-    flex-direction: column;
-    gap: 6px;
-  }
-
-  .terminals-view__identity-primary {
-    min-width: 0;
-    gap: 8px;
-    color: var(--text-hi);
-    font-family: var(--font-mono);
-    font-size: var(--fs-mono-body);
-  }
-
-  .terminals-view__target-marker {
-    color: var(--accent);
-  }
-
-  .terminals-view__identity-meta {
-    min-width: 0;
-    gap: 12px;
-    color: var(--text-lo);
-    font-family: var(--font-mono);
-    font-size: var(--fs-mono-xs);
-  }
-
-  .terminals-view__identity-meta span:last-child {
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .terminals-view__identity-args {
-    color: var(--text-lo);
-  }
-
-  .terminals-view__exit-code {
-    font-weight: 500;
-    color: var(--text-med);
-  }
-
-  .terminals-view__exit-code--nonzero {
-    color: var(--red);
-  }
-
-  .terminals-view__controls {
-    flex: 0 0 auto;
-    gap: 12px;
-  }
-
-  .terminals-view__control-toggle {
-    gap: 8px;
-    color: var(--text-med);
-    font-size: var(--fs-label-sm);
-  }
-
   :global(.terminals-view__feedback) {
     margin-bottom: 8px;
   }
@@ -1419,6 +1387,14 @@
     box-shadow: var(--focus-ring);
   }
 
+  .terminals-view__tile--focused {
+    border-color: var(--accent-40);
+  }
+
+  .terminals-view__tile--focused[data-control='enabled'] {
+    border-color: var(--accent);
+  }
+
   .terminals-view__tile--hidden {
     display: none;
   }
@@ -1426,8 +1402,8 @@
   .terminals-view__tile-bar {
     display: flex;
     min-width: 0;
-    align-items: center;
-    gap: 8px;
+    flex-direction: column;
+    gap: 2px;
     padding: 4px 6px 4px 10px;
     border-bottom: 1px solid var(--border);
     color: var(--text-lo);
@@ -1435,6 +1411,33 @@
     font-family: var(--font-mono);
     font-size: var(--fs-mono-xs);
     letter-spacing: 0.04em;
+  }
+
+  .terminals-view__tile-bar-primary {
+    display: flex;
+    min-width: 0;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .terminals-view__tile-bar-meta {
+    display: flex;
+    min-width: 0;
+    align-items: center;
+    gap: 10px;
+    color: var(--text-lo);
+    font-size: var(--fs-mono-xs);
+  }
+
+  .terminals-view__tile-bar-meta span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .terminals-view__tile-bar-meta span:last-child {
+    min-width: 0;
+    flex: 1;
   }
 
   .terminals-view__tile-title {
@@ -1446,21 +1449,38 @@
     white-space: nowrap;
   }
 
-  .terminals-view__tile-target,
-  .terminals-view__tile-session,
-  .terminals-view__tile-pid {
+  .terminals-view__tile-target {
     overflow: hidden;
+    color: var(--text-med);
     text-overflow: ellipsis;
     white-space: nowrap;
   }
 
-  .terminals-view__tile-session,
   .terminals-view__tile-pid {
-    flex: 0 1 auto;
+    flex: 0 0 auto;
   }
 
-  .terminals-view__tile-target {
+  .terminals-view__tile-command {
     color: var(--text-med);
+  }
+
+  .terminals-view__tile-args {
+    flex: 0 0 auto;
+    color: var(--text-lo);
+  }
+
+  .terminals-view__tile-workdir {
+    color: var(--text-lo);
+  }
+
+  .terminals-view__exit-code {
+    flex: 0 0 auto;
+    font-weight: 500;
+    color: var(--text-med);
+  }
+
+  .terminals-view__exit-code--nonzero {
+    color: var(--red);
   }
 
   .terminals-view__tile-chips {
@@ -1468,6 +1488,14 @@
     flex: 0 0 auto;
     align-items: center;
     gap: 6px;
+    margin-left: auto;
+  }
+
+  .terminals-view__tile-actions {
+    display: flex;
+    flex: 0 0 auto;
+    align-items: center;
+    gap: 4px;
   }
 
   .terminals-view__latest-action {
@@ -1559,18 +1587,9 @@
     font-family: var(--font-mono);
   }
 
-  :global(.terminals-view__attention strong) {
-    margin-right: 8px;
-    color: var(--text-hi);
-  }
-
   @media (max-width: 960px) {
     .terminals-view__detail {
       padding: 16px;
-    }
-
-    .terminals-view__toolbar {
-      align-items: flex-start;
     }
   }
 
@@ -1590,13 +1609,7 @@
       overflow: visible;
     }
 
-    .terminals-view__controls {
-      width: 100%;
-      justify-content: space-between;
-    }
-
-    .terminals-view__tile-session,
-    .terminals-view__tile-pid {
+    .terminals-view__tile-bar-meta {
       display: none;
     }
   }
