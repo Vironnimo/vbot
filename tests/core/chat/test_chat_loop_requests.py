@@ -58,6 +58,7 @@ async def test_send_appends_user_and_final_assistant_without_tools(tmp_path: Pat
     assert adapter.requests[0]["model_id"] == "anthropic/claude-sonnet-4"
     assert adapter.requests[0]["kwargs"] == {
         "temperature": 0.1,
+        "top_p": None,
         "thinking_effort": "high",
         "tools": [
             {

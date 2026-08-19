@@ -797,6 +797,7 @@ class StubModelEntry:
     metadata: dict[str, Any] = field(default_factory=dict)
     capabilities: Any = field(default_factory=lambda: SimpleNamespace(input_modalities=()))
     recommended_temperature: float | None = None
+    recommended_top_p: float | None = None
 
 
 class StubModels:
@@ -806,9 +807,11 @@ class StubModels:
         *,
         input_modalities: dict[tuple[str, str], tuple[str, ...]] | None = None,
         recommended_temperatures: dict[tuple[str, str], float] | None = None,
+        recommended_top_ps: dict[tuple[str, str], float] | None = None,
     ) -> None:
         modality_map = input_modalities or {}
         temp_map = recommended_temperatures or {}
+        top_p_map = recommended_top_ps or {}
         self._entries = {
             (provider_id, model_id): StubModelEntry(
                 context_window=context_window,
@@ -816,6 +819,7 @@ class StubModels:
                     input_modalities=modality_map.get((provider_id, model_id), ())
                 ),
                 recommended_temperature=temp_map.get((provider_id, model_id)),
+                recommended_top_p=top_p_map.get((provider_id, model_id)),
             )
             for (provider_id, model_id), context_window in entries.items()
         }

@@ -129,6 +129,7 @@ from core.chat.model_resolution import (
     _resolve_fallback,
     _split_agent_model,
     resolve_request_temperature,
+    resolve_request_top_p,
 )
 from core.chat.model_resolution import (
     parse_bare_model as parse_bare_model,
@@ -3883,6 +3884,11 @@ class ChatLoop:
             provider_id,
             model_id,
         )
+        top_p = resolve_request_top_p(
+            self._dependencies.models,
+            provider_id,
+            model_id,
+        )
         if self._streaming:
             return await self._send_streaming_assistant_request(
                 agent,
@@ -3897,6 +3903,7 @@ class ChatLoop:
                 continuation_tracker=continuation_tracker,
                 output_cwd=output_cwd,
                 temperature=temperature,
+                top_p=top_p,
             )
 
         return await self._send_non_streaming_assistant_request(
@@ -3908,6 +3915,7 @@ class ChatLoop:
             tools,
             request_context=request_context,
             temperature=temperature,
+            top_p=top_p,
         )
 
     async def _send_non_streaming_assistant_request(
@@ -3921,11 +3929,13 @@ class ChatLoop:
         *,
         request_context: dict[str, Any],
         temperature: float | None,
+        top_p: float | None,
     ) -> _AssistantStep:
         response = await adapter.send(
             messages,
             model_id=model_id,
             temperature=temperature,
+            top_p=top_p,
             thinking_effort=agent.thinking_effort,
             tools=tools,
             **request_context,
@@ -3954,6 +3964,7 @@ class ChatLoop:
         continuation_tracker: ContinuationTracker | None = None,
         *,
         temperature: float | None,
+        top_p: float | None,
     ) -> _AssistantStep:
         # A transient drop before answer text is replayed as a full stream
         # restart. Readable Reasoning and any unexecuted Tool Call preview are
@@ -3975,6 +3986,7 @@ class ChatLoop:
                     continuation_tracker=continuation_tracker,
                     output_cwd=output_cwd,
                     temperature=temperature,
+                    top_p=top_p,
                 )
             except _StreamRestartNeeded as restart:
                 _LOGGER.warning(
@@ -4005,6 +4017,7 @@ class ChatLoop:
         request_context: dict[str, Any] | None = None,
         continuation_tracker: ContinuationTracker | None = None,
         temperature: float | None = None,
+        top_p: float | None = None,
     ) -> _AssistantStep:
         accumulator = StreamingAccumulator()
         delta_emitter = _StreamingRunDeltaEmitter(run)
@@ -4012,6 +4025,7 @@ class ChatLoop:
             messages,
             model_id=model_id,
             temperature=temperature,
+            top_p=top_p,
             thinking_effort=agent.thinking_effort,
             tools=tools,
             **(request_context or {}),
@@ -4084,6 +4098,7 @@ class ChatLoop:
                     tools,
                     request_context=request_context or {},
                     temperature=temperature,
+                    top_p=top_p,
                 )
                 assistant_step = replace(
                     assistant_step,
