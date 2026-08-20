@@ -102,6 +102,7 @@
             }
         },
         "minimax-m3": {
+            "reasoning_replay": "none",
             "metadata": {
                 "ollama": {
                     "remote": true

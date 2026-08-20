@@ -1770,12 +1770,12 @@ class TestModelRegistryRealResources:
     def test_ollama_cloud_reasoning_replay_policies(self):
         """Ollama Cloud defaults to full_history; DeepSeek V4 models opt out.
 
-        Live-verified 2026-08 with the probe (number and instruction
-        carriers): GLM-5.2 reads replayed reasoning across turns and within
-        the run, so it inherits the full_history default. DeepSeek V4 Flash
-        ignores the carrier entirely — number, instruction, and tool-loop
-        probes all fail with the carrier and succeed only from visible
-        content — so it pins ``none``. MiniMax M3 stays unprofiled.
+        Live-verified 2026-08 with the probe (token secrets, exact system
+        path): GLM-5.2 reads replayed reasoning across turns (5/5) and within
+        the run (3/3) on both /v1 and native /api/chat, so it inherits the
+        full_history default. DeepSeek V4 Flash/Pro and MiniMax M3 ignore the
+        carrier entirely in both scopes and on both routes — only visible
+        content works — so they pin ``none``.
         """
 
         registry = ModelRegistry.load(RESOURCES_DIR)
@@ -1785,7 +1785,8 @@ class TestModelRegistryRealResources:
         assert registry.get("ollama-cloud", "deepseek-v4-flash:0731").reasoning_replay == "none"
         assert registry.get("ollama-cloud", "deepseek-v4-flash:preview").reasoning_replay == "none"
         assert registry.get("ollama-cloud", "deepseek-v4-pro:preview").reasoning_replay == "none"
-        assert registry.get("ollama-cloud", "minimax-m3").reasoning_replay is None
+        assert registry.get("ollama-cloud", "deepseek-v4-pro:0813").reasoning_replay == "none"
+        assert registry.get("ollama-cloud", "minimax-m3").reasoning_replay == "none"
 
     def test_openai_task_model_overrides_are_limited_to_working_connections(self):
         """OpenAI task models without a subscription wire are api-key only, while
