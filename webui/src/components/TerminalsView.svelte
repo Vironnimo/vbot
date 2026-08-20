@@ -577,6 +577,10 @@
     if (announcedTitle) {
       return announcedTitle;
     }
+    const launched = launchedCommand(item);
+    if (launched) {
+      return launched;
+    }
     const command = String(item?.command || '').trim();
     const executable = command.split(/[\\/]/).pop()?.toLowerCase() || '';
     const labels = {
@@ -594,13 +598,27 @@
     return labels[executable] || command || 'Terminal';
   }
 
-  function terminalFullCommand(item) {
-    const command = String(item?.command || '').trim();
-    const args = Array.isArray(item?.arguments) ? item.arguments : [];
-    if (!command && args.length === 0) {
+  function launchedCommand(item) {
+    const launchCommand = String(item?.launch_command || '').trim();
+    if (!launchCommand) {
       return '';
     }
-    return [command, ...args].join(' ');
+    const args = Array.isArray(item?.launch_args) ? item.launch_args : [];
+    return [launchCommand, ...args].join(' ');
+  }
+
+  function terminalFullCommand(item) {
+    return (
+      launchedCommand(item) ||
+      (() => {
+        const command = String(item?.command || '').trim();
+        const args = Array.isArray(item?.arguments) ? item.arguments : [];
+        if (!command && args.length === 0) {
+          return '';
+        }
+        return [command, ...args].join(' ');
+      })()
+    );
   }
 
   function terminalSession(item) {
@@ -999,9 +1017,17 @@
                 <span
                   class="terminals-view__tile-command"
                   use:tooltip={terminalFullCommand(item)}
-                  >{item.command || '—'}</span
+                  >{launchedCommand(item) || item.command || '—'}</span
                 >
-                {#if Array.isArray(item.arguments) && item.arguments.length > 0}
+                {#if Array.isArray(item.launch_args) && item.launch_args.length > 0}
+                  <span
+                    class="terminals-view__tile-args"
+                    use:tooltip={item.launch_args.join(' ')}
+                  >
+                    {item.launch_args.length}
+                    {item.launch_args.length === 1 ? 'arg' : 'args'}
+                  </span>
+                {:else if Array.isArray(item.arguments) && item.arguments.length > 0}
                   <span
                     class="terminals-view__tile-args"
                     use:tooltip={item.arguments.join(' ')}
@@ -1100,7 +1126,7 @@
           <p class="terminals-view__start-intro">
             {t(
               'terminals.startIntro',
-              'Leave Command empty to open the server user’s default shell. Every command uses the same real PTY / ConPTY.',
+              'Every manual terminal opens the server user’s default shell. A Command is entered into that shell like typed input, so the terminal keeps working after the command ends.',
             )}
           </p>
 

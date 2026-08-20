@@ -322,8 +322,7 @@ export function createTerminalsController({
       });
       onSnapshot(stream.terminalId, event.ansi, terminal);
       if (finished) {
-        stream.terminalEnded = true;
-        stream.shouldReconnect = false;
+        markStreamFinished(stream);
         void loadTerminals({ silent: true });
       }
       return;
@@ -348,13 +347,22 @@ export function createTerminalsController({
     if (event.type === 'terminal_state') {
       const terminal = mergeTerminalSummary(state, event.terminal);
       if (terminalIsFinished(terminal)) {
-        stream.terminalEnded = true;
-        stream.shouldReconnect = false;
-        setStreamView(stream.terminalId, {
-          status: TERMINAL_STREAM_SNAPSHOT,
-        });
+        markStreamFinished(stream);
         void loadTerminals({ silent: true });
       }
+    }
+  }
+
+  function markStreamFinished(stream) {
+    stream.terminalEnded = true;
+    stream.shouldReconnect = false;
+    clearPendingInput(stream);
+    clearPendingResize(stream);
+    setStreamView(stream.terminalId, {
+      status: TERMINAL_STREAM_SNAPSHOT,
+    });
+    if (state.selectedTerminalId === stream.terminalId) {
+      state.actionError = '';
     }
   }
 
@@ -432,7 +440,7 @@ export function createTerminalsController({
       return;
     }
     const stream = streamRecords.get(state.selectedTerminalId);
-    if (!stream) {
+    if (!stream || stream.terminalEnded) {
       return;
     }
     stream.inputBuffer += data;
@@ -462,13 +470,20 @@ export function createTerminalsController({
     stream.inputChain = stream.inputChain
       .catch(() => undefined)
       .then(async () => {
+        if (stream.terminalEnded) {
+          return;
+        }
         try {
           await api.sendTerminalInput(terminalId, data);
           if (!destroyed && state.selectedTerminalId === terminalId) {
             state.actionError = '';
           }
         } catch (error) {
-          if (!destroyed && state.selectedTerminalId === terminalId) {
+          if (
+            !destroyed &&
+            !stream.terminalEnded &&
+            state.selectedTerminalId === terminalId
+          ) {
             state.actionError = errorMessage(error);
           }
         }
@@ -493,7 +508,7 @@ export function createTerminalsController({
       return;
     }
     const stream = streamRecords.get(terminalId);
-    if (!stream) {
+    if (!stream || stream.terminalEnded) {
       return;
     }
     stream.pendingResize = { terminalId, columns, rows };
@@ -524,6 +539,9 @@ export function createTerminalsController({
     stream.resizeChain = stream.resizeChain
       .catch(() => undefined)
       .then(async () => {
+        if (stream.terminalEnded) {
+          return;
+        }
         try {
           await api.resizeTerminal(
             request.terminalId,
@@ -531,7 +549,11 @@ export function createTerminalsController({
             request.rows,
           );
         } catch (error) {
-          if (!destroyed && state.selectedTerminalId === request.terminalId) {
+          if (
+            !destroyed &&
+            !stream.terminalEnded &&
+            state.selectedTerminalId === request.terminalId
+          ) {
             state.actionError = errorMessage(error);
           }
         }

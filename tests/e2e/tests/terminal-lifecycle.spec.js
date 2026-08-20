@@ -59,12 +59,12 @@ async function startTerminal(page, { command, arguments: args = [] } = {}) {
   await dialog.getByRole("button", { name: "Start terminal" }).click();
   await expect(dialog).not.toBeVisible();
   await expect(
-    page.locator(".terminals-view__terminal-host .xterm-rows"),
+    page.locator(".terminals-view__tile-host .xterm-rows"),
   ).toBeVisible();
 }
 
 function terminalOutput(page) {
-  return page.locator(".terminals-view__terminal-host .xterm-rows");
+  return page.locator(".terminals-view__tile-host .xterm-rows");
 }
 
 async function sendToSelectedTerminal(page, text) {
@@ -143,9 +143,31 @@ test("the platform default shell starts as a native interactive terminal", async
 
   const expectedCommand = expectedDefaultShell();
   await expect(
-    page.locator(".terminals-view__identity-meta span").first(),
+    page.locator(".terminals-view__tile-command").first(),
   ).toHaveText(executableName(expectedCommand));
   await sendToSelectedTerminal(page, defaultShellProbe(expectedCommand));
+  await expect(terminalOutput(page)).toContainText(DEFAULT_SHELL_MARKER);
+});
+
+test("a started command runs inside the shell and the terminal stays usable", async ({
+  page,
+}) => {
+  await openTerminals(page);
+  await startTerminal(page, {
+    command: environment.python,
+    arguments: ["-u", "-c", pythonHarness("INNER")],
+  });
+  await expect(terminalOutput(page)).toContainText("READY-INNER");
+  await expect(
+    page.locator(".terminals-view__list-item").first(),
+  ).toContainText("python");
+
+  await sendToSelectedTerminal(page, "message-for-inner");
+  await expect(terminalOutput(page)).toContainText("INNER:message-for-inner");
+
+  await page.keyboard.press("Control+c");
+  await page.waitForTimeout(400);
+  await sendToSelectedTerminal(page, defaultShellProbe(expectedDefaultShell()));
   await expect(terminalOutput(page)).toContainText(DEFAULT_SHELL_MARKER);
 });
 
@@ -210,5 +232,7 @@ test("multiple terminals keep output, input, reconnect, and stop lifecycle isola
   await expect(terminalOutput(page)).toContainText(
     "ALPHA:alpha-survived-bravo-stop",
   );
-  await expect(page.getByText("Read-only history", { exact: false })).toBeVisible();
+  await expect(
+    page.getByText("Read-only history", { exact: false }),
+  ).toBeVisible();
 });

@@ -9,6 +9,8 @@ import hashlib
 import hmac
 import json
 import os
+import re
+import time
 import uuid
 from collections.abc import AsyncGenerator, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -51,6 +53,7 @@ TERMINAL_CURSOR_VERSION = 1
 TERMINAL_TEMPORARY_CATEGORY = "terminals"
 TERMINAL_INITIAL_INPUT_QUIET_SECONDS = 0.5
 TERMINAL_INITIAL_INPUT_TIMEOUT_SECONDS = 15.0
+TERMINAL_OPERATOR_READY_TIMEOUT_SECONDS = 10.0
 TERMINAL_ACTIVITY_QUIET_SECONDS = 2.0
 TERMINAL_INPUT_KEY_DELAY_SECONDS = 0.1
 TERMINAL_STREAM_RETENTION_EVENTS = 4_096
@@ -194,6 +197,8 @@ class TerminalSession:
     log_path: Path | None
     log_handle: TextIO | None
     log_lease: TemporaryFileLease | None
+    launch_command: str | None = None
+    launch_arguments: tuple[str, ...] = ()
     exit_code: int | None = None
     finished_at: datetime | None = None
     attention_revision: int = 0
@@ -344,9 +349,24 @@ class TerminalManager:
         columns: int = TERMINAL_DEFAULT_COLUMNS,
         rows: int = TERMINAL_DEFAULT_ROWS,
     ) -> dict[str, Any]:
-        """Start one manual Terminal Session through the ordinary PTY path."""
-        argv = [command] if command is not None else default_terminal_argv()
-        argv.extend(arguments)
+        """Start one manual Terminal Session that behaves like a normal terminal.
+
+        A requested command runs inside the interactive shell instead of as the
+        bare PTY child, so the Session keeps a live prompt after the program
+        ends, is interrupted, or is stopped. The command is entered through the
+        existing initial-input path, which means the exact launch command stays
+        available as metadata and the Agent-owned spawn path (exact argv) is
+        untouched.
+        """
+        if command is None:
+            argv = default_terminal_argv()
+            argv.extend(arguments)
+            launch_command = None
+            launch_arguments: tuple[str, ...] = ()
+        else:
+            argv = default_terminal_argv()
+            launch_command = command
+            launch_arguments = tuple(arguments)
         session = await self._spawn(
             None,
             argv,
@@ -355,13 +375,25 @@ class TerminalManager:
             columns=columns,
             rows=rows,
             origin_run_id=None,
+            launch_command=launch_command,
+            launch_arguments=launch_arguments,
         )
+        if launch_command is not None:
+            session.initial_input_task = asyncio.create_task(
+                self._send_operator_command(session),
+                name=f"terminal:{session.terminal_id}:operator-command",
+            )
+            session.initial_input_task.add_done_callback(
+                lambda task: _log_background_task_result(
+                    task, f"Terminal operator command failed for terminal={session.terminal_id}"
+                )
+            )
         remembered_workdir = launch_workdir
         if remembered_workdir is None and cwd is not None:
             remembered_workdir = str(cwd)
         self._remember_operator_launch(
-            command=command,
-            arguments=arguments,
+            command=launch_command,
+            arguments=launch_arguments,
             workdir=remembered_workdir,
         )
         return self._operator_summary(session)
@@ -377,6 +409,8 @@ class TerminalManager:
         rows: int,
         origin_run_id: str | None,
         initial_text: str | None = None,
+        launch_command: str | None = None,
+        launch_arguments: tuple[str, ...] = (),
     ) -> TerminalSession:
         """Start one unmodified program behind PTY/ConPTY."""
         if not argv or not argv[0]:
@@ -421,6 +455,8 @@ class TerminalManager:
             renderer=TerminalRenderer(columns, rows, scrollback_lines=self._scrollback_lines),
             command=argv[0],
             arguments=tuple(argv[1:]),
+            launch_command=launch_command,
+            launch_arguments=launch_arguments,
             cwd=cwd,
             state="starting" if initial_text is not None else "ready",
             started_at=_utc_now(),
@@ -773,6 +809,31 @@ class TerminalManager:
             )
         except asyncio.CancelledError:
             return
+
+    async def _send_operator_command(self, session: TerminalSession) -> None:
+        """Enter one operator-requested command into an interactive shell.
+
+        The shell owns the Session and stays alive after the command ends, so
+        the command is written through the exact `data` channel exactly once,
+        without bracketed-paste or Enter state.
+        """
+        command = _shell_command(session.launch_command, session.launch_arguments)
+        if command is None:
+            return
+        if not await _await_shell_ready(session):
+            return
+        try:
+            await asyncio.to_thread(session.adapter.write, command)
+            await asyncio.to_thread(session.adapter.write, "\r")
+        except (EOFError, OSError):
+            return
+        except asyncio.CancelledError:
+            return
+        async with session.lock:
+            if session.state not in {"exited", "error"} and session.state != "working":
+                session.state = "working"
+                self._publish_state(session)
+            session.output_event.set()
 
     async def resize(
         self,
@@ -1229,6 +1290,8 @@ class TerminalManager:
             "state": session.state,
             "command": Path(session.command).name or session.command,
             "arguments": list(session.arguments),
+            "launch_command": session.launch_command,
+            "launch_args": list(session.launch_arguments),
             "title": session.renderer.title,
             "workdir": model_path(session.cwd),
             "pid": session.adapter.pid,
@@ -1383,6 +1446,99 @@ def _input_chunks(
     if not chunks:
         raise ValueError("input must send text, a key, or Enter")
     return tuple(chunks)
+
+
+def _shell_command(command: str | None, arguments: Sequence[str]) -> str | None:
+    """Render one operator-requested command as shell input, or None."""
+    if command is None:
+        return None
+    if not command.strip() or any(not argument for argument in arguments):
+        return None
+    tokens = [command, *arguments]
+    if all(_SHELL_TOKEN_UNQUOTED_RE.fullmatch(token) for token in tokens):
+        return " ".join(tokens)
+    return " ".join(_shell_quote(token) for token in tokens)
+
+
+_SHELL_TOKEN_UNQUOTED_RE = re.compile(r"[A-Za-z0-9_\-./:=@+%^,]+")
+
+
+def _shell_quote(token: str) -> str:
+    """Quote one shell word against the host shell's word boundaries.
+
+    PowerShell accepts single quotes inside double quotes and cmd.exe treats
+    quotes literally, so double quotes cover both interpreters. Tokens without
+    shell metacharacters stay unquoted for a readable command line.
+    """
+    if _SHELL_TOKEN_SAFE_RE.fullmatch(token):
+        return token
+    if '"' in token:
+        token = token.replace('"', '""')
+    return f'"{token}"'
+
+
+_SHELL_TOKEN_SAFE_RE = re.compile(r"[A-Za-z0-9_\-./\\:@=+%,]+")
+
+
+async def _await_shell_ready(session: TerminalSession) -> bool:
+    """Wait for a stable interactive shell prompt screen.
+
+    Returns False when the terminal ends or no prompt can be established
+    within the bounded window; the operator command is then never written.
+    """
+    deadline = time.monotonic() + TERMINAL_OPERATOR_READY_TIMEOUT_SECONDS
+    revision = -1
+    quiet_since: float | None = None
+    while True:
+        async with session.lock:
+            if session.state in {"exited", "error"}:
+                return False
+            revision_now = session.renderer.revision
+            if revision_now != revision:
+                revision = revision_now
+                text = session.renderer.screen_text()
+                if _screen_has_prompt_marker(text):
+                    quiet_since = time.monotonic()
+                    break
+                if not text:
+                    quiet_since = None
+        now = time.monotonic()
+        if quiet_since is None or now - quiet_since < TERMINAL_INITIAL_INPUT_QUIET_SECONDS:
+            if now >= deadline:
+                return False
+            session.output_event.clear()
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(session.output_event.wait(), timeout=0.1)
+            continue
+        break
+    await asyncio.sleep(TERMINAL_INITIAL_INPUT_QUIET_SECONDS)
+    return True
+
+
+_SHELL_PROMPT_MARKERS = ("$ ", "# ", "> ", "PS ")
+_SHELL_BARE_PROMPT_MARKERS = frozenset(("$", "#", ">", "❯", "➜", "❄", "λ"))
+
+
+def _screen_has_prompt_marker(text: str) -> bool:
+    """Detect a rendered shell prompt in one screen snapshot."""
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    if not lines:
+        return False
+    if any(line.startswith(marker) for line in lines for marker in _SHELL_PROMPT_MARKERS):
+        return True
+    if any(line in _SHELL_BARE_PROMPT_MARKERS for line in lines):
+        return True
+    return _append_known_prompt_marker(lines[-1])
+
+
+_KNOWN_PROMPT_PATTERNS = (
+    r"[A-Za-z0-9_\-\./\\~]+:\s*$",  # pwsh "PS C:\work> " last line after the chevron
+    r"[A-Za-z0-9_\-\./\\~]+(>|#|\$)\s*$",  # cmd "C:\work>", sh "user@host:~/x$"
+)
+
+
+def _append_known_prompt_marker(line: str) -> bool:
+    return any(re.search(pattern, line) for pattern in _KNOWN_PROMPT_PATTERNS)
 
 
 def _parse_launch_history(document: Any) -> list[TerminalLaunchHistoryEntry]:

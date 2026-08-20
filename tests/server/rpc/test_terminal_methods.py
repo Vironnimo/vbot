@@ -137,6 +137,12 @@ async def test_terminal_operator_handlers_validate_and_register_contract() -> No
     with pytest.raises(RpcError) as start_error:
         await _terminal_start(state, {"args": ["valid", 1]})
     assert start_error.value.code == "invalid_request"
+    with pytest.raises(RpcError) as blank_command_error:
+        await _terminal_start(state, {"command": "   "})
+    assert blank_command_error.value.code == "invalid_request"
+    with pytest.raises(RpcError) as blank_argument_error:
+        await _terminal_start(state, {"args": ["  "]})
+    assert blank_argument_error.value.code == "invalid_request"
 
     handlers = build_method_handlers()
     assert {

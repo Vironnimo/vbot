@@ -42,7 +42,7 @@ export const englishCatalog = Object.freeze({
     'Saved on this vBot server. Choosing a setup fills Command, Arguments, and Working directory.',
   'terminals.commandLabel': 'Command',
   'terminals.commandHelp':
-    'Optional. For example: codex, powershell, bash, or python.',
+    'Optional. Runs inside the interactive shell, like typed input. For example: codex, powershell, bash, or python.',
   'terminals.commandPlaceholder': 'Default shell',
   'terminals.argumentsLabel': 'Arguments',
   'terminals.argumentsHelp':
