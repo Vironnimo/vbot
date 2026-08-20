@@ -128,9 +128,11 @@ describe('TerminalsView', () => {
     flushSync();
 
     expect(document.body.textContent).toContain('Auth refactor · Codex');
-    expect(document.body.textContent).toContain('python');
-    expect(document.body.textContent).toContain('PID 4321');
+    expect(document.body.textContent).not.toContain('python');
+    expect(document.body.textContent).not.toContain('PID 4321');
     expect(document.body.textContent).toContain('main@vbot');
+    expect(document.querySelector('.terminals-view__tile-bar-meta')).toBeNull();
+    expect(terminalInstances[0].options.theme.background).toBe('#0E0D0B');
     expect(document.querySelector('button[role="switch"]')).toBeNull();
     expect(document.body.textContent).not.toContain(
       'Quiet is not a semantic prompt.',
@@ -191,7 +193,7 @@ describe('TerminalsView', () => {
     await waitFor(() => streams.length === 1);
 
     expect(document.body.textContent).toContain('PowerShell');
-    expect(document.body.textContent).toContain('pwsh.exe');
+    expect(document.body.textContent).not.toContain('pwsh.exe');
   });
 
   it('rebuilds retained scrollback when the Terminals tab is mounted again', async () => {
@@ -267,10 +269,7 @@ describe('TerminalsView', () => {
     });
     flushSync();
 
-    expect(document.querySelector('.terminals-view__exit-code')).toBeTruthy();
-    const exitCodeEl = document.querySelector('.terminals-view__exit-code');
-    expect(exitCodeEl.textContent).toContain('Exit code');
-    expect(exitCodeEl.textContent).toContain('0');
+    expect(document.querySelector('.terminals-view__exit-code')).toBeNull();
 
     findButtonByAriaLabel('Close terminal').click();
     await waitFor(() => forgetTerminalMock.mock.calls.length > 0);
@@ -432,7 +431,7 @@ describe('TerminalsView', () => {
     expect(terminalInstances[0].scrollToBottom).toHaveBeenCalledTimes(1);
   });
 
-  it('renders one tile per listed terminal with title, state, and owner in the tile bar', async () => {
+  it('renders one tile per listed terminal with title, owner, and compact actions', async () => {
     listTerminalsMock.mockResolvedValue({
       terminals: [
         terminal({ terminal_id: 'term-1', title: 'First terminal' }),
@@ -451,6 +450,14 @@ describe('TerminalsView', () => {
     const firstBar = tiles[0].querySelector('.terminals-view__tile-bar');
     expect(firstBar.textContent).toContain('First terminal');
     expect(firstBar.textContent).toContain('main@vbot');
+    expect(
+      firstBar.querySelectorAll('.terminals-view__tile-action'),
+    ).toHaveLength(2);
+    expect(
+      firstBar
+        .querySelector('.terminals-view__tile-action svg')
+        .getAttribute('width'),
+    ).toBe('14');
     expect(tiles[0].getAttribute('data-control')).toBe('observe');
     expect(tiles[1].getAttribute('data-control')).toBe('observe');
   });

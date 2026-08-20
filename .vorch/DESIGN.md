@@ -26,6 +26,7 @@ surfaceRoles:
   promptHeader: "{colors.surface-2}"
   promptContent: "{colors.surface}"
   preview:     "{colors.surface}"
+  terminal:    "#0E0D0B"
 typography:
   display:
     fontFamily: IBM Plex Sans
@@ -240,7 +241,7 @@ The palette is organized around five layers of warm dark surface and three seman
 
 Accent tints (fills, borders, hover states) come only from the tint ramp tokens `--accent-06 … --accent-40` in `webui/src/styles/app.css` — never hand-write `rgba(232, 135, 10, …)`. If a needed step is missing, extend the ramp there rather than inlining a literal. `--accent-dim` / `--accent-pale` are semantic aliases onto the ramp (08 / 12). The input focus glow is the single `--focus-ring` token.
 
-Semantic surface roles prevent unrelated controls from being coupled merely because they currently share a palette step. `--field-surface` owns ordinary editable fields (`surface-2`); `--composer-surface` owns only the Chat composer (`surface`, preserving its established appearance); `--prompt-header-surface` and `--prompt-content-surface` enforce one System Prompt block hierarchy (`surface-2` title bar over `surface` content) for editable and generated blocks alike; `--preview-surface` owns read-only preview content (`surface`). Change a role rather than a raw palette token when one interaction category needs more or less contrast.
+Semantic surface roles prevent unrelated controls from being coupled merely because they currently share a palette step. `--field-surface` owns ordinary editable fields (`surface-2`); `--composer-surface` owns only the Chat composer (`surface`, preserving its established appearance); `--prompt-header-surface` and `--prompt-content-surface` enforce one System Prompt block hierarchy (`surface-2` title bar over `surface` content) for editable and generated blocks alike; `--preview-surface` owns read-only preview content (`surface`); `--terminal-surface` owns the deliberately near-black interactive terminal canvas. Change a role rather than a raw palette token when one interaction category needs more or less contrast.
 
 ## Typography
 

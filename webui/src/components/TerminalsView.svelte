@@ -588,20 +588,6 @@
     return [launchCommand, ...args].join(' ');
   }
 
-  function terminalFullCommand(item) {
-    return (
-      launchedCommand(item) ||
-      (() => {
-        const command = String(item?.command || '').trim();
-        const args = Array.isArray(item?.arguments) ? item.arguments : [];
-        if (!command && args.length === 0) {
-          return '';
-        }
-        return [command, ...args].join(' ');
-      })()
-    );
-  }
-
   function terminalSession(item) {
     return (
       item?.owner?.session_id || t('terminals.localOperator', 'Local operator')
@@ -642,12 +628,12 @@
 
   function terminalTheme() {
     return {
-      background: cssToken('--bg', '#221A12'),
+      background: cssToken('--terminal-surface', '#0E0D0B'),
       foreground: cssToken('--text-hi', '#EEE7DC'),
       cursor: cssToken('--accent', '#E8870A'),
-      cursorAccent: cssToken('--bg', '#221A12'),
+      cursorAccent: cssToken('--terminal-surface', '#0E0D0B'),
       selectionBackground: cssToken('--border-2', '#5D4A35'),
-      black: '#221A12',
+      black: cssToken('--terminal-surface', '#0E0D0B'),
       red: cssToken('--red', '#FC8181'),
       green: cssToken('--green', '#4ADE80'),
       yellow: cssToken('--amber', '#F59E0B'),
@@ -865,6 +851,7 @@
                   <Button
                     variant="tertiary"
                     icon
+                    class="terminals-view__tile-action"
                     ariaLabel={isMaximized
                       ? t('terminals.restore', 'Restore')
                       : t('terminals.maximize', 'Maximize')}
@@ -876,8 +863,8 @@
                     {#if isMaximized}
                       <svg
                         viewBox="0 0 14 14"
-                        width="11"
-                        height="11"
+                        width="14"
+                        height="14"
                         aria-hidden="true"
                       >
                         <path d="M5.5 5.5V2.5h6v6h-3M2.5 5.5h6v6h-6z" />
@@ -885,8 +872,8 @@
                     {:else}
                       <svg
                         viewBox="0 0 14 14"
-                        width="11"
-                        height="11"
+                        width="14"
+                        height="14"
                         aria-hidden="true"
                       >
                         <path d="M3 3h8v8H3z" />
@@ -896,6 +883,7 @@
                   <Button
                     variant="danger"
                     icon
+                    class="terminals-view__tile-action"
                     loading={closingTerminalId === item.terminal_id}
                     ariaLabel={t('terminals.close', 'Close terminal')}
                     tooltip={t('terminals.close', 'Close terminal')}
@@ -903,54 +891,14 @@
                   >
                     <svg
                       viewBox="0 0 14 14"
-                      width="11"
-                      height="11"
+                      width="14"
+                      height="14"
                       aria-hidden="true"
                     >
                       <path d="M3.5 3.5l7 7M10.5 3.5l-7 7" />
                     </svg>
                   </Button>
                 </span>
-              </div>
-              <div class="terminals-view__tile-bar-meta">
-                <span
-                  class="terminals-view__tile-command"
-                  use:tooltip={terminalFullCommand(item)}
-                  >{launchedCommand(item) || item.command || '—'}</span
-                >
-                {#if Array.isArray(item.launch_args) && item.launch_args.length > 0}
-                  <span
-                    class="terminals-view__tile-args"
-                    use:tooltip={item.launch_args.join(' ')}
-                  >
-                    {item.launch_args.length}
-                    {item.launch_args.length === 1 ? 'arg' : 'args'}
-                  </span>
-                {:else if Array.isArray(item.arguments) && item.arguments.length > 0}
-                  <span
-                    class="terminals-view__tile-args"
-                    use:tooltip={item.arguments.join(' ')}
-                  >
-                    {item.arguments.length}
-                    {item.arguments.length === 1 ? 'arg' : 'args'}
-                  </span>
-                {/if}
-                <span class="terminals-view__tile-pid">PID {item.pid}</span>
-                <span>{item.columns}×{item.rows}</span>
-                {#if isFinished && item.exit_code != null}
-                  <span
-                    class="terminals-view__exit-code"
-                    class:terminals-view__exit-code--nonzero={item.exit_code !==
-                      0}
-                  >
-                    {t('terminals.exitCode', 'Exit code')}
-                    {item.exit_code}
-                  </span>
-                {/if}
-                <span
-                  class="terminals-view__tile-workdir"
-                  use:tooltip={item.workdir}>{item.workdir}</span
-                >
               </div>
             </div>
             <div class="terminals-view__tile-chrome" role="presentation">
@@ -1324,8 +1272,6 @@
   .terminals-view__tile-bar {
     display: flex;
     min-width: 0;
-    flex-direction: column;
-    gap: 2px;
     padding: 4px 6px 4px 10px;
     border-bottom: 1px solid var(--border);
     color: var(--text-lo);
@@ -1338,28 +1284,9 @@
   .terminals-view__tile-bar-primary {
     display: flex;
     min-width: 0;
+    width: 100%;
     align-items: center;
     gap: 8px;
-  }
-
-  .terminals-view__tile-bar-meta {
-    display: flex;
-    min-width: 0;
-    align-items: center;
-    gap: 10px;
-    color: var(--text-lo);
-    font-size: var(--fs-mono-xs);
-  }
-
-  .terminals-view__tile-bar-meta span {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .terminals-view__tile-bar-meta span:last-child {
-    min-width: 0;
-    flex: 1;
   }
 
   .terminals-view__tile-title {
@@ -1372,37 +1299,11 @@
   }
 
   .terminals-view__tile-target {
+    min-width: 0;
     overflow: hidden;
     color: var(--text-med);
     text-overflow: ellipsis;
     white-space: nowrap;
-  }
-
-  .terminals-view__tile-pid {
-    flex: 0 0 auto;
-  }
-
-  .terminals-view__tile-command {
-    color: var(--text-med);
-  }
-
-  .terminals-view__tile-args {
-    flex: 0 0 auto;
-    color: var(--text-lo);
-  }
-
-  .terminals-view__tile-workdir {
-    color: var(--text-lo);
-  }
-
-  .terminals-view__exit-code {
-    flex: 0 0 auto;
-    font-weight: 500;
-    color: var(--text-med);
-  }
-
-  .terminals-view__exit-code--nonzero {
-    color: var(--red);
   }
 
   .terminals-view__tile-actions {
@@ -1410,6 +1311,13 @@
     flex: 0 0 auto;
     align-items: center;
     gap: 4px;
+    margin-left: auto;
+  }
+
+  :global(.btn-tertiary.btn-icon.terminals-view__tile-action),
+  :global(.btn-danger.btn-icon.terminals-view__tile-action) {
+    width: 28px;
+    height: 28px;
   }
 
   .terminals-view__latest-action {
@@ -1440,6 +1348,7 @@
     flex: 1;
     flex-direction: column;
     overflow: hidden;
+    background: var(--terminal-surface);
   }
 
   .terminals-view__tile-host {
@@ -1448,6 +1357,7 @@
     flex: 1;
     padding: 8px 10px;
     overflow: hidden;
+    background: var(--terminal-surface);
   }
 
   .terminals-view__tile-host :global(.xterm) {
@@ -1463,12 +1373,12 @@
     :global(.xterm-scrollable-element > .scrollbar.vertical) {
     opacity: 1 !important;
     pointer-events: auto !important;
-    background: var(--surface-2);
+    background: var(--terminal-surface);
   }
 
   .terminals-view__tile-host
     :global(.xterm-scrollable-element > .scrollbar.vertical > .slider) {
-    border: 2px solid var(--surface-2);
+    border: 2px solid var(--terminal-surface);
     border-radius: var(--r-sm);
     background: var(--text-lo);
   }
@@ -1521,10 +1431,6 @@
     .terminals-view__detail {
       min-height: 620px;
       overflow: visible;
-    }
-
-    .terminals-view__tile-bar-meta {
-      display: none;
     }
   }
 

@@ -34,6 +34,7 @@
   --prompt-header-surface: var(--surface-2);
   --prompt-content-surface: var(--surface);
   --preview-surface: var(--surface);
+  --terminal-surface: #0e0d0b;
   --text-hi: #eee7dc;
   --text-med: #9a8c7e;
   --text-lo: #5e4c38;
