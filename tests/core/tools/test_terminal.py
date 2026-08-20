@@ -175,6 +175,50 @@ async def test_start_accepts_name_and_trimmed_blank_name_fails(
     terminals = cast(dict[str, Any], listed["data"])["terminals"]
     assert terminals[0]["name"] == "joe"
 
+    status = await call(
+        terminal_manager,
+        context,
+        {"action": "status", "terminal_id": started_data["terminal_id"]},
+    )
+    assert cast(dict[str, Any], status["data"])["name"] == "joe"
+
+    waited = await call(
+        terminal_manager,
+        context,
+        {
+            "action": "wait",
+            "terminal_id": started_data["terminal_id"],
+            "timeout_ms": 0,
+        },
+    )
+    assert "name" not in cast(dict[str, Any], waited["data"])
+
+    sent = await call(
+        terminal_manager,
+        context,
+        {"action": "input", "terminal_id": started_data["terminal_id"], "text": "x"},
+    )
+    assert "name" not in cast(dict[str, Any], sent["data"])
+
+    resized = await call(
+        terminal_manager,
+        context,
+        {
+            "action": "resize",
+            "terminal_id": started_data["terminal_id"],
+            "columns": 100,
+            "rows": 30,
+        },
+    )
+    assert "name" not in cast(dict[str, Any], resized["data"])
+
+    killed = await call(
+        terminal_manager,
+        context,
+        {"action": "kill", "terminal_id": started_data["terminal_id"]},
+    )
+    assert "name" not in cast(dict[str, Any], killed["data"])
+
     blank = await call(
         terminal_manager,
         context,
