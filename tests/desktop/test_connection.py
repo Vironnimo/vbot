@@ -21,6 +21,20 @@ from desktop.main import (
     validate_host,
 )
 
+_TEST_DESKTOP_SESSION_ID = "desktop-test-session"
+
+
+class _FixedUuid:
+    hex = _TEST_DESKTOP_SESSION_ID
+
+
+@pytest.fixture(autouse=True)
+def _use_stable_desktop_session_id(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep navigation expectations deterministic outside the UUID-specific tests."""
+
+    monkeypatch.setattr(desktop_connection, "uuid4", lambda: _FixedUuid())
+
+
 # -- Test doubles ------------------------------------------------------------
 
 
@@ -293,7 +307,9 @@ def test_connect_navigates_window_to_webui_with_accessor_param(tmp_path: Path) -
     result = controller.connect("pi.lan", 9000, "Pi")
 
     assert result.status == PROBE_WEBUI_AVAILABLE
-    assert window.loaded_urls == ["http://pi.lan:9000/?accessor=desktop"]
+    assert window.loaded_urls == [
+        "http://pi.lan:9000/?accessor=desktop&desktop_session=desktop-test-session"
+    ]
     assert window.loaded_html == []
 
 
@@ -310,7 +326,7 @@ def test_prepare_connect_returns_url_without_replacing_calling_document(tmp_path
 
     assert prepared.to_bridge_payload() == {
         "status": PROBE_WEBUI_AVAILABLE,
-        "url": "http://pi.lan:9000/?accessor=desktop",
+        "url": "http://pi.lan:9000/?accessor=desktop&desktop_session=desktop-test-session",
     }
     assert window.loaded_urls == []
     assert window.loaded_html == []
@@ -404,7 +420,9 @@ def test_connect_survives_active_server_listener_error(tmp_path: Path) -> None:
     result = controller.connect("pi.lan", 9000)
 
     assert result.status == PROBE_WEBUI_AVAILABLE
-    assert window.loaded_urls == ["http://pi.lan:9000/?accessor=desktop"]
+    assert window.loaded_urls == [
+        "http://pi.lan:9000/?accessor=desktop&desktop_session=desktop-test-session"
+    ]
 
 
 @pytest.mark.parametrize(
@@ -487,7 +505,9 @@ def test_switch_to_connects_to_chosen_server(tmp_path: Path) -> None:
 
     controller.switch_to("10.0.0.5", 8500)
 
-    assert window.loaded_urls == ["http://10.0.0.5:8500/?accessor=desktop"]
+    assert window.loaded_urls == [
+        "http://10.0.0.5:8500/?accessor=desktop&desktop_session=desktop-test-session"
+    ]
 
 
 def test_reconnect_uses_last_used_target(tmp_path: Path) -> None:
@@ -510,7 +530,9 @@ def test_reconnect_uses_last_used_target(tmp_path: Path) -> None:
     assert result is not None
     assert seen[0].host == "pi.lan"
     assert seen[0].port == 9000
-    assert window.loaded_urls == ["http://pi.lan:9000/?accessor=desktop"]
+    assert window.loaded_urls == [
+        "http://pi.lan:9000/?accessor=desktop&desktop_session=desktop-test-session"
+    ]
 
 
 def test_reconnect_first_run_shows_screen_without_error(tmp_path: Path) -> None:
@@ -554,7 +576,9 @@ def test_auto_connect_with_saved_server_connects(tmp_path: Path) -> None:
 
     controller.auto_connect()
 
-    assert window.loaded_urls == ["http://pi.lan:9000/?accessor=desktop"]
+    assert window.loaded_urls == [
+        "http://pi.lan:9000/?accessor=desktop&desktop_session=desktop-test-session"
+    ]
 
 
 def test_attach_window_binds_later_created_window(tmp_path: Path) -> None:
@@ -567,7 +591,35 @@ def test_attach_window_binds_later_created_window(tmp_path: Path) -> None:
 
     controller.connect("pi.lan", 9000)
 
-    assert window.loaded_urls == ["http://pi.lan:9000/?accessor=desktop"]
+    assert window.loaded_urls == [
+        "http://pi.lan:9000/?accessor=desktop&desktop_session=desktop-test-session"
+    ]
+
+
+def test_each_controller_uses_a_new_webui_document_cache_key(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class _Uuid:
+        def __init__(self, value: str) -> None:
+            self.hex = value
+
+    session_ids = iter(("first-launch", "second-launch"))
+    monkeypatch.setattr(desktop_connection, "uuid4", lambda: _Uuid(next(session_ids)))
+
+    first = desktop_connection.ConnectionController(
+        settings_file=tmp_path / "first.json",
+        probe=probe_returning(PROBE_WEBUI_AVAILABLE),
+    )
+    second = desktop_connection.ConnectionController(
+        settings_file=tmp_path / "second.json",
+        probe=probe_returning(PROBE_WEBUI_AVAILABLE),
+    )
+
+    first_url = first.prepare_connect("pi.lan", 9000).navigation_url
+    second_url = second.prepare_connect("pi.lan", 9000).navigation_url
+
+    assert first_url == "http://pi.lan:9000/?accessor=desktop&desktop_session=first-launch"
+    assert second_url == "http://pi.lan:9000/?accessor=desktop&desktop_session=second-launch"
 
 
 def test_controller_without_window_raises(tmp_path: Path) -> None:

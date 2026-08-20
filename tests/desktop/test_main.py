@@ -14,8 +14,22 @@ from typing import Any
 import httpx
 import pytest
 
+from desktop import connection as desktop_connection
 from desktop import main as desktop_main
 from desktop.main import DesktopProbeResult, DesktopTarget
+
+_TEST_DESKTOP_SESSION_ID = "desktop-test-session"
+
+
+class _FixedUuid:
+    hex = _TEST_DESKTOP_SESSION_ID
+
+
+@pytest.fixture(autouse=True)
+def _use_stable_desktop_session_id(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep Desktop navigation expectations deterministic outside the UUID-specific tests."""
+
+    monkeypatch.setattr(desktop_connection, "uuid4", lambda: _FixedUuid())
 
 
 @dataclass
@@ -573,7 +587,9 @@ def test_launch_runs_auto_connect_after_window_is_shown(tmp_path: Path) -> None:
     # the accessor marker; start() itself received no eager startup callback.
     assert fake_webview.start_func is None
     assert len(fake_webview.window.events.shown.handlers) == 1
-    assert fake_webview.window.loaded_urls == ["http://pi.lan:9000/?accessor=desktop"]
+    assert fake_webview.window.loaded_urls == [
+        "http://pi.lan:9000/?accessor=desktop&desktop_session=desktop-test-session"
+    ]
 
 
 def test_launch_first_run_shows_connection_screen_via_auto_connect(tmp_path: Path) -> None:
@@ -632,7 +648,9 @@ def test_launch_host_port_override_connects_directly_even_on_first_run(tmp_path:
     # An explicit override is a deliberate target: it connects straight to the
     # WebUI (with the accessor marker), not to the connection screen, even with
     # nothing saved.
-    assert fake_webview.window.loaded_urls == ["http://pi.lan:9000/?accessor=desktop"]
+    assert fake_webview.window.loaded_urls == [
+        "http://pi.lan:9000/?accessor=desktop&desktop_session=desktop-test-session"
+    ]
     assert fake_webview.window.loaded_html == []
 
 
@@ -664,7 +682,10 @@ def test_launch_port_only_override_fills_default_host(tmp_path: Path) -> None:
         app_icon_path=tmp_path / "missing-icon.png",
     )
 
-    expected_url = f"http://{desktop_main.DEFAULT_HOST}:9000/?accessor=desktop"
+    expected_url = (
+        f"http://{desktop_main.DEFAULT_HOST}:9000/?accessor=desktop"
+        "&desktop_session=desktop-test-session"
+    )
     assert fake_webview.window.loaded_urls == [expected_url]
 
 
@@ -679,7 +700,10 @@ def test_launch_host_only_override_fills_default_port(tmp_path: Path) -> None:
         app_icon_path=tmp_path / "missing-icon.png",
     )
 
-    expected_url = f"http://pi.lan:{desktop_main.DEFAULT_PORT}/?accessor=desktop"
+    expected_url = (
+        f"http://pi.lan:{desktop_main.DEFAULT_PORT}/?accessor=desktop"
+        "&desktop_session=desktop-test-session"
+    )
     assert fake_webview.window.loaded_urls == [expected_url]
 
 
@@ -705,7 +729,9 @@ def test_launch_override_takes_precedence_over_saved_last_used(tmp_path: Path) -
     )
 
     # The override wins over the saved last-used target.
-    assert fake_webview.window.loaded_urls == ["http://new.lan:9000/?accessor=desktop"]
+    assert fake_webview.window.loaded_urls == [
+        "http://new.lan:9000/?accessor=desktop&desktop_session=desktop-test-session"
+    ]
 
 
 def test_resolve_launch_server_url_prefers_override_for_worker(tmp_path: Path) -> None:
@@ -798,7 +824,9 @@ def test_launch_attaches_the_created_window_to_the_controller(tmp_path: Path) ->
     # Proof the controller drove *the created window*: that exact FakeWindow saw
     # the navigation. (If attach_window were skipped, the controller would have
     # no window and raise.)
-    assert fake_webview.window.loaded_urls == ["http://pi.lan:9000/?accessor=desktop"]
+    assert fake_webview.window.loaded_urls == [
+        "http://pi.lan:9000/?accessor=desktop&desktop_session=desktop-test-session"
+    ]
 
 
 def test_launch_does_not_start_worker_when_gui_fails_before_window_is_shown(
