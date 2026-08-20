@@ -13,6 +13,7 @@ from core.tools.arguments import (
     required_int,
     required_string,
 )
+from core.tools.terminal_backend import default_terminal_argv
 from core.tools.terminal_manager import (
     TERMINAL_DEFAULT_COLUMNS,
     TERMINAL_DEFAULT_ROWS,
@@ -47,7 +48,6 @@ from core.utils.paths import model_path
 
 TERMINAL_TOOL_NAME = "terminal"
 TERMINAL_ACTIONS = ("start", "list", "status", "wait", "input", "resize", "kill")
-TERMINAL_DEFAULT_COMMAND = "codex"
 TERMINAL_DEFAULT_WAIT_MS = 1_000
 TERMINAL_MAX_WAIT_MS = 10_000
 TERMINAL_KEYS = tuple(TERMINAL_INPUT_KEY_SEQUENCES)
@@ -58,9 +58,10 @@ TERMINAL_TOOL_DESCRIPTION = (
     "must be operated by typing into and observing its live screen, such as a REPL, TUI, prompt, "
     "or debugger. Terminal Sessions belong to this vBot Session, survive individual Runs, and "
     "are also visible and controllable in the WebUI. vBot launches the requested command and "
-    "arguments without program-specific flags, hooks, or configuration. Use start with text to "
-    "launch the default Codex command and send its first input in one call, or set command and "
-    "args for any other program. After Agent input, vBot wakes you when PTY output has been quiet "
+    "arguments without program-specific flags, hooks, or configuration; an omitted command opens "
+    "the host user's default interactive shell, just like a human terminal. Use start with text to "
+    "launch a program and send its first input in one call, or set command and args for any other "
+    "program. After Agent input, vBot wakes you when PTY output has been quiet "
     "for a short period, or when the process exits or the terminal fails. Quiet output is only an "
     "activity boundary: inspect status to decide whether the program is working, waiting for "
     "input, or finished. Use data for exact terminal sequences, text/key/enter for convenient "
@@ -126,11 +127,10 @@ TERMINAL_TOOL_PARAMETERS: JsonObject = {
         "command": {
             "type": "string",
             "minLength": 1,
-            "default": TERMINAL_DEFAULT_COMMAND,
             "description": (
-                f"Executable for start; default {TERMINAL_DEFAULT_COMMAND}. Every executable "
-                "uses the same generic PTY path with no program-specific flags, hooks, or "
-                "configuration. vBot does not interpolate the value into a shell."
+                "Executable for start; omit to open the host user's default interactive shell. "
+                "Every executable uses the same generic PTY path with no program-specific flags, "
+                "hooks, or configuration. vBot does not interpolate the value into a shell."
             ),
         },
         "args": {
@@ -312,7 +312,7 @@ async def _handle_terminal(
     except _ProjectWorkdirUnavailableError as error:
         return tool_failure("project_unavailable", str(error), retryable=False)
     except FileNotFoundError as error:
-        command = error.filename or TERMINAL_DEFAULT_COMMAND
+        command = error.filename or "the requested program"
         return tool_failure(
             "terminal_command_not_found",
             f"Interactive terminal executable was not found: {command}",
@@ -329,12 +329,11 @@ async def _handle_start(
     arguments: JsonObject,
 ) -> JsonObject:
     raw_command = arguments.get("command")
-    command = (
-        TERMINAL_DEFAULT_COMMAND
-        if raw_command is None
-        else required_string(raw_command, field_name="command")
-    )
-    args = _optional_string_array(arguments.get("args"), field_name="args")
+    if raw_command is None:
+        argv = default_terminal_argv()
+    else:
+        argv = [required_string(raw_command, field_name="command")]
+    argv.extend(_optional_string_array(arguments.get("args"), field_name="args"))
     text = arguments.get("text")
     if text is not None and (not isinstance(text, str) or not text.strip()):
         raise ValueError("text must be a non-empty string when provided")
@@ -358,7 +357,7 @@ async def _handle_start(
     owner = _owner(context)
     session = await terminal_manager.spawn(
         owner,
-        [command, *args],
+        argv,
         cwd=workdir,
         env=None,
         columns=columns,
@@ -679,16 +678,13 @@ def _terminal_display_parts(arguments: JsonObject) -> tuple[ToolDisplayPart, ...
         return tuple(parts)
     command = arguments.get("command")
     if action == "start":
-        command_label = (
-            command if isinstance(command, str) and command else TERMINAL_DEFAULT_COMMAND
-        )
+        command_label = command if isinstance(command, str) and command else "default shell"
         parts.append(ToolDisplayPart(command_label, kind="command"))
     return tuple(parts)
 
 
 __all__ = [
     "TERMINAL_ACTIONS",
-    "TERMINAL_DEFAULT_COMMAND",
     "TERMINAL_DEFAULT_WAIT_MS",
     "TERMINAL_KEYS",
     "TERMINAL_MAX_WAIT_MS",

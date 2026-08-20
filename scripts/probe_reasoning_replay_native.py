@@ -37,7 +37,6 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import json
 import random
 import re
 import sys
@@ -158,13 +157,15 @@ async def _run_tool_loop_round(
     print(f"  planted secret: {secret}")
 
     turn1 = await _send(
-        base_url, api_key, model, [{"role": "user", "content": TURN1_TOOL_PROMPT}],
-        tools=[TOOL_DEFINITION], effort=effort, max_tokens=max_tokens,
+        base_url,
+        api_key,
+        model,
+        [{"role": "user", "content": TURN1_TOOL_PROMPT}],
+        tools=[TOOL_DEFINITION],
+        effort=effort,
+        max_tokens=max_tokens,
     )
-    print(
-        f"  turn1: tool_calls={len(turn1['tool_calls'])} "
-        f"thinking_len={len(turn1['thinking'])}"
-    )
+    print(f"  turn1: tool_calls={len(turn1['tool_calls'])} thinking_len={len(turn1['thinking'])}")
     if not turn1["tool_calls"]:
         print(f"  turn1 invalid: no tool call ({turn1['thinking'][:150]!r})")
         return
@@ -181,8 +182,13 @@ async def _run_tool_loop_round(
             {"role": "user", "content": ASK_PROMPT},
         ]
         result = await _send(
-            base_url, api_key, model, messages, tools=None,
-            effort=effort, max_tokens=max_tokens,
+            base_url,
+            api_key,
+            model,
+            messages,
+            tools=None,
+            effort=effort,
+            max_tokens=max_tokens,
         )
         hit = secret in result["content"] or secret in result["thinking"]
         print(
@@ -233,8 +239,13 @@ async def _run_cross_turn_round(
             {"role": "user", "content": ASK_PROMPT},
         ]
         result = await _send(
-            base_url, api_key, model, messages, tools=None,
-            effort=effort, max_tokens=max_tokens,
+            base_url,
+            api_key,
+            model,
+            messages,
+            tools=None,
+            effort=effort,
+            max_tokens=max_tokens,
         )
         hit = secret in result["content"] or secret in result["thinking"]
         print(
@@ -264,13 +275,15 @@ async def _run_instruction_round(
     max_tokens: int,
 ) -> None:
     turn1 = await _send(
-        base_url, api_key, model, [{"role": "user", "content": TURN1_PLAIN_PROMPT}],
-        tools=None, effort=effort, max_tokens=max_tokens,
+        base_url,
+        api_key,
+        model,
+        [{"role": "user", "content": TURN1_PLAIN_PROMPT}],
+        tools=None,
+        effort=effort,
+        max_tokens=max_tokens,
     )
-    print(
-        f"  turn1: content={turn1['content'][:40]!r} "
-        f"thinking_len={len(turn1['thinking'])}"
-    )
+    print(f"  turn1: content={turn1['content'][:40]!r} thinking_len={len(turn1['thinking'])}")
 
     async def follow_up(label: str, assistant: dict[str, Any]) -> bool:
         messages = [
@@ -279,8 +292,13 @@ async def _run_instruction_round(
             {"role": "user", "content": INSTRUCTION_TRIGGER},
         ]
         result = await _send(
-            base_url, api_key, model, messages, tools=None,
-            effort=effort, max_tokens=max_tokens,
+            base_url,
+            api_key,
+            model,
+            messages,
+            tools=None,
+            effort=effort,
+            max_tokens=max_tokens,
         )
         rule_hit = INSTRUCTION_RESPONSE in result["content"]
         print(
