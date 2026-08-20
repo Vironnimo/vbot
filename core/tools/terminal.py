@@ -55,24 +55,18 @@ TERMINAL_PROJECT_WORKDIR_PREFIX = "project:"
 TERMINAL_TOOL_DESCRIPTION = (
     "Run and control a program through a real PTY/ConPTY when it waits for interactive input or "
     "must be operated by typing into and observing its live screen, such as a REPL, TUI, prompt, "
-    "or debugger. Terminal Sessions belong to this vBot Session, survive individual Runs, and "
-    "are also visible and controllable in the WebUI. vBot launches the requested command and "
-    "arguments without program-specific flags, hooks, or configuration; an omitted command opens "
-    "the host user's default interactive shell, just like a human terminal. Use start with text to "
-    "launch a program and send its first input in one call, or set command and args for any other "
-    "program. After Agent input, vBot wakes you when PTY output has been quiet "
-    "for a short period, or when the process exits or the terminal fails. Quiet output is only an "
-    "activity boundary: inspect status to decide whether the program is working, waiting for "
-    "input, or finished. Use data for exact terminal sequences, text/key for convenient input; "
-    'use key: "enter" to submit text (multiline text uses bracketed paste when the program '
-    "enables it), and status for the "
-    "rendered cell screen and paginated scrollback; list/status expose titles announced by "
-    "programs through the standard terminal protocol. Rendered terminal cells cannot distinguish "
-    "tabs from equivalent spaces or cursor movement, so inspect files with read when exact "
-    "characters matter. Follow scrollback.next_request unchanged to read each older status page. "
-    "Use wait only for a short same-Run pause, resize for TUI dimensions, and kill only when the "
-    "process tree should end. Reuse a live Terminal Session for later work instead of starting a "
-    "duplicate process."
+    "or debugger. Terminal Sessions survive individual Runs and stay owned by this vBot Session. "
+    "An omitted command opens the host user's default interactive shell. Use start with text to "
+    "launch a program and send its first input in one call. After Agent input, vBot wakes you when "
+    "output has been quiet for a short period, or when the process exits or the terminal fails; "
+    "quiet output is only an activity boundary, so inspect status to decide whether the program "
+    "is working, waiting for input, or finished. Use data for exact terminal sequences, text/key "
+    'for convenient input (key: "enter" submits text; multiline text uses bracketed paste and '
+    "does not append Enter). status returns the rendered cell screen plus paginated scrollback "
+    "\u2014 follow scrollback.next_request unchanged for older pages. Rendered cells cannot "
+    "distinguish tabs from equivalent spaces or cursor movement, so use read for exact file "
+    "contents. Reuse a live Terminal Session for later work instead of starting a duplicate "
+    "process."
 )
 
 
@@ -101,19 +95,15 @@ _ACTION_FIELDS = {
 
 TERMINAL_TOOL_PARAMETERS: JsonObject = {
     "type": "object",
-    "description": (
-        "Use start to create a Terminal Session, list to discover this vBot Session's terminals, "
-        "and the returned terminal_id for every other action."
-    ),
     "properties": {
         "action": {
             "type": "string",
             "enum": list(TERMINAL_ACTIONS),
             "description": (
-                "start launches a TUI, list returns owned Terminal Sessions, status reads a "
+                "start launches a program, list returns owned Terminal Sessions, status reads a "
                 "bounded screen page, wait pauses briefly for a new activity boundary, input sends "
-                "exact data or convenient text/keys, resize changes dimensions, and kill "
-                "terminates the process tree."
+                "exact data or convenient text/keys, resize changes dimensions, kill terminates "
+                "the process tree."
             ),
         },
         "terminal_id": {
@@ -127,36 +117,30 @@ TERMINAL_TOOL_PARAMETERS: JsonObject = {
             "type": "string",
             "description": (
                 "Executable for start; omit to open the host user's default interactive shell. "
-                "Every executable uses the same generic PTY path with no program-specific flags, "
-                "hooks, or configuration. vBot does not interpolate the value into a shell."
+                "The value is the executable only \u2014 vBot does not interpolate it into a shell."
             ),
         },
         "args": {
             "type": "array",
             "items": {"type": "string"},
-            "description": (
-                "Exact argument tokens for start. vBot does not add, remove, "
-                "or rewrite program arguments."
-            ),
+            "description": ("Exact argument tokens for start, passed verbatim."),
         },
         "data": {
             "type": "string",
             "maxLength": TERMINAL_INPUT_MAX_CHARS,
             "description": (
-                "For input, exact terminal data sent unchanged in one PTY write. Use for "
-                "arbitrary escape/control sequences or protocols. Cannot be combined with text "
-                "or key."
+                "For input, exact terminal data sent in one write. Use for arbitrary "
+                "escape/control sequences or protocols. Cannot be combined with text or key."
             ),
         },
         "text": {
             "type": "string",
             "maxLength": TERMINAL_INPUT_MAX_CHARS,
             "description": (
-                "For start, the first task to submit after launch. For input, text to type; "
-                "multiline text uses bracketed paste when the terminal program enables it and "
-                'does not append Enter. Combine text with key: "enter" when the input should '
-                "be submitted. Omit on start to leave the TUI ready "
-                "without beginning a task. For exact control sequences, use data instead."
+                "For start, the first input to send after launch; omit to leave the TUI ready. "
+                "For input, text to type; multiline text uses bracketed paste when the program "
+                'enables it and does not append Enter \u2014 combine with key: "enter" to '
+                "submit. For exact control sequences, use data instead."
             ),
         },
         "workdir": {
@@ -171,10 +155,9 @@ TERMINAL_TOOL_PARAMETERS: JsonObject = {
             "type": "string",
             "maxLength": 80,
             "description": (
-                "Human-friendly label for the Terminal Session, so you and the user can talk "
-                "about it in conversation; included in list, status, and summaries. Tool calls "
-                "always use terminal_id, never the name. Omit to leave the Terminal unnamed and "
-                "rely on the announced title or command."
+                "Human-friendly label for the Terminal Session. Tool calls always use "
+                "terminal_id, never the name. Omit to leave it unnamed and rely on the "
+                "announced title or command."
             ),
         },
         "columns": {
@@ -182,18 +165,14 @@ TERMINAL_TOOL_PARAMETERS: JsonObject = {
             "minimum": TERMINAL_MIN_COLUMNS,
             "maximum": TERMINAL_MAX_COLUMNS,
             "default": TERMINAL_DEFAULT_COLUMNS,
-            "description": (
-                f"Terminal width for start or resize; default {TERMINAL_DEFAULT_COLUMNS} on start."
-            ),
+            "description": ("Terminal width; default applies only on start. Required for resize."),
         },
         "rows": {
             "type": "integer",
             "minimum": TERMINAL_MIN_ROWS,
             "maximum": TERMINAL_MAX_ROWS,
             "default": TERMINAL_DEFAULT_ROWS,
-            "description": (
-                f"Terminal height for start or resize; default {TERMINAL_DEFAULT_ROWS} on start."
-            ),
+            "description": ("Terminal height; default applies only on start. Required for resize."),
         },
         "lines": {
             "type": "integer",
@@ -201,8 +180,7 @@ TERMINAL_TOOL_PARAMETERS: JsonObject = {
             "maximum": TERMINAL_STATUS_MAX_LINES,
             "default": TERMINAL_STATUS_DEFAULT_LINES,
             "description": (
-                f"Prior scrollback lines for status; default {TERMINAL_STATUS_DEFAULT_LINES}. "
-                "May be used with or without cursor. The "
+                "Prior scrollback lines for status. May be used with or without cursor; the "
                 "current rendered screen is returned separately."
             ),
         },
@@ -228,16 +206,15 @@ TERMINAL_TOOL_PARAMETERS: JsonObject = {
             "maximum": TERMINAL_MAX_WAIT_MS,
             "default": TERMINAL_DEFAULT_WAIT_MS,
             "description": (
-                f"Maximum same-Run wait in milliseconds; default {TERMINAL_DEFAULT_WAIT_MS}. "
-                "The terminal continues after timeout."
+                "Maximum same-Run wait in milliseconds; the terminal continues after timeout."
             ),
         },
         "key": {
             "type": "string",
             "enum": list(TERMINAL_KEYS),
             "description": (
-                "Named terminal key for input. Supports navigation, F1-F12, Shift-Tab, and "
-                "Ctrl-A through Ctrl-Z; may be combined with text. Use data for any other sequence."
+                "Named terminal key for input; may be combined with text. Use data for any "
+                "other sequence."
             ),
         },
         "expected_screen_revision": {
