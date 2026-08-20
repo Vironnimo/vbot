@@ -158,6 +158,37 @@ async def test_start_without_command_spawns_host_default_shell(
 
 
 @pytest.mark.asyncio
+async def test_dispatch_ignores_empty_optional_text_when_key_submits_input(
+    manager: tuple[TerminalManager, AdapterFactory], tmp_path: Path
+) -> None:
+    terminal_manager, factory = manager
+    registry = ToolRegistry()
+    register_terminal_tool(registry, terminal_manager, ProjectStore(tmp_path))
+    context = make_context(tmp_path)
+
+    started = await registry.dispatch(
+        context,
+        {"action": "start", "command": "fake-tui"},
+        [TERMINAL_TOOL_NAME],
+    )
+    terminal_id = cast(dict[str, Any], started["data"])["terminal_id"]
+
+    result = await registry.dispatch(
+        context,
+        {
+            "action": "input",
+            "terminal_id": terminal_id,
+            "text": "",
+            "key": "enter",
+        },
+        [TERMINAL_TOOL_NAME],
+    )
+
+    assert result["ok"] is True
+    await eventually(lambda: factory.adapters[0].writes == ["\r"])
+
+
+@pytest.mark.asyncio
 async def test_start_accepts_name_and_trimmed_blank_name_fails(
     manager: tuple[TerminalManager, AdapterFactory], tmp_path: Path
 ) -> None:

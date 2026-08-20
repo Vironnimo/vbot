@@ -125,7 +125,6 @@ TERMINAL_TOOL_PARAMETERS: JsonObject = {
         },
         "command": {
             "type": "string",
-            "minLength": 1,
             "description": (
                 "Executable for start; omit to open the host user's default interactive shell. "
                 "Every executable uses the same generic PTY path with no program-specific flags, "
@@ -142,7 +141,6 @@ TERMINAL_TOOL_PARAMETERS: JsonObject = {
         },
         "data": {
             "type": "string",
-            "minLength": 1,
             "maxLength": TERMINAL_INPUT_MAX_CHARS,
             "description": (
                 "For input, exact terminal data sent unchanged in one PTY write. Use for "
@@ -152,7 +150,6 @@ TERMINAL_TOOL_PARAMETERS: JsonObject = {
         },
         "text": {
             "type": "string",
-            "minLength": 1,
             "maxLength": TERMINAL_INPUT_MAX_CHARS,
             "description": (
                 "For start, the first task to submit after launch. For input, text to type; "
@@ -164,7 +161,6 @@ TERMINAL_TOOL_PARAMETERS: JsonObject = {
         },
         "workdir": {
             "type": "string",
-            "minLength": 1,
             "description": (
                 "Working directory for start. Relative paths use the current working directory; "
                 "omit for that directory. Use 'project:<project-id>' to start in a registered "
@@ -173,7 +169,6 @@ TERMINAL_TOOL_PARAMETERS: JsonObject = {
         },
         "name": {
             "type": "string",
-            "minLength": 1,
             "maxLength": 80,
             "description": (
                 "Human-friendly label for the Terminal Session, so you and the user can talk "
@@ -213,7 +208,6 @@ TERMINAL_TOOL_PARAMETERS: JsonObject = {
         },
         "cursor": {
             "type": "string",
-            "minLength": 1,
             "description": (
                 "Signed older-scrollback continuation returned by status. May be combined with "
                 "lines to choose a page size; prefer passing scrollback.next_request unchanged."
@@ -335,17 +329,25 @@ async def _handle_start(
     arguments: JsonObject,
 ) -> JsonObject:
     raw_command = arguments.get("command")
-    if raw_command is None:
+    if raw_command in (None, ""):
         argv = default_terminal_argv()
     else:
         argv = [required_string(raw_command, field_name="command")]
     argv.extend(_optional_string_array(arguments.get("args"), field_name="args"))
     text = arguments.get("text")
+    if text == "":
+        text = None
     if text is not None and (not isinstance(text, str) or not text.strip()):
         raise ValueError("text must be a non-empty string when provided")
-    workdir_value = optional_string(arguments.get("workdir"), field_name="workdir")
+    raw_workdir = arguments.get("workdir")
+    workdir_value = optional_string(raw_workdir, field_name="workdir")
+    if raw_workdir == "":
+        workdir_value = None
     workdir = _resolve_workdir(projects, context, workdir_value)
-    name = optional_string(arguments.get("name"), field_name="name")
+    raw_name = arguments.get("name")
+    name = optional_string(raw_name, field_name="name")
+    if raw_name == "":
+        name = None
     if name is not None:
         name = name.strip()
         if not name:
@@ -474,12 +476,18 @@ async def _handle_input(
     raw_data = arguments.get("data")
     if raw_data is not None and not isinstance(raw_data, str):
         raise ValueError("data must be a string")
-    if raw_data is not None and any(field in arguments for field in ("text", "key")):
-        raise ValueError("data cannot be combined with text or key")
+    if raw_data == "":
+        raw_data = None
     text = arguments.get("text")
     if text is not None and not isinstance(text, str):
         raise ValueError("text must be a string")
+    if text == "":
+        text = None
     key = optional_string(arguments.get("key"), field_name="key")
+    if key == "":
+        key = None
+    if raw_data is not None and (text is not None or key is not None):
+        raise ValueError("data cannot be combined with text or key")
     if key is not None and key not in TERMINAL_KEYS:
         raise ValueError(f"key must be one of: {', '.join(TERMINAL_KEYS)}")
     expected_revision = optional_int(

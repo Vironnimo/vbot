@@ -1454,6 +1454,12 @@ def _input_chunks(
     key: str | None,
     bracketed_paste: bool = False,
 ) -> tuple[str, ...]:
+    if data == "":
+        data = None
+    if text == "":
+        text = None
+    if key == "":
+        key = None
     if data is not None:
         if text is not None or key is not None:
             raise ValueError("data cannot be combined with text or key")
@@ -1465,9 +1471,7 @@ def _input_chunks(
     if key is not None and key not in TERMINAL_INPUT_KEY_SEQUENCES:
         raise ValueError(f"Unsupported terminal key: {key}")
     chunks: list[str] = []
-    if text is not None:
-        if not text:
-            raise ValueError("text must be non-empty when provided")
+    if text:
         if len(text) > TERMINAL_INPUT_MAX_CHARS:
             raise ValueError(f"text must not exceed {TERMINAL_INPUT_MAX_CHARS} characters")
         chunks.append(

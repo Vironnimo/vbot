@@ -111,8 +111,14 @@ class ToolContract:
 
     def normalize_arguments(self, arguments: Any) -> Any:
         """Repair common unambiguous model encodings in a copied argument value."""
+        copied_arguments = copy.deepcopy(arguments)
+        _omit_optional_empty_strings(
+            copied_arguments,
+            self.input_schema,
+            root_schema=self.input_schema,
+        )
         return _normalize_schema_value(
-            copy.deepcopy(arguments),
+            copied_arguments,
             self.input_schema,
             root_schema=self.input_schema,
             root_validator=self.input_validator,
@@ -328,6 +334,89 @@ def _normalize_schema_value(
 
     candidates.append(value)
     return min(candidates, key=lambda candidate: _validation_score(validator, candidate))
+
+
+def _omit_optional_empty_strings(
+    value: Any,
+    schema: Any,
+    *,
+    root_schema: JsonObject,
+) -> None:
+    """Treat an exact empty optional string property as an omitted property.
+
+    Empty strings in required properties and array items remain untouched. A Tool
+    can therefore use an empty optional field as harmless omission without
+    weakening the schema's required-value or collection-item constraints.
+    """
+    if not isinstance(schema, dict):
+        return
+
+    resolved = _resolve_schema_reference(schema, root_schema)
+    if isinstance(value, dict):
+        properties, required = _object_schema_parts(resolved, root_schema=root_schema)
+        additional_schema = resolved.get("additionalProperties")
+        for key in list(value):
+            item = value[key]
+            item_schema = properties.get(key)
+            if item_schema is None and isinstance(additional_schema, dict):
+                item_schema = additional_schema
+            if (
+                key not in required
+                and item == ""
+                and _schema_has_string_type(item_schema, root_schema=root_schema)
+            ):
+                del value[key]
+                continue
+            _omit_optional_empty_strings(item, item_schema, root_schema=root_schema)
+        return
+
+    if isinstance(value, list):
+        item_schema = resolved.get("items")
+        for item in value:
+            _omit_optional_empty_strings(item, item_schema, root_schema=root_schema)
+
+
+def _object_schema_parts(
+    schema: JsonObject,
+    *,
+    root_schema: JsonObject,
+) -> tuple[dict[str, Any], set[str]]:
+    """Collect object properties and required names through local schema branches."""
+    resolved = _resolve_schema_reference(schema, root_schema)
+    properties = dict(resolved.get("properties", {})) if isinstance(resolved, dict) else {}
+    required = {name for name in resolved.get("required", []) if isinstance(name, str)}
+    for keyword in ("allOf", "oneOf", "anyOf"):
+        branches = resolved.get(keyword)
+        if not isinstance(branches, list):
+            continue
+        for branch in branches:
+            if not isinstance(branch, dict):
+                continue
+            branch_properties, branch_required = _object_schema_parts(
+                branch,
+                root_schema=root_schema,
+            )
+            properties.update(branch_properties)
+            required.update(branch_required)
+    return properties, required
+
+
+def _schema_has_string_type(schema: Any, *, root_schema: JsonObject) -> bool:
+    """Return whether a property schema accepts strings, excluding explicit empty enums."""
+    if not isinstance(schema, dict):
+        return False
+    resolved = _resolve_schema_reference(schema, root_schema)
+    if resolved.get("const") == "" or "" in resolved.get("enum", ()):
+        return False
+    if "string" in _declared_json_types(resolved):
+        return True
+    for keyword in ("oneOf", "anyOf", "allOf"):
+        branches = resolved.get(keyword)
+        if isinstance(branches, list) and any(
+            _schema_has_string_type(branch, root_schema=root_schema) for branch in branches
+        ):
+            return True
+    return False
 
 
 def _direct_normalization_candidates(
