@@ -1,5 +1,5 @@
 {
-  "fetched_at": "2026-08-14T13:51:33.684783+00:00",
+  "fetched_at": "2026-08-20T14:57:15.301101+00:00",
   "models": {
     "deepseek-v4-flash": {
       "capabilities": {
@@ -646,6 +646,47 @@
       "family": "minimax-m3",
       "max_output_tokens": 131072,
       "name": "minimax-m3"
+    },
+    "muse-spark-1.2-contributor": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "video",
+          "pdf",
+          "audio"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "control": "levels",
+          "levels": [
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "xhigh"
+          ],
+          "supported": true
+        },
+        "supported_parameters": [],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 1048576,
+      "family": "muse",
+      "max_output_tokens": 131072,
+      "name": "muse-spark-1.2-contributor"
     },
     "qwen3.5-plus": {
       "capabilities": {

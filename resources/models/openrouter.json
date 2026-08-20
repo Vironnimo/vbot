@@ -1,48 +1,6 @@
 {
-  "fetched_at": "2026-08-14T13:51:34.310560+00:00",
+  "fetched_at": "2026-08-20T14:57:15.925965+00:00",
   "models": {
-    "ai21/jamba-large-1.7": {
-      "capabilities": {
-        "input_modalities": [
-          "text"
-        ],
-        "json_mode": true,
-        "output_modalities": [
-          "text"
-        ],
-        "reasoning": {
-          "supported": false
-        },
-        "supported_parameters": [
-          "max_tokens",
-          "response_format",
-          "stop",
-          "temperature",
-          "tool_choice",
-          "tools",
-          "top_p"
-        ],
-        "supported_voices": [],
-        "task_types": [
-          "chat",
-          "text_output"
-        ],
-        "tools": true,
-        "vision": false
-      },
-      "connections": [
-        "api-key"
-      ],
-      "context_window": 256000,
-      "family": "jamba",
-      "max_output_tokens": 4096,
-      "metadata": {
-        "openrouter": {
-          "modality": "text->text"
-        }
-      },
-      "name": "AI21: Jamba Large 1.7"
-    },
     "aion-labs/aion-2.0": {
       "capabilities": {
         "input_modalities": [
@@ -5129,6 +5087,7 @@
         "supported_parameters": [
           "frequency_penalty",
           "logit_bias",
+          "logprobs",
           "max_tokens",
           "min_p",
           "presence_penalty",
@@ -5141,6 +5100,7 @@
           "tool_choice",
           "tools",
           "top_k",
+          "top_logprobs",
           "top_p"
         ],
         "supported_voices": [],
@@ -5156,7 +5116,7 @@
       ],
       "context_window": 163840,
       "family": "deepseek",
-      "max_output_tokens": 65536,
+      "max_output_tokens": 163840,
       "metadata": {
         "openrouter": {
           "modality": "text->text"
@@ -5411,7 +5371,7 @@
       ],
       "context_window": 163840,
       "family": "deepseek",
-      "max_output_tokens": 32768,
+      "max_output_tokens": 163840,
       "metadata": {
         "openrouter": {
           "modality": "text->text"
@@ -5551,6 +5511,7 @@
           "include_reasoning",
           "logit_bias",
           "logprobs",
+          "max_completion_tokens",
           "max_tokens",
           "min_p",
           "presence_penalty",
@@ -5582,7 +5543,7 @@
       ],
       "context_window": 1048576,
       "family": "deepseek-flash",
-      "max_output_tokens": 393216,
+      "max_output_tokens": 384000,
       "metadata": {
         "openrouter": {
           "modality": "text->text",
@@ -5644,7 +5605,7 @@
       "connections": [
         "api-key"
       ],
-      "context_window": 1048576,
+      "context_window": 1310720,
       "family": "deepseek-flash",
       "max_output_tokens": 393216,
       "metadata": {
@@ -5676,6 +5637,7 @@
           "include_reasoning",
           "logit_bias",
           "logprobs",
+          "max_completion_tokens",
           "max_tokens",
           "min_p",
           "presence_penalty",
@@ -5713,7 +5675,7 @@
           "reasoning_response_field": "reasoning_content"
         }
       },
-      "name": "DeepSeek: DeepSeek V4 Pro"
+      "name": "DeepSeek: DeepSeek V4 Pro 0423"
     },
     "deepseek/deepseek-v4-pro-0813": {
       "capabilities": {
@@ -5775,6 +5737,52 @@
         }
       },
       "name": "DeepSeek: DeepSeek V4 Pro 0813"
+    },
+    "dots-studio/dots-3-note-preview:free": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "include_reasoning",
+          "max_tokens",
+          "reasoning",
+          "response_format",
+          "structured_outputs",
+          "temperature",
+          "tool_choice",
+          "tools",
+          "top_p"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 512000,
+      "max_output_tokens": 512000,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image->text"
+        }
+      },
+      "name": "Dots Studio: Dots3-Note Preview (free)"
     },
     "fish-audio/s1": {
       "capabilities": {
@@ -7212,7 +7220,7 @@
       ],
       "context_window": 65536,
       "family": "gemini-flash-lite",
-      "max_output_tokens": 66000,
+      "max_output_tokens": 65536,
       "metadata": {
         "openrouter": {
           "modality": "text+image->text+image"
@@ -8516,7 +8524,7 @@
       ],
       "context_window": 262144,
       "family": "gemma",
-      "max_output_tokens": 262144,
+      "max_output_tokens": 16384,
       "metadata": {
         "openrouter": {
           "modality": "text+image+video->text"
@@ -8615,7 +8623,6 @@
           "temperature",
           "tool_choice",
           "tools",
-          "top_a",
           "top_k",
           "top_logprobs",
           "top_p"
@@ -8637,7 +8644,7 @@
       ],
       "context_window": 262144,
       "family": "gemma",
-      "max_output_tokens": 262144,
+      "max_output_tokens": 16384,
       "metadata": {
         "openrouter": {
           "modality": "text+image+video->text"
@@ -9477,7 +9484,7 @@
         "input_modalities": [
           "text"
         ],
-        "json_mode": false,
+        "json_mode": true,
         "output_modalities": [
           "text"
         ],
@@ -9494,6 +9501,7 @@
           "presence_penalty",
           "reasoning",
           "repetition_penalty",
+          "response_format",
           "seed",
           "stop",
           "temperature",
@@ -10416,40 +10424,33 @@
       },
       "name": "LiquidAI: LFM2.5-2.6B (free)"
     },
-    "mancer/weaver": {
+    "liquid/lfm-2.5-embedding-350m:free": {
       "capabilities": {
         "input_modalities": [
           "text"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
-          "text"
+          "embeddings"
         ],
         "reasoning": {
           "supported": false
         },
         "supported_parameters": [
           "frequency_penalty",
-          "logit_bias",
-          "logprobs",
           "max_tokens",
           "min_p",
           "presence_penalty",
           "repetition_penalty",
-          "response_format",
           "seed",
           "stop",
-          "structured_outputs",
           "temperature",
-          "top_a",
           "top_k",
-          "top_logprobs",
           "top_p"
         ],
         "supported_voices": [],
         "task_types": [
-          "chat",
-          "text_output"
+          "text_embedding"
         ],
         "tools": false,
         "vision": false
@@ -10457,15 +10458,14 @@
       "connections": [
         "api-key"
       ],
-      "context_window": 8000,
-      "family": "alpha",
-      "max_output_tokens": 6000,
+      "context_window": 512,
+      "max_output_tokens": null,
       "metadata": {
         "openrouter": {
-          "modality": "text->text"
+          "modality": "text->embeddings"
         }
       },
-      "name": "Mancer: Weaver (alpha)"
+      "name": "LiquidAI: LFM2.5-Embedding-350M (free)"
     },
     "meituan/longcat-2.0": {
       "capabilities": {
@@ -11935,7 +11935,6 @@
           "logprobs",
           "max_tokens",
           "min_p",
-          "parallel_tool_calls",
           "presence_penalty",
           "reasoning",
           "repetition_penalty",
@@ -14429,7 +14428,7 @@
       ],
       "context_window": 262144,
       "family": "nemotron",
-      "max_output_tokens": 228000,
+      "max_output_tokens": 262144,
       "metadata": {
         "openrouter": {
           "modality": "text->text"
@@ -14937,9 +14936,9 @@
       "connections": [
         "api-key"
       ],
-      "context_window": 1000000,
+      "context_window": 262144,
       "family": "nemotron",
-      "max_output_tokens": 262144,
+      "max_output_tokens": 131072,
       "metadata": {
         "openrouter": {
           "modality": "text->text"
@@ -16573,6 +16572,15 @@
         "task_options": {
           "image_generation": {
             "parameters": {
+              "aspect_ratio": {
+                "type": "enum",
+                "values": [
+                  "1:1",
+                  "3:2",
+                  "2:3",
+                  "auto"
+                ]
+              },
               "background": {
                 "type": "enum",
                 "values": [
@@ -16673,6 +16681,15 @@
         "task_options": {
           "image_generation": {
             "parameters": {
+              "aspect_ratio": {
+                "type": "enum",
+                "values": [
+                  "1:1",
+                  "3:2",
+                  "2:3",
+                  "auto"
+                ]
+              },
               "background": {
                 "type": "enum",
                 "values": [
@@ -17796,6 +17813,20 @@
         "task_options": {
           "image_generation": {
             "parameters": {
+              "aspect_ratio": {
+                "type": "enum",
+                "values": [
+                  "1:1",
+                  "3:2",
+                  "2:3",
+                  "4:3",
+                  "3:4",
+                  "16:9",
+                  "9:16",
+                  "21:9",
+                  "auto"
+                ]
+              },
               "background": {
                 "type": "enum",
                 "values": [
@@ -21604,9 +21635,6 @@
         "output_modalities": [
           "text"
         ],
-        "reasoning": {
-          "supported": true
-        },
         "supported_parameters": [
           "frequency_penalty",
           "include_reasoning",
@@ -22790,7 +22818,7 @@
       ],
       "context_window": 131072,
       "family": "qwen",
-      "max_output_tokens": 16384,
+      "max_output_tokens": 8192,
       "metadata": {
         "openrouter": {
           "modality": "text->text"
@@ -23467,7 +23495,7 @@
         "api-key"
       ],
       "context_window": 32768,
-      "max_output_tokens": 32000,
+      "max_output_tokens": null,
       "metadata": {
         "openrouter": {
           "modality": "text->embeddings"
@@ -23621,7 +23649,7 @@
       ],
       "context_window": 262144,
       "family": "qwen",
-      "max_output_tokens": 262144,
+      "max_output_tokens": 16384,
       "metadata": {
         "openrouter": {
           "modality": "text->text"
@@ -24114,7 +24142,7 @@
       ],
       "context_window": 262144,
       "family": "qwen",
-      "max_output_tokens": 81920,
+      "max_output_tokens": 262144,
       "metadata": {
         "openrouter": {
           "modality": "text+image+video->text"
@@ -24236,7 +24264,7 @@
       ],
       "context_window": 262144,
       "family": "qwen",
-      "max_output_tokens": 65536,
+      "max_output_tokens": 262144,
       "metadata": {
         "openrouter": {
           "modality": "text+image+video->text"
@@ -24297,7 +24325,7 @@
       ],
       "context_window": 262144,
       "family": "qwen",
-      "max_output_tokens": 262144,
+      "max_output_tokens": 65536,
       "metadata": {
         "openrouter": {
           "modality": "text+image+video->text"
@@ -25048,7 +25076,7 @@
       "connections": [
         "api-key"
       ],
-      "context_window": 1010000,
+      "context_window": 1048576,
       "family": "qwen",
       "max_output_tokens": 262144,
       "metadata": {
@@ -25057,6 +25085,72 @@
         }
       },
       "name": "Qwen: Qwen3.8 2.4T A95B"
+    },
+    "qwen/qwen3.8-27b": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "video"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "control": "levels",
+          "levels": [
+            "low",
+            "medium",
+            "xhigh"
+          ],
+          "supported": true
+        },
+        "supported_parameters": [
+          "frequency_penalty",
+          "include_reasoning",
+          "logit_bias",
+          "logprobs",
+          "max_tokens",
+          "presence_penalty",
+          "reasoning",
+          "reasoning_effort",
+          "repetition_penalty",
+          "response_format",
+          "seed",
+          "stop",
+          "structured_outputs",
+          "temperature",
+          "tool_choice",
+          "tools",
+          "top_k",
+          "top_logprobs",
+          "top_p"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding",
+          "video_input",
+          "video_understanding"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 1000000,
+      "family": "qwen",
+      "max_output_tokens": 131072,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image+video->text"
+        }
+      },
+      "name": "Qwen: Qwen3.8 27B"
     },
     "qwen/qwen3.8-max": {
       "capabilities": {
@@ -25366,6 +25460,12 @@
                 "max": 6,
                 "min": 1,
                 "type": "range"
+              },
+              "output_format": {
+                "type": "enum",
+                "values": [
+                  "svg"
+                ]
               }
             },
             "passthrough": {
@@ -25434,6 +25534,12 @@
                 "max": 6,
                 "min": 1,
                 "type": "range"
+              },
+              "output_format": {
+                "type": "enum",
+                "values": [
+                  "svg"
+                ]
               }
             },
             "passthrough": {
@@ -25638,6 +25744,12 @@
                 "max": 6,
                 "min": 1,
                 "type": "range"
+              },
+              "output_format": {
+                "type": "enum",
+                "values": [
+                  "svg"
+                ]
               }
             },
             "passthrough": {
@@ -25842,6 +25954,12 @@
                 "max": 6,
                 "min": 1,
                 "type": "range"
+              },
+              "output_format": {
+                "type": "enum",
+                "values": [
+                  "svg"
+                ]
               }
             },
             "passthrough": {
@@ -26293,6 +26411,7 @@
         "api-key"
       ],
       "context_window": 262144,
+      "family": "sakana-namazu",
       "max_output_tokens": 65536,
       "metadata": {
         "openrouter": {
@@ -27284,6 +27403,86 @@
       },
       "name": "Tencent: Hunyuan A13B Instruct"
     },
+    "tencent/hy-mt2-1.8b": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [
+          "max_completion_tokens",
+          "max_tokens",
+          "stop",
+          "temperature"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
+        "tools": false,
+        "vision": false
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 8192,
+      "family": "Hy",
+      "max_output_tokens": 4096,
+      "metadata": {
+        "openrouter": {
+          "modality": "text->text"
+        }
+      },
+      "name": "Tencent: Hy-MT2-1.8B"
+    },
+    "tencent/hy-mt2-30b-a3b": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [
+          "max_completion_tokens",
+          "max_tokens",
+          "response_format",
+          "stop",
+          "structured_outputs",
+          "temperature"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
+        "tools": false,
+        "vision": false
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 8192,
+      "family": "Hy",
+      "max_output_tokens": 4096,
+      "metadata": {
+        "openrouter": {
+          "modality": "text->text"
+        }
+      },
+      "name": "Tencent: Hy-MT2-30B-A3B"
+    },
     "tencent/hy3": {
       "capabilities": {
         "input_modalities": [
@@ -27972,9 +28171,6 @@
         "output_modalities": [
           "text"
         ],
-        "reasoning": {
-          "supported": true
-        },
         "supported_parameters": [
           "frequency_penalty",
           "include_reasoning",
@@ -28345,16 +28541,13 @@
           "supported": true
         },
         "supported_parameters": [
-          "frequency_penalty",
           "include_reasoning",
           "logprobs",
           "max_tokens",
-          "presence_penalty",
           "reasoning",
           "reasoning_effort",
           "response_format",
           "seed",
-          "stop",
           "structured_outputs",
           "temperature",
           "tool_choice",
@@ -28408,16 +28601,13 @@
           "supported": true
         },
         "supported_parameters": [
-          "frequency_penalty",
           "include_reasoning",
           "logprobs",
           "max_tokens",
-          "presence_penalty",
           "reasoning",
           "reasoning_effort",
           "response_format",
           "seed",
-          "stop",
           "structured_outputs",
           "temperature",
           "tool_choice",
@@ -28472,16 +28662,13 @@
           "supported": true
         },
         "supported_parameters": [
-          "frequency_penalty",
           "include_reasoning",
           "logprobs",
           "max_tokens",
-          "presence_penalty",
           "reasoning",
           "reasoning_effort",
           "response_format",
           "seed",
-          "stop",
           "structured_outputs",
           "temperature",
           "tool_choice",
@@ -28529,15 +28716,12 @@
           "supported": true
         },
         "supported_parameters": [
-          "frequency_penalty",
           "include_reasoning",
           "logprobs",
           "max_tokens",
-          "presence_penalty",
           "reasoning",
           "response_format",
           "seed",
-          "stop",
           "structured_outputs",
           "temperature",
           "tool_choice",
@@ -28584,13 +28768,10 @@
           "supported": false
         },
         "supported_parameters": [
-          "frequency_penalty",
           "logprobs",
           "max_tokens",
-          "presence_penalty",
           "response_format",
           "seed",
-          "stop",
           "temperature",
           "top_logprobs",
           "top_p"
@@ -28678,13 +28859,10 @@
           "supported": false
         },
         "supported_parameters": [
-          "frequency_penalty",
           "logprobs",
           "max_tokens",
-          "presence_penalty",
           "response_format",
           "seed",
-          "stop",
           "temperature",
           "top_logprobs",
           "top_p"
@@ -28765,13 +28943,10 @@
           "supported": false
         },
         "supported_parameters": [
-          "frequency_penalty",
           "logprobs",
           "max_tokens",
-          "presence_penalty",
           "response_format",
           "seed",
-          "stop",
           "temperature",
           "top_logprobs",
           "top_p"
@@ -28877,13 +29052,10 @@
           "supported": false
         },
         "supported_parameters": [
-          "frequency_penalty",
           "logprobs",
           "max_tokens",
-          "presence_penalty",
           "response_format",
           "seed",
-          "stop",
           "temperature",
           "top_logprobs",
           "top_p"
@@ -28970,13 +29142,10 @@
           "supported": false
         },
         "supported_parameters": [
-          "frequency_penalty",
           "logprobs",
           "max_tokens",
-          "presence_penalty",
           "response_format",
           "seed",
-          "stop",
           "temperature",
           "top_logprobs",
           "top_p"
@@ -29015,13 +29184,10 @@
           "supported": false
         },
         "supported_parameters": [
-          "frequency_penalty",
           "logprobs",
           "max_tokens",
-          "presence_penalty",
           "response_format",
           "seed",
-          "stop",
           "temperature",
           "top_logprobs",
           "top_p"
@@ -29658,7 +29824,7 @@
       ],
       "context_window": 204800,
       "family": "glm",
-      "max_output_tokens": 131072,
+      "max_output_tokens": 128000,
       "metadata": {
         "openrouter": {
           "modality": "text->text",
@@ -29758,7 +29924,7 @@
       ],
       "context_window": 204800,
       "family": "glm",
-      "max_output_tokens": 131072,
+      "max_output_tokens": 128000,
       "metadata": {
         "openrouter": {
           "modality": "text->text",
@@ -29879,6 +30045,114 @@
         }
       },
       "name": "Z.ai: GLM 5.2 (batch)"
+    },
+    "z-ai/glm-5.2:free": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "control": "levels",
+          "levels": [
+            "high",
+            "xhigh"
+          ],
+          "supported": true
+        },
+        "supported_parameters": [
+          "frequency_penalty",
+          "include_reasoning",
+          "max_tokens",
+          "min_p",
+          "presence_penalty",
+          "reasoning",
+          "reasoning_effort",
+          "repetition_penalty",
+          "response_format",
+          "seed",
+          "stop",
+          "structured_outputs",
+          "temperature",
+          "tool_choice",
+          "tools",
+          "top_k",
+          "top_p"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
+        "tools": true,
+        "vision": false
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 256000,
+      "family": "glm",
+      "max_output_tokens": 256000,
+      "metadata": {
+        "openrouter": {
+          "modality": "text->text"
+        }
+      },
+      "name": "Z.ai: GLM 5.2 (free)"
+    },
+    "z-ai/glm-5.3": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "control": "levels",
+          "levels": [
+            "low",
+            "high",
+            "max"
+          ],
+          "supported": true
+        },
+        "supported_parameters": [
+          "include_reasoning",
+          "max_tokens",
+          "reasoning",
+          "reasoning_effort",
+          "response_format",
+          "temperature",
+          "tool_choice",
+          "tools",
+          "top_k",
+          "top_p"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
+        "tools": true,
+        "vision": false
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 1048576,
+      "family": "glm",
+      "max_output_tokens": 131072,
+      "metadata": {
+        "openrouter": {
+          "modality": "text->text"
+        }
+      },
+      "name": "Z.ai: GLM 5.3"
     },
     "z-ai/glm-5v-turbo": {
       "capabilities": {
@@ -30219,7 +30493,7 @@
       "connections": [
         "api-key"
       ],
-      "context_window": 1048576,
+      "context_window": 1310720,
       "family": "deepseek",
       "max_output_tokens": 262144,
       "metadata": {
@@ -30418,7 +30692,7 @@
       ],
       "context_window": 1048576,
       "family": "kimi",
-      "max_output_tokens": 1048576,
+      "max_output_tokens": 974842,
       "metadata": {
         "openrouter": {
           "modality": "text+image+video->text"
@@ -30567,16 +30841,13 @@
           "supported": true
         },
         "supported_parameters": [
-          "frequency_penalty",
           "include_reasoning",
           "logprobs",
           "max_tokens",
-          "presence_penalty",
           "reasoning",
           "reasoning_effort",
           "response_format",
           "seed",
-          "stop",
           "structured_outputs",
           "temperature",
           "tool_choice",
@@ -30608,6 +30879,57 @@
         }
       },
       "name": "xAI: Grok Latest"
+    },
+    "~z-ai/glm-latest": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "control": "levels",
+          "levels": [
+            "low",
+            "high",
+            "max"
+          ],
+          "supported": true
+        },
+        "supported_parameters": [
+          "include_reasoning",
+          "max_tokens",
+          "reasoning",
+          "reasoning_effort",
+          "response_format",
+          "temperature",
+          "tool_choice",
+          "tools",
+          "top_k",
+          "top_p"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
+        "tools": true,
+        "vision": false
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 1048576,
+      "family": "glm",
+      "max_output_tokens": 131072,
+      "metadata": {
+        "openrouter": {
+          "modality": "text->text"
+        }
+      },
+      "name": "Z.ai: GLM Latest"
     }
   },
   "provider_id": "openrouter",
