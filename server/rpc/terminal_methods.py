@@ -27,11 +27,12 @@ def _terminal_list(state: Any, params: JsonObject) -> JsonObject:
 async def _terminal_start(state: Any, params: JsonObject) -> JsonObject:
     _reject_unsupported(
         params,
-        {"command", "args", "workdir", "columns", "rows"},
+        {"command", "args", "workdir", "name", "columns", "rows"},
         "terminal.start",
     )
     command = _optional_string(params, "command")
     workdir = _optional_string(params, "workdir")
+    name = _optional_string(params, "name")
     arguments = _optional_arguments(params)
     columns = (
         _required_integer(params, "columns") if "columns" in params else TERMINAL_DEFAULT_COLUMNS
@@ -41,6 +42,11 @@ async def _terminal_start(state: Any, params: JsonObject) -> JsonObject:
         raise RpcError(
             RPC_ERROR_INVALID_REQUEST,
             "params.command must not be empty when provided",
+        )
+    if name is not None and not name.strip():
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST,
+            "params.name must not be empty when provided",
         )
     if any(not argument.strip() for argument in arguments):
         raise RpcError(
@@ -53,6 +59,7 @@ async def _terminal_start(state: Any, params: JsonObject) -> JsonObject:
             arguments=arguments,
             cwd=Path(workdir).expanduser() if workdir is not None else None,
             launch_workdir=workdir,
+            name=name.strip() if name else None,
             columns=columns,
             rows=rows,
         )
@@ -88,6 +95,21 @@ async def _terminal_resize(state: Any, params: JsonObject) -> JsonObject:
         terminal = await _terminal_manager(state).resize_for_operator(
             terminal_id, columns=columns, rows=rows
         )
+    except ValueError as exc:
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, str(exc)) from exc
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
+    return {"terminal": terminal}
+
+
+async def _terminal_rename(state: Any, params: JsonObject) -> JsonObject:
+    _reject_unsupported(params, {"terminal_id", "name"}, "terminal.rename")
+    terminal_id = _required_string(params, "terminal_id")
+    name = _required_string(params, "name")
+    if not name.strip():
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, "params.name must not be empty")
+    try:
+        terminal = _terminal_manager(state).rename_for_operator(terminal_id, name.strip())
     except ValueError as exc:
         raise RpcError(RPC_ERROR_INVALID_REQUEST, str(exc)) from exc
     except Exception as exc:
@@ -149,6 +171,7 @@ def method_handlers() -> dict[str, RpcMethodHandler]:
         "terminal.start": _terminal_start,
         "terminal.input": _terminal_input,
         "terminal.resize": _terminal_resize,
+        "terminal.rename": _terminal_rename,
         "terminal.kill": _terminal_kill,
         "terminal.forget": _terminal_forget,
     }

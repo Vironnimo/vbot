@@ -11,6 +11,7 @@ const sendTerminalInputMock = vi.fn();
 const resizeTerminalMock = vi.fn();
 const killTerminalMock = vi.fn();
 const forgetTerminalMock = vi.fn();
+const renameTerminalMock = vi.fn();
 const subscribeTerminalEventsMock = vi.fn();
 const streams = [];
 const terminalInstances = [];
@@ -26,6 +27,7 @@ vi.mock('$lib/api.js', () => ({
   resizeTerminal: (...args) => resizeTerminalMock(...args),
   killTerminal: (...args) => killTerminalMock(...args),
   forgetTerminal: (...args) => forgetTerminalMock(...args),
+  renameTerminal: (...args) => renameTerminalMock(...args),
   subscribeTerminalEvents: (...args) => subscribeTerminalEventsMock(...args),
 }));
 

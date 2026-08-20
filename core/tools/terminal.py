@@ -47,7 +47,7 @@ from core.tools.tools import (
 from core.utils.paths import model_path
 
 TERMINAL_TOOL_NAME = "terminal"
-TERMINAL_ACTIONS = ("start", "list", "status", "wait", "input", "resize", "kill")
+TERMINAL_ACTIONS = ("start", "list", "status", "wait", "input", "resize", "rename", "kill")
 TERMINAL_DEFAULT_WAIT_MS = 1_000
 TERMINAL_MAX_WAIT_MS = 10_000
 TERMINAL_KEYS = tuple(TERMINAL_INPUT_KEY_SEQUENCES)
@@ -61,7 +61,9 @@ TERMINAL_TOOL_DESCRIPTION = (
     "arguments without program-specific flags, hooks, or configuration; an omitted command opens "
     "the host user's default interactive shell, just like a human terminal. Use start with text to "
     "launch a program and send its first input in one call, or set command and args for any other "
-    "program. After Agent input, vBot wakes you when PTY output has been quiet "
+    "program. Use the optional name to label the Terminal Session so you and the user can refer to "
+    "it later; rename changes that label at any time. After Agent input, vBot wakes you when PTY "
+    "output has been quiet "
     "for a short period, or when the process exits or the terminal fails. Quiet output is only an "
     "activity boundary: inspect status to decide whether the program is working, waiting for "
     "input, or finished. Use data for exact terminal sequences, text/key/enter for convenient "
@@ -81,7 +83,7 @@ class _ProjectWorkdirUnavailableError(ValueError):
 
 
 _ACTION_FIELDS = {
-    "start": frozenset({"action", "command", "args", "text", "workdir", "columns", "rows"}),
+    "start": frozenset({"action", "command", "args", "text", "workdir", "name", "columns", "rows"}),
     "list": frozenset({"action"}),
     "status": frozenset({"action", "terminal_id", "lines", "cursor"}),
     "wait": frozenset({"action", "terminal_id", "after_revision", "timeout_ms"}),
@@ -97,6 +99,7 @@ _ACTION_FIELDS = {
         }
     ),
     "resize": frozenset({"action", "terminal_id", "columns", "rows"}),
+    "rename": frozenset({"action", "terminal_id", "name"}),
     "kill": frozenset({"action", "terminal_id"}),
 }
 
@@ -113,8 +116,8 @@ TERMINAL_TOOL_PARAMETERS: JsonObject = {
             "description": (
                 "start launches a TUI, list returns owned Terminal Sessions, status reads a "
                 "bounded screen page, wait pauses briefly for a new activity boundary, input sends "
-                "exact data or convenient text/keys, resize changes dimensions, and kill "
-                "terminates the process tree."
+                "exact data or convenient text/keys, resize changes dimensions, rename gives a "
+                "Terminal Session a human-friendly name, and kill terminates the process tree."
             ),
         },
         "terminal_id": {
@@ -169,6 +172,16 @@ TERMINAL_TOOL_PARAMETERS: JsonObject = {
                 "Working directory for start. Relative paths use the current working directory; "
                 "omit for that directory. Use 'project:<project-id>' to start in a registered "
                 "Project's directory."
+            ),
+        },
+        "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80,
+            "description": (
+                "Human-friendly name for the Terminal Session, so you and the user can identify "
+                "it later; included in list, status, and summaries. Omit to leave the Terminal "
+                "unnamed and rely on the announced title or command. Use rename to change it."
             ),
         },
         "columns": {
@@ -296,6 +309,8 @@ async def _handle_terminal(
             return await _handle_input(terminal_manager, context, arguments)
         if action == "resize":
             return await _handle_resize(terminal_manager, context, arguments)
+        if action == "rename":
+            return await _handle_rename(terminal_manager, context, arguments)
         return await _handle_kill(terminal_manager, context, arguments)
     except TerminalNotFoundError:
         return tool_failure("terminal_not_found", "Terminal Session not found", retryable=False)
@@ -339,6 +354,13 @@ async def _handle_start(
         raise ValueError("text must be a non-empty string when provided")
     workdir_value = optional_string(arguments.get("workdir"), field_name="workdir")
     workdir = _resolve_workdir(projects, context, workdir_value)
+    name = optional_string(arguments.get("name"), field_name="name")
+    if name is not None:
+        name = name.strip()
+        if not name:
+            raise ValueError("name must not be blank")
+        if len(name) > 80:
+            raise ValueError("name must be at most 80 characters")
     columns = optional_int(
         arguments.get("columns"),
         field_name="columns",
@@ -363,6 +385,7 @@ async def _handle_start(
         columns=columns,
         rows=rows,
         origin_run_id=context.run_id,
+        name=name,
         initial_text=text if isinstance(text, str) else None,
     )
     snapshot = await terminal_manager.snapshot(session.terminal_id, owner)
@@ -520,6 +543,23 @@ async def _handle_resize(
     return tool_success(data)
 
 
+async def _handle_rename(
+    terminal_manager: TerminalManager,
+    context: ToolContext,
+    arguments: JsonObject,
+) -> JsonObject:
+    terminal_id = required_string(arguments.get("terminal_id"), field_name="terminal_id")
+    name = required_string(arguments.get("name"), field_name="name")
+    if not name.strip():
+        raise ValueError("name must not be blank")
+    if len(name) > 80:
+        raise ValueError("name must be at most 80 characters")
+    owner = _owner(context)
+    data = await terminal_manager.rename_session(terminal_id, owner, name.strip())
+    data["delivery"] = "automatic_terminal_activity"
+    return tool_success(data)
+
+
 async def _handle_kill(
     terminal_manager: TerminalManager,
     context: ToolContext,
@@ -574,6 +614,7 @@ def _terminal_summary(session: TerminalSession) -> JsonObject:
         "terminal_id": session.terminal_id,
         "state": session.state,
         "command": session.command,
+        "name": session.name,
         "title": session.renderer.title,
         "workdir": model_path(session.cwd),
         "pid": session.adapter.pid,
