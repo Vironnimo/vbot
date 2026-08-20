@@ -1,5 +1,5 @@
 {
-  "fetched_at": "2026-08-14T13:51:08.232540+00:00",
+  "fetched_at": "2026-08-20T14:56:51.110439+00:00",
   "models": {
     "codestral-2508": {
       "capabilities": {
@@ -255,6 +255,40 @@
       "context_window": 262144,
       "max_output_tokens": null,
       "name": "labs-leanstral-1-5-1"
+    },
+    "magistral-medium-latest": {
+      "canonical": "mistral/magistral-medium-latest",
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "supported_parameters": [
+          "reasoning",
+          "response_format",
+          "tools"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 262144,
+      "family": "magistral-medium",
+      "max_output_tokens": 16384,
+      "name": "mistral-medium-latest"
     },
     "magistral-small-latest": {
       "capabilities": {
@@ -1169,6 +1203,7 @@
       "name": "voxtral-small-2507"
     },
     "voxtral-small-latest": {
+      "canonical": "mistral/voxtral-small-latest",
       "capabilities": {
         "input_modalities": [
           "text",
@@ -1178,9 +1213,6 @@
         "output_modalities": [
           "text"
         ],
-        "reasoning": {
-          "supported": false
-        },
         "supported_parameters": [
           "response_format",
           "tools"

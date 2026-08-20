@@ -629,6 +629,62 @@
       "release_date": "2025-09",
       "temperature": true
     },
+    "alibaba/qwen3-vl-235b-a22b-instruct": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "context_window": 131072,
+      "family": "qwen",
+      "knowledge": "2025-03-31",
+      "last_updated": "2025-09-23",
+      "max_output_tokens": 32768,
+      "name": "Qwen3 VL 235B A22B Instruct",
+      "release_date": "2025-09-23",
+      "temperature": true
+    },
+    "alibaba/qwen3-vl-235b-a22b-thinking": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "context_window": 131072,
+      "family": "qwen",
+      "knowledge": "2025-03-31",
+      "last_updated": "2025-09-23",
+      "max_output_tokens": 32768,
+      "name": "Qwen3 VL 235B A22B Thinking",
+      "release_date": "2025-09-23",
+      "temperature": true
+    },
     "alibaba/qwen3-vl-plus": {
       "capabilities": {
         "input_modalities": [
@@ -1094,6 +1150,60 @@
       "max_output_tokens": 64000,
       "name": "Qwen3.7 Plus",
       "release_date": "2026-06-02",
+      "temperature": true
+    },
+    "alibaba/qwen3.8-2.4t-a95b": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": true,
+        "vision": false
+      },
+      "context_window": 262144,
+      "family": "qwen",
+      "last_updated": "2026-08-12",
+      "max_output_tokens": 131072,
+      "name": "Qwen3.8 2.4T A95B",
+      "release_date": "2026-08-12",
+      "temperature": true
+    },
+    "alibaba/qwen3.8-27b": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "video"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "context_window": 262144,
+      "family": "qwen",
+      "last_updated": "2026-08-14",
+      "max_output_tokens": 32768,
+      "name": "Qwen3.8 27B",
+      "release_date": "2026-08-14",
       "temperature": true
     },
     "alibaba/qwen3.8-max": {
@@ -2065,6 +2175,111 @@
       "release_date": "2025-12-01",
       "temperature": true
     },
+    "bytedance-seed/seed-1-6": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": true,
+        "vision": false
+      },
+      "context_window": 256000,
+      "family": "seed",
+      "last_updated": "2025-10-15",
+      "max_output_tokens": 64000,
+      "name": "Seed 1.6",
+      "release_date": "2025-10-15",
+      "temperature": true
+    },
+    "bytedance-seed/seed-1-6-flash": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": true,
+        "vision": false
+      },
+      "context_window": 256000,
+      "family": "seed",
+      "last_updated": "2025-08-28",
+      "max_output_tokens": 32000,
+      "name": "Seed 1.6 Flash",
+      "release_date": "2025-08-28",
+      "temperature": true
+    },
+    "bytedance-seed/seed-1-6-vision": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "context_window": 256000,
+      "family": "seed",
+      "last_updated": "2025-08-15",
+      "max_output_tokens": 32000,
+      "name": "Seed 1.6 Vision",
+      "release_date": "2025-08-15",
+      "temperature": true
+    },
+    "bytedance-seed/seed-1-8": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": true,
+        "vision": false
+      },
+      "context_window": 256000,
+      "family": "seed",
+      "last_updated": "2025-12-28",
+      "max_output_tokens": 64000,
+      "name": "Seed 1.8",
+      "release_date": "2025-12-28",
+      "temperature": true
+    },
     "bytedance-seed/seed-2.0-code": {
       "capabilities": {
         "input_modalities": [
@@ -2091,6 +2306,202 @@
       "max_output_tokens": 131072,
       "name": "Seed 2.0 Code",
       "release_date": "2026-02-14",
+      "temperature": true
+    },
+    "bytedance-seed/seed-2.0-lite": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "video"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "context_window": 256000,
+      "family": "seed",
+      "last_updated": "2026-02-14",
+      "max_output_tokens": 32000,
+      "name": "Seed 2.0 Lite",
+      "release_date": "2026-02-14",
+      "temperature": true
+    },
+    "bytedance-seed/seed-2.0-mini": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "video"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "context_window": 256000,
+      "family": "seed",
+      "last_updated": "2026-02-14",
+      "max_output_tokens": 32000,
+      "name": "Seed 2.0 Mini",
+      "release_date": "2026-02-14",
+      "temperature": true
+    },
+    "bytedance-seed/seed-2.0-pro": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "video"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "context_window": 256000,
+      "family": "seed",
+      "last_updated": "2026-02-14",
+      "max_output_tokens": 128000,
+      "name": "Seed 2.0 Pro",
+      "release_date": "2026-02-14",
+      "temperature": true
+    },
+    "bytedance-seed/seed-2.1-pro": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "video"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "context_window": 256000,
+      "family": "seed",
+      "last_updated": "2026-06-23",
+      "max_output_tokens": 256000,
+      "name": "Seed 2.1 Pro",
+      "release_date": "2026-06-23",
+      "temperature": true
+    },
+    "bytedance-seed/seed-2.1-turbo": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "video"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "context_window": 256000,
+      "family": "seed",
+      "last_updated": "2026-06-23",
+      "max_output_tokens": 256000,
+      "name": "Seed 2.1 Turbo",
+      "release_date": "2026-06-23",
+      "temperature": true
+    },
+    "bytedance-seed/seed-character": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "video"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "context_window": 256000,
+      "family": "seed",
+      "last_updated": "2026-06-23",
+      "max_output_tokens": 256000,
+      "name": "Seed Character",
+      "release_date": "2026-06-23",
+      "temperature": true
+    },
+    "bytedance-seed/seed-evolving": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "video"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "context_window": 256000,
+      "family": "seed",
+      "last_updated": "2026-06-23",
+      "max_output_tokens": 256000,
+      "name": "Seed Evolving",
+      "release_date": "2026-06-23",
       "temperature": true
     },
     "cohere/c4ai-aya-expanse-32b": {
@@ -4816,6 +5227,32 @@
       "release_date": "2025-10-27",
       "temperature": true
     },
+    "minimax/MiniMax-M2-Her": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": true,
+        "vision": false
+      },
+      "context_window": 200000,
+      "family": "minimax",
+      "last_updated": "2026-01-23",
+      "max_output_tokens": 131000,
+      "name": "MiniMax-M2 Her",
+      "release_date": "2026-01-23",
+      "temperature": true
+    },
     "minimax/MiniMax-M2.1": {
       "capabilities": {
         "input_modalities": [
@@ -5593,6 +6030,33 @@
       "max_output_tokens": 128000,
       "name": "Pixtral Large (latest)",
       "release_date": "2024-11-01",
+      "temperature": true
+    },
+    "mistral/voxtral-small-latest": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "audio"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": true,
+        "vision": false
+      },
+      "context_window": 32000,
+      "family": "voxtral",
+      "last_updated": "2025-07-15",
+      "max_output_tokens": 32000,
+      "name": "Voxtral Small (latest)",
+      "release_date": "2025-07-15",
       "temperature": true
     },
     "moonshotai/kimi-k2-thinking": {
@@ -8014,6 +8478,37 @@
       "release_date": "2024-01-01",
       "temperature": true
     },
+    "perplexity/sonar-deep-research": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "control": "levels",
+          "levels": [
+            "minimal",
+            "low",
+            "medium",
+            "high"
+          ],
+          "supported": true
+        },
+        "tools": false,
+        "vision": false
+      },
+      "context_window": 128000,
+      "family": "sonar",
+      "knowledge": "2025-01",
+      "last_updated": "2025-09-01",
+      "max_output_tokens": 32768,
+      "name": "Sonar Deep Research",
+      "release_date": "2025-02-01",
+      "temperature": false
+    },
     "perplexity/sonar-pro": {
       "capabilities": {
         "input_modalities": [
@@ -8239,6 +8734,35 @@
       "release_date": "2026-06-15",
       "temperature": false
     },
+    "sakana/sakana-namazu": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "pdf"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "control": "on_off",
+          "supported": true
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "context_window": 262144,
+      "family": "sakana-namazu",
+      "last_updated": "2026-08-03",
+      "max_output_tokens": 65536,
+      "name": "Sakana Namazu",
+      "release_date": "2026-08-03",
+      "temperature": true
+    },
     "sarvam/sarvam-105b": {
       "capabilities": {
         "input_modalities": [
@@ -8450,6 +8974,32 @@
       "release_date": "2025-09-02",
       "temperature": true
     },
+    "swiss-ai/apertus-8b": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": true,
+        "vision": false
+      },
+      "context_window": 65536,
+      "knowledge": "2025-09",
+      "last_updated": "2025-09-02",
+      "max_output_tokens": 8192,
+      "name": "Apertus 8B",
+      "release_date": "2025-09-02",
+      "temperature": true
+    },
     "tencent/hy3": {
       "capabilities": {
         "input_modalities": [
@@ -8556,6 +9106,135 @@
       "max_output_tokens": 1048576,
       "name": "Inkling Small",
       "release_date": "2026-07-30",
+      "temperature": true
+    },
+    "trendyol/asure-12b": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": false,
+        "vision": true
+      },
+      "context_window": 131072,
+      "family": "gemma",
+      "last_updated": "2026-02-20",
+      "max_output_tokens": null,
+      "name": "Trendyol Asure 12B",
+      "release_date": "2026-02-19",
+      "temperature": true
+    },
+    "upstage/solar-pro2": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "control": "levels",
+          "levels": [
+            "minimal",
+            "high"
+          ],
+          "supported": true
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": true,
+        "vision": false
+      },
+      "context_window": 65536,
+      "family": "solar-pro",
+      "knowledge": "2025-03",
+      "last_updated": "2025-05-20",
+      "max_output_tokens": 8192,
+      "name": "Solar Pro 2",
+      "release_date": "2025-05-20",
+      "temperature": true
+    },
+    "upstage/solar-pro3": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "control": "levels",
+          "levels": [
+            "low",
+            "medium",
+            "high"
+          ],
+          "supported": true
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": true,
+        "vision": false
+      },
+      "context_window": 131072,
+      "family": "solar-pro",
+      "knowledge": "2025-03",
+      "last_updated": "2026-01",
+      "max_output_tokens": 8192,
+      "name": "Solar Pro 3",
+      "release_date": "2026-01",
+      "temperature": true
+    },
+    "upstage/solar-pro4": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "control": "levels",
+          "levels": [
+            "none",
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ],
+          "supported": true
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": true,
+        "vision": false
+      },
+      "context_window": 524288,
+      "family": "solar-pro",
+      "knowledge": "2026-02",
+      "last_updated": "2026-08-06",
+      "max_output_tokens": 131072,
+      "name": "Solar Pro 4",
+      "release_date": "2026-08-06",
       "temperature": true
     },
     "xai/grok-4.1-fast": {
@@ -8771,6 +9450,30 @@
       "name": "Grok Build 0.1",
       "release_date": "2026-04-16",
       "temperature": true
+    },
+    "xai/grok-imagine-image-2.0": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "image"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "tools": false,
+        "vision": true
+      },
+      "context_window": 8000,
+      "family": "grok",
+      "last_updated": "2026-08-07",
+      "max_output_tokens": 0,
+      "name": "Grok Imagine Image 2.0",
+      "release_date": "2026-08-07",
+      "temperature": false
     },
     "xai/grok-imagine-video-1.5": {
       "capabilities": {
@@ -9141,6 +9844,34 @@
       "last_updated": "2025-12-08",
       "max_output_tokens": 32768,
       "name": "GLM-4.6V",
+      "release_date": "2025-12-08",
+      "temperature": true
+    },
+    "zhipuai/glm-4.6v-flash": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "video"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "context_window": 128000,
+      "family": "glm",
+      "last_updated": "2025-12-08",
+      "max_output_tokens": 32768,
+      "name": "GLM-4.6V-Flash",
       "release_date": "2025-12-08",
       "temperature": true
     },
