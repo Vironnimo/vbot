@@ -25,6 +25,8 @@ _ALTERNATE_SCREEN_MODES = frozenset({47, 1047, 1049})
 _BRACKETED_PASTE_MODE = 2004
 _WINDOWS_INTERACTIVE_SHELLS = ("pwsh.exe", "powershell.exe")
 TERMINAL_TITLE_MAX_CHARS = 160
+_APPLICATION_CURSOR_MODE = 1
+_PRIVATE_MODE_SEQUENCE_MIN = 1000
 _SCREEN_STATE_FIELDS = (
     "savepoints",
     "columns",
@@ -41,6 +43,8 @@ _SCREEN_STATE_FIELDS = (
     "tabstops",
     "cursor",
     "saved_columns",
+    "_private_modes",
+    "bracketed_paste_enabled",
 )
 _ANSI_COLOR_CODES = {
     "black": 30,
@@ -135,9 +139,20 @@ class _TerminalScreen(pyte.Screen):
         self._on_scroll = on_scroll
         self._primary_state: dict[str, Any] | None = None
         self._alternate_modes: set[int] = set()
+        self._private_modes: set[int] = set()
         self.alternate_exit_revision = 0
         self.bracketed_paste_enabled = False
         super().__init__(columns, lines)
+
+    @property
+    def alternate_active(self) -> bool:
+        """Whether the rendered screen is the alternate screen buffer."""
+        return self._primary_state is not None
+
+    @property
+    def private_modes(self) -> frozenset[int]:
+        """Private modes currently enabled by the foreground program."""
+        return frozenset(self._private_modes)
 
     def index(self) -> None:
         top, bottom = self.margins or (0, self.lines - 1)
@@ -148,19 +163,23 @@ class _TerminalScreen(pyte.Screen):
     def set_mode(self, *modes: int, **kwargs: Any) -> None:
         private = kwargs.get("private")
         alternate = _ALTERNATE_SCREEN_MODES.intersection(modes) if private else set()
-        if private and _BRACKETED_PASTE_MODE in modes:
-            self.bracketed_paste_enabled = True
         if alternate and self._primary_state is None:
             self._primary_state = self._capture_state()
             super().reset()
+        if private:
+            self._private_modes.update(modes)
+            if _BRACKETED_PASTE_MODE in modes:
+                self.bracketed_paste_enabled = True
         self._alternate_modes.update(alternate)
         super().set_mode(*modes, **kwargs)
 
     def reset_mode(self, *modes: int, **kwargs: Any) -> None:
         private = kwargs.get("private")
         alternate = _ALTERNATE_SCREEN_MODES.intersection(modes) if private else set()
-        if private and _BRACKETED_PASTE_MODE in modes:
-            self.bracketed_paste_enabled = False
+        if private:
+            self._private_modes.difference_update(modes)
+            if _BRACKETED_PASTE_MODE in modes:
+                self.bracketed_paste_enabled = False
         self._alternate_modes.difference_update(alternate)
         if alternate and not self._alternate_modes and self._primary_state is not None:
             primary_state = self._primary_state
@@ -246,8 +265,29 @@ class TerminalRenderer:
         return self._screen.bracketed_paste_enabled
 
     def ansi_snapshot(self) -> str:
-        """Serialize bounded scrollback plus the current screen for a late viewer."""
+        """Serialize bounded scrollback plus the current screen for a late viewer.
+
+        The stream re-emits the tracked terminal modes before the screen text
+        so the receiving xterm lands in the same state as the live terminal:
+        alternate screen (TUI), application cursor keys, mouse reporting, and
+        bracketed paste. Without these a late viewer renders the alternate
+        screen as plain text on the primary screen, and interactive regions
+        (mouse-dependent TUI controls) are dead.
+        """
         parts = ["\x1b[?25l", "\x1b[0m", "\x1b[2J", "\x1b[H"]
+        if self._screen.alternate_active:
+            parts.append("\x1b[?1049h")
+        for mode in sorted(self._screen.private_modes):
+            if mode in _ALTERNATE_SCREEN_MODES:
+                continue
+            parts.append(f"\x1b[?{mode}h")
+        if _APPLICATION_CURSOR_MODE in self._screen.mode:
+            parts.append("\x1b[?1h")
+        if (
+            self._screen.bracketed_paste_enabled
+            and _BRACKETED_PASTE_MODE not in self._screen.private_modes
+        ):
+            parts.append(f"\x1b[?{_BRACKETED_PASTE_MODE}h")
         if self._scrollback:
             parts.append("\r\n".join(line.text for line in self._scrollback))
             parts.append("\r\n")

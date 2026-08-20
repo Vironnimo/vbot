@@ -147,6 +147,28 @@ def test_renderer_tracks_bracketed_paste_mode() -> None:
     assert renderer.bracketed_paste_enabled is False
 
 
+def test_ansi_snapshot_reemits_alternate_screen_and_terminal_modes() -> None:
+    renderer = TerminalRenderer(12, 3, scrollback_lines=20)
+    renderer.feed("primary")
+
+    renderer.feed("\x1b[?1049h\x1b[?1h\x1b[?1000h\x1b[?2004h\x1b[2J\x1b[Hgame")
+    assert renderer.screen_text() == "game"
+
+    snapshot = renderer.ansi_snapshot()
+    assert "\x1b[?1049h" in snapshot
+    assert "\x1b[?1h" in snapshot
+    assert "\x1b[?1000h" in snapshot
+    assert "\x1b[?2004h" in snapshot
+    assert "game" in snapshot
+
+    renderer.feed("\x1b[?1049l")
+    assert renderer.screen_text() == "primary"
+    assert "\x1b[?1049h" not in renderer.ansi_snapshot()
+    assert "\x1b[?1h" not in renderer.ansi_snapshot()
+    assert "\x1b[?1000h" not in renderer.ansi_snapshot()
+    assert "\x1b[?2004h" not in renderer.ansi_snapshot()
+
+
 def test_ansi_snapshot_preserves_styles_cursor_and_visibility() -> None:
     renderer = TerminalRenderer(10, 2, scrollback_lines=20)
     renderer.feed("\x1b[31;1mred\x1b[0m\x1b[2;4Htail\x1b[?25l")
