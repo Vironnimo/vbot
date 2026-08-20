@@ -46,14 +46,8 @@ export const englishCatalog = Object.freeze({
   'terminals.commandPlaceholder': 'Default shell',
   'terminals.nameLabel': 'Name',
   'terminals.nameHelp':
-    'Optional. A label to recognize this terminal, for example joe. Rename it later from the tile.',
+    'Optional. A label to recognize this terminal, for example joe.',
   'terminals.namePlaceholder': 'Unnamed',
-  'terminals.rename': 'Rename',
-  'terminals.renameTitle': 'Rename terminal',
-  'terminals.renameHelp':
-    'A label to recognize this terminal, for example joe. It appears on the tile and in the list.',
-  'terminals.renamedTitle': 'Terminal renamed',
-  'terminals.renamedMessage': 'The Terminal Session now has the new name.',
   'terminals.argumentsLabel': 'Arguments',
   'terminals.argumentsHelp':
     'Optional. Enter one exact argument per line; spaces within a line are preserved.',

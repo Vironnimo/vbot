@@ -157,7 +157,7 @@ async def test_start_without_command_spawns_host_default_shell(
 
 
 @pytest.mark.asyncio
-async def test_start_accepts_name_and_rename_changes_it(
+async def test_start_accepts_name_and_trimmed_blank_name_fails(
     manager: tuple[TerminalManager, AdapterFactory], tmp_path: Path
 ) -> None:
     terminal_manager, factory = manager
@@ -170,24 +170,15 @@ async def test_start_accepts_name_and_rename_changes_it(
     started_data = cast(dict[str, Any], started["data"])
     assert started["ok"] is True
     assert started_data["name"] == "joe"
-    terminal_id = started_data["terminal_id"]
-
-    renamed = await call(
-        terminal_manager,
-        context,
-        {"action": "rename", "terminal_id": terminal_id, "name": "  alice  "},
-    )
-    assert renamed["ok"] is True
-    assert cast(dict[str, Any], renamed["data"])["name"] == "alice"
 
     listed = await call(terminal_manager, context, {"action": "list"})
     terminals = cast(dict[str, Any], listed["data"])["terminals"]
-    assert terminals[0]["name"] == "alice"
+    assert terminals[0]["name"] == "joe"
 
     blank = await call(
         terminal_manager,
         context,
-        {"action": "rename", "terminal_id": terminal_id, "name": "   "},
+        {"action": "start", "command": "fake-tui", "name": "   "},
     )
     assert cast(dict[str, Any], blank["error"])["code"] == "invalid_arguments"
 

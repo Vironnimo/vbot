@@ -102,21 +102,6 @@ async def _terminal_resize(state: Any, params: JsonObject) -> JsonObject:
     return {"terminal": terminal}
 
 
-async def _terminal_rename(state: Any, params: JsonObject) -> JsonObject:
-    _reject_unsupported(params, {"terminal_id", "name"}, "terminal.rename")
-    terminal_id = _required_string(params, "terminal_id")
-    name = _required_string(params, "name")
-    if not name.strip():
-        raise RpcError(RPC_ERROR_INVALID_REQUEST, "params.name must not be empty")
-    try:
-        terminal = _terminal_manager(state).rename_for_operator(terminal_id, name.strip())
-    except ValueError as exc:
-        raise RpcError(RPC_ERROR_INVALID_REQUEST, str(exc)) from exc
-    except Exception as exc:
-        raise _map_expected_error(exc) from exc
-    return {"terminal": terminal}
-
-
 async def _terminal_kill(state: Any, params: JsonObject) -> JsonObject:
     _reject_unsupported(params, {"terminal_id"}, "terminal.kill")
     terminal_id = _required_string(params, "terminal_id")
@@ -171,7 +156,6 @@ def method_handlers() -> dict[str, RpcMethodHandler]:
         "terminal.start": _terminal_start,
         "terminal.input": _terminal_input,
         "terminal.resize": _terminal_resize,
-        "terminal.rename": _terminal_rename,
         "terminal.kill": _terminal_kill,
         "terminal.forget": _terminal_forget,
     }
