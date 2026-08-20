@@ -46,7 +46,7 @@ export const englishCatalog = Object.freeze({
   'terminals.commandPlaceholder': 'Default shell',
   'terminals.nameLabel': 'Name',
   'terminals.nameHelp':
-    'Optional. A label to recognize this terminal, for example joe.',
+    'Optional. A label so you and the agent can talk about this terminal, for example joe.',
   'terminals.namePlaceholder': 'Unnamed',
   'terminals.argumentsLabel': 'Arguments',
   'terminals.argumentsHelp':
