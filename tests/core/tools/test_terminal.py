@@ -189,6 +189,35 @@ async def test_dispatch_ignores_empty_optional_text_when_key_submits_input(
 
 
 @pytest.mark.asyncio
+async def test_dispatch_ignores_empty_optional_text_as_successful_noop(
+    manager: tuple[TerminalManager, AdapterFactory], tmp_path: Path
+) -> None:
+    terminal_manager, factory = manager
+    registry = ToolRegistry()
+    register_terminal_tool(registry, terminal_manager, ProjectStore(tmp_path))
+    context = make_context(tmp_path)
+
+    started = await registry.dispatch(
+        context,
+        {"action": "start", "command": "fake-tui"},
+        [TERMINAL_TOOL_NAME],
+    )
+    terminal_id = cast(dict[str, Any], started["data"])["terminal_id"]
+
+    result = await registry.dispatch(
+        context,
+        {"action": "input", "terminal_id": terminal_id, "text": ""},
+        [TERMINAL_TOOL_NAME],
+    )
+
+    data = cast(dict[str, Any], result["data"])
+    assert result["ok"] is True
+    assert data["characters_sent"] == 0
+    assert data["screen_revision"] == 0
+    assert factory.adapters[0].writes == []
+
+
+@pytest.mark.asyncio
 async def test_start_accepts_name_and_trimmed_blank_name_fails(
     manager: tuple[TerminalManager, AdapterFactory], tmp_path: Path
 ) -> None:
