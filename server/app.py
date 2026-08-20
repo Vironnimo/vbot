@@ -110,6 +110,11 @@ else:
     FastAPIType = Any
 
 WEBUI_DIST_DIR = Path(__file__).resolve().parents[1] / "webui" / "dist"
+WEBUI_DOCUMENT_CACHE_HEADERS = {
+    "Cache-Control": "no-cache, no-store, must-revalidate",
+    "Pragma": "no-cache",
+    "Expires": "0",
+}
 DEFAULT_SERVER_HOST = "127.0.0.1"
 DEFAULT_SERVER_PORT = 8420
 DEFAULT_SERVER_PORT_SOURCE = "default"
@@ -950,7 +955,7 @@ def _mount_webui(app: FastAPIType) -> None:
 
     @app.get("/", include_in_schema=False)
     async def webui_index() -> FileResponse:
-        return FileResponse(webui_index_file)
+        return FileResponse(webui_index_file, headers=WEBUI_DOCUMENT_CACHE_HEADERS)
 
     @app.get("/{path:path}", include_in_schema=False)
     async def webui_fallback(path: str) -> FileResponse:
@@ -959,7 +964,7 @@ def _mount_webui(app: FastAPIType) -> None:
         requested_file = _safe_webui_file_path(webui_dist_dir, path)
         if requested_file is not None:
             return FileResponse(requested_file)
-        return FileResponse(webui_index_file)
+        return FileResponse(webui_index_file, headers=WEBUI_DOCUMENT_CACHE_HEADERS)
 
 
 async def _stream_websocket_events(websocket: WebSocket, stream: Any) -> None:

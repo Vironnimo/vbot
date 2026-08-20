@@ -19,6 +19,7 @@ from core.sessions import ChatSessionManager
 from core.utils.config import Config
 from core.utils.server_control import CONTROL_SHUTDOWN_PATH, CONTROL_TOKEN_HEADER
 from server.app import (
+    WEBUI_DOCUMENT_CACHE_HEADERS,
     ServerEventBus,
     _active_runs_snapshot,
     _bus_epoch,
@@ -397,10 +398,14 @@ def test_webui_serves_index_static_assets_and_spa_fallback(monkeypatch, tmp_path
 
     assert index_response.status_code == 200
     assert '<div id="app"></div>' in index_response.text
+    assert index_response.headers["cache-control"] == WEBUI_DOCUMENT_CACHE_HEADERS["Cache-Control"]
     assert asset_response.status_code == 200
     assert asset_response.text == "console.log('webui');"
     assert fallback_response.status_code == 200
     assert '<script type="module" src="/assets/app.js"></script>' in fallback_response.text
+    assert (
+        fallback_response.headers["cache-control"] == WEBUI_DOCUMENT_CACHE_HEADERS["Cache-Control"]
+    )
 
 
 @pytest.mark.asyncio
