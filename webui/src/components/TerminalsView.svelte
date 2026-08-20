@@ -421,12 +421,18 @@
       if (!dismissed) {
         return;
       }
+      const wasRunning = !terminalIsFinished(item);
       onToast({
         title: t('terminals.closedTitle', 'Terminal closed'),
-        message: t(
-          'terminals.closedMessage',
-          'The Terminal Session was stopped and removed from the list.',
-        ),
+        message: wasRunning
+          ? t(
+              'terminals.closedMessage',
+              'The Terminal Session was stopped and removed from the list.',
+            )
+          : t(
+              'terminals.closedMessageHistory',
+              'The Terminal Session was removed from the list.',
+            ),
         variant: 'success',
       });
     } finally {
