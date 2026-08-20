@@ -48,6 +48,9 @@
   let startCommand = $state('');
   let startArguments = $state('');
   let startWorkdir = $state('');
+  let startName = $state('');
+  let renameDialogTerminalId = $state('');
+  let renameDialogName = $state('');
   let mounted = false;
   let xtermModulesPromise = null;
   const tileRegistry = new SvelteMap();
@@ -438,6 +441,45 @@
     dismissDialogTerminalId = terminalId;
   }
 
+  function openRenameDialog(terminalId) {
+    const item = findTerminal(terminalId);
+    if (!item) {
+      return;
+    }
+    renameDialogTerminalId = terminalId;
+    renameDialogName = String(item.name || '');
+    viewState.actionError = '';
+  }
+
+  function closeRenameDialog() {
+    if (viewState.renaming) {
+      return;
+    }
+    renameDialogTerminalId = '';
+    viewState.actionError = '';
+  }
+
+  async function confirmRename(event) {
+    event.preventDefault();
+    const terminalId = renameDialogTerminalId;
+    const renamed = await controller.renameTerminal(
+      terminalId,
+      renameDialogName,
+    );
+    if (!renamed) {
+      return;
+    }
+    renameDialogTerminalId = '';
+    onToast({
+      title: t('terminals.renamedTitle', 'Terminal renamed'),
+      message: t(
+        'terminals.renamedMessage',
+        'The Terminal Session now has the new name.',
+      ),
+      variant: 'success',
+    });
+  }
+
   async function confirmStop() {
     const terminalId = stopDialogTerminalId;
     const stopped = await controller.killTerminal(terminalId);
@@ -480,6 +522,7 @@
 
   function openStartDialog() {
     applyLaunchHistory(viewState.launchHistory[0] ?? null);
+    startName = '';
     viewState.startError = '';
     startDialogOpen = true;
   }
@@ -531,6 +574,7 @@
     event.preventDefault();
     const command = startCommand.trim();
     const workdir = startWorkdir.trim();
+    const name = startName.trim();
     const args = startArguments
       .split(/\r?\n/)
       .filter((argument) => argument.length > 0);
@@ -543,6 +587,9 @@
     }
     if (workdir) {
       params.workdir = workdir;
+    }
+    if (name) {
+      params.name = name;
     }
 
     const started = await controller.startManualTerminal(params);
@@ -572,6 +619,10 @@
   }
 
   function terminalTitle(item) {
+    const customName = typeof item?.name === 'string' ? item.name.trim() : '';
+    if (customName) {
+      return customName;
+    }
     const announcedTitle =
       typeof item?.title === 'string' ? item.title.trim() : '';
     if (announcedTitle) {
@@ -983,6 +1034,22 @@
                   <Button
                     variant="tertiary"
                     icon
+                    ariaLabel={t('terminals.rename', 'Rename')}
+                    tooltip={t('terminals.rename', 'Rename')}
+                    onClick={() => openRenameDialog(item.terminal_id)}
+                  >
+                    <svg
+                      viewBox="0 0 14 14"
+                      width="11"
+                      height="11"
+                      aria-hidden="true"
+                    >
+                      <path d="M9.5 2.5l2 2L5 11l-2.5.5L3 9zM8.5 3.5l2 2" />
+                    </svg>
+                  </Button>
+                  <Button
+                    variant="tertiary"
+                    icon
                     ariaLabel={isMaximized
                       ? t('terminals.restore', 'Restore')
                       : t('terminals.maximize', 'Maximize')}
@@ -1186,6 +1253,29 @@
           </FormField>
 
           <FormField
+            controlId="terminal-start-name"
+            label={t('terminals.nameLabel', 'Name')}
+            help={t(
+              'terminals.nameHelp',
+              'Optional. A label to recognize this terminal, for example joe. Rename it later from the tile.',
+            )}
+          >
+            {#snippet children(field)}
+              <TextField
+                id={field.controlId}
+                variant="modal"
+                aria-describedby={field.describedBy}
+                value={startName}
+                disabled={viewState.startingTerminal}
+                placeholder={t('terminals.namePlaceholder', 'Unnamed')}
+                onInput={(next) => {
+                  startName = next;
+                }}
+              />
+            {/snippet}
+          </FormField>
+
+          <FormField
             controlId="terminal-start-arguments"
             label={t('terminals.argumentsLabel', 'Arguments')}
             help={t(
@@ -1286,6 +1376,61 @@
     onConfirm={confirmDismiss}
     onCancel={() => (dismissDialogTerminalId = '')}
   />
+{/if}
+
+{#if renameDialogTerminalId}
+  <Modal
+    title={t('terminals.renameTitle', 'Rename terminal')}
+    labelledById="terminal-rename-modal-title"
+    closeDisabled={Boolean(viewState.renaming)}
+    onClose={closeRenameDialog}
+  >
+    {#snippet body()}
+      <form id="terminal-rename-form" onsubmit={confirmRename}>
+        <div class="modal-body terminals-view__rename-form">
+          <FormField
+            controlId="terminal-rename-name"
+            label={t('terminals.nameLabel', 'Name')}
+            help={t(
+              'terminals.renameHelp',
+              'A label to recognize this terminal, for example joe. It appears on the tile and in the list.',
+            )}
+          >
+            {#snippet children(field)}
+              <TextField
+                id={field.controlId}
+                variant="modal"
+                aria-describedby={field.describedBy}
+                value={renameDialogName}
+                disabled={Boolean(viewState.renaming)}
+                placeholder={t('terminals.namePlaceholder', 'Unnamed')}
+                onInput={(next) => {
+                  renameDialogName = next;
+                }}
+              />
+            {/snippet}
+          </FormField>
+        </div>
+      </form>
+    {/snippet}
+    {#snippet footer()}
+      <Button
+        variant="secondary"
+        disabled={Boolean(viewState.renaming)}
+        onClick={closeRenameDialog}
+      >
+        {t('common.cancel', 'Cancel')}
+      </Button>
+      <Button
+        type="submit"
+        form="terminal-rename-form"
+        variant="primary"
+        loading={Boolean(viewState.renaming)}
+      >
+        {t('terminals.rename', 'Rename')}
+      </Button>
+    {/snippet}
+  </Modal>
 {/if}
 
 <style>

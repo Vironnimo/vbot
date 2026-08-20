@@ -199,6 +199,7 @@ class TerminalSession:
     log_lease: TemporaryFileLease | None
     launch_command: str | None = None
     launch_arguments: tuple[str, ...] = ()
+    name: str | None = None
     exit_code: int | None = None
     finished_at: datetime | None = None
     attention_revision: int = 0
@@ -332,6 +333,7 @@ class TerminalManager:
         rows: int,
         origin_run_id: str,
         initial_text: str | None = None,
+        name: str | None = None,
     ) -> TerminalSession:
         """Start one Agent-owned program behind PTY/ConPTY."""
         _validate_owner(owner)
@@ -344,6 +346,7 @@ class TerminalManager:
             rows=rows,
             origin_run_id=origin_run_id,
             initial_text=initial_text,
+            name=name,
         )
 
     async def spawn_for_operator(
@@ -353,6 +356,7 @@ class TerminalManager:
         arguments: Sequence[str],
         cwd: Path | None,
         launch_workdir: str | None = None,
+        name: str | None = None,
         columns: int = TERMINAL_DEFAULT_COLUMNS,
         rows: int = TERMINAL_DEFAULT_ROWS,
     ) -> dict[str, Any]:
@@ -382,6 +386,7 @@ class TerminalManager:
             columns=columns,
             rows=rows,
             origin_run_id=None,
+            name=name,
             launch_command=launch_command,
             launch_arguments=launch_arguments,
         )
@@ -416,6 +421,7 @@ class TerminalManager:
         rows: int,
         origin_run_id: str | None,
         initial_text: str | None = None,
+        name: str | None = None,
         launch_command: str | None = None,
         launch_arguments: tuple[str, ...] = (),
     ) -> TerminalSession:
@@ -464,6 +470,7 @@ class TerminalManager:
             arguments=tuple(argv[1:]),
             launch_command=launch_command,
             launch_arguments=launch_arguments,
+            name=name,
             cwd=cwd,
             state="starting" if initial_text is not None else "ready",
             started_at=_utc_now(),
@@ -643,6 +650,22 @@ class TerminalManager:
         """Resize an operator-selected Terminal Session."""
         session = self._get_for_operator(terminal_id)
         await self._resize_session(session, columns=columns, rows=rows)
+        return self._operator_summary(session)
+
+    async def rename_session(
+        self, terminal_id: str, owner: TerminalOwner, name: str
+    ) -> dict[str, Any]:
+        """Give one Agent-owned Terminal Session a human-friendly name."""
+        session = self.get_session(terminal_id, owner)
+        session.name = name
+        self._publish_state(session)
+        return await self.snapshot(terminal_id, owner)
+
+    def rename_for_operator(self, terminal_id: str, name: str) -> dict[str, Any]:
+        """Give an operator-selected Terminal Session a human-friendly name."""
+        session = self._get_for_operator(terminal_id)
+        session.name = name
+        self._publish_state(session)
         return self._operator_summary(session)
 
     async def kill_for_operator(self, terminal_id: str) -> dict[str, Any]:
@@ -1288,6 +1311,7 @@ class TerminalManager:
             "terminal_id": session.terminal_id,
             "state": session.state,
             "command": session.command,
+            "name": session.name,
             "title": session.renderer.title,
             "arguments": list(session.arguments),
             "workdir": model_path(session.cwd),
@@ -1318,6 +1342,7 @@ class TerminalManager:
             "terminal_id": session.terminal_id,
             "state": session.state,
             "command": Path(session.command).name or session.command,
+            "name": session.name,
             "arguments": list(session.arguments),
             "launch_command": session.launch_command,
             "launch_args": list(session.launch_arguments),

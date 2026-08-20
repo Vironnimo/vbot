@@ -89,6 +89,7 @@ def test_schema_matches_flat_action_tool_conventions(tmp_path: Path) -> None:
     assert properties["lines"]["default"] == 30
     assert properties["timeout_ms"]["default"] == TERMINAL_DEFAULT_WAIT_MS
     assert "default" not in properties["command"]
+    assert properties["name"]["maxLength"] == 80
     assert properties["enter"]["default"] is False
     assert all(
         isinstance(property_schema.get("description"), str) and property_schema["description"]
@@ -153,6 +154,50 @@ async def test_start_without_command_spawns_host_default_shell(
     assert data["handoff_note"]
     assert factory.calls[0][0] == ["host-shell"]
     assert not any(name.startswith("VBOT_TERMINAL_") for name in factory.calls[0][2])
+
+
+@pytest.mark.asyncio
+async def test_start_accepts_name_and_rename_changes_it(
+    manager: tuple[TerminalManager, AdapterFactory], tmp_path: Path
+) -> None:
+    terminal_manager, factory = manager
+    context = make_context(tmp_path)
+    started = await call(
+        terminal_manager,
+        context,
+        {"action": "start", "command": "fake-tui", "name": "  joe  "},
+    )
+    started_data = cast(dict[str, Any], started["data"])
+    assert started["ok"] is True
+    assert started_data["name"] == "joe"
+    terminal_id = started_data["terminal_id"]
+
+    renamed = await call(
+        terminal_manager,
+        context,
+        {"action": "rename", "terminal_id": terminal_id, "name": "  alice  "},
+    )
+    assert renamed["ok"] is True
+    assert cast(dict[str, Any], renamed["data"])["name"] == "alice"
+
+    listed = await call(terminal_manager, context, {"action": "list"})
+    terminals = cast(dict[str, Any], listed["data"])["terminals"]
+    assert terminals[0]["name"] == "alice"
+
+    blank = await call(
+        terminal_manager,
+        context,
+        {"action": "rename", "terminal_id": terminal_id, "name": "   "},
+    )
+    assert cast(dict[str, Any], blank["error"])["code"] == "invalid_arguments"
+
+    invalid = await call(
+        terminal_manager,
+        context,
+        {"action": "start", "command": "fake-tui", "name": "x" * 81},
+    )
+    assert cast(dict[str, Any], invalid["error"])["code"] == "invalid_arguments"
+    assert len(factory.calls) == 1
 
 
 @pytest.mark.asyncio

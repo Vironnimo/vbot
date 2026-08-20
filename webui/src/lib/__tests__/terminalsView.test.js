@@ -400,6 +400,43 @@ describe('terminal live controller', () => {
     controller.destroy();
   });
 
+  it('renames a terminal and merges the returned summary', async () => {
+    const state = createTerminalsViewState();
+    const streams = [];
+    const api = fakeApi({
+      streams,
+      terminals: [terminal('term-1')],
+    });
+    const controller = createTerminalsController({ state, api });
+
+    await controller.start();
+    api.renameTerminal.mockResolvedValueOnce({
+      terminal: terminal('term-1', { name: 'joe' }),
+    });
+
+    const renamed = await controller.renameTerminal('term-1', ' joe ');
+
+    expect(renamed).toBe(true);
+    expect(api.renameTerminal).toHaveBeenCalledWith('term-1', 'joe');
+    expect(state.terminals[0].name).toBe('joe');
+    expect(state.actionError).toBe('');
+    controller.destroy();
+  });
+
+  it('rejects a blank rename without calling the server', async () => {
+    const state = createTerminalsViewState();
+    const streams = [];
+    const api = fakeApi({ streams });
+    const controller = createTerminalsController({ state, api });
+
+    await controller.start();
+    const renamed = await controller.renameTerminal('term-1', '   ');
+
+    expect(renamed).toBe(false);
+    expect(api.renameTerminal).not.toHaveBeenCalled();
+    controller.destroy();
+  });
+
   it('forgets a finished terminal and selects the next one', async () => {
     const state = createTerminalsViewState();
     const streams = [];
@@ -550,6 +587,7 @@ function fakeApi({ streams, terminals = [terminal('term-1')] }) {
     resizeTerminal: vi.fn().mockResolvedValue({}),
     killTerminal: vi.fn().mockResolvedValue({}),
     forgetTerminal: vi.fn().mockResolvedValue({}),
+    renameTerminal: vi.fn().mockResolvedValue({}),
     subscribeTerminalEvents: vi.fn((_terminalId, handlers) => {
       const connection = { close: vi.fn() };
       streams.push({

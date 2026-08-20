@@ -2,6 +2,7 @@ import {
   forgetTerminal,
   killTerminal,
   listTerminals,
+  renameTerminal,
   resizeTerminal,
   sendTerminalInput,
   startTerminal,
@@ -70,6 +71,7 @@ export function createTerminalsViewState() {
     streams: {},
     killing: '',
     forgetting: '',
+    renaming: '',
     startingTerminal: false,
     startError: '',
   };
@@ -146,6 +148,7 @@ export function createTerminalsController({
     forgetTerminal,
     killTerminal,
     listTerminals,
+    renameTerminal,
     resizeTerminal,
     sendTerminalInput,
     startTerminal,
@@ -560,6 +563,37 @@ export function createTerminalsController({
       });
   }
 
+  async function renameTerminal(terminalId, name) {
+    const value = String(name ?? '').trim();
+    if (
+      !terminalId ||
+      !value ||
+      state.renaming === terminalId ||
+      terminalIsFinished(
+        state.terminals.find((item) => item.terminal_id === terminalId),
+      )
+    ) {
+      return false;
+    }
+    state.renaming = terminalId;
+    state.actionError = '';
+    try {
+      const result = await api.renameTerminal(terminalId, value);
+      const terminal = result?.terminal;
+      if (terminal && typeof terminal.terminal_id === 'string') {
+        mergeTerminalSummary(state, terminal);
+      }
+      return true;
+    } catch (error) {
+      state.actionError = errorMessage(error);
+      return false;
+    } finally {
+      if (state.renaming === terminalId) {
+        state.renaming = '';
+      }
+    }
+  }
+
   async function killTerminal(terminalId) {
     if (
       !terminalId ||
@@ -588,6 +622,10 @@ export function createTerminalsController({
 
   async function killSelected() {
     return killTerminal(state.selectedTerminalId);
+  }
+
+  async function renameSelected(name) {
+    return renameTerminal(state.selectedTerminalId, name);
   }
 
   async function forgetTerminal(terminalId) {
@@ -726,6 +764,8 @@ export function createTerminalsController({
     killTerminal,
     loadTerminals,
     queueInput,
+    renameSelected,
+    renameTerminal,
     resize,
     selectTerminal,
     setServerUnavailable,
