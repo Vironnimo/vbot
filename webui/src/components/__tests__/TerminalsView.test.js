@@ -131,7 +131,7 @@ describe('TerminalsView', () => {
     expect(document.body.textContent).toContain('python');
     expect(document.body.textContent).toContain('PID 4321');
     expect(document.body.textContent).toContain('main@vbot');
-    expect(document.querySelector('button[role="switch"]')).toBeTruthy();
+    expect(document.querySelector('button[role="switch"]')).toBeNull();
     expect(document.body.textContent).not.toContain(
       'Quiet is not a semantic prompt.',
     );
@@ -246,18 +246,13 @@ describe('TerminalsView', () => {
     ).toBeTruthy();
     expect(
       [...document.querySelectorAll('button')].some(
-        (button) => button.getAttribute('aria-label') === 'Stop terminal',
-      ),
-    ).toBe(false);
-    expect(
-      [...document.querySelectorAll('button')].some(
-        (button) => button.getAttribute('aria-label') === 'Dismiss',
+        (button) => button.getAttribute('aria-label') === 'Close terminal',
       ),
     ).toBe(true);
     expect(terminalInstances[0].options.disableStdin).toBe(true);
   });
 
-  it('dismisses a finished Terminal Session and removes it from the list', async () => {
+  it('closes a finished Terminal Session and removes it from the list', async () => {
     listTerminalsMock.mockResolvedValue({
       terminals: [terminal({ state: 'exited', exit_code: 0 })],
     });
@@ -277,17 +272,33 @@ describe('TerminalsView', () => {
     expect(exitCodeEl.textContent).toContain('Exit code');
     expect(exitCodeEl.textContent).toContain('0');
 
-    findButtonByAriaLabel('Dismiss').click();
-    flushSync();
-    const dialog = document.querySelector('[role="dialog"][aria-modal="true"]');
-    expect(dialog).toBeTruthy();
-    const confirmButton = [...dialog.querySelectorAll('button')].find(
-      (b) => b.textContent.trim() === 'Dismiss',
-    );
-    expect(confirmButton).toBeTruthy();
-    confirmButton.click();
+    findButtonByAriaLabel('Close terminal').click();
     await waitFor(() => forgetTerminalMock.mock.calls.length > 0);
     expect(forgetTerminalMock).toHaveBeenCalledWith('term-1');
+    expect(killTerminalMock).not.toHaveBeenCalled();
+  });
+
+  it('closes a running Terminal Session with one click: stop, then remove', async () => {
+    listTerminalsMock.mockResolvedValue({ terminals: [terminal()] });
+    mountedComponent = mount(TerminalsView, { target: document.body });
+    flushSync();
+    await waitFor(() => streams.length === 1 && terminalInstances.length === 1);
+
+    // The post-kill reload keeps the session retained (server behavior), so
+    // the single close action continues with forget to remove it from the
+    // list — no confirmation dialog in between.
+    listTerminalsMock.mockResolvedValueOnce({
+      terminals: [terminal({ state: 'exited' })],
+    });
+
+    findButtonByAriaLabel('Close terminal').click();
+    await waitFor(() => killTerminalMock.mock.calls.length > 0);
+    await waitFor(() => forgetTerminalMock.mock.calls.length > 0);
+    expect(killTerminalMock).toHaveBeenCalledWith('term-1');
+    expect(forgetTerminalMock).toHaveBeenCalledWith('term-1');
+    expect(
+      document.querySelector('[role="dialog"][aria-modal="true"]'),
+    ).toBeNull();
   });
 
   it('starts a manual terminal from the modal and enables direct control', async () => {
@@ -440,7 +451,6 @@ describe('TerminalsView', () => {
     const firstBar = tiles[0].querySelector('.terminals-view__tile-bar');
     expect(firstBar.textContent).toContain('First terminal');
     expect(firstBar.textContent).toContain('main@vbot');
-    expect(firstBar.textContent).toContain('Working');
     expect(tiles[0].getAttribute('data-control')).toBe('observe');
     expect(tiles[1].getAttribute('data-control')).toBe('observe');
   });

@@ -341,6 +341,7 @@ describe('terminal live controller', () => {
     api.listTerminals.mockResolvedValueOnce({ terminals: [] });
     await expect(controller.killSelected()).resolves.toBe(true);
     expect(api.killTerminal).toHaveBeenCalledWith('term-1');
+    expect(api.forgetTerminal).not.toHaveBeenCalled();
     expect(state.terminals).toEqual([]);
     expect(state.selectedTerminalId).toBe('');
     expect(Object.keys(state.streams)).toEqual([]);
