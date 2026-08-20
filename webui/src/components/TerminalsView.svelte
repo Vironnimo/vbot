@@ -1200,7 +1200,7 @@
             label={t('terminals.nameLabel', 'Name')}
             help={t(
               'terminals.nameHelp',
-              'Optional. A label to recognize this terminal, for example joe. Rename it later from the tile.',
+              'Optional. A label so you and the agent can talk about this terminal, for example joe.',
             )}
           >
             {#snippet children(field)}

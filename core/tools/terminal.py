@@ -176,9 +176,10 @@ TERMINAL_TOOL_PARAMETERS: JsonObject = {
             "minLength": 1,
             "maxLength": 80,
             "description": (
-                "Human-friendly name for the Terminal Session, so you and the user can identify "
-                "it later; included in list, status, and summaries. Omit to leave the Terminal "
-                "unnamed and rely on the announced title or command."
+                "Human-friendly label for the Terminal Session, so you and the user can talk "
+                "about it in conversation; included in list, status, and summaries. Tool calls "
+                "always use terminal_id, never the name. Omit to leave the Terminal unnamed and "
+                "rely on the announced title or command."
             ),
         },
         "columns": {
