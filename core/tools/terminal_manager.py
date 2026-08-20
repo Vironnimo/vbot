@@ -652,22 +652,6 @@ class TerminalManager:
         await self._resize_session(session, columns=columns, rows=rows)
         return self._operator_summary(session)
 
-    async def rename_session(
-        self, terminal_id: str, owner: TerminalOwner, name: str
-    ) -> dict[str, Any]:
-        """Give one Agent-owned Terminal Session a human-friendly name."""
-        session = self.get_session(terminal_id, owner)
-        session.name = name
-        self._publish_state(session)
-        return await self.snapshot(terminal_id, owner)
-
-    def rename_for_operator(self, terminal_id: str, name: str) -> dict[str, Any]:
-        """Give an operator-selected Terminal Session a human-friendly name."""
-        session = self._get_for_operator(terminal_id)
-        session.name = name
-        self._publish_state(session)
-        return self._operator_summary(session)
-
     async def kill_for_operator(self, terminal_id: str) -> dict[str, Any]:
         """Explicitly stop an operator-selected Terminal Session."""
         session = self._get_for_operator(terminal_id)

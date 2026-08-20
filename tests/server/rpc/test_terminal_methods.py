@@ -15,7 +15,6 @@ from server.rpc.terminal_methods import (
     _terminal_input,
     _terminal_kill,
     _terminal_list,
-    _terminal_rename,
     _terminal_resize,
     _terminal_start,
 )
@@ -27,7 +26,6 @@ class FakeTerminalManager:
         self.resizes: list[tuple[str, int, int]] = []
         self.kills: list[str] = []
         self.forgotten: list[str] = []
-        self.renamed: list[tuple[str, str]] = []
         self.starts: list[dict[str, Any]] = []
 
     def list_for_operator(self) -> list[dict[str, Any]]:
@@ -66,10 +64,6 @@ class FakeTerminalManager:
         self.forgotten.append(terminal_id)
         return {"terminal_id": terminal_id, "state": "exited"}
 
-    def rename_for_operator(self, terminal_id: str, name: str) -> dict[str, Any]:
-        self.renamed.append((terminal_id, name))
-        return {"terminal_id": terminal_id, "state": "ready", "name": name}
-
 
 def _state(manager: FakeTerminalManager) -> SimpleNamespace:
     return SimpleNamespace(runtime=SimpleNamespace(terminal_manager=manager))
@@ -98,9 +92,6 @@ async def test_terminal_operator_handlers_project_list_input_resize_and_kill() -
         "terminal": {"terminal_id": "manual-1", "state": "ready", "owner": None},
         "launch_history": manager.list_operator_launch_history(),
     }
-    assert await _terminal_rename(state, {"terminal_id": "term-1", "name": " alice "}) == {
-        "terminal": {"terminal_id": "term-1", "state": "ready", "name": "alice"}
-    }
     assert await _terminal_input(state, {"terminal_id": "term-1", "data": "status\r"}) == {
         "terminal": {"terminal_id": "term-1", "state": "working"}
     }
@@ -121,7 +112,6 @@ async def test_terminal_operator_handlers_project_list_input_resize_and_kill() -
     assert manager.resizes == [("term-1", 100, 30)]
     assert manager.kills == ["term-1"]
     assert manager.forgotten == ["term-1"]
-    assert manager.renamed == [("term-1", "alice")]
     assert manager.starts == [
         {
             "command": "codex",
@@ -155,9 +145,6 @@ async def test_terminal_operator_handlers_validate_and_register_contract() -> No
     with pytest.raises(RpcError) as blank_name_error:
         await _terminal_start(state, {"name": "   "})
     assert blank_name_error.value.code == "invalid_request"
-    with pytest.raises(RpcError) as rename_blank_error:
-        await _terminal_rename(state, {"terminal_id": "term-1", "name": "  "})
-    assert rename_blank_error.value.code == "invalid_request"
     with pytest.raises(RpcError) as blank_argument_error:
         await _terminal_start(state, {"args": ["  "]})
     assert blank_argument_error.value.code == "invalid_request"
@@ -168,7 +155,6 @@ async def test_terminal_operator_handlers_validate_and_register_contract() -> No
         "terminal.start",
         "terminal.input",
         "terminal.resize",
-        "terminal.rename",
         "terminal.kill",
         "terminal.forget",
     } <= set(handlers)

@@ -949,20 +949,6 @@ export function forgetTerminal(terminalId, options = {}) {
   return rpc('terminal.forget', { terminal_id: terminalId }, options);
 }
 
-export function renameTerminal(terminalId, name, options = {}) {
-  requireNonEmptyString(
-    terminalId,
-    'Terminal id must be a non-empty string',
-    'terminal.rename',
-  );
-  requireNonEmptyString(
-    name,
-    'Terminal name must be a non-empty string',
-    'terminal.rename',
-  );
-  return rpc('terminal.rename', { terminal_id: terminalId, name }, options);
-}
-
 export function listCronJobs(options = {}) {
   return rpc('cron.list', {}, options);
 }
