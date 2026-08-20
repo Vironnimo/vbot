@@ -33,6 +33,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
+from uuid import uuid4
 
 from desktop.main import (
     ACCESSOR_QUERY_PARAM,
@@ -60,6 +61,7 @@ logger = logging.getLogger("vbot.desktop.connection")
 
 _DEFAULT_HOST_PLACEHOLDER = "127.0.0.1"
 _DEFAULT_PORT_PLACEHOLDER = 8420
+DESKTOP_SESSION_QUERY_PARAM = "desktop_session"
 
 
 class WindowProtocol(Protocol):
@@ -284,6 +286,10 @@ class ConnectionController:
         self._settings_file = settings_file
         self._window = window
         self._probe = probe
+        # WebView2 reuses this persistent profile across Desktop restarts. A
+        # launch-specific document URL prevents a previously cached SPA entry
+        # from selecting an obsolete content-hashed asset bundle after an update.
+        self._desktop_session_id = uuid4().hex
         # Notified with the base WebUI URL on every successful connect, so the
         # voice worker follows the window's active server (wired to the bridge in
         # the launcher — the controller stays decoupled from the voice stack).
@@ -366,7 +372,7 @@ class ConnectionController:
             self._notify_active_server(target.url)
             return PreparedConnection(
                 result=result,
-                navigation_url=_with_accessor_param(target.url),
+                navigation_url=_with_accessor_param(target.url, self._desktop_session_id),
             )
 
         logger.warning(
@@ -797,11 +803,13 @@ def _connection_error_copy(status: str) -> tuple[str, str]:
     raise ValueError(f"Unsupported Desktop probe status: {status}")
 
 
-def _with_accessor_param(url: str) -> str:
-    """Append ``?accessor=desktop`` to a URL, preserving existing query params."""
+def _with_accessor_param(url: str, desktop_session_id: str) -> str:
+    """Mark a Desktop WebUI URL and make its document cache key launch-specific."""
 
     separator = "&" if "?" in url else "?"
-    return f"{url}{separator}{ACCESSOR_QUERY_PARAM}"
+    return (
+        f"{url}{separator}{ACCESSOR_QUERY_PARAM}&{DESKTOP_SESSION_QUERY_PARAM}={desktop_session_id}"
+    )
 
 
 def _display_port(value: Any) -> int:
