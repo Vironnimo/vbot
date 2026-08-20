@@ -213,6 +213,7 @@ class TerminalSession:
     attention_event: asyncio.Event = field(default_factory=asyncio.Event, repr=False)
     reader_task: asyncio.Task[None] | None = field(default=None, repr=False)
     initial_input_task: asyncio.Task[None] | None = field(default=None, repr=False)
+    operator_command_task: asyncio.Task[None] | None = field(default=None, repr=False)
     settle_task: asyncio.Task[None] | None = field(default=None, repr=False)
     notification_task: asyncio.Task[None] | None = field(default=None, repr=False)
     stream_sequence: int = 0
@@ -290,7 +291,12 @@ class TerminalManager:
             self._cancel_delivery(session)
             if session.state not in {"exited", "error"}:
                 terminate_process_tree(session.adapter)
-            for task in (session.reader_task, session.initial_input_task, session.settle_task):
+            for task in (
+                session.reader_task,
+                session.initial_input_task,
+                session.operator_command_task,
+                session.settle_task,
+            ):
                 if task is not None and not task.done():
                     task.cancel()
             self._finish_files(session)
@@ -306,6 +312,7 @@ class TerminalManager:
             for task in (
                 session.reader_task,
                 session.initial_input_task,
+                session.operator_command_task,
                 session.settle_task,
                 session.notification_task,
             ):
@@ -379,11 +386,11 @@ class TerminalManager:
             launch_arguments=launch_arguments,
         )
         if launch_command is not None:
-            session.initial_input_task = asyncio.create_task(
+            session.operator_command_task = asyncio.create_task(
                 self._send_operator_command(session),
                 name=f"terminal:{session.terminal_id}:operator-command",
             )
-            session.initial_input_task.add_done_callback(
+            session.operator_command_task.add_done_callback(
                 lambda task: _log_background_task_result(
                     task, f"Terminal operator command failed for terminal={session.terminal_id}"
                 )
@@ -608,9 +615,17 @@ class TerminalManager:
                 f"Terminal input must not exceed {TERMINAL_INPUT_MAX_CHARS} characters"
             )
         session = self._get_for_operator(terminal_id)
-        initial_task = session.initial_input_task
-        if initial_task is not None and not initial_task.done():
-            initial_task.cancel()
+        command_task = session.operator_command_task
+        if command_task is not None and not command_task.done():
+            # The launch command is typed into the shell while it is still
+            # booting; user input must queue behind it instead of racing it
+            # into the same line (which would corrupt the command). The task
+            # always terminates: its shell-readiness wait is bounded.
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(
+                    asyncio.shield(command_task),
+                    timeout=TERMINAL_OPERATOR_READY_TIMEOUT_SECONDS + 1.0,
+                )
         async with session.lock:
             self._require_live(session)
             state_changed = session.state != "working"
@@ -1103,6 +1118,13 @@ class TerminalManager:
             and not initial_task.done()
         ):
             initial_task.cancel()
+        command_task = session.operator_command_task
+        if (
+            command_task is not None
+            and command_task is not asyncio.current_task()
+            and not command_task.done()
+        ):
+            command_task.cancel()
         settle_task = session.settle_task
         if (
             settle_task is not None
@@ -1218,6 +1240,13 @@ class TerminalManager:
             and not initial_task.done()
         ):
             initial_task.cancel()
+        command_task = session.operator_command_task
+        if (
+            command_task is not None
+            and command_task is not asyncio.current_task()
+            and not command_task.done()
+        ):
+            command_task.cancel()
         if suppress_attention:
             session.suppress_exit_attention = True
             self._cancel_delivery(session)
