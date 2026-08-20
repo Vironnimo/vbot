@@ -508,13 +508,14 @@ async def _handle_input(
         expected_screen_revision=expected_revision,
         origin_run_id=context.run_id,
     )
-    if prior_attention_revision is not None:
-        context.after_result_persisted(
-            lambda: terminal_manager.acknowledge_attention(
-                terminal_id, owner, prior_attention_revision
+    if data["characters_sent"]:
+        if prior_attention_revision is not None:
+            context.after_result_persisted(
+                lambda: terminal_manager.acknowledge_attention(
+                    terminal_id, owner, prior_attention_revision
+                )
             )
-        )
-    data["delivery"] = "automatic_terminal_activity"
+        data["delivery"] = "automatic_terminal_activity"
     return tool_success(data)
 
 

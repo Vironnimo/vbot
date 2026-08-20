@@ -737,12 +737,6 @@ class TerminalManager:
         """Write exact data or named terminal input and track generic PTY activity."""
         session = self.get_session(terminal_id, owner)
         initial_task = session.initial_input_task
-        if (
-            initial_task is not None
-            and initial_task is not asyncio.current_task()
-            and not initial_task.done()
-        ):
-            initial_task.cancel()
         async with session.lock:
             self._require_live(session)
             if (
@@ -763,6 +757,22 @@ class TerminalManager:
                 key=key,
                 bracketed_paste=bracketed_paste,
             )
+            if not chunks:
+                return {
+                    "terminal_id": terminal_id,
+                    "state": session.state,
+                    "characters_sent": 0,
+                    "key": key,
+                    "bracketed_paste": False,
+                    "superseded_attention_revision": None,
+                    "screen_revision": session.renderer.revision,
+                }
+            if (
+                initial_task is not None
+                and initial_task is not asyncio.current_task()
+                and not initial_task.done()
+            ):
+                initial_task.cancel()
             prior_state = session.state
             prior_attention_revision = session.attention_revision
             session.activity_origin_run_id = origin_run_id
@@ -1481,8 +1491,6 @@ def _input_chunks(
         )
     if key is not None:
         chunks.append(TERMINAL_INPUT_KEY_SEQUENCES[key])
-    if not chunks:
-        raise ValueError("input must send text, a key, or Enter")
     return tuple(chunks)
 
 
