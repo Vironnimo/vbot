@@ -250,6 +250,45 @@ async def test_dispatch_normalizes_unambiguous_model_encodings_without_mutating_
     }
 
 
+def test_normalization_omits_exact_empty_optional_string_properties() -> None:
+    schema: JsonObject = {
+        "type": "object",
+        "properties": {
+            "action": {"type": "string"},
+            "optional": {"type": "string", "minLength": 1},
+            "items": {"type": "array", "items": {"type": "string", "minLength": 1}},
+        },
+        "required": ["action"],
+        "additionalProperties": False,
+    }
+    contract = compile_tool_contract(name="sample", input_schema=schema)
+
+    normalized = contract.normalize_arguments({"action": "input", "optional": "", "items": [""]})
+
+    assert normalized == {"action": "input", "items": [""]}
+    with pytest.raises(ToolContractError, match=r"arguments/items\[0\]"):
+        contract.validate_arguments(normalized)
+
+
+def test_normalization_keeps_exact_empty_required_string_properties() -> None:
+    schema: JsonObject = {
+        "type": "object",
+        "properties": {
+            "value": {"type": "string", "minLength": 1},
+            "optional": {"type": "string", "minLength": 1},
+        },
+        "required": ["value"],
+        "additionalProperties": False,
+    }
+    contract = compile_tool_contract(name="sample", input_schema=schema)
+
+    normalized = contract.normalize_arguments({"value": "", "optional": ""})
+
+    assert normalized == {"value": ""}
+    with pytest.raises(ToolContractError, match=r"arguments/value"):
+        contract.validate_arguments(normalized)
+
+
 @pytest.mark.asyncio
 async def test_dispatch_wraps_one_array_item_and_uses_active_input_contract() -> None:
     received: JsonObject | None = None
