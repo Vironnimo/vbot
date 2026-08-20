@@ -677,6 +677,7 @@ class TerminalManager:
         *,
         lines: int = TERMINAL_STATUS_DEFAULT_LINES,
         before: int | None = None,
+        include_name: bool = True,
     ) -> dict[str, Any]:
         """Return one bounded rendered status page."""
         if not 1 <= lines <= TERMINAL_STATUS_MAX_LINES:
@@ -687,7 +688,10 @@ class TerminalManager:
                 scrollback = session.renderer.page(before=before, limit=lines)
             except ValueError as error:
                 raise TerminalCursorError(str(error)) from error
-            return self._snapshot_data(session, scrollback)
+            data = self._snapshot_data(session, scrollback)
+            if include_name:
+                data["name"] = session.name
+            return data
 
     async def wait_for_attention(
         self,
@@ -717,7 +721,7 @@ class TerminalManager:
             except TimeoutError:
                 timed_out = True
                 break
-        return await self.snapshot(terminal_id, owner), timed_out
+        return await self.snapshot(terminal_id, owner, include_name=False), timed_out
 
     async def send_input(
         self,
@@ -895,7 +899,7 @@ class TerminalManager:
         """Explicitly terminate one Terminal Session without an automatic exit wakeup."""
         session = self.get_session(terminal_id, owner)
         await self._terminate_session(session, suppress_attention=True)
-        return await self.snapshot(terminal_id, owner)
+        return await self.snapshot(terminal_id, owner, include_name=False)
 
     async def close_scope(self, owner: TerminalOwner) -> None:
         """Terminate every Terminal Session owned by one removed vBot Session."""
@@ -1295,7 +1299,6 @@ class TerminalManager:
             "terminal_id": session.terminal_id,
             "state": session.state,
             "command": session.command,
-            "name": session.name,
             "title": session.renderer.title,
             "arguments": list(session.arguments),
             "workdir": model_path(session.cwd),
