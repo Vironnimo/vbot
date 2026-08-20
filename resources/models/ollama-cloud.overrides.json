@@ -12,7 +12,7 @@
                     "remote": true
                 },
                 "ollama_cloud": {
-                    "reasoning_response_field": "reasoning_content"
+                    "reasoning_response_field": "reasoning"
                 }
             }
         },
@@ -23,7 +23,18 @@
                     "remote": true
                 },
                 "ollama_cloud": {
-                    "reasoning_response_field": "reasoning_content"
+                    "reasoning_response_field": "reasoning"
+                }
+            }
+        },
+        "deepseek-v4-pro:0813": {
+            "reasoning_replay": "none",
+            "metadata": {
+                "ollama": {
+                    "remote": true
+                },
+                "ollama_cloud": {
+                    "reasoning_response_field": "reasoning"
                 }
             }
         },
@@ -34,7 +45,7 @@
                     "remote": true
                 },
                 "ollama_cloud": {
-                    "reasoning_response_field": "reasoning_content"
+                    "reasoning_response_field": "reasoning"
                 }
             }
         },
