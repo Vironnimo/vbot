@@ -7,7 +7,6 @@ from typing import Any
 
 from core.projects import ProjectError, ProjectNotFoundError, ProjectStore, cwd_exists
 from core.tools.arguments import (
-    optional_bool,
     optional_int,
     optional_string,
     required_int,
@@ -64,8 +63,9 @@ TERMINAL_TOOL_DESCRIPTION = (
     "program. After Agent input, vBot wakes you when PTY output has been quiet "
     "for a short period, or when the process exits or the terminal fails. Quiet output is only an "
     "activity boundary: inspect status to decide whether the program is working, waiting for "
-    "input, or finished. Use data for exact terminal sequences, text/key/enter for convenient "
-    "input (multiline text uses bracketed paste when the program enables it), and status for the "
+    "input, or finished. Use data for exact terminal sequences, text/key for convenient input; "
+    'use key: "enter" to submit text (multiline text uses bracketed paste when the program '
+    "enables it), and status for the "
     "rendered cell screen and paginated scrollback; list/status expose titles announced by "
     "programs through the standard terminal protocol. Rendered terminal cells cannot distinguish "
     "tabs from equivalent spaces or cursor movement, so inspect files with read when exact "
@@ -92,7 +92,6 @@ _ACTION_FIELDS = {
             "data",
             "text",
             "key",
-            "enter",
             "expected_screen_revision",
         }
     ),
@@ -147,8 +146,8 @@ TERMINAL_TOOL_PARAMETERS: JsonObject = {
             "maxLength": TERMINAL_INPUT_MAX_CHARS,
             "description": (
                 "For input, exact terminal data sent unchanged in one PTY write. Use for "
-                "arbitrary escape/control sequences or protocols. Cannot be combined with text, "
-                "key, or enter."
+                "arbitrary escape/control sequences or protocols. Cannot be combined with text "
+                "or key."
             ),
         },
         "text": {
@@ -158,7 +157,8 @@ TERMINAL_TOOL_PARAMETERS: JsonObject = {
             "description": (
                 "For start, the first task to submit after launch. For input, text to type; "
                 "multiline text uses bracketed paste when the terminal program enables it and "
-                "does not append Enter unless enter is true. Omit on start to leave the TUI ready "
+                'does not append Enter. Combine text with key: "enter" when the input should '
+                "be submitted. Omit on start to leave the TUI ready "
                 "without beginning a task. For exact control sequences, use data instead."
             ),
         },
@@ -245,11 +245,6 @@ TERMINAL_TOOL_PARAMETERS: JsonObject = {
                 "Named terminal key for input. Supports navigation, F1-F12, Shift-Tab, and "
                 "Ctrl-A through Ctrl-Z; may be combined with text. Use data for any other sequence."
             ),
-        },
-        "enter": {
-            "type": "boolean",
-            "default": False,
-            "description": "For input, append Enter after text/key.",
         },
         "expected_screen_revision": {
             "type": "integer",
@@ -479,15 +474,14 @@ async def _handle_input(
     raw_data = arguments.get("data")
     if raw_data is not None and not isinstance(raw_data, str):
         raise ValueError("data must be a string")
-    if raw_data is not None and any(field in arguments for field in ("text", "key", "enter")):
-        raise ValueError("data cannot be combined with text, key, or enter")
+    if raw_data is not None and any(field in arguments for field in ("text", "key")):
+        raise ValueError("data cannot be combined with text or key")
     text = arguments.get("text")
     if text is not None and not isinstance(text, str):
         raise ValueError("text must be a string")
     key = optional_string(arguments.get("key"), field_name="key")
     if key is not None and key not in TERMINAL_KEYS:
         raise ValueError(f"key must be one of: {', '.join(TERMINAL_KEYS)}")
-    enter = optional_bool(arguments.get("enter"), field_name="enter", default=False)
     expected_revision = optional_int(
         arguments.get("expected_screen_revision"),
         field_name="expected_screen_revision",
@@ -503,7 +497,6 @@ async def _handle_input(
         data=raw_data if isinstance(raw_data, str) else None,
         text=text if isinstance(text, str) else None,
         key=key,
-        enter=enter,
         expected_screen_revision=expected_revision,
         origin_run_id=context.run_id,
     )
