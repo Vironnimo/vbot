@@ -56,16 +56,12 @@ TERMINAL_TOOL_DESCRIPTION = (
     "Run and control a program through a real PTY/ConPTY when it waits for interactive input or "
     "must be operated by typing into and observing its live screen, such as a REPL, TUI, prompt, "
     "or debugger. Terminal Sessions survive individual Runs and stay owned by this vBot Session. "
-    "An omitted command opens the host user's default interactive shell. Use start with text to "
-    "launch a program and send its first input in one call. After Agent input, vBot wakes you when "
-    "output has been quiet for a short period, or when the process exits or the terminal fails; "
-    "quiet output is only an activity boundary, so inspect status to decide whether the program "
-    "is working, waiting for input, or finished. Use data for exact terminal sequences, text/key "
-    'for convenient input (key: "enter" submits text; multiline text uses bracketed paste and '
-    "does not append Enter). status returns the rendered cell screen plus paginated scrollback "
-    "\u2014 follow scrollback.next_request unchanged for older pages. Rendered cells cannot "
-    "distinguish tabs from equivalent spaces or cursor movement, so use read for exact file "
-    "contents. Reuse a live Terminal Session for later work instead of starting a duplicate "
+    "Use start with text to launch a program and send its first input in one call. After Agent "
+    "input, vBot wakes you when output has been quiet for a short period, or when the process "
+    "exits or the terminal fails; quiet output is only an activity boundary, so inspect status "
+    "to decide whether the program is working, waiting for input, or finished. Rendered cells "
+    "cannot distinguish tabs from equivalent spaces or cursor movement, so use read for exact "
+    "file contents. Reuse a live Terminal Session for later work instead of starting a duplicate "
     "process."
 )
 
