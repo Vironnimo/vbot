@@ -5,23 +5,16 @@
 
   import Banner from './ui/Banner.svelte';
   import Button from './ui/Button.svelte';
-  import ConfirmDialog from './ui/ConfirmDialog.svelte';
   import Dropdown from './Dropdown.svelte';
   import EmptyState from './ui/EmptyState.svelte';
   import FormField from './ui/FormField.svelte';
   import Modal from './ui/Modal.svelte';
-  import StatusChip from './ui/StatusChip.svelte';
   import TextArea from './ui/TextArea.svelte';
   import TextField from './ui/TextField.svelte';
-  import Toggle from './ui/Toggle.svelte';
   import { t } from '$lib/i18n.js';
   import {
-    TERMINAL_STREAM_CONNECTED,
-    TERMINAL_STREAM_CONNECTING,
     TERMINAL_STREAM_ERROR,
     TERMINAL_STREAM_IDLE,
-    TERMINAL_STREAM_RECONNECTING,
-    TERMINAL_STREAM_SNAPSHOT,
     createTerminalsController,
     createTerminalsViewState,
     layoutForCount,
@@ -41,8 +34,7 @@
   let pendingControlTerminalId = '';
   let maximizedTerminalId = $state('');
   let scrolledBackByTerminal = $state({});
-  let stopDialogTerminalId = $state('');
-  let dismissDialogTerminalId = $state('');
+  let closingTerminalId = $state('');
   let startDialogOpen = $state(false);
   let selectedLaunchHistoryId = $state('');
   let startCommand = $state('');
@@ -403,71 +395,44 @@
     setControlEnabled(true);
   }
 
-  function tileControlled(terminalId) {
-    return controlEnabled && viewState.selectedTerminalId === terminalId;
-  }
-
-  function toggleTileControl(terminalId) {
-    if (tileControlled(terminalId)) {
-      setControlEnabled(false);
-      return;
-    }
+  // Close one tile with a single click: a running terminal is stopped first
+  // (kill), then removed from the retained catalog (forget). A finished
+  // terminal is only forgotten. No confirmation — the X is the intent.
+  async function closeTerminal(terminalId) {
     const item = findTerminal(terminalId);
-    if (!item || terminalIsFinished(item)) {
+    if (!item || closingTerminalId === terminalId) {
       return;
     }
-    if (terminalId !== viewState.selectedTerminalId) {
-      pendingControlTerminalId = terminalId;
-      controller.selectTerminal(terminalId);
-    }
-    setControlEnabled(true);
-  }
-
-  function openStopDialog(terminalId) {
-    const item = findTerminal(terminalId);
-    if (!item || terminalIsFinished(item)) {
-      return;
-    }
-    stopDialogTerminalId = terminalId;
-  }
-
-  function openDismissDialog(terminalId) {
-    const item = findTerminal(terminalId);
-    if (!item || !terminalIsFinished(item)) {
-      return;
-    }
-    dismissDialogTerminalId = terminalId;
-  }
-
-  async function confirmStop() {
-    const terminalId = stopDialogTerminalId;
-    const stopped = await controller.killTerminal(terminalId);
-    stopDialogTerminalId = '';
-    if (stopped) {
+    closingTerminalId = terminalId;
+    try {
+      if (!terminalIsFinished(item)) {
+        const stopped = await controller.killTerminal(terminalId);
+        if (!stopped) {
+          return;
+        }
+        const afterKill = findTerminal(terminalId);
+        if (!afterKill) {
+          // The post-kill reload already removed the session — nothing left
+          // to forget.
+          return;
+        }
+      }
+      const dismissed = await controller.forgetTerminal(terminalId);
+      if (!dismissed) {
+        return;
+      }
       onToast({
-        title: t('terminals.stoppedTitle', 'Terminal stopped'),
+        title: t('terminals.closedTitle', 'Terminal closed'),
         message: t(
-          'terminals.stoppedMessage',
-          'The selected Terminal Session and its process tree were stopped.',
+          'terminals.closedMessage',
+          'The Terminal Session was stopped and removed from the list.',
         ),
         variant: 'success',
       });
-    }
-  }
-
-  async function confirmDismiss() {
-    const terminalId = dismissDialogTerminalId;
-    const dismissed = await controller.forgetTerminal(terminalId);
-    dismissDialogTerminalId = '';
-    if (dismissed) {
-      onToast({
-        title: t('terminals.dismissedTitle', 'Terminal dismissed'),
-        message: t(
-          'terminals.dismissedMessage',
-          'The retained Terminal Session was removed from the list.',
-        ),
-        variant: 'success',
-      });
+    } finally {
+      if (closingTerminalId === terminalId) {
+        closingTerminalId = '';
+      }
     }
   }
 
@@ -644,54 +609,6 @@
 
   function stateLabel(state) {
     return t(`terminals.state.${state}`, state || 'Unknown');
-  }
-
-  function stateVariant(state) {
-    if (state === 'working' || state === 'ready') {
-      return 'success';
-    }
-    if (state === 'starting') {
-      return 'warn';
-    }
-    if (state === 'error') {
-      return 'error';
-    }
-    return 'neutral';
-  }
-
-  function streamLabel(status) {
-    if (status === TERMINAL_STREAM_CONNECTED) {
-      return t('terminals.stream.live', 'Live');
-    }
-    if (status === TERMINAL_STREAM_CONNECTING) {
-      return t('terminals.stream.connecting', 'Connecting…');
-    }
-    if (status === TERMINAL_STREAM_RECONNECTING) {
-      return t('terminals.stream.reconnecting', 'Reconnecting…');
-    }
-    if (status === TERMINAL_STREAM_ERROR) {
-      return t('terminals.stream.error', 'Stream error');
-    }
-    if (status === TERMINAL_STREAM_SNAPSHOT) {
-      return t('terminals.stream.snapshot', 'History loaded');
-    }
-    return t('terminals.stream.idle', 'Idle');
-  }
-
-  function streamVariant(status) {
-    if (status === TERMINAL_STREAM_CONNECTED) {
-      return 'success';
-    }
-    if (status === TERMINAL_STREAM_RECONNECTING) {
-      return 'warn';
-    }
-    if (status === TERMINAL_STREAM_SNAPSHOT) {
-      return 'neutral';
-    }
-    if (status === TERMINAL_STREAM_ERROR) {
-      return 'error';
-    }
-    return 'neutral';
   }
 
   function startedAt(item) {
@@ -932,14 +849,6 @@
                     {t('terminals.scrollLatest', 'Jump to latest')}
                   </button>
                 {/if}
-                <span class="terminals-view__tile-chips">
-                  <StatusChip variant={stateVariant(item.state)}>
-                    {stateLabel(item.state)}
-                  </StatusChip>
-                  <StatusChip variant={streamVariant(stream.status)}>
-                    {streamLabel(stream.status)}
-                  </StatusChip>
-                </span>
                 <span
                   class="terminals-view__tile-actions"
                   role="presentation"
@@ -947,49 +856,6 @@
                   ondblclick={(event) => event.stopPropagation()}
                   onkeydown={(event) => event.stopPropagation()}
                 >
-                  {#if !isFinished}
-                    <Toggle
-                      size="sm"
-                      checked={tileControlled(item.terminal_id)}
-                      onChange={() => toggleTileControl(item.terminal_id)}
-                      ariaLabel={t('terminals.controlLabel', 'Take control')}
-                    />
-                    <Button
-                      variant="danger"
-                      icon
-                      loading={viewState.killing === item.terminal_id}
-                      ariaLabel={t('terminals.stop', 'Stop terminal')}
-                      tooltip={t('terminals.stop', 'Stop terminal')}
-                      onClick={() => openStopDialog(item.terminal_id)}
-                    >
-                      <svg
-                        viewBox="0 0 14 14"
-                        width="10"
-                        height="10"
-                        aria-hidden="true"
-                      >
-                        <path d="M4 4h6v6H4z" />
-                      </svg>
-                    </Button>
-                  {:else}
-                    <Button
-                      variant="secondary"
-                      icon
-                      loading={viewState.forgetting === item.terminal_id}
-                      ariaLabel={t('terminals.dismiss', 'Dismiss')}
-                      tooltip={t('terminals.dismiss', 'Dismiss')}
-                      onClick={() => openDismissDialog(item.terminal_id)}
-                    >
-                      <svg
-                        viewBox="0 0 14 14"
-                        width="10"
-                        height="10"
-                        aria-hidden="true"
-                      >
-                        <path d="M3 4h8M5 4V3h4v1M4.5 4l.5 8h4l.5-8" />
-                      </svg>
-                    </Button>
-                  {/if}
                   <Button
                     variant="tertiary"
                     icon
@@ -1020,6 +886,23 @@
                         <path d="M3 3h8v8H3z" />
                       </svg>
                     {/if}
+                  </Button>
+                  <Button
+                    variant="danger"
+                    icon
+                    loading={closingTerminalId === item.terminal_id}
+                    ariaLabel={t('terminals.close', 'Close terminal')}
+                    tooltip={t('terminals.close', 'Close terminal')}
+                    onClick={() => void closeTerminal(item.terminal_id)}
+                  >
+                    <svg
+                      viewBox="0 0 14 14"
+                      width="11"
+                      height="11"
+                      aria-hidden="true"
+                    >
+                      <path d="M3.5 3.5l7 7M10.5 3.5l-7 7" />
+                    </svg>
                   </Button>
                 </span>
               </div>
@@ -1295,32 +1178,6 @@
   </Modal>
 {/if}
 
-{#if stopDialogTerminalId}
-  <ConfirmDialog
-    title={t('terminals.stopConfirmTitle', 'Stop this Terminal Session?')}
-    body={t(
-      'terminals.stopConfirmBody',
-      'This terminates the selected process tree. The Terminal Session cannot be resumed afterward.',
-    )}
-    confirmLabel={t('terminals.stop', 'Stop terminal')}
-    onConfirm={confirmStop}
-    onCancel={() => (stopDialogTerminalId = '')}
-  />
-{/if}
-
-{#if dismissDialogTerminalId}
-  <ConfirmDialog
-    title={t('terminals.dismissConfirmTitle', 'Dismiss this Terminal Session?')}
-    body={t(
-      'terminals.dismissConfirmBody',
-      'The retained history will be removed from this list immediately. The Terminal Session cannot be resumed afterward.',
-    )}
-    confirmLabel={t('terminals.dismiss', 'Dismiss')}
-    onConfirm={confirmDismiss}
-    onCancel={() => (dismissDialogTerminalId = '')}
-  />
-{/if}
-
 <style>
   .terminals-view {
     display: flex;
@@ -1540,14 +1397,6 @@
 
   .terminals-view__exit-code--nonzero {
     color: var(--red);
-  }
-
-  .terminals-view__tile-chips {
-    display: flex;
-    flex: 0 0 auto;
-    align-items: center;
-    gap: 6px;
-    margin-left: auto;
   }
 
   .terminals-view__tile-actions {

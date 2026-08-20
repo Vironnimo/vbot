@@ -62,27 +62,13 @@ export const englishCatalog = Object.freeze({
     'The manual Terminal Session is live and ready for input.',
   'terminals.manualOwner': 'Manual',
   'terminals.localOperator': 'Local operator',
-  'terminals.controlLabel': 'Take control',
-  'terminals.stop': 'Stop terminal',
   'terminals.liveTerminalLabel': 'Live terminal. Click to take control.',
   'terminals.historyTerminalLabel': 'Retained terminal history.',
-  'terminals.mode.control': 'Control enabled — keystrokes go to the process',
-  'terminals.mode.observe': 'Observe mode — click terminal to take control',
-  'terminals.mode.history':
-    'Read-only history — retained temporarily after exit',
   'terminals.scrollLatest': 'Jump to latest',
-  'terminals.stopConfirmTitle': 'Stop this Terminal Session?',
-  'terminals.stopConfirmBody':
-    'This terminates the selected process tree. The Terminal Session cannot be resumed afterward.',
-  'terminals.stoppedTitle': 'Terminal stopped',
-  'terminals.stoppedMessage':
-    'The selected Terminal Session and its process tree were stopped.',
-  'terminals.stream.live': 'Live',
-  'terminals.stream.connecting': 'Connecting…',
-  'terminals.stream.reconnecting': 'Reconnecting…',
-  'terminals.stream.error': 'Stream error',
-  'terminals.stream.snapshot': 'History loaded',
-  'terminals.stream.idle': 'Idle',
+  'terminals.close': 'Close terminal',
+  'terminals.closedTitle': 'Terminal closed',
+  'terminals.closedMessage':
+    'The Terminal Session was stopped and removed from the list.',
   'terminals.streamGap':
     'Terminal output continuity was lost; rebuilding the live screen.',
   'terminals.unknownError': 'Unknown terminal error',
@@ -93,13 +79,6 @@ export const englishCatalog = Object.freeze({
   'terminals.state.working': 'Working',
   'terminals.state.exited': 'Exited',
   'terminals.state.error': 'Error',
-  'terminals.dismiss': 'Dismiss',
-  'terminals.dismissConfirmTitle': 'Dismiss this Terminal Session?',
-  'terminals.dismissConfirmBody':
-    'The retained history will be removed from this list immediately. The Terminal Session cannot be resumed afterward.',
-  'terminals.dismissedTitle': 'Terminal dismissed',
-  'terminals.dismissedMessage':
-    'The retained Terminal Session was removed from the list.',
   'terminals.exitCode': 'Exit code',
   'terminals.maximize': 'Maximize',
   'terminals.restore': 'Restore',
