@@ -37,6 +37,16 @@ async def _terminal_start(state: Any, params: JsonObject) -> JsonObject:
         _required_integer(params, "columns") if "columns" in params else TERMINAL_DEFAULT_COLUMNS
     )
     rows = _required_integer(params, "rows") if "rows" in params else TERMINAL_DEFAULT_ROWS
+    if command is not None and not command.strip():
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST,
+            "params.command must not be empty when provided",
+        )
+    if any(not argument.strip() for argument in arguments):
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST,
+            "params.args must not contain empty arguments",
+        )
     try:
         terminal = await _terminal_manager(state).spawn_for_operator(
             command=command,

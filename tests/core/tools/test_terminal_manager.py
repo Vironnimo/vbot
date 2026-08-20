@@ -175,6 +175,136 @@ async def test_initial_task_waits_for_tui_and_sends_enter_separately(
 
 
 @pytest.mark.asyncio
+async def test_manual_command_runs_inside_the_default_shell(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(terminal_module, "default_terminal_argv", lambda: ["host-shell"])
+    monkeypatch.setattr(terminal_module, "TERMINAL_INITIAL_INPUT_QUIET_SECONDS", 0.01)
+    factory = AdapterFactory("PS C:\\work> ")
+    manager = TerminalManager(adapter_factory=factory, sweep_interval_seconds=3600)
+    manager.start()
+    try:
+        result = await manager.spawn_for_operator(
+            command="codex",
+            arguments=["--profile", "work"],
+            cwd=tmp_path,
+        )
+        session = manager._sessions[result["terminal_id"]]
+
+        assert session.owner is None
+        assert session.command == "host-shell"
+        assert session.arguments == ()
+        assert session.launch_command == "codex"
+        assert session.launch_arguments == ("--profile", "work")
+        assert result["command"] == "host-shell"
+        assert result["launch_command"] == "codex"
+        assert result["launch_args"] == ["--profile", "work"]
+        await eventually(lambda: factory.adapters[0].writes == ["codex --profile work", "\r"])
+    finally:
+        await manager.aclose()
+
+
+@pytest.mark.asyncio
+async def test_manual_command_quotes_arguments_with_spaces(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(terminal_module, "default_terminal_argv", lambda: ["host-shell"])
+    monkeypatch.setattr(terminal_module, "TERMINAL_INITIAL_INPUT_QUIET_SECONDS", 0.01)
+    factory = AdapterFactory("PS C:\\work> ")
+    manager = TerminalManager(adapter_factory=factory, sweep_interval_seconds=3600)
+    manager.start()
+    try:
+        await manager.spawn_for_operator(
+            command="codex",
+            arguments=["--profile", "work space"],
+            cwd=tmp_path,
+        )
+        await eventually(
+            lambda: factory.adapters[0].writes == ['codex --profile "work space"', "\r"]
+        )
+    finally:
+        await manager.aclose()
+
+
+@pytest.mark.asyncio
+async def test_manual_command_is_not_written_without_a_shell_prompt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(terminal_module, "default_terminal_argv", lambda: ["host-shell"])
+    monkeypatch.setattr(terminal_module, "TERMINAL_INITIAL_INPUT_QUIET_SECONDS", 0.01)
+    monkeypatch.setattr(terminal_module, "TERMINAL_OPERATOR_READY_TIMEOUT_SECONDS", 0.2)
+    factory = AdapterFactory()
+    manager = TerminalManager(adapter_factory=factory, sweep_interval_seconds=3600)
+    manager.start()
+    try:
+        await manager.spawn_for_operator(
+            command="codex",
+            arguments=[],
+            cwd=tmp_path,
+        )
+        await asyncio.sleep(0.5)
+        assert factory.adapters[0].writes == []
+    finally:
+        await manager.aclose()
+
+
+@pytest.mark.asyncio
+async def test_manual_command_is_not_written_when_shell_ends_first(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(terminal_module, "default_terminal_argv", lambda: ["host-shell"])
+    monkeypatch.setattr(terminal_module, "TERMINAL_INITIAL_INPUT_QUIET_SECONDS", 0.01)
+    factory = AdapterFactory()
+    manager = TerminalManager(adapter_factory=factory, sweep_interval_seconds=3600)
+    manager.start()
+    try:
+        result = await manager.spawn_for_operator(
+            command="codex",
+            arguments=[],
+            cwd=tmp_path,
+        )
+        session = manager._sessions[result["terminal_id"]]
+        factory.adapters[0].finish(1)
+        await eventually(lambda: session.state == "exited")
+        await asyncio.sleep(0.2)
+        assert factory.adapters[0].writes == []
+    finally:
+        await manager.aclose()
+
+
+def test_shell_command_renders_exact_typed_shell_input() -> None:
+    assert terminal_module._shell_command(None, []) is None
+    assert terminal_module._shell_command("codex", []) == "codex"
+    assert terminal_module._shell_command("codex", ["--profile", "work"]) == (
+        "codex --profile work"
+    )
+    assert terminal_module._shell_command("codex", ["--profile", "work space"]) == (
+        'codex --profile "work space"'
+    )
+    assert terminal_module._shell_command("python", ["-c", "print('hi')"]) == (
+        "python -c \"print('hi')\""
+    )
+    assert terminal_module._shell_command("codex", ["C:\\Tools\\codex.exe"]) == (
+        "codex C:\\Tools\\codex.exe"
+    )
+    assert terminal_module._shell_command("", ["arg"]) is None
+    assert terminal_module._shell_command("codex", [""]) is None
+
+
+def test_screen_prompt_markers_detect_common_shell_prompts() -> None:
+    assert terminal_module._screen_has_prompt_marker("PS C:\\work> ") is True
+    assert terminal_module._screen_has_prompt_marker("PS C:\\work>") is True
+    assert terminal_module._screen_has_prompt_marker("C:\\work>") is True
+    assert terminal_module._screen_has_prompt_marker("user@host:~/project$") is True
+    assert terminal_module._screen_has_prompt_marker("$ ") is True
+    assert terminal_module._screen_has_prompt_marker("> ") is True
+    assert terminal_module._screen_has_prompt_marker("❯ ") is True
+    assert terminal_module._screen_has_prompt_marker("") is False
+    assert terminal_module._screen_has_prompt_marker("hello world") is False
+    assert terminal_module._screen_has_prompt_marker("PS") is False
+
+
+@pytest.mark.asyncio
 async def test_sessions_are_owner_isolated_and_transfer_with_agent_move(
     terminal_manager: tuple[TerminalManager, AdapterFactory], tmp_path: Path
 ) -> None:

@@ -472,6 +472,72 @@ describe('terminal live controller', () => {
     expect(api.resizeTerminal).not.toHaveBeenCalled();
     controller.destroy();
   });
+
+  it('discards buffered input and resize when the terminal ends', async () => {
+    vi.useFakeTimers();
+    const state = createTerminalsViewState();
+    const streams = [];
+    const api = fakeApi({ streams });
+    const controller = createTerminalsController({ state, api });
+
+    await controller.start();
+    streams[0].emit({
+      type: 'terminal_ready',
+      sequence: 1,
+      terminal: terminal('term-1'),
+      ansi: '\\u001b[2Jshell',
+    });
+    controller.queueInput('hello');
+    controller.resize(100, 30);
+    streams[0].emit({
+      type: 'terminal_state',
+      sequence: 2,
+      terminal: terminal('term-1', { state: 'exited' }),
+    });
+    await vi.runAllTimersAsync();
+
+    expect(api.sendTerminalInput).not.toHaveBeenCalled();
+    expect(api.resizeTerminal).not.toHaveBeenCalled();
+    expect(state.streams['term-1'].status).toBe(TERMINAL_STREAM_SNAPSHOT);
+    expect(state.actionError).toBe('');
+    controller.destroy();
+  });
+
+  it('does not surface a terminal-closed RPC error after the terminal ended', async () => {
+    vi.useFakeTimers();
+    const state = createTerminalsViewState();
+    const streams = [];
+    const api = fakeApi({ streams });
+    let rejectInput;
+    api.sendTerminalInput.mockImplementation(
+      () =>
+        new Promise((_resolve, reject) => {
+          rejectInput = reject;
+        }),
+    );
+    const controller = createTerminalsController({ state, api });
+
+    await controller.start();
+    streams[0].emit({
+      type: 'terminal_ready',
+      sequence: 1,
+      terminal: terminal('term-1'),
+      ansi: '\\u001b[2Jshell',
+    });
+    controller.queueInput('hi', { immediate: true });
+    await vi.runAllTimersAsync();
+    streams[0].emit({
+      type: 'terminal_state',
+      sequence: 2,
+      terminal: terminal('term-1', { state: 'exited' }),
+    });
+    rejectInput(new Error('Terminal Session is no longer running'));
+    await vi.runAllTimersAsync();
+
+    expect(api.sendTerminalInput).toHaveBeenCalledWith('term-1', 'hi');
+    expect(state.actionError).toBe('');
+    controller.destroy();
+  });
 });
 
 function fakeApi({ streams, terminals = [terminal('term-1')] }) {
