@@ -10,9 +10,9 @@ import pytest
 import pytest_asyncio
 
 from core.projects import ProjectStore
+from core.tools import terminal as terminal_module
 from core.tools.terminal import (
     TERMINAL_ACTIONS,
-    TERMINAL_DEFAULT_COMMAND,
     TERMINAL_DEFAULT_WAIT_MS,
     TERMINAL_PROJECT_WORKDIR_PREFIX,
     TERMINAL_TOOL_DESCRIPTION,
@@ -88,7 +88,7 @@ def test_schema_matches_flat_action_tool_conventions(tmp_path: Path) -> None:
     assert properties["rows"]["default"] == 32
     assert properties["lines"]["default"] == 30
     assert properties["timeout_ms"]["default"] == TERMINAL_DEFAULT_WAIT_MS
-    assert properties["command"]["default"] == TERMINAL_DEFAULT_COMMAND
+    assert "default" not in properties["command"]
     assert properties["enter"]["default"] is False
     assert all(
         isinstance(property_schema.get("description"), str) and property_schema["description"]
@@ -108,7 +108,8 @@ def test_schema_matches_flat_action_tool_conventions(tmp_path: Path) -> None:
     )
     tool = registry.get(TERMINAL_TOOL_NAME)
     assert tool.open_input_schema is True
-    assert tool.display.summary({"action": "start"}) == "start · codex"
+    assert tool.display.summary({"action": "start", "command": "codex"}) == "start · codex"
+    assert tool.display.summary({"action": "start"}) == "start · default shell"
     list_display = registry.display_for_call(
         TERMINAL_TOOL_NAME,
         {"action": "list"},
@@ -134,22 +135,23 @@ def test_schema_matches_flat_action_tool_conventions(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_start_defaults_to_unmodified_codex_and_returns_non_polling_handoff(
-    manager: tuple[TerminalManager, AdapterFactory], tmp_path: Path
+async def test_start_without_command_spawns_host_default_shell(
+    manager: tuple[TerminalManager, AdapterFactory], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    monkeypatch.setattr(terminal_module, "default_terminal_argv", lambda: ["host-shell"])
     terminal_manager, factory = manager
     result = await call(terminal_manager, make_context(tmp_path), {"action": "start"})
 
     assert result["ok"] is True
     data = cast(dict[str, Any], result["data"])
     assert data["state"] == "ready"
-    assert data["command"] == TERMINAL_DEFAULT_COMMAND
+    assert data["command"] == "host-shell"
     assert data["columns"] == 120
     assert data["rows"] == 32
     assert data["delivery"] == "automatic_terminal_activity"
     assert isinstance(data["handoff_note"], str)
     assert data["handoff_note"]
-    assert factory.calls[0][0] == [TERMINAL_DEFAULT_COMMAND]
+    assert factory.calls[0][0] == ["host-shell"]
     assert not any(name.startswith("VBOT_TERMINAL_") for name in factory.calls[0][2])
 
 
