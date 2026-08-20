@@ -272,6 +272,40 @@ async def test_manual_command_is_not_written_when_shell_ends_first(
         await manager.aclose()
 
 
+@pytest.mark.asyncio
+async def test_manual_command_survives_early_operator_input(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Operator input must not cancel the launch command write.
+
+    The WebUI takes control immediately after a manual start; the first typed
+    characters used to cancel the shared initial-input task and the launch
+    command was never entered. The launch command has its own task and the
+    operator input waits briefly for it instead of cancelling it.
+    """
+    monkeypatch.setattr(terminal_module, "default_terminal_argv", lambda: ["host-shell"])
+    monkeypatch.setattr(terminal_module, "TERMINAL_INITIAL_INPUT_QUIET_SECONDS", 0.01)
+    factory = AdapterFactory("PS C:\\work> ")
+    manager = TerminalManager(adapter_factory=factory, sweep_interval_seconds=3600)
+    manager.start()
+    try:
+        result = await manager.spawn_for_operator(
+            command="opencode2",
+            arguments=[],
+            cwd=tmp_path,
+        )
+        session = manager._sessions[result["terminal_id"]]
+        assert session.operator_command_task is not None
+        assert not session.operator_command_task.done()
+
+        await manager.send_operator_input(session.terminal_id, "x")
+
+        await eventually(lambda: factory.adapters[0].writes == ["opencode2", "\r", "x"])
+        assert session.operator_command_task.done()
+    finally:
+        await manager.aclose()
+
+
 def test_shell_command_renders_exact_typed_shell_input() -> None:
     assert terminal_module._shell_command(None, []) is None
     assert terminal_module._shell_command("codex", []) == "codex"
