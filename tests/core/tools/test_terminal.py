@@ -90,7 +90,8 @@ def test_schema_matches_flat_action_tool_conventions(tmp_path: Path) -> None:
     assert properties["timeout_ms"]["default"] == TERMINAL_DEFAULT_WAIT_MS
     assert "default" not in properties["command"]
     assert properties["name"]["maxLength"] == 80
-    assert properties["enter"]["default"] is False
+    assert "enter" not in properties
+    assert "enter" in properties["key"]["enum"]
     assert all(
         isinstance(property_schema.get("description"), str) and property_schema["description"]
         for property_schema in properties.values()
@@ -451,8 +452,21 @@ async def test_input_supports_convenient_and_exact_data_and_rejects_stale_screen
     )
     assert result["ok"] is True
     assert factory.adapters[0].writes == ["answer"]
-    assert cast(dict[str, Any], result["data"])["enter"] is False
+    assert cast(dict[str, Any], result["data"])["key"] is None
     assert cast(dict[str, Any], result["data"])["delivery"] == ("automatic_terminal_activity")
+
+    confirmed = await call(
+        terminal_manager,
+        context,
+        {
+            "action": "input",
+            "terminal_id": terminal_id,
+            "key": "enter",
+        },
+    )
+    assert confirmed["ok"] is True
+    assert factory.adapters[0].writes[-1] == "\r"
+    assert cast(dict[str, Any], confirmed["data"])["key"] == "enter"
 
     submitted = await call(
         terminal_manager,
@@ -461,7 +475,7 @@ async def test_input_supports_convenient_and_exact_data_and_rejects_stale_screen
             "action": "input",
             "terminal_id": terminal_id,
             "text": "submit",
-            "enter": True,
+            "key": "enter",
         },
     )
     assert submitted["ok"] is True
@@ -538,7 +552,7 @@ async def test_manual_attention_result_acknowledges_only_after_persistence(
             "action": "input",
             "terminal_id": "missing",
             "data": "raw",
-            "enter": False,
+            "enter": True,
         },
         {"action": "resize", "terminal_id": "missing", "columns": 120},
         {"action": "unknown"},

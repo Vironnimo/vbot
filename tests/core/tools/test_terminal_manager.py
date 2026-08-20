@@ -403,8 +403,7 @@ async def test_screen_revision_guards_input_and_resize_updates_both_sides(
             session.terminal_id,
             owner(),
             text="answer",
-            key=None,
-            enter=True,
+            key="enter",
             expected_screen_revision=0,
             origin_run_id="run-b",
         )
@@ -414,8 +413,7 @@ async def test_screen_revision_guards_input_and_resize_updates_both_sides(
         session.terminal_id,
         owner(),
         text="answer",
-        key=None,
-        enter=True,
+        key="enter",
         expected_screen_revision=revision,
         origin_run_id="run-b",
     )
@@ -766,7 +764,6 @@ async def test_exact_agent_data_and_named_keys_share_the_generic_pty(
         data=raw,
         text=None,
         key=None,
-        enter=False,
         expected_screen_revision=None,
         origin_run_id="run-b",
     )
@@ -776,7 +773,6 @@ async def test_exact_agent_data_and_named_keys_share_the_generic_pty(
         data=None,
         text=None,
         key="f12",
-        enter=False,
         expected_screen_revision=None,
         origin_run_id="run-b",
     )
@@ -802,7 +798,6 @@ async def test_multiline_text_uses_bracketed_paste_only_when_terminal_enables_it
         data=None,
         text=multiline,
         key=None,
-        enter=False,
         expected_screen_revision=None,
         origin_run_id="run-b",
     )
@@ -818,7 +813,6 @@ async def test_multiline_text_uses_bracketed_paste_only_when_terminal_enables_it
         data=None,
         text=multiline,
         key=None,
-        enter=False,
         expected_screen_revision=None,
         origin_run_id="run-b",
     )
@@ -893,8 +887,7 @@ async def test_attention_auto_delivers_and_manual_ack_cancels_exactly_once(
             owner(),
             data=None,
             text="do work",
-            key=None,
-            enter=True,
+            key="enter",
             expected_screen_revision=None,
             origin_run_id="run-b",
         )
@@ -941,7 +934,6 @@ async def test_new_output_postpones_a_pending_agent_wakeup_to_the_next_quiet_bou
             data="begin",
             text=None,
             key=None,
-            enter=False,
             expected_screen_revision=None,
             origin_run_id="run-b",
         )
@@ -978,8 +970,7 @@ async def test_session_move_reroutes_pending_attention_to_new_owner(tmp_path: Pa
             owner(),
             data=None,
             text="do work",
-            key=None,
-            enter=True,
+            key="enter",
             expected_screen_revision=None,
             origin_run_id="run-b",
         )

@@ -730,7 +730,6 @@ class TerminalManager:
         *,
         text: str | None,
         key: str | None,
-        enter: bool,
         expected_screen_revision: int | None,
         origin_run_id: str,
         data: str | None = None,
@@ -762,7 +761,6 @@ class TerminalManager:
                 data=data,
                 text=text,
                 key=key,
-                enter=enter,
                 bracketed_paste=bracketed_paste,
             )
             prior_state = session.state
@@ -782,7 +780,6 @@ class TerminalManager:
                 "state": session.state,
                 "characters_sent": sum(len(chunk) for chunk in chunks),
                 "key": key,
-                "enter": enter,
                 "bracketed_paste": bracketed_paste,
                 "superseded_attention_revision": (
                     prior_attention_revision if session.attention is not None else None
@@ -828,8 +825,7 @@ class TerminalManager:
                 owner,
                 data=None,
                 text=text,
-                key=None,
-                enter=True,
+                key="enter",
                 expected_screen_revision=None,
                 origin_run_id=origin_run_id,
             )
@@ -1456,12 +1452,11 @@ def _input_chunks(
     data: str | None,
     text: str | None,
     key: str | None,
-    enter: bool,
     bracketed_paste: bool = False,
 ) -> tuple[str, ...]:
     if data is not None:
-        if text is not None or key is not None or enter:
-            raise ValueError("data cannot be combined with text, key, or enter")
+        if text is not None or key is not None:
+            raise ValueError("data cannot be combined with text or key")
         if not data:
             raise ValueError("data must be a non-empty string")
         if len(data) > TERMINAL_INPUT_MAX_CHARS:
@@ -1482,8 +1477,6 @@ def _input_chunks(
         )
     if key is not None:
         chunks.append(TERMINAL_INPUT_KEY_SEQUENCES[key])
-    if enter:
-        chunks.append("\r")
     if not chunks:
         raise ValueError("input must send text, a key, or Enter")
     return tuple(chunks)

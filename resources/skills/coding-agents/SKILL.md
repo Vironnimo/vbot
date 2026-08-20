@@ -44,7 +44,7 @@ Report meaningful progress rather than every output fragment. It is valid to end
 
 ## Interact with the TUI
 
-Use `input` with `text` and `enter` for ordinary instructions, `key` for named keys such as arrows, Tab, Escape, or Ctrl+C, and `data` only for exact terminal sequences. Menus, editors, confirmations, and question dialogs must be handled as terminal UI, not parsed as a line-oriented protocol.
+Use `input` with `text` and `key: "enter"` for ordinary instructions, `key` for named keys such as arrows, Tab, Escape, or Ctrl+C, and `data` only for exact terminal sequences. Menus, editors, confirmations, and question dialogs must be handled as terminal UI, not parsed as a line-oriented protocol.
 
 If the screen presents a consequential question, summarize the options and ask the user. Do not kill the terminal while waiting. Once the user answers, reread `status`, confirm the prompt is still current, and send the answer with `expected_screen_revision`.
 
