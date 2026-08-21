@@ -11,6 +11,8 @@ import {
   reconcileTerminalList,
   reconcileTerminalLaunchHistory,
   selectedTerminal,
+  terminalViewerGeometry,
+  terminalViewerPointer,
 } from '../terminalsView.js';
 
 afterEach(() => {
@@ -126,6 +128,92 @@ describe('canvas layout', () => {
     expect(layoutForCount(0)).toEqual({ rows: 0, columns: 0, spans: [] });
     expect(layoutForCount(-2)).toEqual({ rows: 0, columns: 0, spans: [] });
     expect(layoutForCount('three')).toEqual({ rows: 0, columns: 0, spans: [] });
+  });
+});
+
+describe('terminal viewer geometry', () => {
+  it('fills a wider viewer without changing the PTY grid', () => {
+    const geometry = terminalViewerGeometry({
+      availableWidth: 1_536,
+      availableHeight: 960,
+      columns: 120,
+      rows: 32,
+      baseFontSize: 12,
+      baseCellWidth: 8,
+      baseCellHeight: 16,
+    });
+
+    expect(geometry).toMatchObject({
+      columns: 120,
+      rows: 32,
+      letterSpacing: 0,
+      lineHeight: 1.171875,
+    });
+    expect(geometry.fontSize).toBeCloseTo(19.2);
+  });
+
+  it('fills a taller viewer through line height without adding rows', () => {
+    expect(
+      terminalViewerGeometry({
+        availableWidth: 960,
+        availableHeight: 960,
+        columns: 120,
+        rows: 32,
+        baseFontSize: 12,
+        baseCellWidth: 8,
+        baseCellHeight: 16,
+      }),
+    ).toEqual({
+      columns: 120,
+      rows: 32,
+      fontSize: 12,
+      letterSpacing: 0,
+      lineHeight: 1.875,
+    });
+  });
+
+  it('fills spare horizontal space without adding columns', () => {
+    expect(
+      terminalViewerGeometry({
+        availableWidth: 1_920,
+        availableHeight: 512,
+        columns: 120,
+        rows: 32,
+        baseFontSize: 12,
+        baseCellWidth: 8,
+        baseCellHeight: 16,
+      }),
+    ).toEqual({
+      columns: 120,
+      rows: 32,
+      fontSize: 12,
+      letterSpacing: 8,
+      lineHeight: 1,
+    });
+  });
+
+  it('rejects an unavailable viewer surface', () => {
+    expect(
+      terminalViewerGeometry({
+        availableWidth: 0,
+        availableHeight: 960,
+        columns: 120,
+        rows: 32,
+        baseFontSize: 12,
+        baseCellWidth: 8,
+        baseCellHeight: 16,
+      }),
+    ).toBeNull();
+  });
+
+  it('maps pointer input back to the unscaled terminal cells', () => {
+    expect(
+      terminalViewerPointer(
+        { clientX: 1_130, clientY: 620 },
+        { left: 50, top: 20 },
+        { x: 1.5, y: 2 },
+      ),
+    ).toEqual({ clientX: 770, clientY: 320 });
   });
 });
 
