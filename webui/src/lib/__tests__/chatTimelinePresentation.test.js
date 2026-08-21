@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 
 import {
   backgroundTasks,
+  changeStatsLabel,
   compactToolValue,
   compactionSummaryText,
   errorMessagePresentation,
@@ -13,7 +14,10 @@ import {
   labelForEvent,
   labelForMessage,
   resolveSubAgentCancelPlan,
+  runChangeStats,
+  runFooterParts,
   runMetaParts,
+  sessionChangeStats,
   subAgentDisplayResult,
   subAgentDotStatus,
   subAgentEffectiveRunId,
@@ -1411,5 +1415,298 @@ describe('isToolPreparing', () => {
   it('tolerates a missing tool', () => {
     expect(isToolPreparing(null)).toBe(false);
     expect(isToolPreparing(undefined)).toBe(false);
+  });
+});
+
+describe('runChangeStats', () => {
+  beforeEach(() => {
+    init('en');
+  });
+
+  function editTool({ path, added, removed, name = 'edit' }) {
+    return {
+      type: 'tool_call',
+      id: `tool-${path}`,
+      name,
+      status: 'success',
+      arguments: { path },
+      startedEvent: {
+        type: 'tool_call_started',
+        payload: { tool_call: { id: `call-${path}`, name } },
+      },
+      resultEvent: {
+        type: 'tool_call_result',
+        payload: {
+          tool_call: { id: `call-${path}`, name },
+          display: {
+            version: 1,
+            summary: path,
+            hidden_argument_keys: [],
+            primary: [],
+            facts: [
+              { kind: 'line_change', change: 'added', value: added },
+              { kind: 'line_change', change: 'removed', value: removed },
+            ],
+          },
+        },
+      },
+    };
+  }
+
+  it('sums line changes and counts distinct files per run', () => {
+    const stats = runChangeStats({
+      type: 'assistant_run',
+      items: [
+        editTool({ path: 'a.txt', added: 3, removed: 2 }),
+        editTool({ path: 'a.txt', added: 1, removed: 0 }),
+        editTool({ path: 'b.txt', added: 5, removed: 1 }),
+      ],
+    });
+
+    expect(stats).toEqual({ files: 2, added: 9, removed: 3 });
+  });
+
+  it('counts a write of a new file as added lines only', () => {
+    const stats = runChangeStats({
+      type: 'assistant_run',
+      items: [
+        editTool({ path: 'new.txt', added: 4, removed: 0, name: 'write' }),
+      ],
+    });
+
+    expect(stats).toEqual({ files: 1, added: 4, removed: 0 });
+  });
+
+  it('ignores non-file tools and tools without line-change facts', () => {
+    const stats = runChangeStats({
+      type: 'assistant_run',
+      items: [
+        {
+          type: 'tool_call',
+          id: 'tool-read',
+          name: 'read',
+          status: 'success',
+          arguments: { path: 'a.txt' },
+          startedEvent: {
+            type: 'tool_call_started',
+            payload: { tool_call: { id: 'call-read', name: 'read' } },
+          },
+        },
+        {
+          type: 'tool_call',
+          id: 'tool-bash',
+          name: 'bash',
+          status: 'success',
+          arguments: { command: 'ls' },
+          startedEvent: {
+            type: 'tool_call_started',
+            payload: { tool_call: { id: 'call-bash', name: 'bash' } },
+          },
+        },
+      ],
+    });
+
+    expect(stats).toBeNull();
+  });
+
+  it('returns null for a run without changes', () => {
+    expect(runChangeStats({ type: 'assistant_run', items: [] })).toBeNull();
+  });
+});
+
+describe('sessionChangeStats', () => {
+  beforeEach(() => {
+    init('en');
+  });
+
+  it('sums every run and deduplicates files across runs', () => {
+    const stats = sessionChangeStats([
+      {
+        type: 'assistant_run',
+        items: [
+          {
+            type: 'tool_call',
+            id: 'tool-1',
+            name: 'edit',
+            status: 'success',
+            arguments: { path: 'a.txt' },
+            startedEvent: {
+              type: 'tool_call_started',
+              payload: { tool_call: { id: 'call-1', name: 'edit' } },
+            },
+            resultEvent: {
+              type: 'tool_call_result',
+              payload: {
+                tool_call: { id: 'call-1', name: 'edit' },
+                display: {
+                  version: 1,
+                  summary: 'a.txt',
+                  hidden_argument_keys: [],
+                  primary: [],
+                  facts: [
+                    { kind: 'line_change', change: 'added', value: 3 },
+                    { kind: 'line_change', change: 'removed', value: 2 },
+                  ],
+                },
+              },
+            },
+          },
+        ],
+      },
+      {
+        type: 'assistant_run',
+        items: [
+          {
+            type: 'tool_call',
+            id: 'tool-2',
+            name: 'edit',
+            status: 'success',
+            arguments: { path: 'a.txt' },
+            startedEvent: {
+              type: 'tool_call_started',
+              payload: { tool_call: { id: 'call-2', name: 'edit' } },
+            },
+            resultEvent: {
+              type: 'tool_call_result',
+              payload: {
+                tool_call: { id: 'call-2', name: 'edit' },
+                display: {
+                  version: 1,
+                  summary: 'a.txt',
+                  hidden_argument_keys: [],
+                  primary: [],
+                  facts: [
+                    { kind: 'line_change', change: 'added', value: 1 },
+                    { kind: 'line_change', change: 'removed', value: 0 },
+                  ],
+                },
+              },
+            },
+          },
+          {
+            type: 'tool_call',
+            id: 'tool-3',
+            name: 'write',
+            status: 'success',
+            arguments: { path: 'b.txt' },
+            startedEvent: {
+              type: 'tool_call_started',
+              payload: { tool_call: { id: 'call-3', name: 'write' } },
+            },
+            resultEvent: {
+              type: 'tool_call_result',
+              payload: {
+                tool_call: { id: 'call-3', name: 'write' },
+                display: {
+                  version: 1,
+                  summary: 'b.txt',
+                  hidden_argument_keys: [],
+                  primary: [],
+                  facts: [
+                    { kind: 'line_change', change: 'added', value: 5 },
+                    { kind: 'line_change', change: 'removed', value: 0 },
+                  ],
+                },
+              },
+            },
+          },
+        ],
+      },
+    ]);
+
+    expect(stats).toEqual({ files: 2, added: 9, removed: 2 });
+  });
+
+  it('returns null for an empty timeline', () => {
+    expect(sessionChangeStats([])).toBeNull();
+  });
+});
+
+describe('changeStatsLabel', () => {
+  beforeEach(() => {
+    init('en');
+  });
+
+  it('formats the compact one-line label', () => {
+    expect(changeStatsLabel({ files: 5, added: 151, removed: 15 })).toBe(
+      '5 files changed, +151 -15',
+    );
+  });
+
+  it('uses the singular file form', () => {
+    expect(changeStatsLabel({ files: 1, added: 2, removed: 0 })).toBe(
+      '1 file changed, +2 -0',
+    );
+  });
+
+  it('returns an empty string for null stats', () => {
+    expect(changeStatsLabel(null)).toBe('');
+  });
+});
+
+describe('runFooterParts', () => {
+  beforeEach(() => {
+    init('en');
+  });
+
+  it('shows status, duration, and change stats for a completed run', () => {
+    const parts = runFooterParts({
+      status: 'completed',
+      durationMs: 8000,
+      items: [
+        {
+          type: 'tool_call',
+          id: 'tool-1',
+          name: 'edit',
+          status: 'success',
+          arguments: { path: 'a.txt' },
+          startedEvent: {
+            type: 'tool_call_started',
+            payload: { tool_call: { id: 'call-1', name: 'edit' } },
+          },
+          resultEvent: {
+            type: 'tool_call_result',
+            payload: {
+              tool_call: { id: 'call-1', name: 'edit' },
+              display: {
+                version: 1,
+                summary: 'a.txt',
+                hidden_argument_keys: [],
+                primary: [],
+                facts: [
+                  { kind: 'line_change', change: 'added', value: 3 },
+                  { kind: 'line_change', change: 'removed', value: 2 },
+                ],
+              },
+            },
+          },
+        },
+      ],
+    });
+
+    expect(parts).toEqual(['Completed', '8.0s', '1 file changed, +3 -2']);
+  });
+
+  it('ticks the live duration while the run is running', () => {
+    const parts = runFooterParts(
+      {
+        status: 'running',
+        durationMs: null,
+        startTimestamp: '2026-08-05T18:00:00.000Z',
+        items: [],
+      },
+      Date.parse('2026-08-05T18:00:05.250Z'),
+    );
+
+    expect(parts).toEqual(['Running', '5.3s']);
+  });
+
+  it('omits the change part when the run changed no files', () => {
+    const parts = runFooterParts({
+      status: 'completed',
+      durationMs: 1000,
+      items: [],
+    });
+    expect(parts).toEqual(['Completed', '1.0s']);
   });
 });

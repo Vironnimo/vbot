@@ -96,7 +96,9 @@ describe('ChatTimeline', () => {
     flushSync();
 
     const runContent = document.querySelector('.assistant-run-content');
-    const renderedChildren = Array.from(runContent.children);
+    const renderedChildren = Array.from(runContent.children).filter(
+      (child) => !child.classList.contains('run-footer'),
+    );
 
     expect(renderedChildren).toHaveLength(3);
     expect(renderedChildren[0].classList.contains('reasoning-block')).toBe(
@@ -174,7 +176,9 @@ describe('ChatTimeline', () => {
     flushSync();
 
     const runContent = document.querySelector('.assistant-run-content');
-    const renderedChildren = Array.from(runContent.children);
+    const renderedChildren = Array.from(runContent.children).filter(
+      (child) => !child.classList.contains('run-footer'),
+    );
 
     expect(renderedChildren).toHaveLength(3);
     expect(renderedChildren[0].classList.contains('msg-markdown')).toBe(true);
@@ -368,7 +372,9 @@ describe('ChatTimeline', () => {
     flushSync();
 
     const runContent = document.querySelector('.assistant-run-content');
-    const renderedChildren = Array.from(runContent.children);
+    const renderedChildren = Array.from(runContent.children).filter(
+      (child) => !child.classList.contains('run-footer'),
+    );
 
     expect(document.querySelectorAll('.reasoning-block')).toHaveLength(1);
     expect(renderedChildren).toHaveLength(2);

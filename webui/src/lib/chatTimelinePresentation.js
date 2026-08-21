@@ -342,6 +342,133 @@ export const runMetaParts = (assistantRun, nowMs = Date.now()) => {
   return parts.filter(Boolean);
 };
 
+// Aggregated file-change statistics for one assistant run, derived from the
+// `line_change` display facts and `path` primaries of its edit/write tool rows.
+// Only successful changes count: a failed edit carries no line-change facts.
+// Returns null when the run contains no file changes.
+export const runChangeStats = (assistantRun) => {
+  const { paths, added, removed } = collectRunChanges(assistantRun);
+  if (paths.size === 0 && added === 0 && removed === 0) {
+    return null;
+  }
+  return { files: paths.size, added, removed };
+};
+
+// Session-wide file-change statistics: the sum over every assistant run in the
+// loaded timeline, with files deduplicated across runs. Returns null when the
+// session contains no file changes.
+export const sessionChangeStats = (timelineItems) => {
+  const paths = new Set();
+  let added = 0;
+  let removed = 0;
+  for (const item of timelineItems ?? []) {
+    if (item?.type !== 'assistant_run') {
+      continue;
+    }
+    const {
+      paths: runPaths,
+      added: runAdded,
+      removed: runRemoved,
+    } = collectRunChanges(item);
+    for (const path of runPaths) {
+      paths.add(path);
+    }
+    added += runAdded;
+    removed += runRemoved;
+  }
+  if (paths.size === 0 && added === 0 && removed === 0) {
+    return null;
+  }
+  return { files: paths.size, added, removed };
+};
+
+// Compact one-line label for change statistics, e.g. "3 files changed, +151 -15".
+export const changeStatsLabel = (stats) => {
+  if (!stats) {
+    return '';
+  }
+  const fileLabel =
+    stats.files === 1
+      ? t('chat.changeStats.filesOne', '1 file changed')
+      : t('chat.changeStats.filesMany', '{count} files changed', {
+          count: stats.files,
+        });
+  return `${fileLabel}, +${stats.added} -${stats.removed}`;
+};
+
+// Footer line for an assistant run: status · duration · changes. The duration
+// ticks live while the run is running (driven by the shared nowMs clock).
+export const runFooterParts = (assistantRun, nowMs = Date.now()) => {
+  const parts = [];
+  const duration = formatRunDuration(assistantRun, nowMs);
+  parts.push(runStatusLabel(assistantRun.status));
+  if (duration) {
+    parts.push(duration);
+  }
+  const stats = runChangeStats(assistantRun);
+  if (stats) {
+    parts.push(changeStatsLabel(stats));
+  }
+  return parts;
+};
+
+function collectRunChanges(assistantRun) {
+  const paths = new Set();
+  let added = 0;
+  let removed = 0;
+  for (const child of visibleRunChildren(assistantRun)) {
+    if (child?.type !== 'tool_call') {
+      continue;
+    }
+    const name = toolNameForRunTool(child);
+    if (name !== 'edit' && name !== 'write') {
+      continue;
+    }
+    let childAdded = 0;
+    let childRemoved = 0;
+    for (const fact of toolDisplayFacts(child)) {
+      if (fact.kind === 'line_change' && fact.change === 'added') {
+        childAdded += fact.value;
+      } else if (fact.kind === 'line_change' && fact.change === 'removed') {
+        childRemoved += fact.value;
+      }
+    }
+    if (childAdded === 0 && childRemoved === 0) {
+      continue;
+    }
+    const path = toolChangePath(child);
+    if (path) {
+      paths.add(path);
+    }
+    added += childAdded;
+    removed += childRemoved;
+  }
+  return { paths, added, removed };
+}
+
+function toolDisplayFacts(tool) {
+  const display = toolDisplay(tool);
+  return Array.isArray(display?.facts) ? display.facts : [];
+}
+
+function toolChangePath(tool) {
+  const args = toolArguments(tool);
+  if (isPlainObject(args) && typeof args.path === 'string' && args.path) {
+    return args.path;
+  }
+  const display = toolDisplay(tool);
+  const primary = Array.isArray(display?.primary) ? display.primary : [];
+  for (const part of primary) {
+    if (isPlainObject(part) && part.kind === 'path') {
+      const value = trimmedString(part.full_value) || trimmedString(part.value);
+      if (value) {
+        return value;
+      }
+    }
+  }
+  return '';
+}
+
 export const toolStatus = (tool) => {
   if (tool.status === 'failed') {
     return 'failed';

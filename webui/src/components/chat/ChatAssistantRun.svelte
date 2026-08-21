@@ -18,6 +18,7 @@
     isSubAgentSpawnTool,
     isTextToSpeechTool,
     isToolPreparing,
+    runFooterParts,
     runMetaParts,
     speechArtifactFromTool,
     subAgentAgentId,
@@ -665,5 +666,15 @@
         {@render runChild(group.child)}
       {/if}
     {/each}
+    {#if runFooterParts(item, nowMs).length > 0}
+      <div
+        class="run-footer"
+        aria-label={runFooterParts(item, nowMs).join(' · ')}
+      >
+        {#each runFooterParts(item, nowMs) as footerPart (footerPart)}
+          <span class="run-footer__part">{footerPart}</span>
+        {/each}
+      </div>
+    {/if}
   </div>
 </article>
