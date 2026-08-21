@@ -13,6 +13,7 @@
     avatarForItem,
     changeStatsLabel,
     changeStatsParts,
+    changeStatsTooltip,
     formatTime,
     isRowCancellable,
     isRunChildWorking,
@@ -667,12 +668,12 @@
     {/each}
     {#if runFooterParts(item, nowMs).length > 0}
       {@const footerParts = runFooterParts(item, nowMs)}
-      {@const changeParts = changeStatsParts(runChangeStats(item))}
+      {@const changeStats = runChangeStats(item)}
+      {@const changeParts = changeStatsParts(changeStats)}
+      {@const changeTooltip = changeStatsTooltip(changeStats)}
       {@const footerLabel = [
         ...footerParts,
-        ...(changeParts.length > 0
-          ? [changeStatsLabel(runChangeStats(item))]
-          : []),
+        ...(changeParts.length > 0 ? [changeStatsLabel(changeStats)] : []),
       ].join(' · ')}
       <div class="run-footer" aria-label={footerLabel}>
         {#each footerParts as footerPart, index (footerPart)}
@@ -683,14 +684,24 @@
         {/each}
         {#if changeParts.length > 0}
           <span class="run-footer__sep" aria-hidden="true">·</span>
-          {#each changeParts as changePart (changePart.kind)}
-            <span
-              class="run-footer__part"
-              class:run-footer__part--added={changePart.kind === 'added'}
-              class:run-footer__part--removed={changePart.kind === 'removed'}
-              >{changePart.text}</span
-            >
-          {/each}
+          <!-- The change block is focusable so keyboard users reach the
+               file-list tooltip; the footer aria-label already carries the
+               full summary for screen readers. -->
+          <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+          <span
+            class="run-footer__changes"
+            use:tooltip={changeTooltip}
+            tabindex="0"
+          >
+            {#each changeParts as changePart (changePart.kind)}
+              <span
+                class="run-footer__part"
+                class:run-footer__part--added={changePart.kind === 'added'}
+                class:run-footer__part--removed={changePart.kind === 'removed'}
+                >{changePart.text}</span
+              >
+            {/each}
+          </span>
         {/if}
       </div>
     {/if}

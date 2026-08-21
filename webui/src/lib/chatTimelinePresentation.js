@@ -356,7 +356,7 @@ export const runChangeStats = (assistantRun) => {
   if (paths.size === 0 && added === 0 && removed === 0) {
     return null;
   }
-  return { files: paths.size, added, removed };
+  return { files: paths.size, added, removed, paths: [...paths].sort() };
 };
 
 // Session-wide file-change statistics: the sum over every assistant run in the
@@ -384,7 +384,7 @@ export const sessionChangeStats = (timelineItems) => {
   if (paths.size === 0 && added === 0 && removed === 0) {
     return null;
   }
-  return { files: paths.size, added, removed };
+  return { files: paths.size, added, removed, paths: [...paths].sort() };
 };
 
 // Compact one-line label for change statistics, e.g. "3 files changed, +151 -15".
@@ -402,8 +402,9 @@ export const changeStatsLabel = (stats) => {
 };
 
 // Structured change-stat parts for colored rendering: the file-count label
-// plus separate added/removed line counts. Returns an empty array when the
-// run changed no files.
+// (carrying the trailing comma) plus separate added/removed line counts.
+// Rendered as one contiguous block, e.g. "6 files changed, +497 -387".
+// Returns an empty array when the run changed no files.
 export const changeStatsParts = (stats) => {
   if (!stats) {
     return [];
@@ -415,10 +416,19 @@ export const changeStatsParts = (stats) => {
           count: stats.files,
         });
   return [
-    { kind: 'files', text: fileLabel },
+    { kind: 'files', text: `${fileLabel},` },
     { kind: 'added', text: `+${stats.added}` },
     { kind: 'removed', text: `-${stats.removed}` },
   ];
+};
+
+// Multi-line tooltip text listing every changed file of the run, one per line.
+// Empty when the stats carry no paths (or are null), which disables the hint.
+export const changeStatsTooltip = (stats) => {
+  if (!stats || !Array.isArray(stats.paths) || stats.paths.length === 0) {
+    return '';
+  }
+  return stats.paths.join('\n');
 };
 
 function collectRunChanges(assistantRun) {
