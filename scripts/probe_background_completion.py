@@ -35,6 +35,7 @@ from core.prompts import PinnedSkillCatalog
 from core.runs import ChatRunManager, Run
 from core.runtime.runtime import Runtime
 from core.tools import ToolAccess, ToolContext, ToolRegistry, tool_success
+from core.tools.change_tracker import ChangeTracker
 from core.tools.file_state import FileReadState
 from core.utils.config import Config
 
@@ -409,6 +410,7 @@ async def _run_case(
         tools=tools,
         process_manager=cast(Any, _NoopProcessManager()),
         file_read_state=FileReadState(),
+        change_tracker=ChangeTracker(),
         storage=source_runtime.storage,
         get_extension_registry=lambda: None,
         get_system_prompts=cast(Any, lambda: prompt_manager),

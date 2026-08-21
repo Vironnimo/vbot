@@ -335,6 +335,19 @@ def edit_handler(
         if file_state is not None:
             file_state.record_read(context.session_id, resolved)
 
+        # Record the before/after content for git-style change statistics. The
+        # baseline is the session's last known content (from read or a prior
+        # write), so repeated edits of the same line diff once instead of
+        # summing per-call counts.
+        if context.change_tracker is not None:
+            baseline = context.change_tracker.baseline_for(context.session_id, resolved)
+            context.change_tracker.record_write(
+                context.session_id,
+                resolved,
+                before=baseline if baseline is not None else content,
+                after=result.new_content,
+            )
+
         # Non-blocking: the edit is already written. The syntax warning reports
         # only a break this edit introduced, never a pre-existing one.
         syntax_warning = warning_for_edited_file(resolved, content, result.new_content)

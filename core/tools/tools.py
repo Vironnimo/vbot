@@ -18,6 +18,7 @@ from core.tools.availability import (
     TOOL_ACTIVATION_FOLLOWS,
     TOOL_ACTIVATION_KINDS,
 )
+from core.tools.change_tracker import ChangeTracker
 from core.tools.contracts import ToolContract, compile_tool_contract
 from core.utils.errors import VBotError
 from core.utils.logging import get_logger
@@ -559,6 +560,13 @@ class ToolContext:
         repr=False,
         compare=False,
     )
+    # Session-scoped file-content tracker for git-style change statistics.
+    # ``None`` keeps direct/legacy callers working without change tracking.
+    change_tracker: ChangeTracker | None = field(
+        default=None,
+        repr=False,
+        compare=False,
+    )
 
     @property
     def effective_cwd(self) -> Path:
@@ -699,6 +707,13 @@ class ToolExecutionConfig:
     session_tool_grants: Sequence[str] = field(default_factory=tuple)
     nesting_depth: int = 0
     input_contracts: Mapping[str, ToolContract] = field(default_factory=dict)
+    # Session-scoped file-content tracker for git-style change statistics.
+    # ``None`` keeps direct/legacy execution groups without change tracking.
+    change_tracker: ChangeTracker | None = field(
+        default=None,
+        repr=False,
+        compare=False,
+    )
 
 
 @dataclass(frozen=True)
@@ -1537,6 +1552,7 @@ class ToolExecutor:
                 session_tool_grants=config.session_tool_grants,
                 nesting_depth=config.nesting_depth,
                 input_contract=config.input_contracts.get(tool_call.name),
+                change_tracker=config.change_tracker,
             )
             return await self._dispatch_with_envelope(context, tool_call, config.allowed_tools)
 

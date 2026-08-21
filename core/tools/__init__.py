@@ -27,6 +27,7 @@ from core.tools.bash import (
     project_bash_tool_definitions,
     register_bash_tool,
 )
+from core.tools.change_tracker import ChangeTracker
 from core.tools.contracts import (
     ToolContract,
     ToolContractError,
@@ -256,6 +257,7 @@ __all__ = [
     "EDIT_TOOL_PARAMETERS",
     "FileReadState",
     "StaleReason",
+    "ChangeTracker",
     "GLOB_TOOL_DESCRIPTION",
     "GLOB_TOOL_NAME",
     "GLOB_TOOL_PARAMETERS",

@@ -130,6 +130,7 @@ from core.storage.storage import StorageManager
 from core.subagents import SubAgentCoordinator
 from core.tools import (
     SESSION_READ_TOOL_NAME,
+    ChangeTracker,
     FileReadState,
     register_analyze_image_tool,
     register_bash_tool,
@@ -568,11 +569,15 @@ class Runtime:
         # One read-before-write guard shared by read/write/edit: read stamps each
         # file, write/edit refuse an unread or externally-changed file (file_state.py).
         self._file_state = FileReadState()
+        # Session-scoped file-content tracker for git-style change statistics
+        # (change_tracker.py). Shared by read/write/edit and the chat loop.
+        self._change_tracker = ChangeTracker()
         register_read_tool(
             self._tools,
             attachment_store=self._attachment_store,
             speech_service=self._speech,
             file_state=self._file_state,
+            change_tracker=self._change_tracker,
             speech_max_size_bytes=self._speech_upload_max_size_bytes,
         )
         register_edit_tool(self._tools, file_state=self._file_state)
@@ -703,6 +708,7 @@ class Runtime:
             tools=self._tools,
             process_manager=self._process_manager,
             file_read_state=self._file_state,
+            change_tracker=self._change_tracker,
             storage=self._storage,
             get_extension_registry=lambda: self.extensions,
             get_system_prompts=lambda: self.system_prompts,
@@ -2108,6 +2114,19 @@ class Runtime:
         if self._file_state is None:
             raise RuntimeError("File read state service not available")
         return self._file_state
+
+    @property
+    def change_tracker(self) -> ChangeTracker:
+        """Access to the shared session-scoped file-content change tracker.
+
+        The same instance the read/write/edit tools and the chat loop use, so
+        run-end change statistics are computed from the tools' recorded
+        before/after content.
+        """
+        self._ensure_started()
+        if self._change_tracker is None:
+            raise RuntimeError("Change tracker service not available")
+        return self._change_tracker
 
     @property
     def skills(self) -> SkillRegistry:

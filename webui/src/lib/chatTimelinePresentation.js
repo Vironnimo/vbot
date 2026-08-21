@@ -347,11 +347,17 @@ export const runFooterParts = (assistantRun, nowMs = Date.now()) => {
   return parts;
 };
 
-// Aggregated file-change statistics for one assistant run, derived from the
-// `line_change` display facts and `path` primaries of its edit/write tool rows.
-// Only successful changes count: a failed edit carries no line-change facts.
-// Returns null when the run contains no file changes.
+// Aggregated file-change statistics for one assistant run. Prefers the
+// server-computed git-style values (real before/after line diffs, persisted on
+// the run summary) and falls back to summing the `line_change` display facts
+// of the run's edit/write tool rows — the fallback covers runs from before the
+// server tracker existed and sessions after a server restart. Returns null
+// when the run contains no file changes.
 export const runChangeStats = (assistantRun) => {
+  const serverStats = serverChangeStats(assistantRun);
+  if (serverStats) {
+    return serverStats;
+  }
   const { paths, added, removed } = collectRunChanges(assistantRun);
   if (paths.size === 0 && added === 0 && removed === 0) {
     return null;
@@ -370,22 +376,47 @@ export const sessionChangeStats = (timelineItems) => {
     if (item?.type !== 'assistant_run') {
       continue;
     }
-    const {
-      paths: runPaths,
-      added: runAdded,
-      removed: runRemoved,
-    } = collectRunChanges(item);
-    for (const path of runPaths) {
+    const stats = runChangeStats(item);
+    if (!stats) {
+      continue;
+    }
+    for (const path of stats.paths ?? []) {
       paths.add(path);
     }
-    added += runAdded;
-    removed += runRemoved;
+    added += stats.added;
+    removed += stats.removed;
   }
   if (paths.size === 0 && added === 0 && removed === 0) {
     return null;
   }
   return { files: paths.size, added, removed, paths: [...paths].sort() };
 };
+
+// Validated server-computed change statistics carried by the run summary or
+// the terminal run event. Returns null when absent or malformed.
+function serverChangeStats(assistantRun) {
+  const candidate = assistantRun?.changeStats;
+  if (!isPlainObject(candidate)) {
+    return null;
+  }
+  const files = candidate.files;
+  const added = candidate.added;
+  const removed = candidate.removed;
+  if (
+    !Number.isInteger(files) ||
+    files < 0 ||
+    !Number.isInteger(added) ||
+    added < 0 ||
+    !Number.isInteger(removed) ||
+    removed < 0
+  ) {
+    return null;
+  }
+  const paths = Array.isArray(candidate.paths)
+    ? candidate.paths.filter((path) => typeof path === 'string' && path)
+    : [];
+  return { files, added, removed, paths };
+}
 
 // Compact one-line label for change statistics, e.g. "3 files changed, +151 -15".
 export const changeStatsLabel = (stats) => {

@@ -12,6 +12,7 @@ from typing import Any
 from core.attachments import AttachmentError, sniff_media_type
 from core.model_tasks import SpeechError
 from core.tools.arguments import LINE_NUMBER_GUTTER_SEPARATOR, optional_int
+from core.tools.change_tracker import ChangeTracker
 from core.tools.file_state import FileReadState
 from core.tools.read_extract import (
     ExtractionError,
@@ -606,6 +607,7 @@ def make_read_handler(
     speech_service: Any,
     file_state: FileReadState,
     *,
+    change_tracker: ChangeTracker | None = None,
     speech_max_size_bytes: int,
 ) -> ToolHandler:
     """Create a read handler bound to the attachment store and speech service.
@@ -729,6 +731,15 @@ def make_read_handler(
             return tool_failure(
                 "file_read_error", f"failed to read file: {displayed_path}: {error}"
             )
+        # Record the full text content as the session's baseline for git-style
+        # change statistics. Only a complete read (no offset/limit window) is a
+        # trustworthy baseline; a partial read would diff against a fragment.
+        if (
+            context.change_tracker is not None
+            and not arguments.get("offset")
+            and not arguments.get("limit")
+        ):
+            context.change_tracker.record_read(context.session_id, resolved, content)
         return tool_success({"content": content})
 
     async def read_handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
@@ -906,6 +917,7 @@ def register_read_tool(
     attachment_store: Any,
     speech_service: Any,
     file_state: FileReadState,
+    change_tracker: ChangeTracker | None = None,
     speech_max_size_bytes: int,
 ) -> None:
     """Register the read tool with a vBot tool registry."""
@@ -917,6 +929,7 @@ def register_read_tool(
             attachment_store,
             speech_service,
             file_state,
+            change_tracker=change_tracker,
             speech_max_size_bytes=speech_max_size_bytes,
         ),
         family="files",

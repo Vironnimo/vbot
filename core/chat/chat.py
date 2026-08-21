@@ -244,6 +244,7 @@ if TYPE_CHECKING:
     from core.sessions import ChatSessionManager
     from core.skills.skills import SkillRegistry
     from core.storage import StorageManager
+    from core.tools.change_tracker import ChangeTracker
     from core.tools.file_state import FileReadState
     from core.tools.process_manager import ProcessManager
     from core.tools.tools import ToolRegistry
@@ -566,6 +567,7 @@ class ChatLoopDependencies:
     tools: ToolRegistry
     process_manager: ProcessManager
     file_read_state: FileReadState
+    change_tracker: ChangeTracker
     storage: StorageManager
     get_extension_registry: Callable[[], ExtensionRegistry | None]
     get_system_prompts: Callable[[], SystemPromptManager]
@@ -2134,6 +2136,19 @@ class ChatLoop:
                 timing=run_timing,
                 iteration_count=run.iteration_count,
             )
+            # Git-style change statistics for this run, computed from the
+            # session-scoped content tracker (real before/after line diffs).
+            # Best-effort: a missing baseline simply means the UI falls back to
+            # its per-tool-call counts.
+            try:
+                change_stats = self._dependencies.change_tracker.take_run_stats(run.session_id)
+                if change_stats is not None:
+                    run.terminal_payload_extras["change_stats"] = change_stats
+                    object.__setattr__(run_summary, "change_stats", change_stats)
+            except Exception:
+                _LOGGER.warning(
+                    "Failed to compute change statistics for run %s", run.id, exc_info=True
+                )
             await session.append_async(run_summary)
             await context.session_snapshot.refresh(session)
             if run.contributes_to_agent_activity:
@@ -3136,6 +3151,7 @@ class ChatLoop:
                         base_allowed_tools=state.allowed_tool_names,
                         session_tool_grants=state.session_tool_grants,
                         tool_contracts=state.tool_contracts,
+                        change_tracker=self._dependencies.change_tracker,
                     )
                     terminal_error = _terminal_outcome_error(
                         terminal_outcome,
