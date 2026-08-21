@@ -316,16 +316,21 @@ export function isRunChildWorking(assistantRun, child) {
   return childIndex >= 0 && childIndex === children.length - 1;
 }
 
-export const runMetaParts = (assistantRun, nowMs = Date.now()) => {
+// Footer line for an assistant run: status · duration · iterations ·
+// provider liveness. The duration ticks live while the run is running
+// (driven by the shared nowMs clock). This is the single home for run-level
+// meta information; the message header shows only the timestamp. File-change
+// statistics are rendered separately via `changeStatsParts`.
+export const runFooterParts = (assistantRun, nowMs = Date.now()) => {
   const parts = [];
+  parts.push(runStatusLabel(assistantRun.status));
+  const duration = formatRunDuration(assistantRun, nowMs);
+  if (duration) {
+    parts.push(duration);
+  }
   const iterationLabel = labelForRunIterations(assistantRun);
   if (iterationLabel) {
     parts.push(iterationLabel);
-  }
-  const duration = formatRunDuration(assistantRun, nowMs);
-  parts.push(runStatusLabel(assistantRun.status));
-  if (duration) {
-    parts.push(duration);
   }
   if (
     assistantRun.status === 'running' &&
@@ -339,7 +344,7 @@ export const runMetaParts = (assistantRun, nowMs = Date.now()) => {
       ),
     );
   }
-  return parts.filter(Boolean);
+  return parts;
 };
 
 // Aggregated file-change statistics for one assistant run, derived from the
@@ -396,20 +401,24 @@ export const changeStatsLabel = (stats) => {
   return `${fileLabel}, +${stats.added} -${stats.removed}`;
 };
 
-// Footer line for an assistant run: status · duration · changes. The duration
-// ticks live while the run is running (driven by the shared nowMs clock).
-export const runFooterParts = (assistantRun, nowMs = Date.now()) => {
-  const parts = [];
-  const duration = formatRunDuration(assistantRun, nowMs);
-  parts.push(runStatusLabel(assistantRun.status));
-  if (duration) {
-    parts.push(duration);
+// Structured change-stat parts for colored rendering: the file-count label
+// plus separate added/removed line counts. Returns an empty array when the
+// run changed no files.
+export const changeStatsParts = (stats) => {
+  if (!stats) {
+    return [];
   }
-  const stats = runChangeStats(assistantRun);
-  if (stats) {
-    parts.push(changeStatsLabel(stats));
-  }
-  return parts;
+  const fileLabel =
+    stats.files === 1
+      ? t('chat.changeStats.filesOne', '1 file changed')
+      : t('chat.changeStats.filesMany', '{count} files changed', {
+          count: stats.files,
+        });
+  return [
+    { kind: 'files', text: fileLabel },
+    { kind: 'added', text: `+${stats.added}` },
+    { kind: 'removed', text: `-${stats.removed}` },
+  ];
 };
 
 function collectRunChanges(assistantRun) {

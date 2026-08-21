@@ -914,7 +914,21 @@ describe('ChatAssistantRun run footer', () => {
     expect(footer.getAttribute('aria-label')).toBe(
       'Completed · 8.0s · 1 file changed, +3 -2',
     );
-    expect(footer.querySelectorAll('.run-footer__part')).toHaveLength(3);
+    const parts = [...footer.querySelectorAll('.run-footer__part')];
+    expect(parts.map((part) => part.textContent)).toEqual([
+      'Completed',
+      '8.0s',
+      '1 file changed',
+      '+3',
+      '-2',
+    ]);
+    expect(footer.querySelector('.run-footer__part--added').textContent).toBe(
+      '+3',
+    );
+    expect(footer.querySelector('.run-footer__part--removed').textContent).toBe(
+      '-2',
+    );
+    expect(footer.querySelectorAll('.run-footer__sep')).toHaveLength(2);
   });
 
   it('ticks the live duration while the run is running', () => {
@@ -941,6 +955,20 @@ describe('ChatAssistantRun run footer', () => {
     expect(footer).toBeTruthy();
     expect(footer.getAttribute('aria-label')).toBe('Running');
     expect(footer.querySelectorAll('.run-footer__part')).toHaveLength(1);
+    expect(footer.querySelectorAll('.run-footer__sep')).toHaveLength(0);
+  });
+
+  it('shows the iteration count in the footer', () => {
+    const item = createAssistantRunItem({
+      status: 'completed',
+      items: [],
+    });
+    item.durationMs = 8000;
+    item.iterationCount = 3;
+    mountedComponent = mountRun({ item });
+
+    const footer = document.querySelector('.run-footer');
+    expect(footer.getAttribute('aria-label')).toBe('Completed · 8.0s · 3 iter');
   });
 });
 

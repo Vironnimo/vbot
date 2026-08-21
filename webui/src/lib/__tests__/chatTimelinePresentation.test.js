@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import {
   backgroundTasks,
   changeStatsLabel,
+  changeStatsParts,
   compactToolValue,
   compactionSummaryText,
   errorMessagePresentation,
@@ -16,7 +17,6 @@ import {
   resolveSubAgentCancelPlan,
   runChangeStats,
   runFooterParts,
-  runMetaParts,
   sessionChangeStats,
   subAgentDisplayResult,
   subAgentDotStatus,
@@ -1287,13 +1287,13 @@ describe('takeoverSeparatorLabel', () => {
   });
 });
 
-describe('runMetaParts', () => {
+describe('runFooterParts', () => {
   beforeEach(() => {
     init('en');
   });
 
   it('uses only the canonical Iteration count from the backend', () => {
-    const parts = runMetaParts({
+    const parts = runFooterParts({
       status: 'completed',
       durationMs: 1000,
       iterationCount: 2,
@@ -1301,11 +1301,12 @@ describe('runMetaParts', () => {
       tools: Array.from({ length: 5 }, () => ({ name: 'read' })),
     });
 
-    expect(parts[0]).toBe('2 iter');
+    expect(parts[0]).toBe('Completed');
+    expect(parts).toContain('2 iter');
   });
 
   it('does not estimate an Iteration count when backend truth is absent', () => {
-    const parts = runMetaParts({
+    const parts = runFooterParts({
       status: 'completed',
       durationMs: 1000,
       outputs: [{ content: 'done' }, { content: 'another message' }],
@@ -1317,7 +1318,7 @@ describe('runMetaParts', () => {
   });
 
   it('shows zero before the first Model response returns', () => {
-    const parts = runMetaParts({
+    const parts = runFooterParts({
       status: 'running',
       durationMs: null,
       iterationCount: 0,
@@ -1325,11 +1326,12 @@ describe('runMetaParts', () => {
       tools: [],
     });
 
-    expect(parts[0]).toBe('0 iter');
+    expect(parts[0]).toBe('Running');
+    expect(parts).toContain('0 iter');
   });
 
   it('shows the Cancelled label plus the runtime for a cancelled run', () => {
-    const parts = runMetaParts({
+    const parts = runFooterParts({
       status: 'cancelled',
       durationMs: 12000,
       outputs: [{ content: 'partial' }],
@@ -1343,7 +1345,7 @@ describe('runMetaParts', () => {
   });
 
   it('shows only the Cancelled label when a cancelled run has no timing', () => {
-    const parts = runMetaParts({
+    const parts = runFooterParts({
       status: 'cancelled',
       durationMs: null,
       outputs: [],
@@ -1354,7 +1356,7 @@ describe('runMetaParts', () => {
   });
 
   it('shows terminal status and canonical duration for completed runs', () => {
-    const parts = runMetaParts({
+    const parts = runFooterParts({
       status: 'completed',
       durationMs: 8000,
       outputs: [{ content: 'done' }],
@@ -1366,7 +1368,7 @@ describe('runMetaParts', () => {
   });
 
   it('computes a live Run duration from its start timestamp', () => {
-    const parts = runMetaParts(
+    const parts = runFooterParts(
       {
         status: 'running',
         durationMs: null,
@@ -1381,7 +1383,7 @@ describe('runMetaParts', () => {
   });
 
   it('shows live Provider liveness without calling it model output', () => {
-    const parts = runMetaParts({
+    const parts = runFooterParts({
       status: 'running',
       durationMs: null,
       outputs: [{ content: 'Writing the plan now.' }],
@@ -1649,7 +1651,7 @@ describe('runFooterParts', () => {
     init('en');
   });
 
-  it('shows status, duration, and change stats for a completed run', () => {
+  it('shows status and duration for a completed run', () => {
     const parts = runFooterParts({
       status: 'completed',
       durationMs: 8000,
@@ -1684,7 +1686,7 @@ describe('runFooterParts', () => {
       ],
     });
 
-    expect(parts).toEqual(['Completed', '8.0s', '1 file changed, +3 -2']);
+    expect(parts).toEqual(['Completed', '8.0s']);
   });
 
   it('ticks the live duration while the run is running', () => {
@@ -1708,5 +1710,41 @@ describe('runFooterParts', () => {
       items: [],
     });
     expect(parts).toEqual(['Completed', '1.0s']);
+  });
+
+  it('includes the iteration count after the duration', () => {
+    const parts = runFooterParts({
+      status: 'completed',
+      durationMs: 8000,
+      iterationCount: 3,
+      items: [],
+    });
+    expect(parts).toEqual(['Completed', '8.0s', '3 iter']);
+  });
+});
+
+describe('changeStatsParts', () => {
+  beforeEach(() => {
+    init('en');
+  });
+
+  it('splits the change stats into file, added, and removed parts', () => {
+    expect(changeStatsParts({ files: 5, added: 151, removed: 15 })).toEqual([
+      { kind: 'files', text: '5 files changed' },
+      { kind: 'added', text: '+151' },
+      { kind: 'removed', text: '-15' },
+    ]);
+  });
+
+  it('uses the singular file form', () => {
+    expect(changeStatsParts({ files: 1, added: 2, removed: 0 })).toEqual([
+      { kind: 'files', text: '1 file changed' },
+      { kind: 'added', text: '+2' },
+      { kind: 'removed', text: '-0' },
+    ]);
+  });
+
+  it('returns an empty array for null stats', () => {
+    expect(changeStatsParts(null)).toEqual([]);
   });
 });

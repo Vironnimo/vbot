@@ -211,9 +211,8 @@
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 4px 10px;
+  gap: 4px 6px;
   margin-top: 2px;
-  padding: 4px 0 0 34px;
   color: var(--text-lo);
   font-family: var(--font-mono);
   font-size: 11px;
@@ -221,6 +220,19 @@
 
 .run-footer__part {
   white-space: nowrap;
+}
+
+.run-footer__sep {
+  color: var(--text-lo);
+  opacity: 0.6;
+}
+
+.run-footer__part--added {
+  color: var(--green);
+}
+
+.run-footer__part--removed {
+  color: var(--red);
 }
 
 @media (prefers-reduced-motion: reduce) {
