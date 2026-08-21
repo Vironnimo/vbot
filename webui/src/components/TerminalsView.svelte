@@ -29,9 +29,7 @@
   } = $props();
 
   let viewState = $state(createTerminalsViewState());
-  let controlEnabledByTerminal = $state({});
-  let controlledTerminalId = $state('');
-  let pendingControlTerminalId = '';
+  let pendingFocusTerminalId = '';
   let maximizedTerminalId = $state('');
   let scrolledBackByTerminal = $state({});
   let closingTerminalId = $state('');
@@ -118,35 +116,14 @@
   });
 
   $effect(() => {
-    const selectedId = viewState.selectedTerminalId;
-    const previous = controlledTerminalId;
-    if (selectedId === previous) {
-      return;
-    }
-    controlledTerminalId = selectedId;
-    if (pendingControlTerminalId === selectedId) {
-      pendingControlTerminalId = '';
-      return;
-    }
-    const tile = tileRegistry.get(selectedId);
-    if (tile?.xterm) {
-      const enabled = !!controlEnabledByTerminal[selectedId];
-      tile.xterm.options.disableStdin = !enabled;
-      tile.xterm.options.cursorBlink = enabled;
-      if (enabled) {
-        tile.xterm.focus();
+    for (const item of viewState.terminals) {
+      const tile = tileRegistry.get(item.terminal_id);
+      if (!tile?.xterm) {
+        continue;
       }
-    }
-  });
-
-  $effect(() => {
-    const selected = findTerminal(viewState.selectedTerminalId);
-    const terminalId = viewState.selectedTerminalId;
-    if (
-      terminalIsFinished(selected) &&
-      !!controlEnabledByTerminal[terminalId]
-    ) {
-      setControlEnabled(false);
+      const interactive = !terminalIsFinished(item) && !serverUnavailable;
+      tile.xterm.options.disableStdin = !interactive;
+      tile.xterm.options.cursorBlink = interactive;
     }
   });
 
@@ -242,13 +219,14 @@
     if (!mounted || !host) {
       return;
     }
-    const controlled = !!controlEnabledByTerminal[terminalId];
+    const interactive =
+      !terminalIsFinished(findTerminal(terminalId)) && !serverUnavailable;
     const xtermInstance = new Terminal({
       allowTransparency: false,
       convertEol: false,
-      cursorBlink: controlled,
+      cursorBlink: interactive,
       cursorInactiveStyle: 'outline',
-      disableStdin: !controlled,
+      disableStdin: !interactive,
       fontFamily: cssToken('--font-mono', 'IBM Plex Mono, monospace'),
       fontSize: 12,
       // Terminal TUIs paint contiguous panels with per-cell background colors.
@@ -266,8 +244,8 @@
     xtermInstance.open(host);
     enableWebglRenderer(xtermInstance, WebglAddon);
     const inputDisposable = xtermInstance.onData((data) => {
-      if (controlEnabledByTerminal[terminalId]) {
-        controller.queueInput(data);
+      if (!terminalIsFinished(findTerminal(terminalId))) {
+        controller.queueInput(data, { terminalId });
       }
     });
     const scrollDisposable = xtermInstance.onScroll(() => {
@@ -302,7 +280,8 @@
       }
     }
     scheduleFit(terminalId);
-    if (controlled) {
+    if (pendingFocusTerminalId === terminalId) {
+      pendingFocusTerminalId = '';
       xtermInstance.focus();
     }
   }
@@ -348,40 +327,8 @@
     }
     try {
       tile.fitAddon.fit();
-      const item = findTerminal(terminalId);
-      const isManual = !item?.owner;
-      if (isManual && !terminalIsFinished(item)) {
-        const immediate = maximizedTerminalId === terminalId;
-        controller.resize(
-          tile.xterm.cols,
-          tile.xterm.rows,
-          terminalId,
-          immediate,
-        );
-      }
     } catch {
       // The host may be between layout states while the view is mounting.
-    }
-  }
-
-  function setControlEnabled(enabled) {
-    const terminalId = viewState.selectedTerminalId;
-    const next =
-      enabled === true &&
-      Boolean(terminalId) &&
-      !terminalIsFinished(findTerminal(terminalId));
-    const tile = tileRegistry.get(terminalId);
-    if (tile?.xterm) {
-      tile.xterm.options.disableStdin = !next;
-      tile.xterm.options.cursorBlink = next;
-      if (next) {
-        tile.xterm.focus();
-      }
-    }
-    if (next) {
-      controlEnabledByTerminal[terminalId] = true;
-    } else if (terminalId) {
-      delete controlEnabledByTerminal[terminalId];
     }
   }
 
@@ -389,7 +336,7 @@
     const tile = tileRegistry.get(terminalId);
     tile?.xterm?.scrollToBottom();
     scrolledBackByTerminal[terminalId] = false;
-    if (controlEnabledByTerminal[terminalId]) {
+    if (!terminalIsFinished(findTerminal(terminalId))) {
       tile?.xterm?.focus();
     }
   }
@@ -407,21 +354,14 @@
     }
   }
 
-  function takeTerminalControl(event, terminalId) {
+  function activateTerminalFromPointer(event, terminalId) {
     if (event.button !== 0 || !terminalId || serverUnavailable) {
       return;
     }
-    const item = findTerminal(terminalId);
-    if (!item || terminalIsFinished(item)) {
-      return;
-    }
-    if (terminalId !== viewState.selectedTerminalId) {
-      controller.selectTerminal(terminalId);
-    }
-    tileRegistry.get(terminalId)?.xterm?.focus();
+    activateTerminal(terminalId);
   }
 
-  function takeTerminalControlViaKeyboard(event, terminalId) {
+  function activateTerminalFromKeyboard(event, terminalId) {
     if (
       !terminalId ||
       serverUnavailable ||
@@ -433,43 +373,25 @@
       return;
     }
     event.preventDefault();
-    const item = findTerminal(terminalId);
-    if (!item || terminalIsFinished(item)) {
-      return;
-    }
-    if (terminalId !== viewState.selectedTerminalId) {
-      controller.selectTerminal(terminalId);
-    }
-    tileRegistry.get(terminalId)?.xterm?.focus();
+    activateTerminal(terminalId);
   }
 
-  function toggleControl(terminalId) {
-    if (!terminalId || serverUnavailable) {
-      return;
-    }
+  function activateTerminal(terminalId) {
     const item = findTerminal(terminalId);
-    if (!item || terminalIsFinished(item)) {
+    if (!item) {
       return;
     }
-    const currentlyEnabled = !!controlEnabledByTerminal[terminalId];
     if (terminalId !== viewState.selectedTerminalId) {
       controller.selectTerminal(terminalId);
     }
+    if (terminalIsFinished(item) || serverUnavailable) {
+      return;
+    }
     const tile = tileRegistry.get(terminalId);
-    if (currentlyEnabled) {
-      if (tile?.xterm) {
-        tile.xterm.options.disableStdin = true;
-        tile.xterm.options.cursorBlink = false;
-      }
-      delete controlEnabledByTerminal[terminalId];
+    if (tile?.xterm) {
+      tile.xterm.focus();
     } else {
-      if (tile?.xterm) {
-        tile.xterm.options.disableStdin = false;
-        tile.xterm.options.cursorBlink = true;
-        tile.xterm.focus();
-      }
-      controlEnabledByTerminal[terminalId] = true;
-      pendingControlTerminalId = '';
+      pendingFocusTerminalId = terminalId;
     }
   }
 
@@ -606,7 +528,7 @@
     }
     startDialogOpen = false;
     await tick();
-    setControlEnabled(true);
+    activateTerminal(started.terminal_id);
     onToast({
       title: t('terminals.startedTitle', 'Terminal started'),
       message: t(
@@ -875,10 +797,6 @@
             class:terminals-view__tile--focused={isFocused &&
               !maximizedTerminalId}
             data-terminal-id={item.terminal_id}
-            data-control={isFocused &&
-            controlEnabledByTerminal[item.terminal_id]
-              ? 'enabled'
-              : 'observe'}
             style="grid-row: {span.row +
               1} / span {span.rowSpan}; grid-column: {span.column +
               1} / span {span.columnSpan};"
@@ -888,12 +806,12 @@
               role="button"
               tabindex="0"
               aria-label={terminalTitle(item)}
-              onclick={() => controller.selectTerminal(item.terminal_id)}
+              onclick={() => activateTerminal(item.terminal_id)}
               ondblclick={() => toggleMaximize(item.terminal_id)}
               onkeydown={(event) => {
                 if (event.key === 'Enter' || event.key === ' ') {
                   event.preventDefault();
-                  controller.selectTerminal(item.terminal_id);
+                  activateTerminal(item.terminal_id);
                 } else if (event.key === 'F2') {
                   event.preventDefault();
                   toggleMaximize(item.terminal_id);
@@ -929,41 +847,6 @@
                   ondblclick={(event) => event.stopPropagation()}
                   onkeydown={(event) => event.stopPropagation()}
                 >
-                  <Button
-                    variant={controlEnabledByTerminal[item.terminal_id]
-                      ? 'primary'
-                      : 'tertiary'}
-                    icon
-                    class="terminals-view__tile-action"
-                    disabled={isFinished || serverUnavailable}
-                    ariaLabel={controlEnabledByTerminal[item.terminal_id]
-                      ? t('terminals.releaseControl', 'Release control')
-                      : t('terminals.takeControl', 'Take control')}
-                    tooltip={controlEnabledByTerminal[item.terminal_id]
-                      ? t('terminals.releaseControl', 'Release control')
-                      : t('terminals.takeControl', 'Take control')}
-                    onClick={() => toggleControl(item.terminal_id)}
-                  >
-                    {#if controlEnabledByTerminal[item.terminal_id]}
-                      <svg
-                        viewBox="0 0 14 14"
-                        width="14"
-                        height="14"
-                        aria-hidden="true"
-                      >
-                        <path d="M4 4h6v6H4z" />
-                      </svg>
-                    {:else}
-                      <svg
-                        viewBox="0 0 14 14"
-                        width="14"
-                        height="14"
-                        aria-hidden="true"
-                      >
-                        <path d="M3 11l5-5 2 2-5 5H3z M8 4l2 2 1-1-2-2z" />
-                      </svg>
-                    {/if}
-                  </Button>
                   <Button
                     variant="tertiary"
                     icon
@@ -1045,12 +928,12 @@
                     : 'terminals.liveTerminalLabel',
                   isFinished
                     ? 'Retained terminal history.'
-                    : 'Live terminal. Use Take control to enable input.',
+                    : 'Live terminal. Click to focus and type.',
                 )}
                 onpointerdown={(event) =>
-                  takeTerminalControl(event, item.terminal_id)}
+                  activateTerminalFromPointer(event, item.terminal_id)}
                 onkeydown={(event) =>
-                  takeTerminalControlViaKeyboard(event, item.terminal_id)}
+                  activateTerminalFromKeyboard(event, item.terminal_id)}
               ></div>
             </div>
           </div>
@@ -1372,17 +1255,8 @@
     background: var(--bg);
   }
 
-  .terminals-view__tile[data-control='enabled'] {
-    border-color: var(--accent-40);
-    box-shadow: var(--focus-ring);
-  }
-
   .terminals-view__tile--focused {
     border-color: var(--accent-40);
-  }
-
-  .terminals-view__tile--focused[data-control='enabled'] {
-    border-color: var(--accent);
   }
 
   .terminals-view__tile--hidden {

@@ -2,7 +2,6 @@ import {
   forgetTerminal,
   killTerminal,
   listTerminals,
-  resizeTerminal,
   sendTerminalInput,
   startTerminal,
   subscribeTerminalEvents,
@@ -20,7 +19,6 @@ const RECONNECT_INITIAL_DELAY_MS = 500;
 const RECONNECT_MAX_DELAY_MS = 8_000;
 const INPUT_FLUSH_DELAY_MS = 24;
 const INPUT_CHUNK_CHARS = 32_768;
-const RESIZE_DEBOUNCE_MS = 100;
 const TERMINAL_STATES_FINISHED = new Set(['exited', 'error']);
 
 /**
@@ -146,7 +144,6 @@ export function createTerminalsController({
     forgetTerminal,
     killTerminal,
     listTerminals,
-    resizeTerminal,
     sendTerminalInput,
     startTerminal,
     subscribeTerminalEvents,
@@ -257,10 +254,6 @@ export function createTerminalsController({
         inputTimer: null,
         inputBuffer: '',
         inputChain: Promise.resolve(),
-        resizeTimer: null,
-        pendingResize: null,
-        lastResize: null,
-        resizeChain: Promise.resolve(),
       };
       streamRecords.set(terminalId, stream);
     }
@@ -357,7 +350,6 @@ export function createTerminalsController({
     stream.terminalEnded = true;
     stream.shouldReconnect = false;
     clearPendingInput(stream);
-    clearPendingResize(stream);
     setStreamView(stream.terminalId, {
       status: TERMINAL_STREAM_SNAPSHOT,
     });
@@ -429,17 +421,24 @@ export function createTerminalsController({
     }, delay);
   }
 
-  function queueInput(data, { immediate = false } = {}) {
+  function queueInput(
+    data,
+    { immediate = false, terminalId = state.selectedTerminalId } = {},
+  ) {
+    const item = state.terminals.find(
+      (terminal) => terminal.terminal_id === terminalId,
+    );
     if (
       typeof data !== 'string' ||
       !data ||
-      !state.selectedTerminalId ||
-      terminalIsFinished(selectedTerminal(state)) ||
+      !terminalId ||
+      !item ||
+      terminalIsFinished(item) ||
       serverUnavailable
     ) {
       return;
     }
-    const stream = streamRecords.get(state.selectedTerminalId);
+    const stream = streamRecords.get(terminalId);
     if (!stream || stream.terminalEnded) {
       return;
     }
@@ -461,7 +460,7 @@ export function createTerminalsController({
       clearTimeoutFn(stream.inputTimer);
       stream.inputTimer = null;
     }
-    if (!stream.inputBuffer || !state.selectedTerminalId) {
+    if (!stream.inputBuffer) {
       return;
     }
     const terminalId = stream.terminalId;
@@ -491,83 +490,6 @@ export function createTerminalsController({
     if (stream.inputBuffer) {
       stream.inputTimer = setTimeoutFn(() => flushInput(stream), 0);
     }
-  }
-
-  function resize(
-    columns,
-    rows,
-    terminalId = state.selectedTerminalId,
-    immediate = false,
-  ) {
-    const item = state.terminals.find(
-      (terminal) => terminal.terminal_id === terminalId,
-    );
-    if (
-      !Number.isInteger(columns) ||
-      !Number.isInteger(rows) ||
-      !terminalId ||
-      !item ||
-      terminalIsFinished(item) ||
-      serverUnavailable
-    ) {
-      return;
-    }
-    const stream = streamRecords.get(terminalId);
-    if (!stream || stream.terminalEnded) {
-      return;
-    }
-    stream.pendingResize = { terminalId, columns, rows };
-    if (
-      stream.lastResize?.terminalId === stream.pendingResize.terminalId &&
-      stream.lastResize.columns === columns &&
-      stream.lastResize.rows === rows
-    ) {
-      return;
-    }
-    if (stream.resizeTimer !== null) {
-      clearTimeoutFn(stream.resizeTimer);
-      stream.resizeTimer = null;
-    }
-    if (immediate) {
-      flushResize(stream);
-      return;
-    }
-    stream.resizeTimer = setTimeoutFn(
-      () => flushResize(stream),
-      RESIZE_DEBOUNCE_MS,
-    );
-  }
-
-  function flushResize(stream) {
-    stream.resizeTimer = null;
-    const request = stream.pendingResize;
-    stream.pendingResize = null;
-    if (!request || !streamRecords.has(request.terminalId)) {
-      return;
-    }
-    stream.lastResize = request;
-    stream.resizeChain = stream.resizeChain
-      .catch(() => undefined)
-      .then(async () => {
-        if (stream.terminalEnded) {
-          return;
-        }
-        try {
-          await api.resizeTerminal(
-            request.terminalId,
-            request.columns,
-            request.rows,
-          );
-        } catch (error) {
-          if (
-            !destroyed &&
-            !stream.terminalEnded &&
-            state.selectedTerminalId === request.terminalId
-          ) {
-            state.actionError = errorMessage(error);
-          }
-        }
-      });
   }
 
   async function killTerminal(terminalId) {
@@ -689,14 +611,6 @@ export function createTerminalsController({
     stream.inputBuffer = '';
   }
 
-  function clearPendingResize(stream) {
-    if (stream.resizeTimer !== null) {
-      clearTimeoutFn(stream.resizeTimer);
-      stream.resizeTimer = null;
-    }
-    stream.pendingResize = null;
-  }
-
   function clearReconnectTimer(stream) {
     if (stream.reconnectTimer !== null) {
       clearTimeoutFn(stream.reconnectTimer);
@@ -709,7 +623,6 @@ export function createTerminalsController({
     removeStreamView(stream.terminalId);
     clearReconnectTimer(stream);
     clearPendingInput(stream);
-    clearPendingResize(stream);
     stream.shouldReconnect = false;
     const connection = stream.connection;
     stream.connection = null;
@@ -736,7 +649,6 @@ export function createTerminalsController({
     killTerminal,
     loadTerminals,
     queueInput,
-    resize,
     selectTerminal,
     setServerUnavailable,
     startManualTerminal,
