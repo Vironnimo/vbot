@@ -126,6 +126,14 @@ class TerminalNotFoundError(TerminalManagerError):
     """Raised when a Terminal Session is missing or belongs to another Session."""
 
 
+class TerminalAlreadyAttachedError(TerminalManagerError):
+    """Raised when another vBot Session already holds the one attachment."""
+
+
+class TerminalNotAttachedError(TerminalManagerError):
+    """Raised when detach does not target the current attachment."""
+
+
 class TerminalClosedError(TerminalManagerError):
     """Raised when input or resize targets a closed Terminal Session."""
 
@@ -148,7 +156,7 @@ class TerminalCursorError(TerminalManagerError):
 
 @dataclass(frozen=True, slots=True)
 class TerminalOwner:
-    """Exact vBot Session authority for one Terminal Session."""
+    """Exact vBot Session address used by Terminal lifecycle and attachment scopes."""
 
     project_id: str | None
     agent_id: str
@@ -184,7 +192,12 @@ class TerminalSession:
     """In-memory state for one interactive terminal process."""
 
     terminal_id: str
+    # Immutable process provenance. None means the local operator started it.
     owner: TerminalOwner | None
+    # Agent-started terminals retain their lifecycle scope independently of attachment.
+    lifecycle_owner: TerminalOwner | None
+    # The one vBot Session currently authorized for Tool access and activity delivery.
+    attachment: TerminalOwner | None
     adapter: TerminalAdapter
     renderer: TerminalRenderer
     command: str
@@ -207,6 +220,7 @@ class TerminalSession:
     attention: TerminalAttention | None = None
     activity_generation: int = 0
     notify_on_settle: bool = False
+    settled_delivery_enabled: bool = False
     snapshot_on_settle: bool = False
     suppress_exit_attention: bool = False
     lock: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False)
@@ -464,6 +478,8 @@ class TerminalManager:
         session = TerminalSession(
             terminal_id=terminal_id,
             owner=owner,
+            lifecycle_owner=owner,
+            attachment=owner,
             adapter=adapter,
             renderer=TerminalRenderer(columns, rows, scrollback_lines=self._scrollback_lines),
             command=argv[0],
@@ -504,18 +520,67 @@ class TerminalManager:
         self._publish_state(session)
         return session
 
-    def list_sessions(self, owner: TerminalOwner) -> list[TerminalSession]:
-        """Return all retained Terminal Sessions owned by one vBot Session."""
+    def list_sessions(self) -> list[TerminalSession]:
+        """Return all retained Terminal Sessions discoverable for attachment."""
         return sorted(
-            (session for session in self._sessions.values() if session.owner == owner),
+            self._sessions.values(),
             key=lambda session: session.started_at,
         )
 
     def get_session(self, terminal_id: str, owner: TerminalOwner) -> TerminalSession:
-        """Return an owned Terminal Session without revealing cross-Session ids."""
+        """Return a Terminal Session attached to the exact vBot Session."""
         session = self._sessions.get(terminal_id)
-        if session is None or session.owner != owner:
+        if session is None or session.attachment != owner:
             raise TerminalNotFoundError(f"Terminal Session not found: {terminal_id}")
+        return session
+
+    def attach(
+        self,
+        terminal_id: str,
+        attachment: TerminalOwner,
+        *,
+        origin_run_id: str,
+    ) -> tuple[TerminalSession, bool]:
+        """Attach one live Terminal Session without changing its process or lifecycle."""
+        _validate_owner(attachment)
+        session = self._get_for_operator(terminal_id)
+        self._require_live(session)
+        if session.attachment is not None and session.attachment != attachment:
+            raise TerminalAlreadyAttachedError(
+                "Terminal Session is already attached to another vBot Session."
+            )
+        changed = session.attachment is None
+        session.attachment = attachment
+        session.activity_origin_run_id = origin_run_id
+        session.acknowledged_attention_revision = session.attention_revision
+        session.settled_delivery_enabled = True
+        if session.state == "working":
+            self._schedule_settle(session, notify=True)
+        if changed:
+            self._publish_state(session)
+            _LOGGER.info(
+                "Attached Terminal Session terminal=%s agent=%s session=%s project=%s",
+                terminal_id,
+                attachment.agent_id,
+                attachment.session_id,
+                attachment.project_id,
+            )
+        return session, changed
+
+    def detach(self, terminal_id: str, attachment: TerminalOwner) -> TerminalSession:
+        """Remove only one exact vBot Session attachment."""
+        session = self._get_for_operator(terminal_id)
+        if session.attachment != attachment:
+            raise TerminalNotAttachedError("Terminal Session is not attached to this vBot Session.")
+        self._detach_session(session)
+        self._publish_state(session)
+        _LOGGER.info(
+            "Detached Terminal Session terminal=%s agent=%s session=%s project=%s",
+            terminal_id,
+            attachment.agent_id,
+            attachment.session_id,
+            attachment.project_id,
+        )
         return session
 
     def list_for_operator(self) -> list[dict[str, Any]]:
@@ -638,7 +703,7 @@ class TerminalManager:
             state_changed = session.state != "working"
             session.state = "working"
             await asyncio.to_thread(session.adapter.write, data)
-            self._schedule_settle(session, notify=False)
+            self._schedule_settle(session, notify=session.attachment is not None)
             session.output_event.set()
             if state_changed:
                 self._publish_state(session)
@@ -827,12 +892,12 @@ class TerminalManager:
                     await asyncio.wait_for(session.output_event.wait(), timeout=0.1)
             if session.state in {"exited", "error"}:
                 return
-            owner = session.owner
-            if owner is None:
+            attachment = session.attachment
+            if attachment is None:
                 return
             await self.send_input(
                 session.terminal_id,
-                owner,
+                attachment,
                 data=None,
                 text=text,
                 key="enter",
@@ -908,53 +973,87 @@ class TerminalManager:
         return await self.snapshot(terminal_id, owner, include_name=False)
 
     async def close_scope(self, owner: TerminalOwner) -> None:
-        """Terminate every Terminal Session owned by one removed vBot Session."""
-        sessions = [session for session in self._sessions.values() if session.owner == owner]
+        """Apply Terminal lifecycle and attachment cleanup for a removed Session."""
+        sessions = [
+            session for session in self._sessions.values() if session.lifecycle_owner == owner
+        ]
+        for session in self._sessions.values():
+            if session.lifecycle_owner != owner and session.attachment == owner:
+                self._detach_session(session)
+                self._publish_state(session)
         await asyncio.gather(
             *(self._terminate_session(session, suppress_attention=True) for session in sessions),
             return_exceptions=False,
         )
 
     async def close_agent_scope(self, agent_id: str, project_id: str | None) -> None:
-        """Terminate Terminal Sessions under an Agent/Project owner being removed."""
+        """Apply Terminal lifecycle and attachment cleanup for a removed Agent scope."""
         sessions = [
             session
             for session in self._sessions.values()
-            if session.owner is not None
-            and session.owner.agent_id == agent_id
-            and session.owner.project_id == project_id
+            if session.lifecycle_owner is not None
+            and session.lifecycle_owner.agent_id == agent_id
+            and session.lifecycle_owner.project_id == project_id
         ]
+        terminating = {session.terminal_id for session in sessions}
+        for session in self._sessions.values():
+            attachment = session.attachment
+            if (
+                session.terminal_id not in terminating
+                and attachment is not None
+                and attachment.agent_id == agent_id
+                and attachment.project_id == project_id
+            ):
+                self._detach_session(session)
+                self._publish_state(session)
         await asyncio.gather(
             *(self._terminate_session(session, suppress_attention=True) for session in sessions),
             return_exceptions=False,
         )
 
     async def close_project_scope(self, project_id: str) -> None:
-        """Terminate every Terminal Session under a removed Project."""
+        """Apply Terminal lifecycle and attachment cleanup for a removed Project."""
         sessions = [
             session
             for session in self._sessions.values()
-            if session.owner is not None and session.owner.project_id == project_id
+            if session.lifecycle_owner is not None
+            and session.lifecycle_owner.project_id == project_id
         ]
+        terminating = {session.terminal_id for session in sessions}
+        for session in self._sessions.values():
+            attachment = session.attachment
+            if (
+                session.terminal_id not in terminating
+                and attachment is not None
+                and attachment.project_id == project_id
+            ):
+                self._detach_session(session)
+                self._publish_state(session)
         await asyncio.gather(
             *(self._terminate_session(session, suppress_attention=True) for session in sessions),
             return_exceptions=False,
         )
 
     def transfer_scope(self, source: TerminalOwner, target: TerminalOwner) -> int:
-        """Transfer all Terminal Sessions after a successful `/agent` Session move."""
+        """Transfer lifecycle and attachment scopes after a successful Session move."""
         transferred = 0
         for session in self._sessions.values():
-            if session.owner == source:
+            lifecycle_matches = session.lifecycle_owner == source
+            attachment_matches = session.attachment == source
+            if lifecycle_matches or attachment_matches:
                 attention = session.attention
                 pending_delivery = (
-                    attention is not None
+                    attachment_matches
+                    and attention is not None
                     and session.notification_task is not None
                     and not session.notification_task.done()
                 )
                 if pending_delivery:
                     self._cancel_delivery(session)
-                session.owner = target
+                if lifecycle_matches:
+                    session.lifecycle_owner = target
+                if attachment_matches:
+                    session.attachment = target
                 self._publish_state(session)
                 if pending_delivery and attention is not None:
                     self._schedule_attention_delivery(session, attention)
@@ -1053,7 +1152,12 @@ class TerminalManager:
                     if session.state != "starting":
                         state_changed = session.state != "working"
                         session.state = "working"
-                        self._schedule_settle(session, notify=False)
+                        self._schedule_settle(
+                            session,
+                            notify=(
+                                session.attachment is not None and session.settled_delivery_enabled
+                            ),
+                        )
                     if state_changed or title_changed:
                         self._publish_state(session)
                     session.output_event.set()
@@ -1109,6 +1213,7 @@ class TerminalManager:
                     return
                 deliver = session.notify_on_settle
                 session.notify_on_settle = False
+                session.settled_delivery_enabled = session.attachment is not None
                 session.state = "ready"
                 if session.snapshot_on_settle:
                     session.snapshot_on_settle = False
@@ -1211,7 +1316,7 @@ class TerminalManager:
     def _schedule_attention_delivery(
         self, session: TerminalSession, attention: TerminalAttention
     ) -> None:
-        if self._trigger_service is None or session.owner is None:
+        if self._trigger_service is None or session.attachment is None:
             return
         revision = attention.revision
         session.notification_task = asyncio.create_task(
@@ -1230,19 +1335,19 @@ class TerminalManager:
         self, session: TerminalSession, attention: TerminalAttention
     ) -> None:
         trigger_service = self._trigger_service
-        owner = session.owner
-        if trigger_service is None or owner is None:
+        attachment = session.attachment
+        if trigger_service is None or attachment is None:
             return
         origin_run_id = session.activity_origin_run_id or session.origin_run_id
         if origin_run_id is None:
             return
         delivery = trigger_service.submit_completion(
-            owner.agent_id,
-            owner.session_id,
+            attachment.agent_id,
+            attachment.session_id,
             notice_id=attention.notice_id,
             origin_run_id=origin_run_id,
             body=_attention_body(session, attention),
-            project_id=owner.project_id,
+            project_id=attachment.project_id,
         )
         await delivery
         attention.delivered = True
@@ -1285,17 +1390,25 @@ class TerminalManager:
     def _cancel_delivery(self, session: TerminalSession) -> None:
         task = session.notification_task
         attention = session.attention
-        owner = session.owner
-        if task is None or task.done() or attention is None or owner is None:
+        attachment = session.attachment
+        if task is None or task.done() or attention is None or attachment is None:
             return
         if self._trigger_service is not None:
             self._trigger_service.cancel_completion(
-                owner.agent_id,
-                owner.session_id,
+                attachment.agent_id,
+                attachment.session_id,
                 notice_id=attention.notice_id,
-                project_id=owner.project_id,
+                project_id=attachment.project_id,
             )
         task.cancel()
+
+    def _detach_session(self, session: TerminalSession) -> None:
+        """Clear one attachment and any delivery state without touching the child."""
+        self._cancel_delivery(session)
+        session.attachment = None
+        session.activity_origin_run_id = None
+        session.notify_on_settle = False
+        session.settled_delivery_enabled = False
 
     def _snapshot_data(
         self, session: TerminalSession, scrollback: dict[str, Any]
@@ -1331,6 +1444,7 @@ class TerminalManager:
     def _operator_summary(self, session: TerminalSession) -> dict[str, Any]:
         attention = session.attention
         owner = session.owner
+        attachment = session.attachment
         return {
             "terminal_id": session.terminal_id,
             "state": session.state,
@@ -1355,6 +1469,15 @@ class TerminalManager:
                     "session_id": owner.session_id,
                 }
                 if owner is not None
+                else None
+            ),
+            "attachment": (
+                {
+                    "project_id": attachment.project_id,
+                    "agent_id": attachment.agent_id,
+                    "session_id": attachment.session_id,
+                }
+                if attachment is not None
                 else None
             ),
             "attention": (
@@ -1418,7 +1541,7 @@ class TerminalManager:
             raise TerminalCapacityError(
                 f"Live Terminal Session limit reached ({TERMINAL_MAX_LIVE_GLOBAL})"
             )
-        owned = sum(1 for session in live if owner is not None and session.owner == owner)
+        owned = sum(1 for session in live if owner is not None and session.lifecycle_owner == owner)
         if owner is not None and owned >= TERMINAL_MAX_LIVE_PER_SESSION:
             raise TerminalCapacityError(
                 "Live Terminal Session limit reached for this vBot Session "
@@ -1754,6 +1877,7 @@ __all__ = [
     "TERMINAL_STATUS_MAX_LINES",
     "TERMINAL_TEMPORARY_CATEGORY",
     "TerminalAdapter",
+    "TerminalAlreadyAttachedError",
     "TerminalCapacityError",
     "TerminalClosedError",
     "TerminalCursorError",
@@ -1762,6 +1886,7 @@ __all__ = [
     "TerminalManager",
     "TerminalManagerError",
     "TerminalNotFoundError",
+    "TerminalNotAttachedError",
     "TerminalOwner",
     "TerminalSession",
     "TerminalStaleScreenError",

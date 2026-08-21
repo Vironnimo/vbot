@@ -364,6 +364,128 @@ async def test_start_keeps_relative_workdir_resolution_unchanged(
 
 
 @pytest.mark.asyncio
+async def test_attach_grants_full_contract_and_detach_only_removes_binding(
+    manager: tuple[TerminalManager, AdapterFactory], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(terminal_module, "default_terminal_argv", lambda: ["host-shell"])
+    terminal_manager, factory = manager
+    manual = await terminal_manager.spawn_for_operator(
+        command=None,
+        arguments=[],
+        cwd=tmp_path,
+        name="afk codex",
+    )
+    terminal_id = manual["terminal_id"]
+    context = make_context(tmp_path)
+    other_context = make_context(tmp_path, session_id="session-b")
+
+    listed = await call(terminal_manager, context, {"action": "list"})
+    listed_item = cast(dict[str, Any], listed["data"])["terminals"][0]
+    assert listed_item["terminal_id"] == terminal_id
+    assert listed_item["attachment"] == "none"
+
+    attached = await call(
+        terminal_manager,
+        context,
+        {"action": "attach", "terminal_id": terminal_id},
+    )
+    attached_data = cast(dict[str, Any], attached["data"])
+    assert attached["ok"] is True
+    assert attached_data["attached"] is True
+    assert attached_data["changed"] is True
+    assert attached_data["attachment"] == "current"
+
+    idempotent = await call(
+        terminal_manager,
+        context,
+        {"action": "attach", "terminal_id": terminal_id},
+    )
+    assert cast(dict[str, Any], idempotent["data"])["changed"] is False
+
+    conflict = await call(
+        terminal_manager,
+        other_context,
+        {"action": "attach", "terminal_id": terminal_id},
+    )
+    assert cast(dict[str, Any], conflict["error"])["code"] == "terminal_already_attached"
+
+    status = await call(
+        terminal_manager,
+        context,
+        {"action": "status", "terminal_id": terminal_id},
+    )
+    assert status["ok"] is True
+
+    sent = await call(
+        terminal_manager,
+        context,
+        {"action": "input", "terminal_id": terminal_id, "text": "hello"},
+    )
+    assert sent["ok"] is True
+    assert factory.adapters[0].writes == ["hello"]
+
+    resized = await call(
+        terminal_manager,
+        context,
+        {"action": "resize", "terminal_id": terminal_id, "columns": 100, "rows": 24},
+    )
+    assert resized["ok"] is True
+    assert factory.adapters[0].resizes == [(24, 100)]
+
+    waited = await call(
+        terminal_manager,
+        context,
+        {"action": "wait", "terminal_id": terminal_id, "timeout_ms": 0},
+    )
+    assert waited["ok"] is True
+
+    wrong_detach = await call(
+        terminal_manager,
+        other_context,
+        {"action": "detach", "terminal_id": terminal_id},
+    )
+    assert cast(dict[str, Any], wrong_detach["error"])["code"] == "terminal_not_attached"
+
+    detached = await call(
+        terminal_manager,
+        context,
+        {"action": "detach", "terminal_id": terminal_id},
+    )
+    detached_data = cast(dict[str, Any], detached["data"])
+    assert detached_data["attached"] is False
+    assert detached_data["process_continues"] is True
+    assert factory.adapters[0].alive is True
+
+    denied = await call(
+        terminal_manager,
+        context,
+        {"action": "status", "terminal_id": terminal_id},
+    )
+    assert cast(dict[str, Any], denied["error"])["code"] == "terminal_not_found"
+
+    reattached = await call(
+        terminal_manager,
+        other_context,
+        {"action": "attach", "terminal_id": terminal_id},
+    )
+    assert reattached["ok"] is True
+    killed = await call(
+        terminal_manager,
+        other_context,
+        {"action": "kill", "terminal_id": terminal_id},
+    )
+    assert killed["ok"] is True
+    assert factory.adapters[0].alive is False
+
+    closed = await call(
+        terminal_manager,
+        context,
+        {"action": "attach", "terminal_id": terminal_id},
+    )
+    assert cast(dict[str, Any], closed["error"])["code"] == "terminal_closed"
+
+
+@pytest.mark.asyncio
 async def test_start_rejects_unresolvable_project_workdirs_before_spawn(
     manager: tuple[TerminalManager, AdapterFactory], tmp_path: Path
 ) -> None:
@@ -398,7 +520,7 @@ async def test_start_rejects_unresolvable_project_workdirs_before_spawn(
 
 
 @pytest.mark.asyncio
-async def test_list_is_session_scoped_and_status_paginates(
+async def test_list_discovers_terminal_attachment_state_and_status_paginates(
     manager: tuple[TerminalManager, AdapterFactory], tmp_path: Path
 ) -> None:
     terminal_manager, factory = manager
@@ -421,10 +543,13 @@ async def test_list_is_session_scoped_and_status_paginates(
     terminals = cast(dict[str, Any], listed["data"])["terminals"]
     assert [item["terminal_id"] for item in terminals] == [terminal_id]
     assert terminals[0]["title"] == "Codex migration"
-    hidden = await call(
+    assert terminals[0]["attachment"] == "current"
+    discovered = await call(
         terminal_manager, make_context(tmp_path, session_id="other"), {"action": "list"}
     )
-    assert cast(dict[str, Any], hidden["data"])["terminals"] == []
+    other_terminals = cast(dict[str, Any], discovered["data"])["terminals"]
+    assert [item["terminal_id"] for item in other_terminals] == [terminal_id]
+    assert other_terminals[0]["attachment"] == "other"
 
     status = await call(
         terminal_manager,
