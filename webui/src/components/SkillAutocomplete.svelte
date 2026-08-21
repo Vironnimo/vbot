@@ -14,6 +14,35 @@
 
   let normalizedSkills = $derived(normalizeSkills(skills));
   let matchingSkills = $derived(matchSkills(normalizedSkills, query));
+  let containerElement = $state(null);
+
+  // Keep the active option visible inside the scrollable popup when keyboard
+  // navigation or list changes move it out of the visible area. Only the
+  // container is scrolled — the page and timeline stay put.
+  $effect(() => {
+    activeIndex;
+    matchingSkills.length;
+
+    const container = containerElement;
+    if (!container) {
+      return;
+    }
+
+    const activeOption = container.querySelector(
+      '.skill-autocomplete__option.active',
+    );
+    if (!activeOption) {
+      return;
+    }
+
+    const containerRect = container.getBoundingClientRect();
+    const optionRect = activeOption.getBoundingClientRect();
+    if (optionRect.top < containerRect.top) {
+      container.scrollTop -= containerRect.top - optionRect.top;
+    } else if (optionRect.bottom > containerRect.bottom) {
+      container.scrollTop += optionRect.bottom - containerRect.bottom;
+    }
+  });
 
   export function hasMatches() {
     return matchingSkills.length > 0;
@@ -95,6 +124,7 @@
 
 {#if matchingSkills.length > 0}
   <div
+    bind:this={containerElement}
     class="skill-autocomplete"
     role="listbox"
     aria-label={t('skillAutocomplete.label', 'Skill suggestions')}
