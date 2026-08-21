@@ -249,7 +249,9 @@
       disableStdin: !controlled,
       fontFamily: cssToken('--font-mono', 'IBM Plex Mono, monospace'),
       fontSize: 12,
-      lineHeight: 1.12,
+      // Terminal TUIs paint contiguous panels with per-cell background colors.
+      // Extra line spacing would expose the terminal background between cells.
+      lineHeight: 1,
       minimumContrastRatio: 4.5,
       rightClickSelectsWord: true,
       scrollback: 2_000,

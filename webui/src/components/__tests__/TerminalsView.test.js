@@ -133,6 +133,7 @@ describe('TerminalsView', () => {
     expect(document.body.textContent).toContain('main@vbot');
     expect(document.querySelector('.terminals-view__tile-bar-meta')).toBeNull();
     expect(terminalInstances[0].options.theme.background).toBe('#0E0D0B');
+    expect(terminalInstances[0].options.lineHeight).toBe(1);
     expect(document.querySelector('button[role="switch"]')).toBeNull();
     expect(document.body.textContent).not.toContain(
       'Quiet is not a semantic prompt.',
