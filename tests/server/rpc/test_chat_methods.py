@@ -71,10 +71,32 @@ class _RecordingLoop:
 
     def __init__(self) -> None:
         self.start_calls: list[dict[str, Any]] = []
+        self.start_error: Exception | None = None
 
     async def start_run(self, agent_id: str, content: Any, **kwargs: Any) -> _FakeRun:
+        if self.start_error is not None:
+            raise self.start_error
         self.start_calls.append({"agent_id": agent_id, "content": content, **kwargs})
         return _FakeRun()
+
+    async def queue_run(self, agent_id: str, content: Any, **kwargs: Any) -> Any:
+        return SimpleNamespace(
+            future=asyncio.Future(),
+            item_id="queued-1",
+            display_content=content,
+            editable=False,
+            internal=False,
+            run_kind=RunKind.USER,
+            created_at="2026-08-21T12:00:00+00:00",
+            to_dict=lambda: {
+                "id": "queued-1",
+                "content": content,
+                "editable": False,
+                "internal": False,
+                "run_kind": "user",
+                "created_at": "2026-08-21T12:00:00+00:00",
+            },
+        )
 
 
 class _NoCommandDispatcher:
@@ -150,6 +172,70 @@ async def test_send_bare_agent_runs_identity(monkeypatch: pytest.MonkeyPatch) ->
     assert loop.start_calls[0]["agent_id"] == "builder"
     assert loop.start_calls[0]["project_id"] is None
     assert loop.start_calls[0]["reply_surface"] == ReplySurface.webui()
+
+
+@pytest.mark.asyncio
+async def test_send_marks_identity_session_as_current(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A user message re-aims the identity agent's current-session pointer, so a
+    # restart re-opens the session the user last wrote to. The agents channel
+    # notifies other windows of the new current marking.
+    loop = _RecordingLoop()
+    state = _make_state(loop)
+    updates: list[tuple[str, str]] = []
+    published: list[str] = []
+    state.runtime.agents = SimpleNamespace(
+        update=lambda agent_id, **kwargs: updates.append((agent_id, kwargs["current_session_id"]))
+    )
+    monkeypatch.setattr("server.rpc.chat_methods._bridge_run_to_event_bus", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "server.rpc.chat_methods.publish_resource_changed",
+        lambda _state, kind, **kwargs: published.append(kind),
+    )
+
+    await _send_chat(state, {"agent_id": "builder", "session_id": "s1", "content": "hi"})
+
+    assert updates == [("builder", "s1")]
+    assert published == ["agents"]
+
+
+@pytest.mark.asyncio
+async def test_send_does_not_mark_project_agent_session(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A project (config) agent has no anchor-level current pointer; sending to
+    # one must not attempt an agent update.
+    loop = _RecordingLoop()
+    state = _make_state(loop)
+    state.runtime.agents = SimpleNamespace(update=lambda *a, **k: pytest.fail("must not update"))
+    monkeypatch.setattr("server.rpc.chat_methods._bridge_run_to_event_bus", lambda *a, **k: None)
+
+    await _send_chat(state, {"agent_id": "builder@vbot", "session_id": "s1", "content": "hi"})
+
+    assert loop.start_calls[0]["project_id"] == "vbot"
+
+
+@pytest.mark.asyncio
+async def test_send_marks_session_before_enqueue_when_busy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The pointer must move even when the session is busy and the message is
+    # queued: the user still wrote to that session.
+    loop = _RecordingLoop()
+    loop.start_error = ActiveRunError("busy")
+    state = _make_state(loop)
+    updates: list[tuple[str, str]] = []
+    state.runtime.agents = SimpleNamespace(
+        update=lambda agent_id, **kwargs: updates.append((agent_id, kwargs["current_session_id"]))
+    )
+    monkeypatch.setattr("server.rpc.chat_methods._bridge_run_to_event_bus", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "server.rpc.chat_methods._bridge_queued_item_to_event_bus", lambda *a, **k: None
+    )
+    monkeypatch.setattr("server.rpc.chat_methods._publish_queue_changed", lambda *a, **k: None)
+
+    await _send_chat(state, {"agent_id": "builder", "session_id": "s1", "content": "hi"})
+
+    assert updates == [("builder", "s1")]
 
 
 @pytest.mark.asyncio

@@ -162,9 +162,10 @@ def test_websocket_receives_run_lifecycle_events_without_provider_metadata(tmp_p
             # First frame is the connection_ready hello; skip it.
             hello = websocket.receive_json()
             assert hello["type"] == "connection_ready"
-            events = [websocket.receive_json() for _ in range(6)]
+            events = [websocket.receive_json() for _ in range(7)]
 
     assert [event["type"] for event in events] == [
+        "resource_changed",
         "run_started",
         "run_output",
         "run_output",
@@ -172,8 +173,9 @@ def test_websocket_receives_run_lifecycle_events_without_provider_metadata(tmp_p
         "run_output",
         "run_completed",
     ]
-    assert all(event["payload"]["run_id"] == run_id for event in events)
-    assert events[2]["payload"]["run_event_type"] == "reasoning"
+    assert events[0]["payload"]["kind"] == "agents"
+    assert all(event["payload"]["run_id"] == run_id for event in events[1:])
+    assert events[3]["payload"]["run_event_type"] == "reasoning"
     assert "reasoning_meta" not in str(events)
 
 
@@ -209,9 +211,10 @@ def test_websocket_excludes_streaming_delta_events(tmp_path: Path) -> None:
             # First frame is the connection_ready hello; skip it.
             hello = websocket.receive_json()
             assert hello["type"] == "connection_ready"
-            events = [websocket.receive_json() for _ in range(6)]
+            events = [websocket.receive_json() for _ in range(7)]
 
     assert [event["type"] for event in events] == [
+        "resource_changed",
         "run_started",
         "run_output",
         "run_output",
@@ -219,7 +222,8 @@ def test_websocket_excludes_streaming_delta_events(tmp_path: Path) -> None:
         "run_output",
         "run_completed",
     ]
-    assert [event["payload"]["run_event_type"] for event in events] == [
+    assert events[0]["payload"]["kind"] == "agents"
+    assert [event["payload"]["run_event_type"] for event in events[1:]] == [
         "run_started",
         "user_message_persisted",
         "reasoning",
@@ -227,7 +231,7 @@ def test_websocket_excludes_streaming_delta_events(tmp_path: Path) -> None:
         "model_step_usage",
         "run_completed",
     ]
-    assert all(event["payload"]["run_id"] == run_id for event in events)
+    assert all(event["payload"]["run_id"] == run_id for event in events[1:])
     assert "reasoning_delta" not in str(events)
     assert "assistant_output_delta" not in str(events)
     assert "tool_call_delta" not in str(events)
