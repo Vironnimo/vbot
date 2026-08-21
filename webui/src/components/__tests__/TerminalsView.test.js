@@ -14,8 +14,7 @@ const forgetTerminalMock = vi.fn();
 const subscribeTerminalEventsMock = vi.fn();
 const streams = [];
 const terminalInstances = [];
-const webglAddons = [];
-let webglActivationFails = false;
+const fitAddons = [];
 
 vi.mock('svelte', async () => {
   return import('../../../node_modules/svelte/src/index-client.js');
@@ -53,7 +52,11 @@ vi.mock('@xterm/xterm', () => ({
       terminalInstances.push(this);
     }
 
-    loadAddon = vi.fn();
+    loadAddon = vi.fn((addon) => {
+      if (addon && typeof addon.activate === 'function') {
+        addon.activate(this);
+      }
+    });
     open(host) {
       Object.defineProperties(host, {
         clientWidth: { get: () => 800 },
@@ -76,15 +79,6 @@ vi.mock('@xterm/xterm', () => ({
       element.append(screen);
       host.append(element);
       this.element = element;
-      this.rawGetCoords = vi.fn();
-      this._core = {
-        _mouseService: {
-          getCoords: this.rawGetCoords,
-        },
-        _viewport: {
-          queueSync: vi.fn(),
-        },
-      };
     }
     onData(callback) {
       this.onDataCallback = callback;
@@ -97,19 +91,27 @@ vi.mock('@xterm/xterm', () => ({
   },
 }));
 
-vi.mock('@xterm/addon-webgl', () => ({
-  WebglAddon: class MockWebglAddon {
+vi.mock('@xterm/addon-fit', () => ({
+  FitAddon: class MockFitAddon {
     constructor() {
-      if (webglActivationFails) {
-        throw new Error('WebGL is unavailable');
-      }
-      this.dispose = vi.fn();
-      this.onContextLoss = vi.fn((callback) => {
-        this.onContextLossCallback = callback;
-        return { dispose: vi.fn() };
+      this.terminal = null;
+      this.fit = vi.fn(() => {
+        if (!this.terminal?.element?.parentElement) {
+          return;
+        }
+        const host = this.terminal.element.parentElement;
+        const cellWidth = 8;
+        const cellHeight = 16;
+        const cols = Math.max(1, Math.floor(host.clientWidth / cellWidth));
+        const rows = Math.max(1, Math.floor(host.clientHeight / cellHeight));
+        this.terminal.resize(cols, rows);
       });
-      webglAddons.push(this);
+      fitAddons.push(this);
     }
+    activate(terminal) {
+      this.terminal = terminal;
+    }
+    dispose() {}
   },
 }));
 
@@ -124,8 +126,7 @@ describe('TerminalsView', () => {
     mountedComponent = null;
     streams.length = 0;
     terminalInstances.length = 0;
-    webglAddons.length = 0;
-    webglActivationFails = false;
+    fitAddons.length = 0;
     listTerminalsMock.mockReset();
     startTerminalMock.mockReset().mockResolvedValue({});
     sendTerminalInputMock.mockReset().mockResolvedValue({});
@@ -178,20 +179,17 @@ describe('TerminalsView', () => {
     expect(document.body.textContent).toContain('main@vbot');
     expect(document.querySelector('.terminals-view__tile-bar-meta')).toBeNull();
     expect(terminalInstances[0].options.theme.background).toBe('#0E0D0B');
-    expect(terminalInstances[0].options.lineHeight).toBeGreaterThanOrEqual(1);
-    expect(terminalInstances[0].loadAddon).toHaveBeenCalledWith(webglAddons[0]);
-    webglAddons[0].onContextLossCallback();
-    expect(webglAddons[0].dispose).toHaveBeenCalledOnce();
+    expect(terminalInstances[0].loadAddon).toHaveBeenCalledWith(fitAddons[0]);
     expect(document.querySelector('button[role="switch"]')).toBeNull();
     expect(document.body.textContent).not.toContain(
       'Quiet is not a semantic prompt.',
     );
-    expect(terminalInstances[0].resize).not.toHaveBeenCalled();
+    expect(terminalInstances[0].resize).toHaveBeenCalled();
     expect(terminalInstances[0].write).toHaveBeenCalledWith(
       '\u001b[2JDemo TUI ready',
       expect.any(Function),
     );
-    expect(terminalInstances[0].refresh).toHaveBeenCalledWith(0, 31);
+    expect(terminalInstances[0].refresh).toHaveBeenCalledWith(0, 27);
 
     await unmount(mountedComponent);
     mountedComponent = null;
@@ -202,19 +200,18 @@ describe('TerminalsView', () => {
     expect(killTerminalMock).not.toHaveBeenCalled();
   });
 
-  it('keeps the Terminal Session usable when WebGL is unavailable', async () => {
-    webglActivationFails = true;
+  it('loads the FitAddon and resizes the terminal to fill the host', async () => {
     listTerminalsMock.mockResolvedValue({ terminals: [terminal()] });
     mountedComponent = mount(TerminalsView, { target: document.body });
     flushSync();
 
     await waitFor(() => streams.length === 1 && terminalInstances.length === 1);
 
-    expect(webglAddons).toHaveLength(0);
-    expect(terminalInstances[0].options.disableStdin).toBe(false);
-    expect(document.body.textContent).not.toContain(
-      'The browser terminal renderer could not be loaded.',
-    );
+    expect(fitAddons).toHaveLength(1);
+    expect(terminalInstances[0].loadAddon).toHaveBeenCalledWith(fitAddons[0]);
+    expect(fitAddons[0].fit).toHaveBeenCalled();
+    expect(terminalInstances[0].cols).toBe(100);
+    expect(terminalInstances[0].rows).toBe(32);
   });
 
   it('uses the shared secondary sidebar header, action, list, and selection contract', async () => {
@@ -527,32 +524,17 @@ describe('TerminalsView', () => {
     ).toBeNull();
   });
 
-  it('fills the tile on the canonical grid and maps pointer coordinates back', async () => {
+  it('resizes the PTY to match the fitted terminal dimensions', async () => {
     listTerminalsMock.mockResolvedValue({ terminals: [terminal()] });
     mountedComponent = mount(TerminalsView, { target: document.body });
     flushSync();
     await waitFor(() => streams.length === 1 && terminalInstances.length === 1);
-    const screen = document.querySelector('.xterm-screen');
-    await waitFor(() => screen.style.transform !== '');
+    await waitFor(() => fitAddons[0].fit.mock.calls.length > 0);
 
-    expect(terminalInstances[0].cols).toBe(120);
+    expect(terminalInstances[0].cols).toBe(100);
     expect(terminalInstances[0].rows).toBe(32);
-    expect(screen.style.transform).toBe('scale(0.8333333333333334, 1)');
-    expect(resizeTerminalMock).not.toHaveBeenCalled();
-
-    terminalInstances[0]._core._mouseService.getCoords(
-      { clientX: 400, clientY: 300 },
-      screen,
-      120,
-      32,
-    );
-    const [mappedPointer, mappedElement, mappedColumns, mappedRows] =
-      terminalInstances[0].rawGetCoords.mock.calls[0];
-    expect(mappedPointer.clientX).toBeCloseTo(478);
-    expect(mappedPointer.clientY).toBe(300);
-    expect(mappedElement).toBe(screen);
-    expect(mappedColumns).toBe(120);
-    expect(mappedRows).toBe(32);
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    expect(resizeTerminalMock).toHaveBeenCalledWith('term-1', 100, 32);
   });
 
   it('focuses the first tile and switches focus via a tile bar click', async () => {
@@ -622,7 +604,8 @@ describe('TerminalsView', () => {
     expect(tiles[1].classList.contains('terminals-view__tile--hidden')).toBe(
       true,
     );
-    expect(resizeTerminalMock).not.toHaveBeenCalled();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(resizeTerminalMock).toHaveBeenCalledWith('term-1', 100, 32);
 
     document
       .querySelector('button[aria-label="Restore"]')
