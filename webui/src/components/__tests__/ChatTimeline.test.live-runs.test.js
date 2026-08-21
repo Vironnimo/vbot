@@ -671,10 +671,10 @@ describe('ChatTimeline', () => {
     });
     flushSync();
 
-    expect(document.querySelector('.msg-header').textContent).toContain(
+    expect(document.querySelector('.run-footer').textContent).toContain(
       'Running',
     );
-    expect(document.querySelector('.msg-header').textContent).toContain('5.0s');
+    expect(document.querySelector('.run-footer').textContent).toContain('5.0s');
     expect(
       document.querySelector('.tool-event-line .te-time').textContent,
     ).toBe('2.5s');
@@ -682,7 +682,7 @@ describe('ChatTimeline', () => {
     await vi.advanceTimersByTimeAsync(500);
     flushSync();
 
-    expect(document.querySelector('.msg-header').textContent).toContain('5.5s');
+    expect(document.querySelector('.run-footer').textContent).toContain('5.5s');
     expect(
       document.querySelector('.tool-event-line .te-time').textContent,
     ).toBe('3.0s');

@@ -11,6 +11,8 @@
   } from '$lib/tooltip.js';
   import {
     avatarForItem,
+    changeStatsLabel,
+    changeStatsParts,
     formatTime,
     isRowCancellable,
     isRunChildWorking,
@@ -18,8 +20,8 @@
     isSubAgentSpawnTool,
     isTextToSpeechTool,
     isToolPreparing,
+    runChangeStats,
     runFooterParts,
-    runMetaParts,
     speechArtifactFromTool,
     subAgentAgentId,
     subAgentDisplayResult,
@@ -312,9 +314,6 @@
     {#if formatTime(timestampForItem(item))}
       <span class="msg-timestamp">{formatTime(timestampForItem(item))}</span>
     {/if}
-    {#each runMetaParts(item, nowMs) as metaPart (metaPart)}
-      <span class="msg-meta-extra">· {metaPart}</span>
-    {/each}
     {#if answerCopyText}
       <CopyButton
         text={answerCopyText}
@@ -667,13 +666,32 @@
       {/if}
     {/each}
     {#if runFooterParts(item, nowMs).length > 0}
-      <div
-        class="run-footer"
-        aria-label={runFooterParts(item, nowMs).join(' · ')}
-      >
-        {#each runFooterParts(item, nowMs) as footerPart (footerPart)}
+      {@const footerParts = runFooterParts(item, nowMs)}
+      {@const changeParts = changeStatsParts(runChangeStats(item))}
+      {@const footerLabel = [
+        ...footerParts,
+        ...(changeParts.length > 0
+          ? [changeStatsLabel(runChangeStats(item))]
+          : []),
+      ].join(' · ')}
+      <div class="run-footer" aria-label={footerLabel}>
+        {#each footerParts as footerPart, index (footerPart)}
+          {#if index > 0}
+            <span class="run-footer__sep" aria-hidden="true">·</span>
+          {/if}
           <span class="run-footer__part">{footerPart}</span>
         {/each}
+        {#if changeParts.length > 0}
+          <span class="run-footer__sep" aria-hidden="true">·</span>
+          {#each changeParts as changePart (changePart.kind)}
+            <span
+              class="run-footer__part"
+              class:run-footer__part--added={changePart.kind === 'added'}
+              class:run-footer__part--removed={changePart.kind === 'removed'}
+              >{changePart.text}</span
+            >
+          {/each}
+        {/if}
       </div>
     {/if}
   </div>
