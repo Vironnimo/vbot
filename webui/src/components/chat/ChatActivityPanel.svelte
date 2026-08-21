@@ -6,8 +6,11 @@
     backgroundTasks,
     sessionChangeStats,
     changeStatsLabel,
+    changeStatsParts,
+    changeStatsTooltip,
   } from '$lib/chatTimelinePresentation.js';
   import { t } from '$lib/i18n.js';
+  import { tooltip } from '$lib/tooltip.js';
 
   import Button from '../ui/Button.svelte';
 
@@ -33,6 +36,8 @@
   );
   let runningTaskCount = $derived(activeTasks.length);
   let sessionStats = $derived(sessionChangeStats(timelineItems));
+  let sessionStatsParts = $derived(changeStatsParts(sessionStats));
+  let sessionStatsTooltip = $derived(changeStatsTooltip(sessionStats));
   let sessionStatsLabel = $derived(changeStatsLabel(sessionStats));
 
   const panelId = 'chat-activity-panel';
@@ -272,7 +277,26 @@
           {t('chat.activity.statsTitle', 'Session stats')}
         </h3>
         {#if sessionStats}
-          <p class="chat-activity__stats-value">{sessionStatsLabel}</p>
+          <!-- The change block is focusable so keyboard users reach the
+               file-list tooltip; the aria-label already carries the full
+               summary for screen readers. -->
+          <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+          <p
+            class="chat-activity__stats-value"
+            aria-label={sessionStatsLabel}
+            use:tooltip={sessionStatsTooltip}
+            tabindex="0"
+          >
+            {#each sessionStatsParts as changePart (changePart.kind)}
+              <span
+                class="chat-activity__stats-part"
+                class:chat-activity__stats-part--added={changePart.kind ===
+                  'added'}
+                class:chat-activity__stats-part--removed={changePart.kind ===
+                  'removed'}>{changePart.text}</span
+              >
+            {/each}
+          </p>
         {:else}
           <p class="chat-activity__stats-empty">
             {t('chat.activity.statsEmpty', 'No changes yet')}
@@ -460,7 +484,25 @@
   }
 
   .chat-activity__stats-value {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    border-radius: var(--r-sm);
     color: var(--text-med);
+    cursor: default;
+  }
+
+  .chat-activity__stats-value:focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 2px var(--accent-16);
+  }
+
+  .chat-activity__stats-part--added {
+    color: var(--green);
+  }
+
+  .chat-activity__stats-part--removed {
+    color: var(--red);
   }
 
   .chat-activity__stats-empty {
