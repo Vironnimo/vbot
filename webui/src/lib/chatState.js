@@ -159,6 +159,7 @@ export function createChatController({
   const queueSyncVersions = new Map();
   const subAgentStatusVerificationKeys = new Set();
   const subAgentStatusInflightKeys = new Set();
+  let displayedHistoryLoadCount = 0;
 
   function errorMessage(error) {
     return typeof error?.message === 'string' && error.message
@@ -708,6 +709,7 @@ export function createChatController({
     const isDisplayed = () => isDisplayedSession(agentId, sessionId);
     const startedDisplayed = isDisplayed();
     if (startedDisplayed) {
+      displayedHistoryLoadCount += 1;
       chatState.loadingHistory = true;
       chatState.historyError = '';
       runStream.closeSubscriptionsExcept(sessionState.key);
@@ -757,8 +759,11 @@ export function createChatController({
       }
       return false;
     } finally {
-      if (isLatestRequest() && startedDisplayed && isDisplayed()) {
-        chatState.loadingHistory = false;
+      if (startedDisplayed) {
+        displayedHistoryLoadCount = Math.max(0, displayedHistoryLoadCount - 1);
+        if (displayedHistoryLoadCount === 0) {
+          chatState.loadingHistory = false;
+        }
       }
     }
   }
@@ -1190,6 +1195,8 @@ export function createChatController({
     queueSyncVersions.clear();
     subAgentStatusInflightKeys.clear();
     subAgentStatusVerificationKeys.clear();
+    displayedHistoryLoadCount = 0;
+    chatState.loadingHistory = false;
   }
 
   return {

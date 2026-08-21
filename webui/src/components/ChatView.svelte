@@ -768,7 +768,29 @@
 
   onMount(() => {
     loadAgents({ preferredAgentId: sharedSelectedAgentId });
-    return () => chatController.destroy();
+    const onVisibilityChange = () => {
+      if (document.visibilityState !== 'visible') {
+        return;
+      }
+      const sessionState = activeSessionState;
+      if (
+        !sessionState?.currentRun?.runId ||
+        sessionState.status !== 'running'
+      ) {
+        return;
+      }
+      if (sessionState.streamError) {
+        void chatController.reconcileRunSession(
+          sessionState,
+          sessionState.currentRun.runId,
+        );
+      }
+    };
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    return () => {
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+      chatController.destroy();
+    };
   });
 
   // Reload command/skill suggestions whenever the active address or live command

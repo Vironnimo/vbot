@@ -83,7 +83,10 @@
   import Banner from './components/ui/Banner.svelte';
   import Button from './components/ui/Button.svelte';
   import Modal from './components/ui/Modal.svelte';
-  import { CONNECTION_STATUS_DISCONNECTED } from '$lib/connectionState.js';
+  import {
+    CONNECTION_STATUS_DISCONNECTED,
+    handleVisibilityChange,
+  } from '$lib/connectionState.js';
   import {
     createAppController,
     createAppControllerState,
@@ -936,6 +939,11 @@
     appController.initializeNavigationHistory();
     connectServerEvents();
 
+    const onVisibilityChange = () => {
+      handleVisibilityChange(appControllerState.connectionState);
+    };
+    document.addEventListener('visibilitychange', onVisibilityChange);
+
     // Load the project list for the chat dropdown (best-effort; the chat works
     // identity-only when this fails).
     loadProjects();
@@ -1009,6 +1017,7 @@
     return () => {
       cancelled = true;
       projectsLoadRequestId += 1;
+      document.removeEventListener('visibilitychange', onVisibilityChange);
       appController.destroy();
       clearToastDismissTimers();
       if (cleanupWakewordPoll) {
