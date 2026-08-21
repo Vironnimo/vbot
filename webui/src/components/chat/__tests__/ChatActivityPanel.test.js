@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushSync, mount, unmount } from 'svelte';
 
 import { init } from '../../../lib/i18n.js';
+import { TOOLTIP_SHOW_DELAY_MS } from '../../../lib/tooltip.js';
 
 vi.mock('svelte', async () => {
   return import('../../../../node_modules/svelte/src/index-client.js');
@@ -326,7 +327,7 @@ describe('ChatActivityPanel', () => {
     ).toBeTruthy();
   });
 
-  it('shows the aggregated Session change stats above the tasks', () => {
+  it('shows the aggregated Session change stats above the tasks', async () => {
     mountedComponent = mount(ChatActivityPanel, {
       target: document.body,
       props: {
@@ -407,8 +408,37 @@ describe('ChatActivityPanel', () => {
 
     const statsValue = document.querySelector('.chat-activity__stats-value');
     expect(statsValue).toBeTruthy();
-    expect(statsValue.textContent.trim()).toBe('2 files changed, +8 -2');
+    expect(statsValue.getAttribute('aria-label')).toBe(
+      '2 files changed, +8 -2',
+    );
+    const parts = [
+      ...statsValue.querySelectorAll('.chat-activity__stats-part'),
+    ];
+    expect(parts.map((part) => part.textContent.trim())).toEqual([
+      '2 files changed,',
+      '+8',
+      '-2',
+    ]);
+    expect(
+      parts[1].classList.contains('chat-activity__stats-part--added'),
+    ).toBe(true);
+    expect(
+      parts[2].classList.contains('chat-activity__stats-part--removed'),
+    ).toBe(true);
+    expect(
+      parts[0].classList.contains('chat-activity__stats-part--added'),
+    ).toBe(false);
     expect(document.querySelector('.chat-activity__stats-empty')).toBeNull();
+
+    vi.useFakeTimers();
+    statsValue.dispatchEvent(new Event('pointerenter'));
+    await vi.advanceTimersByTimeAsync(TOOLTIP_SHOW_DELAY_MS);
+    flushSync();
+    expect(document.getElementById('app-tooltip')?.textContent).toBe(
+      'a.txt\nb.txt',
+    );
+    statsValue.dispatchEvent(new Event('pointerleave'));
+    vi.useRealTimers();
   });
 
   it('shows a calm empty state for the Session stats when nothing changed', () => {
