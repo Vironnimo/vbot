@@ -14,6 +14,14 @@ from core.projects import (
     ProjectNotFoundError,
 )
 from core.runs import ActiveRunError, RunCancelledError, RunError, RunNotFoundError
+from core.tools.terminal_manager import (
+    TerminalCapacityError,
+    TerminalClosedError,
+    TerminalCursorError,
+    TerminalLaunchError,
+    TerminalNotFoundError,
+    TerminalStaleScreenError,
+)
 from core.utils.errors import ConfigError, VBotError
 from server.rpc.errors import (
     RPC_ERROR_ACTIVE_RUN,
@@ -58,6 +66,19 @@ def _map_expected_error(error: Exception) -> RpcError:
     if isinstance(error, AgentOrderConflictError):
         return RpcError(RPC_ERROR_AGENT_ORDER_CONFLICT, str(error))
     if isinstance(error, InvalidAgentOrderError):
+        return RpcError(RPC_ERROR_INVALID_REQUEST, str(error))
+    if isinstance(error, TerminalNotFoundError):
+        return RpcError(RPC_ERROR_INVALID_REQUEST, str(error))
+    if isinstance(
+        error,
+        (
+            TerminalCapacityError,
+            TerminalClosedError,
+            TerminalCursorError,
+            TerminalLaunchError,
+            TerminalStaleScreenError,
+        ),
+    ):
         return RpcError(RPC_ERROR_INVALID_REQUEST, str(error))
     if isinstance(error, ProjectError):
         return RpcError(RPC_ERROR_DOMAIN, str(error))

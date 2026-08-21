@@ -302,11 +302,14 @@ async def _handle_start(
     arguments: JsonObject,
 ) -> JsonObject:
     raw_command = arguments.get("command")
+    args = _optional_string_array(arguments.get("args"), field_name="args")
     if raw_command in (None, ""):
+        if args:
+            raise ValueError("args requires command to be set")
         argv = default_terminal_argv()
     else:
         argv = [required_string(raw_command, field_name="command")]
-    argv.extend(_optional_string_array(arguments.get("args"), field_name="args"))
+        argv.extend(args)
     text = arguments.get("text")
     if text == "":
         text = None

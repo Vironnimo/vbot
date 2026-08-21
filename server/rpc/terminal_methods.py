@@ -5,7 +5,15 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from core.tools.terminal_manager import TERMINAL_DEFAULT_COLUMNS, TERMINAL_DEFAULT_ROWS
+from core.tools.terminal_manager import (
+    TERMINAL_DEFAULT_COLUMNS,
+    TERMINAL_DEFAULT_ROWS,
+    TERMINAL_INPUT_MAX_CHARS,
+    TERMINAL_MAX_COLUMNS,
+    TERMINAL_MAX_ROWS,
+    TERMINAL_MIN_COLUMNS,
+    TERMINAL_MIN_ROWS,
+)
 from server.rpc.dispatcher import RpcMethodHandler
 from server.rpc.error_mapping import _map_expected_error
 from server.rpc.errors import RPC_ERROR_INVALID_REQUEST, RpcError
@@ -38,6 +46,16 @@ async def _terminal_start(state: Any, params: JsonObject) -> JsonObject:
         _required_integer(params, "columns") if "columns" in params else TERMINAL_DEFAULT_COLUMNS
     )
     rows = _required_integer(params, "rows") if "rows" in params else TERMINAL_DEFAULT_ROWS
+    if not TERMINAL_MIN_COLUMNS <= columns <= TERMINAL_MAX_COLUMNS:
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST,
+            f"params.columns must be between {TERMINAL_MIN_COLUMNS} and {TERMINAL_MAX_COLUMNS}",
+        )
+    if not TERMINAL_MIN_ROWS <= rows <= TERMINAL_MAX_ROWS:
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST,
+            f"params.rows must be between {TERMINAL_MIN_ROWS} and {TERMINAL_MAX_ROWS}",
+        )
     if command is not None and not command.strip():
         raise RpcError(
             RPC_ERROR_INVALID_REQUEST,
@@ -47,6 +65,11 @@ async def _terminal_start(state: Any, params: JsonObject) -> JsonObject:
         raise RpcError(
             RPC_ERROR_INVALID_REQUEST,
             "params.name must not be empty when provided",
+        )
+    if name is not None and len(name.strip()) > 80:
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST,
+            "params.name must be at most 80 characters",
         )
     if any(not argument.strip() for argument in arguments):
         raise RpcError(
@@ -77,6 +100,11 @@ async def _terminal_input(state: Any, params: JsonObject) -> JsonObject:
     _reject_unsupported(params, {"terminal_id", "data"}, "terminal.input")
     terminal_id = _required_string(params, "terminal_id")
     data = _required_string(params, "data")
+    if len(data) > TERMINAL_INPUT_MAX_CHARS:
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST,
+            f"params.data must not exceed {TERMINAL_INPUT_MAX_CHARS} characters",
+        )
     try:
         terminal = await _terminal_manager(state).send_operator_input(terminal_id, data)
     except ValueError as exc:
@@ -91,6 +119,16 @@ async def _terminal_resize(state: Any, params: JsonObject) -> JsonObject:
     terminal_id = _required_string(params, "terminal_id")
     columns = _required_integer(params, "columns")
     rows = _required_integer(params, "rows")
+    if not TERMINAL_MIN_COLUMNS <= columns <= TERMINAL_MAX_COLUMNS:
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST,
+            f"params.columns must be between {TERMINAL_MIN_COLUMNS} and {TERMINAL_MAX_COLUMNS}",
+        )
+    if not TERMINAL_MIN_ROWS <= rows <= TERMINAL_MAX_ROWS:
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST,
+            f"params.rows must be between {TERMINAL_MIN_ROWS} and {TERMINAL_MAX_ROWS}",
+        )
     try:
         terminal = await _terminal_manager(state).resize_for_operator(
             terminal_id, columns=columns, rows=rows
