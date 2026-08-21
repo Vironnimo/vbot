@@ -215,9 +215,12 @@
     return xtermModulesPromise;
   }
 
+  let WebglAddonClass = null;
+
   async function initializeTerminal(terminalId) {
     const [{ Terminal }, { FitAddon }, { WebglAddon }] =
       await loadXtermModules();
+    WebglAddonClass = WebglAddon;
     const host = tileHosts.get(terminalId);
     if (!mounted || !host) {
       return;
@@ -243,14 +246,14 @@
     const fitAddonInstance = new FitAddon();
     xtermInstance.loadAddon(fitAddonInstance);
     xtermInstance.open(host);
-    // Size the terminal to the host before loading WebGL so the canvas
-    // initializes at the correct dimensions — not the 120×32 default.
+    // Fit to host dimensions so the terminal starts at the right size.
     try {
       fitAddonInstance.fit();
     } catch {
       // The host may not have settled yet; scheduleFit will retry.
     }
-    enableWebglRenderer(xtermInstance, WebglAddon);
+    // WebGL is loaded AFTER the first fitTerminal completes — loading it
+    // before the snapshot write + resize cycle causes white row gaps.
     const inputDisposable = xtermInstance.onData((data) => {
       if (!terminalIsFinished(findTerminal(terminalId))) {
         controller.queueInput(data, { terminalId });
@@ -274,6 +277,7 @@
       resizeObserver: resizeObserverInstance,
       inputDisposable,
       scrollDisposable,
+      webglLoaded: false,
     });
     const pending = pendingSnapshots.get(terminalId);
     if (pending) {
@@ -377,6 +381,13 @@
         terminalId,
         immediate,
       );
+      // Load WebGL after the terminal has settled at its final dimensions.
+      // Loading it earlier causes the canvas to resize multiple times during
+      // the snapshot-write → fit cycle, producing white horizontal gaps.
+      if (!tile.webglLoaded && WebglAddonClass) {
+        tile.webglLoaded = true;
+        enableWebglRenderer(tile.xterm, WebglAddonClass);
+      }
     } catch {
       // The host may be between layout states while the view is mounting.
     }
