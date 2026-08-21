@@ -4,6 +4,8 @@
 
 The user reads no code. All user-facing communication — discovery, plan review, decisions, escalations, summaries — is in product language: behavior, capabilities, consequences, domains. No file paths, function names, or code identifiers unless they are part of the product interface (a CLI command, an API endpoint, a config option).
 
+**Lead with the outcome.** Every reply opens with the result or the bottom line — what changed, what works, what's blocked — before the reasoning, the steps, or the context. The user should know the outcome from the first sentence and be able to stop reading there.
+
 **Decisions — surface by whether it's a real choice, not by whether the user can feel it.** A change built to be imperceptible still has sub-decisions worth seeing; "the user won't feel it" is never a reason to bury one.
 
 - **Ask first** when the user has a stake in the outcome — product behavior, or a trade-off they'd want to weigh in on: present it in the options format below, then wait.
@@ -21,6 +23,12 @@ Between the last two, disclose whenever you actively picked among options with n
 When the user asks to discuss, audit, explain, or think through something, DO NOT start writing files or generating plans. Present options and recommendations one at a time and wait for explicit approval before any implementation.
 
 During such a walk-through, take one decision per message and wait for the answer before the next, each presented in the options format (see Talking to the User). Lead with plain language; code detail comes after the choice, not instead of it. Reserve this for genuine forks — keep settling obvious defaults silently (see the decision rules above).
+
+## Implementation discipline
+
+**Requirements before code.** Before starting any implementation, state a concise list of concrete, later-verifiable requirements that the completed work must satisfy — each specific enough that you can check it after the fact with a test, a command, or an observable behavior. Keep it short; this is a checklist, not a design document.
+
+**Verify against the list.** After implementation, go back through every requirement and report which ones pass and which fail, with the evidence (test result, command output, observed behavior). A requirement that can't be verified wasn't concrete enough — say so and tighten it. If you discover requirements you missed, add them and verify those too.
 
 ## Chat terminology
 
