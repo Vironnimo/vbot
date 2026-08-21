@@ -493,7 +493,12 @@ export function createTerminalsController({
     }
   }
 
-  function resize(columns, rows, terminalId = state.selectedTerminalId) {
+  function resize(
+    columns,
+    rows,
+    terminalId = state.selectedTerminalId,
+    immediate = false,
+  ) {
     const item = state.terminals.find(
       (terminal) => terminal.terminal_id === terminalId,
     );
@@ -521,6 +526,11 @@ export function createTerminalsController({
     }
     if (stream.resizeTimer !== null) {
       clearTimeoutFn(stream.resizeTimer);
+      stream.resizeTimer = null;
+    }
+    if (immediate) {
+      flushResize(stream);
+      return;
     }
     stream.resizeTimer = setTimeoutFn(
       () => flushResize(stream),
