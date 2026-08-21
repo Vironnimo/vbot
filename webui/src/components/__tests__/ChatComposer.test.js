@@ -1118,6 +1118,141 @@ describe('ChatComposer', () => {
 
     expect(onSendMessage).toHaveBeenCalledWith('ping @nobody');
   });
+
+  it('opens the model argument autocomplete after "/model "', async () => {
+    const onLoadModelCatalog = vi.fn().mockResolvedValue(modelCatalogFixture());
+    mountedComponent = mount(ChatComposer, {
+      target: document.body,
+      props: { onLoadModelCatalog },
+    });
+    flushSync();
+
+    typeInComposer(composerInput(), '/model ');
+    await flushComposerAsyncWork();
+
+    expect(onLoadModelCatalog).toHaveBeenCalledTimes(1);
+    const options = modelAutocompleteOptions();
+    expect(options.length).toBeGreaterThan(0);
+    expect(options[0].textContent).toContain('openai/gpt-5.2');
+  });
+
+  it('filters model options by the text after "/model "', async () => {
+    const onLoadModelCatalog = vi.fn().mockResolvedValue(modelCatalogFixture());
+    mountedComponent = mount(ChatComposer, {
+      target: document.body,
+      props: { onLoadModelCatalog },
+    });
+    flushSync();
+
+    typeInComposer(composerInput(), '/model ');
+    await flushComposerAsyncWork();
+
+    // All suitable models are visible initially.
+    expect(modelAutocompleteOptions().length).toBe(2);
+
+    // Typing a fragment narrows the list.
+    typeInComposer(composerInput(), '/model ant');
+    await flushComposerAsyncWork();
+
+    const filtered = modelAutocompleteOptions();
+    expect(filtered).toHaveLength(1);
+    expect(filtered[0].textContent).toContain('anthropic/claude-sonnet-4');
+  });
+
+  it('submits "/model <value>" immediately when a model is selected', async () => {
+    const onSendMessage = vi.fn().mockResolvedValue(true);
+    const onLoadModelCatalog = vi.fn().mockResolvedValue(modelCatalogFixture());
+    mountedComponent = mount(ChatComposer, {
+      target: document.body,
+      props: { onSendMessage, onLoadModelCatalog },
+    });
+    flushSync();
+
+    typeInComposer(composerInput(), '/model ');
+    await flushComposerAsyncWork();
+
+    modelAutocompleteOptions()[0].dispatchEvent(
+      new MouseEvent('click', { bubbles: true }),
+    );
+    await flushComposerAsyncWork();
+
+    expect(onSendMessage).toHaveBeenCalledWith(
+      '/model openai/gpt-5.2::api-key',
+    );
+    expect(composerInput().value).toBe('');
+  });
+
+  it('does not submit while another send is in flight', async () => {
+    let resolveSend;
+    const onSendMessage = vi.fn(
+      () =>
+        new Promise((resolve) => {
+          resolveSend = resolve;
+        }),
+    );
+    const onLoadModelCatalog = vi.fn().mockResolvedValue(modelCatalogFixture());
+    mountedComponent = mount(ChatComposer, {
+      target: document.body,
+      props: { onSendMessage, onLoadModelCatalog },
+    });
+    flushSync();
+
+    typeInComposer(composerInput(), 'first message');
+    submitComposer();
+    expect(onSendMessage).toHaveBeenCalledTimes(1);
+
+    typeInComposer(composerInput(), '/model ');
+    await flushComposerAsyncWork();
+
+    modelAutocompleteOptions()[0].dispatchEvent(
+      new MouseEvent('click', { bubbles: true }),
+    );
+    await flushComposerAsyncWork();
+
+    expect(onSendMessage).toHaveBeenCalledTimes(1);
+    expect(composerInput().value).toBe('/model ');
+
+    resolveSend(true);
+    await flushComposerAsyncWork();
+  });
+
+  it('does not open the model popup for "/modeling" or other slash text', async () => {
+    const onLoadModelCatalog = vi.fn().mockResolvedValue(modelCatalogFixture());
+    mountedComponent = mount(ChatComposer, {
+      target: document.body,
+      props: { availableSkills: skillFixtures(), onLoadModelCatalog },
+    });
+    flushSync();
+
+    typeInComposer(composerInput(), '/modeling something');
+    await flushComposerAsyncWork();
+
+    expect(onLoadModelCatalog).not.toHaveBeenCalled();
+    expect(document.body.querySelector('.model-autocomplete')).toBeNull();
+  });
+
+  it('lets Enter select the active model option', async () => {
+    const onSendMessage = vi.fn().mockResolvedValue(true);
+    const onLoadModelCatalog = vi.fn().mockResolvedValue(modelCatalogFixture());
+    mountedComponent = mount(ChatComposer, {
+      target: document.body,
+      props: { onSendMessage, onLoadModelCatalog },
+    });
+    flushSync();
+
+    typeInComposer(composerInput(), '/model ');
+    await flushComposerAsyncWork();
+
+    const input = composerInput();
+    input.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }),
+    );
+    await flushComposerAsyncWork();
+
+    expect(onSendMessage).toHaveBeenCalledWith(
+      '/model openai/gpt-5.2::api-key',
+    );
+  });
 });
 
 function typeInComposer(input, value, caret = value.length) {
@@ -1200,4 +1335,61 @@ async function flushComposerAsyncWork() {
   await Promise.resolve();
   await Promise.resolve();
   flushSync();
+}
+
+function modelCatalogFixture() {
+  return {
+    models: [
+      {
+        id: 'openai/gpt-5.2',
+        provider_id: 'openai',
+        name: 'openai/gpt-5.2',
+        capabilities: { tools: true },
+        context_window: 128000,
+        effective_context_window: 128000,
+      },
+      {
+        id: 'anthropic/claude-sonnet-4',
+        provider_id: 'anthropic',
+        name: 'anthropic/claude-sonnet-4',
+        capabilities: { tools: true },
+        context_window: 200000,
+        effective_context_window: 200000,
+      },
+      {
+        id: 'ollama/tiny',
+        provider_id: 'ollama',
+        name: 'ollama/tiny',
+        capabilities: { tools: false },
+        context_window: 8192,
+        effective_context_window: 8192,
+      },
+    ],
+    connections: [
+      {
+        id: 'openai:api-key',
+        provider_id: 'openai',
+        label: 'API Key',
+        usable: true,
+      },
+      {
+        id: 'anthropic:api-key',
+        provider_id: 'anthropic',
+        label: 'API Key',
+        usable: true,
+      },
+      {
+        id: 'ollama:local',
+        provider_id: 'ollama',
+        label: 'Local',
+        usable: true,
+      },
+    ],
+  };
+}
+
+function modelAutocompleteOptions() {
+  return Array.from(
+    document.body.querySelectorAll('.model-autocomplete__option'),
+  );
 }

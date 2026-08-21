@@ -18,8 +18,14 @@
     matchMentionCandidates,
   } from '$lib/fileMentions.js';
   import { t } from '$lib/i18n.js';
+  import {
+    buildModelSelectOptions,
+    filterModelSelectOptions,
+    modelFilterFooterLabel,
+  } from '$lib/modelSelection.js';
   import { floatingHoverCard, tooltip } from '$lib/tooltip.js';
   import FileAutocomplete from './FileAutocomplete.svelte';
+  import ModelAutocomplete from './ModelAutocomplete.svelte';
   import SkillAutocomplete from './SkillAutocomplete.svelte';
   import Button from './ui/Button.svelte';
 
@@ -42,6 +48,7 @@
     onCancelRun = () => {},
     onTranscriptionError,
     onListFiles = null,
+    onLoadModelCatalog = null,
   } = $props();
   let content = $state('');
   // Input-history navigation. `historyCursor` is -1 while editing the live draft
@@ -56,6 +63,7 @@
   let inputElement = $state(null);
   let autocompleteElement = $state(null);
   let fileAutocompleteElement = $state(null);
+  let modelAutocompleteElement = $state(null);
   let fileInputElement = $state(null);
   let triggerContext = $state(null);
   let activeSkillIndex = $state(0);
@@ -66,6 +74,12 @@
   let fileListTruncated = $state(false);
   let fileListLoading = $state(false);
   let _fileFetchToken = 0;
+  // /model argument autocomplete: `null` = never fetched. Fetched once when the
+  // `/model ` trigger opens and reused while the popup stays active.
+  let modelCatalog = $state(null);
+  let modelCatalogLoading = $state(false);
+  let _modelCatalogFetchToken = 0;
+  let showAllModels = $state(false);
   let pendingAttachments = $state([]);
   let isDragOver = $state(false);
   let attachmentToastMessage = $state('');
@@ -100,12 +114,38 @@
   let showSkillAutocomplete = $derived(
     Boolean(triggerContext) &&
       triggerContext.marker !== '@' &&
+      triggerContext.marker !== 'model' &&
       matchingSkillCount() > 0,
   );
   let showFileAutocomplete = $derived(
     Boolean(triggerContext) &&
       triggerContext.marker === '@' &&
       (fileListLoading || matchingFiles.length > 0),
+  );
+  let allModelOptions = $derived.by(() => {
+    if (!modelCatalog) {
+      return [];
+    }
+    return buildModelSelectOptions({
+      models: modelCatalog.models,
+      connections: modelCatalog.connections,
+      translate: t,
+    }).filter((option) => option.value !== '');
+  });
+  let modelOptions = $derived(
+    filterModelSelectOptions(allModelOptions, { showAll: showAllModels }),
+  );
+  let modelFilterFooter = $derived(
+    modelFilterFooterLabel({
+      showAll: showAllModels,
+      hiddenCount: allModelOptions.length - modelOptions.length,
+      translate: t,
+    }),
+  );
+  let showModelAutocomplete = $derived(
+    Boolean(triggerContext) &&
+      triggerContext.marker === 'model' &&
+      (modelCatalogLoading || matchingModelCount() > 0),
   );
   let hasUploadingAttachments = $derived(
     pendingAttachments.some((attachment) => attachment.uploading),
@@ -148,6 +188,11 @@
     fileListTruncated = false;
     fileListLoading = false;
     _fileFetchToken += 1;
+    // Drop the model catalog so a fresh `/model ` fetches the latest list.
+    modelCatalog = null;
+    modelCatalogLoading = false;
+    _modelCatalogFetchToken += 1;
+    showAllModels = false;
     content = getDraft(key);
     tick().then(() => {
       if (content) {
@@ -777,17 +822,27 @@
     return true;
   };
 
-  // The skill/command popup and the file popup share one keyboard contract;
-  // these two pick the popup that is currently open.
+  // The skill/command, file, and model popups share one keyboard contract;
+  // these pick the popup that is currently open.
   const activeAutocompleteElement = () =>
-    showFileAutocomplete ? fileAutocompleteElement : autocompleteElement;
-  const activeMatchCount = () =>
-    triggerContext?.marker === '@'
-      ? matchingFiles.length
-      : matchingSkillCount();
+    showFileAutocomplete
+      ? fileAutocompleteElement
+      : showModelAutocomplete
+        ? modelAutocompleteElement
+        : autocompleteElement;
+  const activeMatchCount = () => {
+    if (triggerContext?.marker === '@') {
+      return matchingFiles.length;
+    }
+    if (triggerContext?.marker === 'model') {
+      return matchingModelCount();
+    }
+    return matchingSkillCount();
+  };
 
   const handleKeydown = (event) => {
-    const autocompleteOpen = showSkillAutocomplete || showFileAutocomplete;
+    const autocompleteOpen =
+      showSkillAutocomplete || showFileAutocomplete || showModelAutocomplete;
     if (autocompleteOpen) {
       if (event.key === 'ArrowDown') {
         event.preventDefault();
@@ -897,6 +952,25 @@
     return matchingItems.length;
   };
 
+  // Mirror ModelAutocomplete's match set exactly (same predicate) so keyboard
+  // navigation and the rendered list never disagree.
+  const matchingModelCount = () => {
+    if (!triggerContext || triggerContext.marker !== 'model') {
+      return 0;
+    }
+
+    const normalizedQuery = autocompleteQuery.trim().toLowerCase();
+    if (!normalizedQuery) {
+      return modelOptions.length;
+    }
+
+    return modelOptions.filter((option) =>
+      `${option.label} ${option.secondaryLabel ?? ''}`
+        .toLowerCase()
+        .includes(normalizedQuery),
+    ).length;
+  };
+
   function triggerItemsForContext(context) {
     if (!context) {
       return [];
@@ -922,8 +996,21 @@
 
     const cursorPosition = inputElement.selectionStart ?? content.length;
     const previousContext = triggerContext;
-    triggerContext = detectSkillTrigger(content, cursorPosition);
+    const skillTrigger = detectSkillTrigger(content, cursorPosition);
+    const modelTrigger = skillTrigger
+      ? null
+      : detectModelArgumentTrigger(content, cursorPosition);
+    triggerContext = skillTrigger ?? modelTrigger;
     activeSkillIndex = 0;
+
+    // Reset show-all when leaving the model trigger.
+    if (
+      previousContext?.marker === 'model' &&
+      triggerContext?.marker !== 'model'
+    ) {
+      showAllModels = false;
+    }
+
     // A newly opened @-picker (or the caret jumping to a different @-token)
     // fetches a fresh file list; typing within the same token filters locally.
     if (
@@ -932,6 +1019,15 @@
         previousContext.start !== triggerContext.start)
     ) {
       refreshFileCandidates();
+    }
+
+    // A newly opened /model argument popup fetches the model catalog once;
+    // typing within the same argument filters locally.
+    if (
+      triggerContext?.marker === 'model' &&
+      previousContext?.marker !== 'model'
+    ) {
+      refreshModelCatalog();
     }
   };
 
@@ -966,9 +1062,58 @@
     }
   };
 
-  // An @-mention trigger: the token charset includes path characters, and the
-  // char before the `@` must not look like a word/path char (so an email's
-  // `user@host` never opens the picker).
+  const refreshModelCatalog = async () => {
+    if (typeof onLoadModelCatalog !== 'function') {
+      modelCatalog = { models: [], connections: [] };
+      return;
+    }
+    // The token invalidates stale responses: a session switch or a newer fetch
+    // bumps it, and the slower response is dropped instead of applied.
+    const fetchToken = ++_modelCatalogFetchToken;
+    modelCatalogLoading = true;
+    try {
+      const result = await onLoadModelCatalog();
+      if (fetchToken !== _modelCatalogFetchToken) {
+        return;
+      }
+      modelCatalog = {
+        models: Array.isArray(result?.models) ? result.models : [],
+        connections: Array.isArray(result?.connections)
+          ? result.connections
+          : [],
+      };
+    } catch {
+      if (fetchToken !== _modelCatalogFetchToken) {
+        return;
+      }
+      modelCatalog = modelCatalog ?? { models: [], connections: [] };
+    } finally {
+      if (fetchToken === _modelCatalogFetchToken) {
+        modelCatalogLoading = false;
+      }
+    }
+  };
+
+  // A /model argument trigger: content starts with "/model" followed by a
+  // space, and the cursor sits at or after that space. The query is everything
+  // after the space (extracted via the shared autocompleteQuery derived).
+  const detectModelArgumentTrigger = (value, cursorPosition) => {
+    const boundedCursor = Math.max(0, Math.min(cursorPosition, value.length));
+
+    if (!value.startsWith('/model')) {
+      return null;
+    }
+
+    if (value.length <= 6 || value[6] !== ' ') {
+      return null;
+    }
+
+    if (boundedCursor < 7) {
+      return null;
+    }
+
+    return { marker: 'model', start: 6, end: boundedCursor };
+  };
   const detectFileTrigger = (value, boundedCursor) => {
     let start = boundedCursor - 1;
 
@@ -1127,6 +1272,41 @@
     inputElement?.setSelectionRange(nextCursorPosition, nextCursorPosition);
     resizeInput();
   };
+
+  // A model chosen from the /model argument popup is submitted immediately —
+  // no second Enter is needed. The option's canonical value (including any
+  // connection/account suffix) becomes the /model argument through the regular
+  // guarded submit path so failures leave a retryable draft.
+  const selectModel = (option) => {
+    if (!triggerContext || !option?.value) {
+      return;
+    }
+
+    const command = `/model ${option.value}`;
+    const candidateSnapshot = {
+      ...createSubmitSnapshot(),
+      content: command,
+      trimmedContent: command,
+      inputOrigin: '',
+      mentionTokens: [],
+      attachments: [],
+    };
+    if (submitBlocked(candidateSnapshot)) {
+      return;
+    }
+
+    content = command;
+    setDraft(draftKey, command);
+    inputOrigin = '';
+    triggerContext = null;
+    activeSkillIndex = 0;
+    _triggerClosed = true;
+    isDragOver = false;
+    historyCursor = -1;
+    navWorkingCopies = {};
+    resetInputHeight();
+    void submit(candidateSnapshot);
+  };
 </script>
 
 <form
@@ -1178,6 +1358,21 @@
       loading={fileListLoading}
       activeIndex={activeSkillIndex}
       onSelect={selectFile}
+      onHover={(index) => {
+        activeSkillIndex = index;
+      }}
+    />
+  {/if}
+  {#if showModelAutocomplete}
+    <ModelAutocomplete
+      bind:this={modelAutocompleteElement}
+      options={modelOptions}
+      query={autocompleteQuery}
+      loading={modelCatalogLoading}
+      footerLabel={modelFilterFooter}
+      onFooterAction={() => (showAllModels = !showAllModels)}
+      activeIndex={activeSkillIndex}
+      onSelect={selectModel}
       onHover={(index) => {
         activeSkillIndex = index;
       }}

@@ -386,6 +386,9 @@ export const englishCatalog = Object.freeze({
   'fileAutocomplete.eyebrow': 'files',
   'fileAutocomplete.truncated': 'list truncated — keep typing',
 
+  'modelAutocomplete.label': 'Model suggestions',
+  'modelAutocomplete.eyebrow': 'models',
+
   'chat.fileMention.label': 'Mentioned file',
   'chat.fileMention.tooLarge': 'too large to attach — referenced by path',
   'chat.fileMention.notText': 'not a text file — referenced by path',
