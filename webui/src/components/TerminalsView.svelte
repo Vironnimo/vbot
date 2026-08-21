@@ -348,6 +348,17 @@
     }
     try {
       tile.fitAddon.fit();
+      const item = findTerminal(terminalId);
+      const isManual = !item?.owner;
+      if (isManual && !terminalIsFinished(item)) {
+        const immediate = maximizedTerminalId === terminalId;
+        controller.resize(
+          tile.xterm.cols,
+          tile.xterm.rows,
+          terminalId,
+          immediate,
+        );
+      }
     } catch {
       // The host may be between layout states while the view is mounting.
     }
