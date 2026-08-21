@@ -186,7 +186,7 @@ describe('TerminalsView', () => {
     await waitFor(() => streams.length === 1 && terminalInstances.length === 1);
 
     expect(webglAddons).toHaveLength(0);
-    expect(terminalInstances[0].options.disableStdin).toBe(true);
+    expect(terminalInstances[0].options.disableStdin).toBe(false);
     expect(document.body.textContent).not.toContain(
       'The browser terminal renderer could not be loaded.',
     );
@@ -339,7 +339,7 @@ describe('TerminalsView', () => {
     ).toBeNull();
   });
 
-  it('starts a manual terminal from the modal and enables direct control', async () => {
+  it('starts a terminal from the modal and focuses it for direct input', async () => {
     listTerminalsMock.mockResolvedValue({ terminals: [] });
     startTerminalMock.mockResolvedValue({
       terminal: terminal({
@@ -369,11 +369,14 @@ describe('TerminalsView', () => {
       args: ['--profile', 'work space'],
       workdir: 'C:\\repo',
     });
-    expect(
-      document.querySelector('.terminals-view__tile[data-control="enabled"]'),
-    ).toBeTruthy();
     expect(terminalInstances[0].options.disableStdin).toBe(false);
     expect(terminalInstances[0].focus).toHaveBeenCalled();
+    expect(
+      document.querySelector('button[aria-label="Take control"]'),
+    ).toBeNull();
+    expect(
+      document.querySelector('button[aria-label="Release control"]'),
+    ).toBeNull();
   });
 
   it('prefills the last launch and can select an older persistent setup', async () => {
@@ -435,16 +438,13 @@ describe('TerminalsView', () => {
     );
   });
 
-  it('takes control on terminal click, forwards native keys, and exposes scrollback recovery', async () => {
+  it('focuses on terminal click, forwards native keys, and exposes scrollback recovery', async () => {
     listTerminalsMock.mockResolvedValue({ terminals: [terminal()] });
     mountedComponent = mount(TerminalsView, { target: document.body });
     flushSync();
     await waitFor(() => streams.length === 1 && terminalInstances.length === 1);
 
-    expect(terminalInstances[0].options.disableStdin).toBe(true);
-    expect(
-      document.querySelector('.terminals-view__tile[data-control="observe"]'),
-    ).toBeTruthy();
+    expect(terminalInstances[0].options.disableStdin).toBe(false);
     document.querySelector('.terminals-view__tile-host').dispatchEvent(
       new MouseEvent('pointerdown', {
         bubbles: true,
@@ -452,15 +452,6 @@ describe('TerminalsView', () => {
       }),
     );
     flushSync();
-    expect(
-      document.querySelector('.terminals-view__tile[data-control="observe"]'),
-    ).toBeTruthy();
-    expect(terminalInstances[0].options.disableStdin).toBe(true);
-    findButtonByAriaLabel('Take control').click();
-    flushSync();
-    expect(
-      document.querySelector('.terminals-view__tile[data-control="enabled"]'),
-    ).toBeTruthy();
     expect(terminalInstances[0].options.disableStdin).toBe(false);
     expect(terminalInstances[0].focus).toHaveBeenCalled();
 
@@ -497,14 +488,18 @@ describe('TerminalsView', () => {
     expect(firstBar.textContent).toContain('main@vbot');
     expect(
       firstBar.querySelectorAll('.terminals-view__tile-action'),
-    ).toHaveLength(3);
+    ).toHaveLength(2);
     expect(
       firstBar
         .querySelector('.terminals-view__tile-action svg')
         .getAttribute('width'),
     ).toBe('14');
-    expect(tiles[0].getAttribute('data-control')).toBe('observe');
-    expect(tiles[1].getAttribute('data-control')).toBe('observe');
+    expect(
+      document.querySelector('button[aria-label="Take control"]'),
+    ).toBeNull();
+    expect(
+      document.querySelector('button[aria-label="Release control"]'),
+    ).toBeNull();
   });
 
   it('focuses the first tile and switches focus via a tile bar click', async () => {
@@ -541,11 +536,7 @@ describe('TerminalsView', () => {
         .querySelectorAll('.terminals-view__tile')[1]
         .classList.contains('terminals-view__tile--focused'),
     ).toBe(true);
-    expect(
-      document
-        .querySelectorAll('.terminals-view__tile')[1]
-        .getAttribute('data-control'),
-    ).toBe('observe');
+    expect(terminalInstances[1].focus).toHaveBeenCalled();
   });
 
   it('maximizes a tile to fill the canvas and restores the grid', async () => {
@@ -578,7 +569,7 @@ describe('TerminalsView', () => {
     expect(tiles[1].classList.contains('terminals-view__tile--hidden')).toBe(
       true,
     );
-    expect(tiles[0].getAttribute('data-control')).toBe('observe');
+    expect(resizeTerminalMock).not.toHaveBeenCalled();
 
     document
       .querySelector('button[aria-label="Restore"]')
@@ -597,7 +588,7 @@ describe('TerminalsView', () => {
     ).toHaveLength(0);
   });
 
-  it('takes control only for the clicked tile', async () => {
+  it('activates the clicked tile and routes its input without ownership modes', async () => {
     listTerminalsMock.mockResolvedValue({
       terminals: [
         terminal({ terminal_id: 'term-1', title: 'First terminal' }),
@@ -616,20 +607,16 @@ describe('TerminalsView', () => {
     );
     flushSync();
 
-    let tiles = document.querySelectorAll('.terminals-view__tile');
-    expect(tiles[0].getAttribute('data-control')).toBe('observe');
-    expect(tiles[1].getAttribute('data-control')).toBe('observe');
-    expect(terminalInstances[1].options.disableStdin).toBe(true);
-
-    document.querySelectorAll('button[aria-label="Take control"]')[1].click();
-    flushSync();
-
-    tiles = document.querySelectorAll('.terminals-view__tile');
-    expect(tiles[0].getAttribute('data-control')).toBe('observe');
-    expect(tiles[1].getAttribute('data-control')).toBe('enabled');
+    const tiles = document.querySelectorAll('.terminals-view__tile');
+    expect(tiles[0].classList.contains('terminals-view__tile--focused')).toBe(
+      false,
+    );
+    expect(tiles[1].classList.contains('terminals-view__tile--focused')).toBe(
+      true,
+    );
     expect(terminalInstances[1].options.disableStdin).toBe(false);
     expect(terminalInstances[1].focus).toHaveBeenCalled();
-    expect(terminalInstances[0].options.disableStdin).toBe(true);
+    expect(terminalInstances[0].options.disableStdin).toBe(false);
 
     terminalInstances[1].onDataCallback('ls');
     await new Promise((resolve) => setTimeout(resolve, 30));

@@ -276,7 +276,7 @@ describe('terminal live controller', () => {
     controller.destroy();
   });
 
-  it('routes input to the focused terminal and keeps the previous buffer on focus switch', async () => {
+  it('routes input to its exact terminal and keeps the previous buffer on focus switch', async () => {
     vi.useFakeTimers();
     const state = createTerminalsViewState();
     const streams = [];
@@ -289,7 +289,7 @@ describe('terminal live controller', () => {
     await controller.start();
     controller.queueInput('hel');
     controller.selectTerminal('term-2');
-    controller.queueInput('hi');
+    controller.queueInput('hi', { terminalId: 'term-2' });
     await vi.runAllTimersAsync();
 
     expect(api.sendTerminalInput).toHaveBeenCalledWith('term-1', 'hel');
@@ -298,45 +298,22 @@ describe('terminal live controller', () => {
     controller.destroy();
   });
 
-  it('debounces resize per terminal and sends the right size to each', async () => {
+  it('batches input and removes an explicitly killed terminal', async () => {
     vi.useFakeTimers();
     const state = createTerminalsViewState();
     const streams = [];
     const api = fakeApi({
       streams,
-      terminals: [terminal('term-1'), terminal('term-2')],
+      terminals: [terminal('term-1')],
     });
-    const controller = createTerminalsController({ state, api });
-
-    await controller.start();
-    controller.resize(100, 30);
-    controller.resize(110, 32);
-    controller.selectTerminal('term-2');
-    controller.resize(80, 24);
-    await vi.runAllTimersAsync();
-
-    expect(api.resizeTerminal).toHaveBeenCalledTimes(2);
-    expect(api.resizeTerminal).toHaveBeenCalledWith('term-1', 110, 32);
-    expect(api.resizeTerminal).toHaveBeenCalledWith('term-2', 80, 24);
-    controller.destroy();
-  });
-
-  it('batches input, debounces resize, and removes an explicitly killed terminal', async () => {
-    vi.useFakeTimers();
-    const state = createTerminalsViewState();
-    const streams = [];
-    const api = fakeApi({ streams });
     const controller = createTerminalsController({ state, api });
 
     await controller.start();
     controller.queueInput('hello');
     controller.queueInput('\r', { immediate: true });
-    controller.resize(100, 30);
-    controller.resize(110, 32);
     await vi.runAllTimersAsync();
 
     expect(api.sendTerminalInput).toHaveBeenCalledWith('term-1', 'hello\r');
-    expect(api.resizeTerminal).toHaveBeenCalledWith('term-1', 110, 32);
 
     api.listTerminals.mockResolvedValueOnce({ terminals: [] });
     await expect(controller.killSelected()).resolves.toBe(true);
@@ -454,7 +431,7 @@ describe('terminal live controller', () => {
     controller.destroy();
   });
 
-  it('does not queue input or resize for a finished focused terminal', async () => {
+  it('does not queue input for a finished focused terminal', async () => {
     vi.useFakeTimers();
     const state = createTerminalsViewState();
     const streams = [];
@@ -466,15 +443,13 @@ describe('terminal live controller', () => {
 
     await controller.start();
     controller.queueInput('x');
-    controller.resize(100, 30);
     await vi.runAllTimersAsync();
 
     expect(api.sendTerminalInput).not.toHaveBeenCalled();
-    expect(api.resizeTerminal).not.toHaveBeenCalled();
     controller.destroy();
   });
 
-  it('discards buffered input and resize when the terminal ends', async () => {
+  it('discards buffered input when the terminal ends', async () => {
     vi.useFakeTimers();
     const state = createTerminalsViewState();
     const streams = [];
@@ -489,7 +464,6 @@ describe('terminal live controller', () => {
       ansi: '\\u001b[2Jshell',
     });
     controller.queueInput('hello');
-    controller.resize(100, 30);
     streams[0].emit({
       type: 'terminal_state',
       sequence: 2,
@@ -498,7 +472,6 @@ describe('terminal live controller', () => {
     await vi.runAllTimersAsync();
 
     expect(api.sendTerminalInput).not.toHaveBeenCalled();
-    expect(api.resizeTerminal).not.toHaveBeenCalled();
     expect(state.streams['term-1'].status).toBe(TERMINAL_STREAM_SNAPSHOT);
     expect(state.actionError).toBe('');
     controller.destroy();
@@ -548,7 +521,6 @@ function fakeApi({ streams, terminals = [terminal('term-1')] }) {
       .mockResolvedValue({ terminals: terminals.map((item) => ({ ...item })) }),
     sendTerminalInput: vi.fn().mockResolvedValue({}),
     startTerminal: vi.fn().mockResolvedValue({}),
-    resizeTerminal: vi.fn().mockResolvedValue({}),
     killTerminal: vi.fn().mockResolvedValue({}),
     forgetTerminal: vi.fn().mockResolvedValue({}),
     subscribeTerminalEvents: vi.fn((_terminalId, handlers) => {
