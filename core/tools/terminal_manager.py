@@ -1501,7 +1501,7 @@ def _shell_command(command: str | None, arguments: Sequence[str]) -> str | None:
     if not command.strip() or any(not argument for argument in arguments):
         return None
     tokens = [command, *arguments]
-    if all(_SHELL_TOKEN_UNQUOTED_RE.fullmatch(token) for token in tokens):
+    if all(_SHELL_TOKEN_SAFE_RE.fullmatch(token) for token in tokens):
         return " ".join(tokens)
     return " ".join(_shell_quote(token) for token in tokens)
 
@@ -1512,14 +1512,18 @@ _SHELL_TOKEN_UNQUOTED_RE = re.compile(r"[A-Za-z0-9_\-./:=@+%^,]+")
 def _shell_quote(token: str) -> str:
     """Quote one shell word against the host shell's word boundaries.
 
-    PowerShell accepts single quotes inside double quotes and cmd.exe treats
-    quotes literally, so double quotes cover both interpreters. Tokens without
-    shell metacharacters stay unquoted for a readable command line.
+    Windows shells (PowerShell/cmd) escape a double quote as "" inside
+    double quotes; POSIX shells escape it as \\" . Tokens without shell
+    metacharacters stay unquoted for readability.
     """
     if _SHELL_TOKEN_SAFE_RE.fullmatch(token):
         return token
+    if os.name == "nt":
+        if '"' in token:
+            token = token.replace('"', '""')
+        return f'"{token}"'
     if '"' in token:
-        token = token.replace('"', '""')
+        token = token.replace('"', '\\"')
     return f'"{token}"'
 
 
@@ -1533,31 +1537,30 @@ async def _await_shell_ready(session: TerminalSession) -> bool:
     within the bounded window; the operator command is then never written.
     """
     deadline = time.monotonic() + TERMINAL_OPERATOR_READY_TIMEOUT_SECONDS
-    revision = -1
+    last_revision = -1
     quiet_since: float | None = None
     while True:
+        if time.monotonic() >= deadline:
+            return False
         async with session.lock:
             if session.state in {"exited", "error"}:
                 return False
             revision_now = session.renderer.revision
-            if revision_now != revision:
-                revision = revision_now
-                text = session.renderer.screen_text()
-                if _screen_has_prompt_marker(text):
-                    quiet_since = time.monotonic()
+            text = session.renderer.screen_text()
+            has_prompt = bool(text) and _screen_has_prompt_marker(text)
+            if has_prompt and revision_now != last_revision:
+                last_revision = revision_now
+                quiet_since = time.monotonic()
+            elif has_prompt and quiet_since is not None:
+                if time.monotonic() - quiet_since >= TERMINAL_INITIAL_INPUT_QUIET_SECONDS:
                     break
-                if not text:
-                    quiet_since = None
-        now = time.monotonic()
-        if quiet_since is None or now - quiet_since < TERMINAL_INITIAL_INPUT_QUIET_SECONDS:
-            if now >= deadline:
-                return False
-            session.output_event.clear()
-            with contextlib.suppress(TimeoutError):
-                await asyncio.wait_for(session.output_event.wait(), timeout=0.1)
-            continue
-        break
-    await asyncio.sleep(TERMINAL_INITIAL_INPUT_QUIET_SECONDS)
+            elif not has_prompt:
+                if revision_now != last_revision:
+                    last_revision = revision_now
+                quiet_since = None
+        session.output_event.clear()
+        with contextlib.suppress(TimeoutError):
+            await asyncio.wait_for(session.output_event.wait(), timeout=0.1)
     return True
 
 
