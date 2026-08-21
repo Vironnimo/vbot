@@ -14,6 +14,8 @@ const forgetTerminalMock = vi.fn();
 const subscribeTerminalEventsMock = vi.fn();
 const streams = [];
 const terminalInstances = [];
+const webglAddons = [];
+let webglActivationFails = false;
 
 vi.mock('svelte', async () => {
   return import('../../../node_modules/svelte/src/index-client.js');
@@ -51,7 +53,7 @@ vi.mock('@xterm/xterm', () => ({
       terminalInstances.push(this);
     }
 
-    loadAddon() {}
+    loadAddon = vi.fn();
     open() {}
     onData(callback) {
       this.onDataCallback = callback;
@@ -60,6 +62,22 @@ vi.mock('@xterm/xterm', () => ({
     onScroll(callback) {
       this.onScrollCallback = callback;
       return { dispose: vi.fn() };
+    }
+  },
+}));
+
+vi.mock('@xterm/addon-webgl', () => ({
+  WebglAddon: class MockWebglAddon {
+    constructor() {
+      if (webglActivationFails) {
+        throw new Error('WebGL is unavailable');
+      }
+      this.dispose = vi.fn();
+      this.onContextLoss = vi.fn((callback) => {
+        this.onContextLossCallback = callback;
+        return { dispose: vi.fn() };
+      });
+      webglAddons.push(this);
     }
   },
 }));
@@ -81,6 +99,8 @@ describe('TerminalsView', () => {
     mountedComponent = null;
     streams.length = 0;
     terminalInstances.length = 0;
+    webglAddons.length = 0;
+    webglActivationFails = false;
     listTerminalsMock.mockReset();
     startTerminalMock.mockReset().mockResolvedValue({});
     sendTerminalInputMock.mockReset().mockResolvedValue({});
@@ -134,6 +154,9 @@ describe('TerminalsView', () => {
     expect(document.querySelector('.terminals-view__tile-bar-meta')).toBeNull();
     expect(terminalInstances[0].options.theme.background).toBe('#0E0D0B');
     expect(terminalInstances[0].options.lineHeight).toBe(1);
+    expect(terminalInstances[0].loadAddon).toHaveBeenCalledWith(webglAddons[0]);
+    webglAddons[0].onContextLossCallback();
+    expect(webglAddons[0].dispose).toHaveBeenCalledOnce();
     expect(document.querySelector('button[role="switch"]')).toBeNull();
     expect(document.body.textContent).not.toContain(
       'Quiet is not a semantic prompt.',
@@ -152,6 +175,21 @@ describe('TerminalsView', () => {
       'terminals-view-close',
     );
     expect(killTerminalMock).not.toHaveBeenCalled();
+  });
+
+  it('keeps the Terminal Session usable when WebGL is unavailable', async () => {
+    webglActivationFails = true;
+    listTerminalsMock.mockResolvedValue({ terminals: [terminal()] });
+    mountedComponent = mount(TerminalsView, { target: document.body });
+    flushSync();
+
+    await waitFor(() => streams.length === 1 && terminalInstances.length === 1);
+
+    expect(webglAddons).toHaveLength(0);
+    expect(terminalInstances[0].options.disableStdin).toBe(true);
+    expect(document.body.textContent).not.toContain(
+      'The browser terminal renderer could not be loaded.',
+    );
   });
 
   it('uses the shared secondary sidebar header, action, list, and selection contract', async () => {
