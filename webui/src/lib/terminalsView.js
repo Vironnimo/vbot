@@ -15,6 +15,8 @@ export const TERMINAL_STREAM_RECONNECTING = 'reconnecting';
 export const TERMINAL_STREAM_ERROR = 'error';
 export const TERMINAL_STREAM_SNAPSHOT = 'snapshot';
 
+const DEFAULT_TERMINAL_COLUMNS = 120;
+const DEFAULT_TERMINAL_ROWS = 32;
 const RECONNECT_INITIAL_DELAY_MS = 500;
 const RECONNECT_MAX_DELAY_MS = 8_000;
 const INPUT_FLUSH_DELAY_MS = 24;
@@ -55,6 +57,70 @@ export function layoutForCount(count) {
     spans.push(span);
   }
   return { rows, columns, spans };
+}
+
+/**
+ * Keep the viewer on the PTY's canonical grid while enlarging its cells to
+ * consume the available browser surface. At least one spacing axis remains at
+ * its natural value, so glyphs never overlap or become narrower than the font.
+ *
+ * @param {{ availableWidth: number, availableHeight: number, columns: number, rows: number, baseFontSize: number, baseCellWidth: number, baseCellHeight: number }} measurements
+ * @returns {{ columns: number, rows: number, fontSize: number, letterSpacing: number, lineHeight: number } | null}
+ */
+export function terminalViewerGeometry(measurements) {
+  const availableWidth = positiveNumber(measurements?.availableWidth);
+  const availableHeight = positiveNumber(measurements?.availableHeight);
+  const baseFontSize = positiveNumber(measurements?.baseFontSize);
+  const baseCellWidth = positiveNumber(measurements?.baseCellWidth);
+  const baseCellHeight = positiveNumber(measurements?.baseCellHeight);
+  if (
+    availableWidth === null ||
+    availableHeight === null ||
+    baseFontSize === null ||
+    baseCellWidth === null ||
+    baseCellHeight === null
+  ) {
+    return null;
+  }
+  const columns = terminalGridDimension(
+    measurements?.columns,
+    DEFAULT_TERMINAL_COLUMNS,
+  );
+  const rows = terminalGridDimension(measurements?.rows, DEFAULT_TERMINAL_ROWS);
+  const targetCellWidth = availableWidth / columns;
+  const targetCellHeight = availableHeight / rows;
+  const scale = Math.min(
+    targetCellWidth / baseCellWidth,
+    targetCellHeight / baseCellHeight,
+  );
+  const scaledCellWidth = baseCellWidth * scale;
+  const scaledCellHeight = baseCellHeight * scale;
+  return {
+    columns,
+    rows,
+    fontSize: baseFontSize * scale,
+    letterSpacing: Math.max(0, targetCellWidth - scaledCellWidth),
+    lineHeight: Math.max(1, targetCellHeight / scaledCellHeight),
+  };
+}
+
+export function terminalViewerPointer(event, bounds, scale) {
+  const scaleX = positiveNumber(scale?.x) ?? 1;
+  const scaleY = positiveNumber(scale?.y) ?? 1;
+  return {
+    clientX: bounds.left + (event.clientX - bounds.left) / scaleX,
+    clientY: bounds.top + (event.clientY - bounds.top) / scaleY,
+  };
+}
+
+function terminalGridDimension(value, fallback) {
+  return Number.isInteger(value) && value > 0 ? value : fallback;
+}
+
+function positiveNumber(value) {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0
+    ? value
+    : null;
 }
 
 export function createTerminalsViewState() {

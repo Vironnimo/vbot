@@ -54,7 +54,38 @@ vi.mock('@xterm/xterm', () => ({
     }
 
     loadAddon = vi.fn();
-    open() {}
+    open(host) {
+      Object.defineProperties(host, {
+        clientWidth: { get: () => 800 },
+        clientHeight: { get: () => 512 },
+      });
+      const element = document.createElement('div');
+      const screen = document.createElement('div');
+      element.className = 'xterm';
+      screen.className = 'xterm-screen';
+      screen.getBoundingClientRect = () => ({
+        left: 10,
+        top: 20,
+        width: this.cols * 8,
+        height: this.rows * 16,
+      });
+      Object.defineProperties(screen, {
+        offsetWidth: { get: () => this.cols * 8 },
+        offsetHeight: { get: () => this.rows * 16 },
+      });
+      element.append(screen);
+      host.append(element);
+      this.element = element;
+      this.rawGetCoords = vi.fn();
+      this._core = {
+        _mouseService: {
+          getCoords: this.rawGetCoords,
+        },
+        _viewport: {
+          queueSync: vi.fn(),
+        },
+      };
+    }
     onData(callback) {
       this.onDataCallback = callback;
       return { dispose: vi.fn() };
@@ -79,12 +110,6 @@ vi.mock('@xterm/addon-webgl', () => ({
       });
       webglAddons.push(this);
     }
-  },
-}));
-
-vi.mock('@xterm/addon-fit', () => ({
-  FitAddon: class MockFitAddon {
-    fit() {}
   },
 }));
 
@@ -153,7 +178,7 @@ describe('TerminalsView', () => {
     expect(document.body.textContent).toContain('main@vbot');
     expect(document.querySelector('.terminals-view__tile-bar-meta')).toBeNull();
     expect(terminalInstances[0].options.theme.background).toBe('#0E0D0B');
-    expect(terminalInstances[0].options.lineHeight).toBe(1);
+    expect(terminalInstances[0].options.lineHeight).toBeGreaterThanOrEqual(1);
     expect(terminalInstances[0].loadAddon).toHaveBeenCalledWith(webglAddons[0]);
     webglAddons[0].onContextLossCallback();
     expect(webglAddons[0].dispose).toHaveBeenCalledOnce();
@@ -500,6 +525,34 @@ describe('TerminalsView', () => {
     expect(
       document.querySelector('button[aria-label="Release control"]'),
     ).toBeNull();
+  });
+
+  it('fills the tile on the canonical grid and maps pointer coordinates back', async () => {
+    listTerminalsMock.mockResolvedValue({ terminals: [terminal()] });
+    mountedComponent = mount(TerminalsView, { target: document.body });
+    flushSync();
+    await waitFor(() => streams.length === 1 && terminalInstances.length === 1);
+    const screen = document.querySelector('.xterm-screen');
+    await waitFor(() => screen.style.transform !== '');
+
+    expect(terminalInstances[0].cols).toBe(120);
+    expect(terminalInstances[0].rows).toBe(32);
+    expect(screen.style.transform).toBe('scale(0.8333333333333334, 1)');
+    expect(resizeTerminalMock).not.toHaveBeenCalled();
+
+    terminalInstances[0]._core._mouseService.getCoords(
+      { clientX: 400, clientY: 300 },
+      screen,
+      120,
+      32,
+    );
+    const [mappedPointer, mappedElement, mappedColumns, mappedRows] =
+      terminalInstances[0].rawGetCoords.mock.calls[0];
+    expect(mappedPointer.clientX).toBeCloseTo(478);
+    expect(mappedPointer.clientY).toBe(300);
+    expect(mappedElement).toBe(screen);
+    expect(mappedColumns).toBe(120);
+    expect(mappedRows).toBe(32);
   });
 
   it('focuses the first tile and switches focus via a tile bar click', async () => {
