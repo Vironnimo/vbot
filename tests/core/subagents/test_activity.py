@@ -163,3 +163,44 @@ async def test_activity_write_failure_does_not_change_run_result(
 
     assert await run.wait() is expected
     await asyncio.sleep(0)
+
+
+@pytest.mark.asyncio
+async def test_attach_keeps_watch_task_reference_until_run_completes(tmp_path: Path) -> None:
+    activity = SubAgentActivity.create(
+        TemporaryFileManager(tmp_path),
+        agent_id="worker",
+        session_id="child-session",
+    )
+    assert activity is not None
+    run = Run(run_id="child-run", agent_id="worker", session_id="child-session")
+    activity.attach(run)
+
+    watch_task = activity._watch_task
+    assert watch_task is not None
+    assert not watch_task.done()
+
+    run.mark_completed(ChatMessage.assistant(model="test", content="done"))
+    await watch_task
+
+    assert "completed (`child-run`)" in activity.path.read_text(encoding="utf-8")
+
+
+@pytest.mark.asyncio
+async def test_attach_twice_starts_a_single_watcher(tmp_path: Path) -> None:
+    activity = SubAgentActivity.create(
+        TemporaryFileManager(tmp_path),
+        agent_id="worker",
+        session_id="child-session",
+    )
+    assert activity is not None
+    run = Run(run_id="child-run", agent_id="worker", session_id="child-session")
+    activity.attach(run)
+    first_watcher = activity._watch_task
+    assert first_watcher is not None
+
+    activity.attach(run)
+
+    assert activity._watch_task is first_watcher
+    run.mark_completed(ChatMessage.assistant(model="test", content="done"))
+    await first_watcher

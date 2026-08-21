@@ -32,6 +32,9 @@ class SubAgentActivity:
         self._lease = lease
         self._finished = False
         self._attached = False
+        # Strong reference: the event loop keeps only weak references to tasks,
+        # so an unsaved watch task may be garbage-collected mid-execution.
+        self._watch_task: asyncio.Task[None] | None = None
 
     @property
     def path(self) -> Path:
@@ -78,7 +81,7 @@ class SubAgentActivity:
         if self._attached or self._finished:
             return
         self._attached = True
-        asyncio.create_task(
+        self._watch_task = asyncio.create_task(
             self._watch(run),
             name=f"subagent-activity:{run.id}",
         )
