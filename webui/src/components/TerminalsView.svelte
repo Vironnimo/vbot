@@ -381,12 +381,19 @@
         terminalId,
         immediate,
       );
-      // Load WebGL after the terminal has settled at its final dimensions.
-      // Loading it earlier causes the canvas to resize multiple times during
-      // the snapshot-write → fit cycle, producing white horizontal gaps.
+      // Load WebGL after the terminal has settled at its final dimensions
+      // and the browser has painted at least once. Creating the WebGL canvas
+      // in a microtask (before the first paint) produces white row gaps that
+      // only disappear after a subsequent resize triggers a re-render.
       if (!tile.webglLoaded && WebglAddonClass) {
         tile.webglLoaded = true;
-        enableWebglRenderer(tile.xterm, WebglAddonClass);
+        requestAnimationFrame(() => {
+          const current = tileRegistry.get(terminalId);
+          if (current?.xterm) {
+            enableWebglRenderer(current.xterm, WebglAddonClass);
+            current.xterm.refresh(0, current.xterm.rows - 1);
+          }
+        });
       }
     } catch {
       // The host may be between layout states while the view is mounting.
