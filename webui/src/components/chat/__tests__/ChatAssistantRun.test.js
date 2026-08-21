@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushSync, mount, unmount } from 'svelte';
 
 import { init } from '../../../lib/i18n.js';
+import { TOOLTIP_SHOW_DELAY_MS } from '../../../lib/tooltip.js';
 
 vi.mock('svelte', async () => {
   return import('../../../../node_modules/svelte/src/index-client.js');
@@ -918,7 +919,7 @@ describe('ChatAssistantRun run footer', () => {
     expect(parts.map((part) => part.textContent)).toEqual([
       'Completed',
       '8.0s',
-      '1 file changed',
+      '1 file changed,',
       '+3',
       '-2',
     ]);
@@ -929,6 +930,40 @@ describe('ChatAssistantRun run footer', () => {
       '-2',
     );
     expect(footer.querySelectorAll('.run-footer__sep')).toHaveLength(2);
+    // The change block is one contiguous unit: file label, +N, and -N live
+    // inside a single wrapper so they never wrap apart from each other.
+    const changeBlock = footer.querySelector('.run-footer__changes');
+    expect(changeBlock).toBeTruthy();
+    expect(
+      [...changeBlock.querySelectorAll('.run-footer__part')].map(
+        (part) => part.textContent,
+      ),
+    ).toEqual(['1 file changed,', '+3', '-2']);
+  });
+
+  it('shows the changed files in a hover tooltip on the change block', async () => {
+    vi.useFakeTimers();
+    const item = createAssistantRunItem({
+      status: 'completed',
+      items: [
+        createEditToolChild({ path: 'a.txt' }),
+        createEditToolChild({ path: 'b.txt' }),
+      ],
+    });
+    item.durationMs = 8000;
+    mountedComponent = mountRun({ item });
+
+    const changeBlock = document.querySelector('.run-footer__changes');
+    expect(changeBlock).toBeTruthy();
+    changeBlock.dispatchEvent(new Event('pointerenter'));
+    await vi.advanceTimersByTimeAsync(TOOLTIP_SHOW_DELAY_MS);
+    flushSync();
+
+    expect(document.getElementById('app-tooltip')?.textContent).toBe(
+      'a.txt\nb.txt',
+    );
+    changeBlock.dispatchEvent(new Event('pointerleave'));
+    vi.useRealTimers();
   });
 
   it('ticks the live duration while the run is running', () => {

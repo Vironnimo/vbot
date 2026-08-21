@@ -4,6 +4,7 @@ import {
   backgroundTasks,
   changeStatsLabel,
   changeStatsParts,
+  changeStatsTooltip,
   compactToolValue,
   compactionSummaryText,
   errorMessagePresentation,
@@ -1465,7 +1466,12 @@ describe('runChangeStats', () => {
       ],
     });
 
-    expect(stats).toEqual({ files: 2, added: 9, removed: 3 });
+    expect(stats).toEqual({
+      files: 2,
+      added: 9,
+      removed: 3,
+      paths: ['a.txt', 'b.txt'],
+    });
   });
 
   it('counts a write of a new file as added lines only', () => {
@@ -1476,7 +1482,12 @@ describe('runChangeStats', () => {
       ],
     });
 
-    expect(stats).toEqual({ files: 1, added: 4, removed: 0 });
+    expect(stats).toEqual({
+      files: 1,
+      added: 4,
+      removed: 0,
+      paths: ['new.txt'],
+    });
   });
 
   it('ignores non-file tools and tools without line-change facts', () => {
@@ -1616,7 +1627,12 @@ describe('sessionChangeStats', () => {
       },
     ]);
 
-    expect(stats).toEqual({ files: 2, added: 9, removed: 2 });
+    expect(stats).toEqual({
+      files: 2,
+      added: 9,
+      removed: 2,
+      paths: ['a.txt', 'b.txt'],
+    });
   });
 
   it('returns null for an empty timeline', () => {
@@ -1730,7 +1746,7 @@ describe('changeStatsParts', () => {
 
   it('splits the change stats into file, added, and removed parts', () => {
     expect(changeStatsParts({ files: 5, added: 151, removed: 15 })).toEqual([
-      { kind: 'files', text: '5 files changed' },
+      { kind: 'files', text: '5 files changed,' },
       { kind: 'added', text: '+151' },
       { kind: 'removed', text: '-15' },
     ]);
@@ -1738,7 +1754,7 @@ describe('changeStatsParts', () => {
 
   it('uses the singular file form', () => {
     expect(changeStatsParts({ files: 1, added: 2, removed: 0 })).toEqual([
-      { kind: 'files', text: '1 file changed' },
+      { kind: 'files', text: '1 file changed,' },
       { kind: 'added', text: '+2' },
       { kind: 'removed', text: '-0' },
     ]);
@@ -1746,5 +1762,23 @@ describe('changeStatsParts', () => {
 
   it('returns an empty array for null stats', () => {
     expect(changeStatsParts(null)).toEqual([]);
+  });
+});
+
+describe('changeStatsTooltip', () => {
+  it('lists every changed file, one per line', () => {
+    expect(
+      changeStatsTooltip({
+        files: 2,
+        added: 9,
+        removed: 3,
+        paths: ['a.txt', 'b.txt'],
+      }),
+    ).toBe('a.txt\nb.txt');
+  });
+
+  it('returns an empty string when no paths are known', () => {
+    expect(changeStatsTooltip({ files: 1, added: 2, removed: 0 })).toBe('');
+    expect(changeStatsTooltip(null)).toBe('');
   });
 });
