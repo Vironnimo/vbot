@@ -1,7 +1,7 @@
 <script>
   import { onDestroy, onMount } from 'svelte';
 
-  import { subscribeRunEvents } from '$lib/api.js';
+  import { listConnections, listModels, subscribeRunEvents } from '$lib/api.js';
   import { getDraft } from '$lib/composerMemory.js';
   import {
     extractMentionTokens,
@@ -390,6 +390,20 @@
       return null;
     }
     return async () => await chatController.listFiles(agentId);
+  });
+  // The model catalog is global (not agent/session-scoped), so the loader is
+  // always available. The composer fetches on demand when `/model ` is typed.
+  let composerLoadModelCatalog = $derived(async () => {
+    const [modelsResult, connectionsResult] = await Promise.all([
+      listModels(),
+      listConnections(),
+    ]);
+    return {
+      models: Array.isArray(modelsResult?.models) ? modelsResult.models : [],
+      connections: Array.isArray(connectionsResult?.connections)
+        ? connectionsResult.connections
+        : [],
+    };
   });
   const displayedSessionIsEmpty = () =>
     isSessionEmpty(activeSessionState) &&
@@ -2103,6 +2117,7 @@
               onCancelRun={handleCancelRun}
               onTranscriptionError={handleTranscriptionError}
               onListFiles={composerListFiles}
+              onLoadModelCatalog={composerLoadModelCatalog}
             />
           </div>
         </div>
