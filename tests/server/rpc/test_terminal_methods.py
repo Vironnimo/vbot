@@ -12,6 +12,10 @@ from server.rpc.errors import RpcError
 from server.rpc.methods import build_method_handlers
 from server.rpc.terminal_methods import (
     _terminal_forget,
+    _terminal_group_create,
+    _terminal_group_delete,
+    _terminal_group_order,
+    _terminal_group_rename,
     _terminal_input,
     _terminal_kill,
     _terminal_list,
@@ -27,6 +31,32 @@ class FakeTerminalManager:
         self.kills: list[str] = []
         self.forgotten: list[str] = []
         self.starts: list[dict[str, Any]] = []
+        self.groups: list[dict[str, Any]] = []
+        self.group_creates: list[str] = []
+        self.group_renames: list[tuple[str, str]] = []
+        self.group_deletes: list[str] = []
+        self.group_orders: list[tuple[str, list[str]]] = []
+
+    def list_groups_for_operator(self) -> list[dict[str, Any]]:
+        return list(self.groups)
+
+    def create_group_for_operator(self, name: str) -> dict[str, Any]:
+        self.group_creates.append(name)
+        group = {"group_id": "group-1", "name": name, "kind": "user"}
+        self.groups.append(group)
+        return group
+
+    def rename_group_for_operator(self, group_id: str, name: str) -> dict[str, Any]:
+        self.group_renames.append((group_id, name))
+        return {"group_id": group_id, "name": name, "kind": "user"}
+
+    async def delete_group_for_operator(self, group_id: str) -> dict[str, Any]:
+        self.group_deletes.append(group_id)
+        return {"group_id": group_id, "terminals_killed": 1}
+
+    def set_group_order_for_operator(self, group_id: str, order: list[str]) -> dict[str, Any]:
+        self.group_orders.append((group_id, order))
+        return {"group_id": group_id, "order": list(order)}
 
     def list_for_operator(self) -> list[dict[str, Any]]:
         return [{"terminal_id": "term-1", "state": "working"}]
@@ -75,6 +105,7 @@ async def test_terminal_operator_handlers_project_list_input_resize_and_kill() -
     state = _state(manager)
 
     assert _terminal_list(state, {}) == {
+        "groups": manager.list_groups_for_operator(),
         "terminals": [{"terminal_id": "term-1", "state": "working"}],
         "launch_history": manager.list_operator_launch_history(),
     }
@@ -119,6 +150,7 @@ async def test_terminal_operator_handlers_project_list_input_resize_and_kill() -
             "cwd": Path("~/repo").expanduser(),
             "launch_workdir": "~/repo",
             "name": "joe",
+            "group_id": None,
             "columns": 100,
             "rows": 30,
         }
@@ -157,4 +189,43 @@ async def test_terminal_operator_handlers_validate_and_register_contract() -> No
         "terminal.resize",
         "terminal.kill",
         "terminal.forget",
+        "terminal.group.create",
+        "terminal.group.rename",
+        "terminal.group.delete",
+        "terminal.group.order",
     } <= set(handlers)
+
+
+@pytest.mark.asyncio
+async def test_terminal_group_handlers_create_rename_delete_and_order() -> None:
+    manager = FakeTerminalManager()
+    state = _state(manager)
+
+    assert _terminal_group_create(state, {"name": "Work"}) == {
+        "group": {"group_id": "group-1", "name": "Work", "kind": "user"}
+    }
+    assert manager.group_creates == ["Work"]
+
+    assert _terminal_group_rename(state, {"group_id": "group-1", "name": "Dev"}) == {
+        "group": {"group_id": "group-1", "name": "Dev", "kind": "user"}
+    }
+    assert manager.group_renames == [("group-1", "Dev")]
+
+    assert await _terminal_group_delete(state, {"group_id": "group-1"}) == {
+        "group_id": "group-1",
+        "terminals_killed": 1,
+    }
+    assert manager.group_deletes == ["group-1"]
+
+    assert _terminal_group_order(state, {"group_id": "group-1", "order": ["term-2", "term-1"]}) == {
+        "group_id": "group-1",
+        "order": ["term-2", "term-1"],
+    }
+    assert manager.group_orders == [("group-1", ["term-2", "term-1"])]
+
+    with pytest.raises(RpcError) as blank_name_error:
+        _terminal_group_create(state, {"name": "   "})
+    assert blank_name_error.value.code == "invalid_request"
+    with pytest.raises(RpcError) as bad_order_error:
+        _terminal_group_order(state, {"group_id": "group-1", "order": [1, 2]})
+    assert bad_order_error.value.code == "invalid_request"

@@ -19,6 +19,7 @@
     createTerminalsViewState,
     layoutForCount,
     terminalIsFinished,
+    visibleTerminals,
   } from '$lib/terminalsView.js';
   import { tooltip } from '$lib/tooltip.js';
 
@@ -39,6 +40,15 @@
   let startArguments = $state('');
   let startWorkdir = $state('');
   let startName = $state('');
+  let startGroupId = $state('');
+  let groupDialogOpen = $state(false);
+  let groupDialogMode = $state('create');
+  let groupDialogName = $state('');
+  let groupDialogTargetId = $state('');
+  let deleteGroupDialogOpen = $state(false);
+  let deleteGroupTargetId = $state('');
+  let draggedTerminalId = $state('');
+  let dragOverTerminalId = $state('');
   let mounted = false;
   let xtermModulesPromise = null;
   const tileRegistry = new SvelteMap();
@@ -50,11 +60,22 @@
   const TERMINAL_MAX_COLUMNS = 240;
   const TERMINAL_MAX_ROWS = 80;
 
-  let hasTerminals = $derived(viewState.terminals.length > 0);
+  const groupTerminals = $derived(visibleTerminals(viewState));
+  let hasTerminals = $derived(groupTerminals.length > 0);
   let layout = $derived(
     maximizedTerminalId
       ? layoutForCount(1)
-      : layoutForCount(viewState.terminals.length),
+      : layoutForCount(groupTerminals.length),
+  );
+  let selectedGroup = $derived(
+    viewState.groups.find(
+      (group) => group.group_id === viewState.selectedGroupId,
+    ) ?? null,
+  );
+  let groupReorderable = $derived(
+    !!selectedGroup &&
+      selectedGroup.kind !== 'finished' &&
+      selectedGroup.kind !== 'automatic',
   );
   let launchHistoryOptions = $derived(
     viewState.launchHistory.map((entry) => ({
@@ -63,6 +84,20 @@
       secondaryLabel: launchHistoryWorkdir(entry),
     })),
   );
+  let groupOptions = $derived(
+    viewState.groups
+      .filter((group) => group.kind === 'user' || group.kind === 'agent')
+      .map((group) => ({
+        value: group.group_id,
+        label: group.name,
+        secondaryLabel: groupKindLabel(group.kind),
+      })),
+  );
+  const groupOptionAutomatic = {
+    value: '',
+    label: t('terminals.groupAutomatic', 'Automatic'),
+    secondaryLabel: t('terminals.kind.manual', 'Manual'),
+  };
 
   const controller = createTerminalsController({
     state: viewState,
@@ -110,16 +145,14 @@
   $effect(() => {
     if (
       maximizedTerminalId &&
-      !viewState.terminals.some(
-        (item) => item.terminal_id === maximizedTerminalId,
-      )
+      !groupTerminals.some((item) => item.terminal_id === maximizedTerminalId)
     ) {
       maximizedTerminalId = '';
     }
   });
 
   $effect(() => {
-    for (const item of viewState.terminals) {
+    for (const item of groupTerminals) {
       const tile = tileRegistry.get(item.terminal_id);
       if (!tile?.xterm) {
         continue;
@@ -542,6 +575,9 @@
   function openStartDialog() {
     applyLaunchHistory(viewState.launchHistory[0] ?? null);
     startName = '';
+    startGroupId = groupCanEdit(selectedGroup)
+      ? (viewState.selectedGroupId ?? '')
+      : '';
     viewState.startError = '';
     startDialogOpen = true;
   }
@@ -611,7 +647,9 @@
       params.name = name;
     }
 
-    const started = await controller.startManualTerminal(params);
+    const started = await controller.startManualTerminal(params, {
+      groupId: startGroupId,
+    });
     if (!started) {
       return;
     }
@@ -626,6 +664,179 @@
       ),
       variant: 'success',
     });
+  }
+
+  function groupKindLabel(kind) {
+    if (kind === 'user') {
+      return t('terminals.kind.user', 'My group');
+    }
+    if (kind === 'agent') {
+      return t('terminals.kind.agent', 'Agent');
+    }
+    if (kind === 'finished') {
+      return t('terminals.kind.finished', 'Finished');
+    }
+    return t('terminals.kind.manual', 'Manual');
+  }
+
+  function groupCanEdit(group) {
+    return group?.kind === 'user' || group?.kind === 'agent';
+  }
+
+  function openCreateGroupDialog() {
+    groupDialogMode = 'create';
+    groupDialogName = '';
+    groupDialogTargetId = '';
+    viewState.actionError = '';
+    groupDialogOpen = true;
+  }
+
+  function openRenameGroupDialog(group) {
+    if (!groupCanEdit(group)) {
+      return;
+    }
+    groupDialogMode = 'rename';
+    groupDialogName = group.name;
+    groupDialogTargetId = group.group_id;
+    viewState.actionError = '';
+    groupDialogOpen = true;
+  }
+
+  function closeGroupDialog() {
+    if (viewState.groupActionPending) {
+      return;
+    }
+    groupDialogOpen = false;
+    viewState.actionError = '';
+  }
+
+  async function submitGroupDialog(event) {
+    event.preventDefault();
+    const name = groupDialogName.trim();
+    if (!name) {
+      viewState.actionError = t(
+        'terminals.groupNameRequired',
+        'Enter a group name.',
+      );
+      return;
+    }
+    if (groupDialogMode === 'create') {
+      const group = await controller.createGroup(name);
+      if (!group) {
+        return;
+      }
+      groupDialogOpen = false;
+      onToast({
+        title: t('terminals.groupCreatedTitle', 'Group created'),
+        message: t(
+          'terminals.groupCreatedMessage',
+          'The group is ready and appears in the terminal list.',
+        ),
+        variant: 'success',
+      });
+    } else {
+      const renamed = await controller.renameGroup(groupDialogTargetId, name);
+      if (!renamed) {
+        return;
+      }
+      groupDialogOpen = false;
+      onToast({
+        title: t('terminals.groupRenamedTitle', 'Group renamed'),
+        message: t(
+          'terminals.groupRenamedMessage',
+          'The group name was updated.',
+        ),
+        variant: 'success',
+      });
+    }
+  }
+
+  function openDeleteGroupDialog(group) {
+    if (!groupCanEdit(group)) {
+      return;
+    }
+    deleteGroupTargetId = group.group_id;
+    viewState.actionError = '';
+    deleteGroupDialogOpen = true;
+  }
+
+  function closeDeleteGroupDialog() {
+    if (viewState.groupActionPending) {
+      return;
+    }
+    deleteGroupDialogOpen = false;
+    viewState.actionError = '';
+  }
+
+  async function confirmDeleteGroup() {
+    const group = viewState.groups.find(
+      (item) => item.group_id === deleteGroupTargetId,
+    );
+    if (!group) {
+      deleteGroupDialogOpen = false;
+      return;
+    }
+    const result = await controller.deleteGroup(deleteGroupTargetId);
+    if (!result) {
+      return;
+    }
+    deleteGroupDialogOpen = false;
+    onToast({
+      title: t('terminals.deleteGroupTitle', 'Delete group'),
+      message: t(
+        'terminals.deleteGroupMessage',
+        'The group was deleted and its terminals were stopped.',
+      ),
+      variant: 'success',
+    });
+  }
+
+  function onTileDragStart(event, terminalId) {
+    if (!groupReorderable) {
+      return;
+    }
+    draggedTerminalId = terminalId;
+    event.dataTransfer.effectAllowed = 'move';
+    event.dataTransfer.setData('text/plain', terminalId);
+  }
+
+  function onTileDragOver(event, terminalId) {
+    if (
+      !groupReorderable ||
+      !draggedTerminalId ||
+      draggedTerminalId === terminalId
+    ) {
+      return;
+    }
+    event.preventDefault();
+    event.dataTransfer.dropEffect = 'move';
+    dragOverTerminalId = terminalId;
+  }
+
+  function onTileDragEnd() {
+    draggedTerminalId = '';
+    dragOverTerminalId = '';
+  }
+
+  function onTileDrop(event, targetTerminalId) {
+    event.preventDefault();
+    const sourceId =
+      draggedTerminalId || event.dataTransfer.getData('text/plain');
+    draggedTerminalId = '';
+    dragOverTerminalId = '';
+    if (!sourceId || sourceId === targetTerminalId || !groupReorderable) {
+      return;
+    }
+    const ids = groupTerminals.map((terminal) => terminal.terminal_id);
+    const fromIndex = ids.indexOf(sourceId);
+    const toIndex = ids.indexOf(targetTerminalId);
+    if (fromIndex < 0 || toIndex < 0) {
+      return;
+    }
+    const reordered = [...ids];
+    reordered.splice(fromIndex, 1);
+    reordered.splice(toIndex, 0, sourceId);
+    controller.reorderGroup(viewState.selectedGroupId, reordered);
   }
 
   function terminalTarget(item) {
@@ -677,33 +888,6 @@
     return [launchCommand, ...args].join(' ');
   }
 
-  function terminalSession(item) {
-    return (
-      item?.owner?.session_id || t('terminals.localOperator', 'Local operator')
-    );
-  }
-
-  function shortSession(item) {
-    const sessionId = terminalSession(item);
-    return sessionId.length > 14 ? `${sessionId.slice(0, 12)}…` : sessionId;
-  }
-
-  function stateLabel(state) {
-    return t(`terminals.state.${state}`, state || 'Unknown');
-  }
-
-  function startedAt(item) {
-    const date = new Date(item?.started_at || '');
-    if (Number.isNaN(date.getTime())) {
-      return '—';
-    }
-    return new Intl.DateTimeFormat(undefined, {
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit',
-    }).format(date);
-  }
-
   function cssToken(name, fallback) {
     if (typeof document === 'undefined') {
       return fallback;
@@ -753,22 +937,22 @@
   >
     <div class="secondary-pane__header">
       <span id="terminals-list-title" class="secondary-pane__title">
-        {t('terminals.title', 'Terminals')}
+        {t('terminals.groupsLabel', 'Groups')}
       </span>
       <Button
         variant="primary"
         disabled={serverUnavailable}
-        onClick={openStartDialog}
+        onClick={openCreateGroupDialog}
       >
         <svg viewBox="0 0 14 14" width="11" height="11" aria-hidden="true">
           <path d="M7 1v12M1 7h12" />
         </svg>
-        {t('common.add', 'Add')}
+        {t('terminals.addGroup', 'Add group')}
       </Button>
     </div>
 
     <div class="secondary-pane__scroll secondary-list terminals-view__list">
-      {#if viewState.loading && viewState.terminals.length === 0}
+      {#if viewState.loading && viewState.groups.length === 0}
         <Banner variant="neutral">
           {t('terminals.loading', 'Loading terminal sessions…')}
         </Banner>
@@ -787,7 +971,7 @@
             {t('common.retry', 'Retry')}
           </Button>
         </Banner>
-      {:else if viewState.terminals.length === 0}
+      {:else if viewState.groups.length === 0}
         <EmptyState
           title={t('terminals.emptyTitle', 'No terminal sessions')}
           description={t(
@@ -796,36 +980,77 @@
           )}
         />
       {:else}
-        {#each viewState.terminals as item (item.terminal_id)}
-          <button
-            type="button"
-            class="secondary-list__item terminals-view__list-item"
-            class:active={item.terminal_id === viewState.selectedTerminalId}
-            aria-current={item.terminal_id === viewState.selectedTerminalId
-              ? 'true'
-              : undefined}
-            onclick={() => controller.selectTerminal(item.terminal_id)}
+        {#each viewState.groups as group (group.group_id)}
+          <div
+            class="terminals-view__group"
+            class:active={group.group_id === viewState.selectedGroupId}
           >
-            <span class="terminals-view__item-topline">
+            <button
+              type="button"
+              class="terminals-view__group-main"
+              aria-current={group.group_id === viewState.selectedGroupId
+                ? 'true'
+                : undefined}
+              onclick={() => controller.selectGroup(group.group_id)}
+            >
+              <span class="terminals-view__group-topline">
+                <span
+                  class="terminals-view__group-title"
+                  use:tooltip={group.name}>{group.name}</span
+                >
+                <span class="terminals-view__group-count"
+                  >{group.terminal_count}</span
+                >
+              </span>
+              <span class="terminals-view__group-kind">
+                {groupKindLabel(group.kind)}
+              </span>
+            </button>
+            {#if groupCanEdit(group)}
               <span
-                class="terminals-view__item-title"
-                use:tooltip={terminalTitle(item)}>{terminalTitle(item)}</span
+                class="terminals-view__group-actions"
+                role="presentation"
+                onclick={(event) => event.stopPropagation()}
               >
-              <span
-                class={`terminals-view__state-dot terminals-view__state-dot--${item.state}`}
-                role="img"
-                aria-label={stateLabel(item.state)}
-                use:tooltip={stateLabel(item.state)}
-              ></span>
-            </span>
-            <span class="terminals-view__target">{terminalTarget(item)}</span>
-            <span class="terminals-view__item-meta">
-              <span use:tooltip={terminalSession(item)}
-                >{shortSession(item)}</span
-              >
-              <span>{startedAt(item)}</span>
-            </span>
-          </button>
+                <Button
+                  variant="tertiary"
+                  icon
+                  class="terminals-view__group-action"
+                  ariaLabel={t('terminals.renameGroupAction', 'Rename group')}
+                  tooltip={t('terminals.renameGroupAction', 'Rename group')}
+                  onClick={() => openRenameGroupDialog(group)}
+                >
+                  <svg
+                    viewBox="0 0 14 14"
+                    width="12"
+                    height="12"
+                    aria-hidden="true"
+                  >
+                    <path
+                      d="M9.8 1.8a1.3 1.3 0 0 1 1.9 1.9L4.6 10.8l-2.8.8.8-2.8z"
+                    />
+                  </svg>
+                </Button>
+                <Button
+                  variant="danger"
+                  icon
+                  class="terminals-view__group-action"
+                  ariaLabel={t('terminals.deleteGroupAction', 'Delete group')}
+                  tooltip={t('terminals.deleteGroupAction', 'Delete group')}
+                  onClick={() => openDeleteGroupDialog(group)}
+                >
+                  <svg
+                    viewBox="0 0 14 14"
+                    width="12"
+                    height="12"
+                    aria-hidden="true"
+                  >
+                    <path d="M3.5 3.5l7 7M10.5 3.5l-7 7" />
+                  </svg>
+                </Button>
+              </span>
+            {/if}
+          </div>
         {/each}
       {/if}
     </div>
@@ -863,7 +1088,7 @@
         aria-label={t('terminals.canvasLabel', 'Terminal canvas')}
         style="grid-template-columns: repeat({layout.columns}, minmax(0, 1fr)); grid-template-rows: repeat({layout.rows}, minmax(0, 1fr));"
       >
-        {#each viewState.terminals as item, itemIndex (item.terminal_id)}
+        {#each groupTerminals as item, itemIndex (item.terminal_id)}
           {@const span = layout.spans[itemIndex] ?? {
             row: 0,
             column: 0,
@@ -878,6 +1103,8 @@
           {@const isMaximized = maximizedTerminalId === item.terminal_id}
           {@const isFinished = terminalIsFinished(item)}
           {@const isFocused = item.terminal_id === viewState.selectedTerminalId}
+          {@const isDragged = draggedTerminalId === item.terminal_id}
+          {@const isDropTarget = dragOverTerminalId === item.terminal_id}
           <div
             class="terminals-view__tile"
             class:terminals-view__tile--hidden={maximizedTerminalId &&
@@ -885,6 +1112,8 @@
             class:terminals-view__tile--maximized={isMaximized}
             class:terminals-view__tile--focused={isFocused &&
               !maximizedTerminalId}
+            class:terminals-view__tile--dragging={isDragged}
+            class:terminals-view__tile--drop-target={isDropTarget}
             data-terminal-id={item.terminal_id}
             style="grid-row: {span.row +
               1} / span {span.rowSpan}; grid-column: {span.column +
@@ -895,6 +1124,11 @@
               role="button"
               tabindex="0"
               aria-label={terminalTitle(item)}
+              draggable={groupReorderable}
+              ondragstart={(event) => onTileDragStart(event, item.terminal_id)}
+              ondragover={(event) => onTileDragOver(event, item.terminal_id)}
+              ondragend={onTileDragEnd}
+              ondrop={(event) => onTileDrop(event, item.terminal_id)}
               onclick={() => activateTerminal(item.terminal_id)}
               ondblclick={() => toggleMaximize(item.terminal_id)}
               onkeydown={(event) => {
@@ -1031,11 +1265,18 @@
     {:else}
       <EmptyState
         fill
-        title={t('terminals.detailEmptyTitle', 'Open a terminal')}
-        description={t(
-          'terminals.detailEmptyDescription',
-          'Start the local default shell or choose a command such as codex. Agent terminals will appear here too.',
-        )}
+        title={selectedGroup
+          ? t('terminals.groupEmptyTitle', 'No terminals in this group')
+          : t('terminals.detailEmptyTitle', 'Open a terminal')}
+        description={selectedGroup
+          ? t(
+              'terminals.groupEmptyDescription',
+              'Start a terminal in this group, or ask an agent to open one here.',
+            )
+          : t(
+              'terminals.detailEmptyDescription',
+              'Start the local default shell or choose a command such as codex. Agent terminals will appear here too.',
+            )}
       >
         {#snippet actions()}
           <Button
@@ -1176,6 +1417,31 @@
           </FormField>
 
           <FormField
+            controlId="terminal-start-group"
+            label={t('terminals.startGroupLabel', 'Group')}
+            help={t(
+              'terminals.startGroupHelp',
+              'Optional. Start the terminal inside a group. Automatic groups are created for each agent and for manual terminals.',
+            )}
+          >
+            {#snippet children(field)}
+              <Dropdown
+                id={field.controlId}
+                value={startGroupId}
+                options={[groupOptionAutomatic, ...groupOptions]}
+                ariaLabel={t('terminals.startGroupLabel', 'Group')}
+                ariaDescribedby={field.describedBy}
+                disabled={viewState.startingTerminal}
+                triggerClass="terminals-view__group-dropdown"
+                listClass="terminals-view__group-dropdown-list"
+                onValueChange={(next) => {
+                  startGroupId = next;
+                }}
+              />
+            {/snippet}
+          </FormField>
+
+          <FormField
             controlId="terminal-start-workdir"
             label={t('terminals.workdirLabel', 'Working directory')}
             help={t(
@@ -1224,6 +1490,131 @@
   </Modal>
 {/if}
 
+{#if groupDialogOpen}
+  <Modal
+    title={groupDialogMode === 'create'
+      ? t('terminals.createGroupTitle', 'New group')
+      : t('terminals.renameGroupTitle', 'Rename group')}
+    labelledById="terminal-group-modal-title"
+    class="terminals-view__group-modal"
+    closeDisabled={viewState.groupActionPending}
+    onClose={closeGroupDialog}
+  >
+    {#snippet body()}
+      <form id="terminal-group-form" onsubmit={submitGroupDialog}>
+        <div class="modal-body">
+          {#if viewState.actionError && !serverUnavailable}
+            <Banner variant="error" role="alert">
+              {terminalError(viewState.actionError)}
+            </Banner>
+          {/if}
+          <FormField
+            controlId="terminal-group-name"
+            label={t('terminals.groupNameLabel', 'Group name')}
+            help={t(
+              'terminals.groupNameHelp',
+              'Shown in the sidebar. Terminals you start here join this group.',
+            )}
+          >
+            {#snippet children(field)}
+              <TextField
+                id={field.controlId}
+                variant="modal"
+                aria-describedby={field.describedBy}
+                value={groupDialogName}
+                disabled={viewState.groupActionPending}
+                placeholder={t('terminals.groupNamePlaceholder', 'e.g. Work')}
+                onInput={(next) => {
+                  groupDialogName = next;
+                  viewState.actionError = '';
+                }}
+              />
+            {/snippet}
+          </FormField>
+        </div>
+      </form>
+    {/snippet}
+    {#snippet footer()}
+      <Button
+        variant="secondary"
+        disabled={viewState.groupActionPending}
+        onClick={closeGroupDialog}
+      >
+        {t('common.cancel', 'Cancel')}
+      </Button>
+      <Button
+        type="submit"
+        form="terminal-group-form"
+        variant="primary"
+        loading={viewState.groupActionPending}
+      >
+        {groupDialogMode === 'create'
+          ? t('terminals.createGroup', 'Create group')
+          : t('terminals.renameGroup', 'Rename')}
+      </Button>
+    {/snippet}
+  </Modal>
+{/if}
+
+{#if deleteGroupDialogOpen}
+  {@const deleteGroup = viewState.groups.find(
+    (group) => group.group_id === deleteGroupTargetId,
+  )}
+  <Modal
+    title={t('terminals.deleteGroupTitle', 'Delete group')}
+    labelledById="terminal-delete-group-title"
+    closeDisabled={viewState.groupActionPending}
+    onClose={closeDeleteGroupDialog}
+  >
+    {#snippet body()}
+      <div class="modal-body">
+        {#if viewState.actionError && !serverUnavailable}
+          <Banner variant="error" role="alert">
+            {terminalError(viewState.actionError)}
+          </Banner>
+        {/if}
+        <p class="terminals-view__delete-intro">
+          {t(
+            'terminals.deleteGroupWarning',
+            'Deleting this group stops every running terminal in it. Finished terminals remain available until they expire.',
+          )}
+        </p>
+        {#if deleteGroup && deleteGroup.terminal_count > 0}
+          <Banner variant="warn">
+            {t(
+              'terminals.deleteGroupCount',
+              '{count} terminals are in this group.',
+              {
+                count: deleteGroup.terminal_count,
+              },
+            )}
+          </Banner>
+        {/if}
+      </div>
+    {/snippet}
+    {#snippet footer()}
+      <Button
+        variant="secondary"
+        disabled={viewState.groupActionPending}
+        onClick={closeDeleteGroupDialog}
+      >
+        {t('common.cancel', 'Cancel')}
+      </Button>
+      <Button
+        variant="danger"
+        loading={viewState.groupActionPending}
+        onClick={() => void confirmDeleteGroup()}
+      >
+        {deleteGroup?.terminal_count
+          ? t('terminals.deleteGroupConfirm', 'Delete {count} terminal(s)', {
+              count: deleteGroup.terminal_count,
+            })
+          : t('terminals.deleteGroupEmptyConfirm', 'Delete group')}
+      </Button>
+    {/snippet}
+  </Modal>
+{/if}
+
 <style>
   .terminals-view {
     display: flex;
@@ -1238,72 +1629,101 @@
     gap: 0;
   }
 
-  .terminals-view__list-item {
+  .terminals-view__group {
+    position: relative;
     display: flex;
     width: 100%;
-    flex-direction: column;
-    gap: 6px;
-    text-align: left;
-  }
-
-  .terminals-view__item-topline,
-  .terminals-view__item-meta {
-    display: flex;
     align-items: center;
+    gap: 4px;
+    border-radius: var(--r-md);
   }
 
-  .terminals-view__item-topline,
-  .terminals-view__item-meta {
+  .terminals-view__group:hover {
+    background: var(--surface-hover);
+  }
+
+  .terminals-view__group.active {
+    background: var(--surface-active);
+  }
+
+  .terminals-view__group-main {
+    display: flex;
+    min-width: 0;
+    flex: 1;
+    flex-direction: column;
+    gap: 3px;
+    padding: 8px 6px 8px 10px;
+    text-align: left;
+    border: 0;
+    background: transparent;
+    font: inherit;
+  }
+
+  .terminals-view__group-topline {
+    display: flex;
     width: 100%;
+    align-items: center;
     justify-content: space-between;
     gap: 8px;
   }
 
-  .terminals-view__item-title,
-  .terminals-view__target,
-  .terminals-view__item-meta {
+  .terminals-view__group-title {
+    min-width: 0;
     overflow: hidden;
+    color: var(--text-hi);
     font-family: var(--font-mono);
+    font-size: var(--fs-mono-body);
+    font-weight: 500;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
 
-  .terminals-view__item-title {
-    color: var(--text-hi);
-    font-size: var(--fs-mono-body);
-    font-weight: 500;
-  }
-
-  .terminals-view__target {
-    width: 100%;
-    color: var(--text-med);
-    font-size: var(--fs-mono-sm);
-  }
-
-  .terminals-view__item-meta {
-    color: var(--text-lo);
-    font-size: var(--fs-mono-xs);
-  }
-
-  .terminals-view__state-dot {
-    width: 7px;
-    height: 7px;
+  .terminals-view__group-count {
     flex: 0 0 auto;
-    border-radius: 50%;
-    background: var(--text-lo);
+    min-width: 20px;
+    padding: 1px 6px;
+    border-radius: 999px;
+    color: var(--text-med);
+    background: var(--surface);
+    font-family: var(--font-mono);
+    font-size: var(--fs-mono-xs);
+    text-align: center;
   }
 
-  .terminals-view__state-dot--working,
-  .terminals-view__state-dot--ready {
-    background: var(--green);
+  .terminals-view__group.active .terminals-view__group-count {
+    color: var(--text-hi);
+    background: var(--accent-20);
   }
 
-  .terminals-view__state-dot--starting {
-    background: var(--amber);
+  .terminals-view__group-kind {
+    overflow: hidden;
+    color: var(--text-lo);
+    font-size: var(--fs-body-xs);
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
-  .terminals-view__state-dot--error {
-    background: var(--red);
+  .terminals-view__group-actions {
+    display: flex;
+    flex: 0 0 auto;
+    align-items: center;
+    gap: 2px;
+    padding-right: 6px;
+  }
+
+  .terminals-view__group-actions {
+    visibility: hidden;
+  }
+
+  .terminals-view__group:hover .terminals-view__group-actions,
+  .terminals-view__group:focus-within .terminals-view__group-actions {
+    visibility: visible;
+  }
+
+  :global(.btn-tertiary.btn-icon.terminals-view__group-action),
+  :global(.btn-danger.btn-icon.terminals-view__group-action) {
+    width: 26px;
+    height: 26px;
   }
 
   .terminals-view__detail {
@@ -1352,6 +1772,15 @@
     display: none;
   }
 
+  .terminals-view__tile--dragging {
+    opacity: 0.45;
+  }
+
+  .terminals-view__tile--drop-target {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 1px var(--accent) inset;
+  }
+
   .terminals-view__tile-bar {
     display: flex;
     min-width: 0;
@@ -1362,6 +1791,15 @@
     font-family: var(--font-mono);
     font-size: var(--fs-mono-xs);
     letter-spacing: 0.04em;
+    cursor: pointer;
+  }
+
+  .terminals-view__tile-bar[draggable='true'] {
+    cursor: grab;
+  }
+
+  .terminals-view__tile-bar[draggable='true']:active {
+    cursor: grabbing;
   }
 
   .terminals-view__tile-bar-primary {
@@ -1468,6 +1906,29 @@
 
   :global(.modal.terminals-view__start-modal) {
     width: 520px;
+  }
+
+  :global(.modal.terminals-view__group-modal) {
+    width: 440px;
+  }
+
+  .terminals-view__delete-intro {
+    margin: 0 0 12px;
+    color: var(--text-med);
+    font-size: var(--fs-body-sm);
+    line-height: 1.5;
+  }
+
+  :global(.terminals-view__group-dropdown) {
+    width: 100%;
+  }
+
+  :global(.terminals-view__group-dropdown .dropdown-primitive__trigger) {
+    width: 100%;
+  }
+
+  :global(.terminals-view__group-dropdown-list) {
+    font-family: var(--font-mono);
   }
 
   .terminals-view__start-form {

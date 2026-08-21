@@ -63,6 +63,13 @@ TERMINAL_BRACKETED_PASTE_START = "\x1b[200~"
 TERMINAL_BRACKETED_PASTE_END = "\x1b[201~"
 TERMINAL_LAUNCH_HISTORY_VERSION = 1
 TERMINAL_LAUNCH_HISTORY_MAX_ENTRIES = 50
+TERMINAL_GROUPS_FILE_NAME = "groups.json"
+TERMINAL_GROUPS_VERSION = 1
+TERMINAL_GROUP_NAME_MAX_CHARS = 80
+TERMINAL_FINISHED_GROUP_ID = "finished"
+TERMINAL_MANUAL_GROUP_ID = "auto:manual"
+TERMINAL_AGENT_GROUP_ID_PREFIX = "auto:agent:"
+GroupKind = Literal["user", "agent", "automatic", "finished"]
 TERMINAL_INPUT_KEY_SEQUENCES = {
     "enter": "\r",
     "escape": "\x1b",
@@ -175,6 +182,26 @@ class TerminalLaunchHistoryEntry:
 
 
 @dataclass(slots=True)
+class TerminalGroup:
+    """One operator-visible collection of Terminal Sessions.
+
+    ``kind`` decides durability and lifecycle:
+    - ``user`` groups are persisted and stay when empty.
+    - ``agent`` groups are created by the terminal Tool and live in memory.
+    - ``automatic`` groups are synthesized per Agent and for manual terminals,
+      never durable, and removed when empty.
+    - ``finished`` is the single retention group for exited/error terminals.
+    """
+
+    group_id: str
+    name: str
+    kind: GroupKind
+    order: list[str]
+    created_at: datetime
+    source: str | None = None
+
+
+@dataclass(slots=True)
 class TerminalAttention:
     """One program-agnostic Agent-attention boundary for a Terminal Session."""
 
@@ -213,6 +240,9 @@ class TerminalSession:
     launch_command: str | None = None
     launch_arguments: tuple[str, ...] = ()
     name: str | None = None
+    # Explicit user/agent group chosen at spawn; None means the Terminal
+    # belongs to its automatic group (per-Agent or shared manual).
+    group_id: str | None = None
     exit_code: int | None = None
     finished_at: datetime | None = None
     attention_revision: int = 0
@@ -246,6 +276,7 @@ class TerminalManager:
         *,
         temporary_files: TemporaryFileManager | None = None,
         launch_history_path: Path | None = None,
+        groups_path: Path | None = None,
         data_dir: Path | None = None,
         adapter_factory: TerminalAdapterFactory | None = None,
         scrollback_lines: int = TERMINAL_SCROLLBACK_LINES,
@@ -264,6 +295,7 @@ class TerminalManager:
         self._trigger_service = trigger_service
         self._temporary_files = temporary_files
         self._launch_history_path = launch_history_path
+        self._groups_path = groups_path
         self._data_dir = data_dir
         self._adapter_factory = adapter_factory or spawn_terminal_adapter
         self._scrollback_lines = scrollback_lines
@@ -273,6 +305,7 @@ class TerminalManager:
         self._sessions: dict[str, TerminalSession] = {}
         self._changed_callbacks: list[TerminalChangedCallback] = []
         self._launch_history = self._load_launch_history()
+        self._groups = self._load_groups()
         self._cursor_secret = os.urandom(32)
         self._sweeper_task: asyncio.Task[None] | None = None
 
@@ -348,6 +381,7 @@ class TerminalManager:
         origin_run_id: str,
         initial_text: str | None = None,
         name: str | None = None,
+        group_id: str | None = None,
     ) -> TerminalSession:
         """Start one Agent-owned program behind PTY/ConPTY."""
         _validate_owner(owner)
@@ -361,6 +395,7 @@ class TerminalManager:
             origin_run_id=origin_run_id,
             initial_text=initial_text,
             name=name,
+            group_id=group_id,
         )
 
     async def spawn_for_operator(
@@ -371,6 +406,7 @@ class TerminalManager:
         cwd: Path | None,
         launch_workdir: str | None = None,
         name: str | None = None,
+        group_id: str | None = None,
         columns: int = TERMINAL_DEFAULT_COLUMNS,
         rows: int = TERMINAL_DEFAULT_ROWS,
     ) -> dict[str, Any]:
@@ -403,6 +439,7 @@ class TerminalManager:
             name=name,
             launch_command=launch_command,
             launch_arguments=launch_arguments,
+            group_id=group_id,
         )
         if launch_command is not None:
             session.operator_command_task = asyncio.create_task(
@@ -438,6 +475,7 @@ class TerminalManager:
         name: str | None = None,
         launch_command: str | None = None,
         launch_arguments: tuple[str, ...] = (),
+        group_id: str | None = None,
     ) -> TerminalSession:
         """Start one unmodified program behind PTY/ConPTY."""
         if not argv or not argv[0]:
@@ -447,6 +485,8 @@ class TerminalManager:
         _validate_dimensions(columns, rows)
         if not cwd.is_dir():
             raise ValueError(f"Terminal workdir is not a directory: {model_path(cwd)}")
+        if group_id is not None:
+            self._require_group(group_id)
         self._enforce_capacity(owner)
 
         terminal_id = uuid.uuid4().hex
@@ -487,6 +527,7 @@ class TerminalManager:
             launch_command=launch_command,
             launch_arguments=launch_arguments,
             name=name,
+            group_id=group_id,
             cwd=cwd,
             state="starting" if initial_text is not None else "ready",
             started_at=_utc_now(),
@@ -496,6 +537,8 @@ class TerminalManager:
             log_handle=log_handle,
             log_lease=log_lease,
         )
+        if group_id is not None:
+            self._append_group_terminal(group_id, terminal_id)
         self._sessions[terminal_id] = session
         session.reader_task = asyncio.create_task(
             self._read_terminal(session), name=f"terminal:{terminal_id}:reader"
@@ -584,15 +627,24 @@ class TerminalManager:
         return session
 
     def list_for_operator(self) -> list[dict[str, Any]]:
-        """Return live and temporarily retained Terminal Sessions for inspection."""
-        sessions = sorted(
-            self._sessions.values(),
-            key=lambda session: (
-                session.finished_at is None,
-                session.finished_at or session.started_at,
-            ),
-            reverse=True,
-        )
+        """Return retained Terminal Sessions grouped and ordered for display."""
+        rank: dict[str, int] = {
+            group["group_id"]: index for index, group in enumerate(self.list_groups_for_operator())
+        }
+
+        def sort_key(session: TerminalSession) -> tuple[int, int, int, float]:
+            group_id = self._session_group(session).group_id
+            group = self._groups.get(group_id)
+            position = len(group.order) + 1 if group is not None else -1
+            if group is not None:
+                try:
+                    position = group.order.index(session.terminal_id)
+                except ValueError:
+                    position = len(group.order) + 1
+            stamp = session.finished_at if session.finished_at else session.started_at
+            return (rank.get(group_id, 10**9), position, 0, -stamp.timestamp())
+
+        sessions = sorted(self._sessions.values(), key=sort_key)
         return [self._operator_summary(session) for session in sessions]
 
     def list_operator_launch_history(self) -> list[dict[str, Any]]:
@@ -607,6 +659,141 @@ class TerminalManager:
             }
             for entry in self._launch_history
         ]
+
+    def list_groups_for_operator(self) -> list[dict[str, Any]]:
+        """Return operator-visible groups: user/agent groups, then the shared
+        manual automatic group, then one automatic group per active Agent."""
+        groups = list(self._groups.values())
+        automatic = [
+            self._automatic_group(TERMINAL_MANUAL_GROUP_ID)
+            if self._automatic_group_terminals(TERMINAL_MANUAL_GROUP_ID)
+            else None,
+            *(
+                self._automatic_group(agent_group_id(owner.agent_id))
+                for owner in self._distinct_agent_owners()
+                if self._automatic_group_terminals(agent_group_id(owner.agent_id))
+            ),
+        ]
+        for group in automatic:
+            if group is not None and not any(
+                existing.group_id == group.group_id for existing in groups
+            ):
+                groups.append(group)
+        if self._finished_group_terminals():
+            groups.append(self._finished_group())
+        return [self._group_summary(group) for group in groups]
+
+    def create_group_for_operator(self, name: str) -> dict[str, Any]:
+        """Create one durable user group with a unique name."""
+        name = _validate_group_name(name)
+        if self._group_name_taken(name):
+            raise TerminalManagerError(f"A Terminal group named '{name}' already exists")
+        group = TerminalGroup(
+            group_id=uuid.uuid4().hex,
+            name=name,
+            kind="user",
+            order=[],
+            created_at=_utc_now(),
+        )
+        self._groups[group.group_id] = group
+        self._persist_groups()
+        self._notify_changed("")
+        _LOGGER.info("Created Terminal group group=%s name=%s", group.group_id, group.name)
+        return self._group_summary(group)
+
+    def rename_group_for_operator(self, group_id: str, name: str) -> dict[str, Any]:
+        """Rename one user or agent group; automatic groups are fixed."""
+        group = self._require_group(group_id)
+        if group.kind == "automatic" or group.kind == "finished":
+            raise TerminalManagerError("This Terminal group cannot be renamed")
+        name = _validate_group_name(name)
+        if self._group_name_taken(name, exclude=group_id):
+            raise TerminalManagerError(f"A Terminal group named '{name}' already exists")
+        previous = group.name
+        group.name = name
+        if group.kind == "user":
+            self._persist_groups()
+        self._notify_changed("")
+        _LOGGER.info("Renamed Terminal group group=%s from=%s to=%s", group_id, previous, name)
+        return self._group_summary(group)
+
+    async def delete_group_for_operator(self, group_id: str) -> dict[str, Any]:
+        """Remove one user or agent group and kill every live terminal in it.
+
+        Killed terminals stay in the retained catalog and appear in the
+        finished group, exactly like an explicit kill.
+        """
+        group = self._require_group(group_id)
+        if group.kind == "automatic" or group.kind == "finished":
+            raise TerminalManagerError("This Terminal group cannot be deleted")
+        terminals = [
+            session
+            for session in self._sessions.values()
+            if self._session_group(session).group_id == group_id
+        ]
+        for session in terminals:
+            if session.state not in {"exited", "error"}:
+                await self._terminate_session(session, suppress_attention=True)
+        del self._groups[group_id]
+        if group.kind == "user":
+            self._persist_groups()
+        self._notify_changed("")
+        _LOGGER.info(
+            "Deleted Terminal group group=%s name=%s terminals=%d",
+            group_id,
+            group.name,
+            len(terminals),
+        )
+        return {"group_id": group_id, "name": group.name, "terminals_killed": len(terminals)}
+
+    def set_group_order_for_operator(self, group_id: str, order: Sequence[str]) -> dict[str, Any]:
+        """Persist one user-set Terminal order; missing ids are appended."""
+        group = self._require_group(group_id)
+        if not isinstance(order, list) or any(
+            not isinstance(item, str) or not item for item in order
+        ):
+            raise ValueError("order must be a list of terminal ids")
+        seen: set[str] = set()
+        for terminal_id in order:
+            if terminal_id in seen:
+                raise ValueError("order must not contain duplicate terminal ids")
+            seen.add(terminal_id)
+        members = self._group_members(group.group_id)
+        unknown = seen - {session.terminal_id for session in members}
+        if unknown:
+            raise TerminalManagerError("order contains terminals that do not belong to this group")
+        ordered = list(order)
+        ordered.extend(
+            session.terminal_id for session in members if session.terminal_id not in seen
+        )
+        group.order = ordered
+        if group.kind == "user":
+            self._persist_groups()
+        self._notify_changed("")
+        return {"group_id": group_id, "order": list(ordered)}
+
+    def resolve_or_create_agent_group(self, name: str) -> TerminalGroup:
+        """Return the group with this name or create a non-durable Agent group.
+
+        The lookup spans user and agent groups, so an Agent reuses the group
+        the operator already set up (or another Agent created).
+        """
+        name = _validate_group_name(name)
+        existing = self._group_by_name(name)
+        if existing is not None:
+            return existing
+        group = TerminalGroup(
+            group_id=uuid.uuid4().hex,
+            name=name,
+            kind="agent",
+            order=[],
+            created_at=_utc_now(),
+            source=None,
+        )
+        self._groups[group.group_id] = group
+        self._notify_changed("")
+        _LOGGER.info("Created Agent Terminal group group=%s name=%s", group.group_id, name)
+        return group
 
     def _load_launch_history(self) -> list[TerminalLaunchHistoryEntry]:
         path = self._launch_history_path
@@ -655,6 +842,44 @@ class TerminalManager:
             )
         except OSError as error:
             _LOGGER.warning("Could not persist Terminal launch history to '%s': %s", path, error)
+
+    def _load_groups(self) -> dict[str, TerminalGroup]:
+        path = self._groups_path
+        if path is None or not path.exists():
+            return {}
+        try:
+            document = json.loads(path.read_text(encoding="utf-8"))
+            groups = _parse_groups(document)
+        except (OSError, UnicodeError, ValueError) as error:
+            _LOGGER.warning("Could not load Terminal groups from '%s': %s", path, error)
+            return {}
+        return {group.group_id: group for group in groups}
+
+    def _persist_groups(self) -> None:
+        path = self._groups_path
+        if path is None:
+            return
+        document = {
+            "version": TERMINAL_GROUPS_VERSION,
+            "groups": [
+                {
+                    "id": group.group_id,
+                    "name": group.name,
+                    "order": list(group.order),
+                    "created_at": group.created_at.isoformat(),
+                }
+                for group in self._groups.values()
+                if group.kind == "user"
+            ],
+        }
+        try:
+            atomic_write_text(
+                path,
+                json.dumps(document, ensure_ascii=False, indent=2) + "\n",
+                data_dir=self._data_dir,
+            )
+        except OSError as error:
+            _LOGGER.warning("Could not persist Terminal groups to '%s': %s", path, error)
 
     async def watch_for_operator(
         self, terminal_id: str
@@ -1435,6 +1660,109 @@ class TerminalManager:
             "log_file": model_path(session.log_path) if session.log_path is not None else None,
         }
 
+    def _session_group(self, session: TerminalSession) -> TerminalGroup:
+        """Return the operator-visible group a Terminal Session belongs to."""
+        if session.state in {"exited", "error"} and session.finished_at is not None:
+            return self._finished_group()
+        group_id = session.group_id
+        if group_id is not None and group_id in self._groups:
+            return self._groups[group_id]
+        if session.owner is None:
+            return self._automatic_group(TERMINAL_MANUAL_GROUP_ID)
+        return self._automatic_group(agent_group_id(session.owner.agent_id))
+
+    def _group_members(self, group_id: str) -> list[TerminalSession]:
+        return [
+            session
+            for session in self._sessions.values()
+            if self._session_group(session).group_id == group_id
+        ]
+
+    def _automatic_group(self, group_id: str) -> TerminalGroup:
+        name = (
+            "Manual"
+            if group_id == TERMINAL_MANUAL_GROUP_ID
+            else f"Agent {group_id.removeprefix(TERMINAL_AGENT_GROUP_ID_PREFIX)}"
+        )
+        return TerminalGroup(
+            group_id=group_id,
+            name=name,
+            kind="automatic",
+            order=[],
+            created_at=_utc_now(),
+        )
+
+    def _automatic_group_terminals(self, group_id: str) -> bool:
+        return any(
+            self._session_group(session).group_id == group_id for session in self._sessions.values()
+        )
+
+    def _finished_group(self) -> TerminalGroup:
+        return TerminalGroup(
+            group_id=TERMINAL_FINISHED_GROUP_ID,
+            name="Finished",
+            kind="finished",
+            order=[],
+            created_at=_utc_now(),
+        )
+
+    def _finished_group_terminals(self) -> bool:
+        return any(session.finished_at is not None for session in self._sessions.values())
+
+    def _distinct_agent_owners(self) -> list[TerminalOwner]:
+        owners: dict[tuple[str | None, str], TerminalOwner] = {}
+        for session in self._sessions.values():
+            owner = session.owner
+            if owner is None:
+                continue
+            owners[(owner.project_id, owner.agent_id)] = owner
+        return sorted(
+            owners.values(),
+            key=lambda owner: (owner.project_id or "", owner.agent_id),
+        )
+
+    def _group_summary(self, group: TerminalGroup) -> dict[str, Any]:
+        members = self._group_members(group.group_id)
+        return {
+            "group_id": group.group_id,
+            "name": group.name,
+            "kind": group.kind,
+            "terminal_count": len(members),
+            "live_count": sum(session.state not in {"exited", "error"} for session in members),
+            "order": list(group.order),
+            "source": group.source,
+        }
+
+    def _require_group(self, group_id: str) -> TerminalGroup:
+        if not isinstance(group_id, str) or not group_id:
+            raise ValueError("group_id must be a non-empty string")
+        group = self._groups.get(group_id)
+        if group is None:
+            raise TerminalNotFoundError(f"Terminal group not found: {group_id}")
+        return group
+
+    def _group_by_name(self, name: str) -> TerminalGroup | None:
+        lowered = name.casefold()
+        for group in self._groups.values():
+            if group.kind in {"user", "agent"} and group.name.casefold() == lowered:
+                return group
+        return None
+
+    def _group_name_taken(self, name: str, *, exclude: str | None = None) -> bool:
+        lowered = name.casefold()
+        return any(
+            group.kind in {"user", "agent"}
+            and group.group_id != exclude
+            and group.name.casefold() == lowered
+            for group in self._groups.values()
+        )
+
+    def _append_group_terminal(self, group_id: str, terminal_id: str) -> None:
+        group = self._groups.get(group_id)
+        if group is None or terminal_id in group.order:
+            return
+        group.order.append(terminal_id)
+
     def _get_for_operator(self, terminal_id: str) -> TerminalSession:
         session = self._sessions.get(terminal_id)
         if session is None:
@@ -1447,6 +1775,7 @@ class TerminalManager:
         attachment = session.attachment
         return {
             "terminal_id": session.terminal_id,
+            "group_id": self._session_group(session).group_id,
             "state": session.state,
             "command": Path(session.command).name or session.command,
             "name": session.name,
@@ -1848,6 +2177,78 @@ def _utc_now() -> datetime:
     return datetime.now(UTC)
 
 
+def _validate_group_name(name: str) -> str:
+    if not isinstance(name, str) or not name.strip():
+        raise ValueError("Terminal group name must not be empty")
+    if len(name.strip()) > TERMINAL_GROUP_NAME_MAX_CHARS:
+        raise ValueError(
+            f"Terminal group name must be at most {TERMINAL_GROUP_NAME_MAX_CHARS} characters"
+        )
+    return name.strip()
+
+
+def agent_group_id(agent_id: str) -> str:
+    """Return the automatic group id for one Agent owner."""
+    return f"{TERMINAL_AGENT_GROUP_ID_PREFIX}{agent_id}"
+
+
+def _parse_groups(document: Any) -> list[TerminalGroup]:
+    if not isinstance(document, dict) or set(document) != {"version", "groups"}:
+        raise ValueError("Terminal groups must contain only version and groups")
+    if document["version"] != TERMINAL_GROUPS_VERSION:
+        raise ValueError("Unsupported Terminal groups version")
+    raw_groups = document["groups"]
+    if not isinstance(raw_groups, list):
+        raise ValueError("Terminal groups entries are invalid")
+
+    parsed: list[TerminalGroup] = []
+    seen_ids: set[str] = set()
+    for raw_group in raw_groups:
+        if not isinstance(raw_group, dict) or set(raw_group) != {
+            "id",
+            "name",
+            "order",
+            "created_at",
+        }:
+            raise ValueError("Terminal group shape is invalid")
+        group_id = raw_group["id"]
+        name = raw_group["name"]
+        order = raw_group["order"]
+        created_at = raw_group["created_at"]
+        if not isinstance(group_id, str) or not group_id or group_id in seen_ids:
+            raise ValueError("Terminal group id is invalid or duplicated")
+        if not isinstance(name, str) or not name.strip():
+            raise ValueError("Terminal group name is invalid")
+        if not isinstance(order, list) or any(
+            not isinstance(item, str) or not item for item in order
+        ):
+            raise ValueError("Terminal group order is invalid")
+        parsed_at = _parse_group_timestamp(created_at)
+        seen_ids.add(group_id)
+        parsed.append(
+            TerminalGroup(
+                group_id=group_id,
+                name=name.strip(),
+                kind="user",
+                order=list(order),
+                created_at=parsed_at,
+            )
+        )
+    return parsed
+
+
+def _parse_group_timestamp(value: Any) -> datetime:
+    if not isinstance(value, str):
+        raise ValueError("Terminal group timestamp is invalid")
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as error:
+        raise ValueError("Terminal group timestamp is invalid") from error
+    if parsed.tzinfo is None or parsed.utcoffset() != timedelta(0):
+        raise ValueError("Terminal group timestamp must be UTC")
+    return parsed.astimezone(UTC)
+
+
 def _log_background_task_result(task: asyncio.Task[Any], message: str) -> None:
     if task.cancelled():
         return
@@ -1864,11 +2265,16 @@ def _log_background_task_result(task: asyncio.Task[Any], message: str) -> None:
 
 __all__ = [
     "AttentionKind",
+    "GroupKind",
+    "TERMINAL_AGENT_GROUP_ID_PREFIX",
     "TERMINAL_DEFAULT_COLUMNS",
     "TERMINAL_DEFAULT_ROWS",
+    "TERMINAL_FINISHED_GROUP_ID",
     "TERMINAL_FINISHED_TTL",
+    "TERMINAL_GROUP_NAME_MAX_CHARS",
     "TERMINAL_INPUT_MAX_CHARS",
     "TERMINAL_INPUT_KEY_SEQUENCES",
+    "TERMINAL_MANUAL_GROUP_ID",
     "TERMINAL_MAX_COLUMNS",
     "TERMINAL_MAX_ROWS",
     "TERMINAL_MIN_COLUMNS",
@@ -1881,6 +2287,7 @@ __all__ = [
     "TerminalCapacityError",
     "TerminalClosedError",
     "TerminalCursorError",
+    "TerminalGroup",
     "TerminalLaunchError",
     "TerminalLaunchHistoryEntry",
     "TerminalManager",
@@ -1891,4 +2298,5 @@ __all__ = [
     "TerminalSession",
     "TerminalStaleScreenError",
     "TerminalState",
+    "agent_group_id",
 ]

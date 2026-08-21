@@ -949,6 +949,53 @@ export function forgetTerminal(terminalId, options = {}) {
   return rpc('terminal.forget', { terminal_id: terminalId }, options);
 }
 
+export function createTerminalGroup(name, options = {}) {
+  requireNonEmptyString(
+    name,
+    'Group name must be a non-empty string',
+    'terminal.group.create',
+  );
+  return rpc('terminal.group.create', { name }, options);
+}
+
+export function renameTerminalGroup(groupId, name, options = {}) {
+  requireNonEmptyString(
+    groupId,
+    'Group id must be a non-empty string',
+    'terminal.group.rename',
+  );
+  requireNonEmptyString(
+    name,
+    'Group name must be a non-empty string',
+    'terminal.group.rename',
+  );
+  return rpc('terminal.group.rename', { group_id: groupId, name }, options);
+}
+
+export function deleteTerminalGroup(groupId, options = {}) {
+  requireNonEmptyString(
+    groupId,
+    'Group id must be a non-empty string',
+    'terminal.group.delete',
+  );
+  return rpc('terminal.group.delete', { group_id: groupId }, options);
+}
+
+export function setTerminalGroupOrder(groupId, order, options = {}) {
+  requireNonEmptyString(
+    groupId,
+    'Group id must be a non-empty string',
+    'terminal.group.order',
+  );
+  if (!Array.isArray(order) || order.some((id) => typeof id !== 'string')) {
+    throw new ApiClientError(
+      RPC_ERROR_INVALID_CLIENT_REQUEST,
+      'Terminal group order must be an array of terminal ids',
+    );
+  }
+  return rpc('terminal.group.order', { group_id: groupId, order }, options);
+}
+
 export function listCronJobs(options = {}) {
   return rpc('cron.list', {}, options);
 }

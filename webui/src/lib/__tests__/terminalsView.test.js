@@ -18,11 +18,12 @@ afterEach(() => {
 });
 
 describe('terminal list projection', () => {
-  it('keeps a valid selection and includes retained finished terminals', () => {
+  it('keeps a valid group and terminal selection, including retained finished terminals', () => {
     const state = createTerminalsViewState();
     state.selectedTerminalId = 'term-2';
 
     reconcileTerminalList(state, {
+      groups: [manual()],
       terminals: [
         terminal('term-1'),
         terminal('term-2', { state: 'ready' }),
@@ -30,6 +31,7 @@ describe('terminal list projection', () => {
       ],
     });
 
+    expect(state.selectedGroupId).toBe('auto:manual');
     expect(state.selectedTerminalId).toBe('term-2');
     expect(state.terminals.map((item) => item.terminal_id)).toEqual([
       'term-1',
@@ -231,6 +233,7 @@ describe('terminal live controller', () => {
 
     await controller.start();
     api.listTerminals.mockResolvedValueOnce({
+      groups: [manual({ terminal_count: 1 })],
       terminals: [terminal('term-1', { state: 'exited' })],
     });
     streams[0].emit({
@@ -363,7 +366,10 @@ describe('terminal live controller', () => {
 
     expect(api.sendTerminalInput).toHaveBeenCalledWith('term-1', 'hello\r');
 
-    api.listTerminals.mockResolvedValueOnce({ terminals: [] });
+    api.listTerminals.mockResolvedValueOnce({
+      groups: [],
+      terminals: [],
+    });
     await expect(controller.killSelected()).resolves.toBe(true);
     expect(api.killTerminal).toHaveBeenCalledWith('term-1');
     expect(api.forgetTerminal).not.toHaveBeenCalled();
@@ -387,6 +393,7 @@ describe('terminal live controller', () => {
     expect(streams).toHaveLength(2);
 
     api.listTerminals.mockResolvedValueOnce({
+      groups: [manual({ terminal_count: 1 })],
       terminals: [terminal('term-2')],
     });
     await controller.loadTerminals();
@@ -408,7 +415,11 @@ describe('terminal live controller', () => {
 
     await controller.start();
     api.startTerminal.mockResolvedValueOnce({
-      terminal: terminal('manual-1', { command: 'codex', owner: null }),
+      terminal: terminal('manual-1', {
+        command: 'codex',
+        owner: null,
+        group_id: 'auto:manual',
+      }),
       launch_history: [launchHistory('codex', { command: 'codex' })],
     });
 
@@ -436,6 +447,7 @@ describe('terminal live controller', () => {
     expect(state.selectedTerminalId).toBe('term-1');
 
     api.listTerminals.mockResolvedValueOnce({
+      groups: [manual({ terminal_count: 2 })],
       terminals: [
         terminal('term-1', { state: 'exited' }),
         terminal('term-2', { state: 'ready' }),
@@ -562,16 +574,28 @@ describe('terminal live controller', () => {
   });
 });
 
-function fakeApi({ streams, terminals = [terminal('term-1')] }) {
+function fakeApi({ streams, terminals = [terminal('term-1')], groups }) {
+  const groupList = groups ?? [
+    {
+      ...manual(),
+      terminal_count: terminals.length,
+      live_count: terminals.length,
+    },
+  ];
   return {
-    listTerminals: vi
-      .fn()
-      .mockResolvedValue({ terminals: terminals.map((item) => ({ ...item })) }),
+    listTerminals: vi.fn().mockResolvedValue({
+      groups: groupList.map((item) => ({ ...item })),
+      terminals: terminals.map((item) => ({ ...item })),
+    }),
     sendTerminalInput: vi.fn().mockResolvedValue({}),
     resizeTerminal: vi.fn().mockResolvedValue({}),
     startTerminal: vi.fn().mockResolvedValue({}),
     killTerminal: vi.fn().mockResolvedValue({}),
     forgetTerminal: vi.fn().mockResolvedValue({}),
+    createTerminalGroup: vi.fn().mockResolvedValue({}),
+    renameTerminalGroup: vi.fn().mockResolvedValue({}),
+    deleteTerminalGroup: vi.fn().mockResolvedValue({}),
+    setTerminalGroupOrder: vi.fn().mockResolvedValue({}),
     subscribeTerminalEvents: vi.fn((_terminalId, handlers) => {
       const connection = { close: vi.fn() };
       streams.push({
@@ -584,9 +608,22 @@ function fakeApi({ streams, terminals = [terminal('term-1')] }) {
   };
 }
 
+function manual(overrides = {}) {
+  return {
+    group_id: 'auto:manual',
+    name: 'Manual',
+    kind: 'automatic',
+    terminal_count: 0,
+    live_count: 0,
+    order: [],
+    ...overrides,
+  };
+}
+
 function terminal(terminalId, changes = {}) {
   return {
     terminal_id: terminalId,
+    group_id: 'auto:manual',
     state: 'working',
     command: 'python',
     title: '',
@@ -619,3 +656,94 @@ function launchHistory(id, changes = {}) {
 function span(row, column) {
   return { row, column, rowSpan: 1, columnSpan: 1 };
 }
+
+describe('terminal group selection and reorder', () => {
+  it('switches groups, reconnects only the visible terminals, and keeps selection valid', async () => {
+    vi.useFakeTimers();
+    const state = createTerminalsViewState();
+    const streams = [];
+    const groups = [
+      {
+        ...manual(),
+        group_id: 'g1',
+        name: 'Work',
+        kind: 'user',
+        terminal_count: 1,
+      },
+      {
+        ...manual(),
+        group_id: 'g2',
+        name: 'Play',
+        kind: 'user',
+        terminal_count: 1,
+      },
+    ];
+    const api = fakeApi({
+      streams,
+      groups,
+      terminals: [
+        terminal('term-1', { group_id: 'g1' }),
+        terminal('term-2', { group_id: 'g2' }),
+      ],
+    });
+    const controller = createTerminalsController({ state, api });
+
+    await controller.start();
+    expect(state.selectedGroupId).toBe('g1');
+    expect(Object.keys(state.streams)).toEqual(['term-1']);
+
+    controller.selectGroup('g2');
+    expect(state.selectedGroupId).toBe('g2');
+    expect(state.selectedTerminalId).toBe('term-2');
+    expect(Object.keys(state.streams)).toEqual(['term-2']);
+    expect(streams[0].connection.close).toHaveBeenCalledWith(
+      1000,
+      'terminals-view-close',
+    );
+
+    controller.selectGroup('g1');
+    expect(Object.keys(state.streams)).toEqual(['term-1']);
+    controller.destroy();
+  });
+
+  it('reorders a group optimistically and persists the order', async () => {
+    const state = createTerminalsViewState();
+    const streams = [];
+    const api = fakeApi({
+      streams,
+      groups: [manual({ terminal_count: 2 })],
+      terminals: [terminal('term-1'), terminal('term-2')],
+    });
+    const controller = createTerminalsController({ state, api });
+
+    await controller.start();
+    controller.reorderGroup('auto:manual', ['term-2', 'term-1']);
+
+    expect(api.setTerminalGroupOrder).toHaveBeenCalledWith('auto:manual', [
+      'term-2',
+      'term-1',
+    ]);
+    expect(state.terminals.map((item) => item.terminal_id)).toEqual([
+      'term-2',
+      'term-1',
+    ]);
+    controller.destroy();
+  });
+
+  it('creates a user group and selects it', async () => {
+    const state = createTerminalsViewState();
+    const streams = [];
+    const api = fakeApi({ streams });
+    api.createTerminalGroup.mockResolvedValueOnce({
+      group: { group_id: 'new-group', name: 'Docs', kind: 'user' },
+    });
+    const controller = createTerminalsController({ state, api });
+
+    await controller.start();
+    const group = await controller.createGroup('Docs');
+
+    expect(group?.group_id).toBe('new-group');
+    expect(state.selectedGroupId).toBe('new-group');
+    controller.destroy();
+  });
+});
