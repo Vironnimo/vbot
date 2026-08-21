@@ -24,10 +24,12 @@ from core.tools.terminal_manager import (
     TERMINAL_MIN_ROWS,
     TERMINAL_STATUS_DEFAULT_LINES,
     TERMINAL_STATUS_MAX_LINES,
+    TerminalAlreadyAttachedError,
     TerminalCapacityError,
     TerminalClosedError,
     TerminalCursorError,
     TerminalManager,
+    TerminalNotAttachedError,
     TerminalNotFoundError,
     TerminalOwner,
     TerminalSession,
@@ -46,7 +48,17 @@ from core.tools.tools import (
 from core.utils.paths import model_path
 
 TERMINAL_TOOL_NAME = "terminal"
-TERMINAL_ACTIONS = ("start", "list", "status", "wait", "input", "resize", "kill")
+TERMINAL_ACTIONS = (
+    "start",
+    "list",
+    "attach",
+    "detach",
+    "status",
+    "wait",
+    "input",
+    "resize",
+    "kill",
+)
 TERMINAL_DEFAULT_WAIT_MS = 1_000
 TERMINAL_MAX_WAIT_MS = 10_000
 TERMINAL_KEYS = tuple(TERMINAL_INPUT_KEY_SEQUENCES)
@@ -55,14 +67,18 @@ TERMINAL_PROJECT_WORKDIR_PREFIX = "project:"
 TERMINAL_TOOL_DESCRIPTION = (
     "Run and control a program through a real PTY/ConPTY when it waits for interactive input or "
     "must be operated by typing into and observing its live screen, such as a REPL, TUI, prompt, "
-    "or debugger. Terminal Sessions survive individual Runs and stay owned by this vBot Session. "
-    "Use start with text to launch a program and send its first input in one call. After Agent "
-    "input, vBot wakes you when output has been quiet for a short period, or when the process "
-    "exits or the terminal fails; quiet output is only an activity boundary, so inspect status "
-    "to decide whether the program is working, waiting for input, or finished. Rendered cells "
-    "cannot distinguish tabs from equivalent spaces or cursor movement, so use read for exact "
-    "file contents. Reuse a live Terminal Session for later work instead of starting a duplicate "
-    "process."
+    "or debugger. Terminal Sessions survive individual Runs. A Terminal Session started here is "
+    "attached to this vBot Session automatically. Use list to discover running Terminal Sessions "
+    "and attach to bind an unattached one to this vBot Session without changing its process, "
+    "screen, dimensions, or lifetime. An attached Terminal Session supports status, wait, input, "
+    "resize, kill, and automatic activity delivery. detach removes only the vBot Session binding; "
+    "the process continues. Use start with text to launch a program and send its first input in "
+    "one call. While a Terminal Session is attached, vBot wakes you when its output has been quiet "
+    "for a short period, or when the process exits or the terminal fails; quiet output is only an "
+    "activity boundary, so inspect status to decide whether the program is working, waiting for "
+    "input, or finished. Rendered cells cannot distinguish tabs from equivalent spaces or cursor "
+    "movement, so use read for exact file contents. Reuse a live Terminal Session for later work "
+    "instead of starting a duplicate process."
 )
 
 
@@ -73,6 +89,8 @@ class _ProjectWorkdirUnavailableError(ValueError):
 _ACTION_FIELDS = {
     "start": frozenset({"action", "command", "args", "text", "workdir", "name", "columns", "rows"}),
     "list": frozenset({"action"}),
+    "attach": frozenset({"action", "terminal_id"}),
+    "detach": frozenset({"action", "terminal_id"}),
     "status": frozenset({"action", "terminal_id", "lines", "cursor"}),
     "wait": frozenset({"action", "terminal_id", "after_revision", "timeout_ms"}),
     "input": frozenset(
@@ -96,17 +114,20 @@ TERMINAL_TOOL_PARAMETERS: JsonObject = {
             "type": "string",
             "enum": list(TERMINAL_ACTIONS),
             "description": (
-                "start launches a program, list returns owned Terminal Sessions, status reads a "
-                "bounded screen page, wait pauses briefly for a new activity boundary, input sends "
-                "exact data or convenient text/keys, resize changes dimensions, kill terminates "
-                "the process tree."
+                "start launches and attaches a program, list returns discoverable Terminal "
+                "Sessions, attach binds an unattached running Terminal Session to this vBot "
+                "Session, detach removes that binding without stopping the process, status reads "
+                "a bounded screen page, wait pauses briefly for a new activity boundary, input "
+                "sends exact data or convenient text/keys, resize changes dimensions, kill "
+                "terminates the process tree."
             ),
         },
         "terminal_id": {
             "type": "string",
             "minLength": 1,
             "description": (
-                "Terminal Session id returned by start or list. Required except for start and list."
+                "Terminal Session id returned by start or list. Required except for start and "
+                "list; attach and detach also use it."
             ),
         },
         "command": {
@@ -261,6 +282,10 @@ async def _handle_terminal(
             return await _handle_start(terminal_manager, projects, context, arguments)
         if action == "list":
             return _handle_list(terminal_manager, context)
+        if action == "attach":
+            return _handle_attach(terminal_manager, context, arguments)
+        if action == "detach":
+            return _handle_detach(terminal_manager, context, arguments)
         if action == "status":
             return await _handle_status(terminal_manager, context, arguments)
         if action == "wait":
@@ -272,6 +297,10 @@ async def _handle_terminal(
         return await _handle_kill(terminal_manager, context, arguments)
     except TerminalNotFoundError:
         return tool_failure("terminal_not_found", "Terminal Session not found", retryable=False)
+    except TerminalAlreadyAttachedError as error:
+        return tool_failure("terminal_already_attached", str(error), retryable=False)
+    except TerminalNotAttachedError as error:
+        return tool_failure("terminal_not_attached", str(error), retryable=False)
     except TerminalClosedError as error:
         return tool_failure("terminal_closed", str(error), retryable=False)
     except TerminalCapacityError as error:
@@ -363,12 +392,12 @@ async def _handle_start(
         {
             "delivery": "automatic_terminal_activity",
             "handoff_note": (
-                "The Terminal Session continues independently of this vBot Run. vBot will wake "
-                "you after output settles following Agent input, or if the process exits or the "
-                "terminal fails. Quiet output does not prove that the program finished or needs "
-                "input, so inspect status when resumed. You may finish this Run after reporting "
-                "that the program is running; do not poll merely to wait and do not start a "
-                "duplicate process."
+                "The Terminal Session is attached to this vBot Session and continues independently "
+                "of this vBot Run. vBot will wake you after output settles while it remains "
+                "attached, or if the process exits or the terminal fails. Quiet output does not "
+                "prove that the program finished or needs input, so inspect status when resumed. "
+                "You may finish this Run after reporting that the program is running; do not poll "
+                "merely to wait and do not start a duplicate process."
             ),
         }
     )
@@ -376,8 +405,50 @@ async def _handle_start(
 
 
 def _handle_list(terminal_manager: TerminalManager, context: ToolContext) -> JsonObject:
-    sessions = terminal_manager.list_sessions(_owner(context))
-    return tool_success({"terminals": [_terminal_summary(session) for session in sessions]})
+    owner = _owner(context)
+    sessions = terminal_manager.list_sessions()
+    return tool_success(
+        {
+            "terminals": [
+                _terminal_summary(session, current_attachment=owner) for session in sessions
+            ]
+        }
+    )
+
+
+def _handle_attach(
+    terminal_manager: TerminalManager,
+    context: ToolContext,
+    arguments: JsonObject,
+) -> JsonObject:
+    terminal_id = required_string(arguments.get("terminal_id"), field_name="terminal_id")
+    owner = _owner(context)
+    session, changed = terminal_manager.attach(
+        terminal_id,
+        owner,
+        origin_run_id=context.run_id,
+    )
+    data = _terminal_summary(session, current_attachment=owner)
+    data.update({"attached": True, "changed": changed, "delivery": "automatic_terminal_activity"})
+    return tool_success(data)
+
+
+def _handle_detach(
+    terminal_manager: TerminalManager,
+    context: ToolContext,
+    arguments: JsonObject,
+) -> JsonObject:
+    terminal_id = required_string(arguments.get("terminal_id"), field_name="terminal_id")
+    session = terminal_manager.detach(terminal_id, _owner(context))
+    data = _terminal_summary(session, current_attachment=_owner(context))
+    data.update(
+        {
+            "attached": False,
+            "changed": True,
+            "process_continues": session.state not in {"exited", "error"},
+        }
+    )
+    return tool_success(data)
 
 
 async def _handle_status(
@@ -565,8 +636,14 @@ def _project_snapshot(
     return projected
 
 
-def _terminal_summary(session: TerminalSession) -> JsonObject:
+def _terminal_summary(session: TerminalSession, *, current_attachment: TerminalOwner) -> JsonObject:
     attention = session.attention
+    if session.attachment == current_attachment:
+        attachment = "current"
+    elif session.attachment is None:
+        attachment = "none"
+    else:
+        attachment = "other"
     return {
         "terminal_id": session.terminal_id,
         "state": session.state,
@@ -581,6 +658,7 @@ def _terminal_summary(session: TerminalSession) -> JsonObject:
         "screen_revision": session.renderer.revision,
         "attention_revision": session.attention_revision,
         "attention_kind": attention.kind if attention is not None else None,
+        "attachment": attachment,
     }
 
 
