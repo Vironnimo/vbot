@@ -849,6 +849,101 @@ describe('ChatAssistantRun compact Working blocks', () => {
   });
 });
 
+describe('ChatAssistantRun run footer', () => {
+  let mountedComponent;
+
+  beforeEach(() => {
+    document.body.innerHTML = '';
+    init('en');
+    mountedComponent = null;
+  });
+
+  afterEach(async () => {
+    if (mountedComponent) {
+      await unmount(mountedComponent);
+      mountedComponent = null;
+    }
+    document.body.innerHTML = '';
+  });
+
+  function createEditToolChild({
+    path = 'a.txt',
+    added = 3,
+    removed = 2,
+  } = {}) {
+    return {
+      type: 'tool_call',
+      id: `tool-edit-${path}`,
+      name: 'edit',
+      toolCallId: `call-edit-${path}`,
+      status: 'success',
+      arguments: { path },
+      startedEvent: {
+        type: 'tool_call_started',
+        payload: { tool_call: { id: `call-edit-${path}`, name: 'edit' } },
+      },
+      resultEvent: {
+        type: 'tool_call_result',
+        payload: {
+          tool_call: { id: `call-edit-${path}`, name: 'edit' },
+          display: {
+            version: 1,
+            summary: path,
+            hidden_argument_keys: [],
+            primary: [],
+            facts: [
+              { kind: 'line_change', change: 'added', value: added },
+              { kind: 'line_change', change: 'removed', value: removed },
+            ],
+          },
+        },
+      },
+    };
+  }
+
+  it('renders status, duration, and change stats under a completed run', () => {
+    const item = createAssistantRunItem({
+      status: 'completed',
+      items: [createEditToolChild()],
+    });
+    item.durationMs = 8000;
+    mountedComponent = mountRun({ item });
+
+    const footer = document.querySelector('.run-footer');
+    expect(footer).toBeTruthy();
+    expect(footer.getAttribute('aria-label')).toBe(
+      'Completed · 8.0s · 1 file changed, +3 -2',
+    );
+    expect(footer.querySelectorAll('.run-footer__part')).toHaveLength(3);
+  });
+
+  it('ticks the live duration while the run is running', () => {
+    const item = createAssistantRunItem({
+      status: 'running',
+      startTimestamp: '2026-08-05T18:00:00.000Z',
+      items: [],
+    });
+    mountedComponent = mountRun({
+      item,
+      nowMs: Date.parse('2026-08-05T18:00:05.250Z'),
+    });
+
+    const footer = document.querySelector('.run-footer');
+    expect(footer).toBeTruthy();
+    expect(footer.getAttribute('aria-label')).toBe('Running · 5.3s');
+  });
+
+  it('shows only the status when the run has no duration and no changes', () => {
+    const item = createAssistantRunItem({ items: [] });
+    mountedComponent = mountRun({ item });
+
+    const footer = document.querySelector('.run-footer');
+    expect(footer).toBeTruthy();
+    expect(footer.getAttribute('aria-label')).toBe('Running');
+    expect(footer.querySelectorAll('.run-footer__part')).toHaveLength(1);
+  });
+});
+
 async function flushAsync() {
   for (let index = 0; index < 5; index += 1) {
     await Promise.resolve();

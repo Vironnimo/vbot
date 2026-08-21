@@ -2,7 +2,11 @@
   import { onDestroy, onMount } from 'svelte';
   import { SvelteSet } from 'svelte/reactivity';
 
-  import { backgroundTasks } from '$lib/chatTimelinePresentation.js';
+  import {
+    backgroundTasks,
+    sessionChangeStats,
+    changeStatsLabel,
+  } from '$lib/chatTimelinePresentation.js';
   import { t } from '$lib/i18n.js';
 
   import Button from '../ui/Button.svelte';
@@ -28,6 +32,8 @@
     tasks.filter((task) => task.dotStatus !== 'running'),
   );
   let runningTaskCount = $derived(activeTasks.length);
+  let sessionStats = $derived(sessionChangeStats(timelineItems));
+  let sessionStatsLabel = $derived(changeStatsLabel(sessionStats));
 
   const panelId = 'chat-activity-panel';
 
@@ -121,19 +127,19 @@
 
   let railLabel = $derived(
     open
-      ? t('chat.activity.close', 'Close activity panel')
+      ? t('chat.activity.close', 'Close session info')
       : runningTaskCount === 1
         ? t(
             'chat.activity.openOneRunning',
-            'Open activity panel · 1 task running',
+            'Open session info · 1 task running',
           )
         : runningTaskCount > 1
           ? t(
               'chat.activity.openManyRunning',
-              'Open activity panel · {count} tasks running',
+              'Open session info · {count} tasks running',
               { count: runningTaskCount },
             )
-          : t('chat.activity.open', 'Open activity panel'),
+          : t('chat.activity.open', 'Open session info'),
   );
 </script>
 
@@ -254,9 +260,25 @@
     >
       <header class="chat-activity__header">
         <h2 id="chat-activity-title" class="chat-activity__title">
-          {t('chat.activity.title', 'Background tasks')}
+          {t('chat.activity.title', 'Session')}
         </h2>
       </header>
+
+      <section
+        class="chat-activity__stats"
+        aria-labelledby="chat-activity-stats-title"
+      >
+        <h3 id="chat-activity-stats-title" class="chat-activity__group-title">
+          {t('chat.activity.statsTitle', 'Session stats')}
+        </h3>
+        {#if sessionStats}
+          <p class="chat-activity__stats-value">{sessionStatsLabel}</p>
+        {:else}
+          <p class="chat-activity__stats-empty">
+            {t('chat.activity.statsEmpty', 'No changes yet')}
+          </p>
+        {/if}
+      </section>
 
       <div class="chat-activity__tasks">
         {#if tasks.length === 0}
@@ -418,6 +440,31 @@
     flex: 1;
     overflow-y: auto;
     padding: 5px;
+  }
+
+  .chat-activity__stats {
+    flex: 0 0 auto;
+    padding: 5px 5px 0;
+  }
+
+  .chat-activity__stats .chat-activity__group-title {
+    padding-bottom: 2px;
+  }
+
+  .chat-activity__stats-value,
+  .chat-activity__stats-empty {
+    margin: 0;
+    padding: 5px 8px;
+    font-family: var(--font-mono);
+    font-size: var(--fs-mono-sm);
+  }
+
+  .chat-activity__stats-value {
+    color: var(--text-med);
+  }
+
+  .chat-activity__stats-empty {
+    color: var(--text-lo);
   }
 
   .chat-activity__empty {

@@ -325,4 +325,104 @@ describe('ChatActivityPanel', () => {
       document.querySelector('.chat-activity__group--finished h3'),
     ).toBeTruthy();
   });
+
+  it('shows the aggregated Session change stats above the tasks', () => {
+    mountedComponent = mount(ChatActivityPanel, {
+      target: document.body,
+      props: {
+        timelineItems: [
+          {
+            id: 'assistant-run',
+            type: 'assistant_run',
+            items: [
+              {
+                type: 'tool_call',
+                id: 'tool-edit-1',
+                name: 'edit',
+                status: 'success',
+                arguments: { path: 'a.txt' },
+                startedEvent: {
+                  type: 'tool_call_started',
+                  payload: { tool_call: { id: 'call-edit-1', name: 'edit' } },
+                },
+                resultEvent: {
+                  type: 'tool_call_result',
+                  payload: {
+                    tool_call: { id: 'call-edit-1', name: 'edit' },
+                    display: {
+                      version: 1,
+                      summary: 'a.txt',
+                      hidden_argument_keys: [],
+                      primary: [],
+                      facts: [
+                        { kind: 'line_change', change: 'added', value: 3 },
+                        { kind: 'line_change', change: 'removed', value: 2 },
+                      ],
+                    },
+                  },
+                },
+              },
+            ],
+          },
+          {
+            id: 'assistant-run-2',
+            type: 'assistant_run',
+            items: [
+              {
+                type: 'tool_call',
+                id: 'tool-write-1',
+                name: 'write',
+                status: 'success',
+                arguments: { path: 'b.txt' },
+                startedEvent: {
+                  type: 'tool_call_started',
+                  payload: { tool_call: { id: 'call-write-1', name: 'write' } },
+                },
+                resultEvent: {
+                  type: 'tool_call_result',
+                  payload: {
+                    tool_call: { id: 'call-write-1', name: 'write' },
+                    display: {
+                      version: 1,
+                      summary: 'b.txt',
+                      hidden_argument_keys: [],
+                      primary: [],
+                      facts: [
+                        { kind: 'line_change', change: 'added', value: 5 },
+                        { kind: 'line_change', change: 'removed', value: 0 },
+                      ],
+                    },
+                  },
+                },
+              },
+            ],
+          },
+        ],
+      },
+    });
+    flushSync();
+
+    document.querySelector('.chat-activity__rail').click();
+    flushSync();
+
+    const statsValue = document.querySelector('.chat-activity__stats-value');
+    expect(statsValue).toBeTruthy();
+    expect(statsValue.textContent.trim()).toBe('2 files changed, +8 -2');
+    expect(document.querySelector('.chat-activity__stats-empty')).toBeNull();
+  });
+
+  it('shows a calm empty state for the Session stats when nothing changed', () => {
+    mountedComponent = mount(ChatActivityPanel, {
+      target: document.body,
+      props: { timelineItems: [] },
+    });
+    flushSync();
+
+    document.querySelector('.chat-activity__rail').click();
+    flushSync();
+
+    expect(
+      document.querySelector('.chat-activity__stats-empty').textContent.trim(),
+    ).toBe('No changes yet');
+  });
 });

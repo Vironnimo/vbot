@@ -207,6 +207,22 @@
   border-left: 1px solid var(--border-2);
 }
 
+.run-footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+  margin-top: 2px;
+  padding: 4px 0 0 34px;
+  color: var(--text-lo);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.run-footer__part {
+  white-space: nowrap;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .working-block__chevron {
     transition: none;
