@@ -243,6 +243,13 @@
     const fitAddonInstance = new FitAddon();
     xtermInstance.loadAddon(fitAddonInstance);
     xtermInstance.open(host);
+    // Size the terminal to the host before loading WebGL so the canvas
+    // initializes at the correct dimensions — not the 120×32 default.
+    try {
+      fitAddonInstance.fit();
+    } catch {
+      // The host may not have settled yet; scheduleFit will retry.
+    }
     enableWebglRenderer(xtermInstance, WebglAddon);
     const inputDisposable = xtermInstance.onData((data) => {
       if (!terminalIsFinished(findTerminal(terminalId))) {
