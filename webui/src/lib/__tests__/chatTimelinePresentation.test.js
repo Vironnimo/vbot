@@ -1525,6 +1525,44 @@ describe('runChangeStats', () => {
   it('returns null for a run without changes', () => {
     expect(runChangeStats({ type: 'assistant_run', items: [] })).toBeNull();
   });
+
+  it('prefers the server-computed git-style stats over the tool-fact sum', () => {
+    const stats = runChangeStats({
+      type: 'assistant_run',
+      changeStats: {
+        files: 1,
+        added: 1,
+        removed: 1,
+        paths: ['a.txt'],
+      },
+      items: [
+        editTool({ path: 'a.txt', added: 3, removed: 2 }),
+        editTool({ path: 'a.txt', added: 1, removed: 0 }),
+      ],
+    });
+
+    expect(stats).toEqual({
+      files: 1,
+      added: 1,
+      removed: 1,
+      paths: ['a.txt'],
+    });
+  });
+
+  it('falls back to the tool-fact sum when the server stats are malformed', () => {
+    const stats = runChangeStats({
+      type: 'assistant_run',
+      changeStats: { files: 'x', added: 1, removed: 1, paths: [] },
+      items: [editTool({ path: 'a.txt', added: 3, removed: 2 })],
+    });
+
+    expect(stats).toEqual({
+      files: 1,
+      added: 3,
+      removed: 2,
+      paths: ['a.txt'],
+    });
+  });
 });
 
 describe('sessionChangeStats', () => {
@@ -1637,6 +1675,33 @@ describe('sessionChangeStats', () => {
 
   it('returns null for an empty timeline', () => {
     expect(sessionChangeStats([])).toBeNull();
+  });
+
+  it('sums server-computed stats across runs and deduplicates files', () => {
+    const stats = sessionChangeStats([
+      {
+        type: 'assistant_run',
+        changeStats: { files: 1, added: 1, removed: 1, paths: ['a.txt'] },
+        items: [],
+      },
+      {
+        type: 'assistant_run',
+        changeStats: {
+          files: 2,
+          added: 5,
+          removed: 0,
+          paths: ['a.txt', 'b.txt'],
+        },
+        items: [],
+      },
+    ]);
+
+    expect(stats).toEqual({
+      files: 2,
+      added: 6,
+      removed: 1,
+      paths: ['a.txt', 'b.txt'],
+    });
   });
 });
 

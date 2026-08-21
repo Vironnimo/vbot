@@ -482,6 +482,7 @@ class ChatMessage:
     work_id: str | None = None
     status: str | None = None
     iteration_count: int | None = None
+    change_stats: JsonObject | None = None
     sender: MessageSender | None = None
     interrupted: bool = False
     interruption_cause: str | None = None
@@ -616,6 +617,7 @@ class ChatMessage:
         status: str,
         timing: JsonObject,
         iteration_count: int,
+        change_stats: JsonObject | None = None,
         timestamp: datetime | None = None,
     ) -> ChatMessage:
         """Create an append-only run summary annotation."""
@@ -628,6 +630,7 @@ class ChatMessage:
             status=status,
             timing=dict(timing),
             iteration_count=iteration_count,
+            change_stats=dict(change_stats) if change_stats is not None else None,
         )
 
     @classmethod
@@ -770,6 +773,7 @@ class ChatMessage:
         _add_if_not_none(message, "work_id", self.work_id)
         _add_if_not_none(message, "status", self.status)
         _add_if_not_none(message, "iteration_count", self.iteration_count)
+        _add_if_not_none(message, "change_stats", self.change_stats)
         if self.sender is not None:
             message["sender"] = self.sender.to_dict()
         if self.interrupted:
@@ -810,6 +814,9 @@ class ChatMessage:
             or iteration_count < 0
         ):
             raise ChatMessageValidationError("iteration_count must be a non-negative integer")
+        change_stats = data.get("change_stats")
+        if change_stats is not None and not isinstance(change_stats, dict):
+            raise ChatMessageValidationError("change_stats must be an object")
 
         projection_data = data.get("projection")
         if projection_data is not None:
@@ -854,6 +861,7 @@ class ChatMessage:
             work_id=_optional_string(data, "work_id"),
             status=_optional_string(data, "status"),
             iteration_count=iteration_count,
+            change_stats=dict(change_stats) if change_stats is not None else None,
             sender=MessageSender.from_dict(sender_data) if sender_data is not None else None,
             interrupted=interrupted,
             interruption_cause=interruption_cause,
@@ -1977,6 +1985,8 @@ def _validate_core_fields(message: ChatMessage) -> None:
         raise ChatMessageValidationError(f"{message.role} messages cannot include tool_display")
     if message.role != "assistant" and message.output_files is not None:
         raise ChatMessageValidationError(f"{message.role} messages cannot include output_files")
+    if message.role != "run_summary" and message.change_stats is not None:
+        raise ChatMessageValidationError(f"{message.role} messages cannot include change_stats")
     if message.role != "compaction_checkpoint":
         _reject_fields(
             message,
@@ -2334,6 +2344,8 @@ def _validate_run_summary_message(message: ChatMessage) -> None:
         or message.iteration_count < 0
     ):
         raise ChatMessageValidationError("run summaries iteration_count must be non-negative")
+    if message.change_stats is not None:
+        _validate_change_stats(message.change_stats)
     _validate_timing_payload(message.timing)
     _reject_fields(
         message,
@@ -2348,6 +2360,22 @@ def _validate_run_summary_message(message: ChatMessage) -> None:
         "error_kind",
         "sender",
     )
+
+
+def _validate_change_stats(change_stats: JsonObject) -> None:
+    """Validate the git-style change statistics carried by a run summary."""
+    files = change_stats.get("files")
+    if isinstance(files, bool) or not isinstance(files, int) or files < 0:
+        raise ChatMessageValidationError("change_stats.files must be a non-negative integer")
+    added = change_stats.get("added")
+    if isinstance(added, bool) or not isinstance(added, int) or added < 0:
+        raise ChatMessageValidationError("change_stats.added must be a non-negative integer")
+    removed = change_stats.get("removed")
+    if isinstance(removed, bool) or not isinstance(removed, int) or removed < 0:
+        raise ChatMessageValidationError("change_stats.removed must be a non-negative integer")
+    paths = change_stats.get("paths")
+    if not isinstance(paths, list) or not all(isinstance(path, str) for path in paths):
+        raise ChatMessageValidationError("change_stats.paths must be an array of strings")
 
 
 def _validate_agent_takeover_message(message: ChatMessage) -> None:

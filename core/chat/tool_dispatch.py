@@ -23,6 +23,7 @@ from core.skills.requirements import SkillRequirements, environment_requirement_
 from core.skills.skill_validator import SKILL_NAME_CHARSET_FRAGMENT
 from core.tools import (
     READ_MEDIA_ARTIFACT_KIND,
+    ChangeTracker,
     InvalidToolResultError,
     SessionToolUnavailableError,
     ToolContext,
@@ -78,6 +79,7 @@ class ToolDispatchContext:
     base_allowed_tools: Sequence[str] | None = None
     session_tool_grants: Sequence[str] = ()
     tool_contracts: Mapping[str, ToolContract] = field(default_factory=dict)
+    change_tracker: ChangeTracker | None = None
     _result_persisted_callbacks: dict[str, list[ToolResultPersistedCallback]] = field(
         default_factory=dict,
         init=False,
@@ -530,6 +532,7 @@ async def _dispatch_tool_calls(
             tool_call_result_persisted_registrar=context.register_result_persisted,
             nesting_depth=context.nesting_depth,
             input_contracts=context.tool_contracts,
+            change_tracker=context.change_tracker,
         ),
     )
     tool_messages: list[ChatMessage] = []

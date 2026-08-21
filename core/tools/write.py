@@ -147,6 +147,23 @@ def write_handler(
         if file_state is not None:
             file_state.record_read(context.session_id, resolved)
 
+    # Record the before/after content for git-style change statistics. The
+    # baseline is the session's last known content (from read or a prior write),
+    # so a full-file rewrite of a file the session has read diffs against that
+    # read instead of counting every line as added and removed. A brand-new file
+    # has no baseline and counts its whole content as added; an existing file
+    # the session never read has no known before-content, so it is not tracked
+    # and the client-side per-tool-call counts remain the fallback.
+    if context.change_tracker is not None:
+        baseline = context.change_tracker.baseline_for(context.session_id, resolved)
+        if baseline is not None or not target_exists:
+            context.change_tracker.record_write(
+                context.session_id,
+                resolved,
+                before=baseline if baseline is not None else "",
+                after=content_argument,
+            )
+
     context.add_display_line_changes(
         added=logical_line_count(content_argument),
         removed=removed_lines,

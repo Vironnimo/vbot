@@ -27,6 +27,7 @@ from core.tools import (
     ToolRegistry,
 )
 from core.tools.availability import ToolAccess
+from core.tools.change_tracker import ChangeTracker
 from core.tools.file_state import FileReadState
 
 JsonObject = dict[str, Any]
@@ -51,6 +52,10 @@ def build_chat_loop(runtime: Any, **kwargs: Any) -> ChatLoop:
         tools=cast(Any, getattr(runtime, "tools", missing)),
         process_manager=cast(Any, getattr(runtime, "process_manager", missing)),
         file_read_state=cast(Any, getattr(runtime, "file_read_state", missing)),
+        change_tracker=cast(
+            Any,
+            getattr(runtime, "change_tracker", None) or ChangeTracker(),
+        ),
         storage=cast(Any, getattr(runtime, "storage", missing)),
         get_extension_registry=lambda: getattr(runtime, "extensions", None),
         get_system_prompts=lambda: runtime.system_prompts,

@@ -1056,6 +1056,9 @@ function appendLiveRunEvent(assistantRun, event) {
       assistantRun.iterationCount = iterationCount;
     }
     assistantRun.terminalEvent = event;
+    if (isPlainObject(event.payload?.change_stats)) {
+      assistantRun.changeStats = event.payload.change_stats;
+    }
     if (event.type === 'run_cancelled') {
       markPendingToolsCancelled(assistantRun, event);
     }
@@ -1237,6 +1240,9 @@ function appendHistoryRunSummary(assistantRun, message) {
   const iterationCount = normalizedIterationCount(message?.iteration_count);
   if (iterationCount !== null) {
     assistantRun.iterationCount = iterationCount;
+  }
+  if (isPlainObject(message?.change_stats)) {
+    assistantRun.changeStats = message.change_stats;
   }
   assistantRun.runSummaryMessage = message;
   if (assistantRun.status === CHAT_STATUS_CANCELLED) {
