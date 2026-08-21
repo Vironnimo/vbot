@@ -11,8 +11,6 @@ import {
   reconcileTerminalList,
   reconcileTerminalLaunchHistory,
   selectedTerminal,
-  terminalViewerGeometry,
-  terminalViewerPointer,
 } from '../terminalsView.js';
 
 afterEach(() => {
@@ -128,92 +126,6 @@ describe('canvas layout', () => {
     expect(layoutForCount(0)).toEqual({ rows: 0, columns: 0, spans: [] });
     expect(layoutForCount(-2)).toEqual({ rows: 0, columns: 0, spans: [] });
     expect(layoutForCount('three')).toEqual({ rows: 0, columns: 0, spans: [] });
-  });
-});
-
-describe('terminal viewer geometry', () => {
-  it('fills a wider viewer without changing the PTY grid', () => {
-    const geometry = terminalViewerGeometry({
-      availableWidth: 1_536,
-      availableHeight: 960,
-      columns: 120,
-      rows: 32,
-      baseFontSize: 12,
-      baseCellWidth: 8,
-      baseCellHeight: 16,
-    });
-
-    expect(geometry).toMatchObject({
-      columns: 120,
-      rows: 32,
-      letterSpacing: 0,
-      lineHeight: 1.171875,
-    });
-    expect(geometry.fontSize).toBeCloseTo(19.2);
-  });
-
-  it('fills a taller viewer through line height without adding rows', () => {
-    expect(
-      terminalViewerGeometry({
-        availableWidth: 960,
-        availableHeight: 960,
-        columns: 120,
-        rows: 32,
-        baseFontSize: 12,
-        baseCellWidth: 8,
-        baseCellHeight: 16,
-      }),
-    ).toEqual({
-      columns: 120,
-      rows: 32,
-      fontSize: 12,
-      letterSpacing: 0,
-      lineHeight: 1.875,
-    });
-  });
-
-  it('fills spare horizontal space without adding columns', () => {
-    expect(
-      terminalViewerGeometry({
-        availableWidth: 1_920,
-        availableHeight: 512,
-        columns: 120,
-        rows: 32,
-        baseFontSize: 12,
-        baseCellWidth: 8,
-        baseCellHeight: 16,
-      }),
-    ).toEqual({
-      columns: 120,
-      rows: 32,
-      fontSize: 12,
-      letterSpacing: 8,
-      lineHeight: 1,
-    });
-  });
-
-  it('rejects an unavailable viewer surface', () => {
-    expect(
-      terminalViewerGeometry({
-        availableWidth: 0,
-        availableHeight: 960,
-        columns: 120,
-        rows: 32,
-        baseFontSize: 12,
-        baseCellWidth: 8,
-        baseCellHeight: 16,
-      }),
-    ).toBeNull();
-  });
-
-  it('maps pointer input back to the unscaled terminal cells', () => {
-    expect(
-      terminalViewerPointer(
-        { clientX: 1_130, clientY: 620 },
-        { left: 50, top: 20 },
-        { x: 1.5, y: 2 },
-      ),
-    ).toEqual({ clientX: 770, clientY: 320 });
   });
 });
 
@@ -383,6 +295,54 @@ describe('terminal live controller', () => {
     expect(api.sendTerminalInput).toHaveBeenCalledWith('term-1', 'hel');
     expect(api.sendTerminalInput).toHaveBeenCalledWith('term-2', 'hi');
     expect(api.sendTerminalInput).toHaveBeenCalledTimes(2);
+    controller.destroy();
+  });
+
+  it('debounces resize requests and skips unchanged dimensions', async () => {
+    vi.useFakeTimers();
+    const state = createTerminalsViewState();
+    const streams = [];
+    const api = fakeApi({ streams });
+    const controller = createTerminalsController({ state, api });
+
+    await controller.start();
+    controller.resize(100, 30, 'term-1');
+    controller.resize(100, 30, 'term-1');
+    controller.resize(120, 32, 'term-1');
+    await vi.runAllTimersAsync();
+
+    expect(api.resizeTerminal).toHaveBeenCalledTimes(1);
+    expect(api.resizeTerminal).toHaveBeenCalledWith('term-1', 120, 32);
+    controller.destroy();
+  });
+
+  it('sends an immediate resize without waiting for the debounce', async () => {
+    vi.useFakeTimers();
+    const state = createTerminalsViewState();
+    const streams = [];
+    const api = fakeApi({ streams });
+    const controller = createTerminalsController({ state, api });
+
+    await controller.start();
+    controller.resize(200, 50, 'term-1', true);
+    await vi.runAllTimersAsync();
+    expect(api.resizeTerminal).toHaveBeenCalledWith('term-1', 200, 50);
+    controller.destroy();
+  });
+
+  it('does not resize a finished terminal', async () => {
+    vi.useFakeTimers();
+    const state = createTerminalsViewState();
+    const streams = [];
+    const api = fakeApi({
+      streams,
+      terminals: [terminal('term-1', { state: 'exited' })],
+    });
+    const controller = createTerminalsController({ state, api });
+
+    await controller.start();
+    controller.resize(100, 30, 'term-1', true);
+    expect(api.resizeTerminal).not.toHaveBeenCalled();
     controller.destroy();
   });
 
@@ -608,6 +568,7 @@ function fakeApi({ streams, terminals = [terminal('term-1')] }) {
       .fn()
       .mockResolvedValue({ terminals: terminals.map((item) => ({ ...item })) }),
     sendTerminalInput: vi.fn().mockResolvedValue({}),
+    resizeTerminal: vi.fn().mockResolvedValue({}),
     startTerminal: vi.fn().mockResolvedValue({}),
     killTerminal: vi.fn().mockResolvedValue({}),
     forgetTerminal: vi.fn().mockResolvedValue({}),

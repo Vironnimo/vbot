@@ -19,8 +19,6 @@
     createTerminalsViewState,
     layoutForCount,
     terminalIsFinished,
-    terminalViewerGeometry,
-    terminalViewerPointer,
   } from '$lib/terminalsView.js';
   import { tooltip } from '$lib/tooltip.js';
 
@@ -49,8 +47,8 @@
   const pendingSnapshots = new SvelteMap();
   const pendingOutputs = new SvelteMap();
   const TERMINAL_BASE_FONT_SIZE = 12;
-  const TERMINAL_DEFAULT_COLUMNS = 120;
-  const TERMINAL_DEFAULT_ROWS = 32;
+  const TERMINAL_MAX_COLUMNS = 240;
+  const TERMINAL_MAX_ROWS = 80;
 
   let hasTerminals = $derived(viewState.terminals.length > 0);
   let layout = $derived(
@@ -210,52 +208,39 @@
     if (!xtermModulesPromise) {
       xtermModulesPromise = Promise.all([
         import('@xterm/xterm'),
-        import('@xterm/addon-webgl'),
+        import('@xterm/addon-fit'),
       ]);
     }
     return xtermModulesPromise;
   }
 
   async function initializeTerminal(terminalId) {
-    const [{ Terminal }, { WebglAddon }] = await loadXtermModules();
+    const [{ Terminal }, { FitAddon }] = await loadXtermModules();
     const host = tileHosts.get(terminalId);
     if (!mounted || !host) {
       return;
     }
     const interactive =
       !terminalIsFinished(findTerminal(terminalId)) && !serverUnavailable;
-    const terminalGrid = terminalDimensions(findTerminal(terminalId));
     const xtermInstance = new Terminal({
       allowTransparency: false,
-      cols: terminalGrid.columns,
       convertEol: false,
       cursorBlink: interactive,
       cursorInactiveStyle: 'outline',
       disableStdin: !interactive,
       fontFamily: cssToken('--font-mono', 'IBM Plex Mono, monospace'),
       fontSize: TERMINAL_BASE_FONT_SIZE,
-      // Measure one natural contiguous grid before viewer geometry expands its
-      // cells to match the browser surface.
       lineHeight: 1,
       minimumContrastRatio: 4.5,
       rightClickSelectsWord: true,
-      rows: terminalGrid.rows,
       scrollback: 2_000,
       scrollOnUserInput: true,
       smoothScrollDuration: 100,
       theme: terminalTheme(),
     });
+    const fitAddonInstance = new FitAddon();
+    xtermInstance.loadAddon(fitAddonInstance);
     xtermInstance.open(host);
-    const baseCell = measureTerminalCell(xtermInstance);
-    if (!baseCell) {
-      throw new Error('The browser terminal renderer has no measurable grid.');
-    }
-    const viewerScale = { x: 1, y: 1 };
-    const mouseCoordinatesAdapted = adaptTerminalMouseCoordinates(
-      xtermInstance,
-      viewerScale,
-    );
-    enableWebglRenderer(xtermInstance, WebglAddon);
     const inputDisposable = xtermInstance.onData((data) => {
       if (!terminalIsFinished(findTerminal(terminalId))) {
         controller.queueInput(data, { terminalId });
@@ -275,9 +260,7 @@
     }
     tileRegistry.set(terminalId, {
       xterm: xtermInstance,
-      baseCell,
-      mouseCoordinatesAdapted,
-      viewerScale,
+      fitAddon: fitAddonInstance,
       resizeObserver: resizeObserverInstance,
       inputDisposable,
       scrollDisposable,
@@ -301,10 +284,21 @@
     }
   }
 
-  function writeSnapshot(terminalId, ansi, _snapshotTerminal) {
+  function writeSnapshot(terminalId, ansi, snapshotTerminal) {
     const tile = tileRegistry.get(terminalId);
     if (!tile?.xterm) {
       return;
+    }
+    const columns = snapshotTerminal?.columns;
+    const rows = snapshotTerminal?.rows;
+    if (
+      Number.isInteger(columns) &&
+      Number.isInteger(rows) &&
+      columns > 0 &&
+      rows > 0 &&
+      (tile.xterm.cols !== columns || tile.xterm.rows !== rows)
+    ) {
+      tile.xterm.resize(columns, rows);
     }
     tile.xterm.reset();
     scrolledBackByTerminal[terminalId] = false;
@@ -312,16 +306,6 @@
       tileRegistry.get(terminalId)?.xterm?.refresh(0, tile.xterm.rows - 1);
       scheduleFit(terminalId);
     });
-  }
-
-  function enableWebglRenderer(xtermInstance, WebglAddon) {
-    try {
-      const webglAddon = new WebglAddon();
-      webglAddon.onContextLoss(() => webglAddon.dispose());
-      xtermInstance.loadAddon(webglAddon);
-    } catch {
-      // The built-in DOM renderer remains the safe fallback when WebGL is absent.
-    }
   }
 
   function scheduleFit(terminalId) {
@@ -333,7 +317,7 @@
     const host = tileHosts.get(terminalId);
     if (
       !tile?.xterm ||
-      !tile.baseCell ||
+      !tile.fitAddon ||
       !host ||
       host.clientWidth <= 0 ||
       host.clientHeight <= 0
@@ -341,113 +325,27 @@
       return;
     }
     try {
-      const hostStyle = getComputedStyle(host);
-      const availableWidth =
-        host.clientWidth -
-        cssPixels(hostStyle.paddingLeft) -
-        cssPixels(hostStyle.paddingRight);
-      const availableHeight =
-        host.clientHeight -
-        cssPixels(hostStyle.paddingTop) -
-        cssPixels(hostStyle.paddingBottom);
-      const item = findTerminal(terminalId);
-      const geometry = terminalViewerGeometry({
-        availableWidth,
-        availableHeight,
-        ...terminalDimensions(item),
-        baseFontSize: TERMINAL_BASE_FONT_SIZE,
-        baseCellWidth: tile.baseCell.width,
-        baseCellHeight: tile.baseCell.height,
-      });
-      if (!geometry) {
-        return;
+      tile.xterm.options.fontSize = TERMINAL_BASE_FONT_SIZE;
+      tile.fitAddon.fit();
+      const colScale = tile.xterm.cols / TERMINAL_MAX_COLUMNS;
+      const rowScale = tile.xterm.rows / TERMINAL_MAX_ROWS;
+      const scale = Math.max(colScale, rowScale, 1);
+      if (scale > 1) {
+        tile.xterm.options.fontSize = Math.round(
+          TERMINAL_BASE_FONT_SIZE * scale,
+        );
+        tile.fitAddon.fit();
       }
-      tile.xterm.options.fontSize = geometry.fontSize;
-      tile.xterm.options.letterSpacing = geometry.letterSpacing;
-      tile.xterm.options.lineHeight = geometry.lineHeight;
-      if (
-        tile.xterm.cols !== geometry.columns ||
-        tile.xterm.rows !== geometry.rows
-      ) {
-        tile.xterm.resize(geometry.columns, geometry.rows);
-      }
-      scaleTerminalScreen(tile, availableWidth, availableHeight);
-      // xterm updates renderer dimensions for font options but its scroll
-      // viewport otherwise waits for a buffer resize that never happens here.
-      tile.xterm._core?._viewport?.queueSync?.();
-      tile.xterm.refresh(0, geometry.rows - 1);
+      const immediate = maximizedTerminalId === terminalId;
+      controller.resize(
+        tile.xterm.cols,
+        tile.xterm.rows,
+        terminalId,
+        immediate,
+      );
     } catch {
       // The host may be between layout states while the view is mounting.
     }
-  }
-
-  function scaleTerminalScreen(tile, availableWidth, availableHeight) {
-    const screen = tile.xterm.element?.querySelector('.xterm-screen');
-    if (!screen || !tile.mouseCoordinatesAdapted) {
-      return;
-    }
-    const naturalWidth = screen.offsetWidth;
-    const naturalHeight = screen.offsetHeight;
-    if (naturalWidth <= 0 || naturalHeight <= 0) {
-      return;
-    }
-    tile.viewerScale.x = availableWidth / naturalWidth;
-    tile.viewerScale.y = availableHeight / naturalHeight;
-    screen.style.transformOrigin = 'top left';
-    screen.style.transform = `scale(${tile.viewerScale.x}, ${tile.viewerScale.y})`;
-  }
-
-  function adaptTerminalMouseCoordinates(xtermInstance, viewerScale) {
-    // xterm computes mouse cells from untransformed renderer dimensions. Undo
-    // the small final visual scale before its selection/link/TUI mouse paths
-    // see the pointer so all of them retain canonical cell coordinates.
-    const mouseService = xtermInstance._core?._mouseService;
-    if (!mouseService || typeof mouseService.getCoords !== 'function') {
-      return false;
-    }
-    const getCoords = mouseService.getCoords.bind(mouseService);
-    mouseService.getCoords = (event, element, ...args) => {
-      const bounds = element.getBoundingClientRect();
-      const pointer = terminalViewerPointer(event, bounds, viewerScale);
-      return getCoords(pointer, element, ...args);
-    };
-    return true;
-  }
-
-  function terminalDimensions(item) {
-    return {
-      columns:
-        Number.isInteger(item?.columns) && item.columns > 0
-          ? item.columns
-          : TERMINAL_DEFAULT_COLUMNS,
-      rows:
-        Number.isInteger(item?.rows) && item.rows > 0
-          ? item.rows
-          : TERMINAL_DEFAULT_ROWS,
-    };
-  }
-
-  function measureTerminalCell(xtermInstance) {
-    const screen = xtermInstance.element?.querySelector('.xterm-screen');
-    const bounds = screen?.getBoundingClientRect();
-    if (
-      !bounds ||
-      bounds.width <= 0 ||
-      bounds.height <= 0 ||
-      xtermInstance.cols <= 0 ||
-      xtermInstance.rows <= 0
-    ) {
-      return null;
-    }
-    return {
-      width: bounds.width / xtermInstance.cols,
-      height: bounds.height / xtermInstance.rows,
-    };
-  }
-
-  function cssPixels(value) {
-    const parsed = Number.parseFloat(value);
-    return Number.isFinite(parsed) ? parsed : 0;
   }
 
   function scrollToLatest(terminalId) {

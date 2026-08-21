@@ -2,6 +2,7 @@ import {
   forgetTerminal,
   killTerminal,
   listTerminals,
+  resizeTerminal,
   sendTerminalInput,
   startTerminal,
   subscribeTerminalEvents,
@@ -15,10 +16,9 @@ export const TERMINAL_STREAM_RECONNECTING = 'reconnecting';
 export const TERMINAL_STREAM_ERROR = 'error';
 export const TERMINAL_STREAM_SNAPSHOT = 'snapshot';
 
-const DEFAULT_TERMINAL_COLUMNS = 120;
-const DEFAULT_TERMINAL_ROWS = 32;
 const RECONNECT_INITIAL_DELAY_MS = 500;
 const RECONNECT_MAX_DELAY_MS = 8_000;
+const RESIZE_DEBOUNCE_MS = 100;
 const INPUT_FLUSH_DELAY_MS = 24;
 const INPUT_CHUNK_CHARS = 32_768;
 const TERMINAL_STATES_FINISHED = new Set(['exited', 'error']);
@@ -57,70 +57,6 @@ export function layoutForCount(count) {
     spans.push(span);
   }
   return { rows, columns, spans };
-}
-
-/**
- * Keep the viewer on the PTY's canonical grid while enlarging its cells to
- * consume the available browser surface. At least one spacing axis remains at
- * its natural value, so glyphs never overlap or become narrower than the font.
- *
- * @param {{ availableWidth: number, availableHeight: number, columns: number, rows: number, baseFontSize: number, baseCellWidth: number, baseCellHeight: number }} measurements
- * @returns {{ columns: number, rows: number, fontSize: number, letterSpacing: number, lineHeight: number } | null}
- */
-export function terminalViewerGeometry(measurements) {
-  const availableWidth = positiveNumber(measurements?.availableWidth);
-  const availableHeight = positiveNumber(measurements?.availableHeight);
-  const baseFontSize = positiveNumber(measurements?.baseFontSize);
-  const baseCellWidth = positiveNumber(measurements?.baseCellWidth);
-  const baseCellHeight = positiveNumber(measurements?.baseCellHeight);
-  if (
-    availableWidth === null ||
-    availableHeight === null ||
-    baseFontSize === null ||
-    baseCellWidth === null ||
-    baseCellHeight === null
-  ) {
-    return null;
-  }
-  const columns = terminalGridDimension(
-    measurements?.columns,
-    DEFAULT_TERMINAL_COLUMNS,
-  );
-  const rows = terminalGridDimension(measurements?.rows, DEFAULT_TERMINAL_ROWS);
-  const targetCellWidth = availableWidth / columns;
-  const targetCellHeight = availableHeight / rows;
-  const scale = Math.min(
-    targetCellWidth / baseCellWidth,
-    targetCellHeight / baseCellHeight,
-  );
-  const scaledCellWidth = baseCellWidth * scale;
-  const scaledCellHeight = baseCellHeight * scale;
-  return {
-    columns,
-    rows,
-    fontSize: baseFontSize * scale,
-    letterSpacing: Math.max(0, targetCellWidth - scaledCellWidth),
-    lineHeight: Math.max(1, targetCellHeight / scaledCellHeight),
-  };
-}
-
-export function terminalViewerPointer(event, bounds, scale) {
-  const scaleX = positiveNumber(scale?.x) ?? 1;
-  const scaleY = positiveNumber(scale?.y) ?? 1;
-  return {
-    clientX: bounds.left + (event.clientX - bounds.left) / scaleX,
-    clientY: bounds.top + (event.clientY - bounds.top) / scaleY,
-  };
-}
-
-function terminalGridDimension(value, fallback) {
-  return Number.isInteger(value) && value > 0 ? value : fallback;
-}
-
-function positiveNumber(value) {
-  return typeof value === 'number' && Number.isFinite(value) && value > 0
-    ? value
-    : null;
 }
 
 export function createTerminalsViewState() {
@@ -210,6 +146,7 @@ export function createTerminalsController({
     forgetTerminal,
     killTerminal,
     listTerminals,
+    resizeTerminal,
     sendTerminalInput,
     startTerminal,
     subscribeTerminalEvents,
@@ -320,6 +257,10 @@ export function createTerminalsController({
         inputTimer: null,
         inputBuffer: '',
         inputChain: Promise.resolve(),
+        resizeTimer: null,
+        pendingResize: null,
+        lastResize: null,
+        resizeChain: Promise.resolve(),
       };
       streamRecords.set(terminalId, stream);
     }
@@ -416,6 +357,7 @@ export function createTerminalsController({
     stream.terminalEnded = true;
     stream.shouldReconnect = false;
     clearPendingInput(stream);
+    clearPendingResize(stream);
     setStreamView(stream.terminalId, {
       status: TERMINAL_STREAM_SNAPSHOT,
     });
@@ -558,6 +500,91 @@ export function createTerminalsController({
     }
   }
 
+  function resize(
+    columns,
+    rows,
+    terminalId = state.selectedTerminalId,
+    immediate = false,
+  ) {
+    const item = state.terminals.find(
+      (terminal) => terminal.terminal_id === terminalId,
+    );
+    if (
+      !Number.isInteger(columns) ||
+      !Number.isInteger(rows) ||
+      !terminalId ||
+      !item ||
+      terminalIsFinished(item) ||
+      serverUnavailable
+    ) {
+      return;
+    }
+    const stream = streamRecords.get(terminalId);
+    if (!stream || stream.terminalEnded) {
+      return;
+    }
+    stream.pendingResize = { terminalId, columns, rows };
+    if (
+      stream.lastResize?.terminalId === stream.pendingResize.terminalId &&
+      stream.lastResize.columns === columns &&
+      stream.lastResize.rows === rows
+    ) {
+      return;
+    }
+    if (stream.resizeTimer !== null) {
+      clearTimeoutFn(stream.resizeTimer);
+      stream.resizeTimer = null;
+    }
+    if (immediate) {
+      flushResize(stream);
+      return;
+    }
+    stream.resizeTimer = setTimeoutFn(
+      () => flushResize(stream),
+      RESIZE_DEBOUNCE_MS,
+    );
+  }
+
+  function flushResize(stream) {
+    stream.resizeTimer = null;
+    const request = stream.pendingResize;
+    stream.pendingResize = null;
+    if (!request || !streamRecords.has(request.terminalId)) {
+      return;
+    }
+    stream.lastResize = request;
+    stream.resizeChain = stream.resizeChain
+      .catch(() => undefined)
+      .then(async () => {
+        if (stream.terminalEnded) {
+          return;
+        }
+        try {
+          await api.resizeTerminal(
+            request.terminalId,
+            request.columns,
+            request.rows,
+          );
+        } catch (error) {
+          if (
+            !destroyed &&
+            !stream.terminalEnded &&
+            state.selectedTerminalId === request.terminalId
+          ) {
+            state.actionError = errorMessage(error);
+          }
+        }
+      });
+  }
+
+  function clearPendingResize(stream) {
+    if (stream.resizeTimer !== null) {
+      clearTimeoutFn(stream.resizeTimer);
+      stream.resizeTimer = null;
+    }
+    stream.pendingResize = null;
+  }
+
   async function killTerminal(terminalId) {
     if (
       !terminalId ||
@@ -689,6 +716,7 @@ export function createTerminalsController({
     removeStreamView(stream.terminalId);
     clearReconnectTimer(stream);
     clearPendingInput(stream);
+    clearPendingResize(stream);
     stream.shouldReconnect = false;
     const connection = stream.connection;
     stream.connection = null;
@@ -715,6 +743,7 @@ export function createTerminalsController({
     killTerminal,
     loadTerminals,
     queueInput,
+    resize,
     selectTerminal,
     setServerUnavailable,
     startManualTerminal,
