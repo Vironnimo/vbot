@@ -307,21 +307,10 @@
     }
   }
 
-  function writeSnapshot(terminalId, ansi, snapshotTerminal) {
+  function writeSnapshot(terminalId, ansi, _snapshotTerminal) {
     const tile = tileRegistry.get(terminalId);
     if (!tile?.xterm) {
       return;
-    }
-    const columns = snapshotTerminal?.columns;
-    const rows = snapshotTerminal?.rows;
-    if (
-      Number.isInteger(columns) &&
-      Number.isInteger(rows) &&
-      columns > 0 &&
-      rows > 0 &&
-      (tile.xterm.cols !== columns || tile.xterm.rows !== rows)
-    ) {
-      tile.xterm.resize(columns, rows);
     }
     tile.xterm.reset();
     scrolledBackByTerminal[terminalId] = false;
@@ -359,13 +348,6 @@
     }
     try {
       tile.fitAddon.fit();
-      const immediate = maximizedTerminalId === terminalId;
-      controller.resize(
-        tile.xterm.cols,
-        tile.xterm.rows,
-        terminalId,
-        immediate,
-      );
     } catch {
       // The host may be between layout states while the view is mounting.
     }
@@ -423,17 +405,15 @@
       return;
     }
     if (terminalId !== viewState.selectedTerminalId) {
-      pendingControlTerminalId = terminalId;
       controller.selectTerminal(terminalId);
     }
-    setControlEnabled(true);
+    tileRegistry.get(terminalId)?.xterm?.focus();
   }
 
   function takeTerminalControlViaKeyboard(event, terminalId) {
     if (
       !terminalId ||
       serverUnavailable ||
-      controlEnabledByTerminal[terminalId] ||
       event.target !== event.currentTarget
     ) {
       return;
@@ -447,10 +427,39 @@
       return;
     }
     if (terminalId !== viewState.selectedTerminalId) {
-      pendingControlTerminalId = terminalId;
       controller.selectTerminal(terminalId);
     }
-    setControlEnabled(true);
+    tileRegistry.get(terminalId)?.xterm?.focus();
+  }
+
+  function toggleControl(terminalId) {
+    if (!terminalId || serverUnavailable) {
+      return;
+    }
+    const item = findTerminal(terminalId);
+    if (!item || terminalIsFinished(item)) {
+      return;
+    }
+    const currentlyEnabled = !!controlEnabledByTerminal[terminalId];
+    if (terminalId !== viewState.selectedTerminalId) {
+      controller.selectTerminal(terminalId);
+    }
+    const tile = tileRegistry.get(terminalId);
+    if (currentlyEnabled) {
+      if (tile?.xterm) {
+        tile.xterm.options.disableStdin = true;
+        tile.xterm.options.cursorBlink = false;
+      }
+      delete controlEnabledByTerminal[terminalId];
+    } else {
+      if (tile?.xterm) {
+        tile.xterm.options.disableStdin = false;
+        tile.xterm.options.cursorBlink = true;
+        tile.xterm.focus();
+      }
+      controlEnabledByTerminal[terminalId] = true;
+      pendingControlTerminalId = '';
+    }
   }
 
   // Close one tile with a single click: a running terminal is stopped first
@@ -910,6 +919,41 @@
                   onkeydown={(event) => event.stopPropagation()}
                 >
                   <Button
+                    variant={controlEnabledByTerminal[item.terminal_id]
+                      ? 'primary'
+                      : 'tertiary'}
+                    icon
+                    class="terminals-view__tile-action"
+                    disabled={isFinished || serverUnavailable}
+                    ariaLabel={controlEnabledByTerminal[item.terminal_id]
+                      ? t('terminals.releaseControl', 'Release control')
+                      : t('terminals.takeControl', 'Take control')}
+                    tooltip={controlEnabledByTerminal[item.terminal_id]
+                      ? t('terminals.releaseControl', 'Release control')
+                      : t('terminals.takeControl', 'Take control')}
+                    onClick={() => toggleControl(item.terminal_id)}
+                  >
+                    {#if controlEnabledByTerminal[item.terminal_id]}
+                      <svg
+                        viewBox="0 0 14 14"
+                        width="14"
+                        height="14"
+                        aria-hidden="true"
+                      >
+                        <path d="M4 4h6v6H4z" />
+                      </svg>
+                    {:else}
+                      <svg
+                        viewBox="0 0 14 14"
+                        width="14"
+                        height="14"
+                        aria-hidden="true"
+                      >
+                        <path d="M3 11l5-5 2 2-5 5H3z M8 4l2 2 1-1-2-2z" />
+                      </svg>
+                    {/if}
+                  </Button>
+                  <Button
                     variant="tertiary"
                     icon
                     class="terminals-view__tile-action"
@@ -990,7 +1034,7 @@
                     : 'terminals.liveTerminalLabel',
                   isFinished
                     ? 'Retained terminal history.'
-                    : 'Live terminal. Click or press Enter to take control.',
+                    : 'Live terminal. Use Take control to enable input.',
                 )}
                 onpointerdown={(event) =>
                   takeTerminalControl(event, item.terminal_id)}

@@ -161,12 +161,12 @@ describe('TerminalsView', () => {
     expect(document.body.textContent).not.toContain(
       'Quiet is not a semantic prompt.',
     );
-    expect(terminalInstances[0].resize).toHaveBeenCalledWith(100, 28);
+    expect(terminalInstances[0].resize).not.toHaveBeenCalled();
     expect(terminalInstances[0].write).toHaveBeenCalledWith(
       '\u001b[2JDemo TUI ready',
       expect.any(Function),
     );
-    expect(terminalInstances[0].refresh).toHaveBeenCalledWith(0, 27);
+    expect(terminalInstances[0].refresh).toHaveBeenCalledWith(0, 31);
 
     await unmount(mountedComponent);
     mountedComponent = null;
@@ -453,6 +453,12 @@ describe('TerminalsView', () => {
     );
     flushSync();
     expect(
+      document.querySelector('.terminals-view__tile[data-control="observe"]'),
+    ).toBeTruthy();
+    expect(terminalInstances[0].options.disableStdin).toBe(true);
+    findButtonByAriaLabel('Take control').click();
+    flushSync();
+    expect(
       document.querySelector('.terminals-view__tile[data-control="enabled"]'),
     ).toBeTruthy();
     expect(terminalInstances[0].options.disableStdin).toBe(false);
@@ -491,7 +497,7 @@ describe('TerminalsView', () => {
     expect(firstBar.textContent).toContain('main@vbot');
     expect(
       firstBar.querySelectorAll('.terminals-view__tile-action'),
-    ).toHaveLength(2);
+    ).toHaveLength(3);
     expect(
       firstBar
         .querySelector('.terminals-view__tile-action svg')
@@ -610,7 +616,15 @@ describe('TerminalsView', () => {
     );
     flushSync();
 
-    const tiles = document.querySelectorAll('.terminals-view__tile');
+    let tiles = document.querySelectorAll('.terminals-view__tile');
+    expect(tiles[0].getAttribute('data-control')).toBe('observe');
+    expect(tiles[1].getAttribute('data-control')).toBe('observe');
+    expect(terminalInstances[1].options.disableStdin).toBe(true);
+
+    document.querySelectorAll('button[aria-label="Take control"]')[1].click();
+    flushSync();
+
+    tiles = document.querySelectorAll('.terminals-view__tile');
     expect(tiles[0].getAttribute('data-control')).toBe('observe');
     expect(tiles[1].getAttribute('data-control')).toBe('enabled');
     expect(terminalInstances[1].options.disableStdin).toBe(false);
