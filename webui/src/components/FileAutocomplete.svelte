@@ -21,6 +21,35 @@
   let matchingFiles = $derived(
     fuzzyFilterFiles(files, query, MAX_RENDERED_MATCHES),
   );
+  let containerElement = $state(null);
+
+  // Keep the active option visible inside the scrollable popup when keyboard
+  // navigation or list changes move it out of the visible area. Only the
+  // container is scrolled — the page and timeline stay put.
+  $effect(() => {
+    activeIndex;
+    matchingFiles.length;
+
+    const container = containerElement;
+    if (!container) {
+      return;
+    }
+
+    const activeOption = container.querySelector(
+      '.file-autocomplete__option.active',
+    );
+    if (!activeOption) {
+      return;
+    }
+
+    const containerRect = container.getBoundingClientRect();
+    const optionRect = activeOption.getBoundingClientRect();
+    if (optionRect.top < containerRect.top) {
+      container.scrollTop -= containerRect.top - optionRect.top;
+    } else if (optionRect.bottom > containerRect.bottom) {
+      container.scrollTop += optionRect.bottom - containerRect.bottom;
+    }
+  });
 
   export function matchCount() {
     return matchingFiles.length;
@@ -55,6 +84,7 @@
 
 {#if matchingFiles.length > 0 || loading}
   <div
+    bind:this={containerElement}
     class="file-autocomplete"
     role="listbox"
     aria-label={t('fileAutocomplete.label', 'File suggestions')}
