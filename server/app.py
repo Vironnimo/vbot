@@ -9,6 +9,7 @@ import os
 from collections import OrderedDict
 from collections.abc import AsyncGenerator, AsyncIterator, Callable, MutableMapping
 from contextlib import aclosing, asynccontextmanager, suppress
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, TypedDict, cast
 from urllib.parse import SplitResult, urlsplit
@@ -122,6 +123,7 @@ UPLOAD_READ_CHUNK_SIZE_BYTES = 1_048_576
 MULTIPART_BODY_OVERHEAD_ALLOWANCE_BYTES = 65_536
 MULTIPART_MAX_FORM_FIELDS = 16
 SSE_HEARTBEAT_INTERVAL_SECONDS = 10.0
+WS_HEARTBEAT_INTERVAL_SECONDS = 25.0
 REPLAY_STATUS_FRESH = "fresh"
 REPLAY_STATUS_RESUMED = "resumed"
 REPLAY_STATUS_GAP = "gap"
@@ -980,8 +982,14 @@ async def _stream_websocket_events(websocket: WebSocket, stream: Any) -> None:
                 event_task = asyncio.create_task(stream_iter.__anext__())
             done, _pending = await asyncio.wait(
                 {event_task, disconnect_task},
+                timeout=WS_HEARTBEAT_INTERVAL_SECONDS,
                 return_when=asyncio.FIRST_COMPLETED,
             )
+            if not done:
+                await websocket.send_json(
+                    {"type": "heartbeat", "timestamp": datetime.now(UTC).isoformat()}
+                )
+                continue
 
             if disconnect_task in done:
                 message = disconnect_task.result()

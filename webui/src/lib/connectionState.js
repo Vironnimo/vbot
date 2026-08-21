@@ -11,6 +11,7 @@ export const CONNECTION_REPLAY_STATUS_EPOCH_CHANGED = 'epoch_changed';
 
 const RECONNECT_INITIAL_DELAY_MS = 1000;
 const RECONNECT_MAX_DELAY_MS = 30000;
+const WS_HEARTBEAT_TIMEOUT_MS = 60000;
 
 export function createConnectionState() {
   return {
@@ -20,6 +21,8 @@ export function createConnectionState() {
     _connection: null,
     _reconnectTimer: null,
     _reconnectAttempt: 0,
+    _heartbeatTimer: null,
+    _lastEventAt: 0,
   };
 }
 
@@ -34,14 +37,21 @@ export function connect(state, handlers = {}) {
         state.status = CONNECTION_STATUS_CONNECTED;
         state._reconnectAttempt = 0;
         handlers.onStatusChange?.();
+        _armHeartbeatWatchdog(state);
       },
       onClose: () => {
+        _clearHeartbeatWatchdog(state);
         _cleanup(state);
         state.status = CONNECTION_STATUS_DISCONNECTED;
         handlers.onStatusChange?.();
         _scheduleReconnect(state, handlers);
       },
       onEvent: (event) => {
+        if (event.type === 'heartbeat') {
+          _armHeartbeatWatchdog(state);
+          return;
+        }
+        _armHeartbeatWatchdog(state);
         if (event.type === 'connection_ready') {
           const nextEpoch = event.epoch ?? '';
           const isReplayResume = event.replay_status
@@ -74,6 +84,7 @@ export function connect(state, handlers = {}) {
   );
 
   state._connection = connection;
+  _armHeartbeatWatchdog(state);
 }
 
 export function disconnect(state) {
@@ -86,9 +97,54 @@ function _cleanup(state) {
     clearTimeout(state._reconnectTimer);
     state._reconnectTimer = null;
   }
+  _clearHeartbeatWatchdog(state);
   if (state._connection) {
     state._connection.close();
     state._connection = null;
+  }
+}
+
+function _armHeartbeatWatchdog(state) {
+  _clearHeartbeatWatchdog(state);
+  state._lastEventAt = Date.now();
+  state._heartbeatTimer = setTimeout(() => {
+    state._heartbeatTimer = null;
+    if (state._connection) {
+      try {
+        state._connection.close();
+      } catch {
+        // Close is best-effort; onClose will schedule reconnect.
+      }
+    }
+  }, WS_HEARTBEAT_TIMEOUT_MS);
+}
+
+export function handleVisibilityChange(state) {
+  if (
+    typeof document === 'undefined' ||
+    document.visibilityState !== 'visible'
+  ) {
+    return;
+  }
+  if (state.status !== CONNECTION_STATUS_CONNECTED) {
+    return;
+  }
+  const elapsed = Date.now() - (state._lastEventAt || 0);
+  if (elapsed > WS_HEARTBEAT_TIMEOUT_MS / 2) {
+    if (state._connection) {
+      try {
+        state._connection.close();
+      } catch {
+        // Best-effort; onClose will schedule reconnect.
+      }
+    }
+  }
+}
+
+function _clearHeartbeatWatchdog(state) {
+  if (state._heartbeatTimer) {
+    clearTimeout(state._heartbeatTimer);
+    state._heartbeatTimer = null;
   }
 }
 
