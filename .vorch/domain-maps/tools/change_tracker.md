@@ -14,16 +14,16 @@ changed. No git repository or external process is involved.
 
 ## Data flow
 
-1. `read` (full-file reads only, no `offset`/`limit` window) → `ChangeTracker.record_read(session_id, resolved, content)` stores the file's text as the session baseline.
+1. `read` (full-file reads only, no `offset`/`limit` window) → `ChangeTracker.record_read(session_id, resolved, content)` stores the file's **raw text** (BOM stripped, line endings untouched) as the session baseline. The numbered `N| ` rendering is never a baseline — a later write must diff against real content, not against the gutter.
 2. `write`/`edit` → `ChangeTracker.record_write(session_id, resolved, before, after)` stores the before/after pair per `(session, path)`. The `before` is the session's last known content (from read or a prior write), so repeated edits of one file in a run diff against the run's first baseline instead of summing per-call counts.
 3. Chat loop run end (`_execute_run_impl` finally block) → `ChangeTracker.take_run_stats(session_id)` computes one real line diff per changed file, sums added/removed, and returns `{files, added, removed, paths}` (paths sorted, capped at 200). The per-run deltas are consumed and cleared.
 4. The stats land in `run.terminal_payload_extras["change_stats"]` (live UI) and on the persisted `run_summary` message (`change_stats` field, validated by `_validate_change_stats` in `core/chat/messages.py`), so reloads keep the server-computed values.
 
 ## Wiring
 
-- One runtime-owned instance (`Runtime._change_tracker`), exposed as `Runtime.change_tracker`, injected into `register_read_tool`/`make_read_handler` and into `ChatLoopDependencies.change_tracker`.
+- One runtime-owned instance (`Runtime._change_tracker`), exposed as `Runtime.change_tracker`, injected into `ChatLoopDependencies.change_tracker`.
 - The chat loop threads it through `ToolDispatchContext.change_tracker` → `ToolExecutionConfig.change_tracker` → `ToolContext.change_tracker`.
-- `ToolContext.change_tracker` is `None` for direct/legacy callers that do not execute inside Chat — those simply skip tracking.
+- `ToolContext.change_tracker` is `None` for direct/legacy callers that do not execute inside Chat — those simply skip tracking. The read/write/edit handlers read it from the context; no tool registration signature carries the tracker.
 
 ## Best-effort semantics
 

@@ -19,6 +19,7 @@ from core.model_tasks import SpeechError, SpeechTranscriptionResult
 from core.tools import (
     READ_TOOL_NAME,
     READ_TOOL_PARAMETERS,
+    ChangeTracker,
     FileReadState,
     ToolContext,
     ToolRegistry,
@@ -84,7 +85,11 @@ class _FakeSpeech:
 
 
 def make_context(
-    workspace: Path, tool_name: str = READ_TOOL_NAME, *, cwd: Path | None = None
+    workspace: Path,
+    tool_name: str = READ_TOOL_NAME,
+    *,
+    cwd: Path | None = None,
+    change_tracker: ChangeTracker | None = None,
 ) -> ToolContext:
     return ToolContext(
         agent_id="agent-1",
@@ -97,6 +102,7 @@ def make_context(
         vbot_root=workspace.parent,
         data_root=workspace.parent / "data",
         cwd=cwd,
+        change_tracker=change_tracker,
     )
 
 
@@ -619,6 +625,53 @@ async def test_streaming_text_matches_byte_renderer_across_chunked_line_endings(
 
     data = assert_success_envelope(result)
     assert data["content"] == read_module.render_text_file(raw)
+
+
+@pytest.mark.asyncio
+async def test_read_records_raw_text_baseline_for_change_tracker(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    workspace.joinpath("notes.txt").write_bytes(b"alpha\nbeta\ngamma\n")
+    tracker = ChangeTracker()
+
+    result = await make_handler()(
+        make_context(workspace, change_tracker=tracker), {"path": "notes.txt"}
+    )
+
+    data = assert_success_envelope(result)
+    assert data["content"] == "1| alpha\n2| beta\n3| gamma\n"
+    # The baseline is the raw file text, never the numbered rendering: a later
+    # write must diff against real content, not against the `N| ` gutter.
+    assert tracker.baseline_for("session-1", (workspace / "notes.txt").resolve()) == (
+        "alpha\nbeta\ngamma\n"
+    )
+
+
+@pytest.mark.asyncio
+async def test_read_does_not_record_baseline_for_partial_read(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    workspace.joinpath("notes.txt").write_bytes(b"one\ntwo\nthree\nfour\n")
+    tracker = ChangeTracker()
+
+    result = await make_handler()(
+        make_context(workspace, change_tracker=tracker),
+        {"path": "notes.txt", "offset": 2, "limit": 2},
+    )
+
+    assert_success_envelope(result)
+    assert tracker.baseline_for("session-1", (workspace / "notes.txt").resolve()) is None
+
+
+@pytest.mark.asyncio
+async def test_read_skips_baseline_without_change_tracker(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    workspace.joinpath("notes.txt").write_bytes(b"hello\n")
+
+    result = await make_handler()(make_context(workspace), {"path": "notes.txt"})
+
+    assert_success_envelope(result)
 
 
 @pytest.mark.asyncio

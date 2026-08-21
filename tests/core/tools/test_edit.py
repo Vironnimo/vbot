@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from core.tools.change_tracker import ChangeTracker
 from core.tools.edit import (
     EDIT_TOOL_DESCRIPTION,
     EDIT_TOOL_NAME,
@@ -23,6 +24,7 @@ def make_context(
     *,
     cwd: Path | None = None,
     session_id: str = "session-1",
+    change_tracker: ChangeTracker | None = None,
 ) -> ToolContext:
     return ToolContext(
         agent_id="agent-1",
@@ -35,6 +37,7 @@ def make_context(
         vbot_root=workspace.parent,
         data_root=workspace.parent / "data",
         cwd=cwd,
+        change_tracker=change_tracker,
     )
 
 
@@ -994,3 +997,28 @@ def test_concurrent_session_edits_serialize_and_merge_current_content(
     assert isinstance(second_data, dict)
     assert "stale_warning" in second_data
     assert target.read_text(encoding="utf-8") == "ALPHA BETA\n"
+
+
+def test_edit_diffs_against_read_baseline_not_rendered_gutter(tmp_path: Path) -> None:
+    # Regression: the read baseline must be the raw file text, never the
+    # numbered `N| ` rendering. A single-line edit of a multi-line file must
+    # count exactly one added and one removed line, not every line of the file.
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    target = workspace / "notes.txt"
+    target.write_text("alpha\nbeta\ngamma\n", encoding="utf-8")
+    tracker = ChangeTracker()
+    tracker.record_read("session-1", target.resolve(), "alpha\nbeta\ngamma\n")
+
+    result = edit_handler(
+        make_context(workspace, change_tracker=tracker),
+        {"path": "notes.txt", "old_string": "beta", "new_string": "BETA"},
+    )
+
+    assert_success_envelope(result)
+    stats = tracker.take_run_stats("session-1")
+    assert stats is not None
+    assert stats["files"] == 1
+    assert stats["added"] == 1
+    assert stats["removed"] == 1
+    assert stats["paths"] == [str(target.resolve())]
