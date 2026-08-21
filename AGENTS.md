@@ -1,66 +1,49 @@
-# Agent Rules
+# AGENTS.md
 
-These rules apply to every agent, every task, unconditionally.
-**Read this before starting any work. These are YOUR rules.**
+## Talking to the User
 
-## Session Start
+The user reads no code. All user-facing communication — discovery, plan review, decisions, escalations, summaries — is in product language: behavior, capabilities, consequences, domains. No file paths, function names, or code identifiers unless they are part of the product interface (a CLI command, an API endpoint, a config option).
 
-Every session begins by reading these files — immediately, before anything else:
+**Decisions — surface by whether it's a real choice, not by whether the user can feel it.** A change built to be imperceptible still has sub-decisions worth seeing; "the user won't feel it" is never a reason to bury one.
 
-1. `.vorch/PROJECT.md`
-2. `.vorch/GLOSSARY.md`
+- **Ask first** when the user has a stake in the outcome — product behavior, or a trade-off they'd want to weigh in on: present it in the options format below, then wait.
+- **Decide, then disclose in one line** when it's a real choice among defensible options the user would likely leave to good practice (a 0.5s vs 0.8s debounce, a threshold, a library): make the call and show it — what you chose, the alternative, and why, in one overridable line.
+- **Settle silently** only when no alternative exists that the user could hold a view on — naming, code structure below domain level, where code lives.
 
-**Read each file completely, start to end — don't skim, and don't stop after the first 100–200 lines assuming you have enough.**
+Between the last two, disclose whenever you actively picked among options with no single obvious right answer; a lone obvious path stays silent.
 
-Your agent file lists any additional files to read on top of these. Apply the same rule: read them in full.
+**Never end at a dead end.** When anything is open after your reply — a decision, a direction, a sensible next step — surface it proactively as options with a recommendation instead of waiting to be asked; a reply ends with closure or with the fork, never with neither. Real forks only — don't invent ritual options.
 
-## Roles & Ownership
+**Options format — every decision that goes to the user uses it, always.** Present 2–4 labeled, mutually exclusive options (A/B/…) inline as text (never a picker overlay), each in product language; mark a clear recommendation with a one-line why, and add a one-line concrete example only when the difference isn't self-evident — so a single letter (or "go with your recommendation") settles it. Independent decisions may share one message as numbered points, each with its own lettered options, so "1B, 2B, 3A" answers them all; an interactive walk-through stays one decision per message (see Discuss vs. Act).
 
-| Responsibility | Owner |
-|---|---|
-| Git (branches, commits, merges) | **Orchestrator + User** |
-| Project docs (`.vorch/PROJECT.md`) | **Orchestrator only** |
-| Domain maps (`.vorch/domain-maps/`) | **Orchestrator only** |
-| Glossary (`.vorch/GLOSSARY.md`) | **Orchestrator only** |
-| Planning & file-scope assignment | **Planner** |
-| Application code, tests, and UI | **Builder** |
-| Code review | **Reviewer** |
-| Web research (tech, libraries, APIs) | **Researcher** |
-| Codebase exploration & structured summaries | **Explorer** |
-| Bug investigation & root-cause analysis | **Investigator** |
+## Discuss vs. Act
 
-**No agent operates outside their role.** Only the Orchestrator and User touch git. Only the Orchestrator writes `.vorch/PROJECT.md`, `.vorch/GLOSSARY.md`, and files under `.vorch/domain-maps/`. Every other agent writes only within the scope defined by their role.
+When the user asks to discuss, audit, explain, or think through something, DO NOT start writing files or generating plans. Present options and recommendations one at a time and wait for explicit approval before any implementation.
 
-## Technical Decisions
+During such a walk-through, take one decision per message and wait for the answer before the next, each presented in the options format (see Talking to the User). Lead with plain language; code detail comes after the choice, not instead of it. Reserve this for genuine forks — keep settling obvious defaults silently (see the decision rules above).
 
-When a technical decision involves a trade-off, do not give much weight to development cost. Prefer quality, simplicity, robustness, scalability, and long-term maintainability.
+## Chat terminology
 
-## Architecture
+Use vBot's established terms exactly as the glossary and domain maps define them. Say Tools, Run, Session, Queue, Skill, Provider — not translated alternatives.
 
-**Few, deep modules** — small interfaces, implementation hidden inside. Module count is a budget: the system must stay small enough to hold in your head.
+## Agent-facing text review
 
-- Default to extending an existing module. Before adding a new module, layer, or abstraction, name the existing module that could own the capability and why it can't — "no existing owner fits" is a valid answer, "didn't look" is not. An unjustified new module is a defect, not a style nit.
-- Deep over wide: one module owning a capability end-to-end beats several shallow ones passing data around.
-- Expose what callers need, hide everything else.
-- A module is too shallow when its interface is nearly as large as its implementation, when it's mostly pass-through, when it wraps something without adding an abstraction, or when callers must know its internals — fold it back or deepen it.
+Before creating runtime Agent-facing text in this repository, show the user its complete proposed wording verbatim with all new text in bold. Before changing existing runtime Agent-facing text, show exactly two complete versions: the current wording with every passage to be changed or removed in bold, then the proposed wording with every changed or added passage in bold. Do not substitute a summary or description of the text. Runtime Agent-facing text means text that vBot supplies to an Agent or Model as part of its runtime context or interaction, including System Prompt blocks, Tool descriptions, Skill instructions, System Reminders. It does not include repository governance or development documentation such as this file, domain maps, glossary entries, PROJECT.md, DESIGN.md, or code documentation.
 
-## Code Quality
+## Architecture & code
 
-**Naming:** Descriptive — `getUserById`, not `getU`. No abbreviations except standards (`id`, `url`, `db`). Consistent throughout. One human language, never mixed.
+**Few, deep modules** — small interfaces, implementation hidden inside. Module count is a budget: the system must stay small enough to hold in your head. Deep over wide: one module owning a capability end-to-end beats several shallow ones passing data around. Expose what callers need, hide the rest. **Default to extending an existing module — before adding a new module, file, layer, or abstraction, name the existing module that could own the capability and why it can't; "no existing owner fits" is a valid answer, "didn't look" is not, and an unjustified new module is a defect, not a style nit.** A module is too shallow when its interface is nearly as large as its implementation, when it's mostly pass-through, when it wraps something without adding an abstraction, or when callers must know its internals — fold it back or deepen it.
 
-**Functions:** One thing per function. Max 3 levels of nesting.
+**Code quality** — no magic numbers or strings (name the constant: `MAX_RETRIES = 3`, not `3`); comments explain *why*, not *what*; no commented-out code (git keeps history).
 
-**Imports:** stdlib → third-party → local. Blank line between groups. Remove unused.
+- **Naming:** descriptive — `getUserById`, not `getU`. No abbreviations except standards (`id`, `url`, `db`). One human language, never mixed.
+- **Functions:** one thing per function. Max 3 levels of nesting.
+- **Imports:** stdlib → third-party → local. Blank line between groups. Remove unused.
+- **Separation of concerns:** UI displays and takes input only — no business logic. Business logic has no UI, no direct DB queries. Data access owns its I/O. API endpoints route only.
 
-**Constants:** No magic numbers or strings — `MAX_RETRIES = 3`, not `3`.
+**Security** — never put user input straight into SQL, HTML, shell, or file paths; parameterized queries always; no credentials or secrets in code or logs (env vars only, never commit `.env`); no `innerHTML` with user data (use `textContent`); validate all input server-side.
 
-**Comments:** Explain *why*, not *what*. No commented-out code — that's what git is for.
-
-**Separation of concerns:**
-- UI: display + user input only, no business logic
-- Business logic: no UI, no direct DB queries
-- Data access: queries and file I/O in their own layer
-- API endpoints: routing + request/response only, no logic
+**Technical Decisions** — when making technical decisions, do not give much weight to development cost. Instead, prefer quality, simplicity, robustness, scalability, and long-term maintainability.
 
 ## Error Handling
 
@@ -78,15 +61,6 @@ Key question: "Did I expect this could happen?" Yes → handle. No → rethrow.
 **Retry transient errors**: network failures and HTTP 429/502/503/504 always; HTTP 500 only for idempotent (safely repeatable) requests — never on action-causing POSTs. Max 3 retries, exponential backoff with jitter. Do NOT retry: other 4xx, auth failures, validation errors.
 
 For project-specific error patterns, log format, and logging setup → `.vorch/PROJECT.md` (Conventions section).
-
-## Security — non-negotiable
-
-- **Never** insert user input directly into SQL, HTML, shell commands, or file paths
-- **Always** use parameterized queries / prepared statements
-- **No credentials in code** — environment variables only, never commit `.env`
-- **No `innerHTML` with user data** — use `textContent`
-- **Validate all input server-side** — type, format, length, range
-- **Never log** passwords, tokens, or secrets
 
 ## Testing
 
@@ -107,24 +81,48 @@ For project-specific test framework, file naming, fixtures, and coverage targets
 
 ## Dependencies
 
-Agents **do NOT install packages themselves.** If a task requires a new dependency:
+If a task requires a new dependency, **check first** that no existing dependency already covers the need. Then install it, add it to `pyproject.toml` (or `webui/package.json` for frontend), and commit the lock file changes. Do not install packages speculatively — only what the current task requires.
 
-1. **Check first:** verify no existing dependency already covers the need.
-2. **Report it** in your output under `### New Dependencies`:
-   ```markdown
-   ### New Dependencies
-   - `<package-name>` — [why it's needed, what it does]
-   ```
-3. The **Orchestrator** handles installation and commits lock file changes. No other agent runs install commands.
+## You maintain the docs & domain maps
 
-Do NOT install packages speculatively. Only request what the current task requires.
+There's no orchestrator here to keep these current — that's on you. When a change you make affects one, update it as part of the work (small, factual, not deferred):
 
-## Project Context
+- `.vorch/PROJECT.md` — architecture, conventions, dev/test setup, domain-maps index, strategic context
+- `.vorch/domain-maps/<domain>.md` — a domain's interface, boundary, invariant, or contract changes, or a new domain emerges (a new domain also gets added to the domain-maps index in PROJECT.md)
+- `.vorch/DESIGN.md` — design-system changes (colors, typography, spacing, components)
+- `.vorch/GLOSSARY.md` — new or changed project-specific terms
+- `.vorch/FLAGGED.md` — git-ignored, never commit it; append a deferred concern at the bottom so you needn't read the whole file, or fold it into a related existing entry when you already know one fits.
 
-If a section referenced from `.vorch/PROJECT.md` doesn't exist yet, skip it and proceed with what you have.
+**⛔ HARD GATE — read the workflow before ANY domain-map work, no exceptions.** Before you create, edit, or audit *anything* under `.vorch/domain-maps/`, you MUST first read `.vorch/workflows/domain-map-workflow.md` in full. If you are about to write to a domain map or start a map audit and you have not read that workflow, stop and read it first — that read is the first action of the task, before any Edit, Write, or plan. It defines what belongs in a domain map (factual working notes, every claim backed by source/tests, no exhaustive API/field dumps) and the rules for creating, maintaining, and indexing them.
+
+**Never hard-wrap prose.** In every Markdown file you write or maintain — this one, PROJECT.md, GLOSSARY.md, the domain maps, FLAGGED.md, all of them — write each paragraph and list item as a single line and let the editor soft-wrap. No manual line breaks mid-sentence at some fixed column. Hard-wrapped prose is miserable to read and to edit, and the wrap points rot the moment text changes. Do not add them, and when you touch a file that has them, unwrap the lines you touch.
+
+**Write all project documents in English.** Plans, design documents, decision records (like the system-prompt handoff), domain maps, PROJECT.md, GLOSSARY.md, FLAGGED.md — every project artifact is written in English, regardless of the language you and the user speak in chat. User-facing chat follows the user's language; the documents do not.
+
+## Working with domain maps
 
 When working on a domain, start with its root map at `.vorch/domain-maps/<domain>.md`; root maps are the always-read routing and safety layer. Treat the task's `read:` list as a starting point, not a ceiling, and read additional root maps when ownership or contracts cross domains.
 
 After reading a root map, inspect its `## References` and load only the exact supplementary files whose trigger matches the current task. Never preload a domain's supplementary folder. A supplementary file adds task-specific depth, never replaces its root, and is deliberately absent from the Domain Maps index in `.vorch/PROJECT.md`.
 
 Terminology has two homes: core, cross-cutting terms live in `.vorch/GLOSSARY.md`; a domain's own terms live in a `## Terms` section inside its map. So a domain map is also where that domain's vocabulary is defined — reading the map gives you both the domain and its words.
+
+## Glossary
+
+`.vorch/GLOSSARY.md` is shared context for the whole project — keeping it right matters, which means keeping it **small**. It holds only core, cross-cutting terms every agent needs regardless of what it touches, plus terms the user says in conversation. A **domain-internal** term — one you only need once you are already working inside that one domain, and that the user never says — lives in a `## Terms` section inside that domain's map instead, never in the glossary. **One home per term, never both** (writing a domain-map term is domain-map work — the HARD GATE above applies). Watch for term candidates as you work and while discussing with the user:
+
+- A term got **implicitly defined** through the conversation, a clarification, or a decision.
+- A **project-specific term** in play could plausibly be misread (non-obvious meaning here).
+- A term seems to cause **friction** because you and the user may mean different things by it.
+
+Only project-specific terms — never standard programming terms or anything self-evident. When a term matters, decide its home by the rule above, propose handling it (add full definition / add placeholder / skip), then run the `glossary` skill — it handles triage (including which home), the interview, and writing the entry into the glossary or the domain map's `## Terms` section.
+
+## Git
+
+- Work directly on `main` — no feature branches by default. When you finish a task, commit it (the user may also ask you to commit mid-way); you don't need to wait to be asked.
+- **Worktrees are used only when the user asks for one.** Then create it with the project's worktree tooling (`python scripts/worktree.py create <task-name>` — see PROJECT.md → Development) and work and commit inside it. When everything is done and committed, tell the user the worktree is merge-ready (branch name + one-line status) and **wait for his go before merging** — he decides when you start. After merging, remove the worktree (`python scripts/worktree.py delete <task-name>`).
+- Conventional format: `<type>(<scope>): <what>` — lowercase, ≤72 chars, no trailing period. Types: `feat` `fix` `docs` `refactor` `perf` `test` `chore`. Breaking change → `!`.
+- One logical unit per commit; never batch unrelated changes; never commit broken code.
+- **Two gate passes per task.** While you work and before any intermediate commit, run the **scoped** gate on what you changed for fast feedback — `python scripts/quality.py <paths>` for backend files, `python scripts/quality-frontend.py <paths>` for `webui/` files, both when a commit spans both sides, and neither for a docs-only change — all green first. Write tests together with the feature.
+- **Before the final commit that closes the task, run the full gate (no args) once for each side you actually touched — and only those.** Pick by what the task changed: backend code (Python, `pyproject.toml`, `scripts/`, `tests/` — anything the backend gate lints or tests) → `python scripts/quality.py`; frontend (anything under `webui/`) → `python scripts/quality-frontend.py`; both sides touched → both gates; a docs-only task (only Markdown / `.vorch/` / other files neither gate touches) → neither, no gate needed. Use the full no-args form, not a scoped one, so it sweeps the whole side; a code task isn't done until its side's gate has run once over the repo. Keep every auto-fix. Any real failure the full run surfaces is now yours to handle: caused by your change or trivially related → fix it; genuinely pre-existing and unrelated → you may **not** silently dismiss it ("it was already broken") — report it to the user in your summary **and** append it to `.vorch/FLAGGED.md`.
+- **The quality gates auto-fix (ruff format, prettier, eslint --fix). KEEP every change they make — never revert a gate's auto-fix, even on files you did not touch. Letting the tools do their work across the repo is the whole point of running the full gates. Reverting their output is forbidden.** When a gate reports a real failure (test/type/lint error it cannot auto-fix), fix the underlying problem rather than working around it.
