@@ -20,8 +20,9 @@ from core.chat.file_mentions import expand_file_mentions, resolve_mention_root
 from core.projects import format_agent_address
 from core.runs import ActiveRunError, ChatRunManager, QueuedRunItem, Run, RunCancelledError
 from core.tools.bash import background_bash_statuses
+from core.utils.logging import get_logger
 from core.utils.workers import BoundedWorkerPool
-from server.events import RESOURCE_KIND_QUEUE
+from server.events import RESOURCE_KIND_AGENTS, RESOURCE_KIND_QUEUE
 from server.rpc.dispatcher import RpcMethodHandler
 from server.rpc.error_mapping import _map_expected_error
 from server.rpc.errors import (
@@ -61,6 +62,7 @@ from server.rpc.validation import (
 JsonObject = dict[str, Any]
 MAX_CHAT_HISTORY_LIMIT = 500
 _CHAT_RPC_WORKERS = BoundedWorkerPool(name="chat-rpc", max_workers=4)
+_LOGGER = get_logger("server.rpc.chat")
 
 WEBUI_REPLY_SURFACE = ReplySurface.webui()
 
@@ -372,6 +374,36 @@ async def _expand_content_file_mentions(
         raise _map_expected_error(exc) from exc
 
 
+async def _mark_current_session(state: Any, agent_id: str, session_id: str) -> None:
+    """Re-aim an identity agent's current-session pointer to the session the
+    user just wrote to.
+
+    Best-effort: the pointer is a convenience for re-opening the last active
+    session after a restart, so a failure must never block the user's message.
+    The agent store is the single writer; other windows learn about the new
+    current marking through the agents channel.
+    """
+    agents = getattr(getattr(state, "runtime", None), "agents", None)
+    if agents is None:
+        return
+    try:
+        await _CHAT_RPC_WORKERS.run(agents.update, agent_id, current_session_id=session_id)
+    except Exception as exc:
+        _LOGGER.warning(
+            "Failed to mark current session (agent=%s session=%s): %s",
+            agent_id,
+            session_id,
+            exc,
+        )
+    else:
+        publish_resource_changed(state, RESOURCE_KIND_AGENTS)
+        _LOGGER.info(
+            "Current session marked (agent=%s session=%s)",
+            agent_id,
+            session_id,
+        )
+
+
 async def _submit_chat(
     state: Any,
     params: JsonObject,
@@ -407,6 +439,14 @@ async def _submit_chat(
     content = await _expand_content_file_mentions(
         state, agent_id, project_id, session_id, content, file_mentions
     )
+
+    # A user message makes this session the agent's current one: after a server
+    # restart the accessor re-opens the session the user last wrote to, not the
+    # one they last viewed. Identity agents only — a project (config) agent has
+    # no anchor-level current pointer. Runs triggered by automation, channels,
+    # or sub-agents never pass through here, so they cannot move the pointer.
+    if project_id is None:
+        await _mark_current_session(state, agent_id, session_id)
 
     chat_loop = _streaming_chat_loop(state) if streaming else state.chat_loop
     try:
