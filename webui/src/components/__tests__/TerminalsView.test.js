@@ -200,8 +200,10 @@ describe('TerminalsView', () => {
     expect(document.querySelector('.terminals-view__tile-bar-meta')).toBeNull();
     expect(terminalInstances[0].options.theme.background).toBe('#0E0D0B');
     expect(terminalInstances[0].loadAddon).toHaveBeenCalledWith(fitAddons[0]);
-    // WebGL loads in requestAnimationFrame after fitTerminal — flush it.
-    await new Promise((r) => requestAnimationFrame(() => r()));
+    // WebGL loads in double requestAnimationFrame after fitTerminal — flush it.
+    await new Promise((r) =>
+      requestAnimationFrame(() => requestAnimationFrame(() => r())),
+    );
     expect(terminalInstances[0].loadAddon).toHaveBeenCalledWith(webglAddons[0]);
     webglAddons[0].onContextLossCallback();
     expect(webglAddons[0].dispose).toHaveBeenCalledOnce();
@@ -231,8 +233,10 @@ describe('TerminalsView', () => {
     flushSync();
 
     await waitFor(() => streams.length === 1 && terminalInstances.length === 1);
-    // WebGL loads in requestAnimationFrame after fitTerminal — flush it.
-    await new Promise((r) => requestAnimationFrame(() => r()));
+    // WebGL loads in double requestAnimationFrame after fitTerminal — flush it.
+    await new Promise((r) =>
+      requestAnimationFrame(() => requestAnimationFrame(() => r())),
+    );
 
     expect(fitAddons).toHaveLength(1);
     expect(terminalInstances[0].loadAddon).toHaveBeenCalledWith(fitAddons[0]);
@@ -250,8 +254,10 @@ describe('TerminalsView', () => {
     flushSync();
 
     await waitFor(() => streams.length === 1 && terminalInstances.length === 1);
-    // WebGL loads in requestAnimationFrame after fitTerminal — flush it.
-    await new Promise((r) => requestAnimationFrame(() => r()));
+    // WebGL loads in double requestAnimationFrame after fitTerminal — flush it.
+    await new Promise((r) =>
+      requestAnimationFrame(() => requestAnimationFrame(() => r())),
+    );
 
     expect(webglAddons).toHaveLength(0);
     expect(terminalInstances[0].options.disableStdin).toBe(false);
