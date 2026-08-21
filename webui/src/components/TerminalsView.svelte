@@ -229,13 +229,15 @@
       xtermModulesPromise = Promise.all([
         import('@xterm/xterm'),
         import('@xterm/addon-fit'),
+        import('@xterm/addon-webgl'),
       ]);
     }
     return xtermModulesPromise;
   }
 
   async function initializeTerminal(terminalId) {
-    const [{ Terminal }, { FitAddon }] = await loadXtermModules();
+    const [{ Terminal }, { FitAddon }, { WebglAddon }] =
+      await loadXtermModules();
     const host = tileHosts.get(terminalId);
     if (!mounted || !host) {
       return;
@@ -262,6 +264,7 @@
     const fitAddonInstance = new FitAddon();
     xtermInstance.loadAddon(fitAddonInstance);
     xtermInstance.open(host);
+    enableWebglRenderer(xtermInstance, WebglAddon);
     const inputDisposable = xtermInstance.onData((data) => {
       if (controlEnabledByTerminal[terminalId]) {
         controller.queueInput(data);
@@ -326,6 +329,16 @@
       tileRegistry.get(terminalId)?.xterm?.refresh(0, tile.xterm.rows - 1);
       scheduleFit(terminalId);
     });
+  }
+
+  function enableWebglRenderer(xtermInstance, WebglAddon) {
+    try {
+      const webglAddon = new WebglAddon();
+      webglAddon.onContextLoss(() => webglAddon.dispose());
+      xtermInstance.loadAddon(webglAddon);
+    } catch {
+      // The built-in DOM renderer remains the safe fallback when WebGL is absent.
+    }
   }
 
   function scheduleFit(terminalId) {
@@ -417,7 +430,12 @@
   }
 
   function takeTerminalControlViaKeyboard(event, terminalId) {
-    if (!terminalId || serverUnavailable) {
+    if (
+      !terminalId ||
+      serverUnavailable ||
+      controlEnabledByTerminal[terminalId] ||
+      event.target !== event.currentTarget
+    ) {
       return;
     }
     if (event.key !== 'Enter' && event.key !== ' ') {
