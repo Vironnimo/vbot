@@ -347,14 +347,28 @@
     try {
       tile.xterm.options.fontSize = TERMINAL_BASE_FONT_SIZE;
       tile.fitAddon.fit();
-      const colScale = tile.xterm.cols / TERMINAL_MAX_COLUMNS;
-      const rowScale = tile.xterm.rows / TERMINAL_MAX_ROWS;
-      const scale = Math.max(colScale, rowScale, 1);
-      if (scale > 1) {
-        tile.xterm.options.fontSize = Math.round(
-          TERMINAL_BASE_FONT_SIZE * scale,
+      // Increase the font size until the grid fits within the PTY dimension
+      // limits. Font metrics are not perfectly proportional, so this may
+      // need more than one pass.
+      let attempts = 0;
+      while (
+        (tile.xterm.cols > TERMINAL_MAX_COLUMNS ||
+          tile.xterm.rows > TERMINAL_MAX_ROWS) &&
+        attempts < 5
+      ) {
+        const colScale = tile.xterm.cols / TERMINAL_MAX_COLUMNS;
+        const rowScale = tile.xterm.rows / TERMINAL_MAX_ROWS;
+        tile.xterm.options.fontSize = Math.ceil(
+          tile.xterm.options.fontSize * Math.max(colScale, rowScale),
         );
         tile.fitAddon.fit();
+        attempts += 1;
+      }
+      // Hard clamp as a final safety net so the backend never rejects.
+      const clampedCols = Math.min(tile.xterm.cols, TERMINAL_MAX_COLUMNS);
+      const clampedRows = Math.min(tile.xterm.rows, TERMINAL_MAX_ROWS);
+      if (clampedCols !== tile.xterm.cols || clampedRows !== tile.xterm.rows) {
+        tile.xterm.resize(clampedCols, clampedRows);
       }
       const immediate = maximizedTerminalId === terminalId;
       controller.resize(
