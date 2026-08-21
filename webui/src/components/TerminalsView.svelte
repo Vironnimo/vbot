@@ -385,15 +385,36 @@
       // and the browser has painted at least once. Creating the WebGL canvas
       // in a microtask (before the first paint) produces white row gaps that
       // only disappear after a subsequent resize triggers a re-render.
+      // The first tile in a multi-tile grid is especially prone to this:
+      // its host is measured before the grid has fully settled on remount
+      // (tab switch), so a single rAF still sees a transient size.
+      // We use double rAF to wait for layout + paint, and retry if the
+      // host is still 0 (grid not yet flushed) — otherwise the tile would
+      // stay on the DOM renderer and keep the TUI gaps for all tiles.
       if (!tile.webglLoaded && WebglAddonClass) {
-        tile.webglLoaded = true;
-        requestAnimationFrame(() => {
-          const current = tileRegistry.get(terminalId);
-          if (current?.xterm) {
-            enableWebglRenderer(current.xterm, WebglAddonClass);
-            current.xterm.refresh(0, current.xterm.rows - 1);
-          }
-        });
+        const scheduleWebgl = () => {
+          requestAnimationFrame(() => {
+            requestAnimationFrame(() => {
+              const current = tileRegistry.get(terminalId);
+              const currentHost = tileHosts.get(terminalId);
+              if (!current?.xterm || !WebglAddonClass || current.webglLoaded) {
+                return;
+              }
+              if (
+                !currentHost ||
+                currentHost.clientWidth <= 0 ||
+                currentHost.clientHeight <= 0
+              ) {
+                scheduleWebgl();
+                return;
+              }
+              current.webglLoaded = true;
+              enableWebglRenderer(current.xterm, WebglAddonClass);
+              current.xterm.refresh(0, current.xterm.rows - 1);
+            });
+          });
+        };
+        scheduleWebgl();
       }
     } catch {
       // The host may be between layout states while the view is mounting.
