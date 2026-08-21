@@ -16,6 +16,37 @@
 
   let normalizedOptions = $derived(normalizeOptions(options));
   let matchingOptions = $derived(matchOptions(normalizedOptions, query));
+  let containerElement = $state(null);
+
+  // Keep the active option visible inside the scrollable popup when keyboard
+  // navigation or list changes move it out of the visible area. Only the
+  // container is scrolled — the page and timeline stay put.
+  $effect(() => {
+    // Track reactive dependencies so the effect re-runs on navigation and
+    // list changes.
+    activeIndex;
+    matchingOptions.length;
+
+    const container = containerElement;
+    if (!container) {
+      return;
+    }
+
+    const activeOption = container.querySelector(
+      '.model-autocomplete__option.active',
+    );
+    if (!activeOption) {
+      return;
+    }
+
+    const containerRect = container.getBoundingClientRect();
+    const optionRect = activeOption.getBoundingClientRect();
+    if (optionRect.top < containerRect.top) {
+      container.scrollTop -= containerRect.top - optionRect.top;
+    } else if (optionRect.bottom > containerRect.bottom) {
+      container.scrollTop += optionRect.bottom - containerRect.bottom;
+    }
+  });
 
   export function hasMatches() {
     return matchingOptions.length > 0;
@@ -64,6 +95,7 @@
 
 {#if matchingOptions.length > 0 || loading}
   <div
+    bind:this={containerElement}
     class="model-autocomplete"
     role="listbox"
     aria-label={t('modelAutocomplete.label', 'Model suggestions')}
