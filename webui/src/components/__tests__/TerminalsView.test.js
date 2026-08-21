@@ -11,6 +11,10 @@ const sendTerminalInputMock = vi.fn();
 const resizeTerminalMock = vi.fn();
 const killTerminalMock = vi.fn();
 const forgetTerminalMock = vi.fn();
+const createTerminalGroupMock = vi.fn();
+const renameTerminalGroupMock = vi.fn();
+const deleteTerminalGroupMock = vi.fn();
+const setTerminalGroupOrderMock = vi.fn();
 const subscribeTerminalEventsMock = vi.fn();
 const streams = [];
 const terminalInstances = [];
@@ -29,6 +33,10 @@ vi.mock('$lib/api.js', () => ({
   resizeTerminal: (...args) => resizeTerminalMock(...args),
   killTerminal: (...args) => killTerminalMock(...args),
   forgetTerminal: (...args) => forgetTerminalMock(...args),
+  createTerminalGroup: (...args) => createTerminalGroupMock(...args),
+  renameTerminalGroup: (...args) => renameTerminalGroupMock(...args),
+  deleteTerminalGroup: (...args) => deleteTerminalGroupMock(...args),
+  setTerminalGroupOrder: (...args) => setTerminalGroupOrderMock(...args),
   subscribeTerminalEvents: (...args) => subscribeTerminalEventsMock(...args),
 }));
 
@@ -153,6 +161,10 @@ describe('TerminalsView', () => {
     resizeTerminalMock.mockReset().mockResolvedValue({});
     killTerminalMock.mockReset().mockResolvedValue({});
     forgetTerminalMock.mockReset().mockResolvedValue({});
+    createTerminalGroupMock.mockReset().mockResolvedValue({});
+    renameTerminalGroupMock.mockReset().mockResolvedValue({});
+    deleteTerminalGroupMock.mockReset().mockResolvedValue({});
+    setTerminalGroupOrderMock.mockReset().mockResolvedValue({});
     subscribeTerminalEventsMock
       .mockReset()
       .mockImplementation((_id, handlers) => {
@@ -171,7 +183,7 @@ describe('TerminalsView', () => {
   });
 
   it('shows active ownership and renders the live ANSI snapshot without owning lifetime', async () => {
-    listTerminalsMock.mockResolvedValue({ terminals: [terminal()] });
+    listTerminalsMock.mockResolvedValue(terminalListResponse([terminal()]));
     mountedComponent = mount(TerminalsView, { target: document.body });
     flushSync();
     await waitFor(() => streams.length === 1 && terminalInstances.length === 1);
@@ -228,7 +240,7 @@ describe('TerminalsView', () => {
   });
 
   it('loads the FitAddon and resizes the terminal to fill the host', async () => {
-    listTerminalsMock.mockResolvedValue({ terminals: [terminal()] });
+    listTerminalsMock.mockResolvedValue(terminalListResponse([terminal()]));
     mountedComponent = mount(TerminalsView, { target: document.body });
     flushSync();
 
@@ -249,7 +261,7 @@ describe('TerminalsView', () => {
 
   it('keeps the Terminal Session usable when WebGL is unavailable', async () => {
     webglActivationFails = true;
-    listTerminalsMock.mockResolvedValue({ terminals: [terminal()] });
+    listTerminalsMock.mockResolvedValue(terminalListResponse([terminal()]));
     mountedComponent = mount(TerminalsView, { target: document.body });
     flushSync();
 
@@ -267,7 +279,10 @@ describe('TerminalsView', () => {
   });
 
   it('uses the shared secondary sidebar header, action, list, and selection contract', async () => {
-    listTerminalsMock.mockResolvedValue({ terminals: [terminal()] });
+    listTerminalsMock.mockResolvedValue({
+      groups: [manualGroup({ terminal_count: 1, live_count: 1 })],
+      terminals: [terminal()],
+    });
     mountedComponent = mount(TerminalsView, { target: document.body });
     flushSync();
     await waitFor(() => streams.length === 1);
@@ -275,16 +290,20 @@ describe('TerminalsView', () => {
     const pane = document.querySelector('.terminals-view__list-pane');
     const header = pane.querySelector('.secondary-pane__header');
     const list = pane.querySelector('.secondary-pane__scroll.secondary-list');
-    const item = list.querySelector('.secondary-list__item');
+    const item = list.querySelector('.terminals-view__group');
 
     expect(header.querySelector('#terminals-list-title')).toBeTruthy();
-    expect(header.querySelector('button').textContent.trim()).toBe('Add');
+    expect(header.querySelector('button').textContent.trim()).toBe('Add group');
     expect(item.classList.contains('active')).toBe(true);
-    expect(item.getAttribute('aria-current')).toBe('true');
+    expect(
+      item
+        .querySelector('.terminals-view__group-main')
+        .getAttribute('aria-current'),
+    ).toBe('true');
   });
 
   it('renders the shared empty state when no Terminal Session is active', async () => {
-    listTerminalsMock.mockResolvedValue({ terminals: [] });
+    listTerminalsMock.mockResolvedValue({ groups: [], terminals: [] });
     mountedComponent = mount(TerminalsView, { target: document.body });
     flushSync();
     await waitFor(() =>
@@ -299,6 +318,7 @@ describe('TerminalsView', () => {
 
   it('humanizes a shell command while no program has announced a title', async () => {
     listTerminalsMock.mockResolvedValue({
+      groups: [manualGroup({ terminal_count: 1, live_count: 1 })],
       terminals: [terminal({ command: 'pwsh.exe', title: '' })],
     });
     mountedComponent = mount(TerminalsView, { target: document.body });
@@ -310,7 +330,7 @@ describe('TerminalsView', () => {
   });
 
   it('rebuilds retained scrollback when the Terminals tab is mounted again', async () => {
-    listTerminalsMock.mockResolvedValue({ terminals: [terminal()] });
+    listTerminalsMock.mockResolvedValue(terminalListResponse([terminal()]));
     mountedComponent = mount(TerminalsView, { target: document.body });
     flushSync();
     await waitFor(() => streams.length === 1 && terminalInstances.length === 1);
@@ -343,7 +363,18 @@ describe('TerminalsView', () => {
 
   it('keeps a finished Terminal Session available as read-only history', async () => {
     listTerminalsMock.mockResolvedValue({
-      terminals: [terminal({ state: 'exited' })],
+      groups: [
+        manualGroup(),
+        {
+          group_id: 'finished',
+          name: 'Finished',
+          kind: 'finished',
+          terminal_count: 1,
+          live_count: 0,
+          order: [],
+        },
+      ],
+      terminals: [terminal({ group_id: 'finished', state: 'exited' })],
     });
     mountedComponent = mount(TerminalsView, { target: document.body });
     flushSync();
@@ -351,14 +382,16 @@ describe('TerminalsView', () => {
     streams[0].handlers.onEvent({
       type: 'terminal_ready',
       sequence: 6,
-      terminal: terminal({ state: 'exited' }),
+      terminal: terminal({ group_id: 'finished', state: 'exited' }),
       ansi: '\u001b[2Jretained final answer',
     });
     flushSync();
 
     expect(
-      document.querySelector('.terminals-view__state-dot--exited'),
-    ).toBeTruthy();
+      [...document.querySelectorAll('.terminals-view__group-kind')].some(
+        (element) => element.textContent.includes('Finished'),
+      ),
+    ).toBe(true);
     expect(
       [...document.querySelectorAll('button')].some(
         (button) => button.getAttribute('aria-label') === 'Close terminal',
@@ -368,9 +401,9 @@ describe('TerminalsView', () => {
   });
 
   it('closes a finished Terminal Session and removes it from the list', async () => {
-    listTerminalsMock.mockResolvedValue({
-      terminals: [terminal({ state: 'exited', exit_code: 0 })],
-    });
+    listTerminalsMock.mockResolvedValue(
+      terminalListResponse([terminal({ state: 'exited', exit_code: 0 })]),
+    );
     mountedComponent = mount(TerminalsView, { target: document.body });
     flushSync();
     await waitFor(() => streams.length === 1 && terminalInstances.length === 1);
@@ -391,7 +424,7 @@ describe('TerminalsView', () => {
   });
 
   it('closes a running Terminal Session with one click: stop, then remove', async () => {
-    listTerminalsMock.mockResolvedValue({ terminals: [terminal()] });
+    listTerminalsMock.mockResolvedValue(terminalListResponse([terminal()]));
     mountedComponent = mount(TerminalsView, { target: document.body });
     flushSync();
     await waitFor(() => streams.length === 1 && terminalInstances.length === 1);
@@ -399,9 +432,9 @@ describe('TerminalsView', () => {
     // The post-kill reload keeps the session retained (server behavior), so
     // the single close action continues with forget to remove it from the
     // list — no confirmation dialog in between.
-    listTerminalsMock.mockResolvedValueOnce({
-      terminals: [terminal({ state: 'exited' })],
-    });
+    listTerminalsMock.mockResolvedValueOnce(
+      terminalListResponse([terminal({ state: 'exited' })]),
+    );
 
     findButtonByAriaLabel('Close terminal').click();
     await waitFor(() => killTerminalMock.mock.calls.length > 0);
@@ -414,12 +447,13 @@ describe('TerminalsView', () => {
   });
 
   it('starts a terminal from the modal and focuses it for direct input', async () => {
-    listTerminalsMock.mockResolvedValue({ terminals: [] });
+    listTerminalsMock.mockResolvedValue(terminalListResponse([]));
     startTerminalMock.mockResolvedValue({
       terminal: terminal({
         terminal_id: 'manual-1',
         command: 'codex',
         owner: null,
+        group_id: 'auto:manual',
       }),
     });
     mountedComponent = mount(TerminalsView, { target: document.body });
@@ -428,7 +462,7 @@ describe('TerminalsView', () => {
       document.querySelector('.terminals-view__detail > .empty-state'),
     );
 
-    findButton('Add').click();
+    findButton('New terminal').click();
     flushSync();
     setField('#terminal-start-command', 'codex');
     setField('#terminal-start-arguments', '--profile\nwork space');
@@ -455,6 +489,7 @@ describe('TerminalsView', () => {
 
   it('prefills the last launch and can select an older persistent setup', async () => {
     listTerminalsMock.mockResolvedValue({
+      groups: [],
       terminals: [],
       launch_history: [
         launchHistory({
@@ -477,7 +512,7 @@ describe('TerminalsView', () => {
       document.querySelector('.terminals-view__detail > .empty-state'),
     );
 
-    findButton('Add').click();
+    findButton('New terminal').click();
     flushSync();
     expect(document.querySelector('#terminal-start-command').value).toBe(
       'codex',
@@ -513,7 +548,7 @@ describe('TerminalsView', () => {
   });
 
   it('focuses on terminal click, forwards native keys, and exposes scrollback recovery', async () => {
-    listTerminalsMock.mockResolvedValue({ terminals: [terminal()] });
+    listTerminalsMock.mockResolvedValue(terminalListResponse([terminal()]));
     mountedComponent = mount(TerminalsView, { target: document.body });
     flushSync();
     await waitFor(() => streams.length === 1 && terminalInstances.length === 1);
@@ -542,12 +577,12 @@ describe('TerminalsView', () => {
   });
 
   it('renders one tile per listed terminal with title, owner, and compact actions', async () => {
-    listTerminalsMock.mockResolvedValue({
-      terminals: [
+    listTerminalsMock.mockResolvedValue(
+      terminalListResponse([
         terminal({ terminal_id: 'term-1', title: 'First terminal' }),
         terminal({ terminal_id: 'term-2', title: 'Second terminal' }),
-      ],
-    });
+      ]),
+    );
     mountedComponent = mount(TerminalsView, { target: document.body });
     flushSync();
     await waitFor(() => streams.length === 2);
@@ -577,7 +612,7 @@ describe('TerminalsView', () => {
   });
 
   it('resizes the PTY to match the fitted terminal dimensions', async () => {
-    listTerminalsMock.mockResolvedValue({ terminals: [terminal()] });
+    listTerminalsMock.mockResolvedValue(terminalListResponse([terminal()]));
     mountedComponent = mount(TerminalsView, { target: document.body });
     flushSync();
     await waitFor(() => streams.length === 1 && terminalInstances.length === 1);
@@ -590,12 +625,12 @@ describe('TerminalsView', () => {
   });
 
   it('focuses the first tile and switches focus via a tile bar click', async () => {
-    listTerminalsMock.mockResolvedValue({
-      terminals: [
+    listTerminalsMock.mockResolvedValue(
+      terminalListResponse([
         terminal({ terminal_id: 'term-1', title: 'First terminal' }),
         terminal({ terminal_id: 'term-2', title: 'Second terminal' }),
-      ],
-    });
+      ]),
+    );
     mountedComponent = mount(TerminalsView, { target: document.body });
     flushSync();
     await waitFor(() => streams.length === 2 && terminalInstances.length === 2);
@@ -627,12 +662,12 @@ describe('TerminalsView', () => {
   });
 
   it('maximizes a tile to fill the canvas and restores the grid', async () => {
-    listTerminalsMock.mockResolvedValue({
-      terminals: [
+    listTerminalsMock.mockResolvedValue(
+      terminalListResponse([
         terminal({ terminal_id: 'term-1', title: 'First terminal' }),
         terminal({ terminal_id: 'term-2', title: 'Second terminal' }),
-      ],
-    });
+      ]),
+    );
     mountedComponent = mount(TerminalsView, { target: document.body });
     flushSync();
     await waitFor(() => streams.length === 2 && terminalInstances.length === 2);
@@ -677,12 +712,12 @@ describe('TerminalsView', () => {
   });
 
   it('activates the clicked tile and routes its input without ownership modes', async () => {
-    listTerminalsMock.mockResolvedValue({
-      terminals: [
+    listTerminalsMock.mockResolvedValue(
+      terminalListResponse([
         terminal({ terminal_id: 'term-1', title: 'First terminal' }),
         terminal({ terminal_id: 'term-2', title: 'Second terminal' }),
-      ],
-    });
+      ]),
+    );
     mountedComponent = mount(TerminalsView, { target: document.body });
     flushSync();
     await waitFor(() => streams.length === 2 && terminalInstances.length === 2);
@@ -712,12 +747,12 @@ describe('TerminalsView', () => {
   });
 
   it('keeps maximized output streaming and restores without re-initializing tiles', async () => {
-    listTerminalsMock.mockResolvedValue({
-      terminals: [
+    listTerminalsMock.mockResolvedValue(
+      terminalListResponse([
         terminal({ terminal_id: 'term-1', title: 'First terminal' }),
         terminal({ terminal_id: 'term-2', title: 'Second terminal' }),
-      ],
-    });
+      ]),
+    );
     mountedComponent = mount(TerminalsView, { target: document.body });
     flushSync();
     await waitFor(() => streams.length === 2 && terminalInstances.length === 2);
@@ -743,11 +778,77 @@ describe('TerminalsView', () => {
       document.querySelectorAll('.terminals-view__tile-host'),
     ).toHaveLength(2);
   });
+
+  it('reorders terminals in a user group by drag and drop on the tile bar', async () => {
+    listTerminalsMock.mockResolvedValue(
+      terminalListResponse(
+        [
+          terminal({
+            terminal_id: 'term-1',
+            title: 'First terminal',
+            group_id: 'group-1',
+          }),
+          terminal({
+            terminal_id: 'term-2',
+            title: 'Second terminal',
+            group_id: 'group-1',
+          }),
+        ],
+        [
+          {
+            group_id: 'group-1',
+            name: 'Work',
+            kind: 'user',
+            terminal_count: 2,
+            live_count: 2,
+            order: [],
+          },
+        ],
+      ),
+    );
+    mountedComponent = mount(TerminalsView, { target: document.body });
+    flushSync();
+    await waitFor(() => streams.length === 2 && terminalInstances.length === 2);
+
+    const bars = document.querySelectorAll('.terminals-view__tile-bar');
+    expect(bars[0].getAttribute('draggable')).toBe('true');
+
+    function dragEvent(type) {
+      const event = new MouseEvent(type, {
+        bubbles: true,
+        cancelable: true,
+      });
+      let payload = '';
+      const dataTransfer = {
+        effectAllowed: '',
+        dropEffect: '',
+        setData: (_kind, value) => {
+          payload = value;
+        },
+        getData: () => payload,
+      };
+      Object.defineProperty(event, 'dataTransfer', { value: dataTransfer });
+      return event;
+    }
+
+    bars[0].dispatchEvent(dragEvent('dragstart'));
+    bars[1].dispatchEvent(dragEvent('dragover'));
+    bars[1].dispatchEvent(dragEvent('drop'));
+    flushSync();
+
+    expect(setTerminalGroupOrderMock).toHaveBeenCalledWith('group-1', [
+      'term-2',
+      'term-1',
+    ]);
+    const tiles = document.querySelectorAll('.terminals-view__tile');
+    expect(tiles[0].getAttribute('data-terminal-id')).toBe('term-2');
+  });
 });
 
 function terminal(changes = {}) {
   return {
     terminal_id: 'term-1',
+    group_id: 'auto:manual',
     state: 'working',
     command: 'python',
     title: '',
@@ -775,6 +876,28 @@ function launchHistory(changes = {}) {
     used_at: '2026-08-08T10:00:00+00:00',
     ...changes,
   };
+}
+
+function manualGroup(overrides = {}) {
+  return {
+    group_id: 'auto:manual',
+    name: 'Manual',
+    kind: 'automatic',
+    terminal_count: 0,
+    live_count: 0,
+    order: [],
+    ...overrides,
+  };
+}
+
+function terminalListResponse(terminals, groups) {
+  const groupList = groups ?? [
+    manualGroup({
+      terminal_count: terminals.length,
+      live_count: terminals.length,
+    }),
+  ];
+  return { groups: groupList, terminals };
 }
 
 async function waitFor(predicate, attempts = 50) {

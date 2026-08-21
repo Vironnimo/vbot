@@ -749,6 +749,7 @@ class Runtime:
             self._trigger_service,
             temporary_files=self._storage.temporary_files,
             launch_history_path=self._storage.layout.terminals / "launch-history.json",
+            groups_path=self._storage.layout.terminals / "groups.json",
             data_dir=self._storage.data_dir,
         )
         self._start_terminal_manager()

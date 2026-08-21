@@ -16,6 +16,7 @@ from core.tools.terminal_backend import default_terminal_argv
 from core.tools.terminal_manager import (
     TERMINAL_DEFAULT_COLUMNS,
     TERMINAL_DEFAULT_ROWS,
+    TERMINAL_GROUP_NAME_MAX_CHARS,
     TERMINAL_INPUT_KEY_SEQUENCES,
     TERMINAL_INPUT_MAX_CHARS,
     TERMINAL_MAX_COLUMNS,
@@ -87,7 +88,9 @@ class _ProjectWorkdirUnavailableError(ValueError):
 
 
 _ACTION_FIELDS = {
-    "start": frozenset({"action", "command", "args", "text", "workdir", "name", "columns", "rows"}),
+    "start": frozenset(
+        {"action", "command", "args", "text", "workdir", "name", "group", "columns", "rows"}
+    ),
     "list": frozenset({"action"}),
     "attach": frozenset({"action", "terminal_id"}),
     "detach": frozenset({"action", "terminal_id"}),
@@ -175,6 +178,16 @@ TERMINAL_TOOL_PARAMETERS: JsonObject = {
                 "Human-friendly label for the Terminal Session. Tool calls always use "
                 "terminal_id, never the name. Omit to leave it unnamed and rely on the "
                 "announced title or command."
+            ),
+        },
+        "group": {
+            "type": "string",
+            "maxLength": TERMINAL_GROUP_NAME_MAX_CHARS,
+            "description": (
+                "Optional group name for the Terminal Session. When a group with this name "
+                "already exists (created by you, the operator, or another Agent) the "
+                "Terminal joins it; otherwise a new group with this name is created and "
+                "shown in the Terminals tab until it becomes empty."
             ),
         },
         "columns": {
@@ -375,6 +388,16 @@ async def _handle_start(
     )
     assert columns is not None and rows is not None
     owner = _owner(context)
+    group_id = None
+    raw_group = arguments.get("group")
+    if raw_group == "":
+        raw_group = None
+    if raw_group is not None:
+        if not isinstance(raw_group, str) or not raw_group.strip():
+            raise ValueError("group must be a non-empty string")
+        if len(raw_group.strip()) > TERMINAL_GROUP_NAME_MAX_CHARS:
+            raise ValueError(f"group must be at most {TERMINAL_GROUP_NAME_MAX_CHARS} characters")
+        group_id = terminal_manager.resolve_or_create_agent_group(raw_group.strip()).group_id
     session = await terminal_manager.spawn(
         owner,
         argv,
@@ -385,6 +408,7 @@ async def _handle_start(
         origin_run_id=context.run_id,
         name=name,
         initial_text=text if isinstance(text, str) else None,
+        group_id=group_id,
     )
     snapshot = await terminal_manager.snapshot(session.terminal_id, owner)
     data = _project_snapshot(terminal_manager, snapshot)

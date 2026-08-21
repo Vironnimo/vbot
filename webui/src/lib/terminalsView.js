@@ -1,9 +1,13 @@
 import {
+  createTerminalGroup,
+  deleteTerminalGroup,
   forgetTerminal,
   killTerminal,
   listTerminals,
+  renameTerminalGroup,
   resizeTerminal,
   sendTerminalInput,
+  setTerminalGroupOrder,
   startTerminal,
   subscribeTerminalEvents,
 } from './api.js';
@@ -62,7 +66,9 @@ export function layoutForCount(count) {
 export function createTerminalsViewState() {
   return {
     terminals: [],
+    groups: [],
     launchHistory: [],
+    selectedGroupId: '',
     selectedTerminalId: '',
     loading: false,
     listError: '',
@@ -70,9 +76,26 @@ export function createTerminalsViewState() {
     streams: {},
     killing: '',
     forgetting: '',
+    groupActionPending: false,
     startingTerminal: false,
     startError: '',
   };
+}
+
+export function visibleTerminals(state) {
+  if (!state.selectedGroupId) {
+    return [];
+  }
+  return state.terminals.filter(
+    (terminal) => terminal?.group_id === state.selectedGroupId,
+  );
+}
+
+export function selectedGroup(state) {
+  return (
+    state.groups.find((group) => group.group_id === state.selectedGroupId) ??
+    null
+  );
 }
 
 export function selectedTerminal(state) {
@@ -92,7 +115,14 @@ export function reconcileTerminalList(state, result) {
   state.terminals = terminals.filter(
     (terminal) => terminal && typeof terminal.terminal_id === 'string',
   );
+  reconcileTerminalGroups(state, result);
   reconcileTerminalLaunchHistory(state, result);
+  if (
+    state.selectedGroupId &&
+    !state.groups.some((group) => group.group_id === state.selectedGroupId)
+  ) {
+    state.selectedGroupId = state.groups[0]?.group_id ?? '';
+  }
   if (
     state.selectedTerminalId &&
     state.terminals.some(
@@ -101,8 +131,28 @@ export function reconcileTerminalList(state, result) {
   ) {
     return state.selectedTerminalId;
   }
-  state.selectedTerminalId = state.terminals[0]?.terminal_id ?? '';
+  const firstVisible = visibleTerminals(state)[0];
+  state.selectedTerminalId = firstVisible?.terminal_id ?? '';
   return state.selectedTerminalId;
+}
+
+export function reconcileTerminalGroups(state, result) {
+  if (!Array.isArray(result?.groups)) {
+    return state.groups;
+  }
+  state.groups = result.groups.filter(
+    (group) =>
+      group &&
+      typeof group.group_id === 'string' &&
+      group.group_id &&
+      typeof group.name === 'string',
+  );
+  if (!state.selectedGroupId) {
+    const firstOccupied =
+      state.groups.find((group) => Number(group.terminal_count) > 0) ?? null;
+    state.selectedGroupId = (firstOccupied ?? state.groups[0])?.group_id ?? '';
+  }
+  return state.groups;
 }
 
 export function reconcileTerminalLaunchHistory(state, result) {
@@ -137,17 +187,47 @@ export function mergeTerminalSummary(state, terminal) {
   return terminal;
 }
 
+export function reconcileGroup(state, group) {
+  if (!group || typeof group.group_id !== 'string') {
+    return null;
+  }
+  const index = state.groups.findIndex(
+    (item) => item.group_id === group.group_id,
+  );
+  if (index < 0) {
+    state.groups = [group, ...state.groups];
+  } else {
+    state.groups[index] = { ...state.groups[index], ...group };
+  }
+  return group;
+}
+
+export function reconcileSingleGroup(state, group) {
+  const merged = reconcileGroup(state, group);
+  if (merged) {
+    reconcileTerminalList(state, {
+      groups: state.groups,
+      terminals: state.terminals,
+    });
+  }
+  return merged;
+}
+
 export function createTerminalsController({
   state,
   onSnapshot = () => {},
   onOutput = () => {},
   onClear = () => {},
   api = {
+    createTerminalGroup,
+    deleteTerminalGroup,
     forgetTerminal,
     killTerminal,
     listTerminals,
+    renameTerminalGroup,
     resizeTerminal,
     sendTerminalInput,
+    setTerminalGroupOrder,
     startTerminal,
     subscribeTerminalEvents,
   },
@@ -221,9 +301,32 @@ export function createTerminalsController({
     state.actionError = '';
   }
 
+  function selectGroup(groupId) {
+    if (groupId === state.selectedGroupId) {
+      return;
+    }
+    if (!state.groups.some((group) => group.group_id === groupId)) {
+      return;
+    }
+    state.selectedGroupId = groupId;
+    state.actionError = '';
+    const firstVisible = visibleTerminals(state)[0];
+    if (
+      state.selectedTerminalId &&
+      !state.terminals.some(
+        (terminal) =>
+          terminal.terminal_id === state.selectedTerminalId &&
+          terminal.group_id === groupId,
+      )
+    ) {
+      state.selectedTerminalId = firstVisible?.terminal_id ?? '';
+    }
+    reconcileStreams();
+  }
+
   function reconcileStreams() {
     const listedIds = new Set(
-      state.terminals.map((terminal) => terminal.terminal_id),
+      visibleTerminals(state).map((terminal) => terminal.terminal_id),
     );
     for (const stream of [...streamRecords.values()]) {
       if (!listedIds.has(stream.terminalId)) {
@@ -233,7 +336,7 @@ export function createTerminalsController({
     if (serverUnavailable) {
       return;
     }
-    for (const terminal of state.terminals) {
+    for (const terminal of visibleTerminals(state)) {
       if (!streamRecords.has(terminal.terminal_id)) {
         connectStream(terminal.terminal_id);
       }
@@ -637,7 +740,8 @@ export function createTerminalsController({
         (item) => item.terminal_id !== terminalId,
       );
       if (state.selectedTerminalId === terminalId) {
-        state.selectedTerminalId = state.terminals[0]?.terminal_id ?? '';
+        state.selectedTerminalId =
+          visibleTerminals(state)[0]?.terminal_id ?? '';
       }
       return true;
     } catch (error) {
@@ -654,14 +758,119 @@ export function createTerminalsController({
     return forgetTerminal(state.selectedTerminalId);
   }
 
-  async function startManualTerminal(params = {}) {
+  async function createGroup(name) {
+    if (state.groupActionPending || !name?.trim() || serverUnavailable) {
+      return null;
+    }
+    state.groupActionPending = true;
+    state.actionError = '';
+    try {
+      const result = await api.createTerminalGroup(name.trim());
+      const group = reconcileSingleGroup(state, result?.group);
+      if (group) {
+        state.selectedGroupId = group.group_id;
+      }
+      return group;
+    } catch (error) {
+      state.actionError = errorMessage(error);
+      return null;
+    } finally {
+      state.groupActionPending = false;
+    }
+  }
+
+  async function renameGroup(groupId, name) {
+    if (
+      state.groupActionPending ||
+      !groupId ||
+      !name?.trim() ||
+      serverUnavailable
+    ) {
+      return false;
+    }
+    state.groupActionPending = true;
+    state.actionError = '';
+    try {
+      const group = await api.renameTerminalGroup(groupId, name.trim());
+      reconcileGroup(state, group?.group);
+      return true;
+    } catch (error) {
+      state.actionError = errorMessage(error);
+      return false;
+    } finally {
+      state.groupActionPending = false;
+    }
+  }
+
+  async function deleteGroup(groupId) {
+    if (state.groupActionPending || !groupId || serverUnavailable) {
+      return null;
+    }
+    state.groupActionPending = true;
+    state.actionError = '';
+    try {
+      const result = await api.deleteTerminalGroup(groupId);
+      await loadTerminals({ silent: true });
+      return (
+        result ?? {
+          group_id: groupId,
+          terminals_killed: 0,
+        }
+      );
+    } catch (error) {
+      state.actionError = errorMessage(error);
+      return null;
+    } finally {
+      state.groupActionPending = false;
+    }
+  }
+
+  function reorderGroup(groupId, order) {
+    if (!groupId || !Array.isArray(order) || serverUnavailable) {
+      return;
+    }
+    const current = visibleTerminals(state);
+    const members = new Set(current.map((terminal) => terminal.terminal_id));
+    const ordered = order.filter((terminalId) => members.has(terminalId));
+    for (const terminal of current) {
+      if (!ordered.includes(terminal.terminal_id)) {
+        ordered.push(terminal.terminal_id);
+      }
+    }
+    // Optimistic local order: rewrite the terminal list in the new order so
+    // the canvas reflows immediately; the server order follows.
+    state.terminals = state.terminals
+      .filter((terminal) => terminal.group_id !== groupId)
+      .concat(
+        ordered.map((terminalId) =>
+          state.terminals.find(
+            (terminal) => terminal.terminal_id === terminalId,
+          ),
+        ),
+      );
+    void api.setTerminalGroupOrder(groupId, ordered).catch(() => {
+      if (!destroyed) {
+        state.actionError = errorMessage(
+          new Error(
+            'The terminal order could not be saved on the server. Reload the list to restore it.',
+          ),
+        );
+      }
+    });
+  }
+
+  async function startManualTerminal(params = {}, { groupId = null } = {}) {
     if (state.startingTerminal || serverUnavailable) {
       return null;
     }
     state.startingTerminal = true;
     state.startError = '';
     try {
-      const result = await api.startTerminal(params);
+      const request = { ...params };
+      if (groupId) {
+        request.group_id = groupId;
+      }
+      const result = await api.startTerminal(request);
       if (destroyed) {
         return null;
       }
@@ -670,6 +879,9 @@ export function createTerminalsController({
         throw new Error('The server returned an invalid terminal.');
       }
       reconcileTerminalLaunchHistory(state, result);
+      if (groupId) {
+        state.selectedGroupId = groupId;
+      }
       state.selectedTerminalId = terminal.terminal_id;
       reconcileStreams();
       return terminal;
@@ -736,6 +948,8 @@ export function createTerminalsController({
   }
 
   return {
+    createGroup,
+    deleteGroup,
     destroy,
     forgetSelected,
     forgetTerminal,
@@ -743,7 +957,10 @@ export function createTerminalsController({
     killTerminal,
     loadTerminals,
     queueInput,
+    renameGroup,
+    reorderGroup,
     resize,
+    selectGroup,
     selectTerminal,
     setServerUnavailable,
     startManualTerminal,
