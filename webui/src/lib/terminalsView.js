@@ -61,7 +61,12 @@ export const TERMINAL_STREAM_SNAPSHOT = 'snapshot';
 
 const RECONNECT_INITIAL_DELAY_MS = 500;
 const RECONNECT_MAX_DELAY_MS = 8_000;
+// A tab revisit remounts the terminal tiles while the grid is still settling,
+// so the first measured size can transiently differ from the final one and
+// must not reach the PTY. A size only becomes sendable after it has been
+// observed unchanged across two consecutive fits separated by a frame.
 const RESIZE_DEBOUNCE_MS = 100;
+const RESIZE_STABILITY_FITS = 2;
 const INPUT_FLUSH_DELAY_MS = 24;
 const INPUT_CHUNK_CHARS = 32_768;
 // A socket that still sits in WS_CONNECTING past this budget is treated as
@@ -426,6 +431,9 @@ export function createTerminalsController({
         resizeTimer: null,
         pendingResize: null,
         lastResize: null,
+        lastFitColumns: null,
+        lastFitRows: null,
+        stableFitCount: 0,
         resizeChain: Promise.resolve(),
       };
       streamRecords.set(terminalId, stream);
@@ -723,8 +731,29 @@ export function createTerminalsController({
     // Without this, every tab revisit re-sends the same size on its fresh
     // stream and makes the foreground program repaint for nothing.
     if (item.columns === columns && item.rows === rows) {
+      stream.lastFitColumns = null;
+      stream.lastFitRows = null;
+      stream.stableFitCount = 0;
       clearPendingResize(stream);
       return;
+    }
+    // A tab revisit remounts the tiles while the grid is still settling, so
+    // the first measured size can transiently differ from the final one and
+    // must never reach the PTY. Only a size observed unchanged across two
+    // consecutive fits becomes sendable; a new size restarts the count.
+    // An immediate fit (maximize) skips the stability pass: the tile snaps to
+    // the canvas in a deterministic user action, so its measurement is
+    // trustworthy without waiting for a second frame.
+    if (!immediate) {
+      const stable =
+        stream.lastFitColumns === columns && stream.lastFitRows === rows;
+      stream.lastFitColumns = columns;
+      stream.lastFitRows = rows;
+      stream.stableFitCount = stable ? stream.stableFitCount + 1 : 1;
+      if (stream.stableFitCount < RESIZE_STABILITY_FITS) {
+        clearPendingResize(stream);
+        return;
+      }
     }
     stream.pendingResize = { terminalId, columns, rows };
     if (

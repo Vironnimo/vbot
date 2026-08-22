@@ -615,7 +615,7 @@ describe('TerminalsView', () => {
     ).toBeNull();
   });
 
-  it('resizes the PTY to match the fitted terminal dimensions', async () => {
+  it('maximizes a tile and resizes the PTY immediately from the fitted dimensions', async () => {
     listTerminalsMock.mockResolvedValue(terminalListResponse([terminal()]));
     mountedComponent = mount(TerminalsView, { target: document.body });
     flushSync();
@@ -624,7 +624,12 @@ describe('TerminalsView', () => {
 
     expect(terminalInstances[0].cols).toBe(100);
     expect(terminalInstances[0].rows).toBe(32);
-    await new Promise((resolve) => setTimeout(resolve, 150));
+    // Maximize is a deterministic user action: its fit resizes the PTY
+    // immediately, without waiting for a second measurement.
+    document
+      .querySelector('button[aria-label="Maximize"]')
+      .dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await waitFor(() => resizeTerminalMock.mock.calls.length > 0);
     expect(resizeTerminalMock).toHaveBeenCalledWith('term-1', 100, 32);
   });
 

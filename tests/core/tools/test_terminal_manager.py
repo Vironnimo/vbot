@@ -452,6 +452,7 @@ async def test_resize_repaint_inside_grace_window_does_not_wake_the_agent(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(terminal_module, "TERMINAL_RESIZE_GRACE_SECONDS", 0.25)
+    monkeypatch.setattr(terminal_module, "TERMINAL_RESIZE_GRACE_MAX_SECONDS", 0.3)
     trigger = PendingTriggerService()
     factory = AdapterFactory()
     manager = TerminalManager(
@@ -476,8 +477,97 @@ async def test_resize_repaint_inside_grace_window_does_not_wake_the_agent(
         await asyncio.sleep(0.05)
         assert len(trigger.submissions) == 1
 
-        await asyncio.sleep(0.25)
+        await asyncio.sleep(0.4)
         factory.adapters[0].emit("real work output")
+        await eventually(lambda: len(trigger.submissions) == 2)
+        assert session.attention is not None
+        assert session.attention.kind == "output_settled"
+    finally:
+        await manager.aclose()
+
+
+@pytest.mark.asyncio
+async def test_resize_grace_extends_with_repaint_but_hard_deadline_caps_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Repaint waves must stay suppressed even when they outlive the base grace
+    window, but a stream that keeps producing output must still wake the agent
+    once the capped deadline expires."""
+    monkeypatch.setattr(terminal_module, "TERMINAL_RESIZE_GRACE_SECONDS", 0.1)
+    monkeypatch.setattr(terminal_module, "TERMINAL_RESIZE_GRACE_MAX_SECONDS", 0.4)
+    trigger = PendingTriggerService()
+    factory = AdapterFactory()
+    manager = TerminalManager(
+        trigger,
+        adapter_factory=factory,
+        sweep_interval_seconds=3600,
+        activity_quiet_seconds=0.03,
+    )
+    manager.start()
+    try:
+        session = await spawn(manager, tmp_path)
+        session.state = "working"
+        manager.attach(session.terminal_id, owner(), origin_run_id="attach-run")
+        await eventually(lambda: len(trigger.submissions) == 1)
+        trigger.release.set()
+        await eventually(lambda: session.attention.delivered)
+
+        await manager.resize(session.terminal_id, owner(), columns=90, rows=24)
+        # A first repaint wave lands inside the base window and extends it.
+        factory.adapters[0].emit("repaint wave 1")
+        await eventually(lambda: session.state == "ready")
+        await asyncio.sleep(0.05)
+        # A second wave lands after the base window but still inside the
+        # extended grace and must remain suppressed.
+        factory.adapters[0].emit("repaint wave 2")
+        await eventually(lambda: session.state == "ready")
+        await asyncio.sleep(0.05)
+        assert len(trigger.submissions) == 1
+
+        # After the hard deadline expires, continued output is real work.
+        await asyncio.sleep(0.35)
+        factory.adapters[0].emit("work after grace cap")
+        await eventually(lambda: len(trigger.submissions) == 2)
+        assert session.attention is not None
+        assert session.attention.kind == "output_settled"
+    finally:
+        await manager.aclose()
+
+
+@pytest.mark.asyncio
+async def test_agent_input_clears_resize_grace_and_wakes_on_later_output(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Input after a resize is work, so it ends the grace: a settle following
+    it must deliver immediately instead of being treated as repaint noise."""
+    monkeypatch.setattr(terminal_module, "TERMINAL_RESIZE_GRACE_SECONDS", 0.25)
+    trigger = PendingTriggerService()
+    factory = AdapterFactory()
+    manager = TerminalManager(
+        trigger,
+        adapter_factory=factory,
+        sweep_interval_seconds=3600,
+        activity_quiet_seconds=0.03,
+    )
+    manager.start()
+    try:
+        session = await spawn(manager, tmp_path)
+        session.state = "working"
+        manager.attach(session.terminal_id, owner(), origin_run_id="attach-run")
+        await eventually(lambda: len(trigger.submissions) == 1)
+        trigger.release.set()
+        await eventually(lambda: session.attention.delivered)
+
+        await manager.resize(session.terminal_id, owner(), columns=100, rows=24)
+        await manager.send_input(
+            session.terminal_id,
+            owner(),
+            text="answer",
+            key="enter",
+            expected_screen_revision=None,
+            origin_run_id="run-c",
+        )
+        factory.adapters[0].emit("output after agent input")
         await eventually(lambda: len(trigger.submissions) == 2)
         assert session.attention is not None
         assert session.attention.kind == "output_settled"
