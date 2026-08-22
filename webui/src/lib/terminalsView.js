@@ -626,6 +626,13 @@ export function createTerminalsController({
     if (!stream || stream.terminalEnded) {
       return;
     }
+    // Skip resizes that only repeat the terminal's authoritative dimensions.
+    // Without this, every tab revisit re-sends the same size on its fresh
+    // stream and makes the foreground program repaint for nothing.
+    if (item.columns === columns && item.rows === rows) {
+      clearPendingResize(stream);
+      return;
+    }
     stream.pendingResize = { terminalId, columns, rows };
     if (
       stream.lastResize?.terminalId === stream.pendingResize.terminalId &&

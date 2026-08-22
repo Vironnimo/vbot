@@ -55,6 +55,10 @@ TERMINAL_INITIAL_INPUT_QUIET_SECONDS = 0.5
 TERMINAL_INITIAL_INPUT_TIMEOUT_SECONDS = 15.0
 TERMINAL_OPERATOR_READY_TIMEOUT_SECONDS = 10.0
 TERMINAL_ACTIVITY_QUIET_SECONDS = 2.0
+# After a real dimension change the foreground program repaints its screen.
+# That repaint is viewer noise rather than work, so output that settles inside
+# this grace window after an explicit resize must not wake the agent session.
+TERMINAL_RESIZE_GRACE_SECONDS = 4.0
 TERMINAL_INPUT_KEY_DELAY_SECONDS = 0.1
 TERMINAL_STREAM_RETENTION_EVENTS = 4_096
 TERMINAL_STREAM_SUBSCRIBER_QUEUE_EVENTS = 512
@@ -251,6 +255,9 @@ class TerminalSession:
     activity_generation: int = 0
     notify_on_settle: bool = False
     settled_delivery_enabled: bool = False
+    # Monotonic deadline until which settle notifications are suppressed because
+    # the output is expected to be a repaint after an explicit resize.
+    resize_grace_until: float = 0.0
     snapshot_on_settle: bool = False
     suppress_exit_attention: bool = False
     lock: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False)
@@ -1180,8 +1187,19 @@ class TerminalManager:
         _validate_dimensions(columns, rows)
         async with session.lock:
             self._require_live(session)
+            if columns == session.renderer.columns and rows == session.renderer.rows:
+                # A resize to the current dimensions is a no-op: forwarding it
+                # would make the foreground program repaint and wake the agent.
+                return {
+                    "terminal_id": session.terminal_id,
+                    "state": session.state,
+                    "columns": columns,
+                    "rows": rows,
+                    "screen_revision": session.renderer.revision,
+                }
             await asyncio.to_thread(session.adapter.resize, rows, columns)
             session.renderer.resize(columns, rows)
+            session.resize_grace_until = time.monotonic() + TERMINAL_RESIZE_GRACE_SECONDS
             self._publish_state(session)
             return {
                 "terminal_id": session.terminal_id,
@@ -1377,12 +1395,12 @@ class TerminalManager:
                     if session.state != "starting":
                         state_changed = session.state != "working"
                         session.state = "working"
-                        self._schedule_settle(
-                            session,
-                            notify=(
-                                session.attachment is not None and session.settled_delivery_enabled
-                            ),
-                        )
+                        notify = session.attachment is not None and session.settled_delivery_enabled
+                        if notify and time.monotonic() < session.resize_grace_until:
+                            # Repaint output right after an explicit resize is
+                            # viewer noise, not work worth waking the agent for.
+                            notify = False
+                        self._schedule_settle(session, notify=notify)
                     if state_changed or title_changed:
                         self._publish_state(session)
                     session.output_event.set()
