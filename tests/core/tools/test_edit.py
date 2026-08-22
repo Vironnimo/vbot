@@ -349,6 +349,89 @@ def test_edit_uses_continuation_read_gutter_in_old_string(tmp_path: Path) -> Non
     assert target.read_text(encoding="utf-8") == "replacement\n"
 
 
+def test_edit_strips_single_line_gutter_in_old_string(tmp_path: Path) -> None:
+    # The most common gutter mistake: a single-line edit with the read gutter
+    # left in place. The block-level detector needs >= 2 lines, so this only
+    # works via the per-line fallback.
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    target = workspace / "module.py"
+    target.write_text("def f():\n    return 1\n", encoding="utf-8")
+
+    result = edit_handler(
+        make_context(workspace),
+        {"path": "module.py", "old_string": "2|     return 1", "new_string": "    return 42"},
+    )
+
+    data = assert_success_envelope(result)
+    assert data["first_changed_line"] == 2
+    assert target.read_text(encoding="utf-8") == "def f():\n    return 42\n"
+
+
+def test_edit_strips_partial_gutter_in_old_string(tmp_path: Path) -> None:
+    # The model pasted a block from read output but dropped the gutter on one
+    # line (the one it edited). The block-level detector rejects this because
+    # not every line carries a gutter; the per-line fallback handles it.
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    target = workspace / "module.py"
+    target.write_text("def deploy():\n    timeout = 30\n    retries = 5\n", encoding="utf-8")
+
+    result = edit_handler(
+        make_context(workspace),
+        {
+            "path": "module.py",
+            "old_string": "1| def deploy():\n    timeout = 30\n3|     retries = 5",
+            "new_string": "def deploy():\n    timeout = 60\n    retries = 5",
+        },
+    )
+
+    assert_success_envelope(result)
+    assert (
+        target.read_text(encoding="utf-8") == "def deploy():\n    timeout = 60\n    retries = 5\n"
+    )
+
+
+def test_edit_per_line_gutter_still_detects_ambiguity(tmp_path: Path) -> None:
+    # When the per-line fallback strips a single-line gutter and the result
+    # matches multiple locations, the edit must still report ambiguity rather
+    # than silently picking one.
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    target = workspace / "notes.txt"
+    target.write_text("same\nother\nsame\n", encoding="utf-8")
+
+    result = edit_handler(
+        make_context(workspace),
+        {"path": "notes.txt", "old_string": "1| same", "new_string": "changed"},
+    )
+
+    error = assert_failure_envelope(result, "ambiguous_match")
+    assert "Found 2 occurrences" in error["message"]
+    assert target.read_text(encoding="utf-8") == "same\nother\nsame\n"
+
+
+def test_edit_per_line_gutter_diagnostic_uses_stripped_pattern(tmp_path: Path) -> None:
+    # When the per-line fallback strips a gutter but the stripped text still
+    # doesn't match, the closest-candidates diagnostic should search with the
+    # gutter-free pattern, not the original guttered text.
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    target = workspace / "notes.txt"
+    target.write_text("alpha = 2\nbeta\n", encoding="utf-8")
+
+    result = edit_handler(
+        make_context(workspace),
+        {"path": "notes.txt", "old_string": "1| alpha = 1", "new_string": "alpha = 9"},
+    )
+
+    error = assert_failure_envelope(result, "text_not_found")
+    assert "after removing read's line-number gutter" in error["message"]
+    assert "alpha = 2" in error["message"]
+    assert "1|" not in error["message"]
+    assert target.read_text(encoding="utf-8") == "alpha = 2\nbeta\n"
+
+
 def test_edit_keeps_ambiguity_after_stripping_old_string_gutter(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()

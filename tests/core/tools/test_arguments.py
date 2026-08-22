@@ -15,6 +15,7 @@ from core.tools.arguments import (
     optional_string,
     required_int,
     required_string,
+    strip_line_number_gutters,
 )
 
 
@@ -199,3 +200,53 @@ class TestLineNumberGutterCandidates:
     )
     def test_rejects_incomplete_or_ordinary_blocks(self, text: str) -> None:
         assert line_number_gutter_candidates(text) == ()
+
+
+class TestStripLineNumberGutters:
+    def test_strips_single_line_gutter(self) -> None:
+        assert strip_line_number_gutters("42|     return 1") == "    return 1"
+
+    def test_strips_single_line_compact_gutter(self) -> None:
+        assert strip_line_number_gutters("42|return 1") == "return 1"
+
+    def test_strips_continuation_gutter(self) -> None:
+        assert strip_line_number_gutters("50:50001| fragment") == "fragment"
+
+    def test_strips_partial_gutter_leaving_plain_lines_unchanged(self) -> None:
+        assert strip_line_number_gutters("1| def foo():\n    return 1\n3| return 2") == (
+            "def foo():\n    return 1\nreturn 2"
+        )
+
+    def test_strips_non_consecutive_gutter_numbers(self) -> None:
+        assert strip_line_number_gutters("1| alpha\n3| gamma") == "alpha\ngamma"
+
+    def test_preserves_line_endings(self) -> None:
+        assert strip_line_number_gutters("10| def f():\r\n11|     return 1\r\n") == (
+            "def f():\r\n    return 1\r\n"
+        )
+
+    def test_strips_indented_gutter_block(self) -> None:
+        # Leading whitespace before the gutter (model indentation when pasting)
+        # is removed along with the gutter — it is not file content.
+        assert strip_line_number_gutters("  10| def f():\n  11|     return 1") == (
+            "def f():\n    return 1"
+        )
+
+    def test_strips_blank_line_gutter(self) -> None:
+        assert strip_line_number_gutters("1| alpha\n2| \n3| gamma") == "alpha\n\ngamma"
+
+    def test_returns_none_when_no_line_has_gutter(self) -> None:
+        assert strip_line_number_gutters("def foo():\n    return 1") is None
+
+    def test_returns_none_for_pipe_without_digit_prefix(self) -> None:
+        assert strip_line_number_gutters("echo hi | grep foo") is None
+
+    def test_returns_none_for_empty_string(self) -> None:
+        assert strip_line_number_gutters("") is None
+
+    def test_non_string_returns_none(self) -> None:
+        assert strip_line_number_gutters(None) is None  # type: ignore[arg-type]
+
+    def test_does_not_strip_pipe_in_middle_of_line(self) -> None:
+        # A pipe preceded by non-digit text is not a gutter.
+        assert strip_line_number_gutters("x = a|b\nc = d|e") is None
