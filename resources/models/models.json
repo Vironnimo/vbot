@@ -3287,6 +3287,39 @@
       "release_date": "2026-07-31",
       "temperature": true
     },
+    "deepseek/deepseek-v4-flash-vision-exp": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "control": "levels",
+          "levels": [
+            "low",
+            "high",
+            "max"
+          ],
+          "supported": true
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "context_window": 1000000,
+      "family": "deepseek-flash",
+      "last_updated": "2026-08-21",
+      "max_output_tokens": 384000,
+      "name": "DeepSeek V4 Flash Vision Exp",
+      "release_date": "2026-08-21",
+      "temperature": true
+    },
     "deepseek/deepseek-v4-pro": {
       "capabilities": {
         "input_modalities": [
@@ -3317,6 +3350,33 @@
       "max_output_tokens": 384000,
       "name": "DeepSeek V4 Pro",
       "release_date": "2026-04-24",
+      "temperature": true
+    },
+    "deepseek/deepseek-v4-pro-0423": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": true,
+        "vision": false
+      },
+      "context_window": 1000000,
+      "family": "deepseek-thinking",
+      "knowledge": "2025-05",
+      "last_updated": "2026-04-23",
+      "max_output_tokens": 384000,
+      "name": "DeepSeek V4 Pro 0423",
+      "release_date": "2026-04-23",
       "temperature": true
     },
     "deepseek/deepseek-v4-pro-0813": {
@@ -4368,7 +4428,6 @@
         "reasoning": {
           "control": "levels",
           "levels": [
-            "minimal",
             "low",
             "medium",
             "high"
@@ -4383,11 +4442,11 @@
       },
       "context_window": 1048576,
       "family": "gemini-flash",
-      "knowledge": "2025-01",
-      "last_updated": "2026-05-19",
+      "knowledge": "2026-03",
+      "last_updated": "2026-08-13",
       "max_output_tokens": 65536,
       "name": "Gemini Flash Latest",
-      "release_date": "2026-05-19",
+      "release_date": "2026-08-13",
       "temperature": true
     },
     "google/gemini-flash-lite-latest": {
@@ -4421,11 +4480,11 @@
       },
       "context_window": 1048576,
       "family": "gemini-flash-lite",
-      "knowledge": "2025-01",
-      "last_updated": "2026-05-07",
+      "knowledge": "2026-03",
+      "last_updated": "2026-07-21",
       "max_output_tokens": 65536,
       "name": "Gemini Flash-Lite Latest",
-      "release_date": "2026-05-07",
+      "release_date": "2026-07-21",
       "temperature": true
     },
     "google/gemini-omni-flash-preview": {

@@ -1,166 +1,178 @@
 {
-  "fetched_at": "2026-08-20T14:57:15.301101+00:00",
+  "fetched_at": "2026-08-22T15:10:08.755619+00:00",
   "provider_id": "opencode-go",
   "raw_response": {
     "data": [
       {
-        "created": 1787237839,
+        "created": 1787411416,
         "id": "minimax-m3",
         "object": "model",
         "owned_by": "opencode"
       },
       {
-        "created": 1787237839,
+        "created": 1787411416,
         "id": "minimax-m2.7",
         "object": "model",
         "owned_by": "opencode"
       },
       {
-        "created": 1787237839,
+        "created": 1787411416,
         "id": "minimax-m2.5",
         "object": "model",
         "owned_by": "opencode"
       },
       {
-        "created": 1787237839,
+        "created": 1787411416,
         "id": "kimi-k3",
         "object": "model",
         "owned_by": "opencode"
       },
       {
-        "created": 1787237839,
+        "created": 1787411416,
         "id": "kimi-k2.7-code",
         "object": "model",
         "owned_by": "opencode"
       },
       {
-        "created": 1787237839,
+        "created": 1787411416,
         "id": "kimi-k2.6",
         "object": "model",
         "owned_by": "opencode"
       },
       {
-        "created": 1787237839,
+        "created": 1787411416,
         "id": "kimi-k2.5",
         "object": "model",
         "owned_by": "opencode"
       },
       {
-        "created": 1787237839,
+        "created": 1787411416,
         "id": "glm-5.2",
         "object": "model",
         "owned_by": "opencode"
       },
       {
-        "created": 1787237839,
+        "created": 1787411416,
         "id": "glm-5.3",
         "object": "model",
         "owned_by": "opencode"
       },
       {
-        "created": 1787237839,
+        "created": 1787411416,
+        "id": "ox-alpha-free",
+        "object": "model",
+        "owned_by": "opencode"
+      },
+      {
+        "created": 1787411416,
         "id": "glm-5.1",
         "object": "model",
         "owned_by": "opencode"
       },
       {
-        "created": 1787237839,
+        "created": 1787411416,
         "id": "glm-5",
         "object": "model",
         "owned_by": "opencode"
       },
       {
-        "created": 1787237839,
+        "created": 1787411416,
         "id": "deepseek-v4-pro",
         "object": "model",
         "owned_by": "opencode"
       },
       {
-        "created": 1787237839,
+        "created": 1787411416,
         "id": "deepseek-v4-flash",
         "object": "model",
         "owned_by": "opencode"
       },
       {
-        "created": 1787237839,
+        "created": 1787411416,
+        "id": "deepseek-v4-flash-vision-exp",
+        "object": "model",
+        "owned_by": "opencode"
+      },
+      {
+        "created": 1787411416,
         "id": "qwen3.7-max",
         "object": "model",
         "owned_by": "opencode"
       },
       {
-        "created": 1787237839,
+        "created": 1787411416,
         "id": "qwen3.8-max",
         "object": "model",
         "owned_by": "opencode"
       },
       {
-        "created": 1787237839,
+        "created": 1787411416,
         "id": "qwen3.7-plus",
         "object": "model",
         "owned_by": "opencode"
       },
       {
-        "created": 1787237839,
+        "created": 1787411416,
         "id": "qwen3.6-plus",
         "object": "model",
         "owned_by": "opencode"
       },
       {
-        "created": 1787237839,
+        "created": 1787411416,
         "id": "qwen3.5-plus",
         "object": "model",
         "owned_by": "opencode"
       },
       {
-        "created": 1787237839,
+        "created": 1787411416,
         "id": "mimo-v2-pro",
         "object": "model",
         "owned_by": "opencode"
       },
       {
-        "created": 1787237839,
+        "created": 1787411416,
         "id": "mimo-v2-omni",
         "object": "model",
         "owned_by": "opencode"
       },
       {
-        "created": 1787237839,
+        "created": 1787411416,
         "id": "mimo-v2.5-pro",
         "object": "model",
         "owned_by": "opencode"
       },
       {
-        "created": 1787237839,
+        "created": 1787411416,
         "id": "mimo-v2.5",
         "object": "model",
         "owned_by": "opencode"
       },
       {
-        "created": 1787237839,
+        "created": 1787411416,
         "id": "hy3",
         "object": "model",
         "owned_by": "opencode"
       },
       {
-        "created": 1787237839,
+        "created": 1787411416,
         "id": "hy3-preview",
         "object": "model",
         "owned_by": "opencode"
       },
       {
-        "created": 1787237839,
+        "created": 1787411416,
         "id": "gpt-5.6-luna",
         "object": "model",
         "owned_by": "opencode"
       },
       {
-        "created": 1787237839,
+        "created": 1787411416,
         "id": "grok-4.5",
         "object": "model",
         "owned_by": "opencode"
       },
       {
-        "created": 1787237839,
+        "created": 1787411416,
         "id": "muse-spark-1.2-contributor",
         "object": "model",
         "owned_by": "opencode"

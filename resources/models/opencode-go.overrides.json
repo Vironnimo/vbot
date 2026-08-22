@@ -1,8 +1,18 @@
 {
-  "_comment": "Hand layer for OpenCode Go, verified 2026-08-17 against its official endpoint table, current models.dev feed, upstream model documentation, and two-turn live gateway probes. The provider defaults to full-history reasoning replay; individual model records can override that policy. Each profile keeps protocol, response field, and model-specific request controls independent. Override metadata is wholesale at load, so OpenAI-route profiles repeat reasoning_response_field instead of accidentally discarding the generated value.",
+  "_comment": "Hand layer for OpenCode Go, verified 2026-08-17 against its official endpoint table, current models.dev feed, upstream model documentation, and two-turn live gateway probes; DeepSeek V4 Flash entries re-probed 2026-08-22. The provider defaults to full-history reasoning replay; individual model records can override that policy. Each profile keeps protocol, response field, and model-specific request controls independent. Override metadata is wholesale at load, so OpenAI-route profiles repeat reasoning_response_field instead of accidentally discarding the generated value.",
   "reasoning_replay": "full_history",
   "models": {
     "deepseek-v4-flash": {
+      "reasoning_replay": "none",
+      "metadata": {
+        "opencode_go": {
+          "protocol": "openai",
+          "reasoning_response_field": "reasoning_content"
+        }
+      }
+    },
+    "deepseek-v4-flash-vision-exp": {
+      "reasoning_replay": "none",
       "metadata": {
         "opencode_go": {
           "protocol": "openai",
