@@ -238,9 +238,10 @@ describe('TerminalsView', () => {
     expect(terminalInstances[0].options.theme.background).toBe('#0E0D0B');
     expect(terminalInstances[0].loadAddon).toHaveBeenCalledWith(fitAddons[0]);
     await waitForWebgl();
-    expect(terminalInstances[0].loadAddon).toHaveBeenCalledWith(webglAddons[0]);
-    webglAddons[0].onContextLossCallback();
-    expect(webglAddons[0].dispose).toHaveBeenCalledOnce();
+    const webglAddon = webglAddons.at(-1);
+    expect(terminalInstances[0].loadAddon).toHaveBeenCalledWith(webglAddon);
+    webglAddon.onContextLossCallback();
+    expect(webglAddon.dispose).toHaveBeenCalled();
     expect(document.querySelector('button[role="switch"]')).toBeNull();
     expect(document.body.textContent).not.toContain(
       'Quiet is not a semantic prompt.',
@@ -719,6 +720,32 @@ describe('TerminalsView', () => {
     expect(webglAddons).toHaveLength(1);
   });
 
+  it('rebuilds WebGL after a same-size snapshot write', async () => {
+    listTerminalsMock.mockResolvedValue(terminalListResponse([terminal()]));
+    mountedComponent = mount(TerminalsView, { target: document.body });
+    flushSync();
+    await waitFor(() => streams.length === 1 && terminalInstances.length === 1);
+    await waitForWebgl();
+    expect(webglAddons).toHaveLength(1);
+    const firstAddon = webglAddons[0];
+    const resizesBefore = resizeTerminalMock.mock.calls.length;
+
+    streams[0].handlers.onEvent({
+      type: 'terminal_ready',
+      sequence: 2,
+      terminal: terminal({ columns: 100, rows: 32 }),
+      ansi: '\u001b[2Jsame-size snapshot',
+    });
+    flushSync();
+    expect(firstAddon.dispose).toHaveBeenCalledOnce();
+    expect(webglAddons).toHaveLength(1);
+
+    await waitForWebgl();
+    expect(webglAddons).toHaveLength(2);
+    expect(terminalInstances[0].loadAddon).toHaveBeenCalledWith(webglAddons[1]);
+    expect(resizeTerminalMock.mock.calls.length).toBe(resizesBefore);
+  });
+
   it('rebuilds both tiles after the Terminals tab is mounted again', async () => {
     listTerminalsMock.mockResolvedValue(
       terminalListResponse([
@@ -739,6 +766,29 @@ describe('TerminalsView', () => {
     mountedComponent = mount(TerminalsView, { target: document.body });
     flushSync();
     await waitFor(() => streams.length === 4 && terminalInstances.length === 4);
+    streams[2].handlers.onEvent({
+      type: 'terminal_ready',
+      sequence: 2,
+      terminal: terminal({
+        terminal_id: 'term-1',
+        title: 'First terminal',
+        columns: 100,
+        rows: 32,
+      }),
+      ansi: '\u001b[2Jfirst remount snapshot',
+    });
+    streams[3].handlers.onEvent({
+      type: 'terminal_ready',
+      sequence: 2,
+      terminal: terminal({
+        terminal_id: 'term-2',
+        title: 'Second terminal',
+        columns: 100,
+        rows: 32,
+      }),
+      ansi: '\u001b[2Jsecond remount snapshot',
+    });
+    flushSync();
     await waitForWebgl();
     expect(webglAddons).toHaveLength(2);
     expect(terminalInstances[2].refresh).toHaveBeenCalled();
