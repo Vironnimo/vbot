@@ -81,8 +81,12 @@ IMAGE_GENERATION_TOOL_PARAMETERS: JsonObject = {
             "type": "string",
             "minLength": 1,
             "description": (
-                "Describe the subject, setting, composition, lighting, mood, and visual "
-                "style. For edits, state both the changes and what must remain unchanged."
+                "The text prompt for the image. Be specific and concrete — name the "
+                "subject and its key attributes, the setting, composition, lighting, "
+                "mood, color palette, and the visual medium or style (e.g. photograph, "
+                "oil painting, 3D render, anime, flat vector). For edits, state both "
+                "the changes and what must remain unchanged. Detailed prompts produce "
+                "markedly better images than short vague ones."
             ),
         },
         "source_images": {
