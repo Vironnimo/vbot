@@ -325,11 +325,12 @@ class TerminalRenderer:
         has_more = bool(selected) and any(
             line.sequence < selected[0].sequence for line in self._scrollback
         )
+        oldest_displayed = len(available) - len(selected)
         return {
             "text": "\n".join(line.text for line in selected),
             "line_count": len(selected),
             "has_more": has_more,
-            "next_before": selected[0].sequence if has_more else None,
+            "next_start_line": max(0, oldest_displayed - limit) if has_more else None,
             **self._buffer_metrics(),
         }
 

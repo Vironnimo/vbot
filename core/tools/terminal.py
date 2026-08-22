@@ -14,8 +14,6 @@ from core.tools.arguments import (
 )
 from core.tools.terminal_backend import default_terminal_argv
 from core.tools.terminal_manager import (
-    TERMINAL_DEFAULT_COLUMNS,
-    TERMINAL_DEFAULT_ROWS,
     TERMINAL_GROUP_NAME_MAX_CHARS,
     TERMINAL_INPUT_KEY_SEQUENCES,
     TERMINAL_INPUT_MAX_CHARS,
@@ -91,13 +89,11 @@ class _ProjectWorkdirUnavailableError(ValueError):
 
 
 _ACTION_FIELDS = {
-    "start": frozenset(
-        {"action", "command", "args", "text", "workdir", "name", "group", "columns", "rows"}
-    ),
+    "start": frozenset({"action", "command", "args", "text", "workdir", "name", "group"}),
     "list": frozenset({"action"}),
     "attach": frozenset({"action", "terminal_id"}),
     "detach": frozenset({"action", "terminal_id"}),
-    "status": frozenset({"action", "terminal_id", "lines", "cursor", "start_line"}),
+    "status": frozenset({"action", "terminal_id", "lines", "start_line"}),
     "wait": frozenset({"action", "terminal_id", "after_revision", "timeout_ms"}),
     "input": frozenset(
         {
@@ -126,7 +122,7 @@ TERMINAL_TOOL_PARAMETERS: JsonObject = {
                 "a bounded screen page, wait pauses briefly for a new activity boundary, input "
                 "sends exact data or convenient text/keys, resize changes dimensions, kill "
                 "terminates the process tree. For status, address the whole buffer by absolute "
-                "zero-based line numbers with start_line, or continue older scrollback with cursor."
+                "zero-based line numbers with start_line."
             ),
         },
         "terminal_id": {
@@ -198,15 +194,13 @@ TERMINAL_TOOL_PARAMETERS: JsonObject = {
             "type": "integer",
             "minimum": TERMINAL_MIN_COLUMNS,
             "maximum": TERMINAL_MAX_COLUMNS,
-            "default": TERMINAL_DEFAULT_COLUMNS,
-            "description": ("Terminal width; default applies only on start. Required for resize."),
+            "description": ("Terminal width. Required for resize."),
         },
         "rows": {
             "type": "integer",
             "minimum": TERMINAL_MIN_ROWS,
             "maximum": TERMINAL_MAX_ROWS,
-            "default": TERMINAL_DEFAULT_ROWS,
-            "description": ("Terminal height; default applies only on start. Required for resize."),
+            "description": ("Terminal height. Required for resize."),
         },
         "lines": {
             "type": "integer",
@@ -214,16 +208,8 @@ TERMINAL_TOOL_PARAMETERS: JsonObject = {
             "maximum": TERMINAL_STATUS_MAX_LINES,
             "default": TERMINAL_STATUS_DEFAULT_LINES,
             "description": (
-                "Prior scrollback lines for status. May be used with or without cursor or "
-                "start_line; the current rendered screen is returned separately."
-            ),
-        },
-        "cursor": {
-            "type": "string",
-            "description": (
-                "Signed older-scrollback continuation returned by status. May be combined with "
-                "lines to choose a page size; prefer passing scrollback.next_request unchanged. "
-                "Cannot be combined with start_line."
+                "Prior scrollback lines for status. May be used with or without start_line; the "
+                "current rendered screen is returned separately."
             ),
         },
         "start_line": {
@@ -232,9 +218,9 @@ TERMINAL_TOOL_PARAMETERS: JsonObject = {
             "description": (
                 "For status: absolute zero-based line at which to start reading (0 = oldest "
                 "retained scrollback line; the current screen follows the scrollback). Combines "
-                "with lines to page forward through the whole buffer with plain numbers instead "
-                "of a signed cursor; the result reports total_lines, start_line, end_line, and "
-                "next_start_line. Cannot be combined with cursor."
+                "with lines to page forward through the whole buffer with plain numbers; the "
+                "result reports total_lines, start_line, end_line, and next_start_line. Omit to "
+                "read the newest lines."
             ),
         },
         "after_revision": {
@@ -388,21 +374,6 @@ async def _handle_start(
             raise ValueError("name must not be blank")
         if len(name) > 80:
             raise ValueError("name must be at most 80 characters")
-    columns = optional_int(
-        arguments.get("columns"),
-        field_name="columns",
-        default=TERMINAL_DEFAULT_COLUMNS,
-        minimum=TERMINAL_MIN_COLUMNS,
-        maximum=TERMINAL_MAX_COLUMNS,
-    )
-    rows = optional_int(
-        arguments.get("rows"),
-        field_name="rows",
-        default=TERMINAL_DEFAULT_ROWS,
-        minimum=TERMINAL_MIN_ROWS,
-        maximum=TERMINAL_MAX_ROWS,
-    )
-    assert columns is not None and rows is not None
     owner = _owner(context)
     group_id = None
     raw_group = arguments.get("group")
@@ -419,15 +390,13 @@ async def _handle_start(
         argv,
         cwd=workdir,
         env=None,
-        columns=columns,
-        rows=rows,
         origin_run_id=context.run_id,
         name=name,
         initial_text=text if isinstance(text, str) else None,
         group_id=group_id,
     )
     snapshot = await terminal_manager.snapshot(session.terminal_id, owner)
-    data = _project_snapshot(terminal_manager, snapshot)
+    data = _project_snapshot(snapshot)
     data.update(
         {
             "delivery": "automatic_terminal_activity",
@@ -505,13 +474,6 @@ async def _handle_status(
         maximum=TERMINAL_STATUS_MAX_LINES,
     )
     assert lines is not None
-    cursor = arguments.get("cursor")
-    if cursor is not None:
-        if not isinstance(cursor, str) or not cursor.strip():
-            raise ValueError("cursor must be a non-empty string")
-        before = terminal_manager.decode_cursor(cursor, terminal_id)
-    else:
-        before = None
     start_line = optional_int(
         arguments.get("start_line"),
         field_name="start_line",
@@ -523,11 +485,10 @@ async def _handle_status(
         terminal_id,
         owner,
         lines=lines,
-        before=before,
         start_line=start_line,
     )
     _acknowledge_after_persistence(terminal_manager, context, owner, snapshot)
-    return tool_success(_project_snapshot(terminal_manager, snapshot, page_lines=lines))
+    return tool_success(_project_snapshot(snapshot, page_lines=lines))
 
 
 async def _handle_wait(
@@ -561,7 +522,7 @@ async def _handle_wait(
         timeout_ms=timeout_ms,
     )
     _acknowledge_after_persistence(terminal_manager, context, owner, snapshot)
-    data = _project_snapshot(terminal_manager, snapshot)
+    data = _project_snapshot(snapshot)
     data["timed_out"] = timed_out
     return tool_success(data)
 
@@ -656,48 +617,29 @@ async def _handle_kill(
                 terminal_id, owner, prior_attention_revision
             )
         )
-    return tool_success(_project_snapshot(terminal_manager, snapshot))
+    return tool_success(_project_snapshot(snapshot))
 
 
 def _project_snapshot(
-    terminal_manager: TerminalManager,
     snapshot: dict[str, Any],
     *,
     page_lines: int = TERMINAL_STATUS_DEFAULT_LINES,
 ) -> JsonObject:
     projected = dict(snapshot)
     scrollback = dict(projected.get("scrollback", {}))
-    before = scrollback.pop("next_before", None)
+    scrollback.pop("next_before", None)
     next_start = scrollback.get("next_start_line")
-    if next_start is not None:
-        scrollback["next_cursor"] = None
-        scrollback["next_request"] = (
-            {
-                "action": "status",
-                "terminal_id": str(snapshot["terminal_id"]),
-                "start_line": next_start,
-                "lines": page_lines,
-            }
-            if isinstance(next_start, int)
-            else None
-        )
-    else:
-        next_cursor = (
-            terminal_manager.encode_cursor(str(snapshot["terminal_id"]), before)
-            if isinstance(before, int)
-            else None
-        )
-        scrollback["next_cursor"] = next_cursor
-        scrollback["next_request"] = (
-            {
-                "action": "status",
-                "terminal_id": str(snapshot["terminal_id"]),
-                "cursor": next_cursor,
-                "lines": page_lines,
-            }
-            if next_cursor is not None
-            else None
-        )
+    scrollback.pop("next_cursor", None)
+    scrollback["next_request"] = (
+        {
+            "action": "status",
+            "terminal_id": str(snapshot["terminal_id"]),
+            "start_line": next_start,
+            "lines": page_lines,
+        }
+        if isinstance(next_start, int)
+        else None
+    )
     projected["scrollback"] = scrollback
     return projected
 

@@ -15,7 +15,6 @@ import pytest_asyncio
 import core.tools.terminal_manager as terminal_module
 from core.tools.terminal_manager import (
     TerminalCapacityError,
-    TerminalCursorError,
     TerminalManager,
     TerminalManagerError,
     TerminalNotFoundError,
@@ -900,7 +899,7 @@ async def test_finished_operator_history_expires_with_a_catalog_change(
 
 
 @pytest.mark.asyncio
-async def test_status_is_bounded_and_scrollback_cursor_is_signed(
+async def test_status_is_bounded_and_pages_back_with_absolute_lines(
     terminal_manager: tuple[TerminalManager, AdapterFactory], tmp_path: Path
 ) -> None:
     manager, factory = terminal_manager
@@ -910,12 +909,17 @@ async def test_status_is_bounded_and_scrollback_cursor_is_signed(
 
     snapshot = await manager.snapshot(session.terminal_id, owner(), lines=3)
     assert snapshot["scrollback"]["line_count"] == 3
-    before = snapshot["scrollback"]["next_before"]
-    assert isinstance(before, int)
-    cursor = manager.encode_cursor(session.terminal_id, before)
-    assert manager.decode_cursor(cursor, session.terminal_id) == before
-    with pytest.raises(TerminalCursorError):
-        manager.decode_cursor(cursor + "x", session.terminal_id)
+    assert snapshot["scrollback"]["total_lines"] == 50
+    assert snapshot["scrollback"]["next_start_line"] is not None
+
+    older = await manager.snapshot(
+        session.terminal_id,
+        owner(),
+        lines=3,
+        start_line=snapshot["scrollback"]["next_start_line"],
+    )
+    assert older["scrollback"]["line_count"] == 3
+    assert older["scrollback"]["start_line"] == snapshot["scrollback"]["next_start_line"]
 
 
 @pytest.mark.asyncio
