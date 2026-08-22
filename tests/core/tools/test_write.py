@@ -229,7 +229,9 @@ def test_write_replaces_full_file_content(tmp_path: Path) -> None:
     )
 
     assert_success_envelope(result)
-    assert target.read_bytes() == b"new\nbody\nthree"
+    # The existing file's CRLF endings are preserved — the model's LF output
+    # is normalized to match the file's style.
+    assert target.read_bytes() == b"new\r\nbody\r\nthree"
     assert context.presentation_facts == [
         {"kind": "line_change", "change": "added", "value": 3},
         {"kind": "line_change", "change": "removed", "value": 2},
@@ -570,3 +572,119 @@ def test_concurrent_session_writes_serialize_and_reject_stale_overwrite(
     assert_success_envelope(results["a"])
     assert_failure_envelope(results["b"], "file_modified_since_read")
     assert target.read_bytes() == b"first\n"
+
+
+def test_write_preserves_existing_crlf_endings(tmp_path: Path) -> None:
+    # The model naturally produces LF, but a CRLF file must stay CRLF after a
+    # full-file rewrite — no silent line-ending switch that would cause a
+    # full-file git diff.
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    target = workspace / "notes.txt"
+    target.write_bytes(b"line one\r\nline two\r\n")
+
+    result = write_handler(
+        make_context(workspace),
+        {"path": "notes.txt", "content": "new one\nnew two\nnew three\n"},
+    )
+
+    assert_success_envelope(result)
+    assert target.read_bytes() == b"new one\r\nnew two\r\nnew three\r\n"
+
+
+def test_write_preserves_existing_lf_endings(tmp_path: Path) -> None:
+    # An LF file stays LF even when the model sends CRLF content.
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    target = workspace / "notes.txt"
+    target.write_bytes(b"line one\nline two\n")
+
+    result = write_handler(
+        make_context(workspace),
+        {"path": "notes.txt", "content": "new one\r\nnew two\r\n"},
+    )
+
+    assert_success_envelope(result)
+    assert target.read_bytes() == b"new one\nnew two\n"
+
+
+def test_write_new_file_keeps_agent_line_endings_verbatim(tmp_path: Path) -> None:
+    # A new file has no existing style to preserve — the agent's content is
+    # written exactly as supplied.
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    result = write_handler(
+        make_context(workspace),
+        {"path": "fresh.txt", "content": "line one\r\nline two\r\n"},
+    )
+
+    assert_success_envelope(result)
+    assert (workspace / "fresh.txt").read_bytes() == b"line one\r\nline two\r\n"
+
+
+def test_write_preserves_existing_cr_endings(tmp_path: Path) -> None:
+    # Old Mac CR-only endings are detected and preserved.
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    target = workspace / "notes.txt"
+    target.write_bytes(b"line one\rline two\r")
+
+    result = write_handler(
+        make_context(workspace),
+        {"path": "notes.txt", "content": "new one\nnew two\n"},
+    )
+
+    assert_success_envelope(result)
+    assert target.read_bytes() == b"new one\rnew two\r"
+
+
+def test_write_no_normalization_for_single_line_file(tmp_path: Path) -> None:
+    # A file with no line endings (single line) has nothing to detect — the
+    # agent's content is written verbatim.
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    target = workspace / "notes.txt"
+    target.write_bytes(b"single line no newline")
+
+    result = write_handler(
+        make_context(workspace),
+        {"path": "notes.txt", "content": "replacement"},
+    )
+
+    assert_success_envelope(result)
+    assert target.read_bytes() == b"replacement"
+
+
+def test_write_normalizes_mixed_endings_to_dominant_style(tmp_path: Path) -> None:
+    # A file with mixed endings (mostly CRLF) is detected as CRLF; the agent's
+    # mixed content is normalized to CRLF.
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    target = workspace / "notes.txt"
+    target.write_bytes(b"crlf line\r\nlf line\ncrlf line\r\n")
+
+    result = write_handler(
+        make_context(workspace),
+        {"path": "notes.txt", "content": "a\nb\r\nc\n"},
+    )
+
+    assert_success_envelope(result)
+    assert target.read_bytes() == b"a\r\nb\r\nc\r\n"
+
+
+def test_write_crlf_preservation_works_with_bom(tmp_path: Path) -> None:
+    # BOM preservation and line-ending normalization are independent: a BOM
+    # CRLF file keeps both its BOM and its CRLF endings.
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    target = workspace / "config.txt"
+    target.write_bytes(b"\xef\xbb\xbfold\r\nbody\r\n")
+
+    result = write_handler(
+        make_context(workspace),
+        {"path": "config.txt", "content": "new\nbody\n"},
+    )
+
+    assert_success_envelope(result)
+    assert target.read_bytes() == b"\xef\xbb\xbfnew\r\nbody\r\n"
