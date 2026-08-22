@@ -261,6 +261,43 @@ def line_number_gutter_candidates(text: str) -> tuple[str, ...]:
     return separated, compact
 
 
+def strip_line_number_gutters(text: str) -> str | None:
+    """Strip a read gutter (``N| `` or ``N:C| ``) from each line that carries one.
+
+    Unlike :func:`line_number_gutter_candidates`, this is per-line and partial:
+    lines without a gutter pass through unchanged, and there is no minimum line
+    count or consecutiveness requirement. Returns the stripped text when at least
+    one line had a gutter removed, otherwise ``None`` so the caller can skip a
+    pointless retry with unchanged text.
+    """
+    if not isinstance(text, str):
+        return None
+
+    lines = text.splitlines(keepends=True)
+    stripped_any = False
+    result_lines: list[str] = []
+
+    for physical_line in lines:
+        body, ending = _split_supported_line_ending(physical_line)
+        prefix, separator, rest = body.lstrip().partition(LINE_NUMBER_GUTTER_SEPARATOR)
+        line_number, colon, character = prefix.partition(":")
+        if (
+            separator
+            and line_number.isdigit()
+            and int(line_number) >= 1
+            and (not colon or (character.isdigit() and int(character) >= 1))
+        ):
+            content = rest[1:] if rest.startswith(" ") else rest
+            result_lines.append(content + ending)
+            stripped_any = True
+        else:
+            result_lines.append(physical_line)
+
+    if not stripped_any:
+        return None
+    return "".join(result_lines)
+
+
 def _to_int(value: object, field_name: str) -> int:
     if isinstance(value, bool) or not isinstance(value, int):
         raise ToolArgumentError(f"{field_name} must be an integer")
@@ -306,6 +343,7 @@ __all__ = [
     "ToolArgumentError",
     "line_number_gutter_candidates",
     "looks_like_line_numbered_content",
+    "strip_line_number_gutters",
     "optional_bool",
     "optional_int",
     "optional_number",

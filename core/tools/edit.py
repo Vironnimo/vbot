@@ -11,6 +11,7 @@ from core.tools.arguments import (
     logical_line_count,
     looks_like_line_numbered_content,
     optional_bool,
+    strip_line_number_gutters,
 )
 from core.tools.file_state import FileReadState, StaleReason, atomic_write_bytes
 from core.tools.fuzzy_match import (
@@ -149,10 +150,15 @@ def _format_no_match_candidates(candidates: list[ClosestFuzzyCandidate]) -> str:
 
 
 def _text_not_found_failure(content: str, old_string: str) -> JsonObject:
-    gutter_candidates = line_number_gutter_candidates(old_string)
-    if gutter_candidates:
+    block_candidates = line_number_gutter_candidates(old_string)
+    per_line = strip_line_number_gutters(old_string)
+
+    if block_candidates:
         message = "old_string not found after removing read's line-number gutter."
-        diagnostic_pattern = gutter_candidates[0]
+        diagnostic_pattern = block_candidates[0]
+    elif per_line is not None and per_line != old_string:
+        message = "old_string not found after removing read's line-number gutter."
+        diagnostic_pattern = per_line
     elif looks_like_line_numbered_content(old_string):
         message = (
             "old_string not found — it appears to contain an incomplete or damaged "
@@ -177,6 +183,15 @@ def _replace_with_gutter_fallback(
 
     for candidate in line_number_gutter_candidates(old_string):
         result = replace_fuzzy(content, candidate, new_string, replace_all=replace_all)
+        if result is not None:
+            return result
+
+    # Per-line fallback: strip a gutter from each line that carries one, leaving
+    # other lines unchanged. Handles single-line gutters and partial gutter
+    # blocks that the strict block-level detector above rejects.
+    per_line = strip_line_number_gutters(old_string)
+    if per_line is not None and per_line != old_string:
+        result = replace_fuzzy(content, per_line, new_string, replace_all=replace_all)
         if result is not None:
             return result
     return None
