@@ -1,5 +1,5 @@
 {
-  "fetched_at": "2026-08-20T14:57:15.301101+00:00",
+  "fetched_at": "2026-08-22T15:10:08.755619+00:00",
   "models": {
     "deepseek-v4-flash": {
       "capabilities": {
@@ -40,6 +40,47 @@
         }
       },
       "name": "deepseek-v4-flash"
+    },
+    "deepseek-v4-flash-vision-exp": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "control": "levels",
+          "levels": [
+            "low",
+            "high",
+            "max"
+          ],
+          "supported": true
+        },
+        "supported_parameters": [],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 1000000,
+      "family": "deepseek-flash",
+      "max_output_tokens": 384000,
+      "metadata": {
+        "opencode_go": {
+          "reasoning_response_field": "reasoning_content"
+        }
+      },
+      "name": "deepseek-v4-flash-vision-exp"
     },
     "deepseek-v4-pro": {
       "capabilities": {
@@ -687,6 +728,47 @@
       "family": "muse",
       "max_output_tokens": 131072,
       "name": "muse-spark-1.2-contributor"
+    },
+    "ox-alpha-free": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "video"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "control": "levels",
+          "levels": [
+            "low",
+            "high",
+            "max"
+          ],
+          "supported": true
+        },
+        "supported_parameters": [],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 1000000,
+      "max_output_tokens": 131072,
+      "metadata": {
+        "opencode_go": {
+          "reasoning_response_field": "reasoning_content"
+        }
+      },
+      "name": "ox-alpha-free"
     },
     "qwen3.5-plus": {
       "capabilities": {
