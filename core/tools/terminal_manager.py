@@ -974,15 +974,28 @@ class TerminalManager:
         *,
         lines: int = TERMINAL_STATUS_DEFAULT_LINES,
         before: int | None = None,
+        start_line: int | None = None,
         include_name: bool = True,
     ) -> dict[str, Any]:
-        """Return one bounded rendered status page."""
+        """Return one bounded rendered status page.
+
+        ``start_line`` addresses the whole buffer by absolute zero-based line
+        (Hermes ``read_terminal`` contract); ``before`` is the signed-cursor
+        continuation for older scrollback. Exactly one of them may be given.
+        """
         if not 1 <= lines <= TERMINAL_STATUS_MAX_LINES:
             raise ValueError(f"lines must be between 1 and {TERMINAL_STATUS_MAX_LINES}")
+        if start_line is not None and before is not None:
+            raise ValueError("start_line and cursor cannot be combined")
         session = self.get_session(terminal_id, owner)
         async with session.lock:
             try:
-                scrollback = session.renderer.page(before=before, limit=lines)
+                if start_line is not None:
+                    if start_line < 0:
+                        raise ValueError("start_line must be a non-negative integer")
+                    scrollback = session.renderer.page_from(start_line, lines)
+                else:
+                    scrollback = session.renderer.page(before=before, limit=lines)
             except ValueError as error:
                 raise TerminalCursorError(str(error)) from error
             data = self._snapshot_data(session, scrollback)

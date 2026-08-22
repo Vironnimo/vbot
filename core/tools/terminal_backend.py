@@ -330,7 +330,55 @@ class TerminalRenderer:
             "line_count": len(selected),
             "has_more": has_more,
             "next_before": selected[0].sequence if has_more else None,
+            **self._buffer_metrics(),
         }
+
+    def page_from(self, start: int, limit: int) -> dict[str, Any]:
+        """Return a forward page of the whole buffer addressed by absolute line.
+
+        Line 0 is the oldest retained scrollback line; the current screen
+        follows it. This gives the Agent one-call paging over the complete
+        retained history (Hermes ``read_terminal`` contract) instead of a
+        signed-cursor chase, and is the cheaper model path for long logs.
+        """
+        all_lines, scrollback_len = self._all_lines()
+        total = len(all_lines)
+        start = max(0, min(start, total))
+        count = max(0, min(limit, total - start))
+        selected = all_lines[start : start + count]
+        end = start + count
+        return {
+            "text": "\n".join(selected),
+            "line_count": count,
+            "total_lines": total,
+            "start_line": start,
+            "end_line": end,
+            "next_start_line": end if end < total else None,
+            **self._buffer_metrics(scrollback_len=scrollback_len),
+        }
+
+    def _buffer_metrics(self, *, scrollback_len: int | None = None) -> dict[str, Any]:
+        """Share absolute line metrics between the two page addressing modes."""
+        if scrollback_len is None:
+            _lines, scrollback_len = self._all_lines()
+        return {
+            "total_lines": len(self._scrollback) + self._screen_rows_trimmed(),
+            "cursor_row": scrollback_len + self._screen.cursor.y,
+            "viewport_rows": self.rows,
+        }
+
+    def _screen_rows_trimmed(self) -> int:
+        return len(self._trimmed_screen_lines())
+
+    def _all_lines(self) -> tuple[list[str], int]:
+        scrollback = [line.text for line in self._scrollback]
+        return scrollback + self._trimmed_screen_lines(), len(scrollback)
+
+    def _trimmed_screen_lines(self) -> list[str]:
+        lines = [line.rstrip() for line in self._screen.display]
+        while lines and not lines[-1]:
+            lines.pop()
+        return lines
 
     def _capture_scrolled_line(self, text: str) -> None:
         self._scrollback.append(_ScrollbackLine(self._next_sequence, text))
