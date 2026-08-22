@@ -576,6 +576,85 @@ async def test_agent_input_clears_resize_grace_and_wakes_on_later_output(
 
 
 @pytest.mark.asyncio
+async def test_unchanged_screen_settle_does_not_wake_the_agent_again(
+    tmp_path: Path,
+) -> None:
+    """A quiet boundary whose rendered screen did not change since the last
+    delivered settle (status refreshes, cursor frames, repaint echoes) must
+    not wake the agent: the screen is already known to it."""
+    trigger = PendingTriggerService()
+    factory = AdapterFactory()
+    manager = TerminalManager(
+        trigger,
+        adapter_factory=factory,
+        sweep_interval_seconds=3600,
+        activity_quiet_seconds=0.03,
+    )
+    manager.start()
+    try:
+        session = await spawn(manager, tmp_path)
+        session.state = "working"
+        manager.attach(session.terminal_id, owner(), origin_run_id="attach-run")
+        await eventually(lambda: len(trigger.submissions) == 1)
+        trigger.release.set()
+        await eventually(lambda: session.attention.delivered)
+
+        factory.adapters[0].emit("MENU> ")
+        await eventually(lambda: len(trigger.submissions) == 2)
+        assert session.attention is not None
+        assert session.attention.kind == "output_settled"
+
+        # The identical screen settles again (a status refresh rewrites the
+        # same line): state becomes ready, but no new delivery is created.
+        factory.adapters[0].emit("\rMENU> ")
+        await eventually(lambda: session.state == "ready")
+        await asyncio.sleep(0.1)
+        assert len(trigger.submissions) == 2
+    finally:
+        await manager.aclose()
+
+
+@pytest.mark.asyncio
+async def test_screen_change_after_repeated_settle_still_delivers(
+    tmp_path: Path,
+) -> None:
+    """Suppression only covers an unchanged screen: once the screen actually
+    changes, the next quiet boundary wakes the agent again."""
+    trigger = PendingTriggerService()
+    factory = AdapterFactory()
+    manager = TerminalManager(
+        trigger,
+        adapter_factory=factory,
+        sweep_interval_seconds=3600,
+        activity_quiet_seconds=0.03,
+    )
+    manager.start()
+    try:
+        session = await spawn(manager, tmp_path)
+        session.state = "working"
+        manager.attach(session.terminal_id, owner(), origin_run_id="attach-run")
+        await eventually(lambda: len(trigger.submissions) == 1)
+        trigger.release.set()
+        await eventually(lambda: session.attention.delivered)
+
+        factory.adapters[0].emit("MENU> ")
+        await eventually(lambda: len(trigger.submissions) == 2)
+        # Repeated identical refresh bytes stay silent...
+        factory.adapters[0].emit("\rMENU> ")
+        await eventually(lambda: session.state == "ready")
+        await asyncio.sleep(0.05)
+        assert len(trigger.submissions) == 2
+
+        # ...until the screen content actually changes.
+        factory.adapters[0].emit("\rMENU> \nsecond option")
+        await eventually(lambda: len(trigger.submissions) == 3)
+        assert session.attention is not None
+        assert session.attention.kind == "output_settled"
+    finally:
+        await manager.aclose()
+
+
+@pytest.mark.asyncio
 async def test_operator_stream_starts_with_ansi_snapshot_and_continues_in_sequence(
     terminal_manager: tuple[TerminalManager, AdapterFactory], tmp_path: Path
 ) -> None:
