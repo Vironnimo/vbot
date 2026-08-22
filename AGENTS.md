@@ -1,5 +1,14 @@
 # AGENTS.md
 
+## Read at session start (if not already in your context/system prompt)
+
+Read these two core files completely before doing anything (even saying 'hi'), every session, no exceptions — there is no auto-import here, so loading them is on you:
+
+- `.vorch/PROJECT.md` — project context, architecture, conventions, dev/test commands, domain-maps index
+- `.vorch/GLOSSARY.md` — project-specific terms
+
+They hold the project's rules and conventions — **follow them.** Read more as the task needs it: a domain's map under `.vorch/domain-maps/` (index in PROJECT.md) when you work that domain, plus any adjacent map your change touches; `.vorch/DESIGN.md` for UI work. Domain maps are first-pass orientation: use them to find the responsible domain, relevant contracts, likely source, and tests. They do not prove the current implementation and never replace source code, which remains the source of truth for implemented behavior.
+
 ## Talking to the User
 
 The user reads no code. All user-facing communication — discovery, plan review, decisions, escalations, summaries — is in product language: behavior, capabilities, consequences, domains. No file paths, function names, or code identifiers unless they are part of the product interface (a CLI command, an API endpoint, a config option).
