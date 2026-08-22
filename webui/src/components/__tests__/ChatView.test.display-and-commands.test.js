@@ -534,7 +534,7 @@ describe('ChatView', () => {
 
     // The ring is rendered only when both token count and context window are
     // known. Its fill arc's stroke-dashoffset encodes the fill ratio.
-    const circumference = 2 * Math.PI * 6;
+    const circumference = 2 * Math.PI * 5.25;
     const expectedRatio = 3978 / 262144;
     const expectedOffset = circumference * (1 - expectedRatio);
 
@@ -605,7 +605,7 @@ describe('ChatView', () => {
     flushSync();
 
     // The ring should update its fill arc to reflect the new token count.
-    const circumference = 2 * Math.PI * 6;
+    const circumference = 2 * Math.PI * 5.25;
     const expectedRatio = 4050 / 262144;
     const expectedOffset = circumference * (1 - expectedRatio);
 
@@ -643,7 +643,7 @@ describe('ChatView', () => {
       100,
     );
 
-    const circumference = 2 * Math.PI * 6;
+    const circumference = 2 * Math.PI * 5.25;
     const expectedRatio = 3978 / 262144;
     const expectedOffset = circumference * (1 - expectedRatio);
     const fillArc = document.body.querySelector(
