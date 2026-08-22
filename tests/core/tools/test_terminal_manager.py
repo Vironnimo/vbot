@@ -735,12 +735,12 @@ async def test_textless_agent_start_suppresses_the_startup_settle(
 
 
 @pytest.mark.asyncio
-async def test_resize_repaint_stays_silent_until_the_screen_grows(
+async def test_resize_repaint_is_swallowed_once_and_then_uses_the_new_baseline(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """After a real resize, a TUI redraws the same content at the new size.
-    That repaint is viewer noise: settles stay silent until the screen
-    actually grows with new content."""
+    """After a real resize, the TUI repaints the same content at the new
+    size. That settle is swallowed and its screen becomes the new baseline;
+    an identical refresh afterwards stays silent, a changed screen delivers."""
     monkeypatch.setattr(terminal_module, "TERMINAL_RESIZE_GRACE_SECONDS", 0.05)
     monkeypatch.setattr(terminal_module, "TERMINAL_RESIZE_GRACE_MAX_SECONDS", 0.1)
     trigger = PendingTriggerService()
@@ -771,8 +771,7 @@ async def test_resize_repaint_stays_silent_until_the_screen_grows(
         trigger.release.set()
         await eventually(lambda: session.attention.delivered)
 
-        # The resize anchors the rendered screen; a repaint that redraws that
-        # same content at the new size settles silently.
+        # The resize repaint settle is swallowed and becomes the new baseline.
         await manager.resize(session.terminal_id, owner(), columns=90, rows=24)
         await asyncio.sleep(0.4)
         factory.adapters[0].emit("\rMENU> ")
@@ -780,8 +779,14 @@ async def test_resize_repaint_stays_silent_until_the_screen_grows(
         await asyncio.sleep(0.1)
         assert len(trigger.submissions) == 1
 
+        # An identical refresh against the repaint baseline stays silent.
+        factory.adapters[0].emit("\rMENU> ")
+        await eventually(lambda: session.state == "ready")
+        await asyncio.sleep(0.1)
+        assert len(trigger.submissions) == 1
+
         # The screen changes with real content: the settle delivers again.
-        factory.adapters[0].emit("new work output line")
+        factory.adapters[0].emit("\rMENU> \nnew work output line")
         await eventually(lambda: len(trigger.submissions) == 2)
         assert session.attention is not None
         assert session.attention.kind == "output_settled"
