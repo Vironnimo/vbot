@@ -179,6 +179,15 @@ function expectedShellTitle(command) {
   if (executable === "cmd.exe" || executable === "cmd") {
     return "Command Prompt";
   }
+  if (executable === "bash.exe" || executable === "bash") {
+    return "Bash";
+  }
+  if (executable === "zsh.exe" || executable === "zsh") {
+    return "Zsh";
+  }
+  if (executable === "fish.exe" || executable === "fish") {
+    return "Fish";
+  }
   return executableName(command);
 }
 
