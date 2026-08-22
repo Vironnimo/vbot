@@ -23,6 +23,7 @@
     filterModelSelectOptions,
     modelFilterFooterLabel,
   } from '$lib/modelSelection.js';
+  import { formatTokenUsageTooltip } from '$lib/tokenUsageTooltip.js';
   import { floatingHoverCard, tooltip } from '$lib/tooltip.js';
   import FileAutocomplete from './FileAutocomplete.svelte';
   import ModelAutocomplete from './ModelAutocomplete.svelte';
@@ -41,6 +42,10 @@
     isRunning = false,
     cancelling = false,
     availableSkills = [],
+    contextUsage = null,
+    contextWindow = null,
+    usage = null,
+    sessionUsage = null,
     draftKey = '',
     historyKey = '',
     focusRequest = 0,
@@ -90,6 +95,31 @@
   let attachmentToastTimeoutId = null;
   let _suppressSelectionUpdate = false;
   let _triggerClosed = false;
+
+  // Context-window fill ring: a thin SVG progress arc proportional to
+  // tokens / context_window. The same tooltip as the old header badge.
+  const CONTEXT_RING_RADIUS = 6;
+  const CONTEXT_RING_CIRCUMFERENCE = 2 * Math.PI * CONTEXT_RING_RADIUS;
+
+  let contextFillRatio = $derived.by(() => {
+    const tokens = contextUsage?.tokens;
+    if (
+      !Number.isFinite(tokens) ||
+      !Number.isFinite(contextWindow) ||
+      contextWindow <= 0
+    ) {
+      return null;
+    }
+    return Math.min(1, tokens / contextWindow);
+  });
+  let contextRingOffset = $derived(
+    contextFillRatio === null
+      ? CONTEXT_RING_CIRCUMFERENCE
+      : CONTEXT_RING_CIRCUMFERENCE * (1 - contextFillRatio),
+  );
+  let contextTooltip = $derived(
+    formatTokenUsageTooltip(contextUsage, usage, sessionUsage) ?? undefined,
+  );
 
   let triggerItems = $derived(availableSkills.filter((item) => item?.name));
   let autocompleteItems = $derived.by(() =>
@@ -1402,6 +1432,38 @@
       )}
       rows="1"
     ></textarea>
+    {#if contextFillRatio !== null}
+      <span
+        class="context-ring"
+        use:tooltip={contextTooltip}
+        aria-label={t('chat.contextRingLabel', 'Context window usage')}
+      >
+        <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
+          <circle
+            class="context-ring__track"
+            cx="8"
+            cy="8"
+            r={CONTEXT_RING_RADIUS}
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.5"
+          />
+          <circle
+            class="context-ring__fill"
+            cx="8"
+            cy="8"
+            r={CONTEXT_RING_RADIUS}
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.5"
+            stroke-linecap="round"
+            stroke-dasharray={CONTEXT_RING_CIRCUMFERENCE}
+            stroke-dashoffset={contextRingOffset}
+            transform="rotate(-90 8 8)"
+          />
+        </svg>
+      </span>
+    {/if}
     <div class="input-btns">
       <Button
         variant="tertiary"
@@ -1583,6 +1645,32 @@
 
   .msg-input {
     height: 22px;
+  }
+
+  /* Context-window fill ring: sits at the bottom-right of the input box,
+     between the textarea and the action buttons, aligned to the button row.
+     The track is faint; the fill arc shows how much of the context window is
+     consumed. Same tooltip as the old header badge. */
+  .context-ring {
+    display: flex;
+    flex-shrink: 0;
+    align-self: flex-end;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    margin-bottom: 1px;
+    color: var(--text-lo);
+    cursor: default;
+  }
+
+  .context-ring__track {
+    opacity: 0.3;
+  }
+
+  .context-ring__fill {
+    color: var(--text-med);
+    transition: stroke-dashoffset 300ms ease;
   }
 
   /* Extra breathing room around the stop button: cancelling by accident is the

@@ -1,7 +1,6 @@
 <script>
-  import { activeLocaleTag, t } from '$lib/i18n.js';
+  import { t } from '$lib/i18n.js';
   import { parseModelSelectionValue } from '$lib/modelSelection.js';
-  import { formatTokenUsageTooltip } from '$lib/tokenUsageTooltip.js';
   import { tooltip } from '$lib/tooltip.js';
   import Button from '../ui/Button.svelte';
   import Dropdown from '../Dropdown.svelte';
@@ -12,7 +11,6 @@
     selectedAgentId = '',
     loadingAgents = false,
     activeAgent = null,
-    activeSessionState = null,
     showSessionDrawer = false,
     creatingSession = false,
     newSessionLoading = false,
@@ -29,19 +27,6 @@
     onNavigateToVoiceSettings = () => {},
   } = $props();
 
-  let tokenBadgeText = $derived.by(() =>
-    formatTokenBadge(
-      activeSessionState?.contextUsage,
-      activeAgent?.context_window,
-    ),
-  );
-  let tokenBadgeTooltip = $derived.by(() =>
-    formatTokenUsageTooltip(
-      activeSessionState?.contextUsage,
-      activeSessionState?.usage,
-      activeSessionState?.sessionUsage,
-    ),
-  );
   let micDotClass = $derived(computeMicDotClass(wakewordStatus));
   let micTooltip = $derived(computeMicTooltip(wakewordStatus));
   let micVisible = $derived(Boolean(desktopCapabilities?.wakeword));
@@ -62,41 +47,6 @@
       label: project.display_name || project.project_id,
     })),
   ]);
-
-  function formatTokenBadge(contextUsage, contextWindow) {
-    const numberFormat = new Intl.NumberFormat(activeLocaleTag());
-
-    if (Number.isFinite(contextUsage?.tokens)) {
-      const tokensFormatted = numberFormat.format(contextUsage.tokens);
-      const estimated = contextUsage.estimated === true;
-
-      if (contextWindow != null) {
-        const contextFormatted = numberFormat.format(contextWindow);
-        return estimated
-          ? t('chat.tokenBadgeEstimated', '~{tokens} / {context} tok', {
-              tokens: tokensFormatted,
-              context: contextFormatted,
-            })
-          : t('chat.tokenBadge', '{tokens} / {context} tok', {
-              tokens: tokensFormatted,
-              context: contextFormatted,
-            });
-      }
-      return estimated
-        ? t('chat.tokenBadgeEstimatedNoContext', '~{tokens} tok', {
-            tokens: tokensFormatted,
-          })
-        : t('chat.tokenBadgeNoContext', '{tokens} tok', {
-            tokens: tokensFormatted,
-          });
-    }
-    if (contextWindow != null) {
-      return t('chat.tokenBadgeNoUsage', '— / {context} tok', {
-        context: numberFormat.format(contextWindow),
-      });
-    }
-    return '';
-  }
 
   function computeMicDotClass(status) {
     if (status?.state === 'error') {
@@ -278,11 +228,6 @@
         {/if}
       </button>
     {/if}
-    {#if tokenBadgeText}
-      <span class="token-badge" use:tooltip={tokenBadgeTooltip}
-        >{tokenBadgeText}</span
-      >
-    {/if}
     <Dropdown
       value={selectedProjectId}
       options={projectOptions}
@@ -409,16 +354,6 @@
     flex-shrink: 0;
     align-items: center;
     gap: 10px;
-  }
-
-  .token-badge {
-    padding: 3px 8px;
-    border: 1px solid var(--border);
-    border-radius: var(--r-sm);
-    color: var(--text-lo);
-    background: var(--surface-2);
-    font-family: var(--font-mono);
-    font-size: var(--fs-mono-sm);
   }
 
   .mic-indicator {
@@ -549,10 +484,6 @@
       margin-left: auto;
       flex-wrap: wrap;
       justify-content: flex-end;
-    }
-
-    .token-badge {
-      display: none;
     }
   }
 </style>
