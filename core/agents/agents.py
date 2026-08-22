@@ -13,6 +13,7 @@ from copy import deepcopy
 from dataclasses import asdict, dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
+from threading import RLock
 from typing import Any, cast
 
 from core.config_validation import (
@@ -415,6 +416,10 @@ class AgentStore:
         )
         self._defaults_provider = defaults_provider
         self._reported_order_error: str | None = None
+        # Agent updates can arrive from separate RPC worker pools. Serialize
+        # replacement of the same config files so Windows never sees two
+        # concurrent os.replace calls targeting one agent.json or order.json.
+        self._write_lock = RLock()
 
     @property
     def data_dir(self) -> Path:
@@ -1092,16 +1097,20 @@ class AgentStore:
         return self._data_dir / "archive" / "agents" / agent_id
 
     def _write_agent(self, agent: Agent) -> None:
-        agent_path = self._agent_path(agent.id)
-        persisted = asdict(agent)
-        persisted["tool_access"] = agent.tool_access.to_dict()
-        if not persisted["tools"]:
-            persisted.pop("tools")
-        persisted["workspace"] = _workspace_for_storage(
-            agent.workspace,
-            data_dir=self._data_dir,
-        )
-        atomic_write_text(agent_path, json.dumps(persisted, ensure_ascii=False, indent=2) + "\n")
+        with self._write_lock:
+            agent_path = self._agent_path(agent.id)
+            persisted = asdict(agent)
+            persisted["tool_access"] = agent.tool_access.to_dict()
+            if not persisted["tools"]:
+                persisted.pop("tools")
+            persisted["workspace"] = _workspace_for_storage(
+                agent.workspace,
+                data_dir=self._data_dir,
+            )
+            atomic_write_text(
+                agent_path,
+                json.dumps(persisted, ensure_ascii=False, indent=2) + "\n",
+            )
 
     def _load_agent_order(self) -> _AgentOrderDocument | None:
         order_path = self._agent_order_path()
@@ -1132,10 +1141,11 @@ class AgentStore:
             "revision": order.revision,
             "agent_ids": list(order.agent_ids),
         }
-        atomic_write_text(
-            self._agent_order_path(),
-            json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
-        )
+        with self._write_lock:
+            atomic_write_text(
+                self._agent_order_path(),
+                json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+            )
         self._reported_order_error = None
 
     def _restore_agent_order(self, order: _AgentOrderDocument | None) -> None:

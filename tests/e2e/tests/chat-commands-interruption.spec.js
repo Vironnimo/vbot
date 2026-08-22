@@ -16,7 +16,7 @@ test("a normal message resumes interrupted work without recovery controls", asyn
   await chat.getByRole("textbox", { name: "Message" }).fill("/stop");
   await chat.getByRole("button", { name: "Queue message" }).click();
   await expect(chat.getByText("Run cancelled.", { exact: true })).toBeVisible();
-  await expect(chat.getByText("· Cancelled", { exact: true })).toBeVisible();
+  await expect(chat.getByText("Cancelled", { exact: true })).toBeVisible();
   await expect(
     chat.getByText("Interrupted work retained", { exact: true }),
   ).toHaveCount(0);

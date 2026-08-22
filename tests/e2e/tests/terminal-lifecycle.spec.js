@@ -45,8 +45,8 @@ async function openTerminals(page) {
 
 async function startTerminal(page, { command, arguments: args = [] } = {}) {
   await page
-    .getByRole("complementary", { name: "Terminals" })
-    .getByRole("button", { exact: true, name: "Add" })
+    .getByRole("region", { name: "Terminals" })
+    .getByRole("button", { exact: true, name: "New terminal" })
     .click();
   const dialog = page.getByRole("dialog", { name: "New terminal" });
   await expect(dialog).toBeVisible();
@@ -59,28 +59,78 @@ async function startTerminal(page, { command, arguments: args = [] } = {}) {
   await dialog.getByRole("button", { name: "Start terminal" }).click();
   await expect(dialog).not.toBeVisible();
   await expect(
-    page.locator(".terminals-view__tile-host .xterm-rows"),
+    selectedTerminal(page).getByRole("group", { name: /^Live terminal/ }),
   ).toBeVisible();
 }
 
-function terminalOutput(page) {
-  return page.locator(".terminals-view__tile-host .xterm-rows");
+function selectedTerminal(page) {
+  return page.locator(".terminals-view__tile--focused");
+}
+
+async function readSelectedTerminalSnapshot(page) {
+  const terminalId = await selectedTerminal(page).getAttribute("data-terminal-id");
+  if (!terminalId) {
+    throw new Error("No selected terminal is available");
+  }
+  return page.evaluate(
+    ({ terminalId }) =>
+      new Promise((resolve, reject) => {
+        const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+        const socket = new WebSocket(
+          `${protocol}//${window.location.host}/ws/terminals/${encodeURIComponent(terminalId)}`,
+        );
+        const timeout = window.setTimeout(() => {
+          socket.close();
+          reject(new Error("Timed out waiting for a terminal snapshot"));
+        }, 3000);
+        socket.onmessage = (event) => {
+          const payload = JSON.parse(event.data);
+          if (typeof payload.ansi !== "string") {
+            return;
+          }
+          window.clearTimeout(timeout);
+          socket.close();
+          resolve(payload.ansi);
+        };
+        socket.onerror = () => {
+          window.clearTimeout(timeout);
+          reject(new Error("Terminal snapshot WebSocket failed"));
+        };
+      }),
+    { terminalId },
+  );
+}
+
+async function expectSelectedTerminalOutput(page, text) {
+  await expect
+    .poll(async () => (await readSelectedTerminalSnapshot(page)).includes(text))
+    .toBe(true);
+}
+
+async function expectSelectedTerminalWithoutOutput(page, text) {
+  await expect
+    .poll(async () => (await readSelectedTerminalSnapshot(page)).includes(text))
+    .toBe(false);
 }
 
 async function sendToSelectedTerminal(page, text) {
-  await page
-    .getByRole("group", { name: "Live terminal. Click to take control." })
+  await selectedTerminal(page)
+    .getByRole("group", { name: /^Live terminal/ })
     .click();
   await page.keyboard.type(text);
   await page.keyboard.press("Enter");
 }
 
-async function stopSelectedTerminal(page) {
-  await page.getByRole("button", { name: "Stop terminal" }).click();
-  const dialog = page.getByRole("dialog", {
-    name: "Stop this Terminal Session?",
-  });
-  await dialog.getByRole("button", { name: "Stop terminal" }).click();
+async function closeSelectedTerminal(page) {
+  const tile = selectedTerminal(page);
+  const terminalId = await tile.getAttribute("data-terminal-id");
+  if (!terminalId) {
+    throw new Error("No selected terminal is available");
+  }
+  await tile.getByRole("button", { name: "Close terminal" }).click();
+  await expect(
+    page.locator(`[data-terminal-id="${terminalId}"]`),
+  ).toHaveCount(0);
 }
 
 function pythonHarness(label, backgroundDelaySeconds = null) {
@@ -118,6 +168,20 @@ function executableName(command) {
   return command.split(/[\\/]/).pop();
 }
 
+function expectedShellTitle(command) {
+  const executable = executableName(command).toLowerCase();
+  if (executable === "pwsh.exe" || executable === "pwsh") {
+    return "PowerShell";
+  }
+  if (executable === "powershell.exe" || executable === "powershell") {
+    return "Windows PowerShell";
+  }
+  if (executable === "cmd.exe" || executable === "cmd") {
+    return "Command Prompt";
+  }
+  return executableName(command);
+}
+
 function defaultShellProbe(command) {
   if (process.platform !== "win32") {
     return `printf '${DEFAULT_SHELL_MARKER}\\n'`;
@@ -143,10 +207,10 @@ test("the platform default shell starts as a native interactive terminal", async
 
   const expectedCommand = expectedDefaultShell();
   await expect(
-    page.locator(".terminals-view__tile-command").first(),
-  ).toHaveText(executableName(expectedCommand));
+    page.locator(".terminals-view__tile-title").first(),
+  ).toHaveText(expectedShellTitle(expectedCommand));
   await sendToSelectedTerminal(page, defaultShellProbe(expectedCommand));
-  await expect(terminalOutput(page)).toContainText(DEFAULT_SHELL_MARKER);
+  await expectSelectedTerminalOutput(page, DEFAULT_SHELL_MARKER);
 });
 
 test("a started command runs inside the shell and the terminal stays usable", async ({
@@ -157,25 +221,25 @@ test("a started command runs inside the shell and the terminal stays usable", as
     command: environment.python,
     arguments: ["-u", "-c", pythonHarness("INNER")],
   });
-  await expect(terminalOutput(page)).toContainText("READY-INNER");
+  await expectSelectedTerminalOutput(page, "READY-INNER");
   await expect(
-    page.locator(".terminals-view__list-item").first(),
-  ).toContainText("python");
+    page.locator(".terminals-view__tile-target").first(),
+  ).toHaveText("Manual");
 
   await sendToSelectedTerminal(page, "message-for-inner");
-  await expect(terminalOutput(page)).toContainText("INNER:message-for-inner");
+  await expectSelectedTerminalOutput(page, "INNER:message-for-inner");
 
   await page.keyboard.press("Control+c");
   await page.waitForTimeout(400);
   await sendToSelectedTerminal(page, defaultShellProbe(expectedDefaultShell()));
-  await expect(terminalOutput(page)).toContainText(DEFAULT_SHELL_MARKER);
+  await expectSelectedTerminalOutput(page, DEFAULT_SHELL_MARKER);
 });
 
 test("multiple terminals keep output, input, reconnect, and stop lifecycle isolated", async ({
   page,
 }) => {
   await openTerminals(page);
-  const terminalItems = page.locator(".terminals-view__list-item");
+  const terminalItems = page.locator(".terminals-view__tile-bar");
 
   await startTerminal(page, {
     command: environment.python,
@@ -183,56 +247,44 @@ test("multiple terminals keep output, input, reconnect, and stop lifecycle isola
   });
   await expect(terminalItems).toHaveCount(1);
   await expect(terminalItems.nth(0)).toContainText("E2E-ALPHA");
-  await expect(terminalOutput(page)).toContainText("READY-ALPHA");
+  await expectSelectedTerminalOutput(page, "READY-ALPHA");
 
   await startTerminal(page, {
     command: environment.python,
     arguments: ["-u", "-c", pythonHarness("BRAVO")],
   });
   await expect(terminalItems).toHaveCount(2);
-  await expect(terminalItems.nth(0)).toHaveAttribute("aria-current", "true");
+  await expect(
+    page.locator(".terminals-view__tile--focused .terminals-view__tile-title"),
+  ).toHaveText("E2E-BRAVO");
   await expect(terminalItems.nth(0)).toContainText("E2E-BRAVO");
-  await expect(terminalOutput(page)).toContainText("READY-BRAVO");
+  await expectSelectedTerminalOutput(page, "READY-BRAVO");
   await sendToSelectedTerminal(page, "message-for-bravo");
-  await expect(terminalOutput(page)).toContainText("BRAVO:message-for-bravo");
+  await expectSelectedTerminalOutput(page, "BRAVO:message-for-bravo");
 
   await terminalItems.nth(1).click();
   await expect(terminalItems.nth(1)).toContainText("E2E-ALPHA active");
-  await expect(terminalOutput(page)).toContainText("BACKGROUND-ALPHA");
-  await expect(terminalOutput(page)).not.toContainText(
-    "BRAVO:message-for-bravo",
-  );
+  await expectSelectedTerminalOutput(page, "BACKGROUND-ALPHA");
+  await expectSelectedTerminalWithoutOutput(page, "BRAVO:message-for-bravo");
   await sendToSelectedTerminal(page, "message-for-alpha");
-  await expect(terminalOutput(page)).toContainText("ALPHA:message-for-alpha");
+  await expectSelectedTerminalOutput(page, "ALPHA:message-for-alpha");
 
   await terminalItems.nth(0).click();
-  await expect(terminalOutput(page)).toContainText("BRAVO:message-for-bravo");
-  await expect(terminalOutput(page)).not.toContainText(
-    "ALPHA:message-for-alpha",
-  );
+  await expectSelectedTerminalOutput(page, "BRAVO:message-for-bravo");
+  await expectSelectedTerminalWithoutOutput(page, "ALPHA:message-for-alpha");
 
   const navigation = page.getByRole("navigation", { name: "Sections" });
   await navigation.getByRole("button", { name: "Projects" }).click();
   await navigation.getByRole("button", { name: "Terminals" }).click();
   await expect(terminalItems).toHaveCount(2);
-  await expect(terminalOutput(page)).toContainText("BRAVO:message-for-bravo");
+  await expectSelectedTerminalOutput(page, "BRAVO:message-for-bravo");
 
-  await stopSelectedTerminal(page);
-  await expect(terminalItems).toHaveCount(2);
-  await expect(terminalOutput(page)).toContainText("BRAVO:message-for-bravo");
-  await terminalItems.filter({ hasText: "E2E-ALPHA" }).click();
-  await expect(terminalOutput(page)).toContainText("ALPHA:message-for-alpha");
+  await closeSelectedTerminal(page);
+  await expect(terminalItems).toHaveCount(1);
+  await expectSelectedTerminalOutput(page, "ALPHA:message-for-alpha");
   await sendToSelectedTerminal(page, "alpha-survived-bravo-stop");
-  await expect(terminalOutput(page)).toContainText(
-    "ALPHA:alpha-survived-bravo-stop",
-  );
+  await expectSelectedTerminalOutput(page, "ALPHA:alpha-survived-bravo-stop");
 
-  await stopSelectedTerminal(page);
-  await expect(terminalItems).toHaveCount(2);
-  await expect(terminalOutput(page)).toContainText(
-    "ALPHA:alpha-survived-bravo-stop",
-  );
-  await expect(
-    page.getByText("Read-only history", { exact: false }),
-  ).toBeVisible();
+  await closeSelectedTerminal(page);
+  await expect(terminalItems).toHaveCount(0);
 });
