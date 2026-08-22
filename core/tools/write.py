@@ -27,6 +27,7 @@ from core.utils.paths import model_path
 _UTF8_BOM_BYTES = b"\xef\xbb\xbf"
 _UTF8_BOM = chr(0xFEFF)
 _LINE_COUNT_CHUNK_BYTES = 64 * 1024
+_LINE_ENDING_DETECT_BYTES = 8 * 1024
 
 WRITE_TOOL_NAME = "write"
 WRITE_TOOL_DESCRIPTION = (
@@ -35,7 +36,10 @@ WRITE_TOOL_DESCRIPTION = (
     "edits or appending. Automatically creates parent directories. If the "
     "file already exists you must read it first; this tool fails if you did "
     "not, or if it changed on disk since you last read it. Content is written "
-    "verbatim - never include the N| line-number prefix from read output."
+    "verbatim - never include the N| line-number prefix from read output. "
+    "When overwriting an existing file, line endings are normalized to match "
+    "the file's current style (CRLF/LF), so the model's natural LF output does "
+    "not silently change a CRLF file."
 )
 WRITE_TOOL_PARAMETERS: JsonObject = {
     "type": "object",
@@ -79,6 +83,30 @@ def _file_line_count(path: Path) -> int:
     if last_byte is None:
         return 0
     return line_breaks + (0 if last_byte in {ord("\r"), ord("\n")} else 1)
+
+
+def _detect_file_line_ending(path: Path) -> str | None:
+    """Detect a file's dominant line ending from a bounded binary read."""
+    try:
+        with path.open("rb") as handle:
+            sample = handle.read(_LINE_ENDING_DETECT_BYTES)
+    except OSError:
+        return None
+    if b"\r\n" in sample:
+        return "\r\n"
+    if b"\n" in sample:
+        return "\n"
+    if b"\r" in sample:
+        return "\r"
+    return None
+
+
+def _normalize_to_line_ending(text: str, ending: str) -> str:
+    """Convert all line endings in ``text`` to ``ending``."""
+    lf = text.replace("\r\n", "\n").replace("\r", "\n")
+    if ending == "\n":
+        return lf
+    return lf.replace("\n", ending)
 
 
 def write_handler(
@@ -129,10 +157,19 @@ def write_handler(
 
         try:
             removed_lines = _file_line_count(resolved) if target_exists else 0
+            # Preserve the existing file's line endings: the model naturally
+            # produces LF, but silently switching a CRLF file to LF causes
+            # unnecessary full-file git diffs. A new file keeps the agent's
+            # endings verbatim (no existing style to preserve).
+            content = content_argument
+            if target_exists:
+                file_ending = _detect_file_line_ending(resolved)
+                if file_ending is not None:
+                    content = _normalize_to_line_ending(content, file_ending)
             resolved.parent.mkdir(parents=True, exist_ok=True)
             # Preserve a BOM the existing file already had, so a full-file rewrite of
             # content the model read BOM-free does not silently drop the marker.
-            payload = content_argument
+            payload = content
             if _file_starts_with_bom(resolved) and not payload.startswith(_UTF8_BOM):
                 payload = _UTF8_BOM + payload
             encoded = payload.encode("utf-8")
@@ -161,11 +198,11 @@ def write_handler(
                 context.session_id,
                 resolved,
                 before=baseline if baseline is not None else "",
-                after=content_argument,
+                after=content,
             )
 
     context.add_display_line_changes(
-        added=logical_line_count(content_argument),
+        added=logical_line_count(content),
         removed=removed_lines,
     )
 
@@ -178,7 +215,7 @@ def write_handler(
     }
     # Non-blocking: the file is already written. A syntax warning only tells the
     # model it just broke the file so it can fix it next turn.
-    warning = warning_for_written_file(resolved, content_argument)
+    warning = warning_for_written_file(resolved, content)
     if warning is not None:
         data["syntax_warning"] = warning
     return tool_success(data)
