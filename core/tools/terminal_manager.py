@@ -47,6 +47,9 @@ TERMINAL_MAX_LIVE_GLOBAL = 32
 TERMINAL_SWEEP_INTERVAL_SECONDS = 60.0
 TERMINAL_FINISHED_TTL = timedelta(minutes=30)
 TERMINAL_NOTICE_MESSAGE_CAP_CHARS = 16_000
+# How many newest screen rows the automatic attention notice embeds, so the
+# woken Agent can usually act without a follow-up status call.
+TERMINAL_DELIVERY_TAIL_LINES = 20
 TERMINAL_TEMPORARY_CATEGORY = "terminals"
 TERMINAL_INITIAL_INPUT_QUIET_SECONDS = 0.5
 TERMINAL_INITIAL_INPUT_TIMEOUT_SECONDS = 15.0
@@ -2122,10 +2125,16 @@ def _attention_body(session: TerminalSession, attention: TerminalAttention) -> s
     if attention.kind == "output_settled":
         sections.extend(
             (
-                "Use terminal status to inspect the current screen. Decide from that "
-                "screen whether the program is still working, is waiting for input, has "
-                "returned to a prompt, or needs no action. Reuse this Terminal Session; do "
-                "not start a duplicate process.",
+                "The current screen tail is embedded below so you can usually act "
+                "without a follow-up status call. Decide from it whether the program "
+                "is still working, is waiting for input, has returned to a prompt, or "
+                "needs no action. Use terminal status for the full screen and older "
+                "scrollback when needed. Reuse this Terminal Session; do not start a "
+                "duplicate process.",
+                "",
+                "```",
+                session.renderer.screen_tail(TERMINAL_DELIVERY_TAIL_LINES),
+                "```",
             )
         )
     elif attention.details:
