@@ -254,6 +254,15 @@ class TerminalRenderer:
             lines.pop()
         return "\n".join(lines)
 
+    def screen_tail(self, count: int) -> str:
+        """Return the newest ``count`` non-blank screen rows as plain text."""
+        if count <= 0:
+            return ""
+        lines = [line.rstrip() for line in self._screen.display]
+        while lines and not lines[-1]:
+            lines.pop()
+        return "\n".join(lines[-count:])
+
     @property
     def title(self) -> str:
         """Return one bounded single-line title announced through the VT stream."""

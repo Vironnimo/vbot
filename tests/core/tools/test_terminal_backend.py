@@ -240,6 +240,15 @@ def test_page_from_handles_empty_and_overflow_addresses() -> None:
     assert beyond["next_start_line"] is None
 
 
+def test_screen_tail_returns_newest_non_blank_rows() -> None:
+    renderer = TerminalRenderer(12, 3, scrollback_lines=20)
+    renderer.feed("a\r\nb\r\nc")
+
+    assert renderer.screen_tail(2) == "b\nc"
+    assert renderer.screen_tail(10) == "a\nb\nc"
+    assert renderer.screen_tail(0) == ""
+
+
 def test_cursor_page_carries_absolute_buffer_metrics() -> None:
     renderer = TerminalRenderer(12, 3, scrollback_lines=20)
     renderer.feed("".join(f"line-{index}\r\n" for index in range(6)))

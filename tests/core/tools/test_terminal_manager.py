@@ -1095,6 +1095,8 @@ async def test_attention_auto_delivers_and_manual_ack_cancels_exactly_once(
         assert kwargs["project_id"] == "project-a"
         assert isinstance(kwargs["body"], str)
         assert session.terminal_id in kwargs["body"]
+        assert "```" in kwargs["body"]
+        assert "working..." in kwargs["body"]
         assert session.attention is not None
         assert session.attention.kind == "output_settled"
 
