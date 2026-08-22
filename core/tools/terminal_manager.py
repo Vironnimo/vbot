@@ -139,7 +139,7 @@ class TerminalManagerError(VBotError):
 
 
 class TerminalNotFoundError(TerminalManagerError):
-    """Raised when a Terminal Session is missing or belongs to another Session."""
+    """Raised when a Terminal Session does not exist."""
 
 
 class TerminalAlreadyAttachedError(TerminalManagerError):
@@ -148,6 +148,15 @@ class TerminalAlreadyAttachedError(TerminalManagerError):
 
 class TerminalNotAttachedError(TerminalManagerError):
     """Raised when detach does not target the current attachment."""
+
+
+class TerminalNotOwnedError(TerminalManagerError):
+    """Raised when a Terminal Session exists but is not attached to the calling Session.
+
+    Discovery (``list``) grants no operational access. Controlling, status,
+    or targeting a Terminal Session requires the exact ``attach`` binding, so
+    the caller must ``attach`` the Session to its own Session first.
+    """
 
 
 class TerminalClosedError(TerminalManagerError):
@@ -611,8 +620,13 @@ class TerminalManager:
     def get_session(self, terminal_id: str, owner: TerminalOwner) -> TerminalSession:
         """Return a Terminal Session attached to the exact vBot Session."""
         session = self._sessions.get(terminal_id)
-        if session is None or session.attachment != owner:
+        if session is None:
             raise TerminalNotFoundError(f"Terminal Session not found: {terminal_id}")
+        if session.attachment != owner:
+            raise TerminalNotOwnedError(
+                f"Terminal Session is not attached to this vBot Session; attach it first "
+                f"(id: {terminal_id})"
+            )
         return session
 
     def attach(

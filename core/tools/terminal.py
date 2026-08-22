@@ -30,6 +30,7 @@ from core.tools.terminal_manager import (
     TerminalManager,
     TerminalNotAttachedError,
     TerminalNotFoundError,
+    TerminalNotOwnedError,
     TerminalOwner,
     TerminalSession,
     TerminalStaleScreenError,
@@ -316,6 +317,12 @@ async def _handle_terminal(
         return tool_failure("terminal_already_attached", str(error), retryable=False)
     except TerminalNotAttachedError as error:
         return tool_failure("terminal_not_attached", str(error), retryable=False)
+    except TerminalNotOwnedError as error:
+        return tool_failure(
+            "terminal_not_owned",
+            str(error),
+            retryable=False,
+        )
     except TerminalClosedError as error:
         return tool_failure("terminal_closed", str(error), retryable=False)
     except TerminalCapacityError as error:

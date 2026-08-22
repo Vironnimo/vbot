@@ -18,6 +18,7 @@ from core.tools.terminal_manager import (
     TerminalManager,
     TerminalManagerError,
     TerminalNotFoundError,
+    TerminalNotOwnedError,
     TerminalOwner,
     TerminalStaleScreenError,
 )
@@ -346,7 +347,7 @@ async def test_attachment_isolated_access_transfers_without_rewriting_origin(
     session = await spawn(manager, tmp_path)
     other = owner("session-b")
 
-    with pytest.raises(TerminalNotFoundError):
+    with pytest.raises(TerminalNotOwnedError):
         manager.get_session(session.terminal_id, other)
 
     assert manager.transfer_scope(owner(), other) == 1
@@ -1052,7 +1053,7 @@ async def test_operator_terminal_attach_delivers_activity_and_detach_preserves_l
         assert manager.detach(terminal_id, owner()) is session
         assert session.attachment is None
         assert factory.adapters[0].alive is True
-        with pytest.raises(TerminalNotFoundError):
+        with pytest.raises(TerminalNotOwnedError):
             manager.get_session(terminal_id, owner())
 
         await manager.close_scope(owner())
