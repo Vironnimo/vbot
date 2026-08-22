@@ -333,6 +333,8 @@
       webglHostWidth: null,
       webglHostHeight: null,
       webglFontSize: null,
+      webglRejectedHostWidth: null,
+      webglRejectedHostHeight: null,
       lastFitCols: null,
       lastFitRows: null,
       lastFitHostWidth: null,
@@ -484,10 +486,57 @@
     ) {
       return;
     }
+    if (
+      tile.webglRejectedHostWidth !== host.clientWidth ||
+      tile.webglRejectedHostHeight !== host.clientHeight
+    ) {
+      tile.webglRejectedHostWidth = null;
+      tile.webglRejectedHostHeight = null;
+    }
     // FitAddon skips xterm.resize when cols/rows stay the same, so a
     // host-pixel or font-size change leaves the WebGL quads on the
     // previous cell metrics — white row gaps or a shifted TUI.
     disposeWebglRenderer(tile);
+  }
+
+  function webglScreenCanvas(host) {
+    return [...host.querySelectorAll('.xterm-screen canvas')].find(
+      (canvas) =>
+        !canvas.classList.contains('xterm-link-layer') && canvas.height > 32,
+    );
+  }
+
+  function webglBackingMatchesGrid(tile, host) {
+    const canvas = webglScreenCanvas(host);
+    const rows = tile.xterm.rows;
+    if (!canvas || rows < 1 || canvas.height < 1) {
+      return true;
+    }
+    // At 125% desktop scale the browser's device-pixel box is often one
+    // pixel off the cell grid. xterm then overwrites the backing store
+    // without recomputing cell height — regular white row gaps. That
+    // alignment depends on the tile's on-screen position, so a later
+    // remount or a newly added tile can fail again until it happens to
+    // land on a whole device pixel.
+    if (canvas.height % rows !== 0) {
+      return false;
+    }
+    const cssHeight = canvas.clientHeight;
+    if (cssHeight < 1) {
+      return true;
+    }
+    const expected = Math.round(cssHeight * (window.devicePixelRatio || 1));
+    return Math.abs(canvas.height - expected) <= 1;
+  }
+
+  function rejectMisalignedWebgl(tile, host) {
+    if (webglBackingMatchesGrid(tile, host)) {
+      return false;
+    }
+    disposeWebglRenderer(tile);
+    tile.webglRejectedHostWidth = host.clientWidth;
+    tile.webglRejectedHostHeight = host.clientHeight;
+    return true;
   }
 
   function invalidateWebglAfterSnapshot(tile) {
@@ -496,6 +545,8 @@
     // skips xterm.resize, so WebGL never recomputes its quads — leftover
     // cells and a TUI stuck at the top until a real resize (maximize).
     disposeWebglRenderer(tile);
+    tile.webglRejectedHostWidth = null;
+    tile.webglRejectedHostHeight = null;
     tile.stableFitCount = 0;
     tile.lastFitCols = null;
     tile.lastFitRows = null;
@@ -531,11 +582,25 @@
             scheduleFit(terminalId);
             return;
           }
+          if (
+            current.webglRejectedHostWidth === currentHost.clientWidth &&
+            current.webglRejectedHostHeight === currentHost.clientHeight
+          ) {
+            return;
+          }
           enableWebglRenderer(current, WebglAddonClass);
           current.webglHostWidth = currentHost.clientWidth;
           current.webglHostHeight = currentHost.clientHeight;
           current.webglFontSize = current.xterm.options.fontSize;
           refreshTileRenderer(current);
+          requestAnimationFrame(() => {
+            const loaded = tileRegistry.get(terminalId);
+            const loadedHost = tileHosts.get(terminalId);
+            if (!loaded?.webglLoaded || !loadedHost) {
+              return;
+            }
+            rejectMisalignedWebgl(loaded, loadedHost);
+          });
         });
       });
     };
@@ -612,6 +677,9 @@
       tile.lastFitHostHeight = hostHeight;
       refreshTileRenderer(tile);
       rebuildWebglIfHostDrifted(tile, host);
+      if (tile.webglLoaded) {
+        rejectMisalignedWebgl(tile, host);
+      }
       // Two fits in the same turn (ResizeObserver + scheduleFit on remount)
       // can agree on a pre-paint size. That must not count as stable:
       // creating WebGL against it leaves white row gaps until a later
