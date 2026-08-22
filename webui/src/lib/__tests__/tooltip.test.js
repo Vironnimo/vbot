@@ -131,6 +131,44 @@ describe('tooltip action', () => {
     vi.advanceTimersByTime(SHOW_DELAY_MS);
     expect(isVisible()).toBe(false);
   });
+
+  it('repositions on scroll instead of hiding while the anchor is visible', () => {
+    action = tooltip(node, 'Context: 5000 tok');
+    node.getBoundingClientRect = () => ({
+      top: 300,
+      bottom: 320,
+      left: 500,
+      right: 540,
+      width: 40,
+      height: 20,
+    });
+    window.innerHeight = 800;
+    window.innerWidth = 1200;
+    hover(node);
+    expect(isVisible()).toBe(true);
+
+    window.dispatchEvent(new Event('scroll'));
+    expect(isVisible()).toBe(true);
+  });
+
+  it('hides on scroll when the anchor has scrolled out of the viewport', () => {
+    action = tooltip(node, 'Context: 5000 tok');
+    node.getBoundingClientRect = () => ({
+      top: -100,
+      bottom: -80,
+      left: 500,
+      right: 540,
+      width: 40,
+      height: 20,
+    });
+    window.innerHeight = 800;
+    window.innerWidth = 1200;
+    hover(node);
+    expect(isVisible()).toBe(true);
+
+    window.dispatchEvent(new Event('scroll'));
+    expect(isVisible()).toBe(false);
+  });
 });
 
 describe('positionFloating', () => {
@@ -303,6 +341,26 @@ describe('floatingHoverCard action', () => {
     anchor.dispatchEvent(new Event('pointerenter'));
     document.dispatchEvent(new Event('scroll'));
     expect(card.dataset.floatingOpen).toBe('false');
+  });
+
+  it('repositions on scroll instead of hiding while the anchor is visible', () => {
+    action = floatingHoverCard(card);
+    anchor.getBoundingClientRect = () => ({
+      top: 300,
+      bottom: 320,
+      left: 500,
+      right: 540,
+      width: 40,
+      height: 20,
+    });
+    window.innerHeight = 800;
+    window.innerWidth = 1200;
+
+    anchor.dispatchEvent(new Event('pointerenter'));
+    expect(card.dataset.floatingOpen).toBe('true');
+
+    document.dispatchEvent(new Event('scroll'));
+    expect(card.dataset.floatingOpen).toBe('true');
   });
 
   it('keeps decorative previews out of the accessibility tree', () => {

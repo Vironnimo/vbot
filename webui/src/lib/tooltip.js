@@ -88,7 +88,7 @@ function hideTooltip() {
     tooltipElement.classList.remove('app-tooltip--visible');
   }
   window.removeEventListener('keydown', onWindowKeydown, true);
-  window.removeEventListener('scroll', hideTooltip, true);
+  window.removeEventListener('scroll', onWindowScroll, true);
   document.removeEventListener('pointerdown', onDocumentPointerDown, true);
 }
 
@@ -104,6 +104,29 @@ function onDocumentPointerDown(event) {
   }
 }
 
+// On scroll, reposition the tooltip to follow its anchor instead of blindly
+// hiding. Chat content updates (streaming, new messages) fire scroll events
+// from inner containers; the anchor (e.g. the context ring in the composer)
+// often hasn't moved at all, so the tooltip should stay open and keep updating.
+// Only hide when the anchor has actually scrolled out of the viewport.
+function onWindowScroll() {
+  if (!activeAnchor || !tooltipElement) {
+    hideTooltip();
+    return;
+  }
+  const rect = activeAnchor.getBoundingClientRect();
+  const inViewport =
+    rect.bottom > 0 &&
+    rect.top < window.innerHeight &&
+    rect.right > 0 &&
+    rect.left < window.innerWidth;
+  if (inViewport) {
+    positionFloating(activeAnchor, tooltipElement);
+  } else {
+    hideTooltip();
+  }
+}
+
 function showTooltip(anchor, text) {
   const element = ensureTooltipElement();
   element.textContent = text;
@@ -112,7 +135,7 @@ function showTooltip(anchor, text) {
   activeAnchor = anchor;
   anchor.setAttribute('aria-describedby', TOOLTIP_ID);
   window.addEventListener('keydown', onWindowKeydown, true);
-  window.addEventListener('scroll', hideTooltip, true);
+  window.addEventListener('scroll', onWindowScroll, true);
   document.addEventListener('pointerdown', onDocumentPointerDown, true);
 }
 
@@ -350,7 +373,17 @@ export function floatingHoverCard(node, options = {}) {
     if (target && node.contains(target)) {
       return;
     }
-    hide();
+    const rect = anchor.getBoundingClientRect();
+    const inViewport =
+      rect.bottom > 0 &&
+      rect.top < window.innerHeight &&
+      rect.right > 0 &&
+      rect.left < window.innerWidth;
+    if (inViewport) {
+      positionFloating(anchor, node);
+    } else {
+      hide();
+    }
   }
 
   function onDocumentPointerDown(event) {
