@@ -332,12 +332,15 @@
       webglAddon: null,
       webglHostWidth: null,
       webglHostHeight: null,
+      webglFontSize: null,
       lastFitCols: null,
       lastFitRows: null,
       lastFitHostWidth: null,
       lastFitHostHeight: null,
       stableFitCount: 0,
       fitFollowUpScheduled: false,
+      writeInFlight: false,
+      snapshotGeneration: 0,
     });
     const pending = pendingSnapshots.get(terminalId);
     if (pending) {
@@ -374,12 +377,28 @@
     ) {
       tile.xterm.resize(columns, rows);
     }
+    tile.writeInFlight = true;
+    tile.snapshotGeneration += 1;
+    const generation = tile.snapshotGeneration;
     tile.xterm.reset();
     scrolledBackByTerminal[terminalId] = false;
-    tile.xterm.write(ansi, () => {
-      tileRegistry.get(terminalId)?.xterm?.refresh(0, tile.xterm.rows - 1);
+    try {
+      tile.xterm.write(ansi, () => {
+        if (
+          tileRegistry.get(terminalId) !== tile ||
+          tile.snapshotGeneration !== generation
+        ) {
+          return;
+        }
+        tile.writeInFlight = false;
+        invalidateWebglAfterSnapshot(tile);
+        refreshTileRenderer(tile);
+        scheduleFit(terminalId);
+      });
+    } catch {
+      tile.writeInFlight = false;
       scheduleFit(terminalId);
-    });
+    }
   }
 
   function enableWebglRenderer(tile, WebglAddon) {
@@ -392,11 +411,13 @@
           tile.webglLoaded = false;
           tile.webglHostWidth = null;
           tile.webglHostHeight = null;
+          tile.webglFontSize = null;
         }
       });
       tile.xterm.loadAddon(webglAddon);
       tile.webglAddon = webglAddon;
       tile.webglLoaded = true;
+      tile.webglFontSize = tile.xterm.options.fontSize;
       return webglAddon;
     } catch {
       // The built-in DOM renderer remains the safe fallback when WebGL is absent.
@@ -411,6 +432,7 @@
       tile.webglLoaded = false;
       tile.webglHostWidth = null;
       tile.webglHostHeight = null;
+      tile.webglFontSize = null;
       return;
     }
     try {
@@ -422,6 +444,7 @@
     tile.webglLoaded = false;
     tile.webglHostWidth = null;
     tile.webglHostHeight = null;
+    tile.webglFontSize = null;
   }
 
   function scheduleFit(terminalId) {
@@ -456,14 +479,28 @@
     }
     if (
       tile.webglHostWidth === host.clientWidth &&
-      tile.webglHostHeight === host.clientHeight
+      tile.webglHostHeight === host.clientHeight &&
+      tile.webglFontSize === tile.xterm.options.fontSize
     ) {
       return;
     }
     // FitAddon skips xterm.resize when cols/rows stay the same, so a
-    // host-pixel-only change (tab remount, sibling tile) leaves the
-    // WebGL quads on the previous canvas size — white row gaps.
+    // host-pixel or font-size change leaves the WebGL quads on the
+    // previous cell metrics — white row gaps or a shifted TUI.
     disposeWebglRenderer(tile);
+  }
+
+  function invalidateWebglAfterSnapshot(tile) {
+    // A remount often fits and creates WebGL against an empty grid of
+    // the same cols/rows as the session. The later snapshot write then
+    // skips xterm.resize, so WebGL never recomputes its quads — leftover
+    // cells and a TUI stuck at the top until a real resize (maximize).
+    disposeWebglRenderer(tile);
+    tile.stableFitCount = 0;
+    tile.lastFitCols = null;
+    tile.lastFitRows = null;
+    tile.lastFitHostWidth = null;
+    tile.lastFitHostHeight = null;
   }
 
   function scheduleWebglRenderer(terminalId) {
@@ -497,6 +534,7 @@
           enableWebglRenderer(current, WebglAddonClass);
           current.webglHostWidth = currentHost.clientWidth;
           current.webglHostHeight = currentHost.clientHeight;
+          current.webglFontSize = current.xterm.options.fontSize;
           refreshTileRenderer(current);
         });
       });
@@ -511,6 +549,7 @@
       !tile?.xterm ||
       !tile.fitAddon ||
       !host ||
+      tile.writeInFlight ||
       host.clientWidth <= 0 ||
       host.clientHeight <= 0
     ) {
