@@ -592,6 +592,104 @@ async def test_list_discovers_terminal_attachment_state_and_status_paginates(
 
 
 @pytest.mark.asyncio
+async def test_status_pages_forward_with_absolute_start_line(
+    manager: tuple[TerminalManager, AdapterFactory], tmp_path: Path
+) -> None:
+    terminal_manager, factory = manager
+    context = make_context(tmp_path)
+    started = await call(
+        terminal_manager,
+        context,
+        {"action": "start", "command": "fake-tui"},
+    )
+    terminal_id = cast(dict[str, Any], started["data"])["terminal_id"]
+    session = terminal_manager.get_session(
+        terminal_id, TerminalOwner("project-a", "agent-a", "session-a")
+    )
+    factory.adapters[0].emit("".join(f"line-{index}\r\n" for index in range(50)))
+    await eventually(lambda: session.renderer.revision > 0)
+
+    first = await call(
+        terminal_manager,
+        context,
+        {"action": "status", "terminal_id": terminal_id, "start_line": 0, "lines": 3},
+    )
+    first_scrollback = cast(dict[str, Any], first["data"])["scrollback"]
+    assert first_scrollback["text"] == "line-0\nline-1\nline-2"
+    assert first_scrollback["total_lines"] == 50
+    assert first_scrollback["start_line"] == 0
+    assert first_scrollback["end_line"] == 3
+    assert first_scrollback["next_start_line"] == 3
+    assert first_scrollback["next_cursor"] is None
+    assert first_scrollback["next_request"] == {
+        "action": "status",
+        "terminal_id": terminal_id,
+        "start_line": 3,
+        "lines": 3,
+    }
+
+    followed = await call(
+        terminal_manager,
+        context,
+        cast(dict[str, Any], first_scrollback["next_request"]),
+    )
+    followed_scrollback = cast(dict[str, Any], followed["data"])["scrollback"]
+    assert followed_scrollback["text"] == "line-3\nline-4\nline-5"
+    assert followed_scrollback["start_line"] == 3
+    assert followed_scrollback["next_start_line"] == 6
+
+    tail = await call(
+        terminal_manager,
+        context,
+        {"action": "status", "terminal_id": terminal_id, "start_line": 48, "lines": 100},
+    )
+    tail_scrollback = cast(dict[str, Any], tail["data"])["scrollback"]
+    assert tail_scrollback["line_count"] == 2
+    assert tail_scrollback["end_line"] == 50
+    assert tail_scrollback["next_start_line"] is None
+    assert tail_scrollback["next_request"] is None
+
+
+@pytest.mark.asyncio
+async def test_status_rejects_start_line_with_cursor(
+    manager: tuple[TerminalManager, AdapterFactory], tmp_path: Path
+) -> None:
+    terminal_manager, factory = manager
+    context = make_context(tmp_path)
+    started = await call(
+        terminal_manager,
+        context,
+        {"action": "start", "command": "fake-tui"},
+    )
+    terminal_id = cast(dict[str, Any], started["data"])["terminal_id"]
+    session = terminal_manager.get_session(
+        terminal_id, TerminalOwner("project-a", "agent-a", "session-a")
+    )
+    factory.adapters[0].emit("".join(f"line-{index}\r\n" for index in range(50)))
+    await eventually(lambda: session.renderer.revision > 0)
+
+    page = await call(
+        terminal_manager,
+        context,
+        {"action": "status", "terminal_id": terminal_id, "lines": 3},
+    )
+    scrollback = cast(dict[str, Any], page["data"])["scrollback"]
+
+    rejected = await call(
+        terminal_manager,
+        context,
+        {
+            "action": "status",
+            "terminal_id": terminal_id,
+            "cursor": scrollback["next_cursor"],
+            "start_line": 0,
+        },
+    )
+    assert rejected["ok"] is False
+    assert cast(dict[str, Any], rejected["error"])["code"] == "invalid_arguments"
+
+
+@pytest.mark.asyncio
 async def test_input_supports_convenient_and_exact_data_and_rejects_stale_screen(
     manager: tuple[TerminalManager, AdapterFactory], tmp_path: Path
 ) -> None:

@@ -191,3 +191,63 @@ def test_ansi_snapshot_rebuilds_bounded_scrollback_for_a_late_viewer() -> None:
 
     assert late_viewer.page(before=None, limit=20) == source.page(before=None, limit=20)
     assert late_viewer.screen_text() == source.screen_text()
+
+
+def test_page_from_addresses_whole_buffer_by_absolute_line() -> None:
+    renderer = TerminalRenderer(12, 3, scrollback_lines=20)
+    renderer.feed("".join(f"line-{index}\r\n" for index in range(8)))
+
+    first = renderer.page_from(0, 3)
+    assert first["text"] == "line-0\nline-1\nline-2"
+    assert first["line_count"] == 3
+    assert first["start_line"] == 0
+    assert first["end_line"] == 3
+    assert first["next_start_line"] == 3
+    assert first["total_lines"] == 8
+    assert first["viewport_rows"] == 3
+    assert first["cursor_row"] == 8
+
+    next_page = renderer.page_from(first["next_start_line"], 3)
+    assert next_page["text"] == "line-3\nline-4\nline-5"
+    assert next_page["start_line"] == 3
+    assert next_page["end_line"] == 6
+
+    tail = renderer.page_from(6, 100)
+    assert tail["text"] == "line-6\nline-7"
+    assert tail["line_count"] == 2
+    assert tail["end_line"] == 8
+    assert tail["next_start_line"] is None
+
+
+def test_page_from_handles_empty_and_overflow_addresses() -> None:
+    renderer = TerminalRenderer(12, 3, scrollback_lines=20)
+    renderer.feed("")
+
+    empty = renderer.page_from(0, 3)
+    assert empty["text"] == ""
+    assert empty["total_lines"] == 0
+    assert empty["start_line"] == 0
+    assert empty["end_line"] == 0
+    assert empty["next_start_line"] is None
+    assert empty["cursor_row"] == 0
+
+    renderer.feed("one\ntwo")
+    beyond = renderer.page_from(99, 3)
+    assert beyond["total_lines"] == 2
+    assert beyond["start_line"] == 2
+    assert beyond["line_count"] == 0
+    assert beyond["end_line"] == 2
+    assert beyond["next_start_line"] is None
+
+
+def test_cursor_page_carries_absolute_buffer_metrics() -> None:
+    renderer = TerminalRenderer(12, 3, scrollback_lines=20)
+    renderer.feed("".join(f"line-{index}\r\n" for index in range(6)))
+
+    page = renderer.page(before=None, limit=2)
+
+    assert page["text"] == "line-2\nline-3"
+    assert page["total_lines"] == 6
+    assert page["cursor_row"] == 6
+    assert page["viewport_rows"] == 3
+    assert page["next_before"] is not None
