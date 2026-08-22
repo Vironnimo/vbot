@@ -251,6 +251,7 @@
     tile.resizeObserver?.disconnect();
     tile.inputDisposable?.dispose();
     tile.scrollDisposable?.dispose();
+    disposeWebglRenderer(tile);
     tile.xterm?.dispose();
   }
 
@@ -328,6 +329,9 @@
       inputDisposable,
       scrollDisposable,
       webglLoaded: false,
+      webglAddon: null,
+      webglHostWidth: null,
+      webglHostHeight: null,
       lastFitCols: null,
       lastFitRows: null,
       lastFitHostWidth: null,
@@ -378,14 +382,46 @@
     });
   }
 
-  function enableWebglRenderer(xtermInstance, WebglAddon) {
+  function enableWebglRenderer(tile, WebglAddon) {
     try {
       const webglAddon = new WebglAddon();
-      webglAddon.onContextLoss(() => webglAddon.dispose());
-      xtermInstance.loadAddon(webglAddon);
+      webglAddon.onContextLoss(() => {
+        webglAddon.dispose();
+        if (tile.webglAddon === webglAddon) {
+          tile.webglAddon = null;
+          tile.webglLoaded = false;
+          tile.webglHostWidth = null;
+          tile.webglHostHeight = null;
+        }
+      });
+      tile.xterm.loadAddon(webglAddon);
+      tile.webglAddon = webglAddon;
+      tile.webglLoaded = true;
+      return webglAddon;
     } catch {
       // The built-in DOM renderer remains the safe fallback when WebGL is absent.
+      tile.webglAddon = null;
+      tile.webglLoaded = false;
+      return null;
     }
+  }
+
+  function disposeWebglRenderer(tile) {
+    if (!tile.webglAddon) {
+      tile.webglLoaded = false;
+      tile.webglHostWidth = null;
+      tile.webglHostHeight = null;
+      return;
+    }
+    try {
+      tile.webglAddon.dispose();
+    } catch {
+      // A lost context may already have disposed the addon.
+    }
+    tile.webglAddon = null;
+    tile.webglLoaded = false;
+    tile.webglHostWidth = null;
+    tile.webglHostHeight = null;
   }
 
   function scheduleFit(terminalId) {
@@ -403,7 +439,7 @@
       if (current) {
         current.fitFollowUpScheduled = false;
       }
-      fitTerminal(terminalId);
+      fitTerminal(terminalId, { fromFollowUp: true });
     });
   }
 
@@ -414,7 +450,61 @@
     tile.xterm.refresh(0, tile.xterm.rows - 1);
   }
 
-  function fitTerminal(terminalId) {
+  function rebuildWebglIfHostDrifted(tile, host) {
+    if (!tile.webglLoaded || !tile.webglAddon) {
+      return;
+    }
+    if (
+      tile.webglHostWidth === host.clientWidth &&
+      tile.webglHostHeight === host.clientHeight
+    ) {
+      return;
+    }
+    // FitAddon skips xterm.resize when cols/rows stay the same, so a
+    // host-pixel-only change (tab remount, sibling tile) leaves the
+    // WebGL quads on the previous canvas size — white row gaps.
+    disposeWebglRenderer(tile);
+  }
+
+  function scheduleWebglRenderer(terminalId) {
+    const tile = tileRegistry.get(terminalId);
+    if (!tile?.xterm || tile.webglLoaded || !WebglAddonClass) {
+      return;
+    }
+    const scheduleWebgl = () => {
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          const current = tileRegistry.get(terminalId);
+          const currentHost = tileHosts.get(terminalId);
+          if (!current?.xterm || !WebglAddonClass || current.webglLoaded) {
+            return;
+          }
+          if (
+            !currentHost ||
+            currentHost.clientWidth <= 0 ||
+            currentHost.clientHeight <= 0
+          ) {
+            scheduleWebgl();
+            return;
+          }
+          if (
+            currentHost.clientWidth !== current.lastFitHostWidth ||
+            currentHost.clientHeight !== current.lastFitHostHeight
+          ) {
+            scheduleFit(terminalId);
+            return;
+          }
+          enableWebglRenderer(current, WebglAddonClass);
+          current.webglHostWidth = currentHost.clientWidth;
+          current.webglHostHeight = currentHost.clientHeight;
+          refreshTileRenderer(current);
+        });
+      });
+    };
+    scheduleWebgl();
+  }
+
+  function fitTerminal(terminalId, { fromFollowUp = false } = {}) {
     const tile = tileRegistry.get(terminalId);
     const host = tileHosts.get(terminalId);
     if (
@@ -463,20 +553,16 @@
         terminalId,
         immediate,
       );
-      // Load WebGL only after the fitted grid has settled at a stable size.
-      // On a tab-switch remount the first fit measures a transient layout, so
-      // the WebGL renderer must not be created against that geometry: it
-      // leaves the background quads misaligned (visible as white row gaps)
-      // until a later resize forces the renderer to recompute. Mirror the
-      // controller's stability pass — only a size observed unchanged across
-      // two consecutive fits is trustworthy. Include the host geometry: the
-      // grid can hold cols/rows while the host is still being laid out at a
-      // transient width, which also feeds the char-size measurement.
+      // Load WebGL only after the fitted grid has settled across a frame.
+      // A tab remount queues two same-turn fits (ResizeObserver + initial
+      // scheduleFit) that can agree on a pre-paint size; creating WebGL
+      // against that leaves white row gaps until a later resize. Include
+      // host geometry: cols/rows can hold while the host is still settling.
       const cols = tile.xterm.cols;
       const rows = tile.xterm.rows;
       const hostWidth = host.clientWidth;
       const hostHeight = host.clientHeight;
-      const stable =
+      const sameGeometry =
         tile.lastFitCols === cols &&
         tile.lastFitRows === rows &&
         tile.lastFitHostWidth === hostWidth &&
@@ -485,51 +571,31 @@
       tile.lastFitRows = rows;
       tile.lastFitHostWidth = hostWidth;
       tile.lastFitHostHeight = hostHeight;
-      tile.stableFitCount = stable ? tile.stableFitCount + 1 : 1;
       refreshTileRenderer(tile);
-      if (tile.stableFitCount < TERMINAL_WEBGL_STABLE_FITS) {
-        // ResizeObserver often fires once when a sibling tile joins.
-        // The stability gate needs a second unchanged measurement, so
-        // schedule that observation on the next frame instead of waiting
-        // for another layout event that may never come.
+      rebuildWebglIfHostDrifted(tile, host);
+      // Two fits in the same turn (ResizeObserver + scheduleFit on remount)
+      // can agree on a pre-paint size. That must not count as stable:
+      // creating WebGL against it leaves white row gaps until a later
+      // resize. Only a follow-up on the next animation frame may confirm.
+      if (!sameGeometry) {
+        tile.stableFitCount = 1;
         scheduleFitFollowUp(terminalId);
         return;
       }
-      // Load WebGL after the terminal has settled at its final dimensions
-      // and the browser has painted at least once. Creating the WebGL canvas
-      // in a microtask (before the first paint) produces white row gaps that
-      // only disappear after a subsequent resize triggers a re-render.
-      // The first tile in a multi-tile grid is especially prone to this:
-      // its host is measured before the grid has fully settled on remount
-      // (tab switch), so a single rAF still sees a transient size.
-      // We use double rAF to wait for layout + paint, and retry if the
-      // host is still 0 (grid not yet flushed) — otherwise the tile would
-      // stay on the DOM renderer and keep the TUI gaps for all tiles.
-      if (!tile.webglLoaded && WebglAddonClass) {
-        const scheduleWebgl = () => {
-          requestAnimationFrame(() => {
-            requestAnimationFrame(() => {
-              const current = tileRegistry.get(terminalId);
-              const currentHost = tileHosts.get(terminalId);
-              if (!current?.xterm || !WebglAddonClass || current.webglLoaded) {
-                return;
-              }
-              if (
-                !currentHost ||
-                currentHost.clientWidth <= 0 ||
-                currentHost.clientHeight <= 0
-              ) {
-                scheduleWebgl();
-                return;
-              }
-              current.webglLoaded = true;
-              enableWebglRenderer(current.xterm, WebglAddonClass);
-              current.xterm.refresh(0, current.xterm.rows - 1);
-            });
-          });
-        };
-        scheduleWebgl();
+      if (!fromFollowUp) {
+        if (tile.stableFitCount < TERMINAL_WEBGL_STABLE_FITS) {
+          scheduleFitFollowUp(terminalId);
+        } else {
+          scheduleWebglRenderer(terminalId);
+        }
+        return;
       }
+      tile.stableFitCount += 1;
+      if (tile.stableFitCount < TERMINAL_WEBGL_STABLE_FITS) {
+        scheduleFitFollowUp(terminalId);
+        return;
+      }
+      scheduleWebglRenderer(terminalId);
     } catch {
       // The host may be between layout states while the view is mounting.
     }
