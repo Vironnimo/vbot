@@ -466,6 +466,16 @@ async def test_resize_repaint_inside_grace_window_does_not_wake_the_agent(
         session = await spawn(manager, tmp_path)
         session.state = "working"
         manager.attach(session.terminal_id, owner(), origin_run_id="attach-run")
+        # A text-less Agent start suppresses the first settle (startup screen
+        # is not work); the first agent input re-arms delivery.
+        await manager.send_input(
+            session.terminal_id,
+            owner(),
+            text="go",
+            key="enter",
+            expected_screen_revision=None,
+            origin_run_id="run-0",
+        )
         await eventually(lambda: len(trigger.submissions) == 1)
         trigger.release.set()
         assert session.attention is not None
@@ -508,6 +518,16 @@ async def test_resize_grace_extends_with_repaint_but_hard_deadline_caps_it(
         session = await spawn(manager, tmp_path)
         session.state = "working"
         manager.attach(session.terminal_id, owner(), origin_run_id="attach-run")
+        # A text-less Agent start suppresses the first settle (startup screen
+        # is not work); the first agent input re-arms delivery.
+        await manager.send_input(
+            session.terminal_id,
+            owner(),
+            text="go",
+            key="enter",
+            expected_screen_revision=None,
+            origin_run_id="run-0",
+        )
         await eventually(lambda: len(trigger.submissions) == 1)
         trigger.release.set()
         await eventually(lambda: session.attention.delivered)
@@ -554,6 +574,16 @@ async def test_agent_input_clears_resize_grace_and_wakes_on_later_output(
         session = await spawn(manager, tmp_path)
         session.state = "working"
         manager.attach(session.terminal_id, owner(), origin_run_id="attach-run")
+        # A text-less Agent start suppresses the first settle (startup screen
+        # is not work); the first agent input re-arms delivery.
+        await manager.send_input(
+            session.terminal_id,
+            owner(),
+            text="go",
+            key="enter",
+            expected_screen_revision=None,
+            origin_run_id="run-0",
+        )
         await eventually(lambda: len(trigger.submissions) == 1)
         trigger.release.set()
         await eventually(lambda: session.attention.delivered)
@@ -648,6 +678,104 @@ async def test_screen_change_after_repeated_settle_still_delivers(
         # ...until the screen content actually changes.
         factory.adapters[0].emit("\rMENU> \nsecond option")
         await eventually(lambda: len(trigger.submissions) == 3)
+        assert session.attention is not None
+        assert session.attention.kind == "output_settled"
+    finally:
+        await manager.aclose()
+
+
+@pytest.mark.asyncio
+async def test_textless_agent_start_suppresses_the_startup_settle(
+    tmp_path: Path,
+) -> None:
+    """A text-less Agent start stays silent until the first explicit input:
+    the startup screen (banner, prompt, TUI boot) is observed by the starting
+    Agent and must not wake the session."""
+    trigger = PendingTriggerService()
+    factory = AdapterFactory()
+    manager = TerminalManager(
+        trigger,
+        adapter_factory=factory,
+        sweep_interval_seconds=3600,
+        activity_quiet_seconds=0.03,
+    )
+    manager.start()
+    try:
+        session = await spawn(manager, tmp_path)
+        session.state = "working"
+
+        factory.adapters[0].emit("TUI banner")
+        await eventually(lambda: session.state == "ready")
+        await asyncio.sleep(0.1)
+        assert trigger.submissions == []
+        assert session.attention is None or not session.attention.delivered
+
+        # Real agent input re-arms delivery; the next screen change wakes.
+        await manager.send_input(
+            session.terminal_id,
+            owner(),
+            text="go",
+            key="enter",
+            expected_screen_revision=None,
+            origin_run_id="run-0",
+        )
+        factory.adapters[0].emit("output after input")
+        await eventually(lambda: len(trigger.submissions) == 1)
+        assert session.attention is not None
+        assert session.attention.kind == "output_settled"
+    finally:
+        await manager.aclose()
+
+
+@pytest.mark.asyncio
+async def test_resize_repaint_stays_silent_until_the_screen_grows(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """After a real resize, a TUI redraws the same content at the new size.
+    That repaint is viewer noise: settles stay silent until the screen
+    actually grows with new content."""
+    monkeypatch.setattr(terminal_module, "TERMINAL_RESIZE_GRACE_SECONDS", 0.05)
+    monkeypatch.setattr(terminal_module, "TERMINAL_RESIZE_GRACE_MAX_SECONDS", 0.1)
+    trigger = PendingTriggerService()
+    factory = AdapterFactory()
+    manager = TerminalManager(
+        trigger,
+        adapter_factory=factory,
+        sweep_interval_seconds=3600,
+        activity_quiet_seconds=0.03,
+    )
+    manager.start()
+    try:
+        session = await spawn(manager, tmp_path)
+        session.state = "working"
+        manager.attach(session.terminal_id, owner(), origin_run_id="attach-run")
+        # A text-less Agent start suppresses the first settle (startup screen
+        # is not work); the first agent input re-arms delivery.
+        await manager.send_input(
+            session.terminal_id,
+            owner(),
+            text="go",
+            key="enter",
+            expected_screen_revision=None,
+            origin_run_id="run-0",
+        )
+        factory.adapters[0].emit("MENU> ")
+        await eventually(lambda: len(trigger.submissions) == 1)
+        trigger.release.set()
+        await eventually(lambda: session.attention.delivered)
+
+        # The resize anchors the rendered screen; a repaint that redraws that
+        # same content at the new size settles silently.
+        await manager.resize(session.terminal_id, owner(), columns=90, rows=24)
+        await asyncio.sleep(0.4)
+        factory.adapters[0].emit("\rMENU> ")
+        await eventually(lambda: session.state == "ready")
+        await asyncio.sleep(0.1)
+        assert len(trigger.submissions) == 1
+
+        # The screen changes with real content: the settle delivers again.
+        factory.adapters[0].emit("new work output line")
+        await eventually(lambda: len(trigger.submissions) == 2)
         assert session.attention is not None
         assert session.attention.kind == "output_settled"
     finally:
@@ -1196,6 +1324,8 @@ async def test_operator_activity_wakes_the_attached_agent_session(tmp_path: Path
     manager.start()
     try:
         session = await spawn(manager, tmp_path)
+        # A text-less Agent start suppresses the first settle (startup screen
+        # is not work); operator input re-arms delivery.
         await manager.send_operator_input(session.terminal_id, "look\r")
         factory.adapters[0].emit("screen changed")
         await eventually(lambda: session.attention_revision == 1)

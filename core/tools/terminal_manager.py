@@ -260,6 +260,18 @@ class TerminalSession:
     activity_generation: int = 0
     notify_on_settle: bool = False
     settled_delivery_enabled: bool = False
+    # Agent-started sessions without initial text suppress settle deliveries
+    # until the first explicit input or attach: the startup screen (banner,
+    # prompt, TUI boot) is observed by the starting Agent and visible to the
+    # operator, so its settle waves must not wake the session. Real work
+    # after the suppression clears delivers normally.
+    suppress_until_activity: bool = False
+    # Rendered screen signature at the moment of the last real resize. A TUI
+    # repaints after a resize by redrawing the same content at the new size;
+    # while the screen equals this signature, settles are viewer noise and
+    # stay silent. The first screen that differs is new content: it delivers
+    # and clears the anchor. Any input clears it too.
+    repaint_anchor_signature: str | None = None
     # Monotonic deadline until which settle notifications are suppressed because
     # the output is expected to be a repaint after an explicit resize. Output
     # inside the base window extends it rollingly up to the cap; agent or
@@ -552,6 +564,7 @@ class TerminalManager:
             started_at=_utc_now(),
             origin_run_id=origin_run_id,
             activity_origin_run_id=None,
+            suppress_until_activity=(owner is not None and initial_text is None),
             log_path=log_path,
             log_handle=log_handle,
             log_lease=log_lease,
@@ -616,6 +629,10 @@ class TerminalManager:
         session.activity_origin_run_id = origin_run_id
         session.acknowledged_attention_revision = session.attention_revision
         session.settled_delivery_enabled = True
+        # An explicit Agent attach is deliberate contact: the Agent sees the
+        # current screen in the attach result, so the startup suppression no
+        # longer applies and delivery resumes normally.
+        session.suppress_until_activity = False
         if session.state == "working":
             self._schedule_settle(session, notify=True)
         if changed:
@@ -944,10 +961,13 @@ class TerminalManager:
                 )
         async with session.lock:
             self._require_live(session)
-            # Operator input ends the post-resize grace for the same reason as
-            # agent input: the operator is acting on the new dimensions.
+            # Operator input ends the post-resize grace and the repaint
+            # anchor, and counts as work against the startup suppression,
+            # for the same reason as agent input: the operator is acting.
             session.resize_grace_until = 0.0
             session.resize_grace_deadline = 0.0
+            session.repaint_anchor_signature = None
+            session.suppress_until_activity = False
             state_changed = session.state != "working"
             session.state = "working"
             await asyncio.to_thread(session.adapter.write, data)
@@ -1068,10 +1088,13 @@ class TerminalManager:
                 raise TerminalStaleScreenError(
                     "Terminal screen changed; inspect status before sending this input"
                 )
-            # Real agent input ends the post-resize grace: what the agent types
-            # in response to the new dimensions is work, not repaint noise.
+            # Real agent input ends the post-resize grace and the repaint
+            # anchor, and counts as work against the startup suppression:
+            # what the agent types is not startup noise.
             session.resize_grace_until = 0.0
             session.resize_grace_deadline = 0.0
+            session.repaint_anchor_signature = None
+            session.suppress_until_activity = False
             bracketed_paste = (
                 text is not None
                 and ("\n" in text or "\r" in text)
@@ -1233,6 +1256,9 @@ class TerminalManager:
             # A new explicit resize restarts the hard deadline; the rolling
             # extension happens on repaint output inside the base window.
             session.resize_grace_deadline = now + TERMINAL_RESIZE_GRACE_MAX_SECONDS
+            # Anchor the post-resize screen: while the TUI only repaints this
+            # same content at the new dimensions, settles stay silent.
+            session.repaint_anchor_signature = session.renderer.screen_text()
             self._publish_state(session)
             return {
                 "terminal_id": session.terminal_id,
@@ -1396,7 +1422,8 @@ class TerminalManager:
                         state_changed = session.state != "working"
                         session.state = "working"
                         notify = session.attachment is not None and session.settled_delivery_enabled
-                        if notify and time.monotonic() < session.resize_grace_deadline:
+                        now = time.monotonic()
+                        if notify and now < session.resize_grace_deadline:
                             # Output inside the post-resize grace is repaint
                             # noise, not work, so it must not wake the agent.
                             # A repaint burst can arrive in several waves, so
@@ -1404,10 +1431,8 @@ class TerminalManager:
                             # extends that window; everything inside the hard
                             # deadline stays suppressed. Input clears the
                             # grace entirely (send_input/send_operator_input).
-                            if time.monotonic() < session.resize_grace_until:
-                                session.resize_grace_until = (
-                                    time.monotonic() + TERMINAL_RESIZE_GRACE_SECONDS
-                                )
+                            if now < session.resize_grace_until:
+                                session.resize_grace_until = now + TERMINAL_RESIZE_GRACE_SECONDS
                             notify = False
                         self._schedule_settle(session, notify=notify)
                     if state_changed or title_changed:
@@ -1471,6 +1496,14 @@ class TerminalManager:
                     session.snapshot_on_settle = False
                     self._publish_snapshot(session)
                 signature = session.renderer.screen_text()
+                if deliver and session.suppress_until_activity:
+                    # A text-less Agent start is silent until the first
+                    # explicit input or attach: the startup screen (banner,
+                    # prompt, TUI boot) is observed by the starting Agent and
+                    # visible to the operator, so its settle waves must not
+                    # wake the session. Input/attach clear the flag in
+                    # send_input/send_operator_input/attach.
+                    deliver = False
                 if deliver and signature == session.settled_screen_signature:
                     # The quiet boundary came from bytes that did not change
                     # the rendered screen (status refreshes, cursor frames,
@@ -1478,8 +1511,21 @@ class TerminalManager:
                     # screen. That is not work, so do not wake the agent
                     # again; the screen is already known to it.
                     deliver = False
+                elif (
+                    deliver
+                    and session.repaint_anchor_signature is not None
+                    and signature == session.repaint_anchor_signature
+                ):
+                    # A TUI repaints after a resize by redrawing the same
+                    # content at the new size (re-wrapped lines): the screen
+                    # is identical to the post-resize anchor, so this settle
+                    # is viewer noise. The first screen that differs is new
+                    # content: it delivers and clears the anchor. Input
+                    # cleared it in send_input/send_operator_input.
+                    deliver = False
                 if deliver:
                     session.settled_screen_signature = signature
+                    session.repaint_anchor_signature = None
                 self._set_attention(
                     session,
                     kind="output_settled",
