@@ -981,29 +981,29 @@
         />
       {:else}
         {#each viewState.groups as group (group.group_id)}
-          <div
-            class="terminals-view__group"
-            class:active={group.group_id === viewState.selectedGroupId}
-          >
+          <div class="terminals-view__group-row" role="listitem">
             <button
               type="button"
-              class="terminals-view__group-main"
+              class="terminals-view__group-item secondary-list__item"
+              class:active={group.group_id === viewState.selectedGroupId}
               aria-current={group.group_id === viewState.selectedGroupId
                 ? 'true'
                 : undefined}
               onclick={() => controller.selectGroup(group.group_id)}
             >
-              <span class="terminals-view__group-topline">
-                <span
-                  class="terminals-view__group-title"
-                  use:tooltip={group.name}>{group.name}</span
-                >
-                <span class="terminals-view__group-count"
-                  >{group.terminal_count}</span
-                >
-              </span>
-              <span class="terminals-view__group-kind">
-                {groupKindLabel(group.kind)}
+              <span class="terminals-view__group-inner">
+                <span class="terminals-view__group-topline">
+                  <span
+                    class="terminals-view__group-title"
+                    use:tooltip={group.name}>{group.name}</span
+                  >
+                  <span class="terminals-view__group-count"
+                    >{group.terminal_count}</span
+                  >
+                </span>
+                <span class="terminals-view__group-kind">
+                  {groupKindLabel(group.kind)}
+                </span>
               </span>
             </button>
             {#if groupCanEdit(group)}
@@ -1628,34 +1628,28 @@
     gap: 0;
   }
 
-  .terminals-view__group {
+  .terminals-view__group-row {
     position: relative;
+    display: block;
+    min-width: 0;
+  }
+
+  .terminals-view__group-item {
     display: flex;
     width: 100%;
-    align-items: center;
-    gap: 4px;
-    border-radius: var(--r-md);
+    min-width: 0;
+    align-items: stretch;
+    color: inherit;
+    text-align: left;
   }
 
-  .terminals-view__group:hover {
-    background: var(--surface-hover);
-  }
-
-  .terminals-view__group.active {
-    background: var(--surface-active);
-  }
-
-  .terminals-view__group-main {
+  .terminals-view__group-inner {
     display: flex;
     min-width: 0;
     flex: 1;
     flex-direction: column;
     gap: 3px;
-    padding: 8px 6px 8px 10px;
-    text-align: left;
-    border: 0;
-    background: transparent;
-    font: inherit;
+    padding: 7px 10px;
   }
 
   .terminals-view__group-topline {
@@ -1677,21 +1671,25 @@
     white-space: nowrap;
   }
 
+  .terminals-view__group-item.active .terminals-view__group-title {
+    color: var(--accent);
+  }
+
   .terminals-view__group-count {
     flex: 0 0 auto;
     min-width: 20px;
     padding: 1px 6px;
     border-radius: 999px;
     color: var(--text-med);
-    background: var(--surface);
+    background: var(--surface-2);
     font-family: var(--font-mono);
     font-size: var(--fs-mono-xs);
     text-align: center;
   }
 
-  .terminals-view__group.active .terminals-view__group-count {
+  .terminals-view__group-item.active .terminals-view__group-count {
     color: var(--text-hi);
-    background: var(--accent-20);
+    background: var(--accent-dim);
   }
 
   .terminals-view__group-kind {
@@ -1703,20 +1701,22 @@
   }
 
   .terminals-view__group-actions {
+    position: absolute;
+    z-index: 1;
+    top: 4px;
+    right: 4px;
     display: flex;
-    flex: 0 0 auto;
     align-items: center;
     gap: 2px;
-    padding-right: 6px;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 120ms ease;
   }
 
-  .terminals-view__group-actions {
-    visibility: hidden;
-  }
-
-  .terminals-view__group:hover .terminals-view__group-actions,
-  .terminals-view__group:focus-within .terminals-view__group-actions {
-    visibility: visible;
+  .terminals-view__group-row:hover .terminals-view__group-actions,
+  .terminals-view__group-row:focus-within .terminals-view__group-actions {
+    opacity: 1;
+    pointer-events: auto;
   }
 
   :global(.btn-tertiary.btn-icon.terminals-view__group-action),

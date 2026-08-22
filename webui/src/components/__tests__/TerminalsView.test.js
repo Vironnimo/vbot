@@ -290,16 +290,12 @@ describe('TerminalsView', () => {
     const pane = document.querySelector('.terminals-view__list-pane');
     const header = pane.querySelector('.secondary-pane__header');
     const list = pane.querySelector('.secondary-pane__scroll.secondary-list');
-    const item = list.querySelector('.terminals-view__group');
+    const item = list.querySelector('.terminals-view__group-item');
 
     expect(header.querySelector('#terminals-list-title')).toBeTruthy();
     expect(header.querySelector('button').textContent.trim()).toBe('Add group');
     expect(item.classList.contains('active')).toBe(true);
-    expect(
-      item
-        .querySelector('.terminals-view__group-main')
-        .getAttribute('aria-current'),
-    ).toBe('true');
+    expect(item.getAttribute('aria-current')).toBe('true');
 
     const detailHeader = document.querySelector('.terminals-view__header');
     expect(
