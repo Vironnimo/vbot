@@ -266,6 +266,11 @@ class TerminalSession:
     # operator input clears it so real work wakes the agent immediately.
     resize_grace_until: float = 0.0
     resize_grace_deadline: float = 0.0
+    # Text signature of the rendered screen at the moment the last
+    # output_settled delivery happened (None until the first delivery).
+    # A quiet boundary whose screen is unchanged (status refreshes, cursor
+    # frames, repaint echoes) must not wake the agent again.
+    settled_screen_signature: str | None = None
     snapshot_on_settle: bool = False
     suppress_exit_attention: bool = False
     lock: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False)
@@ -1465,6 +1470,16 @@ class TerminalManager:
                 if session.snapshot_on_settle:
                     session.snapshot_on_settle = False
                     self._publish_snapshot(session)
+                signature = session.renderer.screen_text()
+                if deliver and signature == session.settled_screen_signature:
+                    # The quiet boundary came from bytes that did not change
+                    # the rendered screen (status refreshes, cursor frames,
+                    # repaint echoes) or repeated the already-delivered
+                    # screen. That is not work, so do not wake the agent
+                    # again; the screen is already known to it.
+                    deliver = False
+                if deliver:
+                    session.settled_screen_signature = signature
                 self._set_attention(
                     session,
                     kind="output_settled",
