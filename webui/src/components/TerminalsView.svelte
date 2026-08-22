@@ -1927,8 +1927,6 @@
 
   .terminals-view__tile-host
     :global(.xterm-scrollable-element > .scrollbar.vertical) {
-    opacity: 1 !important;
-    pointer-events: auto !important;
     background: var(--terminal-surface);
   }
 
