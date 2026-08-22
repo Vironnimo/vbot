@@ -98,7 +98,10 @@
 
   // Context-window fill ring: a thin SVG progress arc proportional to
   // tokens / context_window. The same tooltip as the old header badge.
-  const CONTEXT_RING_RADIUS = 6;
+  // Radius is reduced so the 3px stroke grows inward from the original
+  // 1.5px outer edge (6 + 0.75 = 6.75), keeping the ring's visual size
+  // constant while thickening the arc.
+  const CONTEXT_RING_RADIUS = 5.25;
   const CONTEXT_RING_CIRCUMFERENCE = 2 * Math.PI * CONTEXT_RING_RADIUS;
 
   let contextFillRatio = $derived.by(() => {
@@ -1446,7 +1449,7 @@
             r={CONTEXT_RING_RADIUS}
             fill="none"
             stroke="currentColor"
-            stroke-width="2.5"
+            stroke-width="3"
           />
           <circle
             class="context-ring__fill"
@@ -1455,7 +1458,7 @@
             r={CONTEXT_RING_RADIUS}
             fill="none"
             stroke="currentColor"
-            stroke-width="2.5"
+            stroke-width="3"
             stroke-linecap="round"
             stroke-dasharray={CONTEXT_RING_CIRCUMFERENCE}
             stroke-dashoffset={contextRingOffset}
