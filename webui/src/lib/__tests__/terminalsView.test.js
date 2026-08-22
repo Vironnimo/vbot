@@ -372,12 +372,38 @@ describe('terminal live controller', () => {
     const controller = createTerminalsController({ state, api });
 
     await controller.start();
+    // A size must be observed across two consecutive fits before it becomes
+    // sendable, so the first measurement never reaches the PTY.
     controller.resize(100, 30, 'term-1');
+    controller.resize(110, 31, 'term-1');
     controller.resize(110, 31, 'term-1');
     await vi.runAllTimersAsync();
 
     expect(api.resizeTerminal).toHaveBeenCalledTimes(1);
     expect(api.resizeTerminal).toHaveBeenCalledWith('term-1', 110, 31);
+    controller.destroy();
+  });
+
+  it('sends a fitted size only after it was observed stable across two fits', async () => {
+    vi.useFakeTimers();
+    const state = createTerminalsViewState();
+    const streams = [];
+    const api = fakeApi({ streams });
+    const controller = createTerminalsController({ state, api });
+
+    await controller.start();
+    // A tab revisit measures a transient size before the grid settles; that
+    // first measurement must not trigger a PTY resize.
+    controller.resize(100, 30, 'term-1');
+    await vi.runAllTimersAsync();
+    expect(api.resizeTerminal).not.toHaveBeenCalled();
+
+    // The settled grid produces the same size on the next fit; only now is
+    // it sendable.
+    controller.resize(100, 30, 'term-1');
+    await vi.runAllTimersAsync();
+    expect(api.resizeTerminal).toHaveBeenCalledTimes(1);
+    expect(api.resizeTerminal).toHaveBeenCalledWith('term-1', 100, 30);
     controller.destroy();
   });
 
@@ -398,7 +424,7 @@ describe('terminal live controller', () => {
     controller.destroy();
   });
 
-  it('sends an immediate resize without waiting for the debounce', async () => {
+  it('sends an immediate resize without waiting for the stability pass or debounce', async () => {
     vi.useFakeTimers();
     const state = createTerminalsViewState();
     const streams = [];
@@ -406,6 +432,8 @@ describe('terminal live controller', () => {
     const controller = createTerminalsController({ state, api });
 
     await controller.start();
+    // Maximize is a deterministic user action, so its measurement is
+    // trustworthy on the first fit: no stability pass, no debounce.
     controller.resize(200, 50, 'term-1', true);
     await vi.runAllTimersAsync();
     expect(api.resizeTerminal).toHaveBeenCalledWith('term-1', 200, 50);

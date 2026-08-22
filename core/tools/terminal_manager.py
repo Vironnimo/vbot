@@ -58,7 +58,12 @@ TERMINAL_ACTIVITY_QUIET_SECONDS = 2.0
 # After a real dimension change the foreground program repaints its screen.
 # That repaint is viewer noise rather than work, so output that settles inside
 # this grace window after an explicit resize must not wake the agent session.
+# Output arriving inside the window extends it rollingly (a TUI repaint can
+# outlive the base window), but never beyond the hard deadline below, so a
+# genuinely long-running stream still wakes the agent once the extension
+# expires instead of being suppressed forever.
 TERMINAL_RESIZE_GRACE_SECONDS = 4.0
+TERMINAL_RESIZE_GRACE_MAX_SECONDS = 15.0
 TERMINAL_INPUT_KEY_DELAY_SECONDS = 0.1
 TERMINAL_STREAM_RETENTION_EVENTS = 4_096
 TERMINAL_STREAM_SUBSCRIBER_QUEUE_EVENTS = 512
@@ -256,8 +261,11 @@ class TerminalSession:
     notify_on_settle: bool = False
     settled_delivery_enabled: bool = False
     # Monotonic deadline until which settle notifications are suppressed because
-    # the output is expected to be a repaint after an explicit resize.
+    # the output is expected to be a repaint after an explicit resize. Output
+    # inside the base window extends it rollingly up to the cap; agent or
+    # operator input clears it so real work wakes the agent immediately.
     resize_grace_until: float = 0.0
+    resize_grace_deadline: float = 0.0
     snapshot_on_settle: bool = False
     suppress_exit_attention: bool = False
     lock: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False)
@@ -931,6 +939,10 @@ class TerminalManager:
                 )
         async with session.lock:
             self._require_live(session)
+            # Operator input ends the post-resize grace for the same reason as
+            # agent input: the operator is acting on the new dimensions.
+            session.resize_grace_until = 0.0
+            session.resize_grace_deadline = 0.0
             state_changed = session.state != "working"
             session.state = "working"
             await asyncio.to_thread(session.adapter.write, data)
@@ -1051,6 +1063,10 @@ class TerminalManager:
                 raise TerminalStaleScreenError(
                     "Terminal screen changed; inspect status before sending this input"
                 )
+            # Real agent input ends the post-resize grace: what the agent types
+            # in response to the new dimensions is work, not repaint noise.
+            session.resize_grace_until = 0.0
+            session.resize_grace_deadline = 0.0
             bracketed_paste = (
                 text is not None
                 and ("\n" in text or "\r" in text)
@@ -1207,7 +1223,11 @@ class TerminalManager:
                 }
             await asyncio.to_thread(session.adapter.resize, rows, columns)
             session.renderer.resize(columns, rows)
-            session.resize_grace_until = time.monotonic() + TERMINAL_RESIZE_GRACE_SECONDS
+            now = time.monotonic()
+            session.resize_grace_until = now + TERMINAL_RESIZE_GRACE_SECONDS
+            # A new explicit resize restarts the hard deadline; the rolling
+            # extension happens on repaint output inside the base window.
+            session.resize_grace_deadline = now + TERMINAL_RESIZE_GRACE_MAX_SECONDS
             self._publish_state(session)
             return {
                 "terminal_id": session.terminal_id,
@@ -1371,9 +1391,18 @@ class TerminalManager:
                         state_changed = session.state != "working"
                         session.state = "working"
                         notify = session.attachment is not None and session.settled_delivery_enabled
-                        if notify and time.monotonic() < session.resize_grace_until:
-                            # Repaint output right after an explicit resize is
-                            # viewer noise, not work worth waking the agent for.
+                        if notify and time.monotonic() < session.resize_grace_deadline:
+                            # Output inside the post-resize grace is repaint
+                            # noise, not work, so it must not wake the agent.
+                            # A repaint burst can arrive in several waves, so
+                            # output inside the rolling base window also
+                            # extends that window; everything inside the hard
+                            # deadline stays suppressed. Input clears the
+                            # grace entirely (send_input/send_operator_input).
+                            if time.monotonic() < session.resize_grace_until:
+                                session.resize_grace_until = (
+                                    time.monotonic() + TERMINAL_RESIZE_GRACE_SECONDS
+                                )
                             notify = False
                         self._schedule_settle(session, notify=notify)
                     if state_changed or title_changed:
