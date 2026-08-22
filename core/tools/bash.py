@@ -17,6 +17,7 @@ from typing import Any
 
 from core.tools.arguments import optional_number, optional_string
 from core.tools.availability import bash_allowed_env_keys, normalize_env_keys
+from core.tools.bash_hints import annotate_failure
 from core.tools.process_manager import (
     ProcessManager,
     ProcessSession,
@@ -93,7 +94,9 @@ BASH_TOOL_DESCRIPTION = (
     "because that bypasses vBot's process ownership. Result output keeps the newest "
     f"{BASH_MODEL_OUTPUT_CAP_CHARS} characters; when output is truncated or a command is handed "
     "off, the result includes a log_file path to the complete combined stdout/stderr stream — "
-    "read or grep it for the full output." + _shell_syntax_notes()
+    "read or grep it for the full output. A non-zero exit code returns an additional `hint` "
+    "field when a well-known failure shape was recognized — follow it instead of retrying "
+    "blindly." + _shell_syntax_notes()
 )
 BASH_SUBAGENT_TOOL_DESCRIPTION = (
     "Run an unattended shell command inside this Sub-Agent through pipes when no interactive "
@@ -418,6 +421,7 @@ async def bash_handler(
         session_id,
         yield_after,
         mode=mode,
+        command=command,
     )
 
     if context.is_cancelled() or context.was_cancelled_by_user():
@@ -615,6 +619,9 @@ async def _watch_background_process(
             "Output:\n"
             f"{output}"
         )
+        hint = annotate_failure(command, session.exit_code, output)
+        if hint:
+            body += f"\n\nHint: {hint}"
 
     notice_id = f"bash:{process_session_id}"
     delivery = trigger_service.submit_completion(
@@ -1034,6 +1041,7 @@ async def _run_foreground_phase(
     yield_after: float | None,
     *,
     mode: str,
+    command: str,
 ) -> JsonObject:
     deadline = asyncio.get_running_loop().time() + yield_after if yield_after is not None else None
 
@@ -1047,6 +1055,7 @@ async def _run_foreground_phase(
                 context,
                 session_id,
                 mode=mode,
+                command=command,
             )
 
         if context.is_cancelled():
@@ -1056,6 +1065,7 @@ async def _run_foreground_phase(
                 context,
                 session_id,
                 mode=mode,
+                command=command,
             )
         if deadline is not None and asyncio.get_running_loop().time() >= deadline:
             return await _background_result(
@@ -1229,17 +1239,20 @@ async def _completion_result(
     session_id: str,
     *,
     mode: str,
+    command: str,
 ) -> JsonObject:
     session = process_manager.get_session(session_id, context.agent_id)
     output = await _combined_output(process_manager, context, session_id)
-    return tool_success(
-        {
-            "status": "completed",
-            "exit_code": session.exit_code,
-            "mode": mode,
-            **_shape_output_fields(session, output),
-        }
-    )
+    result: JsonObject = {
+        "status": "completed",
+        "exit_code": session.exit_code,
+        "mode": mode,
+        **_shape_output_fields(session, output),
+    }
+    hint = annotate_failure(command, session.exit_code, output)
+    if hint:
+        result["hint"] = hint
+    return tool_success(result)
 
 
 def _handoff_note(mode: str, handoff_after: float | None) -> str:
