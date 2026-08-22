@@ -940,7 +940,7 @@
         {t('terminals.groupsLabel', 'Groups')}
       </span>
       <Button
-        variant="primary"
+        variant="secondary"
         disabled={serverUnavailable}
         onClick={openCreateGroupDialog}
       >
@@ -1059,9 +1059,6 @@
   <div class="terminals-view__detail">
     <header class="terminals-view__header view-header">
       <div class="view-header__intro">
-        <p class="view-header__eyebrow">
-          {t('terminals.eyebrow', 'Live PTY / ConPTY')}
-        </p>
         <h2 id="terminals-title" class="view-header__title">
           {t('terminals.title', 'Terminals')}
         </h2>
@@ -1071,6 +1068,18 @@
             'Open and use your own terminals, or watch and control the same interactive terminal an agent is using.',
           )}
         </p>
+      </div>
+      <div class="view-header__actions">
+        <Button
+          variant="primary"
+          disabled={serverUnavailable}
+          onClick={openStartDialog}
+        >
+          <svg viewBox="0 0 14 14" width="11" height="11" aria-hidden="true">
+            <path d="M7 1v12M1 7h12" />
+          </svg>
+          {t('terminals.new', 'New terminal')}
+        </Button>
       </div>
     </header>
 
@@ -1277,17 +1286,7 @@
               'terminals.detailEmptyDescription',
               'Start the local default shell or choose a command such as codex. Agent terminals will appear here too.',
             )}
-      >
-        {#snippet actions()}
-          <Button
-            variant="primary"
-            disabled={serverUnavailable}
-            onClick={openStartDialog}
-          >
-            {t('terminals.new', 'New terminal')}
-          </Button>
-        {/snippet}
-      </EmptyState>
+      />
     {/if}
   </div>
 </section>
