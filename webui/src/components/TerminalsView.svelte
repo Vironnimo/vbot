@@ -59,6 +59,11 @@
   const TERMINAL_BASE_FONT_SIZE = 12;
   const TERMINAL_MAX_COLUMNS = 240;
   const TERMINAL_MAX_ROWS = 80;
+  // WebGL must load against a settled grid. A tab-switch remount measures a
+  // transient layout, so require a size observed unchanged across this many
+  // consecutive fits before creating the WebGL renderer (mirrors the
+  // controller's RESIZE_STABILITY_FITS).
+  const TERMINAL_WEBGL_STABLE_FITS = 2;
 
   const groupTerminals = $derived(visibleTerminals(viewState));
   let hasTerminals = $derived(groupTerminals.length > 0);
@@ -311,6 +316,11 @@
       inputDisposable,
       scrollDisposable,
       webglLoaded: false,
+      lastFitCols: null,
+      lastFitRows: null,
+      lastFitHostWidth: null,
+      lastFitHostHeight: null,
+      stableFitCount: 0,
     });
     const pending = pendingSnapshots.get(terminalId);
     if (pending) {
@@ -414,6 +424,32 @@
         terminalId,
         immediate,
       );
+      // Load WebGL only after the fitted grid has settled at a stable size.
+      // On a tab-switch remount the first fit measures a transient layout, so
+      // the WebGL renderer must not be created against that geometry: it
+      // leaves the background quads misaligned (visible as white row gaps)
+      // until a later resize forces the renderer to recompute. Mirror the
+      // controller's stability pass — only a size observed unchanged across
+      // two consecutive fits is trustworthy. Include the host geometry: the
+      // grid can hold cols/rows while the host is still being laid out at a
+      // transient width, which also feeds the char-size measurement.
+      const cols = tile.xterm.cols;
+      const rows = tile.xterm.rows;
+      const hostWidth = host.clientWidth;
+      const hostHeight = host.clientHeight;
+      const stable =
+        tile.lastFitCols === cols &&
+        tile.lastFitRows === rows &&
+        tile.lastFitHostWidth === hostWidth &&
+        tile.lastFitHostHeight === hostHeight;
+      tile.lastFitCols = cols;
+      tile.lastFitRows = rows;
+      tile.lastFitHostWidth = hostWidth;
+      tile.lastFitHostHeight = hostHeight;
+      tile.stableFitCount = stable ? tile.stableFitCount + 1 : 1;
+      if (tile.stableFitCount < TERMINAL_WEBGL_STABLE_FITS) {
+        return;
+      }
       // Load WebGL after the terminal has settled at its final dimensions
       // and the browser has painted at least once. Creating the WebGL canvas
       // in a microtask (before the first paint) produces white row gaps that
