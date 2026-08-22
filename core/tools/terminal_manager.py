@@ -3,10 +3,8 @@
 from __future__ import annotations
 
 import asyncio
-import base64
 import contextlib
 import hashlib
-import hmac
 import json
 import os
 import re
@@ -16,7 +14,7 @@ from collections.abc import AsyncGenerator, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any, Literal, TextIO, cast
+from typing import Any, Literal, TextIO
 
 from core.event_stream import ReplayEventStream
 from core.storage.temp_files import TemporaryFileLease, TemporaryFileManager
@@ -49,7 +47,6 @@ TERMINAL_MAX_LIVE_GLOBAL = 32
 TERMINAL_SWEEP_INTERVAL_SECONDS = 60.0
 TERMINAL_FINISHED_TTL = timedelta(minutes=30)
 TERMINAL_NOTICE_MESSAGE_CAP_CHARS = 16_000
-TERMINAL_CURSOR_VERSION = 1
 TERMINAL_TEMPORARY_CATEGORY = "terminals"
 TERMINAL_INITIAL_INPUT_QUIET_SECONDS = 0.5
 TERMINAL_INITIAL_INPUT_TIMEOUT_SECONDS = 15.0
@@ -313,7 +310,6 @@ class TerminalManager:
         self._changed_callbacks: list[TerminalChangedCallback] = []
         self._launch_history = self._load_launch_history()
         self._groups = self._load_groups()
-        self._cursor_secret = os.urandom(32)
         self._sweeper_task: asyncio.Task[None] | None = None
 
     def add_changed_callback(self, callback: TerminalChangedCallback) -> Callable[[], None]:
@@ -383,8 +379,8 @@ class TerminalManager:
         *,
         cwd: Path,
         env: Mapping[str, str] | None,
-        columns: int,
-        rows: int,
+        columns: int = TERMINAL_DEFAULT_COLUMNS,
+        rows: int = TERMINAL_DEFAULT_ROWS,
         origin_run_id: str,
         initial_text: str | None = None,
         name: str | None = None,
@@ -973,29 +969,25 @@ class TerminalManager:
         owner: TerminalOwner,
         *,
         lines: int = TERMINAL_STATUS_DEFAULT_LINES,
-        before: int | None = None,
         start_line: int | None = None,
         include_name: bool = True,
     ) -> dict[str, Any]:
         """Return one bounded rendered status page.
 
         ``start_line`` addresses the whole buffer by absolute zero-based line
-        (Hermes ``read_terminal`` contract); ``before`` is the signed-cursor
-        continuation for older scrollback. Exactly one of them may be given.
+        (Hermes ``read_terminal`` contract); omit it for the newest page.
         """
         if not 1 <= lines <= TERMINAL_STATUS_MAX_LINES:
             raise ValueError(f"lines must be between 1 and {TERMINAL_STATUS_MAX_LINES}")
-        if start_line is not None and before is not None:
-            raise ValueError("start_line and cursor cannot be combined")
+        if start_line is not None and start_line < 0:
+            raise ValueError("start_line must be a non-negative integer")
         session = self.get_session(terminal_id, owner)
         async with session.lock:
             try:
                 if start_line is not None:
-                    if start_line < 0:
-                        raise ValueError("start_line must be a non-negative integer")
                     scrollback = session.renderer.page_from(start_line, lines)
                 else:
-                    scrollback = session.renderer.page(before=before, limit=lines)
+                    scrollback = session.renderer.page(before=None, limit=lines)
             except ValueError as error:
                 raise TerminalCursorError(str(error)) from error
             data = self._snapshot_data(session, scrollback)
@@ -1331,39 +1323,6 @@ class TerminalManager:
             session.acknowledged_attention_revision, revision
         )
         self._cancel_delivery(session)
-
-    def encode_cursor(self, terminal_id: str, before: int) -> str:
-        """Encode one process-local signed scrollback continuation."""
-        payload = json.dumps(
-            {"v": TERMINAL_CURSOR_VERSION, "terminal_id": terminal_id, "before": before},
-            separators=(",", ":"),
-            sort_keys=True,
-        ).encode("utf-8")
-        signature = hmac.new(self._cursor_secret, payload, hashlib.sha256).digest()
-        return base64.urlsafe_b64encode(payload + signature).decode("ascii").rstrip("=")
-
-    def decode_cursor(self, cursor: str, terminal_id: str) -> int:
-        """Validate one signed cursor and return its exclusive line boundary."""
-        try:
-            padded = cursor + "=" * (-len(cursor) % 4)
-            decoded = base64.urlsafe_b64decode(padded.encode("ascii"))
-            payload, signature = decoded[:-32], decoded[-32:]
-            expected = hmac.new(self._cursor_secret, payload, hashlib.sha256).digest()
-            if not hmac.compare_digest(signature, expected):
-                raise ValueError
-            data = json.loads(payload.decode("utf-8"))
-        except (ValueError, UnicodeError, json.JSONDecodeError) as error:
-            raise TerminalCursorError("Terminal scrollback cursor is invalid") from error
-        if (
-            not isinstance(data, dict)
-            or data.get("v") != TERMINAL_CURSOR_VERSION
-            or data.get("terminal_id") != terminal_id
-            or isinstance(data.get("before"), bool)
-            or not isinstance(data.get("before"), int)
-            or data["before"] < 1
-        ):
-            raise TerminalCursorError("Terminal scrollback cursor is invalid")
-        return cast(int, data["before"])
 
     async def sweep_finished(self) -> None:
         """Forget terminal metadata after the bounded inspection window."""

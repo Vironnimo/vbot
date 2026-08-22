@@ -250,4 +250,4 @@ def test_cursor_page_carries_absolute_buffer_metrics() -> None:
     assert page["total_lines"] == 6
     assert page["cursor_row"] == 6
     assert page["viewport_rows"] == 3
-    assert page["next_before"] is not None
+    assert page["next_start_line"] is not None

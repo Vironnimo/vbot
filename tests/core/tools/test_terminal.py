@@ -84,8 +84,8 @@ def test_schema_matches_flat_action_tool_conventions(tmp_path: Path) -> None:
     assert "additionalProperties" not in TERMINAL_TOOL_PARAMETERS
     properties = cast(dict[str, Any], TERMINAL_TOOL_PARAMETERS["properties"])
     assert properties["action"]["enum"] == list(TERMINAL_ACTIONS)
-    assert properties["columns"]["default"] == 120
-    assert properties["rows"]["default"] == 32
+    assert "default" not in properties["columns"]
+    assert "default" not in properties["rows"]
     assert properties["lines"]["default"] == 30
     assert properties["timeout_ms"]["default"] == TERMINAL_DEFAULT_WAIT_MS
     assert "default" not in properties["command"]
@@ -130,7 +130,6 @@ def test_schema_matches_flat_action_tool_conventions(tmp_path: Path) -> None:
             {
                 "action": "status",
                 "terminal_id": "terminal-a",
-                "cursor": "signed-cursor",
                 "lines": 150,
             }
         )
@@ -560,11 +559,11 @@ async def test_list_discovers_terminal_attachment_state_and_status_paginates(
     assert status_data["title"] == "Codex migration"
     scrollback = status_data["scrollback"]
     assert scrollback["line_count"] == 3
-    assert scrollback["next_cursor"] is not None
+    assert scrollback["next_start_line"] is not None
     assert scrollback["next_request"] == {
         "action": "status",
         "terminal_id": terminal_id,
-        "cursor": scrollback["next_cursor"],
+        "start_line": scrollback["next_start_line"],
         "lines": 3,
     }
     continued = await call(
@@ -583,7 +582,7 @@ async def test_list_discovers_terminal_attachment_state_and_status_paginates(
         {
             "action": "status",
             "terminal_id": terminal_id,
-            "cursor": scrollback["next_cursor"],
+            "start_line": scrollback["next_start_line"],
             "lines": 100,
         },
     )
@@ -620,7 +619,7 @@ async def test_status_pages_forward_with_absolute_start_line(
     assert first_scrollback["start_line"] == 0
     assert first_scrollback["end_line"] == 3
     assert first_scrollback["next_start_line"] == 3
-    assert first_scrollback["next_cursor"] is None
+    assert "next_cursor" not in first_scrollback
     assert first_scrollback["next_request"] == {
         "action": "status",
         "terminal_id": terminal_id,
@@ -651,7 +650,7 @@ async def test_status_pages_forward_with_absolute_start_line(
 
 
 @pytest.mark.asyncio
-async def test_status_rejects_start_line_with_cursor(
+async def test_status_rejects_cursor_parameter_as_unknown(
     manager: tuple[TerminalManager, AdapterFactory], tmp_path: Path
 ) -> None:
     terminal_manager, factory = manager
@@ -662,18 +661,6 @@ async def test_status_rejects_start_line_with_cursor(
         {"action": "start", "command": "fake-tui"},
     )
     terminal_id = cast(dict[str, Any], started["data"])["terminal_id"]
-    session = terminal_manager.get_session(
-        terminal_id, TerminalOwner("project-a", "agent-a", "session-a")
-    )
-    factory.adapters[0].emit("".join(f"line-{index}\r\n" for index in range(50)))
-    await eventually(lambda: session.renderer.revision > 0)
-
-    page = await call(
-        terminal_manager,
-        context,
-        {"action": "status", "terminal_id": terminal_id, "lines": 3},
-    )
-    scrollback = cast(dict[str, Any], page["data"])["scrollback"]
 
     rejected = await call(
         terminal_manager,
@@ -681,8 +668,7 @@ async def test_status_rejects_start_line_with_cursor(
         {
             "action": "status",
             "terminal_id": terminal_id,
-            "cursor": scrollback["next_cursor"],
-            "start_line": 0,
+            "cursor": "some-signed-cursor",
         },
     )
     assert rejected["ok"] is False
