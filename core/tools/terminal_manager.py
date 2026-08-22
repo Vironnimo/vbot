@@ -266,12 +266,14 @@ class TerminalSession:
     # operator, so its settle waves must not wake the session. Real work
     # after the suppression clears delivers normally.
     suppress_until_activity: bool = False
-    # Rendered screen signature at the moment of the last real resize. A TUI
-    # repaints after a resize by redrawing the same content at the new size;
-    # while the screen equals this signature, settles are viewer noise and
-    # stay silent. The first screen that differs is new content: it delivers
-    # and clears the anchor. Any input clears it too.
-    repaint_anchor_signature: str | None = None
+    # Canonical character count (all rendered screen characters, line breaks
+    # removed) at the moment of the last real resize. A TUI repaints after a
+    # resize by redrawing the same content at the new size: re-wrapping does
+    # not change this count and pyte's line capping only shrinks it, while
+    # real new content grows it. Settles stay silent while the count stays at
+    # or below the anchor (viewer noise); the first growth is new content,
+    # which delivers and clears the anchor. Any input clears it too.
+    repaint_anchor_chars: int | None = None
     # Monotonic deadline until which settle notifications are suppressed because
     # the output is expected to be a repaint after an explicit resize. Output
     # inside the base window extends it rollingly up to the cap; agent or
@@ -966,7 +968,7 @@ class TerminalManager:
             # for the same reason as agent input: the operator is acting.
             session.resize_grace_until = 0.0
             session.resize_grace_deadline = 0.0
-            session.repaint_anchor_signature = None
+            session.repaint_anchor_chars = None
             session.suppress_until_activity = False
             state_changed = session.state != "working"
             session.state = "working"
@@ -1093,7 +1095,7 @@ class TerminalManager:
             # what the agent types is not startup noise.
             session.resize_grace_until = 0.0
             session.resize_grace_deadline = 0.0
-            session.repaint_anchor_signature = None
+            session.repaint_anchor_chars = None
             session.suppress_until_activity = False
             bracketed_paste = (
                 text is not None
@@ -1256,9 +1258,10 @@ class TerminalManager:
             # A new explicit resize restarts the hard deadline; the rolling
             # extension happens on repaint output inside the base window.
             session.resize_grace_deadline = now + TERMINAL_RESIZE_GRACE_MAX_SECONDS
-            # Anchor the post-resize screen: while the TUI only repaints this
-            # same content at the new dimensions, settles stay silent.
-            session.repaint_anchor_signature = session.renderer.screen_text()
+            # Anchor the canonical post-resize screen size: while the TUI only
+            # repaints this same content at the new dimensions, settles stay
+            # silent (see the field docstring for the count semantics).
+            session.repaint_anchor_chars = _screen_char_count(session.renderer)
             self._publish_state(session)
             return {
                 "terminal_id": session.terminal_id,
@@ -1501,8 +1504,11 @@ class TerminalManager:
                     # explicit input or attach: the startup screen (banner,
                     # prompt, TUI boot) is observed by the starting Agent and
                     # visible to the operator, so its settle waves must not
-                    # wake the session. Input/attach clear the flag in
+                    # wake the session. Mark the screen as already seen so a
+                    # later identical status refresh stays silent too.
+                    # Input/attach clear the flag in
                     # send_input/send_operator_input/attach.
+                    session.settled_screen_signature = signature
                     deliver = False
                 if deliver and signature == session.settled_screen_signature:
                     # The quiet boundary came from bytes that did not change
@@ -1513,19 +1519,20 @@ class TerminalManager:
                     deliver = False
                 elif (
                     deliver
-                    and session.repaint_anchor_signature is not None
-                    and signature == session.repaint_anchor_signature
+                    and session.repaint_anchor_chars is not None
+                    and _screen_char_count(session.renderer) <= session.repaint_anchor_chars
                 ):
                     # A TUI repaints after a resize by redrawing the same
-                    # content at the new size (re-wrapped lines): the screen
-                    # is identical to the post-resize anchor, so this settle
-                    # is viewer noise. The first screen that differs is new
-                    # content: it delivers and clears the anchor. Input
-                    # cleared it in send_input/send_operator_input.
+                    # content at the new size: re-wrapping does not change the
+                    # canonical character count and pyte's line capping only
+                    # shrinks it, so this settle is viewer noise. The first
+                    # growth is new content: it delivers and clears the
+                    # anchor. Input cleared it in
+                    # send_input/send_operator_input.
                     deliver = False
                 if deliver:
                     session.settled_screen_signature = signature
-                    session.repaint_anchor_signature = None
+                    session.repaint_anchor_chars = None
                 self._set_attention(
                     session,
                     kind="output_settled",
@@ -2197,6 +2204,16 @@ def _parse_launch_history_timestamp(value: Any) -> datetime:
     if parsed.tzinfo is None or parsed.utcoffset() != timedelta(0):
         raise ValueError("Terminal launch history timestamp must be UTC")
     return parsed.astimezone(UTC)
+
+
+def _screen_char_count(renderer: TerminalRenderer) -> int:
+    """Canonical character count of the rendered screen, line breaks removed.
+
+    Re-wrapping a line after a resize does not change this count, while pyte
+    capping an over-wide line shrinks it and real new content grows it —
+    the basis for the post-resize repaint suppression.
+    """
+    return len("".join(renderer.screen_text().splitlines()))
 
 
 def _attention_body(session: TerminalSession, attention: TerminalAttention) -> str:
