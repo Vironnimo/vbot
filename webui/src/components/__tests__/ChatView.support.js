@@ -376,17 +376,17 @@ export async function waitForCondition(check, attempts = 20) {
   throw new Error('Timed out waiting for condition.');
 }
 
-// Hovers the token badge and polls the shared quick tooltip (#app-tooltip)
+// Hovers the context ring and polls the shared quick tooltip (#app-tooltip)
 // until it shows `expectedText` — usage data may still be streaming in when
-// the badge first renders, and the tooltip updates in place.
-export async function hoveredTokenBadgeTooltip(expectedText) {
+// the ring first renders, and the tooltip updates in place.
+export async function hoveredContextRingTooltip(expectedText) {
   await waitForCondition(
-    () => document.body.querySelector('.token-badge') !== null,
+    () => document.body.querySelector('.context-ring') !== null,
     100,
   );
   vi.useFakeTimers();
   return hoveredTooltipText(
-    document.body.querySelector('.token-badge'),
+    document.body.querySelector('.context-ring'),
     expectedText,
   );
 }

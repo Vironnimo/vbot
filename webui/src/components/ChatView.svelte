@@ -1821,7 +1821,6 @@
     selectedAgentId={displayedIdentityAgentId}
     loadingAgents={chatState.loadingAgents}
     {activeAgent}
-    {activeSessionState}
     {showSessionDrawer}
     {creatingSession}
     newSessionLoading={chatState.loadingHistory}
@@ -2113,6 +2112,10 @@
               historyKey={composerHistoryKey}
               focusRequest={composerFocusRequest}
               availableSkills={chatState.availableSkills}
+              contextUsage={activeSessionState?.contextUsage}
+              contextWindow={activeAgent?.context_window}
+              usage={activeSessionState?.usage}
+              sessionUsage={activeSessionState?.sessionUsage}
               onSendMessage={composerSendMessage}
               onCancelRun={handleCancelRun}
               onTranscriptionError={handleTranscriptionError}

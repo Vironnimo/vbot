@@ -8,7 +8,7 @@ import {
   expect,
   findButtonByText,
   flushSync,
-  hoveredTokenBadgeTooltip,
+  hoveredContextRingTooltip,
   it,
   listSessionActivityMock,
   rpcMock,
@@ -522,7 +522,7 @@ describe('ChatView', () => {
     await Promise.resolve();
   });
 
-  it('shows the server-owned Context Usage in the token badge', async () => {
+  it('renders the context ring with the correct fill ratio', async () => {
     rpcMock.mockImplementation(
       createChatRpcMock({
         usage: { input_tokens: 3886, output_tokens: 92 },
@@ -532,19 +532,24 @@ describe('ChatView', () => {
     chatViewTest.mount({ target: document.body });
     flushSync();
 
-    const numberFormat = new Intl.NumberFormat('en');
-    const expectedBadge = `${numberFormat.format(3978)} / ${numberFormat.format(262144)} tok`;
+    // The ring is rendered only when both token count and context window are
+    // known. Its fill arc's stroke-dashoffset encodes the fill ratio.
+    const circumference = 2 * Math.PI * 6;
+    const expectedRatio = 3978 / 262144;
+    const expectedOffset = circumference * (1 - expectedRatio);
 
     await waitForCondition(
       () =>
-        document.body.querySelector('.token-badge')?.textContent?.trim() ===
-        expectedBadge,
+        document.body.querySelector('.context-ring .context-ring__fill') !==
+        null,
       100,
     );
 
-    expect(
-      document.body.querySelector('.token-badge')?.textContent?.trim(),
-    ).toBe(expectedBadge);
+    const fillArc = document.body.querySelector(
+      '.context-ring .context-ring__fill',
+    );
+    const offset = Number(fillArc.getAttribute('stroke-dashoffset'));
+    expect(offset).toBeCloseTo(expectedOffset, 1);
   });
 
   it('refreshes Context Usage after a model step while the run continues', async () => {
@@ -599,24 +604,29 @@ describe('ChatView', () => {
     });
     flushSync();
 
-    const numberFormat = new Intl.NumberFormat('en');
-    const expectedBadge = `~${numberFormat.format(4050)} / ${numberFormat.format(262144)} tok`;
-    await waitForCondition(
-      () =>
-        document.body.querySelector('.token-badge')?.textContent?.trim() ===
-        expectedBadge,
-      100,
-    );
+    // The ring should update its fill arc to reflect the new token count.
+    const circumference = 2 * Math.PI * 6;
+    const expectedRatio = 4050 / 262144;
+    const expectedOffset = circumference * (1 - expectedRatio);
 
-    expect(
-      document.body.querySelector('.token-badge')?.textContent?.trim(),
-    ).toBe(expectedBadge);
+    await waitForCondition(() => {
+      const fillArc = document.body.querySelector(
+        '.context-ring .context-ring__fill',
+      );
+      if (!fillArc) return false;
+      return (
+        Math.abs(
+          Number(fillArc.getAttribute('stroke-dashoffset')) - expectedOffset,
+        ) < 0.5
+      );
+    }, 100);
+
     expect(testChatStateRefs[0].sessions['alpha::session-1'].status).toBe(
       'running',
     );
   });
 
-  it('keeps the estimated marker when Context Usage is estimated', async () => {
+  it('renders the context ring when Context Usage is estimated', async () => {
     rpcMock.mockImplementation(
       createChatRpcMock({
         usage: { input_tokens: 3886, output_tokens: 92, estimated: true },
@@ -626,25 +636,27 @@ describe('ChatView', () => {
     chatViewTest.mount({ target: document.body });
     flushSync();
 
-    const numberFormat = new Intl.NumberFormat('en');
-    const expectedBadge = `~${numberFormat.format(3978)} / ${numberFormat.format(262144)} tok`;
-
+    // The ring renders regardless of the estimated flag — the flag only
+    // affects the tooltip text (prefixes the token count with ~).
     await waitForCondition(
-      () =>
-        document.body.querySelector('.token-badge')?.textContent?.trim() ===
-        expectedBadge,
+      () => document.body.querySelector('.context-ring') !== null,
       100,
     );
 
-    expect(
-      document.body.querySelector('.token-badge')?.textContent?.trim(),
-    ).toBe(expectedBadge);
+    const circumference = 2 * Math.PI * 6;
+    const expectedRatio = 3978 / 262144;
+    const expectedOffset = circumference * (1 - expectedRatio);
+    const fillArc = document.body.querySelector(
+      '.context-ring .context-ring__fill',
+    );
+    const offset = Number(fillArc.getAttribute('stroke-dashoffset'));
+    expect(offset).toBeCloseTo(expectedOffset, 1);
   });
 
-  it('tolerates a null context window in the token badge', async () => {
-    // A model whose context window is unknown sends context_window: null in the
-    // agent payload. The badge must show just the tokens — never "/ NaN" or a
-    // crash (Phase 6 honest-gap contract).
+  it('does not render the context ring when the context window is null', async () => {
+    // A model whose context window is unknown sends context_window: null in
+    // the agent payload. Without a denominator the fill ratio is undefined,
+    // so the ring must not render — never a crash or a NaN arc.
     rpcMock.mockImplementation(
       createChatRpcMock({
         usage: { input_tokens: 3886, output_tokens: 92 },
@@ -655,25 +667,16 @@ describe('ChatView', () => {
     chatViewTest.mount({ target: document.body });
     flushSync();
 
-    const numberFormat = new Intl.NumberFormat('en');
-    const expectedBadge = `${numberFormat.format(3978)} tok`;
-
+    // Give the component a moment to settle, then confirm no ring.
     await waitForCondition(
-      () =>
-        document.body.querySelector('.token-badge')?.textContent?.trim() ===
-        expectedBadge,
+      () => document.body.textContent.includes('Hello'),
       100,
     );
 
-    const badgeText = document.body
-      .querySelector('.token-badge')
-      ?.textContent?.trim();
-    expect(badgeText).toBe(expectedBadge);
-    expect(badgeText).not.toContain('NaN');
-    expect(badgeText).not.toContain('/');
+    expect(document.body.querySelector('.context-ring')).toBeNull();
   });
 
-  it('shows the last-turn and session usage breakdown in the token badge tooltip', async () => {
+  it('shows the last-turn and session usage breakdown in the context ring tooltip', async () => {
     rpcMock.mockImplementation(
       createChatRpcMock({
         usage: {
@@ -714,12 +717,12 @@ describe('ChatView', () => {
       'Avg cache read per turn: 2,667 tok',
     ].join('\n');
 
-    expect(await hoveredTokenBadgeTooltip(expectedTooltip)).toBe(
+    expect(await hoveredContextRingTooltip(expectedTooltip)).toBe(
       expectedTooltip,
     );
   });
 
-  it('omits cache lines from the token badge tooltip without cache usage', async () => {
+  it('omits cache lines from the context ring tooltip without cache usage', async () => {
     rpcMock.mockImplementation(
       createChatRpcMock({
         usage: { input_tokens: 3886, output_tokens: 92 },
@@ -737,7 +740,7 @@ describe('ChatView', () => {
       'Output: 92 tok',
     ].join('\n');
 
-    expect(await hoveredTokenBadgeTooltip(expectedTooltip)).toBe(
+    expect(await hoveredContextRingTooltip(expectedTooltip)).toBe(
       expectedTooltip,
     );
   });
