@@ -20,7 +20,6 @@ export const englishCatalog = Object.freeze({
   'nav.section.insights': 'Insights',
 
   'terminals.title': 'Terminals',
-  'terminals.eyebrow': 'Live PTY / ConPTY',
   'terminals.subtitle':
     'Open and use your own terminals, inspect their retained output, or watch and control the same interactive terminal an agent is using.',
   'terminals.sessionsLabel': 'Terminal sessions',

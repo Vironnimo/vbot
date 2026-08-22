@@ -300,6 +300,14 @@ describe('TerminalsView', () => {
         .querySelector('.terminals-view__group-main')
         .getAttribute('aria-current'),
     ).toBe('true');
+
+    const detailHeader = document.querySelector('.terminals-view__header');
+    expect(
+      [...detailHeader.querySelectorAll('button')].some(
+        (button) => button.textContent.trim() === 'New terminal',
+      ),
+    ).toBe(true);
+    expect(detailHeader.querySelector('.view-header__eyebrow')).toBeNull();
   });
 
   it('renders the shared empty state when no Terminal Session is active', async () => {
