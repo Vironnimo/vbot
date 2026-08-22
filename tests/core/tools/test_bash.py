@@ -530,6 +530,54 @@ async def test_background_trigger_message_contains_command_exit_code_and_output(
 
 
 @pytest.mark.asyncio
+async def test_background_trigger_message_carries_failure_hint(
+    manager: ProcessManager,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A failed background command's automatic note includes the output hint."""
+    messages: list[str] = []
+    trigger_called = asyncio.Event()
+
+    class MockTriggerService:
+        def submit_completion(
+            self,
+            _agent_id: str,
+            session_id: str,
+            *,
+            notice_id: str,
+            origin_run_id: str,
+            body: str,
+            project_id: str | None = None,
+        ) -> asyncio.Future[None]:
+            messages.append(body)
+            assert session_id
+            assert origin_run_id == context.run_id
+            trigger_called.set()
+            return delivered_future()
+
+    monkeypatch.setattr(bash_module, "_shell_argv", python_command)
+    context = make_context(tmp_path)
+    command = "import sys; sys.stderr.write('bash: python: command not found\\n'); sys.exit(127)"
+
+    result = await bash_handler(
+        context,
+        {"command": command, "mode": "background"},
+        manager,
+        trigger_service=MockTriggerService(),
+    )
+
+    assert result["ok"] is True
+    assert result["data"]["status"] == "running"
+    await asyncio.wait_for(trigger_called.wait(), timeout=2)
+
+    assert len(messages) == 1
+    assert "Exit code: 127" in messages[0]
+    assert "Hint: " in messages[0]
+    assert "python3" in messages[0]
+
+
+@pytest.mark.asyncio
 async def test_background_completion_trigger_carries_project_id(
     manager: ProcessManager,
     tmp_path: Path,
@@ -1094,6 +1142,56 @@ async def test_non_zero_exit_code_is_successful_tool_result(
     assert result["data"]["status"] == "completed"
     assert result["data"]["exit_code"] == 7
     assert "bad" in result["data"]["output"]
+
+
+@pytest.mark.asyncio
+async def test_foreground_failure_includes_hint_field(
+    manager: ProcessManager,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(bash_module, "_shell_argv", python_command)
+    context = make_context(tmp_path)
+
+    result = await bash_handler(
+        context,
+        {
+            "command": (
+                "import sys; sys.stderr.write('bash: python: command not found\\n'); sys.exit(127)"
+            ),
+            "mode": "foreground",
+        },
+        manager,
+    )
+
+    assert result["ok"] is True
+    assert result["data"]["status"] == "completed"
+    assert result["data"]["exit_code"] == 127
+    assert result["data"]["hint"] == (
+        "This system has no bare `python` — use `python3`, or the project "
+        "venv's interpreter (e.g. .venv/bin/python)."
+    )
+
+
+@pytest.mark.asyncio
+async def test_foreground_success_omits_hint(
+    manager: ProcessManager,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(bash_module, "_shell_argv", python_command)
+    context = make_context(tmp_path)
+
+    result = await bash_handler(
+        context,
+        {"command": "print('ok')", "mode": "foreground"},
+        manager,
+    )
+
+    assert result["ok"] is True
+    assert result["data"]["status"] == "completed"
+    assert result["data"]["exit_code"] == 0
+    assert "hint" not in result["data"]
 
 
 @pytest.mark.asyncio
