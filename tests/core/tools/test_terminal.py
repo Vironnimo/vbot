@@ -460,7 +460,9 @@ async def test_attach_grants_full_contract_and_detach_only_removes_binding(
         context,
         {"action": "status", "terminal_id": terminal_id},
     )
-    assert cast(dict[str, Any], denied["error"])["code"] == "terminal_not_found"
+    denied_error = cast(dict[str, Any], denied["error"])
+    assert denied_error["code"] == "terminal_not_owned"
+    assert "attach" in denied_error["message"]
 
     reattached = await call(
         terminal_manager,
