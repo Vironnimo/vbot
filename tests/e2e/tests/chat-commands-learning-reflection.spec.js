@@ -27,6 +27,7 @@ test("learn authors a private Skill and reflect creates a review Fork", async ({
   await expect(
     chat.getByText("Learned command Skill cleaned up.", { exact: true }),
   ).toBeVisible();
+  await expect(chat.getByText("· Running", { exact: true })).toHaveCount(0);
 
   await drawer
     .getByRole("button", { name: "Session list filters" })
