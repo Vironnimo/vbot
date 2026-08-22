@@ -1446,7 +1446,7 @@
             r={CONTEXT_RING_RADIUS}
             fill="none"
             stroke="currentColor"
-            stroke-width="1.5"
+            stroke-width="2.5"
           />
           <circle
             class="context-ring__fill"
@@ -1455,7 +1455,7 @@
             r={CONTEXT_RING_RADIUS}
             fill="none"
             stroke="currentColor"
-            stroke-width="1.5"
+            stroke-width="2.5"
             stroke-linecap="round"
             stroke-dasharray={CONTEXT_RING_CIRCUMFERENCE}
             stroke-dashoffset={contextRingOffset}
