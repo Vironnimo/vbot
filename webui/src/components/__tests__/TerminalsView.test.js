@@ -141,6 +141,22 @@ vi.mock('@xterm/addon-webgl', () => ({
   },
 }));
 
+// A real browser fires a ResizeObserver when the tile host is laid out,
+// which drives scheduleFit. Model that so the WebGL load — gated on a
+// stable grid — observes more than one fit, exactly as a remount does.
+// Firing synchronously on observe queues both fits in the same microtask
+// burst, so flushSync/waitFor capture the gate reaching two stable fits.
+class MockResizeObserver {
+  constructor(callback) {
+    this.callback = callback;
+  }
+  observe() {
+    this.callback();
+  }
+  disconnect() {}
+}
+vi.stubGlobal('ResizeObserver', MockResizeObserver);
+
 const { default: TerminalsView } = await import('../TerminalsView.svelte');
 
 describe('TerminalsView', () => {
