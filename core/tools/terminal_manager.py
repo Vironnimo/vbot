@@ -266,15 +266,18 @@ class TerminalSession:
     # operator, so its settle waves must not wake the session. Real work
     # after the suppression clears delivers normally.
     suppress_until_activity: bool = False
-    # After a real resize the immediate next quiet boundary is swallowed and
-    # its screen recorded as the new already-seen baseline: the TUI repaints
-    # the same content at the new size, and re-wrapped text cannot be
-    # reliably distinguished from new content by size or shape. Swallowing
-    # that one settle makes the resize repaint invisible; identical
-    # refreshes afterwards stay silent via the signature rule, while any
-    # genuinely changed screen delivers normally. Input clears the flag
-    # immediately (send_input/send_operator_input).
+    # After a real resize the TUI repaints the same content at the new size,
+    # usually in several waves whose intermediate frames differ from each
+    # other (re-wrapped lines, redrawn border, status refresh). Settle
+    # deliveries stay suppressed until the repainted screen is observed
+    # stable across two consecutive quiet boundaries, then that stable screen
+    # becomes the new already-seen baseline; identical refreshes afterwards
+    # stay silent via the signature rule, while a genuinely changed screen
+    # delivers normally. The suppression is additionally bounded by the
+    # post-resize grace deadline. Input clears the gate immediately
+    # (send_input/send_operator_input).
     resize_pending_settle: bool = False
+    resize_settle_prev_signature: str | None = None
     # Monotonic deadline until which settle notifications are suppressed because
     # the output is expected to be a repaint after an explicit resize. Output
     # inside the base window extends it rollingly up to the cap; agent or
@@ -970,6 +973,7 @@ class TerminalManager:
             session.resize_grace_until = 0.0
             session.resize_grace_deadline = 0.0
             session.resize_pending_settle = False
+            session.resize_settle_prev_signature = None
             session.suppress_until_activity = False
             state_changed = session.state != "working"
             session.state = "working"
@@ -1097,6 +1101,7 @@ class TerminalManager:
             session.resize_grace_until = 0.0
             session.resize_grace_deadline = 0.0
             session.resize_pending_settle = False
+            session.resize_settle_prev_signature = None
             session.suppress_until_activity = False
             bracketed_paste = (
                 text is not None
@@ -1519,19 +1524,26 @@ class TerminalManager:
                     # again; the screen is already known to it.
                     deliver = False
                 if session.resize_pending_settle:
-                    # The first quiet boundary after a real resize is the
-                    # TUI's repaint of the same content at the new size
-                    # (re-wrapped lines, redrawn border, status refresh).
-                    # Swallow it — even if the grace window already
-                    # suppressed this settle's delivery — and record the
-                    # repainted screen as the new already-seen baseline.
-                    # Identical later refreshes stay silent via the
-                    # signature rule; any genuinely changed screen delivers
-                    # normally. Input cleared the flag in
-                    # send_input/send_operator_input.
-                    session.settled_screen_signature = signature
-                    session.resize_pending_settle = False
-                    deliver = False
+                    # After a real resize the TUI repaints the same content
+                    # at the new size, usually in several waves. Settles stay
+                    # suppressed until the repainted screen is observed
+                    # stable across two consecutive quiet boundaries, then
+                    # that stable screen becomes the new already-seen
+                    # baseline. The grace deadline bounds this gate; input
+                    # clears it (send_input/send_operator_input).
+                    if time.monotonic() >= session.resize_grace_deadline:
+                        # The gate must not outlive the repaint window: after
+                        # the deadline, settles deliver normally again.
+                        session.resize_pending_settle = False
+                        session.resize_settle_prev_signature = None
+                    else:
+                        deliver = False
+                        if signature == session.resize_settle_prev_signature:
+                            session.resize_pending_settle = False
+                            session.resize_settle_prev_signature = None
+                            session.settled_screen_signature = signature
+                        else:
+                            session.resize_settle_prev_signature = signature
                 if deliver:
                     session.settled_screen_signature = signature
                 self._set_attention(
