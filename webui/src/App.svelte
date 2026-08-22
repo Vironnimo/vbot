@@ -1040,6 +1040,9 @@
   canSwitchServer={Boolean(desktopCapabilities?.serverSelection)}
   onSwitchServer={() => (serverSwitcherOpen = true)}
   desktopContextMenuEnabled={Boolean(desktopCapabilities?.contextMenu)}
+  {wakewordStatus}
+  {desktopCapabilities}
+  onNavigateToVoiceSettings={navigateToVoiceSettings}
   onToast={showToast}
 >
   {#if showFinishSetup}
@@ -1089,9 +1092,6 @@
         {sessionsRefreshToken}
         {commandsRefreshToken}
         {queueInvalidation}
-        {wakewordStatus}
-        {desktopCapabilities}
-        onNavigateToVoiceSettings={navigateToVoiceSettings}
         hasConnectedProvider={settings === null ? null : operational}
         onConnectProvider={navigateToProviders}
         onPickModel={navigateToAgentModel}

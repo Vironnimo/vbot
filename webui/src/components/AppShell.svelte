@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
   import Button from './ui/Button.svelte';
   import { t } from '$lib/i18n.js';
+  import { tooltip } from '$lib/tooltip.js';
   import {
     getDesktopClipboardText,
     openDesktopExternalUrl,
@@ -25,6 +26,9 @@
     canSwitchServer = false,
     onSwitchServer = () => {},
     desktopContextMenuEnabled = false,
+    wakewordStatus = { enabled: false, state: 'off' },
+    desktopCapabilities = null,
+    onNavigateToVoiceSettings = () => {},
     onToast = () => {},
     children,
   } = $props();
@@ -96,6 +100,128 @@
         ? t('status.notReachable', 'Not reachable')
         : t('status.reconnecting', 'Reconnecting…'),
   );
+
+  // Wakeword indicator — lives in the sidebar footer so it is visible across
+  // every view, not just the Chat tab.  Only shown when the Desktop accessor
+  // advertises wakeword capability.
+  const micVisible = $derived(Boolean(desktopCapabilities?.wakeword));
+  const micDotClass = $derived(computeMicDotClass(wakewordStatus));
+  const micTooltip = $derived(computeMicTooltip(wakewordStatus));
+  const micStatusLabel = $derived(computeMicStatusLabel(wakewordStatus));
+
+  function computeMicDotClass(status) {
+    if (status?.state === 'error') {
+      return 'mic-dot--error';
+    }
+    if (!status?.enabled) {
+      return 'mic-dot--off';
+    }
+    switch (status.state) {
+      case 'starting':
+        return 'mic-dot--processing';
+      case 'listening':
+      case 'wakeword_detected':
+        return 'mic-dot--listening';
+      case 'recording':
+        return 'mic-dot--recording';
+      case 'transcribing':
+      case 'sending':
+        return 'mic-dot--processing';
+      case 'sent':
+        return 'mic-dot--listening';
+      case 'cancelled':
+      case 'no_speech':
+      case 'transcription_failed':
+      case 'microphone_disconnected':
+        return 'mic-dot--warning';
+      case 'error':
+        return 'mic-dot--error';
+      default:
+        return 'mic-dot--off';
+    }
+  }
+
+  function computeMicTooltip(status) {
+    if (status?.state === 'error') {
+      return t('voice.mic.tooltip.error', 'Voice error');
+    }
+    if (!status?.enabled) {
+      return t('voice.mic.tooltip.off', 'Wakeword disabled');
+    }
+    switch (status.state) {
+      case 'starting':
+        return t('voice.mic.tooltip.starting', 'Starting wakeword listening');
+      case 'listening':
+        return t('voice.mic.tooltip.listening', 'Listening for wakeword');
+      case 'wakeword_detected':
+        return t('voice.mic.tooltip.detected', 'Wakeword detected');
+      case 'recording':
+        return t('voice.mic.tooltip.recording', 'Recording voice command');
+      case 'transcribing':
+      case 'sending':
+        return t('voice.mic.tooltip.processing', 'Processing voice command');
+      case 'sent':
+        return t('voice.mic.tooltip.sent', 'Voice command sent');
+      case 'cancelled':
+        return t('voice.mic.tooltip.cancelled', 'Voice command cancelled');
+      case 'no_speech':
+        return t('voice.mic.tooltip.noSpeech', 'No speech heard');
+      case 'transcription_failed':
+        return t(
+          'voice.mic.tooltip.transcriptionFailed',
+          'Voice command was not understood',
+        );
+      case 'microphone_disconnected':
+        return t(
+          'voice.mic.tooltip.microphoneDisconnected',
+          'Microphone disconnected',
+        );
+      case 'error':
+        return t('voice.mic.tooltip.error', 'Voice error');
+      default:
+        return t('voice.mic.tooltip.off', 'Wakeword disabled');
+    }
+  }
+
+  function computeMicStatusLabel(status) {
+    if (status?.state === 'error') {
+      return t('voice.state.error', 'Voice error');
+    }
+    if (!status?.enabled) {
+      return t('voice.state.off', 'Disabled');
+    }
+    switch (status.state) {
+      case 'starting':
+        return t('voice.state.starting', 'Starting');
+      case 'listening':
+        return t('voice.state.listening', 'Listening');
+      case 'wakeword_detected':
+        return t('voice.state.wakewordDetected', 'Wakeword detected');
+      case 'recording':
+        return t('voice.state.recording', 'Recording');
+      case 'transcribing':
+        return t('voice.state.transcribing', 'Transcribing');
+      case 'sending':
+        return t('voice.state.sending', 'Sending');
+      case 'sent':
+        return t('voice.state.sent', 'Sent');
+      case 'cancelled':
+        return t('voice.state.cancelled', 'Cancelled');
+      case 'no_speech':
+        return t('voice.state.no_speech', 'No speech heard');
+      case 'transcription_failed':
+        return t('voice.state.transcription_failed', 'Not understood');
+      case 'microphone_disconnected':
+        return t(
+          'voice.state.microphone_disconnected',
+          'Microphone disconnected',
+        );
+      case 'error':
+        return t('voice.state.error', 'Voice error');
+      default:
+        return t('voice.state.off', 'Disabled');
+    }
+  }
 
   const serverRestored = $derived(serverNoticeState === 'restored');
 
@@ -586,11 +712,25 @@
       {/each}
     </nav>
 
-    <div class="sidebar-footer app-shell__footer" aria-label={statusAriaLabel}>
-      <div class={statusDotClass} aria-hidden="true"></div>
-      <span class="footer-text">
-        {statusLabel}
-      </span>
+    <div class="sidebar-footer app-shell__footer">
+      {#if micVisible}
+        <button
+          type="button"
+          class="sidebar-footer__row sidebar-footer__mic"
+          use:tooltip={micTooltip}
+          aria-label={micTooltip}
+          onclick={onNavigateToVoiceSettings}
+        >
+          <span class="mic-dot {micDotClass}" aria-hidden="true"></span>
+          <span class="footer-text" aria-live="polite">{micStatusLabel}</span>
+        </button>
+      {/if}
+      <div class="sidebar-footer__row" aria-label={statusAriaLabel}>
+        <div class={statusDotClass} aria-hidden="true"></div>
+        <span class="footer-text">
+          {statusLabel}
+        </span>
+      </div>
     </div>
   </aside>
 
@@ -718,3 +858,99 @@
     </div>
   {/if}
 </div>
+
+<style>
+  .sidebar-footer__mic {
+    width: 100%;
+    border: none;
+    border-bottom: 1px solid var(--border);
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+    transition: background 0.15s;
+  }
+
+  .sidebar-footer__mic:hover {
+    background: var(--surface-2);
+  }
+
+  .sidebar-footer__mic:focus-visible {
+    outline: none;
+    box-shadow: var(--focus-ring);
+  }
+
+  .sidebar-footer__mic + .sidebar-footer__row {
+    border-top: none;
+  }
+
+  .mic-dot {
+    display: block;
+    width: 8px;
+    height: 8px;
+    flex-shrink: 0;
+    border-radius: 50%;
+  }
+
+  .mic-dot--off {
+    background: var(--text-lo);
+  }
+
+  .mic-dot--listening {
+    animation: mic-pulse 1.6s ease-in-out infinite;
+    background: var(--green);
+  }
+
+  .mic-dot--recording {
+    background: var(--amber);
+  }
+
+  .mic-dot--processing {
+    animation: mic-spin 1s linear infinite;
+    background: var(--accent);
+  }
+
+  .mic-dot--warning {
+    background: var(--amber);
+  }
+
+  .mic-dot--error {
+    background: var(--red);
+  }
+
+  @keyframes mic-pulse {
+    0%,
+    100% {
+      opacity: 1;
+    }
+    50% {
+      opacity: 0.35;
+    }
+  }
+
+  @keyframes mic-spin {
+    0% {
+      opacity: 1;
+    }
+    25% {
+      opacity: 0.5;
+    }
+    50% {
+      opacity: 0.2;
+    }
+    75% {
+      opacity: 0.5;
+    }
+    100% {
+      opacity: 1;
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .mic-dot--listening,
+    .mic-dot--processing {
+      animation: none;
+    }
+  }
+</style>

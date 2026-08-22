@@ -19,18 +19,11 @@
     projects = [],
     selectedProjectId = '',
     onSelectProject = () => {},
-    wakewordStatus = { enabled: false, state: 'off' },
-    desktopCapabilities = null,
     onSelectAgent = () => {},
     onToggleSessionDrawer = () => {},
     onNewSession = () => {},
-    onNavigateToVoiceSettings = () => {},
   } = $props();
 
-  let micDotClass = $derived(computeMicDotClass(wakewordStatus));
-  let micTooltip = $derived(computeMicTooltip(wakewordStatus));
-  let micVisible = $derived(Boolean(desktopCapabilities?.wakeword));
-  let micStatusText = $derived(compactMicStatus(wakewordStatus));
   // The identity bar carries a "Personal" label only while a project is
   // selected, so it visually pairs with the project-name label on the second
   // (team) bar below. With no project there is just one bar and no label needed.
@@ -47,107 +40,6 @@
       label: project.display_name || project.project_id,
     })),
   ]);
-
-  function computeMicDotClass(status) {
-    if (status?.state === 'error') {
-      return 'mic-dot--error';
-    }
-    if (!status?.enabled) {
-      return 'mic-dot--off';
-    }
-    switch (status.state) {
-      case 'starting':
-        return 'mic-dot--processing';
-      case 'listening':
-      case 'wakeword_detected':
-        return 'mic-dot--listening';
-      case 'recording':
-        return 'mic-dot--recording';
-      case 'transcribing':
-      case 'sending':
-        return 'mic-dot--processing';
-      case 'sent':
-        return 'mic-dot--listening';
-      case 'cancelled':
-      case 'no_speech':
-      case 'transcription_failed':
-      case 'microphone_disconnected':
-        return 'mic-dot--warning';
-      case 'error':
-        return 'mic-dot--error';
-      default:
-        return 'mic-dot--off';
-    }
-  }
-
-  function computeMicTooltip(status) {
-    if (status?.state === 'error') {
-      return t('voice.mic.tooltip.error', 'Voice error');
-    }
-    if (!status?.enabled) {
-      return t('voice.mic.tooltip.off', 'Wakeword disabled');
-    }
-    switch (status.state) {
-      case 'starting':
-        return t('voice.mic.tooltip.starting', 'Starting wakeword listening');
-      case 'listening':
-        return t('voice.mic.tooltip.listening', 'Listening for wakeword');
-      case 'wakeword_detected':
-        return t('voice.mic.tooltip.detected', 'Wakeword detected');
-      case 'recording':
-        return t('voice.mic.tooltip.recording', 'Recording voice command');
-      case 'transcribing':
-      case 'sending':
-        return t('voice.mic.tooltip.processing', 'Processing voice command');
-      case 'sent':
-        return t('voice.mic.tooltip.sent', 'Voice command sent');
-      case 'cancelled':
-        return t('voice.mic.tooltip.cancelled', 'Voice command cancelled');
-      case 'no_speech':
-        return t('voice.mic.tooltip.noSpeech', 'No speech heard');
-      case 'transcription_failed':
-        return t(
-          'voice.mic.tooltip.transcriptionFailed',
-          'Voice command was not understood',
-        );
-      case 'microphone_disconnected':
-        return t(
-          'voice.mic.tooltip.microphoneDisconnected',
-          'Microphone disconnected',
-        );
-      case 'error':
-        return t('voice.mic.tooltip.error', 'Voice error');
-      default:
-        return t('voice.mic.tooltip.off', 'Wakeword disabled');
-    }
-  }
-
-  function compactMicStatus(status) {
-    if (status?.state === 'error') {
-      return t('voice.state.error', 'Voice error');
-    }
-    if (!status?.enabled) return '';
-    switch (status.state) {
-      case 'wakeword_detected':
-        return t('voice.state.wakewordDetected', 'Wakeword detected');
-      case 'recording':
-        return t('voice.state.recording', 'Recording');
-      case 'transcribing':
-      case 'sending':
-        return t('voice.state.processing', 'Processing');
-      case 'cancelled':
-        return t('voice.state.cancelled', 'Cancelled');
-      case 'microphone_disconnected':
-        return t(
-          'voice.state.microphone_disconnected',
-          'Microphone disconnected',
-        );
-      case 'error':
-        return t('voice.state.error', 'Voice error');
-      default:
-        return '';
-    }
-  }
 
   function agentActivityLabel(name, status) {
     if (status === 'running') {
@@ -213,21 +105,6 @@
     {/if}
   </div>
   <div class="header-right">
-    {#if micVisible}
-      <button
-        type="button"
-        class="mic-indicator"
-        use:tooltip={micTooltip}
-        aria-label={micTooltip}
-        onclick={onNavigateToVoiceSettings}
-      >
-        <span class="mic-dot {micDotClass}" aria-hidden="true"></span>
-        {#if micStatusText}
-          <span class="mic-status-text" aria-live="polite">{micStatusText}</span
-          >
-        {/if}
-      </button>
-    {/if}
     <Dropdown
       value={selectedProjectId}
       options={projectOptions}
@@ -356,67 +233,6 @@
     gap: 10px;
   }
 
-  .mic-indicator {
-    display: inline-flex;
-    min-width: 28px;
-    height: 28px;
-    flex-shrink: 0;
-    align-items: center;
-    justify-content: center;
-    gap: 6px;
-    padding: 0 8px;
-    border: none;
-    border-radius: 50%;
-    background: transparent;
-    cursor: pointer;
-    transition: background 0.15s;
-  }
-
-  .mic-indicator:hover {
-    background: var(--surface-2);
-  }
-
-  .mic-dot {
-    display: block;
-    width: 8px;
-    height: 8px;
-    flex-shrink: 0;
-    border-radius: 50%;
-  }
-
-  .mic-dot--off {
-    background: var(--text-lo);
-  }
-
-  .mic-dot--listening {
-    animation: mic-pulse 1.6s ease-in-out infinite;
-    background: var(--green);
-  }
-
-  .mic-dot--recording {
-    background: var(--amber);
-  }
-
-  .mic-dot--processing {
-    animation: mic-spin 1s linear infinite;
-    background: var(--accent);
-  }
-
-  .mic-dot--warning {
-    background: var(--amber);
-  }
-
-  .mic-dot--error {
-    background: var(--red);
-  }
-
-  .mic-status-text {
-    color: var(--text-med);
-    font-family: var(--font-ui);
-    font-size: var(--fs-label-sm);
-    white-space: nowrap;
-  }
-
   :global(.chat-sessions-toggle--active) {
     border-color: var(--accent);
     color: var(--accent);
@@ -429,41 +245,6 @@
   :global(.chat-header__project-dropdown) {
     min-width: 150px;
     max-width: 220px;
-  }
-
-  @keyframes mic-pulse {
-    0%,
-    100% {
-      opacity: 1;
-    }
-    50% {
-      opacity: 0.35;
-    }
-  }
-
-  @keyframes mic-spin {
-    0% {
-      opacity: 1;
-    }
-    25% {
-      opacity: 0.5;
-    }
-    50% {
-      opacity: 0.2;
-    }
-    75% {
-      opacity: 0.5;
-    }
-    100% {
-      opacity: 1;
-    }
-  }
-
-  @media (prefers-reduced-motion: reduce) {
-    .mic-dot--listening,
-    .mic-dot--processing {
-      animation: none;
-    }
   }
 
   @media (max-width: 640px) {
