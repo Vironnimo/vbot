@@ -710,6 +710,13 @@ async def test_textless_agent_start_suppresses_the_startup_settle(
         assert trigger.submissions == []
         assert session.attention is None or not session.attention.delivered
 
+        # A later status refresh writes the identical startup screen again:
+        # it must stay silent too, not wake with the already-known screen.
+        factory.adapters[0].emit("\rTUI banner")
+        await eventually(lambda: session.state == "ready")
+        await asyncio.sleep(0.1)
+        assert trigger.submissions == []
+
         # Real agent input re-arms delivery; the next screen change wakes.
         await manager.send_input(
             session.terminal_id,
