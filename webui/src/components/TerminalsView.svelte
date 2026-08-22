@@ -157,6 +157,18 @@
   });
 
   $effect(() => {
+    void layout.columns;
+    void layout.rows;
+    void groupTerminals.length;
+    void maximizedTerminalId;
+    void tick().then(() => {
+      for (const id of tileRegistry.keys()) {
+        scheduleFit(id);
+      }
+    });
+  });
+
+  $effect(() => {
     for (const item of groupTerminals) {
       const tile = tileRegistry.get(item.terminal_id);
       if (!tile?.xterm) {
@@ -321,6 +333,7 @@
       lastFitHostWidth: null,
       lastFitHostHeight: null,
       stableFitCount: 0,
+      fitFollowUpScheduled: false,
     });
     const pending = pendingSnapshots.get(terminalId);
     if (pending) {
@@ -379,6 +392,28 @@
     queueMicrotask(() => fitTerminal(terminalId));
   }
 
+  function scheduleFitFollowUp(terminalId) {
+    const tile = tileRegistry.get(terminalId);
+    if (!tile || tile.fitFollowUpScheduled) {
+      return;
+    }
+    tile.fitFollowUpScheduled = true;
+    requestAnimationFrame(() => {
+      const current = tileRegistry.get(terminalId);
+      if (current) {
+        current.fitFollowUpScheduled = false;
+      }
+      fitTerminal(terminalId);
+    });
+  }
+
+  function refreshTileRenderer(tile) {
+    if (!tile?.xterm || tile.xterm.rows < 1) {
+      return;
+    }
+    tile.xterm.refresh(0, tile.xterm.rows - 1);
+  }
+
   function fitTerminal(terminalId) {
     const tile = tileRegistry.get(terminalId);
     const host = tileHosts.get(terminalId);
@@ -392,7 +427,11 @@
       return;
     }
     try {
+      // WebGL keeps the previous cell metrics until the renderer is
+      // refreshed, so a shrink after a large-font full-width tile would
+      // otherwise measure too few columns and clip the TUI.
       tile.xterm.options.fontSize = TERMINAL_BASE_FONT_SIZE;
+      refreshTileRenderer(tile);
       tile.fitAddon.fit();
       // Increase the font size until the grid fits within the PTY dimension
       // limits. Font metrics are not perfectly proportional, so this may
@@ -447,7 +486,13 @@
       tile.lastFitHostWidth = hostWidth;
       tile.lastFitHostHeight = hostHeight;
       tile.stableFitCount = stable ? tile.stableFitCount + 1 : 1;
+      refreshTileRenderer(tile);
       if (tile.stableFitCount < TERMINAL_WEBGL_STABLE_FITS) {
+        // ResizeObserver often fires once when a sibling tile joins.
+        // The stability gate needs a second unchanged measurement, so
+        // schedule that observation on the next frame instead of waiting
+        // for another layout event that may never come.
+        scheduleFitFollowUp(terminalId);
         return;
       }
       // Load WebGL after the terminal has settled at its final dimensions

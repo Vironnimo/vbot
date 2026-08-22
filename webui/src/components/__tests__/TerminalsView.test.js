@@ -20,6 +20,9 @@ const streams = [];
 const terminalInstances = [];
 const fitAddons = [];
 const webglAddons = [];
+const resizeObservers = [];
+let mockHostWidth = 800;
+let mockHostHeight = 512;
 let webglActivationFails = false;
 
 vi.mock('svelte', async () => {
@@ -69,8 +72,8 @@ vi.mock('@xterm/xterm', () => ({
     });
     open(host) {
       Object.defineProperties(host, {
-        clientWidth: { get: () => 800 },
-        clientHeight: { get: () => 512 },
+        clientWidth: { get: () => mockHostWidth },
+        clientHeight: { get: () => mockHostHeight },
       });
       const element = document.createElement('div');
       const screen = document.createElement('div');
@@ -149,11 +152,15 @@ vi.mock('@xterm/addon-webgl', () => ({
 class MockResizeObserver {
   constructor(callback) {
     this.callback = callback;
+    resizeObservers.push(this);
   }
   observe() {
     this.callback();
   }
   disconnect() {}
+  fire() {
+    this.callback();
+  }
 }
 vi.stubGlobal('ResizeObserver', MockResizeObserver);
 
@@ -170,6 +177,9 @@ describe('TerminalsView', () => {
     terminalInstances.length = 0;
     fitAddons.length = 0;
     webglAddons.length = 0;
+    resizeObservers.length = 0;
+    mockHostWidth = 800;
+    mockHostHeight = 512;
     webglActivationFails = false;
     listTerminalsMock.mockReset();
     startTerminalMock.mockReset().mockResolvedValue({});
@@ -649,6 +659,60 @@ describe('TerminalsView', () => {
     expect(resizeTerminalMock).toHaveBeenCalledWith('term-1', 100, 32);
   });
 
+  it('follows a one-shot tile shrink with a second fit so the PTY resizes', async () => {
+    listTerminalsMock.mockResolvedValue(terminalListResponse([terminal()]));
+    mountedComponent = mount(TerminalsView, { target: document.body });
+    flushSync();
+    await waitFor(() => streams.length === 1 && terminalInstances.length === 1);
+    await flushAnimationFrames(2);
+    expect(resizeObservers).toHaveLength(1);
+    resizeTerminalMock.mockClear();
+
+    mockHostWidth = 400;
+    resizeObservers[0].fire();
+    await Promise.resolve();
+    flushSync();
+    expect(resizeTerminalMock).not.toHaveBeenCalled();
+
+    await flushAnimationFrames(1);
+    // A settled size is still debounced before it reaches the PTY.
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    expect(resizeTerminalMock).toHaveBeenCalledWith('term-1', 50, 32);
+    expect(terminalInstances[0].refresh).toHaveBeenCalled();
+  });
+
+  it('re-fits the first tile when a second terminal joins the canvas', async () => {
+    listTerminalsMock.mockResolvedValue(terminalListResponse([terminal()]));
+    startTerminalMock.mockResolvedValue({
+      terminal: terminal({
+        terminal_id: 'term-2',
+        title: 'Second terminal',
+        command: 'opencode',
+      }),
+    });
+    mountedComponent = mount(TerminalsView, { target: document.body });
+    flushSync();
+    await waitFor(() => streams.length === 1 && terminalInstances.length === 1);
+    await flushAnimationFrames(2);
+    const fitsBefore = fitAddons[0].fit.mock.calls.length;
+    const refreshesBefore = terminalInstances[0].refresh.mock.calls.length;
+
+    findButton('New terminal').click();
+    flushSync();
+    document
+      .querySelector('#terminal-start-form')
+      .dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    await waitFor(() => terminalInstances.length === 2);
+    await Promise.resolve();
+    flushSync();
+    await flushAnimationFrames(1);
+
+    expect(fitAddons[0].fit.mock.calls.length).toBeGreaterThan(fitsBefore);
+    expect(terminalInstances[0].refresh.mock.calls.length).toBeGreaterThan(
+      refreshesBefore,
+    );
+  });
+
   it('focuses the first tile and switches focus via a tile bar click', async () => {
     listTerminalsMock.mockResolvedValue(
       terminalListResponse([
@@ -923,6 +987,16 @@ function terminalListResponse(terminals, groups) {
     }),
   ];
   return { groups: groupList, terminals };
+}
+
+function flushAnimationFrames(count = 1) {
+  let wait = Promise.resolve();
+  for (let index = 0; index < count; index += 1) {
+    wait = wait.then(
+      () => new Promise((resolve) => requestAnimationFrame(() => resolve())),
+    );
+  }
+  return wait;
 }
 
 async function waitFor(predicate, attempts = 50) {
