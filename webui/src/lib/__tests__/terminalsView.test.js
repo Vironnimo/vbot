@@ -5,6 +5,7 @@ import {
   TERMINAL_STREAM_CONNECTING,
   TERMINAL_STREAM_RECONNECTING,
   TERMINAL_STREAM_SNAPSHOT,
+  createPtyFrameSanitizer,
   createTerminalsController,
   createTerminalsViewState,
   layoutForCount,
@@ -15,6 +16,49 @@ import {
 
 afterEach(() => {
   vi.useRealTimers();
+});
+
+describe('pty frame sanitizer', () => {
+  it('reassembles an ANSI escape split across frames', () => {
+    const sanitizer = createPtyFrameSanitizer();
+
+    expect(sanitizer.next('build ok \u001b[')).toBe('build ok ');
+    expect(sanitizer.next('31mred\u001b[0m')).toBe('\u001b[31mred\u001b[0m');
+    expect(sanitizer.flush()).toBe('');
+  });
+
+  it('drops a buffered partial escape at end of stream', () => {
+    const sanitizer = createPtyFrameSanitizer();
+
+    expect(sanitizer.next('text \u001b[2')).toBe('text ');
+    expect(sanitizer.flush()).toBe('');
+  });
+
+  it('accumulates a blank-line burst split across frames and collapses it', () => {
+    const sanitizer = createPtyFrameSanitizer();
+    const burst = '\r\n'.repeat(80);
+
+    // Frame 1 ends inside the burst: the run is held back, text passes.
+    expect(sanitizer.next('head' + burst.slice(0, 60))).toBe('head');
+    // Frame 2 completes the run; still no non-newline content, so it stays
+    // held until the burst can be collapsed together with real text.
+    expect(sanitizer.next(burst.slice(60))).toBe('');
+    // The next real content collapses the accumulated run once.
+    expect(sanitizer.next('tail')).toBe('\r\n\r\ntail');
+  });
+
+  it('collapses a burst inside a single frame', () => {
+    const sanitizer = createPtyFrameSanitizer();
+
+    expect(sanitizer.next('a' + '\r\n'.repeat(80) + 'b')).toBe('a\r\n\r\nb');
+  });
+
+  it('flushes a held newline run at end of stream', () => {
+    const sanitizer = createPtyFrameSanitizer();
+
+    expect(sanitizer.next('a\r\n\r')).toBe('a');
+    expect(sanitizer.flush()).toBe('\r\n\r');
+  });
 });
 
 describe('terminal list projection', () => {
@@ -607,9 +651,109 @@ describe('terminal live controller', () => {
     expect(state.actionError).toBe('');
     controller.destroy();
   });
+
+  it('force-closes a wedged connecting socket after the budget and reconnects', async () => {
+    vi.useFakeTimers();
+    const state = createTerminalsViewState();
+    const streams = [];
+    const api = fakeApi({ streams, socketReadyState: 0 });
+    const controller = createTerminalsController({ state, api });
+
+    await controller.start();
+    expect(streams[0].connection.socket.readyState).toBe(0);
+
+    // Nothing arrived and the socket never opened: after the wedge budget the
+    // controller must close it and schedule an immediate reconnect.
+    await vi.advanceTimersByTimeAsync(8_001);
+
+    expect(streams[0].connection.close).toHaveBeenCalled();
+    expect(streams).toHaveLength(2);
+    expect(state.streams['term-1'].status).toBe(TERMINAL_STREAM_RECONNECTING);
+
+    // The fresh socket opens cleanly; its wedge timer must never fire again.
+    streams[1].connection.socket.readyState = 1;
+    streams[1].emit({
+      type: 'terminal_ready',
+      sequence: 1,
+      terminal: terminal('term-1'),
+      ansi: '\u001b[2Jready',
+    });
+    await vi.advanceTimersByTimeAsync(20_000);
+
+    expect(streams).toHaveLength(2);
+    expect(state.streams['term-1'].status).toBe(TERMINAL_STREAM_CONNECTED);
+    controller.destroy();
+  });
+
+  it('does not force-close a socket that opens within the budget', async () => {
+    vi.useFakeTimers();
+    const state = createTerminalsViewState();
+    const streams = [];
+    const api = fakeApi({ streams, socketReadyState: 0 });
+    const controller = createTerminalsController({ state, api });
+
+    await controller.start();
+    // The socket opens (readyState flips) before the wedge budget elapses.
+    streams[0].connection.socket.readyState = 1;
+    streams[0].emit({
+      type: 'terminal_ready',
+      sequence: 1,
+      terminal: terminal('term-1'),
+      ansi: '\\u001b[2Jready',
+    });
+    await vi.runAllTimersAsync();
+
+    expect(streams[0].connection.close).not.toHaveBeenCalled();
+    expect(streams).toHaveLength(1);
+    expect(state.streams['term-1'].status).toBe(TERMINAL_STREAM_CONNECTED);
+    controller.destroy();
+  });
+
+  it('sanitizes output chunks split across frames before rendering', async () => {
+    vi.useFakeTimers();
+    const state = createTerminalsViewState();
+    const streams = [];
+    const output = [];
+    const api = fakeApi({ streams });
+    const controller = createTerminalsController({
+      state,
+      api,
+      onOutput: (terminalId, data) => output.push([terminalId, data]),
+    });
+
+    await controller.start();
+    streams[0].emit({
+      type: 'terminal_ready',
+      sequence: 1,
+      terminal: terminal('term-1'),
+      ansi: '\\u001b[2Jshell',
+    });
+    // A CSI escape torn across two frames must be reassembled before xterm.
+    streams[0].emit({
+      type: 'terminal_output',
+      sequence: 2,
+      data: 'build \u001b[',
+    });
+    streams[0].emit({
+      type: 'terminal_output',
+      sequence: 3,
+      data: '31mok\u001b[0m',
+    });
+
+    expect(output).toEqual([
+      ['term-1', 'build '],
+      ['term-1', '\u001b[31mok\u001b[0m'],
+    ]);
+    controller.destroy();
+  });
 });
 
-function fakeApi({ streams, terminals = [terminal('term-1')], groups }) {
+function fakeApi({
+  streams,
+  terminals = [terminal('term-1')],
+  groups,
+  socketReadyState = 1,
+}) {
   const groupList = groups ?? [
     {
       ...manual(),
@@ -632,7 +776,10 @@ function fakeApi({ streams, terminals = [terminal('term-1')], groups }) {
     deleteTerminalGroup: vi.fn().mockResolvedValue({}),
     setTerminalGroupOrder: vi.fn().mockResolvedValue({}),
     subscribeTerminalEvents: vi.fn((_terminalId, handlers) => {
-      const connection = { close: vi.fn() };
+      const connection = {
+        close: vi.fn(),
+        socket: { readyState: socketReadyState },
+      };
       streams.push({
         connection,
         emit: (event) => handlers.onEvent(event),

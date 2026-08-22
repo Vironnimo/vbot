@@ -13,6 +13,45 @@ import {
 } from './api.js';
 import { reconnectBackoffDelay } from './backoff.js';
 
+export function createPtyFrameSanitizer() {
+  let pending = '';
+
+  function next(chunk) {
+    const combined = pending + chunk;
+    if (combined === '') {
+      pending = '';
+      return '';
+    }
+    const lastEsc = combined.lastIndexOf('\x1b');
+    if (lastEsc !== -1 && PARTIAL_ESC.test(combined.slice(lastEsc))) {
+      pending = combined.slice(lastEsc);
+      return combined
+        .slice(0, lastEsc)
+        .replace(BLANK_LINE_BURST, COLLAPSED_BURST);
+    }
+    const trailing = TRAILING_NEWLINES.exec(combined);
+    if (trailing.index === 0) {
+      pending = combined;
+      return '';
+    }
+    pending = trailing[0];
+    return combined
+      .slice(0, trailing.index)
+      .replace(BLANK_LINE_BURST, COLLAPSED_BURST);
+  }
+
+  function flush() {
+    const last = pending;
+    pending = '';
+    if (last === '' || last.includes('\x1b')) {
+      return '';
+    }
+    return last.replace(BLANK_LINE_BURST, COLLAPSED_BURST);
+  }
+
+  return { next, flush };
+}
+
 export const TERMINAL_STREAM_IDLE = 'idle';
 export const TERMINAL_STREAM_CONNECTING = 'connecting';
 export const TERMINAL_STREAM_CONNECTED = 'connected';
@@ -25,6 +64,28 @@ const RECONNECT_MAX_DELAY_MS = 8_000;
 const RESIZE_DEBOUNCE_MS = 100;
 const INPUT_FLUSH_DELAY_MS = 24;
 const INPUT_CHUNK_CHARS = 32_768;
+// A socket that still sits in WS_CONNECTING past this budget is treated as
+// wedged (half-open after a sleep/radio/network handoff) and force-closed so
+// the ordinary close path schedules a reconnect; such sockets never fire
+// open or close on their own.
+const CONNECT_TIMEOUT_MS = 8_000;
+const WS_CONNECTING = 0;
+const WS_OPEN = 1;
+// A WS frame boundary can split an ANSI escape sequence, a UTF-8 code point,
+// or a long blank-line run in two. Feeding xterm the torn halves corrupts its
+// parser (it can swallow the output after a reconnect). This sanitizer holds
+// back a trailing partial escape / newline run until the next frame completes
+// it, mirrors Hermes' pty-resume sanitizer.
+// A WS frame boundary can split an ANSI escape sequence, a UTF-8 code point,
+// or a long blank-line run in two. Feeding xterm the torn halves corrupts its
+// parser (it can swallow the output after a reconnect). This sanitizer holds
+// back a trailing partial escape / newline run until the next frame completes
+// it, mirrors Hermes' pty-resume sanitizer.
+// eslint-disable-next-line no-control-regex -- intentional ESC byte in ANSI sequence parser
+const PARTIAL_ESC = /^\x1b(?:\[\d*)?$/;
+const TRAILING_NEWLINES = /(?:\r?\n)*\r?$/;
+const BLANK_LINE_BURST = /(?:\r?\n){50,}/g;
+const COLLAPSED_BURST = '\r\n\r\n';
 const TERMINAL_STATES_FINISHED = new Set(['exited', 'error']);
 
 /**
@@ -357,6 +418,8 @@ export function createTerminalsController({
         lastSequence: 0,
         reconnectTimer: null,
         reconnectAttempt: 0,
+        connectTimer: null,
+        sanitizer: createPtyFrameSanitizer(),
         inputTimer: null,
         inputBuffer: '',
         inputChain: Promise.resolve(),
@@ -391,6 +454,29 @@ export function createTerminalsController({
         },
         onClose: () => handleStreamClose(stream),
       });
+      const socket = stream.connection?.socket;
+      if (socket && socket.readyState === WS_CONNECTING) {
+        stream.connectTimer = setTimeoutFn(() => {
+          stream.connectTimer = null;
+          if (streamRecords.get(terminalId) !== stream) {
+            return;
+          }
+          const current = stream.connection?.socket;
+          if (
+            !current ||
+            current.readyState === WS_OPEN ||
+            stream.terminalEnded
+          ) {
+            return;
+          }
+          // Still connecting past the budget: treat as wedged. Forcing the
+          // close runs the ordinary reconnect path (which this handler's
+          // onClose feeds); the socket never opened, so nothing is lost.
+          stream.connection?.close();
+          stream.connection = null;
+          scheduleReconnect(terminalId, 0);
+        }, CONNECT_TIMEOUT_MS);
+      }
     } catch (error) {
       setStreamView(terminalId, {
         error: errorMessage(error),
@@ -414,6 +500,10 @@ export function createTerminalsController({
         reconnectForGap(stream);
         return;
       }
+      // Fresh stream: any partially-held frame tail from the previous socket
+      // is dead and must not bleed into the rebuilt buffer.
+      stream.sanitizer = createPtyFrameSanitizer();
+      clearConnectTimer(stream);
       stream.lastSequence = sequence;
       stream.reconnectAttempt = 0;
       const terminal = mergeTerminalSummary(state, event.terminal);
@@ -439,7 +529,10 @@ export function createTerminalsController({
     }
     stream.lastSequence = sequence;
     if (event.type === 'terminal_output' && typeof event.data === 'string') {
-      onOutput(stream.terminalId, event.data);
+      const sanitized = stream.sanitizer.next(event.data);
+      if (sanitized) {
+        onOutput(stream.terminalId, sanitized);
+      }
       return;
     }
     if (event.type === 'terminal_snapshot' && typeof event.ansi === 'string') {
@@ -927,6 +1020,14 @@ export function createTerminalsController({
     if (stream.reconnectTimer !== null) {
       clearTimeoutFn(stream.reconnectTimer);
       stream.reconnectTimer = null;
+    }
+    clearConnectTimer(stream);
+  }
+
+  function clearConnectTimer(stream) {
+    if (stream.connectTimer !== null) {
+      clearTimeoutFn(stream.connectTimer);
+      stream.connectTimer = null;
     }
   }
 
