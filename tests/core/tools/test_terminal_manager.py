@@ -430,6 +430,63 @@ async def test_screen_revision_guards_input_and_resize_updates_both_sides(
 
 
 @pytest.mark.asyncio
+async def test_resize_to_current_dimensions_is_a_no_op(
+    terminal_manager: tuple[TerminalManager, AdapterFactory], tmp_path: Path
+) -> None:
+    manager, factory = terminal_manager
+    session = await spawn(manager, tmp_path)
+
+    result = await manager.resize(session.terminal_id, owner(), columns=120, rows=32)
+    operator_result = await manager.resize_for_operator(session.terminal_id, columns=120, rows=32)
+
+    assert factory.adapters[0].resizes == []
+    assert result["columns"] == 120
+    assert result["rows"] == 32
+    assert result["screen_revision"] == session.renderer.revision
+    assert operator_result["screen_revision"] == session.renderer.revision
+    assert session.attention is None
+    assert session.state != "working"
+
+
+@pytest.mark.asyncio
+async def test_resize_repaint_inside_grace_window_does_not_wake_the_agent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(terminal_module, "TERMINAL_RESIZE_GRACE_SECONDS", 0.25)
+    trigger = PendingTriggerService()
+    factory = AdapterFactory()
+    manager = TerminalManager(
+        trigger,
+        adapter_factory=factory,
+        sweep_interval_seconds=3600,
+        activity_quiet_seconds=0.03,
+    )
+    manager.start()
+    try:
+        session = await spawn(manager, tmp_path)
+        session.state = "working"
+        manager.attach(session.terminal_id, owner(), origin_run_id="attach-run")
+        await eventually(lambda: len(trigger.submissions) == 1)
+        trigger.release.set()
+        assert session.attention is not None
+        await eventually(lambda: session.attention.delivered)
+
+        await manager.resize(session.terminal_id, owner(), columns=100, rows=24)
+        factory.adapters[0].emit("repaint after resize")
+        await eventually(lambda: session.state == "ready")
+        await asyncio.sleep(0.05)
+        assert len(trigger.submissions) == 1
+
+        await asyncio.sleep(0.25)
+        factory.adapters[0].emit("real work output")
+        await eventually(lambda: len(trigger.submissions) == 2)
+        assert session.attention is not None
+        assert session.attention.kind == "output_settled"
+    finally:
+        await manager.aclose()
+
+
+@pytest.mark.asyncio
 async def test_operator_stream_starts_with_ansi_snapshot_and_continues_in_sequence(
     terminal_manager: tuple[TerminalManager, AdapterFactory], tmp_path: Path
 ) -> None:

@@ -301,7 +301,26 @@ describe('terminal live controller', () => {
     controller.destroy();
   });
 
-  it('debounces resize requests and skips unchanged dimensions', async () => {
+  it('debounces resize requests and drops bursts ending at the current dimensions', async () => {
+    vi.useFakeTimers();
+    const state = createTerminalsViewState();
+    const streams = [];
+    const api = fakeApi({ streams });
+    const controller = createTerminalsController({ state, api });
+
+    await controller.start();
+    // The terminal already runs at 120x32: a burst that ends there must not
+    // reach the server, not even with an intermediate size in between.
+    controller.resize(100, 30, 'term-1');
+    controller.resize(100, 30, 'term-1');
+    controller.resize(120, 32, 'term-1');
+    await vi.runAllTimersAsync();
+
+    expect(api.resizeTerminal).not.toHaveBeenCalled();
+    controller.destroy();
+  });
+
+  it('debounces a resize burst into one request with the final dimensions', async () => {
     vi.useFakeTimers();
     const state = createTerminalsViewState();
     const streams = [];
@@ -310,12 +329,28 @@ describe('terminal live controller', () => {
 
     await controller.start();
     controller.resize(100, 30, 'term-1');
-    controller.resize(100, 30, 'term-1');
-    controller.resize(120, 32, 'term-1');
+    controller.resize(110, 31, 'term-1');
     await vi.runAllTimersAsync();
 
     expect(api.resizeTerminal).toHaveBeenCalledTimes(1);
-    expect(api.resizeTerminal).toHaveBeenCalledWith('term-1', 120, 32);
+    expect(api.resizeTerminal).toHaveBeenCalledWith('term-1', 110, 31);
+    controller.destroy();
+  });
+
+  it('skips a resize that repeats the terminal’s authoritative dimensions', async () => {
+    vi.useFakeTimers();
+    const state = createTerminalsViewState();
+    const streams = [];
+    const api = fakeApi({ streams });
+    const controller = createTerminalsController({ state, api });
+
+    await controller.start();
+    // A tab revisit builds a fresh stream; repeating the known dimensions
+    // must not reach the server or make the program repaint.
+    controller.resize(120, 32, 'term-1', true);
+    await vi.runAllTimersAsync();
+
+    expect(api.resizeTerminal).not.toHaveBeenCalled();
     controller.destroy();
   });
 
