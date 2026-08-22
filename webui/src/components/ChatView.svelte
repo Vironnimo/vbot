@@ -93,9 +93,6 @@
     // Scope object of the latest `resource_changed(kind:"queue")` (a fresh
     // object per signal); re-syncs the matching held session's queue live.
     queueInvalidation = null,
-    wakewordStatus = { enabled: false, state: 'off' },
-    desktopCapabilities = null,
-    onNavigateToVoiceSettings = () => {},
     // App supplies the server-backed operational state. `null` means Settings
     // are still loading, so Chat does not guess which prerequisite is missing.
     hasConnectedProvider = true,
@@ -1827,14 +1824,11 @@
     {projects}
     {selectedProjectId}
     onSelectProject={handleSelectProject}
-    {wakewordStatus}
-    {desktopCapabilities}
     onSelectAgent={handleSelectAgent}
     onToggleSessionDrawer={() => {
       showSessionDrawer = !showSessionDrawer;
     }}
     onNewSession={handleNewSession}
-    {onNavigateToVoiceSettings}
   />
 
   {#if isProjectSelected(selectedProjectId)}

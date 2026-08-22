@@ -392,9 +392,18 @@ svg {
 
 .sidebar-footer {
   display: flex;
+  flex-direction: column;
+  border-top: 1px solid var(--border);
+}
+
+.sidebar-footer__row {
+  display: flex;
   align-items: center;
   gap: 8px;
-  padding: 14px 18px;
+  padding: 10px 18px;
+}
+
+.sidebar-footer__row + .sidebar-footer__row {
   border-top: 1px solid var(--border);
 }
 
