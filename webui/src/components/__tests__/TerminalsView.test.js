@@ -720,6 +720,32 @@ describe('TerminalsView', () => {
     expect(webglAddons).toHaveLength(1);
   });
 
+  it('drops WebGL when the backing canvas is not a multiple of the grid', async () => {
+    listTerminalsMock.mockResolvedValue(terminalListResponse([terminal()]));
+    mountedComponent = mount(TerminalsView, { target: document.body });
+    flushSync();
+    await waitFor(() => streams.length === 1 && terminalInstances.length === 1);
+    await waitForWebgl();
+    expect(webglAddons).toHaveLength(1);
+    const resizesBefore = resizeTerminalMock.mock.calls.length;
+
+    const screen = document.querySelector('.xterm-screen');
+    const canvas = document.createElement('canvas');
+    canvas.height = terminalInstances[0].rows * 15 + 1;
+    canvas.width = 100;
+    Object.defineProperty(canvas, 'clientHeight', { get: () => 480 });
+    screen.append(canvas);
+    resizeObservers[0].fire();
+    await Promise.resolve();
+    flushSync();
+
+    expect(webglAddons[0].dispose).toHaveBeenCalledOnce();
+    expect(resizeTerminalMock.mock.calls.length).toBe(resizesBefore);
+
+    await flushAnimationFrames(3);
+    expect(webglAddons).toHaveLength(1);
+  });
+
   it('rebuilds WebGL after a same-size snapshot write', async () => {
     listTerminalsMock.mockResolvedValue(terminalListResponse([terminal()]));
     mountedComponent = mount(TerminalsView, { target: document.body });
