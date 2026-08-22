@@ -735,14 +735,19 @@ async def test_textless_agent_start_suppresses_the_startup_settle(
 
 
 @pytest.mark.asyncio
-async def test_resize_repaint_is_swallowed_once_and_then_uses_the_new_baseline(
+async def test_resize_repaint_is_swallowed_until_stable_then_uses_new_baseline(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """After a real resize, the TUI repaints the same content at the new
-    size. That settle is swallowed and its screen becomes the new baseline;
-    an identical refresh afterwards stays silent, a changed screen delivers."""
+    """After a real resize the TUI repaints in several waves. Settles stay
+    suppressed until the repainted screen is stable across two boundaries;
+    that stable screen becomes the new baseline — identical refreshes stay
+    silent, a changed screen delivers."""
     monkeypatch.setattr(terminal_module, "TERMINAL_RESIZE_GRACE_SECONDS", 0.05)
-    monkeypatch.setattr(terminal_module, "TERMINAL_RESIZE_GRACE_MAX_SECONDS", 0.1)
+    # The repaint waves must land inside the grace deadline while the real
+    # output afterwards lands outside it, so the deadline does not swallow
+    # the final delivery (the deadline cap itself is covered by
+    # test_resize_grace_extends_with_repaint_but_hard_deadline_caps_it).
+    monkeypatch.setattr(terminal_module, "TERMINAL_RESIZE_GRACE_MAX_SECONDS", 2.0)
     trigger = PendingTriggerService()
     factory = AdapterFactory()
     manager = TerminalManager(
@@ -771,23 +776,32 @@ async def test_resize_repaint_is_swallowed_once_and_then_uses_the_new_baseline(
         trigger.release.set()
         await eventually(lambda: session.attention.delivered)
 
-        # The resize repaint settle is swallowed and becomes the new baseline.
+        # Repaint wave 1 differs from wave 2; wave 3 repeats wave 2, so the
+        # screen is stable and the gate closes silently. All waves land
+        # inside the 2s grace deadline.
         await manager.resize(session.terminal_id, owner(), columns=90, rows=24)
-        await asyncio.sleep(0.4)
+        await asyncio.sleep(0.15)
         factory.adapters[0].emit("\rMENU> ")
         await eventually(lambda: session.state == "ready")
-        await asyncio.sleep(0.1)
+        await asyncio.sleep(0.15)
+        factory.adapters[0].emit("\rMENU> status")
+        await eventually(lambda: session.state == "ready")
+        await asyncio.sleep(0.15)
+        factory.adapters[0].emit("\rMENU> status")
+        await eventually(lambda: session.state == "ready")
+        await asyncio.sleep(0.15)
         assert len(trigger.submissions) == 1
 
         # An identical refresh against the repaint baseline stays silent.
-        factory.adapters[0].emit("\rMENU> ")
+        factory.adapters[0].emit("\rMENU> status")
         await eventually(lambda: session.state == "ready")
-        await asyncio.sleep(0.1)
+        await asyncio.sleep(0.15)
         assert len(trigger.submissions) == 1
 
-        # The screen changes with real content: the settle delivers again.
-        factory.adapters[0].emit("\rMENU> \nnew work output line")
-        await eventually(lambda: len(trigger.submissions) == 2)
+        # Let the grace deadline expire, then real content delivers again.
+        await asyncio.sleep(2.0)
+        factory.adapters[0].emit("\rMENU> status\nnew work output line")
+        await eventually(lambda: len(trigger.submissions) == 2, attempts=500)
         assert session.attention is not None
         assert session.attention.kind == "output_settled"
     finally:
