@@ -15,7 +15,7 @@ describe('formatTokenUsageTooltip', () => {
     ).toBeUndefined();
   });
 
-  it('renders the shared current Context projection and its provenance', () => {
+  it('renders the context summary with provider in/out and estimated delta', () => {
     const tooltip = formatTokenUsageTooltip(
       {
         tokens: 155489,
@@ -26,14 +26,14 @@ describe('formatTokenUsageTooltip', () => {
       },
       null,
       null,
+      262144,
     );
 
     const lines = tooltip.split('\n');
-    expect(lines).toHaveLength(4);
-    expect(lines[0]).toContain('~155,489');
-    expect(lines[1]).toContain('154,731');
-    expect(lines[2]).toContain('243');
-    expect(lines[3]).toContain('515');
+    expect(lines).toHaveLength(3);
+    expect(lines[0]).toBe('~155,489 / 262,144');
+    expect(lines[1]).toBe('(in 154,731, out 243)');
+    expect(lines[2]).toContain('515');
   });
 
   it('renders the last turn with cache shares, uncached remainder and percent', () => {

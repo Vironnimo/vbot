@@ -1,20 +1,26 @@
-// Composes the chat-header token badge hover text: a "Last turn" block that
-// splits the input into its cache shares, plus a whole-session block with the
-// session cache hit rate. Rendered by the shared quick tooltip (lib/tooltip.js),
-// which keeps line breaks, so structure is expressed with line breaks and
-// middot-indented sub-lines.
+// Composes the context-ring hover text: a compact context summary
+// ("tokens / contextWindow" plus a provider in/out line), a "Last turn"
+// block that splits the input into its cache shares, and a whole-session
+// block with the session cache hit rate. Rendered by the shared quick
+// tooltip (lib/tooltip.js), which keeps line breaks, so structure is
+// expressed with line breaks and middot-indented sub-lines.
 //
 // The cache lines matter for spotting prompt-cache breaks: canonical
 // `input_tokens` already contains the cached tokens, so the sub-lines are
 // shares of the input ("davon"), never additions on top.
 import { activeLocaleTag, t } from './i18n.js';
 
-export function formatTokenUsageTooltip(contextUsage, usage, sessionUsage) {
+export function formatTokenUsageTooltip(
+  contextUsage,
+  usage,
+  sessionUsage,
+  contextWindow,
+) {
   const numberFormat = new Intl.NumberFormat(activeLocaleTag());
   const format = (value) => numberFormat.format(value);
 
   const sections = [
-    contextUsageLines(contextUsage, format),
+    contextUsageLines(contextUsage, contextWindow, format),
     usage ? lastTurnLines(usage, format) : [],
     sessionUsageLines(sessionUsage, format),
   ].filter((section) => section.length > 0);
@@ -23,34 +29,50 @@ export function formatTokenUsageTooltip(contextUsage, usage, sessionUsage) {
     : undefined;
 }
 
-function contextUsageLines(contextUsage, format) {
+function contextUsageLines(contextUsage, contextWindow, format) {
   const tokens = finiteOrNull(contextUsage?.tokens);
   if (tokens === null) {
     return [];
   }
   const tokenText = `${contextUsage.estimated === true ? '~' : ''}${format(tokens)}`;
-  const lines = [
-    t('chat.tokenTooltipContext', 'Current context: {tokens} tok', {
-      tokens: tokenText,
-    }),
-  ];
+  const lines = [];
+  if (Number.isFinite(contextWindow) && contextWindow > 0) {
+    lines.push(
+      t('chat.tokenTooltipContextSummary', '{tokens} / {context}', {
+        tokens: tokenText,
+        context: format(contextWindow),
+      }),
+    );
+  } else {
+    lines.push(
+      t('chat.tokenTooltipContextSummaryNoWindow', '{tokens}', {
+        tokens: tokenText,
+      }),
+    );
+  }
   const providerInput = finiteOrNull(contextUsage.provider_input_tokens);
   const providerOutput = finiteOrNull(contextUsage.provider_output_tokens);
+  if (providerInput !== null && providerOutput !== null) {
+    lines.push(
+      t('chat.tokenTooltipContextInOut', '(in {input}, out {output})', {
+        input: format(providerInput),
+        output: format(providerOutput),
+      }),
+    );
+  } else if (providerInput !== null) {
+    lines.push(
+      t('chat.tokenTooltipContextInOnly', '(in {input})', {
+        input: format(providerInput),
+      }),
+    );
+  } else if (providerOutput !== null) {
+    lines.push(
+      t('chat.tokenTooltipContextOutOnly', '(out {output})', {
+        output: format(providerOutput),
+      }),
+    );
+  }
   const estimatedDelta = finiteOrNull(contextUsage.estimated_delta_tokens);
-  if (providerInput !== null) {
-    lines.push(
-      t('chat.tokenTooltipContextInput', '  · provider input: {tokens}', {
-        tokens: format(providerInput),
-      }),
-    );
-  }
-  if (providerOutput !== null) {
-    lines.push(
-      t('chat.tokenTooltipContextOutput', '  · provider output: {tokens}', {
-        tokens: format(providerOutput),
-      }),
-    );
-  }
   if (estimatedDelta !== null) {
     lines.push(
       t(
