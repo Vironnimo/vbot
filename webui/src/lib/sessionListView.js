@@ -186,6 +186,7 @@ function normalizeSession(session) {
     created_at: asOptionalText(session?.created_at),
     last_active_at: asOptionalText(session?.last_active_at),
     has_unread_completion: session?.has_unread_completion === true,
+    has_active_run: session?.has_active_run === true,
     latest_completion_run_id: asOptionalText(session?.latest_completion_run_id),
     unread_run_id: asOptionalText(session?.unread_run_id),
     unread_run_status: asOptionalText(session?.unread_run_status),

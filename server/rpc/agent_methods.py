@@ -578,6 +578,18 @@ async def _list_sessions(state: Any, params: JsonObject) -> JsonObject:
             list[JsonObject],
             state.runtime.chat_sessions.list_with_metadata(agent_id, project_id),
         )
+        run_manager = getattr(state.runtime, "chat_run_manager", None)
+        for session in sessions:
+            session_id = session.get("id")
+            if isinstance(session_id, str) and run_manager is not None:
+                active = run_manager.active_run(
+                    agent_id=agent_id,
+                    session_id=session_id,
+                    project_id=project_id,
+                )
+                session["has_active_run"] = active is not None
+            else:
+                session["has_active_run"] = False
         resolver = getattr(state.runtime, "agent_resolver", None)
         agents = getattr(state.runtime, "agents", None)
         if resolver is None and agents is None:
