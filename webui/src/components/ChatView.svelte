@@ -119,7 +119,7 @@
   let generationSessionKey = '';
   let transientCardSeq = 0;
   let showSessionDrawer = $state(false);
-  let sessionBarElement = $state(null);
+  let sessionFilters = $state(null);
   let viewingSessionId = $state('');
   let viewingSessionAgentId = $state('');
   let viewingSubAgentSession = $state(false);
@@ -1264,7 +1264,6 @@
     sessionAgentAddress,
     isSubAgentSession,
   ) => {
-    showSessionDrawer = false;
     // The drawer may list sessions of other agents (All-agents filter); the
     // row's owning address wins, otherwise the displayed agent's own address.
     const agentAddress =
@@ -1422,7 +1421,6 @@
   };
 
   const handleNewSession = async () => {
-    showSessionDrawer = false;
     if (chatState.loadingHistory || creatingSession) {
       return;
     }
@@ -1914,7 +1912,7 @@
   {:else}
     <div class="chat-view__content-shell">
       <div class="chat-view__surface">
-        <div bind:this={sessionBarElement} class="chat-view__session-bar">
+        <div class="chat-view__session-bar">
           <Button
             variant="secondary"
             class={`chat-view__session-toggle${
@@ -1951,9 +1949,9 @@
               activeAgent.current_session_id}
             reloadToken={sessionsRefreshToken}
             agents={sessionDrawerAgents}
-            triggerElement={sessionBarElement}
-            onClose={() => {
-              showSessionDrawer = false;
+            initialFilters={sessionFilters}
+            onFiltersChange={(next) => {
+              sessionFilters = next;
             }}
             onSessionSelected={handleSessionSelected}
             onSessionDeleted={handleSessionDeleted}
