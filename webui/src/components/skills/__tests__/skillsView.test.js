@@ -70,6 +70,37 @@ const INVENTORY = {
   stale_shared: [],
 };
 
+const MULTI_PROJECT_INVENTORY = {
+  ...INVENTORY,
+  skills: [
+    ...INVENTORY.skills,
+    {
+      name: 'shared-project-skill',
+      description: 'From the first project.',
+      origin: 'project:first',
+      owner_id: null,
+      shared: false,
+      disabled: false,
+      status: 'available',
+      missing: [],
+      optional_missing: [],
+      warnings: [],
+    },
+    {
+      name: 'shared-project-skill',
+      description: 'From the second project.',
+      origin: 'project:second',
+      owner_id: null,
+      shared: false,
+      disabled: false,
+      status: 'available',
+      missing: [],
+      optional_missing: [],
+      warnings: [],
+    },
+  ],
+};
+
 function callCount(method) {
   return rpcMock.mock.calls.filter((call) => call[0] === method).length;
 }
@@ -87,14 +118,16 @@ async function waitForCondition(check, attempts = 20) {
 
 describe('SkillsView', () => {
   let mountedComponent;
+  let inventoryResponse;
 
   beforeEach(() => {
     document.body.innerHTML = '';
     init('en');
+    inventoryResponse = INVENTORY;
     rpcMock.mockReset();
     rpcMock.mockImplementation((method) => {
       if (method === 'skill.inventory') {
-        return Promise.resolve(INVENTORY);
+        return Promise.resolve(inventoryResponse);
       }
       if (method === 'agent.list') {
         return Promise.resolve({
@@ -278,6 +311,19 @@ describe('SkillsView', () => {
     // The agent group key is `agent:main`; bundled/global source groups follow.
     expect(keys).toContain('agent:main');
     expect(keys).toContain('bundled');
+  });
+
+  it('renders same-named skills from multiple projects without duplicate keys', async () => {
+    inventoryResponse = MULTI_PROJECT_INVENTORY;
+    await mountView();
+
+    const matchingCards = [
+      ...document.body.querySelectorAll('.skills-card-name'),
+    ].filter(
+      (element) => element.textContent.trim() === 'shared-project-skill',
+    );
+
+    expect(matchingCards).toHaveLength(2);
   });
 
   it('opens the create modal when the new-skill button is clicked', async () => {
