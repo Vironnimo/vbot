@@ -25,9 +25,15 @@
       section: 'work',
     },
     {
-      id: 'settings',
-      labelKey: 'navigation.settings',
-      labelFallback: 'Settings',
+      id: 'skills',
+      labelKey: 'navigation.skills',
+      labelFallback: 'Skills',
+      section: 'configure',
+    },
+    {
+      id: 'cron',
+      labelKey: 'navigation.cron',
+      labelFallback: 'Cron',
       section: 'configure',
     },
     {
@@ -37,9 +43,9 @@
       section: 'configure',
     },
     {
-      id: 'cron',
-      labelKey: 'navigation.cron',
-      labelFallback: 'Cron',
+      id: 'settings',
+      labelKey: 'navigation.settings',
+      labelFallback: 'Settings',
       section: 'configure',
     },
     {
@@ -74,6 +80,7 @@
   import LogsView from './components/LogsView.svelte';
   import ProjectsView from './components/ProjectsView.svelte';
   import SettingsView from './components/SettingsView.svelte';
+  import SkillsView from './components/skills/SkillsView.svelte';
   import DesktopConnectionSettings from './components/settings/DesktopConnectionSettings.svelte';
   import StatisticsView from './components/StatisticsView.svelte';
   import SystemPromptView from './components/SystemPromptView.svelte';
@@ -270,6 +277,7 @@
   let clientsRefreshToken = $derived(appControllerState.clientsRefreshToken);
   let channelsRefreshToken = $derived(appControllerState.channelsRefreshToken);
   let cronRefreshToken = $derived(appControllerState.cronRefreshToken);
+  let skillsRefreshToken = $derived(appControllerState.skillsRefreshToken);
   let debugTracesRefreshToken = $derived(
     appControllerState.debugTracesRefreshToken,
   );
@@ -1131,6 +1139,13 @@
           {cronRefreshToken}
           {agentsRefreshToken}
           {projectsRefreshToken}
+        />
+      {:else if activeViewId === 'skills'}
+        <SkillsView
+          onToast={showToast}
+          {settings}
+          onSettingsCommit={(nextSettings) => (settings = nextSettings)}
+          {skillsRefreshToken}
         />
       {:else if activeViewId === 'system-prompt'}
         <SystemPromptView

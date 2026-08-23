@@ -208,4 +208,7 @@ def test_method_handlers_registered() -> None:
         "skill.delete",
         "skill.write_file",
         "skill.remove_file",
+        "skill.inventory",
+        "skill.set_disabled",
+        "skill.share",
     }

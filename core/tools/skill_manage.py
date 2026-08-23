@@ -14,6 +14,7 @@ from core.skills.skill_validator import (
     MAX_SKILL_NAME_LENGTH,
     SKILL_NAME_CHARSET_FRAGMENT,
 )
+from core.skills.skills import find_skill_package_dir
 from core.tools.arguments import ToolArgumentError, optional_string, required_string
 from core.tools.availability import SKILL_MANAGE_TOOL_NAME
 from core.tools.tools import (
@@ -35,6 +36,10 @@ SKILL_MANAGE_TOOL_DESCRIPTION = (
 )
 
 _ACTIONS = ("create", "edit", "patch", "write_file", "remove_file", "delete")
+# Actions that may operate on a Skill shared into the caller (maintained in the
+# owner's package). ``create`` is own-home-only by definition; ``delete`` stays
+# owner/human-only so a receiver cannot remove someone else's playbook.
+_SHARED_TARGET_ACTIONS = frozenset({"edit", "patch", "write_file", "remove_file"})
 _LOGGER = get_logger("tools.skill_manage")
 
 _ACTION_FIELDS: dict[str, frozenset[str]] = {
@@ -105,9 +110,17 @@ SKILL_MANAGE_TOOL_PARAMETERS: JsonObject = {
 def make_skill_manage_handler(
     authoring: SkillAuthoringService,
     resolve_agent_skills_dir: Callable[[str], Path],
-    invalidate_agent_skills: Callable[[str], None],
+    invalidate_agent_skills: Callable[[str | None], None],
+    resolve_shared_skills_dir: Callable[[str, str], Path | None] | None = None,
 ) -> Callable[[ToolContext, JsonObject], JsonObject]:
-    """Return the direct Skill-management handler."""
+    """Return the direct Skill-management handler.
+
+    ``resolve_shared_skills_dir(agent_id, name)`` optionally maps a name that is
+    not one of the caller's own Skills to the owning home of the effective shared
+    instance (first-found ordering, exactly what activation resolves). It is
+    intentionally absent from the Tool contract and Agent-facing texts — a
+    receiving Agent discovers editability through normal use.
+    """
 
     def skill_manage_handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
         try:
@@ -120,7 +133,20 @@ def make_skill_manage_handler(
                 raise ToolArgumentError(f"Unknown {action} argument(s): {names}")
 
             name = required_string(arguments.get("name"), field_name="name")
-            target_root = resolve_agent_skills_dir(context.agent_id)
+            own_root = resolve_agent_skills_dir(context.agent_id)
+            target_root = own_root
+            shared_target = False
+            if action in _SHARED_TARGET_ACTIONS and (
+                find_skill_package_dir(own_root, name) is None
+            ):
+                shared_root = (
+                    resolve_shared_skills_dir(context.agent_id, name)
+                    if resolve_shared_skills_dir is not None
+                    else None
+                )
+                if shared_root is not None:
+                    target_root = shared_root
+                    shared_target = True
             result, file_path = _apply_action(
                 authoring,
                 target_root,
@@ -139,16 +165,22 @@ def make_skill_manage_handler(
         except OSError as error:
             return tool_failure("skill_write_error", str(error))
 
-        invalidate_agent_skills(context.agent_id)
+        # A shared-package mutation changes every receiver's pool, so all
+        # agent-aware registries rebuild; an own-home write touches one agent.
+        invalidate_agent_skills(None if shared_target else context.agent_id)
         _LOGGER.info(
-            "Skill mutated (skill=%s scope=own action=%s actor_agent=%s)",
+            "Skill mutated (skill=%s scope=%s owner=%s action=%s actor_agent=%s)",
             result.name,
+            "shared" if shared_target else "own",
+            target_root.parent.name if shared_target else context.agent_id,
             action,
             context.agent_id,
         )
         data: JsonObject = {
             "action": action,
             "name": result.name,
+            # Deliberately identical for own and shared targets: a receiving Agent
+            # must not be able to tell a shared Skill apart from its own.
             "scope": "own",
             "warnings": list(result.warnings),
             "message": _success_message(action, result.name),
@@ -226,7 +258,8 @@ def register_skill_manage_tool(
     registry: ToolRegistry,
     authoring: SkillAuthoringService,
     resolve_agent_skills_dir: Callable[[str], Path],
-    invalidate_agent_skills: Callable[[str], None],
+    invalidate_agent_skills: Callable[[str | None], None],
+    resolve_shared_skills_dir: Callable[[str, str], Path | None] | None = None,
 ) -> None:
     """Register identity-only direct Skill management."""
     registry.register(
@@ -237,6 +270,7 @@ def register_skill_manage_tool(
             authoring,
             resolve_agent_skills_dir,
             invalidate_agent_skills,
+            resolve_shared_skills_dir,
         ),
         family="skills",
         constraints=("identity_agent",),

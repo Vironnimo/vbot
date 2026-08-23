@@ -26,6 +26,7 @@ import {
   RESOURCE_TOKEN_MODELS,
   RESOURCE_TOKEN_PROJECTS,
   RESOURCE_TOKEN_SESSIONS,
+  RESOURCE_TOKEN_SKILLS,
   RESOURCE_TOKEN_TERMINALS,
   tokenKeysForKind,
 } from './resourceInvalidation.js';
@@ -69,6 +70,7 @@ export function createAppControllerState(activeViewId) {
     sessionsRefreshToken: 0,
     settingsPanelTarget: '',
     settingsPanelTargetRequestId: 0,
+    skillsRefreshToken: 0,
     terminalsRefreshToken: 0,
   };
 }
@@ -400,6 +402,7 @@ export function createAppController({
         state.commandsRefreshToken += 1;
         state.debugTracesRefreshToken += 1;
         state.terminalsRefreshToken += 1;
+        state.skillsRefreshToken += 1;
         await Promise.all([onLoadProjects(), onReloadAgents()]);
       }
       return;
@@ -464,6 +467,9 @@ export function createAppController({
     }
     if (tokenKeys.includes(RESOURCE_TOKEN_TERMINALS)) {
       state.terminalsRefreshToken += 1;
+    }
+    if (tokenKeys.includes(RESOURCE_TOKEN_SKILLS)) {
+      state.skillsRefreshToken += 1;
     }
     if (tokenKeys.includes(RESOURCE_TOKEN_AGENTS)) {
       await onReloadAgents();

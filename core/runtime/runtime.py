@@ -114,12 +114,14 @@ from core.settings.paths import (
     DEFAULT_SPEECH_UPLOAD_MAX_SIZE_BYTES,
 )
 from core.skills.authoring import SkillAuthoringService
+from core.skills.policy import SkillPolicyService
 from core.skills.skills import (
     SKILL_ORIGIN_AGENT,
     SKILL_ORIGIN_BUNDLED,
     SKILL_ORIGIN_GLOBAL,
     SkillMetadata,
     SkillRegistry,
+    find_skill_package_dir,
     load_project_skill_registry,
     project_skill_origin,
     project_skills_dir,
@@ -436,6 +438,10 @@ class Runtime:
         # start() with the bundled skills root as a protected target. Used by the
         # agent ``skill_manage`` tool and (later) the skill-mutation RPCs.
         self._skill_authoring: SkillAuthoringService | None = None
+        # The Skills domain's central policy overlay (disable switch + sharing).
+        # Constructed at start() beside the skill registries; every runtime-owned
+        # registry build threads its disable set through ``SkillRegistry.load``.
+        self._skill_policy: SkillPolicyService | None = None
         self._extensions: ExtensionRegistry | None = None
         # Serializes every extension-layer mutation (full reload + live disable) so
         # rapid WebUI toggles / concurrent CLI calls queue instead of interleaving
@@ -617,12 +623,14 @@ class Runtime:
         # Skills load after extensions: a loaded extension may bundle its own skills
         # under ``<extension>/skills/``, which ``_skill_scan_roots`` folds into the
         # global pool, so the extension layer must be in place first.
+        self._skill_policy = SkillPolicyService(self._storage)
         skill_scan_roots = self._skill_scan_roots(settings, resources_path)
         self._skills = SkillRegistry.load(
             skill_scan_roots[0],
             extra_dirs=skill_scan_roots[1:],
             environment=self._skill_environment(data_dir_credentials),
             origins=self._bundled_skill_origins(skill_scan_roots),
+            excluded_names=self._disabled_skill_names(),
         )
         invalid_skill_count = len(self._skills.invalid_diagnostics())
         if invalid_skill_count > 0:
@@ -642,6 +650,7 @@ class Runtime:
             self._skill_authoring,
             self.agent_skills_dir,
             self.invalidate_agent_skills,
+            self._resolve_shared_skills_dir,
         )
         self._chat_sessions = ChatSessionManager(self._storage.data_dir)
         register_history_tool(self._tools, self._chat_sessions)
@@ -959,6 +968,7 @@ class Runtime:
         self._project_skills = {}
         self._agent_skills = {}
         self._skill_authoring = None
+        self._skill_policy = None
         self._extensions = None
         self._chat_sessions = None
         self._projects = None
@@ -1284,6 +1294,15 @@ class Runtime:
             raise RuntimeError("Storage service not available")
         return self._storage.data_dir / _AGENTS_DIRNAME / agent_id / _SKILLS_DIRNAME
 
+    def agent_owns_private_skill(self, agent_id: str, name: str) -> bool:
+        """Whether an Identity Agent's private home currently loads that Skill name."""
+        if self._skill_policy is None:
+            return False
+        environment = self._skill_environment(self.storage.load_environment())
+        return (
+            find_skill_package_dir(self.agent_skills_dir(agent_id), name, environment) is not None
+        )
+
     @property
     def global_skills_dir(self) -> Path:
         """Return the user-curated global skills directory (``<data_dir>/skills``)."""
@@ -1323,7 +1342,11 @@ class Runtime:
         if (
             identity_agent_id is not None
             and self.agents.exists(identity_agent_id)
-            and (project_id is not None or self.agent_skills_dir(identity_agent_id).is_dir())
+            and (
+                project_id is not None
+                or self.agent_skills_dir(identity_agent_id).is_dir()
+                or self._receives_shared_skills(identity_agent_id)
+            )
         ):
             return self._agent_skill_registry(project_id, identity_agent_id)
         if project_id is None:
@@ -1358,6 +1381,7 @@ class Runtime:
         registry = SkillRegistry.load(
             project_skills_dir(Path(project.cwd), project.source_format),
             environment=environment,
+            excluded_names=self._disabled_skill_names(),
         )
         return registry.list_all()
 
@@ -1374,6 +1398,112 @@ class Runtime:
         bundle = self._project_skill_bundle(project_id)
         allowed_names = set(effective_project_allowed_skills(project, bundle.names))
         return [skill for skill in bundle.registry.list_all() if skill.name in allowed_names]
+
+    def skill_inventory(self) -> dict[str, Any]:
+        """One pass over every Skill source for the human manager (no exclusions).
+
+        Unlike ``skills_for`` this never applies the policy disable switch, so a
+        disabled Skill stays visible and manageable here. Every scanned package
+        is listed per source — a same-name Skill in two sources appears once per
+        origin — annotated with its origin, owner (private homes only), share and
+        disable state, availability, and warnings. Availability is resolved
+        against one merged registry so cross-source Skill dependencies answer
+        exactly like runtime activation does. Stale policy entries (an unknown
+        owner or a vanished package) are reported for cleanup, not silently
+        dropped.
+        """
+        self._ensure_started()
+        settings = self.storage.load_settings()
+        environment = self._skill_environment(self.storage.load_environment())
+        scan_roots = self._skill_scan_roots(settings, self._resolve_resources_path())
+        policy = self.skill_policy.load()
+
+        # (metadata, origin, owner_id, warnings, loadable) per scanned package.
+        raw_entries: list[tuple[SkillMetadata, str | None, str | None, list[str], bool]] = []
+        merged_roots: list[Path] = []
+        merged_origins: list[str | None] = []
+
+        def add_root(root: Path, origin: str | None, owner_id: str | None) -> None:
+            registry = SkillRegistry.load(root, environment=environment)
+            for skill in registry.list_all():
+                raw_entries.append(
+                    (skill, origin, owner_id, registry.warnings_for(skill.name), True)
+                )
+            for diagnostic in registry.invalid_diagnostics():
+                placeholder = SkillMetadata(
+                    name=diagnostic.name, description="", path=diagnostic.path
+                )
+                raw_entries.append((placeholder, origin, owner_id, diagnostic.warnings, False))
+            merged_roots.append(root)
+            merged_origins.append(origin)
+
+        for root, origin in zip(scan_roots, self._bundled_skill_origins(scan_roots), strict=True):
+            add_root(root, origin, None)
+        for project in self.projects.list():
+            add_root(
+                project_skills_dir(Path(project.cwd), project.source_format),
+                project_skill_origin(project.display_name),
+                None,
+            )
+        for agent in self.agents.list():
+            add_root(self.agent_skills_dir(agent.id), SKILL_ORIGIN_AGENT, agent.id)
+
+        merged = SkillRegistry.load(
+            merged_roots[0],
+            extra_dirs=merged_roots[1:],
+            environment=environment,
+            origins=merged_origins,
+        )
+        skills: list[dict[str, Any]] = []
+        for skill, origin, owner_id, warnings, loadable in raw_entries:
+            if loadable:
+                availability = merged.availability_for(skill.name)
+                missing = list(availability.missing)
+                optional_missing = list(availability.optional_missing)
+                status = "available" if availability.state == "available" else "unavailable"
+            else:
+                missing = []
+                optional_missing = []
+                status = "invalid"
+            disabled = skill.name in policy.disabled
+            if disabled:
+                # The master switch outranks every other state in display.
+                status = "disabled"
+            skills.append(
+                {
+                    "name": skill.name,
+                    "description": skill.description,
+                    "origin": origin,
+                    "owner_id": owner_id,
+                    "shared": bool(
+                        owner_id and skill.name in policy.shared.get(owner_id, frozenset())
+                    ),
+                    "disabled": disabled,
+                    "status": status,
+                    "missing": missing,
+                    "optional_missing": optional_missing,
+                    "warnings": warnings,
+                }
+            )
+        return {
+            "skills": skills,
+            "policy_diagnostics": self.skill_policy.validation_diagnostics(),
+            "stale_shared": self._stale_shared_entries(policy),
+        }
+
+    def _stale_shared_entries(self, policy: Any) -> list[dict[str, Any]]:
+        """Report shared policy entries whose owner or package no longer exists."""
+        environment = self._skill_environment(self.storage.load_environment())
+        stale: list[dict[str, Any]] = []
+        for owner_id, names in sorted(policy.shared.items()):
+            owner_exists = self.agents.exists(owner_id)
+            for name in sorted(names):
+                if not owner_exists or (
+                    find_skill_package_dir(self.agent_skills_dir(owner_id), name, environment)
+                    is None
+                ):
+                    stale.append({"agent_id": owner_id, "name": name})
+        return stale
 
     def project_skill_names(self, project_id: str | None) -> frozenset[str]:
         """Return the names of a project's own scanned skills (empty for identity).
@@ -1444,15 +1574,25 @@ class Runtime:
                     self._project_skill_bundle(project_id).names,
                 )
             )
+        # Shared layer (own > project > shared > global > bundled): every other
+        # owner's individually resolved shared package directories — never an
+        # owner's whole skills home, so unshared neighbours cannot leak. They are
+        # tagged with the receiver-facing Agent origin, so catalogs render them
+        # indistinguishably among "Your own skills", and they are NOT added to
+        # ``always_allowed``: they pass through the receiver's ``allowed_skills``
+        # filter exactly like global skills.
+        shared_package_dirs = self._shared_package_dirs(agent_id)
+        roots.extend(shared_package_dirs)
+        origins.extend(SKILL_ORIGIN_AGENT for _ in shared_package_dirs)
         roots.extend(scan_roots)
         origins.extend(self._bundled_skill_origins(scan_roots))
         # First-found-wins ordering makes agent skills win over project, project over
-        # bundled. The agent's own skills are always-allowed for it, so they bypass
-        # the owner's ``allowed_skills`` filter without leaking to other agents
-        # (whose registries never scan this home). Project Context is itself the
-        # authorization to use that Project's effective Skill set: those exact
-        # Project-granted names also bypass the Identity Agent's unrelated personal
-        # allowlist while this project-scoped registry is active.
+        # shared, shared over bundled. The agent's own skills are always-allowed for
+        # it, so they bypass the owner's ``allowed_skills`` filter without leaking to
+        # other agents (whose registries never scan this home). Project Context is
+        # itself the authorization to use that Project's effective Skill set: those
+        # exact Project-granted names also bypass the Identity Agent's unrelated
+        # personal allowlist while this project-scoped registry is active.
         agent_own_names = scan_skill_names(agent_root, environment)
         return SkillRegistry.load(
             roots[0],
@@ -1460,7 +1600,84 @@ class Runtime:
             environment=environment,
             always_allowed=agent_own_names | project_allowed_names,
             origins=origins,
+            excluded_names=self._disabled_skill_names(),
         )
+
+    def _receives_shared_skills(self, receiver_agent_id: str) -> bool:
+        """Whether any other Identity Agent has shared Skills to this receiver.
+
+        Part of the ``skills_for`` scoping decision: an agent with no private home
+        and no Project must still get a scoped registry when others share to it.
+        """
+        if self._skill_policy is None:
+            return False
+        shared = self._skill_policy.load().shared
+        return any(owner_id != receiver_agent_id and names for owner_id, names in shared.items())
+
+    def _resolve_shared_skills_dir(self, receiver_agent_id: str, name: str) -> Path | None:
+        """Return the owning skills home of the effective shared Skill instance.
+
+        Mirrors the registry's first-found ordering (sorted owner ids), so a
+        ``skill_manage`` mutation lands in exactly the package activation serves.
+        ``None`` when no other agent shares that name with the receiver.
+        """
+        if self._skill_policy is None:
+            return None
+        shared = self._skill_policy.load().shared
+        if not shared:
+            return None
+        environment = self._skill_environment(self.storage.load_environment())
+        for owner_id, names in sorted(shared.items()):
+            if owner_id == receiver_agent_id or name not in names:
+                continue
+            if not self.agents.exists(owner_id):
+                continue
+            package_dir = find_skill_package_dir(self.agent_skills_dir(owner_id), name, environment)
+            if package_dir is not None:
+                return package_dir.parent
+        return None
+
+    def _shared_package_dirs(self, receiver_agent_id: str) -> list[Path]:
+        """Resolve every owner's shared private Skill packages for one receiver.
+
+        Deterministic order — sorted by owner id, then skill name — so first-found
+        collision handling matches activation exactly. Only existing Identity
+        Agents contribute; stale entries (an unknown owner id or a vanished package
+        directory) are ignored at load with a warning and stay in the policy file
+        for the human manager to clean up.
+        """
+        if self._skill_policy is None:
+            return []
+        shared = self._skill_policy.load().shared
+        if not shared:
+            return []
+        environment = self._skill_environment(self.storage.load_environment())
+        directories: list[Path] = []
+        for owner_id, names in sorted(shared.items()):
+            if owner_id == receiver_agent_id:
+                # The owner keeps its own copy via its private-home layer.
+                continue
+            if not self.agents.exists(owner_id):
+                if self.logger is not None:
+                    self.logger.warning(
+                        "Ignoring stale shared skills for unknown agent '%s'",
+                        owner_id,
+                    )
+                continue
+            owner_root = self.agent_skills_dir(owner_id)
+            for name in sorted(names):
+                package_dir = find_skill_package_dir(owner_root, name, environment)
+                if package_dir is None:
+                    if self.logger is not None:
+                        self.logger.warning(
+                            "Ignoring stale shared skill '%s' of agent '%s' "
+                            "(no such private skill)",
+                            name,
+                            owner_id,
+                        )
+                    continue
+                directories.append(package_dir)
+        return directories
 
     def _project_skill_bundle(self, project_id: str) -> _ProjectSkillBundle:
         cached = self._project_skills.get(project_id)
@@ -1476,6 +1693,7 @@ class Runtime:
         settings = self.storage.load_settings()
         scan_roots = self._skill_scan_roots(settings, self._resolve_resources_path())
         environment = self._skill_environment(self.storage.load_environment())
+        disabled = self._disabled_skill_names()
         registry = load_project_skill_registry(
             project_cwd,
             project.source_format,
@@ -1483,9 +1701,12 @@ class Runtime:
             environment,
             project_origin=project_skill_origin(project.display_name),
             bundled_origins=self._bundled_skill_origins(scan_roots),
+            excluded_names=disabled,
         )
+        # The resolver's config-agent input must be clean of disabled names too —
+        # a disabled project skill is invisible everywhere, including opt-ins.
         names = scan_project_skill_names(project_cwd, project.source_format, environment)
-        return _ProjectSkillBundle(registry=registry, names=names)
+        return _ProjectSkillBundle(registry=registry, names=names - disabled)
 
     def _reload_channel_tool_if_started(self) -> None:
         if not self._started:
@@ -1825,6 +2046,7 @@ class Runtime:
             extra_dirs=skill_scan_roots[1:],
             environment=self._skill_environment(self.storage.load_environment()),
             origins=self._bundled_skill_origins(skill_scan_roots),
+            excluded_names=self._disabled_skill_names(),
         )
 
     def _apply_reloaded_skills(self, skills: SkillRegistry) -> None:
@@ -1855,6 +2077,7 @@ class Runtime:
                     self._skill_authoring,
                     self.agent_skills_dir,
                     self.invalidate_agent_skills,
+                    self._resolve_shared_skills_dir,
                 )
         if self._system_prompts is not None:
             self._system_prompts.update_skill_registry(cast(SkillPromptRegistry, self._skills))
@@ -2143,6 +2366,24 @@ class Runtime:
         if self._skill_authoring is None:
             raise RuntimeError("Skill authoring service not available")
         return self._skill_authoring
+
+    @property
+    def skill_policy(self) -> SkillPolicyService:
+        """The Skills domain's central policy overlay (disable switch + sharing)."""
+        self._ensure_started()
+        if self._skill_policy is None:
+            raise RuntimeError("Skill policy service not available")
+        return self._skill_policy
+
+    def _disabled_skill_names(self) -> frozenset[str]:
+        """Return the policy's disabled names for registry-load exclusion.
+
+        Called on every runtime-owned registry build; the manager-facing editor
+        loads deliberately bypass this so disabled skills stay visible there.
+        """
+        if self._skill_policy is None:
+            return frozenset()
+        return self._skill_policy.load().disabled
 
     async def _dispatch_channel_interaction(
         self, event: InteractionEvent, responder: InteractionResponder

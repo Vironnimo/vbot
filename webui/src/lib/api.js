@@ -360,6 +360,42 @@ export function deleteSkill(scope, name, options = {}) {
   return rpc('skill.delete', { scope, name }, options);
 }
 
+export function skillInventory(options = {}) {
+  return rpc('skill.inventory', {}, options);
+}
+
+export function setSkillDisabled(name, disabled, options = {}) {
+  requireNonEmptyString(
+    name,
+    'Skill name must be a non-empty string',
+    'skill.set_disabled',
+  );
+  if (typeof disabled !== 'boolean') {
+    throw new ApiClientError(
+      'Disabled flag must be a boolean',
+      'skill.set_disabled',
+    );
+  }
+  return rpc('skill.set_disabled', { name, disabled }, options);
+}
+
+export function shareSkill(agentId, name, shared, options = {}) {
+  requireNonEmptyString(
+    agentId,
+    'Agent id must be a non-empty string',
+    'skill.share',
+  );
+  requireNonEmptyString(
+    name,
+    'Skill name must be a non-empty string',
+    'skill.share',
+  );
+  if (typeof shared !== 'boolean') {
+    throw new ApiClientError('Shared flag must be a boolean', 'skill.share');
+  }
+  return rpc('skill.share', { agent_id: agentId, name, shared }, options);
+}
+
 export function listChatCommands(params = {}, options = {}) {
   requirePlainObject(
     params,

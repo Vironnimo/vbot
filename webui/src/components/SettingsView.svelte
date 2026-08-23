@@ -15,7 +15,6 @@
   import SettingsRecallPanel from './settings/SettingsRecallPanel.svelte';
   import SettingsReflectionPanel from './settings/SettingsReflectionPanel.svelte';
   import SettingsSessionTitlesPanel from './settings/SettingsSessionTitlesPanel.svelte';
-  import SettingsSkillsPanel from './settings/SettingsSkillsPanel.svelte';
   import SettingsSpecializedModelsPanel from './settings/SettingsSpecializedModelsPanel.svelte';
   import SettingsSubAgentsPanel from './settings/SettingsSubAgentsPanel.svelte';
   import SettingsWebSearchPanel from './settings/SettingsWebSearchPanel.svelte';
@@ -231,17 +230,6 @@
             t(
               'settings.reflection.subtitle',
               'Automatic background self-review that saves durable memory and skill updates from finished conversations.',
-            ),
-        },
-        {
-          id: 'skills',
-          labelKey: 'settings.skills.title',
-          labelFallback: 'Skills',
-          label: () => t('settings.skills.title', 'Skills'),
-          subtitle: () =>
-            t(
-              'settings.skills.subtitle',
-              'Manage skill files and skill scan directories.',
             ),
         },
       ],
@@ -1117,20 +1105,6 @@
         >
           {@render sectionHeader(panelById.get('reflection'))}
           <SettingsReflectionPanel
-            {settings}
-            onCommit={commitSettings}
-            {onToast}
-            onError={(message) => reportSettingsError(message)}
-          />
-        </section>
-
-        <section
-          class="s-section"
-          data-settings-section="skills"
-          aria-labelledby="settings-section-skills"
-        >
-          {@render sectionHeader(panelById.get('skills'))}
-          <SettingsSkillsPanel
             {settings}
             onCommit={commitSettings}
             {onToast}

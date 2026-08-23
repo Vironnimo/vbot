@@ -32,7 +32,7 @@ class _Harness:
     def __init__(self, tmp_path: Path) -> None:
         self.root = tmp_path
         self._homes = tmp_path / "agents"
-        self.invalidated: list[str] = []
+        self.invalidated: list[str | None] = []
         self.tools = ToolRegistry()
         register_skill_manage_tool(
             self.tools,
