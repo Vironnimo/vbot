@@ -28,6 +28,9 @@
     visibleSessionsForSelection,
   } from '$lib/sessionListView.js';
 
+  const SESSION_INITIAL_DISPLAY_LIMIT = 35;
+  const SESSION_DISPLAY_INCREMENT = 20;
+
   let {
     agentId = '',
     currentSessionId = '',
@@ -70,6 +73,9 @@
       selectedSessionId: currentSessionId,
     }),
   );
+  let displayLimit = $state(SESSION_INITIAL_DISPLAY_LIMIT);
+  let displayedSessions = $derived(visibleSessions.slice(0, displayLimit));
+  let hasMoreToDisplay = $derived(visibleSessions.length > displayLimit);
   let activeFilterCount = $derived(
     Number(filters.allAgents) +
       Number(filters.subagents) +
@@ -617,7 +623,27 @@
     };
   });
 
-  // Focus (and select) the inline rename field as soon as it mounts.
+  // Reset the display limit when the filtered session list changes — agent
+  // switch, filter toggle, reload, or new/deleted session — so the user starts
+  // from the top of the fresh list.
+  $effect(() => {
+    visibleSessions;
+    displayLimit = SESSION_INITIAL_DISPLAY_LIMIT;
+  });
+
+  const handleListScroll = (event) => {
+    if (!hasMoreToDisplay) {
+      return;
+    }
+    const el = event.currentTarget;
+    if (el.scrollTop + el.clientHeight >= el.scrollHeight - 60) {
+      displayLimit = Math.min(
+        displayLimit + SESSION_DISPLAY_INCREMENT,
+        visibleSessions.length,
+      );
+    }
+  };
+
   const autofocusRename = (node) => {
     node.focus();
     node.select();
@@ -810,8 +836,8 @@
       )}
     />
   {:else}
-    <ul class="session-drawer__list">
-      {#each visibleSessions as session (session.id)}
+    <ul class="session-drawer__list" onscroll={handleListScroll}>
+      {#each displayedSessions as session (session.id)}
         <li
           class="session-row"
           class:session-row--editing={editingSessionId === session.id}
@@ -1154,6 +1180,13 @@
         </li>
       {/each}
     </ul>
+    {#if hasMoreToDisplay}
+      <p class="session-drawer__more-hint">
+        {t('sessions.moreHint', '{count} more sessions — scroll to load', {
+          count: visibleSessions.length - displayLimit,
+        })}
+      </p>
+    {/if}
   {/if}
 </aside>
 
@@ -1405,6 +1438,15 @@
     display: flex;
     flex-direction: column;
     gap: 8px;
+  }
+
+  .session-drawer__more-hint {
+    margin: 0;
+    padding: 6px 14px 8px;
+    color: var(--text-med);
+    font-family: var(--font-ui);
+    font-size: var(--fs-label-sm);
+    text-align: center;
   }
 
   .session-row {
