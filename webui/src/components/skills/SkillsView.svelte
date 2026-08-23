@@ -433,7 +433,9 @@
       {#if loadError}
         <Banner variant="error" role="alert">{loadError}</Banner>
       {:else if loading && inventory.length === 0}
-        <Banner variant="neutral">{t('settings.loading', 'Loading…')}</Banner>
+        <Banner variant="neutral"
+          >{t('skills.loading', 'Loading skills…')}</Banner
+        >
       {:else}
         <div class="skills-toolbar">
           <div class="skills-search">
