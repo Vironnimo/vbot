@@ -423,17 +423,22 @@
   }
 </script>
 
-<div class="s-row s-row--stacked s-row--channels-header">
-  <div class="s-row-control">
-    <div class="s-row-actions s-row-actions--channel-header">
-      <Button
-        variant="primary"
-        disabled={channelPanelBusy}
-        onClick={startCreateChannel}
-      >
-        {t('settings.channels.add', 'Add channel')}
-      </Button>
-    </div>
+<div class="s-list-head">
+  <span class="s-list-head-info">
+    {#if !channelPanelState.loading}
+      {t('settings.channels.count', '{count} configured', {
+        count: channelPanelState.channels.length,
+      })}
+    {/if}
+  </span>
+  <div class="s-list-head-actions">
+    <Button
+      variant="primary"
+      disabled={channelPanelBusy}
+      onClick={startCreateChannel}
+    >
+      {t('settings.channels.add', 'Add channel')}
+    </Button>
   </div>
 </div>
 

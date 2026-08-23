@@ -1572,6 +1572,14 @@ textarea::placeholder {
   font-weight: 600;
 }
 
+/* Action buttons under a field (rename, "edit global defaults", …) sit in a
+   left-aligned row instead of stretching with the field column. */
+.form-field__actions {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+}
+
 .section-label,
 .secondary-pane__title,
 .detail-group-title,

@@ -519,6 +519,14 @@
     };
   }
 
+  // The scan report collapses behind its summary banner: ten near-identical
+  // finding cards bury the team section, so the details render on demand only.
+  let findingsExpanded = $state(false);
+
+  function toggleFindings() {
+    findingsExpanded = !findingsExpanded;
+  }
+
   function overrideDraft(agentId) {
     return projectsController.overrideDraft(agentId);
   }
@@ -1183,48 +1191,61 @@
                 {#if projectsState.activeReport && !projectsState.activeReport.clean}
                   <div class="projects-field">
                     <Banner variant="warn" role="status">
-                      {t(
-                        'projects.report.findingCount',
-                        '{count} issues found',
-                        {
-                          count: projectsState.activeReport.findingCount,
-                        },
-                      )}
+                      <span>
+                        {t(
+                          'projects.report.findingCount',
+                          '{count} issues found',
+                          {
+                            count: projectsState.activeReport.findingCount,
+                          },
+                        )}
+                      </span>
+                      <Button
+                        variant="tertiary"
+                        aria-expanded={findingsExpanded}
+                        onClick={toggleFindings}
+                      >
+                        {findingsExpanded
+                          ? t('projects.report.hideDetails', 'Hide details')
+                          : t('projects.report.showDetails', 'Show details')}
+                      </Button>
                     </Banner>
-                    {#each projectsState.activeReport.groups as group (group.type)}
-                      <div class="projects-finding-group">
-                        <h4 class="projects-finding-title">
-                          {groupLabel(group.type)}
-                        </h4>
-                        <ul class="projects-findings">
-                          {#each group.findings as finding, index (`${group.type}-${index}`)}
-                            <li class="projects-finding">
-                              <span class="projects-finding-detail">
-                                {finding.detail}
-                              </span>
-                              {#if finding.agent_id}
-                                <span class="projects-finding-meta">
-                                  {t(
-                                    'projects.report.finding.agent',
-                                    'Agent {agentId}',
-                                    { agentId: finding.agent_id },
-                                  )}
+                    {#if findingsExpanded}
+                      {#each projectsState.activeReport.groups as group (group.type)}
+                        <div class="projects-finding-group">
+                          <h4 class="projects-finding-title">
+                            {groupLabel(group.type)}
+                          </h4>
+                          <ul class="projects-findings">
+                            {#each group.findings as finding, index (`${group.type}-${index}`)}
+                              <li class="projects-finding">
+                                <span class="projects-finding-detail">
+                                  {finding.detail}
                                 </span>
-                              {/if}
-                              {#if finding.source_path}
-                                <span class="projects-finding-meta">
-                                  {t(
-                                    'projects.report.finding.source',
-                                    'Source: {source}',
-                                    { source: finding.source_path },
-                                  )}
-                                </span>
-                              {/if}
-                            </li>
-                          {/each}
-                        </ul>
-                      </div>
-                    {/each}
+                                {#if finding.agent_id}
+                                  <span class="projects-finding-meta">
+                                    {t(
+                                      'projects.report.finding.agent',
+                                      'Agent {agentId}',
+                                      { agentId: finding.agent_id },
+                                    )}
+                                  </span>
+                                {/if}
+                                {#if finding.source_path}
+                                  <span class="projects-finding-meta">
+                                    {t(
+                                      'projects.report.finding.source',
+                                      'Source: {source}',
+                                      { source: finding.source_path },
+                                    )}
+                                  </span>
+                                {/if}
+                              </li>
+                            {/each}
+                          </ul>
+                        </div>
+                      {/each}
+                    {/if}
                   </div>
                 {/if}
 
