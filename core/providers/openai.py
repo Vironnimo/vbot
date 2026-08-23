@@ -516,20 +516,27 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
             if self._uses_platform_responses(model_id)
             else frozenset()
         )
-        self._apply_model_output_limit(
-            request_kwargs,
-            model_id,
-            messages,
-            estimated_input_tokens=estimate_responses_input_tokens(
+        policy = self._responses_policy_for_model(model_id)
+        # Codex rejects output-token fields. Budgeting them locally would abort
+        # a still-valid subscription request (the 25% reserve sits at the same
+        # 80% line as Compaction, but Compaction never sees this pre-send path).
+        if policy.supports_request_parameter("max_tokens") or policy.supports_request_parameter(
+            "max_output_tokens"
+        ):
+            self._apply_model_output_limit(
+                request_kwargs,
+                model_id,
                 messages,
-                document_media_types=document_media_types,
-                tools=request_kwargs.get("tools"),
-            ),
-        )
+                estimated_input_tokens=estimate_responses_input_tokens(
+                    messages,
+                    document_media_types=document_media_types,
+                    tools=request_kwargs.get("tools"),
+                ),
+            )
         payload = build_responses_payload(
             messages,
             model_id=model_id,
-            policy=self._responses_policy_for_model(model_id),
+            policy=policy,
             stream=stream,
             document_media_types=document_media_types,
             **request_kwargs,
