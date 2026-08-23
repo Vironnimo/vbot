@@ -678,6 +678,8 @@
                 {:else if item.id === 'terminals'}
                   <rect x="1.5" y="2.5" width="13" height="11" rx="1.5" />
                   <path d="m4 6 2 2-2 2m4 0h3.5" />
+                {:else if item.id === 'skills'}
+                  <path d="M4 2h8v12l-4-2.5L4 14z" />
                 {:else if item.id === 'projects'}
                   <path d="M2 12.5V4h4l1.5 1.5h6.5v7z" />
                 {:else if item.id === 'cron'}
