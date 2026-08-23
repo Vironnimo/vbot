@@ -337,7 +337,7 @@ describe('ChatView', () => {
       100,
     );
 
-    document.querySelector('.chat-sessions-toggle')?.click();
+    findButtonByText('Sessions')?.click();
     flushSync();
 
     await waitForCondition(
