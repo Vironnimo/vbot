@@ -5,6 +5,7 @@ import {
   TERMINAL_STREAM_CONNECTING,
   TERMINAL_STREAM_RECONNECTING,
   TERMINAL_STREAM_SNAPSHOT,
+  clampTerminalGrid,
   createPtyFrameSanitizer,
   createTerminalsController,
   createTerminalsViewState,
@@ -34,30 +35,24 @@ describe('pty frame sanitizer', () => {
     expect(sanitizer.flush()).toBe('');
   });
 
-  it('accumulates a blank-line burst split across frames and collapses it', () => {
+  it('passes a blank-line burst through byte-exact so viewer and server stay in sync', () => {
     const sanitizer = createPtyFrameSanitizer();
     const burst = '\r\n'.repeat(80);
 
-    // Frame 1 ends inside the burst: the run is held back, text passes.
-    expect(sanitizer.next('head' + burst.slice(0, 60))).toBe('head');
-    // Frame 2 completes the run; still no non-newline content, so it stays
-    // held until the burst can be collapsed together with real text.
-    expect(sanitizer.next(burst.slice(60))).toBe('');
-    // The next real content collapses the accumulated run once.
-    expect(sanitizer.next('tail')).toBe('\r\n\r\ntail');
+    expect(sanitizer.next('head' + burst.slice(0, 60))).toBe(
+      'head' + burst.slice(0, 60),
+    );
+    expect(sanitizer.next(burst.slice(60) + 'tail')).toBe(
+      burst.slice(60) + 'tail',
+    );
   });
 
-  it('collapses a burst inside a single frame', () => {
+  it('passes a blank-line burst split across frames through unchanged', () => {
     const sanitizer = createPtyFrameSanitizer();
 
-    expect(sanitizer.next('a' + '\r\n'.repeat(80) + 'b')).toBe('a\r\n\r\nb');
-  });
-
-  it('flushes a held newline run at end of stream', () => {
-    const sanitizer = createPtyFrameSanitizer();
-
-    expect(sanitizer.next('a\r\n\r')).toBe('a');
-    expect(sanitizer.flush()).toBe('\r\n\r');
+    expect(sanitizer.next('a\r\n\r\n\r')).toBe('a\r\n\r\n\r');
+    expect(sanitizer.next('\nb')).toBe('\nb');
+    expect(sanitizer.flush()).toBe('');
   });
 });
 
@@ -95,6 +90,18 @@ describe('terminal list projection', () => {
     reconcileTerminalLaunchHistory(state, { launch_history: history });
 
     expect(state.launchHistory).toEqual(history);
+  });
+});
+
+describe('terminal grid bounds', () => {
+  it('clamps fitted grids into the server-accepted dimension window', () => {
+    expect(clampTerminalGrid(10, 4)).toEqual({ columns: 40, rows: 10 });
+    expect(clampTerminalGrid(500, 200)).toEqual({ columns: 240, rows: 80 });
+    expect(clampTerminalGrid(100.9, 31.2)).toEqual({
+      columns: 100,
+      rows: 31,
+    });
+    expect(clampTerminalGrid(120, 32)).toEqual({ columns: 120, rows: 32 });
   });
 });
 
@@ -372,8 +379,8 @@ describe('terminal live controller', () => {
     const controller = createTerminalsController({ state, api });
 
     await controller.start();
-    // A size must be observed across two consecutive fits before it becomes
-    // sendable, so the first measurement never reaches the PTY.
+    // A burst collapses into one debounced request with the final size;
+    // intermediate sizes never reach the server.
     controller.resize(100, 30, 'term-1');
     controller.resize(110, 31, 'term-1');
     controller.resize(110, 31, 'term-1');
@@ -384,7 +391,7 @@ describe('terminal live controller', () => {
     controller.destroy();
   });
 
-  it('sends a fitted size only after it was observed stable across two fits', async () => {
+  it('sends a settled size once after the debounce without repeated fits', async () => {
     vi.useFakeTimers();
     const state = createTerminalsViewState();
     const streams = [];
@@ -392,18 +399,18 @@ describe('terminal live controller', () => {
     const controller = createTerminalsController({ state, api });
 
     await controller.start();
-    // A tab revisit measures a transient size before the grid settles; that
-    // first measurement must not trigger a PTY resize.
-    controller.resize(100, 30, 'term-1');
-    await vi.runAllTimersAsync();
-    expect(api.resizeTerminal).not.toHaveBeenCalled();
-
-    // The settled grid produces the same size on the next fit; only now is
-    // it sendable.
+    // A single settled measurement reaches the PTY after the debounce; the
+    // remount-transient protection is the debounce itself plus the
+    // geometry-change follow-up fit, not a repeated-measurement counter.
     controller.resize(100, 30, 'term-1');
     await vi.runAllTimersAsync();
     expect(api.resizeTerminal).toHaveBeenCalledTimes(1);
     expect(api.resizeTerminal).toHaveBeenCalledWith('term-1', 100, 30);
+
+    // Repeating the same measurement stays silent.
+    controller.resize(100, 30, 'term-1');
+    await vi.runAllTimersAsync();
+    expect(api.resizeTerminal).toHaveBeenCalledTimes(1);
     controller.destroy();
   });
 
@@ -424,7 +431,7 @@ describe('terminal live controller', () => {
     controller.destroy();
   });
 
-  it('sends an immediate resize without waiting for the stability pass or debounce', async () => {
+  it('sends an immediate resize without waiting for the debounce', async () => {
     vi.useFakeTimers();
     const state = createTerminalsViewState();
     const streams = [];
@@ -432,11 +439,71 @@ describe('terminal live controller', () => {
     const controller = createTerminalsController({ state, api });
 
     await controller.start();
-    // Maximize is a deterministic user action, so its measurement is
-    // trustworthy on the first fit: no stability pass, no debounce.
+    // Maximize is a deterministic user action: its measurement goes out
+    // immediately, without the debounce.
     controller.resize(200, 50, 'term-1', true);
     await vi.runAllTimersAsync();
     expect(api.resizeTerminal).toHaveBeenCalledWith('term-1', 200, 50);
+    controller.destroy();
+  });
+
+  it('clamps a fitted grid below the server minimum into the accepted bounds', async () => {
+    vi.useFakeTimers();
+    const state = createTerminalsViewState();
+    const streams = [];
+    const api = fakeApi({ streams });
+    const controller = createTerminalsController({ state, api });
+
+    await controller.start();
+    // A tiny tile fits below the server's 40x10 minimum; the request must
+    // carry the clamped legal grid, not one the server would reject.
+    controller.resize(22, 6, 'term-1', true);
+    await vi.runAllTimersAsync();
+
+    expect(api.resizeTerminal).toHaveBeenCalledWith('term-1', 40, 10);
+    expect(state.terminals[0]).toMatchObject({ columns: 40, rows: 10 });
+    controller.destroy();
+  });
+
+  it('adopts the server-confirmed dimensions after a successful resize', async () => {
+    vi.useFakeTimers();
+    const state = createTerminalsViewState();
+    const streams = [];
+    const api = fakeApi({ streams });
+    api.resizeTerminal.mockResolvedValue({ columns: 110, rows: 31 });
+    const controller = createTerminalsController({ state, api });
+
+    await controller.start();
+    controller.resize(100, 30, 'term-1');
+    controller.resize(100, 30, 'term-1');
+    await vi.runAllTimersAsync();
+
+    expect(api.resizeTerminal).toHaveBeenCalledTimes(1);
+    expect(state.terminals[0]).toMatchObject({ columns: 110, rows: 31 });
+    expect(state.streams['term-1'].gridPending).toBe(false);
+    // The next fit at the confirmed size is now a no-op.
+    controller.resize(110, 31, 'term-1');
+    await vi.runAllTimersAsync();
+    expect(api.resizeTerminal).toHaveBeenCalledTimes(1);
+    controller.destroy();
+  });
+
+  it('keeps the grid divergence visible while a resize correction failed', async () => {
+    vi.useFakeTimers();
+    const state = createTerminalsViewState();
+    const streams = [];
+    const api = fakeApi({ streams });
+    api.resizeTerminal.mockRejectedValue(new Error('resize rejected'));
+    const controller = createTerminalsController({ state, api });
+
+    await controller.start();
+    controller.resize(100, 30, 'term-1');
+    controller.resize(100, 30, 'term-1');
+    await vi.runAllTimersAsync();
+
+    expect(api.resizeTerminal).toHaveBeenCalledTimes(1);
+    expect(state.streams['term-1'].gridPending).toBe(true);
+    expect(state.actionError).toBe('resize rejected');
     controller.destroy();
   });
 
