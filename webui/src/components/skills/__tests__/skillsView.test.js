@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushSync, mount, unmount } from 'svelte';
 
 import { init } from '../../../lib/i18n.js';
+import { TOOLTIP_SHOW_DELAY_MS } from '../../../lib/tooltip.js';
 import { rpcBackedApiMock } from '../../__tests__/apiMock.js';
 
 const rpcMock = vi.fn();
@@ -287,6 +288,29 @@ describe('SkillsView', () => {
       el.textContent.trim(),
     );
     expect(names).toEqual(['teach']);
+  });
+
+  it('keeps descriptions in skill-name tooltips and renders edit as an icon', async () => {
+    await mountView();
+
+    expect(document.body.querySelectorAll('.skills-card-desc')).toHaveLength(0);
+
+    const skillName = [
+      ...document.body.querySelectorAll('.skills-card-name'),
+    ].find((element) => element.textContent.trim() === 'teach');
+    vi.useFakeTimers();
+    skillName.dispatchEvent(new Event('pointerenter'));
+    await vi.advanceTimersByTimeAsync(TOOLTIP_SHOW_DELAY_MS);
+    expect(document.getElementById('app-tooltip').textContent).toBe(
+      'Teach a topic.',
+    );
+    skillName.dispatchEvent(new Event('pointerleave'));
+    vi.useRealTimers();
+
+    const editButton = document.body.querySelector('button[aria-label="Edit"]');
+    expect(editButton).not.toBeNull();
+    expect(editButton.textContent.trim()).toBe('');
+    expect(editButton.querySelector('svg')).not.toBeNull();
   });
 
   it('groups by agent when the by-agent view toggle is activated', async () => {
