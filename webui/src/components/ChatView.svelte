@@ -119,6 +119,7 @@
   let generationSessionKey = '';
   let transientCardSeq = 0;
   let showSessionDrawer = $state(false);
+  let sessionBarElement = $state(null);
   let viewingSessionId = $state('');
   let viewingSessionAgentId = $state('');
   let viewingSubAgentSession = $state(false);
@@ -1263,6 +1264,7 @@
     sessionAgentAddress,
     isSubAgentSession,
   ) => {
+    showSessionDrawer = false;
     // The drawer may list sessions of other agents (All-agents filter); the
     // row's owning address wins, otherwise the displayed agent's own address.
     const agentAddress =
@@ -1420,6 +1422,7 @@
   };
 
   const handleNewSession = async () => {
+    showSessionDrawer = false;
     if (chatState.loadingHistory || creatingSession) {
       return;
     }
@@ -1817,15 +1820,10 @@
     agentStatuses={identityAgentStatuses}
     selectedAgentId={displayedIdentityAgentId}
     loadingAgents={chatState.loadingAgents}
-    {activeAgent}
-    {showSessionDrawer}
     {projects}
     {selectedProjectId}
     onSelectProject={handleSelectProject}
     onSelectAgent={handleSelectAgent}
-    onToggleSessionDrawer={() => {
-      showSessionDrawer = !showSessionDrawer;
-    }}
   />
 
   {#if isProjectSelected(selectedProjectId)}
@@ -1915,31 +1913,52 @@
     />
   {:else}
     <div class="chat-view__content-shell">
-      {#if showSessionDrawer}
-        <SessionListDrawer
-          agentId={activeAgentAddress}
-          currentSessionId={viewingSessionId || activeAgent.current_session_id}
-          reloadToken={sessionsRefreshToken}
-          agents={sessionDrawerAgents}
-          onSessionSelected={handleSessionSelected}
-          onSessionDeleted={handleSessionDeleted}
-        />
-      {/if}
       <div class="chat-view__surface">
-        <Button
-          variant="secondary"
-          icon
-          class="chat-view__new-session-fab"
-          ariaLabel={t('chat.newSession', 'New session')}
-          tooltip={t('chat.newSession', 'New session')}
-          disabled={chatState.loadingHistory}
-          loading={creatingSession}
-          onClick={handleNewSession}
-        >
-          <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
-            <path d="M12 5v14M5 12h14" />
-          </svg>
-        </Button>
+        <div bind:this={sessionBarElement} class="chat-view__session-bar">
+          <Button
+            variant="secondary"
+            class={`chat-view__session-toggle${
+              showSessionDrawer ? ' chat-view__session-toggle--active' : ''
+            }`}
+            disabled={!activeAgent}
+            onClick={() => {
+              showSessionDrawer = !showSessionDrawer;
+            }}
+          >
+            {t('sessions.title', 'Sessions')}
+          </Button>
+          <span class="chat-view__session-bar-divider" aria-hidden="true"
+          ></span>
+          <Button
+            variant="secondary"
+            icon
+            class="chat-view__new-session-fab"
+            ariaLabel={t('chat.newSession', 'New session')}
+            tooltip={t('chat.newSession', 'New session')}
+            disabled={chatState.loadingHistory}
+            loading={creatingSession}
+            onClick={handleNewSession}
+          >
+            <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+              <path d="M12 5v14M5 12h14" />
+            </svg>
+          </Button>
+        </div>
+        {#if showSessionDrawer}
+          <SessionListDrawer
+            agentId={activeAgentAddress}
+            currentSessionId={viewingSessionId ||
+              activeAgent.current_session_id}
+            reloadToken={sessionsRefreshToken}
+            agents={sessionDrawerAgents}
+            triggerElement={sessionBarElement}
+            onClose={() => {
+              showSessionDrawer = false;
+            }}
+            onSessionSelected={handleSessionSelected}
+            onSessionDeleted={handleSessionDeleted}
+          />
+        {/if}
         {#if chatState.loadingHistory || chatState.historyError || chatState.actionError || chatState.commandsError || activeSessionState?.actionError || activeSessionState?.streamError || activeSessionState?.error}
           <div class="chat-view__notice-stack" aria-live="polite">
             <div class="chat-view__measure chat-view__notice-inner">
@@ -2175,27 +2194,64 @@
     overflow: hidden;
   }
 
-  /* Free-floating New Session action at the top-left of the chat surface.
-     Stays fixed while the timeline scrolls underneath, and naturally shifts
-     with the surface when the session drawer opens/closes (the drawer is a
-     flex sibling, so the surface — and this button — move together). */
-  :global(.btn-secondary.btn-icon.chat-view__new-session-fab) {
+  /* Combined floating "Sessions | +" control at the top-left of the chat
+     surface. Stays fixed while the timeline scrolls underneath. The session
+     panel opens downward from this control as a floating overlay (not a
+     sidebar), so the chat surface always fills the full width. */
+  .chat-view__session-bar {
     position: absolute;
     top: 12px;
     left: 12px;
     z-index: 2;
-    width: 36px;
-    height: 36px;
-    padding: 0;
-    border-radius: 50%;
+    display: flex;
+    align-items: stretch;
+    border: 1px solid var(--border-2);
+    border-radius: var(--r-lg);
     background: var(--surface-2);
     box-shadow: var(--floating-elevation);
+    overflow: hidden;
   }
 
-  :global(.btn-secondary.btn-icon.chat-view__new-session-fab:hover) {
-    border-color: var(--accent);
+  .chat-view__session-bar-divider {
+    width: 1px;
+    align-self: stretch;
+    background: var(--border-2);
+  }
+
+  :global(.btn-secondary.chat-view__session-toggle) {
+    border: 0;
+    border-radius: 0;
+    padding: 7px 14px;
+    background: transparent;
+    color: var(--text-med);
+    font-size: var(--fs-label-sm);
+    font-weight: 600;
+  }
+
+  :global(.btn-secondary.chat-view__session-toggle:hover:not(:disabled)) {
+    background: var(--accent-08);
     color: var(--accent);
-    background: var(--surface-3);
+  }
+
+  :global(.chat-view__session-toggle--active) {
+    background: var(--accent-12);
+    color: var(--accent);
+  }
+
+  :global(.btn-secondary.btn-icon.chat-view__new-session-fab) {
+    border: 0;
+    border-radius: 0;
+    width: 36px;
+    padding: 0;
+    background: transparent;
+    color: var(--text-med);
+  }
+
+  :global(
+    .btn-secondary.btn-icon.chat-view__new-session-fab:hover:not(:disabled)
+  ) {
+    background: var(--accent-08);
+    color: var(--accent);
   }
 
   :global(.chat-view__new-session-fab svg) {
@@ -2436,11 +2492,6 @@
 
     :global(.chat-view__subagent-session-return) {
       margin-right: 0;
-    }
-
-    :global(.btn-secondary.btn-icon.chat-view__new-session-fab) {
-      width: 40px;
-      height: 40px;
     }
   }
 </style>

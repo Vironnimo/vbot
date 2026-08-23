@@ -37,6 +37,13 @@
     // Roster of addressable agents ({ address, name }) the "All agents"
     // filter lists sessions for — the same set the Chat agent bars show.
     agents = [],
+    // The floating "Sessions | +" trigger bar in ChatView, used by the
+    // outside-click handler to distinguish a toggle click from an outside
+    // click (so clicking the trigger doesn't close-then-reopen the panel).
+    triggerElement = null,
+    // Called when the panel should close: outside click, Escape (after
+    // closing any open internal menu), or session selection.
+    onClose = () => {},
     // Called with (sessionId, agentAddress, isSubAgentSession) when a row is
     // picked — the address routes cross-agent selections, the flag drives the
     // sub-agent footer banner in ChatView.
@@ -54,6 +61,7 @@
 
   let sessionState = $state(createSessionListState());
   let filters = $state(createSessionListFilters());
+  let panelElement = $state(null);
   let visibleSessions = $derived(
     visibleSessionsForSelection(sessionState.sessions, {
       filters,
@@ -559,7 +567,9 @@
   // Close an open row menu or the filter dropdown on an outside click or
   // Escape, mirroring the Dropdown primitive. Both panels are portaled, so
   // their original trigger areas and document-root panels must count as
-  // inside.
+  // inside. The panel root and the floating trigger bar (passed from
+  // ChatView) also count as inside so a toggle click doesn't close-then-
+  // reopen the panel. Clicking outside all of these closes the panel too.
   const handleDocumentMouseDown = (event) => {
     if (
       event.target instanceof Element &&
@@ -568,18 +578,27 @@
           filterMenuElement?.contains(event.target))) ||
         (openMenuSessionId !== null &&
           (event.target.closest('.session-row__actions') ||
-            menuElement?.contains(event.target))))
+            menuElement?.contains(event.target))) ||
+        panelElement?.contains(event.target) ||
+        triggerElement?.contains(event.target))
     ) {
       return;
     }
     closeMenu();
     closeFilterMenu();
+    onClose();
   };
 
   const handleDocumentKeyDown = (event) => {
     if (event.key === 'Escape') {
-      closeMenu();
-      closeFilterMenu();
+      // First Escape closes an open internal menu; the second closes the
+      // panel itself — standard layered Escape behavior.
+      if (openMenuSessionId !== null || filterMenuOpen) {
+        closeMenu();
+        closeFilterMenu();
+        return;
+      }
+      onClose();
     }
   };
 
@@ -694,7 +713,11 @@
 
 <svelte:window onresize={closeMenu} />
 
-<aside class="session-drawer" aria-label={t('sessions.title', 'Sessions')}>
+<aside
+  bind:this={panelElement}
+  class="session-drawer"
+  aria-label={t('sessions.title', 'Sessions')}
+>
   <div class="session-drawer__header">
     <h3 class="session-drawer__title">{t('sessions.title', 'Sessions')}</h3>
     <div class="session-drawer__filter">
@@ -1199,12 +1222,18 @@
 
 <style>
   .session-drawer {
+    position: absolute;
+    top: 56px;
+    left: 12px;
+    z-index: 2;
     display: flex;
-    width: 295px;
-    min-width: 295px;
+    width: 320px;
+    max-height: calc(100% - 68px);
     flex-direction: column;
-    border-right: 1px solid var(--border);
+    border: 1px solid var(--border-2);
+    border-radius: var(--r-lg);
     background: var(--surface);
+    box-shadow: var(--floating-elevation);
     overflow: hidden;
   }
 
@@ -1636,11 +1665,10 @@
 
   @media (max-width: 640px) {
     .session-drawer {
-      width: 100%;
-      min-width: 0;
-      border-right: 0;
-      border-bottom: 1px solid var(--border);
-      max-height: 46%;
+      left: 8px;
+      right: 8px;
+      width: auto;
+      max-height: 60%;
     }
   }
 </style>

@@ -2,7 +2,6 @@
   import { t } from '$lib/i18n.js';
   import { parseModelSelectionValue } from '$lib/modelSelection.js';
   import { tooltip } from '$lib/tooltip.js';
-  import Button from '../ui/Button.svelte';
   import Dropdown from '../Dropdown.svelte';
 
   let {
@@ -10,15 +9,12 @@
     agentStatuses = {},
     selectedAgentId = '',
     loadingAgents = false,
-    activeAgent = null,
-    showSessionDrawer = false,
     // Project context for the compact project picker that lives in the header
     // (left of the Sessions button). "No project" is Personal/identity chat.
     projects = [],
     selectedProjectId = '',
     onSelectProject = () => {},
     onSelectAgent = () => {},
-    onToggleSessionDrawer = () => {},
   } = $props();
 
   // The identity bar carries a "Personal" label only while a project is
@@ -109,18 +105,6 @@
       triggerClass="chat-header__project-dropdown"
       onValueChange={(next) => onSelectProject(next)}
     />
-    <Button
-      variant="secondary"
-      class={`chat-sessions-toggle${
-        showSessionDrawer ? ' chat-sessions-toggle--active' : ''
-      }`}
-      onClick={onToggleSessionDrawer}
-      disabled={!activeAgent}
-    >
-      {showSessionDrawer
-        ? t('sessions.hide', 'Hide sessions')
-        : t('sessions.title', 'Sessions')}
-    </Button>
   </div>
 </header>
 
@@ -216,12 +200,6 @@
     flex-shrink: 0;
     align-items: center;
     gap: 10px;
-  }
-
-  :global(.chat-sessions-toggle--active) {
-    border-color: var(--accent);
-    color: var(--accent);
-    background: var(--accent-08);
   }
 
   /* Compact project picker in the header: shares the shared Dropdown chrome
