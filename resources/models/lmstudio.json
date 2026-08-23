@@ -1,0 +1,267 @@
+{
+  "fetched_at": "2026-08-22T15:09:43.627203+00:00",
+  "models": {
+    "gemma-4-12b-heretic-abliterated": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "control": "on_off",
+          "supported": true
+        },
+        "supported_parameters": [],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "local"
+      ],
+      "context_window": 262144,
+      "family": "gemma4",
+      "max_output_tokens": null,
+      "metadata": {
+        "lmstudio": {
+          "local": true
+        }
+      },
+      "name": "Gemma 4 12B Heretic"
+    },
+    "gemma-4-e4b-it-erotica": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "control": "on_off",
+          "supported": true
+        },
+        "supported_parameters": [],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
+        "tools": true,
+        "vision": false
+      },
+      "connections": [
+        "local"
+      ],
+      "context_window": 131072,
+      "family": "gemma4",
+      "max_output_tokens": null,
+      "metadata": {
+        "lmstudio": {
+          "local": true
+        }
+      },
+      "name": "Gemma 4 E4B Instruct Erotica"
+    },
+    "qwen3.5-9b-the-defiant-fable-uncensored-heretic-neo-imatrix-max-mtp": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "control": "on_off",
+          "supported": true
+        },
+        "supported_parameters": [],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "local"
+      ],
+      "context_window": 262144,
+      "family": "qwen35",
+      "max_output_tokens": null,
+      "metadata": {
+        "lmstudio": {
+          "local": true
+        }
+      },
+      "name": "Qwen3.5 9B The Defiant Fable Uncnr Heretic NEO MAX MTP"
+    },
+    "qwen3.6-35b-a3b-uncensored-heretic-native-mtp-preserved-apex": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "control": "on_off",
+          "supported": true
+        },
+        "supported_parameters": [],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "local"
+      ],
+      "context_window": 262144,
+      "family": "qwen35moe",
+      "max_output_tokens": null,
+      "metadata": {
+        "lmstudio": {
+          "local": true
+        }
+      },
+      "name": "Qwen3.6 35B A3B Uncensored Heretic Native MTP Preserved APEX I Compact"
+    },
+    "qwen3.8-27b-abliterated": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "control": "on_off",
+          "supported": true
+        },
+        "supported_parameters": [],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "local"
+      ],
+      "context_window": 262144,
+      "family": "qwen35",
+      "max_output_tokens": null,
+      "metadata": {
+        "lmstudio": {
+          "local": true
+        }
+      },
+      "name": "Qwen3.8 27B ABLITERATED"
+    },
+    "qwen3.8-27b-abliterated-3.69bpw-12gb-mtp.gguf": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "control": "on_off",
+          "supported": true
+        },
+        "supported_parameters": [],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
+        "tools": true,
+        "vision": false
+      },
+      "connections": [
+        "local"
+      ],
+      "context_window": 262144,
+      "family": "qwen35",
+      "max_output_tokens": null,
+      "metadata": {
+        "lmstudio": {
+          "local": true
+        }
+      },
+      "name": "Qwen3.8 27B Abliterated 3.69bpw 12GB MTP"
+    },
+    "qwen3.8-27b-heretic-ara-mtp": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "control": "on_off",
+          "supported": true
+        },
+        "supported_parameters": [],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "local"
+      ],
+      "context_window": 262144,
+      "family": "qwen35",
+      "max_output_tokens": null,
+      "metadata": {
+        "lmstudio": {
+          "local": true
+        }
+      },
+      "name": "Qwen3.8 27B Heretic Ara MTP"
+    }
+  },
+  "provider_id": "lmstudio",
+  "source": "discovery"
+}
