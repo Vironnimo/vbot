@@ -1567,10 +1567,27 @@ class TestResolveRequestOutputLimit:
                 model_output_limit=8_192,
                 provider_default=None,
                 effective_context_window=8_192,
-                estimated_input_tokens=8_000,
+                estimated_input_tokens=8_192,
             )
 
         assert exc_info.value.retryable is False
+
+    def test_reserve_does_not_fail_when_input_still_fits(self) -> None:
+        """A 25% reserve must not abort a request that still has output room.
+
+        Live Luna hit estimated 218470 / 272000. The reserve (54618) made
+        reserved output negative while 53530 tokens of real capacity remained.
+        """
+
+        resolved = resolve_request_output_limit(
+            explicit_limit=None,
+            model_output_limit=272_000,
+            provider_default=8_192,
+            effective_context_window=272_000,
+            estimated_input_tokens=218_470,
+        )
+
+        assert resolved == 272_000 - 218_470
 
 
 class TestCustomProviderRegistry:

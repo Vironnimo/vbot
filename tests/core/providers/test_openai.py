@@ -1312,6 +1312,55 @@ async def test_codex_send_omits_unspecified_top_p() -> None:
 
 @respx.mock
 @pytest.mark.asyncio
+async def test_codex_send_skips_output_limit_clamp() -> None:
+    """Codex must not abort a still-fitting request over a reserve it never sends."""
+
+    access_token = _jwt_with_account("acct_openai")
+    adapter = OpenAIAdapter(
+        _subscription_config(),
+        access_token,
+        connection_mode=CODEX_RESPONSES_MODE,
+        model_lookup=_subscription_model_lookup(levels=("low", "medium", "high", "xhigh")),
+    )
+    route = respx.post(OPENAI_SUBSCRIPTION_URL).mock(
+        return_value=_codex_sse_response({"id": "resp_1", "status": "completed", "output": []})
+    )
+    huge_messages: list[dict[str, Any]] = [
+        {"role": "system", "content": "Use concise answers."},
+        {"role": "user", "content": "x" * 50_000},
+        {
+            "role": "assistant",
+            "content": "ok",
+            "reasoning_meta": {
+                "response_output": [
+                    {
+                        "type": "reasoning",
+                        "id": "rs_1",
+                        "encrypted_content": "opaque" * 20_000,
+                    }
+                ],
+                "reasoning_items": [
+                    {
+                        "type": "reasoning",
+                        "id": "rs_1",
+                        "encrypted_content": "opaque" * 20_000,
+                    }
+                ],
+                "encrypted_content": ["opaque" * 20_000],
+            },
+        },
+        {"role": "user", "content": "continue"},
+    ]
+
+    await adapter.send(huge_messages, model_id="gpt-5.6-luna")
+
+    payload = json.loads(route.calls.last.request.content)
+    assert "max_output_tokens" not in payload
+    assert "max_tokens" not in payload
+
+
+@respx.mock
+@pytest.mark.asyncio
 async def test_codex_send_omits_unsupported_top_p() -> None:
     """The Codex backend rejects sampling top_p for subscription models."""
 
