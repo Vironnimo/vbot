@@ -38,7 +38,7 @@ Streaming deltas (`assistant_output_delta`, `reasoning_delta`, `tool_call_delta`
 
 ## `resource_changed`
 
-`publish_resource_changed(state, kind, scope=None)` is the single generic invalidation seam. Payload is `{kind, scope?}` and contains no resource data; consumers re-fetch through normal RPC. It no-ops when no bus exists (CLI/runtime stubs) and rejects unknown kinds. Current allowed kinds are `models`, `queue`, `sessions`, `agents`, `providers`, `clients`, `channels`, `debug_traces`, `projects`, `cron`, `commands`, and `terminals`.
+`publish_resource_changed(state, kind, scope=None)` is the single generic invalidation seam. Payload is `{kind, scope?}` and contains no resource data; consumers re-fetch through normal RPC. It no-ops when no bus exists (CLI/runtime stubs) and rejects unknown kinds. Current allowed kinds are `models`, `queue`, `sessions`, `agents`, `providers`, `clients`, `channels`, `debug_traces`, `projects`, `cron`, `commands`, `terminals`, `memories`, and `skills`.
 
 `commands` is emitted after a successful explicit Extension reload and after Settings mutations that reload, enable, or disable Extensions. Config-only Extension saves do not emit it because runtime values are read live and the Command structure is unchanged.
 

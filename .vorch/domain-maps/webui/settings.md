@@ -25,6 +25,7 @@ Settings-style panels register their pending local draft and save lifecycle with
 
 ## Extensions, Skills, Agents, and channels
 
+- The dedicated Skills management surface moved out of Settings into the Configure → Skills view (`webui/src/components/skills/`, see the WebUI map's Interfaces); Settings keeps no Skill section. Agent editors still use Skill *selectors* (below) for per-Agent allowlists and authoring entry points.
 - Extension management renders the backend-provided capability, status, schema, waiting, and configuration projections, including declared Slash Commands and whether each is currently registered. Commands are code-owned capabilities summarized in the existing row, not editable Settings. Only an Extension with a non-empty Settings Schema receives a configuration disclosure; schema-less Extensions expose no generic editor. Schema forms preserve unknown/non-secret config through the backend contract; secrets use the dedicated secret operation and are never rehydrated into normal form state.
 - A transition flush batches all changed non-secret Extension schema forms into one complete `settings.update` projection so independently edited rows cannot overwrite each other. Invalid schema drafts fail the transition in place. Secret values remain outside autosave and retain their explicit per-secret operation.
 - Reload, enable/disable, and configuration changes are separate operations. Live capability ownership remains in the Extensions domain even when the panel displays its result.

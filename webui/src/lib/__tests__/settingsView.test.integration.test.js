@@ -209,60 +209,6 @@ describe('SettingsView', () => {
     ).toBe('Appearance');
   });
 
-  it('adds, removes, and saves skill directories', async () => {
-    const toastMock = vi.fn();
-    rpcMock.mockImplementation(
-      createSettingsRpcHandler({
-        'settings.update': (params) =>
-          createSettingsPayload({
-            skills: {
-              default_directory: 'C:/Users/test/.vbot/skills',
-              directories: params.skills.directories,
-            },
-          }),
-      }),
-    );
-
-    mountedComponent = mount(SettingsView, {
-      target: document.body,
-      props: { onToast: toastMock },
-    });
-    flushSync();
-
-    await waitForText('Add provider');
-    openSection('Skills', 'skills');
-
-    expect(document.body.textContent).toContain('C:/Users/test/.vbot/skills');
-    expect(document.body.textContent).toContain('C:/skills/shared');
-
-    const input = activeSection.querySelector('input.s-input');
-    expect(input).not.toBeNull();
-    input.value = 'D:/skills/team';
-    input.dispatchEvent(new Event('input', { bubbles: true }));
-    flushSync();
-
-    clickButton('Add directory');
-    expect(document.body.textContent).toContain('D:/skills/team');
-
-    clickButton('Remove');
-    expect(document.body.textContent).not.toContain('C:/skills/shared');
-
-    clickButton('Save');
-
-    expect(rpcMock).toHaveBeenCalledWith('settings.update', {
-      skills: {
-        directories: ['D:/skills/team'],
-      },
-    });
-
-    await waitForCondition(() => toastMock.mock.calls.length > 0);
-    expect(toastMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        variant: 'success',
-      }),
-    );
-  });
-
   it('edits and saves sub-agent settings', async () => {
     const toastMock = vi.fn();
     rpcMock.mockImplementation(

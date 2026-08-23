@@ -147,6 +147,7 @@ class SkillRegistry:
         diagnostics: list[SkillDiagnostic] | None = None,
         environment: Mapping[str, str] | None = None,
         always_allowed: Iterable[str] | None = None,
+        excluded_skills: Mapping[str, SkillMetadata] | None = None,
     ) -> None:
         self._skills = skills
         self._diagnostics = list(diagnostics or [])
@@ -156,6 +157,11 @@ class SkillRegistry:
         # agent-scoped registry always exposes the agent's own skills while a
         # shared registry (global/project) leaves it empty and filters as before.
         self._always_allowed = frozenset(always_allowed or ())
+        # Skills hidden by the policy disable switch: loaded, then moved out of the
+        # effective pool. They are invisible to every read answer (get/list_all/
+        # filter_allowed/availability) but stay reachable for the human manager via
+        # ``excluded_skills()``; editor-scope loads simply never exclude anything.
+        self._excluded_skills = dict(excluded_skills or {})
 
     @classmethod
     def load(
@@ -165,6 +171,7 @@ class SkillRegistry:
         environment: Mapping[str, str] | None = None,
         always_allowed: Iterable[str] | None = None,
         origins: Sequence[str | None] | None = None,
+        excluded_names: Iterable[str] | None = None,
     ) -> SkillRegistry:
         """Load all valid skills from immediate subdirectories of scan roots.
 
@@ -177,16 +184,32 @@ class SkillRegistry:
         ``origins`` is a parallel sequence of origin tags for ``[skills_dir,
         *extra_dirs]``; each loaded skill records the tag of the root it came from
         (missing/short → ``None``), so the catalog can group by scope.
+        ``excluded_names`` (the Skill Policy disable switch) removes matching
+        skills from the effective pool entirely — first-found-wins still applies
+        before exclusion, so one disabled name hides every origin's copy. Runtime
+        consumers pass the policy's disabled set; editor-scope loads omit it so
+        disabled skills stay visible and editable for the human manager.
         """
         skills: dict[str, SkillMetadata] = {}
         diagnostics: list[SkillDiagnostic] = []
         scan_roots = [skills_dir, *(extra_dirs or [])]
         origin_tags = list(origins) if origins is not None else []
+        excluded = frozenset(excluded_names or ())
         for index, scan_root in enumerate(scan_roots):
             origin = origin_tags[index] if index < len(origin_tags) else None
             _load_skill_root(scan_root, skills, diagnostics, origin)
 
-        return cls(skills, diagnostics, environment=environment, always_allowed=always_allowed)
+        if excluded:
+            excluded_skills = {name: skills.pop(name) for name in excluded if name in skills}
+        else:
+            excluded_skills = {}
+        return cls(
+            skills,
+            diagnostics,
+            environment=environment,
+            always_allowed=always_allowed,
+            excluded_skills=excluded_skills,
+        )
 
     def get(self, name: str) -> SkillMetadata:
         """Return one skill by name.
@@ -202,6 +225,15 @@ class SkillRegistry:
     def list_all(self) -> list[SkillMetadata]:
         """Return all loaded skills sorted by name."""
         return [self._skills[name] for name in sorted(self._skills)]
+
+    def excluded_skills(self) -> list[SkillMetadata]:
+        """Return skills hidden by this registry's exclusion set, sorted by name.
+
+        Only the human-facing manager consumes these; every runtime answer
+        (``get``/``list_all``/``filter_allowed``/availability) treats a disabled
+        skill exactly like one that never loaded.
+        """
+        return [self._excluded_skills[name] for name in sorted(self._excluded_skills)]
 
     def diagnostics(self) -> list[SkillDiagnostic]:
         """Return diagnostics for loadable and rejected skill directories."""
@@ -374,6 +406,14 @@ def _load_skill_root(
     if not skills_dir.is_dir():
         return
 
+    # A scan root that is itself a skill package (its path contains SKILL.md)
+    # contributes exactly that one package. This is how the shared layer works:
+    # the runtime inserts individually resolved package directories — never an
+    # owner's whole skills home — so unshared neighbours cannot leak.
+    if (skills_dir / SKILL_FILENAME).is_file():
+        _load_skill_directory(skills_dir, skills, diagnostics, origin)
+        return
+
     try:
         skill_directories = sorted(skills_dir.iterdir(), key=lambda path: path.name)
     except OSError as exc:
@@ -393,86 +433,95 @@ def _load_skill_root(
     for skill_dir in skill_directories:
         if not skill_dir.is_dir():
             continue
-
-        skill_file = skill_dir / SKILL_FILENAME
-        if not skill_file.is_file():
+        if not (skill_dir / SKILL_FILENAME).is_file():
             continue
+        _load_skill_directory(skill_dir, skills, diagnostics, origin)
 
-        resolved_skill_file = skill_file.resolve()
-        try:
-            skill, result = _read_skill_metadata(skill_file)
-        except OSError as exc:
-            warnings = [f"Cannot read skill metadata {skill_file}: {exc}"]
-            diagnostics.append(
-                SkillDiagnostic(
-                    name=skill_dir.name,
-                    path=resolved_skill_file,
-                    valid=False,
-                    warnings=warnings,
-                    loadable=False,
-                )
+
+def _load_skill_directory(
+    skill_dir: Path,
+    skills: dict[str, SkillMetadata],
+    diagnostics: list[SkillDiagnostic],
+    origin: str | None = None,
+) -> None:
+    """Read one skill package directory into the accumulated load state."""
+    skill_file = skill_dir / SKILL_FILENAME
+
+    resolved_skill_file = skill_file.resolve()
+    try:
+        skill, result = _read_skill_metadata(skill_file)
+    except OSError as exc:
+        warnings = [f"Cannot read skill metadata {skill_file}: {exc}"]
+        diagnostics.append(
+            SkillDiagnostic(
+                name=skill_dir.name,
+                path=resolved_skill_file,
+                valid=False,
+                warnings=warnings,
+                loadable=False,
             )
-            _log_validation_warnings(skill_dir.name, resolved_skill_file, warnings)
-            continue
-        except ValueError as exc:
-            warnings = [str(exc)]
-            diagnostics.append(
-                SkillDiagnostic(
-                    name=skill_dir.name,
-                    path=resolved_skill_file,
-                    valid=False,
-                    warnings=warnings,
-                    loadable=False,
-                )
+        )
+        _log_validation_warnings(skill_dir.name, resolved_skill_file, warnings)
+        return
+    except ValueError as exc:
+        warnings = [str(exc)]
+        diagnostics.append(
+            SkillDiagnostic(
+                name=skill_dir.name,
+                path=resolved_skill_file,
+                valid=False,
+                warnings=warnings,
+                loadable=False,
             )
-            _log_validation_warnings(skill_dir.name, resolved_skill_file, warnings)
-            continue
+        )
+        _log_validation_warnings(skill_dir.name, resolved_skill_file, warnings)
+        return
 
-        if skill is None:
-            diagnostics.append(
-                SkillDiagnostic(
-                    name=skill_dir.name,
-                    path=resolved_skill_file,
-                    valid=False,
-                    warnings=result.warnings,
-                    loadable=False,
-                )
+    if skill is None:
+        diagnostics.append(
+            SkillDiagnostic(
+                name=skill_dir.name,
+                path=resolved_skill_file,
+                valid=False,
+                warnings=result.warnings,
+                loadable=False,
             )
-            _log_validation_warnings(skill_dir.name, resolved_skill_file, result.warnings)
-            continue
+        )
+        _log_validation_warnings(skill_dir.name, resolved_skill_file, result.warnings)
+        return
 
-        skill = replace(skill, origin=origin)
-        if skill.name in skills:
-            warnings = [
-                *result.warnings,
-                (
-                    f"Duplicate skill name '{skill.name}' rejected; "
-                    f"first found at {skills[skill.name].path}."
-                ),
-            ]
-            diagnostics.append(
-                SkillDiagnostic(
-                    name=skill.name,
-                    path=skill.path,
-                    valid=False,
-                    warnings=warnings,
-                    loadable=False,
-                )
-            )
-            _log_validation_warnings(skill.name, skill.path, warnings)
-            continue
-
-        skills[skill.name] = skill
+    skill = replace(skill, origin=origin)
+    if skill.name in skills:
+        warnings = [
+            *result.warnings,
+            (
+                f"Duplicate skill name '{skill.name}' rejected; "
+                f"first found at {skills[skill.name].path}."
+            ),
+        ]
         diagnostics.append(
             SkillDiagnostic(
                 name=skill.name,
                 path=skill.path,
-                valid=len(result.warnings) == 0,
-                warnings=result.warnings,
-                loadable=True,
+                valid=False,
+                warnings=warnings,
+                loadable=False,
             )
         )
-        _log_validation_warnings(skill.name, skill.path, result.warnings)
+        _log_validation_warnings(skill.name, skill.path, warnings)
+        return
+
+    skills[skill.name] = skill
+    diagnostics.append(
+        SkillDiagnostic(
+            name=skill.name,
+            path=skill.path,
+            valid=len(result.warnings) == 0,
+            warnings=result.warnings,
+            loadable=True,
+        )
+    )
+    _log_validation_warnings(skill.name, skill.path, result.warnings)
 
 
 def _read_skill_metadata(skill_file: Path) -> tuple[SkillMetadata | None, ValidationResult]:
@@ -572,6 +621,7 @@ def load_project_skill_registry(
     *,
     project_origin: str | None = None,
     bundled_origins: Sequence[str | None] | None = None,
+    excluded_names: Iterable[str] | None = None,
 ) -> SkillRegistry:
     """Build a project-scoped registry: the project's own skills, then the bundled ones.
 
@@ -584,6 +634,7 @@ def load_project_skill_registry(
     so a project without one simply gets the bundled pool.
     ``project_origin``/``bundled_origins`` tag the loaded skills with their scope
     for catalog grouping (the project root then the bundled roots).
+    ``excluded_names`` forwards the Skill Policy disable switch to the merge.
     """
     origins: list[str | None] | None = None
     if project_origin is not None or bundled_origins is not None:
@@ -598,6 +649,7 @@ def load_project_skill_registry(
         extra_dirs=list(bundled_scan_roots),
         environment=environment,
         origins=origins,
+        excluded_names=excluded_names,
     )
 
 
@@ -614,6 +666,25 @@ def scan_skill_names(
     """
     registry = SkillRegistry.load(skills_dir, environment=environment)
     return frozenset(skill.name for skill in registry.list_all())
+
+
+def find_skill_package_dir(
+    skills_dir: Path,
+    name: str,
+    environment: Mapping[str, str] | None = None,
+) -> Path | None:
+    """Return the package directory in one skill home whose loaded skill name matches.
+
+    The comparison uses the normalized front-matter name — the same key the
+    registry uses — so a policy entry naming a skill resolves to the exact
+    package the owner's registry serves. ``None`` means no package carries that
+    name (a stale policy entry). Only ``skills_dir`` is read, never its parents.
+    """
+    registry = SkillRegistry.load(skills_dir, environment=environment)
+    try:
+        return registry.get(name).path.parent
+    except KeyError:
+        return None
 
 
 def scan_project_skill_names(

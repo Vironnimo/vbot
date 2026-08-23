@@ -1,10 +1,12 @@
 <script>
+  // The skill-directory rows moved out of Settings: a read-only default
+  // directory plus the autosaved additional-directories list. Ported from the
+  // retired SettingsSkillsPanel with its exact save semantics.
   import { onDestroy, untrack } from 'svelte';
 
   import Button from '../ui/Button.svelte';
   import EmptyState from '../ui/EmptyState.svelte';
   import TextField from '../ui/TextField.svelte';
-  import SettingsSkillManagerPanel from './SettingsSkillManagerPanel.svelte';
   import { updateSettings } from '$lib/api.js';
   import {
     createAutosaveParticipant,
@@ -27,8 +29,6 @@
     onError = noop,
   } = $props();
 
-  // Form is seeded once from the settings prop at mount (untrack avoids a
-  // reactive dependency); later commits flow back through saveDisabled.
   let skillDirectories = $state(untrack(() => getSkillDirectories(settings)));
   let newSkillDirectory = $state('');
   let saving = $state(false);
@@ -41,16 +41,15 @@
     saving || directoriesMatch(skillDirectories, getSkillDirectories(settings)),
   );
   const autosaveContext = useAutosaveContext();
-  const skillDirectoriesAutosave = createAutosaveParticipant({
+  const directoryAutosave = createAutosaveParticipant({
     cancelPending: clearAutoSaveTimer,
     getSnapshot: () => [...skillDirectories],
     hasChanges: () =>
       !directoriesMatch(skillDirectories, getSkillDirectories(settings)),
     save: saveSkillDirectories,
   });
-  const unregisterSkillDirectoriesAutosave = autosaveContext.register(
-    skillDirectoriesAutosave,
-  );
+  const unregisterDirectoryAutosave =
+    autosaveContext.register(directoryAutosave);
 
   $effect(() => {
     if (saveDisabled) {
@@ -59,7 +58,7 @@
 
     autoSaveTimer = setTimeout(() => {
       autoSaveTimer = null;
-      void skillDirectoriesAutosave.runSave();
+      void directoryAutosave.runSave();
     }, AUTO_SAVE_DEBOUNCE_MS);
 
     return () => {
@@ -68,7 +67,7 @@
   });
 
   onDestroy(() => {
-    unregisterSkillDirectoriesAutosave();
+    unregisterDirectoryAutosave();
     clearAutoSaveTimer();
   });
 
@@ -129,7 +128,7 @@
     }
 
     clearAutoSaveTimer();
-    void skillDirectoriesAutosave.runSave('manual');
+    void directoryAutosave.runSave('manual');
   }
 
   async function saveSkillDirectories() {
@@ -191,7 +190,7 @@
     </div>
   </div>
 
-  <div class="s-skill-directory-list">
+  <div class="skills-directory-list">
     {#if skillDirectories.length === 0}
       <EmptyState
         density="compact"
@@ -202,11 +201,10 @@
       />
     {:else}
       {#each skillDirectories as directory (directory)}
-        <div class="s-skill-directory-item">
+        <div class="skills-directory-item">
           <span>{directory}</span>
           <Button
             variant="secondary"
-            class="s-directory-remove"
             ariaLabel={t(
               'settings.skills.removeDirectory',
               'Remove skill directory {path}',
@@ -221,7 +219,7 @@
     {/if}
   </div>
 
-  <div class="s-skill-directory-add">
+  <div class="skills-directory-add">
     <TextField
       value={newSkillDirectory}
       onInput={(next) => (newSkillDirectory = next)}
@@ -237,15 +235,38 @@
     </Button>
   </div>
 
-  <div class="s-footer">
-    <Button
-      variant="primary"
-      class="s-save-button s-save-button--inline"
-      onClick={handleManualSkillDirectoriesSave}
-    >
+  <div class="skills-footer">
+    <Button variant="primary" onClick={handleManualSkillDirectoriesSave}>
       {saving ? t('common.saving', 'Saving…') : t('common.save', 'Save')}
     </Button>
   </div>
 </div>
 
-<SettingsSkillManagerPanel {onToast} {onError} />
+<style>
+  .skills-directory-list,
+  .skills-directory-add {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-sm);
+  }
+
+  .skills-directory-item {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-sm);
+  }
+
+  .skills-directory-item span {
+    font-family: var(--font-mono);
+    font-size: var(--fs-mono-body);
+    color: var(--text-med);
+    word-break: break-all;
+  }
+
+  .skills-footer {
+    display: flex;
+    justify-content: flex-end;
+  }
+</style>

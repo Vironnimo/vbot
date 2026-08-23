@@ -7,6 +7,11 @@ file tools. All writes go through the one validated authoring service with
 ``author="human"`` provenance, then the matching scoped invalidation so the change
 is live without a restart. Validation failures surface the authoring diagnostics as
 an ``invalid_request`` error.
+
+The manager surface (``skill.inventory`` / ``skill.set_disabled`` / ``skill.share``)
+reads every source without exclusions and mutates the Skills domain's policy file;
+both mutations invalidate live and publish the generic resource-changed event with
+the ``skills`` kind.
 """
 
 from __future__ import annotations
@@ -18,8 +23,10 @@ from typing import Any, cast
 from core.settings import is_valid_agent_id
 from core.skills import SkillAuthoringError, SkillRegistry, SkillWriteResult
 from core.utils.logging import get_logger
+from server.events import RESOURCE_KIND_SKILLS
 from server.rpc.dispatcher import RpcMethodHandler
 from server.rpc.errors import RPC_ERROR_INVALID_REQUEST, RpcError
+from server.rpc.event_bridge import publish_resource_changed
 from server.rpc.validation import _optional_string, _required_string
 
 JsonObject = dict[str, Any]
@@ -168,6 +175,59 @@ def _skill_remove_file(state: Any, params: JsonObject) -> JsonObject:
     )
 
 
+def _skill_inventory(state: Any, params: JsonObject) -> JsonObject:
+    """Return every Skill from every source with status/share/owner annotations."""
+    if params:
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, "skill.inventory does not accept params")
+    return cast(JsonObject, state.runtime.skill_inventory())
+
+
+def _required_bool(params: JsonObject, key: str) -> bool:
+    value = params.get(key)
+    if not isinstance(value, bool):
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, f"params.{key} must be a boolean")
+    return value
+
+
+def _skill_set_disabled(state: Any, params: JsonObject) -> JsonObject:
+    """Toggle the policy disable switch for one Skill name (master switch)."""
+    name = _required_string(params, "name")
+    disabled = _required_bool(params, "disabled")
+    inventory = state.runtime.skill_inventory()
+    if not any(entry["name"] == name for entry in inventory["skills"]):
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, f"unknown skill: {name!r}")
+    state.runtime.skill_policy.set_disabled(name, disabled=disabled)
+    # Disable hides the name in every registry flavor → full reload.
+    state.runtime.reload_skills()
+    publish_resource_changed(state, RESOURCE_KIND_SKILLS)
+    return {"name": name, "disabled": disabled}
+
+
+def _skill_share(state: Any, params: JsonObject) -> JsonObject:
+    """Share or unshare one Identity Agent's private Skill with all other Agents."""
+    agent_id = _required_string(params, "agent_id")
+    if not is_valid_agent_id(agent_id):
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, f"invalid agent id: {agent_id!r}")
+    if not state.runtime.agents.exists(agent_id):
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST,
+            f"unknown agent: {agent_id!r} (sharing is identity-agent-only)",
+        )
+    name = _required_string(params, "name")
+    shared = _required_bool(params, "shared")
+    if not state.runtime.agent_owns_private_skill(agent_id, name):
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST,
+            f"agent {agent_id!r} owns no private skill named {name!r}",
+        )
+    state.runtime.skill_policy.set_shared(agent_id, name, shared=shared)
+    # A share change reshuffles every receiver's registry layer; the global pool
+    # is unaffected because shared Skills never enter it.
+    state.runtime.invalidate_agent_skills(None)
+    publish_resource_changed(state, RESOURCE_KIND_SKILLS)
+    return {"agent_id": agent_id, "name": name, "shared": shared}
+
+
 def method_handlers() -> dict[str, RpcMethodHandler]:
     """Return the skill mutation RPC handlers."""
     return {
@@ -177,4 +237,7 @@ def method_handlers() -> dict[str, RpcMethodHandler]:
         "skill.delete": _skill_delete,
         "skill.write_file": _skill_write_file,
         "skill.remove_file": _skill_remove_file,
+        "skill.inventory": _skill_inventory,
+        "skill.set_disabled": _skill_set_disabled,
+        "skill.share": _skill_share,
     }

@@ -6,6 +6,12 @@ from core.skills.authoring import (
     SkillAuthoringService,
     SkillWriteResult,
 )
+from core.skills.policy import (
+    POLICY_SCHEMA_VERSION,
+    SkillPolicy,
+    SkillPolicyError,
+    SkillPolicyService,
+)
 from core.skills.requirements import SkillAvailability, SkillRequirements
 from core.skills.skill_validator import FRONT_MATTER_DELIMITER
 from core.skills.skills import (
@@ -16,6 +22,7 @@ from core.skills.skills import (
     WILDCARD_ALLOWLIST,
     SkillMetadata,
     SkillRegistry,
+    find_skill_package_dir,
     load_project_skill_registry,
     project_skill_origin,
     project_skills_dir,
@@ -26,6 +33,7 @@ from core.skills.skills import (
 
 __all__ = [
     "FRONT_MATTER_DELIMITER",
+    "POLICY_SCHEMA_VERSION",
     "SKILL_ORIGIN_AGENT",
     "SKILL_ORIGIN_BUNDLED",
     "SKILL_ORIGIN_GLOBAL",
@@ -35,10 +43,14 @@ __all__ = [
     "SkillAuthoringService",
     "SkillAvailability",
     "SkillMetadata",
+    "SkillPolicy",
+    "SkillPolicyError",
+    "SkillPolicyService",
     "SkillRegistry",
     "SkillRequirements",
     "SkillWriteResult",
     "WILDCARD_ALLOWLIST",
+    "find_skill_package_dir",
     "load_project_skill_registry",
     "project_skill_origin",
     "project_skills_dir",
