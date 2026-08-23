@@ -280,6 +280,8 @@ export const englishCatalog = Object.freeze({
   'chat.toolNoData': '—',
   'chat.runIterations': '{count} iter',
   'chat.runDurationSeconds': '{seconds}s',
+  'chat.durationMinutesSeconds': '{minutes}m {seconds}s',
+  'chat.durationHoursMinutes': '{hours}h {minutes}m',
   'chat.changeStats.filesOne': '1 file changed',
   'chat.changeStats.filesMany': '{count} files changed',
   'chat.toolDurationSeconds': '{seconds}s',

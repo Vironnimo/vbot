@@ -1383,6 +1383,28 @@ describe('runFooterParts', () => {
     expect(parts).toContain('5.3s');
   });
 
+  it('formats minute-scale durations as minutes and seconds', () => {
+    const parts = runFooterParts({
+      status: 'completed',
+      durationMs: 325000,
+      outputs: [{ content: 'done' }],
+      tools: [],
+    });
+
+    expect(parts).toContain('5m 25s');
+  });
+
+  it('formats hour-scale durations as hours and minutes without seconds', () => {
+    const parts = runFooterParts({
+      status: 'completed',
+      durationMs: 5071000,
+      outputs: [{ content: 'done' }],
+      tools: [],
+    });
+
+    expect(parts).toContain('1h 24m');
+  });
+
   it('shows live Provider liveness without calling it model output', () => {
     const parts = runFooterParts({
       status: 'running',
