@@ -1118,6 +1118,7 @@ export const englishCatalog = Object.freeze({
     'Every skill from every source — manage availability, sharing, and editing.',
   'skills.refresh': 'Refresh',
   'skills.loadError': 'Skills could not be loaded.',
+  'skills.loading': 'Loading skills…',
   'skills.directoriesTitle': 'Scan directories',
   'skills.managerTitle': 'Installed skills',
   'skills.createScopeLabel': 'Create in',
