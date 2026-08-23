@@ -846,6 +846,21 @@
               use:tooltip={sessionHoverDetails(session)}
             >
               <div class="session-row__heading">
+                {#if session.has_active_run}
+                  <span
+                    class="session-row__active-dot"
+                    aria-label={t('sessions.activeRun', 'Active')}
+                    use:tooltip={t(
+                      'sessions.activeRunHint',
+                      'This session is currently running.',
+                    )}
+                  >
+                    <span
+                      class="tab-indicator tab-indicator--running"
+                      aria-hidden="true"
+                    ></span>
+                  </span>
+                {/if}
                 <p class="session-row__name">
                   {session.display_name || sessionDisplayName(session)}
                 </p>
@@ -1412,16 +1427,16 @@
 
   .session-row__select {
     width: 100%;
-    min-height: 48px;
     border: 0;
     border-radius: inherit;
-    padding: 10px 36px 10px 14px;
+    padding: 8px 36px 8px 14px;
     text-align: left;
     background: transparent;
     color: var(--text-hi);
     display: flex;
     flex-direction: column;
-    justify-content: center;
+    align-items: flex-start;
+    justify-content: flex-start;
     line-height: 1.35;
     transition:
       background 150ms ease,
@@ -1580,7 +1595,7 @@
     color: var(--text-hi);
     font-family: var(--font-ui);
     font-size: var(--fs-label-md);
-    font-weight: 600;
+    font-weight: 400;
     line-height: 1.25;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -1630,6 +1645,13 @@
     border-radius: 50%;
     background: var(--blue);
     box-shadow: 0 0 0 2px var(--blue-dim);
+  }
+
+  .session-row__active-dot {
+    display: inline-flex;
+    flex-shrink: 0;
+    align-items: center;
+    padding-top: 1px;
   }
 
   .session-drawer__state {

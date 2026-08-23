@@ -59,6 +59,7 @@ describe('sessionListView helpers', () => {
       is_channel_session: false,
       latest_completion_run_id: 'run-one',
       has_unread_completion: true,
+      has_active_run: false,
       unread_run_id: 'run-one',
       unread_run_status: 'completed',
     });
