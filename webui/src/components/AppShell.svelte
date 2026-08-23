@@ -714,16 +714,18 @@
 
     <div class="sidebar-footer app-shell__footer">
       {#if micVisible}
-        <button
-          type="button"
-          class="sidebar-footer__row sidebar-footer__mic"
-          use:tooltip={micTooltip}
-          aria-label={micTooltip}
-          onclick={onNavigateToVoiceSettings}
-        >
+        <div class="sidebar-footer__row">
           <span class="mic-dot {micDotClass}" aria-hidden="true"></span>
-          <span class="footer-text" aria-live="polite">{micStatusLabel}</span>
-        </button>
+          <button
+            type="button"
+            class="sidebar-footer__link"
+            use:tooltip={micTooltip}
+            aria-label={micTooltip}
+            onclick={onNavigateToVoiceSettings}
+          >
+            {micStatusLabel}
+          </button>
+        </div>
       {/if}
       <div class="sidebar-footer__row" aria-label={statusAriaLabel}>
         <div class={statusDotClass} aria-hidden="true"></div>
@@ -860,29 +862,25 @@
 </div>
 
 <style>
-  .sidebar-footer__mic {
-    width: 100%;
+  .sidebar-footer__link {
+    padding: 0;
     border: none;
-    border-bottom: 1px solid var(--border);
-    background: transparent;
-    color: inherit;
-    font: inherit;
+    background: none;
+    color: var(--text-lo);
+    font-family: var(--font-mono);
+    font-size: 11px;
     text-align: left;
     cursor: pointer;
-    transition: background 0.15s;
+    transition: color 0.15s;
   }
 
-  .sidebar-footer__mic:hover {
-    background: var(--surface-2);
+  .sidebar-footer__link:hover {
+    color: var(--text-hi);
   }
 
-  .sidebar-footer__mic:focus-visible {
+  .sidebar-footer__link:focus-visible {
     outline: none;
     box-shadow: var(--focus-ring);
-  }
-
-  .sidebar-footer__mic + .sidebar-footer__row {
-    border-top: none;
   }
 
   .mic-dot {
