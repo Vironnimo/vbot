@@ -12,8 +12,6 @@
     loadingAgents = false,
     activeAgent = null,
     showSessionDrawer = false,
-    creatingSession = false,
-    newSessionLoading = false,
     // Project context for the compact project picker that lives in the header
     // (left of the Sessions button). "No project" is Personal/identity chat.
     projects = [],
@@ -21,7 +19,6 @@
     onSelectProject = () => {},
     onSelectAgent = () => {},
     onToggleSessionDrawer = () => {},
-    onNewSession = () => {},
   } = $props();
 
   // The identity bar carries a "Personal" label only while a project is
@@ -123,18 +120,6 @@
       {showSessionDrawer
         ? t('sessions.hide', 'Hide sessions')
         : t('sessions.title', 'Sessions')}
-    </Button>
-    <Button
-      variant="primary"
-      disabled={!activeAgent || newSessionLoading || creatingSession}
-      onClick={onNewSession}
-    >
-      <svg viewBox="0 0 14 14" width="12" height="12" aria-hidden="true">
-        <path d="M7 1v12M1 7h12" />
-      </svg>
-      {creatingSession
-        ? t('common.loading', 'Loading…')
-        : t('chat.newSession', 'New session')}
     </Button>
   </div>
 </header>

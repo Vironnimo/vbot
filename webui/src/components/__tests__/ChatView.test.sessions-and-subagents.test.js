@@ -10,6 +10,7 @@ import {
   expect,
   findButtonByText,
   findCancelRunButton,
+  findNewSessionButton,
   flushSync,
   it,
   listQueueMock,
@@ -44,7 +45,7 @@ describe('ChatView', () => {
       100,
     );
 
-    const newSessionButton = findButtonByText('New session');
+    const newSessionButton = findNewSessionButton();
     const composerInput = document.querySelector('#chat-composer-input');
     expect(newSessionButton).toBeTruthy();
     expect(composerInput).toBeTruthy();
@@ -97,7 +98,7 @@ describe('ChatView', () => {
     const composerInput = document.querySelector('#chat-composer-input');
     setInputValue(composerInput, 'unfinished draft');
     flushSync();
-    findButtonByText('New session').click();
+    findNewSessionButton().click();
 
     await waitForCondition(
       () =>
@@ -136,7 +137,7 @@ describe('ChatView', () => {
       100,
     );
 
-    const newSessionButton = findButtonByText('New session');
+    const newSessionButton = findNewSessionButton();
     expect(newSessionButton).toBeTruthy();
     newSessionButton.click();
     newSessionButton.click();
@@ -184,7 +185,7 @@ describe('ChatView', () => {
 
     await waitForCondition(() => Boolean(findCancelRunButton()), 100);
 
-    const newSessionButton = findButtonByText('New session');
+    const newSessionButton = findNewSessionButton();
     expect(newSessionButton).toBeTruthy();
     expect(newSessionButton.disabled).toBe(false);
     newSessionButton.click();
@@ -429,7 +430,7 @@ describe('ChatView', () => {
       const composerInput = document.querySelector('#chat-composer-input');
       expect(document.activeElement).not.toBe(composerInput);
 
-      findButtonByText('New session').click();
+      findNewSessionButton().click();
       await waitForCondition(
         () =>
           rpcMock.mock.calls.some(
@@ -748,7 +749,7 @@ describe('ChatView', () => {
     await waitForCondition(() => findCancelRunButton() === undefined, 100);
 
     expect(findCancelRunButton()).toBeUndefined();
-    expect(findButtonByText('New session')?.disabled).toBe(false);
+    expect(findNewSessionButton()?.disabled).toBe(false);
     expect(closeSubscriptionForMock).toHaveBeenCalledWith('alpha::session-1');
     // No new SSE attach — the dead run is gone, not replaced.
     expect(subscribeRunEventsMock).toHaveBeenCalledTimes(1);
@@ -809,7 +810,7 @@ describe('ChatView', () => {
     );
 
     expect(findCancelRunButton()).toBeTruthy();
-    expect(findButtonByText('New session')?.disabled).toBe(false);
+    expect(findNewSessionButton()?.disabled).toBe(false);
     expect(closeSubscriptionForMock).not.toHaveBeenCalled();
     expect(subscribeRunEventsMock).toHaveBeenCalledTimes(1);
   });
@@ -944,7 +945,7 @@ describe('ChatView', () => {
     expect(sessionState.currentRun?.runId).toBe('run-replacement');
     expect(closeSubscriptionForMock).not.toHaveBeenCalled();
     expect(findCancelRunButton()).toBeTruthy();
-    expect(findButtonByText('New session')?.disabled).toBe(false);
+    expect(findNewSessionButton()?.disabled).toBe(false);
   });
 
   // Helper: render a single running sub-agent tool row in the parent

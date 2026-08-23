@@ -1819,8 +1819,6 @@
     loadingAgents={chatState.loadingAgents}
     {activeAgent}
     {showSessionDrawer}
-    {creatingSession}
-    newSessionLoading={chatState.loadingHistory}
     {projects}
     {selectedProjectId}
     onSelectProject={handleSelectProject}
@@ -1828,7 +1826,6 @@
     onToggleSessionDrawer={() => {
       showSessionDrawer = !showSessionDrawer;
     }}
-    onNewSession={handleNewSession}
   />
 
   {#if isProjectSelected(selectedProjectId)}
@@ -1929,6 +1926,20 @@
         />
       {/if}
       <div class="chat-view__surface">
+        <Button
+          variant="secondary"
+          icon
+          class="chat-view__new-session-fab"
+          ariaLabel={t('chat.newSession', 'New session')}
+          tooltip={t('chat.newSession', 'New session')}
+          disabled={chatState.loadingHistory}
+          loading={creatingSession}
+          onClick={handleNewSession}
+        >
+          <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+            <path d="M12 5v14M5 12h14" />
+          </svg>
+        </Button>
         {#if chatState.loadingHistory || chatState.historyError || chatState.actionError || chatState.commandsError || activeSessionState?.actionError || activeSessionState?.streamError || activeSessionState?.error}
           <div class="chat-view__notice-stack" aria-live="polite">
             <div class="chat-view__measure chat-view__notice-inner">
@@ -2147,6 +2158,7 @@
   }
 
   .chat-view__surface {
+    position: relative;
     display: flex;
     min-height: 0;
     flex: 1;
@@ -2161,6 +2173,37 @@
     min-height: 0;
     flex: 1;
     overflow: hidden;
+  }
+
+  /* Free-floating New Session action at the top-left of the chat surface.
+     Stays fixed while the timeline scrolls underneath, and naturally shifts
+     with the surface when the session drawer opens/closes (the drawer is a
+     flex sibling, so the surface — and this button — move together). */
+  :global(.btn-secondary.btn-icon.chat-view__new-session-fab) {
+    position: absolute;
+    top: 12px;
+    left: 12px;
+    z-index: 2;
+    width: 36px;
+    height: 36px;
+    padding: 0;
+    border-radius: 50%;
+    background: var(--surface-2);
+    box-shadow: var(--floating-elevation);
+  }
+
+  :global(.btn-secondary.btn-icon.chat-view__new-session-fab:hover) {
+    border-color: var(--accent);
+    color: var(--accent);
+    background: var(--surface-3);
+  }
+
+  :global(.chat-view__new-session-fab svg) {
+    fill: none;
+    stroke: currentcolor;
+    stroke-width: 2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
   }
 
   .chat-view__timeline-shell {
@@ -2393,6 +2436,11 @@
 
     :global(.chat-view__subagent-session-return) {
       margin-right: 0;
+    }
+
+    :global(.btn-secondary.btn-icon.chat-view__new-session-fab) {
+      width: 40px;
+      height: 40px;
     }
   }
 </style>
