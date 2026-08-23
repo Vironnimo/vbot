@@ -37,6 +37,7 @@
     updateSkill,
   } from '$lib/api.js';
   import { t } from '$lib/i18n.js';
+  import { tooltip } from '$lib/tooltip.js';
 
   const GLOBAL_SCOPE = 'global';
   const noop = () => {};
@@ -526,7 +527,12 @@
                   <div class="skills-card-main">
                     <div class="skills-card-info">
                       <div class="skills-card-header">
-                        <span class="skills-card-name">{entry.name}</span>
+                        <span
+                          class="skills-card-name tooltip-anchor"
+                          use:tooltip={entry.description ||
+                            t('skills.noDescription', 'No description')}
+                          >{entry.name}</span
+                        >
                         {#if entry.shared}
                           <Badge variant="info">
                             {t('skills.sharedBadge', 'Shared')}
@@ -545,10 +551,6 @@
                           {skillStatusLabel(entry, t)}
                         </StatusChip>
                       </div>
-                      <p class="skills-card-desc">
-                        {entry.description ||
-                          t('skills.noDescription', 'No description')}
-                      </p>
                       {#if entry.owner_id && viewMode === 'source'}
                         <span class="skills-card-owner">
                           {agentDisplayName(entry.owner_id, agents)}
@@ -593,11 +595,30 @@
                       {/if}
                       {#if skillSupportsEditAndDelete(entry)}
                         <Button
-                          variant="secondary"
+                          variant="tertiary"
+                          icon
+                          ariaLabel={t('common.edit', 'Edit')}
+                          tooltip={t('common.edit', 'Edit')}
                           disabled={busy}
                           onClick={() => startEdit(entry)}
                         >
-                          {t('common.edit', 'Edit')}
+                          <svg
+                            viewBox="0 0 16 16"
+                            width="14"
+                            height="14"
+                            aria-hidden="true"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-linecap="round"
+                            stroke-linejoin="round"
+                            stroke-width="1.35"
+                          >
+                            <path d="m10.9 2.2 2.9 2.9" />
+                            <path
+                              d="m2.6 13.4.7-3.2L10.9 2.6a1.4 1.4 0 0 1 2 0l.5.5a1.4 1.4 0 0 1 0 2l-7.6 7.6-3.2.7Z"
+                            />
+                            <path d="m9.8 3.7 2.5 2.5" />
+                          </svg>
                         </Button>
                         <Button
                           variant="danger"
@@ -851,19 +872,24 @@
     flex-direction: column;
     min-height: 0;
     height: 100%;
+    overflow-x: hidden;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-gutter: stable;
   }
 
   .skills-layout {
     display: flex;
-    min-height: 0;
-    height: 100%;
+    width: 100%;
+    min-height: 100%;
+    height: auto;
     justify-content: center;
   }
 
   .skills-scroll {
     width: 100%;
     max-width: var(--content-max-narrow);
-    overflow-y: auto;
+    overflow: visible;
     padding: var(--space-lg);
     display: flex;
     flex-direction: column;
@@ -1056,13 +1082,7 @@
     font-size: var(--fs-mono-body);
     color: var(--text-hi);
     font-weight: 500;
-  }
-
-  .skills-card-desc {
-    margin: 0;
-    font-size: var(--fs-body-sm);
-    color: var(--text-med);
-    line-height: 1.4;
+    cursor: help;
   }
 
   .skills-card-owner {
