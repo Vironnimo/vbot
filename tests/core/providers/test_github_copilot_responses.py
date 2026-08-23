@@ -292,6 +292,17 @@ def test_build_payload_omits_temperature_for_gpt5_responses_models(model_id: str
     assert payload["parallel_tool_calls"] is True
 
 
+def test_build_payload_omits_unspecified_top_p() -> None:
+    payload = build_responses_payload(
+        [{"role": "user", "content": "Hello"}],
+        model_id="gpt-5.4",
+        policy=responses_policy(),
+        top_p=None,
+    )
+
+    assert "top_p" not in payload
+
+
 def test_build_payload_omits_temperature_for_partial_openai_like_metadata() -> None:
     partial_policy = responses_policy(reasoning_efforts=[])
 

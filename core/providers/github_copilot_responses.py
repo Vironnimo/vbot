@@ -653,10 +653,12 @@ def _apply_remaining_kwargs(
     max_output_tokens = request_kwargs.pop("max_output_tokens", None)
     if max_output_tokens is not None:
         payload["max_output_tokens"] = max_output_tokens
-    if "temperature" in request_kwargs and _supports_responses_temperature(policy):
-        payload["temperature"] = request_kwargs["temperature"]
-    if "top_p" in request_kwargs:
-        payload["top_p"] = request_kwargs["top_p"]
+    temperature = request_kwargs.pop("temperature", None)
+    if temperature is not None and _supports_responses_temperature(policy):
+        payload["temperature"] = temperature
+    top_p = request_kwargs.pop("top_p", None)
+    if top_p is not None:
+        payload["top_p"] = top_p
     if policy.supports_request_parameter("prompt_cache_key") and isinstance(prompt_cache_key, str):
         normalized_cache_key = prompt_cache_key.strip()
         if normalized_cache_key:
