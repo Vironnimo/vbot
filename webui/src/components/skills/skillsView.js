@@ -3,8 +3,8 @@
 // The backend's `skill.inventory` returns one flat list of entries, each
 // annotated with its origin tag, owner (for private homes), and share/disable
 // state. This module owns the view-only projections: ordering the origin
-// groups, deriving a group label from an entry, and mapping a status to a
-// StatusChip variant. No Svelte, no transport.
+// groups, deriving a group label from an entry, mapping a status to a
+// StatusChip variant, and the by-agent grouping. No Svelte, no transport.
 
 // Group order mirrors the prompt catalog: Bundled / Global / per-Project /
 // per-Agent private — Shared is appended as the manager-only extra group.
@@ -21,6 +21,12 @@ const AGENT_ORIGIN = 'agent';
 
 function projectDisplayName(origin) {
   return origin.slice(PROJECT_ORIGIN_PREFIX.length);
+}
+
+// Resolve an agent id to a display name from the agents list.
+export function agentDisplayName(agentId, agents) {
+  const agent = (agents ?? []).find((a) => a.id === agentId);
+  return agent?.name || agentId;
 }
 
 // Which display group an inventory entry belongs to. Extension Skills carry the
@@ -47,7 +53,7 @@ export function skillGroupKey(entry) {
   return 'global';
 }
 
-export function skillGroupLabel(entry, translate) {
+export function skillGroupLabel(entry, translate, agents) {
   const key = skillGroupKey(entry);
   if (key === 'project') {
     return translate('skills.group.project', "Project '{name}'", {
@@ -55,12 +61,14 @@ export function skillGroupLabel(entry, translate) {
     });
   }
   if (key === 'private') {
-    return translate('skills.group.private', "Private '{name}'", {
-      name: entry.owner_id || '',
+    return translate('skills.group.private', '{name} (private)', {
+      name: agentDisplayName(entry.owner_id, agents),
     });
   }
   if (key === 'shared') {
-    return translate('skills.group.shared', 'Shared');
+    return translate('skills.group.shared', 'Shared by {name}', {
+      name: agentDisplayName(entry.owner_id, agents),
+    });
   }
   if (key === 'bundled') {
     return translate('skills.group.bundled', 'Bundled');
@@ -70,14 +78,14 @@ export function skillGroupLabel(entry, translate) {
 
 // Group the flat inventory into ordered `{ key, label, skills }` groups.
 // Within a group, skills keep their server order (sorted by name/origin).
-export function groupInventorySkills(entries, translate) {
+export function groupInventorySkills(entries, translate, agents) {
   const groups = new Map();
   for (const entry of Array.isArray(entries) ? entries : []) {
     const key = skillGroupKey(entry);
     if (!groups.has(key)) {
       groups.set(key, {
         key,
-        label: skillGroupLabel(entry, translate),
+        label: skillGroupLabel(entry, translate, agents),
         skills: [],
       });
     }
@@ -86,6 +94,60 @@ export function groupInventorySkills(entries, translate) {
   return SKILL_GROUP_ORDER.filter((key) => groups.has(key)).map((key) =>
     groups.get(key),
   );
+}
+
+// Group skills by agent for the agent-centric view mode. Each identity agent
+// gets a group with their private skills (shared or not). Skills without an
+// owner (bundled, global, project) keep their origin grouping.
+export function groupInventoryByAgent(entries, translate, agents) {
+  const agentGroups = new Map();
+  const sourceGroups = new Map();
+
+  for (const entry of Array.isArray(entries) ? entries : []) {
+    if (entry.owner_id) {
+      if (!agentGroups.has(entry.owner_id)) {
+        agentGroups.set(entry.owner_id, {
+          key: `agent:${entry.owner_id}`,
+          label: agentDisplayName(entry.owner_id, agents),
+          skills: [],
+        });
+      }
+      agentGroups.get(entry.owner_id).skills.push(entry);
+    } else {
+      const key = skillGroupKey(entry);
+      if (!sourceGroups.has(key)) {
+        sourceGroups.set(key, {
+          key,
+          label: skillGroupLabel(entry, translate, agents),
+          skills: [],
+        });
+      }
+      sourceGroups.get(key).skills.push(entry);
+    }
+  }
+
+  // Agent groups first (sorted by agent display name), then source groups in
+  // catalog order.
+  const agentResult = [...agentGroups.values()].sort((a, b) =>
+    a.label.localeCompare(b.label),
+  );
+  const sourceResult = SKILL_GROUP_ORDER.filter((key) =>
+    sourceGroups.has(key),
+  ).map((key) => sourceGroups.get(key));
+  return [...agentResult, ...sourceResult];
+}
+
+// Filter entries by a search query against name and description.
+export function filterSkills(entries, query) {
+  const trimmed = (query ?? '').trim().toLowerCase();
+  if (!trimmed) {
+    return entries;
+  }
+  return entries.filter((entry) => {
+    const name = (entry.name ?? '').toLowerCase();
+    const desc = (entry.description ?? '').toLowerCase();
+    return name.includes(trimmed) || desc.includes(trimmed);
+  });
 }
 
 // Status → StatusChip variant. Disabled outranks everything (the server already

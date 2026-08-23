@@ -212,4 +212,77 @@ describe('SkillsView', () => {
       shared: true,
     });
   });
+
+  it('filters skills by search query against name and description', async () => {
+    await mountView();
+
+    // All four skills visible initially.
+    let names = [...document.body.querySelectorAll('.skills-card-name')].map(
+      (el) => el.textContent.trim(),
+    );
+    expect(names).toHaveLength(4);
+
+    const searchInput = document.body.querySelector('.skills-search-input');
+    searchInput.value = 'teach';
+    searchInput.dispatchEvent(new Event('input', { bubbles: true }));
+    flushSync();
+
+    names = [...document.body.querySelectorAll('.skills-card-name')].map((el) =>
+      el.textContent.trim(),
+    );
+    expect(names).toEqual(['teach']);
+  });
+
+  it('groups by agent when the by-agent view toggle is activated', async () => {
+    await mountView();
+
+    // Default: by-source groups include 'bundled', 'global', 'private'.
+    let keys = [
+      ...document.body.querySelectorAll('[data-testid^="skill-group-"]'),
+    ].map((el) => el.getAttribute('data-testid').replace('skill-group-', ''));
+    expect(keys).toContain('private');
+
+    // Switch to by-agent: the agent's private skills group under their id.
+    const agentToggle = [...document.body.querySelectorAll('button')].find(
+      (button) => button.textContent.trim() === 'By agent',
+    );
+    agentToggle.click();
+    flushSync();
+
+    keys = [
+      ...document.body.querySelectorAll('[data-testid^="skill-group-"]'),
+    ].map((el) => el.getAttribute('data-testid').replace('skill-group-', ''));
+    // The agent group key is `agent:main`; bundled/global source groups follow.
+    expect(keys).toContain('agent:main');
+    expect(keys).toContain('bundled');
+  });
+
+  it('opens the create modal when the new-skill button is clicked', async () => {
+    await mountView();
+
+    const newButton = [...document.body.querySelectorAll('button')].find(
+      (button) => button.textContent.trim() === '+ New skill',
+    );
+    newButton.click();
+    flushSync();
+
+    const modal = document.body.querySelector('[role="dialog"]');
+    expect(modal).not.toBeNull();
+    // The scope selector is inside the modal.
+    expect(modal.querySelector('#create-scope')).not.toBeNull();
+    expect(modal.querySelector('#new-skill-name')).not.toBeNull();
+    expect(modal.querySelector('#new-skill-content')).not.toBeNull();
+  });
+
+  it('shows agent display names instead of raw ids in private group labels', async () => {
+    await mountView();
+
+    const groupLabels = [
+      ...document.body.querySelectorAll('.skills-group-title'),
+    ].map((el) => el.textContent.trim());
+    // The private group label should contain the agent's display name "Main",
+    // not the raw id "main".
+    const privateLabel = groupLabels.find((label) => label.includes('Main'));
+    expect(privateLabel).toBeTruthy();
+  });
 });

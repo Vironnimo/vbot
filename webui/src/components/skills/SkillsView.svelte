@@ -1,24 +1,27 @@
 <script>
   // The dedicated Skills management view: one grouped control plane over every
-  // Skill source — directories (moved from Settings), origin-grouped inventory,
-  // per-Skill status/diagnostics, the policy disable switch, sharing of private
-  // Agent Skills, and the existing global/private create-edit-delete UX.
+  // Skill source — origin-grouped inventory, per-Skill status/diagnostics, the
+  // policy disable switch, sharing of private Agent Skills, and the existing
+  // global/private create-edit-delete UX.
   import { onMount } from 'svelte';
 
   import SkillDirectoryEditor from './SkillDirectoryEditor.svelte';
   import {
+    agentDisplayName,
+    filterSkills,
+    groupInventoryByAgent,
     groupInventorySkills,
     skillDiagnosticLines,
     skillStatusLabel,
     skillStatusVariant,
     skillSupportsEditAndDelete,
   } from './skillsView.js';
-  import Dropdown from '../Dropdown.svelte';
   import Banner from '../ui/Banner.svelte';
   import Button from '../ui/Button.svelte';
   import ConfirmDialog from '../ui/ConfirmDialog.svelte';
   import EmptyState from '../ui/EmptyState.svelte';
   import InfoHint from '../ui/InfoHint.svelte';
+  import Modal from '../ui/Modal.svelte';
   import StatusChip from '../ui/StatusChip.svelte';
   import TextArea from '../ui/TextArea.svelte';
   import TextField from '../ui/TextField.svelte';
@@ -52,24 +55,36 @@
   let loadError = $state('');
   let busy = $state(false);
 
-  // Create-form state: a target scope (global pool or an agent's private home)
-  // plus the name/content draft, ported from the retired Settings panel.
+  // View-mode state: group by source (origin) or by agent (owner-centric).
+  let viewMode = $state('source');
+  let searchQuery = $state('');
+
+  // Create-modal state: a target scope (global pool or an agent's private home)
+  // plus the name/content draft.
+  let showCreateModal = $state(false);
   let createScope = $state(GLOBAL_SCOPE);
-  let createExpanded = $state(false);
   let newName = $state('');
   let newContent = $state('');
 
-  // Inline editor state: which entry (scope + name) is open with which content.
+  // Edit-modal state: which entry (scope + name) is open with which content.
   let editing = $state(null); // { scope, name }
   let editContent = $state('');
 
   // The skill awaiting delete confirmation (null = dialog closed).
   let deleteTarget = $state(null); // { scope, name }
 
-  // The entry whose diagnostics disclosure is expanded.
-  let expandedName = $state(null);
+  // The entry whose diagnostics disclosure is expanded (unique per scope+name).
+  let expandedKey = $state(null);
 
-  let groups = $derived(groupInventorySkills(inventory, t));
+  // Collapsible scan-directories section.
+  let showDirectories = $state(false);
+
+  let filtered = $derived(filterSkills(inventory, searchQuery));
+  let groups = $derived(
+    viewMode === 'agent'
+      ? groupInventoryByAgent(filtered, t, agents)
+      : groupInventorySkills(filtered, t, agents),
+  );
   let createDisabled = $derived(busy || !newName.trim() || !newContent.trim());
   let scopeOptions = $derived([
     {
@@ -133,13 +148,19 @@
     return entry.owner_id ? `agent:${entry.owner_id}` : GLOBAL_SCOPE;
   }
 
-  function startCreate() {
-    cancelEdit();
-    createExpanded = true;
+  function entryKey(entry) {
+    return `${scopeForEntry(entry)}:${entry.name}`;
   }
 
-  function cancelCreate() {
-    createExpanded = false;
+  function openCreateModal() {
+    createScope = GLOBAL_SCOPE;
+    newName = '';
+    newContent = '';
+    showCreateModal = true;
+  }
+
+  function closeCreateModal() {
+    showCreateModal = false;
     newName = '';
     newContent = '';
   }
@@ -159,7 +180,7 @@
         title: t('settings.skills.created', 'Skill created.'),
         variant: 'success',
       });
-      cancelCreate();
+      closeCreateModal();
       await loadInventory();
     } catch (error) {
       onToast({
@@ -172,7 +193,6 @@
   }
 
   async function startEdit(entry) {
-    cancelCreate();
     const scope = scopeForEntry(entry);
     busy = true;
     try {
@@ -192,7 +212,7 @@
     }
   }
 
-  function cancelEdit() {
+  function closeEditModal() {
     editing = null;
     editContent = '';
   }
@@ -212,7 +232,7 @@
         title: t('settings.skills.saved', 'Skill saved.'),
         variant: 'success',
       });
-      cancelEdit();
+      closeEditModal();
       await loadInventory();
     } catch (error) {
       onToast({
@@ -233,10 +253,10 @@
       await setSkillDisabled(entry.name, !entry.disabled);
       onToast({
         title: entry.disabled
-          ? t('skills.enabledToast', 'Skill “{name}” enabled.', {
+          ? t('skills.enabledToast', 'Skill "{name}" enabled.', {
               name: entry.name,
             })
-          : t('skills.disabledToast', 'Skill “{name}” disabled everywhere.', {
+          : t('skills.disabledToast', 'Skill "{name}" disabled everywhere.', {
               name: entry.name,
             }),
         variant: 'success',
@@ -304,7 +324,7 @@
         variant: 'success',
       });
       if (editing?.name === target.name) {
-        cancelEdit();
+        closeEditModal();
       }
       await loadInventory();
     } catch (error) {
@@ -318,7 +338,8 @@
   }
 
   function toggleDiagnostics(entry) {
-    expandedName = expandedName === entry.name ? null : entry.name;
+    const key = entryKey(entry);
+    expandedKey = expandedKey === key ? null : key;
   }
 </script>
 
@@ -336,7 +357,7 @@
           <p class="skills-subtitle view-header__subtitle">
             {t(
               'skills.subtitle',
-              'Every skill from every source — manage scan directories, availability, and sharing.',
+              'Every skill from every source — manage availability, sharing, and editing.',
             )}
           </p>
         </div>
@@ -356,259 +377,315 @@
       {:else if loading && inventory.length === 0}
         <Banner variant="neutral">{t('settings.loading', 'Loading…')}</Banner>
       {:else}
-        <section class="skills-card" aria-labelledby="skills-directories-title">
-          <h3 id="skills-directories-title" class="skills-card-title">
-            {t('skills.directoriesTitle', 'Scan directories')}
-          </h3>
-          <SkillDirectoryEditor
-            {settings}
-            onCommit={onSettingsCommit}
-            {onToast}
-            onError={(message) => (loadError = message)}
-          />
-        </section>
-
-        <section class="skills-card" aria-labelledby="skills-manager-title">
-          <div class="skills-manager-head">
-            <h3 id="skills-manager-title" class="skills-card-title">
-              {t('skills.managerTitle', 'Installed skills')}
-            </h3>
-            {#if !createExpanded}
-              <Button variant="primary" disabled={busy} onClick={startCreate}>
-                <span aria-hidden="true">+</span>
-                {t('settings.skills.newSkill', 'New skill')}
-              </Button>
-            {/if}
-          </div>
-
-          {#if staleShared.length > 0}
-            <Banner variant="warn">
-              {t(
-                'skills.staleShared',
-                '{count} shared-skill entries point at a missing agent or skill and are ignored.',
-                { count: staleShared.length },
-              )}
-            </Banner>
-          {/if}
-
-          {#if !createExpanded}
-            <div class="skills-create-row">
-              <Dropdown
-                value={createScope}
-                options={scopeOptions}
-                onValueChange={(next) => (createScope = next)}
-                ariaLabel={t(
-                  'skills.createScopeLabel',
-                  'Where new skills are created',
-                )}
-              />
-            </div>
-          {/if}
-
-          {#if createExpanded}
-            <div class="skills-create">
-              <div class="skills-create-title">
-                <span>{t('settings.skills.newSkill', 'New skill')}</span>
-                <InfoHint
-                  text={t(
-                    'settings.skills.newSkillHelp',
-                    'A skill is a Markdown playbook: a header with a name and a short description, followed by the instructions.\n\nThe description matters most — it is what the agent reads to decide when to apply the skill, so state clearly what task it is for.',
-                  )}
-                />
-              </div>
-              <div class="skills-field">
-                <label class="skills-field-label" for="new-skill-name">
-                  {t('settings.skills.nameLabel', 'Skill name')}
-                </label>
-                <TextField
-                  id="new-skill-name"
-                  value={newName}
-                  onInput={(next) => (newName = next)}
-                  placeholder={t(
-                    'settings.skills.namePlaceholder',
-                    'skill-name',
-                  )}
-                />
-              </div>
-              <div class="skills-field">
-                <label class="skills-field-label" for="new-skill-content">
-                  {t('settings.skills.contentLabel', 'SKILL.md content')}
-                </label>
-                <TextArea
-                  id="new-skill-content"
-                  code
-                  rows="10"
-                  value={newContent}
-                  onInput={(value) => (newContent = value)}
-                  placeholder={t(
-                    'settings.skills.contentPlaceholder',
-                    '---\nname: skill-name\ndescription: When to use this skill.\n---\n\n# Overview',
-                  )}
-                />
-              </div>
-              <div class="skills-actions-row">
-                <Button
-                  variant="secondary"
-                  disabled={busy}
-                  onClick={cancelCreate}
-                >
-                  {t('common.cancel', 'Cancel')}
-                </Button>
-                <Button
-                  variant="primary"
-                  disabled={createDisabled}
-                  onClick={createSkill}
-                >
-                  {t('settings.skills.create', 'Create skill')}
-                </Button>
-              </div>
-            </div>
-          {:else if groups.length === 0}
-            <EmptyState
-              density="compact"
-              description={t('skills.empty', 'No skills found in any source.')}
+        <div class="skills-toolbar">
+          <div class="skills-search">
+            <svg
+              class="skills-search-icon"
+              viewBox="0 0 16 16"
+              aria-hidden="true"
+            >
+              <circle cx="7" cy="7" r="4.5" />
+              <path d="m10.5 10.5 3 3" />
+            </svg>
+            <input
+              type="search"
+              class="skills-search-input"
+              placeholder={t('skills.searchPlaceholder', 'Search skills…')}
+              value={searchQuery}
+              oninput={(e) => (searchQuery = e.currentTarget.value)}
+              aria-label={t('skills.searchPlaceholder', 'Search skills…')}
             />
-          {:else}
-            {#each groups as group (group.key)}
-              <div
-                class="skills-group"
-                data-testid={`skill-group-${group.key}`}
+          </div>
+          <div class="skills-toolbar-right">
+            <div
+              class="skills-view-toggle"
+              role="group"
+              aria-label={t('skills.viewModeLabel', 'Group by')}
+            >
+              <button
+                type="button"
+                class="skills-view-toggle-btn"
+                class:skills-view-toggle-btn--active={viewMode === 'source'}
+                aria-pressed={viewMode === 'source'}
+                onclick={() => (viewMode = 'source')}
               >
-                <h4 class="skills-group-title">{group.label}</h4>
-                {#each group.skills as entry (entry.owner_id + '/' + entry.origin + '/' + entry.name)}
-                  {@const diagnostics = skillDiagnosticLines(entry)}
-                  <div
-                    class="skills-item"
-                    class:skills-item--disabled={entry.disabled}
-                  >
-                    <div class="skills-item-head">
-                      <div class="skills-item-copy">
-                        <span class="skills-item-name">{entry.name}</span>
+                {t('skills.viewBySource', 'By source')}
+              </button>
+              <button
+                type="button"
+                class="skills-view-toggle-btn"
+                class:skills-view-toggle-btn--active={viewMode === 'agent'}
+                aria-pressed={viewMode === 'agent'}
+                onclick={() => (viewMode = 'agent')}
+              >
+                {t('skills.viewByAgent', 'By agent')}
+              </button>
+            </div>
+            <Button variant="primary" disabled={busy} onClick={openCreateModal}>
+              <span aria-hidden="true">+</span>
+              {t('settings.skills.newSkill', 'New skill')}
+            </Button>
+          </div>
+        </div>
+
+        {#if staleShared.length > 0}
+          <Banner variant="warn">
+            {t(
+              'skills.staleShared',
+              '{count} shared-skill entries point at a missing agent or skill and are ignored.',
+              { count: staleShared.length },
+            )}
+          </Banner>
+        {/if}
+
+        {#if groups.length === 0}
+          <EmptyState
+            density="compact"
+            description={t('skills.empty', 'No skills found.{suffix}', {
+              suffix: searchQuery ? ' Try a different search.' : '',
+            })}
+          />
+        {:else}
+          {#each groups as group (group.key)}
+            <section
+              class="skills-group"
+              data-testid={`skill-group-${group.key}`}
+            >
+              <h3 class="skills-group-title">
+                <span>{group.label}</span>
+                <span class="skills-group-count">{group.skills.length}</span>
+              </h3>
+              {#each group.skills as entry (entryKey(entry))}
+                {@const diagnostics = skillDiagnosticLines(entry)}
+                {@const isExpanded = expandedKey === entryKey(entry)}
+                <article
+                  class="skills-card"
+                  class:skills-card--disabled={entry.disabled}
+                  class:skills-card--expanded={isExpanded}
+                >
+                  <div class="skills-card-main">
+                    <div class="skills-card-info">
+                      <div class="skills-card-header">
+                        <span class="skills-card-name">{entry.name}</span>
                         {#if entry.shared}
                           <Badge variant="info">
                             {t('skills.sharedBadge', 'Shared')}
                           </Badge>
                         {/if}
-                        <span class="skills-item-desc">{entry.description}</span
-                        >
-                      </div>
-                      <div class="skills-item-state">
                         <StatusChip variant={skillStatusVariant(entry)}>
                           {skillStatusLabel(entry, t)}
                         </StatusChip>
-                        {#if diagnostics.length > 0}
-                          <Button
-                            variant="tertiary"
-                            ariaExpanded={expandedName === entry.name}
-                            onClick={() => toggleDiagnostics(entry)}
-                          >
-                            {expandedName === entry.name
-                              ? t('skills.hideDetails', 'Hide details')
-                              : t('skills.showDetails', 'Details')}
-                          </Button>
-                        {/if}
                       </div>
-                      <div class="skills-item-actions">
+                      <p class="skills-card-desc">
+                        {entry.description ||
+                          t('skills.noDescription', 'No description')}
+                      </p>
+                      {#if entry.owner_id && viewMode === 'source'}
+                        <span class="skills-card-owner">
+                          {agentDisplayName(entry.owner_id, agents)}
+                        </span>
+                      {/if}
+                    </div>
+                    <div class="skills-card-actions">
+                      <Button
+                        variant="secondary"
+                        disabled={busy}
+                        onClick={() => toggleDisabled(entry)}
+                      >
+                        {entry.disabled
+                          ? t('skills.enable', 'Enable')
+                          : t('skills.disable', 'Disable')}
+                      </Button>
+                      {#if entry.owner_id}
                         <Button
                           variant="secondary"
                           disabled={busy}
-                          onClick={() => toggleDisabled(entry)}
+                          onClick={() => toggleShared(entry)}
                         >
-                          {entry.disabled
-                            ? t('skills.enable', 'Enable')
-                            : t('skills.disable', 'Disable')}
+                          {entry.shared
+                            ? t('skills.unshare', 'Unshare')
+                            : t('skills.share', 'Share')}
                         </Button>
-                        {#if entry.owner_id}
-                          <Button
-                            variant="secondary"
-                            disabled={busy}
-                            onClick={() => toggleShared(entry)}
-                          >
-                            {entry.shared
-                              ? t('skills.unshare', 'Unshare')
-                              : t('skills.share', 'Share')}
-                          </Button>
-                        {/if}
-                        {#if skillSupportsEditAndDelete(entry)}
-                          <Button
-                            variant="secondary"
-                            disabled={busy}
-                            onClick={() => startEdit(entry)}
-                          >
-                            {t('common.edit', 'Edit')}
-                          </Button>
-                          <Button
-                            variant="danger"
-                            disabled={busy}
-                            onClick={() => requestDelete(entry)}
-                          >
-                            {t('common.delete', 'Delete')}
-                          </Button>
-                        {/if}
-                      </div>
-                    </div>
-                    {#if expandedName === entry.name && diagnostics.length > 0}
-                      <ul class="skills-diagnostics">
-                        {#each diagnostics as line (line)}
-                          <li>{line}</li>
-                        {/each}
-                      </ul>
-                    {/if}
-                    {#if editing && editing.name === entry.name && editing.scope === scopeForEntry(entry)}
-                      <div class="skills-editor">
-                        <label
-                          class="skills-field-label"
-                          for={`skill-content-${entry.name}`}
+                      {/if}
+                      {#if skillSupportsEditAndDelete(entry)}
+                        <Button
+                          variant="secondary"
+                          disabled={busy}
+                          onClick={() => startEdit(entry)}
                         >
-                          {t(
-                            'settings.skills.contentLabel',
-                            'SKILL.md content',
-                          )}
-                        </label>
-                        <TextArea
-                          id={`skill-content-${entry.name}`}
-                          code
-                          rows="10"
-                          value={editContent}
-                          onInput={(value) => (editContent = value)}
-                        />
-                        <div class="skills-actions-row">
-                          <Button
-                            variant="primary"
-                            disabled={busy}
-                            onClick={saveEdit}
-                          >
-                            {busy
-                              ? t('common.saving', 'Saving…')
-                              : t('common.save', 'Save')}
-                          </Button>
-                          <Button
-                            variant="secondary"
-                            disabled={busy}
-                            onClick={cancelEdit}
-                          >
-                            {t('common.cancel', 'Cancel')}
-                          </Button>
-                        </div>
-                      </div>
-                    {/if}
+                          {t('common.edit', 'Edit')}
+                        </Button>
+                        <Button
+                          variant="danger"
+                          disabled={busy}
+                          onClick={() => requestDelete(entry)}
+                        >
+                          {t('common.delete', 'Delete')}
+                        </Button>
+                      {/if}
+                      {#if diagnostics.length > 0}
+                        <button
+                          type="button"
+                          class="skills-card-details-btn"
+                          aria-expanded={isExpanded}
+                          onclick={() => toggleDiagnostics(entry)}
+                        >
+                          {isExpanded
+                            ? t('skills.hideDetails', 'Hide details')
+                            : t('skills.showDetails', 'Details')}
+                        </button>
+                      {/if}
+                    </div>
                   </div>
-                {/each}
-              </div>
-            {/each}
+                  {#if isExpanded && diagnostics.length > 0}
+                    <ul class="skills-diagnostics">
+                      {#each diagnostics as line (line)}
+                        <li>{line}</li>
+                      {/each}
+                    </ul>
+                  {/if}
+                </article>
+              {/each}
+            </section>
+          {/each}
+        {/if}
+
+        <details class="skills-directories-section" bind:open={showDirectories}>
+          <summary>
+            <span class="skills-eyebrow">
+              {t('skills.directoriesTitle', 'Scan directories')}
+            </span>
+          </summary>
+          {#if showDirectories}
+            <SkillDirectoryEditor
+              {settings}
+              onCommit={onSettingsCommit}
+              {onToast}
+              onError={(message) => (loadError = message)}
+            />
           {/if}
-        </section>
+        </details>
       {/if}
     </div>
   </div>
 </section>
+
+{#if showCreateModal}
+  <Modal
+    title={t('settings.skills.newSkill', 'New skill')}
+    labelledById="skill-create-modal-title"
+    closeDisabled={busy}
+    onClose={closeCreateModal}
+  >
+    {#snippet body()}
+      <div class="skills-modal-body">
+        <div class="skills-field">
+          <label class="skills-field-label" for="create-scope">
+            {t('skills.createScopeLabel', 'Create in')}
+          </label>
+          <select
+            id="create-scope"
+            class="skills-select"
+            value={createScope}
+            onchange={(e) => (createScope = e.currentTarget.value)}
+          >
+            {#each scopeOptions as option (option.value)}
+              <option value={option.value}>{option.label}</option>
+            {/each}
+          </select>
+        </div>
+        <div class="skills-field">
+          <label class="skills-field-label" for="new-skill-name">
+            {t('settings.skills.nameLabel', 'Skill name')}
+          </label>
+          <TextField
+            id="new-skill-name"
+            value={newName}
+            onInput={(next) => (newName = next)}
+            placeholder={t('settings.skills.namePlaceholder', 'skill-name')}
+          />
+        </div>
+        <div class="skills-field">
+          <label class="skills-field-label" for="new-skill-content">
+            {t('settings.skills.contentLabel', 'SKILL.md content')}
+            <InfoHint
+              text={t(
+                'settings.skills.newSkillHelp',
+                'A skill is a Markdown playbook: a header with a name and a short description, followed by the instructions.\n\nThe description matters most — it is what the agent reads to decide when to apply the skill, so state clearly what task it is for.',
+              )}
+            />
+          </label>
+          <TextArea
+            id="new-skill-content"
+            code
+            rows="12"
+            value={newContent}
+            onInput={(value) => (newContent = value)}
+            placeholder={t(
+              'settings.skills.contentPlaceholder',
+              '---\nname: skill-name\ndescription: When to use this skill.\n---\n\n# Overview',
+            )}
+          />
+        </div>
+      </div>
+    {/snippet}
+    {#snippet footer()}
+      <Button variant="secondary" disabled={busy} onClick={closeCreateModal}>
+        {t('common.cancel', 'Cancel')}
+      </Button>
+      <Button variant="primary" disabled={createDisabled} onClick={createSkill}>
+        {t('settings.skills.create', 'Create skill')}
+      </Button>
+    {/snippet}
+  </Modal>
+{/if}
+
+{#if editing}
+  <Modal
+    title={t('skills.editTitle', 'Edit {name}', { name: editing.name })}
+    labelledById="skill-edit-modal-title"
+    closeDisabled={busy}
+    onClose={closeEditModal}
+  >
+    {#snippet body()}
+      <div class="skills-modal-body">
+        <div class="skills-edit-name">
+          {editing.name}
+        </div>
+        <div class="skills-field">
+          <label
+            class="skills-field-label"
+            for={`skill-content-${editing.name}`}
+          >
+            {t('settings.skills.contentLabel', 'SKILL.md content')}
+          </label>
+          <TextArea
+            id={`skill-content-${editing.name}`}
+            code
+            rows="16"
+            value={editContent}
+            onInput={(value) => (editContent = value)}
+          />
+        </div>
+      </div>
+    {/snippet}
+    {#snippet footer()}
+      <Button variant="secondary" disabled={busy} onClick={closeEditModal}>
+        {t('common.cancel', 'Cancel')}
+      </Button>
+      <Button variant="primary" disabled={busy} onClick={saveEdit}>
+        {busy ? t('common.saving', 'Saving…') : t('common.save', 'Save')}
+      </Button>
+    {/snippet}
+  </Modal>
+{/if}
 
 {#if deleteTarget}
   <ConfirmDialog
     title={t('settings.skills.deleteConfirmTitle', 'Delete skill')}
     body={t(
       'settings.skills.deleteConfirm',
-      'Delete skill “{name}” permanently? The skill file is removed from disk.',
+      'Delete skill "{name}" permanently? The skill file is removed from disk.',
       { name: deleteTarget.name },
     )}
     confirmLabel={t('common.delete', 'Delete')}
@@ -650,7 +727,6 @@
   }
 
   .skills-eyebrow,
-  .skills-card-title,
   .skills-group-title {
     font-family: var(--font-mono);
     font-size: var(--fs-mono-xs);
@@ -673,55 +749,89 @@
     color: var(--text-med);
   }
 
-  .skills-card {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-lg);
-    padding: var(--space-lg);
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-md);
-  }
-
-  .skills-manager-head {
+  /* Toolbar: search + view toggle + new skill button */
+  .skills-toolbar {
     display: flex;
     align-items: center;
     justify-content: space-between;
     gap: var(--space-sm);
+    flex-wrap: wrap;
   }
 
-  .skills-create-row {
-    display: flex;
-    justify-content: flex-start;
+  .skills-search {
+    position: relative;
+    flex: 1 1 220px;
+    max-width: 360px;
   }
 
-  .skills-create {
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-md);
-    border-left: 2px solid var(--border-2);
-    padding-left: var(--space-md);
+  .skills-search-icon {
+    position: absolute;
+    left: var(--space-sm);
+    top: 50%;
+    transform: translateY(-50%);
+    width: 14px;
+    height: 14px;
+    color: var(--text-lo);
+    pointer-events: none;
   }
 
-  .skills-create-title {
+  .skills-search-input {
+    width: 100%;
+    padding: var(--space-sm) var(--space-sm) var(--space-sm) 28px;
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    color: var(--text-hi);
+    font-size: var(--fs-body-sm);
+    font-family: var(--font-mono);
+  }
+
+  .skills-search-input::placeholder {
+    color: var(--text-lo);
+  }
+
+  .skills-search-input:focus-visible {
+    outline: none;
+    border-color: var(--accent);
+    box-shadow: var(--focus-ring);
+  }
+
+  .skills-toolbar-right {
     display: flex;
     align-items: center;
     gap: var(--space-sm);
-    color: var(--text-hi);
-    font-weight: 600;
   }
 
-  .skills-field {
+  .skills-view-toggle {
     display: flex;
-    flex-direction: column;
-    gap: var(--space-xs);
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    overflow: hidden;
   }
 
-  .skills-field-label {
-    font-size: var(--fs-body-sm);
+  .skills-view-toggle-btn {
+    padding: var(--space-xs) var(--space-sm);
+    border: none;
+    background: none;
     color: var(--text-med);
+    font-size: var(--fs-body-sm);
+    cursor: pointer;
+    transition:
+      background 0.15s,
+      color 0.15s;
   }
 
+  .skills-view-toggle-btn:hover {
+    color: var(--text-hi);
+  }
+
+  .skills-view-toggle-btn--active {
+    background: var(--surface-3);
+    color: var(--text-hi);
+  }
+
+  /* Group headers */
   .skills-group {
     display: flex;
     flex-direction: column;
@@ -729,63 +839,107 @@
   }
 
   .skills-group-title {
-    margin-top: var(--space-sm);
+    margin: var(--space-sm) 0 0;
+    display: flex;
+    align-items: center;
+    gap: var(--space-sm);
   }
 
-  .skills-item {
+  .skills-group-count {
+    font-size: var(--fs-mono-xs);
+    color: var(--text-lo);
+    background: var(--surface-2);
+    border-radius: 99px;
+    padding: 1px 7px;
+  }
+
+  /* Skill cards */
+  .skills-card {
+    background: var(--surface);
     border: 1px solid var(--border);
     border-radius: var(--radius-md);
     padding: var(--space-sm) var(--space-md);
     display: flex;
     flex-direction: column;
     gap: var(--space-sm);
+    transition: border-color 0.15s;
   }
 
-  .skills-item--disabled {
+  .skills-card:hover {
+    border-color: var(--border-2);
+  }
+
+  .skills-card--disabled {
     opacity: 0.55;
   }
 
-  .skills-item-head {
+  .skills-card--expanded {
+    border-color: var(--border-2);
+  }
+
+  .skills-card-main {
     display: flex;
-    align-items: center;
+    align-items: flex-start;
     justify-content: space-between;
     gap: var(--space-md);
     flex-wrap: wrap;
   }
 
-  .skills-item-copy {
+  .skills-card-info {
     display: flex;
-    align-items: baseline;
-    gap: var(--space-sm);
+    flex-direction: column;
+    gap: 2px;
     min-width: 0;
-    flex: 1 1 240px;
+    flex: 1 1 200px;
   }
 
-  .skills-item-name {
-    font-family: var(--font-mono);
-    font-size: var(--fs-mono-body);
-    color: var(--text-hi);
-  }
-
-  .skills-item-desc {
-    font-size: var(--fs-body-sm);
-    color: var(--text-med);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .skills-item-state {
+  .skills-card-header {
     display: flex;
     align-items: center;
     gap: var(--space-sm);
+    flex-wrap: wrap;
   }
 
-  .skills-item-actions {
+  .skills-card-name {
+    font-family: var(--font-mono);
+    font-size: var(--fs-mono-body);
+    color: var(--text-hi);
+    font-weight: 500;
+  }
+
+  .skills-card-desc {
+    margin: 0;
+    font-size: var(--fs-body-sm);
+    color: var(--text-med);
+    line-height: 1.4;
+  }
+
+  .skills-card-owner {
+    font-size: var(--fs-mono-xs);
+    color: var(--text-lo);
+  }
+
+  .skills-card-actions {
     display: flex;
     align-items: center;
     gap: var(--space-xs);
     flex-wrap: wrap;
+    flex-shrink: 0;
+  }
+
+  .skills-card-details-btn {
+    padding: var(--space-xs) var(--space-sm);
+    border: none;
+    background: none;
+    color: var(--text-med);
+    font-size: var(--fs-body-sm);
+    cursor: pointer;
+    text-decoration: underline;
+    text-underline-offset: 2px;
+  }
+
+  .skills-card-details-btn:hover {
+    color: var(--text-hi);
   }
 
   .skills-diagnostics {
@@ -800,23 +954,90 @@
     color: var(--text-med);
   }
 
-  .skills-editor {
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-sm);
-    border-left: 2px solid var(--border-2);
-    padding-left: var(--space-md);
+  /* Scan directories collapsible */
+  .skills-directories-section {
+    margin-top: var(--space-lg);
+    border-top: 1px solid var(--border);
+    padding-top: var(--space-md);
   }
 
-  .skills-actions-row {
+  .skills-directories-section > summary {
+    cursor: pointer;
+    list-style: none;
+    padding: var(--space-xs) 0;
+  }
+
+  .skills-directories-section > summary::-webkit-details-marker {
+    display: none;
+  }
+
+  .skills-directories-section > summary::before {
+    content: '▸';
+    display: inline-block;
+    margin-right: var(--space-sm);
+    color: var(--text-lo);
+    transition: transform 0.15s;
+  }
+
+  .skills-directories-section[open] > summary::before {
+    transform: rotate(90deg);
+  }
+
+  /* Modals */
+  .skills-modal-body {
     display: flex;
-    justify-content: flex-end;
-    gap: var(--space-sm);
+    flex-direction: column;
+    gap: var(--space-md);
+  }
+
+  .skills-edit-name {
+    font-family: var(--font-mono);
+    font-size: var(--fs-mono-body);
+    color: var(--text-hi);
+    font-weight: 500;
+  }
+
+  .skills-field {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-xs);
+  }
+
+  .skills-field-label {
+    display: flex;
+    align-items: center;
+    gap: var(--space-xs);
+    font-size: var(--fs-body-sm);
+    color: var(--text-med);
+  }
+
+  .skills-select {
+    padding: var(--space-sm);
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    color: var(--text-hi);
+    font-size: var(--fs-body-sm);
+    font-family: var(--font-mono);
+  }
+
+  .skills-select:focus-visible {
+    outline: none;
+    border-color: var(--accent);
+    box-shadow: var(--focus-ring);
   }
 
   @media (max-width: 640px) {
     .skills-scroll {
       padding: var(--space-md);
+    }
+
+    .skills-card-main {
+      flex-direction: column;
+    }
+
+    .skills-card-actions {
+      width: 100%;
     }
   }
 </style>
