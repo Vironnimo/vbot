@@ -38,7 +38,7 @@ class TestLoad:
                 {
                     "version": POLICY_SCHEMA_VERSION,
                     "disabled": ["deploy"],
-                    "shared": {"main": ["deploy", "review"]},
+                    "shared": {"main": {"deploy": ["two"], "review": ["two", "three"]}},
                 }
             ),
             encoding="utf-8",
@@ -48,7 +48,9 @@ class TestLoad:
         policy = service.load()
 
         assert policy.disabled == frozenset({"deploy"})
-        assert policy.shared == {"main": frozenset({"deploy", "review"})}
+        assert policy.shared == {
+            "main": {"deploy": frozenset({"two"}), "review": frozenset({"two", "three"})},
+        }
         assert service.validation_diagnostics() == []
 
     def test_malformed_json_yields_diagnostics_and_empty_policy(
@@ -69,13 +71,13 @@ class TestLoad:
     def test_unsupported_version_is_invalid(self, storage: StorageManager) -> None:
         path = policy_path(storage)
         path.parent.mkdir(parents=True)
-        path.write_text(json.dumps({"version": 99, "disabled": []}), encoding="utf-8")
+        path.write_text(json.dumps({"version": 1, "disabled": []}), encoding="utf-8")
         service = SkillPolicyService(storage)
 
         policy = service.load()
 
         assert policy == SkillPolicy()
-        assert any("must be 1" in message for message in service.validation_diagnostics())
+        assert any("must be 2" in message for message in service.validation_diagnostics())
 
     def test_unknown_keys_warn_but_still_load(self, storage: StorageManager) -> None:
         path = policy_path(storage)
@@ -99,7 +101,7 @@ class TestLoad:
                 {
                     "version": POLICY_SCHEMA_VERSION,
                     "disabled": ["bad name!", "good-name"],
-                    "shared": {"owner": ["also bad!"]},
+                    "shared": {"owner": {"also bad!": ["two"]}},
                 }
             ),
             encoding="utf-8",
@@ -114,7 +116,7 @@ class TestLoad:
         messages = service.validation_diagnostics()
         assert sum("ignoring unusable skill name" in message for message in messages) == 2
 
-    def test_non_string_entries_are_shape_errors(self, storage: StorageManager) -> None:
+    def test_non_string_receivers_are_shape_errors(self, storage: StorageManager) -> None:
         path = policy_path(storage)
         path.parent.mkdir(parents=True)
         path.write_text(
@@ -122,7 +124,7 @@ class TestLoad:
                 {
                     "version": POLICY_SCHEMA_VERSION,
                     "disabled": ["deploy"],
-                    "shared": {"owner": [42]},
+                    "shared": {"owner": {"deploy": [42]}},
                 }
             ),
             encoding="utf-8",
@@ -158,32 +160,32 @@ class TestMutations:
 
     def test_set_disabled_preserves_shared_state(self, storage: StorageManager) -> None:
         service = SkillPolicyService(storage)
-        service.set_shared("main", "notes", shared=True)
+        service.set_shared("main", "notes", shared=True, receivers=["two"])
 
         service.set_disabled("other", disabled=True)
 
         policy = service.load()
         assert policy.disabled == frozenset({"other"})
-        assert policy.shared == {"main": frozenset({"notes"})}
+        assert policy.shared == {"main": {"notes": frozenset({"two"})}}
 
     def test_set_shared_groups_by_owner_and_drops_empty_owners(
         self, storage: StorageManager
     ) -> None:
         service = SkillPolicyService(storage)
 
-        service.set_shared("main", "notes", shared=True)
-        service.set_shared("two", "deploy", shared=True)
+        service.set_shared("main", "notes", shared=True, receivers=["two"])
+        service.set_shared("two", "deploy", shared=True, receivers=["main"])
 
         policy = service.load()
         assert policy.shared == {
-            "main": frozenset({"notes"}),
-            "two": frozenset({"deploy"}),
+            "main": {"notes": frozenset({"two"})},
+            "two": {"deploy": frozenset({"main"})},
         }
 
         service.set_shared("main", "notes", shared=False)
 
         policy = service.load()
-        assert policy.shared == {"two": frozenset({"deploy"})}
+        assert policy.shared == {"two": {"deploy": frozenset({"main"})}}
 
     def test_write_failure_raises_skill_policy_error(
         self, storage: StorageManager, monkeypatch: pytest.MonkeyPatch

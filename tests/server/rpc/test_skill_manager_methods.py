@@ -30,7 +30,7 @@ class _ManagerRuntime:
         self.reload_calls = 0
         self.invalidated: list[str | None] = []
         self.policy_calls: list[tuple[str, tuple[Any, ...]]] = []
-        self.agents = SimpleNamespace(exists=lambda agent_id: agent_id == "builder")
+        self.agents = SimpleNamespace(exists=lambda agent_id: agent_id in ("builder", "reviewer"))
         self.published: list[str] = []
         self.skill_policy = SimpleNamespace(
             set_disabled=self.set_disabled,
@@ -49,8 +49,10 @@ class _ManagerRuntime:
     def set_disabled(self, name: str, *, disabled: bool) -> None:
         self.policy_calls.append(("set_disabled", (name, disabled)))
 
-    def set_shared(self, agent_id: str, name: str, *, shared: bool) -> None:
-        self.policy_calls.append(("set_shared", (agent_id, name, shared)))
+    def set_shared(
+        self, agent_id: str, name: str, *, shared: bool, receivers: list[str] | None = None
+    ) -> None:
+        self.policy_calls.append(("set_shared", (agent_id, name, shared, receivers or [])))
 
     def agent_owns_private_skill(self, agent_id: str, name: str) -> bool:
         return agent_id == "builder" and name == "deploy"
@@ -118,10 +120,20 @@ class TestShare:
     def test_valid_owner_and_skill_persists_invalidates_and_publishes(self, tmp_path: Path) -> None:
         state = _state(tmp_path)
 
-        result = _skill_share(state, {"agent_id": "builder", "name": "deploy", "shared": True})
+        result = _skill_share(
+            state,
+            {"agent_id": "builder", "name": "deploy", "shared": True, "receivers": ["reviewer"]},
+        )
 
-        assert result == {"agent_id": "builder", "name": "deploy", "shared": True}
-        assert state.runtime.policy_calls == [("set_shared", ("builder", "deploy", True))]
+        assert result == {
+            "agent_id": "builder",
+            "name": "deploy",
+            "shared": True,
+            "receivers": ["reviewer"],
+        }
+        assert state.runtime.policy_calls == [
+            ("set_shared", ("builder", "deploy", True, ["reviewer"]))
+        ]
         assert state.runtime.invalidated == [None]
         assert state.runtime.reload_calls == 0
         assert state.runtime.published == ["skills"]
@@ -130,7 +142,10 @@ class TestShare:
         state = _state(tmp_path)
 
         with pytest.raises(RpcError) as excinfo:
-            _skill_share(state, {"agent_id": "ghost", "name": "deploy", "shared": True})
+            _skill_share(
+                state,
+                {"agent_id": "ghost", "name": "deploy", "shared": True, "receivers": ["reviewer"]},
+            )
 
         assert excinfo.value.code == RPC_ERROR_INVALID_REQUEST
 
@@ -138,7 +153,10 @@ class TestShare:
         state = _state(tmp_path)
 
         with pytest.raises(RpcError) as excinfo:
-            _skill_share(state, {"agent_id": "builder", "name": "notes", "shared": True})
+            _skill_share(
+                state,
+                {"agent_id": "builder", "name": "notes", "shared": True, "receivers": ["reviewer"]},
+            )
 
         assert excinfo.value.code == RPC_ERROR_INVALID_REQUEST
 
@@ -147,7 +165,39 @@ class TestShare:
 
         _skill_share(state, {"agent_id": "builder", "name": "deploy", "shared": False})
 
-        assert state.runtime.policy_calls == [("set_shared", ("builder", "deploy", False))]
+        assert state.runtime.policy_calls == [("set_shared", ("builder", "deploy", False, []))]
+
+    def test_unknown_receiver_is_invalid_request(self, tmp_path: Path) -> None:
+        state = _state(tmp_path)
+
+        with pytest.raises(RpcError) as excinfo:
+            _skill_share(
+                state,
+                {"agent_id": "builder", "name": "deploy", "shared": True, "receivers": ["ghost"]},
+            )
+
+        assert excinfo.value.code == RPC_ERROR_INVALID_REQUEST
+
+    def test_self_receiver_is_invalid_request(self, tmp_path: Path) -> None:
+        state = _state(tmp_path)
+
+        with pytest.raises(RpcError) as excinfo:
+            _skill_share(
+                state,
+                {"agent_id": "builder", "name": "deploy", "shared": True, "receivers": ["builder"]},
+            )
+
+        assert excinfo.value.code == RPC_ERROR_INVALID_REQUEST
+
+    def test_empty_receivers_when_sharing_is_invalid_request(self, tmp_path: Path) -> None:
+        state = _state(tmp_path)
+
+        with pytest.raises(RpcError) as excinfo:
+            _skill_share(
+                state, {"agent_id": "builder", "name": "deploy", "shared": True, "receivers": []}
+            )
+
+        assert excinfo.value.code == RPC_ERROR_INVALID_REQUEST
 
 
 def test_manager_methods_are_registered() -> None:

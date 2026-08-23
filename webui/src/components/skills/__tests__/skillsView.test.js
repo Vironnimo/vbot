@@ -97,7 +97,12 @@ describe('SkillsView', () => {
         return Promise.resolve(INVENTORY);
       }
       if (method === 'agent.list') {
-        return Promise.resolve({ agents: [{ id: 'main', name: 'Main' }] });
+        return Promise.resolve({
+          agents: [
+            { id: 'main', name: 'Main' },
+            { id: 'reviewer', name: 'Reviewer' },
+          ],
+        });
       }
       return Promise.resolve({});
     });
@@ -195,13 +200,30 @@ describe('SkillsView', () => {
     });
   });
 
-  it('wires the share action to skill.share with the owning agent', async () => {
+  it('wires the share action to skill.share with receivers', async () => {
     await mountView();
 
+    // Click "Share" on the deploy entry (owner: main, not yet shared).
     const shareButton = [...document.body.querySelectorAll('button')].find(
       (button) => button.textContent.trim() === 'Share',
     );
     shareButton.click();
+    flushSync();
+
+    // The share modal opens with a toggle list of other agents.
+    const modal = document.body.querySelector('[role="dialog"]');
+    expect(modal).not.toBeNull();
+    const toggles = [...modal.querySelectorAll('[role="switch"]')];
+    expect(toggles.length).toBe(1); // only "reviewer" is available
+
+    // Select the receiver and save.
+    toggles[0].click();
+    flushSync();
+
+    const saveButton = [...modal.querySelectorAll('button')].find(
+      (button) => button.textContent.trim() === 'Save',
+    );
+    saveButton.click();
     flushSync();
 
     await waitForCondition(() => callCount('skill.share') === 1);
@@ -210,6 +232,7 @@ describe('SkillsView', () => {
       agent_id: 'main',
       name: 'deploy',
       shared: true,
+      receivers: ['reviewer'],
     });
   });
 

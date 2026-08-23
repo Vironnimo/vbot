@@ -2,8 +2,8 @@
 
 The Skills domain owns ``<data_dir>/skills/policy.json``: a versioned JSON
 document that disables Skills by name across every origin and marks an Identity
-Agent's private Skills as shared with all other Identity Agents. A missing file
-means an empty policy. A malformed file yields diagnostics plus an empty
+Agent's private Skills as shared with specific other Identity Agents. A missing
+file means an empty policy. A malformed file yields diagnostics plus an empty
 effective policy instead of breaking startup; the manager surfaces the
 diagnostics. There is deliberately no legacy compatibility or auto-migration —
 an unsupported schema version is simply invalid.
@@ -31,7 +31,7 @@ from core.utils.atomic import atomic_write_text
 from core.utils.errors import VBotError
 from core.utils.logging import get_logger
 
-POLICY_SCHEMA_VERSION = 1
+POLICY_SCHEMA_VERSION = 2
 _SKILLS_DIRNAME = "skills"
 _POLICY_FILENAME = "policy.json"
 _POLICY_KEYS = frozenset({"version", "disabled", "shared"})
@@ -55,10 +55,11 @@ class SkillPolicy:
     """The validated, in-memory form of the Skill Policy document."""
 
     disabled: frozenset[str] = frozenset()
-    # Owner Identity Agent id -> shared private Skill names. Entries are kept as
-    # written (stale owners/names included); staleness is resolved where the
-    # receiving registries are built, which knows the live Agent roster.
-    shared: Mapping[str, frozenset[str]] = field(default_factory=dict)
+    # Owner Identity Agent id -> {shared Skill name -> receiver Identity Agent
+    # ids}. Entries are kept as written (stale owners/names included); staleness
+    # is resolved where the receiving registries are built, which knows the live
+    # Agent roster.
+    shared: Mapping[str, Mapping[str, frozenset[str]]] = field(default_factory=dict)
 
 
 def _validate_policy_document(data: Any) -> list[JsonDiagnostic]:
@@ -78,8 +79,17 @@ def _validate_policy_document(data: Any) -> list[JsonDiagnostic]:
     if shared is not None and not isinstance(shared, dict):
         add_error(diagnostics, "$.shared", "must be an object keyed by owner agent id")
     else:
-        for owner_id, names in sorted((shared or {}).items()):
-            validate_string_list(diagnostics, child_path("$.shared", str(owner_id)), names)
+        for owner_id, skills in sorted((shared or {}).items()):
+            owner_path = child_path("$.shared", str(owner_id))
+            if not isinstance(skills, dict):
+                add_error(diagnostics, owner_path, "must be an object keyed by skill name")
+                continue
+            for skill_name, receivers in sorted(skills.items()):
+                validate_string_list(
+                    diagnostics,
+                    child_path(owner_path, str(skill_name)),
+                    receivers,
+                )
     warn_unknown_keys(diagnostics, "$", data, _POLICY_KEYS, "key")
     return diagnostics
 
@@ -127,26 +137,39 @@ class SkillPolicyService:
                 target=name,
             )
 
-    def set_shared(self, owner_id: str, name: str, *, shared: bool) -> SkillPolicy:
-        """Share or unshare one of an owner's private Skills with all other Agents."""
+    def set_shared(
+        self,
+        owner_id: str,
+        name: str,
+        *,
+        shared: bool,
+        receivers: list[str] | None = None,
+    ) -> SkillPolicy:
+        """Share or unshare one of an owner's private Skills with specific Agents.
+
+        When ``shared`` is True, ``receivers`` must list at least one Identity
+        Agent id; the skill becomes visible to exactly those agents. When False,
+        the entry is removed entirely.
+        """
         with self._lock:
             policy = self.load()
-            per_owner: dict[str, frozenset[str]] = {
-                owner: frozenset(names) for owner, names in policy.shared.items()
+            per_owner: dict[str, dict[str, frozenset[str]]] = {
+                owner: dict(skills) for owner, skills in policy.shared.items()
             }
-            names = set(per_owner.get(owner_id, frozenset()))
+            owner_skills = per_owner.get(owner_id, {})
             if shared:
-                names.add(name)
+                owner_skills[name] = frozenset(receivers or [])
+                per_owner[owner_id] = owner_skills
             else:
-                names.discard(name)
-            if names:
-                per_owner[owner_id] = frozenset(names)
-            else:
-                per_owner.pop(owner_id, None)
+                owner_skills.pop(name, None)
+                if owner_skills:
+                    per_owner[owner_id] = owner_skills
+                else:
+                    per_owner.pop(owner_id, None)
             return self._write_policy(
                 SkillPolicy(
                     disabled=policy.disabled,
-                    shared={owner: per_owner[owner] for owner in sorted(per_owner)},
+                    shared={owner: dict(skills) for owner, skills in sorted(per_owner.items())},
                 ),
                 operation="share" if shared else "unshare",
                 target=f"{owner_id}/{name}",
@@ -158,7 +181,7 @@ class SkillPolicyService:
             return SkillPolicy(), []
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, UnicodeError, json.JSONDecodeError) as error:
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
             message = f"Cannot read skill policy {path}: {error}"
             _LOGGER.warning(message)
             return SkillPolicy(), [message]
@@ -199,17 +222,23 @@ class SkillPolicyService:
             for index, name in enumerate(data.get("disabled") or [])
             if usable_name(name, f"$.disabled[{index}]")
         )
-        shared: dict[str, frozenset[str]] = {}
+        shared: dict[str, dict[str, frozenset[str]]] = {}
         raw_shared = data.get("shared") or {}
-        for owner_id, raw_names in sorted(raw_shared.items()):
+        for owner_id, raw_skills in sorted(raw_shared.items()):
             path = child_path("$.shared", str(owner_id))
-            names = frozenset(
-                name
-                for index, name in enumerate(raw_names or [])
-                if usable_name(name, f"{path}[{index}]")
-            )
-            if names:
-                shared[str(owner_id)] = names
+            skills: dict[str, frozenset[str]] = {}
+            for index, (skill_name, raw_receivers) in enumerate(sorted((raw_skills or {}).items())):
+                if not usable_name(skill_name, f"{path}[{index}]"):
+                    continue
+                receivers = frozenset(
+                    receiver
+                    for r_index, receiver in enumerate(raw_receivers or [])
+                    if isinstance(receiver, str) and SKILL_NAME_TRIGGER_PATTERN.match(receiver)
+                )
+                if receivers:
+                    skills[str(skill_name)] = receivers
+            if skills:
+                shared[str(owner_id)] = skills
         return SkillPolicy(disabled=disabled, shared=shared)
 
     def _write_policy(self, policy: SkillPolicy, *, operation: str, target: str) -> SkillPolicy:
@@ -217,7 +246,11 @@ class SkillPolicyService:
             "version": POLICY_SCHEMA_VERSION,
             "disabled": sorted(policy.disabled),
             "shared": {
-                owner_id: sorted(names) for owner_id, names in sorted(policy.shared.items())
+                owner_id: {
+                    skill_name: sorted(receivers)
+                    for skill_name, receivers in sorted(skills.items())
+                }
+                for owner_id, skills in sorted(policy.shared.items())
             },
         }
         try:

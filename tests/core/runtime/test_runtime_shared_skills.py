@@ -42,7 +42,7 @@ def test_shared_skill_reaches_receiver_as_own_layer(config: Config, tmp_path: Pa
         runtime.agents.create("two", "Two")
         _write_agent_skill(data_dir, "main", "deploy", "Main's private playbook.")
 
-        runtime.skill_policy.set_shared("main", "deploy", shared=True)
+        runtime.skill_policy.set_shared("main", "deploy", shared=True, receivers=["two"])
         runtime.invalidate_agent_skills(None)
 
         registry = runtime.skills_for(None, "two")
@@ -61,7 +61,7 @@ def test_shared_skill_is_subject_to_the_receiver_allowlist(config: Config, tmp_p
     try:
         runtime.agents.create("two", "Two", allowed_skills=["unrelated"])
         _write_agent_skill(data_dir, "main", "deploy", "Main's private playbook.")
-        runtime.skill_policy.set_shared("main", "deploy", shared=True)
+        runtime.skill_policy.set_shared("main", "deploy", shared=True, receivers=["two"])
 
         registry = runtime.skills_for(None, "two")
 
@@ -84,7 +84,7 @@ def test_unshared_private_neighbors_stay_invisible(config: Config, tmp_path: Pat
         runtime.agents.create("two", "Two")
         _write_agent_skill(data_dir, "main", "deploy", "Shared.")
         _write_agent_skill(data_dir, "main", "secret-notes", "Unshared neighbour.")
-        runtime.skill_policy.set_shared("main", "deploy", shared=True)
+        runtime.skill_policy.set_shared("main", "deploy", shared=True, receivers=["two"])
 
         registry = runtime.skills_for(None, "two")
 
@@ -104,7 +104,7 @@ def test_owner_view_and_always_allowed_status_unchanged(config: Config, tmp_path
         _write_agent_skill(data_dir, "main", "deploy", "Main's private playbook.")
         before = runtime.skills_for(None, "main")
 
-        runtime.skill_policy.set_shared("main", "deploy", shared=True)
+        runtime.skill_policy.set_shared("main", "deploy", shared=True, receivers=["two"])
         runtime.invalidate_agent_skills("main")
         after = runtime.skills_for(None, "main")
 
@@ -123,7 +123,7 @@ def test_unshare_drops_the_skill_from_receivers_live(config: Config, tmp_path: P
     try:
         runtime.agents.create("two", "Two")
         _write_agent_skill(data_dir, "main", "deploy", "Shared.")
-        runtime.skill_policy.set_shared("main", "deploy", shared=True)
+        runtime.skill_policy.set_shared("main", "deploy", shared=True, receivers=["two"])
         runtime.invalidate_agent_skills(None)
         assert "deploy" in _names(runtime.skills_for(None, "two"))
 
@@ -147,7 +147,7 @@ def test_project_scoped_registry_without_identity_never_receives_shared(
     try:
         runtime.agents.create("two", "Two")
         _write_agent_skill(data_dir, "main", "deploy", "Shared.")
-        runtime.skill_policy.set_shared("main", "deploy", shared=True)
+        runtime.skill_policy.set_shared("main", "deploy", shared=True, receivers=["two"])
         project = runtime.projects.create("p", "P", repo)
 
         # A config-agent run passes no identity id: the private-home boundary
@@ -165,7 +165,7 @@ def test_receiver_catalog_renders_shared_among_own_skills(config: Config, tmp_pa
     try:
         receiver = runtime.agents.create("two", "Two")
         _write_agent_skill(data_dir, "main", "deploy", "Shared playbook.")
-        runtime.skill_policy.set_shared("main", "deploy", shared=True)
+        runtime.skill_policy.set_shared("main", "deploy", shared=True, receivers=["two"])
         registry = runtime.skills_for(None, "two")
 
         catalog = runtime.system_prompts.render_skill_catalog(receiver, registry)
@@ -189,7 +189,7 @@ def test_disabled_shared_skill_is_hidden_from_receivers_too(config: Config, tmp_
     try:
         runtime.agents.create("two", "Two")
         _write_agent_skill(data_dir, "main", "deploy", "Shared.")
-        runtime.skill_policy.set_shared("main", "deploy", shared=True)
+        runtime.skill_policy.set_shared("main", "deploy", shared=True, receivers=["two"])
         runtime.invalidate_agent_skills(None)
 
         runtime.skill_policy.set_disabled("deploy", disabled=True)
