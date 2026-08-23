@@ -353,7 +353,7 @@
 
       {#if loadError}
         <Banner variant="error" role="alert">{loadError}</Banner>
-      {:else if loading}
+      {:else if loading && inventory.length === 0}
         <Banner variant="neutral">{t('settings.loading', 'Loading…')}</Banner>
       {:else}
         <section class="skills-card" aria-labelledby="skills-directories-title">
