@@ -656,28 +656,35 @@
 </script>
 
 {#if visible}
-  <div class="s-providers-toolbar">
-    {#if hasRefreshEligibleProvider}
-      <Button
-        variant="secondary"
-        disabled={refreshingModels}
-        tooltip={t(
-          'settings.providers.refreshModelsHint',
-          'Fetches the current model lists from your connected providers and the public model catalog. Run it when a provider ships new models — your hand-maintained overrides are never touched.',
-        )}
-        onClick={refreshModelDatabase}
-      >
-        {refreshingModels
-          ? t('settings.providers.refreshingModels', 'Updating…')
-          : t('settings.providers.refreshModels', 'Update Model DB')}
+  <div class="s-list-head">
+    <span class="s-list-head-info">
+      {t('settings.providers.connectedCount', '{count} connected', {
+        count: displayedProviders.length,
+      })}
+    </span>
+    <div class="s-list-head-actions">
+      {#if hasRefreshEligibleProvider}
+        <Button
+          variant="secondary"
+          disabled={refreshingModels}
+          tooltip={t(
+            'settings.providers.refreshModelsHint',
+            'Fetches the current model lists from your connected providers and the public model catalog. Run it when a provider ships new models — your hand-maintained overrides are never touched.',
+          )}
+          onClick={refreshModelDatabase}
+        >
+          {refreshingModels
+            ? t('settings.providers.refreshingModels', 'Updating…')
+            : t('settings.providers.refreshModels', 'Update Model DB')}
+        </Button>
+      {/if}
+      <Button variant="primary" onClick={openAddProviderModal}>
+        {t('settings.providers.add.button', 'Add provider')}
       </Button>
-    {/if}
-    <Button variant="primary" onClick={openAddProviderModal}>
-      {t('settings.providers.add.button', 'Add provider')}
-    </Button>
-    <Button variant="secondary" onClick={() => openCustomProviderModal(null)}>
-      {t('settings.providers.custom.addButton', 'Add custom')}
-    </Button>
+      <Button variant="secondary" onClick={() => openCustomProviderModal(null)}>
+        {t('settings.providers.custom.addButton', 'Add custom')}
+      </Button>
+    </div>
   </div>
 
   {#if displayedProviders.length === 0}

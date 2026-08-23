@@ -656,6 +656,16 @@
 
 /* The subtle jump link to Settings → Agent defaults / the agent's prompt scope,
    sized down to sit beside a field without competing with it. */
+/* Card title rows that carry a trailing action (e.g. the Model card's single
+   "Edit global defaults" link) keep the standard title look but align the
+   action to the right edge. */
+.agents-view .agents-view__group-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
 .agents-view .agents-view__inherit-link {
   align-self: flex-start;
   padding: 2px 8px;

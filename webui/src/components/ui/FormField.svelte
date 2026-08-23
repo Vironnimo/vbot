@@ -63,6 +63,8 @@
     <small class="form-field__error" id={errorId} role="alert">{error}</small>
   {/if}
   {#if actions}
-    {@render actions()}
+    <!-- Flex-start wrapper: as a bare flex-column child a button would
+         stretch to the field's full width. -->
+    <div class="form-field__actions">{@render actions()}</div>
   {/if}
 </div>
