@@ -216,7 +216,12 @@ describe('ProjectsView', () => {
 
     await waitForCondition(() => document.body.textContent.includes('Builder'));
     expect(document.body.textContent).toContain('Builder');
-    // A non-clean report surfaces its findings at the top of the Team section.
+    // A non-clean report surfaces a collapsed summary at the top of the Team
+    // section — the findings themselves stay hidden until expanded.
+    expect(document.body.textContent).toContain('1 issues found');
+    expect(document.body.textContent).not.toContain('model not configured');
+    buttonWithTextContent('Show details').click();
+    flushSync();
     expect(document.body.textContent).toContain('model not configured');
   });
 
@@ -1569,6 +1574,14 @@ function member(overrides = {}) {
 function buttonByTestId(testId) {
   const button = document.querySelector(`[data-testid="${testId}"]`);
   expect(button, testId).toBeTruthy();
+  return button;
+}
+
+function buttonWithTextContent(label) {
+  const button = Array.from(document.querySelectorAll('button')).find(
+    (item) => item.textContent.trim() === label,
+  );
+  expect(button, `button not found: ${label}`).toBeTruthy();
   return button;
 }
 

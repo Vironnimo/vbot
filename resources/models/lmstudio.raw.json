@@ -1,0 +1,213 @@
+{
+  "fetched_at": "2026-08-22T15:09:43.627203+00:00",
+  "provider_id": "lmstudio",
+  "raw_response": {
+    "models": [
+      {
+        "architecture": "qwen35",
+        "capabilities": {
+          "reasoning": {
+            "allowed_options": [
+              "off",
+              "on"
+            ],
+            "default": "on"
+          },
+          "trained_for_tool_use": true,
+          "vision": false
+        },
+        "description": null,
+        "display_name": "Qwen3.8 27B Abliterated 3.69bpw 12GB MTP",
+        "format": "gguf",
+        "key": "qwen3.8-27b-abliterated-3.69bpw-12gb-mtp.gguf",
+        "loaded_instances": [],
+        "max_context_length": 262144,
+        "params_string": "27B",
+        "publisher": "soyaakinohara",
+        "quantization": null,
+        "size_bytes": 12599187808,
+        "type": "llm"
+      },
+      {
+        "architecture": "qwen35",
+        "capabilities": {
+          "reasoning": {
+            "allowed_options": [
+              "off",
+              "on"
+            ],
+            "default": "on"
+          },
+          "trained_for_tool_use": true,
+          "vision": true
+        },
+        "description": null,
+        "display_name": "Qwen3.8 27B Heretic Ara MTP",
+        "format": "gguf",
+        "key": "qwen3.8-27b-heretic-ara-mtp",
+        "loaded_instances": [],
+        "max_context_length": 262144,
+        "params_string": "27B",
+        "publisher": "cygnal",
+        "quantization": {
+          "bits_per_weight": 4,
+          "name": "Q4_K_M"
+        },
+        "size_bytes": 17741860928,
+        "type": "llm"
+      },
+      {
+        "architecture": "qwen35",
+        "capabilities": {
+          "reasoning": {
+            "allowed_options": [
+              "off",
+              "on"
+            ],
+            "default": "on"
+          },
+          "trained_for_tool_use": true,
+          "vision": true
+        },
+        "description": null,
+        "display_name": "Qwen3.8 27B ABLITERATED",
+        "format": "gguf",
+        "key": "qwen3.8-27b-abliterated",
+        "loaded_instances": [],
+        "max_context_length": 262144,
+        "params_string": "27B",
+        "publisher": "Blackfrost-AI",
+        "quantization": {
+          "bits_per_weight": 4,
+          "name": "Q4_K_S"
+        },
+        "size_bytes": 16513923904,
+        "type": "llm"
+      },
+      {
+        "architecture": "gemma4",
+        "capabilities": {
+          "reasoning": {
+            "allowed_options": [
+              "off",
+              "on"
+            ],
+            "default": "on"
+          },
+          "trained_for_tool_use": true,
+          "vision": false
+        },
+        "description": null,
+        "display_name": "Gemma 4 E4B Instruct Erotica",
+        "format": "gguf",
+        "key": "gemma-4-e4b-it-erotica",
+        "loaded_instances": [],
+        "max_context_length": 131072,
+        "params_string": "7.5B",
+        "publisher": "mradermacher",
+        "quantization": {
+          "bits_per_weight": 8,
+          "name": "Q8_0"
+        },
+        "size_bytes": 8031236096,
+        "type": "llm"
+      },
+      {
+        "architecture": "qwen35",
+        "capabilities": {
+          "reasoning": {
+            "allowed_options": [
+              "off",
+              "on"
+            ],
+            "default": "on"
+          },
+          "trained_for_tool_use": true,
+          "vision": true
+        },
+        "description": null,
+        "display_name": "Qwen3.5 9B The Defiant Fable Uncnr Heretic NEO MAX MTP",
+        "format": "gguf",
+        "key": "qwen3.5-9b-the-defiant-fable-uncensored-heretic-neo-imatrix-max-mtp",
+        "loaded_instances": [],
+        "max_context_length": 262144,
+        "params_string": "9B",
+        "publisher": "DavidAU",
+        "quantization": {
+          "bits_per_weight": 6,
+          "name": "Q6_K"
+        },
+        "size_bytes": 10582848288,
+        "type": "llm"
+      },
+      {
+        "architecture": "qwen35moe",
+        "capabilities": {
+          "reasoning": {
+            "allowed_options": [
+              "off",
+              "on"
+            ],
+            "default": "on"
+          },
+          "trained_for_tool_use": true,
+          "vision": true
+        },
+        "description": null,
+        "display_name": "Qwen3.6 35B A3B Uncensored Heretic Native MTP Preserved APEX I Compact",
+        "format": "gguf",
+        "key": "qwen3.6-35b-a3b-uncensored-heretic-native-mtp-preserved-apex",
+        "loaded_instances": [],
+        "max_context_length": 262144,
+        "params_string": "35B-A3B",
+        "publisher": "SC117",
+        "quantization": null,
+        "size_bytes": 17915907616,
+        "type": "llm"
+      },
+      {
+        "architecture": "gemma4",
+        "capabilities": {
+          "reasoning": {
+            "allowed_options": [
+              "off",
+              "on"
+            ],
+            "default": "on"
+          },
+          "trained_for_tool_use": true,
+          "vision": true
+        },
+        "description": null,
+        "display_name": "Gemma 4 12B Heretic",
+        "format": "gguf",
+        "key": "gemma-4-12b-heretic-abliterated",
+        "loaded_instances": [],
+        "max_context_length": 262144,
+        "params_string": "12B",
+        "publisher": "culturerevolt",
+        "quantization": {
+          "bits_per_weight": 6,
+          "name": "Q6_K"
+        },
+        "size_bytes": 9961137056,
+        "type": "llm"
+      },
+      {
+        "display_name": "Nomic Embed Text v1.5",
+        "format": "gguf",
+        "key": "text-embedding-nomic-embed-text-v1.5",
+        "loaded_instances": [],
+        "max_context_length": 2048,
+        "params_string": null,
+        "publisher": "nomic-ai",
+        "quantization": {
+          "bits_per_weight": 4,
+          "name": "Q4_K_M"
+        },
+        "size_bytes": 84106624,
+        "type": "embedding"
+      }
+    ]
+  }
+}

@@ -418,20 +418,29 @@
   }
 </script>
 
-<div class="s-ext-toolbar">
-  <Button variant="secondary" disabled={panelBusy} onClick={reloadExtensions}>
-    {t('settings.extensions.reload', 'Reload extensions')}
-  </Button>
-  <InfoHint
-    ariaLabel={t(
-      'settings.extensions.reloadInfoAria',
-      'About reloading extensions',
-    )}
-    text={t(
-      'settings.extensions.reloadHelp',
-      'Rebuilds all extensions from disk — picks up code edits, new and removed extensions.',
-    )}
-  />
+<div class="s-list-head">
+  <span class="s-list-head-info">
+    {#if !loading && !loadError}
+      {t('settings.extensions.count', '{count} discovered', {
+        count: extensions.length,
+      })}
+    {/if}
+  </span>
+  <div class="s-list-head-actions">
+    <Button variant="secondary" disabled={panelBusy} onClick={reloadExtensions}>
+      {t('settings.extensions.reload', 'Reload extensions')}
+    </Button>
+    <InfoHint
+      ariaLabel={t(
+        'settings.extensions.reloadInfoAria',
+        'About reloading extensions',
+      )}
+      text={t(
+        'settings.extensions.reloadHelp',
+        'Rebuilds all extensions from disk — picks up code edits, new and removed extensions.',
+      )}
+    />
+  </div>
 </div>
 
 {#if loading}

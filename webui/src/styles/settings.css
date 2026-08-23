@@ -250,6 +250,10 @@
 .s-row--stacked {
   align-items: stretch;
   flex-direction: column;
+  /* A column flex row that also wraps reserves phantom line height its
+     content never fills (seen as ~100px dead space per stacked row); stacked
+     rows must size strictly to their content. */
+  flex-wrap: nowrap;
 }
 
 .s-row-info {
@@ -887,12 +891,27 @@
   }
 }
 
-.s-providers-toolbar {
+/* List header row: section content that owns primary actions anchors them in
+   one row — a muted summary on the left, actions pinned right — instead of
+   floating buttons between the section header and the list. */
+.s-list-head {
   display: flex;
-  justify-content: flex-end;
+  align-items: center;
+  justify-content: space-between;
   gap: 10px;
   padding: 14px 0;
   border-bottom: 1px solid var(--border);
+}
+
+.s-list-head-info {
+  color: var(--text-lo);
+  font-size: var(--fs-body-sm);
+}
+
+.s-list-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
 }
 
 .s-provider-add-connection {
@@ -1041,15 +1060,6 @@
 
 .s-save-button {
   min-width: 84px;
-}
-
-.s-row--channels-header {
-  gap: 14px;
-}
-
-.s-row-actions--channel-header {
-  justify-content: flex-end;
-  width: 100%;
 }
 
 .s-channel-form {
@@ -1234,14 +1244,6 @@
 }
 
 /* --- Extensions panel --- */
-
-.s-ext-toolbar {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: var(--space-sm);
-  padding: var(--space-md) 0;
-}
 
 .s-ext-list {
   display: flex;

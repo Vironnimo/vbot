@@ -573,21 +573,23 @@
 .projects-view .projects-findings {
   display: flex;
   flex-direction: column;
-  gap: 6px;
   margin: 0;
   padding: 0;
   list-style: none;
 }
 
+/* Hairline rows, not cards: the summary banner already carries the warn
+   color, and a dozen boxed rows bury the section. */
 .projects-view .projects-finding {
   display: flex;
   flex-direction: column;
   gap: 2px;
-  padding: 8px 12px;
-  border: 1px solid var(--border-2);
-  border-left: 2px solid var(--amber);
-  border-radius: var(--r-md);
-  background: var(--surface);
+  padding: 7px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.projects-view .projects-finding:last-child {
+  border-bottom: none;
 }
 
 .projects-view .projects-finding-detail {

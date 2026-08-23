@@ -1259,18 +1259,6 @@
   }
 </script>
 
-{#snippet globalDefaultsLink()}
-  {#if formMode === AGENT_FORM_MODE_EDIT}
-    <Button
-      variant="tertiary"
-      class="agents-view__inherit-link"
-      onClick={navigateToAgentDefaults}
-    >
-      {t('inherit.editGlobalDefaults', 'Edit global defaults')}
-    </Button>
-  {/if}
-{/snippet}
-
 <form class="agent-detail-pane" onsubmit={handleAgentSubmit}>
   <div class="agent-detail-scroll">
     <div class="detail-top">
@@ -1414,7 +1402,6 @@
         {#if formMode === AGENT_FORM_MODE_EDIT}
           <FormField
             controlId="agent-project"
-            full
             label={t('agents.form.project', 'Project')}
             help={projectCatalogError
               ? t(
@@ -1443,8 +1430,17 @@
     </div>
 
     <div class="detail-group agents-view__model-group">
-      <div class="detail-group-title">
-        {t('agents.detail.model', 'Model')}
+      <div class="detail-group-title agents-view__group-title-row">
+        <span>{t('agents.detail.model', 'Model')}</span>
+        {#if formMode === AGENT_FORM_MODE_EDIT}
+          <Button
+            variant="tertiary"
+            class="agents-view__inherit-link"
+            onClick={navigateToAgentDefaults}
+          >
+            {t('inherit.editGlobalDefaults', 'Edit global defaults')}
+          </Button>
+        {/if}
       </div>
       <div class="detail-fields agents-view__model-fields">
         <FormField
@@ -1471,7 +1467,6 @@
             onValueChange={(selectedValue) =>
               updateModelSelection('model', selectedValue)}
           />
-          {#snippet actions()}{@render globalDefaultsLink()}{/snippet}
         </FormField>
 
         <FormField controlId="agent-fallback-model">
@@ -1504,7 +1499,6 @@
             onValueChange={(selectedValue) =>
               updateModelSelection('fallback_model', selectedValue)}
           />
-          {#snippet actions()}{@render globalDefaultsLink()}{/snippet}
         </FormField>
 
         <FormField
@@ -1538,11 +1532,6 @@
               formValues.thinking_effort = selectedValue;
             }}
           />
-          {#snippet actions()}
-            {#if formValues.thinking_effort === ''}
-              {@render globalDefaultsLink()}
-            {/if}
-          {/snippet}
         </FormField>
 
         <FormField
@@ -1596,11 +1585,6 @@
                 </Button>
               {/if}
             </div>
-          {/snippet}
-          {#snippet actions()}
-            {#if temperatureIsInherit}
-              {@render globalDefaultsLink()}
-            {/if}
           {/snippet}
         </FormField>
       </div>
