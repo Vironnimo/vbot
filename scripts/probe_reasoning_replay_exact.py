@@ -40,6 +40,9 @@ Examples:
         --model glm-5.2 --scenario cross_turn
     python scripts/probe_reasoning_replay_exact.py --provider opencode-go \\
         --model glm-5.3 --scenario instruction
+    python scripts/probe_reasoning_replay_exact.py --provider opencode-go \\
+        --model ox-alpha-free --api-key-env OPENCODE_GO_API_KEY \\
+        --data-dir ~/.vbot-dev --scenario tool_loop
 """
 
 from __future__ import annotations

@@ -1,5 +1,5 @@
 {
-  "_comment": "Hand layer for OpenCode Go, verified 2026-08-17 against its official endpoint table, current models.dev feed, upstream model documentation, and two-turn live gateway probes; DeepSeek V4 Flash entries re-probed 2026-08-22. The provider defaults to full-history reasoning replay; individual model records can override that policy. Each profile keeps protocol, response field, and model-specific request controls independent. Override metadata is wholesale at load, so OpenAI-route profiles repeat reasoning_response_field instead of accidentally discarding the generated value.",
+  "_comment": "Hand layer for OpenCode Go, verified 2026-08-17 against its official endpoint table, current models.dev feed, upstream model documentation, and two-turn live gateway probes; DeepSeek V4 Flash entries re-probed 2026-08-22; ox-alpha-free added 2026-08-23 from live replay/effort probes (model never reads replayed reasoning in any scenario, accepts every effort rung, reasons even at 'none' while 'low' yields no thinking; policy stays current_run as a safety margin since the gateway silently discards surplus carriers). The provider defaults to full-history reasoning replay; individual model records can override that policy. Each profile keeps protocol, response field, and model-specific request controls independent. Override metadata is wholesale at load, so OpenAI-route profiles repeat reasoning_response_field instead of accidentally discarding the generated value.",
   "reasoning_replay": "full_history",
   "models": {
     "deepseek-v4-flash": {
@@ -183,6 +183,16 @@
       "metadata": {
         "opencode_go": {
           "protocol": "anthropic"
+        }
+      }
+    },
+    "ox-alpha-free": {
+      "reasoning_replay": "current_run",
+      "metadata": {
+        "opencode_go": {
+          "minimum_reasoning_effort": "low",
+          "protocol": "openai",
+          "reasoning_response_field": "reasoning_content"
         }
       }
     },
