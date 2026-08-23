@@ -1291,6 +1291,48 @@ async def test_codex_send_omits_unsupported_output_token_limits() -> None:
 
 @respx.mock
 @pytest.mark.asyncio
+async def test_codex_send_omits_unspecified_top_p() -> None:
+    """An unspecified Chat-loop top_p must not become a Codex body field."""
+
+    access_token = _jwt_with_account("acct_openai")
+    adapter = OpenAIAdapter(
+        _subscription_config(),
+        access_token,
+        connection_mode=CODEX_RESPONSES_MODE,
+    )
+    route = respx.post(OPENAI_SUBSCRIPTION_URL).mock(
+        return_value=_codex_sse_response({"id": "resp_1", "status": "completed", "output": []})
+    )
+
+    await adapter.send(SAMPLE_MESSAGES, model_id="gpt-5.6-luna", top_p=None)
+
+    payload = json.loads(route.calls.last.request.content)
+    assert "top_p" not in payload
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_codex_send_omits_unsupported_top_p() -> None:
+    """The Codex backend rejects sampling top_p for subscription models."""
+
+    access_token = _jwt_with_account("acct_openai")
+    adapter = OpenAIAdapter(
+        _subscription_config(),
+        access_token,
+        connection_mode=CODEX_RESPONSES_MODE,
+    )
+    route = respx.post(OPENAI_SUBSCRIPTION_URL).mock(
+        return_value=_codex_sse_response({"id": "resp_1", "status": "completed", "output": []})
+    )
+
+    await adapter.send(SAMPLE_MESSAGES, model_id="gpt-5.6-luna", top_p=0.9)
+
+    payload = json.loads(route.calls.last.request.content)
+    assert "top_p" not in payload
+
+
+@respx.mock
+@pytest.mark.asyncio
 async def test_codex_send_rejects_oauth_token_without_account_id() -> None:
     """Subscription requests need the ChatGPT account id claim from the OAuth JWT."""
 

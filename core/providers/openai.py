@@ -74,7 +74,10 @@ OPENAI_PLATFORM_RESPONSES_REQUEST_PARAMETERS = frozenset(
 OPENAI_REASONING_CONTEXTS = frozenset({"auto", "current_turn", "all_turns"})
 OPENAI_SUBSCRIPTION_DEFAULT_INSTRUCTIONS = "You are a helpful assistant."
 OPENAI_SUBSCRIPTION_REASONING_EFFORTS = frozenset({"low", "medium", "high", "xhigh"})
-OPENAI_SUBSCRIPTION_REQUEST_PARAMETERS = frozenset({"top_p"})
+# Codex rejects sampling and output-limit fields the same way. A Chat-loop
+# ``top_p=None`` (no model recommendation) used to survive as ``"top_p": null``
+# and fail live GPT-5.6 Luna with ``Unsupported parameter: top_p``.
+OPENAI_SUBSCRIPTION_REQUEST_PARAMETERS: frozenset[str] = frozenset()
 OPTIONAL_REQUEST_PARAMETER_NAMES = frozenset(
     {"max_tokens", "max_output_tokens", "temperature", "top_p", "top_k", "stop_sequences"}
 )
@@ -482,10 +485,12 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
         return super().normalize_response(response, model_id=model_id)
 
     def _request_kwargs_with_defaults(self, kwargs: Mapping[str, Any]) -> dict[str, Any]:
-        request_kwargs: dict[str, Any] = {}
+        # ``None``-valued caller kwargs mean unspecified — drop them before
+        # Provider defaults, matching ``OpenAICompatibleAdapter._build_payload``.
+        request_kwargs = {key: value for key, value in kwargs.items() if value is not None}
         if self._config.defaults:
-            request_kwargs.update(self._config.defaults)
-        request_kwargs.update(kwargs)
+            for key, value in self._config.defaults.items():
+                request_kwargs.setdefault(key, value)
         # Output-limit defaults are resolved by _apply_model_output_limit in
         # _build_responses_payload, which honors the full precedence chain:
         # explicit caller limit → model ceiling → provider default. Leaving the
