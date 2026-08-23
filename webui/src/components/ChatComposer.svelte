@@ -118,7 +118,8 @@
       : CONTEXT_RING_CIRCUMFERENCE * (1 - contextFillRatio),
   );
   let contextTooltip = $derived(
-    formatTokenUsageTooltip(contextUsage, usage, sessionUsage) ?? undefined,
+    formatTokenUsageTooltip(contextUsage, usage, sessionUsage, contextWindow) ??
+      undefined,
   );
 
   let triggerItems = $derived(availableSkills.filter((item) => item?.name));

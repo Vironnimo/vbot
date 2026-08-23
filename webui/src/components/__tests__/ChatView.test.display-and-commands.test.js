@@ -701,7 +701,7 @@ describe('ChatView', () => {
     flushSync();
 
     const expectedTooltip = [
-      'Current context: 3,978 tok',
+      '3,978 / 262,144',
       '',
       'Last turn',
       'Input: 3,886 tok',
@@ -733,7 +733,7 @@ describe('ChatView', () => {
     flushSync();
 
     const expectedTooltip = [
-      'Current context: 3,978 tok',
+      '3,978 / 262,144',
       '',
       'Last turn',
       'Input: 3,886 tok',
