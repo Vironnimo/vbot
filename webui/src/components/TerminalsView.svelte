@@ -13,8 +13,11 @@
   import TextField from './ui/TextField.svelte';
   import { t } from '$lib/i18n.js';
   import {
+    TERMINAL_MAX_COLUMNS,
+    TERMINAL_MAX_ROWS,
     TERMINAL_STREAM_ERROR,
     TERMINAL_STREAM_IDLE,
+    clampTerminalGrid,
     createTerminalsController,
     createTerminalsViewState,
     layoutForCount,
@@ -56,14 +59,15 @@
   const rendererPromises = new SvelteMap();
   const pendingSnapshots = new SvelteMap();
   const pendingOutputs = new SvelteMap();
+  // The grid each tile is currently fitted to, kept as reactive state so the
+  // per-tile diagnostics hint can compare it against the server dimensions.
+  let fittedGrids = $state({});
   const TERMINAL_BASE_FONT_SIZE = 12;
-  const TERMINAL_MAX_COLUMNS = 240;
-  const TERMINAL_MAX_ROWS = 80;
-  // WebGL must load against a settled grid. A tab-switch remount measures a
-  // transient layout, so require a size observed unchanged across this many
-  // consecutive fits before creating the WebGL renderer (mirrors the
-  // controller's RESIZE_STABILITY_FITS).
-  const TERMINAL_WEBGL_STABLE_FITS = 2;
+  // WebGL is intentionally not used: its renderer sizes the canvas backing
+  // store from the browser's device-pixel box, which sits one pixel off the
+  // cell grid at fractional desktop scale (Windows 125% / 150%) and paints
+  // regular white row gaps that no post-hoc detection could fully rule out.
+  // The DOM renderer is deterministic and fast enough for a handful of tiles.
 
   const groupTerminals = $derived(visibleTerminals(viewState));
   let hasTerminals = $derived(groupTerminals.length > 0);
@@ -248,10 +252,12 @@
       return;
     }
     tileRegistry.delete(terminalId);
+    fittedGrids = Object.fromEntries(
+      Object.entries(fittedGrids).filter(([id]) => id !== terminalId),
+    );
     tile.resizeObserver?.disconnect();
     tile.inputDisposable?.dispose();
     tile.scrollDisposable?.dispose();
-    disposeWebglRenderer(tile);
     tile.xterm?.dispose();
   }
 
@@ -260,18 +266,13 @@
       xtermModulesPromise = Promise.all([
         import('@xterm/xterm'),
         import('@xterm/addon-fit'),
-        import('@xterm/addon-webgl'),
       ]);
     }
     return xtermModulesPromise;
   }
 
-  let WebglAddonClass = null;
-
   async function initializeTerminal(terminalId) {
-    const [{ Terminal }, { FitAddon }, { WebglAddon }] =
-      await loadXtermModules();
-    WebglAddonClass = WebglAddon;
+    const [{ Terminal }, { FitAddon }] = await loadXtermModules();
     const host = tileHosts.get(terminalId);
     if (!mounted || !host) {
       return;
@@ -297,14 +298,11 @@
     const fitAddonInstance = new FitAddon();
     xtermInstance.loadAddon(fitAddonInstance);
     xtermInstance.open(host);
-    // Fit to host dimensions so the terminal starts at the right size.
     try {
       fitAddonInstance.fit();
     } catch {
       // The host may not have settled yet; scheduleFit will retry.
     }
-    // WebGL is loaded AFTER the first fitTerminal completes — loading it
-    // before the snapshot write + resize cycle causes white row gaps.
     const inputDisposable = xtermInstance.onData((data) => {
       if (!terminalIsFinished(findTerminal(terminalId))) {
         controller.queueInput(data, { terminalId });
@@ -328,18 +326,8 @@
       resizeObserver: resizeObserverInstance,
       inputDisposable,
       scrollDisposable,
-      webglLoaded: false,
-      webglAddon: null,
-      webglHostWidth: null,
-      webglHostHeight: null,
-      webglFontSize: null,
-      webglRejectedHostWidth: null,
-      webglRejectedHostHeight: null,
       lastFitCols: null,
       lastFitRows: null,
-      lastFitHostWidth: null,
-      lastFitHostHeight: null,
-      stableFitCount: 0,
       fitFollowUpScheduled: false,
       writeInFlight: false,
       snapshotGeneration: 0,
@@ -393,8 +381,6 @@
           return;
         }
         tile.writeInFlight = false;
-        invalidateWebglAfterSnapshot(tile);
-        refreshTileRenderer(tile);
         scheduleFit(terminalId);
       });
     } catch {
@@ -403,56 +389,14 @@
     }
   }
 
-  function enableWebglRenderer(tile, WebglAddon) {
-    try {
-      const webglAddon = new WebglAddon();
-      webglAddon.onContextLoss(() => {
-        webglAddon.dispose();
-        if (tile.webglAddon === webglAddon) {
-          tile.webglAddon = null;
-          tile.webglLoaded = false;
-          tile.webglHostWidth = null;
-          tile.webglHostHeight = null;
-          tile.webglFontSize = null;
-        }
-      });
-      tile.xterm.loadAddon(webglAddon);
-      tile.webglAddon = webglAddon;
-      tile.webglLoaded = true;
-      tile.webglFontSize = tile.xterm.options.fontSize;
-      return webglAddon;
-    } catch {
-      // The built-in DOM renderer remains the safe fallback when WebGL is absent.
-      tile.webglAddon = null;
-      tile.webglLoaded = false;
-      return null;
-    }
-  }
-
-  function disposeWebglRenderer(tile) {
-    if (!tile.webglAddon) {
-      tile.webglLoaded = false;
-      tile.webglHostWidth = null;
-      tile.webglHostHeight = null;
-      tile.webglFontSize = null;
-      return;
-    }
-    try {
-      tile.webglAddon.dispose();
-    } catch {
-      // A lost context may already have disposed the addon.
-    }
-    tile.webglAddon = null;
-    tile.webglLoaded = false;
-    tile.webglHostWidth = null;
-    tile.webglHostHeight = null;
-    tile.webglFontSize = null;
-  }
-
   function scheduleFit(terminalId) {
     queueMicrotask(() => fitTerminal(terminalId));
   }
 
+  // A one-shot layout change (tab remount, maximize) measures a transient
+  // geometry; re-fitting once on the next animation frame gives the grid a
+  // chance to settle and lets the controller's stability pass see the
+  // confirmed size as a genuinely separated second measurement.
   function scheduleFitFollowUp(terminalId) {
     const tile = tileRegistry.get(terminalId);
     if (!tile || tile.fitFollowUpScheduled) {
@@ -466,145 +410,6 @@
       }
       fitTerminal(terminalId, { fromFollowUp: true });
     });
-  }
-
-  function refreshTileRenderer(tile) {
-    if (!tile?.xterm || tile.xterm.rows < 1) {
-      return;
-    }
-    tile.xterm.refresh(0, tile.xterm.rows - 1);
-  }
-
-  function rebuildWebglIfHostDrifted(tile, host) {
-    if (!tile.webglLoaded || !tile.webglAddon) {
-      return;
-    }
-    if (
-      tile.webglHostWidth === host.clientWidth &&
-      tile.webglHostHeight === host.clientHeight &&
-      tile.webglFontSize === tile.xterm.options.fontSize
-    ) {
-      return;
-    }
-    if (
-      tile.webglRejectedHostWidth !== host.clientWidth ||
-      tile.webglRejectedHostHeight !== host.clientHeight
-    ) {
-      tile.webglRejectedHostWidth = null;
-      tile.webglRejectedHostHeight = null;
-    }
-    // FitAddon skips xterm.resize when cols/rows stay the same, so a
-    // host-pixel or font-size change leaves the WebGL quads on the
-    // previous cell metrics — white row gaps or a shifted TUI.
-    disposeWebglRenderer(tile);
-  }
-
-  function webglScreenCanvas(host) {
-    return [...host.querySelectorAll('.xterm-screen canvas')].find(
-      (canvas) =>
-        !canvas.classList.contains('xterm-link-layer') && canvas.height > 32,
-    );
-  }
-
-  function webglBackingMatchesGrid(tile, host) {
-    const canvas = webglScreenCanvas(host);
-    const rows = tile.xterm.rows;
-    if (!canvas || rows < 1 || canvas.height < 1) {
-      return true;
-    }
-    // At 125% desktop scale the browser's device-pixel box is often one
-    // pixel off the cell grid. xterm then overwrites the backing store
-    // without recomputing cell height — regular white row gaps. That
-    // alignment depends on the tile's on-screen position, so a later
-    // remount or a newly added tile can fail again until it happens to
-    // land on a whole device pixel.
-    if (canvas.height % rows !== 0) {
-      return false;
-    }
-    const cssHeight = canvas.clientHeight;
-    if (cssHeight < 1) {
-      return true;
-    }
-    const expected = Math.round(cssHeight * (window.devicePixelRatio || 1));
-    return Math.abs(canvas.height - expected) <= 1;
-  }
-
-  function rejectMisalignedWebgl(tile, host) {
-    if (webglBackingMatchesGrid(tile, host)) {
-      return false;
-    }
-    disposeWebglRenderer(tile);
-    tile.webglRejectedHostWidth = host.clientWidth;
-    tile.webglRejectedHostHeight = host.clientHeight;
-    return true;
-  }
-
-  function invalidateWebglAfterSnapshot(tile) {
-    // A remount often fits and creates WebGL against an empty grid of
-    // the same cols/rows as the session. The later snapshot write then
-    // skips xterm.resize, so WebGL never recomputes its quads — leftover
-    // cells and a TUI stuck at the top until a real resize (maximize).
-    disposeWebglRenderer(tile);
-    tile.webglRejectedHostWidth = null;
-    tile.webglRejectedHostHeight = null;
-    tile.stableFitCount = 0;
-    tile.lastFitCols = null;
-    tile.lastFitRows = null;
-    tile.lastFitHostWidth = null;
-    tile.lastFitHostHeight = null;
-  }
-
-  function scheduleWebglRenderer(terminalId) {
-    const tile = tileRegistry.get(terminalId);
-    if (!tile?.xterm || tile.webglLoaded || !WebglAddonClass) {
-      return;
-    }
-    const scheduleWebgl = () => {
-      requestAnimationFrame(() => {
-        requestAnimationFrame(() => {
-          const current = tileRegistry.get(terminalId);
-          const currentHost = tileHosts.get(terminalId);
-          if (!current?.xterm || !WebglAddonClass || current.webglLoaded) {
-            return;
-          }
-          if (
-            !currentHost ||
-            currentHost.clientWidth <= 0 ||
-            currentHost.clientHeight <= 0
-          ) {
-            scheduleWebgl();
-            return;
-          }
-          if (
-            currentHost.clientWidth !== current.lastFitHostWidth ||
-            currentHost.clientHeight !== current.lastFitHostHeight
-          ) {
-            scheduleFit(terminalId);
-            return;
-          }
-          if (
-            current.webglRejectedHostWidth === currentHost.clientWidth &&
-            current.webglRejectedHostHeight === currentHost.clientHeight
-          ) {
-            return;
-          }
-          enableWebglRenderer(current, WebglAddonClass);
-          current.webglHostWidth = currentHost.clientWidth;
-          current.webglHostHeight = currentHost.clientHeight;
-          current.webglFontSize = current.xterm.options.fontSize;
-          refreshTileRenderer(current);
-          requestAnimationFrame(() => {
-            const loaded = tileRegistry.get(terminalId);
-            const loadedHost = tileHosts.get(terminalId);
-            if (!loaded?.webglLoaded || !loadedHost) {
-              return;
-            }
-            rejectMisalignedWebgl(loaded, loadedHost);
-          });
-        });
-      });
-    };
-    scheduleWebgl();
   }
 
   function fitTerminal(terminalId, { fromFollowUp = false } = {}) {
@@ -621,11 +426,6 @@
       return;
     }
     try {
-      // WebGL keeps the previous cell metrics until the renderer is
-      // refreshed, so a shrink after a large-font full-width tile would
-      // otherwise measure too few columns and clip the TUI.
-      tile.xterm.options.fontSize = TERMINAL_BASE_FONT_SIZE;
-      refreshTileRenderer(tile);
       tile.fitAddon.fit();
       // Increase the font size until the grid fits within the PTY dimension
       // limits. Font metrics are not perfectly proportional, so this may
@@ -644,65 +444,32 @@
         tile.fitAddon.fit();
         attempts += 1;
       }
-      // Hard clamp as a final safety net so the backend never rejects.
-      const clampedCols = Math.min(tile.xterm.cols, TERMINAL_MAX_COLUMNS);
-      const clampedRows = Math.min(tile.xterm.rows, TERMINAL_MAX_ROWS);
-      if (clampedCols !== tile.xterm.cols || clampedRows !== tile.xterm.rows) {
-        tile.xterm.resize(clampedCols, clampedRows);
+      // Final safety net: clamp into the server's accepted bounds so a tiny
+      // host produces a legal minimum grid instead of a rejected resize.
+      const fitted = clampTerminalGrid(tile.xterm.cols, tile.xterm.rows);
+      if (
+        fitted.columns !== tile.xterm.cols ||
+        fitted.rows !== tile.xterm.rows
+      ) {
+        tile.xterm.resize(fitted.columns, fitted.rows);
       }
-      const immediate = maximizedTerminalId === terminalId;
+      fittedGrids = {
+        ...fittedGrids,
+        [terminalId]: { columns: fitted.columns, rows: fitted.rows },
+      };
       controller.resize(
-        tile.xterm.cols,
-        tile.xterm.rows,
+        fitted.columns,
+        fitted.rows,
         terminalId,
-        immediate,
+        maximizedTerminalId === terminalId,
       );
-      // Load WebGL only after the fitted grid has settled across a frame.
-      // A tab remount queues two same-turn fits (ResizeObserver + initial
-      // scheduleFit) that can agree on a pre-paint size; creating WebGL
-      // against that leaves white row gaps until a later resize. Include
-      // host geometry: cols/rows can hold while the host is still settling.
-      const cols = tile.xterm.cols;
-      const rows = tile.xterm.rows;
-      const hostWidth = host.clientWidth;
-      const hostHeight = host.clientHeight;
-      const sameGeometry =
-        tile.lastFitCols === cols &&
-        tile.lastFitRows === rows &&
-        tile.lastFitHostWidth === hostWidth &&
-        tile.lastFitHostHeight === hostHeight;
-      tile.lastFitCols = cols;
-      tile.lastFitRows = rows;
-      tile.lastFitHostWidth = hostWidth;
-      tile.lastFitHostHeight = hostHeight;
-      refreshTileRenderer(tile);
-      rebuildWebglIfHostDrifted(tile, host);
-      if (tile.webglLoaded) {
-        rejectMisalignedWebgl(tile, host);
-      }
-      // Two fits in the same turn (ResizeObserver + scheduleFit on remount)
-      // can agree on a pre-paint size. That must not count as stable:
-      // creating WebGL against it leaves white row gaps until a later
-      // resize. Only a follow-up on the next animation frame may confirm.
-      if (!sameGeometry) {
-        tile.stableFitCount = 1;
+      const geometryChanged =
+        tile.lastFitCols !== fitted.columns || tile.lastFitRows !== fitted.rows;
+      tile.lastFitCols = fitted.columns;
+      tile.lastFitRows = fitted.rows;
+      if (geometryChanged && !fromFollowUp) {
         scheduleFitFollowUp(terminalId);
-        return;
       }
-      if (!fromFollowUp) {
-        if (tile.stableFitCount < TERMINAL_WEBGL_STABLE_FITS) {
-          scheduleFitFollowUp(terminalId);
-        } else {
-          scheduleWebglRenderer(terminalId);
-        }
-        return;
-      }
-      tile.stableFitCount += 1;
-      if (tile.stableFitCount < TERMINAL_WEBGL_STABLE_FITS) {
-        scheduleFitFollowUp(terminalId);
-        return;
-      }
-      scheduleWebglRenderer(terminalId);
     } catch {
       // The host may be between layout states while the view is mounting.
     }
@@ -1182,6 +949,30 @@
   function terminalError(message) {
     return message || t('terminals.unknownError', 'Unknown terminal error');
   }
+
+  // Diagnostics: a tile whose settled grid differs from the server's
+  // authoritative dimensions renders TUI content at the wrong cell count —
+  // stretched or wrapped borders. While a resize correction is still inside
+  // the pipeline (stability pass, debounce, in-flight request) the mismatch
+  // is expected and stays quiet; a lit hint means the pipeline closed
+  // without reconciling the two sizes.
+  function gridMismatchHint(terminalId) {
+    const fitted = fittedGrids[terminalId];
+    const item = findTerminal(terminalId);
+    if (!fitted || !item || terminalIsFinished(item) || serverUnavailable) {
+      return '';
+    }
+    if (viewState.streams[terminalId]?.gridPending) {
+      return '';
+    }
+    if (fitted.columns === item.columns && fitted.rows === item.rows) {
+      return '';
+    }
+    return t('terminals.gridMismatch', 'Tile {fitted} · Session {server}', {
+      fitted: `${fitted.columns}×${fitted.rows}`,
+      server: `${item.columns}×${item.rows}`,
+    });
+  }
 </script>
 
 <section class="terminals-view" aria-labelledby="terminals-title">
@@ -1368,6 +1159,7 @@
           {@const isFocused = item.terminal_id === viewState.selectedTerminalId}
           {@const isDragged = draggedTerminalId === item.terminal_id}
           {@const isDropTarget = dragOverTerminalId === item.terminal_id}
+          {@const gridMismatch = gridMismatchHint(item.terminal_id)}
           <div
             class="terminals-view__tile"
             class:terminals-view__tile--hidden={maximizedTerminalId &&
@@ -1414,6 +1206,15 @@
                   use:tooltip={terminalTarget(item)}
                   >{terminalTarget(item)}</span
                 >
+                {#if gridMismatch}
+                  <span
+                    class="terminals-view__grid-mismatch"
+                    use:tooltip={t(
+                      'terminals.gridMismatchHelp',
+                      'This tile shows its content at a different size than the terminal session uses. Try resizing the window or maximizing this tile once to reapply the session size.',
+                    )}>{gridMismatch}</span
+                  >
+                {/if}
                 {#if scrolledBackByTerminal[item.terminal_id]}
                   <button
                     type="button"
@@ -2078,6 +1879,17 @@
     color: var(--text-med);
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+
+  .terminals-view__grid-mismatch {
+    flex: 0 0 auto;
+    padding: 1px 6px;
+    border-radius: 999px;
+    color: var(--amber);
+    background: var(--accent-dim);
+    font-size: var(--fs-mono-xs);
+    white-space: nowrap;
+    cursor: help;
   }
 
   .terminals-view__tile-actions {

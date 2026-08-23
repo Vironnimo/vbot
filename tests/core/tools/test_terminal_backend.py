@@ -147,6 +147,33 @@ def test_renderer_tracks_bracketed_paste_mode() -> None:
     assert renderer.bracketed_paste_enabled is False
 
 
+def test_keyboard_mode_sequences_do_not_corrupt_cell_attributes() -> None:
+    renderer = TerminalRenderer(20, 3, scrollback_lines=20)
+
+    # opencode2 enables xterm modifyOtherKeys with CSI > 4 ; 1 m. pyte
+    # ignores the ">" prefix and would misread it as SGR underscore+bold,
+    # painting white underlines under every blank cell in snapshots.
+    renderer.feed("\x1b[>4;1m\x1b[2J\x1b[H")
+
+    assert all(not renderer._screen.buffer[0][col].underscore for col in range(20))
+    assert all(not renderer._screen.buffer[0][col].bold for col in range(20))
+    assert ";4m" not in renderer.ansi_snapshot()
+
+    renderer.feed("\x1b[>4;2m\x1b[1;1Htext")
+    assert renderer.screen_text() == "text"
+
+
+def test_keyboard_mode_sequence_split_across_feeds_is_dropped() -> None:
+    renderer = TerminalRenderer(20, 3, scrollback_lines=20)
+
+    renderer.feed("a\x1b[>4")
+    renderer.feed(";1mb")
+
+    assert renderer.screen_text().startswith("ab")
+    assert all(not renderer._screen.buffer[0][col].underscore for col in range(20))
+    assert all(not renderer._screen.buffer[0][col].bold for col in range(20))
+
+
 def test_ansi_snapshot_reemits_alternate_screen_and_terminal_modes() -> None:
     renderer = TerminalRenderer(12, 3, scrollback_lines=20)
     renderer.feed("primary")
