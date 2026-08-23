@@ -153,8 +153,8 @@
     return entry.owner_id ? `agent:${entry.owner_id}` : GLOBAL_SCOPE;
   }
 
-  function entryKey(entry) {
-    return `${scopeForEntry(entry)}:${entry.name}`;
+  function entryKey(entry, groupKey, entryIndex) {
+    return `${groupKey}:${entry.origin ?? GLOBAL_SCOPE}:${scopeForEntry(entry)}:${entry.name}:${entryIndex}`;
   }
 
   function openCreateModal() {
@@ -394,11 +394,6 @@
       busy = false;
     }
   }
-
-  function toggleDiagnostics(entry) {
-    const key = entryKey(entry);
-    expandedKey = expandedKey === key ? null : key;
-  }
 </script>
 
 <section class="skills-view view active" aria-labelledby="skills-title">
@@ -515,9 +510,14 @@
                 <span>{group.label}</span>
                 <span class="skills-group-count">{group.skills.length}</span>
               </h3>
-              {#each group.skills as entry (entryKey(entry))}
+              {#each group.skills as entry, entryIndex (entryKey(entry, group.key, entryIndex))}
                 {@const diagnostics = skillDiagnosticLines(entry)}
-                {@const isExpanded = expandedKey === entryKey(entry)}
+                {@const currentEntryKey = entryKey(
+                  entry,
+                  group.key,
+                  entryIndex,
+                )}
+                {@const isExpanded = expandedKey === currentEntryKey}
                 <article
                   class="skills-card"
                   class:skills-card--disabled={entry.disabled}
@@ -612,7 +612,8 @@
                           type="button"
                           class="skills-card-details-btn"
                           aria-expanded={isExpanded}
-                          onclick={() => toggleDiagnostics(entry)}
+                          onclick={() =>
+                            (expandedKey = isExpanded ? null : currentEntryKey)}
                         >
                           {isExpanded
                             ? t('skills.hideDetails', 'Hide details')
