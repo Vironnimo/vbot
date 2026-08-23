@@ -26,8 +26,8 @@ class TestStaleEntries:
             "version": POLICY_SCHEMA_VERSION,
             "disabled": [],
             "shared": {
-                "ghost-agent": ["deploy"],
-                "main": ["notes", "vanished-skill"],
+                "ghost-agent": {"deploy": ["two"]},
+                "main": {"notes": ["two"], "vanished-skill": ["two"]},
             },
         }
         policy_file.write_text(json.dumps(document), encoding="utf-8")
@@ -38,8 +38,11 @@ class TestStaleEntries:
         assert service.load() == SkillPolicy(
             disabled=frozenset(),
             shared={
-                "ghost-agent": frozenset({"deploy"}),
-                "main": frozenset({"notes", "vanished-skill"}),
+                "ghost-agent": {"deploy": frozenset({"two"})},
+                "main": {
+                    "notes": frozenset({"two"}),
+                    "vanished-skill": frozenset({"two"}),
+                },
             },
         )
         assert service.validation_diagnostics() == []

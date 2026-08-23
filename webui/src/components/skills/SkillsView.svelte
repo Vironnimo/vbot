@@ -73,6 +73,11 @@
   // The skill awaiting delete confirmation (null = dialog closed).
   let deleteTarget = $state(null); // { scope, name }
 
+  // Share-modal state: which entry is being shared and which receivers are
+  // selected.
+  let shareTarget = $state(null); // { owner_id, name }
+  let shareReceivers = $state([]); // selected receiver agent ids
+
   // The entry whose diagnostics disclosure is expanded (unique per scope+name).
   let expandedKey = $state(null);
 
@@ -272,20 +277,73 @@
     }
   }
 
-  async function toggleShared(entry) {
+  function openShareModal(entry) {
+    if (busy || !entry.owner_id) {
+      return;
+    }
+    shareTarget = { owner_id: entry.owner_id, name: entry.name };
+    shareReceivers = Array.isArray(entry.shared_with)
+      ? [...entry.shared_with]
+      : [];
+  }
+
+  function closeShareModal() {
+    shareTarget = null;
+    shareReceivers = [];
+  }
+
+  function toggleReceiver(agentId) {
+    if (shareReceivers.includes(agentId)) {
+      shareReceivers = shareReceivers.filter((id) => id !== agentId);
+    } else {
+      shareReceivers = [...shareReceivers, agentId];
+    }
+  }
+
+  let shareableAgents = $derived(
+    agents.filter((agent) => agent.id !== shareTarget?.owner_id),
+  );
+  let shareSaveDisabled = $derived(busy || shareReceivers.length === 0);
+
+  async function saveShare() {
+    if (busy || !shareTarget || shareReceivers.length === 0) {
+      return;
+    }
+    busy = true;
+    try {
+      await shareSkill(
+        shareTarget.owner_id,
+        shareTarget.name,
+        true,
+        shareReceivers,
+      );
+      onToast({
+        title: t('skills.sharedToast', 'Skill shared with {count} agents.', {
+          count: shareReceivers.length,
+        }),
+        variant: 'success',
+      });
+      closeShareModal();
+      await loadInventory();
+    } catch (error) {
+      onToast({
+        title: `${t('skills.shareError', 'Sharing could not be changed.')} ${error.message}`,
+        variant: 'error',
+      });
+    } finally {
+      busy = false;
+    }
+  }
+
+  async function unshareSkill(entry) {
     if (busy || !entry.owner_id) {
       return;
     }
     busy = true;
     try {
-      await shareSkill(entry.owner_id, entry.name, !entry.shared);
+      await shareSkill(entry.owner_id, entry.name, false, []);
       onToast({
-        title: entry.shared
-          ? t('skills.unsharedToast', 'Sharing stopped.', {})
-          : t(
-              'skills.sharedToast',
-              'Skill shared with all other identity agents.',
-            ),
+        title: t('skills.unsharedToast', 'Sharing stopped.', {}),
         variant: 'success',
       });
       await loadInventory();
@@ -471,6 +529,15 @@
                           <Badge variant="info">
                             {t('skills.sharedBadge', 'Shared')}
                           </Badge>
+                          {#if entry.shared_with?.length > 0}
+                            <span class="skills-card-receivers">
+                              {t('skills.sharedWith', 'with {names}', {
+                                names: entry.shared_with
+                                  .map((id) => agentDisplayName(id, agents))
+                                  .join(', '),
+                              })}
+                            </span>
+                          {/if}
                         {/if}
                         <StatusChip variant={skillStatusVariant(entry)}>
                           {skillStatusLabel(entry, t)}
@@ -497,15 +564,30 @@
                           : t('skills.disable', 'Disable')}
                       </Button>
                       {#if entry.owner_id}
-                        <Button
-                          variant="secondary"
-                          disabled={busy}
-                          onClick={() => toggleShared(entry)}
-                        >
-                          {entry.shared
-                            ? t('skills.unshare', 'Unshare')
-                            : t('skills.share', 'Share')}
-                        </Button>
+                        {#if entry.shared}
+                          <Button
+                            variant="secondary"
+                            disabled={busy}
+                            onClick={() => openShareModal(entry)}
+                          >
+                            {t('skills.manageShare', 'Manage')}
+                          </Button>
+                          <Button
+                            variant="secondary"
+                            disabled={busy}
+                            onClick={() => unshareSkill(entry)}
+                          >
+                            {t('skills.unshare', 'Unshare')}
+                          </Button>
+                        {:else}
+                          <Button
+                            variant="secondary"
+                            disabled={busy}
+                            onClick={() => openShareModal(entry)}
+                          >
+                            {t('skills.share', 'Share')}
+                          </Button>
+                        {/if}
                       {/if}
                       {#if skillSupportsEditAndDelete(entry)}
                         <Button
@@ -675,6 +757,72 @@
       </Button>
       <Button variant="primary" disabled={busy} onClick={saveEdit}>
         {busy ? t('common.saving', 'Saving…') : t('common.save', 'Save')}
+      </Button>
+    {/snippet}
+  </Modal>
+{/if}
+
+{#if shareTarget}
+  <Modal
+    title={t('skills.shareTitle', 'Share {name}', { name: shareTarget.name })}
+    labelledById="skill-share-modal-title"
+    closeDisabled={busy}
+    onClose={closeShareModal}
+  >
+    {#snippet body()}
+      <div class="skills-modal-body">
+        <p class="skills-share-desc">
+          {t(
+            'skills.shareDescription',
+            'Select which agents should have access to this skill. They can activate and co-maintain it.',
+          )}
+        </p>
+        {#if shareableAgents.length === 0}
+          <EmptyState
+            density="compact"
+            description={t(
+              'skills.noOtherAgents',
+              'No other identity agents exist to share with.',
+            )}
+          />
+        {:else}
+          <div class="skills-share-list">
+            {#each shareableAgents as agent (agent.id)}
+              <button
+                type="button"
+                class="skills-share-option"
+                class:skills-share-option--selected={shareReceivers.includes(
+                  agent.id,
+                )}
+                role="switch"
+                aria-checked={shareReceivers.includes(agent.id)}
+                aria-label={t('skills.toggleReceiver', 'Share with {name}', {
+                  name: agent.name || agent.id,
+                })}
+                onclick={() => toggleReceiver(agent.id)}
+              >
+                <span class="skills-share-agent-name"
+                  >{agent.name || agent.id}</span
+                >
+                {#if agent.name && agent.name !== agent.id}
+                  <span class="skills-share-agent-id">{agent.id}</span>
+                {/if}
+              </button>
+            {/each}
+          </div>
+        {/if}
+      </div>
+    {/snippet}
+    {#snippet footer()}
+      <Button variant="secondary" disabled={busy} onClick={closeShareModal}>
+        {t('common.cancel', 'Cancel')}
+      </Button>
+      <Button
+        variant="primary"
+        disabled={shareSaveDisabled}
+        onClick={saveShare}
+      >
+        {t('skills.saveShare', 'Save')}
       </Button>
     {/snippet}
   </Modal>
@@ -1025,6 +1173,68 @@
     outline: none;
     border-color: var(--accent);
     box-shadow: var(--focus-ring);
+  }
+
+  .skills-card-receivers {
+    font-size: var(--fs-mono-xs);
+    color: var(--text-lo);
+  }
+
+  .skills-share-desc {
+    margin: 0 0 var(--space-md);
+    font-size: var(--fs-body-sm);
+    color: var(--text-med);
+  }
+
+  .skills-share-list {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-xs);
+    max-height: 320px;
+    overflow-y: auto;
+  }
+
+  .skills-share-option {
+    display: flex;
+    align-items: center;
+    gap: var(--space-sm);
+    padding: var(--space-sm);
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    color: var(--text-med);
+    cursor: pointer;
+    transition:
+      border-color 0.15s,
+      background 0.15s,
+      color 0.15s;
+  }
+
+  .skills-share-option:hover {
+    border-color: var(--border-2);
+    color: var(--text-hi);
+  }
+
+  .skills-share-option--selected {
+    background: var(--accent-10);
+    border-color: var(--accent-30);
+    color: var(--accent);
+  }
+
+  .skills-share-option--selected:hover {
+    background: var(--accent-16);
+    color: var(--accent);
+  }
+
+  .skills-share-agent-name {
+    font-size: var(--fs-body-sm);
+    color: var(--text-hi);
+  }
+
+  .skills-share-agent-id {
+    font-family: var(--font-mono);
+    font-size: var(--fs-mono-xs);
+    color: var(--text-lo);
   }
 
   @media (max-width: 640px) {

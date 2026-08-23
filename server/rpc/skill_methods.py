@@ -204,7 +204,7 @@ def _skill_set_disabled(state: Any, params: JsonObject) -> JsonObject:
 
 
 def _skill_share(state: Any, params: JsonObject) -> JsonObject:
-    """Share or unshare one Identity Agent's private Skill with all other Agents."""
+    """Share or unshare one Identity Agent's private Skill with specific Agents."""
     agent_id = _required_string(params, "agent_id")
     if not is_valid_agent_id(agent_id):
         raise RpcError(RPC_ERROR_INVALID_REQUEST, f"invalid agent id: {agent_id!r}")
@@ -220,12 +220,41 @@ def _skill_share(state: Any, params: JsonObject) -> JsonObject:
             RPC_ERROR_INVALID_REQUEST,
             f"agent {agent_id!r} owns no private skill named {name!r}",
         )
-    state.runtime.skill_policy.set_shared(agent_id, name, shared=shared)
+    receivers: list[str] = []
+    if shared:
+        raw_receivers = params.get("receivers", [])
+        if not isinstance(raw_receivers, list):
+            raise RpcError(
+                RPC_ERROR_INVALID_REQUEST, "params.receivers must be a list of agent ids"
+            )
+        for receiver_id in raw_receivers:
+            if not isinstance(receiver_id, str) or not is_valid_agent_id(receiver_id):
+                raise RpcError(
+                    RPC_ERROR_INVALID_REQUEST,
+                    f"invalid receiver agent id: {receiver_id!r}",
+                )
+            if receiver_id == agent_id:
+                raise RpcError(
+                    RPC_ERROR_INVALID_REQUEST,
+                    "an agent cannot share a skill with itself",
+                )
+            if not state.runtime.agents.exists(receiver_id):
+                raise RpcError(
+                    RPC_ERROR_INVALID_REQUEST,
+                    f"unknown receiver agent: {receiver_id!r}",
+                )
+            receivers.append(receiver_id)
+        if not receivers:
+            raise RpcError(
+                RPC_ERROR_INVALID_REQUEST,
+                "at least one receiver agent is required to share a skill",
+            )
+    state.runtime.skill_policy.set_shared(agent_id, name, shared=shared, receivers=receivers)
     # A share change reshuffles every receiver's registry layer; the global pool
     # is unaffected because shared Skills never enter it.
     state.runtime.invalidate_agent_skills(None)
     publish_resource_changed(state, RESOURCE_KIND_SKILLS)
-    return {"agent_id": agent_id, "name": name, "shared": shared}
+    return {"agent_id": agent_id, "name": name, "shared": shared, "receivers": receivers}
 
 
 def method_handlers() -> dict[str, RpcMethodHandler]:

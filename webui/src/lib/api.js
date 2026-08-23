@@ -379,7 +379,13 @@ export function setSkillDisabled(name, disabled, options = {}) {
   return rpc('skill.set_disabled', { name, disabled }, options);
 }
 
-export function shareSkill(agentId, name, shared, options = {}) {
+export function shareSkill(
+  agentId,
+  name,
+  shared,
+  receivers = [],
+  options = {},
+) {
   requireNonEmptyString(
     agentId,
     'Agent id must be a non-empty string',
@@ -393,7 +399,11 @@ export function shareSkill(agentId, name, shared, options = {}) {
   if (typeof shared !== 'boolean') {
     throw new ApiClientError('Shared flag must be a boolean', 'skill.share');
   }
-  return rpc('skill.share', { agent_id: agentId, name, shared }, options);
+  return rpc(
+    'skill.share',
+    { agent_id: agentId, name, shared, receivers },
+    options,
+  );
 }
 
 export function listChatCommands(params = {}, options = {}) {

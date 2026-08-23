@@ -1469,15 +1469,16 @@ class Runtime:
             if disabled:
                 # The master switch outranks every other state in display.
                 status = "disabled"
+            owner_shared = policy.shared.get(owner_id, {}) if owner_id else {}
+            shared_receivers = owner_shared.get(skill.name, frozenset())
             skills.append(
                 {
                     "name": skill.name,
                     "description": skill.description,
                     "origin": origin,
                     "owner_id": owner_id,
-                    "shared": bool(
-                        owner_id and skill.name in policy.shared.get(owner_id, frozenset())
-                    ),
+                    "shared": bool(shared_receivers),
+                    "shared_with": sorted(shared_receivers),
                     "disabled": disabled,
                     "status": status,
                     "missing": missing,
@@ -1495,9 +1496,9 @@ class Runtime:
         """Report shared policy entries whose owner or package no longer exists."""
         environment = self._skill_environment(self.storage.load_environment())
         stale: list[dict[str, Any]] = []
-        for owner_id, names in sorted(policy.shared.items()):
+        for owner_id, skills in sorted(policy.shared.items()):
             owner_exists = self.agents.exists(owner_id)
-            for name in sorted(names):
+            for name in sorted(skills):
                 if not owner_exists or (
                     find_skill_package_dir(self.agent_skills_dir(owner_id), name, environment)
                     is None
@@ -1612,7 +1613,13 @@ class Runtime:
         if self._skill_policy is None:
             return False
         shared = self._skill_policy.load().shared
-        return any(owner_id != receiver_agent_id and names for owner_id, names in shared.items())
+        for owner_id, skills in shared.items():
+            if owner_id == receiver_agent_id:
+                continue
+            for receivers in skills.values():
+                if receiver_agent_id in receivers:
+                    return True
+        return False
 
     def _resolve_shared_skills_dir(self, receiver_agent_id: str, name: str) -> Path | None:
         """Return the owning skills home of the effective shared Skill instance.
@@ -1627,8 +1634,11 @@ class Runtime:
         if not shared:
             return None
         environment = self._skill_environment(self.storage.load_environment())
-        for owner_id, names in sorted(shared.items()):
-            if owner_id == receiver_agent_id or name not in names:
+        for owner_id, skills in sorted(shared.items()):
+            if owner_id == receiver_agent_id:
+                continue
+            receivers = skills.get(name)
+            if receivers is None or receiver_agent_id not in receivers:
                 continue
             if not self.agents.exists(owner_id):
                 continue
@@ -1644,7 +1654,8 @@ class Runtime:
         collision handling matches activation exactly. Only existing Identity
         Agents contribute; stale entries (an unknown owner id or a vanished package
         directory) are ignored at load with a warning and stay in the policy file
-        for the human manager to clean up.
+        for the human manager to clean up. Only skills whose receiver list
+        includes this receiver are inserted.
         """
         if self._skill_policy is None:
             return []
@@ -1653,7 +1664,7 @@ class Runtime:
             return []
         environment = self._skill_environment(self.storage.load_environment())
         directories: list[Path] = []
-        for owner_id, names in sorted(shared.items()):
+        for owner_id, skills in sorted(shared.items()):
             if owner_id == receiver_agent_id:
                 # The owner keeps its own copy via its private-home layer.
                 continue
@@ -1665,7 +1676,9 @@ class Runtime:
                     )
                 continue
             owner_root = self.agent_skills_dir(owner_id)
-            for name in sorted(names):
+            for name, receivers in sorted(skills.items()):
+                if receiver_agent_id not in receivers:
+                    continue
                 package_dir = find_skill_package_dir(owner_root, name, environment)
                 if package_dir is None:
                     if self.logger is not None:

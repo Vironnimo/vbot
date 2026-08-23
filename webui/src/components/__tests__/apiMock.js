@@ -60,8 +60,8 @@ export function rpcBackedApiMock(rpcMock, overrides = {}) {
     skillInventory: () => call('skill.inventory'),
     setSkillDisabled: (name, disabled) =>
       call('skill.set_disabled', { name, disabled }),
-    shareSkill: (agentId, name, shared) =>
-      call('skill.share', { agent_id: agentId, name, shared }),
+    shareSkill: (agentId, name, shared, receivers = []) =>
+      call('skill.share', { agent_id: agentId, name, shared, receivers }),
     listChatCommands: (params = {}) => call('chat.commands', params),
     loadChatHistory: (params) => call('chat.history', params),
     createSession: (params) => call('session.create', params),
