@@ -13,6 +13,13 @@ import {
 } from './api.js';
 import { reconnectBackoffDelay } from './backoff.js';
 
+// A WS frame boundary can split an ANSI escape sequence or a UTF-8 code
+// point in two. Feeding xterm the torn half corrupts its parser (it can
+// swallow the output after a reconnect), so a trailing partial escape is
+// held back until the next frame completes it. Everything else passes
+// through byte-exact: the server-side renderer consumes the same bytes,
+// so any rewriting here would desynchronize the viewer's buffer from the
+// authoritative snapshot source.
 export function createPtyFrameSanitizer() {
   let pending = '';
 
@@ -25,28 +32,17 @@ export function createPtyFrameSanitizer() {
     const lastEsc = combined.lastIndexOf('\x1b');
     if (lastEsc !== -1 && PARTIAL_ESC.test(combined.slice(lastEsc))) {
       pending = combined.slice(lastEsc);
-      return combined
-        .slice(0, lastEsc)
-        .replace(BLANK_LINE_BURST, COLLAPSED_BURST);
+      return combined.slice(0, lastEsc);
     }
-    const trailing = TRAILING_NEWLINES.exec(combined);
-    if (trailing.index === 0) {
-      pending = combined;
-      return '';
-    }
-    pending = trailing[0];
-    return combined
-      .slice(0, trailing.index)
-      .replace(BLANK_LINE_BURST, COLLAPSED_BURST);
+    pending = '';
+    return combined;
   }
 
   function flush() {
-    const last = pending;
+    // The held tail can only ever be an escape start; its rest never
+    // arrives at end of stream, so dropping it protects the parser.
     pending = '';
-    if (last === '' || last.includes('\x1b')) {
-      return '';
-    }
-    return last.replace(BLANK_LINE_BURST, COLLAPSED_BURST);
+    return '';
   }
 
   return { next, flush };
@@ -61,12 +57,7 @@ export const TERMINAL_STREAM_SNAPSHOT = 'snapshot';
 
 const RECONNECT_INITIAL_DELAY_MS = 500;
 const RECONNECT_MAX_DELAY_MS = 8_000;
-// A tab revisit remounts the terminal tiles while the grid is still settling,
-// so the first measured size can transiently differ from the final one and
-// must not reach the PTY. A size only becomes sendable after it has been
-// observed unchanged across two consecutive fits separated by a frame.
 const RESIZE_DEBOUNCE_MS = 100;
-const RESIZE_STABILITY_FITS = 2;
 const INPUT_FLUSH_DELAY_MS = 24;
 const INPUT_CHUNK_CHARS = 32_768;
 // A socket that still sits in WS_CONNECTING past this budget is treated as
@@ -76,22 +67,32 @@ const INPUT_CHUNK_CHARS = 32_768;
 const CONNECT_TIMEOUT_MS = 8_000;
 const WS_CONNECTING = 0;
 const WS_OPEN = 1;
-// A WS frame boundary can split an ANSI escape sequence, a UTF-8 code point,
-// or a long blank-line run in two. Feeding xterm the torn halves corrupts its
-// parser (it can swallow the output after a reconnect). This sanitizer holds
-// back a trailing partial escape / newline run until the next frame completes
-// it, mirrors Hermes' pty-resume sanitizer.
-// A WS frame boundary can split an ANSI escape sequence, a UTF-8 code point,
-// or a long blank-line run in two. Feeding xterm the torn halves corrupts its
-// parser (it can swallow the output after a reconnect). This sanitizer holds
-// back a trailing partial escape / newline run until the next frame completes
-// it, mirrors Hermes' pty-resume sanitizer.
 // eslint-disable-next-line no-control-regex -- intentional ESC byte in ANSI sequence parser
 const PARTIAL_ESC = /^\x1b(?:\[\d*)?$/;
-const TRAILING_NEWLINES = /(?:\r?\n)*\r?$/;
-const BLANK_LINE_BURST = /(?:\r?\n){50,}/g;
-const COLLAPSED_BURST = '\r\n\r\n';
 const TERMINAL_STATES_FINISHED = new Set(['exited', 'error']);
+
+// The server validates Terminal dimensions against these exact bounds and
+// rejects anything outside them. The viewer clamps every fitted grid into
+// this window, so a small tile produces a legal minimum grid instead of a
+// rejected request that would leave the tile rendering at a size the PTY
+// never confirmed.
+export const TERMINAL_MIN_COLUMNS = 40;
+export const TERMINAL_MAX_COLUMNS = 240;
+export const TERMINAL_MIN_ROWS = 10;
+export const TERMINAL_MAX_ROWS = 80;
+
+export function clampTerminalGrid(columns, rows) {
+  return {
+    columns: Math.min(
+      Math.max(Math.floor(columns), TERMINAL_MIN_COLUMNS),
+      TERMINAL_MAX_COLUMNS,
+    ),
+    rows: Math.min(
+      Math.max(Math.floor(rows), TERMINAL_MIN_ROWS),
+      TERMINAL_MAX_ROWS,
+    ),
+  };
+}
 
 /**
  * Fixed canvas grid layout for a terminal count.
@@ -311,6 +312,7 @@ export function createTerminalsController({
         status: TERMINAL_STREAM_IDLE,
         error: '',
         errorCode: '',
+        gridPending: false,
       }
     );
   }
@@ -431,9 +433,6 @@ export function createTerminalsController({
         resizeTimer: null,
         pendingResize: null,
         lastResize: null,
-        lastFitColumns: null,
-        lastFitRows: null,
-        stableFitCount: 0,
         resizeChain: Promise.resolve(),
       };
       streamRecords.set(terminalId, stream);
@@ -727,33 +726,18 @@ export function createTerminalsController({
     if (!stream || stream.terminalEnded) {
       return;
     }
+    // The server bounds are enforced here, at the single place every fitted
+    // grid passes through; the viewer can never emit a rejected size.
+    const fitted = clampTerminalGrid(columns, rows);
+    columns = fitted.columns;
+    rows = fitted.rows;
     // Skip resizes that only repeat the terminal's authoritative dimensions.
     // Without this, every tab revisit re-sends the same size on its fresh
     // stream and makes the foreground program repaint for nothing.
     if (item.columns === columns && item.rows === rows) {
-      stream.lastFitColumns = null;
-      stream.lastFitRows = null;
-      stream.stableFitCount = 0;
       clearPendingResize(stream);
+      setStreamView(terminalId, { gridPending: false });
       return;
-    }
-    // A tab revisit remounts the tiles while the grid is still settling, so
-    // the first measured size can transiently differ from the final one and
-    // must never reach the PTY. Only a size observed unchanged across two
-    // consecutive fits becomes sendable; a new size restarts the count.
-    // An immediate fit (maximize) skips the stability pass: the tile snaps to
-    // the canvas in a deterministic user action, so its measurement is
-    // trustworthy without waiting for a second frame.
-    if (!immediate) {
-      const stable =
-        stream.lastFitColumns === columns && stream.lastFitRows === rows;
-      stream.lastFitColumns = columns;
-      stream.lastFitRows = rows;
-      stream.stableFitCount = stable ? stream.stableFitCount + 1 : 1;
-      if (stream.stableFitCount < RESIZE_STABILITY_FITS) {
-        clearPendingResize(stream);
-        return;
-      }
     }
     stream.pendingResize = { terminalId, columns, rows };
     if (
@@ -761,8 +745,15 @@ export function createTerminalsController({
       stream.lastResize.columns === columns &&
       stream.lastResize.rows === rows
     ) {
+      // The identical request was already sent; repeating it would only
+      // make the program repaint. A still-diverging grid stays visible
+      // through the diagnostics surface instead.
+      stream.pendingResize = null;
       return;
     }
+    // From here a real correction enters the pipeline; until its response
+    // lands, the divergence is expected and the diagnostics stay quiet.
+    setStreamView(terminalId, { gridPending: true });
     if (stream.resizeTimer !== null) {
       clearTimeoutFn(stream.resizeTimer);
       stream.resizeTimer = null;
@@ -771,6 +762,10 @@ export function createTerminalsController({
       flushResize(stream);
       return;
     }
+    // The debounce absorbs remount transients: a tab revisit measures its
+    // settling layout several times within this window, and only the final
+    // size reaches the PTY. A genuine one-shot layout change re-fires the
+    // fit path afterwards with the corrected geometry.
     stream.resizeTimer = setTimeoutFn(
       () => flushResize(stream),
       RESIZE_DEBOUNCE_MS,
@@ -792,12 +787,34 @@ export function createTerminalsController({
           return;
         }
         try {
-          await api.resizeTerminal(
+          const result = await api.resizeTerminal(
             request.terminalId,
             request.columns,
             request.rows,
           );
+          if (!destroyed) {
+            // Adopt the server-confirmed dimensions so later fits that
+            // repeat them are recognized as no-ops instead of resending.
+            const index = state.terminals.findIndex(
+              (item) => item.terminal_id === request.terminalId,
+            );
+            if (index >= 0) {
+              state.terminals[index] = {
+                ...state.terminals[index],
+                columns: result?.columns ?? request.columns,
+                rows: result?.rows ?? request.rows,
+              };
+            }
+            setStreamView(request.terminalId, { gridPending: false });
+          }
+          if (!destroyed && state.selectedTerminalId === request.terminalId) {
+            state.actionError = '';
+          }
         } catch (error) {
+          // Allow a later fit at the same grid to retry the failed request.
+          stream.lastResize = null;
+          // gridPending stays lit: the tile still renders at a size the
+          // PTY never confirmed.
           if (
             !destroyed &&
             !stream.terminalEnded &&

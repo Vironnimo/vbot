@@ -19,11 +19,9 @@ const subscribeTerminalEventsMock = vi.fn();
 const streams = [];
 const terminalInstances = [];
 const fitAddons = [];
-const webglAddons = [];
 const resizeObservers = [];
 let mockHostWidth = 800;
 let mockHostHeight = 512;
-let webglActivationFails = false;
 
 vi.mock('svelte', async () => {
   return import('../../../node_modules/svelte/src/index-client.js');
@@ -128,26 +126,10 @@ vi.mock('@xterm/addon-fit', () => ({
   },
 }));
 
-vi.mock('@xterm/addon-webgl', () => ({
-  WebglAddon: class MockWebglAddon {
-    constructor() {
-      if (webglActivationFails) {
-        throw new Error('WebGL is unavailable');
-      }
-      this.dispose = vi.fn();
-      this.onContextLoss = vi.fn((callback) => {
-        this.onContextLossCallback = callback;
-        return { dispose: vi.fn() };
-      });
-      webglAddons.push(this);
-    }
-  },
-}));
-
 // A real browser fires a ResizeObserver when the tile host is laid out,
 // which drives scheduleFit. Same-turn observe + scheduleFit must not
-// confirm the grid: WebGL waits for a follow-up measurement on the next
-// animation frame, then two more frames before the addon is created.
+// confirm the grid: the follow-up measurement happens on the next
+// animation frame.
 class MockResizeObserver {
   constructor(callback) {
     this.callback = callback;
@@ -175,11 +157,9 @@ describe('TerminalsView', () => {
     streams.length = 0;
     terminalInstances.length = 0;
     fitAddons.length = 0;
-    webglAddons.length = 0;
     resizeObservers.length = 0;
     mockHostWidth = 800;
     mockHostHeight = 512;
-    webglActivationFails = false;
     listTerminalsMock.mockReset();
     startTerminalMock.mockReset().mockResolvedValue({});
     sendTerminalInputMock.mockReset().mockResolvedValue({});
@@ -237,11 +217,7 @@ describe('TerminalsView', () => {
     expect(document.querySelector('.terminals-view__tile-bar-meta')).toBeNull();
     expect(terminalInstances[0].options.theme.background).toBe('#0E0D0B');
     expect(terminalInstances[0].loadAddon).toHaveBeenCalledWith(fitAddons[0]);
-    await waitForWebgl();
-    const webglAddon = webglAddons.at(-1);
-    expect(terminalInstances[0].loadAddon).toHaveBeenCalledWith(webglAddon);
-    webglAddon.onContextLossCallback();
-    expect(webglAddon.dispose).toHaveBeenCalled();
+    await flushAnimationFrames(2);
     expect(document.querySelector('button[role="switch"]')).toBeNull();
     expect(document.body.textContent).not.toContain(
       'Quiet is not a semantic prompt.',
@@ -251,7 +227,6 @@ describe('TerminalsView', () => {
       '\u001b[2JDemo TUI ready',
       expect.any(Function),
     );
-    expect(terminalInstances[0].refresh).toHaveBeenCalledWith(0, 27);
 
     await unmount(mountedComponent);
     mountedComponent = null;
@@ -262,37 +237,44 @@ describe('TerminalsView', () => {
     expect(killTerminalMock).not.toHaveBeenCalled();
   });
 
-  it('loads the FitAddon and resizes the terminal to fill the host', async () => {
+  it('loads the FitAddon, fits the host grid, and never loads an accelerated renderer', async () => {
     listTerminalsMock.mockResolvedValue(terminalListResponse([terminal()]));
     mountedComponent = mount(TerminalsView, { target: document.body });
     flushSync();
 
     await waitFor(() => streams.length === 1 && terminalInstances.length === 1);
-    await waitForWebgl();
+    await flushAnimationFrames(2);
 
     expect(fitAddons).toHaveLength(1);
+    expect(terminalInstances[0].loadAddon).toHaveBeenCalledTimes(1);
     expect(terminalInstances[0].loadAddon).toHaveBeenCalledWith(fitAddons[0]);
     expect(fitAddons[0].fit).toHaveBeenCalled();
-    expect(webglAddons).toHaveLength(1);
-    expect(terminalInstances[0].loadAddon).toHaveBeenCalledWith(webglAddons[0]);
     expect(terminalInstances[0].cols).toBe(100);
     expect(terminalInstances[0].rows).toBe(32);
   });
 
-  it('keeps the Terminal Session usable when WebGL is unavailable', async () => {
-    webglActivationFails = true;
+  it('shows a diagnostics hint when a tile keeps rendering at a size the session never confirmed', async () => {
     listTerminalsMock.mockResolvedValue(terminalListResponse([terminal()]));
     mountedComponent = mount(TerminalsView, { target: document.body });
     flushSync();
-
     await waitFor(() => streams.length === 1 && terminalInstances.length === 1);
-    await waitForWebgl();
+    // The tile fits 100x32 while the session still runs at its start size:
+    // while the correction is in flight the hint stays quiet.
+    await flushAnimationFrames(2);
+    expect(document.querySelector('.terminals-view__grid-mismatch')).toBeNull();
 
-    expect(webglAddons).toHaveLength(0);
-    expect(terminalInstances[0].options.disableStdin).toBe(false);
-    expect(document.body.textContent).not.toContain(
-      'The browser terminal renderer could not be loaded.',
+    // The server confirms a different size than the fitted tile: the
+    // pipeline closed without reconciling the two grids.
+    resizeTerminalMock.mockResolvedValue({ columns: 120, rows: 40 });
+    mockHostHeight = 660;
+    resizeObservers[0].fire();
+    await flushAnimationFrames(2);
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    await waitFor(() =>
+      Boolean(document.querySelector('.terminals-view__grid-mismatch')),
     );
+    const hint = document.querySelector('.terminals-view__grid-mismatch');
+    expect(hint.textContent).toContain('Session');
   });
 
   it('uses the shared secondary sidebar header, action, list, and selection contract', async () => {
@@ -655,7 +637,7 @@ describe('TerminalsView', () => {
     mountedComponent = mount(TerminalsView, { target: document.body });
     flushSync();
     await waitFor(() => streams.length === 1 && terminalInstances.length === 1);
-    await waitForWebgl();
+    await new Promise((resolve) => setTimeout(resolve, 150));
     expect(resizeObservers).toHaveLength(1);
     resizeTerminalMock.mockClear();
 
@@ -669,7 +651,6 @@ describe('TerminalsView', () => {
     // A settled size is still debounced before it reaches the PTY.
     await new Promise((resolve) => setTimeout(resolve, 120));
     expect(resizeTerminalMock).toHaveBeenCalledWith('term-1', 50, 32);
-    expect(terminalInstances[0].refresh).toHaveBeenCalled();
   });
 
   it('re-fits the first tile when a second terminal joins the canvas', async () => {
@@ -684,9 +665,7 @@ describe('TerminalsView', () => {
     mountedComponent = mount(TerminalsView, { target: document.body });
     flushSync();
     await waitFor(() => streams.length === 1 && terminalInstances.length === 1);
-    await waitForWebgl();
     const fitsBefore = fitAddons[0].fit.mock.calls.length;
-    const refreshesBefore = terminalInstances[0].refresh.mock.calls.length;
 
     findButton('New terminal').click();
     flushSync();
@@ -699,77 +678,6 @@ describe('TerminalsView', () => {
     await flushAnimationFrames(1);
 
     expect(fitAddons[0].fit.mock.calls.length).toBeGreaterThan(fitsBefore);
-    expect(terminalInstances[0].refresh.mock.calls.length).toBeGreaterThan(
-      refreshesBefore,
-    );
-  });
-
-  it('does not create WebGL from two same-turn fits on remount', async () => {
-    listTerminalsMock.mockResolvedValue(terminalListResponse([terminal()]));
-    mountedComponent = mount(TerminalsView, { target: document.body });
-    flushSync();
-    await waitFor(() => streams.length === 1 && terminalInstances.length === 1);
-    await Promise.resolve();
-    flushSync();
-    expect(webglAddons).toHaveLength(0);
-
-    await flushAnimationFrames(1);
-    expect(webglAddons).toHaveLength(0);
-
-    await flushAnimationFrames(2);
-    expect(webglAddons).toHaveLength(1);
-  });
-
-  it('drops WebGL when the backing canvas is not a multiple of the grid', async () => {
-    listTerminalsMock.mockResolvedValue(terminalListResponse([terminal()]));
-    mountedComponent = mount(TerminalsView, { target: document.body });
-    flushSync();
-    await waitFor(() => streams.length === 1 && terminalInstances.length === 1);
-    await waitForWebgl();
-    expect(webglAddons).toHaveLength(1);
-    const resizesBefore = resizeTerminalMock.mock.calls.length;
-
-    const screen = document.querySelector('.xterm-screen');
-    const canvas = document.createElement('canvas');
-    canvas.height = terminalInstances[0].rows * 15 + 1;
-    canvas.width = 100;
-    Object.defineProperty(canvas, 'clientHeight', { get: () => 480 });
-    screen.append(canvas);
-    resizeObservers[0].fire();
-    await Promise.resolve();
-    flushSync();
-
-    expect(webglAddons[0].dispose).toHaveBeenCalledOnce();
-    expect(resizeTerminalMock.mock.calls.length).toBe(resizesBefore);
-
-    await flushAnimationFrames(3);
-    expect(webglAddons).toHaveLength(1);
-  });
-
-  it('rebuilds WebGL after a same-size snapshot write', async () => {
-    listTerminalsMock.mockResolvedValue(terminalListResponse([terminal()]));
-    mountedComponent = mount(TerminalsView, { target: document.body });
-    flushSync();
-    await waitFor(() => streams.length === 1 && terminalInstances.length === 1);
-    await waitForWebgl();
-    expect(webglAddons).toHaveLength(1);
-    const firstAddon = webglAddons[0];
-    const resizesBefore = resizeTerminalMock.mock.calls.length;
-
-    streams[0].handlers.onEvent({
-      type: 'terminal_ready',
-      sequence: 2,
-      terminal: terminal({ columns: 100, rows: 32 }),
-      ansi: '\u001b[2Jsame-size snapshot',
-    });
-    flushSync();
-    expect(firstAddon.dispose).toHaveBeenCalledOnce();
-    expect(webglAddons).toHaveLength(1);
-
-    await waitForWebgl();
-    expect(webglAddons).toHaveLength(2);
-    expect(terminalInstances[0].loadAddon).toHaveBeenCalledWith(webglAddons[1]);
-    expect(resizeTerminalMock.mock.calls.length).toBe(resizesBefore);
   });
 
   it('rebuilds both tiles after the Terminals tab is mounted again', async () => {
@@ -782,12 +690,9 @@ describe('TerminalsView', () => {
     mountedComponent = mount(TerminalsView, { target: document.body });
     flushSync();
     await waitFor(() => streams.length === 2 && terminalInstances.length === 2);
-    await waitForWebgl();
-    expect(webglAddons).toHaveLength(2);
 
     await unmount(mountedComponent);
     mountedComponent = null;
-    webglAddons.length = 0;
 
     mountedComponent = mount(TerminalsView, { target: document.body });
     flushSync();
@@ -815,10 +720,14 @@ describe('TerminalsView', () => {
       ansi: '\u001b[2Jsecond remount snapshot',
     });
     flushSync();
-    await waitForWebgl();
-    expect(webglAddons).toHaveLength(2);
-    expect(terminalInstances[2].refresh).toHaveBeenCalled();
-    expect(terminalInstances[3].refresh).toHaveBeenCalled();
+    expect(terminalInstances[2].write).toHaveBeenCalledWith(
+      '\u001b[2Jfirst remount snapshot',
+      expect.any(Function),
+    );
+    expect(terminalInstances[3].write).toHaveBeenCalledWith(
+      '\u001b[2Jsecond remount snapshot',
+      expect.any(Function),
+    );
   });
 
   it('focuses the first tile and switches focus via a tile bar click', async () => {
@@ -1095,11 +1004,6 @@ function terminalListResponse(terminals, groups) {
     }),
   ];
   return { groups: groupList, terminals };
-}
-
-function waitForWebgl() {
-  // Follow-up fit on the next frame, then the existing double-rAF WebGL load.
-  return flushAnimationFrames(3);
 }
 
 function flushAnimationFrames(count = 1) {

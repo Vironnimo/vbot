@@ -73,6 +73,9 @@ export const englishCatalog = Object.freeze({
     'The Terminal Session was removed from the list.',
   'terminals.streamGap':
     'Terminal output continuity was lost; rebuilding the live screen.',
+  'terminals.gridMismatch': 'Tile {fitted} · Session {server}',
+  'terminals.gridMismatchHelp':
+    'This tile shows its content at a different size than the terminal session uses. Try resizing the window or maximizing this tile once to reapply the session size.',
   'terminals.unknownError': 'Unknown terminal error',
   'terminals.rendererError':
     'The browser terminal renderer could not be loaded.',

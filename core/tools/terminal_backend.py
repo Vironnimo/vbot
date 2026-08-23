@@ -6,6 +6,7 @@ import codecs
 import contextlib
 import copy
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -27,6 +28,15 @@ _WINDOWS_INTERACTIVE_SHELLS = ("pwsh.exe", "powershell.exe")
 TERMINAL_TITLE_MAX_CHARS = 160
 _APPLICATION_CURSOR_MODE = 1
 _PRIVATE_MODE_SEQUENCE_MIN = 1000
+# pyte ignores the ``<``/``>``/``=`` CSI prefixes and dispatches the payload
+# as a normal sequence. A TUI enabling xterm keyboard modes (for example
+# ``CSI > 4 ; 1 m`` for modifyOtherKeys) is then misread as SGR
+# "underscore + bold", and every blank cell written afterwards inherits
+# those attributes — the viewer draws white underlines under blank rows.
+# pyte cannot act on any of these keyboard/DA sequences, so they are
+# dropped before they reach it.
+_XT_KEYBOARD_MODE_COMPLETE = re.compile(r"\x1b\[[<>=][0-9;:]*[A-Za-z]")
+_XT_KEYBOARD_MODE_PARTIAL = re.compile(r"\x1b\[[<>=][0-9;:]*$")
 _SCREEN_STATE_FIELDS = (
     "savepoints",
     "columns",
@@ -232,9 +242,22 @@ class TerminalRenderer:
         self._scrollback: deque[_ScrollbackLine] = deque(maxlen=scrollback_lines)
         self._screen = _TerminalScreen(columns, rows, self._capture_scrolled_line)
         self._stream = pyte.Stream(self._screen)
+        self._held_sequence_prefix = ""
 
     def feed(self, text: str) -> bool:
         """Render output and report whether it exited an alternate screen."""
+        if not text:
+            return False
+        text = self._held_sequence_prefix + text
+        self._held_sequence_prefix = ""
+        text = _XT_KEYBOARD_MODE_COMPLETE.sub("", text)
+        # A keyboard-mode sequence can be split across PTY read chunks; its
+        # incomplete head is held back so the remainder in the next chunk
+        # completes it instead of leaking into the text stream.
+        partial = _XT_KEYBOARD_MODE_PARTIAL.search(text)
+        if partial:
+            self._held_sequence_prefix = partial.group(0)
+            text = text[: partial.start()]
         if not text:
             return False
         alternate_exit_revision = self._screen.alternate_exit_revision
