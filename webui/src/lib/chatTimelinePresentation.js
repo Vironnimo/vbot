@@ -1749,8 +1749,24 @@ function formatDurationMs(durationMs, i18nKey = 'chat.runDurationSeconds') {
       seconds: elapsedSeconds.toFixed(1),
     });
   }
-  return t(i18nKey, '{seconds}s', {
-    seconds: Math.round(elapsedSeconds),
+  if (elapsedSeconds < 60) {
+    return t(i18nKey, '{seconds}s', {
+      seconds: Math.round(elapsedSeconds),
+    });
+  }
+  const totalSeconds = Math.round(elapsedSeconds);
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  if (hours > 0) {
+    return t('chat.durationHoursMinutes', '{hours}h {minutes}m', {
+      hours,
+      minutes,
+    });
+  }
+  return t('chat.durationMinutesSeconds', '{minutes}m {seconds}s', {
+    minutes,
+    seconds,
   });
 }
 

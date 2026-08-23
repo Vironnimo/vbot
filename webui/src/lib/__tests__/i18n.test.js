@@ -99,6 +99,8 @@ describe('i18n t()', () => {
       'skillAutocomplete.noDescription',
       'chat.runIterations',
       'chat.runDurationSeconds',
+      'chat.durationMinutesSeconds',
+      'chat.durationHoursMinutes',
       'chat.toolArgs',
       'chat.toolResultLabel',
       'chat.toolCancelled',
