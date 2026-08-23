@@ -1245,6 +1245,19 @@
 
 /* --- Extensions panel --- */
 
+/* The "Waiting for: …" tail of the waiting hint gets its own visual beat so
+   the two sentences don't run together in one grey line. */
+.s-ext-waiting-for {
+  color: var(--amber);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mono-xs);
+}
+
+.s-ext-waiting-for::before {
+  content: '· ';
+  color: var(--text-lo);
+}
+
 .s-ext-list {
   display: flex;
   flex-direction: column;
