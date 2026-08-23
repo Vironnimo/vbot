@@ -7,6 +7,7 @@ import {
   createChatRpcMock,
   expect,
   findButtonByText,
+  findNewSessionButton,
   flushSync,
   hoveredContextRingTooltip,
   it,
@@ -757,7 +758,7 @@ describe('ChatView', () => {
     );
 
     expect(findButtonByText('Sessions')).toBeTruthy();
-    expect(findButtonByText('New session')).toBeTruthy();
+    expect(findNewSessionButton()).toBeTruthy();
     expect(findButtonByText('Refresh')).toBeFalsy();
     expect(document.body.querySelector('.chat-refresh')).toBeNull();
   });

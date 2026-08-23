@@ -341,6 +341,14 @@ export function findCancelRunButton() {
   );
 }
 
+// The New Session action is a floating icon-only button (no text content), so
+// it is matched by its aria-label instead of visible text.
+export function findNewSessionButton() {
+  return Array.from(document.querySelectorAll('button')).find(
+    (button) => button.getAttribute('aria-label') === 'New session',
+  );
+}
+
 export function activeAgentTab() {
   return document.querySelector('.agent-tab.active');
 }
