@@ -199,6 +199,11 @@
 .s-section-header {
   padding-bottom: 10px;
   border-bottom: 1px solid var(--border);
+  /* Breathing room between the header divider and the first content block so
+     a boxed control (e.g. the Compaction enabled-card) never sits flush on the
+     line. Rows still supply their own leading padding, so this keeps the
+     header gap in step with the row-to-row rhythm. */
+  margin-bottom: 12px;
 }
 
 .s-section-title {
@@ -223,7 +228,7 @@
   flex-wrap: wrap;
   justify-content: space-between;
   gap: 16px;
-  padding: 14px 0;
+  padding: 12px 0;
   border-bottom: 1px solid var(--border);
 }
 

@@ -1123,7 +1123,7 @@
     {/if}
 
     <!-- Active wakeword models and local model management -->
-    <div class="s-row">
+    <div class="s-row s-row--stacked">
       <div class="s-row-info">
         <div class="s-row-label">
           {t('settings.voice.models', 'Wakeword phrases')}
@@ -1228,6 +1228,13 @@
           {/each}
         </div>
         <div class="voice-model-actions">
+          <span class="voice-model-limit">
+            {t(
+              'settings.voice.modelLimit',
+              '{count} of 2 wakeword models active',
+              { count: voiceState.active_model_ids.length },
+            )}
+          </span>
           <input
             bind:this={modelFileInput}
             class="voice-model-file"
@@ -1244,17 +1251,10 @@
             {t('settings.voice.importModel', 'Import TFLite model')}
           </Button>
         </div>
-        <div class="voice-model-limit">
-          {t(
-            'settings.voice.modelLimit',
-            '{count} of 2 wakeword models active',
-            { count: voiceState.active_model_ids.length },
-          )}
-        </div>
       </div>
     </div>
 
-    <div class="s-row">
+    <div class="s-row s-row--stacked">
       <div class="s-row-info">
         <div class="s-row-label">
           {t('settings.voice.calibrationTitle', 'Wakeword calibration')}
@@ -1754,16 +1754,27 @@
     min-width: 300px;
   }
 
+  /* In a stacked row the control owns the full content width, so the narrow
+     right-floating column and its dead gutter go away. */
+  .s-row--stacked .voice-model-control,
+  .s-row--stacked .voice-calibration-control {
+    width: 100%;
+    min-width: 0;
+    margin-left: 0;
+    justify-content: flex-start;
+  }
+
   .voice-model-control {
     display: flex;
     flex-direction: column;
     align-items: stretch;
-    gap: 8px;
+    gap: 10px;
   }
   .voice-model-list {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+    align-items: start;
+    gap: 10px;
   }
   .voice-model-card {
     padding: 10px 12px;
@@ -1822,12 +1833,13 @@
   }
   .voice-model-actions {
     display: flex;
-    justify-content: flex-end;
+    align-items: center;
+    justify-content: space-between;
     flex-wrap: wrap;
     gap: 8px;
   }
   .voice-model-limit {
-    text-align: right;
+    min-width: 0;
   }
   .voice-model-file {
     display: none;
@@ -1840,6 +1852,11 @@
     gap: 12px;
     color: var(--text-med);
     font-size: var(--fs-body-sm);
+  }
+  .voice-calibration-entry > span {
+    min-width: 0;
+    flex: 1;
+    max-width: 62ch;
   }
   .voice-calibration-panel {
     display: flex;
