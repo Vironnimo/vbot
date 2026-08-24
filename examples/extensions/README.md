@@ -26,8 +26,7 @@ An extension is a single `.py` file (or a directory/package) whose **name is its
 identity**. It exposes one function:
 
 ```python
-def register(api):
-    ...
+def register(api): ...
 ```
 
 `register(api)` only *declares* — it wires up:

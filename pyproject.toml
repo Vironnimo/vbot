@@ -19,9 +19,11 @@ classifiers = [
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Topic :: Software Development :: Libraries :: Application Frameworks",
 ]
-dependencies = ["httpx", "idna>=3,<4", "curl_cffi>=0.7,<1", "pyyaml", "croniter", "tzdata", "tzlocal>=5,<6", "beautifulsoup4", "pypdf>=4,<6", "sqlite-vec>=0.1.9,<0.2", "pathspec>=1.1", "jsonschema>=4.25,<5", "tiktoken>=0.13,<1", "websockets>=14,<17", "pyte>=0.8.2,<0.9", "pywinpty>=3,<4; sys_platform == 'win32'", "ptyprocess>=0.7,<1; sys_platform != 'win32'"]
+dependencies = ["httpx", "idna>=3,<4", "curl_cffi>=0.7,<1", "pyyaml", "croniter", "tzdata", "tzlocal>=5,<6", "beautifulsoup4", "pypdf>=6,<7", "sqlite-vec>=0.1.9,<0.2", "pathspec>=1.1", "jsonschema>=4.25,<5", "tiktoken>=0.13,<1", "websockets>=14,<18", "pyte>=0.8.2,<0.9", "pywinpty>=3,<4; sys_platform == 'win32'", "ptyprocess>=0.7,<1; sys_platform != 'win32'"]
 
 [project.scripts]
 vbot = "cli.main:main"
@@ -61,7 +63,10 @@ select = ["E", "F", "I", "N", "W", "UP", "B", "C4", "SIM"]
 quote-style = "double"
 
 [tool.mypy]
-python_version = "3.11"
+# 3.12 rather than our 3.11 runtime floor: current third-party stubs (numpy)
+# use `type` statements and cannot be parsed under 3.11. Floor syntax stays
+# guarded by ruff's py311 target and the real 3.11 test runs in CI.
+python_version = "3.12"
 warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = false
