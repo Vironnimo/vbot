@@ -1157,4 +1157,51 @@ async def test_iter_with_chunk_timeout_disabled_never_aborts_on_silence() -> Non
     ]
 
 
+async def test_reasoning_timing_absent_without_reasoning_deltas() -> None:
+    accumulator = StreamingAccumulator()
+    accumulator.add_delta({"type": "content_delta", "text": "Answer"})
+    accumulator.add_delta(
+        {
+            "type": "tool_call_delta",
+            "id": "call_1",
+            "name_delta": "read",
+            "arguments_delta": "{}",
+        }
+    )
+
+    fields = accumulator.finalize_assistant_fields()
+
+    assert fields.reasoning_timing is None
+
+
+async def test_reasoning_timing_spans_first_to_last_reasoning_delta() -> None:
+    accumulator = StreamingAccumulator()
+    accumulator.add_delta({"type": "reasoning_delta", "text": "Think"})
+    await asyncio.sleep(0.02)
+    # Empty reasoning fragments carry no text and must not move the window.
+    accumulator.add_delta({"type": "reasoning_delta", "text": ""})
+    accumulator.add_delta({"type": "reasoning_delta", "text": " more"})
+
+    timing = accumulator.reasoning_timing
+
+    assert timing is not None
+    assert set(timing) == {"started_at", "completed_at", "duration_ms"}
+    assert timing["started_at"] < timing["completed_at"]
+    assert timing["duration_ms"] >= 10
+    fields = accumulator.finalize_assistant_fields()
+    assert fields.reasoning_timing == timing
+
+
+async def test_reasoning_timing_present_on_finalized_partial_fields() -> None:
+    accumulator = StreamingAccumulator()
+    accumulator.add_delta({"type": "reasoning_delta", "text": "Partial thought"})
+
+    fields = accumulator.finalize_partial_fields()
+
+    assert fields.reasoning is not None
+    assert fields.reasoning_timing is not None
+    assert fields.reasoning_timing["duration_ms"] >= 0
+    assert fields.reasoning_timing["started_at"] <= fields.reasoning_timing["completed_at"]
+
+
 AsyncIteratorForTest = Any

@@ -19,6 +19,7 @@ import {
   reflectionElapsedLabel,
   reflectionScopeForRunKind,
   reflectionTaskRows,
+  reasoningDurationLabel,
   resolveSubAgentCancelPlan,
   runChangeStats,
   runFooterParts,
@@ -1945,5 +1946,44 @@ describe('reflection panel helpers', () => {
     );
     expect(reflectionElapsedLabel('', Date.now())).toBe('');
     expect(reflectionElapsedLabel(start, Number.NaN)).toBe('');
+  });
+});
+
+describe('reasoningDurationLabel', () => {
+  it('prefers the persisted duration from the stable boundary', () => {
+    expect(reasoningDurationLabel({ durationMs: 4200 }, Date.now())).toBe(
+      '4.2s',
+    );
+  });
+
+  it('ticks live from the first streamed delta while streaming', () => {
+    const child = {
+      durationMs: null,
+      streaming: true,
+      timestamp: '2026-08-24T10:00:00+00:00',
+    };
+
+    expect(
+      reasoningDurationLabel(child, Date.parse(child.timestamp) + 8300),
+    ).toBe('8.3s');
+  });
+
+  it('stays empty without a measurable span and after a non-streamed block', () => {
+    expect(reasoningDurationLabel({ durationMs: null, streaming: false })).toBe(
+      '',
+    );
+    expect(
+      reasoningDurationLabel(
+        { durationMs: null, streaming: true, timestamp: null },
+        Date.now(),
+      ),
+    ).toBe('');
+    // Non-streamed blocks never estimate: only the persisted value counts.
+    expect(
+      reasoningDurationLabel(
+        { durationMs: null, streaming: false },
+        Date.now(),
+      ),
+    ).toBe('');
   });
 });

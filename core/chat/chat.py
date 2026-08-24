@@ -4205,6 +4205,7 @@ class ChatLoop:
             agent.model,
             assistant_fields.to_response_dict(),
             reasoning_scope=response_model,
+            reasoning_timing=assistant_fields.reasoning_timing,
         )
         assistant_message = _with_assistant_output_files(assistant_message, cwd=output_cwd)
         _emit_streaming_assistant_events(run, assistant_message)
@@ -4239,10 +4240,12 @@ class ChatLoop:
         assistant-output event through the cancel suppression — it re-publishes
         text the user already saw streaming, not a late result.
         """
+        partial_fields = accumulator.finalize_partial_fields()
         assistant_message = _assistant_message_from_response(
             agent.model,
-            accumulator.finalize_partial_fields().to_response_dict(),
+            partial_fields.to_response_dict(),
             reasoning_scope=response_model,
+            reasoning_timing=partial_fields.reasoning_timing,
             interrupted=True,
             interruption_cause=interruption_cause,
         )

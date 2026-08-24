@@ -466,6 +466,7 @@ class ChatMessage:
     reasoning: str | None = None
     reasoning_meta: JsonObject | None = None
     reasoning_scope: str | None = None
+    reasoning_timing: JsonObject | None = None
     phase: str | None = None
     usage: JsonObject | None = None
     timing: JsonObject | None = None
@@ -552,6 +553,7 @@ class ChatMessage:
         reasoning: str | None = None,
         reasoning_meta: JsonObject | None = None,
         reasoning_scope: str | None = None,
+        reasoning_timing: JsonObject | None = None,
         phase: str | None = None,
         usage: JsonObject | None = None,
         tool_calls: list[ToolCall] | None = None,
@@ -567,6 +569,8 @@ class ChatMessage:
         not finish, so the next request continues it (see chat domain map).
         ``interruption_cause`` keeps the normalized reason with that durable
         partial turn for result consumers; neither field reaches Provider wires.
+        ``reasoning_timing`` carries the measured first-to-last reasoning delta
+        span of a streamed turn; it is presentation metadata like Tool timing.
         """
         return cls(
             id=_new_message_id(),
@@ -577,6 +581,7 @@ class ChatMessage:
             reasoning=reasoning,
             reasoning_meta=dict(reasoning_meta) if reasoning_meta is not None else None,
             reasoning_scope=reasoning_scope,
+            reasoning_timing=(dict(reasoning_timing) if reasoning_timing is not None else None),
             phase=phase,
             usage=dict(usage) if usage is not None else None,
             tool_calls=list(tool_calls) if tool_calls is not None else None,
@@ -755,6 +760,7 @@ class ChatMessage:
         _add_if_not_none(message, "reasoning", self.reasoning)
         _add_if_not_none(message, "reasoning_meta", self.reasoning_meta)
         _add_if_not_none(message, "reasoning_scope", self.reasoning_scope)
+        _add_if_not_none(message, "reasoning_timing", self.reasoning_timing)
         _add_if_not_none(message, "phase", self.phase)
         _add_if_not_none(message, "usage", self.usage)
         _add_if_not_none(message, "timing", self.timing)
@@ -791,6 +797,9 @@ class ChatMessage:
         reasoning_meta = data.get("reasoning_meta")
         if reasoning_meta is not None and not isinstance(reasoning_meta, dict):
             raise ChatMessageValidationError("reasoning_meta must be an object")
+        reasoning_timing = data.get("reasoning_timing")
+        if reasoning_timing is not None and not isinstance(reasoning_timing, dict):
+            raise ChatMessageValidationError("reasoning_timing must be an object")
         usage = data.get("usage")
         if usage is not None and not isinstance(usage, dict):
             raise ChatMessageValidationError("usage must be an object")
@@ -843,6 +852,7 @@ class ChatMessage:
             reasoning=_optional_string(data, "reasoning"),
             reasoning_meta=dict(reasoning_meta) if reasoning_meta is not None else None,
             reasoning_scope=_optional_string(data, "reasoning_scope"),
+            reasoning_timing=(dict(reasoning_timing) if reasoning_timing is not None else None),
             phase=_optional_string(data, "phase"),
             usage=dict(usage) if usage is not None else None,
             timing=dict(timing) if timing is not None else None,
@@ -1048,6 +1058,8 @@ def _message_to_request_dict(
         data.pop("output_files", None)
     data.pop("timing", None)
     data.pop("tool_display", None)
+    # Reasoning duration is presentation metadata, never a wire field.
+    data.pop("reasoning_timing", None)
     # Sender attribution exists only in the provider request: persisted content stays
     # clean and the tag cannot be spoofed by typing a look-alike prefix in message text.
     data.pop("sender", None)
@@ -1158,6 +1170,7 @@ def _assistant_continuation_dict(
     data.pop("usage", None)
     data.pop("timing", None)
     data.pop("tool_display", None)
+    data.pop("reasoning_timing", None)
     data.pop("interrupted", None)
     data.pop("interruption_cause", None)
     data.pop("output_files", None)
@@ -1704,6 +1717,7 @@ def _assistant_message_from_response(
     response: JsonObject,
     *,
     reasoning_scope: str | None = None,
+    reasoning_timing: JsonObject | None = None,
     interrupted: bool = False,
     interruption_cause: str | None = None,
 ) -> ChatMessage:
@@ -1723,6 +1737,7 @@ def _assistant_message_from_response(
         reasoning_scope=(
             reasoning_scope if reasoning is not None or reasoning_meta is not None else None
         ),
+        reasoning_timing=reasoning_timing if reasoning is not None else None,
         phase=_response_phase(response),
         usage=response.get("usage"),
         tool_calls=tool_calls,
@@ -2044,6 +2059,7 @@ def _validate_system_message(message: ChatMessage) -> None:
         message,
         "reasoning",
         "reasoning_meta",
+        "reasoning_timing",
         "usage",
         "timing",
         "tool_calls",
@@ -2074,6 +2090,7 @@ def _validate_user_message(message: ChatMessage) -> None:
         "model",
         "reasoning",
         "reasoning_meta",
+        "reasoning_timing",
         "usage",
         "timing",
         "tool_calls",
@@ -2124,6 +2141,12 @@ def _validate_assistant_message(message: ChatMessage) -> None:
     )
     if message.reasoning_meta is not None and not isinstance(message.reasoning_meta, dict):
         raise ChatMessageValidationError("reasoning_meta must be an object")
+    if message.reasoning_timing is not None:
+        if message.reasoning is None:
+            raise ChatMessageValidationError(
+                "assistant messages reasoning_timing requires reasoning"
+            )
+        _validate_timing_payload(message.reasoning_timing)
     if message.phase is not None and not message.phase:
         raise ChatMessageValidationError("assistant phase must be a non-empty string")
     if message.usage is not None and not isinstance(message.usage, dict):
@@ -2199,6 +2222,7 @@ def _validate_tool_message(message: ChatMessage) -> None:
         "model",
         "reasoning",
         "reasoning_meta",
+        "reasoning_timing",
         "usage",
         "tool_calls",
         "error_kind",
@@ -2220,6 +2244,7 @@ def _validate_note_message(message: ChatMessage) -> None:
         "model",
         "reasoning",
         "reasoning_meta",
+        "reasoning_timing",
         "usage",
         "timing",
         "tool_calls",
@@ -2245,6 +2270,7 @@ def _validate_error_message(message: ChatMessage) -> None:
         "model",
         "reasoning",
         "reasoning_meta",
+        "reasoning_timing",
         "usage",
         "timing",
         "tool_calls",
@@ -2317,6 +2343,7 @@ def _validate_compaction_checkpoint_message(message: ChatMessage) -> None:
         "model",
         "reasoning",
         "reasoning_meta",
+        "reasoning_timing",
         "timing",
         "tool_calls",
         "tool_call_id",
@@ -2353,6 +2380,7 @@ def _validate_run_summary_message(message: ChatMessage) -> None:
         "model",
         "reasoning",
         "reasoning_meta",
+        "reasoning_timing",
         "usage",
         "tool_calls",
         "tool_call_id",
@@ -2390,6 +2418,7 @@ def _validate_agent_takeover_message(message: ChatMessage) -> None:
         "model",
         "reasoning",
         "reasoning_meta",
+        "reasoning_timing",
         "usage",
         "timing",
         "tool_calls",

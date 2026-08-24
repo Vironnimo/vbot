@@ -284,6 +284,11 @@
   color: var(--text-hi);
 }
 
+.reasoning-duration {
+  font-variant-numeric: tabular-nums;
+  opacity: 0.7;
+}
+
 .reasoning-icon {
   width: 10px;
   height: 10px;

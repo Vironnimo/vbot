@@ -8,6 +8,7 @@ import time
 from collections import OrderedDict
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from enum import Enum
 from typing import Any
 from urllib.parse import urlparse
@@ -294,6 +295,7 @@ class StreamingAssistantFields:
     tool_calls: list[JsonObject] | None
     finish_reason: TerminalOutcome | None
     usage: JsonObject | None = None
+    reasoning_timing: JsonObject | None = None
 
     def to_response_dict(self) -> JsonObject:
         """Return fields in the same shape as adapter response normalization."""
@@ -352,6 +354,10 @@ class StreamingAccumulator:
         self._content_parts: list[str] = []
         self._reasoning_parts: list[str] = []
         self._reasoning_meta: JsonObject | None = None
+        self._reasoning_started_perf: float | None = None
+        self._reasoning_ended_perf: float | None = None
+        self._reasoning_started_at: str | None = None
+        self._reasoning_completed_at: str | None = None
         self._tool_calls: OrderedDict[str, _ToolCallFragments] = OrderedDict()
         self._visible_deltas: list[StreamingVisibleDelta] = []
         self._finish_reason: TerminalOutcome | None = None
@@ -376,6 +382,25 @@ class StreamingAccumulator:
     def partial_content(self) -> str | None:
         """Return accumulated visible content so far, or None if empty."""
         return _joined_or_none(self._content_parts)
+
+    @property
+    def reasoning_timing(self) -> JsonObject | None:
+        """Return the measured first-to-last reasoning delta span, or None.
+
+        The duration uses a monotonic clock; the display timestamps are UTC ISO
+        strings captured at the first and last accepted reasoning delta, matching
+        the canonical ``timing`` payload shape used by Tool Calls and Runs.
+        """
+        if self._reasoning_started_perf is None or self._reasoning_ended_perf is None:
+            return None
+        return {
+            "started_at": self._reasoning_started_at,
+            "completed_at": self._reasoning_completed_at,
+            "duration_ms": max(
+                0,
+                round((self._reasoning_ended_perf - self._reasoning_started_perf) * 1000),
+            ),
+        }
 
     @property
     def has_partial_tool_call(self) -> bool:
@@ -421,6 +446,7 @@ class StreamingAccumulator:
             tool_calls=tool_calls or None,
             finish_reason=self._finish_reason,
             usage=dict(self._usage) if self._usage is not None else None,
+            reasoning_timing=self.reasoning_timing,
         )
 
     def finalize_partial_fields(self) -> StreamingAssistantFields:
@@ -438,6 +464,7 @@ class StreamingAccumulator:
             tool_calls=None,
             finish_reason=None,
             usage=dict(self._usage) if self._usage is not None else None,
+            reasoning_timing=self.reasoning_timing,
         )
 
     def _add_content_delta(self, delta: JsonObject) -> StreamingVisibleDelta | None:
@@ -454,11 +481,20 @@ class StreamingAccumulator:
         text = _optional_delta_string(delta, "text")
         if not text:
             return None
+        self._record_reasoning_activity()
         self._reasoning_parts.append(text)
         return StreamingVisibleDelta(
             event_type=REASONING_DELTA_EVENT,
             payload={"reasoning_delta": text},
         )
+
+    def _record_reasoning_activity(self) -> None:
+        now_perf = time.monotonic()
+        if self._reasoning_started_perf is None:
+            self._reasoning_started_perf = now_perf
+            self._reasoning_started_at = datetime.now(UTC).isoformat()
+        self._reasoning_ended_perf = now_perf
+        self._reasoning_completed_at = datetime.now(UTC).isoformat()
 
     def _add_tool_call_delta(self, delta: JsonObject) -> StreamingVisibleDelta | None:
         stream_slot, synthetic_id_suffix = _tool_call_stream_slot(delta)

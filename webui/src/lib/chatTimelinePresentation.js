@@ -316,6 +316,25 @@ export function isRunChildWorking(assistantRun, child) {
   return childIndex >= 0 && childIndex === children.length - 1;
 }
 
+// Duration label for one reasoning block header: the persisted first-to-last
+// reasoning delta span once the stable boundary arrived, otherwise a live
+// estimate ticking with the shared nowMs clock while the deltas still stream.
+// Returns '' when nothing is measurable (no timing, no streamed start time).
+export function reasoningDurationLabel(child, nowMs = Date.now()) {
+  const durationMs = child?.durationMs;
+  if (Number.isFinite(durationMs) && durationMs >= 0) {
+    return formatDurationMs(durationMs);
+  }
+  if (!child?.streaming) {
+    return '';
+  }
+  const start = timestampToMs(child.timestamp);
+  if (start === null) {
+    return '';
+  }
+  return formatDurationMs(Math.max(0, nowMs - start));
+}
+
 // Footer line for an assistant run: status · duration · iterations ·
 // provider liveness. The duration ticks live while the run is running
 // (driven by the shared nowMs clock). This is the single home for run-level
