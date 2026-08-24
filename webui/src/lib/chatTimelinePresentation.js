@@ -317,13 +317,18 @@ export function isRunChildWorking(assistantRun, child) {
 }
 
 // Duration label for one reasoning block header: the persisted first-to-last
-// reasoning delta span once the stable boundary arrived, otherwise a live
-// estimate ticking with the shared nowMs clock while the deltas still stream.
+// reasoning delta span once the stable boundary arrived, otherwise the frozen
+// estimate from when the deltas stopped growing, otherwise a live estimate
+// ticking with the shared nowMs clock while the deltas still stream.
 // Returns '' when nothing is measurable (no timing, no streamed start time).
 export function reasoningDurationLabel(child, nowMs = Date.now()) {
   const durationMs = child?.durationMs;
   if (Number.isFinite(durationMs) && durationMs >= 0) {
     return formatDurationMs(durationMs);
+  }
+  const estimateMs = child?.durationEstimateMs;
+  if (Number.isFinite(estimateMs) && estimateMs >= 0) {
+    return formatDurationMs(estimateMs);
   }
   if (!child?.streaming) {
     return '';
