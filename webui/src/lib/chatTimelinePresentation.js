@@ -146,13 +146,44 @@ export const errorMessagePresentation = (text) => {
   }
 
   const prefix = fullText.slice(0, jsonStart).trim();
-  const providerMessage = embeddedErrorMessage(parsedBody);
-  const summary = providerMessage
-    ? [prefix, providerMessage].filter(Boolean).join(' ')
+  const errorBody = isPlainObject(parsedBody.error)
+    ? parsedBody.error
+    : parsedBody;
+  const metadata = isPlainObject(errorBody.metadata) ? errorBody.metadata : {};
+  const summaryMessage = embeddedSummaryMessage(
+    embeddedErrorMessage(parsedBody),
+    metadata,
+  );
+  const summary = summaryMessage
+    ? [prefix, summaryMessage].filter(Boolean).join(' ')
     : prefix || fullText;
 
   return { summary, details: JSON.stringify(parsedBody, null, 2) };
 };
+
+// The router's upstream detail (OpenRouter's `metadata.raw` names the real
+// cause — which upstream model failed and why) replaces the often-generic
+// router message ("Provider returned error") in the directly visible summary,
+// so rate limits and upstream outages are readable without expanding details.
+// Long remedy hints stay details-only; the upstream provider name is appended.
+function embeddedSummaryMessage(providerMessage, metadata) {
+  const upstreamDetail =
+    typeof metadata.raw === 'string' && metadata.raw.trim()
+      ? metadata.raw.trim()
+      : '';
+  const providerName =
+    typeof metadata.provider_name === 'string' && metadata.provider_name.trim()
+      ? metadata.provider_name.trim()
+      : '';
+  if (!upstreamDetail && !providerName) {
+    return providerMessage;
+  }
+  const base = upstreamDetail || providerMessage;
+  if (!providerName || base.includes(providerName)) {
+    return base;
+  }
+  return `${base} ${t('chat.errorViaProvider', '(via {name})', { name: providerName })}`;
+}
 
 function embeddedErrorMessage(value) {
   if (!isPlainObject(value)) {
