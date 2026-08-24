@@ -31,7 +31,7 @@ jobs:
       RELEASE_TAG: v${{ inputs.version }}
     steps:
       - name: Check out repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
 
       - name: Validate release metadata
         run: |
@@ -57,7 +57,7 @@ jobs:
           fi
 
       - name: Download gated release candidate WebUI
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v8
         with:
           name: webui-release-candidate
           path: .

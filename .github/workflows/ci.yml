@@ -2,6 +2,7 @@ name: CI
 
 on:
   workflow_call:
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -16,16 +17,25 @@ jobs:
           - platform: linux x64
             runner: ubuntu-latest
             python: "3.11"
+          - platform: linux x64
+            runner: ubuntu-latest
+            python: "3.13"
+          - platform: linux x64
+            runner: ubuntu-latest
+            python: "3.14"
           - platform: linux arm64
             runner: ubuntu-24.04-arm
             python: "3.11"
           - platform: windows x64
             runner: windows-latest
             python: "3.11"
+          - platform: windows x64
+            runner: windows-latest
+            python: "3.14"
     runs-on: ${{ matrix.runner }}
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-python@v6
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python }}
           cache: pip
@@ -37,13 +47,13 @@ jobs:
   frontend:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-python@v6
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.11"
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v7
         with:
-          node-version: 22
+          node-version: 24
           cache: npm
           cache-dependency-path: webui/package-lock.json
       - name: Install WebUI dependencies
@@ -59,10 +69,10 @@ jobs:
     name: build release candidate WebUI
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-node@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
-          node-version: 22
+          node-version: 24
           cache: npm
           cache-dependency-path: webui/package-lock.json
       - name: Install WebUI dependencies
@@ -76,7 +86,7 @@ jobs:
           test -s webui/dist/index.html
           tar -czf webui-dist.tar.gz -C webui dist
       - name: Upload release candidate WebUI
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: webui-release-candidate
           path: webui-dist.tar.gz
@@ -98,13 +108,13 @@ jobs:
     env:
       CANDIDATE_PORT: "8420"
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-python@v6
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.11"
           cache: pip
       - name: Download release candidate WebUI
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v8
         with:
           name: webui-release-candidate
           path: .tmp/release-candidate
@@ -157,13 +167,13 @@ jobs:
     env:
       CANDIDATE_PORT: "8420"
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-python@v6
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
           cache: pip
       - name: Download release candidate WebUI
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v8
         with:
           name: webui-release-candidate
           path: .tmp/release-candidate
