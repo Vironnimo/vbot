@@ -6,6 +6,7 @@ Provider subclasses hard-code their ``retryable`` flags so that the retry
 utility can decide whether to re-attempt the call.
 """
 
+import json
 from collections.abc import Mapping
 from typing import Any
 
@@ -136,6 +137,23 @@ def _first_non_empty_string(*values: Any) -> str | None:
     return None
 
 
+def _error_text(message: str | None, error: Mapping[str, Any]) -> str:
+    """Build the persisted error text with the raw body appended as JSON.
+
+    Run failures persist ``str(exception)``, so the structured payload only
+    survives to the UI's collapsible details block when it is part of the
+    message. The trailing-JSON shape (``<summary>: {body}``) matches what the
+    HTTP-status path already produces and what the WebUI error parser expects.
+    A payload without its own message stays a bare JSON object instead of an
+    unparseable Python repr.
+    """
+
+    body = json.dumps(error, ensure_ascii=False)
+    if message:
+        return f"{message}: {body}"
+    return body
+
+
 def classify_in_band_provider_error(
     error: Any,
     *,
@@ -152,13 +170,19 @@ def classify_in_band_provider_error(
     the identical request through a different upstream endpoint, and Chat bounds
     the resulting retries. Without it (single-endpoint wires), unclassified
     errors stay fatal exactly as before.
+
+    The raised error's message embeds the raw payload as trailing JSON so the
+    provider's structured detail (upstream message, code, router metadata)
+    survives into persisted run failures and the UI details block; see
+    :func:`_error_text`.
     """
 
     if not isinstance(error, Mapping):
         return ProviderError(str(error), retryable=False)
 
     raw_message = error.get("message")
-    message = raw_message if isinstance(raw_message, str) and raw_message else str(error)
+    message = raw_message if isinstance(raw_message, str) and raw_message else None
+    message = _error_text(message, error)
     metadata = error.get("metadata")
     metadata = metadata if isinstance(metadata, Mapping) else {}
     code = error.get("code")

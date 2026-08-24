@@ -1,5 +1,7 @@
 """Tests for provider error classes and in-band error classification."""
 
+import json
+
 import pytest
 
 from core.providers.errors import (
@@ -123,3 +125,57 @@ def test_non_mapping_payload_stays_fatal() -> None:
 
     assert isinstance(classified, ProviderError)
     assert classified.retryable is False
+
+
+def test_non_mapping_message_stays_plain_text() -> None:
+    classified = classify_in_band_provider_error("quota exceeded")
+
+    assert str(classified) == "quota exceeded"
+
+
+def test_mapping_payload_embeds_raw_body_as_trailing_json() -> None:
+    payload = {
+        "message": "Provider returned error",
+        "code": 429,
+        "metadata": {
+            "raw": "temporarily rate-limited upstream",
+            "provider_name": "Stealth",
+        },
+        "availability": {"retry_after": 5},
+    }
+
+    classified = classify_in_band_provider_error(payload, lenient_unknown=True)
+
+    text = str(classified)
+    json_start = text.index("{")
+    assert text[:json_start].strip() == "Provider returned error:"
+    assert json.loads(text[json_start:]) == payload
+
+
+def test_missing_message_payload_stays_parseable_json_object() -> None:
+    payload = {"code": 500, "metadata": {"error_type": "server"}}
+
+    classified = classify_in_band_provider_error(payload)
+
+    assert json.loads(str(classified)) == payload
+
+
+@pytest.mark.parametrize(
+    ("payload", "expected_type"),
+    [
+        ({"message": "bad key", "code": 401}, ProviderAuthError),
+        ({"message": "throttled", "code": 429}, ProviderRateLimitError),
+        ({"message": "deadline", "error_type": "timeout"}, ProviderTimeoutError),
+        (
+            {"message": "overloaded", "metadata": {"error_type": "provider_overloaded"}},
+            ProviderError,
+        ),
+        ({"message": "too long", "error_type": "context_length_exceeded"}, ProviderError),
+    ],
+)
+def test_every_taxonomy_class_carries_the_raw_body(payload, expected_type) -> None:
+    classified = classify_in_band_provider_error(payload, lenient_unknown=True)
+
+    assert isinstance(classified, expected_type)
+    json_start = str(classified).index("{")
+    assert json.loads(str(classified)[json_start:]) == payload
