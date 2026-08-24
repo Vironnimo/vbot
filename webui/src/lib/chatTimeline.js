@@ -1079,6 +1079,7 @@ function appendLiveRunEvent(assistantRun, event) {
     appendTextSection(assistantRun, {
       type: 'reasoning',
       content: textFromRunEventMessage(event, 'reasoning'),
+      durationMs: event.payload?.message?.reasoning_timing?.duration_ms ?? null,
       event,
       streaming: false,
     });
@@ -1107,6 +1108,7 @@ function appendLiveRunEvent(assistantRun, event) {
       appendTextSection(assistantRun, {
         type: 'reasoning',
         content: message.reasoning,
+        durationMs: message.reasoning_timing?.duration_ms ?? null,
         event,
         streaming: false,
       });
@@ -1155,6 +1157,7 @@ function appendHistoryAssistantMessage(assistantRun, message) {
     appendTextSection(assistantRun, {
       type: 'reasoning',
       content: message.reasoning,
+      durationMs: message.reasoning_timing?.duration_ms ?? null,
       message,
       streaming: false,
     });
@@ -1263,6 +1266,7 @@ function appendTextSection(
   {
     type,
     content,
+    durationMs = null,
     event = null,
     message = null,
     streaming,
@@ -1286,6 +1290,11 @@ function appendTextSection(
       : content;
     existingItem.sequence = firstSeenSequence(existingItem.sequence, sequence);
     existingItem.timestamp ??= event?.timestamp ?? message?.timestamp;
+    if (durationMs !== null) {
+      // The stable boundary replaces the streamed draft wholesale, so its
+      // measured duration replaces any live-ticking estimate too.
+      existingItem.durationMs = durationMs;
+    }
     existingItem.streaming = streaming;
     existingItem.interrupted = interrupted;
     existingItem.events = [...(existingItem.events ?? []), event].filter(
@@ -1302,6 +1311,7 @@ function appendTextSection(
     id: `${type}-${assistantRun.id}-${sequence}`,
     type,
     content,
+    durationMs,
     sequence,
     timestamp: event?.timestamp ?? message?.timestamp,
     streaming,

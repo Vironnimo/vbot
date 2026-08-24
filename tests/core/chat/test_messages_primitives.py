@@ -618,6 +618,99 @@ class TestChatMessageFactories:
                 }
             )
 
+
+class TestReasoningTiming:
+    def test_assistant_message_round_trips_reasoning_timing(self):
+        message = ChatMessage.assistant(
+            model="openai/gpt-4.1",
+            content="Answer",
+            reasoning="Thought",
+            reasoning_timing=FIXED_TIMING,
+            timestamp=FIXED_TIMESTAMP,
+        )
+
+        assert message.reasoning_timing == FIXED_TIMING
+        assert ChatMessage.from_dict(message.to_dict()).reasoning_timing == FIXED_TIMING
+
+    def test_assistant_message_without_reasoning_omits_reasoning_timing(self):
+        message = ChatMessage.assistant(
+            model="openai/gpt-4.1",
+            content="Answer",
+            timestamp=FIXED_TIMESTAMP,
+        )
+
+        assert message.to_dict().get("reasoning_timing") is None
+
+    def test_reasoning_timing_requires_reasoning(self):
+        with pytest.raises(ChatMessageValidationError):
+            ChatMessage.assistant(
+                model="openai/gpt-4.1",
+                content="Answer",
+                reasoning_timing=FIXED_TIMING,
+                timestamp=FIXED_TIMESTAMP,
+            ).to_dict()
+
+    def test_reasoning_timing_rejects_bad_payload(self):
+        with pytest.raises(ChatMessageValidationError):
+            ChatMessage.assistant(
+                model="openai/gpt-4.1",
+                content="Answer",
+                reasoning="Thought",
+                reasoning_timing={"started_at": "no-offset", "completed_at": "x", "duration_ms": 1},
+                timestamp=FIXED_TIMESTAMP,
+            ).to_dict()
+
+    def test_user_message_rejects_reasoning_timing(self):
+        with pytest.raises(ChatMessageValidationError):
+            ChatMessage(
+                id="user-1",
+                timestamp="2026-05-03T14:30:00+00:00",
+                role="user",
+                content="hello",
+                reasoning_timing=FIXED_TIMING,
+            ).to_dict()
+
+    def test_tool_message_rejects_reasoning_timing(self):
+        with pytest.raises(ChatMessageValidationError):
+            ChatMessage(
+                id="tool-1",
+                timestamp="2026-05-03T14:30:00+00:00",
+                role="tool",
+                content="{}",
+                tool_call_id="call_abc",
+                name="read",
+                reasoning_timing=FIXED_TIMING,
+            ).to_dict()
+
+    def test_provider_request_projection_strips_reasoning_timing(self):
+        message = ChatMessage.assistant(
+            model="openai/gpt-4.1",
+            content="Answer",
+            reasoning="Thought",
+            reasoning_timing=FIXED_TIMING,
+            timestamp=FIXED_TIMESTAMP,
+        )
+
+        assert "reasoning_timing" not in _message_to_request_dict(message)
+        assert "reasoning_timing" not in _assistant_continuation_dict(message)
+
+    def test_response_construction_keeps_timing_only_with_reasoning(self):
+        timing = dict(FIXED_TIMING)
+        message = _assistant_message_from_response(
+            "openai/gpt-4.1",
+            {"content": "Answer", "reasoning": "Thought", "reasoning_timing": timing},
+            reasoning_timing=timing,
+        )
+        bare = _assistant_message_from_response(
+            "openai/gpt-4.1",
+            {"content": "Answer", "reasoning_timing": timing},
+            reasoning_timing=timing,
+        )
+
+        assert message.reasoning_timing == timing
+        # No reasoning text means no measurable block; the span is dropped.
+        assert bare.reasoning_timing is None
+
     def test_naive_timestamp_is_rejected(self):
         with pytest.raises(ChatMessageValidationError):
             ChatMessage.user("hello", timestamp=datetime(2026, 5, 3, 14, 30))

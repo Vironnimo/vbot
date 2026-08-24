@@ -67,6 +67,88 @@ describe('chat state helpers', () => {
     ]);
   });
 
+  it('captures the persisted reasoning duration from the stable reasoning event', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-reasoning-duration',
+    );
+    startRun(sessionState, {
+      run_id: 'run-reasoning-duration',
+      sse_url: '/api/runs/run-reasoning-duration/events',
+      status: CHAT_STATUS_RUNNING,
+    });
+    appendRunEvent(sessionState, {
+      type: 'reasoning_delta',
+      run_id: 'run-reasoning-duration',
+      sequence: 1,
+      payload: { reasoning_delta: 'Thinking' },
+    });
+    appendRunEvent(sessionState, {
+      type: 'reasoning',
+      run_id: 'run-reasoning-duration',
+      sequence: 2,
+      payload: {
+        message: {
+          id: 'assistant-one',
+          role: 'assistant',
+          model: 'openai/gpt-5.2',
+          content: 'Answer.',
+          reasoning: 'Thinking',
+          reasoning_timing: {
+            started_at: '2026-08-24T10:00:00+00:00',
+            completed_at: '2026-08-24T10:00:04+00:00',
+            duration_ms: 4200,
+          },
+        },
+      },
+    });
+
+    const renderItems = visibleTimelineItemsForRender(sessionState);
+
+    expect(renderItems[0].reasoning).toEqual([
+      expect.objectContaining({
+        type: 'reasoning',
+        durationMs: 4200,
+        streaming: false,
+      }),
+    ]);
+  });
+
+  it('carries the reasoning duration from history assistant messages', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-reasoning-duration-history',
+    );
+
+    loadHistory(sessionState, [
+      { id: 'user-one', role: 'user', content: 'Hi' },
+      {
+        id: 'assistant-one',
+        role: 'assistant',
+        model: 'openai/gpt-5.2',
+        content: 'Answer.',
+        reasoning: 'Thinking',
+        reasoning_timing: {
+          started_at: '2026-08-24T10:00:00+00:00',
+          completed_at: '2026-08-24T10:00:02+00:00',
+          duration_ms: 2000,
+        },
+      },
+    ]);
+
+    const renderItems = visibleTimelineItemsForRender(sessionState);
+
+    expect(renderItems[1].reasoning).toEqual([
+      expect.objectContaining({
+        type: 'reasoning',
+        content: 'Thinking',
+        durationMs: 2000,
+      }),
+    ]);
+  });
+
   it('keeps render selector assistant/reasoning streaming content inside assistant runs', () => {
     const sessionState = ensureSessionState(
       createChatState(),

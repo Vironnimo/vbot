@@ -21,6 +21,7 @@
     isSubAgentSpawnTool,
     isTextToSpeechTool,
     isToolPreparing,
+    reasoningDurationLabel,
     runChangeStats,
     runFooterParts,
     speechArtifactFromTool,
@@ -235,7 +236,11 @@
   </div>
 {/snippet}
 
-{#snippet reasoningSummary(isStreaming = false, isOpen = false)}
+{#snippet reasoningSummary(
+  isStreaming = false,
+  isOpen = false,
+  durationLabel = '',
+)}
   <summary class="reasoning-header">
     <svg class="reasoning-icon" viewBox="0 0 16 16" aria-hidden="true">
       <path
@@ -244,6 +249,9 @@
       <path d="M6 13h4" />
     </svg>
     <span>{t('chat.event.thinking', 'Thinking').toUpperCase()}</span>
+    {#if durationLabel}
+      <span class="reasoning-duration">{durationLabel}</span>
+    {/if}
     {#if isStreaming}
       <span class="streaming-caret" aria-hidden="true"></span>
     {/if}
@@ -334,7 +342,11 @@
           ontoggle={(event) =>
             onReasoningOpenChange(child.id, event.currentTarget.open)}
         >
-          {@render reasoningSummary(working, isReasoningOpen(child.id))}
+          {@render reasoningSummary(
+            working,
+            isReasoningOpen(child.id),
+            reasoningDurationLabel(child, nowMs),
+          )}
           <div class="reasoning-body">
             <div class="reasoning-body__actions">
               <CopyButton
