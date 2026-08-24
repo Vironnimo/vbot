@@ -24,6 +24,7 @@ from collections import deque
 from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol, cast
+from urllib.parse import urlsplit
 
 from desktop.settings import read_wakeword_settings, write_wakeword_settings
 from desktop.system_actions import DesktopSystemActions
@@ -368,11 +369,12 @@ class DesktopBridge:
                 profiles = current.get("server_profiles")
                 if not isinstance(profiles, dict):
                     profiles = {}
-                profile = profiles.get(self._server_url)
+                profile_key = _canonical_profile_key(self._server_url)
+                profile = profiles.get(profile_key)
                 if not isinstance(profile, dict):
                     profile = {}
                 profile.update(profile_changes)
-                profiles[self._server_url] = profile
+                profiles[profile_key] = profile
                 current["server_profiles"] = profiles
                 changed = True
             if not changed:
@@ -670,7 +672,8 @@ class DesktopBridge:
         config["active_model_ids"] = list(active_model_ids)
         config["model_sensitivities"] = normalized_sensitivities
         profiles = config.get("server_profiles")
-        profile = profiles.get(self._server_url, {}) if isinstance(profiles, dict) else {}
+        profile_key = _canonical_profile_key(self._server_url)
+        profile = profiles.get(profile_key, {}) if isinstance(profiles, dict) else {}
         if not isinstance(profile, dict):
             profile = {}
         config["target_agent_id"] = profile.get("target_agent_id")
@@ -983,6 +986,22 @@ def _server_url(entry: ServerEntry) -> str:
     """Build the normalized Desktop URL used for active-target comparison."""
 
     return f"http://{entry.host}:{entry.port}"
+
+
+def _canonical_profile_key(server_url: str) -> str:
+    """Return the Voice profile key for a server URL, merging loopback aliases.
+
+    The same local server is reachable as ``localhost`` and ``127.0.0.1``;
+    profiles keyed by the raw URL spelling would lose the stored target agent
+    whenever the launch host spelling changes between the two forms.
+    """
+
+    url = (server_url or "").strip().rstrip("/")
+    parts = urlsplit(url)
+    if (parts.hostname or "").lower() == "localhost":
+        port = f":{parts.port}" if parts.port else ""
+        return f"{parts.scheme or 'http'}://127.0.0.1{port}"
+    return url
 
 
 def _validated_config_value(key: str, value: Any) -> Any:

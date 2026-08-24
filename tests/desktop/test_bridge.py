@@ -923,6 +923,34 @@ def test_voice_target_profile_is_isolated_per_server(tmp_path: Path) -> None:
     assert status["session_behavior"] == "active"
 
 
+def test_voice_target_profile_merges_loopback_host_aliases(tmp_path: Path) -> None:
+    """localhost and 127.0.0.1 address the same server, so one profile serves both."""
+
+    from desktop.settings import read_wakeword_settings
+
+    settings_file = tmp_path / "settings.json"
+    _write_settings(settings_file)
+    bridge = DesktopBridge(
+        settings_path=settings_file,
+        server_url="http://127.0.0.1:8420",
+    )
+    bridge.setWakewordConfig({"target_agent_id": "nabu"})
+
+    # Reading through the alias spelling finds the profile saved under the
+    # canonical loopback key instead of failing as missing_target_agent.
+    bridge.set_server_url("http://localhost:8420")
+    assert bridge.getWakewordStatus()["target_agent_id"] == "nabu"
+
+    # Saving through the alias spelling updates the canonical key rather than
+    # forking a second profile that only matches while localhost is active.
+    bridge.setWakewordConfig({"target_agent_id": "nova"})
+    stored_profiles = read_wakeword_settings(settings_file)["server_profiles"]
+
+    assert stored_profiles == {"http://127.0.0.1:8420": {"target_agent_id": "nova"}}
+    bridge.set_server_url("http://127.0.0.1:8420")
+    assert bridge.getWakewordStatus()["target_agent_id"] == "nova"
+
+
 def test_status_exposes_actionable_error_and_event_history(tmp_path: Path) -> None:
     settings_file = tmp_path / "settings.json"
     _write_settings(settings_file)
