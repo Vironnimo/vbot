@@ -55,6 +55,20 @@
   flex-direction: column;
 }
 
+/* The floating composer stack overlays the timeline's bottom; this trailing
+   block reserves matching space so the newest message scrolls clear above
+   the composer. It lives INSIDE the content element because Chromium drops
+   both a scroller's bottom padding and a flex item's bottom margin from the
+   scroll extent once content overflows — an in-flow child always counts. */
+.messages__content::after {
+  content: '';
+  display: block;
+  flex: 0 0 auto;
+  /* 28px matches the timeline's own bottom gutter (which Chromium swallows
+     from the scroll extent once content overflows). */
+  height: calc(28px + var(--chat-overlay-height, 0px));
+}
+
 /* Chat reading column width. `.messages` stays full-width (scrollbar at the
    edge); only the inner content column is capped and centered. The live width
    comes from `--chat-measure`, which `.chat-view[data-chat-width]` overrides
