@@ -829,7 +829,7 @@
   // -- Keyboard reorder (accessibility, T2) --------------------------------
 
   async function handleHandleKeydown(index, event) {
-    let target = null;
+    let target;
     if (event.key === 'ArrowUp') {
       target = index - 1;
     } else if (event.key === 'ArrowDown') {

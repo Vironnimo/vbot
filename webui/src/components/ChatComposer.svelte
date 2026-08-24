@@ -675,7 +675,7 @@
       return false;
     }
 
-    let sent = false;
+    let sent;
     try {
       sent =
         (sendOptions
@@ -1431,8 +1431,7 @@
         'chat.composerPlaceholder',
         'Ask this agent to do something… (/ for commands, $ for skills, @ for files)',
       )}
-      rows="1"
-    ></textarea>
+      rows="1"></textarea>
     {#if contextFillRatio !== null}
       <span
         class="context-ring"

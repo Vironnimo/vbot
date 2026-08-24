@@ -47,7 +47,7 @@
     }
 
     editSaving = true;
-    let saved = false;
+    let saved;
     try {
       saved =
         (await onEditQueuedMessage?.(currentEditingId, nextContent)) === true;
@@ -93,8 +93,7 @@
               oninput={(event) => {
                 editedContent = event.currentTarget.value;
                 editError = '';
-              }}
-            ></textarea>
+              }}></textarea>
             <div class="queued-messages__actions">
               <Button
                 variant="tertiary"
