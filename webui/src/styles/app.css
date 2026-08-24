@@ -1934,9 +1934,6 @@ textarea::placeholder {
   overflow-y: auto;
   overflow-anchor: none;
   padding: 28px 0;
-  /* The floating composer stack overlays the timeline's bottom; reserve
-    matching space so the newest message can scroll clear above it. */
-  padding-bottom: calc(28px + var(--chat-overlay-height, 0px));
 }
 
 .date-sep {

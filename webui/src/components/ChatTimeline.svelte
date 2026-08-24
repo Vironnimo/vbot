@@ -213,6 +213,19 @@
     tick().then(() => controller?.contentChanged());
   });
 
+  // Composer-stack growth (typing, attachment tray) only grows the reserved
+  // bottom padding: content geometry is untouched, so the content
+  // ResizeObserver stays silent and the coordination must be re-run
+  // explicitly — a pinned session stays glued to the live tail while the
+  // composer rises, a reading position needs no correction at all.
+  $effect(() => {
+    bottomOverlayHeight;
+    if (hasPendingSubmittedTurnScroll()) {
+      return;
+    }
+    tick().then(() => controller?.contentChanged());
+  });
+
   $effect(() => {
     timelineSignature;
     if (!hasPendingSubmittedTurnScroll()) {
