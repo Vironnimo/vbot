@@ -18,6 +18,7 @@ from core.providers.adapter import (
     ProviderAdapter,
 )
 from core.providers.reasoning import REASONING_REPLAY_FULL_HISTORY, ReasoningReplayPolicy
+from core.runs import RUN_CHANGE_STATS_EVENT
 from core.runtime import Runtime
 from core.skills.skills import SkillRegistry
 from core.tools import tool_success
@@ -263,6 +264,78 @@ async def test_parallel_tool_calls_count_one_iteration_per_model_response(
         assert live_counts == [1, 2]
         assert run.events[-1].payload["iteration_count"] == 2
         assert reflection.calls[0]["iteration_count"] == 2
+    finally:
+        runtime.stop()
+
+
+@pytest.mark.asyncio
+async def test_change_stats_stream_after_each_tool_round_and_match_terminal(
+    tmp_path: Path,
+    resources_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter = FakeAdapter(
+        [
+            {
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "call_write_a",
+                        "name": "write",
+                        "arguments": {"path": "a.txt", "content": "one\ntwo\n"},
+                    }
+                ],
+            },
+            {
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "call_write_b",
+                        "name": "write",
+                        "arguments": {"path": "b.txt", "content": "x\n"},
+                    }
+                ],
+            },
+            {"content": "Both files written.", "tool_calls": None},
+        ]
+    )
+    config = Config(data_dir=tmp_path / "data")
+    config._data["RESOURCES_PATH"] = str(resources_dir)
+    config._data["VBOT_VERSION"] = "test-version"
+    runtime = Runtime(config)
+    monkeypatch.setenv("FAKE_API_KEY", "test-key")
+    monkeypatch.setattr(runtime, "get_adapter", lambda provider_id, connection_id: adapter)
+
+    runtime.start()
+    try:
+        agent = runtime.agents.create(
+            "coder",
+            "Coder Agent",
+            model="fake-provider/fake-model-v1",
+        )
+        workspace = Path(agent.workspace)
+
+        await build_chat_loop(runtime).send("coder", "Write files", session_id="session-one")
+
+        messages = runtime.chat_sessions.get("coder", "session-one").load()
+        run = runtime.chat_run_manager.get(str(messages[-1].run_id))
+        live_stats = [
+            event.payload["change_stats"]
+            for event in run.events
+            if event.type == RUN_CHANGE_STATS_EVENT
+        ]
+
+        assert live_stats == [
+            {"files": 1, "added": 2, "removed": 0, "paths": [str(workspace / "a.txt")]},
+            {
+                "files": 2,
+                "added": 3,
+                "removed": 0,
+                "paths": [str(workspace / "a.txt"), str(workspace / "b.txt")],
+            },
+        ]
+        assert run.terminal_payload_extras["change_stats"] == live_stats[-1]
+        assert messages[-1].change_stats == live_stats[-1]
     finally:
         runtime.stop()
 

@@ -1605,6 +1605,16 @@ describe('runChangeStats', () => {
       paths: ['a.txt'],
     });
   });
+
+  it('returns null for a server-reported zero instead of the tool-fact sum', () => {
+    const stats = runChangeStats({
+      type: 'assistant_run',
+      changeStats: { files: 0, added: 0, removed: 0, paths: [] },
+      items: [editTool({ path: 'a.txt', added: 3, removed: 2 })],
+    });
+
+    expect(stats).toBeNull();
+  });
 });
 
 describe('sessionChangeStats', () => {

@@ -1,11 +1,13 @@
 """Session-scoped file-content tracking for git-style change statistics.
 
 Tracks, per session, the last known text content of every file the session has
-read or written, so the chat loop can compute a real before/after line diff at
-the end of a run. The diff uses ``difflib.SequenceMatcher`` — the same Myers
-line-diff algorithm git uses for ``git diff --stat`` — so repeated edits of the
-same line count once and a full-file rewrite shows only the lines that actually
-changed. No git repository or external process is involved.
+read or written, so the chat loop can compute real before/after line diffs —
+streamed live after each dispatched Tool round via ``peek_run_stats`` and
+consumed once at Run end via ``take_run_stats``. The diff uses
+``difflib.SequenceMatcher`` — the same Myers line-diff algorithm git uses for
+``git diff --stat`` — so repeated edits of the same line count once and a
+full-file rewrite shows only the lines that actually changed. No git repository
+or external process is involved.
 
 The tracker is a single runtime-owned instance injected into the read/write/edit
 tools and the chat loop (constructor injection, like ``FileReadState``) — not a
@@ -84,6 +86,25 @@ class ChangeTracker:
                 _before, _after = run_changes[path]
                 run_changes[path] = (_before, after)
 
+    def peek_run_stats(self, session_id: str) -> dict[str, object] | None:
+        """Return current git-style change statistics WITHOUT consuming them.
+
+        Same computation as :meth:`take_run_stats`, but the per-run deltas stay
+        stored so the chat loop can stream live totals while the Run is still
+        executing and consume them once at Run end. An empty tracker returns
+        ``None``; recorded files whose diffs all net to zero return an explicit
+        all-zero object so a reverted change can retire an earlier nonzero
+        total instead of leaving it stale.
+        """
+        with self._run_changes_lock:
+            snapshot = dict(self._run_changes.get(session_id, {}))
+        if not snapshot:
+            return None
+        stats = _stats_from_changes(snapshot)
+        if stats is not None:
+            return stats
+        return {"files": 0, "added": 0, "removed": 0, "paths": []}
+
     def take_run_stats(self, session_id: str) -> dict[str, object] | None:
         """Return git-style change statistics for the session's current run.
 
@@ -96,27 +117,31 @@ class ChangeTracker:
             run_changes = self._run_changes.pop(session_id, None)
         if not run_changes:
             return None
+        return _stats_from_changes(run_changes)
 
-        paths: list[str] = []
-        added = 0
-        removed = 0
-        for path, (before, after) in run_changes.items():
-            diff_added, diff_removed = _line_diff_counts(before, after)
-            if diff_added == 0 and diff_removed == 0:
-                continue
-            paths.append(path)
-            added += diff_added
-            removed += diff_removed
 
-        if not paths:
-            return None
-        paths.sort()
-        return {
-            "files": len(paths),
-            "added": added,
-            "removed": removed,
-            "paths": paths[:_MAX_REPORTED_PATHS],
-        }
+def _stats_from_changes(run_changes: dict[str, tuple[str, str]]) -> dict[str, object] | None:
+    """Aggregate one real line diff per changed file into run statistics."""
+    paths: list[str] = []
+    added = 0
+    removed = 0
+    for path, (before, after) in run_changes.items():
+        diff_added, diff_removed = _line_diff_counts(before, after)
+        if diff_added == 0 and diff_removed == 0:
+            continue
+        paths.append(path)
+        added += diff_added
+        removed += diff_removed
+
+    if not paths:
+        return None
+    paths.sort()
+    return {
+        "files": len(paths),
+        "added": added,
+        "removed": removed,
+        "paths": paths[:_MAX_REPORTED_PATHS],
+    }
 
 
 def _line_diff_counts(before: str, after: str) -> tuple[int, int]:

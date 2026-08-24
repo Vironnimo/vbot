@@ -1,5 +1,6 @@
 import {
   RUN_EVENT_ASSISTANT_OUTPUT_DELTA,
+  RUN_EVENT_CHANGE_STATS,
   RUN_EVENT_PROVIDER_HEARTBEAT,
   RUN_EVENT_REASONING_DELTA,
   RUN_EVENT_TOOL_CALL_DELTA,
@@ -821,8 +822,15 @@ function liveTimelineEntryItems(entry, projectionCache) {
   }
 
   // Iteration telemetry is non-visual. A sparse WebSocket replay containing
-  // only Usage must not fabricate an empty Assistant Run row.
-  if (entry.events.every((event) => event.type === 'model_step_usage')) {
+  // only Usage or change statistics must not fabricate an empty Assistant Run
+  // row.
+  if (
+    entry.events.every(
+      (event) =>
+        event.type === 'model_step_usage' ||
+        event.type === RUN_EVENT_CHANGE_STATS,
+    )
+  ) {
     return [entry.userItem].filter(Boolean);
   }
 
@@ -1032,6 +1040,17 @@ function appendLiveRunEvent(assistantRun, event) {
     );
     if (iterationCount !== null) {
       assistantRun.iterationCount = iterationCount;
+    }
+    return;
+  }
+
+  // Live git-style change statistics streamed after each dispatched Tool
+  // round. Carries the same validated shape as the terminal change_stats;
+  // an all-zero object is meaningful (edits reverted to their baseline) and
+  // retires an earlier nonzero total instead of falling back to sums.
+  if (event.type === RUN_EVENT_CHANGE_STATS) {
+    if (isPlainObject(event.payload?.change_stats)) {
+      assistantRun.changeStats = event.payload.change_stats;
     }
     return;
   }
@@ -1701,6 +1720,7 @@ function isAssistantRunEvent(event) {
   return [
     'run_started',
     'model_step_usage',
+    RUN_EVENT_CHANGE_STATS,
     'model_fallback_activated',
     RUN_EVENT_PROVIDER_HEARTBEAT,
     RUN_EVENT_REASONING_DELTA,
