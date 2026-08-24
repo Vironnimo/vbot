@@ -15,6 +15,7 @@ from .openai_compatible_test_support import (
     OpenAICompatibleAdapter,
     ProviderAuthError,
     ProviderError,
+    ProviderRateLimitError,
     ProviderTimeoutError,
     httpx,
     json,
@@ -202,6 +203,38 @@ class TestStreamSSE:
 
         # Act / Assert
         with pytest.raises(ProviderError):
+            async for _ in openai_adapter.stream(SAMPLE_MESSAGES, model_id="gpt-5.2"):
+                pass
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_stream_classifies_structured_in_band_error_chunk(self, openai_adapter):
+        """A structured in-band error chunk maps into the shared error taxonomy."""
+
+        # Arrange
+        sse_body = (
+            'data: {"id":"chatcmpl-1","choices":[{"delta":{"content":"Hello"}}]}\n\n'
+            "data: "
+            + json.dumps(
+                {
+                    "error": {
+                        "code": 429,
+                        "message": "Rate limit exceeded",
+                        "metadata": {"error_type": "rate_limit_exceeded"},
+                    }
+                }
+            )
+            + "\n\n"
+            "data: [DONE]\n\n"
+        )
+        respx.post(OPENAI_URL).mock(
+            return_value=httpx.Response(
+                200, text=sse_body, headers={"content-type": "text/event-stream"}
+            )
+        )
+
+        # Act / Assert
+        with pytest.raises(ProviderRateLimitError):
             async for _ in openai_adapter.stream(SAMPLE_MESSAGES, model_id="gpt-5.2"):
                 pass
 

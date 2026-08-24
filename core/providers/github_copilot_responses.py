@@ -29,6 +29,11 @@ from core.providers.adapter import (
     tool_result_content_blocks,
 )
 from core.providers.errors import (
+    IN_BAND_AUTH_ERROR_CODES,
+    IN_BAND_RATE_LIMIT_ERROR_CODES,
+    IN_BAND_RETRYABLE_NUMERIC_CODES,
+    IN_BAND_TIMEOUT_ERROR_CODES,
+    IN_BAND_TRANSIENT_ERROR_CODES,
     ProviderAuthError,
     ProviderError,
     ProviderRateLimitError,
@@ -50,15 +55,6 @@ RESPONSES_ERROR_EVENTS = {"error", "response.error", "response.failed"}
 RESPONSES_INCOMPLETE_EVENTS = {"response.incomplete"}
 _REASONING_META_KEYS = ("reasoning_items", "response_output")
 RESPONSES_RESPONSE_OUTPUT_META_KEY = "response_output"
-_RESPONSES_RATE_LIMIT_CODES = frozenset({"rate_limit_exceeded"})
-_RESPONSES_TIMEOUT_CODES = frozenset({"timeout"})
-_RESPONSES_AUTH_CODES = frozenset(
-    {"authentication", "authentication_error", "invalid_api_key", "unauthorized"}
-)
-_RESPONSES_TRANSIENT_CODES = frozenset(
-    {"provider_overloaded", "provider_unavailable", "server", "server_error"}
-)
-_RESPONSES_RETRYABLE_NUMERIC_CODES = frozenset({429, 502, 503, 504})
 
 
 class ResponsesRequestPolicy(Protocol):
@@ -1191,15 +1187,15 @@ def _classify_responses_stream_error(event_data: Mapping[str, Any]) -> ProviderE
     numeric_code = code if isinstance(code, int) and not isinstance(code, bool) else None
     message = _responses_error_message(event_data)
 
-    if classifier in _RESPONSES_AUTH_CODES or numeric_code in {401, 403}:
+    if classifier in IN_BAND_AUTH_ERROR_CODES or numeric_code in {401, 403}:
         return ProviderAuthError(message)
-    if classifier in _RESPONSES_RATE_LIMIT_CODES or numeric_code == 429:
+    if classifier in IN_BAND_RATE_LIMIT_ERROR_CODES or numeric_code == 429:
         return ProviderRateLimitError(message)
-    if classifier in _RESPONSES_TIMEOUT_CODES or numeric_code == 504:
+    if classifier in IN_BAND_TIMEOUT_ERROR_CODES or numeric_code == 504:
         return ProviderTimeoutError(message)
     if (
-        classifier in _RESPONSES_TRANSIENT_CODES
-        or numeric_code in _RESPONSES_RETRYABLE_NUMERIC_CODES
+        classifier in IN_BAND_TRANSIENT_ERROR_CODES
+        or numeric_code in IN_BAND_RETRYABLE_NUMERIC_CODES
     ):
         return ProviderError(message, retryable=True)
     return ProviderError(message, retryable=False)
