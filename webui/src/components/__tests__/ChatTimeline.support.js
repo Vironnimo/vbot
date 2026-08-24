@@ -67,8 +67,8 @@ export function mockScrollGeometry(container) {
       scrollTop = value;
     },
   });
-  container.scrollTo = (_x, y) => {
-    scrollTop = y;
+  container.scrollTo = (x, y) => {
+    scrollTop = typeof x === 'object' ? x.top : y;
   };
   return {
     setScrollTop: (value) => {

@@ -8,6 +8,7 @@
     timestampForItem,
   } from '$lib/chatTimelinePresentation.js';
   import { t } from '$lib/i18n.js';
+  import { createChatScrollController } from '$lib/chatScroll.js';
 
   import {
     assistantRunChildProgressKey,
@@ -46,16 +47,7 @@
     onLoadOlder = async () => false,
   } = $props();
 
-  const SUBMITTED_TURN_SCROLL_OPTIONS = Object.freeze({
-    block: 'start',
-    inline: 'nearest',
-    behavior: 'smooth',
-  });
   const MIN_SUBMITTED_TURN_SPACER_HEIGHT = 360;
-  const LOAD_OLDER_SCROLL_THRESHOLD = 48;
-  const SESSION_SCROLL_POSITION_LIMIT = 100;
-  const FOLLOW_BOTTOM_THRESHOLD = 56;
-  const USER_SCROLL_INTENT_WINDOW_MS = 750;
 
   let timelineItems = $derived(visibleTimelineItemsForRender(sessionState));
   let nowMs = $state(Date.now());
@@ -78,7 +70,6 @@
   let pendingSubmittedTurnScrollKey = $state(0);
   let pendingSubmittedTurnScrollRunId = $state('');
   let handledSubmittedTurnScrollKey = $state(0);
-  let loadingOlderFromScroll = $state(false);
   let submittedTurnSpacerHeight = $state(MIN_SUBMITTED_TURN_SPACER_HEIGHT);
   let showJumpToLatest = $state(false);
   let timelineSignature = $derived(
@@ -91,13 +82,9 @@
   let sessionScrollKey = $derived(sessionState?.key ?? '');
   let renderedSessionScrollKey = null;
   let handledFollowSessionRequestId = 0;
-  let viewportGeneration = 0;
-  let pendingViewportSync = null;
-  let viewportSyncQueued = false;
-  let viewportSyncFrame = null;
-  let userScrollIntentUntil = 0;
-  // eslint-disable-next-line svelte/prefer-svelte-reactivity
-  const sessionViewports = new Map();
+  // Owns follow/reading modes, per-Session viewports, programmatic writes,
+  // and user-scroll classification. Created once the scroll container binds.
+  let controller = null;
 
   $effect(() => {
     const visibleItems = timelineItems;
@@ -148,6 +135,35 @@
     };
   });
 
+  // Runs before every DOM update so a session switch saves the outgoing
+  // viewport against the still-mounted content. The controller itself is
+  // created here too, guaranteeing it exists before any consumer runs.
+  $effect.pre(() => {
+    const container = scrollContainer;
+    if (!container) {
+      return;
+    }
+    if (!controller) {
+      controller = createChatScrollController(container, {
+        onViewChanged: syncJumpToLatestVisibility,
+        shouldLoadOlder: () => shouldLoadOlderHistory(),
+        requestLoadOlder: () => onLoadOlder?.(),
+      });
+    }
+    const key = sessionScrollKey;
+    if (key !== renderedSessionScrollKey) {
+      renderedSessionScrollKey = key;
+      controller.sessionChanged(key);
+    }
+  });
+
+  $effect(() => {
+    return () => {
+      controller?.destroy();
+      controller = null;
+    };
+  });
+
   $effect(() => {
     const requestId = followSessionRequest?.requestId ?? 0;
     const targetSessionKey = followSessionRequest?.sessionKey ?? '';
@@ -159,9 +175,14 @@
       return;
     }
     handledFollowSessionRequestId = requestId;
-    setViewportMode(targetSessionKey, 'follow');
-    const generation = viewportGeneration;
-    tick().then(() => queueViewportSync(targetSessionKey, generation));
+    // Overrides whatever passive restore was prepared for this session:
+    // an explicit Sub-Agent visit always opens at the bottom, following.
+    // Deferred so the read sees the controller even when this effect runs
+    // ahead of its creation during mount.
+    tick().then(() => {
+      controller?.forceFollowOnNextRestore();
+      controller?.contentChanged();
+    });
   });
 
   $effect(() => {
@@ -171,29 +192,22 @@
     ) {
       pendingSubmittedTurnScrollKey = submittedTurnScrollKey;
       pendingSubmittedTurnScrollRunId = submittedTurnScrollRunId;
-      setViewportMode(sessionScrollKey, 'follow');
       syncSubmittedTurnSpacerHeight();
     }
   });
 
-  // Capture the outgoing DOM before Svelte replaces it, then let the single
-  // viewport coordinator restore the incoming Session after render. Ordinary
-  // content changes use the same coordinator; ResizeObserver below also feeds
-  // it for growth that is invisible to Svelte state (images, fonts, Markdown).
-  $effect.pre(() => {
+  // Content changes (streaming deltas, history pages, transient cards)
+  // re-run the coordination. The controller coalesces through one animation
+  // frame — the same frame boundary the browser scrolls on. Deferred so the
+  // read sees the controller even when this effect runs ahead of its
+  // creation during mount. Skipped while the submitted-turn scroll owns the
+  // viewport so the animation is never fought mid-flight.
+  $effect(() => {
     timelineSignature;
-    const key = sessionScrollKey;
-    if (key !== renderedSessionScrollKey) {
-      saveSessionViewport(renderedSessionScrollKey);
-      renderedSessionScrollKey = key;
-      viewportGeneration += 1;
-      beginViewportRestore(key);
-      const generation = viewportGeneration;
-      tick().then(() => queueViewportSync(key, generation));
+    if (hasPendingSubmittedTurnScroll()) {
       return;
     }
-    const generation = viewportGeneration;
-    tick().then(() => queueViewportSync(key, generation));
+    tick().then(() => controller?.contentChanged());
   });
 
   $effect(() => {
@@ -236,40 +250,33 @@
   });
 
   // Delegated click handling is needed because Markdown images are rendered
-  // through {@html}. Input listeners mark the next scroll as user-owned;
-  // programmatic scroll events therefore cannot silently change follow mode.
+  // through {@html}. Input listeners feed real-user signals to the scroll
+  // controller: upward input releases the follow pin before the browser
+  // scrolls, and any input cancels an in-flight programmatic animation.
   $effect(() => {
     const container = scrollContainer;
     if (!container) {
       return undefined;
     }
     let touchY = null;
-    const markUserScrollIntent = () => {
-      userScrollIntentUntil = Date.now() + USER_SCROLL_INTENT_WINDOW_MS;
-    };
     const handleWheel = (event) => {
-      markUserScrollIntent();
-      if (event.deltaY < 0) {
-        takeReadingControl();
-      }
+      controller?.noteUserInput({ upward: event.deltaY < 0 });
     };
     const handleTouchStart = (event) => {
-      markUserScrollIntent();
+      controller?.noteUserInput();
       touchY = event.touches?.[0]?.clientY ?? null;
     };
     const handleTouchMove = (event) => {
-      markUserScrollIntent();
       const nextTouchY = event.touches?.[0]?.clientY ?? null;
-      if (touchY !== null && nextTouchY !== null && nextTouchY > touchY) {
-        takeReadingControl();
-      }
+      controller?.noteUserInput({
+        upward: touchY !== null && nextTouchY !== null && nextTouchY > touchY,
+      });
       touchY = nextTouchY;
     };
     const handleKeyDown = (event) => {
-      markUserScrollIntent();
-      if (isUpwardScrollKey(event.key)) {
-        takeReadingControl();
-      }
+      controller?.noteUserInput({
+        upward: isUpwardScrollKey(event.key),
+      });
     };
     container.addEventListener('click', handleTimelineClick);
     container.addEventListener('wheel', handleWheel, {
@@ -281,262 +288,38 @@
     container.addEventListener('touchmove', handleTouchMove, {
       passive: true,
     });
-    container.addEventListener('pointerdown', markUserScrollIntent);
+    container.addEventListener('pointerdown', handlePointerDown);
     container.addEventListener('keydown', handleKeyDown);
     return () => {
       container.removeEventListener('click', handleTimelineClick);
       container.removeEventListener('wheel', handleWheel);
       container.removeEventListener('touchstart', handleTouchStart);
       container.removeEventListener('touchmove', handleTouchMove);
-      container.removeEventListener('pointerdown', markUserScrollIntent);
+      container.removeEventListener('pointerdown', handlePointerDown);
       container.removeEventListener('keydown', handleKeyDown);
     };
   });
 
+  function handlePointerDown() {
+    controller?.noteUserInput();
+  }
+
+  // Growth invisible to Svelte state (images, fonts, Markdown layout) feeds
+  // the same coordination path, coalesced by the controller.
   $effect(() => {
     const content = timelineContent;
-    if (!content) {
+    if (!content || typeof ResizeObserver !== 'function') {
       return undefined;
     }
-    const key = sessionScrollKey;
-    const generation = viewportGeneration;
-    const observer =
-      typeof ResizeObserver === 'function'
-        ? new ResizeObserver(() => queueViewportSync(key, generation))
-        : null;
-    observer?.observe(content);
-    return () => observer?.disconnect();
-  });
-
-  $effect(() => {
-    return () => {
-      viewportGeneration += 1;
-      cancelQueuedViewportSync();
-    };
-  });
-
-  function isNearBottom(container) {
-    return (
-      !container ||
-      container.offsetHeight + container.scrollTop >
-        container.scrollHeight - FOLLOW_BOTTOM_THRESHOLD
-    );
-  }
-
-  function createSessionViewport() {
-    return {
-      mode: 'follow',
-      restoreMode: 'follow',
-      anchorId: '',
-      anchorOffset: 0,
-      fallbackTop: 0,
-      fallbackScrollHeight: 0,
-      restoreFromOlderHistory: false,
-    };
-  }
-
-  function sessionViewport(key) {
-    if (!key) {
-      return createSessionViewport();
-    }
-    let viewport = sessionViewports.get(key);
-    if (!viewport) {
-      viewport = createSessionViewport();
-      sessionViewports.set(key, viewport);
-      trimSessionViewports();
-    }
-    return viewport;
-  }
-
-  function trimSessionViewports() {
-    while (sessionViewports.size > SESSION_SCROLL_POSITION_LIMIT) {
-      const oldestKey = sessionViewports.keys().next().value;
-      sessionViewports.delete(oldestKey);
-    }
-  }
-
-  function setViewportMode(key, mode) {
-    if (!key) {
-      return;
-    }
-    const viewport = sessionViewport(key);
-    viewport.mode = mode;
-    viewport.restoreMode = mode;
-    if (mode === 'follow') {
-      viewport.anchorId = '';
-    }
-  }
-
-  function beginViewportRestore(key) {
-    const viewport = sessionViewport(key);
-    viewport.restoreMode = viewport.mode === 'reading' ? 'reading' : 'follow';
-    viewport.mode = 'restoring';
-    showJumpToLatest = viewport.restoreMode === 'reading';
-  }
-
-  function queueViewportSync(
-    key = sessionScrollKey,
-    generation = viewportGeneration,
-  ) {
-    // A disconnected ResizeObserver may already have queued its callback. Do
-    // not let that stale Session replace the current Session's pending sync;
-    // the flush guard alone would discard both by losing the valid request.
-    if (key !== renderedSessionScrollKey || generation !== viewportGeneration) {
-      return;
-    }
-    pendingViewportSync = { key, generation };
-    if (viewportSyncQueued) {
-      return;
-    }
-    viewportSyncQueued = true;
-    if (typeof requestAnimationFrame === 'function') {
-      viewportSyncFrame = requestAnimationFrame(flushViewportSync);
-      return;
-    }
-    queueMicrotask(flushViewportSync);
-  }
-
-  function flushViewportSync() {
-    viewportSyncQueued = false;
-    viewportSyncFrame = null;
-    const pending = pendingViewportSync;
-    pendingViewportSync = null;
-    if (
-      !pending ||
-      pending.key !== renderedSessionScrollKey ||
-      pending.generation !== viewportGeneration ||
-      !scrollContainer ||
-      hasPendingSubmittedTurnScroll()
-    ) {
-      return;
-    }
-    applySessionViewport(pending.key);
-  }
-
-  function cancelQueuedViewportSync() {
-    if (
-      viewportSyncFrame !== null &&
-      typeof cancelAnimationFrame === 'function'
-    ) {
-      cancelAnimationFrame(viewportSyncFrame);
-    }
-    viewportSyncFrame = null;
-    viewportSyncQueued = false;
-    pendingViewportSync = null;
-  }
-
-  function applySessionViewport(key) {
-    const viewport = sessionViewport(key);
-    const mode =
-      viewport.mode === 'restoring' ? viewport.restoreMode : viewport.mode;
-    if (mode === 'follow') {
-      // Only scroll to the bottom when content actually fills the viewport.
-      // During initial load or a session switch before history arrives,
-      // scrollHeight is at most offsetHeight (loading banner / empty state),
-      // so scrollTop = scrollHeight collapses to 0 — the top. Skipping the
-      // flush keeps the viewport in follow mode; the next content-change
-      // sync scrolls to the bottom once there is something to scroll to.
-      if (scrollContainer.scrollHeight > scrollContainer.offsetHeight) {
-        scrollContainer.scrollTop = scrollContainer.scrollHeight;
+    const observer = new ResizeObserver(() => {
+      if (hasPendingSubmittedTurnScroll()) {
+        return;
       }
-      viewport.mode = 'follow';
-    } else {
-      const anchorFound = restoreViewportAnchor(viewport);
-      if (anchorFound) {
-        viewport.mode = 'reading';
-      } else if (viewport.restoreFromOlderHistory) {
-        // The older-history load path already adjusted fallbackTop by the
-        // exact content-height delta, so the corrected pixel restore is
-        // safe even though the height changed. This is the one case where
-        // a height-changed pixel fallback is intentional and correct.
-        // Update the recorded height so later flushes see a stable height
-        // and keep the reading position instead of falling to the bottom.
-        viewport.mode = 'reading';
-        viewport.fallbackScrollHeight = scrollContainer.scrollHeight;
-        viewport.restoreFromOlderHistory = false;
-      } else if (fallbackHeightUnchanged(viewport)) {
-        // The anchor could not be restored, but content height is unchanged
-        // since capture (e.g. jsdom has no layout, or content was stable).
-        // A same-height absolute pixel restore is still safe here.
-        viewport.mode = 'reading';
-      } else {
-        // The saved anchor no longer exists AND content height has changed
-        // (different history page, reload, new messages). A stale absolute
-        // pixel fallback would land mid-text; the bottom is the only safe,
-        // non-surprising position. Switch to follow so future syncs track
-        // new content until the user scrolls.
-        viewport.mode = 'follow';
-        viewport.restoreMode = 'follow';
-        viewport.anchorId = '';
-        if (scrollContainer.scrollHeight > scrollContainer.offsetHeight) {
-          scrollContainer.scrollTop = scrollContainer.scrollHeight;
-        }
-      }
-    }
-    syncJumpToLatestVisibility();
-  }
-
-  function fallbackHeightUnchanged(viewport) {
-    if (viewport.fallbackScrollHeight <= 0) {
-      return false;
-    }
-    return scrollContainer.scrollHeight === viewport.fallbackScrollHeight;
-  }
-
-  function restoreViewportAnchor(viewport) {
-    const anchor = timelineItemElement(viewport.anchorId);
-    if (!anchor || !elementHasLayout(anchor)) {
-      scrollContainer.scrollTop = viewport.fallbackTop;
-      return false;
-    }
-    const containerTop = scrollContainer.getBoundingClientRect().top;
-    const currentOffset = anchor.getBoundingClientRect().top - containerTop;
-    scrollContainer.scrollTop += currentOffset - viewport.anchorOffset;
-    return true;
-  }
-
-  function captureViewportAnchor(viewport) {
-    if (!scrollContainer) {
-      return;
-    }
-    viewport.fallbackTop = scrollContainer.scrollTop;
-    viewport.fallbackScrollHeight = scrollContainer.scrollHeight;
-    const containerTop = scrollContainer.getBoundingClientRect().top;
-    const anchor = timelineItemElements().find(
-      (element) =>
-        elementHasLayout(element) &&
-        element.getBoundingClientRect().bottom > containerTop,
-    );
-    if (!anchor) {
-      viewport.anchorId = '';
-      viewport.anchorOffset = 0;
-      return;
-    }
-    viewport.anchorId = anchor.dataset.timelineItemId ?? '';
-    viewport.anchorOffset = anchor.getBoundingClientRect().top - containerTop;
-  }
-
-  function timelineItemElements() {
-    return Array.from(
-      timelineContent?.querySelectorAll?.('[data-timeline-item-id]') ?? [],
-    );
-  }
-
-  function timelineItemElement(itemId) {
-    if (!itemId) {
-      return null;
-    }
-    return (
-      timelineItemElements().find(
-        (element) => element.dataset.timelineItemId === itemId,
-      ) ?? null
-    );
-  }
-
-  function elementHasLayout(element) {
-    const rect = element.getBoundingClientRect();
-    return rect.height > 0 || element.offsetHeight > 0;
-  }
+      controller?.contentChanged();
+    });
+    observer.observe(content);
+    return () => observer.disconnect();
+  });
 
   function timelineItemSignature(item) {
     if (item.type === 'assistant_run') {
@@ -617,21 +400,33 @@
     return pendingSubmittedTurnScrollKey > handledSubmittedTurnScrollKey;
   }
 
-  function saveSessionViewport(key) {
-    if (!key || !scrollContainer) {
+  function syncJumpToLatestVisibility() {
+    showJumpToLatest = Boolean(
+      sessionScrollKey &&
+      scrollContainer &&
+      controller &&
+      !controller.isNearBottom(),
+    );
+  }
+
+  function jumpToLatest() {
+    if (!sessionScrollKey || !scrollContainer) {
       return;
     }
-    const viewport = sessionViewport(key);
-    if (isNearBottom(scrollContainer)) {
-      setViewportMode(key, 'follow');
-    } else {
-      viewport.mode = 'reading';
-      viewport.restoreMode = 'reading';
-      captureViewportAnchor(viewport);
-    }
-    sessionViewports.delete(key);
-    sessionViewports.set(key, viewport);
-    trimSessionViewports();
+    controller?.pinToBottom();
+  }
+
+  function isUpwardScrollKey(key) {
+    return key === 'ArrowUp' || key === 'PageUp' || key === 'Home';
+  }
+
+  function shouldLoadOlderHistory() {
+    return (
+      hasOlderHistory &&
+      !loadingOlderHistory &&
+      timelineItems.length > 0 &&
+      Boolean(scrollContainer)
+    );
   }
 
   function scrollSubmittedTurnIntoView() {
@@ -639,13 +434,7 @@
     if (!target) {
       return false;
     }
-
-    if (typeof target.scrollIntoView === 'function') {
-      target.scrollIntoView(SUBMITTED_TURN_SCROLL_OPTIONS);
-      return true;
-    }
-
-    scrollContainer?.scrollTo?.(0, target.offsetTop ?? 0);
+    controller?.animateElementToTop(target);
     return true;
   }
 
@@ -663,104 +452,6 @@
       );
     }
     return userMessages[userMessages.length - 1] ?? null;
-  }
-
-  function handleMessagesScroll() {
-    const userOwned = Date.now() <= userScrollIntentUntil;
-    if (userOwned) {
-      updateViewportFromUserScroll();
-    }
-    syncJumpToLatestVisibility();
-    if (userOwned) {
-      void loadOlderHistoryFromScroll();
-    }
-  }
-
-  function syncJumpToLatestVisibility() {
-    showJumpToLatest = Boolean(
-      sessionScrollKey && scrollContainer && !isNearBottom(scrollContainer),
-    );
-  }
-
-  function jumpToLatest() {
-    if (!sessionScrollKey || !scrollContainer) {
-      return;
-    }
-    setViewportMode(sessionScrollKey, 'follow');
-    scrollContainer.scrollTop = scrollContainer.scrollHeight;
-    syncJumpToLatestVisibility();
-  }
-
-  function updateViewportFromUserScroll() {
-    const viewport = sessionViewport(sessionScrollKey);
-    if (isNearBottom(scrollContainer)) {
-      setViewportMode(sessionScrollKey, 'follow');
-      return;
-    }
-    viewport.mode = 'reading';
-    viewport.restoreMode = 'reading';
-    captureViewportAnchor(viewport);
-  }
-
-  function takeReadingControl() {
-    if (!sessionScrollKey || !scrollContainer) {
-      return;
-    }
-    const viewport = sessionViewport(sessionScrollKey);
-    viewport.mode = 'reading';
-    viewport.restoreMode = 'reading';
-    captureViewportAnchor(viewport);
-  }
-
-  function isUpwardScrollKey(key) {
-    return key === 'ArrowUp' || key === 'PageUp' || key === 'Home';
-  }
-
-  async function loadOlderHistoryFromScroll() {
-    if (!shouldLoadOlderHistory()) {
-      return;
-    }
-
-    const key = sessionScrollKey;
-    const generation = viewportGeneration;
-    const viewport = sessionViewport(key);
-    const previousScrollHeight = scrollContainer.scrollHeight;
-    viewport.mode = 'reading';
-    viewport.restoreMode = 'reading';
-    captureViewportAnchor(viewport);
-    viewport.mode = 'restoring';
-    loadingOlderFromScroll = true;
-    try {
-      const loaded = await onLoadOlder?.();
-      if (loaded === false) {
-        return;
-      }
-      await tick();
-      if (
-        key === renderedSessionScrollKey &&
-        generation === viewportGeneration
-      ) {
-        if (!viewport.anchorId) {
-          viewport.fallbackTop +=
-            scrollContainer.scrollHeight - previousScrollHeight;
-        }
-        viewport.restoreFromOlderHistory = true;
-        applySessionViewport(key);
-      }
-    } finally {
-      loadingOlderFromScroll = false;
-    }
-  }
-
-  function shouldLoadOlderHistory() {
-    return (
-      hasOlderHistory &&
-      !loadingOlderHistory &&
-      !loadingOlderFromScroll &&
-      timelineItems.length > 0 &&
-      scrollContainer &&
-      scrollContainer.scrollTop <= LOAD_OLDER_SCROLL_THRESHOLD
-    );
   }
 
   function hasSubmittedTurnUserItem() {
@@ -823,12 +514,7 @@
 </script>
 
 <div class="chat-timeline">
-  <section
-    class="messages"
-    bind:this={scrollContainer}
-    aria-live="polite"
-    onscroll={handleMessagesScroll}
-  >
+  <section class="messages" bind:this={scrollContainer} aria-live="polite">
     <div class="messages__content" bind:this={timelineContent}>
       {#if timelineItems.length === 0 && transientCards.length === 0}
         {#if loadingHistory}
