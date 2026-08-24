@@ -107,9 +107,10 @@ Import the decision objects from `core.extensions`:
 ```python
 from core.extensions import Deny, Modify, Replace
 
+
 def guard(ctx, *, tool_name, tool_call_id, input):
     if tool_name != "bash":
-        return None                       # proceed unchanged
+        return None  # proceed unchanged
     if "rm -rf /" in input.get("command", ""):
         ctx.add_note("guard blocked a destructive command.")
         return Deny(reason="Refused: destructive command.")
@@ -135,8 +136,12 @@ When at least two Tools form one user-recognizable capability, declare a Family 
 ```python
 def register(api):
     api.register_tool_family("weather", "Weather")
-    api.register_tool("weather_now", "Read current weather.", NOW_PARAMETERS, read_now, family="weather")
-    api.register_tool("weather_forecast", "Read a forecast.", FORECAST_PARAMETERS, read_forecast, family="weather")
+    api.register_tool(
+        "weather_now", "Read current weather.", NOW_PARAMETERS, read_now, family="weather"
+    )
+    api.register_tool(
+        "weather_forecast", "Read a forecast.", FORECAST_PARAMETERS, read_forecast, family="weather"
+    )
 ```
 
 ```python
@@ -155,6 +160,7 @@ RESULT = {
     "additionalProperties": False,
 }
 
+
 def word_count(context, arguments):
     unknown = sorted(set(arguments) - {"text"})
     if unknown:
@@ -163,6 +169,7 @@ def word_count(context, arguments):
     if not isinstance(text, str):
         return tool_failure("invalid_arguments", "`text` must be a string.")
     return tool_success({"word_count": len(text.split())})
+
 
 def register(api):
     api.register_tool(
@@ -188,6 +195,7 @@ Skill instead.)
 ```python
 from core.chat import CommandFeedback, CommandOutcome, CommandRun
 
+
 async def start_workflow(context, argument):
     prompt = "$workflow"
     if argument:
@@ -198,6 +206,7 @@ async def start_workflow(context, argument):
         feedback=CommandFeedback(kind="notice", text="Workflow started."),
         runs=(CommandRun(role="follow_up", run=run),),
     )
+
 
 def register(api):
     api.register_command(
@@ -247,20 +256,21 @@ prefix, one owner.
 ```python
 from core.extensions import InteractionButton
 
+
 async def _toggle(event, responder):
     # event.buttons is the message's current keyboard (rows of InteractionButton),
     # event.data is the tapped button's callback payload. Rebuild the keyboard and
     # edit it back — the state lives in the message, there is no server-side store.
     new_rows = [
         [
-            InteractionButton(label=flip(b.label) if b.data == event.data else b.label,
-                              data=b.data)
+            InteractionButton(label=flip(b.label) if b.data == event.data else b.label, data=b.data)
             for b in row
         ]
         for row in event.buttons
     ]
     await responder.edit(buttons=new_rows)
-    await responder.answer()            # stop the tapper's spinner (empty = silent ack)
+    await responder.answer()  # stop the tapper's spinner (empty = silent ack)
+
 
 def register(api):
     api.register_interaction_handler("chk", _toggle)
@@ -299,12 +309,18 @@ An extension declares a **settings schema** when it has user-editable configurat
 
 ```python
 def register(api):
-    api.register_settings([
-        {"key": "url", "type": "text", "label": "Server URL",
-         "default": "http://homeassistant.local:8123"},
-        {"key": "verbose", "type": "toggle", "label": "Verbose logging", "default": False},
-        {"key": "token", "type": "secret", "label": "Access token", "env_key": "HASS_TOKEN"},
-    ])
+    api.register_settings(
+        [
+            {
+                "key": "url",
+                "type": "text",
+                "label": "Server URL",
+                "default": "http://homeassistant.local:8123",
+            },
+            {"key": "verbose", "type": "toggle", "label": "Verbose logging", "default": False},
+            {"key": "token", "type": "secret", "label": "Access token", "env_key": "HASS_TOKEN"},
+        ]
+    )
 ```
 
 Each field is one dict. The v1 types are `text`, `number`, `toggle`, and `secret`:
@@ -370,8 +386,8 @@ block list refreshes whenever extensions reload — no per-request cost.
 
 ```python
 def register(api):
-    api.on_startup(open_resources)     # fires once serving begins (loop running)
-    api.on_shutdown(close_resources)   # fires during runtime shutdown
+    api.on_startup(open_resources)  # fires once serving begins (loop running)
+    api.on_shutdown(close_resources)  # fires during runtime shutdown
 ```
 
 Both may be sync or async and take no arguments. Startup handlers fire on the
@@ -414,6 +430,7 @@ def register(api):
     def call_home(context, arguments):
         url = api.get_config().get("url", "http://homeassistant.local:8123")  # live
         ...
+
     api.register_tool("ha_ping", "Ping Home Assistant.", PARAMS, call_home)
 ```
 
@@ -425,9 +442,11 @@ A `secret` field's value is stored in the data directory's `.env` (`~/.vbot/.env
 
 ```python
 def register(api):
-    api.register_settings([
-        {"key": "token", "type": "secret", "label": "Token", "env_key": "HASS_TOKEN"},
-    ])
+    api.register_settings(
+        [
+            {"key": "token", "type": "secret", "label": "Token", "env_key": "HASS_TOKEN"},
+        ]
+    )
 
     def call_home(context, arguments):
         token = api.resolve_credential("HASS_TOKEN")  # process env, then .env
