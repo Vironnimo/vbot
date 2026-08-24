@@ -254,6 +254,9 @@ class IntegrationStorage:
     def load_session_title_settings(self) -> JsonObject:
         return {"enabled": False, "model": ""}
 
+    def load_settings(self) -> JsonObject:
+        return {}
+
 
 class IntegrationPrompts:
     def __init__(self, tools: ToolRegistry) -> None:
@@ -551,6 +554,7 @@ def test_model_list_and_settings_get_follow_credential_contract(tmp_path: Path) 
                     "port_source": "default",
                 },
                 "data_directory": str(tmp_path),
+                "keep_awake": False,
             },
             "providers": {
                 "items": [
