@@ -170,7 +170,9 @@ def _bash_tool_parameters(*, subagent: bool) -> JsonObject:
         "independent of timeout."
         if subagent
         else 'Only valid when mode is "auto". Seconds auto waits before a still-running '
-        "command is handed to vBot. Omit for the default (30 seconds); independent of timeout."
+        "command is handed to vBot. The command keeps running past this point — this is "
+        "not a timeout; it only ends the synchronous wait. Omit for the default "
+        "(30 seconds); independent of timeout."
     )
     modes = BASH_EXECUTION_MODES[:2] if subagent else BASH_EXECUTION_MODES
     return {
@@ -282,8 +284,8 @@ def _background_blocked_at_depth(context: ToolContext) -> bool:
 def _background_at_depth_timeout_message(background_after_seconds: float) -> str:
     """Build the failure message for Sub-Agent auto mode reaching the threshold."""
     return (
-        f"Auto mode reached background_after_seconds after {background_after_seconds:g}s, "
-        "but process handoff is not "
+        f"Auto waited the full background_after_seconds window ({background_after_seconds:g} s) "
+        "and the command was still running, but process handoff is not "
         "available inside a Sub-Agent. The process was stopped. Use foreground mode when "
         "the next action needs this result, or choose a sufficient "
         "background_after_seconds and timeout "
