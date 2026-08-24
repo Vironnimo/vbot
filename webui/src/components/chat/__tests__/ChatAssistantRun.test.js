@@ -1005,6 +1005,34 @@ describe('ChatAssistantRun run footer', () => {
     const footer = document.querySelector('.run-footer');
     expect(footer.getAttribute('aria-label')).toBe('Completed · 8.0s · 3 iter');
   });
+
+  it('renders the provider liveness notice on its own line below the footer', () => {
+    const item = createAssistantRunItem({
+      status: 'running',
+      items: [],
+    });
+    item.providerHeartbeat = { idleSeconds: 75.4 };
+    mountedComponent = mountRun({ item });
+
+    const notice = document.querySelector('.run-footer__notice');
+    expect(notice).toBeTruthy();
+    expect(notice.textContent).toBe(
+      'Provider connected · waiting 75s for the next model chunk',
+    );
+    // The stable footer line itself carries no notice part.
+    const footer = document.querySelector('.run-footer');
+    expect(footer.textContent).not.toContain('Provider connected');
+  });
+
+  it('renders no notice line without a provider heartbeat', () => {
+    const item = createAssistantRunItem({
+      status: 'running',
+      items: [],
+    });
+    mountedComponent = mountRun({ item });
+
+    expect(document.querySelector('.run-footer__notice')).toBeNull();
+  });
 });
 
 async function flushAsync() {

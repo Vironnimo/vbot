@@ -263,6 +263,13 @@
   color: var(--red);
 }
 
+.run-footer__notice {
+  margin-top: 2px;
+  color: var(--text-lo);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .working-block__chevron {
     transition: none;
