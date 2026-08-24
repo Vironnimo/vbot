@@ -275,6 +275,13 @@ PINNED_SKILL_CATALOG_META_KEY = "pinned_skill_catalog"
 # Rooted Identity Agent Working Project Context, rendered from the selected Project's
 # identity and auto-load files and reused verbatim until the next Compaction.
 PINNED_WORKING_PROJECT_CONTEXT_META_KEY = "pinned_working_project_context"
+# Session-pinned rendered SOUL block text and pinned-memory text: prompt-epoch
+# snapshots like the Skill catalog above. The first request of an epoch renders
+# them once from the workspace files; every later request reuses the exact text so
+# on-disk changes cannot break the System Prompt prefix mid-epoch. Successful
+# Compaction replaces all three snapshots when the new epoch starts.
+PINNED_SOUL_CONTEXT_META_KEY = "pinned_soul_context"
+PINNED_MEMORY_FILES_META_KEY = "pinned_memory_files"
 
 
 @dataclass(frozen=True)
@@ -649,6 +656,8 @@ class _RunExecutionContext:
     project_cwd: Path | None
     project_prompt_context: ProjectPromptContext | None
     working_project_context: str | None
+    soul_context: str | None
+    memory_files_context: str | None
     skill_project_id: str | None
     skill_registry: SkillRegistry
     skill_catalog: PinnedSkillCatalog
@@ -692,6 +701,8 @@ class _CompactionPromptRefresh:
     agent_body: str
     project_prompt_context: ProjectPromptContext | None
     working_project_context: str | None
+    soul_context: str | None
+    memory_files_context: str | None
     skill_registry: SkillRegistry
     skill_catalog: PinnedSkillCatalog
     prompt_read_paths: tuple[Path, ...]
@@ -1376,6 +1387,20 @@ class ChatLoop:
                     prompt_context,
                     run.project_id,
                 )
+                soul_context = await _CHAT_TRANSFORM_WORKERS.run(
+                    self._pinned_soul_context,
+                    run.agent_id,
+                    run.session_id,
+                    agent,
+                    run.project_id,
+                )
+                memory_files_context = await _CHAT_TRANSFORM_WORKERS.run(
+                    self._pinned_memory_files,
+                    run.agent_id,
+                    run.session_id,
+                    agent,
+                    run.project_id,
+                )
                 skill_project_id, identity_agent_id = resolve_skill_scope(
                     run.project_id, prompt_project, run.agent_id
                 )
@@ -1416,6 +1441,8 @@ class ChatLoop:
                     agent_body=agent_body,
                     project_context=prompt_context,
                     working_project_context=working_project_context,
+                    soul_context=soul_context,
+                    memory_files_context=memory_files_context,
                     agent_project_id=run.project_id,
                     skill_registry=skill_registry,
                     skill_catalog=skill_catalog,
@@ -1501,6 +1528,14 @@ class ChatLoop:
                 if prompt_refresh is not None
                 else working_project_context
             )
+            next_soul_context = (
+                prompt_refresh.soul_context if prompt_refresh is not None else soul_context
+            )
+            next_memory_files_context = (
+                prompt_refresh.memory_files_context
+                if prompt_refresh is not None
+                else memory_files_context
+            )
             next_skill_registry = (
                 prompt_refresh.skill_registry if prompt_refresh is not None else skill_registry
             )
@@ -1520,6 +1555,8 @@ class ChatLoop:
                 agent_body=next_agent_body,
                 project_context=next_prompt_context,
                 working_project_context=next_working_project_context,
+                soul_context=next_soul_context,
+                memory_files_context=next_memory_files_context,
                 agent_project_id=run.project_id,
                 skill_registry=next_skill_registry,
                 skill_catalog=next_skill_catalog,
@@ -1727,6 +1764,20 @@ class ChatLoop:
             project_prompt_context,
             project_id,
         )
+        soul_context = await _CHAT_TRANSFORM_WORKERS.run(
+            self._pinned_soul_context,
+            run.agent_id,
+            run.session_id,
+            agent,
+            project_id,
+        )
+        memory_files_context = await _CHAT_TRANSFORM_WORKERS.run(
+            self._pinned_memory_files,
+            run.agent_id,
+            run.session_id,
+            agent,
+            project_id,
+        )
         skill_project_id, identity_agent_id = resolve_skill_scope(
             project_id, prompt_project, run.agent_id
         )
@@ -1761,6 +1812,8 @@ class ChatLoop:
             project_cwd=project_cwd,
             project_prompt_context=project_prompt_context,
             working_project_context=working_project_context,
+            soul_context=soul_context,
+            memory_files_context=memory_files_context,
             skill_project_id=skill_project_id,
             skill_registry=skill_registry,
             skill_catalog=skill_catalog,
@@ -1971,6 +2024,8 @@ class ChatLoop:
                 agent_body=context.agent_body,
                 project_context=context.project_prompt_context,
                 working_project_context=context.working_project_context,
+                soul_context=context.soul_context,
+                memory_files_context=context.memory_files_context,
                 agent_project_id=context.project_id,
                 skill_registry=context.skill_registry,
                 skill_catalog=context.skill_catalog,
@@ -2038,6 +2093,8 @@ class ChatLoop:
                             agent_body=context.agent_body,
                             project_context=context.project_prompt_context,
                             working_project_context=context.working_project_context,
+                            soul_context=context.soul_context,
+                            memory_files_context=context.memory_files_context,
                             agent_project_id=context.project_id,
                             skill_registry=context.skill_registry,
                             skill_catalog=context.skill_catalog,
@@ -2322,6 +2379,32 @@ class ChatLoop:
         self._dependencies.sessions.set_metadata(agent_id, session_id, metadata, project_id)
         return snapshot
 
+    def _pinned_epoch_text(
+        self,
+        meta_key: str,
+        agent_id: str,
+        session_id: str,
+        project_id: str | None,
+        render: Callable[[], str],
+    ) -> str:
+        """Return the prompt epoch's pinned text under *meta_key*, snapshotting on first build.
+
+        The rendered text is stable between successful Compactions (persisted in
+        Session metadata under the Session's own ``project_id`` anchor), so an
+        ordinary mid-epoch file change leaves the System Prompt prefix unchanged.
+        A successful Compaction replaces the snapshot; a new Session starts with a
+        fresh snapshot too.
+        """
+        metadata = self._dependencies.sessions.get_metadata(agent_id, session_id, project_id)
+        pinned = metadata.get(meta_key)
+        pinned_text = pinned.get("text") if isinstance(pinned, dict) else None
+        if isinstance(pinned_text, str):
+            return pinned_text
+        text = render()
+        metadata[meta_key] = {"text": text}
+        self._dependencies.sessions.set_metadata(agent_id, session_id, metadata, project_id)
+        return text
+
     def _pinned_working_project_context(
         self,
         agent_id: str,
@@ -2330,33 +2413,90 @@ class ChatLoop:
         project_context: ProjectPromptContext | None,
         project_id: str | None,
     ) -> str | None:
-        """Return the Rooted Identity Agent Working Project Context for this prompt epoch.
+        """Return the pinned Working Project Context for this prompt epoch.
 
-        This snapshot governs only the automatic Working Project block. The rest
-        of the System Prompt keeps its existing live assembly behavior, and the
-        explicit ``project`` Tool remains an ordinary Tool-result path. A successful
-        Compaction replaces the snapshot from the current Project and auto-load files.
+        This snapshot governs only the automatic Working Project block and covers
+        Rooted Identity Agents and Project Config Agents alike. The rest of the
+        System Prompt keeps its existing live assembly behavior. A successful
+        Compaction replaces the snapshot from the current Project and auto-load
+        files. An unrooted Identity Agent has no Working Project block and no pin.
         """
-        if project_id is not None:
-            return None
-
-        metadata = self._dependencies.sessions.get_metadata(agent_id, session_id, project_id)
-        pinned = metadata.get(PINNED_WORKING_PROJECT_CONTEXT_META_KEY)
-        pinned_text = pinned.get("text") if isinstance(pinned, dict) else None
-        if isinstance(pinned_text, str):
-            return pinned_text
         if prompt_project is None or project_context is None:
             return None
 
         read_paths: list[Path] = []
-        snapshot = self._dependencies.get_system_prompts().render_working_project_context(
-            project_context,
-            on_read=read_paths.append,
+        text = self._pinned_epoch_text(
+            PINNED_WORKING_PROJECT_CONTEXT_META_KEY,
+            agent_id,
+            session_id,
+            project_id,
+            lambda: self._dependencies.get_system_prompts().render_working_project_context(
+                project_context,
+                on_read=read_paths.append,
+            ),
         )
         self._stamp_prompt_files_read(session_id, read_paths)
-        metadata[PINNED_WORKING_PROJECT_CONTEXT_META_KEY] = {"text": snapshot}
-        self._dependencies.sessions.set_metadata(agent_id, session_id, metadata, project_id)
-        return snapshot
+        return text
+
+    def _pinned_soul_context(
+        self,
+        agent_id: str,
+        session_id: str,
+        agent: Any,
+        project_id: str | None,
+    ) -> str | None:
+        """Return the prompt epoch's pinned SOUL block text for an Identity Agent.
+
+        ``None`` when the Agent has no Identity/Memory Workspace (a config agent):
+        its SOUL block gates out regardless, so no pin is stored or needed.
+        """
+        if not getattr(agent, "workspace", None):
+            return None
+        read_paths: list[Path] = []
+
+        def render() -> str:
+            return self._dependencies.get_system_prompts().render_soul(
+                agent,
+                on_read=read_paths.append,
+            )
+
+        return self._pinned_epoch_text(
+            PINNED_SOUL_CONTEXT_META_KEY,
+            agent_id,
+            session_id,
+            project_id,
+            render,
+        )
+
+    def _pinned_memory_files(
+        self,
+        agent_id: str,
+        session_id: str,
+        agent: Any,
+        project_id: str | None,
+    ) -> str | None:
+        """Return the prompt epoch's pinned pinned-memory text for an Identity Agent.
+
+        ``None`` when the Agent has no Identity/Memory Workspace (a config agent):
+        its memory producer renders empty regardless, so no pin is stored or needed.
+        """
+        if not getattr(agent, "workspace", None):
+            return None
+        read_paths: list[Path] = []
+
+        def render() -> str:
+            return self._dependencies.get_system_prompts().render_memory_files(
+                agent,
+                on_read=read_paths.append,
+            )
+
+        return self._pinned_epoch_text(
+            PINNED_MEMORY_FILES_META_KEY,
+            agent_id,
+            session_id,
+            project_id,
+            render,
+        )
 
     def _prepare_prompt_context_after_compaction(
         self,
@@ -2409,20 +2549,37 @@ class ChatLoop:
 
         system_prompts = self._dependencies.get_system_prompts()
         skill_catalog = system_prompts.render_skill_catalog(agent, prompt_skill_registry)
+        refreshed_agent = self._dependencies.agent_resolver.resolve_agent(project_id, agent_id)
         working_project_context: str | None = None
+        soul_context: str | None = None
+        memory_files_context: str | None = None
         read_paths: list[Path] = []
-        if project_id is None and project_prompt_context is not None:
+        if project_prompt_context is not None:
+            # Rooted Identity Agents and Project Config Agents alike pin their
+            # Working Project frame for the new prompt epoch.
             working_project_context = system_prompts.render_working_project_context(
                 project_prompt_context,
                 on_read=read_paths.append,
             )
+        if getattr(refreshed_agent, "workspace", None):
+            soul_read_paths: list[Path] = []
+            soul_context = system_prompts.render_soul(
+                refreshed_agent,
+                on_read=soul_read_paths.append,
+            )
+            memory_files_context = system_prompts.render_memory_files(
+                refreshed_agent,
+                on_read=soul_read_paths.append,
+            )
+            read_paths.extend(soul_read_paths)
 
-        refreshed_agent = self._dependencies.agent_resolver.resolve_agent(project_id, agent_id)
         available_skill_names = self._available_skill_names(agent, prompt_skill_registry)
         return _CompactionPromptRefresh(
             agent_body=runtime_agent_body(refreshed_agent),
             project_prompt_context=project_prompt_context,
             working_project_context=working_project_context,
+            soul_context=soul_context,
+            memory_files_context=memory_files_context,
             skill_registry=activation_skill_registry,
             skill_catalog=skill_catalog,
             prompt_read_paths=tuple(read_paths),
@@ -2446,12 +2603,15 @@ class ChatLoop:
         }
         if refresh.available_skill_names is not None:
             metadata[SEEN_SKILLS_META_KEY] = list(refresh.available_skill_names)
-        if refresh.working_project_context is None:
-            metadata.pop(PINNED_WORKING_PROJECT_CONTEXT_META_KEY, None)
-        else:
-            metadata[PINNED_WORKING_PROJECT_CONTEXT_META_KEY] = {
-                "text": refresh.working_project_context
-            }
+        for pin_key, pin_text in (
+            (PINNED_WORKING_PROJECT_CONTEXT_META_KEY, refresh.working_project_context),
+            (PINNED_SOUL_CONTEXT_META_KEY, refresh.soul_context),
+            (PINNED_MEMORY_FILES_META_KEY, refresh.memory_files_context),
+        ):
+            if pin_text is None:
+                metadata.pop(pin_key, None)
+            else:
+                metadata[pin_key] = {"text": pin_text}
         self._stamp_prompt_files_read(session_id, list(refresh.prompt_read_paths))
         self._dependencies.sessions.set_metadata(agent_id, session_id, metadata, project_id)
 
@@ -2575,6 +2735,8 @@ class ChatLoop:
         agent_body: str = "",
         project_context: ProjectPromptContext | None = None,
         working_project_context: str | None = None,
+        soul_context: str | None = None,
+        memory_files_context: str | None = None,
         agent_project_id: str | None = None,
         skill_registry: SkillRegistry | None = None,
         skill_catalog: PinnedSkillCatalog | None = None,
@@ -2585,7 +2747,9 @@ class ChatLoop:
         # config-agent body is inserted verbatim (never re-expanded) by the builder.
         # ``skill_registry`` scopes the skills block to the project pool (``None`` =
         # the global registry); ``skill_catalog`` is the current prompt-epoch snapshot
-        # the skills block renders from, so only Compaction replaces it.
+        # the skills block renders from, so only Compaction replaces it. The
+        # ``working_project_context`` / ``soul_context`` / ``memory_files_context``
+        # prompt-epoch snapshots behave the same way.
         session_messages = (
             await session.load_async()
             if session_messages_override is None
@@ -2645,6 +2809,8 @@ class ChatLoop:
             agent_body=agent_body,
             project_context=project_context,
             working_project_context=working_project_context,
+            soul_context=soul_context,
+            memory_files_context=memory_files_context,
             agent_project_id=agent_project_id,
             nesting_depth=self._nesting_depth,
             skill_registry=skill_registry,
@@ -2729,6 +2895,8 @@ class ChatLoop:
         agent_body: str,
         project_context: ProjectPromptContext | None,
         working_project_context: str | None,
+        soul_context: str | None,
+        memory_files_context: str | None,
         agent_project_id: str | None,
         skill_registry: SkillRegistry,
         skill_catalog: PinnedSkillCatalog,
@@ -2746,6 +2914,8 @@ class ChatLoop:
             agent_body=agent_body,
             project_context=project_context,
             working_project_context=working_project_context,
+            soul_context=soul_context,
+            memory_files_context=memory_files_context,
             agent_project_id=agent_project_id,
             skill_registry=skill_registry,
             skill_catalog=skill_catalog,
@@ -3574,6 +3744,14 @@ class ChatLoop:
                 if prompt_refresh is not None
                 else context.working_project_context
             )
+            next_soul_context = (
+                prompt_refresh.soul_context if prompt_refresh is not None else context.soul_context
+            )
+            next_memory_files_context = (
+                prompt_refresh.memory_files_context
+                if prompt_refresh is not None
+                else context.memory_files_context
+            )
             next_skill_registry = (
                 prompt_refresh.skill_registry
                 if prompt_refresh is not None
@@ -3610,6 +3788,8 @@ class ChatLoop:
                 agent_body=next_agent_body,
                 project_context=next_project_context,
                 working_project_context=next_working_project_context,
+                soul_context=next_soul_context,
+                memory_files_context=next_memory_files_context,
                 agent_project_id=context.project_id,
                 skill_registry=next_skill_registry,
                 skill_catalog=next_skill_catalog,
@@ -3653,6 +3833,8 @@ class ChatLoop:
                         agent_body=context.agent_body,
                         project_context=context.project_prompt_context,
                         working_project_context=context.working_project_context,
+                        soul_context=context.soul_context,
+                        memory_files_context=context.memory_files_context,
                         agent_project_id=context.project_id,
                         skill_registry=context.skill_registry,
                         skill_catalog=context.skill_catalog,

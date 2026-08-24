@@ -268,6 +268,8 @@ class IntegrationPrompts:
         agent_body: str = "",
         project_context: object = None,
         working_project_context: str | None = None,
+        soul_context: str | None = None,
+        memory_files_context: str | None = None,
         agent_project_id: str | None = None,
         nesting_depth: int = 0,
         skill_registry: object = None,
@@ -278,6 +280,12 @@ class IntegrationPrompts:
     ) -> str:
         del agent_project_id
         return f"System prompt for {agent.id}"
+
+    def render_soul(self, _agent: IntegrationAgent, *, on_read: object = None) -> str:
+        return ""
+
+    def render_memory_files(self, _agent: IntegrationAgent, *, on_read: object = None) -> str:
+        return ""
 
     def render_skill_catalog(self, agent: IntegrationAgent, skill_registry: object = None) -> Any:
         from core.prompts import PinnedSkillCatalog

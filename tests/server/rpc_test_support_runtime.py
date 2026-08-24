@@ -596,6 +596,8 @@ class StubPrompts:
         agent_body: str = "",
         project_context: object = None,
         working_project_context: str | None = None,
+        soul_context: str | None = None,
+        memory_files_context: str | None = None,
         agent_project_id: str | None = None,
         nesting_depth: int = 0,
         skill_registry: object = None,
@@ -632,6 +634,12 @@ class StubPrompts:
     ) -> str:
         del on_read
         return str(getattr(project_context, "project_id", ""))
+
+    def render_soul(self, _agent: StubAgent, *, on_read: object = None) -> str:
+        return ""
+
+    def render_memory_files(self, _agent: StubAgent, *, on_read: object = None) -> str:
+        return ""
 
     def render_skill_catalog(self, _agent: StubAgent, skill_registry: object = None) -> Any:
         from core.prompts import PinnedSkillCatalog

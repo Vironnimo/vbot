@@ -185,6 +185,8 @@ class StubPrompts:
         agent_body: str = "",
         project_context: Any = None,
         working_project_context: str | None = None,
+        soul_context: str | None = None,
+        memory_files_context: str | None = None,
         agent_project_id: str | None = None,
         nesting_depth: int = 0,
         skill_registry: Any = None,

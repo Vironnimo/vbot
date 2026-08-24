@@ -133,10 +133,16 @@ class BlockRenderContext:
 
     agent: PromptAgent
     project_context: ProjectPromptContext | None = None
-    # Session-pinned Working Project Context for a Rooted Identity Agent. When
-    # present, the Working Project block emits this text verbatim instead of reading
-    # ``project_context`` again. Other System Prompt inputs remain live.
+    # Session-pinned Working Project Context. When present, the Working Project
+    # block emits this text verbatim instead of reading ``project_context`` again.
     working_project_context: str | None = None
+    # Session-pinned rendered SOUL block text. When present, the SOUL block emits
+    # this text verbatim instead of re-reading the workspace ``SOUL.md``.
+    soul_context: str | None = None
+    # Session-pinned rendered pinned-memory text. When present, the
+    # ``memory_files`` producer emits this text instead of re-reading
+    # ``USER.md``/``MEMORY.md`` from the workspace.
+    memory_files_context: str | None = None
     # Addressing scope of the Agent itself. This is deliberately separate from
     # ``project_context``: a Rooted Identity Agent may receive Working Project
     # context while remaining identity-scoped for Sub-Agent routing.
