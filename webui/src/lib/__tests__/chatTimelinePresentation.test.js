@@ -8,6 +8,7 @@ import {
   compactToolValue,
   compactionSummaryText,
   errorMessagePresentation,
+  formatTime,
   isRowCancellable,
   isBackgroundSubAgentSpawn,
   isRunChildWorking,
@@ -1842,6 +1843,31 @@ describe('runFooterParts', () => {
       items: [],
     });
     expect(parts).toEqual(['Completed', '8.0s', '3 iter']);
+  });
+
+  it('shows the end time once the run reached a terminal state', () => {
+    const parts = runFooterParts({
+      status: 'completed',
+      durationMs: 8000,
+      endTimestamp: '2026-08-05T18:20:00Z',
+      items: [],
+    });
+
+    expect(parts[parts.length - 1]).toBe(formatTime('2026-08-05T18:20:00Z'));
+  });
+
+  it('shows no end time while the run is still running', () => {
+    const parts = runFooterParts({
+      status: 'running',
+      durationMs: null,
+      endTimestamp: '2026-08-05T18:20:00Z',
+      items: [],
+    });
+
+    expect(parts).not.toContain(formatTime('2026-08-05T18:20:00Z'));
+    expect(
+      parts.every((part) => !part.includes('PM') && !part.includes('AM')),
+    ).toBe(true);
   });
 });
 

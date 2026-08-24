@@ -340,13 +340,16 @@ export function reasoningDurationLabel(child, nowMs = Date.now()) {
   return formatDurationMs(Math.max(0, nowMs - start));
 }
 
-// Footer line for an assistant run: status · duration · iterations. The
-// duration ticks live while the run is running (driven by the shared nowMs
-// clock). This is the stable first line of run-level meta information; the
-// message header shows only the timestamp. File-change statistics are
-// appended to this same line via `changeStatsParts`, while transient problem
-// notices (provider liveness) render on a separate line below via
-// `runFooterNotice` so they can never push the stable parts onto a wrap line.
+// Footer line for an assistant run: status · duration · iterations · end
+// time. The duration ticks live while the run is running (driven by the
+// shared nowMs clock); the end time appears once the run reaches a terminal
+// state (completion, cancellation, failure) and uses the same clock-time
+// formatting as the message header timestamp. This is the stable first line
+// of run-level meta information; the message header shows only the start
+// timestamp. File-change statistics are appended to this same line via
+// `changeStatsParts`, while transient problem notices (provider liveness)
+// render on a separate line below via `runFooterNotice` so they can never
+// push the stable parts onto a wrap line.
 export const runFooterParts = (assistantRun, nowMs = Date.now()) => {
   const parts = [];
   parts.push(runStatusLabel(assistantRun.status));
@@ -357,6 +360,10 @@ export const runFooterParts = (assistantRun, nowMs = Date.now()) => {
   const iterationLabel = labelForRunIterations(assistantRun);
   if (iterationLabel) {
     parts.push(iterationLabel);
+  }
+  const endTimeLabel = runEndTimeLabel(assistantRun);
+  if (endTimeLabel) {
+    parts.push(endTimeLabel);
   }
   return parts;
 };
@@ -1806,6 +1813,17 @@ function runStatusLabel(status) {
     return t('chat.runStatus.completed', 'Completed');
   }
   return t('chat.runStatus.running', 'Running');
+}
+
+// Clock time when the run ended (e.g. "7:20 PM"), shown once the run reached
+// a terminal state — completion, user cancellation, or failure — with the
+// same formatting as the message header timestamp. Empty while running or
+// when no end timestamp is known.
+function runEndTimeLabel(assistantRun) {
+  if (assistantRun.status === 'running') {
+    return '';
+  }
+  return formatTime(assistantRun.endTimestamp);
 }
 
 function formatRunDuration(assistantRun, nowMs = Date.now()) {
