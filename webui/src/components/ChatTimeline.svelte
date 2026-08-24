@@ -29,6 +29,9 @@
     transientCards = [],
     submittedTurnScrollKey = 0,
     submittedTurnScrollRunId = '',
+    // Height of the floating composer stack overlaying this timeline's
+    // bottom; the submitted-turn scroll alignment reserves space for it.
+    bottomOverlayHeight = 0,
     // Explicit navigation through a Sub-Agent row starts that Session as a
     // live tail even when its ordinary per-Session viewport was saved higher
     // in History. Passive restoration does not send this request.
@@ -487,7 +490,12 @@
   }
 
   function syncSubmittedTurnSpacerHeight(target = null) {
-    const containerHeight = scrollContainer?.clientHeight ?? 0;
+    // The composer overlays the timeline's bottom; the aligned message must
+    // stay visible above it, so only the unobstructed height counts.
+    const containerHeight = Math.max(
+      0,
+      (scrollContainer?.clientHeight ?? 0) - bottomOverlayHeight,
+    );
     if (!scrollContainer || containerHeight <= 0 || !target) {
       submittedTurnSpacerHeight = Math.max(
         containerHeight,

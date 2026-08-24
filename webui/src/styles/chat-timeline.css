@@ -17,7 +17,8 @@
 
 .btn-secondary.btn-icon.chat-timeline__jump-latest {
   position: absolute;
-  bottom: 12px;
+  /* Floats immediately above the composer overlay, not behind it. */
+  bottom: calc(12px + var(--chat-overlay-height, 0px));
   left: 50%;
   z-index: 1;
   width: 36px;
