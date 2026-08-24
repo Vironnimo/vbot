@@ -7,6 +7,7 @@ import { init } from '../../lib/i18n.js';
 import { reactiveProps } from './_reactiveProps.svelte.js';
 
 const listClientsMock = vi.fn();
+const updateSettingsMock = vi.fn();
 const resolveClientConnectionIdMock = vi.fn(() => 'tab-self');
 
 vi.mock('svelte', async () => {
@@ -15,6 +16,7 @@ vi.mock('svelte', async () => {
 
 vi.mock('$lib/api.js', () => ({
   listClients: (...args) => listClientsMock(...args),
+  updateSettings: (...args) => updateSettingsMock(...args),
 }));
 
 vi.mock('$lib/clientIdentity.js', () => ({
@@ -63,6 +65,7 @@ describe('SettingsGeneralPanel', () => {
     document.body.innerHTML = '';
     init('en');
     listClientsMock.mockReset();
+    updateSettingsMock.mockReset();
     resolveClientConnectionIdMock.mockReset();
     resolveClientConnectionIdMock.mockReturnValue('tab-self');
     mountedComponent = null;
@@ -167,5 +170,91 @@ describe('SettingsGeneralPanel', () => {
     flushSync();
 
     expect(onOpenSetupGuide).toHaveBeenCalledTimes(1);
+  });
+
+  it('renders the keep-awake toggle from the settings state', async () => {
+    listClientsMock.mockResolvedValue({ clients: [] });
+    const props = reactiveProps({
+      settings: { general: { keep_awake: true } },
+      clientsRefreshToken: 0,
+    });
+
+    mountedComponent = mount(SettingsGeneralPanel, {
+      target: document.body,
+      props,
+    });
+    flushSync();
+    await flushAsync();
+
+    const toggle = document.body.querySelector('[role="switch"]');
+    expect(toggle.getAttribute('aria-checked')).toBe('true');
+    expect(toggle.getAttribute('aria-label')).toBe('Keep computer awake');
+
+    props.settings = { general: { keep_awake: false } };
+    flushSync();
+    expect(
+      document.body
+        .querySelector('[role="switch"]')
+        .getAttribute('aria-checked'),
+    ).toBe('false');
+  });
+
+  it('saves the keep-awake setting when the toggle changes', async () => {
+    listClientsMock.mockResolvedValue({ clients: [] });
+    updateSettingsMock.mockResolvedValue({
+      general: { keep_awake: true },
+    });
+    const onCommit = vi.fn();
+    const onToast = vi.fn();
+
+    mountedComponent = mount(SettingsGeneralPanel, {
+      target: document.body,
+      props: {
+        settings: { general: { keep_awake: false } },
+        clientsRefreshToken: 0,
+        onCommit,
+        onToast,
+      },
+    });
+    flushSync();
+    await flushAsync();
+
+    document.body.querySelector('[role="switch"]').click();
+    await flushAsync();
+
+    expect(updateSettingsMock).toHaveBeenCalledWith({
+      server: { keep_awake: true },
+    });
+    expect(onCommit).toHaveBeenCalledTimes(1);
+    expect(onToast).toHaveBeenCalledWith(
+      expect.objectContaining({ variant: 'success' }),
+    );
+  });
+
+  it('shows an error banner and keeps the old value when saving fails', async () => {
+    listClientsMock.mockResolvedValue({ clients: [] });
+    updateSettingsMock.mockRejectedValue(new Error('boom'));
+    const onError = vi.fn();
+
+    mountedComponent = mount(SettingsGeneralPanel, {
+      target: document.body,
+      props: {
+        settings: { general: { keep_awake: false } },
+        clientsRefreshToken: 0,
+        onError,
+      },
+    });
+    flushSync();
+    await flushAsync();
+
+    document.body.querySelector('[role="switch"]').click();
+    await flushAsync();
+
+    expect(onError).toHaveBeenCalledWith(expect.stringContaining('boom'));
+    expect(
+      document.body
+        .querySelector('[role="switch"]')
+        .getAttribute('aria-checked'),
+    ).toBe('false');
   });
 });

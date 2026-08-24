@@ -205,7 +205,7 @@ def test_public_document_hides_flat_storage_keys() -> None:
         }
     )
 
-    assert effective["server"] == {"port": 9000}
+    assert effective["server"] == {"port": 9000, "keep_awake": False}
     assert effective["skills"] == {"directories": ["~/skills"]}
     assert effective["subagents"]["max_subagent_depth"] == 2
     assert "server_port" not in effective
@@ -269,3 +269,30 @@ def test_catalog_contains_static_and_dynamic_public_paths() -> None:
 def test_unknown_path_suggests_catalog_candidate() -> None:
     with pytest.raises(SettingsPathError):
         resolve_setting("web_search.providr")
+
+
+def test_server_keep_awake_defaults_to_false() -> None:
+    details = setting_details({}, "server.keep_awake")
+
+    assert details["value"] is False
+    assert build_effective_settings({})["server"]["keep_awake"] is False
+
+
+def test_server_keep_awake_effective_value_reads_flat_raw_key() -> None:
+    assert build_effective_settings({"keep_awake": True})["server"]["keep_awake"] is True
+    assert build_effective_settings({"keep_awake": "yes"})["server"]["keep_awake"] is False
+
+
+def test_server_keep_awake_patch_maps_to_flat_raw_key() -> None:
+    operations = parse_patch_operations([{"op": "set", "path": "server.keep_awake", "value": True}])
+
+    updated, changed = apply_settings_patch({}, operations)
+
+    assert updated == {"keep_awake": True}
+    assert changed == ("server.keep_awake",)
+    assert build_effective_settings(updated)["server"]["keep_awake"] is True
+
+    unset_operations = parse_patch_operations([{"op": "unset", "path": "server.keep_awake"}])
+    cleared, _ = apply_settings_patch(updated, unset_operations)
+
+    assert cleared == {}

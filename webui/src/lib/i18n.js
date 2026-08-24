@@ -1089,6 +1089,9 @@ export const englishCatalog = Object.freeze({
   'settings.general.dataDirectory': 'Data directory',
   'settings.general.dataDirectoryDescription':
     'Root path for agents, sessions, and workspace files.',
+  'settings.general.keepAwake': 'Keep computer awake',
+  'settings.general.keepAwakeDescription':
+    'Prevent automatic sleep while vBot is running, so channels such as Telegram stay reachable. Manual sleep still works.',
   'settings.general.setupGuide': 'Setup guide',
   'settings.general.setupGuideDescription':
     'Reopen the guided first-run setup to connect a provider and assign a model.',

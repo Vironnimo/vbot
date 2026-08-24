@@ -77,6 +77,7 @@ SUBAGENT_SETTING_DEFAULTS = {
 SETTINGS_UPDATE_SECTIONS = frozenset(
     {
         "appearance",
+        "server",
         "skills",
         "subagents",
         "compaction",
@@ -402,6 +403,11 @@ class StorageManager:
                 updated_sections["debug"] = self._apply_debug_settings(
                     settings,
                     settings_update["debug"],
+                )
+            if "server" in settings_update:
+                updated_sections["server"] = self._apply_server_settings(
+                    settings,
+                    settings_update["server"],
                 )
             if "extensions" in settings_update:
                 updated_sections["extensions"] = self._apply_extensions_settings(
@@ -860,6 +866,32 @@ class StorageManager:
         )
         settings["debug"] = normalized_debug
         return dict(normalized_debug)
+
+    def _apply_server_settings(
+        self,
+        settings: dict[str, Any],
+        server: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """Merge server settings into an in-memory settings mapping.
+
+        The public ``server`` section persists to the flat raw ``keep_awake``
+        key; unspecified fields keep their stored values (sparse merge).
+        """
+
+        if not isinstance(server, Mapping):
+            raise StorageError("Server settings must be a mapping")
+
+        unsupported_fields = sorted(set(server) - {"keep_awake"})
+        if unsupported_fields:
+            raise StorageError(f"Unsupported server settings: {', '.join(unsupported_fields)}")
+
+        if "keep_awake" in server:
+            keep_awake = server["keep_awake"]
+            if not isinstance(keep_awake, bool):
+                raise StorageError("Server keep_awake setting must be a boolean")
+            settings["keep_awake"] = keep_awake
+
+        return {"keep_awake": settings.get("keep_awake") is True}
 
     def _apply_web_search_settings(
         self,

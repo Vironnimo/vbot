@@ -379,6 +379,12 @@ async def _apply_public_settings_delta(
         reload_recall_backend = getattr(runtime, "reload_recall_backend", None)
         if callable(reload_recall_backend):
             reload_recall_backend()
+
+    keep_awake_changed = previous.get("keep_awake") != current.get("keep_awake")
+    if keep_awake_changed:
+        reload_keep_awake = getattr(runtime, "reload_keep_awake", None)
+        if callable(reload_keep_awake):
+            reload_keep_awake()
     return extension_layer_reloaded
 
 
@@ -802,6 +808,7 @@ def _settings_response(state: Any) -> JsonObject:
         "general": {
             "server": server_bind,
             "data_directory": str(runtime.storage.data_dir),
+            "keep_awake": runtime.storage.load_settings().get("keep_awake") is True,
         },
         "providers": {
             "items": [

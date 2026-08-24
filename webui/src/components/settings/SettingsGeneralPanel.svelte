@@ -4,7 +4,8 @@
   import EmptyState from '../ui/EmptyState.svelte';
   import StatusChip from '../ui/StatusChip.svelte';
   import TextField from '../ui/TextField.svelte';
-  import { listClients } from '$lib/api.js';
+  import Toggle from '../ui/Toggle.svelte';
+  import { listClients, updateSettings } from '$lib/api.js';
   import { resolveClientConnectionId } from '$lib/clientIdentity.js';
   import { activeLocaleTag, t } from '$lib/i18n.js';
   import {
@@ -19,12 +20,41 @@
     settings = null,
     clientsRefreshToken = 0,
     onOpenSetupGuide = noop,
+    onCommit = noop,
+    onToast = noop,
+    onError = noop,
   } = $props();
 
   let serverHostValue = $derived(
     formatServerHost(settings?.general?.server, t),
   );
   let dataDirectoryValue = $derived(getDataDirectoryValue(settings, t));
+  let keepAwakeValue = $derived(settings?.general?.keep_awake === true);
+  let savingKeepAwake = $state(false);
+
+  async function handleKeepAwakeChange(next) {
+    if (savingKeepAwake || next === keepAwakeValue) {
+      return;
+    }
+    savingKeepAwake = true;
+    onError('');
+    try {
+      const nextSettings = await updateSettings({
+        server: { keep_awake: next },
+      });
+      onCommit(nextSettings);
+      onToast({
+        title: t('settings.general.keepAwake', 'Keep computer awake'),
+        variant: 'success',
+      });
+    } catch (error) {
+      onError(
+        `${t('settings.saveError', 'Settings could not be saved.')} ${error.message}`,
+      );
+    } finally {
+      savingKeepAwake = false;
+    }
+  }
 
   // This window's own presence id — matches the row the WebSocket registered so
   // we can mark "this window". Resolved once; stable for the tab.
@@ -141,6 +171,28 @@
   </div>
   <div class="s-row-control s-row-control--input">
     <TextField readonly value={dataDirectoryValue} />
+  </div>
+</div>
+
+<div class="s-row">
+  <div class="s-row-info">
+    <div class="s-row-label">
+      {t('settings.general.keepAwake', 'Keep computer awake')}
+    </div>
+    <div class="s-row-desc">
+      {t(
+        'settings.general.keepAwakeDescription',
+        'Prevent automatic sleep while vBot is running, so channels such as Telegram stay reachable. Manual sleep still works.',
+      )}
+    </div>
+  </div>
+  <div class="s-row-control">
+    <Toggle
+      checked={keepAwakeValue}
+      disabled={savingKeepAwake}
+      ariaLabel={t('settings.general.keepAwake', 'Keep computer awake')}
+      onChange={handleKeepAwakeChange}
+    />
   </div>
 </div>
 

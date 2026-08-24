@@ -107,6 +107,7 @@ from core.runtime.interfaces import (
     LoggerProtocol,
     ProviderCredentialResolverProtocol,
 )
+from core.runtime.keep_awake import KeepAwakeController
 from core.sessions import ChatSessionManager
 from core.sessions.titles import SessionTitleService
 from core.settings.paths import (
@@ -414,6 +415,7 @@ class Runtime:
         self._embeddings: EmbeddingService | None = None
         self._storage: StorageManager | None = None
         self._attachment_store: AttachmentStore | None = None
+        self._keep_awake: KeepAwakeController | None = None
         self._speech_upload_max_size_bytes = DEFAULT_SPEECH_UPLOAD_MAX_SIZE_BYTES
         self._agents: AgentStore | None = None
         self._tools: ToolRegistry | None = None
@@ -507,6 +509,10 @@ class Runtime:
             key="speech_upload_max_size_bytes",
             default=DEFAULT_SPEECH_UPLOAD_MAX_SIZE_BYTES,
         )
+        # Keep-awake is applied as soon as Settings are usable so an enabled
+        # server holds its power request for the whole lifetime of the process.
+        self._keep_awake = KeepAwakeController(self.logger)
+        self._keep_awake.set_enabled(settings.get("keep_awake") is True)
         self._attachment_store = AttachmentStore(
             self._storage.data_dir,
             max_size_bytes=attachment_max_size_bytes,
@@ -900,6 +906,8 @@ class Runtime:
             self._process_manager.stop()
         if self._terminal_manager is not None:
             self._terminal_manager.stop()
+        if self._keep_awake is not None:
+            self._keep_awake.close()
         if self._storage is not None:
             self._storage.temporary_files.stop()
 
@@ -934,6 +942,8 @@ class Runtime:
             await self._process_manager.aclose()
         if self._terminal_manager is not None:
             await self._terminal_manager.aclose()
+        if self._keep_awake is not None:
+            self._keep_awake.close()
         if self._storage is not None:
             await self._storage.temporary_files.aclose()
 
@@ -958,6 +968,7 @@ class Runtime:
         self._embeddings = None
         self._storage = None
         self._attachment_store = None
+        self._keep_awake = None
         self._agents = None
         self._tools = None
         self._memory_service = None
@@ -1809,6 +1820,15 @@ class Runtime:
         """Re-register channel_send based on persisted enabled Channel configs."""
         self._ensure_started()
         self._sync_channel_tool_registration()
+
+    def reload_keep_awake(self) -> None:
+        """Apply the persisted ``keep_awake`` setting to the running process."""
+
+        self._ensure_started()
+        if self._storage is None or self._keep_awake is None:
+            return
+        settings = self._storage.load_settings()
+        self._keep_awake.set_enabled(settings.get("keep_awake") is True)
 
     def reload_recall_backend(self) -> None:
         """Reload Session Recall tools from the current persisted backend setting.

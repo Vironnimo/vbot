@@ -121,3 +121,21 @@ def test_validate_custom_provider_rejects_secret_and_invalid_endpoint() -> None:
     errors = [item for item in diagnostics if item.severity == "error"]
     assert len(errors) == 1
     assert errors[0].path == "$.providers.custom['local-ai']"
+
+
+def test_validate_settings_data_accepts_boolean_keep_awake() -> None:
+    assert validate_settings_data({"keep_awake": True}) == []
+    assert validate_settings_data({"keep_awake": False}) == []
+
+
+def test_validate_settings_data_accepts_missing_keep_awake() -> None:
+    assert validate_settings_data({}) == []
+
+
+def test_validate_settings_data_rejects_non_boolean_keep_awake() -> None:
+    diagnostics = validate_settings_data({"keep_awake": "yes"})
+    errors = [diagnostic for diagnostic in diagnostics if diagnostic.severity == "error"]
+
+    assert len(errors) == 1
+    assert errors[0].path == "$.keep_awake"
+    assert errors[0].message == "must be a boolean"
