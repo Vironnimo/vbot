@@ -921,6 +921,13 @@ function appendLiveRunEvent(assistantRun, event) {
     return;
   }
 
+  if (
+    event.type !== RUN_EVENT_REASONING_DELTA &&
+    event.type !== RUN_EVENT_PROVIDER_HEARTBEAT
+  ) {
+    freezeStreamingReasoningEstimates(assistantRun, event.timestamp);
+  }
+
   if (event.type === 'model_fallback_activated') {
     const toModel = event.payload?.to_model ?? '';
     const fromModel = event.payload?.from_model ?? '';
@@ -1261,6 +1268,39 @@ function appendHistoryRunSummary(assistantRun, message) {
   }
 }
 
+// Reasoning has no explicit end event: any other live Run event (except the
+// idle heartbeat) means the streamed reasoning draft stopped growing, so its
+// ticking header freezes at that boundary instead of counting on through the
+// following Tool Calls. The draft itself stays open for merging; the next
+// stable boundary replaces the frozen estimate with the measured server-side
+// span via appendTextSection.
+function freezeStreamingReasoningEstimates(assistantRun, endedTimestamp) {
+  const endedMs = timestampToMs(endedTimestamp);
+  for (const item of assistantRun.items) {
+    if (
+      item.type !== 'reasoning' ||
+      !item.streaming ||
+      item.durationEstimateMs !== null ||
+      item.durationMs !== null
+    ) {
+      continue;
+    }
+    const startedMs = timestampToMs(item.timestamp);
+    if (startedMs === null || endedMs === null || endedMs < startedMs) {
+      continue;
+    }
+    item.durationEstimateMs = Math.max(0, endedMs - startedMs);
+  }
+}
+
+function timestampToMs(timestamp) {
+  if (!timestamp) {
+    return null;
+  }
+  const value = new Date(timestamp).getTime();
+  return Number.isNaN(value) ? null : value;
+}
+
 function appendTextSection(
   assistantRun,
   {
@@ -1295,6 +1335,7 @@ function appendTextSection(
       // measured duration replaces any live-ticking estimate too.
       existingItem.durationMs = durationMs;
     }
+    existingItem.durationEstimateMs = null;
     existingItem.streaming = streaming;
     existingItem.interrupted = interrupted;
     existingItem.events = [...(existingItem.events ?? []), event].filter(
@@ -1312,6 +1353,7 @@ function appendTextSection(
     type,
     content,
     durationMs,
+    durationEstimateMs: null,
     sequence,
     timestamp: event?.timestamp ?? message?.timestamp,
     streaming,

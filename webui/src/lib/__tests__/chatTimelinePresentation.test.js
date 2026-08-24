@@ -1956,6 +1956,23 @@ describe('reasoningDurationLabel', () => {
     );
   });
 
+  it('prefers the measured span over the frozen estimate', () => {
+    expect(
+      reasoningDurationLabel({ durationMs: 4200, durationEstimateMs: 3000 }),
+    ).toBe('4.2s');
+  });
+
+  it('shows the frozen estimate from when the deltas stopped growing', () => {
+    expect(
+      reasoningDurationLabel({
+        durationMs: null,
+        durationEstimateMs: 3000,
+        streaming: true,
+        timestamp: '2026-08-24T10:00:00+00:00',
+      }),
+    ).toBe('3.0s');
+  });
+
   it('ticks live from the first streamed delta while streaming', () => {
     const child = {
       durationMs: null,

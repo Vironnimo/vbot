@@ -149,6 +149,154 @@ describe('chat state helpers', () => {
     ]);
   });
 
+  it('freezes the streamed reasoning estimate when Tool Calls begin and replaces it at the stable boundary', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-reasoning-freeze',
+    );
+    startRun(sessionState, {
+      run_id: 'run-reasoning-freeze',
+      sse_url: '/api/runs/run-reasoning-freeze/events',
+      status: CHAT_STATUS_RUNNING,
+    });
+    appendRunEvent(sessionState, {
+      type: 'reasoning_delta',
+      run_id: 'run-reasoning-freeze',
+      sequence: 1,
+      timestamp: '2026-08-24T10:00:00+00:00',
+      payload: { reasoning_delta: 'Thinking' },
+    });
+    appendRunEvent(sessionState, {
+      type: 'tool_call_started',
+      run_id: 'run-reasoning-freeze',
+      sequence: 2,
+      timestamp: '2026-08-24T10:00:03+00:00',
+      payload: {
+        tool_call: { id: 'call-one', index: 0, name: 'read', arguments: {} },
+      },
+    });
+
+    const renderItems = visibleTimelineItemsForRender(sessionState);
+
+    expect(renderItems[0].reasoning).toEqual([
+      expect.objectContaining({
+        type: 'reasoning',
+        streaming: true,
+        durationMs: null,
+        durationEstimateMs: 3000,
+      }),
+    ]);
+
+    appendRunEvent(sessionState, {
+      type: 'reasoning',
+      run_id: 'run-reasoning-freeze',
+      sequence: 3,
+      timestamp: '2026-08-24T10:00:09+00:00',
+      payload: {
+        message: {
+          id: 'assistant-one',
+          role: 'assistant',
+          model: 'openai/gpt-5.2',
+          content: 'Answer.',
+          reasoning: 'Thinking',
+          reasoning_timing: {
+            started_at: '2026-08-24T10:00:00+00:00',
+            completed_at: '2026-08-24T10:00:04.2+00:00',
+            duration_ms: 4200,
+          },
+        },
+      },
+    });
+
+    expect(visibleTimelineItemsForRender(sessionState)[0].reasoning).toEqual([
+      expect.objectContaining({
+        type: 'reasoning',
+        streaming: false,
+        durationMs: 4200,
+        durationEstimateMs: null,
+      }),
+    ]);
+  });
+
+  it('keeps the reasoning draft streaming across a provider heartbeat', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-reasoning-heartbeat',
+    );
+    startRun(sessionState, {
+      run_id: 'run-reasoning-heartbeat',
+      sse_url: '/api/runs/run-reasoning-heartbeat/events',
+      status: CHAT_STATUS_RUNNING,
+    });
+    appendRunEvent(sessionState, {
+      type: 'reasoning_delta',
+      run_id: 'run-reasoning-heartbeat',
+      sequence: 1,
+      timestamp: '2026-08-24T10:00:00+00:00',
+      payload: { reasoning_delta: 'Thinking' },
+    });
+    appendRunEvent(sessionState, {
+      type: 'provider_heartbeat',
+      run_id: 'run-reasoning-heartbeat',
+      sequence: 2,
+      timestamp: '2026-08-24T10:00:05+00:00',
+      payload: {
+        idle_seconds: 75.4,
+        state: 'waiting_for_model_delta',
+      },
+    });
+
+    const renderItems = visibleTimelineItemsForRender(sessionState);
+
+    expect(renderItems[0].reasoning).toEqual([
+      expect.objectContaining({
+        type: 'reasoning',
+        streaming: true,
+        durationMs: null,
+        durationEstimateMs: null,
+      }),
+    ]);
+  });
+
+  it('freezes the streamed reasoning estimate at a terminal event without a stable boundary', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-reasoning-terminal-freeze',
+    );
+    startRun(sessionState, {
+      run_id: 'run-reasoning-terminal-freeze',
+      sse_url: '/api/runs/run-reasoning-terminal-freeze/events',
+      status: CHAT_STATUS_RUNNING,
+    });
+    appendRunEvent(sessionState, {
+      type: 'reasoning_delta',
+      run_id: 'run-reasoning-terminal-freeze',
+      sequence: 1,
+      timestamp: '2026-08-24T10:00:00+00:00',
+      payload: { reasoning_delta: 'Thinking' },
+    });
+    appendRunEvent(sessionState, {
+      type: 'run_failed',
+      run_id: 'run-reasoning-terminal-freeze',
+      sequence: 2,
+      timestamp: '2026-08-24T10:00:07+00:00',
+      payload: { status: 'failed' },
+    });
+
+    const renderItems = visibleTimelineItemsForRender(sessionState);
+
+    expect(renderItems[0].reasoning).toEqual([
+      expect.objectContaining({
+        type: 'reasoning',
+        durationMs: null,
+        durationEstimateMs: 7000,
+      }),
+    ]);
+  });
+
   it('keeps render selector assistant/reasoning streaming content inside assistant runs', () => {
     const sessionState = ensureSessionState(
       createChatState(),
