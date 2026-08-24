@@ -250,8 +250,8 @@ class TestChatCancelProcess:
         calls: list[tuple[str, str]] = []
 
         class RecordingProcessManager:
-            async def cancel_for_user(self, session_id: str, agent_id: str) -> Any:
-                calls.append((session_id, agent_id))
+            async def cancel_for_user(self, process_id: str, agent_id: str) -> Any:
+                calls.append((process_id, agent_id))
                 return SimpleNamespace(status="killed", cancelled_by_user=True)
 
         state.runtime.process_manager = RecordingProcessManager()
@@ -262,7 +262,7 @@ class TestChatCancelProcess:
                 "method": "chat.cancel_process",
                 "params": {
                     "agent_id": "builder@project-one",
-                    "process_session_id": "process-one",
+                    "process_id": "process-one",
                 },
             },
         )
@@ -270,7 +270,7 @@ class TestChatCancelProcess:
         assert response == {
             "ok": True,
             "result": {
-                "process_session_id": "process-one",
+                "process_id": "process-one",
                 "status": "cancelled",
             },
         }

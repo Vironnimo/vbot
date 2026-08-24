@@ -296,9 +296,9 @@ describe('chat controller', () => {
     expect(chatState.cancellingRun).toBe(false);
   });
 
-  it('cancels a background Process and settles its Session projection', async () => {
+  it('cancels a background Process and settles its status projection', async () => {
     const cancelProcess = vi.fn().mockResolvedValue({
-      process_session_id: 'process-one',
+      process_id: 'process-one',
       status: 'cancelled',
     });
     const { chatState, controller } = setup({
@@ -314,14 +314,14 @@ describe('chat controller', () => {
       controller.cancelBackgroundProcess({
         sessionState,
         agentId: 'builder',
-        processSessionId: 'process-one',
+        processId: 'process-one',
         projectId: 'project-one',
       }),
     ).resolves.toBe(true);
 
     expect(cancelProcess).toHaveBeenCalledWith({
       agentId: 'builder@project-one',
-      processSessionId: 'process-one',
+      processId: 'process-one',
     });
     expect(sessionState.backgroundBashStatuses).toEqual({
       'process-one': 'cancelled',

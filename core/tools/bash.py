@@ -20,8 +20,8 @@ from core.tools.availability import bash_allowed_env_keys, normalize_env_keys
 from core.tools.bash_hints import annotate_failure
 from core.tools.process_manager import (
     ProcessManager,
-    ProcessSession,
-    SessionNotFoundError,
+    ProcessNotFoundError,
+    TrackedProcess,
     subprocess_creation_flags,
 )
 from core.tools.tools import (
@@ -39,7 +39,7 @@ from core.utils.paths import model_path
 
 BASH_TOOL_NAME = "bash"
 BASH_COMPLETION_STATUS_PREFIX = "### Bash process — "
-BASH_COMPLETION_SESSION_PREFIX = "Process Session: "
+BASH_COMPLETION_PROCESS_ID_PREFIX = "Process ID: "
 CredentialResolver = Callable[[str], str]
 
 # Model-facing output cap. The complete output always lands in the process log
@@ -50,7 +50,7 @@ BASH_MODEL_OUTPUT_CAP_CHARS = 30_000
 # diagnose, small enough not to bloat an error envelope.
 FAILURE_OUTPUT_TAIL_CHARS = 10_000
 BASH_HANDOFF_PROCESS_NOTE = (
-    "Use session_id with the process Tool for status, raw stdin input, or kill. Process input "
+    "Use process_id with the process Tool for status, raw stdin input, or kill. Process input "
     "writes to a pipe; it does not provide a terminal or TTY. output is the newest capped "
     "snapshot collected before handoff. The result's log_file field carries the path to the "
     "complete combined stdout/stderr stream, written live from command start through exit."
@@ -354,7 +354,7 @@ async def bash_handler(
     argv = _shell_argv(command)
 
     try:
-        session_id = await process_manager.spawn(
+        process_id = await process_manager.spawn(
             context.run_id,
             context.agent_id,
             argv,
@@ -381,7 +381,7 @@ async def bash_handler(
         else:
             env[VBOT_RUN_PROJECT_ID_ENV] = context.project_id
         try:
-            session_id = await process_manager.spawn(
+            process_id = await process_manager.spawn(
                 context.run_id,
                 context.agent_id,
                 argv,
@@ -393,11 +393,11 @@ async def bash_handler(
     except (OSError, ValueError) as error:
         return tool_failure("process_spawn_failed", _spawn_failure_message(argv, error))
 
-    _register_user_cancel_callback(process_manager, context, session_id)
+    _register_user_cancel_callback(process_manager, context, process_id)
 
     timeout_task, timeout_state = _schedule_timeout(
         process_manager,
-        session_id,
+        process_id,
         context.agent_id,
         parsed.get("timeout"),
     )
@@ -406,14 +406,14 @@ async def bash_handler(
         result = await _background_result(
             process_manager,
             context,
-            session_id,
+            process_id,
             mode=mode,
             handoff_after=None,
         )
         _maybe_spawn_completion_watcher(
             process_manager,
             context,
-            session_id,
+            process_id,
             command,
             trigger_service,
         )
@@ -427,7 +427,7 @@ async def bash_handler(
     result = await _run_foreground_phase(
         process_manager,
         context,
-        session_id,
+        process_id,
         background_after_seconds,
         mode=mode,
         command=command,
@@ -436,7 +436,7 @@ async def bash_handler(
     if context.is_cancelled() or context.was_cancelled_by_user():
         if timeout_task is not None:
             timeout_task.cancel()
-        await process_manager.kill(session_id, context.agent_id)
+        await process_manager.kill(process_id, context.agent_id)
         if context.was_cancelled_by_user():
             return tool_failure(USER_CANCELLED_FAILURE_CODE, USER_CANCELLED_FAILURE_MESSAGE)
         return tool_failure(RUN_CANCELLED_FAILURE_CODE, RUN_CANCELLED_FAILURE_MESSAGE)
@@ -447,8 +447,8 @@ async def bash_handler(
         if _background_blocked_at_depth(context):
             if timeout_task is not None:
                 timeout_task.cancel()
-            await process_manager.kill(session_id, context.agent_id)
-            suffix = await _failure_output_suffix(process_manager, context, session_id)
+            await process_manager.kill(process_id, context.agent_id)
+            suffix = await _failure_output_suffix(process_manager, context, process_id)
             if background_after_seconds is None:
                 raise RuntimeError("only auto mode may reach the Sub-Agent handoff boundary")
             return tool_failure(
@@ -458,7 +458,7 @@ async def bash_handler(
         _maybe_spawn_completion_watcher(
             process_manager,
             context,
-            session_id,
+            process_id,
             command,
             trigger_service,
         )
@@ -468,9 +468,9 @@ async def bash_handler(
         timeout_task.cancel()
 
     if timeout_state["timed_out"] and _timed_out_process_killed(
-        process_manager, context, session_id
+        process_manager, context, process_id
     ):
-        suffix = await _failure_output_suffix(process_manager, context, session_id)
+        suffix = await _failure_output_suffix(process_manager, context, process_id)
         return tool_failure(
             "process_timeout",
             f"process timed out after {parsed['timeout']} seconds" + suffix,
@@ -564,7 +564,7 @@ def _log_background_task_result(task: asyncio.Task[Any], message: str) -> None:
 
 async def _watch_background_process(
     process_manager: ProcessManager,
-    process_session_id: str,
+    process_id: str,
     agent_id: str,
     chat_session_id: str,
     origin_run_id: str,
@@ -573,30 +573,30 @@ async def _watch_background_process(
     project_id: str | None = None,
 ) -> None:
     try:
-        session = process_manager.get_session(process_session_id, agent_id)
-        wait_task = session.wait_task
+        tracked = process_manager.get_process(process_id, agent_id)
+        wait_task = tracked.wait_task
         if wait_task is not None:
             await wait_task
         else:
-            while process_manager.get_session(process_session_id, agent_id).status == "running":
+            while process_manager.get_process(process_id, agent_id).status == "running":
                 await asyncio.sleep(FOREGROUND_POLL_INTERVAL_SECONDS)
-    except SessionNotFoundError as error:
+    except ProcessNotFoundError as error:
         _LOGGER.warning(
-            "Bash completion watcher skipped trigger for agent=%s process_session=%s: %s",
+            "Bash completion watcher skipped trigger for agent=%s process=%s: %s",
             agent_id,
-            process_session_id,
+            process_id,
             error,
         )
         return
 
     try:
-        log_result = await process_manager.log(process_session_id, agent_id)
-        session = process_manager.get_session(process_session_id, agent_id)
-    except SessionNotFoundError as error:
+        log_result = await process_manager.log(process_id, agent_id)
+        tracked = process_manager.get_process(process_id, agent_id)
+    except ProcessNotFoundError as error:
         _LOGGER.warning(
-            "Bash completion watcher skipped trigger for agent=%s process_session=%s: %s",
+            "Bash completion watcher skipped trigger for agent=%s process=%s: %s",
             agent_id,
-            process_session_id,
+            process_id,
             error,
         )
         return
@@ -606,14 +606,14 @@ async def _watch_background_process(
         output = ""
     # The automatic note lands in the model's context like a tool result, so
     # the same output cap and full-log pointer apply here.
-    output = str(_shape_output_fields(session, output)["output"])
+    output = str(_shape_output_fields(tracked, output)["output"])
 
-    user_cancelled = session.cancelled_by_user
+    user_cancelled = tracked.cancelled_by_user
 
     if user_cancelled:
         body = (
             f"{BASH_COMPLETION_STATUS_PREFIX}aborted by user\n"
-            f"{BASH_COMPLETION_SESSION_PREFIX}{process_session_id}\n"
+            f"{BASH_COMPLETION_PROCESS_ID_PREFIX}{process_id}\n"
             f"{BACKGROUND_USER_CANCELLED_MESSAGE}\n"
             f"Command: {command}\n"
             "Output:\n"
@@ -621,18 +621,18 @@ async def _watch_background_process(
         )
     else:
         body = (
-            f"{BASH_COMPLETION_STATUS_PREFIX}{session.status}\n"
-            f"{BASH_COMPLETION_SESSION_PREFIX}{process_session_id}\n"
+            f"{BASH_COMPLETION_STATUS_PREFIX}{tracked.status}\n"
+            f"{BASH_COMPLETION_PROCESS_ID_PREFIX}{process_id}\n"
             f"Command: {command}\n"
-            f"Exit code: {session.exit_code}\n"
+            f"Exit code: {tracked.exit_code}\n"
             "Output:\n"
             f"{output}"
         )
-        hint = annotate_failure(command, session.exit_code, output)
+        hint = annotate_failure(command, tracked.exit_code, output)
         if hint:
             body += f"\n\nHint: {hint}"
 
-    notice_id = f"bash:{process_session_id}"
+    notice_id = f"bash:{process_id}"
     delivery = trigger_service.submit_completion(
         agent_id,
         chat_session_id,
@@ -656,7 +656,7 @@ async def _watch_background_process(
 def _maybe_spawn_completion_watcher(
     process_manager: ProcessManager,
     context: ToolContext,
-    process_session_id: str,
+    process_id: str,
     command: str,
     trigger_service: Any | None,
 ) -> None:
@@ -666,7 +666,7 @@ def _maybe_spawn_completion_watcher(
     task = asyncio.create_task(
         _watch_background_process(
             process_manager,
-            process_session_id,
+            process_id,
             context.agent_id,
             context.session_id,
             context.run_id,
@@ -677,7 +677,7 @@ def _maybe_spawn_completion_watcher(
     )
     try:
         process_manager.register_completion_notification(
-            process_session_id,
+            process_id,
             context.agent_id,
             task,
         )
@@ -696,21 +696,21 @@ def _maybe_spawn_completion_watcher(
 def _register_user_cancel_callback(
     process_manager: ProcessManager,
     context: ToolContext,
-    session_id: str,
+    process_id: str,
 ) -> None:
-    """Register a cancel callback that kills the spawned process and tags the session.
+    """Register a cancel callback that kills the spawned process and tags its record.
 
     Every owning-Run cancellation kills the process. A user cancellation also
-    marks the process Session so any already-handed-off completion report can
+    marks the process as user-cancelled so any already-handed-off completion report can
     use explicit user-abort wording. The kill coroutine is scheduled on the
     running event loop because the callback type is synchronous.
     """
 
     def cancel_callback() -> None:
         kill_coro = (
-            process_manager.cancel_for_user(session_id, context.agent_id)
+            process_manager.cancel_for_user(process_id, context.agent_id)
             if context.was_cancelled_by_user()
-            else process_manager.kill(session_id, context.agent_id)
+            else process_manager.kill(process_id, context.agent_id)
         )
         try:
             loop = asyncio.get_running_loop()
@@ -722,7 +722,7 @@ def _register_user_cancel_callback(
                 lambda completed: _log_background_task_result(
                     completed,
                     f"Bash user-cancel kill failed for "
-                    f"agent={context.agent_id} session={session_id}",
+                    f"agent={context.agent_id} process={process_id}",
                 )
             )
 
@@ -1009,7 +1009,7 @@ def _parse_null_env(output: str) -> dict[str, str]:
 
 def _schedule_timeout(
     process_manager: ProcessManager,
-    session_id: str,
+    process_id: str,
     agent_id: str,
     timeout: float | None,
 ) -> tuple[asyncio.Task[None] | None, dict[str, bool]]:
@@ -1020,33 +1020,33 @@ def _schedule_timeout(
     async def kill_after_timeout() -> None:
         await asyncio.sleep(timeout)
         state["timed_out"] = True
-        await process_manager.kill(session_id, agent_id)
+        await process_manager.kill(process_id, agent_id)
 
-    return asyncio.create_task(kill_after_timeout(), name=f"bash-timeout:{session_id}"), state
+    return asyncio.create_task(kill_after_timeout(), name=f"bash-timeout:{process_id}"), state
 
 
 def _timed_out_process_killed(
     process_manager: ProcessManager,
     context: ToolContext,
-    session_id: str,
+    process_id: str,
 ) -> bool:
     """Confirm the timeout actually terminated a still-running process.
 
     The timer flag only records that the deadline elapsed; the kill it triggers
     is a no-op once the process has already exited. A process that finishes on
     its own a hair before the deadline keeps its completed/failed terminal
-    status, while a genuine timeout kill leaves the session "killed". Reading
+    status, while a genuine timeout kill leaves the process "killed". Reading
     that terminal status — not the timer flag alone — stops a race at the
     deadline from masking a successful run as a timeout.
     """
-    session = process_manager.get_session(session_id, context.agent_id)
-    return session.status == "killed"
+    tracked = process_manager.get_process(process_id, context.agent_id)
+    return tracked.status == "killed"
 
 
 async def _run_foreground_phase(
     process_manager: ProcessManager,
     context: ToolContext,
-    session_id: str,
+    process_id: str,
     background_after_seconds: float | None,
     *,
     mode: str,
@@ -1059,24 +1059,24 @@ async def _run_foreground_phase(
     )
 
     while True:
-        poll_result = await process_manager.poll(session_id, context.agent_id, timeout_ms=0)
-        await _emit_output_chunks(context, session_id, poll_result)
+        poll_result = await process_manager.poll(process_id, context.agent_id, timeout_ms=0)
+        await _emit_output_chunks(context, process_id, poll_result)
 
         if poll_result["status"] != "running":
             return await _completion_result(
                 process_manager,
                 context,
-                session_id,
+                process_id,
                 mode=mode,
                 command=command,
             )
 
         if context.is_cancelled():
-            await process_manager.kill(session_id, context.agent_id)
+            await process_manager.kill(process_id, context.agent_id)
             return await _completion_result(
                 process_manager,
                 context,
-                session_id,
+                process_id,
                 mode=mode,
                 command=command,
             )
@@ -1084,7 +1084,7 @@ async def _run_foreground_phase(
             return await _background_result(
                 process_manager,
                 context,
-                session_id,
+                process_id,
                 mode=mode,
                 handoff_after=background_after_seconds,
             )
@@ -1101,7 +1101,7 @@ async def _run_foreground_phase(
 
 async def _emit_output_chunks(
     context: ToolContext,
-    session_id: str,
+    process_id: str,
     poll_result: JsonObject,
 ) -> None:
     chunks = poll_result.get("chunks", [])
@@ -1119,7 +1119,7 @@ async def _emit_output_chunks(
             f"tool_call_{stream}",
             {
                 "tool_call_id": context.tool_call_id,
-                "session_id": session_id,
+                "process_id": process_id,
                 "data": data,
             },
         )
@@ -1128,22 +1128,22 @@ async def _emit_output_chunks(
 async def _background_result(
     process_manager: ProcessManager,
     context: ToolContext,
-    session_id: str,
+    process_id: str,
     *,
     mode: str,
     handoff_after: float | None,
 ) -> JsonObject:
-    process_manager.mark_backgrounded(session_id, context.agent_id)
-    session = process_manager.get_session(session_id, context.agent_id)
-    output = await _combined_output(process_manager, context, session_id)
-    fields = _shape_output_fields(session, output)
-    if session.log_file is not None:
+    process_manager.mark_backgrounded(process_id, context.agent_id)
+    tracked = process_manager.get_process(process_id, context.agent_id)
+    output = await _combined_output(process_manager, context, process_id)
+    fields = _shape_output_fields(tracked, output)
+    if tracked.log_file is not None:
         # A background process keeps writing after this result; always hand the
         # model the log path so it can grep progress without polling.
-        fields["log_file"] = model_path(session.log_file)
+        fields["log_file"] = model_path(tracked.log_file)
     result: JsonObject = {
         "status": "running",
-        "session_id": session_id,
+        "process_id": process_id,
         "mode": mode,
         **fields,
     }
@@ -1154,7 +1154,7 @@ async def _background_result(
 
 
 def background_bash_statuses(messages: Sequence[Any]) -> JsonObject:
-    """Fold durable Bash and Process results into Process Session statuses.
+    """Fold durable Bash and Process results into background-process statuses.
 
     Background Bash results are immutable handoff records, so their terminal
     state arrives later in either an automatic completion note or a manually
@@ -1196,19 +1196,19 @@ def _fold_background_tool_status(statuses: JsonObject, tool_name: Any, content: 
         return
 
     _record_background_status(statuses, data)
-    sessions = data.get("sessions")
-    if isinstance(sessions, list):
-        for session in sessions:
-            if isinstance(session, dict):
-                _record_background_status(statuses, session)
+    processes = data.get("processes")
+    if isinstance(processes, list):
+        for tracked in processes:
+            if isinstance(tracked, dict):
+                _record_background_status(statuses, tracked)
 
 
 def _record_background_status(statuses: JsonObject, data: JsonObject) -> None:
-    session_id = data.get("session_id")
+    process_id = data.get("process_id")
     status = data.get("status")
     if (
-        isinstance(session_id, str)
-        and session_id
+        isinstance(process_id, str)
+        and process_id
         and status
         in {
             "running",
@@ -1218,7 +1218,7 @@ def _record_background_status(statuses: JsonObject, data: JsonObject) -> None:
             "cancelled",
         }
     ):
-        statuses[session_id] = status
+        statuses[process_id] = status
 
 
 def _fold_background_completion_note(statuses: JsonObject, content: str) -> None:
@@ -1229,11 +1229,11 @@ def _fold_background_completion_note(statuses: JsonObject, content: str) -> None
                 line.removeprefix(BASH_COMPLETION_STATUS_PREFIX)
             )
             continue
-        if pending_status is None or not line.startswith(BASH_COMPLETION_SESSION_PREFIX):
+        if pending_status is None or not line.startswith(BASH_COMPLETION_PROCESS_ID_PREFIX):
             continue
-        session_id = line.removeprefix(BASH_COMPLETION_SESSION_PREFIX).strip()
-        if session_id:
-            statuses[session_id] = pending_status
+        process_id = line.removeprefix(BASH_COMPLETION_PROCESS_ID_PREFIX).strip()
+        if process_id:
+            statuses[process_id] = pending_status
         pending_status = None
 
 
@@ -1249,20 +1249,20 @@ def _completion_process_status(status: str) -> str | None:
 async def _completion_result(
     process_manager: ProcessManager,
     context: ToolContext,
-    session_id: str,
+    process_id: str,
     *,
     mode: str,
     command: str,
 ) -> JsonObject:
-    session = process_manager.get_session(session_id, context.agent_id)
-    output = await _combined_output(process_manager, context, session_id)
+    tracked = process_manager.get_process(process_id, context.agent_id)
+    output = await _combined_output(process_manager, context, process_id)
     result: JsonObject = {
         "status": "completed",
-        "exit_code": session.exit_code,
+        "exit_code": tracked.exit_code,
         "mode": mode,
-        **_shape_output_fields(session, output),
+        **_shape_output_fields(tracked, output),
     }
-    hint = annotate_failure(command, session.exit_code, output)
+    hint = annotate_failure(command, tracked.exit_code, output)
     if hint:
         result["hint"] = hint
     return tool_success(result)
@@ -1285,16 +1285,16 @@ def _handoff_note(mode: str, handoff_after: float | None) -> str:
     )
 
 
-def _shape_output_fields(session: ProcessSession, output: str) -> JsonObject:
+def _shape_output_fields(tracked: TrackedProcess, output: str) -> JsonObject:
     """Cap model-facing output to the newest chars and point at the full log.
 
     ``truncated`` covers both cut points: the model cap applied here and the
     process buffer cap that already dropped the oldest bytes in memory. Either
     way the missing part is the beginning, and the marker says so.
     """
-    log_file = model_path(session.log_file) if session.log_file is not None else None
+    log_file = model_path(tracked.log_file) if tracked.log_file is not None else None
     capped = len(output) > BASH_MODEL_OUTPUT_CAP_CHARS
-    truncated = capped or session.truncated
+    truncated = capped or tracked.truncated
     if capped:
         output = output[-BASH_MODEL_OUTPUT_CAP_CHARS:]
     if truncated:
@@ -1315,23 +1315,23 @@ def _truncation_marker(log_file: str | None) -> str:
 async def _failure_output_suffix(
     process_manager: ProcessManager,
     context: ToolContext,
-    session_id: str,
+    process_id: str,
 ) -> str:
     """Build the output tail + log pointer appended to timeout-style failures.
 
     Without it a killed command fails with only the timing fact and every byte
     of diagnostics the process printed is lost to the model.
     """
-    output = await _combined_output(process_manager, context, session_id)
-    session = process_manager.get_session(session_id, context.agent_id)
+    output = await _combined_output(process_manager, context, process_id)
+    tracked = process_manager.get_process(process_id, context.agent_id)
 
     parts: list[str] = []
     if output:
         tail = output[-FAILURE_OUTPUT_TAIL_CHARS:]
         label = "Output tail" if len(output) > len(tail) else "Output"
         parts.append(f"\n{label}:\n{tail}")
-    if session.log_file is not None:
-        parts.append(f"\nComplete output: {model_path(session.log_file)}")
+    if tracked.log_file is not None:
+        parts.append(f"\nComplete output: {model_path(tracked.log_file)}")
     return "".join(parts)
 
 
@@ -1352,9 +1352,9 @@ def _spawn_failure_message(argv: list[str], error: Exception) -> str:
 async def _combined_output(
     process_manager: ProcessManager,
     context: ToolContext,
-    session_id: str,
+    process_id: str,
 ) -> str:
-    log_result = await process_manager.log(session_id, context.agent_id, offset=0, limit=None)
+    log_result = await process_manager.log(process_id, context.agent_id, offset=0, limit=None)
     output = log_result.get("output", "")
     return output if isinstance(output, str) else ""
 

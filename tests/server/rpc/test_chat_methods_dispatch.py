@@ -254,7 +254,7 @@ async def test_chat_history_projects_durable_background_bash_statuses(tmp_path: 
             content=json.dumps(
                 tool_success(
                     {
-                        "session_id": "process-one",
+                        "process_id": "process-one",
                         "status": "running",
                         "delivery": "automatic",
                     }
@@ -265,7 +265,7 @@ async def test_chat_history_projects_durable_background_bash_statuses(tmp_path: 
     session.add_note(
         "Automatic completion delivery\n\n"
         "### Bash process — failed\n"
-        "Process Session: process-one\n"
+        "Process ID: process-one\n"
         "Command: npm test"
     )
 

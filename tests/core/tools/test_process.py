@@ -1,4 +1,4 @@
-"""Tests for Agent-facing control of background bash Process Sessions."""
+"""Tests for Agent-facing control of background bash processes."""
 
 from __future__ import annotations
 
@@ -94,9 +94,9 @@ async def spawn_python(manager: ProcessManager, script: str, *, agent_id: str = 
     )
 
 
-async def wait_for_terminal(manager: ProcessManager, session_id: str) -> None:
+async def wait_for_terminal(manager: ProcessManager, process_id: str) -> None:
     for _ in range(20):
-        result = await manager.poll(session_id, AGENT_A, timeout_ms=500)
+        result = await manager.poll(process_id, AGENT_A, timeout_ms=500)
         if result["status"] != "running":
             return
     raise AssertionError("process did not finish")
@@ -110,7 +110,7 @@ def test_schema_exposes_small_flat_action_contract() -> None:
     assert properties["action"]["enum"] == list(PROCESS_ACTIONS)
     assert set(properties) == {
         "action",
-        "session_id",
+        "process_id",
         "text",
         "newline",
         "eof",
@@ -127,25 +127,25 @@ def test_schema_exposes_small_flat_action_contract() -> None:
 
 
 @pytest.mark.asyncio
-async def test_status_without_session_id_lists_owned_sessions_only(
+async def test_status_without_process_id_lists_owned_processes_only(
     manager: ProcessManager,
     context: ToolContext,
 ) -> None:
-    owned_session_id = await spawn_python(manager, "import time; time.sleep(30)")
-    hidden_session_id = await spawn_python(manager, "import time; time.sleep(30)", agent_id=AGENT_B)
+    owned_process_id = await spawn_python(manager, "import time; time.sleep(30)")
+    hidden_process_id = await spawn_python(manager, "import time; time.sleep(30)", agent_id=AGENT_B)
 
     result = await call_process(manager, context, {"action": "status"})
-    await manager.kill(owned_session_id, AGENT_A)
-    await manager.kill(hidden_session_id, AGENT_B)
+    await manager.kill(owned_process_id, AGENT_A)
+    await manager.kill(hidden_process_id, AGENT_B)
 
     assert result["ok"] is True
-    sessions = cast(dict[str, Any], result["data"])["sessions"]
-    assert sessions == [
+    tracked_processes = cast(dict[str, Any], result["data"])["processes"]
+    assert tracked_processes == [
         {
-            "session_id": owned_session_id,
+            "process_id": owned_process_id,
             "status": "running",
             "exit_code": None,
-            "started_at": manager.get_session(owned_session_id, AGENT_A).started_at.isoformat(),
+            "started_at": manager.get_process(owned_process_id, AGENT_A).started_at.isoformat(),
             "finished_at": None,
             "stdin_open": True,
             "log_file": None,
@@ -158,28 +158,28 @@ async def test_status_without_session_id_lists_owned_sessions_only(
 
 
 @pytest.mark.asyncio
-async def test_status_with_session_id_returns_non_consuming_snapshot(
+async def test_status_with_process_id_returns_non_consuming_snapshot(
     manager: ProcessManager,
     context: ToolContext,
 ) -> None:
-    session_id = await spawn_python(manager, "print('snapshot-output')")
-    await wait_for_terminal(manager, session_id)
+    process_id = await spawn_python(manager, "print('snapshot-output')")
+    await wait_for_terminal(manager, process_id)
 
     first = await call_process(
         manager,
         context,
-        {"action": "status", "session_id": session_id},
+        {"action": "status", "process_id": process_id},
     )
     second = await call_process(
         manager,
         context,
-        {"action": "status", "session_id": session_id},
+        {"action": "status", "process_id": process_id},
     )
 
     first_data = cast(dict[str, Any], first["data"])
     second_data = cast(dict[str, Any], second["data"])
     assert first_data == second_data
-    assert first_data["session_id"] == session_id
+    assert first_data["process_id"] == process_id
     assert first_data["status"] == "completed"
     assert first_data["exit_code"] == 0
     assert first_data["output_tail"].strip() == "snapshot-output"
@@ -196,13 +196,13 @@ async def test_status_caps_output_tail(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(process_module, "PROCESS_STATUS_OUTPUT_CAP_CHARS", 5)
-    session_id = await spawn_python(manager, "print('123456789')")
-    await wait_for_terminal(manager, session_id)
+    process_id = await spawn_python(manager, "print('123456789')")
+    await wait_for_terminal(manager, process_id)
 
     result = await call_process(
         manager,
         context,
-        {"action": "status", "session_id": session_id},
+        {"action": "status", "process_id": process_id},
     )
 
     data = cast(dict[str, Any], result["data"])
@@ -215,16 +215,16 @@ async def test_status_reports_waiting_for_input_after_idle_period(
     manager: ProcessManager,
     context: ToolContext,
 ) -> None:
-    session_id = await spawn_python(manager, "import time; time.sleep(30)")
-    session = manager.get_session(session_id, AGENT_A)
-    session.started_at = datetime.now(UTC) - timedelta(seconds=16)
+    process_id = await spawn_python(manager, "import time; time.sleep(30)")
+    tracked = manager.get_process(process_id, AGENT_A)
+    tracked.started_at = datetime.now(UTC) - timedelta(seconds=16)
 
     result = await call_process(
         manager,
         context,
-        {"action": "status", "session_id": session_id},
+        {"action": "status", "process_id": process_id},
     )
-    await manager.kill(session_id, AGENT_A)
+    await manager.kill(process_id, AGENT_A)
 
     assert cast(dict[str, Any], result["data"])["waiting_for_input"] is True
     assert cast(dict[str, Any], result["data"])["stdin_open"] is True
@@ -236,18 +236,18 @@ async def test_input_sends_one_line_by_default(
     context: ToolContext,
 ) -> None:
     script = "import sys; line = sys.stdin.readline(); print('got:' + line.strip())"
-    session_id = await spawn_python(manager, script)
+    process_id = await spawn_python(manager, script)
 
     result = await call_process(
         manager,
         context,
-        {"action": "input", "session_id": session_id, "text": "value"},
+        {"action": "input", "process_id": process_id, "text": "value"},
     )
-    terminal = await manager.poll(session_id, AGENT_A, timeout_ms=2000)
+    terminal = await manager.poll(process_id, AGENT_A, timeout_ms=2000)
 
     assert result == tool_success(
         {
-            "session_id": session_id,
+            "process_id": process_id,
             "characters_sent": 5,
             "newline": True,
             "eof": False,
@@ -262,24 +262,24 @@ async def test_input_can_send_raw_text_and_close_stdin(
     context: ToolContext,
 ) -> None:
     script = "import sys; data = sys.stdin.read(); print('read:' + data)"
-    session_id = await spawn_python(manager, script)
+    process_id = await spawn_python(manager, script)
 
     result = await call_process(
         manager,
         context,
         {
             "action": "input",
-            "session_id": session_id,
+            "process_id": process_id,
             "text": "payload",
             "newline": False,
             "eof": True,
         },
     )
-    terminal = await manager.poll(session_id, AGENT_A, timeout_ms=2000)
+    terminal = await manager.poll(process_id, AGENT_A, timeout_ms=2000)
 
     assert result == tool_success(
         {
-            "session_id": session_id,
+            "process_id": process_id,
             "characters_sent": 7,
             "newline": False,
             "eof": True,
@@ -298,7 +298,7 @@ async def test_input_rejects_a_noop(
         context,
         {
             "action": "input",
-            "session_id": "session-a",
+            "process_id": "process-a",
             "text": "",
             "newline": False,
             "eof": False,
@@ -317,15 +317,15 @@ async def test_kill_stops_a_process(
     manager: ProcessManager,
     context: ToolContext,
 ) -> None:
-    session_id = await spawn_python(manager, "import time; time.sleep(30)")
+    process_id = await spawn_python(manager, "import time; time.sleep(30)")
 
     result = await call_process(
         manager,
         context,
-        {"action": "kill", "session_id": session_id},
+        {"action": "kill", "process_id": process_id},
     )
 
-    assert result == tool_success({"session_id": session_id, "status": "killed"})
+    assert result == tool_success({"process_id": process_id, "status": "killed"})
 
 
 @pytest.mark.parametrize("action", ["status", "kill"])
@@ -341,9 +341,9 @@ async def test_terminal_manual_result_cancels_pending_completion_after_persisten
         result_persisted_hook=lambda callback: callbacks.append(callback),
     )
     script = "print('done')" if action == "status" else "import time; time.sleep(30)"
-    session_id = await spawn_python(manager, script)
+    process_id = await spawn_python(manager, script)
     if action == "status":
-        await wait_for_terminal(manager, session_id)
+        await wait_for_terminal(manager, process_id)
 
     notification_release = asyncio.Event()
 
@@ -351,12 +351,12 @@ async def test_terminal_manual_result_cancels_pending_completion_after_persisten
         await notification_release.wait()
 
     notification_task = asyncio.create_task(pending_notification())
-    manager.register_completion_notification(session_id, AGENT_A, notification_task)
+    manager.register_completion_notification(process_id, AGENT_A, notification_task)
 
     result = await call_process(
         manager,
         context,
-        {"action": action, "session_id": session_id},
+        {"action": action, "process_id": process_id},
     )
 
     assert result["ok"] is True
@@ -367,20 +367,20 @@ async def test_terminal_manual_result_cancels_pending_completion_after_persisten
     await asyncio.sleep(0)
 
     assert notification_task.cancelled() is True
-    assert manager.get_session(session_id, AGENT_A).completion_acknowledged is True
+    assert manager.get_process(process_id, AGENT_A).completion_acknowledged is True
 
 
 @pytest.mark.parametrize(
     "arguments",
     (
-        {"request": {"operation": "poll", "session_id": "process-a"}},
-        {"poll": {"session_id": "process-a"}},
+        {"request": {"operation": "poll", "process_id": "process-a"}},
+        {"poll": {"process_id": "process-a"}},
         {"action": "list"},
-        {"action": "poll", "session_id": "process-a"},
-        {"action": "log", "session_id": "process-a"},
-        {"action": "write", "session_id": "process-a", "data": "value"},
-        {"action": "submit", "session_id": "process-a"},
-        {"action": "clear", "session_id": "process-a"},
+        {"action": "poll", "process_id": "process-a"},
+        {"action": "log", "process_id": "process-a"},
+        {"action": "write", "process_id": "process-a", "data": "value"},
+        {"action": "submit", "process_id": "process-a"},
+        {"action": "clear", "process_id": "process-a"},
     ),
 )
 @pytest.mark.asyncio
@@ -420,8 +420,8 @@ async def test_cross_agent_process_access_returns_not_found(
     tmp_path: Path,
     action: str,
 ) -> None:
-    session_id = await spawn_python(manager, "import time; time.sleep(30)")
-    arguments: JsonObject = {"action": action, "session_id": session_id}
+    process_id = await spawn_python(manager, "import time; time.sleep(30)")
+    arguments: JsonObject = {"action": action, "process_id": process_id}
     if action == "input":
         arguments["text"] = "value"
 
@@ -430,10 +430,10 @@ async def test_cross_agent_process_access_returns_not_found(
         make_context(tmp_path, agent_id=AGENT_B),
         arguments,
     )
-    await manager.kill(session_id, AGENT_A)
+    await manager.kill(process_id, AGENT_A)
 
     assert result == tool_failure(
-        "session_not_found",
-        "Process Session not found",
+        "process_not_found",
+        "Process not found",
         retryable=False,
     )

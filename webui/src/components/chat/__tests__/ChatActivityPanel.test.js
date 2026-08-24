@@ -61,7 +61,7 @@ function backgroundBashTask({ id, command, status = 'running' }) {
       ok: true,
       error: null,
       data: {
-        session_id: `process-${id}`,
+        process_id: `process-${id}`,
         status,
         delivery: 'automatic',
       },
@@ -274,7 +274,7 @@ describe('ChatActivityPanel', () => {
     await Promise.resolve();
     expect(cancelSubAgent).toHaveBeenCalledWith({ tool: running });
     expect(cancelBackgroundProcess).toHaveBeenCalledWith({
-      processSessionId: 'process-bash-running',
+      processId: 'process-bash-running',
     });
     expect(navigate).toHaveBeenCalledTimes(1);
 

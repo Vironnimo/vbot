@@ -576,12 +576,12 @@ export function createChatController({
   async function cancelBackgroundProcess({
     sessionState,
     agentId = '',
-    processSessionId = '',
+    processId = '',
     projectId = '',
   } = {}) {
-    const normalizedProcessSessionId = trimmedString(processSessionId);
+    const normalizedProcessId = trimmedString(processId);
     const targetAgentId = qualifiedAgentAddress(agentId, projectId);
-    if (!sessionState || !normalizedProcessSessionId || !targetAgentId) {
+    if (!sessionState || !normalizedProcessId || !targetAgentId) {
       return false;
     }
 
@@ -589,12 +589,12 @@ export function createChatController({
     try {
       const result = await operations.cancelProcess({
         agentId: targetAgentId,
-        processSessionId: normalizedProcessSessionId,
+        processId: normalizedProcessId,
       });
       const status = trimmedString(result?.status) || 'cancelled';
       sessionState.backgroundBashStatuses = {
         ...sessionState.backgroundBashStatuses,
-        [normalizedProcessSessionId]: status,
+        [normalizedProcessId]: status,
       };
       return true;
     } catch (error) {

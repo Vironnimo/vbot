@@ -1,4 +1,4 @@
-"""Tests for async process session management."""
+"""Tests for async background-process tracking."""
 
 from __future__ import annotations
 
@@ -22,9 +22,9 @@ from core.storage import TemporaryFileManager
 from core.tools import process_manager as process_manager_module
 from core.tools.process_manager import (
     PROCESS_BUFFER_CAP_BYTES,
+    ProcessInputClosedError,
     ProcessManager,
-    SessionInputClosedError,
-    SessionNotFoundError,
+    ProcessNotFoundError,
     guarded_process_launch,
     subprocess_creation_flags,
 )
@@ -47,7 +47,7 @@ async def manager() -> AsyncIterator[ProcessManager]:
 
 async def poll_until_terminal(
     manager: ProcessManager,
-    session_id: str,
+    process_id: str,
     *,
     agent_id: str = AGENT_A,
 ) -> PollResult:
@@ -56,7 +56,7 @@ async def poll_until_terminal(
     stderr = ""
     output = ""
     for _ in range(20):
-        result = await manager.poll(session_id, agent_id, timeout_ms=500)
+        result = await manager.poll(process_id, agent_id, timeout_ms=500)
         stdout += as_text(result["stdout"])
         stderr += as_text(result["stderr"])
         output += as_text(result["output"])
@@ -77,7 +77,7 @@ def as_text(value: object) -> str:
 
 @pytest.mark.asyncio
 async def test_spawn_captures_stdout_and_stderr(manager: ProcessManager) -> None:
-    session_id = await manager.spawn(
+    process_id = await manager.spawn(
         SCOPE_A,
         AGENT_A,
         [
@@ -89,7 +89,7 @@ async def test_spawn_captures_stdout_and_stderr(manager: ProcessManager) -> None
         cwd=None,
     )
 
-    result = await poll_until_terminal(manager, session_id)
+    result = await poll_until_terminal(manager, process_id)
 
     assert result["status"] == "completed"
     assert result["exit_code"] == 0
@@ -107,12 +107,12 @@ async def test_output_is_stripped_of_ansi_escape_sequences(manager: ProcessManag
         "import sys; esc = chr(27); bel = chr(7); "
         "sys.stdout.write(f'{esc}[31mred{esc}[0m and {esc}]0;title{bel}done\\n')"
     )
-    session_id = await manager.spawn(
+    process_id = await manager.spawn(
         SCOPE_A, AGENT_A, [sys.executable, "-c", script], env=None, cwd=None
     )
 
-    result = await poll_until_terminal(manager, session_id)
-    log_result = await manager.log(session_id, AGENT_A)
+    result = await poll_until_terminal(manager, process_id)
+    log_result = await manager.log(process_id, AGENT_A)
 
     streamed = as_text(result["output"])
     logged = as_text(log_result["output"])
@@ -129,7 +129,7 @@ async def test_buffer_cap_drops_oldest_bytes_and_marks_truncated(tmp_path) -> No
     manager = ProcessManager(buffer_cap_bytes=32, sweep_interval_seconds=3600)
     try:
         script = "import sys; sys.stdout.write('a' * 64); sys.stdout.flush()"
-        session_id = await manager.spawn(
+        process_id = await manager.spawn(
             SCOPE_A,
             AGENT_A,
             [sys.executable, "-c", script],
@@ -137,8 +137,8 @@ async def test_buffer_cap_drops_oldest_bytes_and_marks_truncated(tmp_path) -> No
             cwd=tmp_path,
         )
 
-        result = await poll_until_terminal(manager, session_id)
-        log_result = await manager.log(session_id, AGENT_A)
+        result = await poll_until_terminal(manager, process_id)
+        log_result = await manager.log(process_id, AGENT_A)
 
         assert result["status"] == "completed"
         assert log_result["truncated"] is True
@@ -148,27 +148,27 @@ async def test_buffer_cap_drops_oldest_bytes_and_marks_truncated(tmp_path) -> No
 
 
 @pytest.mark.asyncio
-async def test_sweep_finished_removes_expired_sessions(manager: ProcessManager) -> None:
-    session_id = await manager.spawn(
+async def test_sweep_finished_removes_expired_processes(manager: ProcessManager) -> None:
+    process_id = await manager.spawn(
         SCOPE_A,
         AGENT_A,
         [sys.executable, "-c", "print('done')"],
         env=None,
         cwd=None,
     )
-    await poll_until_terminal(manager, session_id)
-    session = manager.get_session(session_id, AGENT_A)
-    session.finished_at = datetime.now(UTC) - timedelta(minutes=31)
+    await poll_until_terminal(manager, process_id)
+    tracked = manager.get_process(process_id, AGENT_A)
+    tracked.finished_at = datetime.now(UTC) - timedelta(minutes=31)
 
     await manager.sweep_finished()
 
-    with pytest.raises(SessionNotFoundError):
-        manager.get_session(session_id, AGENT_A)
+    with pytest.raises(ProcessNotFoundError):
+        manager.get_process(process_id, AGENT_A)
 
 
 @pytest.mark.asyncio
-async def test_cancel_scope_kills_active_sessions(manager: ProcessManager) -> None:
-    session_id = await manager.spawn(
+async def test_cancel_scope_kills_active_processes(manager: ProcessManager) -> None:
+    process_id = await manager.spawn(
         SCOPE_A,
         AGENT_A,
         [sys.executable, "-c", "import time; time.sleep(30)"],
@@ -177,49 +177,49 @@ async def test_cancel_scope_kills_active_sessions(manager: ProcessManager) -> No
     )
 
     manager.cancel_scope(SCOPE_A)
-    result = await manager.poll(session_id, AGENT_A, timeout_ms=5000)
+    result = await manager.poll(process_id, AGENT_A, timeout_ms=5000)
 
     assert result["status"] == "killed"
 
 
 @pytest.mark.asyncio
-async def test_stop_kills_active_sessions(manager: ProcessManager) -> None:
-    session_id = await manager.spawn(
+async def test_stop_kills_active_processes(manager: ProcessManager) -> None:
+    process_id = await manager.spawn(
         SCOPE_A,
         AGENT_A,
         [sys.executable, "-c", "import time; time.sleep(30)"],
         env=None,
         cwd=None,
     )
-    session = manager.get_session(session_id, AGENT_A)
+    tracked = manager.get_process(process_id, AGENT_A)
 
     manager.stop()
-    assert session.wait_task is not None
-    await asyncio.wait_for(session.wait_task, timeout=5)
-    result = await manager.poll(session_id, AGENT_A, timeout_ms=5000)
+    assert tracked.wait_task is not None
+    await asyncio.wait_for(tracked.wait_task, timeout=5)
+    result = await manager.poll(process_id, AGENT_A, timeout_ms=5000)
 
     assert result["status"] == "killed"
-    assert session.proc.returncode is not None
+    assert tracked.proc.returncode is not None
 
 
 @pytest.mark.asyncio
 async def test_aclose_awaits_process_cleanup(manager: ProcessManager) -> None:
     manager.start()
-    session_id = await manager.spawn(
+    process_id = await manager.spawn(
         SCOPE_A,
         AGENT_A,
         [sys.executable, "-c", "import time; time.sleep(30)"],
         env=None,
         cwd=None,
     )
-    session = manager.get_session(session_id, AGENT_A)
+    tracked = manager.get_process(process_id, AGENT_A)
 
     await manager.aclose()
 
     assert manager._sweeper_task is None
-    assert session.status == "killed"
-    assert session.proc.returncode is not None
-    assert session.wait_task is not None and session.wait_task.done()
+    assert tracked.status == "killed"
+    assert tracked.proc.returncode is not None
+    assert tracked.wait_task is not None and tracked.wait_task.done()
 
 
 @pytest.mark.asyncio
@@ -237,7 +237,7 @@ async def test_kill_terminates_child_process_tree(manager: ProcessManager, tmp_p
         f"subprocess.Popen([sys.executable, '-c', {child_script!r}]); "
         "time.sleep(30)"
     )
-    session_id = await manager.spawn(
+    process_id = await manager.spawn(
         SCOPE_A,
         AGENT_A,
         [sys.executable, "-c", parent_script],
@@ -251,7 +251,7 @@ async def test_kill_terminates_child_process_tree(manager: ProcessManager, tmp_p
         await asyncio.sleep(0.05)
     assert child_started_path.exists()
 
-    await manager.kill(session_id, AGENT_A)
+    await manager.kill(process_id, AGENT_A)
     await asyncio.sleep(1.2)
 
     assert not child_survived_path.exists()
@@ -259,7 +259,7 @@ async def test_kill_terminates_child_process_tree(manager: ProcessManager, tmp_p
 
 @pytest.mark.asyncio
 async def test_poll_timeout_waits_for_new_output(manager: ProcessManager) -> None:
-    session_id = await manager.spawn(
+    process_id = await manager.spawn(
         SCOPE_A,
         AGENT_A,
         [
@@ -271,7 +271,7 @@ async def test_poll_timeout_waits_for_new_output(manager: ProcessManager) -> Non
         cwd=None,
     )
 
-    result = await manager.poll(session_id, AGENT_A, timeout_ms=2000)
+    result = await manager.poll(process_id, AGENT_A, timeout_ms=2000)
 
     assert "later" in as_text(result["stdout"])
 
@@ -280,15 +280,15 @@ async def test_poll_timeout_waits_for_new_output(manager: ProcessManager) -> Non
 async def test_poll_does_not_lose_output_that_arrives_before_event_clear(
     manager: ProcessManager,
 ) -> None:
-    session_id = await manager.spawn(
+    process_id = await manager.spawn(
         SCOPE_A,
         AGENT_A,
         [sys.executable, "-c", "import time; time.sleep(30)"],
         env=None,
         cwd=None,
     )
-    session = manager.get_session(session_id, AGENT_A)
-    original_event = session.output_event
+    tracked = manager.get_process(process_id, AGENT_A)
+    original_event = tracked.output_event
 
     class RaceEvent:
         def __init__(self) -> None:
@@ -297,7 +297,7 @@ async def test_poll_does_not_lose_output_that_arrives_before_event_clear(
         def clear(self) -> None:
             if not self.injected:
                 self.injected = True
-                manager._append_output(session, "stdout", b"raced")
+                manager._append_output(tracked, "stdout", b"raced")
             original_event.clear()
 
         async def wait(self) -> bool:
@@ -306,13 +306,13 @@ async def test_poll_does_not_lose_output_that_arrives_before_event_clear(
         def set(self) -> None:
             original_event.set()
 
-    session.output_event = RaceEvent()  # type: ignore[assignment]
+    tracked.output_event = RaceEvent()  # type: ignore[assignment]
 
     started_at = time.monotonic()
-    result = await manager.poll(session_id, AGENT_A, timeout_ms=5000)
+    result = await manager.poll(process_id, AGENT_A, timeout_ms=5000)
     elapsed = time.monotonic() - started_at
 
-    await manager.kill(session_id, AGENT_A)
+    await manager.kill(process_id, AGENT_A)
 
     assert result["stdout"] == "raced"
     assert elapsed < 1
@@ -320,7 +320,7 @@ async def test_poll_does_not_lose_output_that_arrives_before_event_clear(
 
 @pytest.mark.asyncio
 async def test_poll_timeout_returns_empty_when_no_output_arrives(manager: ProcessManager) -> None:
-    session_id = await manager.spawn(
+    process_id = await manager.spawn(
         SCOPE_A,
         AGENT_A,
         [sys.executable, "-c", "import time; time.sleep(1)"],
@@ -328,17 +328,17 @@ async def test_poll_timeout_returns_empty_when_no_output_arrives(manager: Proces
         cwd=None,
     )
 
-    result = await manager.poll(session_id, AGENT_A, timeout_ms=20)
-    await manager.kill(session_id, AGENT_A)
+    result = await manager.poll(process_id, AGENT_A, timeout_ms=20)
+    await manager.kill(process_id, AGENT_A)
 
     assert result["status"] == "running"
     assert result["output"] == ""
 
 
 @pytest.mark.asyncio
-async def test_send_input_kill_and_list_sessions(manager: ProcessManager) -> None:
+async def test_send_input_kill_and_list_processes(manager: ProcessManager) -> None:
     script = "import sys; line = sys.stdin.readline(); print('got:' + line.strip())"
-    session_id = await manager.spawn(
+    process_id = await manager.spawn(
         SCOPE_A,
         AGENT_A,
         [sys.executable, "-c", script],
@@ -347,27 +347,27 @@ async def test_send_input_kill_and_list_sessions(manager: ProcessManager) -> Non
     )
 
     await manager.send_input(
-        session_id,
+        process_id,
         AGENT_A,
         "value",
         newline=True,
         eof=False,
     )
-    result = await poll_until_terminal(manager, session_id)
+    result = await poll_until_terminal(manager, process_id)
 
     assert result["status"] == "completed"
     assert "got:value" in as_text(result["stdout"])
-    assert [session.session_id for session in manager.list_sessions(AGENT_A)] == [session_id]
+    assert [tracked.process_id for tracked in manager.list_processes(AGENT_A)] == [process_id]
 
-    await manager.kill(session_id, AGENT_A)
+    await manager.kill(process_id, AGENT_A)
 
-    assert [session.session_id for session in manager.list_sessions(AGENT_A)] == [session_id]
+    assert [tracked.process_id for tracked in manager.list_processes(AGENT_A)] == [process_id]
 
 
 @pytest.mark.asyncio
 async def test_send_input_with_eof_closes_stdin(manager: ProcessManager) -> None:
     script = "import sys; data = sys.stdin.read(); print('read:' + data)"
-    session_id = await manager.spawn(
+    process_id = await manager.spawn(
         SCOPE_A,
         AGENT_A,
         [sys.executable, "-c", script],
@@ -376,13 +376,13 @@ async def test_send_input_with_eof_closes_stdin(manager: ProcessManager) -> None
     )
 
     await manager.send_input(
-        session_id,
+        process_id,
         AGENT_A,
         "payload",
         newline=False,
         eof=True,
     )
-    result = await poll_until_terminal(manager, session_id)
+    result = await poll_until_terminal(manager, process_id)
 
     assert result["status"] == "completed"
     assert "read:payload" in as_text(result["stdout"])
@@ -392,38 +392,38 @@ async def test_send_input_with_eof_closes_stdin(manager: ProcessManager) -> None
 async def test_send_input_translates_raced_stdin_close_to_input_closed_error(
     manager: ProcessManager,
 ) -> None:
-    session_id = await manager.spawn(
+    process_id = await manager.spawn(
         SCOPE_A,
         AGENT_A,
         [sys.executable, "-c", "import sys; sys.stdin.read()"],
         env=None,
         cwd=None,
     )
-    session = manager.get_session(session_id, AGENT_A)
-    assert session.proc.stdin is not None
+    tracked = manager.get_process(process_id, AGENT_A)
+    assert tracked.proc.stdin is not None
 
     async def raise_connection_reset() -> None:
         raise ConnectionResetError("peer closed")
 
     # Simulate a kill / process exit closing stdin while drain() awaits.
-    session.proc.stdin.drain = raise_connection_reset  # type: ignore[method-assign]
+    tracked.proc.stdin.drain = raise_connection_reset  # type: ignore[method-assign]
 
-    with pytest.raises(SessionInputClosedError, match=session_id):
+    with pytest.raises(ProcessInputClosedError, match=process_id):
         await manager.send_input(
-            session_id,
+            process_id,
             AGENT_A,
             "value",
             newline=False,
             eof=False,
         )
-    assert session.stdin_open is False
+    assert tracked.stdin_open is False
 
-    await manager.kill(session_id, AGENT_A)
+    await manager.kill(process_id, AGENT_A)
 
 
 @pytest.mark.asyncio
 async def test_completed_process_closes_stdin_writer(manager: ProcessManager) -> None:
-    session_id = await manager.spawn(
+    process_id = await manager.spawn(
         SCOPE_A,
         AGENT_A,
         [sys.executable, "-c", "print('done')"],
@@ -431,13 +431,13 @@ async def test_completed_process_closes_stdin_writer(manager: ProcessManager) ->
         cwd=None,
     )
 
-    result = await poll_until_terminal(manager, session_id)
-    session = manager.get_session(session_id, AGENT_A)
+    result = await poll_until_terminal(manager, process_id)
+    tracked = manager.get_process(process_id, AGENT_A)
 
     assert result["status"] == "completed"
-    assert session.proc.stdin is not None
-    assert session.proc.stdin.is_closing() is True
-    transport = getattr(session.proc, "_transport", None)
+    assert tracked.proc.stdin is not None
+    assert tracked.proc.stdin.is_closing() is True
+    transport = getattr(tracked.proc, "_transport", None)
     pipes = getattr(transport, "_pipes", None)
     if isinstance(pipes, dict):
         assert pipes == {}
@@ -447,25 +447,25 @@ async def test_completed_process_closes_stdin_writer(manager: ProcessManager) ->
 async def test_reader_task_failure_is_logged(
     manager: ProcessManager, caplog: pytest.LogCaptureFixture
 ) -> None:
-    async def boom(session: Any, stream_name: str) -> None:
+    async def boom(tracked: Any, stream_name: str) -> None:
         raise RuntimeError("reader exploded")
 
     manager._read_stream = boom  # type: ignore[method-assign]
 
     with caplog.at_level(logging.ERROR, logger="vbot.tools.process_manager"):
-        session_id = await manager.spawn(
+        process_id = await manager.spawn(
             SCOPE_A,
             AGENT_A,
             [sys.executable, "-c", "print('done')"],
             env=None,
             cwd=None,
         )
-        session = manager.get_session(session_id, AGENT_A)
-        assert session.stdout_task is not None
-        assert session.stderr_task is not None
+        tracked = manager.get_process(process_id, AGENT_A)
+        assert tracked.stdout_task is not None
+        assert tracked.stderr_task is not None
         await asyncio.gather(
-            session.stdout_task,
-            session.stderr_task,
+            tracked.stdout_task,
+            tracked.stderr_task,
             return_exceptions=True,
         )
         await asyncio.sleep(0)
@@ -483,24 +483,24 @@ async def test_reader_task_failure_is_logged(
 async def test_watcher_task_failure_is_logged(
     manager: ProcessManager, caplog: pytest.LogCaptureFixture
 ) -> None:
-    async def boom(session: Any) -> None:
+    async def boom(tracked: Any) -> None:
         raise RuntimeError("watcher exploded")
 
     manager._watch_process = boom  # type: ignore[method-assign]
 
     with caplog.at_level(logging.ERROR, logger="vbot.tools.process_manager"):
-        session_id = await manager.spawn(
+        process_id = await manager.spawn(
             SCOPE_A,
             AGENT_A,
             [sys.executable, "-c", "import time; time.sleep(30)"],
             env=None,
             cwd=None,
         )
-        session = manager.get_session(session_id, AGENT_A)
-        assert session.wait_task is not None
-        await asyncio.gather(session.wait_task, return_exceptions=True)
+        tracked = manager.get_process(process_id, AGENT_A)
+        assert tracked.wait_task is not None
+        await asyncio.gather(tracked.wait_task, return_exceptions=True)
         await asyncio.sleep(0)
-        await manager.kill(session_id, AGENT_A)
+        await manager.kill(process_id, AGENT_A)
 
     watcher_errors = [
         record
@@ -518,7 +518,7 @@ async def test_kill_logs_warning_when_taskkill_fails(
     if sys.platform != "win32":
         pytest.skip("taskkill fallback path is Windows-only")
 
-    session_id = await manager.spawn(
+    process_id = await manager.spawn(
         SCOPE_A,
         AGENT_A,
         [sys.executable, "-c", "import time; time.sleep(30)"],
@@ -532,14 +532,14 @@ async def test_kill_logs_warning_when_taskkill_fails(
     monkeypatch.setattr(subprocess, "run", failing_taskkill)
 
     with caplog.at_level(logging.WARNING, logger="vbot.tools.process_manager"):
-        await manager.kill(session_id, AGENT_A)
+        await manager.kill(process_id, AGENT_A)
 
     assert any("taskkill failed" in record.getMessage() for record in caplog.records)
 
 
 @pytest.mark.asyncio
 async def test_kill_stops_process(manager: ProcessManager) -> None:
-    session_id = await manager.spawn(
+    process_id = await manager.spawn(
         SCOPE_A,
         AGENT_A,
         [sys.executable, "-c", "import time; time.sleep(30)"],
@@ -547,18 +547,18 @@ async def test_kill_stops_process(manager: ProcessManager) -> None:
         cwd=None,
     )
 
-    await manager.kill(session_id, AGENT_A)
-    result = await manager.poll(session_id, AGENT_A, timeout_ms=5000)
+    await manager.kill(process_id, AGENT_A)
+    result = await manager.poll(process_id, AGENT_A, timeout_ms=5000)
 
     assert result["status"] == "killed"
-    session = manager.get_session(session_id, AGENT_A)
-    assert session.status == "killed"
-    assert session.cancelled_by_user is False
+    tracked = manager.get_process(process_id, AGENT_A)
+    assert tracked.status == "killed"
+    assert tracked.cancelled_by_user is False
 
 
 @pytest.mark.asyncio
 async def test_cancel_for_user_retains_explicit_user_origin(manager: ProcessManager) -> None:
-    session_id = await manager.spawn(
+    process_id = await manager.spawn(
         SCOPE_A,
         AGENT_A,
         [sys.executable, "-c", "import time; time.sleep(30)"],
@@ -566,15 +566,15 @@ async def test_cancel_for_user_retains_explicit_user_origin(manager: ProcessMana
         cwd=None,
     )
 
-    session = await manager.cancel_for_user(session_id, AGENT_A)
+    tracked = await manager.cancel_for_user(process_id, AGENT_A)
 
-    assert session.status == "killed"
-    assert session.cancelled_by_user is True
+    assert tracked.status == "killed"
+    assert tracked.cancelled_by_user is True
 
 
 @pytest.mark.asyncio
-async def test_agent_isolation_for_session_access_methods(manager: ProcessManager) -> None:
-    session_id = await manager.spawn(
+async def test_agent_isolation_for_access_methods(manager: ProcessManager) -> None:
+    process_id = await manager.spawn(
         SCOPE_A,
         AGENT_A,
         [sys.executable, "-c", "import time; time.sleep(30)"],
@@ -582,42 +582,42 @@ async def test_agent_isolation_for_session_access_methods(manager: ProcessManage
         cwd=None,
     )
 
-    with pytest.raises(SessionNotFoundError):
-        await manager.poll(session_id, AGENT_B, timeout_ms=0)
-    with pytest.raises(SessionNotFoundError):
-        await manager.log(session_id, AGENT_B)
-    with pytest.raises(SessionNotFoundError):
-        await manager.snapshot(session_id, AGENT_B)
-    with pytest.raises(SessionNotFoundError):
+    with pytest.raises(ProcessNotFoundError):
+        await manager.poll(process_id, AGENT_B, timeout_ms=0)
+    with pytest.raises(ProcessNotFoundError):
+        await manager.log(process_id, AGENT_B)
+    with pytest.raises(ProcessNotFoundError):
+        await manager.snapshot(process_id, AGENT_B)
+    with pytest.raises(ProcessNotFoundError):
         await manager.send_input(
-            session_id,
+            process_id,
             AGENT_B,
             "data",
             newline=True,
             eof=False,
         )
-    with pytest.raises(SessionNotFoundError):
-        await manager.kill(session_id, AGENT_B)
+    with pytest.raises(ProcessNotFoundError):
+        await manager.kill(process_id, AGENT_B)
 
-    assert manager.list_sessions(AGENT_B) == []
-    assert [session.session_id for session in manager.list_sessions(AGENT_A)] == [session_id]
+    assert manager.list_processes(AGENT_B) == []
+    assert [tracked.process_id for tracked in manager.list_processes(AGENT_A)] == [process_id]
 
-    await manager.kill(session_id, AGENT_A)
+    await manager.kill(process_id, AGENT_A)
 
 
 @pytest.mark.asyncio
 async def test_log_returns_windowed_combined_output(manager: ProcessManager) -> None:
     script = "import sys; sys.stdout.write('one\\ntwo\\nthree\\n'); sys.stdout.flush()"
-    session_id = await manager.spawn(
+    process_id = await manager.spawn(
         SCOPE_A,
         AGENT_A,
         [sys.executable, "-c", script],
         env=None,
         cwd=None,
     )
-    await poll_until_terminal(manager, session_id)
+    await poll_until_terminal(manager, process_id)
 
-    result = await manager.log(session_id, AGENT_A, offset=1, limit=1)
+    result = await manager.log(process_id, AGENT_A, offset=1, limit=1)
 
     assert as_text(result["output"]).replace("\r\n", "\n") == "two\n"
     assert result["total_lines"] == 3
@@ -625,39 +625,39 @@ async def test_log_returns_windowed_combined_output(manager: ProcessManager) -> 
 
 @pytest.mark.asyncio
 async def test_foreground_capture_can_be_stopped(manager: ProcessManager) -> None:
-    session_id = await manager.spawn(
+    process_id = await manager.spawn(
         SCOPE_A,
         AGENT_A,
         [sys.executable, "-c", "import sys; print('foreground'); sys.stdout.flush()"],
         env=None,
         cwd=None,
     )
-    await poll_until_terminal(manager, session_id)
+    await poll_until_terminal(manager, process_id)
 
-    manager.mark_backgrounded(session_id, AGENT_A)
-    session = manager.get_session(session_id, AGENT_A)
+    manager.mark_backgrounded(process_id, AGENT_A)
+    tracked = manager.get_process(process_id, AGENT_A)
 
-    assert b"foreground" in b"".join(session.stdout_lines)
-    assert session.foreground_capture_open is False
+    assert b"foreground" in b"".join(tracked.stdout_lines)
+    assert tracked.foreground_capture_open is False
 
 
 @pytest.mark.asyncio
 async def test_foreground_capture_is_bounded_by_buffer_cap(tmp_path) -> None:
     manager = ProcessManager(buffer_cap_bytes=32, sweep_interval_seconds=3600)
     try:
-        session_id = await manager.spawn(
+        process_id = await manager.spawn(
             SCOPE_A,
             AGENT_A,
             [sys.executable, "-c", "import sys; sys.stdout.write('a' * 64); sys.stdout.flush()"],
             env=None,
             cwd=tmp_path,
         )
-        await poll_until_terminal(manager, session_id)
-        session = manager.get_session(session_id, AGENT_A)
+        await poll_until_terminal(manager, process_id)
+        tracked = manager.get_process(process_id, AGENT_A)
 
-        assert len(b"".join(session.stdout_lines)) == 32
-        assert b"".join(session.stderr_lines) == b""
-        assert session.truncated is True
+        assert len(b"".join(tracked.stdout_lines)) == 32
+        assert b"".join(tracked.stderr_lines) == b""
+        assert tracked.truncated is True
     finally:
         await manager.aclose()
 
@@ -836,21 +836,21 @@ async def test_log_file_holds_complete_output_beyond_buffer_cap(tmp_path: Path) 
         temporary_files=TemporaryFileManager(tmp_path),
     )
     try:
-        session_id = await manager.spawn(
+        process_id = await manager.spawn(
             SCOPE_A,
             AGENT_A,
             [sys.executable, "-c", "print('start-marker'); print('x' * 500)"],
             env=None,
             cwd=None,
         )
-        await poll_until_terminal(manager, session_id)
+        await poll_until_terminal(manager, process_id)
 
-        session = manager.get_session(session_id, AGENT_A)
-        assert session.truncated is True
-        assert session.log_file is not None
-        assert session.log_file.parent == tmp_path / "artifacts" / "temp" / "bash"
+        tracked = manager.get_process(process_id, AGENT_A)
+        assert tracked.truncated is True
+        assert tracked.log_file is not None
+        assert tracked.log_file.parent == tmp_path / "artifacts" / "temp" / "bash"
 
-        content = session.log_file.read_text(encoding="utf-8")
+        content = tracked.log_file.read_text(encoding="utf-8")
         assert "start-marker" in content
         assert "x" * 500 in content
     finally:
@@ -859,12 +859,12 @@ async def test_log_file_holds_complete_output_beyond_buffer_cap(tmp_path: Path) 
 
 @pytest.mark.asyncio
 async def test_no_temporary_file_manager_means_no_log_file(manager: ProcessManager) -> None:
-    session_id = await manager.spawn(
+    process_id = await manager.spawn(
         SCOPE_A, AGENT_A, [sys.executable, "-c", "print('hi')"], env=None, cwd=None
     )
-    await poll_until_terminal(manager, session_id)
+    await poll_until_terminal(manager, process_id)
 
-    assert manager.get_session(session_id, AGENT_A).log_file is None
+    assert manager.get_process(process_id, AGENT_A).log_file is None
 
 
 @pytest.mark.asyncio
@@ -875,14 +875,14 @@ async def test_log_file_is_stripped_of_ansi_escape_sequences(tmp_path: Path) -> 
     )
     try:
         script = "import sys; esc = chr(27); sys.stdout.write(f'{esc}[31mred{esc}[0m done\n')"
-        session_id = await manager.spawn(
+        process_id = await manager.spawn(
             SCOPE_A, AGENT_A, [sys.executable, "-c", script], env=None, cwd=None
         )
-        await poll_until_terminal(manager, session_id)
+        await poll_until_terminal(manager, process_id)
 
-        session = manager.get_session(session_id, AGENT_A)
-        assert session.log_file is not None
-        content = session.log_file.read_text(encoding="utf-8")
+        tracked = manager.get_process(process_id, AGENT_A)
+        assert tracked.log_file is not None
+        content = tracked.log_file.read_text(encoding="utf-8")
         assert "red" in content and "done" in content
         assert "\x1b" not in content
     finally:
@@ -897,23 +897,23 @@ async def test_log_lease_finishes_only_after_process_is_terminal(tmp_path: Path)
     )
     manager = ProcessManager(sweep_interval_seconds=3600, temporary_files=temporary_files)
     try:
-        session_id = await manager.spawn(
+        process_id = await manager.spawn(
             SCOPE_A,
             AGENT_A,
             [sys.executable, "-c", "import time; time.sleep(30)"],
             env=None,
             cwd=None,
         )
-        session = manager.get_session(session_id, AGENT_A)
-        assert session.log_file is not None
+        tracked = manager.get_process(process_id, AGENT_A)
+        assert tracked.log_file is not None
         time.sleep(0.01)
 
         temporary_files.sweep()
-        assert session.log_file.exists(), "an active process log must survive cleanup"
+        assert tracked.log_file.exists(), "an active process log must survive cleanup"
 
-        await manager.kill(session_id, AGENT_A)
+        await manager.kill(process_id, AGENT_A)
         time.sleep(0.01)
         temporary_files.sweep()
-        assert not session.log_file.exists()
+        assert not tracked.log_file.exists()
     finally:
         await manager.aclose()
