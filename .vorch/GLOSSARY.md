@@ -22,6 +22,10 @@ Core, cross-cutting vocabulary every agent needs regardless of what it touches. 
 **Definition:** A model capability for an internal reasoning step before the final answer — a typed block in the model data (`reasoning.supported`, plus how the provider steers it when supported). At runtime the agent's `thinking_effort` field (`none` / `minimal` / `low` / `medium` / `high` / `xhigh` / `max`, or empty for the provider default) is turned into a provider-neutral intent, and each adapter renders that intent into its own wire vocabulary; `/status` reports what actually reaches the wire. The steering mechanics (Reasoning control in `models.md`; Reasoning intent and Chain of Thought in `providers.md`) live in those maps.
 **Not:** Chain of Thought. Reasoning is the capability and its configuration; CoT is the opaque output it produces (defined in `providers.md`).
 
+## Reasoning Replay
+**Definition:** Returning a Model's prior reasoning state in later requests of the same conversation. Two classes with different rules: opaque meta (`reasoning_details`, signatures/encrypted blocks) is contract state and replays byte-identically when the wire requires it; visible reasoning text is display material and only goes back when that wire's Model demonstrably benefits.
+**Not:** Chain of Thought itself (the content, not its round-trip). Also not "replay everything by default" — minimality is the invariant (see `PROJECT.md` → Context; mechanics in `providers/request-policy.md`).
+
 ## Session
 **Definition:** A system-owned persisted chat container that belongs to exactly one Agent within its Identity or Project scope and owns the message history. Identity Agent Sessions live under `<datadir>/agents/<agent-id>/sessions/`; Project Agent Sessions live under `<datadir>/projects/<project-id>/agents/<agent-id>/sessions/`, with one JSONL file per Session.
 **Not:** The agent itself, the currently executing work, or the agent's Workspace files. The Session is the persisted conversation container; the Run is the active execution inside it.
