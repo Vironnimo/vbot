@@ -43,7 +43,11 @@ from core.providers.adapter import (
     normalize_tool_call_candidates,
     project_tool_result_content_fallbacks,
 )
-from core.providers.errors import NetworkError, ProviderError
+from core.providers.errors import (
+    NetworkError,
+    ProviderError,
+    classify_in_band_provider_error,
+)
 from core.providers.providers import (
     AuthConfig,
     ProviderConfig,
@@ -851,8 +855,10 @@ def _normalize_openai_stream_chunk(
 ) -> list[dict[str, Any]]:
     error = chunk.get("error")
     if isinstance(error, dict):
-        message = error.get("message") or str(error)
-        raise ProviderError(f"Provider stream error: {message}", retryable=False)
+        raise classify_in_band_provider_error(error)
+    if error is not None:
+        # A non-object error payload carries nothing classifiable and stays fatal.
+        raise ProviderError(f"Provider stream error: {error}", retryable=False)
 
     normalized_deltas: list[dict[str, Any]] = []
     for choice in _stream_choices(chunk):

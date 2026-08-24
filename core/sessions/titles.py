@@ -21,6 +21,7 @@ from core.chat.model_resolution import (
     resolve_request_temperature,
 )
 from core.debug import DebugContext
+from core.providers.errors import ProviderError
 from core.sessions.sessions import (
     SESSION_AUTO_TITLE_INITIALIZED_KEY,
     SESSION_TITLE_KEY,
@@ -250,20 +251,25 @@ class SessionTitleService:
                         iteration_number=0,
                     )
                 )
-            response = await adapter.send(
-                [
-                    {"role": "system", "content": TITLE_SYSTEM_PROMPT},
-                    {"role": "user", "content": title_input},
-                ],
-                model_id=model_id,
-                temperature=resolve_request_temperature(
-                    None,
-                    self._runtime.models,
-                    provider_id,
+            try:
+                response = await self._send_title_request(
+                    adapter,
                     model_id,
-                ),
-                thinking_effort="none",
-            )
+                    provider_id,
+                    title_input,
+                    thinking_effort="none",
+                )
+            except ProviderError:
+                # Some reasoning-mandatory endpoints reject an explicit disable
+                # outright. Retry once at the provider-default effort before
+                # giving up on the generated title.
+                response = await self._send_title_request(
+                    adapter,
+                    model_id,
+                    provider_id,
+                    title_input,
+                    thinking_effort="",
+                )
             title = await _SESSION_TITLE_WORKERS.run(
                 _normalize_generated_title,
                 adapter,
@@ -299,6 +305,31 @@ class SessionTitleService:
                     await adapter.aclose()
                 except Exception:
                     _LOGGER.warning("Failed to close Session title adapter", exc_info=True)
+
+    async def _send_title_request(
+        self,
+        adapter: Any,
+        model_id: str,
+        provider_id: str,
+        title_input: str,
+        *,
+        thinking_effort: str,
+    ) -> dict[str, Any]:
+        response: dict[str, Any] = await adapter.send(
+            [
+                {"role": "system", "content": TITLE_SYSTEM_PROMPT},
+                {"role": "user", "content": title_input},
+            ],
+            model_id=model_id,
+            temperature=resolve_request_temperature(
+                None,
+                self._runtime.models,
+                provider_id,
+                model_id,
+            ),
+            thinking_effort=thinking_effort,
+        )
+        return response
 
 
 def _normalize_generated_title(

@@ -25,7 +25,11 @@ from core.providers._http_shared import (
     decode_response_json,
     wrap_network_error,
 )
-from core.providers.errors import NetworkError, ProviderError
+from core.providers.errors import (
+    NetworkError,
+    ProviderError,
+    classify_in_band_provider_error,
+)
 from core.providers.github_copilot_responses import (
     ResponsesStreamState,
     build_responses_payload,
@@ -74,6 +78,11 @@ OPENROUTER_ALL_TURNS_RESPONSES_MODELS = frozenset(
     }
 )
 OPENROUTER_RESPONSES_REQUEST_PARAMETERS = frozenset({"max_tokens", "max_output_tokens", "top_p"})
+
+# Statuses whose handling the shared HTTP policy already gets right (auth,
+# rate limit with Retry-After, transient 5xx). Only other error statuses go
+# through OpenRouter's structured-body refinement in _classify_http_status.
+_OPENROUTER_SHARED_POLICY_STATUSES = frozenset({401, 403, 429, 502, 503, 504})
 
 # Prompt caching for Claude-family models routed through OpenRouter. Anthropic
 # caches nothing unless a content block carries ``cache_control`` (verified live:
@@ -189,6 +198,54 @@ class OpenRouterAdapter(OpenAICompatibleAdapter):
 
     def _uses_all_turns_responses(self, model_id: str) -> bool:
         return model_id.split("::", 1)[0] in OPENROUTER_ALL_TURNS_RESPONSES_MODELS
+
+    def _normalize_stream_chunk(
+        self,
+        raw_chunk: dict[str, Any],
+        tool_call_slots: set[int],
+        normalization_state: dict[str, Any] | None = None,
+    ) -> list[dict[str, Any]]:
+        error = raw_chunk.get("error")
+        if isinstance(error, Mapping):
+            # OpenRouter fronts heterogeneous upstreams behind automatic fallback
+            # routing: the identical request can legitimately succeed through a
+            # different endpoint. Unclassified in-band failures therefore become
+            # retryable so Chat's bounded stream restart can re-route, while the
+            # known-fatal classes (context/token limits, auth, billing, content
+            # policy) stay fatal — see classify_in_band_provider_error.
+            raise classify_in_band_provider_error(error, lenient_unknown=True)
+        return super()._normalize_stream_chunk(
+            raw_chunk,
+            tool_call_slots,
+            normalization_state=normalization_state,
+        )
+
+    def _classify_http_status(
+        self,
+        status_code: int,
+        *,
+        detail: str,
+        response_headers: httpx.Headers,
+    ) -> None:
+        if status_code < 400 or status_code in _OPENROUTER_SHARED_POLICY_STATUSES:
+            super()._classify_http_status(
+                status_code,
+                detail=detail,
+                response_headers=response_headers,
+            )
+            return
+        error = _openrouter_status_error_payload(detail)
+        if error is None:
+            super()._classify_http_status(
+                status_code,
+                detail=detail,
+                response_headers=response_headers,
+            )
+            return
+        # Same router leniency as the streaming path: a structured OpenRouter
+        # error body on an otherwise fatal status may still name a transient or
+        # endpoint-specific condition, so classify from its structured fields.
+        raise classify_in_band_provider_error(error, lenient_unknown=True)
 
     def _request_kwargs_with_defaults(self, kwargs: Mapping[str, Any]) -> dict[str, Any]:
         request_kwargs: dict[str, Any] = {}
@@ -714,6 +771,28 @@ def _openrouter_http_error_detail(
 ) -> str:
     reason = response.text if body is None else body
     return f"{response.status_code} {reason}".strip() if reason else str(response.status_code)
+
+
+def _openrouter_status_error_payload(detail: str) -> dict[str, Any] | None:
+    """Extract the structured ``error`` object from an HTTP error detail.
+
+    The compatible base renders establishment failures as ``"<status> <body>"``
+    and OpenRouter bodies are JSON with a documented ``error`` object. Returns
+    ``None`` when the detail carries no parseable OpenRouter-shaped error, so
+    the shared status policy applies unchanged.
+    """
+
+    start = detail.find("{")
+    if start < 0:
+        return None
+    try:
+        parsed = json.loads(detail[start:])
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(parsed, dict):
+        return None
+    error = parsed.get("error")
+    return error if isinstance(error, dict) else None
 
 
 def _openrouter_routing_options(

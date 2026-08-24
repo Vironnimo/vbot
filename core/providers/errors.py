@@ -6,6 +6,9 @@ Provider subclasses hard-code their ``retryable`` flags so that the retry
 utility can decide whether to re-attempt the call.
 """
 
+from collections.abc import Mapping
+from typing import Any
+
 from core.utils.errors import ProviderError, VBotError
 
 
@@ -86,3 +89,117 @@ class CatalogEntrySkipped(VBotError):  # noqa: N818
     non-error skip conditions (for example non-chat or archived models).
     The discovery loop catches and discards it.
     """
+
+
+# ---------------------------------------------------------------------------
+# In-band provider error classification
+# ---------------------------------------------------------------------------
+
+# Provider in-band error objects (SSE error chunks, structured HTTP error
+# bodies) carry optional structured fields across the OpenAI-compatible and
+# Responses-shaped wires: ``message``, a string or numeric ``code``,
+# ``metadata.error_type`` / top-level ``error_type`` (the typed vocabulary
+# below), and an ``availability`` object whose documented ``retryable`` /
+# ``retry_after`` pair is the router's own recovery hint.
+IN_BAND_AUTH_ERROR_CODES = frozenset(
+    {"authentication", "authentication_error", "invalid_api_key", "unauthorized"}
+)
+IN_BAND_RATE_LIMIT_ERROR_CODES = frozenset({"rate_limit_exceeded"})
+IN_BAND_TIMEOUT_ERROR_CODES = frozenset({"timeout"})
+IN_BAND_TRANSIENT_ERROR_CODES = frozenset(
+    {"provider_overloaded", "provider_unavailable", "server", "server_error"}
+)
+IN_BAND_RETRYABLE_NUMERIC_CODES = frozenset({429, 502, 503, 504})
+
+# Deterministic failures where an identical retry can never help, even on a
+# multi-upstream router: token/context limits, billing, permissions, and
+# content policy. Everything else unclassified may become retryable when the
+# caller opts in via ``lenient_unknown``.
+IN_BAND_FATAL_ERROR_CODES = frozenset(
+    {
+        "context_length_exceeded",
+        "max_tokens_exceeded",
+        "token_limit_exceeded",
+        "string_too_long",
+        "payment_required",
+        "permission_denied",
+        "content_policy_violation",
+        "refusal",
+    }
+)
+
+
+def _first_non_empty_string(*values: Any) -> str | None:
+    for value in values:
+        if isinstance(value, str) and value:
+            return value
+    return None
+
+
+def classify_in_band_provider_error(
+    error: Any,
+    *,
+    lenient_unknown: bool = False,
+) -> ProviderError:
+    """Map one provider in-band error object into vBot's shared error taxonomy.
+
+    Reads the documented structured fields — the typed ``error_type``
+    (top-level or under ``metadata``), a string or numeric ``code``, and the
+    router's ``availability.retryable`` / ``availability.retry_after`` hints —
+    instead of treating every in-band error as fatal. With
+    ``lenient_unknown=True`` (multi-upstream routers such as OpenRouter), an
+    error carrying no known classification becomes retryable: routing can serve
+    the identical request through a different upstream endpoint, and Chat bounds
+    the resulting retries. Without it (single-endpoint wires), unclassified
+    errors stay fatal exactly as before.
+    """
+
+    if not isinstance(error, Mapping):
+        return ProviderError(str(error), retryable=False)
+
+    raw_message = error.get("message")
+    message = raw_message if isinstance(raw_message, str) and raw_message else str(error)
+    metadata = error.get("metadata")
+    metadata = metadata if isinstance(metadata, Mapping) else {}
+    code = error.get("code")
+    classifier = _first_non_empty_string(metadata.get("error_type"), error.get("error_type"))
+    if classifier is None and isinstance(code, str) and code:
+        classifier = code
+    numeric_code = code if isinstance(code, int) and not isinstance(code, bool) else None
+
+    availability = error.get("availability")
+    availability = availability if isinstance(availability, Mapping) else {}
+
+    def _build(retryable: bool) -> ProviderError:
+        provider_error = ProviderError(message, retryable=retryable)
+        if retryable:
+            retry_after = availability.get("retry_after")
+            if (
+                isinstance(retry_after, int)
+                and not isinstance(retry_after, bool)
+                and retry_after > 0
+            ):
+                provider_error.retry_after = retry_after
+        return provider_error
+
+    if classifier in IN_BAND_AUTH_ERROR_CODES or numeric_code in (401, 403):
+        return ProviderAuthError(message)
+    if classifier in IN_BAND_RATE_LIMIT_ERROR_CODES or numeric_code == 429:
+        return _rate_limit_error(message, availability)
+    if classifier in IN_BAND_TIMEOUT_ERROR_CODES or numeric_code == 504:
+        return ProviderTimeoutError(message)
+    if classifier in IN_BAND_TRANSIENT_ERROR_CODES or numeric_code in {502, 503}:
+        return _build(True)
+    if classifier in IN_BAND_FATAL_ERROR_CODES:
+        return _build(False)
+    if availability.get("retryable") is True:
+        return _build(True)
+    return _build(lenient_unknown)
+
+
+def _rate_limit_error(message: str, availability: Mapping[str, Any]) -> ProviderRateLimitError:
+    rate_limit_error = ProviderRateLimitError(message)
+    retry_after = availability.get("retry_after")
+    if isinstance(retry_after, int) and not isinstance(retry_after, bool) and retry_after > 0:
+        rate_limit_error.retry_after = retry_after
+    return rate_limit_error

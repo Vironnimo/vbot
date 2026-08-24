@@ -10,6 +10,7 @@ import pytest
 
 from core.chat import ChatMessage
 from core.chat.content_blocks import ContentBlock, FileBlock, FileMentionBlock, TextBlock
+from core.providers.errors import ProviderError
 from core.sessions import ChatSessionManager
 from core.sessions.titles import (
     GENERATED_TITLE_MAX_CHARACTERS,
@@ -248,6 +249,44 @@ async def test_configured_title_model_replaces_local_title_with_bounded_request(
     )
     assert adapter.closed is True
     assert adapter.debug_context.run_id == "title-run-one"
+
+
+@pytest.mark.asyncio
+async def test_reasoning_mandatory_endpoint_retries_with_default_effort(tmp_path) -> None:
+    """A rejected explicit disable retries once at the provider-default effort."""
+
+    class RejectingAdapter(StubAdapter):
+        async def send(self, messages: list[dict], **kwargs: Any) -> dict[str, Any]:
+            self.requests.append({"messages": messages, **kwargs})
+            if kwargs.get("thinking_effort") == "none":
+                raise ProviderError("Reasoning is mandatory for this endpoint.")
+            return {"content": self.title}
+
+    adapter = RejectingAdapter('Title: "Mandatory reasoning"')
+    runtime = StubRuntime(
+        tmp_path,
+        enabled=True,
+        configured_model="openrouter/stealth/ox-alpha::api-key",
+        adapters=[adapter],
+    )
+    _append_first_user(runtime, "Please fix the scroll bug")
+    service = SessionTitleService(cast(Any, runtime))
+
+    service.notify_user_message(
+        agent_id="coder",
+        session_id="session-one",
+        project_id=None,
+        agent=SimpleNamespace(model="openai/agent::main"),
+        content="Please fix the scroll bug",
+        run_id="run-one",
+    )
+    await _wait_for_background(service)
+
+    assert [request["thinking_effort"] for request in adapter.requests] == ["none", ""]
+    assert runtime.chat_sessions.get_metadata("coder", "session-one")["auto_title"] == (
+        "Mandatory reasoning"
+    )
+    assert adapter.closed is True
 
 
 @pytest.mark.asyncio
