@@ -1171,6 +1171,41 @@ describe('errorMessagePresentation', () => {
     expect(presentation.details).toContain('"status": "boom"');
   });
 
+  it('shows the upstream rate-limit detail and provider name directly', () => {
+    const presentation = errorMessagePresentation(
+      'Rate limited: 429 {"error":{"message":"Provider returned error","code":429,' +
+        '"metadata":{"raw":"stealth/ox-alpha is temporarily rate-limited upstream. Please retry shortly.",' +
+        '"provider_name":"Stealth","remedy_hint":"Retry shortly, add your own provider key"}},"user_id":"u1"}',
+    );
+
+    expect(presentation.summary).toBe(
+      'Rate limited: 429 stealth/ox-alpha is temporarily rate-limited upstream. ' +
+        'Please retry shortly. (via Stealth)',
+    );
+    expect(presentation.summary).not.toContain('Provider returned error');
+    expect(presentation.summary).not.toContain('remedy_hint');
+    expect(presentation.details).toContain('"remedy_hint"');
+  });
+
+  it('reads router metadata from a top-level error body', () => {
+    const presentation = errorMessagePresentation(
+      'Provider returned error: {"message":"Provider returned error","code":502,' +
+        '"metadata":{"raw":"upstream connection reset","provider_name":"Morph"}}',
+    );
+
+    expect(presentation.summary).toBe(
+      'Provider returned error: upstream connection reset (via Morph)',
+    );
+  });
+
+  it('does not duplicate the message when the upstream detail matches it', () => {
+    const presentation = errorMessagePresentation(
+      'Provider error: 500 {"message":"overloaded","metadata":{"raw":"overloaded"}}',
+    );
+
+    expect(presentation.summary).toBe('Provider error: 500 overloaded');
+  });
+
   it('returns plain text unchanged without an embedded JSON object', () => {
     expect(errorMessagePresentation('Connection refused')).toEqual({
       summary: 'Connection refused',
