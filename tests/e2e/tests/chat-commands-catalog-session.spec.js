@@ -39,6 +39,8 @@ test("slash command discovery, help, status, rename, and new Session work togeth
     }),
   ).toBeVisible();
   const drawer = chat.getByRole("complementary", { name: "Sessions" });
+  await chat.getByRole("button", { exact: true, name: "Sessions" }).click();
+  await expect(drawer).toBeVisible();
   await expect(
     drawer.getByText("E2E Slash Command Session", { exact: true }),
   ).toBeVisible();

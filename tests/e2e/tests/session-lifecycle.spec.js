@@ -17,6 +17,7 @@ test("Sessions can be selected and continued without a past-session warning", as
   const selectedSession = sessionDrawer.locator(
     "button.session-row__select--active",
   );
+  await chat.getByRole("button", { exact: true, name: "Sessions" }).click();
   await expect(selectedSession).toHaveCount(1);
 
   await sendChatMessage(chat, `/rename ${EARLIER_SESSION_TITLE}`);
