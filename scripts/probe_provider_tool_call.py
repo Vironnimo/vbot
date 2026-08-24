@@ -227,7 +227,7 @@ BASH_CASES = (
     "top_foreground_all_multiline",
     "top_auto_default",
     "top_auto_zero",
-    "top_auto_yield",
+    "top_auto_background_after",
     "top_auto_timeout",
     "top_auto_all",
     "top_background",
@@ -1457,12 +1457,12 @@ def _bash_scenario(case_name: str) -> ProbeScenario:
         "top_auto_zero": {
             "mode": "auto",
             "command": "python -m pytest tests/core/tools/test_bash.py -q",
-            "yield_after": 0,
+            "background_after_seconds": 0,
         },
-        "top_auto_yield": {
+        "top_auto_background_after": {
             "mode": "auto",
             "command": "python -m pytest tests/core/tools/test_bash.py -q",
-            "yield_after": 5,
+            "background_after_seconds": 5,
         },
         "top_auto_timeout": {
             "mode": "auto",
@@ -1474,7 +1474,7 @@ def _bash_scenario(case_name: str) -> ProbeScenario:
             "command": "python -m pytest tests/core/tools/test_bash.py -q",
             "description": "Run Bash tool tests",
             "workdir": "src",
-            "yield_after": 5,
+            "background_after_seconds": 5,
             "timeout": 120,
         },
         "top_background": {
@@ -1519,14 +1519,14 @@ def _bash_scenario(case_name: str) -> ProbeScenario:
         "sub_auto_zero": {
             "mode": "auto",
             "command": "python -m pytest tests/core/tools/test_bash.py -q",
-            "yield_after": 0,
+            "background_after_seconds": 0,
         },
         "sub_auto_all": {
             "mode": "auto",
             "command": "python -m pytest tests/core/tools/test_bash.py -q",
             "description": "Run Bash tool tests",
             "workdir": "src",
-            "yield_after": 300,
+            "background_after_seconds": 300,
             "timeout": 600,
         },
     }

@@ -55,12 +55,12 @@ BASH_HANDOFF_PROCESS_NOTE = (
     "snapshot collected before handoff. The result's log_file field carries the path to the "
     "complete combined stdout/stderr stream, written live from command start through exit."
 )
-DEFAULT_YIELD_AFTER_SECONDS = 30.0
-# Inside a Sub-Agent auto mode cannot hand off, so its yield_after threshold
-# doubles as the kill deadline. Default it generously there: a 30s handoff
-# would kill a normal pytest/build. Explicit yield_after or timeout still wins,
-# and the Sub-Agent Run timeout is the outer bound.
-DEFAULT_SUBAGENT_YIELD_AFTER_SECONDS = 1800.0
+DEFAULT_BACKGROUND_AFTER_SECONDS = 30.0
+# Inside a Sub-Agent auto mode cannot hand off, so its background_after_seconds
+# threshold doubles as the kill deadline. Default it generously there: a 30s
+# handoff would kill a normal pytest/build. Explicit background_after_seconds
+# or timeout still wins, and the Sub-Agent Run timeout is the outer bound.
+DEFAULT_SUBAGENT_BACKGROUND_AFTER_SECONDS = 1800.0
 
 
 def _shell_syntax_notes() -> str:
@@ -102,7 +102,8 @@ BASH_SUBAGENT_TOOL_DESCRIPTION = (
     "Run an unattended shell command inside this Sub-Agent through pipes when no interactive "
     "terminal input or live screen is needed, such as scripts, builds, non-interactive Git, and "
     "file operations; process handoff is unavailable. Use foreground to wait for completion and "
-    "auto only for bounded work; auto kills a command still running after yield_after. Never "
+    "auto only for bounded work; auto kills a command still running after "
+    "background_after_seconds. Never "
     "manually detach or daemonize a command. Result output keeps the newest "
     f"{BASH_MODEL_OUTPUT_CAP_CHARS} characters; when output is truncated, the result includes a "
     "log_file path to the complete combined stdout/stderr stream." + _shell_syntax_notes()
@@ -134,7 +135,7 @@ _BASH_TIMEOUT_PARAMETER: JsonObject = {
     "exclusiveMinimum": 0,
     "description": (
         "Hard kill deadline in seconds. Omit for no Tool-level timeout; in auto mode it does "
-        "not extend yield_after."
+        "not extend background_after_seconds."
     ),
 }
 _BASH_ENV_KEYS_PARAMETER: JsonObject = {
@@ -150,20 +151,20 @@ _BASH_ENV_KEYS_PARAMETER: JsonObject = {
 
 
 def _bash_tool_parameters(*, subagent: bool) -> JsonObject:
-    yield_after_default = (
-        DEFAULT_SUBAGENT_YIELD_AFTER_SECONDS if subagent else DEFAULT_YIELD_AFTER_SECONDS
+    background_after_default = (
+        DEFAULT_SUBAGENT_BACKGROUND_AFTER_SECONDS if subagent else DEFAULT_BACKGROUND_AFTER_SECONDS
     )
     mode_description = (
         "Execution behavior. Omit for foreground, which waits for completion; auto waits until "
-        "yield_after, "
-        "then kills a still-running command because handoff is unavailable — yield_after "
-        "applies only to auto."
+        "background_after_seconds, "
+        "then kills a still-running command because handoff is unavailable — "
+        "background_after_seconds applies only to auto."
         if subagent
         else "Execution behavior. Omit for foreground, which waits for completion; auto waits "
-        "until yield_after, then hands a still-running command off to vBot; background hands off "
-        "immediately. yield_after applies only to auto."
+        "until background_after_seconds, then hands a still-running command off to vBot; "
+        "background hands off immediately. background_after_seconds applies only to auto."
     )
-    yield_after_description = (
+    background_after_description = (
         'Only valid when mode is "auto". Seconds auto waits before the command is killed '
         "because process handoff is unavailable. Omit for the default (30 minutes); "
         "independent of timeout."
@@ -183,11 +184,11 @@ def _bash_tool_parameters(*, subagent: bool) -> JsonObject:
             "command": _BASH_COMMAND_PARAMETER,
             "description": _BASH_DESCRIPTION_PARAMETER,
             "workdir": _BASH_WORKDIR_PARAMETER,
-            "yield_after": {
+            "background_after_seconds": {
                 "type": "number",
                 "minimum": 0,
-                "description": yield_after_description,
-                "default": yield_after_default,
+                "description": background_after_description,
+                "default": background_after_default,
             },
             "timeout": _BASH_TIMEOUT_PARAMETER,
             "env_keys": _BASH_ENV_KEYS_PARAMETER,
@@ -219,7 +220,7 @@ BACKGROUND_USER_CANCELLED_MESSAGE = "Background process was aborted by the user.
 # Handoff-at-depth block: a Sub-Agent (nesting depth >= 1) runs in an ephemeral
 # Session that nobody reads once it returns its single result, so a handed-off
 # process there could not report back. Background mode is rejected before spawn;
-# auto mode kills and reports failure if it reaches yield_after. No process is
+# auto mode kills and reports failure if it reaches background_after_seconds. No process is
 # left running and no completion watcher is spawned. Top level is unaffected.
 # FLIP-BACK: set BLOCK_BACKGROUND_AT_DEPTH = False to allow background bash at depth.
 BLOCK_BACKGROUND_AT_DEPTH = True
@@ -227,7 +228,7 @@ BACKGROUND_AT_DEPTH_FAILURE_CODE = "background_unavailable_in_subagent"
 BACKGROUND_AT_DEPTH_EXPLICIT_MESSAGE = (
     "Background mode is not available inside a Sub-Agent: its Session ends with this Run, "
     "so a handed-off process could not report back. Use foreground mode, or auto mode with "
-    "a sufficient yield_after and optional timeout."
+    "a sufficient background_after_seconds and optional timeout."
 )
 
 _LOGGER = get_logger("tools.bash")
@@ -278,17 +279,19 @@ def _background_blocked_at_depth(context: ToolContext) -> bool:
     return BLOCK_BACKGROUND_AT_DEPTH and context.nesting_depth >= 1
 
 
-def _background_at_depth_timeout_message(yield_after: float) -> str:
-    """Build the failure message for Sub-Agent auto mode reaching yield_after."""
+def _background_at_depth_timeout_message(background_after_seconds: float) -> str:
+    """Build the failure message for Sub-Agent auto mode reaching the threshold."""
     return (
-        f"Auto mode reached yield_after after {yield_after:g}s, but process handoff is not "
+        f"Auto mode reached background_after_seconds after {background_after_seconds:g}s, "
+        "but process handoff is not "
         "available inside a Sub-Agent. The process was stopped. Use foreground mode when "
-        "the next action needs this result, or choose a sufficient yield_after and timeout "
+        "the next action needs this result, or choose a sufficient "
+        "background_after_seconds and timeout "
         "for bounded independent work."
     )
 
 
-def _resolve_yield_after(context: ToolContext, explicit: float | None) -> float:
+def _resolve_background_after_seconds(context: ToolContext, explicit: float | None) -> float:
     """Resolve auto mode's inline wait: explicit wins, else a per-context default.
 
     Inside a Sub-Agent the command cannot be handed off, so the window is the max
@@ -298,8 +301,8 @@ def _resolve_yield_after(context: ToolContext, explicit: float | None) -> float:
     if explicit is not None:
         return explicit
     if _background_blocked_at_depth(context):
-        return DEFAULT_SUBAGENT_YIELD_AFTER_SECONDS
-    return DEFAULT_YIELD_AFTER_SECONDS
+        return DEFAULT_SUBAGENT_BACKGROUND_AFTER_SECONDS
+    return DEFAULT_BACKGROUND_AFTER_SECONDS
 
 
 async def bash_handler(
@@ -414,12 +417,16 @@ async def bash_handler(
         )
         return result
 
-    yield_after = _resolve_yield_after(context, parsed["yield_after"]) if mode == "auto" else None
+    background_after_seconds = (
+        _resolve_background_after_seconds(context, parsed["background_after_seconds"])
+        if mode == "auto"
+        else None
+    )
     result = await _run_foreground_phase(
         process_manager,
         context,
         session_id,
-        yield_after,
+        background_after_seconds,
         mode=mode,
         command=command,
     )
@@ -433,18 +440,18 @@ async def bash_handler(
         return tool_failure(RUN_CANCELLED_FAILURE_CODE, RUN_CANCELLED_FAILURE_MESSAGE)
 
     if result["data"] is not None and result["data"].get("status") == "running":
-        # At depth auto mode outran yield_after but a Sub-Agent cannot hand off
+        # At depth auto mode outran background_after_seconds but a Sub-Agent cannot hand off
         # the process: kill and fail instead of spawning a watcher.
         if _background_blocked_at_depth(context):
             if timeout_task is not None:
                 timeout_task.cancel()
             await process_manager.kill(session_id, context.agent_id)
             suffix = await _failure_output_suffix(process_manager, context, session_id)
-            if yield_after is None:
+            if background_after_seconds is None:
                 raise RuntimeError("only auto mode may reach the Sub-Agent handoff boundary")
             return tool_failure(
                 BACKGROUND_AT_DEPTH_FAILURE_CODE,
-                _background_at_depth_timeout_message(yield_after) + suffix,
+                _background_at_depth_timeout_message(background_after_seconds) + suffix,
             )
         _maybe_spawn_completion_watcher(
             process_manager,
@@ -726,7 +733,7 @@ def _parse_arguments(arguments: JsonObject) -> JsonObject | str:
         "description",
         "mode",
         "workdir",
-        "yield_after",
+        "background_after_seconds",
         "timeout",
         "env_keys",
     }
@@ -741,15 +748,15 @@ def _parse_arguments(arguments: JsonObject) -> JsonObject | str:
     mode = arguments.get("mode", DEFAULT_EXECUTION_MODE)
     if not isinstance(mode, str) or mode not in BASH_EXECUTION_MODES:
         return "mode must be one of: foreground, auto, background"
-    if mode != "auto" and "yield_after" in arguments:
-        return "yield_after is only valid when mode is auto"
+    if mode != "auto" and "background_after_seconds" in arguments:
+        return "background_after_seconds is only valid when mode is auto"
 
     try:
         workdir = optional_string(arguments.get("workdir"), field_name="workdir")
         optional_string(arguments.get("description"), field_name="description")
-        yield_after = optional_number(
-            arguments.get("yield_after"),
-            field_name="yield_after",
+        background_after_seconds = optional_number(
+            arguments.get("background_after_seconds"),
+            field_name="background_after_seconds",
             default=None,
             minimum=0,
         )
@@ -770,7 +777,7 @@ def _parse_arguments(arguments: JsonObject) -> JsonObject | str:
         "command": command,
         "mode": mode,
         "workdir": workdir,
-        "yield_after": yield_after,
+        "background_after_seconds": background_after_seconds,
         "timeout": timeout,
         "env_keys": env_keys,
     }
@@ -1038,12 +1045,16 @@ async def _run_foreground_phase(
     process_manager: ProcessManager,
     context: ToolContext,
     session_id: str,
-    yield_after: float | None,
+    background_after_seconds: float | None,
     *,
     mode: str,
     command: str,
 ) -> JsonObject:
-    deadline = asyncio.get_running_loop().time() + yield_after if yield_after is not None else None
+    deadline = (
+        asyncio.get_running_loop().time() + background_after_seconds
+        if background_after_seconds is not None
+        else None
+    )
 
     while True:
         poll_result = await process_manager.poll(session_id, context.agent_id, timeout_ms=0)
@@ -1073,7 +1084,7 @@ async def _run_foreground_phase(
                 context,
                 session_id,
                 mode=mode,
-                handoff_after=yield_after,
+                handoff_after=background_after_seconds,
             )
 
         sleep_seconds = FOREGROUND_POLL_INTERVAL_SECONDS

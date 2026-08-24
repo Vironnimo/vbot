@@ -96,7 +96,7 @@ def test_discriminated_union_schema_supports_non_action_discriminators() -> None
                 "type": "object",
                 "properties": {
                     "command": {"type": "string"},
-                    "yield_after": {"type": "number"},
+                    "background_after_seconds": {"type": "number"},
                 },
                 "required": ["command"],
             },
@@ -110,12 +110,16 @@ def test_discriminated_union_schema_supports_non_action_discriminators() -> None
 
     assert set(branches["foreground"]["properties"]) == {"mode", "command"}
     assert branches["foreground"]["required"] == ["mode", "command"]
-    assert set(branches["auto"]["properties"]) == {"mode", "command", "yield_after"}
+    assert set(branches["auto"]["properties"]) == {"mode", "command", "background_after_seconds"}
     assert branches["auto"]["required"] == ["mode", "command"]
     contract.validate_arguments({"mode": "foreground", "command": "echo ok"})
-    contract.validate_arguments({"mode": "auto", "command": "echo ok", "yield_after": 30})
-    with pytest.raises(ToolContractError, match="yield_after"):
-        contract.validate_arguments({"mode": "foreground", "command": "echo ok", "yield_after": 30})
+    contract.validate_arguments(
+        {"mode": "auto", "command": "echo ok", "background_after_seconds": 30}
+    )
+    with pytest.raises(ToolContractError, match="background_after_seconds"):
+        contract.validate_arguments(
+            {"mode": "foreground", "command": "echo ok", "background_after_seconds": 30}
+        )
 
 
 def test_compile_accepts_explicitly_open_model_facing_object() -> None:
