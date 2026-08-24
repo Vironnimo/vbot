@@ -44,6 +44,14 @@ export async function ensureEmptyChat(chat) {
   );
   await expect(emptyChat).toBeVisible();
 
+  // The Sessions panel floats above the chat surface and intercepts pointer
+  // events on the timeline underneath, so it never stays open beyond this
+  // helper. Specs that need it open it explicitly.
+  if (await sessionDrawer.isVisible()) {
+    await chat.getByRole("button", { exact: true, name: "Sessions" }).click();
+    await expect(sessionDrawer).toBeHidden();
+  }
+
   return chat;
 }
 

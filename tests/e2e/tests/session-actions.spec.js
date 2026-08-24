@@ -7,7 +7,10 @@ test("Session actions rename, override Compaction Policy, and delete a Session",
 }) => {
   const chat = await startIsolatedChat(page, { agentName: "Main" });
   const drawer = chat.getByRole("complementary", { name: "Sessions" });
+  await chat.getByRole("button", { exact: true, name: "Sessions" }).click();
+  await expect(drawer).toBeVisible();
   const sessionItems = drawer.getByRole("listitem");
+  await expect(sessionItems.first()).toBeVisible();
   const previousCount = await sessionItems.count();
 
   let selectedSession = drawer.locator(

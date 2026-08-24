@@ -7,6 +7,8 @@ test("learn authors a private Skill and reflect creates a review Fork", async ({
 }) => {
   const chat = await startIsolatedChat(page, { agentName: "Main" });
   const drawer = chat.getByRole("complementary", { name: "Sessions" });
+  await chat.getByRole("button", { exact: true, name: "Sessions" }).click();
+  await expect(drawer).toBeVisible();
 
   await sendChatMessage(
     chat,
