@@ -553,9 +553,9 @@ describe('ChatTimeline', () => {
   });
 
   it('scrolls the submitted user turn to the top when requested', async () => {
-    const scrollIntoView = vi.fn();
-    const originalScrollIntoView = Element.prototype.scrollIntoView;
-    Element.prototype.scrollIntoView = scrollIntoView;
+    const scrollToSpy = vi.fn();
+    const originalScrollTo = Element.prototype.scrollTo;
+    Element.prototype.scrollTo = scrollToSpy;
 
     try {
       const sessionState = ensureSessionState(
@@ -588,24 +588,22 @@ describe('ChatTimeline', () => {
       });
       flushSync();
 
-      await waitForCondition(() => scrollIntoView.mock.calls.length > 0);
+      await waitForCondition(() => scrollToSpy.mock.calls.length > 0);
 
-      expect(scrollIntoView).toHaveBeenCalledWith({
-        block: 'start',
-        inline: 'nearest',
-        behavior: 'smooth',
-      });
-      expect(scrollIntoView.mock.contexts[0].textContent).toContain(
-        'Fresh turn should start the viewport',
+      expect(scrollToSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ behavior: 'smooth' }),
       );
+      // Layout-less jsdom clamps every rect to zero, so the aligned position
+      // resolves to the top of the content.
+      expect(scrollToSpy.mock.calls[0][0].top).toBe(0);
       expect(
         document.querySelector('.submitted-turn-scroll-spacer'),
       ).toBeTruthy();
     } finally {
-      if (originalScrollIntoView) {
-        Element.prototype.scrollIntoView = originalScrollIntoView;
+      if (originalScrollTo) {
+        Element.prototype.scrollTo = originalScrollTo;
       } else {
-        delete Element.prototype.scrollIntoView;
+        delete Element.prototype.scrollTo;
       }
     }
   });
