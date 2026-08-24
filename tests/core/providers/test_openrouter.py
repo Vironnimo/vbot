@@ -14,9 +14,11 @@ from core.models.models import Capabilities, Model, ModelRegistry, ReasoningCapa
 from core.models.query import ModelQuery
 from core.providers.errors import ProviderError, ProviderRateLimitError
 from core.providers.openrouter import (
+    _REASONING_TRAILING_NEWLINES_STATE_KEY,
     OPENROUTER_RESPONSES_ENDPOINT,
     SUPPLEMENTARY_OUTPUT_MODALITIES,
     OpenRouterAdapter,
+    _collapse_reasoning_newline_runs,
     _is_claude_family,
     _normalize_image_parameters,
     _passthrough_from_detail,
@@ -1611,3 +1613,108 @@ async def test_send_429_delegates_to_shared_policy_with_retry_after(
     ):
         await openrouter_adapter.send(SAMPLE_MESSAGES, model_id="stealth/ox-alpha")
     assert exc_info.value.retry_after == 7
+
+
+def test_collapse_reasoning_newline_runs_collapses_interior_runs() -> None:
+    # Arrange
+    text = "first\n\n\n\n\n\n\n\n\nsecond"
+
+    # Act
+    collapsed = _collapse_reasoning_newline_runs(text, None)
+
+    # Assert
+    assert collapsed == "first\n\nsecond"
+
+
+def test_collapse_reasoning_newline_runs_keeps_paragraph_breaks() -> None:
+    # Arrange
+    text = "para one\n\npara two"
+
+    # Act
+    collapsed = _collapse_reasoning_newline_runs(text, None)
+
+    # Assert
+    assert collapsed == text
+
+
+def test_collapse_reasoning_newline_runs_bounds_cross_delta_run() -> None:
+    # Arrange
+    state: dict[str, Any] = {}
+
+    # Act
+    first = _collapse_reasoning_newline_runs("word\n", state)
+    second = _collapse_reasoning_newline_runs("\n\n\nnext", state)
+
+    # Assert
+    assert first == "word\n"
+    assert second == "\nnext"
+    assert "".join([first, second]).endswith("word\n\nnext")
+
+
+def test_collapse_reasoning_newline_runs_empty_fragment_keeps_trailing_state() -> None:
+    # Arrange
+    state: dict[str, Any] = {}
+    _collapse_reasoning_newline_runs("word\n\n", state)
+    assert state[_REASONING_TRAILING_NEWLINES_STATE_KEY] == 2
+
+    # Act
+    noise = _collapse_reasoning_newline_runs("\n\n\n", state)
+
+    # Assert
+    assert noise == ""
+    # The dropped fragment must not reset the emitted stream's trailing run.
+    assert state[_REASONING_TRAILING_NEWLINES_STATE_KEY] == 2
+    after = _collapse_reasoning_newline_runs("\nnext", state)
+    assert after == "next"
+
+
+def test_normalize_stream_chunk_collapses_reasoning_noise_only(
+    openrouter_adapter: OpenRouterAdapter,
+) -> None:
+    # Arrange
+    raw_chunk = {
+        "choices": [
+            {
+                "delta": {
+                    "content": "answer",
+                    "reasoning": "This\n\n\n\n\n\n\n\n\n trace",
+                },
+            }
+        ]
+    }
+    state: dict[str, Any] = {}
+
+    # Act
+    deltas = openrouter_adapter._normalize_stream_chunk(raw_chunk, set(), state)
+
+    # Assert
+    reasoning = [delta["text"] for delta in deltas if delta.get("type") == "reasoning_delta"]
+    content = [delta["text"] for delta in deltas if delta.get("type") == "content_delta"]
+    assert reasoning == ["This\n\n trace"]
+    assert content == ["answer"]
+
+
+def test_normalize_response_collapses_reasoning_newline_runs(
+    openrouter_adapter: OpenRouterAdapter,
+) -> None:
+    """Non-streaming responses get the same newline-run collapse."""
+
+    # Arrange
+    raw_response = {
+        "choices": [
+            {
+                "message": {
+                    "role": "assistant",
+                    "content": "ok",
+                    "reasoning": "why\n\n\n\n\n\n\n\n\nbecause",
+                },
+                "finish_reason": "stop",
+            }
+        ]
+    }
+
+    # Act
+    response = openrouter_adapter.normalize_response(raw_response, model_id="stealth/ox-alpha")
+
+    # Assert
+    assert response["reasoning"] == "why\n\nbecause"

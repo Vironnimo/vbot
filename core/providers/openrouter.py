@@ -5,7 +5,8 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
-from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
+import re
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterable, Mapping
 from dataclasses import dataclass, replace
 from typing import Any
 from urllib.parse import quote
@@ -83,6 +84,17 @@ OPENROUTER_RESPONSES_REQUEST_PARAMETERS = frozenset({"max_tokens", "max_output_t
 # rate limit with Retry-After, transient 5xx). Only other error statuses go
 # through OpenRouter's structured-body refinement in _classify_http_status.
 _OPENROUTER_SHARED_POLICY_STATUSES = frozenset({401, 403, 429, 502, 503, 504})
+
+# Some OpenRouter upstreams serialize visible reasoning summaries with runs of
+# bare newlines between word chunks (observed 2026-08-24 on stealth/ox-alpha:
+# nine "\n" separators per word gap). The visible reasoning text is display
+# material — replay round-trips the opaque ``reasoning_details`` meta untouched,
+# never this text — so vBot collapses any run longer than a paragraph break at
+# accumulation time. Runs spanning delta boundaries are handled statefully via
+# _REASONING_TRAILING_NEWLINES_STATE_KEY.
+MAX_REASONING_PARAGRAPH_NEWLINES = 2
+REASONING_NEWLINE_RUN_PATTERN = re.compile(r"\n{3,}")
+_REASONING_TRAILING_NEWLINES_STATE_KEY = "openrouter_reasoning_trailing_newlines"
 
 # Prompt caching for Claude-family models routed through OpenRouter. Anthropic
 # caches nothing unless a content block carries ``cache_control`` (verified live:
@@ -193,8 +205,15 @@ class OpenRouterAdapter(OpenAICompatibleAdapter):
         """Normalize either OpenRouter endpoint family."""
 
         if isinstance(response.get("output"), list):
-            return normalize_responses_response(response)
-        return super().normalize_response(response, model_id=model_id)
+            normalized = normalize_responses_response(response)
+        else:
+            normalized = super().normalize_response(response, model_id=model_id)
+        reasoning = normalized.get("reasoning")
+        if isinstance(reasoning, str) and reasoning:
+            # Non-streaming counterpart of the streamed newline-run collapse:
+            # a complete response has no delta boundaries, so one pass suffices.
+            normalized["reasoning"] = _collapse_reasoning_newline_runs(reasoning, None)
+        return normalized
 
     def _uses_all_turns_responses(self, model_id: str) -> bool:
         return model_id.split("::", 1)[0] in OPENROUTER_ALL_TURNS_RESPONSES_MODELS
@@ -214,11 +233,12 @@ class OpenRouterAdapter(OpenAICompatibleAdapter):
             # known-fatal classes (context/token limits, auth, billing, content
             # policy) stay fatal — see classify_in_band_provider_error.
             raise classify_in_band_provider_error(error, lenient_unknown=True)
-        return super()._normalize_stream_chunk(
+        normalized = super()._normalize_stream_chunk(
             raw_chunk,
             tool_call_slots,
             normalization_state=normalization_state,
         )
+        return _collapse_reasoning_delta_texts(normalized, normalization_state)
 
     def _classify_http_status(
         self,
@@ -336,6 +356,7 @@ class OpenRouterAdapter(OpenAICompatibleAdapter):
     ) -> AsyncIterator[dict[str, Any]]:
         response = await self._connect_responses_stream(payload)
         state = ResponsesStreamState()
+        newline_state: dict[str, Any] = {}
         event_lines: list[str] = []
         seen_finish_delta = False
         try:
@@ -343,13 +364,19 @@ class OpenRouterAdapter(OpenAICompatibleAdapter):
                 if line:
                     event_lines.append(line)
                     continue
-                for delta in iter_responses_sse_deltas_with_state(event_lines, state):
+                for delta in _collapse_reasoning_delta_texts(
+                    iter_responses_sse_deltas_with_state(event_lines, state),
+                    newline_state,
+                ):
                     if delta.get("type") == "finish":
                         seen_finish_delta = True
                     yield delta
                 event_lines = []
             if event_lines:
-                for delta in iter_responses_sse_deltas_with_state(event_lines, state):
+                for delta in _collapse_reasoning_delta_texts(
+                    iter_responses_sse_deltas_with_state(event_lines, state),
+                    newline_state,
+                ):
                     if delta.get("type") == "finish":
                         seen_finish_delta = True
                     yield delta
@@ -828,6 +855,62 @@ def _openrouter_routing_options(
             key=lambda item: (item[1].casefold(), item[0]),
         )
     ]
+
+
+def _collapse_reasoning_newline_runs(text: str, state: dict[str, Any] | None) -> str:
+    """Collapse newline-run noise in reasoning text, across delta boundaries.
+
+    Interior runs of three or more newlines collapse to one paragraph break.
+    A run split across consecutive deltas is bounded through the per-stream
+    ``state`` mapping: it tracks how many newlines the emitted stream ends
+    with so the next fragment's leading run cannot push the joined total past
+    a paragraph break. Without ``state`` each fragment collapses in isolation.
+    An empty result means this fragment was pure separator noise; the caller
+    drops it and the trailing-run tracking keeps its previous value.
+    """
+
+    trailing = 0
+    if state is not None:
+        stored = state.get(_REASONING_TRAILING_NEWLINES_STATE_KEY, 0)
+        trailing = stored if isinstance(stored, int) else 0
+    leading = len(text) - len(text.lstrip("\n"))
+    if trailing + leading > MAX_REASONING_PARAGRAPH_NEWLINES:
+        excess = trailing + leading - MAX_REASONING_PARAGRAPH_NEWLINES
+        text = text[excess:]
+    collapsed = REASONING_NEWLINE_RUN_PATTERN.sub(
+        "\n" * MAX_REASONING_PARAGRAPH_NEWLINES,
+        text,
+    )
+    if not collapsed:
+        return ""
+    if state is not None:
+        state[_REASONING_TRAILING_NEWLINES_STATE_KEY] = min(
+            MAX_REASONING_PARAGRAPH_NEWLINES,
+            len(collapsed) - len(collapsed.rstrip("\n")),
+        )
+    return collapsed
+
+
+def _collapse_reasoning_delta_texts(
+    deltas: Iterable[dict[str, Any]],
+    state: dict[str, Any] | None,
+) -> list[dict[str, Any]]:
+    """Rewrite ``reasoning_delta`` texts with newline runs collapsed.
+
+    Fragments that collapse to nothing are dropped entirely — Chat ignores
+    empty reasoning text anyway, and dropping keeps the visible delta stream
+    free of no-op events. Non-reasoning deltas pass through untouched.
+    """
+
+    result: list[dict[str, Any]] = []
+    for delta in deltas:
+        if delta.get("type") != "reasoning_delta":
+            result.append(delta)
+            continue
+        collapsed = _collapse_reasoning_newline_runs(str(delta.get("text", "")), state)
+        if collapsed:
+            result.append({"type": "reasoning_delta", "text": collapsed})
+    return result
 
 
 def _render_openrouter_reasoning(payload: dict[str, Any], intent: ReasoningIntent) -> None:
