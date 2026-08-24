@@ -1159,6 +1159,9 @@
             {settings}
             {clientsRefreshToken}
             {onOpenSetupGuide}
+            onCommit={commitSettings}
+            {onToast}
+            onError={(message) => reportSettingsError(message)}
           />
         </section>
 

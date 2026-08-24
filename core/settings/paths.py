@@ -216,6 +216,12 @@ _DEFINITIONS: tuple[SettingDefinition, ...] = (
         maximum=65535,
     ),
     _static(
+        "server.keep_awake",
+        "boolean",
+        "Prevent automatic system sleep while the server runs.",
+        default=False,
+    ),
+    _static(
         "appearance.language",
         "string",
         "Language used by the interactive interface.",
@@ -681,7 +687,10 @@ def build_effective_settings(raw_settings: JsonObject) -> JsonObject:
     providers = normalize_providers_settings(raw_settings.get("providers"))
     speech = normalize_speech_settings(raw_settings.get("speech"))
     return {
-        "server": {"port": port},
+        "server": {
+            "port": port,
+            "keep_awake": raw_settings.get("keep_awake") is True,
+        },
         "appearance": appearance,
         "skills": {
             "directories": normalize_skill_directories(raw_settings.get("skill_directories"))
@@ -1066,6 +1075,8 @@ def _reject_overlapping_operations(operations: list[SettingsPatchOperation]) -> 
 def _raw_path(public_path: tuple[str, ...]) -> tuple[str, ...]:
     if public_path == ("server", "port"):
         return ("server_port",)
+    if public_path == ("server", "keep_awake"):
+        return ("keep_awake",)
     prefix_mappings = {
         ("skills", "directories"): ("skill_directories",),
         ("extensions", "directories"): ("extension_directories",),

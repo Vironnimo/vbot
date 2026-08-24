@@ -467,6 +467,12 @@ class StubStorage:
             }
             self._settings = {**self._settings, "session_titles": normalized}
             updated_sections["session_titles"] = normalized
+        if "server" in settings_update:
+            updated_sections["server"] = {}
+            if "keep_awake" in settings_update["server"]:
+                keep_awake = settings_update["server"]["keep_awake"] is True
+                self._settings = {**self._settings, "keep_awake": keep_awake}
+                updated_sections["server"] = {"keep_awake": keep_awake}
         return updated_sections
 
     def load_extensions_settings(self) -> JsonObject:

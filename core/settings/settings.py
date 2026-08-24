@@ -74,6 +74,7 @@ SETTINGS_UPDATE_SECTIONS = frozenset(
     {
         "appearance",
         "debug",
+        "server",
         "skills",
         "subagents",
         "compaction",
@@ -132,6 +133,9 @@ def parse_settings_update(params: Mapping[str, Any]) -> JsonObject:
 
     if "debug" in params:
         parsed_update["debug"] = _parse_debug_update(params["debug"])
+
+    if "server" in params:
+        parsed_update["server"] = _parse_server_update(params["server"])
 
     if "defaults" in params:
         parsed_update["defaults"] = _parse_defaults_update(params["defaults"])
@@ -869,6 +873,27 @@ def _parse_debug_update(debug: Any) -> JsonObject:
         if trace_limit > 500:
             raise SettingsValidationError("params.debug.trace_limit must not exceed 500")
         parsed["trace_limit"] = trace_limit
+
+    return parsed
+
+
+def _parse_server_update(server: Any) -> JsonObject:
+    if not isinstance(server, dict):
+        raise SettingsValidationError("params.server must be an object")
+
+    unsupported_fields = sorted(set(server) - {"keep_awake"})
+    if unsupported_fields:
+        raise SettingsValidationError(
+            f"unsupported server settings: {', '.join(unsupported_fields)}"
+        )
+
+    parsed: JsonObject = {}
+
+    if "keep_awake" in server:
+        keep_awake = server["keep_awake"]
+        if not isinstance(keep_awake, bool):
+            raise SettingsValidationError("params.server.keep_awake must be a boolean")
+        parsed["keep_awake"] = keep_awake
 
     return parsed
 

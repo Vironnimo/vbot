@@ -70,6 +70,7 @@ KNOWN_RAW_SETTINGS_KEYS = frozenset(
         "defaults",
         "extension_directories",
         "extensions",
+        "keep_awake",
         "local_models",
         "max_subagent_depth",
         "max_subagents_per_turn",
@@ -254,6 +255,8 @@ def validate_settings_data(data: Any) -> list[JsonDiagnostic]:
         required=False,
     )
     _validate_speech(diagnostics, data.get("speech"))
+    if "keep_awake" in data and not isinstance(data["keep_awake"], bool):
+        _error(diagnostics, "$.keep_awake", "must be a boolean")
     for field in SUBAGENT_SETTING_FIELDS:
         _validate_positive_integer(diagnostics, f"$.{field}", data.get(field), required=False)
     _validate_compaction(diagnostics, data.get("compaction"))
