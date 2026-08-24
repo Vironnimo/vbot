@@ -36,6 +36,7 @@
     projectTeam as normalizeProjectTeam,
     normalizeScanReport,
   } from '../lib/projectsView.js';
+  import { reflectionTaskRows } from '../lib/chatTimelinePresentation.js';
   import ChatActivityPanel from './chat/ChatActivityPanel.svelte';
   import ChatHeader from './chat/ChatHeader.svelte';
   import ProjectScanBanner from './chat/ProjectScanBanner.svelte';
@@ -1622,6 +1623,21 @@
     });
   };
 
+  // A reflection review lives in a same-Agent fork; opening it is ordinary
+  // same-agent session navigation, not sub-agent navigation, so no child
+  // banner appears and the fork's live Run streams like any other session.
+  const handleOpenReflection = (row) => {
+    const sessionId = String(row?.sessionId ?? '').trim();
+    if (!sessionId) {
+      return;
+    }
+    void handleSessionSelected(
+      sessionId,
+      activeSessionState?.agentId ?? '',
+      false,
+    );
+  };
+
   const handleTranscriptionError = (message) => {
     setSessionActionError(message);
   };
@@ -2151,7 +2167,9 @@
         timelineItems={activeTimelineItems}
         subAgentStatuses={chatState.subAgentStatuses}
         backgroundBashStatuses={activeSessionState?.backgroundBashStatuses}
+        reflectionTasks={reflectionTaskRows(activeSessionState)}
         onNavigateToSubAgent={handleNavigateToSubAgentLink}
+        onOpenReflection={handleOpenReflection}
         onCancelSubAgent={handleCancelSubAgent}
         onCancelBackgroundProcess={handleCancelBackgroundProcess}
       />

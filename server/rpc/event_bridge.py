@@ -35,6 +35,7 @@ from core.runs import (
     QueuedRunItem,
     Run,
     RunEvent,
+    RunKind,
 )
 from core.subagents import (
     SUBAGENT_SESSION_STARTED_EVENT,
@@ -59,6 +60,45 @@ JsonObject = dict[str, Any]
 _LOGGER = logging.getLogger("vbot.server.rpc.event_bridge")
 DEFAULT_BRIDGED_RUN_RETENTION_LIMIT = 1024
 
+# Public payload field carrying the Session a background review fork reviews.
+RUN_SOURCE_SESSION_FIELD = "source_session_id"
+# Reflection Runs execute in a same-Agent fork; only these kinds carry source
+# provenance worth resolving for accessors.
+REFLECTION_RUN_KIND_VALUES = frozenset(
+    kind.value for kind in (RunKind.REFLECTION, RunKind.MEMORY_REFLECTION, RunKind.SKILL_REFLECTION)
+)
+
+
+def reflection_source_session_id(sessions: Any, run: Run) -> str:
+    """Resolve the source Session a reflection review fork belongs to.
+
+    The fork's metadata sidecar self-describes its origin through the
+    ``fork_source`` provenance key written by the Session fork; accessors need
+    that link to project the running or finished review onto its originating
+    Session. Non-reflection Runs, missing session storage, and unreadable
+    provenance yield an empty string so payloads stay unchanged.
+    """
+    if run.run_kind.value not in REFLECTION_RUN_KIND_VALUES:
+        return ""
+    if sessions is None or not callable(getattr(sessions, "get_metadata", None)):
+        return ""
+    try:
+        metadata = sessions.get_metadata(run.agent_id, run.session_id, run.project_id)
+    except Exception:
+        _LOGGER.warning(
+            "Reflection fork provenance unavailable",
+            exc_info=True,
+            extra={"session_id": run.session_id},
+        )
+        return ""
+    fork_source = metadata.get("fork_source") if isinstance(metadata, dict) else None
+    if not isinstance(fork_source, dict):
+        return ""
+    source_session_id = fork_source.get("session_id")
+    if isinstance(source_session_id, str) and source_session_id:
+        return source_session_id
+    return ""
+
 
 def _bridge_run_to_event_bus(state: Any, run: Run) -> None:
     event_bus = getattr(state, "event_bus", None)
@@ -72,6 +112,9 @@ def _bridge_run_to_event_bus(state: Any, run: Run) -> None:
             event_bus,
             run,
             file_delivery=getattr(state, "file_delivery", None),
+            source_session_id=reflection_source_session_id(
+                getattr(getattr(state, "runtime", None), "chat_sessions", None), run
+            ),
         )
     )
     task.add_done_callback(_on_run_event_bridge_done)
@@ -189,11 +232,16 @@ async def _publish_run_events(
     run: Run,
     *,
     file_delivery: Any | None = None,
+    source_session_id: str = "",
 ) -> None:
     async for event in run.subscribe():
         if event.type in RUN_DELTA_EVENT_TYPES:
             continue
-        summary = _server_event_from_run_event(event, file_delivery=file_delivery)
+        summary = _server_event_from_run_event(
+            event,
+            file_delivery=file_delivery,
+            source_session_id=source_session_id,
+        )
         event_bus.publish(summary["type"], summary["payload"])
         if event.type in RUN_TERMINAL_EVENT_TYPES:
             event_bus.publish(
@@ -213,6 +261,7 @@ def _server_event_from_run_event(
     event: RunEvent,
     *,
     file_delivery: Any | None = None,
+    source_session_id: str = "",
 ) -> JsonObject:
     payload: JsonObject = {
         "run_id": event.run_id,
@@ -226,6 +275,8 @@ def _server_event_from_run_event(
         "run_event_sequence": event.sequence,
         "run_event_timestamp": event.timestamp,
     }
+    if source_session_id:
+        payload[RUN_SOURCE_SESSION_FIELD] = source_session_id
     if not event.contributes_to_agent_activity:
         payload[RUN_AGENT_ACTIVITY_FIELD] = False
     if event.type in RUN_OUTPUT_EVENT_TYPES or event.type == RUN_STARTED_EVENT:

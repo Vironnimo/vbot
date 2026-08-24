@@ -1148,3 +1148,65 @@ def test_websocket_handshake_active_runs_lists_running_with_sse_url_and_omits_te
             "sse_url": "/api/runs/run-running/events",
         }
     ]
+
+
+def test_websocket_handshake_reflection_run_carries_source_session(
+    tmp_path: Path,
+) -> None:
+    """A running reflection Run's snapshot entry resolves the reviewed source
+    Session from the fork's provenance sidecar so the WebUI can project the
+    review onto its originating Session."""
+    runtime = StubRuntime(tmp_path, StubAdapter())
+    app = create_app(runtime=cast(Any, runtime))
+
+    sessions = runtime.chat_sessions
+    source = sessions.create("coder", session_id="session-source")
+    fork = sessions.create("coder", session_id="session-fork")
+    sessions.set_metadata(
+        "coder",
+        fork.id,
+        {"fork_source": {"agent_id": "coder", "session_id": source.id}},
+    )
+
+    reflection_run = cast(
+        Any,
+        type(
+            "StubRun",
+            (),
+            {
+                "id": "run-refl",
+                "agent_id": "coder",
+                "project_id": None,
+                "session_id": fork.id,
+                "run_kind": RunKind.MEMORY_REFLECTION,
+                "status": RunStatus.RUNNING,
+                "created_at": "2026-05-03T14:30:01+00:00",
+                "iteration_count": 0,
+            },
+        )(),
+    )
+
+    with TestClient(app) as client:
+        _override_bus_epoch(app.state.event_bus, epoch="epoch-abc")
+
+        chat_runs: ChatRunManager = app.state.chat_runs
+        active_snapshot = _attach_chat_runs_active_runs(chat_runs)
+        active_snapshot.append(reflection_run)
+
+        with client.websocket_connect("/ws") as websocket:
+            hello = websocket.receive_json()
+
+    assert hello["active_runs"] == [
+        {
+            "run_id": "run-refl",
+            "agent_id": "coder",
+            "project_id": None,
+            "session_id": fork.id,
+            "run_kind": "memory_reflection",
+            "status": "running",
+            "started_at": "2026-05-03T14:30:01+00:00",
+            "iteration_count": 0,
+            "sse_url": "/api/runs/run-refl/events",
+            "source_session_id": source.id,
+        }
+    ]

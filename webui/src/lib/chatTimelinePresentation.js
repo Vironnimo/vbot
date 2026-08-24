@@ -1356,6 +1356,72 @@ function backgroundBashDotStatus(status) {
   return 'running';
 }
 
+// Reflection reviews execute in a same-Agent fork whose lifecycle events carry
+// the reviewed source session. These helpers map the run-kind vocabulary onto
+// Activity-panel presentation and project the per-source tracking entries
+// written by chatRunStream into sortable panel rows.
+export const REFLECTION_RUN_KIND_SCOPES = {
+  memory_reflection: 'memory',
+  skill_reflection: 'skill',
+  reflection: 'combined',
+};
+
+export const isReflectionRunKind = (runKind) =>
+  typeof runKind === 'string' && runKind in REFLECTION_RUN_KIND_SCOPES;
+
+export const reflectionScopeForRunKind = (runKind) =>
+  isReflectionRunKind(runKind) ? REFLECTION_RUN_KIND_SCOPES[runKind] : '';
+
+export const reflectionTaskRows = (sessionState) => {
+  const entries = isPlainObject(sessionState?.reflectionTasks)
+    ? sessionState.reflectionTasks
+    : {};
+  return Object.entries(entries)
+    .filter(
+      ([, entry]) =>
+        isPlainObject(entry) &&
+        typeof entry.sessionId === 'string' &&
+        entry.sessionId.length > 0,
+    )
+    .map(([runId, entry]) => ({
+      runId,
+      sessionId: entry.sessionId,
+      runKind: entry.runKind,
+      scope: reflectionScopeForRunKind(entry.runKind),
+      status:
+        typeof entry.status === 'string' && entry.status
+          ? entry.status
+          : 'running',
+      startedAt: typeof entry.startedAt === 'string' ? entry.startedAt : '',
+    }))
+    .sort((left, right) => {
+      const activeDifference =
+        Number(right.status === 'running') - Number(left.status === 'running');
+      return (
+        activeDifference ||
+        (Date.parse(right.startedAt) || 0) - (Date.parse(left.startedAt) || 0)
+      );
+    });
+};
+
+// Coarse elapsed time for a running review; the panel re-renders it from a
+// ticking clock only while the panel is open with running reflections.
+export const reflectionElapsedLabel = (startedAt, nowMs) => {
+  const startedMs = Date.parse(startedAt);
+  if (Number.isNaN(startedMs) || !Number.isFinite(nowMs)) {
+    return '';
+  }
+  const elapsedMs = Math.max(0, nowMs - startedMs);
+  if (elapsedMs < 60_000) {
+    return t('chat.activity.reflectionElapsedSeconds', '{count}s', {
+      count: Math.floor(elapsedMs / 1000),
+    });
+  }
+  return t('chat.activity.reflectionElapsedMinutes', '{count}m', {
+    count: Math.floor(elapsedMs / 60_000),
+  });
+};
+
 // Extracts one terminal sub-agent Run's final response. A visible Assistant turn
 // is not final until its exact Run Summary follows it.
 export const subAgentResultTextFromMessages = (messages, runId = '') => {

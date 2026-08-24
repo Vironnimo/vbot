@@ -1620,3 +1620,147 @@ describe('createChatRunStream() project-agent address reconstruction', () => {
     ).toBe('running');
   });
 });
+
+describe('reflection review tracking', () => {
+  let chatState;
+  const SOURCE_SESSION_ID = 'session-source';
+
+  beforeEach(() => {
+    chatState = createChatState();
+  });
+
+  function reflectionServerEvent(type, overrides = {}) {
+    return {
+      type,
+      payload: {
+        run_id: 'run-refl-1',
+        agent_id: 'alpha',
+        project_id: null,
+        session_id: 'session-fork',
+        run_kind: 'memory_reflection',
+        run_event_type: type,
+        run_event_sequence: 1,
+        run_event_timestamp: '2026-08-24T10:00:00.000Z',
+        contributes_to_agent_activity: false,
+        source_session_id: SOURCE_SESSION_ID,
+        status: type === 'run_started' ? 'running' : 'completed',
+        ...overrides,
+      },
+    };
+  }
+
+  function sourceReflectionTasks() {
+    return chatState.sessions[`${'alpha'}::${SOURCE_SESSION_ID}`]
+      ?.reflectionTasks;
+  }
+
+  it('creates a running tracking entry on the reviewed source session', () => {
+    const harness = makeStreamHarness({ chatState });
+
+    harness.stream.handleServerEvents(reflectionServerEvent('run_started'));
+
+    expect(sourceReflectionTasks()).toEqual({
+      'run-refl-1': {
+        sessionId: 'session-fork',
+        runKind: 'memory_reflection',
+        status: 'running',
+        startedAt: '2026-08-24T10:00:00.000Z',
+      },
+    });
+  });
+
+  it('settles the entry on a terminal event and preserves the start timestamp', () => {
+    const harness = makeStreamHarness({ chatState });
+
+    harness.stream.handleServerEvents(reflectionServerEvent('run_started'));
+    harness.stream.handleServerEvents(
+      reflectionServerEvent('run_completed', {
+        run_event_sequence: 2,
+        run_event_timestamp: '2026-08-24T10:05:00.000Z',
+      }),
+    );
+
+    expect(sourceReflectionTasks()['run-refl-1']).toMatchObject({
+      sessionId: 'session-fork',
+      status: 'completed',
+      startedAt: '2026-08-24T10:00:00.000Z',
+    });
+  });
+
+  it('ignores non-reflection runs and reflection events without source provenance', () => {
+    const harness = makeStreamHarness({ chatState });
+    const userRunEvent = {
+      type: 'run_started',
+      payload: {
+        run_id: 'run-user',
+        agent_id: 'alpha',
+        session_id: SOURCE_SESSION_ID,
+        run_kind: 'user',
+        run_event_type: 'run_started',
+        run_event_sequence: 1,
+        run_event_timestamp: '2026-08-24T10:00:00.000Z',
+      },
+    };
+
+    harness.stream.handleServerEvents(userRunEvent);
+    harness.stream.handleServerEvents(
+      reflectionServerEvent('run_started', { source_session_id: '' }),
+    );
+
+    expect(chatState.sessions[`alpha::${SOURCE_SESSION_ID}`]).toBeTruthy();
+    expect(
+      chatState.sessions[`alpha::${SOURCE_SESSION_ID}`].reflectionTasks,
+    ).toEqual({});
+  });
+
+  it('seeds running reflections from the connection snapshot, drops stale running entries, and keeps finished ones', () => {
+    const harness = makeStreamHarness({ chatState });
+    const source = ensureSessionState(chatState, 'alpha', SOURCE_SESSION_ID);
+    source.reflectionTasks = {
+      'run-stale': {
+        sessionId: 'session-fork-old',
+        runKind: 'skill_reflection',
+        status: 'running',
+        startedAt: '2026-08-24T09:00:00.000Z',
+      },
+      'run-finished': {
+        sessionId: 'session-fork-done',
+        runKind: 'memory_reflection',
+        status: 'completed',
+        startedAt: '2026-08-24T08:00:00.000Z',
+      },
+    };
+
+    harness.stream.applyConnectionSnapshot({
+      type: 'connection_ready',
+      active_runs: [
+        {
+          run_id: 'run-refl-live',
+          agent_id: 'alpha',
+          session_id: 'session-fork',
+          run_kind: 'memory_reflection',
+          source_session_id: SOURCE_SESSION_ID,
+          status: 'running',
+          started_at: '2026-08-24T11:00:00.000Z',
+          sse_url: '/api/runs/run-refl-live/events',
+          contributes_to_agent_activity: false,
+        },
+      ],
+    });
+
+    expect(source.reflectionTasks).toEqual({
+      'run-refl-live': {
+        sessionId: 'session-fork',
+        runKind: 'memory_reflection',
+        status: 'running',
+        startedAt: '2026-08-24T11:00:00.000Z',
+      },
+      'run-finished': {
+        sessionId: 'session-fork-done',
+        runKind: 'memory_reflection',
+        status: 'completed',
+        startedAt: '2026-08-24T08:00:00.000Z',
+      },
+    });
+  });
+});

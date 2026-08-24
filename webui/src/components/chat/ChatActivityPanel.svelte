@@ -8,6 +8,7 @@
     changeStatsLabel,
     changeStatsParts,
     changeStatsTooltip,
+    reflectionElapsedLabel,
   } from '$lib/chatTimelinePresentation.js';
   import { t } from '$lib/i18n.js';
   import { tooltip } from '$lib/tooltip.js';
@@ -18,7 +19,9 @@
     timelineItems = [],
     subAgentStatuses = {},
     backgroundBashStatuses = {},
+    reflectionTasks = [],
     onNavigateToSubAgent = () => {},
+    onOpenReflection = () => {},
     onCancelSubAgent = () => {},
     onCancelBackgroundProcess = () => {},
   } = $props();
@@ -34,7 +37,15 @@
   let finishedTasks = $derived(
     tasks.filter((task) => task.dotStatus !== 'running'),
   );
-  let runningTaskCount = $derived(activeTasks.length);
+  let activeReflections = $derived(
+    reflectionTasks.filter((row) => row.status === 'running'),
+  );
+  let finishedReflections = $derived(
+    reflectionTasks.filter((row) => row.status !== 'running'),
+  );
+  let runningTaskCount = $derived(
+    activeTasks.length + activeReflections.length,
+  );
   let sessionStats = $derived(sessionChangeStats(timelineItems));
   let sessionStatsParts = $derived(changeStatsParts(sessionStats));
   let sessionStatsTooltip = $derived(changeStatsTooltip(sessionStats));
@@ -66,11 +77,26 @@
     }
   });
 
+  // Elapsed time for running reflections ticks only while the panel is open
+  // and at least one review is running; Svelte owns cleanup via this effect.
+  let nowMs = $state(Date.now());
+  $effect(() => {
+    const needsClock = open && activeReflections.length > 0;
+    if (!needsClock) {
+      return;
+    }
+    nowMs = Date.now();
+    const intervalId = setInterval(() => {
+      nowMs = Date.now();
+    }, 1000);
+    return () => clearInterval(intervalId);
+  });
+
   const statusLabel = (status) => {
     if (status === 'running') {
       return t('chat.activity.status.running', 'Working');
     }
-    if (status === 'success') {
+    if (status === 'success' || status === 'completed') {
       return t('chat.activity.status.completed', 'Completed');
     }
     if (status === 'failed') {
@@ -79,8 +105,36 @@
     if (status === 'cancelled') {
       return t('chat.activity.status.cancelled', 'Cancelled');
     }
+    if (status === 'interrupted') {
+      return t('chat.activity.status.interrupted', 'Interrupted');
+    }
     return t('chat.activity.status.unknown', 'Unknown');
   };
+
+  // The panel's status icons key off the shared dot vocabulary; reflection
+  // rows arrive with run-status words, so they map onto the same symbols.
+  const reflectionDotStatus = (status) =>
+    status === 'running'
+      ? 'running'
+      : status === 'completed'
+        ? 'success'
+        : status;
+
+  const reflectionScopeLabel = (row) => {
+    if (row.scope === 'memory') {
+      return t('chat.activity.reflectionScope.memory', 'Memory review');
+    }
+    if (row.scope === 'skill') {
+      return t('chat.activity.reflectionScope.skill', 'Skill review');
+    }
+    return t('chat.activity.reflectionScope.combined', 'Memory & skill review');
+  };
+
+  const reflectionRowLabel = (row) =>
+    t('chat.activity.reflectionOpenAria', 'Open {scope} Session · {status}', {
+      scope: reflectionScopeLabel(row),
+      status: statusLabel(row.status),
+    });
 
   const taskLabel = (task) => {
     if (task.kind === 'bash') {
@@ -111,7 +165,6 @@
   };
 
   const isTaskCancelling = (task) => cancellingTaskIds.has(task.id);
-
   const handleCancelTask = async (task) => {
     if (isTaskCancelling(task)) {
       return;
@@ -231,6 +284,44 @@
   {/if}
 {/snippet}
 
+{#snippet reflectionRow(row)}
+  <div class="chat-activity__task-row">
+    <Button
+      variant="tertiary"
+      class="chat-activity__task-link"
+      ariaLabel={reflectionRowLabel(row)}
+      disabled={!row.sessionId}
+      onClick={() => row.sessionId && onOpenReflection(row)}
+    >
+      <span class="chat-activity__reflection-mark" aria-hidden="true">
+        <svg
+          viewBox="0 0 14 14"
+          width="11"
+          height="11"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.35"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        >
+          <path d="M10.9 6.9A4.1 4.1 0 1 1 9.65 4" />
+          <path d="M9.65 1.9V4h-2.1" />
+          <path d="M11.1 1.7v2.2M10 2.8h2.2" />
+        </svg>
+      </span>
+      <span class="chat-activity__task-name">
+        {reflectionScopeLabel(row)}
+        {#if row.status === 'running' && reflectionElapsedLabel(row.startedAt, nowMs)}
+          <span class="chat-activity__reflection-elapsed">
+            · {reflectionElapsedLabel(row.startedAt, nowMs)}
+          </span>
+        {/if}
+      </span>
+    </Button>
+    {@render statusIcon({ dotStatus: reflectionDotStatus(row.status) })}
+  </div>
+{/snippet}
+
 <div class:chat-activity--open={open} class="chat-activity">
   <Button
     variant="tertiary"
@@ -305,12 +396,12 @@
       </section>
 
       <div class="chat-activity__tasks">
-        {#if tasks.length === 0}
+        {#if tasks.length === 0 && reflectionTasks.length === 0}
           <p class="chat-activity__empty">
             {t('chat.activity.empty', 'No background tasks')}
           </p>
         {:else}
-          {#if activeTasks.length > 0}
+          {#if activeTasks.length > 0 || activeReflections.length > 0}
             <section
               class="chat-activity__group chat-activity__group--active"
               aria-labelledby="chat-activity-active-title"
@@ -321,15 +412,27 @@
               >
                 {t('chat.activity.active', 'Active')}
               </h3>
-              <ul class="chat-activity__task-list">
-                {#each activeTasks as task (task.id)}
-                  <li>{@render taskRow(task)}</li>
-                {/each}
-              </ul>
+              {#if activeTasks.length > 0}
+                <ul class="chat-activity__task-list">
+                  {#each activeTasks as task (task.id)}
+                    <li>{@render taskRow(task)}</li>
+                  {/each}
+                </ul>
+              {/if}
+              {#if activeReflections.length > 0}
+                <h4 class="chat-activity__subsection-title">
+                  {t('chat.activity.reflections', 'Reflections')}
+                </h4>
+                <ul class="chat-activity__task-list">
+                  {#each activeReflections as row (row.runId)}
+                    <li>{@render reflectionRow(row)}</li>
+                  {/each}
+                </ul>
+              {/if}
             </section>
           {/if}
 
-          {#if finishedTasks.length > 0}
+          {#if finishedTasks.length > 0 || finishedReflections.length > 0}
             <section
               class="chat-activity__group chat-activity__group--finished"
               aria-labelledby="chat-activity-finished-title"
@@ -340,11 +443,23 @@
               >
                 {t('chat.activity.finished', 'Finished')}
               </h3>
-              <ul class="chat-activity__task-list">
-                {#each finishedTasks as task (task.id)}
-                  <li>{@render taskRow(task)}</li>
-                {/each}
-              </ul>
+              {#if finishedTasks.length > 0}
+                <ul class="chat-activity__task-list">
+                  {#each finishedTasks as task (task.id)}
+                    <li>{@render taskRow(task)}</li>
+                  {/each}
+                </ul>
+              {/if}
+              {#if finishedReflections.length > 0}
+                <h4 class="chat-activity__subsection-title">
+                  {t('chat.activity.reflections', 'Reflections')}
+                </h4>
+                <ul class="chat-activity__task-list">
+                  {#each finishedReflections as row (row.runId)}
+                    <li>{@render reflectionRow(row)}</li>
+                  {/each}
+                </ul>
+              {/if}
             </section>
           {/if}
         {/if}
@@ -537,6 +652,30 @@
     font-weight: 500;
     letter-spacing: 0.06em;
     text-transform: uppercase;
+  }
+
+  .chat-activity__subsection-title {
+    margin: 0;
+    padding: 4px 8px 2px;
+    color: var(--text-lo);
+    font-family: var(--font-mono);
+    font-size: var(--fs-mono-xs);
+    font-weight: 400;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+
+  .chat-activity__reflection-mark {
+    display: inline-flex;
+    width: 10px;
+    flex: 0 0 10px;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-lo);
+  }
+
+  .chat-activity__reflection-elapsed {
+    color: var(--text-lo);
   }
 
   .chat-activity__task-list li + li {

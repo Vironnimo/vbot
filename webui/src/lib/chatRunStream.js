@@ -12,6 +12,7 @@ import {
   resetStaleRun,
   startRun,
 } from './chatState.js';
+import { isReflectionRunKind } from './chatTimelinePresentation.js';
 
 const SSE_RECONNECT_DELAY_MS = 500;
 const MAX_SSE_RECONNECT_ATTEMPTS = 3;
@@ -39,6 +40,16 @@ const RUN_SERVER_EVENT_TYPES = new Set([
   'run_failed',
   'run_interrupted',
 ]);
+const REFLECTION_TERMINAL_STATUSES = {
+  run_completed: 'completed',
+  run_failed: 'failed',
+  run_cancelled: 'cancelled',
+  run_interrupted: 'interrupted',
+};
+
+function isPlainObjectValue(value) {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
 
 // Session-scoped status keys are read against persisted spawn descriptors,
 // which carry the child's BARE agent id. Live `/ws` events arrive re-addressed
@@ -812,6 +823,7 @@ export function createChatRunStream({
     if (!event?.agent_id || !event?.session_id) {
       return;
     }
+    trackReflectionTask(event);
 
     const sessionState = ensureSessionState(
       chatState,
@@ -862,6 +874,37 @@ export function createChatRunStream({
     }
   }
 
+  // Reflection reviews are background Runs in a fork session; the server marks
+  // their lifecycle payloads with the reviewed source session so this tracking
+  // can project them onto that source's Activity panel without any extra RPC.
+  // Terminal events settle the entry in place; finished entries survive until
+  // the source session state is discarded.
+  function trackReflectionTask(event) {
+    if (!isReflectionRunKind(event.run_kind) || !event.source_session_id) {
+      return;
+    }
+    const sourceState = ensureSessionState(
+      chatState,
+      event.agent_id,
+      event.source_session_id,
+    );
+    const existing = sourceState.reflectionTasks[event.run_id] ?? {};
+    const terminalStatus = REFLECTION_TERMINAL_STATUSES[event.type];
+    sourceState.reflectionTasks = {
+      ...sourceState.reflectionTasks,
+      [event.run_id]: {
+        sessionId: event.session_id,
+        runKind: event.run_kind,
+        status: terminalStatus ?? 'running',
+        // The start timestamp stays the Run's first-seen time; a terminal
+        // event must not rewrite it into the completion moment.
+        startedAt: terminalStatus
+          ? existing.startedAt || event.timestamp || ''
+          : event.timestamp || existing.startedAt || '',
+      },
+    };
+  }
+
   function normalizedRunServerEvents(singleEvent, events) {
     const normalizedEvents = Array.isArray(events)
       ? events.filter(Boolean)
@@ -910,6 +953,13 @@ export function createChatRunStream({
       session_id: payload.session_id,
       ...(payload.contributes_to_agent_activity === false
         ? { contributes_to_agent_activity: false }
+        : {}),
+      ...(isReflectionRunKind(payload.run_kind)
+        ? { run_kind: payload.run_kind }
+        : {}),
+      ...(typeof payload.source_session_id === 'string' &&
+      payload.source_session_id
+        ? { source_session_id: payload.source_session_id }
         : {}),
       sequence: payload.run_event_sequence,
       timestamp: payload.run_event_timestamp,
@@ -1128,6 +1178,59 @@ export function createChatRunStream({
       }
     }
     updateSubAgentRunStatuses(subAgentUpdates, { replaceActive: true });
+
+    // Rebuild running reflection tracking from the authoritative snapshot.
+    // Finished entries survive so a review's outcome stays visible until its
+    // source session state is discarded; a running entry absent from the
+    // snapshot finished while this client was disconnected and is dropped.
+    const activeReflectionRuns = new Map();
+    for (const activeRun of activeRuns) {
+      if (
+        !activeRun?.run_id ||
+        !isReflectionRunKind(activeRun.run_kind) ||
+        typeof activeRun.source_session_id !== 'string' ||
+        !activeRun.source_session_id
+      ) {
+        continue;
+      }
+      activeReflectionRuns.set(activeRun.run_id, activeRun);
+    }
+    for (const sessionState of Object.values(chatState.sessions)) {
+      const entries = sessionState.reflectionTasks;
+      if (!isPlainObjectValue(entries)) {
+        continue;
+      }
+      let changed = false;
+      for (const [runId, entry] of Object.entries(entries)) {
+        if (entry?.status === 'running' && !activeReflectionRuns.has(runId)) {
+          delete entries[runId];
+          changed = true;
+        }
+      }
+      if (changed) {
+        sessionState.reflectionTasks = { ...entries };
+      }
+    }
+    for (const [runId, activeRun] of activeReflectionRuns) {
+      const agentAddress = formatAgentAddress(
+        activeRun.agent_id,
+        activeRun.project_id,
+      );
+      const sourceState = ensureSessionState(
+        chatState,
+        agentAddress,
+        activeRun.source_session_id,
+      );
+      sourceState.reflectionTasks = {
+        ...sourceState.reflectionTasks,
+        [runId]: {
+          sessionId: activeRun.session_id,
+          runKind: activeRun.run_kind,
+          status: 'running',
+          startedAt: activeRun.started_at ?? '',
+        },
+      };
+    }
 
     for (const activeRun of activeRuns) {
       if (!activeRun?.run_id || !activeRun.agent_id || !activeRun.session_id) {
