@@ -645,6 +645,63 @@ class TestStreamSSE:
 
     @respx.mock
     @pytest.mark.asyncio
+    async def test_stream_stop_with_native_network_error_raises_network_error(
+        self,
+        openai_adapter,
+    ):
+        """A stop that conceals native_finish_reason=network_error is not complete."""
+        chunk = {
+            "id": "gen-1",
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {"content": "", "role": "assistant"},
+                    "finish_reason": "stop",
+                    "native_finish_reason": "network_error",
+                }
+            ],
+        }
+        sse_body = f"data: {json.dumps(chunk)}\n\ndata: [DONE]\n\n"
+        respx.post(OPENAI_URL).mock(
+            return_value=httpx.Response(
+                200, text=sse_body, headers={"content-type": "text/event-stream"}
+            )
+        )
+
+        with pytest.raises(NetworkError, match="native_finish_reason=network_error"):
+            async for _ in openai_adapter.stream(SAMPLE_MESSAGES, model_id="gpt-5.2"):
+                pass
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_stream_stop_with_native_server_error_raises_retryable_provider_error(
+        self,
+        openai_adapter,
+    ):
+        """A stop that conceals native_finish_reason=server_error is retryable."""
+        chunk = {
+            "choices": [
+                {
+                    "delta": {"content": ""},
+                    "finish_reason": "stop",
+                    "native_finish_reason": "server_error",
+                }
+            ],
+        }
+        sse_body = f"data: {json.dumps(chunk)}\n\ndata: [DONE]\n\n"
+        respx.post(OPENAI_URL).mock(
+            return_value=httpx.Response(
+                200, text=sse_body, headers={"content-type": "text/event-stream"}
+            )
+        )
+
+        with pytest.raises(ProviderError, match="native_finish_reason=server_error") as caught:
+            async for _ in openai_adapter.stream(SAMPLE_MESSAGES, model_id="gpt-5.2"):
+                pass
+        assert caught.value.retryable is True
+
+    @respx.mock
+    @pytest.mark.asyncio
     async def test_stream_includes_stream_true_and_usage_request_in_payload(self, openai_adapter):
         """stream() sends stream=true and requests usage in the payload."""
         # Arrange

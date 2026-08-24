@@ -111,6 +111,9 @@ OPENAI_ERROR_FINISH_REASONS = {
     "network_error",
     "server_error",
 }
+# Transport failures some OpenRouter upstreams hide behind finish_reason=stop
+# plus native_finish_reason. These are not completed turns.
+OPENAI_NATIVE_TRANSPORT_FINISH_REASONS = frozenset({"network_error", "server_error"})
 DEFAULT_MAX_OUTPUT_TOKENS = 8192
 CONTEXT_WINDOW_KEYS = ("context_length", "context_window", "contextWindow")
 MAX_OUTPUT_TOKEN_KEYS = (
@@ -874,6 +877,12 @@ def _normalize_openai_stream_chunk(
 
         finish_reason = choice.get("finish_reason")
         if finish_reason is not None:
+            transport_failure = _openai_concealed_transport_failure(
+                finish_reason,
+                choice.get("native_finish_reason"),
+            )
+            if transport_failure is not None:
+                raise transport_failure
             normalized_deltas.append(
                 {
                     "type": "finish",
@@ -1028,6 +1037,32 @@ def _redirect_reused_tool_call_index(
     return raw_index
 
 
+def _openai_concealed_transport_failure(
+    finish_reason: Any,
+    native_finish_reason: Any,
+) -> NetworkError | ProviderError | None:
+    """Return a retryable error when ``stop`` conceals an upstream transport drop.
+
+    Observed 2026-08-24 on OpenRouter ``stealth/ox-alpha``: HTTP 200 SSE with
+    empty ``delta.content``, ``finish_reason=stop``, and
+    ``native_finish_reason=network_error``. Treating that as a completed stop
+    makes Chat try to persist an empty Assistant turn and die on validation,
+    with no stream restart.
+    """
+
+    if (
+        finish_reason != "stop"
+        or native_finish_reason not in OPENAI_NATIVE_TRANSPORT_FINISH_REASONS
+    ):
+        return None
+    if native_finish_reason == "network_error":
+        return NetworkError("Provider stream ended with native_finish_reason=network_error")
+    return ProviderError(
+        "Provider stream ended with native_finish_reason=server_error",
+        retryable=True,
+    )
+
+
 def _normalize_openai_finish_reason(
     finish_reason: Any,
     *,
@@ -1054,8 +1089,15 @@ def _extract_openai_terminal_outcome(
     choices = response.get("choices")
     if not isinstance(choices, list) or not choices or not isinstance(choices[0], dict):
         return TERMINAL_OUTCOME_UNKNOWN
+    choice = choices[0]
+    transport_failure = _openai_concealed_transport_failure(
+        choice.get("finish_reason"),
+        choice.get("native_finish_reason"),
+    )
+    if transport_failure is not None:
+        raise transport_failure
     return _normalize_openai_finish_reason(
-        choices[0].get("finish_reason"),
+        choice.get("finish_reason"),
         has_tool_calls=has_tool_calls,
     )
 

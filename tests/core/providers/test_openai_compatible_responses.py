@@ -10,6 +10,7 @@ from .openai_compatible_test_support import (
     SUCCESS_RESPONSE,
     Capabilities,
     Model,
+    NetworkError,
     OpenAICompatibleAdapter,
     ReasoningCapabilities,
     httpx,
@@ -149,6 +150,21 @@ class TestSendSuccess:
         normalized = openai_adapter.normalize_response(response)
 
         assert normalized["terminal_outcome"] == expected_outcome
+
+    def test_normalize_response_stop_with_native_network_error_raises(self, openai_adapter):
+        """Non-streaming stop + native network_error is not a completed turn."""
+        response = {
+            "choices": [
+                {
+                    "message": {"role": "assistant", "content": ""},
+                    "finish_reason": "stop",
+                    "native_finish_reason": "network_error",
+                }
+            ]
+        }
+
+        with pytest.raises(NetworkError, match="native_finish_reason=network_error"):
+            openai_adapter.normalize_response(response)
 
     def test_normalize_response_preserves_malformed_tool_json_as_rejected_call(
         self, openai_adapter
