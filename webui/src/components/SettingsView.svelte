@@ -149,6 +149,23 @@
               'Task-specific model bindings for speech, image, and embedding tools. These bindings are independent of agent and project defaults.',
             ),
         },
+      ],
+    },
+    {
+      id: 'conversation',
+      label: () => t('settings.groups.conversation', 'Conversation'),
+      sections: [
+        {
+          id: 'compaction',
+          labelKey: 'settings.compaction.title',
+          labelFallback: 'Compaction',
+          label: () => t('settings.compaction.title', 'Compaction'),
+          subtitle: () =>
+            t(
+              'settings.compaction.subtitle',
+              'Automatic summarizing when a conversation nears the model context limit.',
+            ),
+        },
         {
           id: 'session_titles',
           labelKey: 'settings.sessionTitles.title',
@@ -161,14 +178,14 @@
             ),
         },
         {
-          id: 'compaction',
-          labelKey: 'settings.compaction.title',
-          labelFallback: 'Compaction',
-          label: () => t('settings.compaction.title', 'Compaction'),
+          id: 'recall',
+          labelKey: 'settings.recall.title',
+          labelFallback: 'Recall',
+          label: () => t('settings.recall.title', 'Recall'),
           subtitle: () =>
             t(
-              'settings.compaction.subtitle',
-              'Automatic summarizing when a conversation nears the model context limit.',
+              'settings.recall.subtitle',
+              'How agents search past conversations.',
             ),
         },
       ],
@@ -186,17 +203,6 @@
             t(
               'settings.voice.subtitle',
               'Transcription audio and wakeword command settings.',
-            ),
-        },
-        {
-          id: 'recall',
-          labelKey: 'settings.recall.title',
-          labelFallback: 'Recall',
-          label: () => t('settings.recall.title', 'Recall'),
-          subtitle: () =>
-            t(
-              'settings.recall.subtitle',
-              'How agents search past conversations.',
             ),
         },
         {
@@ -234,28 +240,6 @@
         },
       ],
     },
-    ...(desktopCapabilities?.serverSelection
-      ? [
-          {
-            id: 'desktop',
-            label: () => t('settings.groups.desktop', 'Desktop app'),
-            sections: [
-              {
-                id: 'desktop_connection',
-                labelKey: 'settings.desktop.connection.title',
-                labelFallback: 'Connection',
-                label: () =>
-                  t('settings.desktop.connection.title', 'Connection'),
-                subtitle: () =>
-                  t(
-                    'settings.desktop.connection.subtitle',
-                    'Choose which vBot server this Desktop app connects to.',
-                  ),
-              },
-            ],
-          },
-        ]
-      : []),
     {
       id: 'system',
       label: () => t('settings.groups.system', 'System'),
@@ -293,6 +277,22 @@
               'Server address, data directory, and connected clients.',
             ),
         },
+        ...(desktopCapabilities?.serverSelection
+          ? [
+              {
+                id: 'desktop_connection',
+                labelKey: 'settings.desktop.connection.title',
+                labelFallback: 'Connection',
+                label: () =>
+                  t('settings.desktop.connection.title', 'Connection'),
+                subtitle: () =>
+                  t(
+                    'settings.desktop.connection.subtitle',
+                    'Choose which vBot server this Desktop app connects to.',
+                  ),
+              },
+            ]
+          : []),
       ],
     },
   ]);
@@ -923,7 +923,7 @@
         {/if}
 
         <div class="s-doc-group" data-settings-group="connect">
-          {groups[0].label()}
+          {groupById.get('connect').label()}
         </div>
 
         <section
@@ -973,7 +973,7 @@
         </section>
 
         <div class="s-doc-group" data-settings-group="models">
-          {groups[1].label()}
+          {groupById.get('models').label()}
         </div>
 
         <section
@@ -1006,6 +1006,25 @@
           />
         </section>
 
+        <div class="s-doc-group" data-settings-group="conversation">
+          {groupById.get('conversation').label()}
+        </div>
+
+        <section
+          class="s-section"
+          data-settings-section="compaction"
+          aria-labelledby="settings-section-compaction"
+        >
+          {@render sectionHeader(panelById.get('compaction'))}
+          <SettingsCompactionPanel
+            {settings}
+            onCommit={commitSettings}
+            {onToast}
+            onError={(message) => reportSettingsError(message)}
+            {modelsRefreshToken}
+          />
+        </section>
+
         <section
           class="s-section"
           data-settings-section="session_titles"
@@ -1023,21 +1042,20 @@
 
         <section
           class="s-section"
-          data-settings-section="compaction"
-          aria-labelledby="settings-section-compaction"
+          data-settings-section="recall"
+          aria-labelledby="settings-section-recall"
         >
-          {@render sectionHeader(panelById.get('compaction'))}
-          <SettingsCompactionPanel
+          {@render sectionHeader(panelById.get('recall'))}
+          <SettingsRecallPanel
             {settings}
             onCommit={commitSettings}
             {onToast}
             onError={(message) => reportSettingsError(message)}
-            {modelsRefreshToken}
           />
         </section>
 
         <div class="s-doc-group" data-settings-group="behavior">
-          {groups[2].label()}
+          {groupById.get('behavior').label()}
         </div>
 
         <section
@@ -1050,20 +1068,6 @@
             {agents}
             {settings}
             wakewordAvailable={desktopCapabilities?.wakeword === true}
-            onCommit={commitSettings}
-            {onToast}
-            onError={(message) => reportSettingsError(message)}
-          />
-        </section>
-
-        <section
-          class="s-section"
-          data-settings-section="recall"
-          aria-labelledby="settings-section-recall"
-        >
-          {@render sectionHeader(panelById.get('recall'))}
-          <SettingsRecallPanel
-            {settings}
             onCommit={commitSettings}
             {onToast}
             onError={(message) => reportSettingsError(message)}
@@ -1112,21 +1116,6 @@
           />
         </section>
 
-        {#if desktopCapabilities?.serverSelection}
-          <div class="s-doc-group" data-settings-group="desktop">
-            {groupById.get('desktop').label()}
-          </div>
-
-          <section
-            class="s-section"
-            data-settings-section="desktop_connection"
-            aria-labelledby="settings-section-desktop_connection"
-          >
-            {@render sectionHeader(panelById.get('desktop_connection'))}
-            <DesktopConnectionSettings {onToast} />
-          </section>
-        {/if}
-
         <div class="s-doc-group" data-settings-group="system">
           {groupById.get('system').label()}
         </div>
@@ -1172,6 +1161,17 @@
             {onOpenSetupGuide}
           />
         </section>
+
+        {#if desktopCapabilities?.serverSelection}
+          <section
+            class="s-section"
+            data-settings-section="desktop_connection"
+            aria-labelledby="settings-section-desktop_connection"
+          >
+            {@render sectionHeader(panelById.get('desktop_connection'))}
+            <DesktopConnectionSettings {onToast} />
+          </section>
+        {/if}
 
         <div
           class="settings-scroll-tail"
