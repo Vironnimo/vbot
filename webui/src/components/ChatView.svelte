@@ -120,6 +120,25 @@
   let generationSessionKey = '';
   let transientCardSeq = 0;
   let showSessionDrawer = $state(false);
+  // Live height of the floating composer stack over the timeline. The
+  // surface exposes it as a CSS variable so the timeline reserves matching
+  // bottom space and content scrolls out from behind the composer. Measured
+  // with a guarded ResizeObserver instead of bind:clientHeight, which would
+  // hard-require ResizeObserver even in layout-less environments.
+  let footerOverlayHeight = $state(0);
+  let footerStackElement = $state(null);
+
+  $effect(() => {
+    const element = footerStackElement;
+    if (!element || typeof ResizeObserver !== 'function') {
+      return undefined;
+    }
+    const observer = new ResizeObserver(() => {
+      footerOverlayHeight = element.clientHeight;
+    });
+    observer.observe(element);
+    return () => observer.disconnect();
+  });
   let sessionFilters = $state(null);
   let viewingSessionId = $state('');
   let viewingSessionAgentId = $state('');
@@ -1927,7 +1946,10 @@
     />
   {:else}
     <div class="chat-view__content-shell">
-      <div class="chat-view__surface">
+      <div
+        class="chat-view__surface"
+        style={`--chat-overlay-height: ${footerOverlayHeight}px`}
+      >
         <div class="chat-view__session-bar">
           <Button
             variant="secondary"
@@ -2021,6 +2043,7 @@
             {transientCards}
             {submittedTurnScrollKey}
             {submittedTurnScrollRunId}
+            bottomOverlayHeight={footerOverlayHeight}
             followSessionRequest={subAgentLinkFollowRequest}
             hasOlderHistory={activeSessionState?.hasOlderHistory === true}
             loadingOlderHistory={activeSessionState?.loadingOlderHistory ===
@@ -2033,7 +2056,7 @@
             onCancelSubAgent={handleCancelSubAgent}
           />
         </div>
-        <div class="chat-view__footer-stack">
+        <div class="chat-view__footer-stack" bind:this={footerStackElement}>
           {#if subAgentSessionActive}
             <Banner
               variant="info"
@@ -2285,12 +2308,27 @@
     overflow: hidden;
   }
 
+  /* The composer stack floats over the full-height timeline: content scrolls
+    out from behind it instead of the viewport shrinking with every composer
+    autosize. The stack itself is click-transparent (its gradient scrim lets
+    wheel and pointer input reach the timeline beneath); only the actual
+    banners, queue editor, and composer catch input. */
   .chat-view__footer-stack {
+    position: absolute;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    z-index: 3;
     display: flex;
-    flex-shrink: 0;
     flex-direction: column;
     min-height: 0;
-    background: var(--bg);
+    padding-top: 26px;
+    background: linear-gradient(to top, var(--bg) 72%, transparent);
+    pointer-events: none;
+  }
+
+  .chat-view__footer-stack > :global(*) {
+    pointer-events: auto;
   }
 
   :global(.chat-view__state-banner) {

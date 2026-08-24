@@ -608,6 +608,63 @@ describe('ChatTimeline', () => {
     }
   });
 
+  it('reserves the floating composer overlay height when aligning the submitted turn', async () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-submitted-turn-overlay',
+    );
+    appendRunEvent(sessionState, {
+      type: 'user_message_persisted',
+      run_id: 'run-submitted-turn-overlay',
+      sequence: 1,
+      payload: {
+        message: {
+          id: 'user-submitted-turn-overlay',
+          role: 'user',
+          content: 'Turn aligned above the floating composer',
+          timestamp: '2026-05-11T08:00:00',
+        },
+      },
+    });
+
+    mountedComponent = mount(ChatTimeline, {
+      target: document.body,
+      props: {
+        sessionState,
+        agentName: 'Alpha',
+        submittedTurnScrollKey: 1,
+        submittedTurnScrollRunId: 'run-submitted-turn-overlay',
+        bottomOverlayHeight: 200,
+      },
+    });
+    flushSync();
+
+    // The composer overlays the bottom 200px of a 600px viewport, so only
+    // 400px of unobstructed space count; the 300px of content needs a
+    // 100px spacer for the top alignment to be reachable.
+    const messages = document.querySelector('.messages');
+    Object.defineProperty(messages, 'scrollHeight', {
+      configurable: true,
+      get: () => 300,
+    });
+    Object.defineProperty(messages, 'clientHeight', {
+      configurable: true,
+      get: () => 600,
+    });
+    Object.defineProperty(messages, 'scrollTop', {
+      configurable: true,
+      writable: true,
+      value: 0,
+    });
+
+    await waitForCondition(
+      () =>
+        document.querySelector('.submitted-turn-scroll-spacer')?.style
+          .height === '100px',
+    );
+  });
+
   it('waits for the submitted run user event instead of scrolling the previous user message', async () => {
     const scrollIntoView = vi.fn();
     const originalScrollIntoView = Element.prototype.scrollIntoView;
