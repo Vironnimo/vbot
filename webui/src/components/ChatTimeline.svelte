@@ -48,6 +48,10 @@
     // placeholder so stepping through sessions does not flash it.
     loadingHistory = false,
     onLoadOlder = async () => false,
+    // Reports the scroller's real scrollbar width (0 with overlay
+    // scrollbars) so ChatView can keep the floating composer stack clear of
+    // the scrollbar column.
+    onScrollbarWidthChange = () => {},
   } = $props();
 
   const MIN_SUBMITTED_TURN_SPACER_HEIGHT = 360;
@@ -335,6 +339,22 @@
     });
     observer.observe(content);
     return () => observer.disconnect();
+  });
+
+  // The scroller's real scrollbar width (0 with overlay scrollbars), so the
+  // floating composer stack can end before the scrollbar column instead of
+  // covering it.
+  $effect(() => {
+    const container = scrollContainer;
+    if (!container) {
+      return undefined;
+    }
+    const reportWidth = () => {
+      onScrollbarWidthChange(container.offsetWidth - container.clientWidth);
+    };
+    reportWidth();
+    window.addEventListener('resize', reportWidth);
+    return () => window.removeEventListener('resize', reportWidth);
   });
 
   function timelineItemSignature(item) {

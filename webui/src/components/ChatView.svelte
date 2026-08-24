@@ -127,6 +127,9 @@
   // hard-require ResizeObserver even in layout-less environments.
   let footerOverlayHeight = $state(0);
   let footerStackElement = $state(null);
+  // Real scrollbar width of the chat scroller; the composer stack ends
+  // before this column so the scrollbar stays visible over its full height.
+  let chatScrollbarWidth = $state(0);
 
   $effect(() => {
     const element = footerStackElement;
@@ -1948,7 +1951,7 @@
     <div class="chat-view__content-shell">
       <div
         class="chat-view__surface"
-        style={`--chat-overlay-height: ${footerOverlayHeight}px`}
+        style={`--chat-overlay-height: ${footerOverlayHeight}px; --chat-scrollbar-width: ${chatScrollbarWidth}px`}
       >
         <div class="chat-view__session-bar">
           <Button
@@ -2044,6 +2047,9 @@
             {submittedTurnScrollKey}
             {submittedTurnScrollRunId}
             bottomOverlayHeight={footerOverlayHeight}
+            onScrollbarWidthChange={(width) => {
+              chatScrollbarWidth = width;
+            }}
             followSessionRequest={subAgentLinkFollowRequest}
             hasOlderHistory={activeSessionState?.hasOlderHistory === true}
             loadingOlderHistory={activeSessionState?.loadingOlderHistory ===
@@ -2315,7 +2321,9 @@
     banners, queue editor, and composer catch input. */
   .chat-view__footer-stack {
     position: absolute;
-    right: 0;
+    /* Ends before the timeline's scrollbar column so the scrollbar stays
+      visible over its full height instead of disappearing behind us. */
+    right: var(--chat-scrollbar-width, 0px);
     bottom: 0;
     left: 0;
     z-index: 3;

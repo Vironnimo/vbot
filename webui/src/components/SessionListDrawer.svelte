@@ -1261,7 +1261,9 @@
     position: absolute;
     top: 56px;
     left: 12px;
-    z-index: 2;
+    /* Above the floating composer overlay (z-index 3): the expanded drawer
+       reaches into that region and must never be covered by its scrim. */
+    z-index: 4;
     display: flex;
     width: 320px;
     max-height: calc(100% - 68px);
