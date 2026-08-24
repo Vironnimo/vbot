@@ -69,6 +69,43 @@ def test_stats_are_consumed_per_run(tmp_path: Path) -> None:
     assert tracker.take_run_stats("session-1") is None
 
 
+def test_peek_returns_totals_without_consuming_them(tmp_path: Path) -> None:
+    tracker = ChangeTracker()
+    target = tmp_path / "a.txt"
+    tracker.record_read("session-1", target, "a\n")
+    tracker.record_write("session-1", target, "a\n", "b\nc\n")
+
+    first = tracker.peek_run_stats("session-1")
+    second = tracker.peek_run_stats("session-1")
+
+    assert first == second
+    assert first == {"files": 1, "added": 2, "removed": 1, "paths": [str(target)]}
+
+    stats = tracker.take_run_stats("session-1")
+    assert stats == {"files": 1, "added": 2, "removed": 1, "paths": [str(target)]}
+    assert tracker.peek_run_stats("session-1") is None
+
+
+def test_peek_reports_explicit_zero_when_changes_revert_to_baseline(tmp_path: Path) -> None:
+    tracker = ChangeTracker()
+    target = tmp_path / "a.txt"
+    tracker.record_read("session-1", target, "a\n")
+    tracker.record_write("session-1", target, "a\n", "b\n")
+    tracker.record_write("session-1", target, "b\n", "a\n")
+
+    peeked = tracker.peek_run_stats("session-1")
+    assert peeked == {"files": 0, "added": 0, "removed": 0, "paths": []}
+
+    # The terminal contract stays unchanged: an all-zero outcome is no stats.
+    assert tracker.take_run_stats("session-1") is None
+
+
+def test_peek_returns_none_for_unknown_session() -> None:
+    tracker = ChangeTracker()
+
+    assert tracker.peek_run_stats("missing-session") is None
+
+
 def test_sessions_are_isolated(tmp_path: Path) -> None:
     tracker = ChangeTracker()
     target = tmp_path / "a.txt"

@@ -201,6 +201,7 @@ from core.runs import (
     MODEL_FALLBACK_ACTIVATED_EVENT,
     MODEL_STEP_USAGE_EVENT,
     PROVIDER_HEARTBEAT_EVENT,
+    RUN_CHANGE_STATS_EVENT,
     STREAM_ATTEMPT_RESTARTED_EVENT,
     USER_MESSAGE_EVENT,
     ActiveRunError,
@@ -2195,13 +2196,16 @@ class ChatLoop:
             )
             # Git-style change statistics for this run, computed from the
             # session-scoped content tracker (real before/after line diffs).
+            # Peek first so an all-zero outcome persists explicitly and matches
+            # the totals the live stream last showed; take consumes the deltas.
             # Best-effort: a missing baseline simply means the UI falls back to
             # its per-tool-call counts.
             try:
-                change_stats = self._dependencies.change_tracker.take_run_stats(run.session_id)
+                change_stats = self._dependencies.change_tracker.peek_run_stats(run.session_id)
                 if change_stats is not None:
                     run.terminal_payload_extras["change_stats"] = change_stats
                     object.__setattr__(run_summary, "change_stats", change_stats)
+                self._dependencies.change_tracker.take_run_stats(run.session_id)
             except Exception:
                 _LOGGER.warning(
                     "Failed to compute change statistics for run %s", run.id, exc_info=True
@@ -3066,6 +3070,7 @@ class ChatLoop:
         tool_iteration_count = 0
         stream_continuation_count = 0
         interruption_chain: list[ChatMessage] = []
+        emitted_change_stats: dict[str, object] | None = None
         failed_tool_call_breaker = _FailedToolCallCircuitBreaker()
         tool_finalization_reason: str | None = None
         tool_finalization_violation_count = 0
@@ -3433,6 +3438,19 @@ class ChatLoop:
                     run.raise_if_cancelled()
                 finally:
                     await session.flush_deferred_notes_async()
+
+            # Live git-style change statistics after each dispatched Tool round,
+            # so the UI shows the same real totals during the Run that the
+            # terminal payload will carry instead of summing per-call estimates.
+            # Emitted only when the totals changed; best-effort like every
+            # transient projection.
+            if self._dependencies.change_tracker is not None:
+                current_change_stats = self._dependencies.change_tracker.peek_run_stats(
+                    run.session_id
+                )
+                if current_change_stats != emitted_change_stats:
+                    emitted_change_stats = current_change_stats
+                    run.emit(RUN_CHANGE_STATS_EVENT, {"change_stats": current_change_stats})
 
             continuation_request_messages = [
                 *messages_for_request,

@@ -824,6 +824,62 @@ describe('canonical Iteration count projection', () => {
     expect(run.iterationCount).toBe(2);
   });
 
+  it('applies streamed change stats to the still-running assistant run', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-change-stats-live',
+    );
+    startRun(sessionState, {
+      run_id: 'run-change-stats',
+      sse_url: '/runs/run-change-stats',
+      iteration_count: 0,
+    });
+    appendRunEvent(sessionState, {
+      type: 'run_started',
+      run_id: 'run-change-stats',
+      sequence: 1,
+      payload: { status: 'running' },
+    });
+    appendRunEvent(sessionState, {
+      type: 'run_change_stats',
+      run_id: 'run-change-stats',
+      sequence: 2,
+      payload: {
+        change_stats: { files: 1, added: 2, removed: 1, paths: ['a.txt'] },
+      },
+    });
+
+    let run = visibleTimelineItemsForRender(sessionState).find(
+      (item) => item.type === 'assistant_run',
+    );
+    expect(run.status).toBe('running');
+    expect(run.changeStats).toEqual({
+      files: 1,
+      added: 2,
+      removed: 1,
+      paths: ['a.txt'],
+    });
+
+    // An all-zero update (edits reverted to their baseline) retires the
+    // earlier total instead of leaving it stale.
+    appendRunEvent(sessionState, {
+      type: 'run_change_stats',
+      run_id: 'run-change-stats',
+      sequence: 3,
+      payload: { change_stats: { files: 0, added: 0, removed: 0, paths: [] } },
+    });
+    run = visibleTimelineItemsForRender(sessionState).find(
+      (item) => item.type === 'assistant_run',
+    );
+    expect(run.changeStats).toEqual({
+      files: 0,
+      added: 0,
+      removed: 0,
+      paths: [],
+    });
+  });
+
   it('does not invent a count for an older summary without the field', () => {
     const sessionState = ensureSessionState(
       createChatState(),

@@ -385,15 +385,16 @@ export const runFooterNotice = (assistantRun) => {
 };
 
 // Aggregated file-change statistics for one assistant run. Prefers the
-// server-computed git-style values (real before/after line diffs, persisted on
-// the run summary) and falls back to summing the `line_change` display facts
-// of the run's edit/write tool rows — the fallback covers runs from before the
-// server tracker existed and sessions after a server restart. Returns null
-// when the run contains no file changes.
+// server-computed git-style values (real before/after line diffs — streamed
+// live during the run and persisted on the run summary); a server-reported
+// zero means genuinely no net changes and must NOT fall back to the per-call
+// sum. The fallback covers runs from before the server tracker existed and
+// sessions after a server restart. Returns null when the run contains no file
+// changes.
 export const runChangeStats = (assistantRun) => {
   const serverStats = serverChangeStats(assistantRun);
   if (serverStats) {
-    return serverStats;
+    return serverStats.files > 0 ? serverStats : null;
   }
   const { paths, added, removed } = collectRunChanges(assistantRun);
   if (paths.size === 0 && added === 0 && removed === 0) {
