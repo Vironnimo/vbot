@@ -119,7 +119,7 @@ function normalizeChannel(channel) {
     return null;
   }
 
-  let allowedChatIds = [];
+  let allowedChatIds;
   try {
     allowedChatIds = parseAllowedChatIds(channel?.allowed_chat_ids);
   } catch {

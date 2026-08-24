@@ -67,7 +67,7 @@
   }
 
   function handleHandleKeydown(index, event) {
-    let targetIndex = null;
+    let targetIndex;
     if (event.key === 'ArrowUp') {
       targetIndex = index - 1;
     } else if (event.key === 'ArrowDown') {

@@ -668,7 +668,7 @@ export function createChatController({
   async function loadAgents({ preferredAgentId = '' } = {}) {
     chatState.loadingAgents = true;
     chatState.agentsError = null;
-    let selectedAgentId = '';
+    let selectedAgentId;
     try {
       const result = await operations.listAgents();
       const preferred = chatState.selectedAgentId || preferredAgentId;

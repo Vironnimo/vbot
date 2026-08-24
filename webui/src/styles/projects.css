@@ -328,7 +328,7 @@
   margin-top: 6px;
 }
 
-.projects-view .projects-file-add :global(.projects-file-input) {
+.projects-view .projects-file-add .projects-file-input {
   flex: 1;
   min-width: 0;
 }
@@ -502,7 +502,7 @@
   min-width: 140px;
 }
 
-.projects-view .projects-override-input :global(.projects-dropdown) {
+.projects-view .projects-override-input .projects-dropdown {
   width: 100%;
 }
 
@@ -606,8 +606,7 @@
 
 /* ── Modals ───────────────────────────────────────────────────────────────── */
 
-.projects-view :global(.projects-view__modal),
-:global(.projects-view__modal) {
+.projects-view__modal {
   width: 480px;
   max-width: calc(100vw - 40px);
 }

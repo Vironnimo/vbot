@@ -47,5 +47,4 @@
   {readonly}
   aria-label={ariaLabel || undefined}
   aria-invalid={invalid ? 'true' : 'false'}
-  oninput={(event) => onInput(event.currentTarget.value, event)}
-></textarea>
+  oninput={(event) => onInput(event.currentTarget.value, event)}></textarea>

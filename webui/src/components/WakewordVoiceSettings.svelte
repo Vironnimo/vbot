@@ -1352,7 +1352,7 @@
             </ol>
 
             <div class="voice-calibration-models">
-              {#each wakewordModels.filter( (model) => voiceState.active_model_ids.includes(model.id), ) as model (model.id)}
+              {#each wakewordModels.filter( (model) => voiceState.active_model_ids.includes(model.id) ) as model (model.id)}
                 {@const score = calibrationScore(model.id)}
                 {@const peak = calibrationPeak(model.id)}
                 {@const noise = calibrationNoiseLevel(model.id)}
