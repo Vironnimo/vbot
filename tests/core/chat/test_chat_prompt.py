@@ -55,9 +55,11 @@ def _config_agent(body: str) -> ConfigAgent:
     )
 
 
-def _project_runtime(tmp_path: Path, repo: Path, auto_load: list[str], body: str) -> Any:
+def _project_runtime(
+    tmp_path: Path, repo: Path, auto_load: list[str], body: str, responses: int = 1
+) -> Any:
     identity_agent = StubAgent(id=AGENT_ID, model=MODEL, allowed_tools=["*"])
-    adapter = StubAdapter([{"content": "Hello", "tool_calls": None}])
+    adapter = StubAdapter([{"content": "Hello", "tool_calls": None} for _ in range(responses)])
     runtime: Any = StubRuntime(
         data_dir=tmp_path,
         agent=identity_agent,
@@ -91,8 +93,10 @@ async def test_project_session_puts_body_and_files_in_system_prompt(tmp_path: Pa
 
     system = _system_message(adapter)
     assert "You are the orchestrator." in system
-    assert '<file name="AGENTS.md">\nTeam rules\n</file>' in system
-    assert '<file name="CONTEXT.md">\nProject context\n</file>' in system
+    # The pinned Working Project frame renders the auto-load files indented inside
+    # <project_context>, exactly like a Rooted Identity Agent's frame.
+    assert ' <file name="AGENTS.md">\nTeam rules\n </file>' in system
+    assert ' <file name="CONTEXT.md">\nProject context\n </file>' in system
     # Body and project context were handed to the builder verbatim.
     agent_id, agent_body, project_context = runtime.system_prompts.build_calls[-1]
     assert agent_id == AGENT_ID
@@ -100,6 +104,97 @@ async def test_project_session_puts_body_and_files_in_system_prompt(tmp_path: Pa
     assert isinstance(project_context, ProjectPromptContext)
     assert project_context.cwd == repo
     assert project_context.auto_load == ("AGENTS.md", "CONTEXT.md")
+
+
+@pytest.mark.asyncio
+async def test_soul_and_memory_pin_across_runs(tmp_path: Path) -> None:
+    from core.chat.chat import PINNED_MEMORY_FILES_META_KEY, PINNED_SOUL_CONTEXT_META_KEY
+
+    agent = StubAgent(
+        id="coder",
+        model=MODEL,
+        allowed_tools=["*"],
+        workspace=tmp_path / "workspace",
+    )
+    adapter = StubAdapter(
+        [{"content": "One", "tool_calls": None}, {"content": "Two", "tool_calls": None}]
+    )
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+    runtime.chat_sessions.create("coder", session_id="s1")
+    loop = build_chat_loop(runtime)
+
+    await loop.send("coder", "First", session_id="s1")
+    await loop.send("coder", "Second", session_id="s1")
+
+    # The first Run of the epoch rendered SOUL and pinned memory once; the second
+    # Run reused those exact texts instead of re-rendering from the workspace.
+    assert runtime.system_prompts.render_soul_calls == 1
+    assert runtime.system_prompts.render_memory_files_calls == 1
+    # The first Run snapshots and uses the pin itself; the second Run reuses it.
+    assert runtime.system_prompts.render_soul_calls == 1
+    assert runtime.system_prompts.render_memory_files_calls == 1
+    metadata = runtime.chat_sessions.get_metadata("coder", "s1")
+    assert metadata[PINNED_SOUL_CONTEXT_META_KEY] == {"text": "Soul of coder"}
+    assert metadata[PINNED_MEMORY_FILES_META_KEY] == {"text": "Memory of coder"}
+    first_pins, second_pins = runtime.system_prompts.build_pin_calls
+    assert first_pins["soul_context"] == "Soul of coder"
+    assert first_pins["memory_files_context"] == "Memory of coder"
+    assert second_pins["soul_context"] == "Soul of coder"
+    assert second_pins["memory_files_context"] == "Memory of coder"
+
+
+@pytest.mark.asyncio
+async def test_config_agent_session_pins_working_project_across_runs(tmp_path: Path) -> None:
+    from core.chat.chat import PINNED_WORKING_PROJECT_CONTEXT_META_KEY
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    agents_file = repo / "AGENTS.md"
+    agents_file.write_text("Original rules", encoding="utf-8")
+    runtime, adapter = _project_runtime(
+        tmp_path, repo, ["AGENTS.md"], body="You are the orchestrator.", responses=2
+    )
+    runtime.chat_sessions.create(AGENT_ID, session_id="s1", project_id=PROJECT_ID)
+    loop = build_chat_loop(runtime)
+
+    await loop.send(AGENT_ID, "First", session_id="s1", project_id=PROJECT_ID)
+    agents_file.write_text("Changed between runs", encoding="utf-8")
+    await loop.send(AGENT_ID, "Second", session_id="s1", project_id=PROJECT_ID)
+
+    first_system = str(adapter.requests[0]["messages"][0]["content"])
+    second_system = str(adapter.requests[1]["messages"][0]["content"])
+    assert "Original rules" in first_system
+    # A Project Config Agent's auto-load files stay pinned for the prompt epoch:
+    # an on-disk change must not alter the System Prompt prefix mid-session.
+    assert "Changed between runs" not in second_system
+    assert "Original rules" in second_system
+    assert len(runtime.system_prompts.render_working_project_context_calls) == 1
+    metadata = runtime.chat_sessions.get_metadata(AGENT_ID, "s1", PROJECT_ID)
+    assert metadata[PINNED_WORKING_PROJECT_CONTEXT_META_KEY]["text"] in second_system
+
+
+@pytest.mark.asyncio
+async def test_config_agent_without_workspace_stores_no_soul_or_memory_pin(
+    tmp_path: Path,
+) -> None:
+    from core.chat.chat import PINNED_MEMORY_FILES_META_KEY, PINNED_SOUL_CONTEXT_META_KEY
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "AGENTS.md").write_text("Team rules", encoding="utf-8")
+    runtime, _adapter = _project_runtime(
+        tmp_path, repo, ["AGENTS.md"], body="You are the orchestrator."
+    )
+    runtime.chat_sessions.create(AGENT_ID, session_id="s1", project_id=PROJECT_ID)
+
+    await build_chat_loop(runtime).send(AGENT_ID, "Hi", session_id="s1", project_id=PROJECT_ID)
+
+    pins = runtime.system_prompts.build_pin_calls[-1]
+    assert pins["soul_context"] is None
+    assert pins["memory_files_context"] is None
+    metadata = runtime.chat_sessions.get_metadata(AGENT_ID, "s1", PROJECT_ID)
+    assert PINNED_SOUL_CONTEXT_META_KEY not in metadata
+    assert PINNED_MEMORY_FILES_META_KEY not in metadata
 
 
 @pytest.mark.asyncio

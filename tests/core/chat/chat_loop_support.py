@@ -219,9 +219,12 @@ class StubPrompts:
         self.tool_registry = tool_registry
         self.vbot_root = Path("app")
         self.build_calls: list[tuple[str, str, Any]] = []
+        self.build_pin_calls: list[dict[str, str | None]] = []
         self.effective_tool_name_calls: list[tuple[str, ...]] = []
         self.render_project_files_calls: list[Any] = []
         self.render_working_project_context_calls: list[Any] = []
+        self.render_soul_calls = 0
+        self.render_memory_files_calls = 0
         self.render_skill_catalog_calls = 0
 
     def build_system_prompt(
@@ -232,6 +235,8 @@ class StubPrompts:
         agent_body: str = "",
         project_context: Any = None,
         working_project_context: str | None = None,
+        soul_context: str | None = None,
+        memory_files_context: str | None = None,
         agent_project_id: str | None = None,
         nesting_depth: int = 0,
         skill_registry: Any = None,
@@ -245,6 +250,13 @@ class StubPrompts:
             tuple(str(name) for name in (effective_tool_names or ()))
         )
         self.build_calls.append((agent.id, agent_body, project_context))
+        self.build_pin_calls.append(
+            {
+                "working_project_context": working_project_context,
+                "soul_context": soul_context,
+                "memory_files_context": memory_files_context,
+            }
+        )
         # Echo the body and rendered Working Project files so chat tests can assert what
         # actually reaches the system message, mirroring the real builder's slots
         # (body in the identity slot, Working Project files after it). Thread read_paths
@@ -262,6 +274,14 @@ class StubPrompts:
             rendered_project,
         ]
         return "\n".join(part for part in parts if part)
+
+    def render_soul(self, agent: StubAgent, *, on_read: Any = None) -> str:
+        self.render_soul_calls += 1
+        return f"Soul of {agent.id}"
+
+    def render_memory_files(self, agent: StubAgent, *, on_read: Any = None) -> str:
+        self.render_memory_files_calls += 1
+        return f"Memory of {agent.id}"
 
     def render_working_project_context(
         self,

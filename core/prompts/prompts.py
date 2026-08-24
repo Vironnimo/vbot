@@ -987,6 +987,8 @@ class SystemPromptManager:
         agent_body: str = "",
         project_context: ProjectPromptContext | None = None,
         working_project_context: str | None = None,
+        soul_context: str | None = None,
+        memory_files_context: str | None = None,
         agent_project_id: str | None = None,
         nesting_depth: int = 0,
         skill_registry: SkillPromptRegistry | None = None,
@@ -1008,9 +1010,13 @@ class SystemPromptManager:
         collapses). ``project_context`` carries Project identity, Workspace, and
         auto-load files for the live ``core:working_project`` render (``None`` off a
         Project → collapses). ``working_project_context`` is the already-rendered,
-        prompt-epoch replacement used only by Rooted Identity Agents; when set it
-        wins over ``project_context`` so Working Project files are not read again.
-        ``skill_registry`` overrides the registry the skills block is filtered
+        prompt-epoch replacement used by Rooted Identity Agents and Project Config
+        Agents; when set it wins over ``project_context`` so Working Project files
+        are not read again. ``soul_context`` and ``memory_files_context`` are the
+        matching prompt-epoch replacements for the SOUL block and the pinned-memory
+        producer; when set they emit verbatim instead of re-reading the workspace
+        files. Chat replaces all three after Compaction. ``skill_registry`` overrides
+        the registry the skills block is filtered
         against — a project run passes its project-scoped registry; ``None`` uses the
         configured global one (identity runs, unchanged). ``skill_catalog`` is a
         prompt-epoch snapshot: when present the skills block renders its frozen text
@@ -1037,6 +1043,8 @@ class SystemPromptManager:
             agent=agent,
             project_context=project_context,
             working_project_context=working_project_context,
+            soul_context=soul_context,
+            memory_files_context=memory_files_context,
             agent_project_id=agent_project_id,
             nesting_depth=nesting_depth,
             scope=scope_key,
@@ -1237,16 +1245,28 @@ class SystemPromptManager:
         (missing/unreadable → dropped, unsafe path → ``PromptError``, empty workspace
         → no read) never drifts from a normal include. The context's read observer
         (if any) is threaded through so an inlined SOUL.md is stamped as
-        read-before-write.
+        read-before-write. A session-pinned ``soul_context`` wins verbatim so the
+        prompt cache stays stable between Compactions.
 
         When SOUL is present, ``SOUL_FRAMING`` is prefixed so the model reads the
         identity/persona text as its core operating contract rather than as neutral
         file content. An absent/empty SOUL renders to ``""`` (no framing), so the
         block still gates out for a config agent with no workspace.
         """
-        rendered = expand_workspace_includes(
-            SOUL_INCLUDE_MARKER, context.agent.workspace, on_read=context.read_observer
-        )
+        if context.soul_context is not None:
+            return context.soul_context
+        return self.render_soul(context.agent, on_read=context.read_observer)
+
+    def render_soul(
+        self, agent: PromptAgent, *, on_read: Callable[[Path], None] | None = None
+    ) -> str:
+        """Render the SOUL block text from the agent's workspace ``SOUL.md``.
+
+        The single live render path shared by the block and by Chat's prompt-epoch
+        snapshot: fail-soft include expansion plus the ``SOUL_FRAMING`` prefix,
+        empty when the file is missing or the workspace is empty.
+        """
+        rendered = expand_workspace_includes(SOUL_INCLUDE_MARKER, agent.workspace, on_read=on_read)
         if not rendered:
             return ""
         return f"{SOUL_FRAMING}\n\n{rendered}"
@@ -1554,18 +1574,9 @@ class SystemPromptManager:
             )
 
         def memory_files(context: BlockRenderContext) -> str:
-            mode = getattr(context.agent, "memory_prompt_mode", DEFAULT_MEMORY_PROMPT_MODE)
-            workspace = context.agent.workspace
-            rendered = read_memory_files(Path(workspace), mode, provider=self._memory_provider)
-            # Stamp the on-disk memory files as read so the agent can edit a memory
-            # file it was auto-shown. Only existing files are reported (see
-            # memory_prompt_file_paths); an empty workspace (a config agent) is
-            # skipped — it must never resolve against Path(".").
-            observer = context.read_observer
-            if observer is not None and workspace:
-                for path in memory_prompt_file_paths(Path(workspace), mode):
-                    observer(path)
-            return rendered
+            if context.memory_files_context is not None:
+                return context.memory_files_context
+            return self.render_memory_files(context.agent, on_read=context.read_observer)
 
         return {
             "tool_list": tool_list,
@@ -1573,6 +1584,26 @@ class SystemPromptManager:
             "skill_catalog": skill_catalog_text,
             MEMORY_FILES_PRODUCER_NAME: memory_files,
         }
+
+    def render_memory_files(
+        self, agent: PromptAgent, *, on_read: Callable[[Path], None] | None = None
+    ) -> str:
+        """Render the pinned-memory text for the agent's memory prompt mode.
+
+        The single live render path shared by the ``memory_files`` producer and by
+        Chat's prompt-epoch snapshot. When *on_read* is given, every on-disk memory
+        file whose content reaches the render is reported so the agent can edit a
+        file it was auto-shown (see ``memory_prompt_file_paths``); an empty
+        workspace (a config agent) reports nothing and must never resolve against
+        ``Path(".")``.
+        """
+        mode = getattr(agent, "memory_prompt_mode", DEFAULT_MEMORY_PROMPT_MODE)
+        workspace = agent.workspace
+        rendered = read_memory_files(Path(workspace), mode, provider=self._memory_provider)
+        if on_read is not None and workspace:
+            for path in memory_prompt_file_paths(Path(workspace), mode):
+                on_read(path)
+        return rendered
 
     def _is_owner_active(
         self,

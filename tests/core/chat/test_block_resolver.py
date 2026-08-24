@@ -52,6 +52,8 @@ class _StubPrompts:
         agent_body: str = "",
         project_context: object = None,
         working_project_context: str | None = None,
+        soul_context: str | None = None,
+        memory_files_context: str | None = None,
         agent_project_id: str | None = None,
         nesting_depth: int = 0,
         skill_registry: object = None,
@@ -62,6 +64,12 @@ class _StubPrompts:
     ) -> str:
         del agent_project_id
         return "System prompt"
+
+    def render_soul(self, _agent: object, *, on_read: object = None) -> str:
+        return ""
+
+    def render_memory_files(self, _agent: object, *, on_read: object = None) -> str:
+        return ""
 
     def provider_tool_definitions(
         self,

@@ -15,7 +15,9 @@ from core.chat import (
     ToolCall,
 )
 from core.chat.chat import (
+    PINNED_MEMORY_FILES_META_KEY,
     PINNED_SKILL_CATALOG_META_KEY,
+    PINNED_SOUL_CONTEXT_META_KEY,
     PINNED_WORKING_PROJECT_CONTEXT_META_KEY,
     SEEN_SKILLS_META_KEY,
     _RequestState,
@@ -1141,6 +1143,57 @@ async def test_compaction_refreshes_pinned_skill_catalog(tmp_path: Path) -> None
     assert runtime.refresh_skills_for_calls == [(None, "coder")]
     assert metadata[PINNED_SKILL_CATALOG_META_KEY] == {"catalog_text": "catalog:2"}
     assert metadata[SEEN_SKILLS_META_KEY] == ["one", "two"]
+
+
+@pytest.mark.asyncio
+async def test_compaction_refreshes_pinned_soul_and_memory(tmp_path: Path) -> None:
+    # Compaction starts a new prompt epoch: SOUL and pinned-memory snapshots are
+    # re-rendered from the workspace so on-disk edits become visible to the model.
+    agent = StubAgent(
+        id="coder",
+        model="openai/gpt-5.2",
+        allowed_tools=["*"],
+        workspace=tmp_path / "workspace",
+    )
+    adapter = StubAdapter([])
+    runtime: Any = StubRuntime(
+        data_dir=tmp_path,
+        agent=agent,
+        adapter=adapter,
+        storage=StubStorage(
+            {"auto": True, "threshold": 0.8, "tail_tokens": 15_000, "summary_model": None}
+        ),
+        models=StubModels({("openai", "gpt-5.2"): 100}),
+    )
+    session = runtime.chat_sessions.create("coder", session_id="session-one")
+    tail_user = ChatMessage.user("Tail user")
+    session.append(tail_user)
+    session.append(ChatMessage.assistant(model=agent.model, content="Tail assistant"))
+    checkpoint = ChatMessage.compaction_checkpoint(
+        summary="Compacted tail context.",
+        projection=session.load()[-2:],
+        compacted_token_count=42,
+    )
+    compaction_service = StubCompactionService(should_auto=True, checkpoint=checkpoint)
+    loop = build_chat_loop(runtime, compaction_service=cast(Any, compaction_service))
+    run = Run(run_id="run-1", agent_id=agent.id, session_id=session.id)
+
+    # Pin the epoch's texts (as the first build would), then observe the refresh.
+    loop._pinned_soul_context("coder", "session-one", agent, None)
+    loop._pinned_memory_files("coder", "session-one", agent, None)
+    soul_calls_before = runtime.system_prompts.render_soul_calls
+    memory_calls_before = runtime.system_prompts.render_memory_files_calls
+
+    messages = await loop._build_request_messages(agent, session)
+    await _maybe_auto_compact(
+        loop, agent, adapter, "gpt-5.2", session, messages, usage={"input_tokens": 90}, run=run
+    )
+
+    metadata = runtime.chat_sessions.get_metadata("coder", "session-one")
+    assert runtime.system_prompts.render_soul_calls == soul_calls_before + 1
+    assert runtime.system_prompts.render_memory_files_calls == memory_calls_before + 1
+    assert metadata[PINNED_SOUL_CONTEXT_META_KEY] == {"text": "Soul of coder"}
+    assert metadata[PINNED_MEMORY_FILES_META_KEY] == {"text": "Memory of coder"}
 
 
 @pytest.mark.asyncio
