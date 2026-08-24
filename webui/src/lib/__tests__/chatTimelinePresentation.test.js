@@ -13,8 +13,12 @@ import {
   isRunChildWorking,
   isSubAgentSpawnTool,
   isToolPreparing,
+  isReflectionRunKind,
   labelForEvent,
   labelForMessage,
+  reflectionElapsedLabel,
+  reflectionScopeForRunKind,
+  reflectionTaskRows,
   resolveSubAgentCancelPlan,
   runChangeStats,
   runFooterParts,
@@ -1867,5 +1871,79 @@ describe('changeStatsTooltip', () => {
   it('returns an empty string when no paths are known', () => {
     expect(changeStatsTooltip({ files: 1, added: 2, removed: 0 })).toBe('');
     expect(changeStatsTooltip(null)).toBe('');
+  });
+});
+
+describe('reflection panel helpers', () => {
+  it('classifies reflection run kinds and derives their review scope', () => {
+    expect(isReflectionRunKind('memory_reflection')).toBe(true);
+    expect(isReflectionRunKind('skill_reflection')).toBe(true);
+    expect(isReflectionRunKind('reflection')).toBe(true);
+    expect(isReflectionRunKind('user')).toBe(false);
+    expect(isReflectionRunKind(undefined)).toBe(false);
+
+    expect(reflectionScopeForRunKind('memory_reflection')).toBe('memory');
+    expect(reflectionScopeForRunKind('skill_reflection')).toBe('skill');
+    expect(reflectionScopeForRunKind('reflection')).toBe('combined');
+    expect(reflectionScopeForRunKind('cron')).toBe('');
+  });
+
+  it('projects tracking entries into rows sorted running-first, newest first', () => {
+    const sessionState = {
+      reflectionTasks: {
+        'run-old-finished': {
+          sessionId: 'fork-a',
+          runKind: 'skill_reflection',
+          status: 'completed',
+          startedAt: '2026-08-24T08:00:00.000Z',
+        },
+        'run-running': {
+          sessionId: 'fork-b',
+          runKind: 'memory_reflection',
+          status: 'running',
+          startedAt: '2026-08-24T07:00:00.000Z',
+        },
+        'run-newer-finished': {
+          sessionId: 'fork-c',
+          runKind: 'memory_reflection',
+          status: 'failed',
+          startedAt: '2026-08-24T10:00:00.000Z',
+        },
+        'run-broken': { sessionId: '' },
+      },
+    };
+
+    const rows = reflectionTaskRows(sessionState);
+
+    expect(rows.map((row) => row.runId)).toEqual([
+      'run-running',
+      'run-newer-finished',
+      'run-old-finished',
+    ]);
+    expect(rows[0]).toMatchObject({
+      sessionId: 'fork-b',
+      scope: 'memory',
+      status: 'running',
+    });
+    expect(rows[1].scope).toBe('memory');
+    expect(rows[2].scope).toBe('skill');
+  });
+
+  it('tolerates a session state without tracking entries', () => {
+    expect(reflectionTaskRows(undefined)).toEqual([]);
+    expect(reflectionTaskRows({})).toEqual([]);
+  });
+
+  it('formats coarse elapsed labels and stays empty without a parseable start', () => {
+    const start = '2026-08-24T10:00:00.000Z';
+
+    expect(reflectionElapsedLabel(start, Date.parse(start) + 45_123)).toBe(
+      '45s',
+    );
+    expect(reflectionElapsedLabel(start, Date.parse(start) + 125_000)).toBe(
+      '2m',
+    );
+    expect(reflectionElapsedLabel('', Date.now())).toBe('');
+    expect(reflectionElapsedLabel(start, Number.NaN)).toBe('');
   });
 });

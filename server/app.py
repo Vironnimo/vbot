@@ -45,7 +45,11 @@ from server.events import (
 )
 from server.file_delivery import FileDelivery
 from server.rpc.errors import RPC_ERROR_INVALID_REQUEST
-from server.rpc.event_bridge import bridge_run_to_event_bus, publish_resource_changed
+from server.rpc.event_bridge import (
+    bridge_run_to_event_bus,
+    publish_resource_changed,
+    reflection_source_session_id,
+)
 from server.rpc.methods import dispatch_rpc
 from server.rpc.payloads import remove_opaque_provider_metadata
 from server.rpc.statistics_methods import statistics_service
@@ -1212,6 +1216,11 @@ def _active_runs_snapshot(state: Any) -> list[JsonObject]:
         }
         if not getattr(run, "contributes_to_agent_activity", True):
             item[RUN_AGENT_ACTIVITY_FIELD] = False
+        source_session_id = reflection_source_session_id(
+            getattr(getattr(state, "runtime", None), "chat_sessions", None), run
+        )
+        if source_session_id:
+            item["source_session_id"] = source_session_id
         snapshot.append(item)
     return snapshot
 

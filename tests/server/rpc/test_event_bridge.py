@@ -32,18 +32,21 @@ from core.runs import (
     TOOL_CALL_STDOUT_EVENT,
     Run,
     RunEvent,
+    RunKind,
 )
 from server.events import ALLOWED_SERVER_EVENT_TYPES, ServerEventBus
 from server.file_delivery import FileDelivery
 from server.rpc import event_bridge
 from server.rpc.event_bridge import (
     RUN_DELTA_EVENT_TYPES,
+    RUN_SOURCE_SESSION_FIELD,
     SERVER_EVENT_TYPES,
     QueuedRunItem,
     _bridge_queued_item_to_event_bus,
     _publish_run_events,
     _server_event_from_run_event,
     publish_resource_changed,
+    reflection_source_session_id,
 )
 
 
@@ -459,3 +462,134 @@ def test_run_event_bridge_dedupe_cache_is_bounded() -> None:
     assert list(cache) == ["run-two", "run-three"]
     assert event_bridge._run_was_already_bridged(state, cache, "run-one") is False
     assert list(cache) == ["run-three", "run-one"]
+
+
+class _RecordingSessions:
+    """Minimal ChatSessionManager stand-in recording provenance lookups."""
+
+    def __init__(
+        self,
+        metadata: dict[str, Any] | None = None,
+        error: Exception | None = None,
+    ) -> None:
+        self.calls: list[tuple[str, str, str | None]] = []
+        self._metadata = metadata or {}
+        self._error = error
+
+    def get_metadata(
+        self, agent_id: str, session_id: str, project_id: str | None = None
+    ) -> dict[str, Any]:
+        self.calls.append((agent_id, session_id, project_id))
+        if self._error is not None:
+            raise self._error
+        return self._metadata
+
+
+def _reflection_run(run_kind: RunKind = RunKind.MEMORY_REFLECTION) -> Run:
+    return Run(
+        run_id="run-refl",
+        agent_id="diary",
+        session_id="fork-uuid",
+        run_kind=run_kind,
+        contributes_to_agent_activity=False,
+    )
+
+
+def test_reflection_source_session_resolves_fork_provenance() -> None:
+    sessions = _RecordingSessions(
+        {"fork_source": {"agent_id": "diary", "session_id": "source-uuid"}}
+    )
+
+    assert reflection_source_session_id(sessions, _reflection_run()) == "source-uuid"
+    assert sessions.calls == [("diary", "fork-uuid", None)]
+
+
+@pytest.mark.parametrize(
+    "run_kind",
+    [RunKind.REFLECTION, RunKind.MEMORY_REFLECTION, RunKind.SKILL_REFLECTION],
+)
+def test_all_reflection_kinds_resolve_source(run_kind: RunKind) -> None:
+    sessions = _RecordingSessions({"fork_source": {"session_id": "source-uuid"}})
+
+    assert reflection_source_session_id(sessions, _reflection_run(run_kind)) == "source-uuid"
+
+
+def test_non_reflection_run_skips_provenance_lookup() -> None:
+    sessions = _RecordingSessions(error=AssertionError("must not be called"))
+
+    assert reflection_source_session_id(sessions, _reflection_run(RunKind.USER)) == ""
+    assert sessions.calls == []
+
+
+def test_reflection_source_session_without_provenance_is_empty() -> None:
+    assert reflection_source_session_id(_RecordingSessions({}), _reflection_run()) == ""
+
+
+def test_reflection_source_session_missing_storage_is_empty() -> None:
+    assert reflection_source_session_id(None, _reflection_run()) == ""
+
+
+def test_reflection_source_session_read_failure_warns_and_is_empty(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.WARNING, logger="vbot.server.rpc.event_bridge")
+
+    result = reflection_source_session_id(
+        _RecordingSessions(error=RuntimeError("sidecar boom")), _reflection_run()
+    )
+
+    assert result == ""
+    assert any(
+        record.name == "vbot.server.rpc.event_bridge" and record.exc_info is not None
+        for record in caplog.records
+    )
+
+
+def test_server_event_carries_source_session_when_resolved() -> None:
+    event = RunEvent(
+        sequence=1,
+        run_id="run-refl",
+        agent_id="diary",
+        session_id="fork-uuid",
+        run_kind=RunKind.MEMORY_REFLECTION,
+        contributes_to_agent_activity=False,
+        type=RUN_STARTED_EVENT,
+    )
+
+    summary = _server_event_from_run_event(event, source_session_id="source-uuid")
+
+    assert summary["payload"][RUN_SOURCE_SESSION_FIELD] == "source-uuid"
+
+
+def test_server_event_omits_source_session_by_default() -> None:
+    event = RunEvent(
+        sequence=1,
+        run_id="run-one",
+        agent_id="builder",
+        session_id="sess-uuid",
+        type=RUN_STARTED_EVENT,
+    )
+
+    summary = _server_event_from_run_event(event)
+
+    assert RUN_SOURCE_SESSION_FIELD not in summary["payload"]
+
+
+@pytest.mark.asyncio
+async def test_publish_run_events_forwards_source_session_to_lifecycle_payloads() -> None:
+    event_bus = ServerEventBus()
+    run = Run(
+        run_id="run-refl",
+        agent_id="diary",
+        session_id="fork-uuid",
+        run_kind=RunKind.MEMORY_REFLECTION,
+        contributes_to_agent_activity=False,
+    )
+    run.emit(RUN_STARTED_EVENT, {"status": "running"})
+    run.emit(RUN_COMPLETED_EVENT, {"status": "completed"})
+
+    await _publish_run_events(event_bus, run, source_session_id="source-uuid")
+
+    lifecycle_events = [event for event in event_bus.events if event["type"].startswith("run_")]
+    assert lifecycle_events
+    assert all(event["payload"]["source_session_id"] == "source-uuid" for event in lifecycle_events)

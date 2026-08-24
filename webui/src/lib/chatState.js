@@ -1304,6 +1304,7 @@ export function ensureSessionState(state, agentId, sessionId) {
       sessionUsage: null,
       contextUsage: null,
       backgroundBashStatuses: {},
+      reflectionTasks: {},
       hasOlderHistory: false,
       loadingOlderHistory: false,
       hasUnreadCompletion: false,

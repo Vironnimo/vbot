@@ -455,4 +455,106 @@ describe('ChatActivityPanel', () => {
       document.querySelector('.chat-activity__stats-empty').textContent.trim(),
     ).toBe('No changes yet');
   });
+
+  it('lists reflection reviews per scope with navigation and no cancel control', async () => {
+    const openReflection = vi.fn();
+    const navigate = vi.fn();
+    const runningReview = {
+      runId: 'run-refl-running',
+      sessionId: 'session-fork-running',
+      runKind: 'memory_reflection',
+      scope: 'memory',
+      status: 'running',
+      startedAt: new Date(Date.now() - 30_000).toISOString(),
+    };
+    const finishedReview = {
+      runId: 'run-refl-done',
+      sessionId: 'session-fork-done',
+      runKind: 'skill_reflection',
+      scope: 'skill',
+      status: 'completed',
+      startedAt: '2026-08-24T10:00:00.000Z',
+    };
+
+    mountedComponent = mount(ChatActivityPanel, {
+      target: document.body,
+      props: {
+        timelineItems: [],
+        reflectionTasks: [finishedReview, runningReview],
+        onOpenReflection: openReflection,
+        onNavigateToSubAgent: navigate,
+      },
+    });
+    flushSync();
+
+    document.querySelector('.chat-activity__rail').click();
+    flushSync();
+
+    const activeGroup = document.querySelector('.chat-activity__group--active');
+    const finishedGroup = document.querySelector(
+      '.chat-activity__group--finished',
+    );
+    const activeSubsection = activeGroup.querySelector(
+      '.chat-activity__subsection-title',
+    );
+    const finishedSubsection = finishedGroup.querySelector(
+      '.chat-activity__subsection-title',
+    );
+    expect(activeSubsection.textContent.trim()).toBe('Reflections');
+    expect(finishedSubsection.textContent.trim()).toBe('Reflections');
+    expect(
+      activeGroup.querySelectorAll('.chat-activity__task-row'),
+    ).toHaveLength(1);
+    expect(
+      finishedGroup.querySelectorAll('.chat-activity__task-row'),
+    ).toHaveLength(1);
+
+    const rows = [...document.querySelectorAll('.chat-activity__task-row')];
+    const runningRow = rows.find((row) =>
+      row.textContent.includes('Memory review'),
+    );
+    const runningLink = runningRow.querySelector('.chat-activity__task-link');
+    expect(runningLink.getAttribute('aria-label')).toBe(
+      'Open Memory review Session · Working',
+    );
+    expect(runningRow.querySelector('[data-status="running"]')).not.toBeNull();
+    // Running reviews show coarse elapsed time from their start timestamp.
+    expect(runningRow.textContent).toMatch(/·\s*\d+s/);
+
+    const finishedRow = rows.find((row) =>
+      row.textContent.includes('Skill review'),
+    );
+    expect(finishedRow.textContent).not.toMatch(/\d+s/);
+    expect(finishedRow.querySelector('[data-status="success"]')).not.toBeNull();
+
+    // Reviews are server-owned background Runs; they expose navigation but no
+    // cancel affordance.
+    expect(document.querySelectorAll('.chat-activity__cancel')).toHaveLength(0);
+
+    runningLink.click();
+    await Promise.resolve();
+    expect(openReflection).toHaveBeenCalledWith(runningReview);
+    expect(navigate).not.toHaveBeenCalled();
+
+    finishedRow.querySelector('.chat-activity__task-link').click();
+    await Promise.resolve();
+    expect(openReflection).toHaveBeenCalledWith(finishedReview);
+  });
+
+  it('keeps the empty state when neither tasks nor reflections exist', () => {
+    mountedComponent = mount(ChatActivityPanel, {
+      target: document.body,
+      props: { timelineItems: [], reflectionTasks: [] },
+    });
+    flushSync();
+
+    document.querySelector('.chat-activity__rail').click();
+    flushSync();
+
+    expect(document.querySelector('.chat-activity__empty')).toBeTruthy();
+    expect(document.querySelector('.chat-activity__group--active')).toBeNull();
+    expect(
+      document.querySelector('.chat-activity__group--finished'),
+    ).toBeNull();
+  });
 });
