@@ -248,7 +248,11 @@
       />
       <path d="M6 13h4" />
     </svg>
-    <span>{t('chat.event.thinking', 'Thinking').toUpperCase()}</span>
+    <span
+      >{isStreaming
+        ? t('chat.reasoning.active', 'thinking...')
+        : t('chat.reasoning.done', 'thought')}</span
+    >
     {#if durationLabel}
       <span class="reasoning-duration">{durationLabel}</span>
     {/if}

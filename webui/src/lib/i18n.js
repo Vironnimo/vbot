@@ -248,6 +248,8 @@ export const englishCatalog = Object.freeze({
   'chat.role.assistantAvatar': 'A',
   'chat.role.systemAvatar': 'S',
   'chat.event.thinking': 'Thinking',
+  'chat.reasoning.active': 'thinking...',
+  'chat.reasoning.done': 'thought',
   'chat.working.active': 'working...',
   'chat.working.done': 'done working',
   'chat.event.toolStarted': 'Tool started',
