@@ -312,6 +312,37 @@ async def test_streaming_network_error_with_reasoning_restarts_cleanly(
 
 
 @pytest.mark.asyncio
+async def test_streaming_empty_native_network_error_restarts_instead_of_empty_assistant(
+    tmp_path: Path,
+) -> None:
+    """An empty stop concealed as network_error must restart, not fail validation."""
+    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
+    adapter = StubAdapter(
+        [],
+        stream_responses=[
+            [
+                NetworkError("Provider stream ended with native_finish_reason=network_error"),
+            ],
+            [
+                {"type": "content_delta", "text": "Recovered"},
+                {"type": "finish", "reason": "stop"},
+            ],
+        ],
+    )
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+
+    assistant = await build_chat_loop(runtime, streaming=True).send(
+        "coder", "Hi", session_id="session-one"
+    )
+
+    session = runtime.chat_sessions.get("coder", "session-one")
+    assert assistant.content == "Recovered"
+    assert len(adapter.stream_requests) == 2
+    assert persisted_roles(session.load()) == ["user", "assistant"]
+    assert await recover_continuation(session) is None
+
+
+@pytest.mark.asyncio
 async def test_reasoning_only_restart_exhaustion_keeps_only_final_attempt_checkpoint(
     tmp_path: Path,
 ) -> None:
