@@ -340,11 +340,13 @@ export function reasoningDurationLabel(child, nowMs = Date.now()) {
   return formatDurationMs(Math.max(0, nowMs - start));
 }
 
-// Footer line for an assistant run: status · duration · iterations ·
-// provider liveness. The duration ticks live while the run is running
-// (driven by the shared nowMs clock). This is the single home for run-level
-// meta information; the message header shows only the timestamp. File-change
-// statistics are rendered separately via `changeStatsParts`.
+// Footer line for an assistant run: status · duration · iterations. The
+// duration ticks live while the run is running (driven by the shared nowMs
+// clock). This is the stable first line of run-level meta information; the
+// message header shows only the timestamp. File-change statistics are
+// appended to this same line via `changeStatsParts`, while transient problem
+// notices (provider liveness) render on a separate line below via
+// `runFooterNotice` so they can never push the stable parts onto a wrap line.
 export const runFooterParts = (assistantRun, nowMs = Date.now()) => {
   const parts = [];
   parts.push(runStatusLabel(assistantRun.status));
@@ -356,19 +358,23 @@ export const runFooterParts = (assistantRun, nowMs = Date.now()) => {
   if (iterationLabel) {
     parts.push(iterationLabel);
   }
+  return parts;
+};
+
+// Transient problem/liveness notice for an assistant run, rendered on its own
+// line below the footer. Returns '' when there is nothing to report.
+export const runFooterNotice = (assistantRun) => {
   if (
     assistantRun.status === 'running' &&
     Number.isFinite(assistantRun.providerHeartbeat?.idleSeconds)
   ) {
-    parts.push(
-      t(
-        'chat.providerWorking',
-        'Provider connected · waiting {seconds}s for the next model chunk',
-        { seconds: Math.round(assistantRun.providerHeartbeat.idleSeconds) },
-      ),
+    return t(
+      'chat.providerWorking',
+      'Provider connected · waiting {seconds}s for the next model chunk',
+      { seconds: Math.round(assistantRun.providerHeartbeat.idleSeconds) },
     );
   }
-  return parts;
+  return '';
 };
 
 // Aggregated file-change statistics for one assistant run. Prefers the

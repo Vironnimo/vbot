@@ -22,6 +22,7 @@ import {
   reasoningDurationLabel,
   resolveSubAgentCancelPlan,
   runChangeStats,
+  runFooterNotice,
   runFooterParts,
   sessionChangeStats,
   subAgentDisplayResult,
@@ -1410,18 +1411,31 @@ describe('runFooterParts', () => {
     expect(parts).toContain('1h 24m');
   });
 
-  it('shows live Provider liveness without calling it model output', () => {
-    const parts = runFooterParts({
+  it('reports live Provider liveness only on the separate notice line', () => {
+    const assistantRun = {
       status: 'running',
       durationMs: null,
       outputs: [{ content: 'Writing the plan now.' }],
       tools: [],
       providerHeartbeat: { idleSeconds: 75.4 },
-    });
+    };
 
-    expect(parts).toContain(
+    expect(runFooterNotice(assistantRun)).toBe(
       'Provider connected · waiting 75s for the next model chunk',
     );
+    expect(runFooterParts(assistantRun)).not.toContain(
+      'Provider connected · waiting 75s for the next model chunk',
+    );
+  });
+
+  it('returns no notice when the run is not running or has no heartbeat', () => {
+    expect(
+      runFooterNotice({
+        status: 'completed',
+        providerHeartbeat: { idleSeconds: 75.4 },
+      }),
+    ).toBe('');
+    expect(runFooterNotice({ status: 'running' })).toBe('');
   });
 });
 
