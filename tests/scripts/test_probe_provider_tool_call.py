@@ -588,12 +588,12 @@ def test_bash_cases_use_production_profiles_and_exact_arguments() -> None:
         assert validation["schema_valid"] is False
         assert validation["validation_path"].startswith("/env_keys")
         assert validation["validation_keyword"] == keyword
-    assert top.tools[0]["parameters"]["properties"]["yield_after"]["default"] == 30
+    assert top.tools[0]["parameters"]["properties"]["background_after_seconds"]["default"] == 30
     assert sub.tools[0]["parameters"]["properties"]["mode"]["enum"] == [
         "foreground",
         "auto",
     ]
-    assert sub.tools[0]["parameters"]["properties"]["yield_after"]["default"] == 1800
+    assert sub.tools[0]["parameters"]["properties"]["background_after_seconds"]["default"] == 1800
 
 
 def test_channel_send_cases_use_production_profiles_and_exact_arguments() -> None:

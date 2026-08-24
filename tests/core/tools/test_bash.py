@@ -24,8 +24,8 @@ from core.tools.bash import (
     BASH_SUBAGENT_TOOL_PARAMETERS,
     BASH_TOOL_DESCRIPTION,
     BASH_TOOL_PARAMETERS,
+    _resolve_background_after_seconds,
     _resolve_workdir,
-    _resolve_yield_after,
     background_bash_statuses,
     bash_handler,
     project_bash_tool_definitions,
@@ -425,7 +425,7 @@ async def test_background_trigger_not_spawned_when_trigger_service_is_none(
 
 
 @pytest.mark.asyncio
-async def test_yield_after_expiry_triggers_background_completion_when_trigger_service_present(
+async def test_background_after_expiry_triggers_background_completion_when_trigger_service_present(
     manager: ProcessManager,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -464,7 +464,7 @@ async def test_yield_after_expiry_triggers_background_completion_when_trigger_se
         {
             "command": "import time; print('yield-marker'); time.sleep(0.2)",
             "mode": "auto",
-            "yield_after": 0.01,
+            "background_after_seconds": 0.01,
         },
         manager,
         trigger_service=MockTriggerService(),
@@ -779,7 +779,7 @@ async def test_terminal_process_status_cancels_already_pending_completion_delive
 
 
 @pytest.mark.asyncio
-async def test_yield_after_expiry_backgrounds_running_process(
+async def test_background_after_expiry_backgrounds_running_process(
     manager: ProcessManager,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -792,7 +792,7 @@ async def test_yield_after_expiry_backgrounds_running_process(
         {
             "command": "import time; time.sleep(30)",
             "mode": "auto",
-            "yield_after": 0.01,
+            "background_after_seconds": 0.01,
         },
         manager,
     )
@@ -824,7 +824,7 @@ async def test_auto_handoff_includes_capped_output_and_usable_process_session(
                     "print('x' * 200 + 'HANDOFF-END', flush=True); import time; time.sleep(30)"
                 ),
                 "mode": "auto",
-                "yield_after": 0.5,
+                "background_after_seconds": 0.5,
             },
             spool_manager,
         )
@@ -915,7 +915,7 @@ async def test_foreground_mode_never_hands_off(
 
 
 @pytest.mark.asyncio
-async def test_yield_after_is_rejected_outside_auto_mode(
+async def test_background_after_is_rejected_outside_auto_mode(
     manager: ProcessManager,
     tmp_path: Path,
 ) -> None:
@@ -926,7 +926,7 @@ async def test_yield_after_is_rejected_outside_auto_mode(
         {
             "command": "print('never runs')",
             "mode": "foreground",
-            "yield_after": 1,
+            "background_after_seconds": 1,
         },
         manager,
     )
@@ -1016,7 +1016,7 @@ async def test_automatic_background_at_depth_kills_process_and_fails(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """At depth auto mode is killed at yield_after instead of being handed off."""
+    """At depth auto mode is killed at background_after_seconds instead of being handed off."""
     watcher_calls: list[Any] = []
     kill_calls: list[tuple[str, str]] = []
 
@@ -1039,7 +1039,7 @@ async def test_automatic_background_at_depth_kills_process_and_fails(
         {
             "command": "import time; time.sleep(30)",
             "mode": "auto",
-            "yield_after": 0.01,
+            "background_after_seconds": 0.01,
         },
         manager,
     )
@@ -1056,7 +1056,7 @@ async def test_fast_foreground_command_at_depth_succeeds(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A sub-agent command finishing within yield_after still succeeds synchronously."""
+    """A sub-agent command finishing within background_after_seconds succeeds."""
     watcher_calls: list[Any] = []
 
     def record_watcher(*args: Any, **kwargs: Any) -> None:
@@ -1234,21 +1234,30 @@ def test_resolve_workdir_defaults_to_workspace_without_cwd(tmp_path: Path) -> No
     assert _resolve_workdir(context, None) == workspace.resolve()
 
 
-def test_resolve_yield_after_uses_generous_default_inside_subagent(tmp_path: Path) -> None:
-    # Top level: an omitted yield_after keeps the short background-hand-off default.
+def test_resolve_background_after_seconds_uses_generous_default_inside_subagent(
+    tmp_path: Path,
+) -> None:
+    # Top level: an omitted background_after_seconds keeps the short background-hand-off default.
     top = make_context(tmp_path, nesting_depth=0)
-    assert _resolve_yield_after(top, None) == bash_module.DEFAULT_YIELD_AFTER_SECONDS
-    # Sub-agent: an omitted yield_after gets the generous foreground window instead of
+    assert (
+        _resolve_background_after_seconds(top, None) == bash_module.DEFAULT_BACKGROUND_AFTER_SECONDS
+    )
+    # Sub-agent: an omitted background_after_seconds gets the generous foreground window instead of
     # the 30s default, so a normal pytest/build is not killed before it finishes.
     sub = make_context(tmp_path, nesting_depth=1)
-    assert _resolve_yield_after(sub, None) == bash_module.DEFAULT_SUBAGENT_YIELD_AFTER_SECONDS
-    assert bash_module.DEFAULT_SUBAGENT_YIELD_AFTER_SECONDS >= 600.0
+    assert (
+        _resolve_background_after_seconds(sub, None)
+        == bash_module.DEFAULT_SUBAGENT_BACKGROUND_AFTER_SECONDS
+    )
+    assert bash_module.DEFAULT_SUBAGENT_BACKGROUND_AFTER_SECONDS >= 600.0
 
 
-def test_resolve_yield_after_honors_explicit_value_at_any_depth(tmp_path: Path) -> None:
-    # An explicit yield_after wins at both levels, so the caller can still bound tighter.
-    assert _resolve_yield_after(make_context(tmp_path, nesting_depth=0), 5.0) == 5.0
-    assert _resolve_yield_after(make_context(tmp_path, nesting_depth=1), 5.0) == 5.0
+def test_resolve_background_after_seconds_honors_explicit_value_at_any_depth(
+    tmp_path: Path,
+) -> None:
+    # An explicit background_after_seconds wins at both levels; the caller can still bound tighter.
+    assert _resolve_background_after_seconds(make_context(tmp_path, nesting_depth=0), 5.0) == 5.0
+    assert _resolve_background_after_seconds(make_context(tmp_path, nesting_depth=1), 5.0) == 5.0
 
 
 def test_resolve_workdir_resolves_relative_workdir_against_cwd(tmp_path: Path) -> None:
@@ -1385,7 +1394,7 @@ async def test_timeout_kills_process(
             "command": "import time; time.sleep(30)",
             "mode": "auto",
             "timeout": 0.01,
-            "yield_after": 1,
+            "background_after_seconds": 1,
         },
         manager,
     )
@@ -1409,7 +1418,7 @@ async def test_timeout_remains_active_after_foreground_yields_to_background(
             "command": "import time; time.sleep(30)",
             "mode": "auto",
             "timeout": 0.1,
-            "yield_after": 0.01,
+            "background_after_seconds": 0.01,
         },
         manager,
     )
@@ -1453,7 +1462,7 @@ async def test_natural_completion_at_deadline_not_reported_as_timeout(
             "command": "print('done')",
             "mode": "auto",
             "timeout": 0.01,
-            "yield_after": 1,
+            "background_after_seconds": 1,
         },
         manager,
     )
@@ -1512,7 +1521,7 @@ async def test_run_cancellation_stops_auto_mode_without_handoff(
         {
             "command": "import time; time.sleep(30)",
             "mode": "auto",
-            "yield_after": 30,
+            "background_after_seconds": 30,
         },
         manager,
     )
@@ -1612,7 +1621,7 @@ async def test_all_modes_use_managed_windowless_process_group_spawn(
         "mode": mode,
     }
     if mode == "auto":
-        arguments["yield_after"] = 0.01
+        arguments["background_after_seconds"] = 0.01
 
     result: dict[str, Any] | None = None
     try:
@@ -2051,7 +2060,7 @@ def test_register_bash_tool() -> None:
         "command",
         "description",
         "workdir",
-        "yield_after",
+        "background_after_seconds",
         "timeout",
         "env_keys",
     }
@@ -2083,7 +2092,7 @@ def test_register_bash_tool() -> None:
     )
     assert display["primary"][0]["value"] == "Run the frontend tests"
     assert display["primary"][0]["kind"] == "description"
-    assert tool.parameters["properties"]["yield_after"]["default"] == 30
+    assert tool.parameters["properties"]["background_after_seconds"]["default"] == 30
     assert tool.parallel_safe is True
 
 
@@ -2114,7 +2123,7 @@ def test_subagent_projection_exposes_only_non_handoff_bash_modes() -> None:
     assert "additionalProperties" not in parameters
     assert parameters["required"] == ["command"]
     assert parameters["properties"]["mode"]["enum"] == ["foreground", "auto"]
-    assert parameters["properties"]["yield_after"]["default"] == 1800
+    assert parameters["properties"]["background_after_seconds"]["default"] == 1800
     assert projected[1] is definitions[1]
     assert definitions[0]["description"] == BASH_TOOL_DESCRIPTION
     assert definitions[0]["parameters"] == BASH_TOOL_PARAMETERS
@@ -2613,7 +2622,7 @@ async def test_timeout_failure_carries_output_tail_and_log_pointer(
                 "command": ("print('diag-marker', flush=True); import time; time.sleep(30)"),
                 "mode": "auto",
                 "timeout": 1.5,
-                "yield_after": 10,
+                "background_after_seconds": 10,
             },
             spool_manager,
         )
@@ -2641,7 +2650,7 @@ async def test_subagent_kill_failure_carries_output_tail(
             {
                 "command": ("print('diag-marker', flush=True); import time; time.sleep(30)"),
                 "mode": "auto",
-                "yield_after": 1.5,
+                "background_after_seconds": 1.5,
             },
             spool_manager,
         )
