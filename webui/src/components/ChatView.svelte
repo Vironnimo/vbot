@@ -1727,11 +1727,11 @@
     });
   };
 
-  const handleCancelBackgroundProcess = async ({ processSessionId } = {}) => {
+  const handleCancelBackgroundProcess = async ({ processId } = {}) => {
     await chatController.cancelBackgroundProcess({
       sessionState: activeSessionState,
       agentId: activeSessionState?.agentId ?? activeAgent?.id ?? '',
-      processSessionId,
+      processId,
       projectId: displayedSessionProjectId(),
     });
   };

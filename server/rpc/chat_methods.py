@@ -575,21 +575,21 @@ async def _cancel_tool_call_chat(state: Any, params: JsonObject) -> JsonObject:
 async def _cancel_process_chat(state: Any, params: JsonObject) -> JsonObject:
     _reject_unsupported(
         params,
-        {"agent_id", "process_session_id"},
+        {"agent_id", "process_id"},
         "chat.cancel_process",
     )
 
     agent_id, _project_id = _required_agent_address(params, "agent_id")
-    process_session_id = _required_string(params, "process_session_id")
+    process_id = _required_string(params, "process_id")
     try:
-        session = await state.runtime.process_manager.cancel_for_user(
-            process_session_id,
+        tracked = await state.runtime.process_manager.cancel_for_user(
+            process_id,
             agent_id,
         )
     except Exception as exc:
         raise _map_expected_error(exc) from exc
-    status = "cancelled" if session.cancelled_by_user else session.status
-    return {"process_session_id": process_session_id, "status": status}
+    status = "cancelled" if tracked.cancelled_by_user else tracked.status
+    return {"process_id": process_id, "status": status}
 
 
 def _chat_queue_list(state: Any, params: JsonObject) -> JsonObject:

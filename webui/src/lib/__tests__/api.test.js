@@ -956,7 +956,7 @@ describe('cancelProcess()', () => {
       jsonResponse({
         ok: true,
         result: {
-          process_session_id: 'process-1',
+          process_id: 'process-1',
           status: 'cancelled',
         },
       }),
@@ -966,12 +966,12 @@ describe('cancelProcess()', () => {
       cancelProcess(
         {
           agentId: 'builder@project-one',
-          processSessionId: 'process-1',
+          processId: 'process-1',
         },
         { fetch: fetchFunction },
       ),
     ).resolves.toEqual({
-      process_session_id: 'process-1',
+      process_id: 'process-1',
       status: 'cancelled',
     });
 
@@ -979,13 +979,13 @@ describe('cancelProcess()', () => {
       method: 'chat.cancel_process',
       params: {
         agent_id: 'builder@project-one',
-        process_session_id: 'process-1',
+        process_id: 'process-1',
       },
     });
   });
 
   it('rejects a missing Agent or Process Session before sending', () => {
-    expect(() => cancelProcess({ processSessionId: 'process-1' })).toThrow(
+    expect(() => cancelProcess({ processId: 'process-1' })).toThrow(
       expect.objectContaining({ code: RPC_ERROR_INVALID_CLIENT_REQUEST }),
     );
     expect(() => cancelProcess({ agentId: 'builder' })).toThrow(

@@ -17,7 +17,7 @@ const TOOL_DISPLAY_ARGS = {
   subagent: ['action', 'id', 'agent_id', 'content'],
   web_fetch: ['url'],
   web_search: ['query'],
-  process: ['action', 'session_id'],
+  process: ['action', 'process_id'],
   cron: ['action', 'id', 'agent_id', 'schedule_type'],
   channel_send: ['channel_id', 'message'],
   skill: ['name'],
@@ -1363,13 +1363,13 @@ export const backgroundTasks = (
         continue;
       }
       tasks.push({
-        id: `bash:${bashTask.processSessionId}`,
+        id: `bash:${bashTask.processId}`,
         kind: 'bash',
         tool: child,
         dotStatus: bashTask.dotStatus,
         label: bashTask.command,
         command: bashTask.command,
-        processSessionId: bashTask.processSessionId,
+        processId: bashTask.processId,
         target: null,
         order,
       });
@@ -1393,8 +1393,8 @@ function backgroundBashTask(tool, backgroundBashStatuses) {
   }
   const envelope = parseJsonValue(tool.result);
   const data = isPlainObject(envelope?.data) ? envelope.data : {};
-  const processSessionId = trimmedString(data.session_id);
-  if (data.delivery !== 'automatic' || !processSessionId) {
+  const processId = trimmedString(data.process_id);
+  if (data.delivery !== 'automatic' || !processId) {
     return null;
   }
   const args = parseJsonValue(toolArguments(tool));
@@ -1403,11 +1403,11 @@ function backgroundBashTask(tool, backgroundBashStatuses) {
     MAX_BACKGROUND_BASH_LABEL_LENGTH,
   );
   const durableStatus = isPlainObject(backgroundBashStatuses)
-    ? backgroundBashStatuses[processSessionId]
+    ? backgroundBashStatuses[processId]
     : '';
   return {
     command: command || t('chat.activity.bashFallback', 'Bash process'),
-    processSessionId,
+    processId,
     dotStatus: backgroundBashDotStatus(durableStatus || data.status),
   };
 }
@@ -2000,7 +2000,7 @@ function humanReadableToolLabel(toolName, argumentsValue) {
   if (toolName === 'process') {
     const action = trimmedString(args.action);
     if (action) {
-      return [action, trimmedString(args.session_id)]
+      return [action, trimmedString(args.process_id)]
         .filter(Boolean)
         .join(' · ');
     }

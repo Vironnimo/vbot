@@ -1,4 +1,4 @@
-"""Agent-facing control for background Process Sessions created by the bash Tool."""
+"""Agent-facing control for background processes created by the bash Tool."""
 
 from __future__ import annotations
 
@@ -7,10 +7,10 @@ from pathlib import Path
 
 from core.tools.arguments import optional_bool, optional_string, required_string
 from core.tools.process_manager import (
+    ProcessInputClosedError,
     ProcessManager,
-    ProcessSession,
-    SessionInputClosedError,
-    SessionNotFoundError,
+    ProcessNotFoundError,
+    TrackedProcess,
 )
 from core.tools.tools import (
     JsonObject,
@@ -26,44 +26,44 @@ from core.utils.paths import model_path
 
 PROCESS_TOOL_NAME = "process"
 PROCESS_TOOL_DESCRIPTION = (
-    "Inspect or control your own background Process Sessions created by the `bash` Tool. "
-    "Use the session_id returned when a bash call continues in the background; this Tool "
+    "Inspect or control your own background processes created by the `bash` Tool. "
+    "Use the process_id returned when a bash call continues in the background; this Tool "
     "cannot access arbitrary operating-system processes. Bash output is only a capped "
     "snapshot; when log_file is present, it receives the complete combined stdout/stderr "
     "stream live through exit. Completion is delivered automatically, so use status only "
     "for an immediate snapshot, input to write raw UTF-8 to the stdin pipe, and kill to stop "
-    "a Process Session. Input is not an interactive terminal or TTY."
+    "a process. Input is not an interactive terminal or TTY."
 )
 PROCESS_ACTIONS = ("status", "input", "kill")
 PROCESS_STATUS_OUTPUT_CAP_CHARS = 30_000
 
 _PROCESS_ACTION_ARGUMENTS = {
-    "status": frozenset({"action", "session_id"}),
-    "input": frozenset({"action", "session_id", "text", "newline", "eof"}),
-    "kill": frozenset({"action", "session_id"}),
+    "status": frozenset({"action", "process_id"}),
+    "input": frozenset({"action", "process_id", "text", "newline", "eof"}),
+    "kill": frozenset({"action", "process_id"}),
 }
 
 PROCESS_TOOL_PARAMETERS: JsonObject = {
     "type": "object",
     "description": (
-        "Use status without session_id to list tracked background Process Sessions, "
-        "or provide session_id to inspect one. input and kill require session_id."
+        "Use status without process_id to list tracked background processes, "
+        "or provide process_id to inspect one. input and kill require process_id."
     ),
     "properties": {
         "action": {
             "type": "string",
             "enum": list(PROCESS_ACTIONS),
             "description": (
-                "status lists or inspects Process Sessions without waiting, input sends "
-                "stdin to a running Process Session, and kill stops one."
+                "status lists or inspects tracked processes without waiting, input sends "
+                "stdin to a running one, and kill stops one."
             ),
         },
-        "session_id": {
+        "process_id": {
             "type": "string",
             "minLength": 1,
             "description": (
-                "Process Session id returned by the bash Tool. Required for input and kill; "
-                "omit for status to list all tracked Process Sessions."
+                "Process id returned by the bash Tool. Required for input and kill; "
+                "omit for status to list all tracked processes."
             ),
         },
         "text": {
@@ -127,15 +127,15 @@ async def _handle_process_tool(
         if action == "input":
             return await _handle_input(process_manager, context, arguments)
         return await _handle_kill(process_manager, context, arguments)
-    except SessionNotFoundError:
+    except ProcessNotFoundError:
         return tool_failure(
-            "session_not_found",
-            "Process Session not found",
+            "process_not_found",
+            "Process not found",
             retryable=False,
         )
-    except SessionInputClosedError as error:
+    except ProcessInputClosedError as error:
         return tool_failure(
-            "session_input_closed",
+            "process_input_closed",
             str(error),
             retryable=False,
         )
@@ -152,20 +152,20 @@ async def _handle_status(
     context: ToolContext,
     arguments: JsonObject,
 ) -> JsonObject:
-    session_id = optional_string(arguments.get("session_id"), field_name="session_id")
-    if session_id is None:
+    process_id = optional_string(arguments.get("process_id"), field_name="process_id")
+    if process_id is None:
         return tool_success(
             {
-                "sessions": [
-                    _session_summary(session)
-                    for session in process_manager.list_sessions(context.agent_id)
+                "processes": [
+                    _process_summary(tracked)
+                    for tracked in process_manager.list_processes(context.agent_id)
                 ]
             }
         )
 
-    snapshot = await process_manager.snapshot(session_id, context.agent_id)
+    snapshot = await process_manager.snapshot(process_id, context.agent_id)
     if snapshot["status"] != "running":
-        _acknowledge_completion_after_persistence(process_manager, context, session_id)
+        _acknowledge_completion_after_persistence(process_manager, context, process_id)
     return tool_success(_status_snapshot_data(snapshot))
 
 
@@ -174,7 +174,7 @@ async def _handle_input(
     context: ToolContext,
     arguments: JsonObject,
 ) -> JsonObject:
-    session_id = required_string(arguments.get("session_id"), field_name="session_id")
+    process_id = required_string(arguments.get("process_id"), field_name="process_id")
     text = arguments.get("text")
     if not isinstance(text, str):
         raise ValueError("text must be a string")
@@ -184,7 +184,7 @@ async def _handle_input(
         raise ValueError("input must send text, append a newline, or close stdin with eof")
 
     await process_manager.send_input(
-        session_id,
+        process_id,
         context.agent_id,
         text,
         newline=newline,
@@ -192,7 +192,7 @@ async def _handle_input(
     )
     return tool_success(
         {
-            "session_id": session_id,
+            "process_id": process_id,
             "characters_sent": len(text),
             "newline": newline,
             "eof": eof,
@@ -205,22 +205,22 @@ async def _handle_kill(
     context: ToolContext,
     arguments: JsonObject,
 ) -> JsonObject:
-    session_id = required_string(arguments.get("session_id"), field_name="session_id")
-    await process_manager.kill(session_id, context.agent_id)
-    snapshot = await process_manager.snapshot(session_id, context.agent_id)
-    _acknowledge_completion_after_persistence(process_manager, context, session_id)
-    return tool_success({"session_id": session_id, "status": snapshot["status"]})
+    process_id = required_string(arguments.get("process_id"), field_name="process_id")
+    await process_manager.kill(process_id, context.agent_id)
+    snapshot = await process_manager.snapshot(process_id, context.agent_id)
+    _acknowledge_completion_after_persistence(process_manager, context, process_id)
+    return tool_success({"process_id": process_id, "status": snapshot["status"]})
 
 
-def _session_summary(session: ProcessSession) -> JsonObject:
+def _process_summary(tracked: TrackedProcess) -> JsonObject:
     return {
-        "session_id": session.session_id,
-        "status": session.status,
-        "exit_code": session.exit_code,
-        "started_at": _format_timestamp(session.started_at),
-        "finished_at": _format_timestamp(session.finished_at),
-        "stdin_open": session.stdin_open,
-        "log_file": model_path(session.log_file) if session.log_file is not None else None,
+        "process_id": tracked.process_id,
+        "status": tracked.status,
+        "exit_code": tracked.exit_code,
+        "started_at": _format_timestamp(tracked.started_at),
+        "finished_at": _format_timestamp(tracked.finished_at),
+        "stdin_open": tracked.stdin_open,
+        "log_file": model_path(tracked.log_file) if tracked.log_file is not None else None,
     }
 
 
@@ -235,7 +235,7 @@ def _status_snapshot_data(snapshot: JsonObject) -> JsonObject:
     raw_log_file = snapshot.get("log_file")
     log_file = model_path(raw_log_file) if isinstance(raw_log_file, Path) else None
     return {
-        "session_id": snapshot["session_id"],
+        "process_id": snapshot["process_id"],
         "status": snapshot["status"],
         "exit_code": snapshot["exit_code"],
         "started_at": _format_timestamp(snapshot.get("started_at")),
@@ -251,11 +251,11 @@ def _status_snapshot_data(snapshot: JsonObject) -> JsonObject:
 def _acknowledge_completion_after_persistence(
     process_manager: ProcessManager,
     context: ToolContext,
-    session_id: str,
+    process_id: str,
 ) -> None:
     """Suppress automatic delivery only after this manual terminal result is durable."""
     context.after_result_persisted(
-        lambda: process_manager.acknowledge_completion(session_id, context.agent_id)
+        lambda: process_manager.acknowledge_completion(process_id, context.agent_id)
     )
 
 
@@ -266,7 +266,7 @@ def _format_timestamp(value: object) -> str | None:
 
 
 def register_process_tool(registry: ToolRegistry, process_manager: ProcessManager) -> None:
-    """Register Agent-facing control for background bash Process Sessions."""
+    """Register Agent-facing control for background bash processes."""
     registry.register(
         PROCESS_TOOL_NAME,
         PROCESS_TOOL_DESCRIPTION,
@@ -276,7 +276,9 @@ def register_process_tool(registry: ToolRegistry, process_manager: ProcessManage
         result_schema={"type": "object"},
         display=ToolDisplay(
             parts_builder=_process_display_parts,
-            fact_builder=result_count_fact_builder("sessions", when_arguments={"action": "status"}),
+            fact_builder=result_count_fact_builder(
+                "processes", when_arguments={"action": "status"}
+            ),
         ),
         open_input_schema=True,
     )
@@ -287,9 +289,9 @@ def _process_display_parts(arguments: JsonObject) -> tuple[ToolDisplayPart, ...]
     if not isinstance(action, str) or action not in PROCESS_ACTIONS:
         return ()
     parts = [ToolDisplayPart(action, truncate="never", tooltip="none")]
-    session_id = arguments.get("session_id")
-    if isinstance(session_id, str) and session_id:
-        parts.append(ToolDisplayPart(session_id, kind="identifier", truncate="middle"))
+    process_id = arguments.get("process_id")
+    if isinstance(process_id, str) and process_id:
+        parts.append(ToolDisplayPart(process_id, kind="identifier", truncate="middle"))
     return tuple(parts)
 
 

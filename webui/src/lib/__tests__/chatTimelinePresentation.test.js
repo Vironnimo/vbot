@@ -123,7 +123,7 @@ function backgroundBashTool(overrides = {}) {
     result: {
       ok: true,
       data: {
-        session_id: 'process-one',
+        process_id: 'process-one',
         status: 'running',
         delivery: 'automatic',
       },
@@ -230,7 +230,7 @@ describe('chatTimelinePresentation', () => {
   it('summarizes the current flat process action contract', () => {
     const summary = toolArgumentSummary({
       name: 'process',
-      arguments: { action: 'status', session_id: 'process-1' },
+      arguments: { action: 'status', process_id: 'process-1' },
     });
 
     expect(summary).toBe('status · process-1');
@@ -733,7 +733,7 @@ describe('chatTimelinePresentation', () => {
       expect.objectContaining({
         kind: 'bash',
         command: 'npm run dev',
-        processSessionId: 'process-one',
+        processId: 'process-one',
         target: null,
       }),
     );

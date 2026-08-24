@@ -842,26 +842,26 @@ async def test_runtime_starts_and_stops_process_manager_sweeper(config: Config) 
 
 
 @pytest.mark.asyncio
-async def test_runtime_aclose_reaps_process_sessions(config: Config) -> None:
+async def test_runtime_aclose_reaps_tracked_processes(config: Config) -> None:
     logging.getLogger("vbot").handlers = []
     runtime = Runtime(config)
     runtime.start()
     process_manager = runtime.process_manager
     temporary_files = runtime.storage.temporary_files
-    session_id = await process_manager.spawn(
+    process_id = await process_manager.spawn(
         "run-one",
         "agent-one",
         [sys.executable, "-c", "import time; time.sleep(30)"],
         env={},
         cwd=config.data_dir,
     )
-    session = process_manager.get_session(session_id, "agent-one")
+    tracked = process_manager.get_process(process_id, "agent-one")
 
     await runtime.aclose()
 
-    assert session.status == "killed"
-    assert session.proc.returncode is not None
-    assert session.wait_task is not None and session.wait_task.done()
+    assert tracked.status == "killed"
+    assert tracked.proc.returncode is not None
+    assert tracked.wait_task is not None and tracked.wait_task.done()
     assert temporary_files._sweeper_task is None
     with pytest.raises(RuntimeError):
         _ = runtime.process_manager
@@ -890,7 +890,7 @@ async def test_runtime_aclose_cancels_runs_titles_and_reflections(config: Config
 
     run = await runtime.chat_run_manager.start(
         agent_id="main",
-        session_id="shutdown-session",
+        session_id="shutdown-tracked",
         executor=execute,
         project_id=None,
     )

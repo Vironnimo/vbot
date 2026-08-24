@@ -173,7 +173,7 @@
     try {
       if (task.kind === 'bash') {
         await onCancelBackgroundProcess({
-          processSessionId: task.processSessionId,
+          processId: task.processId,
         });
       } else {
         await onCancelSubAgent({ tool: task.tool });

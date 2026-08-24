@@ -104,9 +104,9 @@ def python_command(command: str) -> list[str]:
 async def kill_background(manager: ProcessManager, result: dict[str, Any]) -> None:
     data = result["data"]
     assert isinstance(data, dict)
-    session_id = data["session_id"]
-    assert isinstance(session_id, str)
-    await manager.kill(session_id, AGENT_ID)
+    process_id = data["process_id"]
+    assert isinstance(process_id, str)
+    await manager.kill(process_id, AGENT_ID)
 
 
 def delivered_future() -> asyncio.Future[None]:
@@ -146,7 +146,7 @@ async def test_short_command_completes_and_streams_stdout(
             "tool_call_stdout",
             {
                 "tool_call_id": "call-a",
-                "session_id": events[0][1]["session_id"],
+                "process_id": events[0][1]["process_id"],
                 "data": events[0][1]["data"],
             },
         )
@@ -262,11 +262,11 @@ async def test_ungranted_env_key_is_rejected_before_spawn(
     assert result["ok"] is False
     assert result["error"]["code"] == "invalid_arguments"
     assert "OPENAI_API_KEY" in result["error"]["message"]
-    assert manager.list_sessions(AGENT_ID) == []
+    assert manager.list_processes(AGENT_ID) == []
 
 
 @pytest.mark.asyncio
-async def test_background_mode_returns_running_session_with_clear_handoff(
+async def test_background_mode_returns_running_process_with_clear_handoff(
     manager: ProcessManager,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -286,7 +286,7 @@ async def test_background_mode_returns_running_session_with_clear_handoff(
     assert result["data"]["delivery"] == "automatic"
     assert isinstance(result["data"]["handoff_note"], str)
     assert result["data"]["handoff_note"]
-    assert isinstance(result["data"]["session_id"], str)
+    assert isinstance(result["data"]["process_id"], str)
 
     await kill_background(manager, result)
 
@@ -309,8 +309,8 @@ async def test_windows_background_process_accepts_raw_stdin_via_process_tool(
     )
     bash_data = bash_result["data"]
     assert isinstance(bash_data, dict)
-    process_session_id = bash_data["session_id"]
-    assert isinstance(process_session_id, str)
+    process_id = bash_data["process_id"]
+    assert isinstance(process_id, str)
 
     process_context = ToolContext(
         agent_id=AGENT_ID,
@@ -327,15 +327,15 @@ async def test_windows_background_process_accepts_raw_stdin_via_process_tool(
         process_context,
         {
             "action": "input",
-            "session_id": process_session_id,
+            "process_id": process_id,
             "text": "hello-from-input",
             "eof": True,
         },
     )
-    process_session = manager.get_session(process_session_id, AGENT_ID)
-    assert process_session.wait_task is not None
-    await asyncio.wait_for(process_session.wait_task, timeout=5)
-    terminal = await manager.snapshot(process_session_id, AGENT_ID)
+    tracked = manager.get_process(process_id, AGENT_ID)
+    assert tracked.wait_task is not None
+    await asyncio.wait_for(tracked.wait_task, timeout=5)
+    terminal = await manager.snapshot(process_id, AGENT_ID)
 
     assert input_result["ok"] is True
     assert terminal["status"] == "completed"
@@ -417,7 +417,7 @@ async def test_background_trigger_not_spawned_when_trigger_service_is_none(
 
     assert result["ok"] is True
     assert result["data"]["status"] == "running"
-    assert isinstance(result["data"]["session_id"], str)
+    assert isinstance(result["data"]["process_id"], str)
     await asyncio.sleep(0)
     assert watcher_started.is_set() is False
 
@@ -665,12 +665,12 @@ async def test_background_watcher_does_not_consume_process_poll_output(
     assert result["data"]["status"] == "running"
     data = result["data"]
     assert isinstance(data, dict)
-    session_id = data["session_id"]
-    assert isinstance(session_id, str)
+    process_id = data["process_id"]
+    assert isinstance(process_id, str)
 
     await asyncio.wait_for(trigger_called.wait(), timeout=2)
 
-    poll_result = await manager.poll(session_id, AGENT_ID, timeout_ms=0)
+    poll_result = await manager.poll(process_id, AGENT_ID, timeout_ms=0)
     output = poll_result.get("output")
     assert isinstance(output, str)
     assert "poll-marker" in output
@@ -737,8 +737,8 @@ async def test_terminal_process_status_cancels_already_pending_completion_delive
     )
     bash_data = bash_result["data"]
     assert isinstance(bash_data, dict)
-    process_session_id = bash_data["session_id"]
-    assert isinstance(process_session_id, str)
+    process_id = bash_data["process_id"]
+    assert isinstance(process_id, str)
     await asyncio.wait_for(completion_submitted.wait(), timeout=2)
 
     persisted_callbacks: list[Callable[[], None]] = []
@@ -758,7 +758,7 @@ async def test_terminal_process_status_cancels_already_pending_completion_delive
         process_context,
         {
             "action": "status",
-            "session_id": process_session_id,
+            "process_id": process_id,
         },
     )
 
@@ -768,9 +768,7 @@ async def test_terminal_process_status_cancels_already_pending_completion_delive
 
     persisted_callbacks[0]()
 
-    notification_task = manager.get_session(
-        process_session_id, AGENT_ID
-    ).completion_notification_task
+    notification_task = manager.get_process(process_id, AGENT_ID).completion_notification_task
     assert notification_task is not None
     await asyncio.gather(notification_task, return_exceptions=True)
     await asyncio.sleep(0)
@@ -807,7 +805,7 @@ async def test_background_after_expiry_backgrounds_running_process(
 
 
 @pytest.mark.asyncio
-async def test_auto_handoff_includes_capped_output_and_usable_process_session(
+async def test_auto_handoff_includes_capped_output_and_usable_process(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -835,17 +833,17 @@ async def test_auto_handoff_includes_capped_output_and_usable_process_session(
         assert data["mode"] == "auto"
         assert data["delivery"] == "automatic"
         assert data["process_note"] == bash_module.BASH_HANDOFF_PROCESS_NOTE
-        assert "Use session_id with the process Tool" in data["process_note"]
+        assert "Use process_id with the process Tool" in data["process_note"]
         assert (
             data["process_note"]
-            == "Use session_id with the process Tool for status, raw stdin input, or kill. "
+            == "Use process_id with the process Tool for status, raw stdin input, or kill. "
             "Process input writes to a pipe; it does not provide a terminal or TTY. output is "
             "the newest capped snapshot collected before handoff. The result's log_file field "
             "carries the path to the complete combined stdout/stderr stream, written live from "
             "command start through exit."
         )
-        process_session_id = data["session_id"]
-        assert isinstance(process_session_id, str) and process_session_id
+        process_id = data["process_id"]
+        assert isinstance(process_id, str) and process_id
         assert data["truncated"] is True
         assert data["output"].replace("\r\n", "\n").endswith("HANDOFF-END\n")
         assert "[earlier output truncated" in data["output"]
@@ -868,18 +866,18 @@ async def test_auto_handoff_includes_capped_output_and_usable_process_session(
             process_context,
             {
                 "action": "status",
-                "session_id": process_session_id,
+                "process_id": process_id,
             },
         )
 
         assert process_result["ok"] is True
-        assert process_result["data"]["session_id"] == process_session_id
+        assert process_result["data"]["process_id"] == process_id
         assert process_result["data"]["status"] == "running"
     finally:
-        sessions = spool_manager.list_sessions(AGENT_ID)
-        for session in sessions:
-            if session.status == "running":
-                await spool_manager.kill(session.session_id, AGENT_ID)
+        tracked_processes = spool_manager.list_processes(AGENT_ID)
+        for tracked in tracked_processes:
+            if tracked.status == "running":
+                await spool_manager.kill(tracked.process_id, AGENT_ID)
         await spool_manager.aclose()
 
 
@@ -971,7 +969,7 @@ async def test_invalid_execution_mode_is_rejected_before_spawn(
 
     assert result["ok"] is False
     assert result["error"]["code"] == "invalid_arguments"
-    assert manager.list_sessions(AGENT_ID) == []
+    assert manager.list_processes(AGENT_ID) == []
 
 
 @pytest.mark.asyncio
@@ -1025,9 +1023,9 @@ async def test_automatic_background_at_depth_kills_process_and_fails(
 
     original_kill = manager.kill
 
-    async def tracking_kill(session_id: str, agent_id: str) -> None:
-        kill_calls.append((session_id, agent_id))
-        await original_kill(session_id, agent_id)
+    async def tracking_kill(process_id: str, agent_id: str) -> None:
+        kill_calls.append((process_id, agent_id))
+        await original_kill(process_id, agent_id)
 
     monkeypatch.setattr(bash_module, "_maybe_spawn_completion_watcher", record_watcher)
     monkeypatch.setattr(manager, "kill", tracking_kill)
@@ -1425,8 +1423,8 @@ async def test_timeout_remains_active_after_foreground_yields_to_background(
 
     assert result["ok"] is True
     assert result["data"]["status"] == "running"
-    session_id = result["data"]["session_id"]
-    poll_result = await manager.poll(session_id, AGENT_ID, timeout_ms=2000)
+    process_id = result["data"]["process_id"]
+    poll_result = await manager.poll(process_id, AGENT_ID, timeout_ms=2000)
 
     assert poll_result["status"] == "killed"
 
@@ -1441,13 +1439,13 @@ async def test_natural_completion_at_deadline_not_reported_as_timeout(
 
     Reproduces the deadline race: the timeout flag is already set (the timer
     elapsed) but the process completes naturally, so its kill is a no-op and the
-    session ends "completed". The tool must surface that success, not a timeout.
+    process ends "completed". The tool must surface that success, not a timeout.
     """
     monkeypatch.setattr(bash_module, "_shell_argv", python_command)
 
     def already_timed_out(
         process_manager: ProcessManager,
-        session_id: str,
+        process_id: str,
         agent_id: str,
         timeout: float | None,
     ) -> tuple[None, dict[str, bool]]:
@@ -2221,10 +2219,10 @@ async def test_user_cancel_during_foreground_returns_cancelled_by_user_envelope(
 
     original_cancel_for_user = manager.cancel_for_user
 
-    async def tracking_cancel_for_user(session_id: str, agent_id: str) -> Any:
-        cancel_calls.append((session_id, agent_id))
+    async def tracking_cancel_for_user(process_id: str, agent_id: str) -> Any:
+        cancel_calls.append((process_id, agent_id))
         try:
-            return await original_cancel_for_user(session_id, agent_id)
+            return await original_cancel_for_user(process_id, agent_id)
         finally:
             kill_event.set()
 
@@ -2248,10 +2246,10 @@ async def test_user_cancel_during_foreground_returns_cancelled_by_user_envelope(
     assert result["ok"] is False
     assert result["error"]["code"] == "cancelled_by_user"
     assert cancel_calls, "process_manager.cancel_for_user should have been called"
-    session_id_used, agent_id_used = cancel_calls[0]
+    process_id_used, agent_id_used = cancel_calls[0]
     assert agent_id_used == AGENT_ID
-    assert isinstance(session_id_used, str) and session_id_used
-    assert manager.get_session(session_id_used, AGENT_ID).cancelled_by_user is True
+    assert isinstance(process_id_used, str) and process_id_used
+    assert manager.get_process(process_id_used, AGENT_ID).cancelled_by_user is True
     assert len(registered_callbacks) == 1
 
 
@@ -2293,12 +2291,12 @@ async def test_foreground_completion_unaffected_when_user_cancel_check_is_false(
 
 
 @pytest.mark.asyncio
-async def test_background_watcher_reports_aborted_by_user_when_session_is_user_cancelled(
+async def test_background_watcher_reports_aborted_by_user_when_process_is_user_cancelled(
     manager: ProcessManager,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The watcher uses 'aborted by the user' wording for user-killed sessions."""
+    """The watcher uses 'aborted by the user' wording for user-killed processes."""
     messages: list[str] = []
     trigger_called = asyncio.Event()
 
@@ -2334,10 +2332,10 @@ async def test_background_watcher_reports_aborted_by_user_when_session_is_user_c
     assert result["data"]["status"] == "running"
     data = result["data"]
     assert isinstance(data, dict)
-    session_id = data["session_id"]
-    assert isinstance(session_id, str) and session_id
+    process_id = data["process_id"]
+    assert isinstance(process_id, str) and process_id
 
-    await manager.cancel_for_user(session_id, AGENT_ID)
+    await manager.cancel_for_user(process_id, AGENT_ID)
 
     await asyncio.wait_for(trigger_called.wait(), timeout=2)
 
@@ -2346,7 +2344,7 @@ async def test_background_watcher_reports_aborted_by_user_when_session_is_user_c
     assert "aborted by the user" in message
     assert "Background process completed." not in message
     assert "Exit code:" not in message
-    assert f"Process Session: {session_id}" in message
+    assert f"Process ID: {process_id}" in message
 
 
 @pytest.mark.asyncio
@@ -2409,7 +2407,7 @@ def test_background_bash_statuses_folds_handoffs_manual_results_and_completion_n
             content=json.dumps(
                 tool_success(
                     {
-                        "session_id": "process-one",
+                        "process_id": "process-one",
                         "status": "running",
                         "delivery": "automatic",
                     }
@@ -2419,12 +2417,12 @@ def test_background_bash_statuses_folds_handoffs_manual_results_and_completion_n
         ChatMessage.tool(
             tool_call_id="foreground",
             name="bash",
-            content=json.dumps(tool_success({"session_id": "foreground", "status": "completed"})),
+            content=json.dumps(tool_success({"process_id": "foreground", "status": "completed"})),
         ),
         ChatMessage.note(
             "Automatic completion delivery\n\n"
             "### Bash process — completed\n"
-            "Process Session: process-one\n"
+            "Process ID: process-one\n"
             "Command: npm test"
         ),
         ChatMessage.tool(
@@ -2433,7 +2431,7 @@ def test_background_bash_statuses_folds_handoffs_manual_results_and_completion_n
             content=json.dumps(
                 tool_success(
                     {
-                        "session_id": "process-two",
+                        "process_id": "process-two",
                         "status": "running",
                         "delivery": "automatic",
                     }
@@ -2443,12 +2441,10 @@ def test_background_bash_statuses_folds_handoffs_manual_results_and_completion_n
         ChatMessage.tool(
             tool_call_id="process-two",
             name="process",
-            content=json.dumps(tool_success({"session_id": "process-two", "status": "killed"})),
+            content=json.dumps(tool_success({"process_id": "process-two", "status": "killed"})),
         ),
         ChatMessage.note(
-            "### Bash process — aborted by user\n"
-            "Process Session: process-three\n"
-            "Command: dev server"
+            "### Bash process — aborted by user\nProcess ID: process-three\nCommand: dev server"
         ),
     ]
 
@@ -2474,7 +2470,7 @@ async def test_user_cancel_kill_failure_is_logged(
     """
     kill_failed = asyncio.Event()
 
-    async def failing_cancel_for_user(session_id: str, agent_id: str) -> None:
+    async def failing_cancel_for_user(process_id: str, agent_id: str) -> None:
         kill_failed.set()
         raise RuntimeError("kill exploded")
 
@@ -2493,7 +2489,7 @@ async def test_user_cancel_kill_failure_is_logged(
     )
     # Register the user-cancel callback through the handler's wiring without
     # spawning a real process by exercising the registrar directly.
-    bash_module._register_user_cancel_callback(manager, context, "session-x")
+    bash_module._register_user_cancel_callback(manager, context, "process-x")
     assert captured_callback, "cancel callback should have been registered"
 
     with caplog.at_level(logging.ERROR, logger="vbot.tools.bash"):

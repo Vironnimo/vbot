@@ -27,7 +27,7 @@ from core.utils.logging import get_logger
 _LOGGER = get_logger("tools.process_manager")
 
 PROCESS_BUFFER_CAP_BYTES = 500 * 1024
-FINISHED_SESSION_TTL = timedelta(minutes=30)
+FINISHED_PROCESS_TTL = timedelta(minutes=30)
 SWEEP_INTERVAL_SECONDS = 60.0
 INPUT_IDLE_SECONDS = 15.0
 SUBMIT_BYTES = b"\r\n" if os.name == "nt" else b"\n"
@@ -200,16 +200,16 @@ class ProcessManagerError(VBotError):
     """Base class for expected process manager errors."""
 
 
-class SessionNotFoundError(ProcessManagerError):
-    """Raised when a process session is missing or belongs to another agent."""
+class ProcessNotFoundError(ProcessManagerError):
+    """Raised when a process is missing or belongs to another agent."""
 
 
-class SessionInputClosedError(ProcessManagerError):
+class ProcessInputClosedError(ProcessManagerError):
     """Raised when writing to a process whose stdin is unavailable."""
 
 
-class SessionStillRunningError(ProcessManagerError):
-    """Raised when an operation requires a finished process session."""
+class ProcessStillRunningError(ProcessManagerError):
+    """Raised when an operation requires a finished process."""
 
 
 @dataclass(frozen=True)
@@ -223,10 +223,10 @@ class OutputChunk:
 
 
 @dataclass
-class ProcessSession:
+class TrackedProcess:
     """In-memory state for one managed process."""
 
-    session_id: str
+    process_id: str
     agent_id: str
     scope_key: str
     proc: Process
@@ -262,13 +262,13 @@ class ProcessSession:
 
 
 class ProcessManager:
-    """Spawn, track, poll, and terminate subprocess sessions."""
+    """Spawn, track, poll, and terminate subprocesses."""
 
     def __init__(
         self,
         *,
         buffer_cap_bytes: int = PROCESS_BUFFER_CAP_BYTES,
-        finished_session_ttl: timedelta = FINISHED_SESSION_TTL,
+        finished_process_ttl: timedelta = FINISHED_PROCESS_TTL,
         sweep_interval_seconds: float = SWEEP_INTERVAL_SECONDS,
         temporary_files: TemporaryFileManager | None = None,
     ) -> None:
@@ -278,10 +278,10 @@ class ProcessManager:
             raise ValueError("Sweep interval must be positive")
 
         self._buffer_cap_bytes = buffer_cap_bytes
-        self._finished_session_ttl = finished_session_ttl
+        self._finished_process_ttl = finished_process_ttl
         self._sweep_interval_seconds = sweep_interval_seconds
         self._temporary_files = temporary_files
-        self._sessions: dict[str, ProcessSession] = {}
+        self._processes: dict[str, TrackedProcess] = {}
         self._sweeper_task: asyncio.Task[None] | None = None
 
     def start(self) -> None:
@@ -292,17 +292,17 @@ class ProcessManager:
         self._sweeper_task = asyncio.create_task(self._sweep_loop(), name="process-manager-sweep")
 
     def stop(self) -> None:
-        """Stop the TTL sweeper task and kill active process sessions."""
+        """Stop the TTL sweeper task and kill active processes."""
         if self._sweeper_task is not None:
             self._sweeper_task.cancel()
             self._sweeper_task = None
 
-        for session in list(self._sessions.values()):
-            notification_task = session.completion_notification_task
+        for tracked in list(self._processes.values()):
+            notification_task = tracked.completion_notification_task
             if notification_task is not None and not notification_task.done():
                 notification_task.cancel()
-            if session.status == "running":
-                self._kill_session_now(session)
+            if tracked.status == "running":
+                self._kill_process_now(tracked)
 
     async def aclose(self) -> None:
         """Stop the manager and await tracked task cleanup."""
@@ -312,12 +312,12 @@ class ProcessManager:
         tasks: list[asyncio.Task[None]] = []
         if sweeper_task is not None and not sweeper_task.done():
             tasks.append(sweeper_task)
-        for session in list(self._sessions.values()):
+        for tracked in list(self._processes.values()):
             for task in (
-                session.wait_task,
-                session.stdout_task,
-                session.stderr_task,
-                session.completion_notification_task,
+                tracked.wait_task,
+                tracked.stdout_task,
+                tracked.stderr_task,
+                tracked.completion_notification_task,
             ):
                 if task is not None and not task.done():
                     tasks.append(task)
@@ -334,7 +334,7 @@ class ProcessManager:
         env: dict[str, str] | None,
         cwd: str | Path | None,
     ) -> str:
-        """Start a subprocess and return its process session id."""
+        """Start a subprocess and return its process id."""
         if not scope_key:
             raise ValueError("Process scope key is required")
         if not agent_id:
@@ -363,9 +363,9 @@ class ProcessManager:
             start_new_session=start_new_session,
             pass_fds=pass_fds,
         )
-        session_id = uuid.uuid4().hex
-        session = ProcessSession(
-            session_id=session_id,
+        process_id = uuid.uuid4().hex
+        tracked = TrackedProcess(
+            process_id=process_id,
             agent_id=agent_id,
             scope_key=scope_key,
             proc=proc,
@@ -383,76 +383,76 @@ class ProcessManager:
             last_output_at=None,
             stdin_open=proc.stdin is not None,
         )
-        self._open_log_file(session)
-        self._sessions[session_id] = session
-        session.stdout_task = asyncio.create_task(
-            self._read_stream(session, "stdout"),
-            name=f"process:{session_id}:stdout",
+        self._open_log_file(tracked)
+        self._processes[process_id] = tracked
+        tracked.stdout_task = asyncio.create_task(
+            self._read_stream(tracked, "stdout"),
+            name=f"process:{process_id}:stdout",
         )
-        session.stdout_task.add_done_callback(
+        tracked.stdout_task.add_done_callback(
             lambda task: _log_background_task_result(
-                task, f"Process stdout reader failed for session={session_id}"
+                task, f"Process stdout reader failed for process={process_id}"
             )
         )
-        session.stderr_task = asyncio.create_task(
-            self._read_stream(session, "stderr"),
-            name=f"process:{session_id}:stderr",
+        tracked.stderr_task = asyncio.create_task(
+            self._read_stream(tracked, "stderr"),
+            name=f"process:{process_id}:stderr",
         )
-        session.stderr_task.add_done_callback(
+        tracked.stderr_task.add_done_callback(
             lambda task: _log_background_task_result(
-                task, f"Process stderr reader failed for session={session_id}"
+                task, f"Process stderr reader failed for process={process_id}"
             )
         )
-        session.wait_task = asyncio.create_task(
-            self._watch_process(session),
-            name=f"process:{session_id}:wait",
+        tracked.wait_task = asyncio.create_task(
+            self._watch_process(tracked),
+            name=f"process:{process_id}:wait",
         )
-        session.wait_task.add_done_callback(
+        tracked.wait_task.add_done_callback(
             lambda task: _log_background_task_result(
-                task, f"Process completion watcher failed for session={session_id}"
+                task, f"Process completion watcher failed for process={process_id}"
             )
         )
-        return session_id
+        return process_id
 
-    def get_session(self, session_id: str, agent_id: str) -> ProcessSession:
-        """Return a session owned by agent_id, hiding cross-agent sessions."""
-        return self._session_for_agent(session_id, agent_id)
+    def get_process(self, process_id: str, agent_id: str) -> TrackedProcess:
+        """Return a tracked process owned by agent_id, hiding cross-agent processes."""
+        return self._process_for_agent(process_id, agent_id)
 
-    def list_sessions(self, agent_id: str) -> list[ProcessSession]:
-        """Return sessions visible to one agent."""
+    def list_processes(self, agent_id: str) -> list[TrackedProcess]:
+        """Return processes visible to one agent."""
         return sorted(
-            [session for session in self._sessions.values() if session.agent_id == agent_id],
-            key=lambda session: session.started_at,
+            [tracked for tracked in self._processes.values() if tracked.agent_id == agent_id],
+            key=lambda tracked: tracked.started_at,
         )
 
-    async def poll(self, session_id: str, agent_id: str, timeout_ms: int = 0) -> dict[str, object]:
-        """Return output produced since the previous poll for this session."""
-        session = self._session_for_agent(session_id, agent_id)
+    async def poll(self, process_id: str, agent_id: str, timeout_ms: int = 0) -> dict[str, object]:
+        """Return output produced since the previous poll for this process."""
+        tracked = self._process_for_agent(process_id, agent_id)
         timeout_seconds = max(timeout_ms, 0) / 1000
         deadline = asyncio.get_running_loop().time() + timeout_seconds
 
         while True:
-            poll_result = await self._poll_once(session)
-            if poll_result["output"] or session.status != "running" or timeout_seconds == 0:
+            poll_result = await self._poll_once(tracked)
+            if poll_result["output"] or tracked.status != "running" or timeout_seconds == 0:
                 return poll_result
 
             remaining_seconds = deadline - asyncio.get_running_loop().time()
             if remaining_seconds <= 0:
                 return poll_result
 
-            session.output_event.clear()
-            poll_result = await self._poll_once(session)
-            if poll_result["output"] or session.status != "running":
+            tracked.output_event.clear()
+            poll_result = await self._poll_once(tracked)
+            if poll_result["output"] or tracked.status != "running":
                 return poll_result
 
             try:
-                await asyncio.wait_for(session.output_event.wait(), timeout=remaining_seconds)
+                await asyncio.wait_for(tracked.output_event.wait(), timeout=remaining_seconds)
             except TimeoutError:
-                return await self._poll_once(session)
+                return await self._poll_once(tracked)
 
     async def log(
         self,
-        session_id: str,
+        process_id: str,
         agent_id: str,
         offset: int = 0,
         limit: int | None = None,
@@ -463,38 +463,38 @@ class ProcessManager:
         if limit is not None and limit < 0:
             raise ValueError("Log limit must not be negative")
 
-        session = self._session_for_agent(session_id, agent_id)
-        async with session.lock:
-            text = _decode(bytes(session.combined_buffer))
+        tracked = self._process_for_agent(process_id, agent_id)
+        async with tracked.lock:
+            text = _decode(bytes(tracked.combined_buffer))
             lines = text.splitlines(keepends=True)
             selected_lines = lines[offset:] if limit is None else lines[offset : offset + limit]
             return {
-                "session_id": session.session_id,
+                "process_id": tracked.process_id,
                 "output": "".join(selected_lines),
                 "total_lines": len(lines),
-                "truncated": session.truncated,
+                "truncated": tracked.truncated,
             }
 
-    async def snapshot(self, session_id: str, agent_id: str) -> dict[str, object]:
-        """Return one non-consuming snapshot of a tracked Process Session."""
-        session = self._session_for_agent(session_id, agent_id)
-        async with session.lock:
+    async def snapshot(self, process_id: str, agent_id: str) -> dict[str, object]:
+        """Return one non-consuming snapshot of one tracked process."""
+        tracked = self._process_for_agent(process_id, agent_id)
+        async with tracked.lock:
             return {
-                "session_id": session.session_id,
-                "status": session.status,
-                "exit_code": session.exit_code,
-                "started_at": session.started_at,
-                "finished_at": session.finished_at,
-                "output": _decode(bytes(session.combined_buffer)),
-                "truncated": session.truncated,
-                "stdin_open": session.stdin_open,
-                "waiting_for_input": _is_waiting_for_input(session),
-                "log_file": session.log_file,
+                "process_id": tracked.process_id,
+                "status": tracked.status,
+                "exit_code": tracked.exit_code,
+                "started_at": tracked.started_at,
+                "finished_at": tracked.finished_at,
+                "output": _decode(bytes(tracked.combined_buffer)),
+                "truncated": tracked.truncated,
+                "stdin_open": tracked.stdin_open,
+                "waiting_for_input": _is_waiting_for_input(tracked),
+                "log_file": tracked.log_file,
             }
 
     async def send_input(
         self,
-        session_id: str,
+        process_id: str,
         agent_id: str,
         text: str,
         *,
@@ -502,26 +502,26 @@ class ProcessManager:
         eof: bool,
     ) -> None:
         """Send UTF-8 text, an optional line ending, and optional EOF to stdin."""
-        session = self._session_for_agent(session_id, agent_id)
-        stdin = session.proc.stdin
-        if stdin is None or not session.stdin_open:
-            raise SessionInputClosedError(f"Process stdin is closed: {session_id}")
+        tracked = self._process_for_agent(process_id, agent_id)
+        stdin = tracked.proc.stdin
+        if stdin is None or not tracked.stdin_open:
+            raise ProcessInputClosedError(f"Process stdin is closed: {process_id}")
 
         payload = text.encode("utf-8")
         if newline:
             payload += SUBMIT_BYTES
         if payload:
-            await self._write_stdin(session, stdin, payload)
+            await self._write_stdin(tracked, stdin, payload)
         if eof:
-            await self._close_stdin(session)
+            await self._close_stdin(tracked)
 
     @staticmethod
     async def _write_stdin(
-        session: ProcessSession,
+        tracked: TrackedProcess,
         stdin: StreamWriter,
         payload: bytes,
     ) -> None:
-        """Write bytes to stdin, mapping a raced close to SessionInputClosedError.
+        """Write bytes to stdin, mapping a raced close to ProcessInputClosedError.
 
         The upfront ``stdin_open`` check cannot stop a kill or the process
         exiting from closing stdin while ``drain()`` awaits, so a concurrent
@@ -533,81 +533,81 @@ class ProcessManager:
             stdin.write(payload)
             await stdin.drain()
         except (BrokenPipeError, ConnectionResetError) as error:
-            session.stdin_open = False
-            raise SessionInputClosedError(
-                f"Process stdin is closed: {session.session_id}"
+            tracked.stdin_open = False
+            raise ProcessInputClosedError(
+                f"Process stdin is closed: {tracked.process_id}"
             ) from error
 
-    async def kill(self, session_id: str, agent_id: str) -> None:
-        """Terminate a session with SIGKILL / platform equivalent."""
-        session = self._session_for_agent(session_id, agent_id)
-        await self._kill_session(session)
+    async def kill(self, process_id: str, agent_id: str) -> None:
+        """Terminate a tracked process with SIGKILL / platform equivalent."""
+        tracked = self._process_for_agent(process_id, agent_id)
+        await self._kill_process(tracked)
 
-    async def cancel_for_user(self, session_id: str, agent_id: str) -> ProcessSession:
-        """Terminate one running session and retain its explicit user origin."""
-        session = self._session_for_agent(session_id, agent_id)
-        await self._kill_session(session, cancelled_by_user=True)
-        return session
+    async def cancel_for_user(self, process_id: str, agent_id: str) -> TrackedProcess:
+        """Terminate one running process and retain its explicit user origin."""
+        tracked = self._process_for_agent(process_id, agent_id)
+        await self._kill_process(tracked, cancelled_by_user=True)
+        return tracked
 
-    def mark_backgrounded(self, session_id: str, agent_id: str) -> None:
+    def mark_backgrounded(self, process_id: str, agent_id: str) -> None:
         """Stop accumulating foreground-only stdout/stderr line buffers."""
-        session = self._session_for_agent(session_id, agent_id)
-        session.foreground_capture_open = False
+        tracked = self._process_for_agent(process_id, agent_id)
+        tracked.foreground_capture_open = False
 
     def register_completion_notification(
         self,
-        session_id: str,
+        process_id: str,
         agent_id: str,
         task: asyncio.Task[None],
     ) -> None:
         """Track the automatic completion delivery for one background process."""
-        session = self._session_for_agent(session_id, agent_id)
-        current = session.completion_notification_task
+        tracked = self._process_for_agent(process_id, agent_id)
+        current = tracked.completion_notification_task
         if current is not None and not current.done():
             raise ProcessManagerError(
-                f"Process completion notification is already registered: {session_id}"
+                f"Process completion notification is already registered: {process_id}"
             )
-        session.completion_notification_task = task
-        if session.completion_acknowledged:
+        tracked.completion_notification_task = task
+        if tracked.completion_acknowledged:
             task.cancel()
 
-    def acknowledge_completion(self, session_id: str, agent_id: str) -> None:
+    def acknowledge_completion(self, process_id: str, agent_id: str) -> None:
         """Cancel automatic delivery after a terminal result was durably delivered."""
-        session = self._session_for_agent(session_id, agent_id)
-        if session.status == "running":
-            raise SessionStillRunningError(f"Process session is still running: {session_id}")
-        session.completion_acknowledged = True
-        notification_task = session.completion_notification_task
+        tracked = self._process_for_agent(process_id, agent_id)
+        if tracked.status == "running":
+            raise ProcessStillRunningError(f"Process is still running: {process_id}")
+        tracked.completion_acknowledged = True
+        notification_task = tracked.completion_notification_task
         if notification_task is not None and not notification_task.done():
             notification_task.cancel()
 
     def cancel_scope(self, scope_key: str) -> None:
-        """Kill active sessions in a run scope, independent of agent ownership."""
+        """Kill active processes in a run scope, independent of agent ownership."""
         if not scope_key:
             return
 
-        for session in list(self._sessions.values()):
-            if session.scope_key == scope_key and session.status == "running":
-                self._kill_session_now(session)
+        for tracked in list(self._processes.values()):
+            if tracked.scope_key == scope_key and tracked.status == "running":
+                self._kill_process_now(tracked)
 
     async def sweep_finished(self) -> None:
-        """Remove finished sessions older than the configured TTL."""
-        expires_before = _utc_now() - self._finished_session_ttl
+        """Remove finished processes older than the configured TTL."""
+        expires_before = _utc_now() - self._finished_process_ttl
         expired_ids = [
-            session.session_id
-            for session in self._sessions.values()
-            if session.finished_at is not None and session.finished_at < expires_before
+            tracked.process_id
+            for tracked in self._processes.values()
+            if tracked.finished_at is not None and tracked.finished_at < expires_before
         ]
-        for session_id in expired_ids:
-            self._sessions.pop(session_id, None)
+        for process_id in expired_ids:
+            self._processes.pop(process_id, None)
 
-    def _open_log_file(self, session: ProcessSession) -> None:
+    def _open_log_file(self, tracked: TrackedProcess) -> None:
         """Attach an incremental spool file so the full output survives buffer caps.
 
         The in-memory buffer keeps only the newest ``buffer_cap_bytes``; the log
         file receives every chunk as it arrives, so it is the complete record a
         tool result can point the model at. Spooling is best-effort: on any I/O
-        error the session simply runs without a log file.
+        error the process simply runs without a log file.
         """
         if self._temporary_files is None:
             return
@@ -616,69 +616,69 @@ class ProcessManager:
         try:
             lease = self._temporary_files.create("bash", ".log")
             # newline="" keeps the process's own line endings byte-faithful.
-            session.log_handle = lease.path.open("w", encoding="utf-8", newline="")
+            tracked.log_handle = lease.path.open("w", encoding="utf-8", newline="")
         except OSError as error:
             if lease is not None:
                 lease.finish()
             _LOGGER.warning(
-                "Process log file unavailable for session=%s: %s",
-                session.session_id,
+                "Process log file unavailable for process=%s: %s",
+                tracked.process_id,
                 error,
             )
             return
 
-        session.log_file = lease.path
-        session.log_lease = lease
+        tracked.log_file = lease.path
+        tracked.log_lease = lease
         # Chunks can split multi-byte UTF-8 characters; an incremental decoder
         # carries the partial bytes over to the next chunk instead of replacing.
-        session.log_decoder = codecs.getincrementaldecoder("utf-8")("replace")
+        tracked.log_decoder = codecs.getincrementaldecoder("utf-8")("replace")
 
-    def _spill_to_log_file(self, session: ProcessSession, chunk: bytes) -> None:
-        if session.log_handle is None or session.log_decoder is None:
+    def _spill_to_log_file(self, tracked: TrackedProcess, chunk: bytes) -> None:
+        if tracked.log_handle is None or tracked.log_decoder is None:
             return
 
         try:
-            text = strip_ansi(session.log_decoder.decode(chunk))
+            text = strip_ansi(tracked.log_decoder.decode(chunk))
             if text:
-                session.log_handle.write(text)
+                tracked.log_handle.write(text)
                 # Flush per chunk so the file is greppable while the process runs.
-                session.log_handle.flush()
+                tracked.log_handle.flush()
         except OSError as error:
             _LOGGER.warning(
-                "Process log file write failed for session=%s, disabling: %s",
-                session.session_id,
+                "Process log file write failed for process=%s, disabling: %s",
+                tracked.process_id,
                 error,
             )
-            self._close_log_file(session)
-            session.log_file = None
+            self._close_log_file(tracked)
+            tracked.log_file = None
 
-    def _close_log_file(self, session: ProcessSession) -> None:
-        if session.log_handle is not None:
+    def _close_log_file(self, tracked: TrackedProcess) -> None:
+        if tracked.log_handle is not None:
             with contextlib.suppress(OSError):
-                if session.log_decoder is not None:
-                    remainder = strip_ansi(session.log_decoder.decode(b"", final=True))
+                if tracked.log_decoder is not None:
+                    remainder = strip_ansi(tracked.log_decoder.decode(b"", final=True))
                     if remainder:
-                        session.log_handle.write(remainder)
-                session.log_handle.close()
-        session.log_handle = None
-        session.log_decoder = None
-        if session.log_lease is not None:
-            session.log_lease.finish()
-            session.log_lease = None
+                        tracked.log_handle.write(remainder)
+                tracked.log_handle.close()
+        tracked.log_handle = None
+        tracked.log_decoder = None
+        if tracked.log_lease is not None:
+            tracked.log_lease.finish()
+            tracked.log_lease = None
 
-    async def _poll_once(self, session: ProcessSession) -> dict[str, object]:
-        async with session.lock:
-            start_offset = max(session.poll_offset, session.buffer_start_offset)
-            end_offset = session.buffer_start_offset + len(session.combined_buffer)
-            relative_start = start_offset - session.buffer_start_offset
-            output = bytes(session.combined_buffer[relative_start:])
-            chunks = _chunks_between(session.output_chunks, start_offset, end_offset)
-            session.poll_offset = end_offset
-            session.last_poll_at = _utc_now()
+    async def _poll_once(self, tracked: TrackedProcess) -> dict[str, object]:
+        async with tracked.lock:
+            start_offset = max(tracked.poll_offset, tracked.buffer_start_offset)
+            end_offset = tracked.buffer_start_offset + len(tracked.combined_buffer)
+            relative_start = start_offset - tracked.buffer_start_offset
+            output = bytes(tracked.combined_buffer[relative_start:])
+            chunks = _chunks_between(tracked.output_chunks, start_offset, end_offset)
+            tracked.poll_offset = end_offset
+            tracked.last_poll_at = _utc_now()
             return {
-                "session_id": session.session_id,
-                "status": session.status,
-                "exit_code": session.exit_code,
+                "process_id": tracked.process_id,
+                "status": tracked.status,
+                "exit_code": tracked.exit_code,
                 "output": _decode(output),
                 "stdout": _decode(
                     b"".join(chunk.data for chunk in chunks if chunk.stream == "stdout")
@@ -689,12 +689,12 @@ class ProcessManager:
                 "chunks": [
                     {"stream": chunk.stream, "data": _decode(chunk.data)} for chunk in chunks
                 ],
-                "truncated": session.truncated,
-                "waiting_for_input": _is_waiting_for_input(session),
+                "truncated": tracked.truncated,
+                "waiting_for_input": _is_waiting_for_input(tracked),
             }
 
-    async def _read_stream(self, session: ProcessSession, stream_name: OutputStreamName) -> None:
-        stream = session.proc.stdout if stream_name == "stdout" else session.proc.stderr
+    async def _read_stream(self, tracked: TrackedProcess, stream_name: OutputStreamName) -> None:
+        stream = tracked.proc.stdout if stream_name == "stdout" else tracked.proc.stderr
         if stream is None:
             return
 
@@ -702,59 +702,59 @@ class ProcessManager:
             chunk = await stream.read(4096)
             if not chunk:
                 return
-            async with session.lock:
-                self._append_output(session, stream_name, chunk)
-            session.output_event.set()
+            async with tracked.lock:
+                self._append_output(tracked, stream_name, chunk)
+            tracked.output_event.set()
 
-    async def _watch_process(self, session: ProcessSession) -> None:
-        return_code = await session.proc.wait()
-        await self._close_stdin(session)
-        await self._await_reader_tasks(session)
-        self._release_process_pipe_references(session)
-        async with session.lock:
-            session.exit_code = return_code
-            if session.status == "running":
-                session.status = "completed" if return_code == 0 else "failed"
-            session.finished_at = _utc_now()
-            session.stdin_open = False
-            self._close_log_file(session)
-        session.output_event.set()
+    async def _watch_process(self, tracked: TrackedProcess) -> None:
+        return_code = await tracked.proc.wait()
+        await self._close_stdin(tracked)
+        await self._await_reader_tasks(tracked)
+        self._release_process_pipe_references(tracked)
+        async with tracked.lock:
+            tracked.exit_code = return_code
+            if tracked.status == "running":
+                tracked.status = "completed" if return_code == 0 else "failed"
+            tracked.finished_at = _utc_now()
+            tracked.stdin_open = False
+            self._close_log_file(tracked)
+        tracked.output_event.set()
 
-    async def _await_reader_tasks(self, session: ProcessSession) -> None:
-        tasks = [task for task in (session.stdout_task, session.stderr_task) if task is not None]
+    async def _await_reader_tasks(self, tracked: TrackedProcess) -> None:
+        tasks = [task for task in (tracked.stdout_task, tracked.stderr_task) if task is not None]
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
 
     def _append_output(
         self,
-        session: ProcessSession,
+        tracked: TrackedProcess,
         stream_name: OutputStreamName,
         chunk: bytes,
     ) -> None:
-        start_offset = session.buffer_start_offset + len(session.combined_buffer)
-        session.combined_buffer.extend(chunk)
+        start_offset = tracked.buffer_start_offset + len(tracked.combined_buffer)
+        tracked.combined_buffer.extend(chunk)
         end_offset = start_offset + len(chunk)
-        session.output_chunks.append(OutputChunk(stream_name, chunk, start_offset, end_offset))
-        self._spill_to_log_file(session, chunk)
-        if session.foreground_capture_open:
-            target = session.stdout_lines if stream_name == "stdout" else session.stderr_lines
+        tracked.output_chunks.append(OutputChunk(stream_name, chunk, start_offset, end_offset))
+        self._spill_to_log_file(tracked, chunk)
+        if tracked.foreground_capture_open:
+            target = tracked.stdout_lines if stream_name == "stdout" else tracked.stderr_lines
             target.append(chunk)
             if stream_name == "stdout":
-                session.foreground_stdout_bytes += len(chunk)
+                tracked.foreground_stdout_bytes += len(chunk)
             else:
-                session.foreground_stderr_bytes += len(chunk)
-            self._enforce_foreground_capture_cap(session, stream_name)
-        session.last_output_at = _utc_now()
-        self._enforce_buffer_cap(session)
+                tracked.foreground_stderr_bytes += len(chunk)
+            self._enforce_foreground_capture_cap(tracked, stream_name)
+        tracked.last_output_at = _utc_now()
+        self._enforce_buffer_cap(tracked)
 
     def _enforce_foreground_capture_cap(
         self,
-        session: ProcessSession,
+        tracked: TrackedProcess,
         newest_stream_name: OutputStreamName,
     ) -> None:
         overflow = (
-            session.foreground_stdout_bytes
-            + session.foreground_stderr_bytes
+            tracked.foreground_stdout_bytes
+            + tracked.foreground_stderr_bytes
             - self._buffer_cap_bytes
         )
         if overflow <= 0:
@@ -763,18 +763,18 @@ class ProcessManager:
         first_stream_name: OutputStreamName = (
             "stderr" if newest_stream_name == "stdout" else "stdout"
         )
-        overflow = self._trim_foreground_stream(session, first_stream_name, overflow)
+        overflow = self._trim_foreground_stream(tracked, first_stream_name, overflow)
         if overflow > 0:
-            self._trim_foreground_stream(session, newest_stream_name, overflow)
-        session.truncated = True
+            self._trim_foreground_stream(tracked, newest_stream_name, overflow)
+        tracked.truncated = True
 
     @staticmethod
     def _trim_foreground_stream(
-        session: ProcessSession,
+        tracked: TrackedProcess,
         stream_name: OutputStreamName,
         bytes_to_remove: int,
     ) -> int:
-        chunks = session.stdout_lines if stream_name == "stdout" else session.stderr_lines
+        chunks = tracked.stdout_lines if stream_name == "stdout" else tracked.stderr_lines
         while bytes_to_remove > 0 and chunks:
             chunk = chunks[0]
             if len(chunk) <= bytes_to_remove:
@@ -787,57 +787,57 @@ class ProcessManager:
                 bytes_to_remove = 0
 
             if stream_name == "stdout":
-                session.foreground_stdout_bytes -= removed
+                tracked.foreground_stdout_bytes -= removed
             else:
-                session.foreground_stderr_bytes -= removed
+                tracked.foreground_stderr_bytes -= removed
 
         return bytes_to_remove
 
-    def _enforce_buffer_cap(self, session: ProcessSession) -> None:
-        overflow = len(session.combined_buffer) - self._buffer_cap_bytes
+    def _enforce_buffer_cap(self, tracked: TrackedProcess) -> None:
+        overflow = len(tracked.combined_buffer) - self._buffer_cap_bytes
         if overflow <= 0:
             return
 
-        del session.combined_buffer[:overflow]
-        session.buffer_start_offset += overflow
-        session.truncated = True
-        session.output_chunks = [
+        del tracked.combined_buffer[:overflow]
+        tracked.buffer_start_offset += overflow
+        tracked.truncated = True
+        tracked.output_chunks = [
             chunk
-            for chunk in session.output_chunks
-            if chunk.end_offset > session.buffer_start_offset
+            for chunk in tracked.output_chunks
+            if chunk.end_offset > tracked.buffer_start_offset
         ]
 
-    async def _kill_session(
+    async def _kill_process(
         self,
-        session: ProcessSession,
+        tracked: TrackedProcess,
         *,
         cancelled_by_user: bool = False,
     ) -> None:
-        if session.status != "running":
+        if tracked.status != "running":
             return
 
-        self._kill_session_now(session, cancelled_by_user=cancelled_by_user)
-        if session.wait_task is not None:
-            await asyncio.gather(session.wait_task, return_exceptions=True)
+        self._kill_process_now(tracked, cancelled_by_user=cancelled_by_user)
+        if tracked.wait_task is not None:
+            await asyncio.gather(tracked.wait_task, return_exceptions=True)
 
-    def _kill_session_now(
+    def _kill_process_now(
         self,
-        session: ProcessSession,
+        tracked: TrackedProcess,
         *,
         cancelled_by_user: bool = False,
     ) -> None:
-        if session.status != "running":
+        if tracked.status != "running":
             return
 
-        session.cancelled_by_user = cancelled_by_user
-        session.status = "killed"
-        self._close_stdin_now(session)
+        tracked.cancelled_by_user = cancelled_by_user
+        tracked.status = "killed"
+        self._close_stdin_now(tracked)
         try:
-            self._kill_process_tree(session.proc)
+            self._kill_process_tree(tracked.proc)
         except ProcessLookupError:
-            session.finished_at = _utc_now()
-            session.stdin_open = False
-        session.output_event.set()
+            tracked.finished_at = _utc_now()
+            tracked.stdin_open = False
+        tracked.output_event.set()
 
     @staticmethod
     def _kill_process_tree(proc: Process) -> None:
@@ -874,19 +874,19 @@ class ProcessManager:
                 proc.kill()
 
     @classmethod
-    async def _close_stdin(cls, session: ProcessSession) -> None:
-        cls._close_stdin_now(session)
-        stdin = session.proc.stdin
+    async def _close_stdin(cls, tracked: TrackedProcess) -> None:
+        cls._close_stdin_now(tracked)
+        stdin = tracked.proc.stdin
         if stdin is None:
             return
         with contextlib.suppress(BrokenPipeError, ConnectionResetError, RuntimeError):
             await stdin.wait_closed()
 
     @staticmethod
-    def _close_stdin_now(session: ProcessSession) -> None:
-        stdin = session.proc.stdin
-        if stdin is None or not session.stdin_open:
-            session.stdin_open = False
+    def _close_stdin_now(tracked: TrackedProcess) -> None:
+        stdin = tracked.proc.stdin
+        if stdin is None or not tracked.stdin_open:
+            tracked.stdin_open = False
             return
 
         try:
@@ -894,27 +894,27 @@ class ProcessManager:
                 stdin.write_eof()
         except (BrokenPipeError, ConnectionResetError, RuntimeError) as error:
             _LOGGER.warning(
-                "Process stdin EOF write failed for session=%s: %s",
-                session.session_id,
+                "Process stdin EOF write failed for process=%s: %s",
+                tracked.process_id,
                 error,
             )
         with contextlib.suppress(BrokenPipeError, ConnectionResetError, RuntimeError):
             stdin.close()
-        session.stdin_open = False
+        tracked.stdin_open = False
 
     @staticmethod
-    def _release_process_pipe_references(session: ProcessSession) -> None:
-        transport = getattr(session.proc, "_transport", None)
+    def _release_process_pipe_references(tracked: TrackedProcess) -> None:
+        transport = getattr(tracked.proc, "_transport", None)
         pipes = getattr(transport, "_pipes", None)
         if not isinstance(pipes, dict):
             return
         pipes.clear()
 
-    def _session_for_agent(self, session_id: str, agent_id: str) -> ProcessSession:
-        session = self._sessions.get(session_id)
-        if session is None or session.agent_id != agent_id:
-            raise SessionNotFoundError(f"Process session not found: {session_id}")
-        return session
+    def _process_for_agent(self, process_id: str, agent_id: str) -> TrackedProcess:
+        tracked = self._processes.get(process_id)
+        if tracked is None or tracked.agent_id != agent_id:
+            raise ProcessNotFoundError(f"Process not found: {process_id}")
+        return tracked
 
     async def _sweep_loop(self) -> None:
         try:
@@ -926,7 +926,7 @@ class ProcessManager:
 
 
 def _log_background_task_result(task: asyncio.Task[Any], message: str) -> None:
-    """Log an unexpected exception raised by a tracked background task."""
+    """Log an unexpected exception raised by a background task."""
     if task.cancelled():
         return
     error = task.exception()
@@ -970,11 +970,11 @@ def _decode(data: bytes) -> str:
     return strip_ansi(data.decode("utf-8", errors="replace"))
 
 
-def _is_waiting_for_input(session: ProcessSession) -> bool:
-    if not session.stdin_open:
+def _is_waiting_for_input(tracked: TrackedProcess) -> bool:
+    if not tracked.stdin_open:
         return False
 
-    last_activity_at = session.last_output_at or session.started_at
+    last_activity_at = tracked.last_output_at or tracked.started_at
     return (_utc_now() - last_activity_at).total_seconds() >= INPUT_IDLE_SECONDS
 
 
@@ -983,17 +983,17 @@ def _utc_now() -> datetime:
 
 
 __all__ = [
-    "FINISHED_SESSION_TTL",
+    "FINISHED_PROCESS_TTL",
     "GuardedProcessLaunch",
     "INPUT_IDLE_SECONDS",
     "PROCESS_BUFFER_CAP_BYTES",
     "ProcessManager",
     "ProcessManagerError",
-    "ProcessSession",
+    "TrackedProcess",
     "ProcessStatus",
-    "SessionInputClosedError",
-    "SessionNotFoundError",
-    "SessionStillRunningError",
+    "ProcessInputClosedError",
+    "ProcessNotFoundError",
+    "ProcessStillRunningError",
     "activate_process_containment",
     "guarded_process_launch",
     "subprocess_creation_flags",
