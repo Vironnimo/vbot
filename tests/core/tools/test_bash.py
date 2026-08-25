@@ -2194,6 +2194,22 @@ async def test_two_bash_calls_can_run_concurrently_by_default(
     ]
 
 
+@pytest.mark.parametrize(
+    ("seconds", "expected"),
+    [
+        (0.0, "<1s"),
+        (0.4, "<1s"),
+        (0.6, "1s"),
+        (45.2, "45s"),
+        (845.0, "14m 5s"),
+        (3723.0, "1h 2m 3s"),
+    ],
+)
+def test_format_elapsed_duration_renders_compact_durations(seconds: float, expected: str) -> None:
+    """Elapsed abort times render as compact h/m/s strings."""
+    assert bash_module._format_elapsed_duration(seconds) == expected
+
+
 @pytest.mark.asyncio
 async def test_user_cancel_during_foreground_returns_cancelled_by_user_envelope(
     manager: ProcessManager,
@@ -2245,6 +2261,7 @@ async def test_user_cancel_during_foreground_returns_cancelled_by_user_envelope(
 
     assert result["ok"] is False
     assert result["error"]["code"] == "cancelled_by_user"
+    assert result["error"]["message"].startswith("Command aborted by the user after ")
     assert cancel_calls, "process_manager.cancel_for_user should have been called"
     process_id_used, agent_id_used = cancel_calls[0]
     assert agent_id_used == AGENT_ID
@@ -2341,7 +2358,7 @@ async def test_background_watcher_reports_aborted_by_user_when_process_is_user_c
 
     assert len(messages) == 1
     message = messages[0]
-    assert "aborted by the user" in message
+    assert "aborted by the user after" in message
     assert "Background process completed." not in message
     assert "Exit code:" not in message
     assert f"Process ID: {process_id}" in message

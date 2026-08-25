@@ -12,6 +12,7 @@ import sys
 import time
 from collections.abc import Callable, Sequence
 from copy import deepcopy
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -255,6 +256,47 @@ def reset_shell_env_cache() -> None:
     # again if the result is already stale by then.
 
 
+def _format_elapsed_duration(seconds: float) -> str:
+    """Render an elapsed time compactly: ``45s``, ``14m 5s``, ``1h 2m 3s``."""
+    total_seconds = max(0, int(round(seconds)))
+    if total_seconds == 0:
+        return "<1s"
+    hours, remainder = divmod(total_seconds, 3600)
+    minutes, secs = divmod(remainder, 60)
+    parts = []
+    if hours:
+        parts.append(f"{hours}h")
+    if hours or minutes:
+        parts.append(f"{minutes}m")
+    parts.append(f"{secs}s")
+    return " ".join(parts)
+
+
+def _user_cancelled_failure_message(
+    process_manager: ProcessManager,
+    context: ToolContext,
+    process_id: str,
+) -> str:
+    """User-abort message extended by how long the command ran before the abort."""
+    try:
+        tracked = process_manager.get_process(process_id, context.agent_id)
+    except ProcessNotFoundError:
+        return USER_CANCELLED_FAILURE_MESSAGE
+    elapsed_seconds = (datetime.now(UTC) - tracked.started_at).total_seconds()
+    return f"{USER_CANCELLED_FAILURE_MESSAGE} after {_format_elapsed_duration(elapsed_seconds)}"
+
+
+def _background_user_cancelled_message(tracked: TrackedProcess) -> str:
+    """Background user-abort note extended by the process runtime before the abort."""
+    if tracked.finished_at is None:
+        return BACKGROUND_USER_CANCELLED_MESSAGE
+    elapsed_seconds = (tracked.finished_at - tracked.started_at).total_seconds()
+    return (
+        f"Background process was aborted by the user "
+        f"after {_format_elapsed_duration(elapsed_seconds)}."
+    )
+
+
 def project_bash_tool_definitions(
     definitions: list[JsonObject],
     *,
@@ -438,7 +480,10 @@ async def bash_handler(
             timeout_task.cancel()
         await process_manager.kill(process_id, context.agent_id)
         if context.was_cancelled_by_user():
-            return tool_failure(USER_CANCELLED_FAILURE_CODE, USER_CANCELLED_FAILURE_MESSAGE)
+            return tool_failure(
+                USER_CANCELLED_FAILURE_CODE,
+                _user_cancelled_failure_message(process_manager, context, process_id),
+            )
         return tool_failure(RUN_CANCELLED_FAILURE_CODE, RUN_CANCELLED_FAILURE_MESSAGE)
 
     if result["data"] is not None and result["data"].get("status") == "running":
@@ -614,7 +659,7 @@ async def _watch_background_process(
         body = (
             f"{BASH_COMPLETION_STATUS_PREFIX}aborted by user\n"
             f"{BASH_COMPLETION_PROCESS_ID_PREFIX}{process_id}\n"
-            f"{BACKGROUND_USER_CANCELLED_MESSAGE}\n"
+            f"{_background_user_cancelled_message(tracked)}\n"
             f"Command: {command}\n"
             "Output:\n"
             f"{output}"
