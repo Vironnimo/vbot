@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from difflib import get_close_matches
 from typing import Any
 
 from cli.formatting import string_or_default as _string_or_default
@@ -16,12 +17,36 @@ def memory_list(instance: ServerInstance, agent_id: str) -> CommandResult:
 
     payload = _rpc_call(instance, "memory.list", {"agent_id": agent_id})
     if not payload.ok:
-        return payload.to_command_result()
+        return _memory_failure_result(instance, payload.to_command_result())
     return CommandResult(
         ok=True,
         message=_format_memory_response(payload.data, verb="pinned memory for"),
         instance=instance,
     )
+
+
+def _memory_failure_result(
+    instance: ServerInstance,
+    failed: CommandResult,
+) -> CommandResult:
+    """Attach known agents to unknown-agent failures for one-retry fixes."""
+
+    if "unknown agent" not in failed.message and "not found" not in failed.message.lower():
+        return failed
+    listing = _rpc_call(instance, "agent.list", {})
+    agents = listing.data.get("agents") if listing.ok else None
+    names: list[str] = []
+    if isinstance(agents, list):
+        for agent in agents:
+            if isinstance(agent, dict) and isinstance(agent.get("id"), str):
+                names.append(agent["id"])
+    close = get_close_matches(_first_quoted(failed.message), names, n=1)
+    lines = [failed.message]
+    if close:
+        lines.append(f"did you mean: {close[0]}")
+    if names:
+        lines.append(f"available agents: {', '.join(names)}")
+    return CommandResult(ok=False, message="\n".join(lines), instance=instance)
 
 
 def memory_add(
@@ -107,7 +132,12 @@ def _memory_mutation(
         params["content"] = content
     payload = _rpc_call(instance, method, params)
     if not payload.ok:
-        return payload.to_command_result()
+        failed = payload.to_command_result()
+        if "unknown agent" in failed.message or "not found" in failed.message.lower():
+            failed = _memory_failure_result(instance, failed)
+        elif entry_id is not None:
+            return _with_available_entry_ids(instance, agent_id, scope, failed)
+        return failed
     entry = payload.data.get("entry")
     lines = [f"{verb} memory entry in {agent_id} (scope: {scope})"]
     if isinstance(entry, dict):
@@ -148,6 +178,38 @@ def _format_entry(entry: Mapping[str, Any]) -> str:
     entry_id = entry.get("id")
     content = _string_or_default(entry.get("content"), "")
     return f"#{entry_id}: {content}"
+
+
+def _with_available_entry_ids(
+    instance: ServerInstance,
+    agent_id: str,
+    scope: str,
+    failed: CommandResult,
+) -> CommandResult:
+    """Show the scope's existing entry ids after a failed entry mutation."""
+
+    listing = _rpc_call(instance, "memory.list", {"agent_id": agent_id})
+    scopes = listing.data.get("scopes") if listing.ok else None
+    entries = scopes.get(scope) if isinstance(scopes, dict) else None
+    ids = (
+        [entry.get("id") for entry in entries if isinstance(entry, dict)]
+        if isinstance(entries, list)
+        else []
+    )
+    lines = [failed.message]
+    if ids:
+        lines.append(f"existing {scope}-scope entries: {', '.join(str(i) for i in ids)}")
+    else:
+        lines.append(f"{agent_id} has no {scope}-scope entries")
+    return CommandResult(ok=False, message="\n".join(lines), instance=instance)
+
+
+def _first_quoted(message: str) -> str:
+    start = message.find("'")
+    if start == -1:
+        return message
+    end = message.find("'", start + 1)
+    return message[start + 1 : end] if end != -1 else message
 
 
 def _scope_counts(data: Mapping[str, Any]) -> str | None:

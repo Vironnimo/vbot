@@ -504,3 +504,123 @@ def test_parse_args_share_requires_receiver() -> None:
         cli_main.parse_args(["skill", "share", "assistant", "librarian"])
 
     assert exc_info.value.code == 2
+
+
+def test_skill_disable_unknown_name_attaches_candidates(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    instance = make_instance(tmp_path)
+
+    def fake_post(
+        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
+    ) -> httpx.Response:
+        if json["method"] == "skill.set_disabled":
+            return httpx.Response(
+                400,
+                json={
+                    "ok": False,
+                    "error": {"code": "invalid_request", "message": "unknown skill: 'librrarian'"},
+                },
+            )
+        assert json["method"] == "skill.inventory"
+        return httpx.Response(
+            200,
+            json={
+                "ok": True,
+                "result": {
+                    "skills": [
+                        {"name": "librarian", "origin": "bundled"},
+                        {"name": "summarize", "origin": "global"},
+                    ],
+                    "stale_shared": [],
+                    "policy_diagnostics": [],
+                },
+            },
+        )
+
+    monkeypatch.setattr(skill_management.httpx, "post", fake_post)
+
+    result = skill_management.skill_set_disabled(instance, "librrarian", True)
+
+    assert result.ok is False
+    assert "unknown skill: 'librrarian'" in result.message
+    assert "did you mean: librarian" in result.message
+    assert "known skills: librarian, summarize" in result.message
+
+
+def test_skill_share_unknown_owner_lists_agents(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    instance = make_instance(tmp_path)
+
+    def fake_post(
+        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
+    ) -> httpx.Response:
+        if json["method"] == "skill.share":
+            return httpx.Response(
+                400,
+                json={
+                    "ok": False,
+                    "error": {
+                        "code": "invalid_request",
+                        "message": "unknown agent: 'assistnt' (sharing is identity-agent-only)",
+                    },
+                },
+            )
+        assert json["method"] == "agent.list"
+        return httpx.Response(
+            200,
+            json={"ok": True, "result": {"agents": [{"id": "assistant"}, {"id": "coder"}]}},
+        )
+
+    monkeypatch.setattr(skill_management.httpx, "post", fake_post)
+
+    result = skill_management.skill_share(instance, "assistnt", "librarian", ["coder"])
+
+    assert result.ok is False
+    assert "did you mean: assistant" in result.message
+    assert "available agents: assistant, coder" in result.message
+
+
+def test_skill_share_wrong_private_skill_lists_owned_skills(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    instance = make_instance(tmp_path)
+
+    def fake_post(
+        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
+    ) -> httpx.Response:
+        if json["method"] == "skill.share":
+            return httpx.Response(
+                400,
+                json={
+                    "ok": False,
+                    "error": {
+                        "code": "invalid_request",
+                        "message": "agent 'assistant' owns no private skill named 'ghost'",
+                    },
+                },
+            )
+        assert json["method"] == "skill.inventory"
+        return httpx.Response(
+            200,
+            json={
+                "ok": True,
+                "result": {
+                    "skills": [
+                        {"name": "notes", "owner_id": "assistant"},
+                        {"name": "other", "owner_id": "coder"},
+                    ],
+                    "stale_shared": [],
+                    "policy_diagnostics": [],
+                },
+            },
+        )
+
+    monkeypatch.setattr(skill_management.httpx, "post", fake_post)
+
+    result = skill_management.skill_share(instance, "assistant", "ghost", ["coder"])
+
+    assert result.ok is False
+    assert "owns no private skill named 'ghost'" in result.message
+    assert "assistant's private skills: notes" in result.message

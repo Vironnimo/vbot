@@ -478,3 +478,37 @@ def test_parse_args_supports_agent_reorder() -> None:
     assert args.area == "agent"
     assert args.command == "reorder"
     assert args.ids == ["researcher", "assistant"]
+
+
+def test_agent_reorder_suggests_close_match_for_unknown_id(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    instance = make_instance(tmp_path)
+    methods: list[str] = []
+
+    def fake_post(
+        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
+    ) -> httpx.Response:
+        methods.append(json["method"])
+        if json["method"] == "agent.list":
+            return httpx.Response(
+                200,
+                json={
+                    "ok": True,
+                    "result": {
+                        "agents": [{"id": "assistant"}, {"id": "researcher"}],
+                        "order_revision": 2,
+                    },
+                },
+            )
+        raise AssertionError("reorder RPC must not run for unknown ids")
+
+    monkeypatch.setattr(agent_management.httpx, "post", fake_post)
+
+    result = agent_management.agent_reorder(instance, ["assistent"])
+
+    assert result.ok is False
+    assert "unknown agent id: assistent" in result.message
+    assert "did you mean: assistant" in result.message
+    assert "available agents: assistant, researcher" in result.message
+    assert methods == ["agent.list"]
