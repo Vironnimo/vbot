@@ -9,6 +9,7 @@ from core.utils import tokens as token_utils
 from core.utils.tokens import (
     FALLBACK_CHARS_PER_TOKEN,
     NATIVE_MEDIA_TOKEN_RESERVE,
+    OPAQUE_REASONING_BLOB_TOKEN_RESERVE,
     TOKEN_ESTIMATE_ENCODING,
     estimate_json_tokens,
     estimate_message_tokens,
@@ -362,3 +363,111 @@ def test_estimate_request_input_tokens_reserves_native_media_without_counting_ba
 
     assert request_tokens >= 4 * NATIVE_MEDIA_TOKEN_RESERVE
     assert request_tokens < (4 * NATIVE_MEDIA_TOKEN_RESERVE) + 100
+
+
+# ----- Opaque reasoning blobs -----
+
+
+def _reasoning_details_message(details: list[dict[str, Any]]) -> dict[str, Any]:
+    return {
+        "role": "assistant",
+        "content": None,
+        "reasoning_meta": {"reasoning_details": details},
+    }
+
+
+def test_estimate_message_tokens_reserves_opaque_reasoning_blobs_without_counting_encoded_size():
+    """An oversized non-text blob counts as one fixed reservation, not as prose."""
+
+    # Arrange — a 5000-character encrypted blob would serialize to >1250
+    # prose tokens; providers bill it by decoded content instead.
+    message = _reasoning_details_message(
+        [
+            {
+                "type": "reasoning.encrypted",
+                "format": "unknown",
+                "index": 0,
+                "encrypted_content": "S" * 5_000,
+                "text": "ok",
+            }
+        ]
+    )
+
+    # Act
+    count, is_estimate = estimate_message_tokens(message)
+
+    # Assert
+    assert count >= OPAQUE_REASONING_BLOB_TOKEN_RESERVE
+    assert count < OPAQUE_REASONING_BLOB_TOKEN_RESERVE + 100
+    assert is_estimate is True
+
+
+def test_estimate_message_tokens_counts_visible_reasoning_text_as_prose():
+    """Visible reasoning text inside details keeps counting at text size."""
+
+    # Arrange
+    message = _reasoning_details_message(
+        [{"type": "reasoning.text", "format": "unknown", "index": 0, "text": "a" * 4_000}]
+    )
+
+    # Act
+    count, _ = estimate_message_tokens(message)
+
+    # Assert
+    assert count >= 1_000
+
+
+def test_estimate_message_tokens_counts_short_reasoning_identifiers_verbatim():
+    """Compact identifier strings stay below the blob threshold and add no reserve."""
+
+    # Arrange
+    message = _reasoning_details_message(
+        [
+            {
+                "type": "reasoning.text",
+                "format": "unknown",
+                "id": "rs_1",
+                "index": 0,
+                "text": "ok",
+            }
+        ]
+    )
+
+    # Act
+    count, _ = estimate_message_tokens(message)
+
+    # Assert — well below one blob reservation, so nothing was treated as opaque.
+    assert 0 < count < OPAQUE_REASONING_BLOB_TOKEN_RESERVE
+
+
+def test_estimate_structured_tokens_reserves_opaque_reasoning_blobs():
+    """Structured Responses-style payloads reserve oversized continuity blobs."""
+
+    # Arrange
+    value = [{"type": "reasoning", "id": "rs_1", "encrypted_content": "X" * 5_000}]
+
+    # Act
+    count, _ = estimate_structured_tokens(value)
+
+    # Assert
+    assert count >= OPAQUE_REASONING_BLOB_TOKEN_RESERVE
+    assert count < OPAQUE_REASONING_BLOB_TOKEN_RESERVE + 100
+
+
+def test_estimate_message_tokens_compacts_legacy_delta_fragments():
+    """Sessions persisted before fragment merging are budgeted by content size."""
+
+    # Arrange — one ~4-character fragment per streamed delta, as persisted by
+    # the pre-merge accumulator; 1000 fragments serialize to ~80 KB of framing.
+    fragments = [
+        {"type": "reasoning.text", "format": "unknown", "index": 0, "text": "abc "}
+        for _ in range(1_000)
+    ]
+    message = _reasoning_details_message(fragments)
+
+    # Act
+    count, _ = estimate_message_tokens(message)
+
+    # Assert — merged into one item whose text is ~4000 chars (~1000 tokens).
+    assert count >= 900
+    assert count < 2_000
