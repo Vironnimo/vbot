@@ -363,6 +363,93 @@ async def test_async_register_timeout_within_running_loop_ignores_cancellation(
     assert await asyncio.to_thread(module.finished.wait, 1)
 
 
+@pytest.mark.asyncio
+async def test_aload_keeps_event_loop_responsive_during_async_register(
+    tmp_path: Path,
+) -> None:
+    """The live-loop load path must never freeze the loop behind a register."""
+    root = tmp_path / "extensions"
+    marker = tmp_path / "marker.txt"
+    _write_single_file(
+        root,
+        "slow_async",
+        "import asyncio\n"
+        "import pathlib\n"
+        f"_MARKER = pathlib.Path({str(marker)!r})\n"
+        "async def register(api):\n"
+        "    await asyncio.sleep(0.15)\n"
+        "    def handler(ctx, **payload):\n"
+        "        _MARKER.write_text('fired', encoding='utf-8')\n"
+        "    api.on('run_start', handler)\n",
+    )
+
+    heartbeat_ticks = 0
+    heartbeat_done = asyncio.Event()
+
+    async def heartbeat() -> None:
+        nonlocal heartbeat_ticks
+        while not heartbeat_done.is_set():
+            await asyncio.sleep(0)
+            heartbeat_ticks += 1
+
+    heartbeat_task = asyncio.create_task(heartbeat())
+    registry = await ExtensionRegistry.aload(root)
+    heartbeat_done.set()
+    await heartbeat_task
+
+    # The loop serviced other tasks while register() was pending.
+    assert heartbeat_ticks > 0
+    slow_record = _record(registry, "slow_async")
+    assert slow_record.status == "loaded"
+    ctx = HookContext(session_id="s", agent_id="a", run_id="r")
+    await registry.dispatch_run_start(ctx, session_id="s", agent_id="a")
+    assert marker.read_text(encoding="utf-8") == "fired"
+
+
+@pytest.mark.asyncio
+async def test_aload_register_timeout_fails_only_that_extension(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = tmp_path / "extensions"
+    monkeypatch.setattr(extensions_module, "_ASYNC_REGISTER_TIMEOUT_SECONDS", 0.05)
+    _write_single_file(
+        root,
+        "hanging",
+        "import asyncio\n"
+        "import threading\n"
+        "release = threading.Event()\n"
+        "finished = threading.Event()\n"
+        "async def register(api):\n"
+        "    try:\n"
+        "        while not release.is_set():\n"
+        "            try:\n"
+        "                await asyncio.sleep(0.01)\n"
+        "            except asyncio.CancelledError:\n"
+        "                continue\n"
+        "    finally:\n"
+        "        finished.set()\n",
+    )
+    _write_single_file(
+        root,
+        "healthy",
+        "def register(api):\n    pass\n",
+    )
+
+    registry = await ExtensionRegistry.aload(root)
+
+    hanging = _record(registry, "hanging")
+    assert hanging.status == "failed"
+    assert "timed out" in (hanging.error or "")
+    healthy = _record(registry, "healthy")
+    assert healthy.status == "loaded"
+
+    # The cancelled-but-suppressing coroutine is detached, not awaited forever.
+    module = sys.modules["vbot_ext.hanging"]
+    module.release.set()
+    assert await asyncio.to_thread(module.finished.wait, 1)
+
+
 def test_startup_and_shutdown_fire_in_load_order(tmp_path: Path) -> None:
     root = tmp_path / "extensions"
     marker = tmp_path / "lifecycle.txt"

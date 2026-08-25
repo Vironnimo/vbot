@@ -1898,7 +1898,7 @@ class Runtime:
             # unless the whole vbot_ext namespace is dropped before the fresh load.
             purge_extension_modules()
 
-            new_registry = ExtensionRegistry.load(
+            new_registry = await ExtensionRegistry.aload(
                 storage.data_dir / "extensions",
                 extra_dirs=extension_dirs,
                 disabled=disabled,
