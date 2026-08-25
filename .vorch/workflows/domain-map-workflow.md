@@ -36,6 +36,7 @@ Keep information that helps agents choose the right file, layer, abstraction, or
 - Domain-specific conventions beyond `AGENTS.md`
 - Constraints and gotchas: non-obvious behavior, fragile areas, previous failure modes, security or performance traps
 - Source-of-truth pointers when they help agents verify or extend behavior quickly
+- Cross-cutting mechanisms whose *use trigger* can arise in any domain while the contract lives in one place (example: kernel-to-model notifications). Such a mechanism needs its own cross-cutting home, a one-line always-loaded pointer in `.vorch/PROJECT.md` -> Context, and one-line back-references from each origin domain's References index - otherwise agents working outside the owning domain never learn it exists.
 
 These are eligible kinds of map content, not a requirement to place every instance in the root map. A contract can be important and still be task-gated; exact feature payloads, state transitions, and operational sequences belong in a supplementary file when agents working on other features in the domain do not need them.
 
@@ -50,6 +51,8 @@ Cut information that slows agents down without making them safer:
 - Sections that do not apply
 
 Do not discard important behavior, field semantics, output contracts, or gotchas merely because they duplicate code. Move task-gated signal to a supplementary file, and replace cross-map repetition with a pointer to the canonical owner. Short but wrong is worse than long.
+
+**Mirroring vs operational knowledge.** An inventory is a cut candidate only when it restates what the artifact reliably tells its caller at runtime. Semantics a caller must know before or without running the artifact - flag consequences, exit-code behavior, security rules, offline behavior - are decision-relevant signal: never delegate documented content to `--help`, live probing, or source diving, because the agent's task may be repairing exactly the artifact it would have to execute. Never cut the imperative that makes task-gating work (a read-the-map mandate, a gate contract) on dedup grounds because another always-read file states something similar - that mandate is the mechanism the other cuts rely on, not noise.
 
 ## Formatting: plain ASCII punctuation only
 
@@ -132,6 +135,7 @@ For routine maintenance during implementation:
 3. Make the narrow factual update needed by the completed work.
 4. Base the change on Builder/Reviewer output, explorer summaries, source/test evidence, or explicit user decisions.
 5. Update the Domain Maps index if a map was created, renamed, split, or removed. Supplementary files never enter that index.
+6. After slimming, diff old against new and account for every removed fact: point to its verified new home (verified by reading it, not assumed) or record why it was safe to delete outright. Establish path/reference resolution conventions before the document's first bare reference.
 
 For dedicated map cleanup or audit:
 1. Read the current map and identify what each section is trying to help agents do.
