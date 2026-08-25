@@ -33,7 +33,7 @@ Bare `<name>.md` references throughout this file resolve against `.vorch/domain-
 
 ## Domain Maps
 
-Every domain has a map under `.vorch/domain-maps/`. **Read a domain's map before you touch anything in that domain - without exception.** The map is the briefing on boundaries, contracts, and gotchas you cannot infer from file names; when ownership or contracts cross domains, read the adjacent maps as well. A map's References are task-gated: pull a supplementary file only when your task matches its trigger. Maps are working notes, not the source of truth: when a map and the code disagree, the code wins - fix the map.
+Every domain has a map under `.vorch/domain-maps/`. **Read a domain's map before you touch anything in that domain - without exception.** The map is the briefing on boundaries, contracts, and gotchas you cannot infer from file names; when ownership or contracts cross domains, read the adjacent maps as well. A map orients and guards boundaries - it never documents the code completely, so always read the actual source you are changing alongside it. A map's References are task-gated: pull a supplementary file only when your task matches its trigger. Maps are working notes, not the source of truth: when a map and the code disagree, the code wins - fix the map.
 
 | Map | Domain | Covers |
 |---|---|---|
