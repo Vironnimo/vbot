@@ -6,6 +6,10 @@ Corpus-wide deep-module audit (diagnose-only pass, then living remediation check
 
 **When you work from this file, you keep this file updated in the same change.** Tick the checkbox of every item you finish, add a one-line outcome note (with commit reference where useful), and re-scope or re-prioritize items whose reality diverged from the original finding. An unticked box whose work is already done is a defect in this file, not a convenience. New findings discovered during remediation get added under their section; rejected findings get struck through with a one-line reason instead of being deleted.
 
+## Planned next (agreed 2026-08-25)
+
+Remediation order for the next working block: **C4 first** (run-admission bundle — resolves the temporary dual-form `session_admission_guard` left by C1), **then A1a** (compaction orchestration out of `chat.py`, folding **C2** in at the shared sites), continuing through **A1b → A1c** if capacity allows. A2 stays deliberately last (largest single item). See each item's notes below for the confirmed evidence and recommended owner.
+
 ## Findings
 
 ### A. Split candidates — complexity that deserves its own owner
