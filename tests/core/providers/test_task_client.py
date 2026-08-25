@@ -535,3 +535,33 @@ def test_classify_task_response_uses_bare_status_without_body() -> None:
         classify_task_response(httpx.Response(503))
 
     assert exc_info.value.retryable is True
+
+
+def test_classify_task_response_get_500_is_retryable_when_idempotent() -> None:
+    with pytest.raises(ProviderError, match="500 boom") as exc_info:
+        classify_task_response(httpx.Response(500, text="boom"), idempotent=True)
+
+    assert exc_info.value.retryable is True
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_get_and_parse_retries_transient_500_until_success() -> None:
+    """A status poll / result download GET is replay-safe: a 500 retries."""
+
+    route = respx.get(f"{_PROVIDER_BASE_URL}/jobs/abc")
+    route.side_effect = [
+        httpx.Response(500, text="transient"),
+        httpx.Response(200, json={"status": "done"}),
+    ]
+    client = _make_client()
+
+    with patch("core.utils.retry.asyncio.sleep", new_callable=AsyncMock):
+        result = await client.get_and_parse(
+            "/jobs/abc",
+            timeout=5.0,
+            parse=lambda response: response.json(),
+        )
+
+    assert result == {"status": "done"}
+    assert route.call_count == 2
