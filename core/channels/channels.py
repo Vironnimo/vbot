@@ -62,6 +62,8 @@ _CHANNEL_ACCESS_FILENAME = "access.json"
 _CHANNEL_ACCESS_VERSION = 1
 _RUN_BUTTON_BINDINGS_FILENAME = "run-button-bindings.json"
 _RUN_BUTTON_BINDINGS_VERSION = 1
+_POLLING_STATE_FILENAME = "polling.json"
+_POLLING_STATE_VERSION = 1
 _DEFAULT_DM_SCOPE = "per_conversation"
 ALLOWED_CHANNEL_DM_SCOPES = frozenset(
     ("per_conversation", "main", "per_peer", "per_account_channel_peer")
@@ -368,6 +370,7 @@ class ChannelStorage:
         self._data_root = Path(data_root).expanduser()
         self._channels_dir = self._data_root / "channels"
         self._run_button_bindings_lock = threading.RLock()
+        self._update_offset_lock = threading.RLock()
         self._access_lock = threading.RLock()
 
     def load_all(self) -> list[ChannelConfig]:
@@ -637,6 +640,49 @@ class ChannelStorage:
                 return
             bindings[binding_id] = replace(binding, consumed=False)
             self._write_run_button_bindings(normalized_id, bindings)
+
+    def load_update_offset(self, channel_id: str) -> int:
+        """Return the persisted Telegram update high-water mark (0 when unknown)."""
+        normalized_id = _normalize_channel_id(channel_id)
+        path = self._channel_dir(normalized_id) / _POLLING_STATE_FILENAME
+        if not path.is_file():
+            return 0
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(payload, dict) or payload.get("version") != _POLLING_STATE_VERSION:
+                raise ValueError("unsupported polling-state version")
+            update_id = payload.get("last_update_id")
+            if isinstance(update_id, int) and not isinstance(update_id, bool) and update_id >= 0:
+                return update_id
+            raise ValueError("last_update_id must be a non-negative integer")
+        except (OSError, UnicodeError, json.JSONDecodeError, ValueError, TypeError) as error:
+            # A corrupt tiny state file must not brick the channel; degrading to
+            # an empty watermark re-delivers recent messages instead of losing them.
+            _LOGGER.warning(
+                "Cannot read Telegram polling state for %s, treating as empty: %s",
+                channel_id,
+                error,
+            )
+            return 0
+
+    def save_update_offset(self, channel_id: str, update_id: int) -> None:
+        """Persist the Telegram update high-water mark with atomic replace."""
+        normalized_id = _normalize_channel_id(channel_id)
+        path = self._channel_dir(normalized_id) / _POLLING_STATE_FILENAME
+        payload = {
+            "version": _POLLING_STATE_VERSION,
+            "last_update_id": int(update_id),
+        }
+        with self._update_offset_lock:
+            try:
+                atomic_write_text(
+                    path,
+                    json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\n",
+                )
+            except OSError as error:
+                raise ChannelError(
+                    f"Cannot write Telegram polling state for {channel_id}: {error}"
+                ) from error
 
     def _channel_dir(self, channel_id: str) -> Path:
         return self._channels_dir / channel_id
@@ -1420,6 +1466,7 @@ class ChannelService:
                 interaction_dispatcher=self._interaction_dispatcher,
                 run_button_binding_registry=self._storage,
                 access_registry=self._storage,
+                update_offset_store=self._storage,
             )
 
         raise ChannelConfigError(f"Unsupported channel platform: {config.platform}")
