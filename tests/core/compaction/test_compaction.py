@@ -25,6 +25,7 @@ from core.compaction import (
     is_compacted_tool_result_content,
 )
 from core.compaction.compaction import (
+    COMPACTION_TAIL_BOUNDARY_MARKER,
     COMPACTION_TAIL_GUIDANCE,
     CompactionPlan,
     _plan_working_tail,
@@ -39,8 +40,12 @@ TIMESTAMP = "2026-05-19T12:00:00+00:00"
 
 
 class StubStorage:
+    def __init__(self) -> None:
+        self.read_names: list[str] = []
+
     def read_prompt_fragment(self, name: str) -> str:
-        assert name == "compaction.md"
+        self.read_names.append(name)
+        assert name in {"compaction.md", "compaction-manual.md"}
         return "Preserve decisions and unfinished work."
 
 
@@ -329,13 +334,14 @@ async def test_summary_tail_executes_one_call_and_materializes_projection() -> N
     assert len(summary_adapter.requests) == 1
     assert active_adapter.requests == []
     assert summary_adapter.requests[0]["model_id"] == "openai/summary"
-    assert summary_adapter.requests[0]["messages"][:-1] == request[:4]
+    sent = summary_adapter.requests[0]["messages"]
+    assert sent[:4] == request[:4]
+    assert sent[4] == {"role": "user", "content": COMPACTION_TAIL_BOUNDARY_MARKER}
+    assert sent[5:-1] == request[3:]
+    assert sent[-1]["content"] == "Preserve decisions and unfinished work."
     assert summary_adapter.requests[0]["tools"] == tools
     assert summary_adapter.requests[0]["temperature"] is None
     assert "Compact" not in summary_adapter.requests[0]["messages"][1]["content"]
-    assert summary_adapter.requests[0]["messages"][-1]["content"] == (
-        "Preserve decisions and unfinished work."
-    )
     effective = _effective_compaction_messages([*messages, result])
     assert effective[0].role == "note"
     assert effective[0].content == f"{COMPACTION_SUMMARY_NOTE_PREFIX}NEW SUMMARY"
@@ -414,7 +420,11 @@ async def test_summary_tail_preserves_exact_active_model_prefix_with_reasoning()
         active_model_id="gpt-5",
     )
 
-    assert adapter.requests[0]["messages"][:-1] == request[:4]
+    assert adapter.requests[0]["messages"][:4] == request[:4]
+    assert adapter.requests[0]["messages"][4] == {
+        "role": "user",
+        "content": COMPACTION_TAIL_BOUNDARY_MARKER,
+    }
 
 
 @pytest.mark.asyncio
@@ -443,11 +453,15 @@ async def test_custom_summary_model_drops_active_provider_reasoning_state() -> N
         active_model_id="gpt-5",
     )
 
-    sent_head = summary_adapter.requests[0]["messages"][:-1]
+    sent_head = summary_adapter.requests[0]["messages"][:4]
     assert [message["id"] for message in sent_head] == ["system-1", "u1", "a1", "u2"]
     assert sent_head[2]["content"] == request[2]["content"]
     assert "reasoning" not in sent_head[2]
     assert "reasoning_meta" not in sent_head[2]
+    tail_entries = summary_adapter.requests[0]["messages"][5:-1]
+    retained_assistant = [entry for entry in tail_entries if entry.get("id") == "a2"]
+    assert len(retained_assistant) == 1
+    assert "reasoning" not in retained_assistant[0]
 
 
 @pytest.mark.asyncio
@@ -480,7 +494,12 @@ async def test_next_compaction_consumes_previous_projection_not_hidden_history()
     )
 
     compact_request = adapter.requests[0]["messages"]
-    assert compact_request[:-1] == request[:-1]
+    assert compact_request[:3] == request[:3]
+    assert compact_request[3] == {"role": "user", "content": COMPACTION_TAIL_BOUNDARY_MARKER}
+    assert compact_request[4]["id"] == "u2"
+    assert compact_request[4]["content"] == "kept"
+    assert compact_request[5] == request[3]
+    assert compact_request[-1]["role"] == "user"
     assert "hidden-secret-marker" not in str(compact_request)
     assert str(compact_request).count(COMPACTION_SUMMARY_NOTE_PREFIX + "PRIOR") == 1
     assert "<previous_summary>" not in str(compact_request)
@@ -737,9 +756,14 @@ async def test_summary_tail_compacts_consumed_tool_batch_without_rewriting_reque
     )
 
     compact_request = adapter.requests[0]["messages"]
-    assert compact_request[:-1] == request[:-2]
-    assert compact_request[-2]["content"] == old_result_content
-    assert compact_request[-3]["tool_calls"][0]["arguments"] == old_arguments
+    assert compact_request[:4] == request[:4]
+    assert compact_request[4] == {"role": "user", "content": COMPACTION_TAIL_BOUNDARY_MARKER}
+    assert compact_request[-1]["content"] == "Preserve decisions and unfinished work."
+    assert compact_request[2]["tool_calls"][0]["arguments"] == old_arguments
+    assert compact_request[3]["content"] == old_result_content
+    tail_entries = compact_request[5:-1]
+    assert [entry.get("id") for entry in tail_entries][-2:] == ["a-latest", "t-latest"]
+    assert {entry.get("id") for entry in tail_entries} <= {"u1", "a-latest", "t-latest"}
     assert [item.to_dict() for item in messages] == original_snapshot
     effective = _effective_compaction_messages([*messages, result])
     assert [item.id for item in effective[2:]] == ["u1", "a-latest", "t-latest"]
