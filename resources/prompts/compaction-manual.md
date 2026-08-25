@@ -1,4 +1,6 @@
-Compact the conversation prefix above into a continuation context for the next model call so work can resume without losing critical details.
+Compact the conversation above into a standalone condensed record of this session.
+
+No run is active and nothing continues automatically after this compaction. Any later message may continue the recorded work or start something entirely new, so the record must stand alone: preserve everything needed to resume the recorded work faithfully, and nothing that would pull a new conversation into the old one.
 
 An earlier compaction summary, when present, is already part of the conversation above. Treat it as established context and carry its still-relevant facts forward. Your output replaces only the conversation above the retained-tail note and must stand together with the retained messages below it, not repeat them.
 
@@ -10,13 +12,13 @@ Requirements:
 - Preserve exact file paths, symbol names, command names, and exact error strings.
 - Preserve what has already been tried and the outcome of each attempt.
 - Preserve unanswered user questions and open requests.
-- Preserve the current task status and the immediate next concrete step.
+- Preserve the current task status and, when the recorded work is unfinished, its concrete next step.
 - Keep important technical decisions, constraints, and blockers.
-- Preserve important Tool outcomes, but omit raw Tool protocol and bulky output that the continuation no longer needs.
+- Preserve important Tool outcomes, but omit raw Tool protocol and bulky output that is no longer needed.
 - Do not preserve or reproduce Skill instructions, Skill resource guidance, or Skill environment-access guidance; vBot records activated Skill names separately at the checkpoint. Preserve only task decisions, constraints, progress, and outcomes that remain relevant.
 - Do not add facts that are not present in the conversation.
 
-Write the output as continuation context, not as a retrospective summary.
+Write the output as condensed session context, not as a retrospective summary.
 Start with this exact line:
 Here is the context of the ongoing task.
 

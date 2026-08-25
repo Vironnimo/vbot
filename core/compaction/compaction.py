@@ -217,10 +217,7 @@ class SummarizationStrategy:
             model_messages=(
                 *request_prefix,
                 {"role": "user", "content": COMPACTION_TAIL_BOUNDARY_MARKER},
-                *(
-                    _message_to_request_dict(message)
-                    for message in tail_plan.retained_messages
-                ),
+                *(_message_to_request_dict(message) for message in tail_plan.retained_messages),
                 {"role": "user", "content": prompt},
             ),
             model_target="summary",
@@ -364,6 +361,7 @@ class CompactionService:
         settings: CompactionSettings,
         instruction: str | None = None,
         request_messages: list[JsonObject] | None = None,
+        trigger: str = COMPACTION_TRIGGER_AUTO,
         active_adapter: Any | None = None,
         active_model_id: str | None = None,
         active_tools: list[JsonObject] | None = None,
@@ -373,6 +371,8 @@ class CompactionService:
     ) -> ChatMessage:
         """Execute at most one Model request and persist its assembled projection."""
         del agent
+        if trigger not in COMPACTION_TRIGGERS:
+            raise CompactionError(f"Unknown compaction trigger: {trigger}")
         if minimum_reclaim_tokens < 0:
             raise CompactionError("minimum_reclaim_tokens cannot be negative")
         try:
@@ -382,6 +382,7 @@ class CompactionService:
                 storage=storage,
                 settings=settings,
                 instruction=instruction,
+                trigger=trigger,
                 request_messages=request_messages,
             )
             plan = prepared.plan
@@ -439,6 +440,7 @@ class CompactionService:
         settings: CompactionSettings,
         instruction: str | None,
         request_messages: list[JsonObject] | None,
+        trigger: str = COMPACTION_TRIGGER_AUTO,
     ) -> _PreparedCompaction:
         """Build and validate the sync Strategy plan inside the Compaction pool."""
         strategy = self._strategies.get(settings.strategy)
@@ -452,6 +454,7 @@ class CompactionService:
             previous_compacted_token_count=_previous_compacted_token_count(checkpoint),
             instruction=instruction,
             storage=storage,
+            trigger=trigger,
         )
         plan = strategy.plan(context, settings)
         _validate_plan(plan)

@@ -2,6 +2,7 @@
 
 from core.compaction.compaction import (
     COMPACTION_POLICY_META_KEY,
+    COMPACTION_TRIGGER_MANUAL,
     MIN_AUTO_COMPACTION_RECLAIM_TOKENS,
     TOOL_RESULT_COMPACTED_FIELD,
     CompactionError,
@@ -22,6 +23,7 @@ __all__ = [
     "CompactionError",
     "CompactionInsufficientReclaimError",
     "COMPACTION_POLICY_META_KEY",
+    "COMPACTION_TRIGGER_MANUAL",
     "CompactionPlan",
     "CompactionService",
     "CompactionSettings",

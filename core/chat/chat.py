@@ -1399,6 +1399,8 @@ class ChatLoop:
         instruction: str | None,
     ) -> ChatMessage:
         """Execute one manual Compaction inside its canonical Run lifecycle."""
+        from core.compaction import COMPACTION_TRIGGER_MANUAL
+
         await _CHAT_TRANSFORM_WORKERS.run(
             self._dependencies.sessions.record_run_kind,
             SessionAddress(
@@ -1541,6 +1543,7 @@ class ChatLoop:
                     settings=settings,
                     instruction=instruction,
                     request_messages=request_state.messages,
+                    trigger=COMPACTION_TRIGGER_MANUAL,
                     active_adapter=adapter,
                     active_model_id=model_id,
                     active_tools=request_state.tools,
