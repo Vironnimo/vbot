@@ -659,6 +659,44 @@ async def test_trigger_waits_for_run_and_records_execution_health(tmp_path: Path
 
 
 @pytest.mark.asyncio
+async def test_persistent_save_failure_does_not_hang_the_firing_task(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A stuck jobs file must not spin the fire task forever.
+
+    Regression: the post-fire save used to retry unbounded, so an unwritable
+    jobs file hung the job task between the fire and the Run wait, leaving the
+    fired state unpersisted for as long as the storage fault lasted.
+    """
+    service, trigger_service = make_service(tmp_path)
+    monkeypatch.setattr(cron_module, "_POST_FIRE_SAVE_MAX_ATTEMPTS", 2)
+    monkeypatch.setattr(cron_module, "_POST_FIRE_SAVE_RETRY_SECONDS", 0.0)
+    run = SimpleNamespace(id="run-one", wait=AsyncMock(return_value=None))
+    trigger_service.trigger_run.return_value = run
+    job = service.create_job(
+        agent_id="agent-one",
+        prompt="Health check",
+        schedule_type="cron",
+        cron_expression="0 9 * * *",
+    )
+
+    def broken_save() -> None:
+        raise CronStorageError("disk full")
+
+    monkeypatch.setattr(service, "_save_jobs", broken_save)
+
+    with caplog.at_level(logging.ERROR, logger="vbot.automation.cron"):
+        succeeded = await asyncio.wait_for(service._trigger_job_run(job), timeout=5)
+
+    assert succeeded is True
+    assert service.get_job(job.id).last_outcome == "success"
+    give_up_records = [
+        record for record in caplog.records if "could not be persisted" in record.getMessage()
+    ]
+    assert len(give_up_records) == 1
+
+
+@pytest.mark.asyncio
 async def test_recurring_job_stops_after_consecutive_run_failures(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -76,6 +76,8 @@ _ONCE_RETRY_DELAY_SECONDS = 60.0
 _ONCE_RETRY_BACKOFF_FACTOR = 2.0
 _ONCE_RETRY_MAX_DELAY_SECONDS = 3600.0
 _ONCE_MAX_FIRE_ATTEMPTS = 5
+_POST_FIRE_SAVE_MAX_ATTEMPTS = 3
+_POST_FIRE_SAVE_RETRY_SECONDS = 5.0
 _ONCE_FIRE_CLAIMS_DIR_NAME = "once-fire-claims"
 # asyncio.sleep counts monotonic time, so one full-length sleep would shift a
 # fire time by the size of any system-clock correction (e.g. a Raspberry Pi
@@ -1019,8 +1021,7 @@ class CronService:
             if latest.status == "active":
                 latest.status = "completed"
                 self._jobs[latest.id] = latest
-                while not self._save_jobs_after_fire(latest.id):
-                    await asyncio.sleep(_ONCE_RETRY_DELAY_SECONDS)
+                await self._persist_after_fire(latest.id)
             self._remove_once_fire_claim(latest.id)
             return
 
@@ -1095,8 +1096,7 @@ class CronService:
                 if latest.remaining_runs is not None:
                     latest.remaining_runs = max(latest.remaining_runs - 1, 0)
                 self._jobs[latest.id] = latest
-                while not self._save_jobs_after_fire(latest.id):
-                    await asyncio.sleep(_ONCE_RETRY_DELAY_SECONDS)
+                await self._persist_after_fire(latest.id)
 
                 wait_for_run = getattr(run, "wait", None)
                 if callable(wait_for_run):
@@ -1176,6 +1176,26 @@ class CronService:
         job.status = "completed" if job.last_outcome == "success" else "failed"
         self._jobs[job_id] = job
         self._save_jobs_after_fire(job_id)
+
+    async def _persist_after_fire(self, job_id: str) -> None:
+        """Persist job state after a fire, giving up after bounded retries.
+
+        A persistently unwritable jobs file must not hang the firing task
+        forever: the previous unbounded retry loop stalled the job task for as
+        long as the storage fault lasted. After the cap this logs at error and
+        continues - in-memory state stays authoritative for the process, and
+        the next successful save anywhere re-syncs the file.
+        """
+        for _attempt in range(_POST_FIRE_SAVE_MAX_ATTEMPTS):
+            if self._save_jobs_after_fire(job_id):
+                return
+            await asyncio.sleep(_POST_FIRE_SAVE_RETRY_SECONDS)
+        _LOGGER.error(
+            "Cron job state could not be persisted after %d attempts (job=%s); "
+            "continuing with in-memory state",
+            _POST_FIRE_SAVE_MAX_ATTEMPTS,
+            job_id,
+        )
 
     def _save_jobs_after_fire(self, job_id: str) -> bool:
         try:
