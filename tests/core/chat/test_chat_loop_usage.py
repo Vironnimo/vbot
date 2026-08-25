@@ -11,10 +11,12 @@ from core.tools import (
     ToolRegistry,
     tool_success,
 )
+from core.utils.errors import ProviderError
 from core.utils.tokens import estimate_message_tokens
 from tests.core.chat.chat_loop_support import (
     StubAdapter,
     StubAgent,
+    StubModels,
     StubRuntime,
     build_chat_loop,
 )
@@ -378,3 +380,86 @@ async def test_estimation_with_tool_calls_in_history(
     # The second request includes previous assistant + tool messages, so
     # input_tokens should be larger than the first request alone.
     assert assistant.usage["input_tokens"] > 0
+
+
+@pytest.mark.asyncio
+async def test_measured_context_guard_fails_run_before_second_request(
+    tmp_path: Path,
+) -> None:
+    """A measured anchor filling the window fails cleanly before the next send."""
+    agent = StubAgent(id="coder", model="openai/gpt-4.1", allowed_tools=["get_weather"])
+    adapter = StubAdapter(
+        [
+            {
+                "content": None,
+                "tool_calls": [
+                    {"id": "call_1", "name": "get_weather", "arguments": {"city": "Berlin"}}
+                ],
+                "usage": {"input_tokens": 950, "output_tokens": 20},
+            },
+            {"content": "Sunny", "tool_calls": None},
+        ]
+    )
+    tools = ToolRegistry()
+    tools.register(
+        "get_weather",
+        "Get weather.",
+        {"type": "object"},
+        lambda _context, arguments: tool_success(
+            {"temp": 22, "city": arguments["city"], "report": "x" * 400}
+        ),
+    )
+    runtime: Any = StubRuntime(
+        data_dir=tmp_path,
+        agent=agent,
+        adapter=adapter,
+        tools=tools,
+        models=StubModels({("openai", "gpt-4.1"): 1_000}),
+    )
+
+    with pytest.raises(
+        ProviderError, match="Measured Context usage leaves no output capacity"
+    ) as exc_info:
+        await build_chat_loop(runtime).send("coder", "Weather?", session_id="session-one")
+
+    assert exc_info.value.retryable is False
+    assert len(adapter.requests) == 1
+
+
+@pytest.mark.asyncio
+async def test_measured_context_below_window_does_not_trip_the_guard(
+    tmp_path: Path,
+) -> None:
+    """Measured usage below the window lets the run continue normally."""
+    agent = StubAgent(id="coder", model="openai/gpt-4.1", allowed_tools=["get_weather"])
+    adapter = StubAdapter(
+        [
+            {
+                "content": None,
+                "tool_calls": [
+                    {"id": "call_1", "name": "get_weather", "arguments": {"city": "Berlin"}}
+                ],
+                "usage": {"input_tokens": 300, "output_tokens": 10},
+            },
+            {"content": "Sunny", "tool_calls": None},
+        ]
+    )
+    tools = ToolRegistry()
+    tools.register(
+        "get_weather",
+        "Get weather.",
+        {"type": "object"},
+        lambda _context, arguments: tool_success({"temp": 22, "city": arguments["city"]}),
+    )
+    runtime: Any = StubRuntime(
+        data_dir=tmp_path,
+        agent=agent,
+        adapter=adapter,
+        tools=tools,
+        models=StubModels({("openai", "gpt-4.1"): 1_000}),
+    )
+
+    assistant = await build_chat_loop(runtime).send("coder", "Weather?", session_id="session-one")
+
+    assert assistant.content == "Sunny"
+    assert len(adapter.requests) == 2

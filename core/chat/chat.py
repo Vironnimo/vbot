@@ -3139,6 +3139,13 @@ class ChatLoop:
                 target.model_id,
                 len(messages_for_request),
             )
+            self._raise_if_measured_context_exhausted(
+                context.session_snapshot.messages,
+                messages_for_request,
+                [] if tool_finalization_reason is not None else tools,
+                agent,
+                run,
+            )
             step_started_perf = time.perf_counter()
             workspace = getattr(agent, "workspace", None)
             output_cwd = (
@@ -4011,6 +4018,14 @@ class ChatLoop:
         except (KeyError, AttributeError):
             return None
 
+        try:
+            local_context_windows = self._dependencies.get_local_context_windows()
+        except (AttributeError, KeyError):
+            # Tolerant of a missing/partial runtime (test doubles may not
+            # implement the local-model settings hook): treated as "no
+            # user-configured local window overrides".
+            local_context_windows = {}
+
         return resolve_effective_context_window(
             model_entry.context_window,
             self._lookup_provider_config(provider_id),
@@ -4019,7 +4034,7 @@ class ChatLoop:
             # Live read through the runtime's single source of truth (no reload
             # hook, StorageError-tolerant), so a settings change applies to the
             # next request without re-implementing the storage read here.
-            local_context_windows=self._dependencies.get_local_context_windows(),
+            local_context_windows=local_context_windows,
         )
 
     def _lookup_provider_config(self, provider_id: str) -> Any:
@@ -4033,6 +4048,53 @@ class ChatLoop:
             return self._dependencies.providers.get(provider_id)
         except (KeyError, AttributeError):
             return None
+
+    def _raise_if_measured_context_exhausted(
+        self,
+        session_messages: list[ChatMessage],
+        request_messages: list[JsonObject],
+        tools: list[JsonObject],
+        agent: Any,
+        run: Run,
+    ) -> None:
+        """Fail fast when measured Context Usage already fills the Model window.
+
+        The Provider-side output clamp budgets against the local token
+        estimate, which can diverge from what a Provider actually bills. When
+        the Session carries a measured anchor, its projection is the stronger
+        signal and produces this clean local error instead of a remote
+        Provider rejection mid-Run. Sessions without a measured anchor are
+        skipped — the estimator-based clamp remains their only guard.
+        """
+
+        context_window = self._resolve_context_window(agent)
+        if context_window is None:
+            return
+        projection = latest_session_context_usage(session_messages)
+        if not projection or "provider_input_tokens" not in projection:
+            return
+        system_messages = [
+            message for message in request_messages if message.get("role") == "system"
+        ]
+        overhead_tokens, _ = estimate_request_input_tokens(system_messages, tools or None)
+        projected_tokens = int(projection["tokens"]) + overhead_tokens
+        if projected_tokens < context_window:
+            return
+        _LOGGER.error(
+            "Run %s pre-send context guard tripped (agent=%s session=%s "
+            "projected_input_tokens=%d context_window=%d)",
+            run.id,
+            run.agent_id,
+            run.session_id,
+            projected_tokens,
+            context_window,
+        )
+        raise ProviderError(
+            "Measured Context usage leaves no output capacity in the Model "
+            f"context window (projected_input_tokens={projected_tokens}, "
+            f"context_window={context_window})",
+            retryable=False,
+        )
 
     def _resolve_summary_adapter(
         self,

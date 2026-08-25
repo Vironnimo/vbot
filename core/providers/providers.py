@@ -85,10 +85,11 @@ def resolve_request_output_limit(
     Precedence remains explicit positive caller limit, positive Model ceiling,
     then positive Provider default. The selected allowance is capped so the
     estimated messages, Tool definitions, uncertainty reserve, and output all
-    fit inside the effective context window. The reserve only shrinks the
-    output budget. A request fails locally only when estimated input already
-    fills the window, not when the reserve would leave no *reserved* output
-    while real remaining capacity still exists.
+    fit inside the effective context window. The reserve doubles as the
+    estimator's declared uncertainty margin: a request fails locally only when
+    the estimate overflows the window even at best-case accuracy — an estimate
+    inside that margin goes out unclamped, because an inflated estimate must
+    not kill a request whose measured Context still fits.
     """
 
     requested = next(
@@ -111,6 +112,15 @@ def resolve_request_output_limit(
         REQUEST_MIN_RESERVE_TOKENS,
     )
     if remaining <= 0:
+        if remaining + reserve > 0:
+            _LOGGER.debug(
+                "Estimated input %d fills the %d-token context window only within "
+                "the %d-token estimation reserve; sending without output clamping.",
+                input_tokens,
+                effective_context_window,
+                reserve,
+            )
+            return requested
         raise ProviderError(
             "Request input leaves no output capacity in the Model context window "
             f"(estimated_input_tokens={input_tokens}, reserve_tokens={reserve}, "
