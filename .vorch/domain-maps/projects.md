@@ -34,6 +34,18 @@ Core terms such as Project, Agent, Session, Tool, Skill, and Provider live in `.
 
 **Definition:** The Project-owned selection of bundled and global Skills combined with discovered Project Skills; a Project Skill explicitly disabled by name remains unavailable even when a bundled or global Skill has the same name.
 
+### Source Format
+
+**Definition:** The Project's single declared coding-agent ecosystem (`project.json` -> `source_format`: `opencode` = `.opencode/agents|skills/`, `claude` = `.claude/agents|skills/`) that decides where **both** its Team agents (GLOSSARY -> Team) and its project skills come from. Exactly one per Project - no mixing (same-named agents/skills across ecosystems are usually the same tool tuned per harness, so merging would silently discard one copy); every consumer sees only this format's set. Auto-detected at creation (exactly one present wins; both/neither -> `opencode`), changeable later in project settings - Sessions survive, team and skills re-derive from the repo. Context files stay format-independent: `AGENTS.md` is the seeded auto-load convention for every Project; `CLAUDE.md` is never auto-loaded and its `@import` semantics are never emulated.
+
+**Not:** The per-member `source_format` provenance tag on a scanned team member (`ScannedAgent.source_format`). Same value set, member-level fact recorded by the scan - while the Source Format is the **project-level** choice deciding which detector runs at all.
+
+### Project Context
+
+**Definition:** The current instructions, absolute Project path, and available Project Skills that tell an Agent how to work in a registered Project. Supplied automatically when that Project is the Agent's working Project, or loaded explicitly by an Identity Agent through the `project` Tool (`tools/project.md`).
+
+**Not:** An Agent type, Project membership, Rooting, or a current-working-directory change; an explicit load changes none of those, and every one-shot `bash` call must set `workdir` again.
+
 ## Boundary & Invariants
 
 - `project_id` is stable and names the Project Anchor; `cwd` is a mutable pointer to the repository. Repository equality and working-directory equality never establish Project identity.
