@@ -977,3 +977,63 @@ async def test_inbound_dispatch_propagates_cancellation(tmp_path: Path) -> None:
 def test_split_discord_message_rejects_non_positive_limit() -> None:
     with pytest.raises(ValueError):
         split_discord_message("hello", 0)
+
+
+class _FakeServerError(Exception):
+    pass
+
+
+class _FakeHTTPError(Exception):
+    def __init__(self, status: int, retry_after: float | None = None) -> None:
+        super().__init__(f"http {status}")
+        self.status = status
+        self.retry_after = retry_after
+
+
+def _install_fake_discord_errors(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        discord_module,
+        "_load_discord",
+        lambda: SimpleNamespace(
+            DiscordServerError=_FakeServerError,
+            HTTPException=_FakeHTTPError,
+        ),
+    )
+
+
+@pytest.mark.parametrize(
+    ("error", "expect_retryable"),
+    [
+        (TimeoutError("gateway timeout"), True),
+        (ConnectionError("socket closed"), True),
+        (_FakeServerError("gateway unavailable"), True),
+        (_FakeHTTPError(400), False),
+        (_FakeHTTPError(403), False),
+        (_FakeHTTPError(500), True),
+        (_FakeHTTPError(429, retry_after=3.0), True),
+    ],
+)
+def test_send_error_classification(
+    monkeypatch: pytest.MonkeyPatch,
+    error: Exception,
+    expect_retryable: bool,
+) -> None:
+    from core.channels.discord import _classify_discord_send_error
+
+    _install_fake_discord_errors(monkeypatch)
+    classified = _classify_discord_send_error(error)
+
+    assert isinstance(classified, ChannelError)
+    assert classified.retryable is expect_retryable
+
+
+def test_rate_limit_classification_carries_retry_hint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from core.channels.discord import _classify_discord_send_error
+
+    _install_fake_discord_errors(monkeypatch)
+    classified = _classify_discord_send_error(_FakeHTTPError(429, retry_after=3.0))
+
+    assert classified.retryable is True
+    assert classified.retry_after == 3.0

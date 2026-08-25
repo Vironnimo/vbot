@@ -60,6 +60,7 @@ from core.sessions.sessions import (
     SessionAddress,
 )
 from core.utils.logging import get_logger
+from core.utils.retry import retry_async
 from core.utils.workers import BoundedWorkerPool
 
 if TYPE_CHECKING:
@@ -1183,12 +1184,32 @@ class ChannelConversationEngine:
             await self._send_reply(reply_plan, reply)
 
     async def _send_reply(self, reply_plan: ReplyPlanFacts, text: str) -> None:
-        await self._transport.send_text(
-            reply_plan.platform_target,
-            text,
-            reply_to_message_id=reply_plan.reply_to_message_id,
-            thread_id=reply_plan.thread_id,
-        )
+        """Deliver an engine reply, retrying transient transport failures.
+
+        Retries honor the adapter's retryable classification (network blips,
+        rate limits) with the shared backoff policy. When retries are
+        exhausted the answer is genuinely lost - log it at error level so a
+        dropped reply is visible instead of surfacing as generic queue noise.
+        """
+        try:
+            await retry_async(
+                self._transport.send_text,
+                reply_plan.platform_target,
+                text,
+                reply_to_message_id=reply_plan.reply_to_message_id,
+                thread_id=reply_plan.thread_id,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as error:
+            _LOGGER.error(
+                "Channel reply lost after retries (channel=%s target=%s thread=%s attempts=%s): %s",
+                reply_plan.channel_id,
+                reply_plan.platform_target,
+                reply_plan.thread_id,
+                getattr(error, "attempts_made", None),
+                error,
+            )
 
     def _waiting_scope(self, platform_target: str) -> str:
         return f"{self._config.id}:{platform_target}"
