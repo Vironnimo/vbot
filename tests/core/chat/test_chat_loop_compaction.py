@@ -20,6 +20,7 @@ from core.chat.chat import (
     PINNED_SOUL_CONTEXT_META_KEY,
     PINNED_WORKING_PROJECT_CONTEXT_META_KEY,
     SEEN_SKILLS_META_KEY,
+    RequestBuildInputs,
     _RequestState,
     _restore_in_run_tool_result_content,
     _RunRequest,
@@ -781,7 +782,11 @@ async def test_compaction_allows_repeated_automatic_checkpoints_in_one_run(
         continuation_reminder=None,
         continuation_tracker=None,
     )
-    context.request_state = await loop._build_request_state(agent, session)
+    context.request_state = await loop._build_request_state(
+        agent,
+        session,
+        inputs=RequestBuildInputs.from_context(context, context.primary_target),
+    )
 
     requested_compactions = 5
     affinity_epochs = [context.prompt_cache_affinity_id]
@@ -887,7 +892,9 @@ async def test_final_assistant_compaction_activates_history_on_next_run(tmp_path
     checkpoint = next(
         message for message in session.load() if message.role == "compaction_checkpoint"
     )
-    post_compaction_state = await loop._build_request_state(agent, session)
+    post_compaction_state = await loop._build_request_state(
+        agent, session, inputs=RequestBuildInputs()
+    )
     expected_context_tokens_after, _ = estimate_request_input_tokens(
         post_compaction_state.messages,
         post_compaction_state.tools,
@@ -1327,15 +1334,7 @@ async def test_compaction_refreshes_rooted_working_project_files_and_auto_load(
     context.request_state = await loop._build_request_state(
         agent,
         session,
-        replay_policy=context.primary_target.replay_policy,
-        reasoning_scope_model=context.primary_target.model_reference,
-        input_modalities=context.primary_target.input_modalities,
-        wire_media_types=context.primary_target.wire_media_types,
-        agent_body=context.agent_body,
-        project_context=context.project_prompt_context,
-        working_project_context=context.working_project_context,
-        skill_registry=context.skill_registry,
-        skill_catalog=context.skill_catalog,
+        inputs=RequestBuildInputs.from_context(context, context.primary_target),
     )
 
     agents_file.write_text("Updated rules", encoding="utf-8")
@@ -1904,5 +1903,5 @@ async def test_compact_session_converts_compaction_failure_into_reply(tmp_path: 
     assert reply == "Compaction failed: compaction broke"
     assert persisted_roles(session.load()) == ["user"]
     assert runtime.refresh_skills_for_calls == []
-    request_state = await loop._build_request_state(agent, session)
+    request_state = await loop._build_request_state(agent, session, inputs=RequestBuildInputs())
     assert HISTORY_TOOL_NAME not in [tool["name"] for tool in request_state.tools]

@@ -17,6 +17,7 @@ from core.chat.messages import (
     _compaction_projection_without_provider_state,
     _effective_compaction_messages,
     _latest_compaction_checkpoint,
+    _message_to_request_dict,
 )
 from core.debug.redaction import redact_json_body
 from core.sessions import current_skill_activation_contents, skill_tool_activation
@@ -33,6 +34,14 @@ COMPACTION_TAIL_GUIDANCE = (
     "The messages below are the most recent verbatim Session activity retained after this "
     "Compaction checkpoint. They chronologically follow the summary above."
 )
+COMPACTION_TAIL_BOUNDARY_MARKER = (
+    "Note: The messages below are the most recent Session activity and are kept verbatim "
+    "after this compaction checkpoint. They are shown so your summary reflects the true "
+    "latest state; summarize only the conversation above this note and do not retell them."
+)
+COMPACTION_TRIGGER_AUTO = "auto"
+COMPACTION_TRIGGER_MANUAL = "manual"
+COMPACTION_TRIGGERS = frozenset({COMPACTION_TRIGGER_AUTO, COMPACTION_TRIGGER_MANUAL})
 SKILL_COMPACTION_GUIDANCE = (
     "Skills active before this Compaction: {skill_names_json}. Their instructions and "
     "environment access are no longer active after this checkpoint. If a Skill is still "
@@ -127,6 +136,7 @@ class CompactionContext:
     previous_compacted_token_count: int
     instruction: str | None
     storage: Any
+    trigger: str = COMPACTION_TRIGGER_AUTO
 
 
 @dataclass(frozen=True)
@@ -178,6 +188,11 @@ def find_tail_boundary(messages: list[ChatMessage], tail_tokens: int) -> str:
     return _plan_working_tail(messages, tail_tokens).boundary_id
 
 
+def _fragment_name_for_trigger(trigger: str) -> str:
+    """Return the compaction instruction fragment for one trigger scenario."""
+    return "compaction-manual.md" if trigger == COMPACTION_TRIGGER_MANUAL else "compaction.md"
+
+
 class SummarizationStrategy:
     """Summarize an exact provider-request prefix and retain one safe canonical tail."""
 
@@ -194,13 +209,18 @@ class SummarizationStrategy:
             tail_plan.boundary_id,
         )
         prompt = _build_compaction_instruction(
-            context.storage.read_prompt_fragment("compaction.md"),
+            context.storage.read_prompt_fragment(_fragment_name_for_trigger(context.trigger)),
             context.instruction,
         )
         pinned_user_id = tail_plan.pinned_user.id if tail_plan.pinned_user is not None else None
         return CompactionPlan(
             model_messages=(
                 *request_prefix,
+                {"role": "user", "content": COMPACTION_TAIL_BOUNDARY_MARKER},
+                *(
+                    _message_to_request_dict(message)
+                    for message in tail_plan.retained_messages
+                ),
                 {"role": "user", "content": prompt},
             ),
             model_target="summary",
@@ -232,7 +252,9 @@ class ContinuationStrategy:
         del settings
         if not context.request_messages:
             raise CompactionError("Continuation compaction requires an active request Context")
-        base_instruction = context.storage.read_prompt_fragment("compaction.md").strip()
+        base_instruction = context.storage.read_prompt_fragment(
+            _fragment_name_for_trigger(context.trigger)
+        ).strip()
         instruction = (context.instruction or "").strip()
         suffix = base_instruction
         if instruction:
