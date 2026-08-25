@@ -78,6 +78,7 @@ class TestHistoryCompactionPrimitives:
                 ]
             },
             reasoning_scope="openai/gpt-5.6-sol::api-key",
+            reasoning_timing={"first_delta_ms": 120, "last_delta_ms": 900},
             phase="final_answer",
         )
 
@@ -92,6 +93,7 @@ class TestHistoryCompactionPrimitives:
         assert projected_assistant.reasoning is None
         assert projected_assistant.reasoning_meta is None
         assert projected_assistant.reasoning_scope is None
+        assert projected_assistant.reasoning_timing is None
         assert projected_assistant.phase == "final_answer"
 
     def test_post_compaction_context_overlays_complete_unconsumed_tool_batch(self) -> None:
