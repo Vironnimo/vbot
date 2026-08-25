@@ -59,7 +59,8 @@ AREA_HELP = {
     "provider": "Inspect and configure provider connections",
     "model": "Inspect and refresh model catalogs",
     "task-model": "Inspect and manage specialized task-model bindings",
-    "skill": "Inspect skill availability and diagnostics",
+    "skill": "Inspect and manage skills, including the disable/share policy",
+    "memory": "Inspect and manage one agent's pinned memory entries",
     "extensions": "Inspect and toggle loaded extensions",
     "cron": "Inspect and manage scheduled cron jobs",
     "bootstrap": "Inspect and manage startup-triggered Agent Runs",
@@ -80,6 +81,7 @@ AGENT_HELP = {
     "create": "Create an agent config",
     "update": "Update an agent config",
     "rename": "Change an Identity Agent id and retarget live references",
+    "reorder": "Set the Identity Agent roster order",
     "delete": "Delete an agent config",
 }
 PROJECT_HELP = {
@@ -90,6 +92,7 @@ PROJECT_HELP = {
     "set-override": "Set one project-team agent override",
     "clear-override": "Clear one project-team agent override",
     "rm": "Remove a project, archiving its anchor",
+    "detect": "Detect source formats and context files in a directory",
 }
 SESSION_HELP = {
     "list": "List one agent's chat sessions",
@@ -132,6 +135,8 @@ PROVIDER_HELP = {
     "list": "List provider connections and usability",
     "status": "Show one provider or connection status",
     "usage": "Show live Provider subscription usage and reset windows",
+    "usage-history": "Show recorded Provider usage-limit observations",
+    "usage-history-clear": "Delete all recorded Provider usage-limit observations",
     "set-key": "Set an API-key provider credential",
     "unset-key": "Remove an API-key provider credential",
     "enable": "Enable a provider connection (local providers start disabled)",
@@ -150,6 +155,7 @@ MODEL_HELP = {
 }
 TASK_MODEL_HELP = {
     "list": "List configured task-model bindings",
+    "status": "Show whether one task type is configured and usable",
     "targets": "List available targets for one task type",
     "options": "Show supported, configured, and effective options for one task target",
     "set": "Bind one task type to a target and optionally set options",
@@ -211,12 +217,23 @@ AUTOSTART_HELP = {
 TOOL_HELP = {"list": "List public registered tools"}
 SKILL_HELP = {
     "list": "List effective skills and diagnostics",
+    "inventory": "List every skill from every source with policy state",
     "read": "Read editable skills in a global or private agent scope",
     "create": "Create a skill in a global or private agent scope",
     "update": "Replace a skill's SKILL.md in an editable scope",
     "delete": "Delete a skill from an editable scope",
     "write-file": "Write one supporting file inside an editable skill",
     "remove-file": "Remove one supporting file from an editable skill",
+    "disable": "Disable one skill everywhere (master switch)",
+    "enable": "Re-enable a disabled skill",
+    "share": "Share one agent's private skill with other agents",
+    "unshare": "Stop sharing one agent's private skill",
+}
+MEMORY_HELP = {
+    "list": "List one agent's pinned memory entries",
+    "add": "Add one pinned memory entry",
+    "replace": "Replace one pinned memory entry's content",
+    "remove": "Remove one pinned memory entry",
 }
 EXTENSIONS_HELP = {
     "list": "List loaded, failed, and disabled extensions",
@@ -250,6 +267,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     _add_model_parsers(subparsers)
     _add_task_model_parsers(subparsers)
     _add_skill_parsers(subparsers)
+    _add_memory_parsers(subparsers)
     _add_extensions_parsers(subparsers)
     _add_cron_parsers(subparsers)
     _add_bootstrap_parsers(subparsers)
@@ -415,6 +433,22 @@ def _add_agent_parsers(subparsers: argparse._SubParsersAction[argparse.ArgumentP
         agent_subparsers, "delete", AGENT_HELP["delete"], example="agent delete coder"
     )
     delete_parser.add_argument("id", metavar="<agent-id>", help="Agent id to delete")
+
+    reorder_parser = _add_command_parser(
+        agent_subparsers,
+        "reorder",
+        AGENT_HELP["reorder"],
+        example="agent reorder researcher assistant coder",
+    )
+    reorder_parser.add_argument(
+        "ids",
+        nargs="+",
+        metavar="<agent-id>",
+        help=(
+            "Agent ids in the desired order; agents not listed keep their "
+            "relative order after the listed ones"
+        ),
+    )
 
 
 def _add_agent_change_arguments(
@@ -715,6 +749,18 @@ def _add_project_parsers(subparsers: argparse._SubParsersAction[argparse.Argumen
             "Copy SOUL.md, USER.md, and MEMORY.md from custom Workspaces before rooted "
             "Identity Agents are reset to their default Workspace"
         ),
+    )
+
+    _add_command_parser(
+        project_subparsers,
+        "detect",
+        PROJECT_HELP["detect"],
+        example="project detect C:/Development/projects/vBot",
+    ).add_argument(
+        "cwd",
+        nargs="?",
+        metavar="<path>",
+        help="Directory to inspect; omitted uses the current working directory",
     )
 
 
@@ -1293,6 +1339,23 @@ def _add_provider_parsers(subparsers: argparse._SubParsersAction[argparse.Argume
         help="Probe only this connection; repeat to select multiple connections",
     )
 
+    usage_history_parser = _add_command_parser(
+        provider_subparsers,
+        "usage-history",
+        PROVIDER_HELP["usage-history"],
+        example="provider usage-history --since 2026-08-01T00:00:00Z",
+    )
+    usage_history_parser.add_argument("--since", help="ISO 8601 lower bound (inclusive)")
+    usage_history_parser.add_argument("--until", help="ISO 8601 upper bound (inclusive)")
+
+    usage_history_clear_parser = _add_command_parser(
+        provider_subparsers,
+        "usage-history-clear",
+        PROVIDER_HELP["usage-history-clear"],
+        example="provider usage-history-clear --yes",
+    )
+    usage_history_clear_parser.add_argument("--yes", action="store_true", help="Confirm deletion")
+
     set_key_parser = _add_command_parser(
         provider_subparsers,
         "set-key",
@@ -1475,6 +1538,14 @@ def _add_task_model_parsers(
     )
     targets_parser.add_argument("task_type", metavar="<task-type>", choices=TASK_TYPES)
 
+    status_parser = _add_command_parser(
+        task_model_subparsers,
+        "status",
+        TASK_MODEL_HELP["status"],
+        example="task-model status text_to_speech",
+    )
+    status_parser.add_argument("task_type", metavar="<task-type>", choices=TASK_TYPES)
+
     options_parser = _add_command_parser(
         task_model_subparsers,
         "options",
@@ -1565,6 +1636,45 @@ def _add_skill_parsers(subparsers: argparse._SubParsersAction[argparse.ArgumentP
     skill_subparsers = skill_parser.add_subparsers(dest="command", required=True)
     _add_command_parser(skill_subparsers, "list", SKILL_HELP["list"], example="skill list")
 
+    _add_command_parser(
+        skill_subparsers, "inventory", SKILL_HELP["inventory"], example="skill inventory"
+    )
+
+    for command in ("disable", "enable"):
+        command_parser = _add_command_parser(
+            skill_subparsers,
+            command,
+            SKILL_HELP[command],
+            example=f"skill {command} librarian",
+        )
+        command_parser.add_argument("name", metavar="<skill-name>", help="Skill name to toggle")
+
+    share_parser = _add_command_parser(
+        skill_subparsers,
+        "share",
+        SKILL_HELP["share"],
+        example="skill share assistant librarian --to researcher coder",
+    )
+    share_parser.add_argument("agent", metavar="<agent-id>", help="Owning Identity Agent id")
+    share_parser.add_argument("name", metavar="<skill-name>", help="Private Skill name to share")
+    share_parser.add_argument(
+        "--to",
+        dest="receivers",
+        action="append",
+        required=True,
+        metavar="<receiver-agent-id>",
+        help="Receiver agent id; repeat to share with several agents",
+    )
+
+    unshare_parser = _add_command_parser(
+        skill_subparsers,
+        "unshare",
+        SKILL_HELP["unshare"],
+        example="skill unshare assistant librarian",
+    )
+    unshare_parser.add_argument("agent", metavar="<agent-id>", help="Owning Identity Agent id")
+    unshare_parser.add_argument("name", metavar="<skill-name>", help="Shared Skill name")
+
     read_parser = _add_command_parser(
         skill_subparsers, "read", SKILL_HELP["read"], example="skill read --scope global"
     )
@@ -1629,6 +1739,67 @@ def _add_skill_scope_argument(parser: argparse.ArgumentParser) -> None:
         required=True,
         metavar="<global|agent:id>",
         help="Editable global or private Identity Agent Skill scope",
+    )
+
+
+def _add_memory_parsers(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+    memory_parser = subparsers.add_parser(
+        "memory",
+        help=AREA_HELP["memory"],
+        description=AREA_HELP["memory"],
+    )
+    memory_subparsers = memory_parser.add_subparsers(dest="command", required=True)
+
+    list_parser = _add_command_parser(
+        memory_subparsers, "list", MEMORY_HELP["list"], example="memory list assistant"
+    )
+    _add_memory_agent_argument(list_parser)
+
+    add_parser = _add_command_parser(
+        memory_subparsers,
+        "add",
+        MEMORY_HELP["add"],
+        example='memory add assistant --scope user --content "Prefers concise answers"',
+    )
+    _add_memory_agent_argument(add_parser)
+    _add_memory_content_arguments(add_parser)
+
+    replace_parser = _add_command_parser(
+        memory_subparsers,
+        "replace",
+        MEMORY_HELP["replace"],
+        example='memory replace assistant 3 --content "Updated preference"',
+    )
+    _add_memory_agent_argument(replace_parser)
+    replace_parser.add_argument("entry_id", type=int, metavar="<entry-id>")
+    _add_memory_content_arguments(replace_parser)
+
+    remove_parser = _add_command_parser(
+        memory_subparsers,
+        "remove",
+        MEMORY_HELP["remove"],
+        example="memory remove assistant 3 --yes",
+    )
+    _add_memory_agent_argument(remove_parser)
+    remove_parser.add_argument("entry_id", type=int, metavar="<entry-id>")
+    remove_parser.add_argument("--yes", action="store_true", help="Confirm removal")
+
+
+def _add_memory_agent_argument(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("agent", metavar="<agent-id>", help="Identity Agent id")
+    parser.add_argument(
+        "--scope",
+        choices=("agent", "user"),
+        default="agent",
+        help="Memory file to operate on (default: agent)",
+    )
+
+
+def _add_memory_content_arguments(parser: argparse.ArgumentParser) -> None:
+    content_group = parser.add_mutually_exclusive_group(required=True)
+    content_group.add_argument("--content", help="Entry text as inline content")
+    content_group.add_argument(
+        "--file", dest="content_file", metavar="<path>", help="Read entry text from a file"
     )
 
 

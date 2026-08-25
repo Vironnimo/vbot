@@ -7,6 +7,7 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 from cli.config_management import coerce_config_value
+from cli.formatting import bool_text as _bool_text
 from cli.formatting import string_or_default as _string_or_default
 from cli.rpc_client import httpx as httpx
 from cli.rpc_client import rpc_call as _rpc_call
@@ -25,6 +26,21 @@ def task_model_list(instance: ServerInstance) -> CommandResult:
             ok=False, message="RPC result missing model_tasks object", instance=instance
         )
     return CommandResult(ok=True, message=_format_binding_rows(model_tasks), instance=instance)
+
+
+def task_model_status(instance: ServerInstance, task_type: str) -> CommandResult:
+    """Return one task type's configured/usable state from `task_model.status`."""
+
+    payload = _rpc_call(instance, "task_model.status", {"task_type": task_type})
+    if not payload.ok:
+        return payload.to_command_result()
+    configured = _bool_text(payload.data.get("configured"))
+    usable = _bool_text(payload.data.get("usable"))
+    return CommandResult(
+        ok=True,
+        message=f"task-model {task_type}: configured={configured} usable={usable}",
+        instance=instance,
+    )
 
 
 def task_model_targets(instance: ServerInstance, task_type: str) -> CommandResult:

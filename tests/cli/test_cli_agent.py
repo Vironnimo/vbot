@@ -409,3 +409,72 @@ def test_agent_create_warns_and_gives_recovery_when_no_model_is_effective(
     assert result.ok is True
     assert "vbot model list --task chat" in result.message
     assert "vbot agent update librarian --model <model-id>" in result.message
+
+
+def test_agent_reorder_reads_revision_and_appends_unlisted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    instance = make_instance(tmp_path)
+    calls: list[dict[str, Any]] = []
+
+    def fake_post(
+        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
+    ) -> httpx.Response:
+        calls.append(json)
+        if json["method"] == "agent.list":
+            return httpx.Response(
+                200,
+                json={
+                    "ok": True,
+                    "result": {
+                        "agents": [{"id": "assistant"}, {"id": "coder"}, {"id": "researcher"}],
+                        "order_revision": 4,
+                    },
+                },
+            )
+        assert json["method"] == "agent.reorder"
+        return httpx.Response(
+            200,
+            json={"ok": True, "result": {"agents": [], "order_revision": 5}},
+        )
+
+    monkeypatch.setattr(agent_management.httpx, "post", fake_post)
+
+    result = agent_management.agent_reorder(instance, ["researcher", "assistant"])
+
+    assert result.ok is True
+    assert result.message.startswith("agent roster reordered (revision 5): ")
+    assert result.message.endswith("researcher, assistant, coder")
+    assert calls[1] == {
+        "method": "agent.reorder",
+        "params": {
+            "agent_ids": ["researcher", "assistant", "coder"],
+            "expected_revision": 4,
+        },
+    }
+
+
+def test_agent_reorder_rejects_duplicate_ids_locally(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    instance = make_instance(tmp_path)
+
+    def fake_post(
+        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
+    ) -> httpx.Response:
+        raise AssertionError("no RPC expected for duplicate ids")
+
+    monkeypatch.setattr(agent_management.httpx, "post", fake_post)
+
+    result = agent_management.agent_reorder(instance, ["assistant", "assistant"])
+
+    assert result.ok is False
+    assert "duplicate" in result.message
+
+
+def test_parse_args_supports_agent_reorder() -> None:
+    args = cli_main.parse_args(["agent", "reorder", "researcher", "assistant"])
+
+    assert args.area == "agent"
+    assert args.command == "reorder"
+    assert args.ids == ["researcher", "assistant"]

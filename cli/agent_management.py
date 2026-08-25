@@ -149,6 +149,47 @@ def agent_delete(instance: ServerInstance, agent_id: str) -> CommandResult:
     return CommandResult(ok=True, message=f"deleted {deleted_id}", instance=instance)
 
 
+def agent_reorder(instance: ServerInstance, agent_ids: Sequence[str]) -> CommandResult:
+    """Reorder the Identity Agent roster via `agent.reorder` RPC.
+
+    Reads the current listing first so the caller does not need to know the
+    optimistic-concurrency revision; agents not passed keep their relative
+    order after the listed ones.
+    """
+
+    if len(set(agent_ids)) != len(agent_ids):
+        return CommandResult(
+            ok=False,
+            message="duplicate agent ids in reorder list",
+            instance=instance,
+        )
+    listing = _rpc_call(instance, "agent.list", {})
+    if not listing.ok:
+        return listing.to_command_result()
+    current_agents = listing.data.get("agents")
+    current_ids: list[str] = []
+    if isinstance(current_agents, list):
+        for agent in current_agents:
+            if isinstance(agent, dict) and isinstance(agent.get("id"), str):
+                current_ids.append(agent["id"])
+    ordered_ids = list(agent_ids) + [
+        agent_id for agent_id in current_ids if agent_id not in set(agent_ids)
+    ]
+    params: dict[str, Any] = {
+        "agent_ids": ordered_ids,
+        "expected_revision": listing.data.get("order_revision"),
+    }
+    payload = _rpc_call(instance, "agent.reorder", params)
+    if not payload.ok:
+        return payload.to_command_result()
+    revision = _value_text(payload.data.get("order_revision"))
+    return CommandResult(
+        ok=True,
+        message=f"agent roster reordered (revision {revision}): {', '.join(ordered_ids)}",
+        instance=instance,
+    )
+
+
 def _format_agent_rows(agents: Sequence[object]) -> str:
     if not agents:
         return "no agents configured"

@@ -1,6 +1,6 @@
 ---
 name: vbot-cli
-description: Configure, inspect, and operate vBot through the vbot CLI, including locating the vBot root and runtime data. Use when asked to start, stop, restart, update, or uninstall vBot, set up provider credentials (API key or OAuth), find vBot files or diagnose stored state, list/add/edit/remove agents, projects, sessions, channels (Telegram, Discord), cron jobs, Bootstrap Runs, prompts, skills, extensions, or settings, inspect complete Model data, or configure specialized Task Models such as TTS/STT including model-specific voices and options — as well as to inspect tools, logs, debug traces, Provider subscription usage, and Session usage statistics (tokens, runs, errors, tool and skill usage).
+description: Configure, inspect, and operate vBot through the vbot CLI, including locating the vBot root and runtime data. Use when asked to start, stop, restart, update, or uninstall vBot, set up provider credentials (API key or OAuth), find vBot files or diagnose stored state, list/add/edit/remove agents, projects, sessions, channels (Telegram, Discord), cron jobs, Bootstrap Runs, prompts, skills, pinned Memory entries, extensions, or settings, inspect complete Model data, or configure specialized Task Models such as TTS/STT including model-specific voices and options — as well as to inspect tools, logs, debug traces, Provider subscription usage and limit history, and Session usage statistics (tokens, runs, errors, tool and skill usage).
 ---
 
 # vBot CLI
@@ -56,11 +56,12 @@ Read the reference file before using an area's write commands — it has the exa
 | `desktop` | open the desktop window | `references/server.md` |
 | `home` | show resolved application and data directories | `references/server.md` |
 | `doctor` | `settings` `config` — validate config files locally | `references/server.md` |
-| `provider` | `list` `status` `usage` `enable` `disable` `set-key` `unset-key` `connect` `connect-status` `disconnect` | `references/providers.md` |
+| `provider` | `list` `status` `usage` `usage-history` `usage-history-clear` `enable` `disable` `set-key` `unset-key` `connect` `connect-status` `disconnect` | `references/providers.md` |
 | `model` | `list` `show` `refresh [<provider>]` | `references/providers.md` |
-| `task-model` | `list` `targets` `options` `set` `set-option` `unset-option` `clear` | `references/providers.md` |
-| `agent` | `list` `show` `create` `update` `rename` `delete` | `references/agents-projects.md` |
-| `project` | `add` `list` `show` `set` `set-override` `clear-override` `rm` | `references/agents-projects.md` |
+| `task-model` | `list` `status` `targets` `options` `set` `set-option` `unset-option` `clear` | `references/providers.md` |
+| `agent` | `list` `show` `create` `update` `rename` `reorder` `delete` | `references/agents-projects.md` |
+| `project` | `add` `list` `show` `set` `set-override` `clear-override` `detect` `rm` | `references/agents-projects.md` |
+| `memory` | `list` `add` `replace` `remove` — pinned Memory entries per Agent | `references/memory.md` |
 | `session` | `list` `create` `fork` `rename` `set-compaction-policy` `delete` `link-channel` | `references/agents-projects.md` |
 | `channel` | `add` `list` `status` `update` `set-token` `enable` `disable` `remove` | `references/channels.md` |
 | `cron` | `list` `create` `update` `delete` `enable` `disable` | `references/cron.md` |
@@ -71,7 +72,7 @@ Read the reference file before using an area's write commands — it has the exa
 | `log` | `list` `read` | `references/diagnostics.md` |
 | `debug` | `status` `probe` `traces` `trace` `clear` | `references/diagnostics.md` |
 | `statistics` | `overview` `usage` `runs` `errors` `tools` `skills` | `references/diagnostics.md` |
-| `skill` | `list` `read` `create` `update` `delete` `write-file` `remove-file` | `references/skills.md` |
+| `skill` | `list` `inventory` `read` `create` `update` `delete` `write-file` `remove-file` `disable` `enable` `share` `unshare` | `references/skills.md` |
 | `tool` | `list` — public tools exposed to agents | — |
 
 First-time Telegram bot setup (BotFather, token, chat-id discovery, privacy mode): follow `references/telegram-setup.md`.

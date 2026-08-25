@@ -193,6 +193,42 @@ def project_remove(
     return CommandResult(ok=True, message="\n".join(lines), instance=instance)
 
 
+def project_detect(instance: ServerInstance, cwd: str | None) -> CommandResult:
+    """Report source-format and context-file facts via `project.detect` RPC."""
+
+    params: dict[str, Any] = {} if cwd is None else {"cwd": cwd}
+    payload = _rpc_call(instance, "project.detect", params)
+    if not payload.ok:
+        return payload.to_command_result()
+    target = cwd if cwd else "the current working directory"
+    if payload.data.get("cwd_exists") is not True:
+        return CommandResult(
+            ok=True,
+            message=(
+                f"no directory at {target}; nothing to detect (a nonexistent path is not an error)"
+            ),
+            instance=instance,
+        )
+    lines = [f"detected project facts for {target}:"]
+    formats = payload.data.get("formats")
+    if isinstance(formats, dict):
+        for format_key in sorted(formats):
+            presence = formats.get(format_key)
+            agents = skills = "?"
+            if isinstance(presence, dict):
+                agents = str(presence.get("agents", "?"))
+                skills = str(presence.get("skills", "?"))
+            lines.append(f"{format_key}: agents={agents} skills={skills}")
+    context_files = payload.data.get("context_files")
+    if isinstance(context_files, dict):
+        lines.append(f"AGENTS.md present: {_bool_text(context_files.get('agents_md'))}")
+        claude_md = context_files.get("claude_md")
+        lines.append(
+            f"CLAUDE.md: {claude_md if isinstance(claude_md, str) and claude_md else 'none'}"
+        )
+    return CommandResult(ok=True, message="\n".join(lines), instance=instance)
+
+
 def _format_project_added(data: Mapping[str, Any]) -> str:
     project = data.get("project")
     project_id = "?"
