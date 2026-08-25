@@ -2198,8 +2198,8 @@ class ChatLoop:
             # session-scoped content tracker (real before/after line diffs).
             # Peek first so an all-zero outcome persists explicitly and matches
             # the totals the live stream last showed; take consumes the deltas.
-            # Best-effort: a missing baseline simply means the UI falls back to
-            # its per-tool-call counts.
+            # Best-effort: untracked files (too large, non-UTF-8) simply mean
+            # the UI falls back to its per-tool-call counts.
             try:
                 change_stats = self._dependencies.change_tracker.peek_run_stats(run.session_id)
                 if change_stats is not None:

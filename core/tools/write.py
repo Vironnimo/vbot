@@ -6,6 +6,7 @@ from contextlib import nullcontext
 from pathlib import Path
 
 from core.tools.arguments import logical_line_count, looks_like_line_numbered_content
+from core.tools.change_tracker import MAX_TRACKED_BYTES
 from core.tools.file_state import FileReadState, atomic_write_bytes, stale_failure_text
 from core.tools.syntax_check import warning_for_written_file
 from core.tools.tools import (
@@ -101,6 +102,26 @@ def _detect_file_line_ending(path: Path) -> str | None:
     return None
 
 
+def _read_tracked_before_content(path: Path) -> str | None:
+    """Return the file's current text for change tracking, or ``None`` if untrackable.
+
+    Untrackable means: too large for the tracker's content budget, unreadable,
+    or not valid UTF-8. A leading UTF-8 BOM is stripped so the pre-state
+    compares cleanly against the BOM-free text the write tool produces.
+    """
+    try:
+        if path.stat().st_size > MAX_TRACKED_BYTES:
+            return None
+        raw = path.read_bytes()
+    except OSError:
+        return None
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return None
+    return text.removeprefix(_UTF8_BOM)
+
+
 def _normalize_to_line_ending(text: str, ending: str) -> str:
     """Convert all line endings in ``text`` to ``ending``."""
     lf = text.replace("\r\n", "\n").replace("\r", "\n")
@@ -157,6 +178,13 @@ def write_handler(
 
         try:
             removed_lines = _file_line_count(resolved) if target_exists else 0
+            # Capture the actual pre-write content for change statistics before
+            # the write replaces it. Diffing against real disk state keeps
+            # external changes (formatters, shell commands) out of this run's
+            # delta; a brand-new file counts its whole content as added.
+            tracked_before_content: str | None = ""
+            if context.change_tracker is not None and target_exists:
+                tracked_before_content = _read_tracked_before_content(resolved)
             # Preserve the existing file's line endings: the model naturally
             # produces LF, but silently switching a CRLF file to LF causes
             # unnecessary full-file git diffs. A new file keeps the agent's
@@ -184,22 +212,16 @@ def write_handler(
         if file_state is not None:
             file_state.record_read(context.session_id, resolved)
 
-    # Record the before/after content for git-style change statistics. The
-    # baseline is the session's last known content (from read or a prior write),
-    # so a full-file rewrite of a file the session has read diffs against that
-    # read instead of counting every line as added and removed. A brand-new file
-    # has no baseline and counts its whole content as added; an existing file
-    # the session never read has no known before-content, so it is not tracked
-    # and the client-side per-tool-call counts remain the fallback.
-    if context.change_tracker is not None:
-        baseline = context.change_tracker.baseline_for(context.session_id, resolved)
-        if baseline is not None or not target_exists:
-            context.change_tracker.record_write(
-                context.session_id,
-                resolved,
-                before=baseline if baseline is not None else "",
-                after=content,
-            )
+    # Files that cannot be compared as UTF-8 text within the tracker's size
+    # budget are not tracked and the client-side per-tool-call counts remain
+    # the fallback.
+    if context.change_tracker is not None and tracked_before_content is not None:
+        context.change_tracker.record_write(
+            context.session_id,
+            resolved,
+            before=tracked_before_content,
+            after=content,
+        )
 
     context.add_display_line_changes(
         added=logical_line_count(content),

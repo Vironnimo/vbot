@@ -430,21 +430,6 @@ def _split_stream_fragments(
     return fragments, held_carriage_return
 
 
-def _read_raw_text(resolved: Path) -> str:
-    """Read a file's raw text exactly as the renderer sees it (BOM stripped).
-
-    The change tracker's baseline must be the file's actual content, not the
-    numbered/truncated rendering, so a later write diffs against real content.
-    ``newline=""`` keeps every line ending untouched, matching what ``edit``
-    decodes and what ``write`` stores.
-    """
-    with resolved.open("r", encoding="utf-8", errors="replace", newline="") as handle:
-        text = handle.read()
-    if text.startswith("\ufeff"):
-        text = text[1:]
-    return text
-
-
 def _render_text_path(resolved: Path, arguments: JsonObject) -> str:
     """Render a local text file with bounded memory and early truncation."""
     position = _parse_read_position(arguments.get("offset"))
@@ -629,8 +614,8 @@ def make_read_handler(
     are promoted to attachments and audio is transcribed via speech-to-text.
     Mirrors the image-generation tool's factory pattern. ``file_state`` records
     each read so the write/edit guard can detect unread or externally-changed
-    files (see ``file_state.py``). The change tracker is not bound here: it
-    reaches the handler through ``ToolContext.change_tracker``, like edit/write.
+    files (see ``file_state.py``). Reads take no part in change statistics:
+    the tracker diffs every mutation against actual on-disk content.
     """
 
     if (
@@ -745,22 +730,6 @@ def make_read_handler(
             return tool_failure(
                 "file_read_error", f"failed to read file: {displayed_path}: {error}"
             )
-        # Record the raw file text as the session's baseline for git-style change
-        # statistics. The rendered output carries the `N| ` gutter and truncation
-        # hints, so it must never become a baseline: a later write would diff
-        # gutter text against raw content and count nearly every line as changed.
-        # Only a complete read (no offset/limit window) is a trustworthy baseline;
-        # a partial read would diff against a fragment.
-        if (
-            context.change_tracker is not None
-            and not arguments.get("offset")
-            and not arguments.get("limit")
-        ):
-            try:
-                raw_text = _read_raw_text(resolved)
-            except OSError:
-                raw_text = ""
-            context.change_tracker.record_read(context.session_id, resolved, raw_text)
         return tool_success({"content": content})
 
     async def read_handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
