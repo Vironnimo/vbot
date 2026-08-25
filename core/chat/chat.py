@@ -712,6 +712,78 @@ class _CompactionPromptRefresh:
     available_skill_names: tuple[str, ...] | None
 
 
+@dataclass(frozen=True)
+class RequestBuildInputs:
+    """One immutable bundle of everything that shapes a provider request build.
+
+    Groups the Model-target-derived wire inputs and the pinned prompt-epoch
+    state so call sites pass one value instead of thirteen field-by-field
+    kwargs, and so a Compaction prompt refresh derives the next epoch's inputs
+    in one step instead of re-fusing each field.
+    """
+
+    # Derived from the resolved model target serving this request.
+    replay_policy: ReasoningReplayPolicy = DEFAULT_REASONING_REPLAY_POLICY
+    reasoning_scope_model: str | None = None
+    input_modalities: frozenset[str] | None = None
+    wire_media_types: frozenset[str] = frozenset()
+    # Pinned prompt-epoch state; replaced wholesale by a Compaction refresh.
+    agent_body: str = ""
+    project_context: ProjectPromptContext | None = None
+    working_project_context: str | None = None
+    soul_context: str | None = None
+    memory_files_context: str | None = None
+    agent_project_id: str | None = None
+    skill_registry: SkillRegistry | None = None
+    skill_catalog: PinnedSkillCatalog | None = None
+    # Request-only message source; ``None`` loads the Session transcript.
+    session_messages_override: list[ChatMessage] | None = None
+
+    @classmethod
+    def from_context(
+        cls,
+        context: _RunExecutionContext,
+        target: _ModelTarget,
+    ) -> RequestBuildInputs:
+        """Collect the context's pinned epoch plus one target's wire inputs."""
+        return cls(
+            replay_policy=target.replay_policy,
+            reasoning_scope_model=target.model_reference,
+            input_modalities=target.input_modalities,
+            wire_media_types=target.wire_media_types,
+            agent_body=context.agent_body,
+            project_context=context.project_prompt_context,
+            working_project_context=context.working_project_context,
+            soul_context=context.soul_context,
+            memory_files_context=context.memory_files_context,
+            agent_project_id=context.project_id,
+            skill_registry=context.skill_registry,
+            skill_catalog=context.skill_catalog,
+        )
+
+    def with_session_messages(self, messages: list[ChatMessage]) -> RequestBuildInputs:
+        """Return the same bundle reading its request messages from *messages*."""
+        return replace(self, session_messages_override=messages)
+
+    def merged_with_refresh(
+        self,
+        refresh: _CompactionPromptRefresh | None,
+    ) -> RequestBuildInputs:
+        """Apply one prepared Compaction prompt refresh, or return unchanged."""
+        if refresh is None:
+            return self
+        return replace(
+            self,
+            agent_body=refresh.agent_body,
+            project_context=refresh.project_prompt_context,
+            working_project_context=refresh.working_project_context,
+            soul_context=refresh.soul_context,
+            memory_files_context=refresh.memory_files_context,
+            skill_registry=refresh.skill_registry,
+            skill_catalog=refresh.skill_catalog,
+        )
+
+
 # Skill names the session has already surfaced to the model: the pinned catalog at
 # first build, plus any later additions already announced. Diffed each run against the
 # agent's currently available+allowed skills so a newly available one is announced once.
@@ -1432,9 +1504,7 @@ class ChatLoop:
                     skill_registry,
                     run.project_id,
                 )
-                request_state = await self._build_request_state(
-                    agent,
-                    session,
+                inputs = RequestBuildInputs(
                     replay_policy=replay_policy,
                     reasoning_scope_model=reasoning_scope_model,
                     input_modalities=input_modalities,
@@ -1449,6 +1519,7 @@ class ChatLoop:
                     skill_catalog=skill_catalog,
                     session_messages_override=messages,
                 )
+                request_state = await self._build_request_state(agent, session, inputs=inputs)
                 estimated_context_tokens_before, _ = await _CHAT_TRANSFORM_WORKERS.run(
                     estimate_request_input_tokens,
                     request_state.messages,
@@ -1516,51 +1587,14 @@ class ChatLoop:
                     run.session_id,
                     exc_info=True,
                 )
-            next_agent_body = (
-                prompt_refresh.agent_body if prompt_refresh is not None else agent_body
-            )
-            next_prompt_context = (
-                prompt_refresh.project_prompt_context
-                if prompt_refresh is not None
-                else prompt_context
-            )
-            next_working_project_context = (
-                prompt_refresh.working_project_context
-                if prompt_refresh is not None
-                else working_project_context
-            )
-            next_soul_context = (
-                prompt_refresh.soul_context if prompt_refresh is not None else soul_context
-            )
-            next_memory_files_context = (
-                prompt_refresh.memory_files_context
-                if prompt_refresh is not None
-                else memory_files_context
-            )
-            next_skill_registry = (
-                prompt_refresh.skill_registry if prompt_refresh is not None else skill_registry
-            )
-            next_skill_catalog = (
-                prompt_refresh.skill_catalog if prompt_refresh is not None else skill_catalog
-            )
+            inputs = inputs.merged_with_refresh(prompt_refresh)
             checkpoint, _ = await self._project_post_compaction_request(
                 agent=agent,
                 session=session,
                 session_messages=messages,
                 checkpoint=checkpoint,
                 context_tokens_before=context_tokens_before,
-                replay_policy=replay_policy,
-                reasoning_scope_model=reasoning_scope_model,
-                input_modalities=input_modalities,
-                wire_media_types=wire_media_types,
-                agent_body=next_agent_body,
-                project_context=next_prompt_context,
-                working_project_context=next_working_project_context,
-                soul_context=next_soul_context,
-                memory_files_context=next_memory_files_context,
-                agent_project_id=run.project_id,
-                skill_registry=next_skill_registry,
-                skill_catalog=next_skill_catalog,
+                inputs=inputs.with_session_messages(messages),
             )
             await session.append_async(checkpoint)
             messages.append(checkpoint)
@@ -2008,19 +2042,9 @@ class ChatLoop:
             context.request_state = await self._build_request_state(
                 agent,
                 session,
-                replay_policy=target.replay_policy,
-                reasoning_scope_model=target.model_reference,
-                input_modalities=target.input_modalities,
-                wire_media_types=target.wire_media_types,
-                agent_body=context.agent_body,
-                project_context=context.project_prompt_context,
-                working_project_context=context.working_project_context,
-                soul_context=context.soul_context,
-                memory_files_context=context.memory_files_context,
-                agent_project_id=context.project_id,
-                skill_registry=context.skill_registry,
-                skill_catalog=context.skill_catalog,
-                session_messages_override=context.session_snapshot.messages,
+                inputs=RequestBuildInputs.from_context(context, target).with_session_messages(
+                    context.session_snapshot.messages
+                ),
             )
             if context.continuation_reminder is not None:
                 assert context.prior_continuation is not None
@@ -2077,19 +2101,9 @@ class ChatLoop:
                         context.request_state = await self._build_request_state(
                             agent,
                             session,
-                            replay_policy=fallback_target.replay_policy,
-                            reasoning_scope_model=fallback_target.model_reference,
-                            input_modalities=fallback_target.input_modalities,
-                            wire_media_types=fallback_target.wire_media_types,
-                            agent_body=context.agent_body,
-                            project_context=context.project_prompt_context,
-                            working_project_context=context.working_project_context,
-                            soul_context=context.soul_context,
-                            memory_files_context=context.memory_files_context,
-                            agent_project_id=context.project_id,
-                            skill_registry=context.skill_registry,
-                            skill_catalog=context.skill_catalog,
-                            session_messages_override=context.session_snapshot.messages,
+                            inputs=RequestBuildInputs.from_context(
+                                context, fallback_target
+                            ).with_session_messages(context.session_snapshot.messages),
                         )
                         if context.continuation_reminder is not None:
                             context.request_state = _RequestState(
@@ -2708,16 +2722,18 @@ class ChatLoop:
         state = await self._build_request_state(
             agent,
             session,
-            replay_policy=replay_policy,
-            reasoning_scope_model=reasoning_scope_model,
-            input_modalities=input_modalities,
-            wire_media_types=wire_media_types,
-            agent_body=agent_body,
-            project_context=project_context,
-            working_project_context=working_project_context,
-            agent_project_id=agent_project_id,
-            skill_registry=skill_registry,
-            skill_catalog=skill_catalog,
+            inputs=RequestBuildInputs(
+                replay_policy=replay_policy,
+                reasoning_scope_model=reasoning_scope_model,
+                input_modalities=input_modalities,
+                wire_media_types=wire_media_types,
+                agent_body=agent_body,
+                project_context=project_context,
+                working_project_context=working_project_context,
+                agent_project_id=agent_project_id,
+                skill_registry=skill_registry,
+                skill_catalog=skill_catalog,
+            ),
         )
         return state.messages
 
@@ -2726,32 +2742,20 @@ class ChatLoop:
         agent: Any,
         session: ChatSession,
         *,
-        replay_policy: ReasoningReplayPolicy = DEFAULT_REASONING_REPLAY_POLICY,
-        reasoning_scope_model: str | None = None,
-        input_modalities: frozenset[str] | None = None,
-        wire_media_types: frozenset[str] = frozenset(),
-        agent_body: str = "",
-        project_context: ProjectPromptContext | None = None,
-        working_project_context: str | None = None,
-        soul_context: str | None = None,
-        memory_files_context: str | None = None,
-        agent_project_id: str | None = None,
-        skill_registry: SkillRegistry | None = None,
-        skill_catalog: PinnedSkillCatalog | None = None,
-        session_messages_override: list[ChatMessage] | None = None,
+        inputs: RequestBuildInputs,
     ) -> _RequestState:
         # For a project-born session the Working Project context lands in the system
         # prompt; for an unrooted identity session it is empty. The
         # config-agent body is inserted verbatim (never re-expanded) by the builder.
         # ``skill_registry`` scopes the skills block to the project pool (``None`` =
-        # the global registry); ``skill_catalog`` is the current prompt-epoch snapshot
-        # the skills block renders from, so only Compaction replaces it. The
+        # the global registry); ``inputs.skill_catalog`` is the current prompt-epoch
+        # snapshot the skills block renders from, so only Compaction replaces it. The
         # ``working_project_context`` / ``soul_context`` / ``memory_files_context``
         # prompt-epoch snapshots behave the same way.
         session_messages = (
             await session.load_async()
-            if session_messages_override is None
-            else list(session_messages_override)
+            if inputs.session_messages_override is None
+            else list(inputs.session_messages_override)
         )
         system_prompts = self._dependencies.get_system_prompts()
         base_tools = await _run_prompt_method(
@@ -2765,8 +2769,8 @@ class ChatLoop:
         )
         session_tool_grants = history_grants
         effective_input_modalities = (
-            input_modalities
-            if input_modalities is not None
+            inputs.input_modalities
+            if inputs.input_modalities is not None
             else _model_input_modalities(self._dependencies, agent)
         )
         tools = (
@@ -2783,7 +2787,7 @@ class ChatLoop:
         tools = await self._route_tool_definitions(
             tools,
             input_modalities=effective_input_modalities,
-            wire_media_types=wire_media_types,
+            wire_media_types=inputs.wire_media_types,
         )
         allowed_tool_names = tuple(
             str(definition["name"])
@@ -2804,15 +2808,15 @@ class ChatLoop:
             "build_system_prompt_async",
             "build_system_prompt",
             agent,
-            agent_body=agent_body,
-            project_context=project_context,
-            working_project_context=working_project_context,
-            soul_context=soul_context,
-            memory_files_context=memory_files_context,
-            agent_project_id=agent_project_id,
+            agent_body=inputs.agent_body,
+            project_context=inputs.project_context,
+            working_project_context=inputs.working_project_context,
+            soul_context=inputs.soul_context,
+            memory_files_context=inputs.memory_files_context,
+            agent_project_id=inputs.agent_project_id,
             nesting_depth=self._nesting_depth,
-            skill_registry=skill_registry,
-            skill_catalog=skill_catalog,
+            skill_registry=inputs.skill_registry,
+            skill_catalog=inputs.skill_catalog,
             read_paths=prompt_read_paths,
             effective_tool_names=allowed_tool_names,
             session_tool_grants=session_tool_grants,
@@ -2832,8 +2836,8 @@ class ChatLoop:
             system_prompt=system_prompt,
             agent_model=agent.model,
             session_messages=session_messages,
-            replay_policy=replay_policy,
-            reasoning_scope_model=reasoning_scope_model or agent.model,
+            replay_policy=inputs.replay_policy,
+            reasoning_scope_model=inputs.reasoning_scope_model or agent.model,
         )
         effective_messages = prepared_messages.effective_messages
         request_messages = prepared_messages.messages
@@ -2861,14 +2865,14 @@ class ChatLoop:
                 request_messages,
                 current_user_message_id=current_user_message.id,
                 input_modalities=effective_input_modalities,
-                wire_media_types=wire_media_types,
+                wire_media_types=inputs.wire_media_types,
             )
 
         await self._attach_tool_result_content(
             [message for message in request_messages if message.get("role") == "tool"],
             read_media_outputs,
             effective_input_modalities,
-            wire_media_types,
+            inputs.wire_media_types,
         )
         return _RequestState(
             request_messages,
@@ -2886,18 +2890,7 @@ class ChatLoop:
         session_messages: list[ChatMessage],
         checkpoint: ChatMessage,
         context_tokens_before: int,
-        replay_policy: ReasoningReplayPolicy,
-        reasoning_scope_model: str | None,
-        input_modalities: frozenset[str] | None,
-        wire_media_types: frozenset[str],
-        agent_body: str,
-        project_context: ProjectPromptContext | None,
-        working_project_context: str | None,
-        soul_context: str | None,
-        memory_files_context: str | None,
-        agent_project_id: str | None,
-        skill_registry: SkillRegistry,
-        skill_catalog: PinnedSkillCatalog,
+        inputs: RequestBuildInputs,
         live_request_messages: list[JsonObject] | None = None,
         continuation_reminder: str | None = None,
     ) -> tuple[ChatMessage, _RequestState]:
@@ -2905,19 +2898,7 @@ class ChatLoop:
         projected_state = await self._build_request_state(
             agent,
             session,
-            replay_policy=replay_policy,
-            reasoning_scope_model=reasoning_scope_model,
-            input_modalities=input_modalities,
-            wire_media_types=wire_media_types,
-            agent_body=agent_body,
-            project_context=project_context,
-            working_project_context=working_project_context,
-            soul_context=soul_context,
-            memory_files_context=memory_files_context,
-            agent_project_id=agent_project_id,
-            skill_registry=skill_registry,
-            skill_catalog=skill_catalog,
-            session_messages_override=[*session_messages, checkpoint],
+            inputs=inputs.with_session_messages([*session_messages, checkpoint]),
         )
         projected_messages = projected_state.messages
         if continuation_reminder is not None:
@@ -3745,37 +3726,9 @@ class ChatLoop:
                     exc_info=True,
                 )
 
-            next_agent_body = (
-                prompt_refresh.agent_body if prompt_refresh is not None else context.agent_body
-            )
-            next_project_context = (
-                prompt_refresh.project_prompt_context
-                if prompt_refresh is not None
-                else context.project_prompt_context
-            )
-            next_working_project_context = (
-                prompt_refresh.working_project_context
-                if prompt_refresh is not None
-                else context.working_project_context
-            )
-            next_soul_context = (
-                prompt_refresh.soul_context if prompt_refresh is not None else context.soul_context
-            )
-            next_memory_files_context = (
-                prompt_refresh.memory_files_context
-                if prompt_refresh is not None
-                else context.memory_files_context
-            )
-            next_skill_registry = (
-                prompt_refresh.skill_registry
-                if prompt_refresh is not None
-                else context.skill_registry
-            )
-            next_skill_catalog = (
-                prompt_refresh.skill_catalog
-                if prompt_refresh is not None
-                else context.skill_catalog
-            )
+            projection_inputs = RequestBuildInputs.from_context(
+                context, target
+            ).merged_with_refresh(prompt_refresh)
             if (
                 continue_same_run
                 and context.continuation_reminder is not None
@@ -3795,18 +3748,7 @@ class ChatLoop:
                 session_messages=session_messages,
                 checkpoint=checkpoint,
                 context_tokens_before=input_tokens,
-                replay_policy=target.replay_policy,
-                reasoning_scope_model=target.model_reference,
-                input_modalities=target.input_modalities,
-                wire_media_types=target.wire_media_types,
-                agent_body=next_agent_body,
-                project_context=next_project_context,
-                working_project_context=next_working_project_context,
-                soul_context=next_soul_context,
-                memory_files_context=next_memory_files_context,
-                agent_project_id=context.project_id,
-                skill_registry=next_skill_registry,
-                skill_catalog=next_skill_catalog,
+                inputs=projection_inputs.with_session_messages(session_messages),
                 live_request_messages=messages if continue_same_run else None,
                 continuation_reminder=(
                     context.continuation_reminder if continue_same_run else None
@@ -3840,19 +3782,9 @@ class ChatLoop:
                     refreshed_state = await self._build_request_state(
                         agent,
                         session,
-                        replay_policy=target.replay_policy,
-                        reasoning_scope_model=target.model_reference,
-                        input_modalities=target.input_modalities,
-                        wire_media_types=target.wire_media_types,
-                        agent_body=context.agent_body,
-                        project_context=context.project_prompt_context,
-                        working_project_context=context.working_project_context,
-                        soul_context=context.soul_context,
-                        memory_files_context=context.memory_files_context,
-                        agent_project_id=context.project_id,
-                        skill_registry=context.skill_registry,
-                        skill_catalog=context.skill_catalog,
-                        session_messages_override=context.session_snapshot.messages,
+                        inputs=RequestBuildInputs.from_context(
+                            context, target
+                        ).with_session_messages(context.session_snapshot.messages),
                     )
                     refreshed_messages = _restore_in_run_tool_result_content(
                         _restore_in_run_assistant_reasoning(
