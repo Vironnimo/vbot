@@ -268,9 +268,12 @@ class ProviderTaskClient:
                     response = await client.get(endpoint, headers=await self._headers())
                 except httpx.TransportError as exc:
                     raise wrap_network_error(exc) from exc
+                # A GET is replay-safe by contract here (status polls, result
+                # downloads): a transient 500 retries instead of aborting hard.
                 classify_task_response(
                     response,
                     extra_retryable_status_codes=self.EXTRA_RETRYABLE_STATUS_CODES,
+                    idempotent=True,
                 )
                 return parse(response)
 
@@ -355,13 +358,19 @@ def classify_task_response(
     response: httpx.Response,
     *,
     extra_retryable_status_codes: frozenset[int] = frozenset(),
+    idempotent: bool = False,
 ) -> None:
-    """Classify a task HTTP response, including body detail on error."""
+    """Classify a task HTTP response, including body detail on error.
+
+    Callers declare idempotency explicitly so replay-safe reads and billed
+    non-idempotent generation cannot share the wrong retry branch: a status
+    poll or result download GET may retry HTTP 500, a generation POST may not.
+    """
 
     detail = response.text if response.status_code >= 400 else ""
     classify_http_status(
         response.status_code,
-        idempotent=False,
+        idempotent=idempotent,
         extra_retryable=set(extra_retryable_status_codes),
         detail=f"{response.status_code} {detail}".strip() if detail else str(response.status_code),
         response_headers=response.headers,
