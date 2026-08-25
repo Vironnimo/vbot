@@ -1,5 +1,5 @@
 {
-  "fetched_at": "2026-08-22T15:10:08.755619+00:00",
+  "fetched_at": "2026-08-25T08:14:21.773466+00:00",
   "models": {
     "deepseek-v4-flash": {
       "capabilities": {
@@ -526,6 +526,41 @@
         }
       },
       "name": "kimi-k3"
+    },
+    "longcat-2.0": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "control": "on_off",
+          "supported": true
+        },
+        "supported_parameters": [],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
+        "tools": true,
+        "vision": false
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 1000000,
+      "family": "longcat",
+      "max_output_tokens": 131072,
+      "metadata": {
+        "opencode_go": {
+          "reasoning_response_field": "reasoning_content"
+        }
+      },
+      "name": "longcat-2.0"
     },
     "mimo-v2.5": {
       "capabilities": {

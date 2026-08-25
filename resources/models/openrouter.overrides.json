@@ -1,0 +1,8 @@
+{
+  "provider_id": "openrouter",
+  "models": {
+    "minimax/minimax-m3:free": {
+      "max_output_tokens": 524288
+    }
+  }
+}

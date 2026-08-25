@@ -1,5 +1,5 @@
 {
-  "fetched_at": "2026-08-22T15:10:09.481122+00:00",
+  "fetched_at": "2026-08-25T08:14:22.439879+00:00",
   "models": {
     "aion-labs/aion-2.0": {
       "capabilities": {
@@ -582,6 +582,114 @@
         }
       },
       "name": "Alibaba: Wan 2.7"
+    },
+    "alibaba/wan-3.0": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "video"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [
+          "max_tokens",
+          "presence_penalty",
+          "response_format",
+          "seed",
+          "temperature",
+          "top_p"
+        ],
+        "supported_voices": [],
+        "task_options": {
+          "video_generation": {
+            "frame_images": [
+              "first_frame"
+            ],
+            "parameters": {
+              "aspect_ratio": {
+                "type": "enum",
+                "values": [
+                  "16:9",
+                  "4:3",
+                  "1:1",
+                  "3:4",
+                  "9:16"
+                ]
+              },
+              "duration": {
+                "type": "enum",
+                "values": [
+                  "2",
+                  "3",
+                  "4",
+                  "5",
+                  "6",
+                  "7",
+                  "8",
+                  "9",
+                  "10",
+                  "11",
+                  "12",
+                  "13",
+                  "14",
+                  "15",
+                  "16",
+                  "17",
+                  "18",
+                  "19",
+                  "20",
+                  "21",
+                  "22",
+                  "23",
+                  "24",
+                  "25",
+                  "26",
+                  "27",
+                  "28",
+                  "29",
+                  "30"
+                ]
+              },
+              "generate_audio": {
+                "type": "boolean"
+              },
+              "resolution": {
+                "type": "enum",
+                "values": [
+                  "480p",
+                  "720p",
+                  "1080p"
+                ]
+              },
+              "seed": {
+                "type": "boolean"
+              }
+            }
+          }
+        },
+        "task_types": [
+          "image_input",
+          "video_generation"
+        ],
+        "tools": false,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": null,
+      "max_output_tokens": null,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image->video"
+        }
+      },
+      "name": "Alibaba: Wan 3.0"
     },
     "allenai/olmo-3-32b-think": {
       "capabilities": {
@@ -5599,7 +5707,7 @@
       ],
       "context_window": 1310720,
       "family": "deepseek-flash",
-      "max_output_tokens": 384000,
+      "max_output_tokens": 131072,
       "metadata": {
         "openrouter": {
           "modality": "text->text"
@@ -8270,6 +8378,52 @@
       },
       "name": "Google: Gemini Embedding 2 Preview"
     },
+    "google/gemini-embedding-2:batch": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "file",
+          "audio",
+          "video"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "embeddings"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [
+          "max_tokens",
+          "response_format",
+          "seed",
+          "temperature",
+          "top_p"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "image_input",
+          "file_input",
+          "audio_input",
+          "video_input",
+          "text_embedding"
+        ],
+        "tools": false,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 8192,
+      "max_output_tokens": null,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image+file+audio+video->embeddings"
+        }
+      },
+      "name": "Google: Gemini Embedding 2 (batch)"
+    },
     "google/gemma-2-27b-it": {
       "capabilities": {
         "input_modalities": [
@@ -9270,6 +9424,74 @@
       },
       "name": "hexgrad: Kokoro 82M"
     },
+    "heygen/avatar-iv": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "audio"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "video"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [],
+        "supported_voices": [],
+        "task_options": {
+          "video_generation": {
+            "parameters": {
+              "aspect_ratio": {
+                "type": "enum",
+                "values": [
+                  "16:9",
+                  "9:16",
+                  "1:1"
+                ]
+              },
+              "resolution": {
+                "type": "enum",
+                "values": [
+                  "720p",
+                  "1080p"
+                ]
+              }
+            },
+            "passthrough_parameters": [
+              "voice_id",
+              "voice_settings",
+              "motion_prompt",
+              "expressiveness",
+              "fit",
+              "remove_background",
+              "background",
+              "caption",
+              "title"
+            ]
+          }
+        },
+        "task_types": [
+          "image_input",
+          "audio_input",
+          "video_generation"
+        ],
+        "tools": false,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": null,
+      "max_output_tokens": null,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image+audio->video"
+        }
+      },
+      "name": "HeyGen: Avatar IV"
+    },
     "ibm-granite/granite-4.0-h-micro": {
       "capabilities": {
         "input_modalities": [
@@ -9421,106 +9643,6 @@
       },
       "name": "Inception: Mercury 2"
     },
-    "inclusionai/ling-2.6-1t": {
-      "capabilities": {
-        "input_modalities": [
-          "text"
-        ],
-        "json_mode": true,
-        "output_modalities": [
-          "text"
-        ],
-        "reasoning": {
-          "supported": false
-        },
-        "supported_parameters": [
-          "frequency_penalty",
-          "logprobs",
-          "max_tokens",
-          "presence_penalty",
-          "repetition_penalty",
-          "response_format",
-          "seed",
-          "stop",
-          "structured_outputs",
-          "temperature",
-          "tool_choice",
-          "tools",
-          "top_k",
-          "top_logprobs",
-          "top_p"
-        ],
-        "supported_voices": [],
-        "task_types": [
-          "chat",
-          "text_output"
-        ],
-        "tools": true,
-        "vision": false
-      },
-      "connections": [
-        "api-key"
-      ],
-      "context_window": 262144,
-      "family": "ling",
-      "max_output_tokens": 32768,
-      "metadata": {
-        "openrouter": {
-          "modality": "text->text"
-        }
-      },
-      "name": "inclusionAI: Ling-2.6-1T"
-    },
-    "inclusionai/ling-2.6-flash": {
-      "capabilities": {
-        "input_modalities": [
-          "text"
-        ],
-        "json_mode": true,
-        "output_modalities": [
-          "text"
-        ],
-        "reasoning": {
-          "supported": false
-        },
-        "supported_parameters": [
-          "frequency_penalty",
-          "logprobs",
-          "max_tokens",
-          "presence_penalty",
-          "repetition_penalty",
-          "response_format",
-          "seed",
-          "stop",
-          "structured_outputs",
-          "temperature",
-          "tool_choice",
-          "tools",
-          "top_k",
-          "top_logprobs",
-          "top_p"
-        ],
-        "supported_voices": [],
-        "task_types": [
-          "chat",
-          "text_output"
-        ],
-        "tools": true,
-        "vision": false
-      },
-      "connections": [
-        "api-key"
-      ],
-      "context_window": 262144,
-      "family": "ling",
-      "max_output_tokens": 32768,
-      "metadata": {
-        "openrouter": {
-          "modality": "text->text"
-        }
-      },
-      "name": "inclusionAI: Ling-2.6-flash"
-    },
     "inclusionai/ling-3.0-flash": {
       "capabilities": {
         "input_modalities": [
@@ -9573,61 +9695,6 @@
         }
       },
       "name": "Ling-3.0-flash"
-    },
-    "inclusionai/ring-2.6-1t": {
-      "capabilities": {
-        "input_modalities": [
-          "text"
-        ],
-        "json_mode": true,
-        "output_modalities": [
-          "text"
-        ],
-        "reasoning": {
-          "control": "levels",
-          "levels": [
-            "high",
-            "xhigh"
-          ],
-          "supported": true
-        },
-        "supported_parameters": [
-          "frequency_penalty",
-          "include_reasoning",
-          "max_tokens",
-          "presence_penalty",
-          "reasoning",
-          "reasoning_effort",
-          "repetition_penalty",
-          "response_format",
-          "seed",
-          "stop",
-          "temperature",
-          "tool_choice",
-          "tools",
-          "top_k",
-          "top_p"
-        ],
-        "supported_voices": [],
-        "task_types": [
-          "chat",
-          "text_output"
-        ],
-        "tools": true,
-        "vision": false
-      },
-      "connections": [
-        "api-key"
-      ],
-      "context_window": 262144,
-      "family": "ring",
-      "max_output_tokens": 65536,
-      "metadata": {
-        "openrouter": {
-          "modality": "text->text"
-        }
-      },
-      "name": "inclusionAI: Ring-2.6-1T"
     },
     "intfloat/e5-base-v2": {
       "capabilities": {
@@ -12184,6 +12251,50 @@
       },
       "name": "MiniMax: MiniMax M2.7"
     },
+    "minimax/minimax-m2.7:free": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "include_reasoning",
+          "max_tokens",
+          "reasoning",
+          "response_format",
+          "seed",
+          "temperature",
+          "tool_choice",
+          "tools",
+          "top_p"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
+        "tools": true,
+        "vision": false
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 196608,
+      "family": "minimax",
+      "max_output_tokens": 196608,
+      "metadata": {
+        "openrouter": {
+          "modality": "text->text"
+        }
+      },
+      "name": "MiniMax: MiniMax M2.7 (free)"
+    },
     "minimax/minimax-m3": {
       "capabilities": {
         "input_modalities": [
@@ -12299,6 +12410,56 @@
         }
       },
       "name": "MiniMax: MiniMax M3 (batch)"
+    },
+    "minimax/minimax-m3:free": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "video"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "include_reasoning",
+          "max_tokens",
+          "reasoning",
+          "response_format",
+          "seed",
+          "temperature",
+          "tool_choice",
+          "tools",
+          "top_p"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding",
+          "video_input",
+          "video_understanding"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 1048576,
+      "family": "minimax",
+      "max_output_tokens": 1048576,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image+video->text"
+        }
+      },
+      "name": "MiniMax: MiniMax M3 (free)"
     },
     "minimax/speech-2.8-hd": {
       "capabilities": {
@@ -12465,6 +12626,55 @@
         }
       },
       "name": "Mistral: Codestral Embed 2505"
+    },
+    "mistralai/devstral-2512": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "file"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [
+          "frequency_penalty",
+          "max_tokens",
+          "presence_penalty",
+          "response_format",
+          "seed",
+          "stop",
+          "structured_outputs",
+          "temperature",
+          "tool_choice",
+          "tools",
+          "top_p"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output",
+          "file_input",
+          "file_understanding"
+        ],
+        "tools": true,
+        "vision": false
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 262144,
+      "family": "devstral",
+      "max_output_tokens": 262144,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+file->text"
+        }
+      },
+      "name": "Mistral: Devstral 2 2512"
     },
     "mistralai/ministral-14b-2512": {
       "capabilities": {
@@ -14639,49 +14849,6 @@
       },
       "name": "NVIDIA: Nemotron 3 Nano 30B A3B"
     },
-    "nvidia/nemotron-3-nano-30b-a3b:free": {
-      "capabilities": {
-        "input_modalities": [
-          "text"
-        ],
-        "json_mode": false,
-        "output_modalities": [
-          "text"
-        ],
-        "reasoning": {
-          "supported": true
-        },
-        "supported_parameters": [
-          "include_reasoning",
-          "max_tokens",
-          "reasoning",
-          "seed",
-          "temperature",
-          "tool_choice",
-          "tools",
-          "top_p"
-        ],
-        "supported_voices": [],
-        "task_types": [
-          "chat",
-          "text_output"
-        ],
-        "tools": true,
-        "vision": false
-      },
-      "connections": [
-        "api-key"
-      ],
-      "context_window": 256000,
-      "family": "nemotron",
-      "max_output_tokens": 256000,
-      "metadata": {
-        "openrouter": {
-          "modality": "text->text"
-        }
-      },
-      "name": "NVIDIA: Nemotron 3 Nano 30B A3B (free)"
-    },
     "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free": {
       "capabilities": {
         "input_modalities": [
@@ -15193,55 +15360,6 @@
       },
       "name": "NVIDIA: Nemotron 3.5 Lightning (free)"
     },
-    "nvidia/nemotron-nano-12b-v2-vl:free": {
-      "capabilities": {
-        "input_modalities": [
-          "image",
-          "text",
-          "video"
-        ],
-        "json_mode": false,
-        "output_modalities": [
-          "text"
-        ],
-        "reasoning": {
-          "supported": true
-        },
-        "supported_parameters": [
-          "include_reasoning",
-          "max_tokens",
-          "reasoning",
-          "seed",
-          "temperature",
-          "tool_choice",
-          "tools",
-          "top_p"
-        ],
-        "supported_voices": [],
-        "task_types": [
-          "chat",
-          "text_output",
-          "image_input",
-          "image_understanding",
-          "video_input",
-          "video_understanding"
-        ],
-        "tools": true,
-        "vision": true
-      },
-      "connections": [
-        "api-key"
-      ],
-      "context_window": 128000,
-      "family": "nemotron",
-      "max_output_tokens": 128000,
-      "metadata": {
-        "openrouter": {
-          "modality": "text+image+video->text"
-        }
-      },
-      "name": "NVIDIA: Nemotron Nano 12B 2 VL (free)"
-    },
     "nvidia/nemotron-nano-9b-v2": {
       "capabilities": {
         "input_modalities": [
@@ -15288,51 +15406,6 @@
         }
       },
       "name": "NVIDIA: Nemotron Nano 9B V2"
-    },
-    "nvidia/nemotron-nano-9b-v2:free": {
-      "capabilities": {
-        "input_modalities": [
-          "text"
-        ],
-        "json_mode": true,
-        "output_modalities": [
-          "text"
-        ],
-        "reasoning": {
-          "supported": true
-        },
-        "supported_parameters": [
-          "include_reasoning",
-          "max_tokens",
-          "reasoning",
-          "response_format",
-          "seed",
-          "structured_outputs",
-          "temperature",
-          "tool_choice",
-          "tools",
-          "top_p"
-        ],
-        "supported_voices": [],
-        "task_types": [
-          "chat",
-          "text_output"
-        ],
-        "tools": true,
-        "vision": false
-      },
-      "connections": [
-        "api-key"
-      ],
-      "context_window": 128000,
-      "family": "nemotron",
-      "max_output_tokens": 128000,
-      "metadata": {
-        "openrouter": {
-          "modality": "text->text"
-        }
-      },
-      "name": "NVIDIA: Nemotron Nano 9B V2 (free)"
     },
     "nvidia/parakeet-tdt-0.6b-v3": {
       "capabilities": {
@@ -22167,7 +22240,6 @@
         },
         "supported_parameters": [
           "frequency_penalty",
-          "logit_bias",
           "max_tokens",
           "min_p",
           "presence_penalty",
@@ -22880,10 +22952,8 @@
         "supported_parameters": [
           "frequency_penalty",
           "include_reasoning",
-          "logit_bias",
           "logprobs",
           "max_tokens",
-          "min_p",
           "presence_penalty",
           "reasoning",
           "repetition_penalty",
@@ -22908,7 +22978,7 @@
       "connections": [
         "api-key"
       ],
-      "context_window": 262144,
+      "context_window": 131072,
       "family": "qwen",
       "max_output_tokens": 32768,
       "metadata": {
@@ -22962,7 +23032,7 @@
       ],
       "context_window": 131072,
       "family": "qwen",
-      "max_output_tokens": 8192,
+      "max_output_tokens": 16384,
       "metadata": {
         "openrouter": {
           "modality": "text->text"
@@ -23639,7 +23709,7 @@
         "api-key"
       ],
       "context_window": 32768,
-      "max_output_tokens": null,
+      "max_output_tokens": 32000,
       "metadata": {
         "openrouter": {
           "modality": "text->embeddings"
@@ -24286,7 +24356,7 @@
       ],
       "context_window": 262144,
       "family": "qwen",
-      "max_output_tokens": 65536,
+      "max_output_tokens": 262144,
       "metadata": {
         "openrouter": {
           "modality": "text+image+video->text"
@@ -24469,7 +24539,7 @@
       ],
       "context_window": 262144,
       "family": "qwen",
-      "max_output_tokens": 65536,
+      "max_output_tokens": 262144,
       "metadata": {
         "openrouter": {
           "modality": "text+image+video->text"
@@ -24766,7 +24836,7 @@
       ],
       "context_window": 262144,
       "family": "qwen",
-      "max_output_tokens": 262144,
+      "max_output_tokens": 81920,
       "metadata": {
         "openrouter": {
           "modality": "text+image+video->text"
@@ -25256,6 +25326,7 @@
           "logit_bias",
           "logprobs",
           "max_tokens",
+          "min_p",
           "presence_penalty",
           "reasoning",
           "reasoning_effort",
@@ -27684,6 +27755,47 @@
       },
       "name": "Tencent: Hy-MT2-30B-A3B"
     },
+    "tencent/hy-mt2-7b": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [
+          "max_completion_tokens",
+          "max_tokens",
+          "response_format",
+          "stop",
+          "structured_outputs",
+          "temperature"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
+        "tools": false,
+        "vision": false
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 8192,
+      "family": "Hy",
+      "max_output_tokens": 4096,
+      "metadata": {
+        "openrouter": {
+          "modality": "text->text"
+        }
+      },
+      "name": "Tencent: Hy-MT2-7B"
+    },
     "tencent/hy3": {
       "capabilities": {
         "input_modalities": [
@@ -27980,7 +28092,7 @@
         "api-key"
       ],
       "context_window": 1024000,
-      "max_output_tokens": 1024000,
+      "max_output_tokens": 32768,
       "metadata": {
         "openrouter": {
           "modality": "text->text"
@@ -28150,7 +28262,7 @@
           "image",
           "audio"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -28179,7 +28291,6 @@
           "repetition_penalty",
           "seed",
           "stop",
-          "structured_outputs",
           "temperature",
           "tool_choice",
           "tools",
@@ -28263,7 +28374,7 @@
       "connections": [
         "api-key"
       ],
-      "context_window": 262144,
+      "context_window": 1048576,
       "family": "ling",
       "max_output_tokens": 262144,
       "metadata": {
@@ -28379,7 +28490,7 @@
       "connections": [
         "api-key"
       ],
-      "context_window": 262144,
+      "context_window": 1048576,
       "family": "ling",
       "max_output_tokens": 262144,
       "metadata": {
@@ -28431,7 +28542,7 @@
         "api-key"
       ],
       "context_window": 6144,
-      "max_output_tokens": 6144,
+      "max_output_tokens": 4096,
       "metadata": {
         "openrouter": {
           "modality": "text->text"
@@ -30247,7 +30358,7 @@
       ],
       "context_window": 204800,
       "family": "glm",
-      "max_output_tokens": 128000,
+      "max_output_tokens": 202752,
       "metadata": {
         "openrouter": {
           "modality": "text->text",
@@ -30309,7 +30420,7 @@
       ],
       "context_window": 1048576,
       "family": "glm",
-      "max_output_tokens": 131072,
+      "max_output_tokens": 262144,
       "metadata": {
         "openrouter": {
           "modality": "text->text",
@@ -31015,7 +31126,7 @@
       ],
       "context_window": 1048576,
       "family": "kimi",
-      "max_output_tokens": 974842,
+      "max_output_tokens": 1048576,
       "metadata": {
         "openrouter": {
           "modality": "text+image+video->text"
