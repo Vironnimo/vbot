@@ -1,19 +1,21 @@
 """Session-scoped file-content tracking for git-style change statistics.
 
-Tracks, per session, the last known text content of every file the session has
-read or written, so the chat loop can compute real before/after line diffs —
-streamed live after each dispatched Tool round via ``peek_run_stats`` and
-consumed once at Run end via ``take_run_stats``. The diff uses
-``difflib.SequenceMatcher`` — the same Myers line-diff algorithm git uses for
-``git diff --stat`` — so repeated edits of the same line count once and a
-full-file rewrite shows only the lines that actually changed. No git repository
-or external process is involved.
+Tracks, per session, one real content delta per mutated file so the chat loop
+can compute git-style before/after line diffs — streamed live after each
+dispatched Tool round via ``peek_run_stats`` and consumed once at Run end via
+``take_run_stats``. Every mutation is recorded against the file's actual
+on-disk content immediately before the mutation, so external changes between
+tool calls (formatters, shell commands, other sessions) stay outside the run's
+delta instead of being attributed to it. Repeated mutations of one file within
+a Run count once against the first mutation's pre-state, matching how
+``git diff --stat`` reports a working-tree delta. No git repository or
+external process is involved.
 
 The tracker is a single runtime-owned instance injected into the read/write/edit
 tools and the chat loop (constructor injection, like ``FileReadState``) — not a
-module singleton. It is deliberately best-effort: a missing baseline (file never
-read in this session, server restart, non-UTF-8 content) simply means the run
-falls back to the client-side per-tool-call counts.
+module singleton. It is deliberately best-effort: files that cannot be compared
+as UTF-8 text (too large, undecodable) simply fall back to the client-side
+per-tool-call counts.
 """
 
 from __future__ import annotations
@@ -29,8 +31,9 @@ from pathlib import Path
 _MAX_TRACKED_FILES = 4096
 
 # Cap on retained content per file so huge files do not bloat memory. Files
-# larger than this are not tracked and fall back to per-tool-call counts.
-_MAX_TRACKED_BYTES = 512 * 1024
+# whose before- or after-content exceeds this are not tracked and fall back to
+# per-tool-call counts.
+MAX_TRACKED_BYTES = 512 * 1024
 
 # Cap on the number of changed files reported per run so a pathological run
 # cannot produce an unbounded payload.
@@ -38,44 +41,28 @@ _MAX_REPORTED_PATHS = 200
 
 
 class ChangeTracker:
-    """Process-wide registry of per-session file baselines and run deltas."""
+    """Process-wide registry of per-session run deltas."""
 
     def __init__(self) -> None:
-        self._baselines: dict[tuple[str, str], str] = {}
-        self._baselines_lock = threading.Lock()
         self._run_changes: dict[str, dict[str, tuple[str, str]]] = {}
         self._run_changes_lock = threading.Lock()
-
-    def record_read(self, session_id: str, resolved: Path, content: str) -> None:
-        """Remember the current text content of a file for a session.
-
-        Called by ``read`` for text files. The baseline is only a fallback for
-        later writes; a write without a baseline still records its own delta.
-        """
-        if not content or len(content.encode("utf-8", errors="replace")) > _MAX_TRACKED_BYTES:
-            return
-        key = (session_id, str(resolved))
-        with self._baselines_lock:
-            self._baselines.pop(key, None)
-            self._baselines[key] = content
-            while len(self._baselines) > _MAX_TRACKED_FILES:
-                del self._baselines[next(iter(self._baselines))]
-
-    def baseline_for(self, session_id: str, resolved: Path) -> str | None:
-        """Return the session's last known text content of a file, if any."""
-        with self._baselines_lock:
-            return self._baselines.get((session_id, str(resolved)))
 
     def record_write(self, session_id: str, resolved: Path, before: str, after: str) -> None:
         """Record one file mutation for the current run's change statistics.
 
-        ``before`` is the content the tool replaced (the session's last known
-        content, or the on-disk content for a full-file write); ``after`` is the
-        new content. The delta is stored per ``(session, path)`` so repeated
-        edits of the same file in one run diff against the run's first baseline
-        rather than summing per-call counts.
+        ``before`` is the file's actual on-disk content immediately before the
+        mutation; ``after`` is the new content. The delta is stored per
+        ``(session, path)`` so repeated edits of the same file in one run diff
+        against the run's first pre-mutation state rather than summing
+        per-call counts.
         """
-        if len(after.encode("utf-8", errors="replace")) > _MAX_TRACKED_BYTES:
+        if (
+            max(
+                len(before.encode("utf-8", errors="replace")),
+                len(after.encode("utf-8", errors="replace")),
+            )
+            > MAX_TRACKED_BYTES
+        ):
             return
         path = str(resolved)
         with self._run_changes_lock:
@@ -109,7 +96,7 @@ class ChangeTracker:
         """Return git-style change statistics for the session's current run.
 
         Computes one real line diff per changed file against the run's first
-        baseline, sums the added/removed lines, and returns
+        pre-mutation state, sums the added/removed lines, and returns
         ``{files, added, removed, paths}`` — or ``None`` when the run changed
         no tracked files. The per-run deltas are consumed and cleared.
         """
@@ -145,10 +132,15 @@ def _stats_from_changes(run_changes: dict[str, tuple[str, str]]) -> dict[str, ob
 
 
 def _line_diff_counts(before: str, after: str) -> tuple[int, int]:
-    """Return ``(added, removed)`` line counts of a real before/after diff."""
+    """Return ``(added, removed)`` line counts of a real before/after diff.
+
+    Auto-junking stays off: with the default heuristic, SequenceMatcher treats
+    frequently repeated lines in long files as junk and reports inflated
+    replace blocks where git reports a minimal diff.
+    """
     before_lines = before.splitlines()
     after_lines = after.splitlines()
-    matcher = difflib.SequenceMatcher(None, before_lines, after_lines)
+    matcher = difflib.SequenceMatcher(None, before_lines, after_lines, autojunk=False)
     added = 0
     removed = 0
     for tag, _i1, _i2, j1, j2 in matcher.get_opcodes():
@@ -163,8 +155,7 @@ def _line_diff_counts(before: str, after: str) -> tuple[int, int]:
 
 
 __all__ = [
-    "ChangeTracker",
+    "MAX_TRACKED_BYTES",
     "_MAX_REPORTED_PATHS",
-    "_MAX_TRACKED_BYTES",
     "_MAX_TRACKED_FILES",
 ]

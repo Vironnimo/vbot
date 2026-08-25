@@ -351,15 +351,16 @@ def edit_handler(
             file_state.record_read(context.session_id, resolved)
 
         # Record the before/after content for git-style change statistics. The
-        # baseline is the session's last known content (from read or a prior
-        # write), so repeated edits of the same line diff once instead of
-        # summing per-call counts.
+        # baseline is the file's actual on-disk content immediately before this
+        # edit, so external changes between tool calls (formatters, shell
+        # commands) are never attributed to this run. Repeated edits of one
+        # file in a run deduplicate inside the tracker against the first
+        # pre-mutation state.
         if context.change_tracker is not None:
-            baseline = context.change_tracker.baseline_for(context.session_id, resolved)
             context.change_tracker.record_write(
                 context.session_id,
                 resolved,
-                before=baseline if baseline is not None else content,
+                before=content,
                 after=result.new_content,
             )
 

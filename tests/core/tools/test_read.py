@@ -628,7 +628,8 @@ async def test_streaming_text_matches_byte_renderer_across_chunked_line_endings(
 
 
 @pytest.mark.asyncio
-async def test_read_records_raw_text_baseline_for_change_tracker(tmp_path: Path) -> None:
+async def test_read_never_records_change_tracker_stats(tmp_path: Path) -> None:
+    """Reads take no part in change statistics: the tracker stays untouched."""
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     workspace.joinpath("notes.txt").write_bytes(b"alpha\nbeta\ngamma\n")
@@ -638,40 +639,8 @@ async def test_read_records_raw_text_baseline_for_change_tracker(tmp_path: Path)
         make_context(workspace, change_tracker=tracker), {"path": "notes.txt"}
     )
 
-    data = assert_success_envelope(result)
-    assert data["content"] == "1| alpha\n2| beta\n3| gamma\n"
-    # The baseline is the raw file text, never the numbered rendering: a later
-    # write must diff against real content, not against the `N| ` gutter.
-    assert tracker.baseline_for("session-1", (workspace / "notes.txt").resolve()) == (
-        "alpha\nbeta\ngamma\n"
-    )
-
-
-@pytest.mark.asyncio
-async def test_read_does_not_record_baseline_for_partial_read(tmp_path: Path) -> None:
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-    workspace.joinpath("notes.txt").write_bytes(b"one\ntwo\nthree\nfour\n")
-    tracker = ChangeTracker()
-
-    result = await make_handler()(
-        make_context(workspace, change_tracker=tracker),
-        {"path": "notes.txt", "offset": 2, "limit": 2},
-    )
-
     assert_success_envelope(result)
-    assert tracker.baseline_for("session-1", (workspace / "notes.txt").resolve()) is None
-
-
-@pytest.mark.asyncio
-async def test_read_skips_baseline_without_change_tracker(tmp_path: Path) -> None:
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-    workspace.joinpath("notes.txt").write_bytes(b"hello\n")
-
-    result = await make_handler()(make_context(workspace), {"path": "notes.txt"})
-
-    assert_success_envelope(result)
+    assert tracker.peek_run_stats("session-1") is None
 
 
 @pytest.mark.asyncio

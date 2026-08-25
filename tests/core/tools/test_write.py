@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from core.tools.change_tracker import ChangeTracker
 from core.tools.file_state import FileReadState
 from core.tools.tools import ToolContext, ToolRegistry, is_tool_result_envelope
 from core.tools.write import (
@@ -25,6 +26,7 @@ def make_context(
     *,
     cwd: Path | None = None,
     session_id: str = "session-1",
+    change_tracker: ChangeTracker | None = None,
 ) -> ToolContext:
     return ToolContext(
         agent_id="agent-1",
@@ -37,6 +39,7 @@ def make_context(
         vbot_root=workspace.parent,
         data_root=workspace.parent / "data",
         cwd=cwd,
+        change_tracker=change_tracker,
     )
 
 
@@ -688,3 +691,94 @@ def test_write_crlf_preservation_works_with_bom(tmp_path: Path) -> None:
 
     assert_success_envelope(result)
     assert target.read_bytes() == b"\xef\xbb\xbfnew\r\nbody\r\n"
+
+
+def test_write_new_file_counts_whole_content_as_added(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    tracker = ChangeTracker()
+
+    result = write_handler(
+        make_context(workspace, change_tracker=tracker),
+        {"path": "fresh.txt", "content": "one\ntwo\n"},
+    )
+
+    assert_success_envelope(result)
+    assert tracker.take_run_stats("session-1") == {
+        "files": 1,
+        "added": 2,
+        "removed": 0,
+        "paths": [str((workspace / "fresh.txt").resolve())],
+    }
+
+
+def test_write_overwrite_tracks_existing_file_without_full_read(tmp_path: Path) -> None:
+    # The old semantics skipped tracking unless the session had fully read the
+    # file first; the write now diffs against actual on-disk content, so a
+    # partial read (or none at all in this guard-free call) still counts.
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    target = workspace / "notes.txt"
+    target.write_text("keep\nold\nkeep\n", encoding="utf-8")
+    tracker = ChangeTracker()
+
+    result = write_handler(
+        make_context(workspace, change_tracker=tracker),
+        {"path": "notes.txt", "content": "keep\nnew\nkeep\n"},
+    )
+
+    assert_success_envelope(result)
+    assert tracker.take_run_stats("session-1") == {
+        "files": 1,
+        "added": 1,
+        "removed": 1,
+        "paths": [str(target.resolve())],
+    }
+
+
+def test_write_bom_file_diffs_against_bom_free_content(tmp_path: Path) -> None:
+    # A leading BOM must not count as a changed line: the pre-state is
+    # compared BOM-free, exactly like the content the write produces.
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    target = workspace / "config.txt"
+    target.write_bytes(b"\xef\xbb\xbfold\nbody\n")
+    tracker = ChangeTracker()
+
+    result = write_handler(
+        make_context(workspace, change_tracker=tracker),
+        {"path": "config.txt", "content": "new\nbody\n"},
+    )
+
+    assert_success_envelope(result)
+    stats = tracker.take_run_stats("session-1")
+    assert stats is not None
+    assert stats["added"] == 1
+    assert stats["removed"] == 1
+
+
+def test_write_repeated_writes_in_one_run_count_once(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    target = workspace / "notes.txt"
+    target.write_text("a\n", encoding="utf-8")
+    tracker = ChangeTracker()
+
+    first = write_handler(
+        make_context(workspace, change_tracker=tracker),
+        {"path": "notes.txt", "content": "a\nb\n"},
+    )
+    second = write_handler(
+        make_context(workspace, change_tracker=tracker),
+        {"path": "notes.txt", "content": "a\nb\nc\n"},
+    )
+
+    assert_success_envelope(first)
+    assert_success_envelope(second)
+    # Both writes diff against the run's first pre-write state: net +2 lines.
+    assert tracker.take_run_stats("session-1") == {
+        "files": 1,
+        "added": 2,
+        "removed": 0,
+        "paths": [str(target.resolve())],
+    }
