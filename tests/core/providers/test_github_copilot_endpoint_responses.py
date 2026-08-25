@@ -9,7 +9,7 @@ import httpx
 import pytest
 import respx
 
-from core.chat.chat import _assistant_message_from_response
+from core.chat.messages import _assistant_message_from_response
 from core.chat.streaming import StreamingAccumulator
 from core.providers.errors import NetworkError, ProviderTimeoutError
 from core.providers.github_copilot import (
