@@ -1,63 +1,36 @@
 # Attachments
 
-Blob-backed file attachment storage and attachment-specific message shaping for vBot. Owns persisted blobs under the data directory and the metadata needed to resolve them into chat content.
+Blob-backed file attachment storage and attachment-specific message shaping. Owns persisted blobs under the data directory plus the metadata resolving them into chat content.
 
 ## Overview
 
-`core/attachments/` is a storage-focused domain for uploaded and downloaded files. It stores blobs under `<data_dir>/artifacts/attachments/`, writes one sidecar JSON per attachment, sniffs and validates MIME types, and enforces the configured max file size. Storage owns this canonical placement; Attachments retains the blob/sidecar format and lifecycle. It does not know about providers, model wire formats, or server transport. Chat and channel code consume attachment records and decide how they become `TextBlock`, `MediaBlock`, or `FileBlock` content.
+`core/attachments/` is storage-focused: blobs under `<data_dir>/artifacts/attachments/`, one JSON sidecar per attachment, server-side MIME sniffing/validation, configured size limits. It knows nothing about providers, wire formats, or transport; Chat and channels decide how records become `TextBlock`/`MediaBlock`/`FileBlock`.
 
 ## Data Model
 
-- `AttachmentRecord`
-  - `id: str` - UUID used as blob basename
-  - `filename: str` - user- or platform-visible filename
-  - `media_type: str` - server-sniffed MIME type
-  - `size_bytes: int`
-  - `stored_at: str` - UTC ISO 8601 with explicit offset
-  - `file_path: str` - absolute path to the blob on disk
-  - `transcription: str | None` - cached speech-to-text result for audio attachments, written by `set_transcription()` on first transcription (default `None`)
-- Blob path: `<data_dir>/artifacts/attachments/<uuid><canonical-extension>` - the extension is derived from the sniffed `media_type`, not trusted client metadata
-- Sidecar path: `<data_dir>/artifacts/attachments/<uuid>.json`
-- There is no global index, no DB, and no cleanup pass.
+- `AttachmentRecord`: `id` (UUID, blob basename), `filename` (display name), `media_type` (server-sniffed), `size_bytes`, `stored_at`, `file_path` (informational - recomputed on read), optional cached `transcription` written on first STT.
+- Blob at `<uuid><canonical-extension>` (extension from sniffed type, never client metadata); sidecar `<uuid>.json`. No index, no DB, no cleanup pass.
 
-## Interfaces
+## Contracts
 
-- `AttachmentStore(data_dir: Path, *, max_size_bytes: int = 20_971_520)` - rejects a non-positive `max_size_bytes` with `AttachmentError`
-- `AttachmentStore.max_size_bytes` exposes the configured upload limit so transport layers can reject oversized payloads before materializing the full request body.
-- `AttachmentStore.ensure_within_limit(reported_size_bytes: int | None) -> None` - pre-check companion to `store`: raises `AttachmentTooLargeError` when a platform-reported size exceeds the limit, so a transport refuses an oversized file before downloading it. A `None` size (platform reported none) skips the pre-check and leaves `store`'s post-download size check as the backstop.
-- `sniff_media_type(data: bytes, filename: str) -> str` - public, side-effect-free wrapper over the internal magic-bytes sniffer (`_sniff_mime`). Classifies bytes as image/audio/video/text/etc. **without** touching disk or the allowlist, so callers can decide how to handle a file before storing it. The `read` tool uses it to branch on media type.
-- `canonical_extension_for_media_type(media_type: str) -> str` - returns the storage contract's stable extension for one sniffed type; explicit storage converters reuse this seam instead of duplicating the mapping
-- `store(filename: str, data: bytes) -> AttachmentRecord` - checks size, sniffs MIME, validates the allowlist, appends the canonical extension when the supplied display filename has none, and writes the extension-bearing blob plus sidecar; an existing display-name extension is preserved
-- `get(attachment_id: str) -> AttachmentRecord` - loads one attachment record from its sidecar
-- `set_transcription(attachment_id: str, transcription: str) -> AttachmentRecord` - persists a cached transcription into the sidecar (rejects empty text with `AttachmentError`)
-- `delete(attachment_id: str) -> None` - deletes blob and sidecar if present
-- Expected domain errors (all exported from `core.attachments`):
-  - `AttachmentError`
-  - `AttachmentNotFoundError`
-  - `AttachmentTooLargeError`
-  - `AttachmentTypeNotAllowedError`
+- Store rejects non-positive limits and exposes `max_size_bytes` so transports reject oversized payloads before materializing bodies. `ensure_within_limit(reported_size)` pre-checks platform-reported sizes before download (`None` skips, leaving the post-download check as backstop).
+- `store(filename, data)` checks size, sniffs MIME, enforces the allowlist, appends the canonical extension when the display filename lacks one, writes extension-bearing blob then sidecar atomically in that order - a failed sidecar rolls back the blob, so a present sidecar implies a present blob.
+- `get(id)` accepts only lower-cased UUID4 ids (anything else is `AttachmentNotFoundError`/404, not a validation error), re-checks blob existence and sidecar id match, and **recomputes** `file_path` from current data-dir + id + persisted type instead of trusting the stored path - moving the data directory cannot break resolution.
+- `sniff_media_type(data, filename)` is the public side-effect-free wrapper (no disk, no allowlist) used by tools to branch before storing; `set_transcription` caches STT results rejecting empty text; expected errors are `AttachmentError`/`NotFound`/`TooLarge`/`TypeNotAllowed`.
 
-## Conventions
+## Sniffing & conventions
 
-- MIME type is determined server-side from a bounded magic-bytes sniff, never from browser- or Telegram-supplied content types. Detection is magic-bytes only (no libmagic): images, PDF, OOXML, audio (Ogg, ID3/frame-sync MP3, RIFF/WAVE, FLAC, `ftyp` M4A/M4B), and video (`ftyp` MP4/QuickTime, EBML->`video/webm`, RIFF/AVI) are pure signature matches; any UTF-8-decodable input sniffs to `text/plain` (never another `text/*` subtype); everything else becomes `application/octet-stream` and is then rejected by the allowlist. Known sniffing simplifications: Ogg always classifies as `audio/ogg` (Theora video would be mislabeled) and EBML always classifies as `video/webm` (audio-only WebM would be mislabeled).
-- Every accepted sniffed media type has one canonical storage extension (`image/jpeg` -> `.jpg`, `audio/mpeg` -> `.mp3`, etc.). Blob paths always use that canonical extension so filesystem consumers receive a usable typed path even when the source platform supplied no filename; display filenames gain it only when they had no extension, so a meaningful original suffix such as `.jpeg` remains intact.
-- Exception to "ignore client metadata": legacy OLE Office files (`.doc`/`.xls`/`.ppt` and their siblings) are disambiguated by the filename extension on top of the OLE magic bytes, because the container alone does not reveal Word vs. Excel vs. PowerPoint.
-- The allowlist covers: images (`jpeg`/`png`/`gif`/`webp`), any `text/*`, any `audio/*`, any `video/*`, PDF, and common Office formats (OOXML + legacy OLE). Because the sniffer only ever produces `text/plain` for text, the broad `text/*` allowance is wider than anything actually reachable; the same applies to the `audio/*`/`video/*` prefixes versus the concrete sniffed types.
-- Writes are atomic and ordered: blob first via temp file + `os.replace`, then the sidecar the same way; if the sidecar write fails the blob is rolled back. A present sidecar therefore implies a present blob.
-- Logging goes through `vbot.attachments`.
-- Storage writes use sidecar JSON beside the blob, not shared registries or indexes.
+- MIME comes from bounded magic-bytes only - never client-supplied content types, no libmagic. Signature matches: images, PDF, OOXML, Ogg/MP3/WAVE/FLAC/M4A, MP4/QuickTime/WebM/AVI; UTF-8-decodable input becomes `text/plain`; everything else `application/octet-stream` then allowlist-rejected. Known simplifications: Ogg always classifies audio, EBML always webm.
+- Every accepted type has one canonical storage extension; blobs always carry it so filesystem consumers get typed paths even without source filenames, while meaningful original display suffixes survive.
+- Legacy OLE Office files disambiguate Word/Excel/PowerPoint via filename extension on top of container magic - the sanctioned client-metadata exception.
+- The allowlist covers images, any `text/*`, any `audio/*`/`video/*`, PDF, and Office formats; because sniffing only ever produces `text/plain`, the wildcard allowances are wider than reachable.
 
 ## Constraints & Gotchas
 
-- `get()` accepts only canonical UUID4 ids: a non-UUID4 id raises `AttachmentNotFoundError` (surfaced as HTTP 404), not a validation error, and ids are lower-cased before lookup. It also re-checks that the blob exists and that the sidecar `id` matches, raising `AttachmentNotFoundError` / `AttachmentError` otherwise.
-- `get()` recomputes `file_path` from the current `data_dir`, attachment id, and persisted `media_type`, and ignores the path stored in the sidecar - the persisted `file_path` is informational only, so moving the data directory does not break resolution.
-- Suffixless blobs from the previous storage layout are invalid under the current contract; convert an explicit data directory with `python scripts/converters/attachment_blob_extensions.py <data-dir>`. The standalone converter preflights the complete sidecar set before moving anything, refuses collisions or missing blobs, updates each `file_path`, and is idempotent for already-converted data.
-- `GET /api/attachments/{id}` serves the sniffed `media_type` and the record's display filename through an inline `Content-Disposition`; inline previews remain supported while Save/Download uses the meaningful filename instead of the UUID path.
-- OOXML sniffing opens the uploaded ZIP and reads `[Content_Types].xml`, which is otherwise an unbounded decompression - a within-upload-limit zip bomb could inflate that one entry to gigabytes. `_sniff_ooxml_media_type` therefore decompresses at most `_MAX_OOXML_CONTENT_TYPES_BYTES` (1 MiB) and treats any overflow as "not OOXML". The upload size limit only bounds the *compressed* bytes; the decompressed read must stay bounded here, never made unbounded.
-- Media resolution lives in the chat layer (`ContentBlockResolver`) and is a **provider-agnostic intersection**: an attachment goes native only when it is the current turn **and** the model advertises the modality (`input_modalities`) **and** the adapter's wire carries the concrete media type (`wire_media_types`, from `wire_media_support` - see `providers.md`). Resolution is **one block in, one or more out**, so every attachment - native or degraded - leaves the agent a `Path:` handle to the original blob, and degradation never aborts the run. The per-modality degrade policies are owned by `chat/request-building.md`; `MediaBlock`/`FileBlock` storage stays format-generic - modality + wire scope is a chat-layer decision, not a storage one.
-- Tool-produced image Attachments use the same resolver without becoming canonical user content: `read`/`web_fetch` persist only their compact `read_media` artifact inside the Tool Result, while Chat resolves native base64 or a path note into request-only Tool Result content for the active Run. The next completed Run boundary makes the image historical and it is not re-resolved.
-  - A `file_mention` block is **not attachment-backed** (no record, no blob): the resolver renders it to fixed text via the chat domain's `file_mention_request_text`, identically on every turn. Owned by `core/chat/file_mentions.py` - see `chat.md`.
-- `ContentBlockResolver.resolve_messages()` is async (transcription is a provider call); runtime injects the `SpeechService` as the resolver's transcriber.
-- A text attachment is persisted as one `FileBlock`; its full content stays only in the blob. At request build, `ContentBlockResolver` reads that blob and renders it with the read tool's shared text renderer: compact line gutters, a 2,000-line or 50 KiB cap, and the same continuation hint, alongside the file's `Path:` note. The shared channel classifier and WebUI composer both emit the same sole `FileBlock`, so direct uploads and inbound platform text files behave identically. When an already-persisted message contains a following `TextBlock` that byte-for-byte duplicates the text attachment, request assembly omits that duplicate and uses the bounded read rendering instead. Other non-image files stay a single `FileBlock`.
-- `file_path` is intentionally surfaced to the chat layer in the path note (`[File: <name> (<type>) - Path: <file_path>]`, and the `[Image:/Audio:/Video: ...]` variants) so agents can open the blob with the existing `read` tool or forward it as a file. The resolver renders this Model-facing handle with forward-slash separators while the stored record retains its native absolute path. The note now rides alongside every natively-sent image/audio/document too, not only degraded ones. This is by design, not a leak.
-- Cleanup of orphaned or deleted-session attachments is explicitly out of scope: there is no index, GC, or reference counting. The `read` tool also promotes disk image files to attachments via `store()` (so an image read grows the blob store), but this stays within the same no-GC policy - see `tools/read.md`.
+- OOXML sniffing opens the uploaded ZIP's `[Content_Types].xml` - an unbounded decompression a within-limit zip bomb could inflate to gigabytes. The reader caps at 1 MiB treating overflow as "not OOXML"; the upload limit bounds compressed bytes only, never make this read unbounded.
+- Suffixless blobs from the old layout are invalid - convert explicitly with `scripts/converters/attachment_blob_extensions.py` (pre-flighting, collision-refusing, idempotent).
+- `GET /api/attachments/{id}` serves sniffed type with inline disposition and the display filename.
+- Media resolution lives in the chat layer as a provider-agnostic intersection: native only when current turn AND model modality AND adapter wire support align; otherwise degraded - always one block in, one or more out, every attachment leaving a `Path:` handle, degradation never aborting a Run. Per-modality policies live in `chat/request-building.md`.
+- Tool-produced images use the same resolver without becoming user content: `read`/`web_fetch` persist compact artifacts resolved into request-only content for the active Run; file mentions are not attachment-backed at all.
+- Text attachments persist as one `FileBlock`; request build reads the blob rendering through the shared capped text renderer, omitting a following duplicate TextBlock. The Model-facing path note rides natively-sent media too by design - agents open blobs with `read`.
+- Cleanup of orphaned attachments is explicitly out of scope: no index, GC, or reference counting; `read` promoting disk images into the store stays within that policy.
