@@ -104,6 +104,7 @@ Read these only when your task matches
 - `tools/cron.md` - `cron`
 - `tools/channel_send.md` - `channel_send`
 - `tools/speech.md` - `text_to_speech`
+- Adding a new way to inform the Model at runtime -> `model-communication.md`
 
 
 ## Conventions

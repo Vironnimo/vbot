@@ -66,3 +66,9 @@ Programmatic Run triggering, time- and startup-based scheduling, and background 
 - Once jobs are retained after firing with `status = "completed"` and `last_fired_at` set.
 - Once-job fire claims intentionally prefer at-most-once behavior across restarts: a crash after claim creation but before `trigger_run(...)` may skip that once job on restart instead of risking duplicate execution.
 - Trigger and unsuccessful Run-terminal outcomes, including `interrupted`, are logged and persisted in the job health fields; the retry/ceiling rules (fire claims, bounded backoff, `_ONCE_MAX_FIRE_ATTEMPTS`, five-consecutive-failure stop) are owned by the Conventions section above.
+
+## References
+
+Read these only when your task matches - not by default.
+
+- Choosing how background producers inform the Model (persisted notes vs internal triggers) -> `model-communication.md`

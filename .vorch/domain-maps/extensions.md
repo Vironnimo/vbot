@@ -71,3 +71,4 @@ Read these only when your task matches - not by default.
 - Adding or changing hooks, Command/Tool/Recall/Prompt capabilities, channel interactions, dispatch decisions, collision behavior, or handler payloads -> `extensions/capabilities.md`
 - Changing discovery, manifests, records, settings schemas, secret handling, visibility, enable/disable, startup/shutdown, or full reload -> `extensions/management.md`
 - Changing the bundled Home Assistant Extension, its four Tools, settings, readiness, retry behavior, or security constraints -> `extensions/homeassistant.md`
+- Informing the Model about a background event or state change -> `model-communication.md`

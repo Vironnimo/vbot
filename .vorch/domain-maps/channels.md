@@ -104,3 +104,9 @@ Read these only when your task matches - not by default.
 - WebUI session browsing and retroactive channel linking depend on the sidecar metadata contract. Keep `source_channel_id`, `platform`, `platform_conv_id`, and `last_reply_target` stable when changing channel routing.
 - Channel ids are bare slugs (`^[A-Za-z0-9][A-Za-z0-9_-]*$`), enforced at the `_normalize_channel_id` choke point every storage/service call funnels through - not only by `ChannelConfig.validate`. The id is a path segment under `<data_dir>/channels/` and `delete_channel` recursively removes that directory, so a separator or `..`/absolute id must never reach the filesystem layer (it would otherwise let an operation escape storage and rmtree an arbitrary directory). Tighten id handling here, never just at config validation.
 - A channel's bound `agent_id` is validated as a full agent-id slug (`AGENT_ID_PATTERN`) by `validate_channel_data`, not merely as a non-empty string - it flows into `ChatSessionManager` session paths on every inbound message, so a non-slug value must never load. `channel.create`/`channel.update` additionally require the agent to exist (`_validate_channel_agent_exists`); the file-load slug check is the defense-in-depth backstop for a hand-edited `channel.json`.
+
+## References
+
+Read these only when your task matches - not by default.
+
+- Choosing how to surface information to the Model (notes vs reminders vs quoted context) -> `model-communication.md`
