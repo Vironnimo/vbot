@@ -377,6 +377,7 @@ def _compaction_projection_without_provider_state(
             reasoning=None,
             reasoning_meta=None,
             reasoning_scope=None,
+            reasoning_timing=None,
         )
         if sanitized.content is None and not sanitized.tool_calls:
             continue
