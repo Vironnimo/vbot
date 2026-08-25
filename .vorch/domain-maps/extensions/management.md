@@ -6,7 +6,7 @@ Read this reference only for Extension discovery, manifests, records, settings s
 
 Each scan root accepts immediate `.py` files and directories with an Extension entry point. Import names live under the synthetic `vbot_ext` package so package-relative imports work. Identity is the file stem or directory name; the optional directory manifest enriches display metadata but never replaces filesystem identity.
 
-Async `register(api)` calls run one at a time on private event loops with a hard 10-second deadline. A timeout marks only that Extension as failed, requests task cancellation, and continues loading; the worker is a daemon so even Extension code that suppresses cancellation cannot keep server start or Extension Reload blocked.
+Async `register(api)` calls run one at a time with a hard 10-second deadline. On the serving loop (`ExtensionRegistry.aload`, used by Runtime startup and full reload) each coroutine runs on the live loop; a timeout marks only that Extension as failed and detaches the cancellation request, so even Extension code that suppresses cancellation cannot keep server start or Extension Reload blocked - it may keep running detached, but no longer gates the load. Synchronous off-loop callers (`ExtensionRegistry.load`, tests and tooling) keep the private-event-loop daemon-worker join path with identical semantics.
 
 `settings.extension_directories` is the only configurable extra-root list; the bundled root is fixed separately and cannot be removed through that setting. Runtime ignores a non-list value with a warning, skips non-string or empty entries, expands `~`, and preserves configured order before the final bundled root.
 

@@ -34,7 +34,7 @@ Lets an Agent inspect and control only its own background processes created by t
 - `ProcessManager.snapshot(process_id, agent_id)` provides the public non-consuming status view; `ProcessManager.send_input(process_id, agent_id, text, *, newline, eof)` owns stdin delivery; `ProcessManager.kill(process_id, agent_id)` owns termination.
 - `ProcessManager.cancel_for_user(process_id, agent_id) -> TrackedProcess` terminates a running process through the same kill machinery while retaining `cancelled_by_user: true` on the in-memory record; handed-off Bash completion delivery uses that fact for explicit user-abort wording. The Chat Activity surface exposes this through `chat.cancel_process` (params `agent_id` + `process_id`) with an addressed Agent and exact process id; it does not acknowledge or suppress the automatic completion notice.
 - `ProcessManager.list_processes(agent_id) -> list[TrackedProcess]`
-- `ProcessManager.cancel_scope(scope_key) -> None`
+- `ProcessManager.cancel_scope(scope_key) -> None` kills a run scope synchronously (shutdown paths only); `cancel_scope_async(scope_key)` is the event-loop variant used by Run cancel callbacks so the Windows tree-kill never blocks the loop.
 
 ## Constraints & Gotchas
 
