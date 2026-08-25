@@ -536,3 +536,36 @@ def test_run_dispatches_task_model_list(
     exit_code = cli_main.run(["task-model", "list", "--port", "8765"], resolve=fake_resolve)
 
     assert exit_code == 0
+
+
+def test_task_model_status_reports_configured_and_usable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    instance = make_instance(tmp_path)
+
+    def fake_post(
+        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
+    ) -> httpx.Response:
+        assert json == {"method": "task_model.status", "params": {"task_type": "text_to_speech"}}
+        return httpx.Response(
+            200,
+            json={
+                "ok": True,
+                "result": {"task_type": "text_to_speech", "configured": True, "usable": True},
+            },
+        )
+
+    monkeypatch.setattr(task_model_management.httpx, "post", fake_post)
+
+    result = task_model_management.task_model_status(instance, "text_to_speech")
+
+    assert result.ok is True
+    assert result.message == "task-model text_to_speech: configured=yes usable=yes"
+
+
+def test_parse_args_supports_task_model_status() -> None:
+    args = cli_main.parse_args(["task-model", "status", "image_generation"])
+
+    assert args.area == "task-model"
+    assert args.command == "status"
+    assert args.task_type == "image_generation"

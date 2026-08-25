@@ -7,6 +7,7 @@ from difflib import get_close_matches
 from typing import Any
 
 from cli.formatting import string_or_default as _string_or_default
+from cli.formatting import value_text as _value_text
 from cli.rpc_client import httpx as httpx
 from cli.rpc_client import rpc_call as _rpc_call
 from cli.server_management import CommandResult, ServerInstance
@@ -448,6 +449,94 @@ def provider_connect_status(
         ),
         instance=instance,
     )
+
+
+def provider_usage_history(
+    instance: ServerInstance,
+    since: str | None = None,
+    until: str | None = None,
+) -> CommandResult:
+    """Return recorded usage-limit observations from `provider.usage_history`."""
+
+    params: dict[str, Any] = {}
+    if since is not None:
+        params["since"] = since
+    if until is not None:
+        params["until"] = until
+    payload = _rpc_call(instance, "provider.usage_history", params)
+    if not payload.ok:
+        return payload.to_command_result()
+    return CommandResult(
+        ok=True,
+        message=_format_usage_history(payload.data),
+        instance=instance,
+    )
+
+
+def provider_usage_history_clear(instance: ServerInstance, confirm: bool) -> CommandResult:
+    """Delete all recorded usage observations after explicit confirmation."""
+
+    if not confirm:
+        return CommandResult(
+            ok=False,
+            message=(
+                "refusing to delete the provider usage history without confirmation; "
+                "re-run with --yes"
+            ),
+            instance=instance,
+        )
+    payload = _rpc_call(instance, "provider.usage_history.clear", {})
+    if not payload.ok:
+        return payload.to_command_result()
+    deleted_samples = _value_text(payload.data.get("deleted_samples"))
+    deleted_files = _value_text(payload.data.get("deleted_files"))
+    return CommandResult(
+        ok=True,
+        message=(
+            f"deleted provider usage history: {deleted_samples} samples "
+            f"across {deleted_files} files"
+        ),
+        instance=instance,
+    )
+
+
+def _format_usage_history(data: Mapping[str, Any]) -> str:
+    samples = data.get("samples")
+    if not isinstance(samples, list):
+        samples = []
+    lines = [
+        "provider usage history:",
+        f"generated_at: {_string_or_default(data.get('generated_at'), '?')}",
+    ]
+    if not samples:
+        lines.append("no recorded usage samples in the selected window")
+        return "\n".join(lines)
+    for sample in samples:
+        if not isinstance(sample, dict):
+            lines.append("- invalid sample entry")
+            continue
+        sampled_at = _string_or_default(sample.get("sampled_at"), "?")
+        providers = sample.get("providers")
+        if not isinstance(providers, list) or not providers:
+            lines.append(f"- {sampled_at}  (no usable connections)")
+            continue
+        lines.append(f"- {sampled_at}")
+        for provider in providers:
+            if not isinstance(provider, dict):
+                lines.append("  - invalid provider entry")
+                continue
+            connection = _string_or_default(provider.get("connection"), "?")
+            error = provider.get("error")
+            if isinstance(error, str) and error:
+                lines.append(f"  {connection}: error: {error}")
+                continue
+            windows = provider.get("windows")
+            if not isinstance(windows, list) or not windows:
+                lines.append(f"  - {connection}: windows: none")
+                continue
+            for window in windows:
+                lines.append(f"  {connection}: {_format_usage_window(window).strip()}")
+    return "\n".join(lines)
 
 
 def _format_connection_rows(connections: Sequence[object]) -> str:

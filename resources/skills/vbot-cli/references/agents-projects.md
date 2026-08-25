@@ -10,6 +10,7 @@ vbot agent show <agent-id>
 vbot agent create <agent-id> <display-name> [flags]
 vbot agent update <agent-id> [flags]
 vbot agent rename <current-agent-id> <new-agent-id>
+vbot agent reorder <agent-id>...
 vbot agent delete <agent-id>
 ```
 
@@ -56,6 +57,7 @@ vbot project show <project-id>
 vbot project set <project-id> [--cwd <path>] [--format opencode|claude] [add flags] [--clear-default-agent] [--clear-default-model] [--clear-default-temperature] [--clear-default-thinking-effort]
 vbot project set-override <project-id> <agent-id> model|temperature|thinking_effort|compaction_policy <value>
 vbot project clear-override <project-id> <agent-id> model|temperature|thinking_effort|compaction_policy
+vbot project detect [<path>]
 vbot project rm <project-id> [--copy-rooted-agent-files]
 ```
 

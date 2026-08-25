@@ -14,6 +14,7 @@ from cli.agent_management import (
     agent_delete,
     agent_list,
     agent_rename,
+    agent_reorder,
     agent_show,
     agent_update,
 )
@@ -81,11 +82,18 @@ from cli.extensions_management import (
     extensions_show,
 )
 from cli.log_management import log_list, log_read
+from cli.memory_management import (
+    memory_add,
+    memory_list,
+    memory_remove,
+    memory_replace,
+)
 from cli.model_management import model_list, model_refresh, model_show
 from cli.parser import parse_args
 from cli.project_management import (
     project_add,
     project_clear_override,
+    project_detect,
     project_list,
     project_remove,
     project_set,
@@ -115,6 +123,8 @@ from cli.provider_management import (
     provider_status,
     provider_unset_key,
     provider_usage,
+    provider_usage_history,
+    provider_usage_history_clear,
 )
 from cli.server_management import (
     DEFAULT_HOST,
@@ -140,8 +150,12 @@ from cli.skill_management import (
     list_skills,
     skill_create,
     skill_delete,
+    skill_inventory,
     skill_read,
     skill_remove_file,
+    skill_set_disabled,
+    skill_share,
+    skill_unshare,
     skill_update,
     skill_write_file,
 )
@@ -152,6 +166,7 @@ from cli.task_model_management import (
     task_model_options,
     task_model_set,
     task_model_set_option,
+    task_model_status,
     task_model_targets,
     task_model_unset_option,
 )
@@ -471,6 +486,11 @@ def run(
         print_management_command_result(result)
         return SUCCESS_EXIT_CODE if result.ok else FAILURE_EXIT_CODE
 
+    if args.area == "memory":
+        result = dispatch_memory_command(args, instance)
+        print_management_command_result(result)
+        return SUCCESS_EXIT_CODE if result.ok else FAILURE_EXIT_CODE
+
     if args.area == "extensions":
         result = dispatch_extensions_command(
             args,
@@ -534,6 +554,7 @@ def dispatch_agent_command(
     create_agent: Callable[[ServerInstance, str, str, dict[str, Any]], CommandResult],
     update_agent: Callable[[ServerInstance, str, dict[str, Any]], CommandResult],
     rename_agent: Callable[[ServerInstance, str, str], CommandResult],
+    reorder_agent: Callable[[ServerInstance, Sequence[str]], CommandResult] = agent_reorder,
     delete_agent: Callable[[ServerInstance, str], CommandResult],
 ) -> CommandResult:
     """Dispatch one parsed agent command against the server RPC client."""
@@ -551,6 +572,8 @@ def dispatch_agent_command(
         return update_agent(instance, args.id, _agent_changes_from_args(args))
     if args.command == "rename":
         return rename_agent(instance, args.id, args.new_id)
+    if args.command == "reorder":
+        return reorder_agent(instance, list(args.ids))
     if args.command == "delete":
         return delete_agent(instance, args.id)
     raise ValueError(f"Unsupported agent command: {args.command}")
@@ -661,6 +684,8 @@ def dispatch_project_command(
         return clear_override_fn(instance, args.id, args.agent, args.field)
     if args.command == "rm":
         return remove_project_fn(instance, args.id, args.copy_rooted_agent_files)
+    if args.command == "detect":
+        return project_detect(instance, getattr(args, "cwd", None))
     raise ValueError(f"Unsupported project command: {args.command}")
 
 
@@ -1027,6 +1052,12 @@ def dispatch_provider_command(
     custom_list_fn: Callable[[ServerInstance], CommandResult] = provider_custom_list,
     custom_save_fn: Callable[..., CommandResult] = provider_custom_save,
     custom_delete_fn: Callable[[ServerInstance, str], CommandResult] = provider_custom_delete,
+    usage_history_fn: Callable[
+        [ServerInstance, str | None, str | None], CommandResult
+    ] = provider_usage_history,
+    usage_history_clear_fn: Callable[
+        [ServerInstance, bool], CommandResult
+    ] = provider_usage_history_clear,
 ) -> CommandResult:
     """Dispatch one parsed provider command against the server RPC client."""
 
@@ -1052,6 +1083,10 @@ def dispatch_provider_command(
         return provider_status_fn(instance, args.provider, args.connection)
     if args.command == "usage":
         return provider_usage_fn(instance, args.connection)
+    if args.command == "usage-history":
+        return usage_history_fn(instance, args.since, args.until)
+    if args.command == "usage-history-clear":
+        return usage_history_clear_fn(instance, args.yes)
     if args.command in ("enable", "disable"):
         return set_enabled_fn(instance, args.provider, args.command == "enable", args.connection)
     if args.command == "set-key":
@@ -1124,11 +1159,14 @@ def dispatch_task_model_command(
     set_option_fn: Callable[[ServerInstance, str, str, str], CommandResult] = task_model_set_option,
     unset_option_fn: Callable[[ServerInstance, str, str], CommandResult] = task_model_unset_option,
     clear_binding_fn: Callable[[ServerInstance, str], CommandResult] = task_model_clear,
+    status_fn: Callable[[ServerInstance, str], CommandResult] = task_model_status,
 ) -> CommandResult:
     """Dispatch one parsed task-model command against the server RPC client."""
 
     if args.command == "list":
         return list_bindings_fn(instance)
+    if args.command == "status":
+        return status_fn(instance, args.task_type)
     if args.command == "targets":
         return list_targets_fn(instance, args.task_type)
     if args.command == "options":
@@ -1202,11 +1240,27 @@ def dispatch_skill_command(
     remove_skill_file_fn: Callable[
         [ServerInstance, str, str, str, bool], CommandResult
     ] = skill_remove_file,
+    inventory_skills_fn: Callable[[ServerInstance], CommandResult] = skill_inventory,
+    set_skill_disabled_fn: Callable[
+        [ServerInstance, str, bool], CommandResult
+    ] = skill_set_disabled,
+    share_skill_fn: Callable[
+        [ServerInstance, str, str, Sequence[str]], CommandResult
+    ] = skill_share,
+    unshare_skill_fn: Callable[[ServerInstance, str, str], CommandResult] = skill_unshare,
 ) -> CommandResult:
     """Dispatch one parsed skill command against the server RPC client."""
 
     if args.command == "list":
         return list_skills_fn(instance)
+    if args.command == "inventory":
+        return inventory_skills_fn(instance)
+    if args.command in {"disable", "enable"}:
+        return set_skill_disabled_fn(instance, args.name, args.command == "disable")
+    if args.command == "share":
+        return share_skill_fn(instance, args.agent, args.name, args.receivers)
+    if args.command == "unshare":
+        return unshare_skill_fn(instance, args.agent, args.name)
     if args.command == "read":
         return read_skills_fn(instance, args.scope)
     if args.command in {"create", "update", "write-file"}:
@@ -1228,6 +1282,31 @@ def dispatch_skill_command(
     if args.command == "remove-file":
         return remove_skill_file_fn(instance, args.scope, args.name, args.path, args.yes)
     raise ValueError(f"Unsupported skill command: {args.command}")
+
+
+def dispatch_memory_command(
+    args: argparse.Namespace,
+    instance: ServerInstance,
+) -> CommandResult:
+    """Dispatch one parsed memory command against the server RPC client."""
+
+    try:
+        content = _optional_content_from_args(args)
+    except (OSError, ValueError) as exc:
+        return CommandResult(
+            ok=False,
+            message=f"cannot read memory entry file: {exc}",
+            instance=instance,
+        )
+    if args.command == "list":
+        return memory_list(instance, args.agent)
+    if args.command == "add":
+        return memory_add(instance, args.agent, args.scope, content or "")
+    if args.command == "replace":
+        return memory_replace(instance, args.agent, args.scope, args.entry_id, content or "")
+    if args.command == "remove":
+        return memory_remove(instance, args.agent, args.scope, args.entry_id, args.yes)
+    raise ValueError(f"Unsupported memory command: {args.command}")
 
 
 def dispatch_extensions_command(

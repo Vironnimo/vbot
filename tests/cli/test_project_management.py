@@ -1067,3 +1067,78 @@ def test_project_remove_can_preserve_rooted_agent_files_and_reports_side_effects
     assert "affected_rooted_agents: librarian" in result.message
     assert "  librarian: SOUL.md,MEMORY.md" in result.message
     assert calls[0]["params"]["copy_rooted_agent_identity_files"] is True
+
+
+def test_project_detect_reports_format_and_context_facts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    instance = make_instance(tmp_path)
+
+    def fake_post(
+        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
+    ) -> httpx.Response:
+        assert json == {"method": "project.detect", "params": {"cwd": "C:/repos/demo"}}
+        return httpx.Response(
+            200,
+            json={
+                "ok": True,
+                "result": {
+                    "cwd_exists": True,
+                    "formats": {
+                        "opencode": {"agents": 2, "skills": 1},
+                        "claude": {"agents": 0, "skills": 0},
+                    },
+                    "context_files": {"agents_md": True, "claude_md": None},
+                },
+            },
+        )
+
+    monkeypatch.setattr(project_management.httpx, "post", fake_post)
+
+    result = project_management.project_detect(instance, "C:/repos/demo")
+
+    assert result.ok is True
+    assert result.message.splitlines() == [
+        "detected project facts for C:/repos/demo:",
+        "claude: agents=0 skills=0",
+        "opencode: agents=2 skills=1",
+        "AGENTS.md present: yes",
+        "CLAUDE.md: none",
+    ]
+
+
+def test_project_detect_treats_missing_path_as_success(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    instance = make_instance(tmp_path)
+
+    def fake_post(
+        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
+    ) -> httpx.Response:
+        assert json == {"method": "project.detect", "params": {"cwd": "C:/repos/missing"}}
+        return httpx.Response(
+            200,
+            json={
+                "ok": True,
+                "result": {
+                    "cwd_exists": False,
+                    "formats": {},
+                    "context_files": {"agents_md": False, "claude_md": None},
+                },
+            },
+        )
+
+    monkeypatch.setattr(project_management.httpx, "post", fake_post)
+
+    result = project_management.project_detect(instance, "C:/repos/missing")
+
+    assert result.ok is True
+    assert "no directory at C:/repos/missing" in result.message
+
+
+def test_parse_args_supports_project_detect() -> None:
+    args = cli_main.parse_args(["project", "detect", "C:/repos/demo"])
+
+    assert args.area == "project"
+    assert args.command == "detect"
+    assert args.cwd == "C:/repos/demo"
