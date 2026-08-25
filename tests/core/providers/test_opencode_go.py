@@ -23,6 +23,7 @@ from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfi
 API_KEY = "test-opencode-go-key"
 OPENCODE_GO_URL = "https://opencode-go.example/v1/chat/completions"
 OPENCODE_GO_MESSAGES_URL = "https://opencode-go.example/v1/messages"
+OPENCODE_GO_RESPONSES_URL = "https://opencode-go.example/v1/responses"
 CLOSED_TOOL = {
     "name": "inspect_probe",
     "description": "Inspect one synthetic value.",
@@ -41,6 +42,13 @@ ANTHROPIC_MESSAGES_MODELS: tuple[str, ...] = (
     "minimax-m2.5",
     "qwen3.7-plus",
 )
+# Ids carrying "responses" in the protocol map below must route through the
+# shared stateless Responses machinery (/responses endpoint).
+RESPONSES_MODELS: tuple[str, ...] = (
+    "gpt-5.6-luna",
+    "grok-4.5",
+    "muse-spark-1.2-contributor",
+)
 # Small per-model profiles mirroring the independent facts carried by
 # ``metadata.opencode_go``. Models absent here are unknown to the adapter.
 _PROFILE_BY_MODEL: dict[str, dict[str, object]] = {
@@ -49,14 +57,21 @@ _PROFILE_BY_MODEL: dict[str, dict[str, object]] = {
     "minimax-m3": {"protocol": "anthropic"},
     "qwen3.7-plus": {"protocol": "anthropic"},
     "qwen3.7-max": {"protocol": "anthropic"},
+    "qwen3.8-max": {"protocol": "anthropic"},
     "qwen3.6-plus": {"protocol": "anthropic"},
     "deepseek-v4-flash": {"protocol": "openai"},
     "deepseek-v4-pro": {"protocol": "openai"},
     "glm-5.2": {"protocol": "openai", "reasoning_response_field": "reasoning_content"},
     "glm-5.3": {"protocol": "openai", "reasoning_response_field": "reasoning_content"},
+    "longcat-2.0": {
+        "protocol": "openai",
+        "reasoning_response_field": "reasoning_content",
+    },
+    "gpt-5.6-luna": {"protocol": "responses"},
+    "muse-spark-1.2-contributor": {"protocol": "responses"},
     "grok-4.5": {
         "minimum_reasoning_effort": "low",
-        "protocol": "openai",
+        "protocol": "responses",
     },
     "hy3": {"protocol": "openai"},
     "kimi-k2.5": {
@@ -952,6 +967,12 @@ class TestOpenCodeGoAdapterMinimaxRouting:
                 },
             )
         )
+        responses_route = respx.post(OPENCODE_GO_RESPONSES_URL).mock(
+            return_value=httpx.Response(
+                200,
+                json={"id": "resp_x", "status": "completed", "output": []},
+            )
+        )
 
         opencode_go_module._warned_unmarked_models.clear()
         with caplog.at_level("WARNING", logger="vbot.providers.opencode_go"):
@@ -962,6 +983,7 @@ class TestOpenCodeGoAdapterMinimaxRouting:
 
         assert chat_route.called
         assert not messages_route.called
+        assert not responses_route.called
         assert any(
             "no metadata protocol" in record.getMessage()
             and "brand-new-unlisted-model" in record.getMessage()
@@ -1464,3 +1486,198 @@ class TestOpenCodeGoAdapterMinimaxRouting:
         await opencode_go_adapter.aclose()
 
         shared_client.aclose.assert_awaited_once()
+
+
+RESPONSES_COMPLETED_RESPONSE = {
+    "id": "resp_1",
+    "object": "response",
+    "status": "completed",
+    "model": "gpt-5.6-luna",
+    "output": [
+        {
+            "type": "reasoning",
+            "id": "rs_1",
+            "summary": [],
+            "encrypted_content": "enc-blob",
+        },
+        {
+            "type": "message",
+            "id": "msg_1",
+            "role": "assistant",
+            "phase": "final_answer",
+            "content": [{"type": "output_text", "text": "Done"}],
+        },
+    ],
+    "usage": {"input_tokens": 11, "output_tokens": 5},
+}
+
+
+class TestOpenCodeGoResponsesRouting:
+    @pytest.mark.parametrize("model_id", RESPONSES_MODELS)
+    def test_responses_models_resolve_responses_protocol(
+        self,
+        opencode_go_adapter: OpenCodeGoAdapter,
+        model_id: str,
+    ) -> None:
+        assert opencode_go_adapter._model_protocol(model_id) == "responses"
+
+    def test_longcat_resolves_openai_and_qwen38_max_resolves_anthropic(
+        self,
+        opencode_go_adapter: OpenCodeGoAdapter,
+    ) -> None:
+        assert opencode_go_adapter._model_protocol("longcat-2.0") == "openai"
+        assert opencode_go_adapter._model_protocol("qwen3.8-max") == "anthropic"
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_responses_model_send_uses_responses_path(
+        self,
+        opencode_go_adapter: OpenCodeGoAdapter,
+    ) -> None:
+        responses_route = respx.post(OPENCODE_GO_RESPONSES_URL).mock(
+            return_value=httpx.Response(200, json=RESPONSES_COMPLETED_RESPONSE)
+        )
+        chat_route = respx.post(OPENCODE_GO_URL).mock(
+            return_value=httpx.Response(200, json={"choices": []})
+        )
+        messages_route = respx.post(OPENCODE_GO_MESSAGES_URL).mock(
+            return_value=httpx.Response(200, json={"type": "message"})
+        )
+
+        response = await opencode_go_adapter.send(
+            [
+                {"role": "system", "content": "Be brief."},
+                {"role": "user", "content": "hello"},
+            ],
+            model_id="gpt-5.6-luna",
+        )
+
+        assert responses_route.called
+        assert not chat_route.called
+        assert not messages_route.called
+        request_body = json.loads(responses_route.calls.last.request.content)
+        # Stateless shape: complete history as input items, never stored.
+        assert request_body["store"] is False
+        assert request_body["instructions"] == "Be brief."
+        assert [item["role"] for item in request_body["input"]] == ["user"]
+        normalized = opencode_go_adapter.normalize_response(response, model_id="gpt-5.6-luna")
+        assert normalized["content"] == "Done"
+        assert normalized["phase"] == "final_answer"
+        assert (
+            normalized["reasoning_meta"]["response_output"]
+            == (RESPONSES_COMPLETED_RESPONSE["output"])
+        )
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_responses_payload_renders_effort_and_encrypted_include(
+        self,
+        opencode_go_adapter: OpenCodeGoAdapter,
+    ) -> None:
+        responses_route = respx.post(OPENCODE_GO_RESPONSES_URL).mock(
+            return_value=httpx.Response(200, json=RESPONSES_COMPLETED_RESPONSE)
+        )
+
+        await opencode_go_adapter.send(
+            [{"role": "user", "content": "hello"}],
+            model_id="gpt-5.6-luna",
+            thinking_effort="high",
+            session_id="vbot-session",
+            tools=[CLOSED_TOOL],
+        )
+
+        request_body = json.loads(responses_route.calls.last.request.content)
+        assert request_body["reasoning"] == {"effort": "high", "summary": "auto"}
+        assert request_body["include"] == ["reasoning.encrypted_content"]
+        assert request_body["tools"][0]["type"] == "function"
+        # Non-strict invariant: the field is carried explicitly as false.
+        assert request_body["tools"][0]["strict"] is False
+        # The gateway publishes no sticky-conversation contract; the routing
+        # kwarg is dropped instead of leaking onto the wire.
+        assert "session_id" not in request_body
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_grok_none_effort_maps_to_minimum_on_responses_wire(
+        self,
+        opencode_go_adapter: OpenCodeGoAdapter,
+    ) -> None:
+        """The wire rejects effort ``none`` (HTTP 400); the override's minimum rung wins."""
+
+        responses_route = respx.post(OPENCODE_GO_RESPONSES_URL).mock(
+            return_value=httpx.Response(200, json=RESPONSES_COMPLETED_RESPONSE)
+        )
+
+        await opencode_go_adapter.send(
+            [{"role": "user", "content": "hello"}],
+            model_id="grok-4.5",
+            thinking_effort="none",
+        )
+
+        request_body = json.loads(responses_route.calls.last.request.content)
+        assert request_body["reasoning"] == {"effort": "low", "summary": "auto"}
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_responses_model_stream_happy_path(
+        self,
+        opencode_go_adapter: OpenCodeGoAdapter,
+    ) -> None:
+        completed = {
+            "id": "resp_stream",
+            "object": "response",
+            "status": "completed",
+            "output": RESPONSES_COMPLETED_RESPONSE["output"],
+            "usage": RESPONSES_COMPLETED_RESPONSE["usage"],
+        }
+        responses_route = respx.post(OPENCODE_GO_RESPONSES_URL).mock(
+            return_value=httpx.Response(
+                200,
+                text=(
+                    'event: response.output_text.delta\ndata: {"delta":"Done"}\n\n'
+                    f"event: response.completed\ndata: {json.dumps({'response': completed})}\n\n"
+                ),
+                headers={"content-type": "text/event-stream"},
+            )
+        )
+
+        deltas = [
+            delta
+            async for delta in opencode_go_adapter.stream(
+                [{"role": "user", "content": "hello"}],
+                model_id="muse-spark-1.2-contributor",
+                thinking_effort="low",
+            )
+        ]
+
+        request_body = json.loads(responses_route.calls.last.request.content)
+        assert request_body["stream"] is True
+        assert request_body["reasoning"] == {"effort": "low", "summary": "auto"}
+        assert [delta["type"] for delta in deltas] == [
+            "content_delta",
+            "reasoning_meta",
+            "usage",
+            "finish",
+        ]
+
+    def test_normalize_response_routes_responses_shape_by_model(
+        self,
+        opencode_go_adapter: OpenCodeGoAdapter,
+    ) -> None:
+        result = opencode_go_adapter.normalize_response(
+            {
+                "choices": [{"message": {"role": "assistant", "content": "wrong wire"}}],
+                "output": RESPONSES_COMPLETED_RESPONSE["output"],
+            },
+            model_id="grok-4.5",
+        )
+
+        assert result["content"] == "Done"
+
+    def test_normalize_response_infers_responses_shape_without_model_id(
+        self,
+        opencode_go_adapter: OpenCodeGoAdapter,
+    ) -> None:
+        result = opencode_go_adapter.normalize_response(RESPONSES_COMPLETED_RESPONSE)
+
+        assert result["content"] == "Done"

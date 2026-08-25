@@ -1,5 +1,5 @@
 {
-  "_comment": "Hand layer for OpenCode Go, verified 2026-08-17 against its official endpoint table, current models.dev feed, upstream model documentation, and two-turn live gateway probes; DeepSeek V4 Flash entries re-probed 2026-08-22; ox-alpha-free added 2026-08-23 from live replay/effort probes (model never reads replayed reasoning in any scenario, accepts every effort rung, reasons even at 'none' while 'low' yields no thinking; policy stays current_run as a safety margin since the gateway silently discards surplus carriers). The provider defaults to full-history reasoning replay; individual model records can override that policy. Each profile keeps protocol, response field, and model-specific request controls independent. Override metadata is wholesale at load, so OpenAI-route profiles repeat reasoning_response_field instead of accidentally discarding the generated value.",
+  "_comment": "Hand layer for OpenCode Go, verified 2026-08-25 against its official endpoint table (three wires: /responses, /chat/completions, /messages), current models.dev feed, upstream model documentation, and live gateway probes; DeepSeek V4 Flash entries re-probed 2026-08-22; ox-alpha-free added 2026-08-23 from live replay/effort probes (model never reads replayed reasoning in any scenario, accepts every effort rung, reasons even at 'none' while 'low' yields no thinking; policy stays current_run as a safety margin since the gateway silently discards surplus carriers). DeepSeek routes run under a monthly zero-data-retention agreement that expires 2026-08-31 — re-check the agreement before relying on these entries afterwards. The provider defaults to full-history reasoning replay; individual model records can override that policy. Each profile keeps protocol, response field, and model-specific request controls independent. Override metadata is wholesale at load, so OpenAI-route profiles repeat reasoning_response_field instead of accidentally discarding the generated value.",
   "reasoning_replay": "full_history",
   "models": {
     "deepseek-v4-flash": {
@@ -72,12 +72,18 @@
         }
       }
     },
+    "gpt-5.6-luna": {
+      "metadata": {
+        "opencode_go": {
+          "protocol": "responses"
+        }
+      }
+    },
     "grok-4.5": {
       "metadata": {
         "opencode_go": {
           "minimum_reasoning_effort": "low",
-          "protocol": "openai",
-          "reasoning_response_field": "reasoning_content"
+          "protocol": "responses"
         }
       }
     },
@@ -149,6 +155,14 @@
         }
       }
     },
+    "longcat-2.0": {
+      "metadata": {
+        "opencode_go": {
+          "protocol": "openai",
+          "reasoning_response_field": "reasoning_content"
+        }
+      }
+    },
     "mimo-v2.5": {
       "metadata": {
         "opencode_go": {
@@ -186,6 +200,13 @@
         }
       }
     },
+    "muse-spark-1.2-contributor": {
+      "metadata": {
+        "opencode_go": {
+          "protocol": "responses"
+        }
+      }
+    },
     "ox-alpha-free": {
       "reasoning_replay": "current_run",
       "metadata": {
@@ -218,6 +239,13 @@
       }
     },
     "qwen3.7-plus": {
+      "metadata": {
+        "opencode_go": {
+          "protocol": "anthropic"
+        }
+      }
+    },
+    "qwen3.8-max": {
       "metadata": {
         "opencode_go": {
           "protocol": "anthropic"
