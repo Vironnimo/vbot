@@ -35,6 +35,8 @@ The registry emits one `INFO` log at each logical app-window presence boundary: 
 Streaming deltas (`assistant_output_delta`, `reasoning_delta`, `tool_call_delta`, stdout/stderr) are deliberately excluded from `/ws`; SSE is their transport. Stable Run output and terminal events become the small server lifecycle types and carry `run_id`, bare `agent_id`, `project_id`, `session_id`, original Run event type/sequence/timestamp, and sanitized output/terminal fields. Opaque Provider metadata is recursively removed. For the displayed Session, the WebUI feeds mirrored stable events and SSE events into the same Run-sequence reducer, so the bridge may fill an SSE gap without letting a terminal event overtake earlier output. Non-displayed Sessions have no SSE subscription and therefore receive an intentionally sparse WebSocket sequence; their stable events are reduced directly in WebSocket order, and opening one later reloads durable History. Terminal bridges also publish `resource_changed(kind="debug_traces")` and a scoped `resource_changed(kind="sessions")` after the terminal summary so trace views and durable completion projections re-fetch.
 
 `working_project_id` is internal execution state and never appears in SSE, WebSocket, Queue, history, or public Run payloads. The Run-owned `iteration_count` is deliberately public: active snapshots and Run RPC responses expose its current value, `model_step_usage` exposes the value after each completed Model response, terminal events expose the final value, and Chat Run Summaries persist it for History.
+Reflection attribution: the bridge resolves a reflection fork's `fork_source` sidecar provenance once per Run and stamps `source_session_id` onto every bridged WebSocket lifecycle payload and `connection_ready.active_runs` entry for the reflection kinds (`reflection`, `memory_reflection`, `skill_reflection`), so accessors can attribute a review to its source Session without extra reads. Resolution failures degrade to an omitted field, never a failed bridge.
+
 
 ## `resource_changed`
 
@@ -44,12 +46,12 @@ Streaming deltas (`assistant_output_delta`, `reasoning_delta`, `tool_call_delta`
 
 Emission belongs to the server mutation edge, never `core/`. Representative ownership:
 
-- Model Refresh → `models`; credential/Connection changes → `providers`; Agent CRUD → `agents`; Project mutations/removal → `projects` and any affected `agents`.
-- Session create/rename/delete, title-change callbacks, terminal Runs, and successful completion read acknowledgements → scoped `sessions`; deleting an Identity Agent's current Session also invalidates `agents` because its current pointer changes.
-- RPC Queue mutations and the queued branches of `chat.send`/`chat.stream` → scoped `queue`. Core-origin enqueues intentionally do not publish this browser invalidation.
-- Channel mutations → `channels`; `/ws` presence lifecycle → `clients`; terminal Run bridge and Debug mutations → `debug_traces`.
-- `CronService.add_changed_callback` is bridged in `server/app.py` → `cron`, covering RPC/Tool mutations and scheduler-owned status/health transitions without importing the server bus into core.
-- `TerminalManager.add_changed_callback` is bridged in `server/app.py` → scoped `terminals`, covering active-catalog and state changes from Agent Tool calls, process lifecycle, hooks, and operator mutations without publishing high-volume PTY output to the shared bus.
+- Model Refresh -> `models`; credential/Connection changes -> `providers`; Agent CRUD -> `agents`; Project mutations/removal -> `projects` and any affected `agents`.
+- Session create/rename/delete, title-change callbacks, terminal Runs, and successful completion read acknowledgements -> scoped `sessions`; deleting an Identity Agent's current Session also invalidates `agents` because its current pointer changes.
+- RPC Queue mutations and the queued branches of `chat.send`/`chat.stream` -> scoped `queue`. Core-origin enqueues intentionally do not publish this browser invalidation.
+- Channel mutations -> `channels`; `/ws` presence lifecycle -> `clients`; terminal Run bridge and Debug mutations -> `debug_traces`.
+- `CronService.add_changed_callback` is bridged in `server/app.py` -> `cron`, covering RPC/Tool mutations and scheduler-owned status/health transitions without importing the server bus into core.
+- `TerminalManager.add_changed_callback` is bridged in `server/app.py` -> scoped `terminals`, covering active-catalog and state changes from Agent Tool calls, process lifecycle, hooks, and operator mutations without publishing high-volume PTY output to the shared bus.
 
 The exact emitters remain source-of-truth in `server/rpc/*_methods.py`, `server/rpc/event_bridge.py`, and `server/app.py`. A new consumer normally requires one allowed kind, one mutation-edge emit, and one client reload path rather than a new event family.
 

@@ -4,7 +4,7 @@ Task-gated reference for the `video_generation` Task Model and OpenRouter Video 
 
 ## Boundary
 
-`core/model_tasks/video.py` owns binding resolution, exact configured-Model capability validation, local frame-image loading, provider-error normalization, and caller-owned artifact persistence. `core/model_tasks/video_providers.py` owns OpenRouter's asynchronous `POST /videos` → same-origin job polling → authenticated content download wire. `core/tools/media_generation.py` owns only the Agent Tool schema, effective-cwd path resolution, caller-owned default directory, and result projection.
+`core/model_tasks/video.py` owns binding resolution, exact configured-Model capability validation, local frame-image loading, provider-error normalization, and caller-owned artifact persistence. `core/model_tasks/video_providers.py` owns OpenRouter's asynchronous `POST /videos` -> same-origin job polling -> authenticated content download wire. `core/tools/media_generation.py` owns only the Agent Tool schema, effective-cwd path resolution, caller-owned default directory, and result projection.
 
 ## Discovery and Options
 

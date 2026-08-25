@@ -2,30 +2,30 @@
 
 ## Project
 
-vBot is a local-first agent harness — a runtime that gives agents maximum agency with minimal restrictions. A single async Python kernel powers four accessors: a FastAPI server, a Svelte web UI, a pywebview desktop shell, and a CLI.
+vBot is a local-first agent harness - a runtime that gives agents maximum agency with minimal restrictions. A single async Python kernel powers four accessors: a FastAPI server, a Svelte web UI, a pywebview desktop shell, and a CLI.
 
-Agents are first-class citizens with tool access to the host system. They can read and edit the application source (self-healing — fixing bugs they encounter during their work, or adding small features on the fly), configure the system via the CLI (set up Telegram channels, add API providers, switch the agent's model, etc.), and trigger application restarts to apply changes. The agent lives where the server lives; desktop and CLI are accessors.
+Agents are first-class citizens with tool access to the host system. They can read and edit the application source (self-healing - fixing bugs they encounter during their work, or adding small features on the fly), configure the system via the CLI (set up Telegram channels, add API providers, switch the agent's model, etc.), and trigger application restarts to apply changes. The agent lives where the server lives; desktop and CLI are accessors.
 
 This is a technical-user tool. The agent has the same capabilities as the user, with a small set of critical guardrails.
 
 ## Architecture
 
-**Tech stack:** Python 3.11+ (hatchling), FastAPI + WebSocket + SSE, Svelte (JS, no TypeScript), pywebview. Async-first — asyncio throughout the kernel, threads only where native libraries force them.
+**Tech stack:** Python 3.11+ (hatchling), FastAPI + WebSocket + SSE, Svelte (JS, no TypeScript), pywebview. Async-first - asyncio throughout the kernel, threads only where native libraries force them.
 
 **Layers:**
 ```
-core/          ← Kernel (async). No HTTP, no UI.
-server/        ← FastAPI + WS + SSE. Imports core/. RPC dispatch lives in server/rpc/.
-webui/         ← Svelte frontend. Own package.json. Talks HTTP/WS/SSE only.
-cli/           ← CLI accessor. Server lifecycle locally; all other domains via shared RPC client.
-desktop/       ← pywebview shell. Imports nothing from the project — HTTP only.
+core/          <- Kernel (async). No HTTP, no UI.
+server/        <- FastAPI + WS + SSE. Imports core/. RPC dispatch lives in server/rpc/.
+webui/         <- Svelte frontend. Own package.json. Talks HTTP/WS/SSE only.
+cli/           <- CLI accessor. Server lifecycle locally; all other domains via shared RPC client.
+desktop/       <- pywebview shell. Imports nothing from the project - HTTP only.
 ```
 
-**Core modules:** runtime, models, model_tasks, chat, runs, compaction, sessions, recall, statistics, memory, settings, prompts, attachments, extensions, agents, subagents, tools, providers, channels, skills, automation, storage, utils. Each is a folder with a main file as public API, soft limit 1000 lines per file. `model_tasks/` is the single deep task module: it owns specialized task-model bindings and target discovery (`model_tasks.py` as the main file) **and** the per-task execution services with their provider wire clients (`speech*.py`, `image*.py`, `embeddings*.py`, `video*.py`, `music*.py`). Provider and automation internals live in their domain maps (`providers.md`, `automation.md`).
+**Core modules:** runtime, models, model_tasks, chat, runs, compaction, sessions, recall, statistics, memory, settings, prompts, attachments, extensions, agents, projects, subagents, tools, providers, channels, skills, automation, storage, debug, utils. Each is a folder with a main file as public API, soft limit 1000 lines per file. Two recorded exceptions to the main-file convention: `core/debug` exposes its public API through a small `__init__.py` facade (its recorder/redaction/store internals stay behind it), and `core/utils` is intentionally imported at leaf paths (`core.utils.errors`, `core.utils.logging`, ...) because it is a collection of independent utilities rather than one capability. `model_tasks/` is the single deep task module: it owns specialized task-model bindings and target discovery (`model_tasks.py` as the main file) **and** the per-task execution services with their provider wire clients (`speech*.py`, `image*.py`, `embeddings*.py`, `video*.py`, `music*.py`). Provider and automation internals live in their domain maps (`providers.md`, `automation.md`).
 
 **Communication:** `POST /api/rpc` (method dispatcher) + `/ws` (event-bus push) + `/ws/logs` (selected log-file live tail) + SSE (streaming) + dedicated binary HTTP endpoints (`POST /api/upload`, `GET /api/attachments/{id}`, signed `GET /api/files/{token}`). No auth (single-user-local); Assistant file tokens are per-process HMAC capabilities over original server-local paths rather than persistent copies.
 
-**Data flow:** Accessors → HTTP/WS/SSE → server RPC handlers → core (orchestration via providers, models, tools, agents) → external APIs. Agentic-only — no separate non-agentic streaming path.
+**Data flow:** Accessors -> HTTP/WS/SSE -> server RPC handlers -> core (orchestration via providers, models, tools, agents) -> external APIs. Agentic-only - no separate non-agentic streaming path.
 
 **Tool contracts:** `core/tools/contracts.py` compiles canonical Draft 2020-12 input and success-data schemas with `jsonschema`; before validation and execution, `ToolRegistry` uses the exact advertised input schema to normalize a copied argument object for common unambiguous Model encodings (numeric/Boolean/null strings, JSON-encoded containers, and a scalar supplied for an array), then validates universal requirements before handlers and successful results afterward. Agent-facing definitions follow repository-root `TOOLS.md`: one open flat object, direct parameters for one behavior or target selection, and a required top-level `action` only for genuinely different behaviors. Action-specific requirements, inapplicable or unknown fields, actual defaults, authorization, and semantic checks remain handler-owned. Nested `request.operation` contracts are retired and unsupported by current dispatch; the WebUI may still recognize them solely to label historical persisted calls. Provider adapters preserve the canonical schema and either emit `strict: false` on wires that support the field or omit it on wires that do not; strict Tool calling is forbidden. Sibling Tool Calls execute concurrently by default within shared limits unless a registered Tool explicitly declares a serial barrier.
 
@@ -35,7 +35,7 @@ desktop/       ← pywebview shell. Imports nothing from the project — HTTP on
 
 ## Domain Maps
 
-Each domain has a **domain map** in `.vorch/domain-maps/`, named after its module. A **domain** is any module or subsystem with a clear boundary that you need context about before touching it. A domain map is factual working notes to orient you before you touch the domain — not the ultimate source of truth: when a map and the code disagree, the code wins, and you fix the map. **When you work on a domain, read its map.** Your task lists the relevant maps as a starting point, not a ceiling — read others if you need them.
+Each domain has a **domain map** in `.vorch/domain-maps/`, named after its module. A **domain** is any module or subsystem with a clear boundary that you need context about before touching it. A domain map is factual working notes to orient you before you touch the domain - not the ultimate source of truth: when a map and the code disagree, the code wins, and you fix the map. **When you work on a domain, read its map.** Your task lists the relevant maps as a starting point, not a ceiling - read others if you need them.
 
 | Map file | Domain | What it covers |
 |---|---|---|
@@ -43,7 +43,6 @@ Each domain has a **domain map** in `.vorch/domain-maps/`, named after its modul
 | `.vorch/domain-maps/providers.md` | `core/providers/` | Provider boundary and shared invariants with task-gated Connection, discovery, request, usage, and integration references |
 | `.vorch/domain-maps/models.md` | `core/models/` | Model data classes, registry, capabilities, model ID convention |
 | `.vorch/domain-maps/model_tasks.md` | `core/model_tasks/` | Specialized task-model bindings, target discovery, option schemas; index to the task-execution child maps |
-| `.vorch/domain-maps/model_tasks/speech.md` | speech execution | Speech-to-text and text-to-speech execution, artifacts, provider wire behavior |
 | `.vorch/domain-maps/model_tasks/image.md` | image execution | Image generation execution, artifacts, provider wire behavior |
 | `.vorch/domain-maps/model_tasks/embeddings.md` | embedding execution | Text-embedding execution, provider wire, vector output for recall |
 | `.vorch/domain-maps/chat.md` | `core/chat/` | Canonical ChatMessage boundary, Agentic Loop invariants, and task-reference routing |
@@ -74,23 +73,23 @@ Each domain has a **domain map** in `.vorch/domain-maps/`, named after its modul
 
 ## Conventions
 
-**Deep modules — few, large, simple interface:** We want few deep modules, not many shallow ones. A deep module hides a lot of functionality behind a simple interface.
+**Deep modules - few, large, simple interface:** We want few deep modules, not many shallow ones. A deep module hides a lot of functionality behind a simple interface.
 
 **Dependency injection:** Constructor injection via `__init__`. Interfaces via `typing.Protocol`. No service locator, no global singletons, no `getattr` tricks.
 
-**Error handling:** Base classes in `core/utils/errors.py`, domain-specific extensions per module. Expected errors → handle locally, log `warn`. Unexpected errors → rethrow, log `error`. Transient HTTP errors → max 3 retries, exponential backoff + jitter, honoring a server `Retry-After` hint as a floor (capped). Which HTTP statuses are retryable is defined once in `core/utils/http_status.py` (`is_retryable_status`, idempotency-aware), shared by providers and HTTP tools. Provider errors classified as `retryable` vs `fatal`. No silent `except Exception: pass`.
+**Error handling:** Base classes in `core/utils/errors.py`, domain-specific extensions per module. Expected errors -> handle locally, log `warn`. Unexpected errors -> rethrow, log `error`. Transient HTTP errors -> max 3 retries, exponential backoff + jitter, honoring a server `Retry-After` hint as a floor (capped). Which HTTP statuses are retryable is defined once in `core/utils/http_status.py` (`is_retryable_status`, idempotency-aware), shared by providers and HTTP tools. Provider errors classified as `retryable` vs `fatal`. No silent `except Exception: pass`.
 
 **Logging:** Structured logging via `LogManager` from `core/utils/logging`. Kernel/server application logs go through that pipeline and use per-module `vbot.<domain>` loggers under `<data_dir>/logs/`. The standalone remote-capable Desktop process has no server data directory, so `desktop/main.py` attaches the same `vbot.*` logger tree and required `timestamp [LEVEL] name - message` format to daily files under its OS per-user `<config-dir>/logs/`; it must not import the core logging module. No `print()`, no `logging.basicConfig()`, and no ad-hoc formatting. A successful, material control-plane mutation emits one `INFO` event after the state change with the operation, stable target identifiers, and changed field names or a compact outcome summary. Never log credential or token values, Provider Account ids, Prompt/Skill/Cron content, or external conversation ids. Reads, status polls, appearance-only changes, read acknowledgements, routine request/stream traffic, and effective no-ops stay silent. Operational failures and meaningful health transitions use `WARNING`/`ERROR`; expected retry noise and unchanged failed health probes stay below `INFO`.
 
 **Naming:** Descriptive, no abbreviations (except `id`, `url`, `db`). One thing per function, max 3 nesting levels.
 
-**Imports:** stdlib → third-party → local. Blank line between groups. Remove unused.
+**Imports:** stdlib -> third-party -> local. Blank line between groups. Remove unused.
 
 **Time:** Persisted timestamps in UTC with explicit offset (ISO 8601). UI renders in user timezone. No implicit `datetime.now()`.
 
-**No legacy compatibility in app code — ever.** We are in development; schemas and config formats can and will break. The app reads the current format and nothing else. No auto-migrations, no fallback keys, no "if old_field then…" branches in application code. If a format changes, the old version is simply invalid. Manual conversion scripts go in `scripts/converters/` — they are standalone tools run explicitly by the user, not hooked into app startup or storage layers.
+**No legacy compatibility in app code - ever.** We are in development; schemas and config formats can and will break. The app reads the current format and nothing else. No auto-migrations, no fallback keys, no "if old_field then..." branches in application code. If a format changes, the old version is simply invalid. Manual conversion scripts go in `scripts/converters/` - they are standalone tools run explicitly by the user, not hooked into app startup or storage layers.
 
-**Frontend:** Svelte with JavaScript (no TypeScript). All user-visible strings through i18n — no hardcoded text.
+**Frontend:** Svelte with JavaScript (no TypeScript). All user-visible strings through i18n - no hardcoded text.
 
 ## Development
 
@@ -100,7 +99,7 @@ Each domain has a **domain map** in `.vorch/domain-maps/`, named after its modul
 ```bash
 pip install -e ".[dev]"
 ```
-Use the current Python interpreter directly — do not assume a virtual environment for installs, quality gates, or runtime commands. End-user installation (the public Windows/Linux `install.*` entrypoints with autostart and Desktop shapes, update, and uninstall) lives in [USAGE.md](../USAGE.md#installation); read it when you touch the installer, internal checkout setup, update, or uninstall scripts under `scripts/`. Successful installers persist checkout-local lifecycle state in `.vbot-install.json`; `cli/install_state.py` owns its schema and atomic I/O, and update/uninstall use its recorded dependency groups and Python interpreter instead of inferring the environment on every run. The file is git-ignored and contains no runtime data or credentials.
+Use the current Python interpreter directly - do not assume a virtual environment for installs, quality gates, or runtime commands. End-user installation (the public Windows/Linux `install.*` entrypoints with autostart and Desktop shapes, update, and uninstall) lives in [USAGE.md](../USAGE.md#installation); read it when you touch the installer, internal checkout setup, update, or uninstall scripts under `scripts/`. Successful installers persist checkout-local lifecycle state in `.vbot-install.json`; `cli/install_state.py` owns its schema and atomic I/O, and update/uninstall use its recorded dependency groups and Python interpreter instead of inferring the environment on every run. The file is git-ignored and contains no runtime data or credentials.
 
 **Worktree commands:** Project worktrees are managed with:
 ```bash
@@ -122,12 +121,12 @@ The primary development checkout uses its git-ignored `.vbot-worktree` marker wi
 
 **Build frontend:**
 ```bash
-cd webui && npm ci && npm run build   # Svelte → static JS/CSS
+cd webui && npm ci && npm run build   # Svelte -> static JS/CSS
 ```
 
 **Releasing:** When the user wants to release a new version, read `.vorch/workflows/release-workflow.md`.
 
-**Product data directory:** `~/.vbot` — created on first run when no explicit data directory, environment override, or checkout marker applies. `core/storage/layout.py` owns the canonical placement and creates the complete directory set plus missing `.env`/`settings.json` without overwriting either. Durable Attachments, Speech artifacts, the runtime Model DB, and Debug traces live under `artifacts/`; generated images instead live in the caller-owned `image-gen/` directory under an Identity Agent's Workspace or a Project Agent's cwd. Atomic staging and retained Bash/Sub-Agent output are distinct children of `artifacts/temp/`; Provider-owned normalized usage history lives under `statistics/provider-usage/`, while Statistics owns the disposable `statistics/session-statistics.sqlite` read model. Agents, Projects, Workspaces, Extensions, Skills, Prompts, Recall, Logs, Channels, Cron, Bootstrap, OAuth, Terminal launch history, and archives remain independent root domains; `processes/` is reserved. Existing pre-layout roots are converted explicitly with `scripts/converters/data_dir_artifacts_layout.py`; application code contains no migration or legacy-path fallback. Per-subdirectory format and retention ownership live in the relevant domain maps.
+**Product data directory:** `~/.vbot` - created on first run when no explicit data directory, environment override, or checkout marker applies. `core/storage/layout.py` owns the canonical placement and creates the complete directory set plus missing `.env`/`settings.json` without overwriting either. Durable Attachments, Speech artifacts, the runtime Model DB, and Debug traces live under `artifacts/`; generated images instead live in the caller-owned `image-gen/` directory under an Identity Agent's Workspace or a Project Agent's cwd. Atomic staging and retained Bash/Sub-Agent output are distinct children of `artifacts/temp/`; Provider-owned normalized usage history lives under `statistics/provider-usage/`, while Statistics owns the disposable `statistics/session-statistics.sqlite` read model. Agents, Projects, Workspaces, Extensions, Skills, Prompts, Recall, Logs, Channels, Cron, Bootstrap, OAuth, Terminal launch history, and archives remain independent root domains; `processes/` is reserved. Existing pre-layout roots are converted explicitly with `scripts/converters/data_dir_artifacts_layout.py`; application code contains no migration or legacy-path fallback. Per-subdirectory format and retention ownership live in the relevant domain maps.
 
 ## Testing
 
@@ -139,7 +138,7 @@ cd webui && npm ci && npm run build   # Svelte → static JS/CSS
 
 **Text assertions:** Assert a concrete string only when the text itself is a stable contract (such as a protocol or serialization token, persisted format, required marker, accessibility name, or forbidden secret/internal value) or when a test-owned sentinel proves arbitrary content is transported or rendered unchanged. Do not lock freely editable product or Agent-facing prose, Prompt sentences, Tool descriptions, error-message wording, log wording, or help copy. Prefer exception types, error codes, structured fields, schema and block identifiers, ordering, metadata, side effects, DOM roles and state, and security invariants. Validate the behavioral quality of Agent-facing wording with scenario evals rather than substring unit tests.
 
-**Quality gates:** Two scripts with the same interface — `quality.py` (backend) and `quality-frontend.py` (frontend) — each runs format → lint → type-check → test (→ build for frontend) over the paths you pass, or the whole repo with no args. The default mode auto-fixes what it can; `--check` validates without changing source files, and `-h` / `--help` describes the complete command contract. Both modes map each source file to its mirrored test file(s) and filter tool noise down to an agent-readable verdict (auto-fixed files per step in the default mode, forwarded failure output, a final verdict line). **These gates are the contract — prefer them over invoking `pytest`/`ruff`/`vitest`/etc. by hand.** Reach for a raw tool only when you genuinely suspect the gate withheld something you need (a filtered-away failure, a test that didn't get mapped); when that happens, append a note to `.vorch/FLAGGED.md` so the gate can be improved to surface it, rather than letting hand-invocation become the habit. Full mechanics — the pipeline, the source→test mapping rules, the output contract, and where to fix a gate gap — live in `scripts/README-quality.md`.
+**Quality gates:** Two scripts with the same interface - `quality.py` (backend) and `quality-frontend.py` (frontend) - each runs format -> lint -> type-check -> test (-> build for frontend) over the paths you pass, or the whole repo with no args. The default mode auto-fixes what it can; `--check` validates without changing source files, and `-h` / `--help` describes the complete command contract. Both modes map each source file to its mirrored test file(s) and filter tool noise down to an agent-readable verdict (auto-fixed files per step in the default mode, forwarded failure output, a final verdict line). **These gates are the contract - prefer them over invoking `pytest`/`ruff`/`vitest`/etc. by hand.** Reach for a raw tool only when you genuinely suspect the gate withheld something you need (a filtered-away failure, a test that didn't get mapped); when that happens, append a note to `.vorch/FLAGGED.md` so the gate can be improved to surface it, rather than letting hand-invocation become the habit. Full mechanics - the pipeline, the source->test mapping rules, the output contract, and where to fix a gate gap - live in `scripts/README-quality.md`.
 ```bash
 python scripts/quality.py [--check] [paths...]           # Backend
 python scripts/quality-frontend.py [--check] [paths...]  # Frontend
@@ -179,6 +178,6 @@ Use this section only for important strategic decisions, unusual global constrai
 - **Slash Commands and Skill triggers are separate layers.** A string or exactly one `TextBlock` may be prepared as a Built-in or Extension Command before a normal Run; `/skill-name` and `$skill-name` remain Skill activation hints that preserve the original user message (`$` autocomplete is Skill-only). `CommandDispatcher` owns every Command end to end and returns surface-neutral feedback, navigation, Runs, and resource changes; RPC and Channels only validate/address ingress and project that result. Extensions may register Commands through API v2 and can use the narrow Command context to start a same-address follow-up Run without receiving Runtime. The Command framework and full roster live in `.vorch/domain-maps/chat/commands.md`; the automatic background reflection cadence lives in `.vorch/domain-maps/automation.md`.
 - **Deployment target is Linux, development happens on Windows.** The server is meant to run headless on a Raspberry Pi (64-bit OS); desktop/CLI accessors stay on Windows. Keep core/server/cli code platform-neutral: no Windows-only assumptions without a POSIX branch, path validation accepts/rejects both path flavors on any host, and process management branches on `os.name`/`sys.platform`.
 - **Model-facing filesystem paths use forward slashes.** Whenever vBot authors a known filesystem-path value for a System Prompt, attachment note, Tool result, automatic delivery note, or other Model context, render only its separators as `/` (`C:/...`, `//server/share/...`) at that boundary. Keep `pathlib.Path`, native OS calls, persisted path values, incoming Tool arguments, URLs, arbitrary subprocess output, and opaque exception text unchanged; never apply a global text replacement.
-- **Busy-session queueing is owned by `ChatRunManager`.** Browser sends, `TriggerService`, and subagent routing all enqueue into the same in-memory FIFO per `(project_id, agent_id, session_id)` — the project anchor is part of the run/queue key because session ids may be caller-chosen and repeat across anchors. WebUI queue state is only a server-backed projection and must not become a second source of truth.
+- **Busy-session queueing is owned by `ChatRunManager`.** Browser sends, `TriggerService`, and subagent routing all enqueue into the same in-memory FIFO per `(project_id, agent_id, session_id)` - the project anchor is part of the run/queue key because session ids may be caller-chosen and repeat across anchors. WebUI queue state is only a server-backed projection and must not become a second source of truth.
 - **Rooting is explicit and separate from Session ownership.** An Identity Agent's nullable `root_project_id` selects the working Project; admitted work snapshots it as internal `working_project_id`. `project_id` remains the Session/address anchor (`None` for every Identity Agent), Workspace remains identity/Memory state, and Workspace/cwd path equality has no meaning.
 - **Reasoning replay is minimal by design: send back exactly the reasoning state the target Model needs to work optimally - no more, no less.** Opaque reasoning meta (`reasoning_details`, signed/encrypted blocks) goes back when the wire makes it contract state; visible reasoning text goes back only when the Model demonstrably benefits from it on that specific wire. "Send everything to be safe" is never the correct reading of a replay default: every unnecessary replayed token costs context, speed, and money without improving the Model. A replay decision without a documented per-Provider reason (in `.vorch/domain-maps/providers/<provider>.md`) is a gap to verify and fix, not a safe baseline.

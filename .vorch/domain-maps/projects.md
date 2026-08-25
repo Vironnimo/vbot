@@ -41,7 +41,7 @@ Core terms such as Project, Agent, Session, Tool, Skill, and Provider live in `.
 - A Project selects exactly one supported `source_format` (`opencode` or `claude`) for Agent and Project Skill discovery. Format detection may report multiple candidates but does not make a Project multi-format.
 - `project.json` owns Project defaults, capability ceilings, Skill selections, and per-Agent overrides. Runtime resolution combines those values with freshly read repository Agent configuration and global defaults; it does not copy repository Agent files into the Project Anchor.
 - Project Agent Session paths are anchored at `<data-dir>/projects/<project-id>/agents/<agent-id>/sessions/`. Agent and Project identifiers crossing filesystem boundaries must pass the shared path-segment validation.
-- Without a vBot Tool override, Tool access starts from the Project Tool Whitelist and repository Agent denials remove names. A present `overrides.<agent_id>.tool_access` completely replaces that repository Tool policy and may intentionally re-enable a repo-denied Tool, while still remaining inside the Project Tool Whitelist; mode `none` can remove everything and `selected` can narrow the Project Agent to one Tool. Skill access follows `(project skills ∪ enabled bundled skills ∪ enabled global skills) − disabled project skills − {"*"}`; neither repository configuration nor an Agent override may exceed Project ceilings.
+- Without a vBot Tool override, Tool access starts from the Project Tool Whitelist and repository Agent denials remove names. A present `overrides.<agent_id>.tool_access` completely replaces that repository Tool policy and may intentionally re-enable a repo-denied Tool, while still remaining inside the Project Tool Whitelist; mode `none` can remove everything and `selected` can narrow the Project Agent to one Tool. Skill access follows `(project skills + enabled bundled skills + enabled global skills) - disabled project skills - {"*"}`; neither repository configuration nor an Agent override may exceed Project ceilings.
 - Models, temperature, thinking effort, and compaction policy use the same canonical validators as global settings. Do not create Project-local validation rules or bypass the shared usable-model gate.
 
 ## Ownership Routing
@@ -63,8 +63,8 @@ Core terms such as Project, Agent, Session, Tool, Skill, and Provider live in `.
 
 ## References
 
-Read these only when your task matches — not by default.
+Read these only when your task matches - not by default.
 
-- Changing `project.json`, Project CRUD/RPC mutations, overrides, paths, anchor seeding, or archive/removal behavior → `projects/configuration.md`
-- Changing repository scanning, source-format mappings, format detection, Agent collisions, or scan findings → `projects/scanning.md`
-- Changing Project Agent resolution, model/scalar fallback, effective-config provenance, capability ceilings, or working-Project helpers → `projects/resolution.md`
+- Changing `project.json`, Project CRUD/RPC mutations, overrides, paths, anchor seeding, or archive/removal behavior -> `projects/configuration.md`
+- Changing repository scanning, source-format mappings, format detection, Agent collisions, or scan findings -> `projects/scanning.md`
+- Changing Project Agent resolution, model/scalar fallback, effective-config provenance, capability ceilings, or working-Project helpers -> `projects/resolution.md`

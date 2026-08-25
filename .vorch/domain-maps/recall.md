@@ -14,7 +14,7 @@ The cross-cutting Session and Tool terms live in `.vorch/GLOSSARY.md`.
 
 ### Semantic Recall
 **Definition:** Meaning-based session search using vector embeddings instead of keyword matching. A session about "vehicles" can match a query for "cars" because their vectors are nearby in embedding space, even though they share no literal words. Enabled by switching `recall.backend` to `vector` and configuring a `text_embedding` model.
-**Not:** Keyword search (substring or FTS — that's what `jsonl_scan` and `sqlite_fts` do). Not curated memory or session browsing. Semantic recall retrieves past sessions by meaning, not by exact terms.
+**Not:** Keyword search (substring or FTS - that's what `jsonl_scan` and `sqlite_fts` do). Not curated memory or session browsing. Semantic recall retrieves past sessions by meaning, not by exact terms.
 
 ### Passage
 **Definition:** A source-derived, overlapping span of eligible canonical Message text used as the retrieval and fusion unit by semantic and Hybrid search. It carries stable Message boundaries and source offsets so a result can point back to exact canonical Messages.

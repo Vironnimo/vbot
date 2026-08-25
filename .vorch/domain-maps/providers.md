@@ -67,31 +67,32 @@ Core terms Provider, Model, and Reasoning live in `.vorch/GLOSSARY.md`; Model-DB
 - A mostly OpenAI Chat Completions-compatible Provider extends `OpenAICompatibleAdapter` only when it has real runtime/discovery/policy differences. A Messages-compatible branch composes `AnthropicCompatibleAdapter`; it must not compose concrete `AnthropicAdapter` and accidentally inherit Anthropic-native discovery/media/cache policy.
 - Adapters rebuild authorization headers inside retry attempts so a refreshed OAuth token is used after backoff. Do not cache raw OAuth tokens outside `TokenGetter`.
 - `NetworkError` is retryable but deliberately not Provider-specific, so it must not trigger model fallback. Only `ProviderStreamingUnsupportedError` permits Chat's streaming-to-nonstreaming fallback.
-- The output-limit context clamp (`resolve_request_output_limit` in `core/providers/providers.py`) budgets against the request's actual wire footprint. Responses-family adapters (OpenAI, xAI, GitHub Copilot) pass a wire-accurate estimate from `estimate_responses_input_tokens` (`github_copilot_responses.py`) — the rendered input items including provider-owned encrypted reasoning continuity blobs, system instructions, and rendered Tool definitions — instead of the raw persisted messages. The raw chat-message estimator would count redundant `reasoning_meta` copies (`response_output`, `reasoning_items`, `encrypted_content`) plus `content`/`tool_calls` fields that never reach the stateless Responses wire, tripping the local no-output-capacity error mid-session on long reasoning conversations. Chat Completions adapters keep the shared chat-message estimator.
-- Provider strict mode is forbidden. OpenAI Chat and every Responses-family wire (OpenAI, OpenRouter, and GitHub Copilot) must retain the explicit `strict: false` opt-out; OpenAI Responses can otherwise enable strict normalization when the field is absent. Anthropic Messages enables strict Tool use only when explicitly requested, while the Anthropic, GitHub Copilot Messages, MiniMax, Mistral, Ollama, OpenCode Go, OpenRouter Chat, GitHub Copilot Chat, and Custom Provider wires omit the unsupported or unnecessary field. Never make optional fields required, add nullable placeholders, or strip schema keywords for Provider compatibility; preserve the canonical schema and runtime enforcement.
+- The output-limit context clamp (`resolve_request_output_limit` in `core/providers/providers.py`) budgets against the request's actual wire footprint. Responses-family adapters (OpenAI, xAI, GitHub Copilot) pass a wire-accurate estimate from `estimate_responses_input_tokens` (`github_copilot_responses.py`) - the rendered input items including provider-owned encrypted reasoning continuity blobs, system instructions, and rendered Tool definitions - instead of the raw persisted messages. The raw chat-message estimator would count redundant `reasoning_meta` copies (`response_output`, `reasoning_items`, `encrypted_content`) plus `content`/`tool_calls` fields that never reach the stateless Responses wire, tripping the local no-output-capacity error mid-session on long reasoning conversations. Chat Completions adapters keep the shared chat-message estimator.
+- Provider strict mode is forbidden everywhere (see Boundaries and invariants). Responses-family wires emit the explicit `strict: false` opt-out; wires whose contract lacks the field ship the unchanged canonical schema without it. Never make optional fields required, add nullable placeholders, or strip schema keywords for Provider compatibility; preserve the canonical schema and runtime enforcement.
 - Generated Provider catalogs are refresh artifacts. Durable behavior belongs in Adapter code or verified override files, not hand edits to generated `resources/models/<provider>.json`.
 - A Provider listing that contains proven-unusable ids uses `catalog_exclusions` in its static Provider config; discovery preserves the raw response and omits only those exact ids from the usable Model projection. Do not use this as a preference allow/deny list.
 
 ## References
 
-Read these only when your task matches — not by default.
+Read these only when your task matches - not by default.
 
-- Changing Provider/Connection config, Accounts, credentials, enablement, OAuth/device flow, token storage/refresh, Connection RPCs, or local reachability → `providers/connections.md`
-- Changing Model endpoint discovery, catalog normalization, connection-scoped merge, supplementary/task feeds, refresh retry behavior, or local auto-refresh → `providers/catalog-discovery.md`
-- Changing Adapter request/response/SSE behavior, error/retry policy, reasoning, CoT replay, media support, output/context limits, or shared task HTTP plumbing → `providers/request-policy.md`
-- Changing live subscription limits, usage fetchers/parsers, caching, timeout/fail-open behavior, or `provider.usage` → `providers/usage.md`
-- Adding a Provider, Connection variant, Adapter selector, discovery normalizer, or Provider-specific map → `providers/add-a-provider.md`
-- Changing native Anthropic Messages behavior → `providers/anthropic.md`
-- Changing GitHub Copilot auth, routing, policy, or catalog metadata → `providers/github-copilot.md`
-- Changing Kimi Coding Plan/Platform Connections, reasoning replay, media, or catalog behavior → `providers/kimi.md`
-- Changing MiniMax wire, reasoning, catalog, or usage parsing → `providers/minimax.md`
-- Changing Mistral request policy or catalog normalization → `providers/mistral.md`
-- Changing Nous API-key/Portal OAuth Connections, single-use refresh, catalog policy, or request limits → `providers/nous.md`
-- Changing StepFun Direct API/Step Plan Connections, routing, request limits, or catalog policy → `providers/stepfun.md`
-- Changing Ollama native chat, local/cloud Connections, enrichment, or context enforcement → `providers/ollama.md`
-- Changing LM Studio native discovery, lazy loading, or OpenAI-compatible Chat behavior → `providers/lmstudio.md`
-- Changing OpenAI Platform or ChatGPT subscription behavior → `providers/openai.md`
-- Changing OpenCode Go's per-Model OpenAI/Messages routing → `providers/opencode-go.md`
-- Changing OpenCode Zen Connections, four-wire routing, Gemini replay/media, catalog policy, or errors → `providers/opencode-zen.md`
-- Changing OpenRouter runtime, routing, prompt caching, catalog, reasoning, or task discovery → `providers/openrouter.md`
-- Changing xAI API-key/SuperGrok auth, Responses policy, reasoning replay, media, or catalog behavior → `providers/xai.md`
+- Changing Provider/Connection config, Accounts, credentials, enablement, OAuth/device flow, token storage/refresh, Connection RPCs, or local reachability -> `providers/connections.md`
+- Changing Model endpoint discovery, catalog normalization, connection-scoped merge, supplementary/task feeds, refresh retry behavior, or local auto-refresh -> `providers/catalog-discovery.md`
+- Changing Adapter request/response/SSE behavior, error/retry policy, reasoning, CoT replay, media support, output/context limits, or shared task HTTP plumbing -> `providers/request-policy.md`
+- Changing live subscription limits, usage fetchers/parsers, caching, timeout/fail-open behavior, or `provider.usage` -> `providers/usage.md`
+- Adding a Provider, Connection variant, Adapter selector, discovery normalizer, or Provider-specific map -> `providers/add-a-provider.md`
+- Changing native Anthropic Messages behavior -> `providers/anthropic.md`
+- Changing GitHub Copilot auth, routing, policy, or catalog metadata -> `providers/github-copilot.md`
+- Changing Kimi Coding Plan/Platform Connections, reasoning replay, media, or catalog behavior -> `providers/kimi.md`
+- Changing MiniMax wire, reasoning, catalog, or usage parsing -> `providers/minimax.md`
+- Changing Mistral request policy or catalog normalization -> `providers/mistral.md`
+- Changing Nous API-key/Portal OAuth Connections, single-use refresh, catalog policy, or request limits -> `providers/nous.md`
+- Changing StepFun Direct API/Step Plan Connections, routing, request limits, or catalog policy -> `providers/stepfun.md`
+- Changing Ollama native chat, local/cloud Connections, enrichment, or context enforcement -> `providers/ollama.md`
+- Changing LM Studio native discovery, lazy loading, or OpenAI-compatible Chat behavior -> `providers/lmstudio.md`
+- Changing OpenAI Platform or ChatGPT subscription behavior -> `providers/openai.md`
+- Changing subscription (ChatGPT) image generation -> `providers/openai/codex-image.md`
+- Changing OpenCode Go's per-Model OpenAI/Messages routing -> `providers/opencode-go.md`
+- Changing OpenCode Zen Connections, four-wire routing, Gemini replay/media, catalog policy, or errors -> `providers/opencode-zen.md`
+- Changing OpenRouter runtime, routing, prompt caching, catalog, reasoning, or task discovery -> `providers/openrouter.md`
+- Changing xAI API-key/SuperGrok auth, Responses policy, reasoning replay, media, or catalog behavior -> `providers/xai.md`

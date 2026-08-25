@@ -12,25 +12,25 @@ The logs subsystem exposes application log files from `<data_dir>/logs/` for ins
 - Read snapshot result: `{ file: string, entries: ParsedLogEntry[], cursor: string }`
 - Parsed log entry:
   - `timestamp: string`
-  - `level: string` — lower-cased level such as `info`, `warn`, `error`; a line that doesn't match the header gets `level: "unknown"` with empty `timestamp`/`logger_name`
+  - `level: string` - lower-cased level such as `info`, `warn`, `error`; a line that doesn't match the header gets `level: "unknown"` with empty `timestamp`/`logger_name`
   - `logger_name: string`
   - `message: string`
-  - `continuation: string` — multiline tail such as stack traces
-  - `raw: string` — the source line(s) verbatim (continuation rows joined with `\n`), so an accessor can copy an entry exactly as written to the file; `message`/`level` are derived/normalized, `raw` is not
+  - `continuation: string` - multiline tail such as stack traces
+  - `raw: string` - the source line(s) verbatim (continuation rows joined with `\n`), so an accessor can copy an entry exactly as written to the file; `message`/`level` are derived/normalized, `raw` is not
 - Live stream entry event: `{ type: "append" | "reset", file: string, entries: ParsedLogEntry[] }`
 - Live stream catalog event: `{ type: "catalog", file: string, files: string[], default_file: string | null }`
 
 ## Interfaces
 
 - `core/utils/log_viewer.py`
-  - `LogViewer.list_files()` → `{ files, default_file }`
-  - `LogViewer.read_file(file_name)` → `{ file, entries, cursor }`
-  - `LogViewer.subscribe(file_name, cursor?)` → async generator of entry and catalog events
+  - `LogViewer.list_files()` -> `{ files, default_file }`
+  - `LogViewer.read_file(file_name)` -> `{ file, entries, cursor }`
+  - `LogViewer.subscribe(file_name, cursor?)` -> async generator of entry and catalog events
 - Server RPC
-  - `log.list` — returns the daily log catalog sorted newest-first
-  - `log.read { file }` — returns parsed entries plus a handoff cursor for one selected file
+  - `log.list` - returns the daily log catalog sorted newest-first
+  - `log.read { file }` - returns parsed entries plus a handoff cursor for one selected file
 - Server transport
-  - `GET /ws/logs?file=<name>&cursor=<cursor>` — streams append/reset events for the selected file plus catalog events when the directory's daily file list changes, and can replay the read→socket handoff gap. Invalid file name or unknown/mismatched cursor → close code `1008`.
+  - `GET /ws/logs?file=<name>&cursor=<cursor>` - streams append/reset events for the selected file plus catalog events when the directory's daily file list changes, and can replay the read->socket handoff gap. Invalid file name or unknown/mismatched cursor -> close code `1008`.
 - WebUI
   - `listLogs()` / `readLogFile()` / `subscribeLogEvents()` in `webui/src/lib/api.js`
   - `webui/src/lib/logsView.js` owns client-side selection/filter/search/sort helpers
@@ -50,7 +50,7 @@ The logs subsystem exposes application log files from `<data_dir>/logs/` for ins
 
 ## External Dependencies
 
-- `watchfiles` — `awatch` watches the whole logs *directory* (`recursive=False`) in forced-polling mode (`force_polling=True`, `poll_delay_ms=50`, `debounce=100`), not the single selected file. Timeouts are yielded for reliable watcher teardown. Empty batches compare only selected-file and log-directory metadata before lock acquisition; unchanged metadata stops there, while changed metadata triggers targeted snapshot or catalog reconciliation. Live append/reset events are derived from re-read file snapshots, while a changed sorted filename tuple emits a catalog event even when the selected file did not change — this polling setup is deliberate for reliable Windows behavior and naturally covers daily rollover.
+- `watchfiles` - `awatch` watches the whole logs *directory* (`recursive=False`) in forced-polling mode (`force_polling=True`, `poll_delay_ms=50`, `debounce=100`), not the single selected file. Timeouts are yielded for reliable watcher teardown. Empty batches compare only selected-file and log-directory metadata before lock acquisition; unchanged metadata stops there, while changed metadata triggers targeted snapshot or catalog reconciliation. Live append/reset events are derived from re-read file snapshots, while a changed sorted filename tuple emits a catalog event even when the selected file did not change - this polling setup is deliberate for reliable Windows behavior and naturally covers daily rollover.
 
 ## Constraints & Gotchas
 
@@ -61,4 +61,4 @@ The logs subsystem exposes application log files from `<data_dir>/logs/` for ins
 - **Watcher lifecycle is per-file and ref-counted.** One watcher task per file, shared by all subscribers; it starts on the first subscriber and stops when the last one leaves. `aclose()` (called on server shutdown with a 1 s timeout) tears down every watcher. Snapshots are read and diffed under a single async lock.
 - **Cursor handoff is the no-gap guarantee.** `read_file` stores a one-shot handoff snapshot under a fresh UUID `cursor`, keyed per file (only the file's latest cursor is retained; total handoffs bounded to `MAX_READ_HANDOFFS = 32`, oldest pruned). `subscribe(cursor)` pops it and emits the missed append/reset diff *before* live events; `subscribe(cursor=None)` falls back to popping the file's latest stored cursor. A cursor is single-use; an unknown or file-mismatched cursor raises `ValueError`. This is what prevents losing lines appended between `log.read` and the socket connecting.
 - A WebUI log-stream reconnect reloads the catalog before re-reading and re-subscribing, preserving a still-valid selection and discovering files created while disconnected. A catalog or file-read failure during that recovery keeps the view in `reconnecting` and schedules the next bounded-backoff attempt; only selection change, teardown, or a successful replacement stream ends that retry chain.
-- **One shared `LogViewer` instance.** It lives on `app.state.log_viewer` and is shared by `log.read` (RPC) and `/ws/logs`; the RPC helper lazily creates and caches it if missing. The cursor handoff only works because both paths hit the same instance — never instantiate a `LogViewer` per request or per connection.
+- **One shared `LogViewer` instance.** It lives on `app.state.log_viewer` and is shared by `log.read` (RPC) and `/ws/logs`; the RPC helper lazily creates and caches it if missing. The cursor handoff only works because both paths hit the same instance - never instantiate a `LogViewer` per request or per connection.
