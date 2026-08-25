@@ -664,7 +664,9 @@ async def test_recurring_job_stops_after_consecutive_run_failures(
 ) -> None:
     service, trigger_service = make_service(tmp_path)
     monkeypatch.setattr(cron_module, "MAX_CONSECUTIVE_CRON_FAILURES", 2)
-    trigger_service.trigger_run.side_effect = RuntimeError("provider unavailable")
+    # The Run is admitted and then fails - execution failures count.
+    run = SimpleNamespace(id="run-one", wait=AsyncMock(side_effect=RuntimeError("boom")))
+    trigger_service.trigger_run.return_value = run
     job = service.create_job(
         agent_id="agent-one",
         prompt="Health check",
@@ -679,8 +681,39 @@ async def test_recurring_job_stops_after_consecutive_run_failures(
     updated = service.get_job(job.id)
     assert updated.status == "failed"
     assert updated.last_outcome == "failed"
-    assert updated.last_error == "provider unavailable"
+    assert updated.last_error == "boom"
     assert updated.consecutive_failures == 2
+
+
+@pytest.mark.asyncio
+async def test_pre_admission_trigger_failures_do_not_stop_a_recurring_job(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A fire that never admitted a Run is not a job execution failure.
+
+    Regression: trigger errors (full Queue, shutdown window) used to advance
+    ``consecutive_failures``, so five capacity rejections silently killed a
+    recurring job that never ran at all. The error must stay visible without
+    burning the fatal budget.
+    """
+    service, trigger_service = make_service(tmp_path)
+    monkeypatch.setattr(cron_module, "MAX_CONSECUTIVE_CRON_FAILURES", 2)
+    trigger_service.trigger_run.side_effect = RuntimeError("queue limit reached")
+    job = service.create_job(
+        agent_id="agent-one",
+        prompt="Health check",
+        schedule_type="cron",
+        cron_expression="0 9 * * *",
+    )
+
+    for _ in range(5):
+        assert await service._trigger_job_run(job) is False
+
+        updated = service.get_job(job.id)
+        assert updated.status == "active"
+        assert updated.consecutive_failures == 0
+        assert updated.last_outcome == "failed"
+        assert updated.last_error == "queue limit reached"
 
 
 @pytest.mark.asyncio

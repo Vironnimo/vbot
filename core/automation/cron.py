@@ -1076,6 +1076,7 @@ class CronService:
                 latest.session_id,
                 f" project={latest.project_id}" if latest.project_id else "",
             )
+            run: Any | None = None
             try:
                 run = await self._trigger_service.trigger_run(
                     latest.agent_id,
@@ -1103,6 +1104,19 @@ class CronService:
             except asyncio.CancelledError:
                 raise
             except Exception as error:
+                if run is None:
+                    # Pre-admission failure - the Run never started. A full Queue
+                    # or a shutdown window must not burn a recurring job's
+                    # five-strike execution-failure budget; once jobs keep their
+                    # own fire-claim retry via the False return either way.
+                    self._record_trigger_failure(job.id, error)
+                    _LOGGER.error(
+                        "Cron job trigger failed before admission for job=%s: %s",
+                        job.id,
+                        error,
+                        exc_info=(type(error), error, error.__traceback__),
+                    )
+                    return False
                 self._record_run_failure(job.id, error)
                 self._finalize_exhausted_job(job.id)
                 _LOGGER.error(
@@ -1137,6 +1151,21 @@ class CronService:
             job.consecutive_failures >= MAX_CONSECUTIVE_CRON_FAILURES
         ):
             job.status = "failed"
+        self._jobs[job_id] = job
+        self._save_jobs_after_fire(job_id)
+
+    def _record_trigger_failure(self, job_id: str, error: BaseException) -> None:
+        """Record a pre-admission trigger failure without execution accounting.
+
+        The Run never started, so ``consecutive_failures`` must not advance and a
+        recurring job must not fatal-stop over capacity or shutdown windows. The
+        error stays visible on the job for operators.
+        """
+        job = self._jobs.get(job_id)
+        if job is None:
+            return
+        job.last_outcome = "failed"
+        job.last_error = _truncate_error(str(error) or type(error).__name__)
         self._jobs[job_id] = job
         self._save_jobs_after_fire(job_id)
 
