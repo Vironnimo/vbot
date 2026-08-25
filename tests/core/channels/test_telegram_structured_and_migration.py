@@ -11,6 +11,7 @@ import pytest
 
 import core.channels.engine as engine_module
 import core.channels.telegram as telegram_module
+from core.sessions import SessionAddress
 from tests.core.channels.telegram_test_support import (
     CHANNEL_REPLY_SURFACE,
     drain_chat_queue,
@@ -185,7 +186,9 @@ async def test_dm_start_command_triggers_internal_greeting_run(
     bot.send_message.assert_awaited_once_with(chat_id=12345, text="Hi, I'm vBot!")
 
     # The instruction is persisted as a note, not as a user message.
-    messages = chat_sessions.get("assistant", session_id).load()
+    messages = chat_sessions.get(
+        SessionAddress(project_id=None, agent_id="assistant", session_id=session_id)
+    ).load()
     assert not any(message.role == "user" for message in messages)
     await adapter.stop()
 
@@ -294,18 +297,24 @@ async def test_chat_migration_swaps_allowlist_bridges_session_and_confirms(
     persister.assert_called_once_with("-500", "-100500")
 
     # The new chat id's anchor points at the old conversation's session.
-    new_anchor_metadata = chat_sessions.get_metadata("assistant", "ch-tg-assistant--100500")
+    new_anchor_metadata = chat_sessions.get_metadata(
+        SessionAddress(project_id=None, agent_id="assistant", session_id="ch-tg-assistant--100500")
+    )
     assert new_anchor_metadata[engine_module.ACTIVE_SESSION_METADATA_KEY] == old_anchor
 
     # The live session's channel sidecar targets the new chat id.
-    session_metadata = chat_sessions.get_metadata("assistant", old_anchor)
+    session_metadata = chat_sessions.get_metadata(
+        SessionAddress(project_id=None, agent_id="assistant", session_id=old_anchor)
+    )
     assert session_metadata["platform_conv_id"] == "-100500"
     assert session_metadata["last_reply_target"]["platform_target"] == "-100500"
 
     # The model learns about the migration through a session note.
     notes = [
         message.content
-        for message in chat_sessions.get("assistant", old_anchor).load()
+        for message in chat_sessions.get(
+            SessionAddress(project_id=None, agent_id="assistant", session_id=old_anchor)
+        ).load()
         if message.role == "note"
     ]
     assert any("migrated" in (content or "") for content in notes)
@@ -354,7 +363,9 @@ async def test_chat_migration_second_event_is_noop(
     persister.assert_called_once_with("-500", "-100500")
     assert adapter._is_chat_allowed("-100500")
     # No prior conversation existed, so no anchor session is fabricated.
-    assert not chat_sessions.exists("assistant", "ch-tg-assistant--100500")
+    assert not chat_sessions.exists(
+        SessionAddress(project_id=None, agent_id="assistant", session_id="ch-tg-assistant--100500")
+    )
     await adapter.stop()
 
 

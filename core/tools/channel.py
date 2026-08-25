@@ -17,6 +17,7 @@ from core.channels.channels import (
     ChannelNotFoundError,
 )
 from core.extensions import InteractionButton
+from core.sessions import SessionAddress
 from core.tools.arguments import optional_string, required_string
 from core.tools.tools import (
     JsonObject,
@@ -420,12 +421,11 @@ async def _record_outbound_message_note(
         # Serialize the outbound-context note against an open tool cycle on the
         # target session. The lock is task-reentrant, so this is safe even when
         # the sending Run targets its own session.
-        async with chat_sessions.write_lock(route.agent_id, route.session_id):
-            session = await run_tool_worker(
-                chat_sessions.get_or_create,
-                route.agent_id,
-                route.session_id,
-            )
+        target = SessionAddress(
+            project_id=None, agent_id=route.agent_id, session_id=route.session_id
+        )
+        async with chat_sessions.write_lock(target):
+            session = await run_tool_worker(chat_sessions.get_or_create, target)
             await run_tool_worker(
                 session.add_note,
                 _outbound_message_note(sender_agent_id, message, files),
@@ -500,7 +500,10 @@ def _send_target_from_session_metadata(
     context: ToolContext,
     channel_id: str,
 ) -> tuple[str, str | None] | None:
-    metadata = chat_sessions.get_metadata(context.agent_id, context.session_id)
+    address = SessionAddress(
+        project_id=None, agent_id=context.agent_id, session_id=context.session_id
+    )
+    metadata = chat_sessions.get_metadata(address)
     last_reply_target = metadata.get("last_reply_target")
     if not isinstance(last_reply_target, dict):
         return None

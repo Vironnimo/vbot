@@ -37,6 +37,7 @@ from core.chat.messages import ChatMessage, usage_token_is_estimated
 from core.chat.model_resolution import parse_bare_model
 from core.sessions import (
     FORK_SOURCE_META_KEY,
+    SessionAddress,
     SessionReadBatch,
     SessionReadCursor,
     skill_context_note_name,
@@ -173,9 +174,7 @@ class SessionSource(Protocol):
         self, agent_id: str, project_id: str | None = None
     ) -> list[JsonObject]: ...
 
-    def get(
-        self, agent_id: str, session_id: str, project_id: str | None = None
-    ) -> SessionHandle: ...
+    def get(self, address: SessionAddress) -> SessionHandle: ...
 
 
 # ---------------------------------------------------------------------------
@@ -1808,7 +1807,10 @@ class StatisticsService:
         aggregator.register_scope(agent_id=agent_id, project_id=project_id)
         for summary in resolved_summaries:
             session_id = str(summary["id"])
-            messages = self._sessions.get(agent_id, session_id, project_id).load()
+            address = SessionAddress(
+                project_id=project_id, agent_id=agent_id, session_id=session_id
+            )
+            messages = self._sessions.get(address).load()
             aggregator.process_session(display_key, session_id, messages, summary)
 
     def _scan_run_activity_scope(
@@ -1831,7 +1833,10 @@ class StatisticsService:
             session_id = str(summary["id"])
             title = summary.get("title")
             session_title = title if isinstance(title, str) and title else None
-            messages = self._sessions.get(agent_id, session_id, project_id).load()
+            address = SessionAddress(
+                project_id=project_id, agent_id=agent_id, session_id=session_id
+            )
+            messages = self._sessions.get(address).load()
             activity_messages = _session_activity_messages(messages, summary)
             group: list[ChatMessage] = []
             for message in activity_messages:

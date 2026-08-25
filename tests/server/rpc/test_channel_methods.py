@@ -9,6 +9,7 @@ from unittest.mock import Mock
 import pytest
 
 from core.channels import ChannelConfig, ChannelConfigError, DeniedChatFacts
+from core.sessions import SessionAddress
 from server.events import ServerEventBus
 from server.rpc.methods import dispatch_rpc
 
@@ -692,8 +693,7 @@ async def test_session_link_channel_sets_metadata_without_writing_reminder() -> 
 
     assert response == {"ok": True, "result": {"ok": True}}
     chat_sessions.set_metadata.assert_called_once_with(
-        "assistant",
-        "session-1",
+        SessionAddress(project_id=None, agent_id="assistant", session_id="session-1"),
         {
             "persisted": "value",
             "source_channel_id": "tg-assistant",

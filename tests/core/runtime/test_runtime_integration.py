@@ -26,6 +26,7 @@ from core.recall import (
     VectorRecallBackend,
 )
 from core.runtime.runtime import Runtime
+from core.sessions import SessionAddress
 from core.tools.read import READ_TOOL_DESCRIPTION, READ_TOOL_PARAMETERS
 from core.utils.config import Config
 from core.utils.errors import ConfigError
@@ -795,7 +796,14 @@ def test_runtime_start_preserves_existing_agents(config: Config) -> None:
     agents = runtime.agents.list()
     assert [agent.id for agent in agents] == ["coder"]
     assert agents[0].current_session_id
-    assert runtime.chat_sessions.get("coder", agents[0].current_session_id).load() == []
+    assert (
+        runtime.chat_sessions.get(
+            SessionAddress(
+                project_id=None, agent_id="coder", session_id=agents[0].current_session_id
+            )
+        ).load()
+        == []
+    )
 
 
 def test_runtime_stop_then_start_reloads_registries(config: Config) -> None:

@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import cast
 
 from core.chat.messages import ChatMessage
-from core.sessions import ChatSession, ChatSessionManager
+from core.sessions import ChatSession, ChatSessionManager, SessionAddress
 from core.statistics import AgentDirectory, StatisticsService
 from core.tools import tool_success
 
@@ -193,7 +193,9 @@ def test_metadata_change_updates_index_without_loading_transcript(
 ) -> None:
     service, manager, session = _service(tmp_path)
     service.report()
-    manager.set_title("main", session.id, "Renamed")
+    manager.set_title(
+        SessionAddress(project_id=None, agent_id="main", session_id=session.id), "Renamed"
+    )
 
     def fail_load_since(self, cursor=None):
         raise AssertionError("metadata-only update should not load the transcript")
@@ -247,7 +249,7 @@ def test_deleted_session_is_pruned_from_index(tmp_path: Path) -> None:
     service, manager, session = _service(tmp_path)
     service.report()
 
-    manager.delete("main", session.id)
+    manager.delete(SessionAddress(project_id=None, agent_id="main", session_id=session.id))
     report = service.report()
 
     assert report.overview.total_sessions == 0

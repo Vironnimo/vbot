@@ -40,6 +40,7 @@ from tests.core.chat.chat_loop_support import (
     build_chat_loop,
     persisted_dict_roles,
     persisted_roles,
+    session_address,
 )
 
 JsonObject = dict[str, Any]
@@ -97,7 +98,7 @@ async def test_streaming_mode_emits_deltas_then_final_authoritative_message(
     )
 
     run = next(iter(runtime.chat_runs._runs.values()))
-    messages = runtime.chat_sessions.get("coder", "session-one").load()
+    messages = runtime.chat_sessions.get(session_address("coder", "session-one")).load()
     assert assistant.content == "Hello world"
     assert assistant.reasoning == "Think"
     assert persisted_roles(messages) == ["user", "assistant"]
@@ -147,7 +148,9 @@ async def test_streaming_mode_emits_provider_heartbeat_without_model_output(
     heartbeat = next(event for event in run.events if event.type == PROVIDER_HEARTBEAT_EVENT)
     assert heartbeat.payload["state"] == "waiting_for_model_delta"
     assert heartbeat.payload["idle_seconds"] >= 0
-    assert persisted_roles(runtime.chat_sessions.get("coder", "session-one").load()) == [
+    assert persisted_roles(
+        runtime.chat_sessions.get(session_address("coder", "session-one")).load()
+    ) == [
         "user",
         "assistant",
     ]
@@ -201,7 +204,8 @@ async def test_streaming_mode_persists_only_final_messages_and_continues_tool_lo
 
     run = next(iter(runtime.chat_runs._runs.values()))
     persisted = [
-        message.to_dict() for message in runtime.chat_sessions.get("coder", "session-one").load()
+        message.to_dict()
+        for message in runtime.chat_sessions.get(session_address("coder", "session-one")).load()
     ]
     assert assistant.content == "Sunny"
     assert persisted_dict_roles(persisted) == ["user", "assistant", "tool", "assistant"]
@@ -297,7 +301,7 @@ async def test_streaming_mode_malformed_tool_arguments_return_tool_failure_and_c
     result = await loop.send("coder", "Build it", session_id="session-one")
 
     run = next(iter(runtime.chat_runs._runs.values()))
-    messages = runtime.chat_sessions.get("coder", "session-one").load()
+    messages = runtime.chat_sessions.get(session_address("coder", "session-one")).load()
 
     assert result.content == "The Tool Call was malformed, so I stopped."
     assert run.status == RunStatus.COMPLETED
@@ -311,7 +315,12 @@ async def test_streaming_mode_malformed_tool_arguments_return_tool_failure_and_c
     assert failure["error"]["code"] == "malformed_tool_arguments"
     assert failure["error"]["retryable"] is False
     assert not (tmp_path / "todo.html").exists()
-    assert await recover_continuation(runtime.chat_sessions.get("coder", "session-one")) is None
+    assert (
+        await recover_continuation(
+            runtime.chat_sessions.get(session_address("coder", "session-one"))
+        )
+        is None
+    )
     assert [event.type for event in run.events][-1] == "run_completed"
 
 
@@ -339,7 +348,7 @@ async def test_streaming_mode_missing_finish_delta_continues_after_visible_parti
     )
 
     run = next(iter(runtime.chat_runs._runs.values()))
-    messages = runtime.chat_sessions.get("coder", "session-one").load()
+    messages = runtime.chat_sessions.get(session_address("coder", "session-one")).load()
 
     # The partial boundary remains durable while a fresh Model step continues
     # the same Run without replaying the original visible output.
@@ -383,7 +392,7 @@ async def test_streaming_transport_error_after_finish_keeps_completed_answer(
     )
 
     run = next(iter(runtime.chat_runs._runs.values()))
-    messages = runtime.chat_sessions.get("coder", "session-one").load()
+    messages = runtime.chat_sessions.get(session_address("coder", "session-one")).load()
     persisted_assistant = next(message for message in messages if message.role == "assistant")
 
     assert assistant.content == "Complete answer"
@@ -430,7 +439,7 @@ async def test_streaming_tool_finish_survives_late_transport_error(tmp_path: Pat
     )
 
     run = next(iter(runtime.chat_runs._runs.values()))
-    persisted = runtime.chat_sessions.get("coder", "session-one").load()
+    persisted = runtime.chat_sessions.get(session_address("coder", "session-one")).load()
 
     assert assistant.content == "Sunny"
     assert persisted_roles(persisted) == ["user", "assistant", "tool", "assistant"]

@@ -8,6 +8,7 @@ from core.chat import (
     ExtensionCommandContext,
 )
 from core.runs import COMPACTION_COMPLETED_EVENT, RunKind
+from core.sessions import SessionAddress
 
 from .engine_test_support import (
     CHANNEL_REPLY_SURFACE,
@@ -360,9 +361,9 @@ async def test_handoff_follow_up_is_one_shot_and_keeps_channel_anchor(tmp_path: 
     assert transport.sent_texts == ["review reply", "source reply"]
     assert engine._config.agent_id == "assistant"
     assert (
-        chat_sessions.get_metadata("assistant", SESSION_ID).get(
-            engine_module.ACTIVE_SESSION_METADATA_KEY
-        )
+        chat_sessions.get_metadata(
+            SessionAddress(project_id=None, agent_id="assistant", session_id=SESSION_ID)
+        ).get(engine_module.ACTIVE_SESSION_METADATA_KEY)
         is None
     )
     assert trigger_mock.await_args is not None
@@ -382,16 +383,23 @@ async def test_new_session_command_starts_fresh_session_and_redirects_followups(
     await engine.handle_inbound_text(make_conversation(), "/new")
     await drain(engine, 12345)
 
-    new_session_id = chat_sessions.get_metadata("assistant", SESSION_ID)[
-        engine_module.ACTIVE_SESSION_METADATA_KEY
-    ]
+    new_session_id = chat_sessions.get_metadata(
+        SessionAddress(project_id=None, agent_id="assistant", session_id=SESSION_ID)
+    )[engine_module.ACTIVE_SESSION_METADATA_KEY]
     # A distinct session, anchored to the conversation for grouping, was created.
     assert new_session_id != SESSION_ID
     assert new_session_id.startswith(f"{SESSION_ID}-")
-    assert chat_sessions.exists("assistant", new_session_id)
+    assert chat_sessions.exists(
+        SessionAddress(project_id=None, agent_id="assistant", session_id=new_session_id)
+    )
     # The previous (anchor) session is left intact and still loadable, but /new
     # does not invent a model-facing note for either session.
-    assert chat_sessions.get("assistant", SESSION_ID).load() == []
+    assert (
+        chat_sessions.get(
+            SessionAddress(project_id=None, agent_id="assistant", session_id=SESSION_ID)
+        ).load()
+        == []
+    )
     # /new confirms without triggering a run.
     assert transport.sent_texts == [engine_module._NEW_SESSION_STARTED_REPLY]
     trigger_mock.assert_not_awaited()
@@ -423,9 +431,9 @@ async def test_message_enqueued_behind_pending_new_routes_to_new_session(tmp_pat
     await engine.handle_inbound_text(make_conversation(), "right after new")
     await drain(engine, 12345)
 
-    new_session_id = chat_sessions.get_metadata("assistant", SESSION_ID)[
-        engine_module.ACTIVE_SESSION_METADATA_KEY
-    ]
+    new_session_id = chat_sessions.get_metadata(
+        SessionAddress(project_id=None, agent_id="assistant", session_id=SESSION_ID)
+    )[engine_module.ACTIVE_SESSION_METADATA_KEY]
     trigger_mock.assert_awaited_once()
     assert trigger_mock.await_args is not None
     assert trigger_mock.await_args.args[2] == new_session_id
@@ -442,16 +450,20 @@ async def test_new_session_tags_fresh_session_with_metadata_but_no_reminder(tmp_
     await engine.handle_inbound_text(make_conversation(), "/new")
     await drain(engine, 12345)
 
-    new_session_id = chat_sessions.get_metadata("assistant", SESSION_ID)[
-        engine_module.ACTIVE_SESSION_METADATA_KEY
-    ]
+    new_session_id = chat_sessions.get_metadata(
+        SessionAddress(project_id=None, agent_id="assistant", session_id=SESSION_ID)
+    )[engine_module.ACTIVE_SESSION_METADATA_KEY]
     notes = [
         message
-        for message in chat_sessions.get("assistant", new_session_id).load()
+        for message in chat_sessions.get(
+            SessionAddress(project_id=None, agent_id="assistant", session_id=new_session_id)
+        ).load()
         if message.role == "note"
     ]
     assert notes == []
-    metadata = chat_sessions.get_metadata("assistant", new_session_id)
+    metadata = chat_sessions.get_metadata(
+        SessionAddress(project_id=None, agent_id="assistant", session_id=new_session_id)
+    )
     assert metadata["source_channel_id"] == "tg-assistant"
     assert metadata["platform"] == "telegram"
     assert metadata["platform_conv_id"] == "12345"
@@ -483,7 +495,9 @@ async def test_new_session_command_refused_while_run_active(tmp_path: Path) -> N
     assert transport.sent_texts == ["A new session can be started after the current run finishes."]
     trigger_mock.assert_not_awaited()
     # No new session and no pointer: the anchor is unchanged.
-    metadata = chat_sessions.get_metadata("assistant", SESSION_ID)
+    metadata = chat_sessions.get_metadata(
+        SessionAddress(project_id=None, agent_id="assistant", session_id=SESSION_ID)
+    )
     assert engine_module.ACTIVE_SESSION_METADATA_KEY not in metadata
     await engine.stop()
 
@@ -510,7 +524,9 @@ async def test_new_session_in_one_chat_leaves_other_chat_untouched(tmp_path: Pat
         reply_surface=CHANNEL_REPLY_SURFACE,
         run_kind=RunKind.CHANNEL,
     )
-    metadata_b = chat_sessions.get_metadata("assistant", "ch-tg-assistant-67890")
+    metadata_b = chat_sessions.get_metadata(
+        SessionAddress(project_id=None, agent_id="assistant", session_id="ch-tg-assistant-67890")
+    )
     assert engine_module.ACTIVE_SESSION_METADATA_KEY not in metadata_b
     await engine.stop()
 

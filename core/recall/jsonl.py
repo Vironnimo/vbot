@@ -21,7 +21,7 @@ from core.recall.recall import (
     RecallSearchPage,
     RecallSearchRequest,
 )
-from core.sessions import ChatSessionManager, is_skill_context_note
+from core.sessions import ChatSessionManager, SessionAddress, is_skill_context_note
 
 # Roles that count as a real conversation message. Used for vector chunk
 # anchoring (which message to center a result on) and as the full set of roles
@@ -53,6 +53,15 @@ SESSION_RECALL_MATCH_MODES: tuple[RecallMatchMode, ...] = (
 )
 SESSION_RECALL_SORT_MODES: tuple[RecallOrder, ...] = ("newest", "oldest")
 SESSION_RECALL_SNIPPET_CHARS = 320
+
+
+def _session_address(request: Any, session_id: str) -> SessionAddress:
+    """Address the one Session of a recall request's scope."""
+    return SessionAddress(
+        project_id=request.project_id, agent_id=request.agent_id, session_id=session_id
+    )
+
+
 SESSION_RECALL_CONTEXT_SNIPPET_CHARS = 180
 
 # Backend-specific Agent guidance used to build the session_search Tool summary
@@ -150,7 +159,7 @@ class JsonlSessionRecallBackend:
         ranked: list[tuple[datetime, str, int, RecallSearchHit]] = []
         for summary in summaries:
             session_id = str(summary["id"])
-            messages = self.sessions.get(request.agent_id, session_id, request.project_id).load()
+            messages = self.sessions.get(_session_address(request, session_id)).load()
             for message_index, message in enumerate(messages):
                 if not message_matches_search_request(message, request):
                     continue
@@ -207,7 +216,7 @@ class JsonlSessionRecallBackend:
         fingerprint: list[str] = []
         for summary in sorted(summaries, key=lambda item: str(item.get("id", ""))):
             session_id = str(summary["id"])
-            session = self.sessions.get(request.agent_id, session_id, request.project_id)
+            session = self.sessions.get(_session_address(request, session_id))
             stat = session.path.stat()
             try:
                 metadata_stat = session.sidecar_path.stat()
@@ -258,9 +267,7 @@ class JsonlSessionRecallBackend:
         if summary is None or request.session_id is None:
             return empty_session_overview(request)
 
-        messages = self.sessions.get(
-            request.agent_id, request.session_id, request.project_id
-        ).load()
+        messages = self.sessions.get(_session_address(request, request.session_id)).load()
         eligible_indices = [
             index
             for index, message in enumerate(messages)
@@ -294,7 +301,7 @@ class JsonlSessionRecallBackend:
 
         for summary in summaries:
             session_id = str(summary["id"])
-            messages = self.sessions.get(request.agent_id, session_id, request.project_id).load()
+            messages = self.sessions.get(_session_address(request, session_id)).load()
             searched_sessions += 1
             for message_index, message in enumerate(messages):
                 if not message_matches_request(message, request):
@@ -335,9 +342,7 @@ class JsonlSessionRecallBackend:
         if summary is None or request.session_id is None or request.around_message_id is None:
             return empty_anchored_view(request)
 
-        messages = self.sessions.get(
-            request.agent_id, request.session_id, request.project_id
-        ).load()
+        messages = self.sessions.get(_session_address(request, request.session_id)).load()
         anchor_index = message_index_by_id(messages, request.around_message_id)
         if anchor_index is None:
             return empty_anchored_view(request)

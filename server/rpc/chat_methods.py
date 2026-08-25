@@ -19,6 +19,7 @@ from core.chat.content_blocks import ContentBlock
 from core.chat.file_mentions import expand_file_mentions, resolve_mention_root
 from core.projects import format_agent_address
 from core.runs import ActiveRunError, ChatRunManager, QueuedRunItem, Run, RunCancelledError
+from core.sessions import SessionAddress
 from core.tools.bash import background_bash_statuses
 from core.utils.logging import get_logger
 from core.utils.workers import BoundedWorkerPool
@@ -110,9 +111,7 @@ async def _chat_history(state: Any, params: JsonObject) -> JsonObject:
         )
         session = await _CHAT_RPC_WORKERS.run(
             state.runtime.chat_sessions.get,
-            agent_id,
-            active_session_id,
-            project_id,
+            SessionAddress(project_id=project_id, agent_id=agent_id, session_id=active_session_id),
         )
         loaded_messages = await _CHAT_RPC_WORKERS.run(session.load)
         projection = await _CHAT_RPC_WORKERS.run(

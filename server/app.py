@@ -668,10 +668,10 @@ def _register_session_title_bridge(state: Any) -> Any:
     if not callable(add_callback):
         return None
     return add_callback(
-        lambda agent_id, _session_id, _project_id: publish_resource_changed(
+        lambda address: publish_resource_changed(
             state,
             RESOURCE_KIND_SESSIONS,
-            scope={"agent_id": agent_id},
+            scope={"agent_id": address.agent_id},
         )
     )
 
@@ -689,10 +689,10 @@ def _register_session_completion_read_bridge(state: Any) -> Any:
     if not callable(add_callback):
         return None
     return add_callback(
-        lambda agent_id, _session_id, _project_id: publish_resource_changed(
+        lambda address: publish_resource_changed(
             state,
             RESOURCE_KIND_SESSIONS,
-            scope={"agent_id": agent_id},
+            scope={"agent_id": address.agent_id},
         )
     )
 

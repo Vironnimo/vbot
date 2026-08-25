@@ -19,6 +19,7 @@ from core.agents import AgentNotFoundError
 from core.chat import ChatMessage, ChatSessionManager
 from core.projects import AgentResolutionError
 from core.runs import ActiveRunError, Run, RunKind, RunNotFoundError
+from core.sessions import SessionAddress
 from core.storage import TemporaryFileManager
 from core.subagents.subagents import (
     SubAgentBatchTracker,
@@ -34,6 +35,14 @@ pytestmark = pytest.mark.asyncio
 
 JsonObject = dict[str, Any]
 SUBAGENT_TOOL_NAME = "subagent"
+
+
+def _address(
+    agent_id: str,
+    session_id: str,
+    project_id: str | None = None,
+) -> SessionAddress:
+    return SessionAddress(project_id=project_id, agent_id=agent_id, session_id=session_id)
 
 
 async def _handle_subagent(
@@ -135,8 +144,7 @@ async def test_foreground_result_keeps_handle_and_child_unread_until_parent_pers
     child_run_id = manager.started[0]["run"].id
     work_id = result["data"]["id"]
     runtime.chat_sessions.record_terminal_run(
-        "worker",
-        child_session_id,
+        _address("worker", child_session_id),
         child_run_id,
         "completed",
         "2026-07-22T10:00:00+00:00",
@@ -176,8 +184,7 @@ async def test_status_result_keeps_handle_and_child_unread_until_parent_persiste
         )
     )
     runtime.chat_sessions.record_terminal_run(
-        "worker",
-        "child-session",
+        _address("worker", "child-session"),
         "child-run",
         "completed",
         "2026-07-22T10:00:00+00:00",
@@ -573,8 +580,8 @@ async def test_identity_parent_can_spawn_qualified_project_agent(tmp_path: Path)
     assert manager.parent_run.project_id is None
     assert emitted_events[0][1]["data"]["project_id"] == "vbot"
     child_session_id = result["data"]["session_id"]
-    assert runtime.chat_sessions.get("worker", child_session_id, "vbot")
-    metadata = runtime.chat_sessions.get_metadata("worker", child_session_id, "vbot")
+    assert runtime.chat_sessions.get(_address("worker", child_session_id, "vbot"))
+    metadata = runtime.chat_sessions.get_metadata(_address("worker", child_session_id, "vbot"))
     assert metadata["subagent_parent"]["project_id"] is None
     manager.started[0]["run"].mark_completed(
         ChatMessage.assistant(model="openai/gpt-5.2", content="done")
@@ -694,7 +701,7 @@ async def test_project_subagent_parent_link_metadata_carries_project_id(
     # metadata is read back under the same project anchor.
     assert result["ok"] is True
     child_session_id = result["data"]["session_id"]
-    metadata = runtime.chat_sessions.get_metadata("worker", child_session_id, "acme")
+    metadata = runtime.chat_sessions.get_metadata(_address("worker", child_session_id, "acme"))
     assert metadata["is_subagent_session"] is True
     assert metadata["subagent_parent"] == {
         "id": result["data"]["id"],
@@ -733,7 +740,7 @@ async def test_identity_subagent_session_unchanged_and_link_project_is_none(
     assert identity_session.exists()
     assert manager.started[0]["project_id"] is None
     assert manager.started[0]["run"].project_id is None
-    metadata = runtime.chat_sessions.get_metadata("worker", child_session_id)
+    metadata = runtime.chat_sessions.get_metadata(_address("worker", child_session_id))
     assert metadata["subagent_parent"]["project_id"] is None
 
 
@@ -757,7 +764,7 @@ async def test_new_subagent_session_uses_description_as_automatic_title(tmp_path
 
     assert result["ok"] is True
     child_session_id = result["data"]["session_id"]
-    metadata = runtime.chat_sessions.get_metadata("worker", child_session_id)
+    metadata = runtime.chat_sessions.get_metadata(_address("worker", child_session_id))
     assert metadata["auto_title"] == "A" * 48
     assert metadata["auto_title_initialized"] is True
     assert runtime.chat_sessions.list_with_metadata("worker")[0]["auto_title"] == "A" * 48
@@ -783,7 +790,7 @@ async def test_new_subagent_session_title_falls_back_to_normalized_content(tmp_p
 
     assert result["ok"] is True
     child_session_id = result["data"]["session_id"]
-    metadata = runtime.chat_sessions.get_metadata("worker", child_session_id)
+    metadata = runtime.chat_sessions.get_metadata(_address("worker", child_session_id))
     assert metadata["auto_title"] == "Inspect session titles and report the complete i"
     assert len(metadata["auto_title"]) == 48
     manager.started[0]["run"].mark_completed(
@@ -798,8 +805,8 @@ async def test_continued_subagent_session_keeps_existing_titles(tmp_path: Path) 
     tracker = SubAgentBatchTracker(RecordingTriggerService())
     context = make_context()
     runtime.chat_sessions.create("worker", session_id="existing")
-    runtime.chat_sessions.set_auto_title("worker", "existing", "Original automatic title")
-    runtime.chat_sessions.set_title("worker", "existing", "Manual session title")
+    runtime.chat_sessions.set_auto_title(_address("worker", "existing"), "Original automatic title")
+    runtime.chat_sessions.set_title(_address("worker", "existing"), "Manual session title")
 
     result = await _handle_subagent(
         context,
@@ -814,7 +821,7 @@ async def test_continued_subagent_session_keeps_existing_titles(tmp_path: Path) 
     )
 
     assert result["ok"] is True
-    metadata = runtime.chat_sessions.get_metadata("worker", "existing")
+    metadata = runtime.chat_sessions.get_metadata(_address("worker", "existing"))
     assert metadata["auto_title"] == "Original automatic title"
     assert metadata["title"] == "Manual session title"
     manager.started[0]["run"].mark_completed(

@@ -116,18 +116,14 @@ def _new_prompt_cache_affinity_id() -> str:
     return uuid.uuid4().hex
 
 
-def _default_prompt_cache_affinity_id(
-    agent_id: str,
-    session_id: str,
-    project_id: str | None,
-) -> str:
+def _default_prompt_cache_affinity_id(address: SessionAddress) -> str:
     """Derive the stable initial lineage without creating a metadata sidecar."""
-    address = json.dumps(
-        [project_id, agent_id, session_id],
+    canonical = json.dumps(
+        [address.project_id, address.agent_id, address.session_id],
         ensure_ascii=False,
         separators=(",", ":"),
     ).encode("utf-8")
-    return hashlib.sha256(address).hexdigest()[:32]
+    return hashlib.sha256(canonical).hexdigest()[:32]
 
 
 def _is_prompt_cache_affinity_id(value: Any) -> bool:
@@ -140,12 +136,26 @@ def _is_prompt_cache_affinity_id(value: Any) -> bool:
 
 
 @dataclass(frozen=True)
+class SessionAddress:
+    """Immutable address of exactly one Session.
+
+    ``project_id`` is the anchor (``None`` for the Identity Agent layout),
+    ``agent_id`` the owning agent, ``session_id`` the transcript id. The
+    project anchor is part of the identity because session ids may be
+    caller-chosen and repeat across anchors. Hashable, so it keys dicts and
+    sets directly.
+    """
+
+    project_id: str | None
+    agent_id: str
+    session_id: str
+
+
+@dataclass(frozen=True)
 class SessionIdentityReferenceUpdate:
     """Exact sidecar snapshot changed by an Identity Agent rename."""
 
-    agent_id: str
-    session_id: str
-    project_id: str | None
+    address: SessionAddress
     previous_metadata: JsonObject
 
 
@@ -763,11 +773,11 @@ class ChatSessionManager:
 
     def __init__(self, data_dir: Path) -> None:
         self.data_dir = data_dir
-        self._title_changed_callbacks: list[Callable[[str, str, str | None], None]] = []
-        self._completion_read_callbacks: list[Callable[[str, str, str | None], None]] = []
+        self._title_changed_callbacks: list[Callable[[SessionAddress], None]] = []
+        self._completion_read_callbacks: list[Callable[[SessionAddress], None]] = []
 
     def add_title_changed_callback(
-        self, callback: Callable[[str, str, str | None], None]
+        self, callback: Callable[[SessionAddress], None]
     ) -> Callable[[], None]:
         """Register a display-title change callback and return its unsubscribe."""
         self._title_changed_callbacks.append(callback)
@@ -779,7 +789,7 @@ class ChatSessionManager:
         return unsubscribe
 
     def add_completion_read_callback(
-        self, callback: Callable[[str, str, str | None], None]
+        self, callback: Callable[[SessionAddress], None]
     ) -> Callable[[], None]:
         """Register a successful completion-read callback and return its unsubscribe."""
         self._completion_read_callbacks.append(callback)
@@ -804,9 +814,7 @@ class ChatSessionManager:
             return self.data_dir / "agents" / agent_id / "sessions"
         return project_sessions_dir(self.data_dir, project_id, agent_id)
 
-    def write_lock(
-        self, agent_id: str, session_id: str, project_id: str | None = None
-    ) -> _SessionWriteLock:
+    def write_lock(self, address: SessionAddress) -> _SessionWriteLock:
         """Return the shared append lock for one session's transcript file.
 
         Hold it around any append that must stay contiguous with neighbouring
@@ -816,16 +824,20 @@ class ChatSessionManager:
         project-scoped session sharing one session id resolve to different
         locks — the project anchor is part of the resolved path.
         """
-        _validate_session_id(session_id)
-        session_path = (
-            self.sessions_dir(agent_id, project_id) / f"{session_id}{SESSION_FILE_EXTENSION}"
-        )
+        _validate_session_id(address.session_id)
+        session_path = self.session_path(address)
         key = str(session_path.resolve())
         lock = ChatSessionManager._write_locks.get(key)
         if lock is None:
             lock = _SessionWriteLock()
             ChatSessionManager._write_locks[key] = lock
         return lock
+
+    def session_path(self, address: SessionAddress) -> Path:
+        """Return the canonical transcript path for one Session address."""
+        return self.sessions_dir(address.agent_id, address.project_id) / (
+            f"{address.session_id}{SESSION_FILE_EXTENSION}"
+        )
 
     def create(
         self, agent_id: str, session_id: str | None = None, project_id: str | None = None
@@ -842,85 +854,54 @@ class ChatSessionManager:
         """Create a Session without blocking an async caller on filesystem I/O."""
         return await _run_session_io(self.create, agent_id, session_id, project_id)
 
-    def exists(self, agent_id: str, session_id: str, project_id: str | None = None) -> bool:
+    def exists(self, address: SessionAddress) -> bool:
         """Return whether a valid session exists for an agent."""
         try:
-            self.get(agent_id, session_id, project_id)
+            self.get(address)
         except ChatSessionError:
             return False
         return True
 
-    async def exists_async(
-        self,
-        agent_id: str,
-        session_id: str,
-        project_id: str | None = None,
-    ) -> bool:
+    async def exists_async(self, address: SessionAddress) -> bool:
         """Check Session existence through the async storage boundary."""
-        return await _run_session_io(self.exists, agent_id, session_id, project_id)
+        return await _run_session_io(self.exists, address)
 
-    def get_or_create(
-        self, agent_id: str, session_id: str, project_id: str | None = None
-    ) -> ChatSession:
+    def get_or_create(self, address: SessionAddress) -> ChatSession:
         """Return an existing session handle or create a new one."""
-        _validate_session_id(session_id)
-        session_path = (
-            self.sessions_dir(agent_id, project_id) / f"{session_id}{SESSION_FILE_EXTENSION}"
-        )
+        _validate_session_id(address.session_id)
+        session_path = self.session_path(address)
         if session_path.exists():
             return ChatSession(session_path)
-        return self.create(agent_id, session_id=session_id, project_id=project_id)
-
-    async def get_or_create_async(
-        self,
-        agent_id: str,
-        session_id: str,
-        project_id: str | None = None,
-    ) -> ChatSession:
-        """Resolve or create a Session without blocking an async caller."""
-        return await _run_session_io(self.get_or_create, agent_id, session_id, project_id)
-
-    def get(self, agent_id: str, session_id: str, project_id: str | None = None) -> ChatSession:
-        """Return a session handle for an existing agent session."""
-        _validate_session_id(session_id)
-        session_path = (
-            self.sessions_dir(agent_id, project_id) / f"{session_id}{SESSION_FILE_EXTENSION}"
+        return self.create(
+            address.agent_id, session_id=address.session_id, project_id=address.project_id
         )
+
+    async def get_or_create_async(self, address: SessionAddress) -> ChatSession:
+        """Resolve or create a Session without blocking an async caller."""
+        return await _run_session_io(self.get_or_create, address)
+
+    def get(self, address: SessionAddress) -> ChatSession:
+        """Return a session handle for an existing agent session."""
+        _validate_session_id(address.session_id)
+        session_path = self.session_path(address)
         if not session_path.exists():
-            raise ChatSessionError(f"session does not exist: {session_id}")
+            raise ChatSessionError(f"session does not exist: {address.session_id}")
         return ChatSession(session_path)
 
-    async def get_async(
-        self,
-        agent_id: str,
-        session_id: str,
-        project_id: str | None = None,
-    ) -> ChatSession:
+    async def get_async(self, address: SessionAddress) -> ChatSession:
         """Resolve an existing Session through the async storage boundary."""
-        return await _run_session_io(self.get, agent_id, session_id, project_id)
+        return await _run_session_io(self.get, address)
 
-    def get_metadata(
-        self, agent_id: str, session_id: str, project_id: str | None = None
-    ) -> JsonObject:
+    def get_metadata(self, address: SessionAddress) -> JsonObject:
         """Load session metadata from sidecar JSON or return an empty object."""
-        session = self.get(agent_id, session_id, project_id)
+        session = self.get(address)
         return self._load_sidecar(session)
 
-    async def get_metadata_async(
-        self,
-        agent_id: str,
-        session_id: str,
-        project_id: str | None = None,
-    ) -> JsonObject:
+    async def get_metadata_async(self, address: SessionAddress) -> JsonObject:
         """Read Session metadata without blocking the Event Loop."""
-        return await _run_session_io(self.get_metadata, agent_id, session_id, project_id)
+        return await _run_session_io(self.get_metadata, address)
 
-    def prompt_cache_affinity_id(
-        self,
-        agent_id: str,
-        session_id: str,
-        project_id: str | None = None,
-    ) -> str:
+    def prompt_cache_affinity_id(self, address: SessionAddress) -> str:
         """Return the Session's stable, provider-neutral prompt-cache lineage.
 
         Sessions created before the first metadata write derive an opaque id
@@ -929,39 +910,30 @@ class ChatSessionManager:
         source of a fork byte-for-byte untouched while still letting the fork
         inherit the exact affinity the source resolves.
         """
-        metadata = self.get_metadata(agent_id, session_id, project_id)
+        metadata = self.get_metadata(address)
         stored = metadata.get(PROMPT_CACHE_AFFINITY_META_KEY)
         if stored is None:
-            return _default_prompt_cache_affinity_id(agent_id, session_id, project_id)
+            return _default_prompt_cache_affinity_id(address)
         if not isinstance(stored, str) or not _is_prompt_cache_affinity_id(stored):
-            raise ChatSessionError(f"invalid prompt cache affinity id for session: {session_id}")
+            raise ChatSessionError(
+                f"invalid prompt cache affinity id for session: {address.session_id}"
+            )
         return stored
 
-    def rotate_prompt_cache_affinity_id(
-        self,
-        agent_id: str,
-        session_id: str,
-        project_id: str | None = None,
-    ) -> str:
+    def rotate_prompt_cache_affinity_id(self, address: SessionAddress) -> str:
         """Start and persist a fresh prompt-cache epoch for one Session."""
         affinity_id = _new_prompt_cache_affinity_id()
-        metadata = self.get_metadata(agent_id, session_id, project_id)
+        metadata = self.get_metadata(address)
         metadata[PROMPT_CACHE_AFFINITY_META_KEY] = affinity_id
-        self.set_metadata(agent_id, session_id, metadata, project_id)
+        self.set_metadata(address, metadata)
         return affinity_id
 
-    def set_metadata(
-        self,
-        agent_id: str,
-        session_id: str,
-        data: dict[str, Any],
-        project_id: str | None = None,
-    ) -> None:
+    def set_metadata(self, address: SessionAddress, data: dict[str, Any]) -> None:
         """Persist session metadata to sidecar JSON using atomic replace."""
         if not isinstance(data, dict):
             raise ChatSessionError("session metadata must be an object")
 
-        session = self.get(agent_id, session_id, project_id)
+        session = self.get(address)
         sidecar_path = session.sidecar_path
 
         try:
@@ -972,39 +944,29 @@ class ChatSessionManager:
         try:
             atomic_write_text(sidecar_path, serialized)
         except OSError as exc:
-            raise ChatSessionError(f"failed to write metadata for session: {session_id}") from exc
+            raise ChatSessionError(
+                f"failed to write metadata for session: {address.session_id}"
+            ) from exc
 
-    async def set_metadata_async(
-        self,
-        agent_id: str,
-        session_id: str,
-        data: dict[str, Any],
-        project_id: str | None = None,
-    ) -> None:
+    async def set_metadata_async(self, address: SessionAddress, data: dict[str, Any]) -> None:
         """Persist Session metadata without blocking the Event Loop."""
-        await _run_session_io(self.set_metadata, agent_id, session_id, data, project_id)
+        await _run_session_io(self.set_metadata, address, data)
 
-    def record_run_kind(
-        self,
-        agent_id: str,
-        session_id: str,
-        run_kind: RunKind,
-        project_id: str | None = None,
-    ) -> None:
+    def record_run_kind(self, address: SessionAddress, run_kind: RunKind) -> None:
         """Record one distinct Run origin category on its owning Session."""
         if not isinstance(run_kind, RunKind):
             raise ChatSessionError("session run kind must be a RunKind")
-        metadata = self.get_metadata(agent_id, session_id, project_id)
+        metadata = self.get_metadata(address)
         raw_run_kinds = metadata.get(SESSION_RUN_KINDS_META_KEY, [])
         valid_run_kinds = {kind.value for kind in RunKind}
         if not isinstance(raw_run_kinds, list) or any(
             not isinstance(value, str) or value not in valid_run_kinds for value in raw_run_kinds
         ):
-            raise ChatSessionError(f"invalid run kinds for session: {session_id}")
+            raise ChatSessionError(f"invalid run kinds for session: {address.session_id}")
         if run_kind.value in raw_run_kinds:
             return
         metadata[SESSION_RUN_KINDS_META_KEY] = [*raw_run_kinds, run_kind.value]
-        self.set_metadata(agent_id, session_id, metadata, project_id)
+        self.set_metadata(address, metadata)
 
     def retarget_identity_agent_references(
         self,
@@ -1021,8 +983,8 @@ class ChatSessionManager:
         _validate_agent_id(new_agent_id)
         updates: list[SessionIdentityReferenceUpdate] = []
         try:
-            for agent_id, session_id, project_id in self._all_session_owners():
-                metadata = self.get_metadata(agent_id, session_id, project_id)
+            for address in self._all_session_owners():
+                metadata = self.get_metadata(address)
                 parent = metadata.get("subagent_parent")
                 if (
                     not isinstance(parent, dict)
@@ -1035,13 +997,11 @@ class ChatSessionManager:
                 updated_parent["agent_id"] = new_agent_id
                 metadata["subagent_parent"] = updated_parent
                 update = SessionIdentityReferenceUpdate(
-                    agent_id=agent_id,
-                    session_id=session_id,
-                    project_id=project_id,
+                    address=address,
                     previous_metadata=previous_metadata,
                 )
                 updates.append(update)
-                self.set_metadata(agent_id, session_id, metadata, project_id)
+                self.set_metadata(address, metadata)
         except Exception:
             self.restore_identity_agent_references(tuple(updates))
             raise
@@ -1053,20 +1013,17 @@ class ChatSessionManager:
     ) -> None:
         """Restore exact sidecars changed by a reference retarget."""
         for update in reversed(updates):
-            self.set_metadata(
-                update.agent_id,
-                update.session_id,
-                update.previous_metadata,
-                update.project_id,
-            )
+            self.set_metadata(update.address, update.previous_metadata)
 
-    def _all_session_owners(self) -> builtins.list[tuple[str, str, str | None]]:
+    def _all_session_owners(self) -> builtins.list[SessionAddress]:
         """Enumerate canonical live Session transcripts in both storage layouts."""
-        owners: builtins.list[tuple[str, str, str | None]] = []
+        owners: builtins.list[SessionAddress] = []
         for path in sorted((self.data_dir / "agents").glob("*/sessions/*.jsonl")):
             agent_id = path.parent.parent.name
             if is_valid_agent_id(agent_id) and _is_valid_session_id(path.stem):
-                owners.append((agent_id, path.stem, None))
+                owners.append(
+                    SessionAddress(project_id=None, agent_id=agent_id, session_id=path.stem)
+                )
 
         projects_root = self.data_dir / "projects"
         if projects_root.exists():
@@ -1078,17 +1035,19 @@ class ChatSessionManager:
                     and is_valid_agent_id(agent_id)
                     and _is_valid_session_id(path.stem)
                 ):
-                    owners.append((agent_id, path.stem, project_id))
+                    owners.append(
+                        SessionAddress(
+                            project_id=project_id, agent_id=agent_id, session_id=path.stem
+                        )
+                    )
         return owners
 
     def record_terminal_run(
         self,
-        agent_id: str,
-        session_id: str,
+        address: SessionAddress,
         run_id: str,
         status: str,
         timestamp: str,
-        project_id: str | None = None,
     ) -> None:
         """Persist the latest terminal Run as an unread completion.
 
@@ -1105,10 +1064,10 @@ class ChatSessionManager:
         if not isinstance(timestamp, str) or not timestamp:
             raise ChatSessionError("terminal run timestamp must be a non-empty string")
 
-        session = self.get(agent_id, session_id, project_id)
+        session = self.get(address)
         with self._activity_lock:
             if not session.path.exists():
-                raise ChatSessionError(f"session does not exist: {session_id}")
+                raise ChatSessionError(f"session does not exist: {address.session_id}")
             activity = self._load_activity(session)
             activity["latest_completion"] = {
                 "run_id": run_id,
@@ -1117,13 +1076,7 @@ class ChatSessionManager:
             }
             self._write_activity(session, activity)
 
-    def mark_terminal_run_read(
-        self,
-        agent_id: str,
-        session_id: str,
-        run_id: str,
-        project_id: str | None = None,
-    ) -> JsonObject:
+    def mark_terminal_run_read(self, address: SessionAddress, run_id: str) -> JsonObject:
         """Acknowledge exactly the terminal Run the accessor displayed.
 
         A stale acknowledgement never clears a newer completion: the caller
@@ -1132,10 +1085,10 @@ class ChatSessionManager:
         """
         if not isinstance(run_id, str) or not run_id:
             raise ChatSessionError("read run id must be a non-empty string")
-        session = self.get(agent_id, session_id, project_id)
+        session = self.get(address)
         with self._activity_lock:
             if not session.path.exists():
-                raise ChatSessionError(f"session does not exist: {session_id}")
+                raise ChatSessionError(f"session does not exist: {address.session_id}")
             activity = self._load_activity(session)
             latest = _valid_latest_completion(activity)
             marked_read = False
@@ -1150,32 +1103,16 @@ class ChatSessionManager:
             payload = _completion_activity_payload(activity)
             payload["marked_read"] = marked_read
         if marked_read:
-            self._notify_completion_read(agent_id, session_id, project_id)
+            self._notify_completion_read(address)
         return payload
 
     async def mark_terminal_run_read_async(
-        self,
-        agent_id: str,
-        session_id: str,
-        run_id: str,
-        project_id: str | None = None,
+        self, address: SessionAddress, run_id: str
     ) -> JsonObject:
         """Acknowledge a completion without blocking the Event Loop."""
-        return await _run_session_io(
-            self.mark_terminal_run_read,
-            agent_id,
-            session_id,
-            run_id,
-            project_id,
-        )
+        return await _run_session_io(self.mark_terminal_run_read, address, run_id)
 
-    def set_title(
-        self,
-        agent_id: str,
-        session_id: str,
-        title: str,
-        project_id: str | None = None,
-    ) -> str | None:
+    def set_title(self, address: SessionAddress, title: str) -> str | None:
         """Set or clear a session's display title in its metadata sidecar.
 
         The single seam every titling path goes through — the rename RPC, the
@@ -1190,39 +1127,25 @@ class ChatSessionManager:
         sidecar (never the transcript), so it needs no :meth:`write_lock`.
         """
         normalized_title = _normalize_session_title(title)
-        metadata = dict(self.get_metadata(agent_id, session_id, project_id))
+        metadata = dict(self.get_metadata(address))
         previous_title = metadata.get(SESSION_TITLE_KEY)
         if normalized_title is None:
             metadata.pop(SESSION_TITLE_KEY, None)
         else:
             metadata[SESSION_TITLE_KEY] = normalized_title
-        self.set_metadata(agent_id, session_id, metadata, project_id)
+        self.set_metadata(address, metadata)
         if previous_title != normalized_title:
-            self._notify_title_changed(agent_id, session_id, project_id)
+            self._notify_title_changed(address)
         return normalized_title
 
-    async def set_title_async(
-        self,
-        agent_id: str,
-        session_id: str,
-        title: str,
-        project_id: str | None = None,
-    ) -> str | None:
+    async def set_title_async(self, address: SessionAddress, title: str) -> str | None:
         """Set a manual Session title without blocking the Event Loop."""
-        return await _run_session_io(
-            self.set_title,
-            agent_id,
-            session_id,
-            title,
-            project_id,
-        )
+        return await _run_session_io(self.set_title, address, title)
 
     def set_auto_title(
         self,
-        agent_id: str,
-        session_id: str,
+        address: SessionAddress,
         title: str,
-        project_id: str | None = None,
         *,
         initialized: bool = True,
     ) -> str | None:
@@ -1235,7 +1158,7 @@ class ChatSessionManager:
         reveals the best automatic title again.
         """
         normalized_title = _normalize_session_title(title)
-        metadata = dict(self.get_metadata(agent_id, session_id, project_id))
+        metadata = dict(self.get_metadata(address))
         previous_title = metadata.get(SESSION_AUTO_TITLE_KEY)
         if normalized_title is None:
             metadata.pop(SESSION_AUTO_TITLE_KEY, None)
@@ -1243,56 +1166,46 @@ class ChatSessionManager:
             metadata[SESSION_AUTO_TITLE_KEY] = normalized_title
         if initialized:
             metadata[SESSION_AUTO_TITLE_INITIALIZED_KEY] = True
-        self.set_metadata(agent_id, session_id, metadata, project_id)
+        self.set_metadata(address, metadata)
         if previous_title != normalized_title:
-            self._notify_title_changed(agent_id, session_id, project_id)
+            self._notify_title_changed(address)
         return normalized_title
 
-    def mark_auto_title_initialized(
-        self,
-        agent_id: str,
-        session_id: str,
-        project_id: str | None = None,
-    ) -> None:
+    def mark_auto_title_initialized(self, address: SessionAddress) -> None:
         """Record that an existing Session must not be backfilled later."""
-        metadata = dict(self.get_metadata(agent_id, session_id, project_id))
+        metadata = dict(self.get_metadata(address))
         metadata[SESSION_AUTO_TITLE_INITIALIZED_KEY] = True
-        self.set_metadata(agent_id, session_id, metadata, project_id)
+        self.set_metadata(address, metadata)
 
-    def _notify_title_changed(self, agent_id: str, session_id: str, project_id: str | None) -> None:
+    def _notify_title_changed(self, address: SessionAddress) -> None:
         for callback in list(self._title_changed_callbacks):
             try:
-                callback(agent_id, session_id, project_id)
+                callback(address)
             except Exception:
                 _LOGGER.warning(
                     "Session title change callback failed (agent=%s session=%s)",
-                    agent_id,
-                    session_id,
+                    address.agent_id,
+                    address.session_id,
                     exc_info=True,
                 )
 
-    def _notify_completion_read(
-        self, agent_id: str, session_id: str, project_id: str | None
-    ) -> None:
+    def _notify_completion_read(self, address: SessionAddress) -> None:
         for callback in list(self._completion_read_callbacks):
             try:
-                callback(agent_id, session_id, project_id)
+                callback(address)
             except Exception:
                 _LOGGER.warning(
                     "Session completion-read callback failed (agent=%s session=%s)",
-                    agent_id,
-                    session_id,
+                    address.agent_id,
+                    address.session_id,
                     exc_info=True,
                 )
 
     async def move(
         self,
-        source_agent_id: str,
-        session_id: str,
-        target_agent_id: str,
+        source: SessionAddress,
+        target: SessionAddress,
         *,
-        source_project_id: str | None = None,
-        target_project_id: str | None = None,
         strip_meta_keys: frozenset[str] = frozenset(),
     ) -> ChatSession:
         """Relocate a session's transcript and sidecars to another home.
@@ -1315,85 +1228,75 @@ class ChatSessionManager:
         guard, not this storage lock, prevents new Runs from writing either home
         during the transition.
         """
-        _validate_session_id(session_id)
-        async with self.write_lock(source_agent_id, session_id, source_project_id):
-            return await _run_session_io(
-                self._move_storage,
-                source_agent_id,
-                session_id,
-                target_agent_id,
-                source_project_id,
-                target_project_id,
-                strip_meta_keys,
-            )
+        _validate_session_id(source.session_id)
+        _validate_session_id(target.session_id)
+        async with self.write_lock(source):
+            return await _run_session_io(self._move_storage, source, target, strip_meta_keys)
 
     def _move_storage(
         self,
-        source_agent_id: str,
-        session_id: str,
-        target_agent_id: str,
-        source_project_id: str | None,
-        target_project_id: str | None,
+        source: SessionAddress,
+        target: SessionAddress,
         strip_meta_keys: frozenset[str],
     ) -> ChatSession:
-        source = self.get(source_agent_id, session_id, source_project_id)
-        destination_dir = self.sessions_dir(target_agent_id, target_project_id)
-        destination_path = destination_dir / f"{session_id}{SESSION_FILE_EXTENSION}"
+        source_session = self.get(source)
+        destination_dir = self.sessions_dir(target.agent_id, target.project_id)
+        destination_path = self.session_path(target)
         if destination_path.exists():
-            raise ChatSessionError(f"destination session already exists: {session_id}")
+            raise ChatSessionError(f"destination session already exists: {target.session_id}")
 
-        source_sidecar = source.sidecar_path
-        source_activity = source.activity_path
-        source_continuation = source.continuation_path
+        source_sidecar = source_session.sidecar_path
+        source_activity = source_session.activity_path
+        source_continuation = source_session.continuation_path
         had_sidecar = source_sidecar.exists()
         had_continuation = source_continuation.exists()
-        sidecar_data = self._load_sidecar(source)
+        sidecar_data = self._load_sidecar(source_session)
 
         destination_dir.mkdir(parents=True, exist_ok=True)
         with self._activity_lock:
             had_activity = source_activity.exists()
             try:
-                os.replace(source.path, destination_path)
+                os.replace(source_session.path, destination_path)
             except OSError as exc:
-                raise ChatSessionError(f"failed to move session transcript: {session_id}") from exc
+                raise ChatSessionError(
+                    f"failed to move session transcript: {source.session_id}"
+                ) from exc
             if had_activity:
                 destination_activity = destination_path.with_name(
-                    f"{session_id}{SESSION_ACTIVITY_FILE_SUFFIX}"
+                    f"{target.session_id}{SESSION_ACTIVITY_FILE_SUFFIX}"
                 )
                 try:
                     os.replace(source_activity, destination_activity)
                 except OSError as exc:
                     raise ChatSessionError(
-                        f"failed to move session activity: {session_id}"
+                        f"failed to move session activity: {source.session_id}"
                     ) from exc
 
         if had_sidecar:
             stripped = {
                 key: value for key, value in sidecar_data.items() if key not in strip_meta_keys
             }
-            self.set_metadata(target_agent_id, session_id, stripped, target_project_id)
+            self.set_metadata(target, stripped)
             source_sidecar.unlink(missing_ok=True)
 
         if had_continuation:
             destination_continuation = destination_path.with_name(
-                f"{session_id}{CONTINUATION_FILE_SUFFIX}"
+                f"{target.session_id}{CONTINUATION_FILE_SUFFIX}"
             )
             try:
                 os.replace(source_continuation, destination_continuation)
             except OSError as exc:
                 raise ChatSessionError(
-                    f"failed to move continuation journal: {session_id}"
+                    f"failed to move continuation journal: {source.session_id}"
                 ) from exc
 
         return ChatSession(destination_path)
 
     async def fork(
         self,
-        source_agent_id: str,
-        session_id: str,
+        source: SessionAddress,
         *,
         target_agent_id: str | None = None,
-        source_project_id: str | None = None,
         target_project_id: str | None = None,
         strip_meta_keys: frozenset[str] = frozenset(),
     ) -> ChatSession:
@@ -1413,34 +1316,28 @@ class ChatSessionManager:
         source sidecar (empty when the source had none), drops
         ``strip_meta_keys`` (caller-owned policy, so the sessions domain imports
         no chat/channel constant, same reasoning as :meth:`move`), and always
-        gains the ``fork_source`` provenance key recording the source
-        ``(agent, session, project)``, the fork timestamp, and the copied
-        message count — so a fork is self-describing even when the source
-        carried no sidecar.
+        gains the ``fork_source`` provenance key recording the source address,
+        the fork timestamp, and the copied message count — so a fork is
+        self-describing even when the source carried no sidecar.
         """
-        _validate_session_id(session_id)
-        destination_agent_id = target_agent_id or source_agent_id
-        async with self.write_lock(source_agent_id, session_id, source_project_id):
+        _validate_session_id(source.session_id)
+        async with self.write_lock(source):
             return await _run_session_io(
                 self._fork_storage,
-                source_agent_id,
-                session_id,
-                destination_agent_id,
-                source_project_id,
+                source,
+                target_agent_id or source.agent_id,
                 target_project_id,
                 strip_meta_keys,
             )
 
     def _fork_storage(
         self,
-        source_agent_id: str,
-        session_id: str,
+        source_address: SessionAddress,
         destination_agent_id: str,
-        source_project_id: str | None,
         target_project_id: str | None,
         strip_meta_keys: frozenset[str],
     ) -> ChatSession:
-        source = self.get(source_agent_id, session_id, source_project_id)
+        source = self.get(source_address)
         destination_dir = self.sessions_dir(destination_agent_id, target_project_id)
         fork_session = ChatSession.create(destination_dir)
 
@@ -1449,7 +1346,9 @@ class ChatSessionManager:
                 transcript_bytes = source.path.read_bytes()
                 fork_session.path.write_bytes(transcript_bytes)
             except OSError as exc:
-                raise ChatSessionError(f"failed to copy session transcript: {session_id}") from exc
+                raise ChatSessionError(
+                    f"failed to copy session transcript: {source_address.session_id}"
+                ) from exc
             message_count = transcript_bytes.count(SESSION_LINE_ENDING_BYTES)
 
             source_metadata = self._load_sidecar(source)
@@ -1457,35 +1356,34 @@ class ChatSessionManager:
                 key: value for key, value in source_metadata.items() if key not in strip_meta_keys
             }
             same_prompt_scope = (
-                destination_agent_id == source_agent_id and target_project_id == source_project_id
+                destination_agent_id == source_address.agent_id
+                and target_project_id == source_address.project_id
             )
             if same_prompt_scope:
                 stored_affinity = source_metadata.get(PROMPT_CACHE_AFFINITY_META_KEY)
                 if stored_affinity is None:
-                    stored_affinity = _default_prompt_cache_affinity_id(
-                        source_agent_id,
-                        session_id,
-                        source_project_id,
-                    )
+                    stored_affinity = _default_prompt_cache_affinity_id(source_address)
                 elif not _is_prompt_cache_affinity_id(stored_affinity):
                     raise ChatSessionError(
-                        f"invalid prompt cache affinity id for session: {session_id}"
+                        f"invalid prompt cache affinity id for session: {source_address.session_id}"
                     )
                 forked_metadata[PROMPT_CACHE_AFFINITY_META_KEY] = stored_affinity
             else:
                 forked_metadata[PROMPT_CACHE_AFFINITY_META_KEY] = _new_prompt_cache_affinity_id()
             forked_metadata[FORK_SOURCE_META_KEY] = {
-                "agent_id": source_agent_id,
-                "session_id": session_id,
-                "project_id": source_project_id,
+                "agent_id": source_address.agent_id,
+                "session_id": source_address.session_id,
+                "project_id": source_address.project_id,
                 "forked_at": _format_timestamp(datetime.now(UTC)),
                 "message_count": message_count,
             }
             self.set_metadata(
-                destination_agent_id,
-                fork_session.id,
+                SessionAddress(
+                    project_id=target_project_id,
+                    agent_id=destination_agent_id,
+                    session_id=fork_session.id,
+                ),
                 forked_metadata,
-                target_project_id,
             )
         except Exception:
             fork_session.delete()
@@ -1563,7 +1461,7 @@ class ChatSessionManager:
         """List completion activity through the async storage boundary."""
         return await _run_session_io(self.list_completion_activity, agent_id, project_id)
 
-    def delete(self, agent_id: str, session_id: str, project_id: str | None = None) -> None:
+    def delete(self, address: SessionAddress) -> None:
         """Hard-delete one agent session's transcript and sidecars.
 
         Low-level primitive (unlink transcript + sidecar). The session-deletion
@@ -1571,11 +1469,11 @@ class ChatSessionManager:
         removed session stays recoverable. Kept as the genuine "remove the
         files" capability that tests and staleness cleanup use.
         """
-        session = self.get(agent_id, session_id, project_id)
+        session = self.get(address)
         with self._activity_lock:
             session.delete()
 
-    async def archive(self, agent_id: str, session_id: str, project_id: str | None = None) -> Path:
+    async def archive(self, address: SessionAddress) -> Path:
         """Archive one session's transcript and sidecars instead of deleting them.
 
         The deletion feature's storage step: mirrors ``AgentStore``/
@@ -1590,23 +1488,13 @@ class ChatSessionManager:
         caller holds a Run Admission Guard across this await; that guard, not
         this storage lock, prevents new Runs from recreating the file.
         """
-        _validate_session_id(session_id)
-        async with self.write_lock(agent_id, session_id, project_id):
-            return await _run_session_io(
-                self._archive_storage,
-                agent_id,
-                session_id,
-                project_id,
-            )
+        _validate_session_id(address.session_id)
+        async with self.write_lock(address):
+            return await _run_session_io(self._archive_storage, address)
 
-    def _archive_storage(
-        self,
-        agent_id: str,
-        session_id: str,
-        project_id: str | None,
-    ) -> Path:
-        source = self.get(agent_id, session_id, project_id)
-        archive_dir = self._archive_dir(agent_id, project_id)
+    def _archive_storage(self, address: SessionAddress) -> Path:
+        source = self.get(address)
+        archive_dir = self._archive_dir(address.agent_id, address.project_id)
         archive_dir.mkdir(parents=True, exist_ok=True)
         archived_transcript = archive_dir / source.path.name
         archived_sidecar = archive_dir / source.sidecar_path.name
@@ -1627,7 +1515,7 @@ class ChatSessionManager:
                 os.replace(source.path, archived_transcript)
             except OSError as exc:
                 raise ChatSessionError(
-                    f"failed to archive session transcript: {session_id}"
+                    f"failed to archive session transcript: {address.session_id}"
                 ) from exc
             if had_activity:
                 os.replace(source.activity_path, archived_activity)

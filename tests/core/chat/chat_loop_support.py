@@ -23,6 +23,7 @@ from core.providers.reasoning import (
 from core.runs import (
     ChatRunManager,
 )
+from core.sessions import SessionAddress
 from core.tools import (
     ToolRegistry,
 )
@@ -77,6 +78,13 @@ def build_chat_loop(runtime: Any, **kwargs: Any) -> ChatLoop:
         ),
     )
     return ChatLoop(dependencies, **kwargs)
+
+
+def session_address(
+    agent_id: str, session_id: str, project_id: str | None = None
+) -> SessionAddress:
+    """Build the SessionAddress for direct ChatSessionManager calls in tests."""
+    return SessionAddress(project_id=project_id, agent_id=agent_id, session_id=session_id)
 
 
 def persisted_roles(messages: list[ChatMessage]) -> list[str]:

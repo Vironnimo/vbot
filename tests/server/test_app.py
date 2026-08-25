@@ -15,7 +15,7 @@ from core.automation.cron import CronService
 from core.chat import ChatLoop
 from core.runs import ChatRunManager, RunKind, RunStatus
 from core.runtime import Runtime
-from core.sessions import ChatSessionManager
+from core.sessions import ChatSessionManager, SessionAddress
 from core.utils.config import Config
 from core.utils.server_control import CONTROL_SHUTDOWN_PATH, CONTROL_TOKEN_HEADER
 from server.app import (
@@ -462,7 +462,10 @@ def test_session_title_bridge_publishes_sessions_invalidation(tmp_path: Path) ->
     unsubscribe = _register_session_title_bridge(state)
 
     try:
-        sessions.set_auto_title("coder", "session-one", "Local title")
+        sessions.set_auto_title(
+            SessionAddress(project_id=None, agent_id="coder", session_id="session-one"),
+            "Local title",
+        )
     finally:
         if callable(unsubscribe):
             unsubscribe()
@@ -478,8 +481,7 @@ def test_session_completion_read_bridge_publishes_sessions_invalidation(tmp_path
     sessions = ChatSessionManager(tmp_path)
     sessions.create("coder", session_id="session-one")
     sessions.record_terminal_run(
-        "coder",
-        "session-one",
+        SessionAddress(project_id=None, agent_id="coder", session_id="session-one"),
         "run-one",
         "completed",
         "2026-07-20T10:00:00+00:00",
@@ -491,7 +493,9 @@ def test_session_completion_read_bridge_publishes_sessions_invalidation(tmp_path
     unsubscribe = _register_session_completion_read_bridge(state)
 
     try:
-        sessions.mark_terminal_run_read("coder", "session-one", "run-one")
+        sessions.mark_terminal_run_read(
+            SessionAddress(project_id=None, agent_id="coder", session_id="session-one"), "run-one"
+        )
     finally:
         if callable(unsubscribe):
             unsubscribe()

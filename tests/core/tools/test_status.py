@@ -22,7 +22,7 @@ from core.chat.commands import STATUS_PLACEHOLDER, build_status_text
 from core.models.models import Capabilities, Model, ModelRegistry, ReasoningCapabilities
 from core.projects import AgentResolutionError, AgentResolver, ConfigAgent, ProjectStore
 from core.runs import ChatRunManager, Run
-from core.sessions import ChatSessionManager
+from core.sessions import ChatSessionManager, SessionAddress
 from core.tools import ToolAccess, ToolContext, ToolRegistry, tool_failure
 from core.tools.status import STATUS_TOOL_NAME, STATUS_TOOL_PARAMETERS, register_status_tool
 
@@ -125,14 +125,14 @@ class _StubSessions:
         self._session = _StubSession(messages)
         self.calls: list[tuple[str, str, str | None]] = []
 
-    def get(self, agent_id: str, session_id: str, project_id: str | None = None) -> _StubSession:
-        self.calls.append((agent_id, session_id, project_id))
+    def get(self, address: SessionAddress) -> _StubSession:
+        self.calls.append((address.agent_id, address.session_id, address.project_id))
         return self._session
 
 
 class _NotFoundSessions:
-    def get(self, _agent_id: str, session_id: str, _project_id: str | None = None) -> _StubSession:
-        raise ChatSessionError(f"session does not exist: {session_id}")
+    def get(self, address: SessionAddress) -> _StubSession:
+        raise ChatSessionError(f"session does not exist: {address.session_id}")
 
 
 class _StubModels:

@@ -40,11 +40,20 @@ from core.recall.recall import (
     RecallSearchRequest,
     RecallSortMode,
 )
-from core.sessions import is_skill_context_note
+from core.sessions import SessionAddress, is_skill_context_note
 
 _INDEX_DIR_NAME = "recall"
 _INDEX_FILE_NAME = "session_index.sqlite"
 _SQLITE_BUSY_TIMEOUT_MS = 1000
+
+
+def _session_address(request: Any, session_id: str) -> SessionAddress:
+    """Address the one Session of a search request's scope."""
+    return SessionAddress(
+        project_id=request.project_id, agent_id=request.agent_id, session_id=session_id
+    )
+
+
 # Bump when the on-disk index schema changes; mismatched indexes are dropped and rebuilt.
 # v2 → rows are project-scoped (``project_id`` column in the index keys) so the
 #      same session UUID under a project vs. the global scope never collides.
@@ -197,7 +206,7 @@ class SqliteFtsRecallBackend(JsonlSessionRecallBackend):
         )
         for summary in summaries:
             session_id = str(summary["id"])
-            messages = self.sessions.get(request.agent_id, session_id, request.project_id).load()
+            messages = self.sessions.get(_session_address(request, session_id)).load()
             for message_index, message in enumerate(messages):
                 if not message_matches_search_request(message, request):
                     continue
@@ -304,7 +313,7 @@ class SqliteFtsRecallBackend(JsonlSessionRecallBackend):
         ranked: list[tuple[float, str, str, RecallSearchHit]] = []
         for summary in summaries:
             session_id = str(summary["id"])
-            messages = self.sessions.get(request.agent_id, session_id, request.project_id).load()
+            messages = self.sessions.get(_session_address(request, session_id)).load()
             for passage in build_session_passages(messages):
                 if not _passage_in_time_range(
                     passage.start_timestamp,
@@ -375,7 +384,7 @@ class SqliteFtsRecallBackend(JsonlSessionRecallBackend):
                 continue
             if session_id not in messages_by_session:
                 messages_by_session[session_id] = self.sessions.get(
-                    request.agent_id, session_id, request.project_id
+                    _session_address(request, session_id)
                 ).load()
             messages = messages_by_session[session_id]
             message_index = message_index_by_id(messages, str(row["message_id"]))
@@ -559,7 +568,7 @@ class SqliteFtsRecallBackend(JsonlSessionRecallBackend):
         scope = _scope(request.project_id)
         for summary in summaries:
             session_id = str(summary["id"])
-            session = self.sessions.get(agent_id, session_id, request.project_id)
+            session = self.sessions.get(_session_address(request, session_id))
             stat = session.path.stat()
             indexed = connection.execute(
                 """
@@ -913,9 +922,7 @@ class SqliteFtsRecallBackend(JsonlSessionRecallBackend):
                 continue
             if session_id not in messages_by_session:
                 messages_by_session[session_id] = self.sessions.get(
-                    request.agent_id,
-                    session_id,
-                    request.project_id,
+                    _session_address(request, session_id)
                 ).load()
             messages = messages_by_session[session_id]
             message_index = message_index_by_id(messages, str(row["message_id"]))

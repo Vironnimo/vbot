@@ -18,6 +18,7 @@ from core.sessions import (
     ChatSession,
     ChatSessionError,
     ChatSessionManager,
+    SessionAddress,
     is_skill_context_note,
     latest_project_tool_context_id,
     project_tool_context_id,
@@ -36,14 +37,17 @@ from core.tools.skill import SKILL_STATUS_LOADED, SKILL_TOOL_NAME
 FIXED_TIMESTAMP = datetime(2026, 5, 3, 14, 30, tzinfo=UTC)
 
 
+def _address(agent_id: str, session_id: str, project_id: str | None = None) -> SessionAddress:
+    return SessionAddress(project_id=project_id, agent_id=agent_id, session_id=session_id)
+
+
 def test_identity_agent_reference_retarget_updates_only_live_unqualified_parent_links(
     tmp_path,
 ) -> None:
     manager = ChatSessionManager(tmp_path)
     manager.create("child", session_id="identity-child")
     manager.set_metadata(
-        "child",
-        "identity-child",
+        _address("child", "identity-child"),
         {
             "subagent_parent": {
                 "agent_id": "coder",
@@ -59,8 +63,7 @@ def test_identity_agent_reference_retarget_updates_only_live_unqualified_parent_
     )
     manager.create("project-child", session_id="qualified-parent", project_id="vbot")
     manager.set_metadata(
-        "project-child",
-        "qualified-parent",
+        _address("project-child", "qualified-parent", project_id="vbot"),
         {
             "subagent_parent": {
                 "agent_id": "coder",
@@ -69,17 +72,16 @@ def test_identity_agent_reference_retarget_updates_only_live_unqualified_parent_
                 "project_id": "vbot",
             }
         },
-        project_id="vbot",
     )
 
     updates = manager.retarget_identity_agent_references("coder", "researcher")
 
     assert len(updates) == 1
-    identity_metadata = manager.get_metadata("child", "identity-child")
+    identity_metadata = manager.get_metadata(_address("child", "identity-child"))
     assert identity_metadata["subagent_parent"]["agent_id"] == "researcher"
     assert identity_metadata[FORK_SOURCE_META_KEY]["agent_id"] == "coder"
     assert (
-        manager.get_metadata("project-child", "qualified-parent", project_id="vbot")[
+        manager.get_metadata(_address("project-child", "qualified-parent", project_id="vbot"))[
             "subagent_parent"
         ]["agent_id"]
         == "coder"
@@ -87,7 +89,7 @@ def test_identity_agent_reference_retarget_updates_only_live_unqualified_parent_
 
     manager.restore_identity_agent_references(updates)
 
-    assert manager.get_metadata("child", "identity-child") == updates[0].previous_metadata
+    assert manager.get_metadata(_address("child", "identity-child")) == updates[0].previous_metadata
 
 
 class TestChatSession:
@@ -326,7 +328,7 @@ class TestChatSession:
         valid_content = session.path.read_bytes()
         session.path.write_bytes(valid_content + b'{"id":"partial"')
 
-        async with manager.write_lock("coder", "session-one"):
+        async with manager.write_lock(_address("coder", "session-one")):
             messages = await session.load_async()
 
         assert [loaded_message.to_dict() for loaded_message in messages] == [message.to_dict()]
@@ -357,7 +359,7 @@ class TestChatSession:
         monkeypatch.setattr(sessions_module, "_write_all", blocking_write_all)
 
         async def append_second() -> None:
-            async with manager.write_lock("coder", "session-one"):
+            async with manager.write_lock(_address("coder", "session-one")):
                 await session.append_async(second)
 
         append_task = asyncio.create_task(append_second())
@@ -706,14 +708,14 @@ class TestChatSessionManager:
         manager = ChatSessionManager(tmp_path)
         manager.create("coder", session_id="session-one")
 
-        session = manager.get("coder", "session-one")
+        session = manager.get(_address("coder", "session-one"))
 
         assert session.id == "session-one"
 
     def test_get_or_create_creates_new_session_when_missing(self, tmp_path):
         manager = ChatSessionManager(tmp_path)
 
-        session = manager.get_or_create("coder", "session-one")
+        session = manager.get_or_create(_address("coder", "session-one"))
 
         assert session.id == "session-one"
         assert session.path.exists()
@@ -722,7 +724,7 @@ class TestChatSessionManager:
         manager = ChatSessionManager(tmp_path)
         created = manager.create("coder", session_id="session-one")
 
-        session = manager.get_or_create("coder", "session-one")
+        session = manager.get_or_create(_address("coder", "session-one"))
 
         assert session.path == created.path
 
@@ -730,24 +732,24 @@ class TestChatSessionManager:
         manager = ChatSessionManager(tmp_path)
         manager.create("coder", session_id="session-one")
 
-        assert manager.exists("coder", "session-one") is True
+        assert manager.exists(_address("coder", "session-one")) is True
 
     def test_exists_returns_false_for_missing_session(self, tmp_path):
         manager = ChatSessionManager(tmp_path)
 
-        assert manager.exists("coder", "missing") is False
+        assert manager.exists(_address("coder", "missing")) is False
 
     def test_get_or_create_rejects_invalid_session_id(self, tmp_path):
         manager = ChatSessionManager(tmp_path)
 
         with pytest.raises(ChatSessionError):
-            manager.get_or_create("coder", "../outside")
+            manager.get_or_create(_address("coder", "../outside"))
 
     def test_get_metadata_returns_empty_object_when_sidecar_missing(self, tmp_path):
         manager = ChatSessionManager(tmp_path)
         manager.create("coder", session_id="session-one")
 
-        metadata = manager.get_metadata("coder", "session-one")
+        metadata = manager.get_metadata(_address("coder", "session-one"))
 
         assert metadata == {}
 
@@ -756,26 +758,26 @@ class TestChatSessionManager:
         manager.create("coder", session_id="session-one", project_id="acme")
         manager.create("reviewer", session_id="session-one", project_id="acme")
 
-        first = manager.prompt_cache_affinity_id("coder", "session-one", "acme")
-        repeated = manager.prompt_cache_affinity_id("coder", "session-one", "acme")
-        other_agent = manager.prompt_cache_affinity_id("reviewer", "session-one", "acme")
+        first = manager.prompt_cache_affinity_id(_address("coder", "session-one", "acme"))
+        repeated = manager.prompt_cache_affinity_id(_address("coder", "session-one", "acme"))
+        other_agent = manager.prompt_cache_affinity_id(_address("reviewer", "session-one", "acme"))
 
         assert first == repeated
         assert first != other_agent
         assert len(first) == 32
         assert first != "session-one"
-        assert not manager.get("coder", "session-one", "acme").sidecar_path.exists()
+        assert not manager.get(_address("coder", "session-one", "acme")).sidecar_path.exists()
 
     def test_rotate_prompt_cache_affinity_starts_persisted_epoch(self, tmp_path):
         manager = ChatSessionManager(tmp_path)
         manager.create("coder", session_id="session-one")
-        previous = manager.prompt_cache_affinity_id("coder", "session-one")
+        previous = manager.prompt_cache_affinity_id(_address("coder", "session-one"))
 
-        rotated = manager.rotate_prompt_cache_affinity_id("coder", "session-one")
+        rotated = manager.rotate_prompt_cache_affinity_id(_address("coder", "session-one"))
 
         assert rotated != previous
-        assert manager.prompt_cache_affinity_id("coder", "session-one") == rotated
-        assert manager.get_metadata("coder", "session-one") == {
+        assert manager.prompt_cache_affinity_id(_address("coder", "session-one")) == rotated
+        assert manager.get_metadata(_address("coder", "session-one")) == {
             PROMPT_CACHE_AFFINITY_META_KEY: rotated
         }
 
@@ -787,9 +789,9 @@ class TestChatSessionManager:
             "platform": "telegram",
             "platform_conv_id": "12345678",
         }
-        manager.set_metadata("coder", "session-one", payload)
+        manager.set_metadata(_address("coder", "session-one"), payload)
 
-        metadata = manager.get_metadata("coder", "session-one")
+        metadata = manager.get_metadata(_address("coder", "session-one"))
 
         assert metadata == payload
 
@@ -801,7 +803,7 @@ class TestChatSessionManager:
             "platform": "telegram",
         }
 
-        manager.set_metadata("coder", "session-one", payload)
+        manager.set_metadata(_address("coder", "session-one"), payload)
 
         assert session.sidecar_path.exists()
         assert json.loads(session.sidecar_path.read_text(encoding="utf-8")) == payload
@@ -810,10 +812,9 @@ class TestChatSessionManager:
         manager = ChatSessionManager(tmp_path)
         session = manager.create("coder", session_id="session-one")
 
-        manager.set_metadata("coder", "session-one", {"platform": "telegram"})
+        manager.set_metadata(_address("coder", "session-one"), {"platform": "telegram"})
         manager.set_metadata(
-            "coder",
-            "session-one",
+            _address("coder", "session-one"),
             {
                 "platform": "telegram",
                 "platform_conv_id": "12345678",
@@ -837,11 +838,13 @@ class TestChatSessionManager:
         manager = ChatSessionManager(tmp_path)
         manager.create("coder", session_id="session-one")
 
-        manager.record_run_kind("coder", "session-one", RunKind.CRON)
-        manager.record_run_kind("coder", "session-one", RunKind.CRON)
-        manager.record_run_kind("coder", "session-one", RunKind.USER)
+        manager.record_run_kind(_address("coder", "session-one"), RunKind.CRON)
+        manager.record_run_kind(_address("coder", "session-one"), RunKind.CRON)
+        manager.record_run_kind(_address("coder", "session-one"), RunKind.USER)
 
-        assert manager.get_metadata("coder", "session-one")[SESSION_RUN_KINDS_META_KEY] == [
+        assert manager.get_metadata(_address("coder", "session-one"))[
+            SESSION_RUN_KINDS_META_KEY
+        ] == [
             "cron",
             "user",
         ]
@@ -850,16 +853,18 @@ class TestChatSessionManager:
         manager = ChatSessionManager(tmp_path)
         manager.create("coder", session_id="session-one")
 
-        stored = manager.set_title("coder", "session-one", "Release planning")
+        stored = manager.set_title(_address("coder", "session-one"), "Release planning")
 
         assert stored == "Release planning"
-        assert manager.get_metadata("coder", "session-one") == {"title": "Release planning"}
+        assert manager.get_metadata(_address("coder", "session-one")) == {
+            "title": "Release planning"
+        }
 
     def test_set_title_collapses_whitespace_to_single_line(self, tmp_path):
         manager = ChatSessionManager(tmp_path)
         manager.create("coder", session_id="session-one")
 
-        stored = manager.set_title("coder", "session-one", "  multi\n  line\ttitle  ")
+        stored = manager.set_title(_address("coder", "session-one"), "  multi\n  line\ttitle  ")
 
         assert stored == "multi line title"
 
@@ -867,28 +872,28 @@ class TestChatSessionManager:
         manager = ChatSessionManager(tmp_path)
         manager.create("coder", session_id="session-one")
 
-        stored = manager.set_title("coder", "session-one", "x" * 500)
+        stored = manager.set_title(_address("coder", "session-one"), "x" * 500)
 
         assert stored == "x" * 200
 
     def test_set_title_blank_clears_and_returns_none(self, tmp_path):
         manager = ChatSessionManager(tmp_path)
         manager.create("coder", session_id="session-one")
-        manager.set_title("coder", "session-one", "Release planning")
+        manager.set_title(_address("coder", "session-one"), "Release planning")
 
-        cleared = manager.set_title("coder", "session-one", "   ")
+        cleared = manager.set_title(_address("coder", "session-one"), "   ")
 
         assert cleared is None
-        assert "title" not in manager.get_metadata("coder", "session-one")
+        assert "title" not in manager.get_metadata(_address("coder", "session-one"))
 
     def test_set_title_preserves_other_metadata(self, tmp_path):
         manager = ChatSessionManager(tmp_path)
         manager.create("coder", session_id="session-one")
-        manager.set_metadata("coder", "session-one", {"platform": "telegram"})
+        manager.set_metadata(_address("coder", "session-one"), {"platform": "telegram"})
 
-        manager.set_title("coder", "session-one", "Release planning")
+        manager.set_title(_address("coder", "session-one"), "Release planning")
 
-        assert manager.get_metadata("coder", "session-one") == {
+        assert manager.get_metadata(_address("coder", "session-one")) == {
             "platform": "telegram",
             "title": "Release planning",
         }
@@ -896,22 +901,24 @@ class TestChatSessionManager:
     def test_set_title_clear_keeps_other_metadata(self, tmp_path):
         manager = ChatSessionManager(tmp_path)
         manager.create("coder", session_id="session-one")
-        manager.set_metadata("coder", "session-one", {"platform": "telegram", "title": "old"})
+        manager.set_metadata(
+            _address("coder", "session-one"), {"platform": "telegram", "title": "old"}
+        )
 
-        manager.set_title("coder", "session-one", "")
+        manager.set_title(_address("coder", "session-one"), "")
 
-        assert manager.get_metadata("coder", "session-one") == {"platform": "telegram"}
+        assert manager.get_metadata(_address("coder", "session-one")) == {"platform": "telegram"}
 
     def test_set_title_rejects_missing_session(self, tmp_path):
         manager = ChatSessionManager(tmp_path)
 
         with pytest.raises(ChatSessionError):
-            manager.set_title("coder", "missing", "Release planning")
+            manager.set_title(_address("coder", "missing"), "Release planning")
 
     def test_set_title_surfaces_in_list_with_metadata(self, tmp_path):
         manager = ChatSessionManager(tmp_path)
         manager.create("coder", session_id="session-one")
-        manager.set_title("coder", "session-one", "Release planning")
+        manager.set_title(_address("coder", "session-one"), "Release planning")
 
         sessions = manager.list_with_metadata("coder")
 
@@ -920,49 +927,48 @@ class TestChatSessionManager:
     def test_auto_title_stays_beneath_manual_override_and_reappears_when_cleared(self, tmp_path):
         manager = ChatSessionManager(tmp_path)
         manager.create("coder", session_id="session-one")
-        manager.set_auto_title("coder", "session-one", "Local request")
-        manager.set_title("coder", "session-one", "Manual name")
+        manager.set_auto_title(_address("coder", "session-one"), "Local request")
+        manager.set_title(_address("coder", "session-one"), "Manual name")
 
-        manager.set_auto_title("coder", "session-one", "Generated title")
+        manager.set_auto_title(_address("coder", "session-one"), "Generated title")
 
-        metadata = manager.get_metadata("coder", "session-one")
+        metadata = manager.get_metadata(_address("coder", "session-one"))
         assert metadata["title"] == "Manual name"
         assert metadata["auto_title"] == "Generated title"
-        manager.set_title("coder", "session-one", "")
-        assert manager.get_metadata("coder", "session-one")["auto_title"] == "Generated title"
+        manager.set_title(_address("coder", "session-one"), "")
+        assert (
+            manager.get_metadata(_address("coder", "session-one"))["auto_title"]
+            == "Generated title"
+        )
 
     def test_title_change_callbacks_cover_manual_and_automatic_titles(self, tmp_path):
         manager = ChatSessionManager(tmp_path)
         manager.create("coder", session_id="session-one")
         calls = []
-        unsubscribe = manager.add_title_changed_callback(
-            lambda agent_id, session_id, project_id: calls.append(
-                (agent_id, session_id, project_id)
-            )
-        )
+        unsubscribe = manager.add_title_changed_callback(calls.append)
 
-        manager.set_auto_title("coder", "session-one", "Local request")
-        manager.set_title("coder", "session-one", "Manual name")
+        manager.set_auto_title(_address("coder", "session-one"), "Local request")
+        manager.set_title(_address("coder", "session-one"), "Manual name")
         unsubscribe()
-        manager.set_title("coder", "session-one", "Later name")
+        manager.set_title(_address("coder", "session-one"), "Later name")
 
         assert calls == [
-            ("coder", "session-one", None),
-            ("coder", "session-one", None),
+            _address("coder", "session-one"),
+            _address("coder", "session-one"),
         ]
 
     def test_get_rejects_missing_session(self, tmp_path):
         manager = ChatSessionManager(tmp_path)
 
         with pytest.raises(ChatSessionError):
-            manager.get("coder", "missing")
+            manager.get(_address("coder", "missing"))
 
     @pytest.mark.parametrize("session_id", ["../outside", "..\\outside", "with space"])
     def test_get_rejects_unsafe_session_id_before_path_lookup(self, tmp_path, session_id):
         manager = ChatSessionManager(tmp_path)
 
         with pytest.raises(ChatSessionError):
-            manager.get("coder", session_id)
+            manager.get(_address("coder", session_id))
 
         assert not (tmp_path / "agents").exists()
 
@@ -988,8 +994,7 @@ class TestChatSessionManager:
             ChatMessage.assistant(model="openai/gpt-5", content="hi", timestamp=last_timestamp)
         )
         manager.set_metadata(
-            "coder",
-            "session-a",
+            _address("coder", "session-a"),
             {
                 "source_channel_id": "tg-assistant",
                 "platform": "telegram",
@@ -1031,8 +1036,7 @@ class TestChatSessionManager:
         manager = ChatSessionManager(tmp_path)
         session = manager.create("coder", session_id="session-a")
         manager.record_terminal_run(
-            "coder",
-            "session-a",
+            _address("coder", "session-a"),
             "run-one",
             "completed",
             "2026-07-20T10:00:00+00:00",
@@ -1058,13 +1062,12 @@ class TestChatSessionManager:
         manager.create("coder", session_id="session-empty")
         manager.create("coder", session_id="session-read")
         manager.record_terminal_run(
-            "coder",
-            "session-read",
+            _address("coder", "session-read"),
             "run-one",
             "completed",
             "2026-07-20T10:00:00+00:00",
         )
-        manager.mark_terminal_run_read("coder", "session-read", "run-one")
+        manager.mark_terminal_run_read(_address("coder", "session-read"), "run-one")
 
         activity = manager.list_completion_activity("coder")
 
@@ -1098,12 +1101,10 @@ class TestChatSessionManager:
             project_id="vbot",
         )
         manager.record_terminal_run(
-            "builder",
-            "project-session",
+            _address("builder", "project-session", project_id="vbot"),
             "run-project",
             "failed",
             "2026-07-20T11:00:00+00:00",
-            project_id="vbot",
         )
         identity.delete()
 
@@ -1125,7 +1126,9 @@ class TestChatSessionManager:
         first_timestamp = "2026-07-20T10:00:00+00:00"
         second_timestamp = "2026-07-20T10:05:00+00:00"
 
-        manager.record_terminal_run("coder", "session-a", "run-one", "completed", first_timestamp)
+        manager.record_terminal_run(
+            _address("coder", "session-a"), "run-one", "completed", first_timestamp
+        )
 
         unread = manager.list_with_metadata("coder")[0]
         assert unread["has_unread_completion"] is True
@@ -1135,14 +1138,16 @@ class TestChatSessionManager:
         assert unread["unread_run_at"] == first_timestamp
         assert session.activity_path.exists()
 
-        manager.record_terminal_run("coder", "session-a", "run-two", "failed", second_timestamp)
-        stale = manager.mark_terminal_run_read("coder", "session-a", "run-one")
+        manager.record_terminal_run(
+            _address("coder", "session-a"), "run-two", "failed", second_timestamp
+        )
+        stale = manager.mark_terminal_run_read(_address("coder", "session-a"), "run-one")
 
         assert stale["marked_read"] is False
         assert stale["has_unread_completion"] is True
         assert stale["unread_run_id"] == "run-two"
 
-        acknowledged = manager.mark_terminal_run_read("coder", "session-a", "run-two")
+        acknowledged = manager.mark_terminal_run_read(_address("coder", "session-a"), "run-two")
 
         assert acknowledged == {
             "latest_completion_run_id": "run-two",
@@ -1157,36 +1162,30 @@ class TestChatSessionManager:
     def test_successful_completion_read_notifies_subscribers(self, tmp_path):
         manager = ChatSessionManager(tmp_path)
         manager.create("coder", session_id="session-a")
-        notifications: list[tuple[str, str, str | None]] = []
-        unsubscribe = manager.add_completion_read_callback(
-            lambda agent_id, session_id, project_id: notifications.append(
-                (agent_id, session_id, project_id)
-            )
-        )
+        notifications: list[SessionAddress] = []
+        unsubscribe = manager.add_completion_read_callback(notifications.append)
         manager.record_terminal_run(
-            "coder",
-            "session-a",
+            _address("coder", "session-a"),
             "run-one",
             "completed",
             "2026-07-20T10:00:00+00:00",
         )
 
-        manager.mark_terminal_run_read("coder", "session-a", "stale-run")
+        manager.mark_terminal_run_read(_address("coder", "session-a"), "stale-run")
         assert notifications == []
 
-        manager.mark_terminal_run_read("coder", "session-a", "run-one")
-        assert notifications == [("coder", "session-a", None)]
+        manager.mark_terminal_run_read(_address("coder", "session-a"), "run-one")
+        assert notifications == [_address("coder", "session-a")]
 
         unsubscribe()
         manager.record_terminal_run(
-            "coder",
-            "session-a",
+            _address("coder", "session-a"),
             "run-two",
             "completed",
             "2026-07-20T10:05:00+00:00",
         )
-        manager.mark_terminal_run_read("coder", "session-a", "run-two")
-        assert notifications == [("coder", "session-a", None)]
+        manager.mark_terminal_run_read(_address("coder", "session-a"), "run-two")
+        assert notifications == [_address("coder", "session-a")]
 
     def test_list_with_metadata_recovers_timestamps_from_partial_trailing_line(self, tmp_path):
         manager = ChatSessionManager(tmp_path)
@@ -1228,16 +1227,15 @@ class TestChatSessionManager:
     def test_delete_removes_session_file(self, tmp_path):
         manager = ChatSessionManager(tmp_path)
         session = manager.create("coder", session_id="session-one")
-        manager.set_metadata("coder", "session-one", {"is_subagent_session": True})
+        manager.set_metadata(_address("coder", "session-one"), {"is_subagent_session": True})
         manager.record_terminal_run(
-            "coder",
-            "session-one",
+            _address("coder", "session-one"),
             "run-one",
             "completed",
             "2026-07-20T10:00:00+00:00",
         )
 
-        manager.delete("coder", "session-one")
+        manager.delete(_address("coder", "session-one"))
 
         assert not session.path.exists()
         assert not session.sidecar_path.exists()
@@ -1246,32 +1244,31 @@ class TestChatSessionManager:
     def test_delete_recreated_session_does_not_inherit_metadata(self, tmp_path):
         manager = ChatSessionManager(tmp_path)
         manager.create("coder", session_id="session-one")
-        manager.set_metadata("coder", "session-one", {"is_subagent_session": True})
+        manager.set_metadata(_address("coder", "session-one"), {"is_subagent_session": True})
 
-        manager.delete("coder", "session-one")
+        manager.delete(_address("coder", "session-one"))
         manager.create("coder", session_id="session-one")
 
-        assert manager.get_metadata("coder", "session-one") == {}
+        assert manager.get_metadata(_address("coder", "session-one")) == {}
 
     def test_delete_rejects_unsafe_session_id(self, tmp_path):
         manager = ChatSessionManager(tmp_path)
 
         with pytest.raises(ChatSessionError):
-            manager.delete("coder", "../outside")
+            manager.delete(_address("coder", "../outside"))
 
     def test_archive_moves_files_out_of_live_dir(self, tmp_path):
         manager = ChatSessionManager(tmp_path)
         session = manager.create("coder", session_id="session-one")
-        manager.set_metadata("coder", "session-one", {"title": "Keep me"})
+        manager.set_metadata(_address("coder", "session-one"), {"title": "Keep me"})
         manager.record_terminal_run(
-            "coder",
-            "session-one",
+            _address("coder", "session-one"),
             "run-one",
             "completed",
             "2026-07-20T10:00:00+00:00",
         )
 
-        archive_dir = asyncio.run(manager.archive("coder", "session-one"))
+        archive_dir = asyncio.run(manager.archive(_address("coder", "session-one")))
 
         # Gone from the live location, so list() no longer sees it.
         assert not session.path.exists()
@@ -1300,7 +1297,7 @@ class TestChatSessionManager:
 
         monkeypatch.setattr(manager, "_archive_storage", blocking_archive)
         loop_thread = threading.get_ident()
-        archive_task = asyncio.create_task(manager.archive("coder", "session-one"))
+        archive_task = asyncio.create_task(manager.archive(_address("coder", "session-one")))
         assert await asyncio.to_thread(started.wait, 2)
         await asyncio.sleep(0)
 
@@ -1313,7 +1310,7 @@ class TestChatSessionManager:
         manager = ChatSessionManager(tmp_path)
         manager.create("coder", session_id="session-one")
 
-        archive_dir = asyncio.run(manager.archive("coder", "session-one"))
+        archive_dir = asyncio.run(manager.archive(_address("coder", "session-one")))
 
         assert archive_dir == tmp_path / "archive" / "sessions" / "agents" / "coder"
 
@@ -1321,7 +1318,7 @@ class TestChatSessionManager:
         manager = ChatSessionManager(tmp_path)
         manager.create("coder", session_id="shared", project_id="acme")
 
-        archive_dir = asyncio.run(manager.archive("coder", "shared", project_id="acme"))
+        archive_dir = asyncio.run(manager.archive(_address("coder", "shared", project_id="acme")))
 
         assert (
             archive_dir
@@ -1333,15 +1330,15 @@ class TestChatSessionManager:
         manager = ChatSessionManager(tmp_path)
 
         with pytest.raises(ChatSessionError):
-            asyncio.run(manager.archive("coder", "ghost"))
+            asyncio.run(manager.archive(_address("coder", "ghost")))
 
     def test_archive_replaces_prior_archive_for_same_id(self, tmp_path):
         manager = ChatSessionManager(tmp_path)
         manager.create("coder", session_id="dup")
-        first_dir = asyncio.run(manager.archive("coder", "dup"))
+        first_dir = asyncio.run(manager.archive(_address("coder", "dup")))
         # Re-create and re-archive the same id; the prior archive is replaced.
         manager.create("coder", session_id="dup")
-        second_dir = asyncio.run(manager.archive("coder", "dup"))
+        second_dir = asyncio.run(manager.archive(_address("coder", "dup")))
 
         assert first_dir == second_dir
         assert (second_dir / "dup.jsonl").exists()
@@ -1371,7 +1368,7 @@ class TestChatSessionManager:
         sibling.joinpath("keep.jsonl").write_text("important", encoding="utf-8")
 
         with pytest.raises(ChatSessionError):
-            manager.delete("../secret", "session-one")
+            manager.delete(_address("../secret", "session-one"))
 
         assert sibling.joinpath("keep.jsonl").read_text(encoding="utf-8") == "important"
 
@@ -1379,10 +1376,10 @@ class TestChatSessionManager:
         manager_a = ChatSessionManager(tmp_path)
         manager_b = ChatSessionManager(tmp_path)
 
-        lock = manager_a.write_lock("coder", "session-one")
+        lock = manager_a.write_lock(_address("coder", "session-one"))
 
-        assert manager_b.write_lock("coder", "session-one") is lock
-        assert manager_a.write_lock("coder", "session-two") is not lock
+        assert manager_b.write_lock(_address("coder", "session-one")) is lock
+        assert manager_a.write_lock(_address("coder", "session-two")) is not lock
 
     def test_sessions_dir_without_project_keeps_global_layout(self, tmp_path):
         manager = ChatSessionManager(tmp_path)
@@ -1430,19 +1427,19 @@ class TestChatSessionManager:
         project_session = manager.create("coder", session_id="shared", project_id="acme")
 
         assert global_session.path != project_session.path
-        assert manager.exists("coder", "shared") is True
-        assert manager.exists("coder", "shared", project_id="acme") is True
+        assert manager.exists(_address("coder", "shared")) is True
+        assert manager.exists(_address("coder", "shared", project_id="acme")) is True
         # A project session does not leak into the global scope and vice versa.
-        manager.delete("coder", "shared", project_id="acme")
-        assert manager.exists("coder", "shared") is True
-        assert manager.exists("coder", "shared", project_id="acme") is False
+        manager.delete(_address("coder", "shared", project_id="acme"))
+        assert manager.exists(_address("coder", "shared")) is True
+        assert manager.exists(_address("coder", "shared", project_id="acme")) is False
 
     def test_project_scope_isolates_get_or_create_and_list(self, tmp_path):
         manager = ChatSessionManager(tmp_path)
 
-        manager.get_or_create("coder", "shared")
-        manager.get_or_create("coder", "shared", project_id="acme")
-        manager.get_or_create("coder", "project-only", project_id="acme")
+        manager.get_or_create(_address("coder", "shared"))
+        manager.get_or_create(_address("coder", "shared", project_id="acme"))
+        manager.get_or_create(_address("coder", "project-only", project_id="acme"))
 
         assert [session.id for session in manager.list("coder")] == ["shared"]
         assert [session.id for session in manager.list("coder", project_id="acme")] == [
@@ -1455,11 +1452,13 @@ class TestChatSessionManager:
         manager.create("coder", session_id="shared")
         manager.create("coder", session_id="shared", project_id="acme")
 
-        manager.set_metadata("coder", "shared", {"scope": "global"})
-        manager.set_metadata("coder", "shared", {"scope": "project"}, project_id="acme")
+        manager.set_metadata(_address("coder", "shared"), {"scope": "global"})
+        manager.set_metadata(_address("coder", "shared", project_id="acme"), {"scope": "project"})
 
-        assert manager.get_metadata("coder", "shared") == {"scope": "global"}
-        assert manager.get_metadata("coder", "shared", project_id="acme") == {"scope": "project"}
+        assert manager.get_metadata(_address("coder", "shared")) == {"scope": "global"}
+        assert manager.get_metadata(_address("coder", "shared", project_id="acme")) == {
+            "scope": "project"
+        }
         assert [
             entry["scope"] for entry in manager.list_with_metadata("coder", project_id="acme")
         ] == ["project"]
@@ -1467,18 +1466,18 @@ class TestChatSessionManager:
     def test_write_lock_separates_global_and_project_scope(self, tmp_path):
         manager = ChatSessionManager(tmp_path)
 
-        global_lock = manager.write_lock("coder", "shared")
-        project_lock = manager.write_lock("coder", "shared", project_id="acme")
+        global_lock = manager.write_lock(_address("coder", "shared"))
+        project_lock = manager.write_lock(_address("coder", "shared", project_id="acme"))
 
         assert global_lock is not project_lock
         # Same project + id resolves back to the same lock.
-        assert manager.write_lock("coder", "shared", project_id="acme") is project_lock
+        assert manager.write_lock(_address("coder", "shared", project_id="acme")) is project_lock
 
     def test_write_lock_is_task_reentrant(self, tmp_path):
         manager = ChatSessionManager(tmp_path)
 
         async def reenter() -> bool:
-            lock = manager.write_lock("coder", "session-one")
+            lock = manager.write_lock(_address("coder", "session-one"))
             async with lock, lock:  # same task re-enters; a plain lock would deadlock here
                 return True
 
@@ -1494,7 +1493,7 @@ class TestChatSessionManager:
         manager = ChatSessionManager(tmp_path)
 
         async def scenario() -> bool:
-            lock = manager.write_lock("coder", "session-one")
+            lock = manager.write_lock(_address("coder", "session-one"))
             async with lock:  # "Run" holds the lock across its tool cycle.
 
                 async def tool() -> bool:
@@ -1511,7 +1510,7 @@ class TestChatSessionManager:
         manager = ChatSessionManager(tmp_path)
 
         async def scenario() -> None:
-            lock = manager.write_lock("coder", "session-one")
+            lock = manager.write_lock(_address("coder", "session-one"))
             child_may_enter = asyncio.Event()
             child_entered = asyncio.Event()
             unrelated_entered = asyncio.Event()
@@ -1562,15 +1561,15 @@ class TestChatSessionManager:
         note_persisted = asyncio.Event()
 
         async def run_tool_cycle() -> None:
-            async with manager.write_lock("coder", "session-one"):
+            async with manager.write_lock(_address("coder", "session-one")):
                 session.append(assistant_message)
                 await release_tool.wait()
                 session.append(tool_message)
 
         async def observe_note() -> None:
             # A Run on another accessor: must wait behind the open tool cycle.
-            async with manager.write_lock("coder", "session-one"):
-                manager.get("coder", "session-one").add_note("[channel] observed")
+            async with manager.write_lock(_address("coder", "session-one")):
+                manager.get(_address("coder", "session-one")).add_note("[channel] observed")
                 note_persisted.set()
 
         async def scenario() -> None:
@@ -1584,7 +1583,7 @@ class TestChatSessionManager:
 
         asyncio.run(scenario())
 
-        roles = [message.role for message in manager.get("coder", "session-one").load()]
+        roles = [message.role for message in manager.get(_address("coder", "session-one")).load()]
         assert roles == ["assistant", "tool", "note"]
 
 
@@ -1616,36 +1615,33 @@ class TestChatSessionManagerMove:
     ):
         manager = ChatSessionManager(tmp_path)
         source = self._populate(manager, "alpha", "sess", project_id=source_project_id)
-        manager.set_metadata("alpha", "sess", {"platform": "telegram"}, source_project_id)
+        manager.set_metadata(_address("alpha", "sess", source_project_id), {"platform": "telegram"})
         manager.record_terminal_run(
-            "alpha",
-            "sess",
+            _address("alpha", "sess", source_project_id),
             "run-one",
             "completed",
             "2026-07-20T10:00:00+00:00",
-            source_project_id,
         )
         original = [message.to_dict() for message in source.load()]
 
         destination = asyncio.run(
             manager.move(
-                "alpha",
-                "sess",
-                "beta",
-                source_project_id=source_project_id,
-                target_project_id=target_project_id,
+                _address("alpha", "sess", source_project_id),
+                _address("beta", "sess", target_project_id),
             )
         )
 
         # Source home is empty afterwards (transcript and both sidecars gone).
-        assert manager.exists("alpha", "sess", source_project_id) is False
+        assert manager.exists(_address("alpha", "sess", source_project_id)) is False
         assert not source.sidecar_path.exists()
         assert not source.activity_path.exists()
         # Destination owns the session with identical history, ids, and timestamps.
-        assert manager.exists("beta", "sess", target_project_id) is True
+        assert manager.exists(_address("beta", "sess", target_project_id)) is True
         assert destination.path == manager.sessions_dir("beta", target_project_id) / "sess.jsonl"
         assert [message.to_dict() for message in destination.load()] == original
-        assert manager.get_metadata("beta", "sess", target_project_id) == {"platform": "telegram"}
+        assert manager.get_metadata(_address("beta", "sess", target_project_id)) == {
+            "platform": "telegram"
+        }
         assert (
             manager.list_with_metadata("beta", target_project_id)[0]["unread_run_id"] == "run-one"
         )
@@ -1654,46 +1650,43 @@ class TestChatSessionManagerMove:
         manager = ChatSessionManager(tmp_path)
         self._populate(manager, "alpha", "sess")
 
-        destination = asyncio.run(manager.move("alpha", "sess", "beta"))
+        destination = asyncio.run(manager.move(_address("alpha", "sess"), _address("beta", "sess")))
 
-        assert manager.exists("beta", "sess") is True
+        assert manager.exists(_address("beta", "sess")) is True
         assert not destination.sidecar_path.exists()
-        assert manager.get_metadata("beta", "sess") == {}
+        assert manager.get_metadata(_address("beta", "sess")) == {}
 
     def test_move_strips_requested_meta_keys(self, tmp_path):
         manager = ChatSessionManager(tmp_path)
         self._populate(manager, "alpha", "sess")
         manager.set_metadata(
-            "alpha",
-            "sess",
+            _address("alpha", "sess"),
             {"ephemeral_key": "remove", "platform": "telegram"},
         )
 
         asyncio.run(
             manager.move(
-                "alpha",
-                "sess",
-                "beta",
-                target_project_id="acme",
+                _address("alpha", "sess"),
+                _address("beta", "sess", project_id="acme"),
                 strip_meta_keys=frozenset({"ephemeral_key"}),
             )
         )
 
-        assert manager.get_metadata("beta", "sess", "acme") == {"platform": "telegram"}
+        assert manager.get_metadata(_address("beta", "sess", "acme")) == {"platform": "telegram"}
 
     def test_move_fails_cleanly_on_destination_collision(self, tmp_path):
         manager = ChatSessionManager(tmp_path)
         source = self._populate(manager, "alpha", "sess")
-        manager.set_metadata("alpha", "sess", {"platform": "telegram"})
+        manager.set_metadata(_address("alpha", "sess"), {"platform": "telegram"})
         source.append_continuation_record({"type": "active"})
         # An (improbable) id collision already occupies the destination home.
         manager.create("beta", session_id="sess")
 
         with pytest.raises(ChatSessionError):
-            asyncio.run(manager.move("alpha", "sess", "beta"))
+            asyncio.run(manager.move(_address("alpha", "sess"), _address("beta", "sess")))
 
         # No partial move: the source keeps both of its files.
-        assert manager.exists("alpha", "sess") is True
+        assert manager.exists(_address("alpha", "sess")) is True
         assert source.sidecar_path.exists()
         assert source.load_continuation_records() == [{"type": "active"}]
         assert [message.role for message in source.load()] == ["user", "assistant"]
@@ -1717,7 +1710,7 @@ class TestChatSessionManagerFork:
         manager = ChatSessionManager(tmp_path)
         source = self._populate(manager, "alpha", "sess")
 
-        fork = asyncio.run(manager.fork("alpha", "sess"))
+        fork = asyncio.run(manager.fork(_address("alpha", "sess")))
 
         # Fresh, valid id distinct from the source; transcript copied byte-for-byte.
         assert fork.id != "sess"
@@ -1730,20 +1723,20 @@ class TestChatSessionManagerFork:
     def test_same_scope_fork_inherits_source_prompt_cache_affinity(self, tmp_path):
         manager = ChatSessionManager(tmp_path)
         source = self._populate(manager, "alpha", "sess", project_id="acme")
-        source_affinity = manager.prompt_cache_affinity_id("alpha", source.id, "acme")
+        source_affinity = manager.prompt_cache_affinity_id(_address("alpha", source.id, "acme"))
 
         fork = asyncio.run(
             manager.fork(
-                "alpha",
-                source.id,
-                source_project_id="acme",
+                _address("alpha", source.id, project_id="acme"),
                 target_project_id="acme",
             )
         )
 
-        assert manager.prompt_cache_affinity_id("alpha", fork.id, "acme") == source_affinity
+        assert manager.prompt_cache_affinity_id(_address("alpha", fork.id, "acme")) == (
+            source_affinity
+        )
         assert (
-            manager.get_metadata("alpha", fork.id, "acme")[PROMPT_CACHE_AFFINITY_META_KEY]
+            manager.get_metadata(_address("alpha", fork.id, "acme"))[PROMPT_CACHE_AFFINITY_META_KEY]
             == source_affinity
         )
 
@@ -1759,26 +1752,22 @@ class TestChatSessionManagerFork:
     ):
         manager = ChatSessionManager(tmp_path)
         source = self._populate(manager, "alpha", "sess", project_id="acme")
-        source_affinity = manager.prompt_cache_affinity_id("alpha", source.id, "acme")
+        source_affinity = manager.prompt_cache_affinity_id(_address("alpha", source.id, "acme"))
 
         fork = asyncio.run(
             manager.fork(
-                "alpha",
-                source.id,
+                _address("alpha", source.id, project_id="acme"),
                 target_agent_id=target_agent_id,
-                source_project_id="acme",
                 target_project_id=target_project_id,
             )
         )
 
         fork_affinity = manager.prompt_cache_affinity_id(
-            target_agent_id,
-            fork.id,
-            target_project_id,
+            _address(target_agent_id, fork.id, target_project_id)
         )
         assert fork_affinity != source_affinity
         assert (
-            manager.get_metadata(target_agent_id, fork.id, target_project_id)[
+            manager.get_metadata(_address(target_agent_id, fork.id, target_project_id))[
                 PROMPT_CACHE_AFFINITY_META_KEY
             ]
             == fork_affinity
@@ -1788,22 +1777,22 @@ class TestChatSessionManagerFork:
         manager = ChatSessionManager(tmp_path)
         source = self._populate(manager, "alpha", "sess")
 
-        first_fork = asyncio.run(manager.fork("alpha", source.id))
-        second_fork = asyncio.run(manager.fork("alpha", first_fork.id))
+        first_fork = asyncio.run(manager.fork(_address("alpha", source.id)))
+        second_fork = asyncio.run(manager.fork(_address("alpha", first_fork.id)))
 
         assert {
-            manager.prompt_cache_affinity_id("alpha", session_id)
+            manager.prompt_cache_affinity_id(_address("alpha", session_id))
             for session_id in (source.id, first_fork.id, second_fork.id)
-        } == {manager.prompt_cache_affinity_id("alpha", source.id)}
+        } == {manager.prompt_cache_affinity_id(_address("alpha", source.id))}
 
     def test_fork_leaves_source_untouched(self, tmp_path):
         manager = ChatSessionManager(tmp_path)
         source = self._populate(manager, "alpha", "sess")
-        manager.set_metadata("alpha", "sess", {"platform": "telegram"})
+        manager.set_metadata(_address("alpha", "sess"), {"platform": "telegram"})
         source_bytes = source.path.read_bytes()
         source_sidecar = source.sidecar_path.read_bytes()
 
-        asyncio.run(manager.fork("alpha", "sess"))
+        asyncio.run(manager.fork(_address("alpha", "sess")))
 
         assert source.path.read_bytes() == source_bytes
         assert source.sidecar_path.read_bytes() == source_sidecar
@@ -1812,14 +1801,13 @@ class TestChatSessionManagerFork:
         manager = ChatSessionManager(tmp_path)
         source = self._populate(manager, "alpha", "sess")
         manager.record_terminal_run(
-            "alpha",
-            "sess",
+            _address("alpha", "sess"),
             "run-one",
             "completed",
             "2026-07-20T10:00:00+00:00",
         )
 
-        fork = asyncio.run(manager.fork("alpha", "sess"))
+        fork = asyncio.run(manager.fork(_address("alpha", "sess")))
 
         assert source.activity_path.exists()
         assert not fork.activity_path.exists()
@@ -1831,10 +1819,13 @@ class TestChatSessionManagerFork:
         self._populate(manager, "alpha", "sess", project_id="acme")
 
         fork = asyncio.run(
-            manager.fork("alpha", "sess", source_project_id="acme", target_project_id="acme")
+            manager.fork(
+                _address("alpha", "sess", project_id="acme"),
+                target_project_id="acme",
+            )
         )
 
-        provenance = manager.get_metadata("alpha", fork.id, "acme")[FORK_SOURCE_META_KEY]
+        provenance = manager.get_metadata(_address("alpha", fork.id, "acme"))[FORK_SOURCE_META_KEY]
         assert provenance["agent_id"] == "alpha"
         assert provenance["session_id"] == "sess"
         assert provenance["project_id"] == "acme"
@@ -1845,20 +1836,18 @@ class TestChatSessionManagerFork:
         manager = ChatSessionManager(tmp_path)
         self._populate(manager, "alpha", "sess")
         manager.set_metadata(
-            "alpha",
-            "sess",
+            _address("alpha", "sess"),
             {"pinned_skill_catalog": {"text": "cached"}, "title": "Keep me"},
         )
 
         fork = asyncio.run(
             manager.fork(
-                "alpha",
-                "sess",
+                _address("alpha", "sess"),
                 strip_meta_keys=frozenset({"pinned_skill_catalog"}),
             )
         )
 
-        metadata = manager.get_metadata("alpha", fork.id)
+        metadata = manager.get_metadata(_address("alpha", fork.id))
         assert "pinned_skill_catalog" not in metadata
         assert metadata["title"] == "Keep me"
         assert FORK_SOURCE_META_KEY in metadata
@@ -1867,20 +1856,23 @@ class TestChatSessionManagerFork:
         manager = ChatSessionManager(tmp_path)
         self._populate(manager, "alpha", "sess")
 
-        fork = asyncio.run(manager.fork("alpha", "sess", target_agent_id="beta"))
+        fork = asyncio.run(manager.fork(_address("alpha", "sess"), target_agent_id="beta"))
 
         assert fork.path.parent == manager.sessions_dir("beta")
-        assert manager.exists("beta", fork.id) is True
-        assert manager.get_metadata("beta", fork.id)[FORK_SOURCE_META_KEY]["agent_id"] == "alpha"
+        assert manager.exists(_address("beta", fork.id)) is True
+        assert (
+            manager.get_metadata(_address("beta", fork.id))[FORK_SOURCE_META_KEY]["agent_id"]
+            == "alpha"
+        )
 
     def test_fork_without_sidecar_writes_fork_source_only(self, tmp_path):
         manager = ChatSessionManager(tmp_path)
         source = self._populate(manager, "alpha", "sess")
         assert not source.sidecar_path.exists()
 
-        fork = asyncio.run(manager.fork("alpha", "sess"))
+        fork = asyncio.run(manager.fork(_address("alpha", "sess")))
 
-        assert list(manager.get_metadata("alpha", fork.id)) == [
+        assert list(manager.get_metadata(_address("alpha", fork.id))) == [
             PROMPT_CACHE_AFFINITY_META_KEY,
             FORK_SOURCE_META_KEY,
         ]
@@ -1892,31 +1884,34 @@ class TestChatSessionManagerFork:
         original_set_metadata = manager.set_metadata
         metadata_write_attempts = 0
 
-        def fail_first_metadata_write(agent_id, session_id, data, project_id=None):
+        def fail_first_metadata_write(address, data):
             nonlocal metadata_write_attempts
             metadata_write_attempts += 1
             if metadata_write_attempts == 1:
                 raise ChatSessionError("simulated metadata write failure")
-            original_set_metadata(agent_id, session_id, data, project_id)
+            original_set_metadata(address, data)
 
         monkeypatch.setattr(manager, "set_metadata", fail_first_metadata_write)
 
         with pytest.raises(ChatSessionError, match="simulated metadata write failure"):
-            asyncio.run(manager.fork("alpha", "sess"))
+            asyncio.run(manager.fork(_address("alpha", "sess")))
 
         assert [session.id for session in manager.list("alpha")] == ["sess"]
         assert source.path.read_bytes() == source_bytes
 
-        fork = asyncio.run(manager.fork("alpha", "sess"))
+        fork = asyncio.run(manager.fork(_address("alpha", "sess")))
 
         assert {session.id for session in manager.list("alpha")} == {"sess", fork.id}
-        assert manager.get_metadata("alpha", fork.id)[FORK_SOURCE_META_KEY]["session_id"] == "sess"
+        assert (
+            manager.get_metadata(_address("alpha", fork.id))[FORK_SOURCE_META_KEY]["session_id"]
+            == "sess"
+        )
 
     def test_fork_of_unknown_session_raises(self, tmp_path):
         manager = ChatSessionManager(tmp_path)
 
         with pytest.raises(ChatSessionError):
-            asyncio.run(manager.fork("alpha", "missing"))
+            asyncio.run(manager.fork(_address("alpha", "missing")))
 
 
 class TestForkStripPolicy:
@@ -2020,14 +2015,13 @@ class TestContinuationJournal:
         project = manager.create("alpha", "project", "acme")
         project.append_continuation_record({"scope": "project"})
 
-        moved_identity = asyncio.run(manager.move("alpha", "identity", "beta"))
+        moved_identity = asyncio.run(
+            manager.move(_address("alpha", "identity"), _address("beta", "identity"))
+        )
         moved_project = asyncio.run(
             manager.move(
-                "alpha",
-                "project",
-                "beta",
-                source_project_id="acme",
-                target_project_id="other",
+                _address("alpha", "project", project_id="acme"),
+                _address("beta", "project", project_id="other"),
             )
         )
 
@@ -2045,7 +2039,7 @@ class TestContinuationJournal:
         archived = archive_dir / session.continuation_path.name
         archived.write_text('{"generation":1}\n', encoding="utf-8")
 
-        asyncio.run(manager.archive("alpha", "session-one"))
+        asyncio.run(manager.archive(_address("alpha", "session-one")))
 
         assert json.loads(archived.read_text(encoding="utf-8")) == {"generation": 2}
         assert not session.continuation_path.exists()
@@ -2056,7 +2050,7 @@ class TestContinuationJournal:
         source.append(ChatMessage.user("work"))
         source.append_continuation_record({"type": "active"})
 
-        fork = asyncio.run(manager.fork("alpha", "session-one"))
+        fork = asyncio.run(manager.fork(_address("alpha", "session-one")))
 
         assert source.continuation_path.exists()
         assert not fork.continuation_path.exists()

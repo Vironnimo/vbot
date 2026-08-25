@@ -13,6 +13,7 @@ from typing import Any, Protocol, cast
 from core.chat.messages import ChatMessage, MessageRole
 from core.sessions import (
     FORK_SOURCE_META_KEY,
+    SessionAddress,
     SessionReadBatch,
     SessionReadCursor,
     skill_context_note_name,
@@ -45,12 +46,7 @@ class StatisticsSessionSource(Protocol):
 
     data_dir: Path
 
-    def get(
-        self,
-        agent_id: str,
-        session_id: str,
-        project_id: str | None = None,
-    ) -> _SessionHandle: ...
+    def get(self, address: SessionAddress) -> _SessionHandle: ...
 
 
 @dataclass(frozen=True)
@@ -212,7 +208,11 @@ class StatisticsIndex:
                 key = (project_key, scope.agent_id, session_id)
                 current_keys.add(key)
                 summary = _statistics_summary(raw_summary)
-                handle = sessions.get(scope.agent_id, session_id, scope.project_id)
+                handle = sessions.get(
+                    SessionAddress(
+                        project_id=scope.project_id, agent_id=scope.agent_id, session_id=session_id
+                    )
+                )
                 self._reconcile_session(connection, handle, key, summary)
         return current_keys
 

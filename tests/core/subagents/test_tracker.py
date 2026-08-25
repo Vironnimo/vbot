@@ -7,6 +7,7 @@ import asyncio
 import pytest
 
 from core.chat import ChatSessionManager
+from core.sessions import SessionAddress
 from core.subagents.subagents import SubAgentBatchTracker
 from core.subagents.tracker import _entry_result_text, _entry_status, _SubAgentEntry
 
@@ -236,8 +237,7 @@ async def test_background_result_is_read_only_after_parent_note_persists(tmp_pat
     sessions = ChatSessionManager(tmp_path)
     sessions.create("worker", session_id="session-one")
     sessions.record_terminal_run(
-        "worker",
-        "session-one",
+        SessionAddress(project_id=None, agent_id="worker", session_id="session-one"),
         "run-one",
         "completed",
         "2026-07-22T10:00:00+00:00",
@@ -265,8 +265,7 @@ async def test_background_delivery_failure_leaves_child_unread(tmp_path) -> None
     sessions = ChatSessionManager(tmp_path)
     sessions.create("worker", session_id="session-one")
     sessions.record_terminal_run(
-        "worker",
-        "session-one",
+        SessionAddress(project_id=None, agent_id="worker", session_id="session-one"),
         "run-one",
         "completed",
         "2026-07-22T10:00:00+00:00",

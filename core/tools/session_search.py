@@ -37,6 +37,7 @@ from core.sessions import (
     SESSION_RUN_KINDS_META_KEY,
     ChatSessionError,
     ChatSessionManager,
+    SessionAddress,
 )
 from core.tools.tools import (
     JsonObject,
@@ -419,16 +420,17 @@ async def _read_session(
     message_id = _optional_string(arguments.get("message_id"))
     all_messages = arguments.get("all_messages") is True
     continuation = _optional_string(arguments.get("continuation"))
+    address = SessionAddress(
+        project_id=context.project_id, agent_id=agent_id, session_id=session_id
+    )
     try:
-        session = sessions.get(agent_id, session_id, context.project_id)
+        session = sessions.get(address)
     except ChatSessionError as error:
         raise _SessionSearchError(
             "session_not_found", f"Session not found: {session_id}"
         ) from error
     messages = await run_tool_worker(session.load)
-    metadata = await run_tool_worker(
-        sessions.get_metadata, agent_id, session_id, context.project_id
-    )
+    metadata = await run_tool_worker(sessions.get_metadata, address)
     indices = {str(message.id): index for index, message in enumerate(messages)}
     if message_id is not None and message_id not in indices:
         raise _SessionSearchError("message_not_found", f"Message not found: {message_id}")
@@ -815,9 +817,10 @@ def _load_search_hit_session_context(
             messages=None,
             descriptor=_session_descriptor(agent_id, session_id, {}, None),
         )
+    address = SessionAddress(project_id=project_id, agent_id=agent_id, session_id=session_id)
     try:
-        messages = sessions.get(agent_id, session_id, project_id).load()
-        metadata = sessions.get_metadata(agent_id, session_id, project_id)
+        messages = sessions.get(address).load()
+        metadata = sessions.get_metadata(address)
     except Exception:
         messages = None
         metadata = {}
@@ -1124,8 +1127,9 @@ def _load_session_messages(
     session_id: str,
     project_id: str | None,
 ) -> list[Any] | None:
+    address = SessionAddress(project_id=project_id, agent_id=agent_id, session_id=session_id)
     try:
-        return sessions.get(agent_id, session_id, project_id).load()
+        return sessions.get(address).load()
     except Exception:
         return None
 
@@ -1374,7 +1378,10 @@ def _filter_session_summaries_by_period(
         if not session_id:
             continue
         try:
-            messages = sessions.get(agent_id, session_id, project_id).load()
+            address = SessionAddress(
+                project_id=project_id, agent_id=agent_id, session_id=session_id
+            )
+            messages = sessions.get(address).load()
         except Exception:
             continue
         matching = [

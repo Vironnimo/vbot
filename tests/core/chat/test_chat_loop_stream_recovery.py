@@ -49,6 +49,7 @@ from tests.core.chat.chat_loop_support import (
     StubRuntime,
     build_chat_loop,
     persisted_roles,
+    session_address,
 )
 
 JsonObject = dict[str, Any]
@@ -118,7 +119,7 @@ async def test_streaming_mode_does_not_fallback_on_generic_provider_error(tmp_pa
         await build_chat_loop(runtime, streaming=True).send("coder", "Hi", session_id="session-one")
 
     run = next(iter(runtime.chat_runs._runs.values()))
-    messages = runtime.chat_sessions.get("coder", "session-one").load()
+    messages = runtime.chat_sessions.get(session_address("coder", "session-one")).load()
     assert run.status == RunStatus.FAILED
     assert persisted_roles(messages) == ["user", "error"]
     assert messages[1].error_kind == "provider_fatal"
@@ -149,7 +150,7 @@ async def test_streaming_mode_preserves_partial_instead_of_fallback_after_visibl
     )
 
     run = next(iter(runtime.chat_runs._runs.values()))
-    messages = runtime.chat_sessions.get("coder", "session-one").load()
+    messages = runtime.chat_sessions.get(session_address("coder", "session-one")).load()
     # Once visible output escaped, the break preserves the partial answer rather
     # than silently re-issuing the request as a non-streaming call.
     assert assistant.content == "Continued answer"
@@ -198,7 +199,7 @@ async def test_streaming_mode_chunk_timeout_preserves_partial_after_visible_outp
     )
 
     run = next(iter(runtime.chat_runs._runs.values()))
-    messages = runtime.chat_sessions.get("coder", "session-one").load()
+    messages = runtime.chat_sessions.get(session_address("coder", "session-one")).load()
     # A remote provider that stalls after streaming visible content has its
     # partial answer preserved as an interrupted turn (no timeout failure).
     assert assistant.content == " continued"
@@ -239,7 +240,7 @@ async def test_streaming_mode_cancellation_closes_adapter_and_preserves_visible_
     with pytest.raises(RunCancelledError):
         await run.wait()
 
-    messages = runtime.chat_sessions.get("coder", "session-one").load()
+    messages = runtime.chat_sessions.get(session_address("coder", "session-one")).load()
     assert adapter.closed is True
     assert run.status == RunStatus.CANCELLED
     # The already-shown partial answer is preserved as an interrupted turn
@@ -271,9 +272,11 @@ async def test_streaming_cancellation_with_reasoning_retains_continuation(
     with pytest.raises(RunCancelledError):
         await loop.send("coder", "Hi", session_id="session-one")
 
-    messages = runtime.chat_sessions.get("coder", "session-one").load()
+    messages = runtime.chat_sessions.get(session_address("coder", "session-one")).load()
     assert persisted_roles(messages) == ["user"]
-    state = await recover_continuation(runtime.chat_sessions.get("coder", "session-one"))
+    state = await recover_continuation(
+        runtime.chat_sessions.get(session_address("coder", "session-one"))
+    )
     assert state is not None
     assert state.reasoning == "Need network."
     assert state.cause == "internal"
@@ -304,7 +307,7 @@ async def test_streaming_network_error_with_reasoning_restarts_cleanly(
         "coder", "Hi", session_id="session-one"
     )
 
-    session = runtime.chat_sessions.get("coder", "session-one")
+    session = runtime.chat_sessions.get(session_address("coder", "session-one"))
     assert assistant.content == "Recovered"
     assert assistant.reasoning == "Recovered plan."
     assert len(adapter.stream_requests) == 2
@@ -335,7 +338,7 @@ async def test_streaming_empty_native_network_error_restarts_instead_of_empty_as
         "coder", "Hi", session_id="session-one"
     )
 
-    session = runtime.chat_sessions.get("coder", "session-one")
+    session = runtime.chat_sessions.get(session_address("coder", "session-one"))
     assert assistant.content == "Recovered"
     assert len(adapter.stream_requests) == 2
     assert persisted_roles(session.load()) == ["user", "assistant"]
@@ -362,7 +365,7 @@ async def test_reasoning_only_restart_exhaustion_keeps_only_final_attempt_checkp
     with pytest.raises(RunInterruptedError, match="network"):
         await build_chat_loop(runtime, streaming=True).send("coder", "Hi", session_id="session-one")
 
-    session = runtime.chat_sessions.get("coder", "session-one")
+    session = runtime.chat_sessions.get(session_address("coder", "session-one"))
     run = next(iter(runtime.chat_runs._runs.values()))
     state = await recover_continuation(session)
     assert state is not None
@@ -403,7 +406,7 @@ async def test_streaming_network_error_after_visible_content_preserves_partial(
     )
 
     run = next(iter(runtime.chat_runs._runs.values()))
-    messages = runtime.chat_sessions.get("coder", "session-one").load()
+    messages = runtime.chat_sessions.get(session_address("coder", "session-one")).load()
     # Visible content present at the drop → preserved as an interrupted turn,
     # not discarded; the Continuation Checkpoint retains the readable state.
     assert assistant.content == " continued"
@@ -446,7 +449,7 @@ async def test_streaming_mode_restarts_after_transient_drop_before_visible_outpu
     )
 
     run = next(iter(runtime.chat_runs._runs.values()))
-    messages = runtime.chat_sessions.get("coder", "session-one").load()
+    messages = runtime.chat_sessions.get(session_address("coder", "session-one")).load()
     assert assistant.content == "Recovered"
     assert len(adapter.stream_requests) == 2
     assert adapter.stream_requests[0]["messages"] == adapter.stream_requests[1]["messages"]
@@ -557,7 +560,7 @@ async def test_streaming_mode_continues_same_run_after_visible_delta(tmp_path: P
     )
 
     run = next(iter(runtime.chat_runs._runs.values()))
-    messages = runtime.chat_sessions.get("coder", "session-one").load()
+    messages = runtime.chat_sessions.get(session_address("coder", "session-one")).load()
     # The original request is not replayed. Its durable partial plus an internal
     # recovery reminder form a new Model step inside the same Run.
     assert len(adapter.stream_requests) == 2
@@ -644,7 +647,9 @@ async def test_streaming_mode_restarts_after_unexecuted_tool_call_delta(tmp_path
     run = next(iter(runtime.chat_runs._runs.values()))
     assert assistant.content == "Recovered"
     assert len(adapter.stream_requests) == 2
-    assert persisted_roles(runtime.chat_sessions.get("coder", "session-one").load()) == [
+    assert persisted_roles(
+        runtime.chat_sessions.get(session_address("coder", "session-one")).load()
+    ) == [
         "user",
         "assistant",
     ]
@@ -681,7 +686,7 @@ async def test_streaming_mode_restart_exhaustion_marks_run_interrupted(tmp_path:
         await build_chat_loop(runtime, streaming=True).send("coder", "Hi", session_id="session-one")
 
     run = next(iter(runtime.chat_runs._runs.values()))
-    messages = runtime.chat_sessions.get("coder", "session-one").load()
+    messages = runtime.chat_sessions.get(session_address("coder", "session-one")).load()
     # Initial attempt plus MAX_STREAM_RESTARTS replays, then recovery ends with
     # an explicit interruption instead of a fabricated normal completion/error.
     assert len(adapter.stream_requests) == 3
@@ -721,7 +726,7 @@ async def test_streaming_mode_restarts_after_chunk_stall_before_visible_output(
     )
 
     run = next(iter(runtime.chat_runs._runs.values()))
-    messages = runtime.chat_sessions.get("coder", "session-one").load()
+    messages = runtime.chat_sessions.get(session_address("coder", "session-one")).load()
     assert assistant.content == "Recovered"
     assert len(adapter.stream_requests) == 2
     assert run.status == RunStatus.COMPLETED
@@ -754,7 +759,7 @@ async def test_streaming_mode_continues_after_chunk_stall_with_visible_output(
     )
 
     run = next(iter(runtime.chat_runs._runs.values()))
-    messages = runtime.chat_sessions.get("coder", "session-one").load()
+    messages = runtime.chat_sessions.get(session_address("coder", "session-one")).load()
     assert len(adapter.stream_requests) == 2
     assert assistant.content == " continued"
     assert assistant.interrupted is False
@@ -818,7 +823,7 @@ async def test_streaming_interrupted_partial_discards_in_flight_tool_call(
     )
 
     run = next(iter(runtime.chat_runs._runs.values()))
-    messages = runtime.chat_sessions.get("coder", "session-one").load()
+    messages = runtime.chat_sessions.get(session_address("coder", "session-one")).load()
     # The half-streamed Tool Call is dropped. The continuation must regenerate a
     # complete call before dispatch, so the Tool runs exactly once.
     assert assistant.content == "Weather checked"
@@ -886,7 +891,7 @@ async def test_local_provider_stream_not_aborted_by_chunk_stall(
     )
 
     run = next(iter(runtime.chat_runs._runs.values()))
-    messages = runtime.chat_sessions.get("coder", "session-one").load()
+    messages = runtime.chat_sessions.get(session_address("coder", "session-one")).load()
     # The local provider's silence exceeds the chunk timeout but is not aborted:
     # the stream completes normally instead of being cut off mid-stream.
     assert assistant.content == "partial done"
@@ -914,7 +919,7 @@ async def test_remote_provider_stream_aborted_by_chunk_stall(
         await build_chat_loop(runtime, streaming=True).send("coder", "Hi", session_id="session-one")
 
     run = next(iter(runtime.chat_runs._runs.values()))
-    messages = runtime.chat_sessions.get("coder", "session-one").load()
+    messages = runtime.chat_sessions.get(session_address("coder", "session-one")).load()
     # A remote provider keeps the stall guard. Consecutive visible partials are
     # continued twice, then the bounded recovery ends explicitly.
     assert len(adapter.stream_requests) == 3
@@ -955,7 +960,7 @@ async def test_user_cancel_after_visible_stream_preserves_partial_and_stays_canc
     with pytest.raises(RunCancelledError):
         await run.wait()
 
-    messages = runtime.chat_sessions.get("coder", "session-one").load()
+    messages = runtime.chat_sessions.get(session_address("coder", "session-one")).load()
     assert run.status == RunStatus.CANCELLED
     assert persisted_roles(messages) == ["user", "assistant"]
     assert messages[1].content == "before"
@@ -978,7 +983,7 @@ async def test_user_cancel_while_complete_stream_waits_to_persist_preserves_answ
     )
     await adapter.finish_emitted.wait()
 
-    target_lock = runtime.chat_sessions.write_lock("coder", "session-one")
+    target_lock = runtime.chat_sessions.write_lock(session_address("coder", "session-one"))
     holder_acquired = asyncio.Event()
     release_holder = asyncio.Event()
     persist_wait_started = asyncio.Event()
@@ -1014,7 +1019,7 @@ async def test_user_cancel_while_complete_stream_waits_to_persist_preserves_answ
     with pytest.raises(RunCancelledError):
         await run.wait()
 
-    messages = runtime.chat_sessions.get("coder", "session-one").load()
+    messages = runtime.chat_sessions.get(session_address("coder", "session-one")).load()
     assert run.status == RunStatus.CANCELLED
     assert [message.role for message in messages] == ["user", "assistant", "run_summary"]
     assert messages[1].content == "Complete answer"
@@ -1040,7 +1045,7 @@ async def test_user_cancel_replays_interrupted_reasoning_only_through_checkpoint
     with pytest.raises(RunCancelledError):
         await run.wait()
 
-    messages = runtime.chat_sessions.get("coder", "session-one").load()
+    messages = runtime.chat_sessions.get(session_address("coder", "session-one")).load()
     assert run.status == RunStatus.CANCELLED
     assert persisted_roles(messages) == ["user", "assistant"]
     assert messages[1].content is None
@@ -1054,7 +1059,9 @@ async def test_user_cancel_replays_interrupted_reasoning_only_through_checkpoint
     assert "reasoning_meta" not in reasoning_events[-1].payload["message"]
     assert assistant_events[-1].payload["message"]["interrupted"] is True
 
-    state = await recover_continuation(runtime.chat_sessions.get("coder", "session-one"))
+    state = await recover_continuation(
+        runtime.chat_sessions.get(session_address("coder", "session-one"))
+    )
     assert state is not None
     assert state.reasoning == "Thinking hard."
     summaries = [message for message in messages if message.role == "run_summary"]
@@ -1075,7 +1082,7 @@ async def test_user_cancel_replays_interrupted_reasoning_only_through_checkpoint
     )
     assert "Thinking hard." in reminder
     assert not [message for message in request_messages if message["role"] == "assistant"]
-    persisted = runtime.chat_sessions.get("coder", "session-one").load()
+    persisted = runtime.chat_sessions.get(session_address("coder", "session-one")).load()
     assert persisted[1].reasoning == "Thinking hard."
     assert persisted[1].reasoning_meta == {"signature": "interrupted-signed-state"}
 
@@ -1099,7 +1106,7 @@ async def test_user_cancel_before_visible_output_does_not_persist_assistant(
     with pytest.raises(RunCancelledError):
         await run.wait()
 
-    messages = runtime.chat_sessions.get("coder", "session-one").load()
+    messages = runtime.chat_sessions.get(session_address("coder", "session-one")).load()
     assert run.status == RunStatus.CANCELLED
     assert persisted_roles(messages) == ["user"]
     assert not any(event.type == "assistant_output" for event in run.events)

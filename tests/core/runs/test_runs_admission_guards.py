@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from core.sessions import SessionAddress
+
 from .runs_test_support import (
     ChatRunManager,
     Run,
@@ -19,8 +21,8 @@ async def _finish_immediately(_run: Run) -> str:
 
 async def test_session_guard_blocks_source_and_destination_until_release() -> None:
     manager = ChatRunManager()
-    source = (None, "builder", "session-one")
-    destination = ("vbot", "planner", "session-one")
+    source = SessionAddress(project_id=None, agent_id="builder", session_id="session-one")
+    destination = SessionAddress(project_id="vbot", agent_id="planner", session_id="session-one")
 
     async with manager.session_admission_guard(source, destination):
         with pytest.raises(RunAdmissionBlockedError):
@@ -70,14 +72,18 @@ async def test_session_guard_refuses_existing_run_and_releases_after_body_failur
         project_id=None,
     )
     with pytest.raises(RunAdmissionBlockedError):
-        async with manager.session_admission_guard((None, "builder", "busy")):
+        async with manager.session_admission_guard(
+            SessionAddress(project_id=None, agent_id="builder", session_id="busy")
+        ):
             pytest.fail("busy guard must not be entered")
 
     release.set()
     assert await active.wait() == "done"
 
     with pytest.raises(RuntimeError, match="storage failed"):
-        async with manager.session_admission_guard((None, "builder", "idle")):
+        async with manager.session_admission_guard(
+            SessionAddress(project_id=None, agent_id="builder", session_id="idle")
+        ):
             raise RuntimeError("storage failed")
 
     admitted = await manager.start(

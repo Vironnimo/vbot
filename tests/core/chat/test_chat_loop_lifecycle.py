@@ -14,6 +14,7 @@ from tests.core.chat.chat_loop_support import (
     StubAgent,
     StubRuntime,
     build_chat_loop,
+    session_address,
 )
 
 JsonObject = dict[str, Any]
@@ -124,7 +125,7 @@ async def test_run_excluded_from_agent_activity_still_persists_its_session_histo
     )
     await run.wait()
 
-    persisted = runtime.chat_sessions.get("coder", "session-one").load()
+    persisted = runtime.chat_sessions.get(session_address("coder", "session-one")).load()
     assert [message.role for message in persisted] == ["note", "assistant", "run_summary"]
     assert persisted[-1].run_id == run.id
     assert persisted[-1].status == "completed"
@@ -153,7 +154,7 @@ async def test_run_summary_persists_durable_work_id(tmp_path: Path) -> None:
     )
     await run.wait()
 
-    persisted = runtime.chat_sessions.get("coder", "session-one").load()
+    persisted = runtime.chat_sessions.get(session_address("coder", "session-one")).load()
     assert persisted[-1].role == "run_summary"
     assert persisted[-1].run_id == run.id
     assert persisted[-1].work_id == "sub-work-one"

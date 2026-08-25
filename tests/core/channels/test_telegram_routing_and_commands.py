@@ -28,7 +28,7 @@ from core.chat.commands import (
 )
 from core.chat.content_blocks import MediaBlock
 from core.runs import Run
-from core.sessions import ChatSessionManager
+from core.sessions import ChatSessionManager, SessionAddress
 from tests.core.channels.engine_test_support import (
     assert_member_trigger,
     make_new_only_dispatcher,
@@ -117,7 +117,9 @@ async def test_negative_chat_id_routes_to_shared_group_session(
     await drain_chat_queue(adapter, -10001)
 
     # Group chats ignore dm_scope and share one session keyed by the chat id.
-    assert chat_sessions.exists("assistant", session_id)
+    assert chat_sessions.exists(
+        SessionAddress(project_id=None, agent_id="assistant", session_id=session_id)
+    )
     assert_member_trigger(
         trigger_mock,
         "assistant",
@@ -264,9 +266,13 @@ async def test_inbound_session_creation_writes_no_reply_surface_note(
     await adapter._handle_inbound_message(update, SimpleNamespace())
     await drain_chat_queue(adapter, 12345)
 
-    session = chat_sessions.get("assistant", session_id)
+    session = chat_sessions.get(
+        SessionAddress(project_id=None, agent_id="assistant", session_id=session_id)
+    )
     notes = [message for message in session.load() if message.role == "note"]
-    metadata = chat_sessions.get_metadata("assistant", session_id)
+    metadata = chat_sessions.get_metadata(
+        SessionAddress(project_id=None, agent_id="assistant", session_id=session_id)
+    )
 
     assert notes == []
     assert metadata["last_reply_target"] == {
@@ -340,7 +346,9 @@ async def test_ensure_outbound_session_creates_session_without_reminder(
 
     assert route.agent_id == "assistant"
     assert route.session_id == "ch-tg-assistant-12345"
-    session = chat_sessions.get("assistant", "ch-tg-assistant-12345")
+    session = chat_sessions.get(
+        SessionAddress(project_id=None, agent_id="assistant", session_id="ch-tg-assistant-12345")
+    )
     notes = [message for message in session.load() if message.role == "note"]
     assert notes == []
     await adapter.stop()
@@ -359,7 +367,9 @@ async def test_ensure_outbound_session_writes_channel_metadata(
 
     adapter.ensure_outbound_session("12345")
 
-    metadata = chat_sessions.get_metadata("assistant", "ch-tg-assistant-12345")
+    metadata = chat_sessions.get_metadata(
+        SessionAddress(project_id=None, agent_id="assistant", session_id="ch-tg-assistant-12345")
+    )
     assert metadata["source_channel_id"] == "tg-assistant"
     assert metadata["platform"] == "telegram"
     assert metadata["platform_conv_id"] == "12345"
@@ -386,7 +396,9 @@ async def test_ensure_outbound_session_reuses_existing_session_without_notes(
     adapter.ensure_outbound_session("12345")
     adapter.ensure_outbound_session("12345")
 
-    session = chat_sessions.get("assistant", "ch-tg-assistant-12345")
+    session = chat_sessions.get(
+        SessionAddress(project_id=None, agent_id="assistant", session_id="ch-tg-assistant-12345")
+    )
     notes = [message for message in session.load() if message.role == "note"]
     assert notes == []
     await adapter.stop()
@@ -492,10 +504,14 @@ async def test_new_command_starts_fresh_session(
     )
     await drain_chat_queue(adapter, 12345)
 
-    anchor_metadata = chat_sessions.get_metadata("assistant", "ch-tg-assistant-12345")
+    anchor_metadata = chat_sessions.get_metadata(
+        SessionAddress(project_id=None, agent_id="assistant", session_id="ch-tg-assistant-12345")
+    )
     new_session_id = anchor_metadata[engine_module.ACTIVE_SESSION_METADATA_KEY]
     assert new_session_id.startswith("ch-tg-assistant-12345-")
-    assert chat_sessions.exists("assistant", new_session_id)
+    assert chat_sessions.exists(
+        SessionAddress(project_id=None, agent_id="assistant", session_id=new_session_id)
+    )
     trigger_mock.assert_not_awaited()
     bot.send_message.assert_awaited_once_with(
         chat_id=12345,

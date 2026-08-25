@@ -35,7 +35,7 @@ from core.runs import (
     RunAdmissionBlockedError,
     RunNotFoundError,
 )
-from core.sessions import SESSION_MOVE_STRIP_META_KEYS
+from core.sessions import SESSION_MOVE_STRIP_META_KEYS, SessionAddress
 from core.skills.skill_validator import SKILL_NAME_TRIGGER_PATTERN
 from core.tools.availability import memory_tool_enabled
 from core.tools.terminal_manager import TerminalManager, TerminalOwner
@@ -1144,6 +1144,12 @@ class CommandDispatcher:
 
         source_session_key = (context.project_id, context.agent_id, context.session_id)
         target_session_key = (target_project_id, target_agent_id, context.session_id)
+        source_address = SessionAddress(
+            project_id=context.project_id, agent_id=context.agent_id, session_id=context.session_id
+        )
+        target_address = SessionAddress(
+            project_id=target_project_id, agent_id=target_agent_id, session_id=context.session_id
+        )
         try:
             async with self._chat_runs.session_admission_guard(
                 source_session_key, target_session_key
@@ -1152,32 +1158,23 @@ class CommandDispatcher:
                     sessions,
                     "get_metadata_async",
                     "get_metadata",
-                    context.agent_id,
-                    context.session_id,
-                    context.project_id,
+                    source_address,
                 )
                 refusal = self._session_move_block_reason(metadata)
                 if refusal is not None:
                     return self._notice("agent", refusal)
 
                 await sessions.move(
-                    context.agent_id,
-                    context.session_id,
-                    target_agent_id,
-                    source_project_id=context.project_id,
-                    target_project_id=target_project_id,
+                    source_address,
+                    target_address,
                     strip_meta_keys=SESSION_MOVE_STRIP_META_KEYS,
                 )
-                async with sessions.write_lock(
-                    target_agent_id, context.session_id, target_project_id
-                ):
+                async with sessions.write_lock(target_address):
                     destination = await _command_session_io(
                         sessions,
                         "get_async",
                         "get",
-                        target_agent_id,
-                        context.session_id,
-                        target_project_id,
+                        target_address,
                     )
                     await _command_session_io(
                         destination,
@@ -1436,10 +1433,12 @@ class CommandDispatcher:
             sessions,
             "set_title_async",
             "set_title",
-            context.agent_id,
-            context.session_id,
+            SessionAddress(
+                project_id=context.project_id,
+                agent_id=context.agent_id,
+                session_id=context.session_id,
+            ),
             argument or "",
-            context.project_id,
         )
         reply = f"Session renamed to {stored_title}." if stored_title else "Session name cleared."
         return CommandOutcome(
@@ -1477,9 +1476,11 @@ class CommandDispatcher:
                     self._sessions,
                     "get_async",
                     "get",
-                    context.agent_id,
-                    context.session_id,
-                    context.project_id,
+                    SessionAddress(
+                        project_id=context.project_id,
+                        agent_id=context.agent_id,
+                        session_id=context.session_id,
+                    ),
                 )
                 messages = await _command_session_io(
                     session,

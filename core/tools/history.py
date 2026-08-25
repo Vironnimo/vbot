@@ -11,7 +11,7 @@ import time
 from dataclasses import dataclass
 from typing import Any, cast
 
-from core.sessions import ChatSessionManager
+from core.sessions import ChatSessionManager, SessionAddress
 from core.tools.tools import (
     JsonObject,
     ToolContext,
@@ -276,9 +276,11 @@ def make_history_handler(sessions: ChatSessionManager):
         try:
             try:
                 messages = sessions.get(
-                    context.agent_id,
-                    context.session_id,
-                    context.project_id,
+                    SessionAddress(
+                        project_id=context.project_id,
+                        agent_id=context.agent_id,
+                        session_id=context.session_id,
+                    )
                 ).load()
             except Exception as error:
                 raise _HistoryError(

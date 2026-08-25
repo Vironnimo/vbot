@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from core.projects import ModelConfigurationError
+from core.sessions import SessionAddress
 from core.tools.subagent import (
     SUBAGENT_TOOL_DESCRIPTION,
     SUBAGENT_TOOL_PARAMETERS,
@@ -287,7 +288,11 @@ async def test_subagent_tool_marks_created_session_with_parent_metadata(
     # Assert
     assert result["ok"] is True
     metadata = runtime.chat_sessions.get_metadata(
-        result["data"]["agent_id"], result["data"]["session_id"]
+        SessionAddress(
+            project_id=None,
+            agent_id=result["data"]["agent_id"],
+            session_id=result["data"]["session_id"],
+        )
     )
     assert metadata["is_subagent_session"] is True
     assert metadata["subagent_parent"] == {
@@ -382,8 +387,9 @@ async def test_subagent_tool_routes_into_existing_session_when_session_id_provid
     context = make_context()
     runtime.chat_sessions.create(context.agent_id, session_id="existing-sub-session")
     runtime.chat_sessions.set_metadata(
-        context.agent_id,
-        "existing-sub-session",
+        SessionAddress(
+            project_id=None, agent_id=context.agent_id, session_id="existing-sub-session"
+        ),
         {"platform": "telegram"},
     )
     existing_session_ids = [session.id for session in runtime.chat_sessions.list(context.agent_id)]
@@ -407,7 +413,11 @@ async def test_subagent_tool_routes_into_existing_session_when_session_id_provid
     assert [
         session.id for session in runtime.chat_sessions.list(context.agent_id)
     ] == existing_session_ids
-    metadata = runtime.chat_sessions.get_metadata(context.agent_id, "existing-sub-session")
+    metadata = runtime.chat_sessions.get_metadata(
+        SessionAddress(
+            project_id=None, agent_id=context.agent_id, session_id="existing-sub-session"
+        )
+    )
     assert metadata["platform"] == "telegram"
     assert metadata["is_subagent_session"] is True
     assert metadata["subagent_parent"]["session_id"] == context.session_id

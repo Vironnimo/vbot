@@ -24,7 +24,7 @@ from core.skills.skills import SkillRegistry
 from core.tools import tool_success
 from core.tools.memory import MEMORY_TOOL_DESCRIPTION, MEMORY_TOOL_PARAMETERS
 from core.utils.config import Config
-from tests.core.chat.chat_loop_support import RecordingReflection, build_chat_loop
+from tests.core.chat.chat_loop_support import RecordingReflection, build_chat_loop, session_address
 
 JsonObject = dict[str, Any]
 
@@ -124,7 +124,7 @@ async def test_agent_sends_message_and_persists_assistant_response(
 
         assistant = await build_chat_loop(runtime).send("coder", "Hello", session_id="session-one")
 
-        messages = runtime.chat_sessions.get("coder", "session-one").load()
+        messages = runtime.chat_sessions.get(session_address("coder", "session-one")).load()
         assert assistant.content == "assistant response"
         assert runtime.has_provider_credentials("fake-provider") is True
         assert runtime.get_provider_credentials("fake-provider") == "test-key"
@@ -178,7 +178,7 @@ async def test_read_tool_success_persists_result_and_final_response_uses_content
             "coder", "Read note", session_id="session-one"
         )
 
-        messages = runtime.chat_sessions.get("coder", "session-one").load()
+        messages = runtime.chat_sessions.get(session_address("coder", "session-one")).load()
         tool_message_content = messages[2].content
         assert isinstance(tool_message_content, str)
         tool_result = json.loads(tool_message_content)
@@ -250,7 +250,7 @@ async def test_parallel_tool_calls_count_one_iteration_per_model_response(
             "coder", "Read this five times", session_id="session-one"
         )
 
-        messages = runtime.chat_sessions.get("coder", "session-one").load()
+        messages = runtime.chat_sessions.get(session_address("coder", "session-one")).load()
         run = runtime.chat_run_manager.get(str(messages[-1].run_id))
         live_counts = [
             event.payload["iteration_count"]
@@ -317,7 +317,7 @@ async def test_change_stats_stream_after_each_tool_round_and_match_terminal(
 
         await build_chat_loop(runtime).send("coder", "Write files", session_id="session-one")
 
-        messages = runtime.chat_sessions.get("coder", "session-one").load()
+        messages = runtime.chat_sessions.get(session_address("coder", "session-one")).load()
         run = runtime.chat_run_manager.get(str(messages[-1].run_id))
         live_stats = [
             event.payload["change_stats"]
@@ -368,7 +368,7 @@ async def test_reasoning_only_response_is_one_iteration(
             "coder", "Think without answering", session_id="session-one"
         )
 
-        messages = runtime.chat_sessions.get("coder", "session-one").load()
+        messages = runtime.chat_sessions.get(session_address("coder", "session-one")).load()
         run = runtime.chat_run_manager.get(str(messages[-1].run_id))
         assert len(adapter.requests) == 1
         assert messages[1].reasoning == "Only thinking this time."
@@ -415,7 +415,7 @@ async def test_read_tool_missing_file_persists_failure_and_run_recovers(
             "coder", "Read missing", session_id="session-one"
         )
 
-        messages = runtime.chat_sessions.get("coder", "session-one").load()
+        messages = runtime.chat_sessions.get(session_address("coder", "session-one")).load()
         tool_message_content = messages[2].content
         assert isinstance(tool_message_content, str)
         tool_result = json.loads(tool_message_content)
@@ -501,7 +501,7 @@ async def test_read_image_returns_run_local_base64_in_tool_result_for_vision_mod
 
         # The canonical Session persists only the original user turn and the
         # compact Tool envelope; request-only base64 never reaches history.
-        messages = runtime.chat_sessions.get("coder", "session-one").load()
+        messages = runtime.chat_sessions.get(session_address("coder", "session-one")).load()
         assert [message.role for message in messages] == [
             "user",
             "assistant",
@@ -582,7 +582,7 @@ async def test_read_image_degrades_to_note_for_non_vision_model(
         assert "diagram.png" in note["text"]
 
         # No synthetic user message is persisted for the fallback either.
-        messages = runtime.chat_sessions.get("coder", "session-one").load()
+        messages = runtime.chat_sessions.get(session_address("coder", "session-one")).load()
         assert [message.role for message in messages] == [
             "user",
             "assistant",
@@ -657,7 +657,7 @@ async def test_full_history_adapter_replays_prior_run_reasoning_in_next_run(
         assert prior_assistant["reasoning"] == "Run-one thinking"
         assert prior_assistant["reasoning_meta"] == RUN_ONE_REASONING_META
         assert "usage" not in prior_assistant
-        persisted = runtime.chat_sessions.get("coder", "session-one").load()
+        persisted = runtime.chat_sessions.get(session_address("coder", "session-one")).load()
         assert persisted[1].reasoning_scope == "fake-provider/fake-model-v1::api-key"
     finally:
         runtime.stop()

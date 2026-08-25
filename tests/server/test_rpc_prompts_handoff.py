@@ -10,6 +10,7 @@ from typing import Any
 import pytest
 
 from core.projects.resolver import ConfigAgent
+from core.sessions import SessionAddress
 from core.tools.availability import ToolAccess
 from server.rpc.methods import dispatch_rpc
 from tests.server.rpc_test_support import (
@@ -268,13 +269,17 @@ async def test_chat_methods_handle_handoff_command_for_same_agent(
     assert target_runs[0].agent_id == "coder"
     # Wait for the receiving run to write its user message and finish.
     await target_runs[0].wait()
-    new_session = state.runtime.chat_sessions.get("coder", new_session_id)
+    new_session = state.runtime.chat_sessions.get(
+        SessionAddress(project_id=None, agent_id="coder", session_id=new_session_id)
+    )
     new_history = new_session.load()
     user_messages = [message for message in new_history if message.role == "user"]
     assert len(user_messages) == 1
     assert user_messages[0].content == "OK"
     # The handoff-writing run used a system-reminder note on the source session.
-    source_history = state.runtime.chat_sessions.get("coder", "session-one").load()
+    source_history = state.runtime.chat_sessions.get(
+        SessionAddress(project_id=None, agent_id="coder", session_id="session-one")
+    ).load()
     assert any(message.role == "note" for message in source_history)
 
 
@@ -315,7 +320,9 @@ async def test_chat_methods_handle_handoff_command_for_other_agent(
     assert len(target_runs) == 1
     assert target_runs[0].agent_id == "reviewer"
     await target_runs[0].wait()
-    new_session = state.runtime.chat_sessions.get("reviewer", new_session_id)
+    new_session = state.runtime.chat_sessions.get(
+        SessionAddress(project_id=None, agent_id="reviewer", session_id=new_session_id)
+    )
     new_history = new_session.load()
     user_messages = [message for message in new_history if message.role == "user"]
     assert len(user_messages) == 1
@@ -359,7 +366,9 @@ async def test_chat_methods_handle_handoff_command_with_agent_and_instruction(
     await target_runs[0].wait()
     # The handoff-writing run runs as an internal note on the source session, so
     # its prompt — with the woven instruction — is persisted there.
-    source_history = state.runtime.chat_sessions.get("coder", "session-one").load()
+    source_history = state.runtime.chat_sessions.get(
+        SessionAddress(project_id=None, agent_id="coder", session_id="session-one")
+    ).load()
     notes = [message for message in source_history if message.role == "note"]
     assert any("don't forget the plates!" in str(note.content) for note in notes)
 

@@ -64,6 +64,7 @@ from core.recall.vector_store import (
     VectorStoreError,
     format_started_at,
 )
+from core.sessions import SessionAddress
 
 # Target size of an embedded chunk in characters. ~500 tokens for the
 # common English case; small chunks give the KNN finer-grained matches
@@ -1023,7 +1024,11 @@ class VectorRecallBackend(JsonlSessionRecallBackend):
         scope = _project_scope(request.project_id)
         stale_sessions: list[tuple[JsonObject, int, int, list[Any]]] = []
         for session_id, summary in active.items():
-            session = self.sessions.get(agent_id, session_id, request.project_id)
+            session = self.sessions.get(
+                SessionAddress(
+                    project_id=request.project_id, agent_id=agent_id, session_id=session_id
+                )
+            )
             stat = session.path.stat()
             cached = indexed.get(session_id)
             if cached is not None and cached[0] == stat.st_mtime_ns and cached[1] == stat.st_size:
@@ -1069,7 +1074,13 @@ class VectorRecallBackend(JsonlSessionRecallBackend):
     ) -> JsonObject | None:
         """Hydrate a per-chunk result anchored at a request-eligible message."""
 
-        messages = self.sessions.get(request.agent_id, record.session_id, request.project_id).load()
+        messages = self.sessions.get(
+            SessionAddress(
+                project_id=request.project_id,
+                agent_id=request.agent_id,
+                session_id=record.session_id,
+            )
+        ).load()
         if not messages:
             return None
         anchor_index = self._resolve_request_anchor(messages, record, request)

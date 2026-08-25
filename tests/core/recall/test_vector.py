@@ -38,7 +38,7 @@ from core.recall.vector import (
     build_session_chunks,
 )
 from core.recall.vector_store import VectorStore
-from core.sessions import ChatSessionManager
+from core.sessions import ChatSessionManager, SessionAddress
 
 pytestmark = pytest.mark.asyncio
 
@@ -653,7 +653,7 @@ async def test_vector_backend_drops_indexed_session_when_jsonl_file_removed(tmp_
     recall = backend(tmp_path, sessions, embeddings=embeddings)
     await recall.search(request(query="carrot", limit=2))
 
-    sessions.delete("coder", "carrots")
+    sessions.delete(SessionAddress(project_id=None, agent_id="coder", session_id="carrots"))
     data = await recall.search(request(query="carrot", limit=2))
 
     assert "carrots" not in [match["session_id"] for match in data["matches"]]

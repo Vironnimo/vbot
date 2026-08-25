@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient  # type: ignore[import-not-found]
 
 from core.chat import ChatMessage
 from core.chat.output_files import AssistantFileReference
+from core.sessions import SessionAddress
 from server.app import create_app
 from server.file_delivery import FILE_URL_PREFIX, FileDelivery
 from server.rpc.payloads import _visible_message
@@ -158,7 +159,9 @@ def test_rpc_final_message_and_history_share_signed_original_file_projection(
     assert " and [report.txt]" in sent_content
     assert image_response.content == b"\x89PNG\r\n\x1a\nchart-one"
     assert report_response.text == "report-one"
-    canonical = runtime.chat_sessions.get("coder", "session-one").load()[-2]
+    canonical = runtime.chat_sessions.get(
+        SessionAddress(project_id=None, agent_id="coder", session_id="session-one")
+    ).load()[-2]
     assert canonical.content == content
     assert canonical.output_files is not None
     assert [reference.path for reference in canonical.output_files] == [

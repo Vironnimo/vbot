@@ -20,7 +20,7 @@ from core.providers.providers import ProviderRegistry
 from core.recall import JsonlSessionRecallBackend, RecallBackendRegistry, SqliteFtsRecallBackend
 from core.runs import ChatRunManager, Run, RunCancelledError, RunStatus
 from core.runtime.runtime import _VBOT_ROOT, Runtime, _detect_vbot_version
-from core.sessions import ChatSessionManager
+from core.sessions import ChatSessionManager, SessionAddress
 from core.skills.skills import SKILL_ORIGIN_GLOBAL, SkillRegistry
 from core.storage.layout import DATA_DIRECTORY_RELATIVE_PATHS
 from core.storage.storage import StorageManager
@@ -795,7 +795,14 @@ def test_start_bootstraps_main_agent_when_data_dir_is_empty(config: Config):
     main_agent = agents[0]
     assert main_agent.name == "Main"
     assert main_agent.current_session_id
-    assert runtime.chat_sessions.get("main", main_agent.current_session_id).load() == []
+    assert (
+        runtime.chat_sessions.get(
+            SessionAddress(
+                project_id=None, agent_id="main", session_id=main_agent.current_session_id
+            )
+        ).load()
+        == []
+    )
 
 
 def test_runtime_stop_clears_phase_two_services(config: Config):

@@ -25,7 +25,7 @@ from core.projects.resolver import ConfigAgent
 from core.prompts import ProjectPromptContext
 from core.tools import ToolContext, ToolRegistry, tool_success
 from core.tools.availability import ToolAccess
-from tests.core.chat.chat_loop_support import build_chat_loop
+from tests.core.chat.chat_loop_support import build_chat_loop, session_address
 from tests.core.chat.test_chat_loop import (
     StubAdapter,
     StubAgent,
@@ -133,7 +133,7 @@ async def test_soul_and_memory_pin_across_runs(tmp_path: Path) -> None:
     # The first Run snapshots and uses the pin itself; the second Run reuses it.
     assert runtime.system_prompts.render_soul_calls == 1
     assert runtime.system_prompts.render_memory_files_calls == 1
-    metadata = runtime.chat_sessions.get_metadata("coder", "s1")
+    metadata = runtime.chat_sessions.get_metadata(session_address("coder", "s1"))
     assert metadata[PINNED_SOUL_CONTEXT_META_KEY] == {"text": "Soul of coder"}
     assert metadata[PINNED_MEMORY_FILES_META_KEY] == {"text": "Memory of coder"}
     first_pins, second_pins = runtime.system_prompts.build_pin_calls
@@ -169,7 +169,7 @@ async def test_config_agent_session_pins_working_project_across_runs(tmp_path: P
     assert "Changed between runs" not in second_system
     assert "Original rules" in second_system
     assert len(runtime.system_prompts.render_working_project_context_calls) == 1
-    metadata = runtime.chat_sessions.get_metadata(AGENT_ID, "s1", PROJECT_ID)
+    metadata = runtime.chat_sessions.get_metadata(session_address(AGENT_ID, "s1", PROJECT_ID))
     assert metadata[PINNED_WORKING_PROJECT_CONTEXT_META_KEY]["text"] in second_system
 
 
@@ -192,7 +192,7 @@ async def test_config_agent_without_workspace_stores_no_soul_or_memory_pin(
     pins = runtime.system_prompts.build_pin_calls[-1]
     assert pins["soul_context"] is None
     assert pins["memory_files_context"] is None
-    metadata = runtime.chat_sessions.get_metadata(AGENT_ID, "s1", PROJECT_ID)
+    metadata = runtime.chat_sessions.get_metadata(session_address(AGENT_ID, "s1", PROJECT_ID))
     assert PINNED_SOUL_CONTEXT_META_KEY not in metadata
     assert PINNED_MEMORY_FILES_META_KEY not in metadata
 
@@ -374,7 +374,7 @@ async def test_rooted_project_context_stays_pinned_across_project_tool_call(
     assert "Changed during project Tool call" not in second_system
     assert first_system == second_system
     assert len(runtime.system_prompts.render_working_project_context_calls) == 1
-    metadata = runtime.chat_sessions.get_metadata("coder", "s1")
+    metadata = runtime.chat_sessions.get_metadata(session_address("coder", "s1"))
     assert metadata[PINNED_WORKING_PROJECT_CONTEXT_META_KEY]["text"] in first_system
 
 

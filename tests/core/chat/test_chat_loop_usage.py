@@ -19,6 +19,7 @@ from tests.core.chat.chat_loop_support import (
     StubModels,
     StubRuntime,
     build_chat_loop,
+    session_address,
 )
 
 JsonObject = dict[str, Any]
@@ -55,7 +56,7 @@ async def test_non_streaming_response_with_usage_produces_assistant_with_usage(
         "reasoning_tokens": 8,
     }
     assert assistant.usage == expected_usage
-    session = runtime.chat_sessions.get("coder", "session-one")
+    session = runtime.chat_sessions.get(session_address("coder", "session-one"))
     persisted = session.load()
     assert persisted[1].usage == expected_usage
     run = next(iter(runtime.chat_runs._runs.values()))
@@ -146,7 +147,7 @@ async def test_streaming_response_with_usage_delta_produces_assistant_with_usage
         "reasoning_tokens": 15,
     }
     assert assistant.usage == expected_usage
-    session = runtime.chat_sessions.get("coder", "session-one")
+    session = runtime.chat_sessions.get(session_address("coder", "session-one"))
     persisted = session.load()
     assert persisted[1].usage == expected_usage
     run = next(iter(runtime.chat_runs._runs.values()))
@@ -251,7 +252,7 @@ async def test_response_without_usage_applies_estimation(
         "output_tokens_estimated": True,
         "estimated": True,
     }
-    session = runtime.chat_sessions.get("coder", "session-one")
+    session = runtime.chat_sessions.get(session_address("coder", "session-one"))
     persisted = session.load()
     assert persisted[1].usage is not None
     assert persisted[1].usage["estimated"] is True
@@ -308,7 +309,7 @@ async def test_provider_usage_preserved_without_estimated_flag(
 
     assert assistant.usage == {"input_tokens": 150, "output_tokens": 12}
     assert "estimated" not in assistant.usage
-    session = runtime.chat_sessions.get("coder", "session-one")
+    session = runtime.chat_sessions.get(session_address("coder", "session-one"))
     persisted = session.load()
     assert persisted[1].usage == {"input_tokens": 150, "output_tokens": 12}
     assert "estimated" not in persisted[1].usage

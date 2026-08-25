@@ -36,7 +36,11 @@ from core.chat import (
 from core.chat.content_blocks import FileMentionBlock, TextBlock
 from core.projects import AgentResolutionError, ModelConfigurationError, format_agent_address
 from core.runs import ActiveRunError, ChatRunManager, RunAdmissionBlockedError, RunKind
-from core.sessions import SESSION_FORK_ALWAYS_STRIP_META_KEYS, SESSION_MOVE_STRIP_META_KEYS
+from core.sessions import (
+    SESSION_FORK_ALWAYS_STRIP_META_KEYS,
+    SESSION_MOVE_STRIP_META_KEYS,
+    SessionAddress,
+)
 from core.tools.file_state import FileReadState
 from core.tools.terminal_manager import TerminalOwner
 from server.events import ServerEventBus
@@ -582,22 +586,20 @@ def _make_reflect_state(
         captured.append({"agent_id": agent_id, "message": content, **kwargs})
         return _FakeRun()
 
-    async def fork(source_agent_id: str, session_id: str, **kwargs: Any) -> Any:
-        forked.append({"source_agent_id": source_agent_id, "session_id": session_id, **kwargs})
+    async def fork(source: SessionAddress, **kwargs: Any) -> Any:
+        forked.append(
+            {"source_agent_id": source.agent_id, "session_id": source.session_id, **kwargs}
+        )
         return SimpleNamespace(id="fork-1")
 
     title_log = titles if titles is not None else []
     metadata_log = metadata_writes if metadata_writes is not None else []
     chat_sessions = SimpleNamespace(
         fork=fork,
-        get_metadata=lambda agent_id, session_id, project_id=None: {},
-        set_metadata=lambda agent_id, session_id, data, project_id=None: metadata_log.append(
-            (session_id, data)
-        ),
-        set_title=lambda agent_id, session_id, title, project_id=None: title_log.append(
-            (session_id, title)
-        ),
-        record_run_kind=lambda agent_id, session_id, run_kind, project_id=None: None,
+        get_metadata=lambda address: {},
+        set_metadata=lambda address, data: metadata_log.append((address.session_id, data)),
+        set_title=lambda address, title: title_log.append((address.session_id, title)),
+        record_run_kind=lambda address, run_kind: None,
     )
     runtime = SimpleNamespace(
         agent_resolver=SimpleNamespace(
@@ -861,10 +863,8 @@ class _RecordingTitleSessions:
     def __init__(self) -> None:
         self.renamed: list[tuple[str, str, str, str | None]] = []
 
-    def set_title(
-        self, agent_id: str, session_id: str, title: str, project_id: str | None = None
-    ) -> str | None:
-        self.renamed.append((agent_id, session_id, title, project_id))
+    def set_title(self, address: SessionAddress, title: str) -> str | None:
+        self.renamed.append((address.agent_id, address.session_id, title, address.project_id))
         normalized = " ".join(title.split())
         return normalized or None
 
@@ -1259,21 +1259,18 @@ class _FakeMoveSessions:
 
     async def move(
         self,
-        source_agent_id: str,
-        session_id: str,
-        target_agent_id: str,
+        source: SessionAddress,
+        target: SessionAddress,
         *,
-        source_project_id: str | None = None,
-        target_project_id: str | None = None,
         strip_meta_keys: Any = frozenset(),
     ) -> _FakeMovedSession:
         self.move_calls.append(
             {
-                "source_agent_id": source_agent_id,
-                "session_id": session_id,
-                "target_agent_id": target_agent_id,
-                "source_project_id": source_project_id,
-                "target_project_id": target_project_id,
+                "source_agent_id": source.agent_id,
+                "session_id": source.session_id,
+                "target_agent_id": target.agent_id,
+                "source_project_id": source.project_id,
+                "target_project_id": target.project_id,
                 "strip_meta_keys": set(strip_meta_keys),
             }
         )
@@ -1283,17 +1280,13 @@ class _FakeMoveSessions:
             await self.move_release.wait()
         return self.destination
 
-    def get_metadata(self, agent_id: str, session_id: str, project_id: str | None = None) -> dict:
+    def get_metadata(self, address: SessionAddress) -> dict:
         return dict(self._metadata)
 
-    def write_lock(
-        self, agent_id: str, session_id: str, project_id: str | None = None
-    ) -> _FakeWriteLock:
+    def write_lock(self, address: SessionAddress) -> _FakeWriteLock:
         return _FakeWriteLock()
 
-    def get(
-        self, agent_id: str, session_id: str, project_id: str | None = None
-    ) -> _FakeMovedSession:
+    def get(self, address: SessionAddress) -> _FakeMovedSession:
         return self.destination
 
 

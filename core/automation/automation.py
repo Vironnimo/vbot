@@ -18,6 +18,7 @@ from core.runs import (
     RunStatus,
     WaitingWorkAdmission,
 )
+from core.sessions import SessionAddress
 from core.utils.logging import get_logger
 
 if TYPE_CHECKING:
@@ -35,8 +36,6 @@ AUTOMATIC_COMPLETION_GUIDANCE = (
 _SUPPRESSED_ORIGIN_LIMIT = 256
 _COMPLETION_PERSIST_RETRY_INITIAL_SECONDS = 0.25
 _COMPLETION_PERSIST_RETRY_MAX_SECONDS = 30.0
-
-CompletionSessionKey = tuple[str | None, str, str]
 
 
 @dataclass
@@ -68,8 +67,8 @@ class _CompletionDeliveryCoordinator:
         self._chat_loop = chat_loop
         self._run_manager = run_manager
         self._sessions = sessions
-        self._buckets: dict[CompletionSessionKey, _CompletionBucket] = {}
-        self._suppressed_origins: dict[CompletionSessionKey, list[str]] = {}
+        self._buckets: dict[SessionAddress, _CompletionBucket] = {}
+        self._suppressed_origins: dict[SessionAddress, list[str]] = {}
         self._closed = False
 
     def submit(
@@ -88,18 +87,18 @@ class _CompletionDeliveryCoordinator:
             delivered: asyncio.Future[None] = asyncio.get_running_loop().create_future()
             delivered.cancel()
             return delivered
-        key = (project_id, agent_id, session_id)
-        bucket = self._buckets.setdefault(key, _CompletionBucket())
+        address = SessionAddress(project_id=project_id, agent_id=agent_id, session_id=session_id)
+        bucket = self._buckets.setdefault(address, _CompletionBucket())
         existing = bucket.notices.get(notice_id)
         if existing is not None:
             return existing.delivered
 
-        boundary_run = self._active_run(key)
+        boundary_run = self._active_run(address)
         suppress_run = origin_run_id in self._suppressed_origins.get(
-            key, ()
+            address, ()
         ) or self._run_was_user_cancelled(origin_run_id)
         if suppress_run:
-            self._suppress_origin(key, origin_run_id)
+            self._suppress_origin(address, origin_run_id)
         delivered = asyncio.get_running_loop().create_future()
         notice = _CompletionNotice(
             id=notice_id,
@@ -113,8 +112,8 @@ class _CompletionDeliveryCoordinator:
         bucket.notices[notice_id] = notice
         if bucket.delivery_task is None or bucket.delivery_task.done():
             bucket.delivery_task = asyncio.create_task(
-                self._deliver(key, bucket),
-                name=f"completion-delivery:{agent_id}:{session_id}",
+                self._deliver(address, bucket),
+                name=f"completion-delivery:{address.agent_id}:{address.session_id}",
             )
         return delivered
 
@@ -127,8 +126,8 @@ class _CompletionDeliveryCoordinator:
         notice_id: str,
     ) -> bool:
         """Withdraw one result before its automatic note is persisted."""
-        key = (project_id, agent_id, session_id)
-        bucket = self._buckets.get(key)
+        address = SessionAddress(project_id=project_id, agent_id=agent_id, session_id=session_id)
+        bucket = self._buckets.get(address)
         if bucket is None:
             return False
         notice = bucket.notices.pop(notice_id, None)
@@ -142,9 +141,11 @@ class _CompletionDeliveryCoordinator:
         """Persist ready results for the next request of their active boundary Run."""
         if self._closed:
             return False
-        key = (run.project_id, run.agent_id, run.session_id)
-        bucket = self._buckets.get(key)
-        if bucket is None or self._active_run(key) is not run:
+        address = SessionAddress(
+            project_id=run.project_id, agent_id=run.agent_id, session_id=run.session_id
+        )
+        bucket = self._buckets.get(address)
+        if bucket is None or self._active_run(address) is not run:
             return False
 
         self._move_idle_notices_to_run(bucket, run)
@@ -165,17 +166,17 @@ class _CompletionDeliveryCoordinator:
             _LOGGER.warning(
                 "Completion persistence failed at a request boundary "
                 "(agent=%s session=%s); keeping notices pending",
-                key[1],
-                key[2],
+                address.agent_id,
+                address.session_id,
                 exc_info=True,
             )
             return False
-        self._acknowledge(key, bucket, pending)
+        self._acknowledge(address, bucket, pending)
         return True
 
     async def _deliver(
         self,
-        key: CompletionSessionKey,
+        address: SessionAddress,
         bucket: _CompletionBucket,
     ) -> None:
         try:
@@ -188,7 +189,7 @@ class _CompletionDeliveryCoordinator:
                         boundary_run.status == RunStatus.CANCELLED
                         and boundary_run.cancel_reason == "user"
                     ):
-                        self._suppress_origin(key, boundary_run.id)
+                        self._suppress_origin(address, boundary_run.id)
                         for notice in bucket.notices.values():
                             if notice.boundary_run is not boundary_run:
                                 continue
@@ -202,7 +203,7 @@ class _CompletionDeliveryCoordinator:
                     # One event-loop turn collects sibling completions that become
                     # ready together while the Session is already idle.
                     await asyncio.sleep(0)
-                    active_run = self._active_run(key)
+                    active_run = self._active_run(address)
                     if active_run is not None:
                         self._move_idle_notices_to_run(bucket, active_run)
                         continue
@@ -214,10 +215,10 @@ class _CompletionDeliveryCoordinator:
                     continue
                 suppressed = [notice for notice in pending if notice.suppress_run]
                 if suppressed:
-                    await self._persist_without_run(key, bucket, suppressed)
+                    await self._persist_without_run(address, bucket, suppressed)
                     continue
 
-                active_run = self._active_run(key)
+                active_run = self._active_run(address)
                 if active_run is not None:
                     for notice in pending:
                         notice.boundary_run = active_run
@@ -226,19 +227,21 @@ class _CompletionDeliveryCoordinator:
                 message = _completion_message(pending)
                 try:
                     run = await self._chat_loop.start_run(
-                        key[1],
+                        address.agent_id,
                         message,
-                        session_id=key[2],
+                        session_id=address.session_id,
                         internal=True,
-                        project_id=key[0],
-                        input_persisted_hook=self._acknowledgement_callback(key, bucket, pending),
+                        project_id=address.project_id,
+                        input_persisted_hook=self._acknowledgement_callback(
+                            address, bucket, pending
+                        ),
                         run_kind=RunKind.SYSTEM,
                     )
                 except ActiveRunError:
                     # Another ingress won the idle-session race. Keep the exact
                     # notices pending and collect everything that finishes while
                     # that Run is active.
-                    active_run = self._active_run(key)
+                    active_run = self._active_run(address)
                     if active_run is not None:
                         for notice in pending:
                             notice.boundary_run = active_run
@@ -252,14 +255,14 @@ class _CompletionDeliveryCoordinator:
                     _LOGGER.warning(
                         "Completion Run start failed (agent=%s session=%s); "
                         "persisting without a Run",
-                        key[1],
-                        key[2],
+                        address.agent_id,
+                        address.session_id,
                         exc_info=True,
                     )
                     for notice in pending:
                         if bucket.notices.get(notice.id) is notice:
                             notice.boundary_run = None
-                    await self._persist_without_run(key, bucket, pending)
+                    await self._persist_without_run(address, bucket, pending)
                     continue
 
                 await _wait_for_terminal_run(run)
@@ -269,20 +272,20 @@ class _CompletionDeliveryCoordinator:
                 if undelivered:
                     for notice in undelivered:
                         notice.suppress_run = True
-                    await self._persist_without_run(key, bucket, undelivered)
+                    await self._persist_without_run(address, bucket, undelivered)
         except BaseException as error:
             self._fail(bucket, list(bucket.notices.values()), error)
             if isinstance(error, asyncio.CancelledError):
                 raise
         finally:
-            if not bucket.notices and self._buckets.get(key) is bucket:
-                self._buckets.pop(key, None)
+            if not bucket.notices and self._buckets.get(address) is bucket:
+                self._buckets.pop(address, None)
 
-    def _active_run(self, key: CompletionSessionKey) -> Run | None:
+    def _active_run(self, address: SessionAddress) -> Run | None:
         return self._run_manager.active_run(
-            agent_id=key[1],
-            session_id=key[2],
-            project_id=key[0],
+            agent_id=address.agent_id,
+            session_id=address.session_id,
+            project_id=address.project_id,
         )
 
     @staticmethod
@@ -300,7 +303,7 @@ class _CompletionDeliveryCoordinator:
 
     async def _persist_without_run(
         self,
-        key: CompletionSessionKey,
+        address: SessionAddress,
         bucket: _CompletionBucket,
         notices: list[_CompletionNotice],
     ) -> None:
@@ -319,12 +322,12 @@ class _CompletionDeliveryCoordinator:
             if not pending:
                 return
 
-            async with self._sessions.write_lock(key[1], key[2], key[0]):
+            async with self._sessions.write_lock(address):
                 pending = self._still_pending(bucket, notices)
                 if not pending:
                     return
                 try:
-                    session = self._sessions.get(key[1], key[2], key[0])
+                    session = self._sessions.get(address)
                 except Exception as error:
                     # There is no durable target left. A terminal delivery
                     # failure lets producers release their process-local state.
@@ -336,13 +339,13 @@ class _CompletionDeliveryCoordinator:
                     _LOGGER.warning(
                         "Completion persistence failed (agent=%s session=%s); "
                         "retrying in %.2f seconds",
-                        key[1],
-                        key[2],
+                        address.agent_id,
+                        address.session_id,
                         retry_delay,
                         exc_info=True,
                     )
                 else:
-                    self._acknowledge(key, bucket, pending)
+                    self._acknowledge(address, bucket, pending)
                     return
 
             await asyncio.sleep(retry_delay)
@@ -361,7 +364,7 @@ class _CompletionDeliveryCoordinator:
 
     def _acknowledge(
         self,
-        key: CompletionSessionKey,
+        address: SessionAddress,
         bucket: _CompletionBucket,
         notices: list[_CompletionNotice],
     ) -> None:
@@ -376,8 +379,8 @@ class _CompletionDeliveryCoordinator:
                 except Exception:
                     _LOGGER.warning(
                         "Completion persistence callback failed (agent=%s session=%s notice=%s)",
-                        key[1],
-                        key[2],
+                        address.agent_id,
+                        address.session_id,
                         notice.id,
                         exc_info=True,
                     )
@@ -386,12 +389,12 @@ class _CompletionDeliveryCoordinator:
 
     def _acknowledgement_callback(
         self,
-        key: CompletionSessionKey,
+        address: SessionAddress,
         bucket: _CompletionBucket,
         notices: list[_CompletionNotice],
     ) -> Callable[[], None]:
         def acknowledge() -> None:
-            self._acknowledge(key, bucket, notices)
+            self._acknowledge(address, bucket, notices)
 
         return acknowledge
 
@@ -411,8 +414,8 @@ class _CompletionDeliveryCoordinator:
                 else:
                     notice.delivered.set_exception(error)
 
-    def _suppress_origin(self, key: CompletionSessionKey, run_id: str) -> None:
-        origins = self._suppressed_origins.setdefault(key, [])
+    def _suppress_origin(self, address: SessionAddress, run_id: str) -> None:
+        origins = self._suppressed_origins.setdefault(address, [])
         if run_id in origins:
             return
         origins.append(run_id)

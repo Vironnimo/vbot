@@ -24,7 +24,7 @@ from core.chat import CommandUnavailability, MessageSender, PreparedCommand, Rep
 from core.chat.content_blocks import MediaBlock, TextBlock
 from core.extensions import InteractionButton
 from core.runs import ASSISTANT_OUTPUT_EVENT, Run, RunKind, WaitingWorkAdmission
-from core.sessions import ChatSessionManager
+from core.sessions import ChatSessionManager, SessionAddress
 
 from .engine_test_support import MemoryChannelAccessRegistry, assert_member_trigger
 
@@ -379,7 +379,9 @@ async def test_group_mention_triggers_shared_run_with_sender(tmp_path: Path) -> 
     await adapter._handle_inbound_message(message)
     await drain_chat_queue(adapter, 100)
 
-    assert chat_sessions.exists("assistant", session_id)
+    assert chat_sessions.exists(
+        SessionAddress(project_id=None, agent_id="assistant", session_id=session_id)
+    )
     assert_member_trigger(
         trigger_mock,
         "assistant",
@@ -518,8 +520,12 @@ async def test_thread_inherits_parent_allowlist_and_uses_own_session(tmp_path: P
     )
     await drain_chat_queue(adapter, 101)
 
-    assert chat_sessions.exists("assistant", session_id)
-    metadata = chat_sessions.get_metadata("assistant", session_id)
+    assert chat_sessions.exists(
+        SessionAddress(project_id=None, agent_id="assistant", session_id=session_id)
+    )
+    metadata = chat_sessions.get_metadata(
+        SessionAddress(project_id=None, agent_id="assistant", session_id=session_id)
+    )
     assert metadata["platform_conv_id"] == "101"
     assert metadata["last_reply_target"]["platform_target"] == "101"
     await adapter.stop()
@@ -584,7 +590,9 @@ async def test_unaddressed_group_message_is_dropped_without_session(tmp_path: Pa
     await drain_chat_queue(adapter, 100)
 
     trigger_mock.assert_not_awaited()
-    assert not chat_sessions.exists("assistant", "ch-dc-assistant-100")
+    assert not chat_sessions.exists(
+        SessionAddress(project_id=None, agent_id="assistant", session_id="ch-dc-assistant-100")
+    )
     assert channel.history_calls == []
     await adapter.stop()
 
@@ -645,7 +653,9 @@ async def test_mention_backfills_history_since_last_bot_reply_in_order(
         assert run_kind is RunKind.CHANNEL
         observed_at_trigger.extend(
             message.content
-            for message in chat_sessions.get("assistant", session_id).load()
+            for message in chat_sessions.get(
+                SessionAddress(project_id=None, agent_id="assistant", session_id=session_id)
+            ).load()
             if message.role == "note" and isinstance(message.content, str)
         )
         return make_completed_run(session_id=session_id)
@@ -742,7 +752,9 @@ async def test_passive_observation_disables_history_backfill(tmp_path: Path) -> 
     )
     await drain_chat_queue(adapter, 100)
 
-    notes = chat_sessions.get("assistant", "ch-dc-assistant-100").load()
+    notes = chat_sessions.get(
+        SessionAddress(project_id=None, agent_id="assistant", session_id="ch-dc-assistant-100")
+    ).load()
     assert any(
         message.content == "[channel-message] [Alice|50|member]: background context"
         for message in notes
@@ -903,7 +915,9 @@ async def test_ensure_outbound_session_uses_cached_target_kind(tmp_path: Path) -
     route = adapter.ensure_outbound_session("100")
 
     assert route.session_id == "ch-dc-assistant-100"
-    assert chat_sessions.exists("assistant", route.session_id)
+    assert chat_sessions.exists(
+        SessionAddress(project_id=None, agent_id="assistant", session_id=route.session_id)
+    )
     await adapter.stop()
 
 

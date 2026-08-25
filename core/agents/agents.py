@@ -40,7 +40,7 @@ from core.memory import (
     MemoryPromptMode,
     validate_memory_prompt_mode,
 )
-from core.sessions import ChatSessionManager
+from core.sessions import ChatSessionManager, SessionAddress
 from core.settings import (
     SettingsValidationError,
     is_valid_agent_id,
@@ -1237,7 +1237,8 @@ class AgentStore:
             raise AgentError(f"current session does not exist: {session_id}")
 
     def _session_exists(self, agent_id: str, session_id: str) -> bool:
-        return self._session_manager().exists(agent_id, session_id)
+        address = SessionAddress(project_id=None, agent_id=agent_id, session_id=session_id)
+        return self._session_manager().exists(address)
 
     def _session_manager(self) -> ChatSessionManager:
         return ChatSessionManager(self._data_dir)

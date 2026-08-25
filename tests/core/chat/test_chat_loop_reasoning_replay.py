@@ -29,6 +29,7 @@ from tests.core.chat.chat_loop_support import (
     StubStorage,
     build_chat_loop,
     persisted_roles,
+    session_address,
 )
 
 JsonObject = dict[str, Any]
@@ -284,7 +285,7 @@ async def test_none_policy_strips_reasoning_from_live_tool_continuation(
     assert "reasoning" not in continuation[2]
     assert "reasoning_meta" not in continuation[2]
     # Persistence is unaffected by request shaping.
-    persisted = runtime.chat_sessions.get("coder", "session-one").load()
+    persisted = runtime.chat_sessions.get(session_address("coder", "session-one")).load()
     assert persisted[1].reasoning == "Need weather."
     assert persisted[1].reasoning_meta == {"encrypted_content": "opaque-current-turn"}
     assert assistant.content == "Sunny"

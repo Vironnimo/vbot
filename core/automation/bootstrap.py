@@ -25,6 +25,7 @@ from core.config_validation import (
     warn_unknown_keys,
 )
 from core.runs import RunKind, RunStatus
+from core.sessions import SessionAddress
 from core.settings import is_valid_agent_id, is_valid_project_id
 from core.utils.atomic import atomic_write_text
 from core.utils.errors import VBotError
@@ -544,7 +545,11 @@ class BootstrapService:
             if session_id is None:
                 continue
             try:
-                messages = self._sessions.get(job.agent_id, session_id, job.project_id).load()
+                messages = self._sessions.get(
+                    SessionAddress(
+                        project_id=job.project_id, agent_id=job.agent_id, session_id=session_id
+                    )
+                ).load()
             except Exception:
                 continue
             summary = next(
@@ -665,7 +670,11 @@ class BootstrapService:
         if self._agent_resolver is not None:
             self._agent_resolver.resolve_agent(job.project_id, job.agent_id)
         if job.session_id is not None and self._sessions is not None:
-            self._sessions.get(job.agent_id, job.session_id, job.project_id)
+            self._sessions.get(
+                SessionAddress(
+                    project_id=job.project_id, agent_id=job.agent_id, session_id=job.session_id
+                )
+            )
 
     def _validate_capacity(
         self, candidate: BootstrapJob, *, replacing_id: str | None = None

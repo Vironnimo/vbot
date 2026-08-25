@@ -18,6 +18,7 @@ from core.models.query import ModelQuery
 from core.projects.resolver import AgentResolutionError
 from core.providers.accounts import ProviderAccount
 from core.runs import ChatRunManager
+from core.sessions import SessionAddress
 from core.skills.skills import SkillRegistry
 from core.tools import FileReadState, ToolContext, ToolRegistry, tool_success
 from core.utils.errors import ConfigError
@@ -758,7 +759,9 @@ def test_http_session_create_send_sse_and_jsonl_persistence(tmp_path: Path) -> N
         "run_completed",
     ]
 
-    messages = runtime.chat_sessions.get("coder", "session-one").load()
+    messages = runtime.chat_sessions.get(
+        SessionAddress(project_id=None, agent_id="coder", session_id="session-one")
+    ).load()
     assert [message.role for message in messages] == [
         "note",
         "user",
@@ -882,7 +885,9 @@ async def test_cancel_suppresses_late_output_and_prevents_new_tool_steps(tmp_pat
     await asyncio.sleep(0)
 
     run = state.chat_runs.get(stream_response["result"]["run_id"])
-    messages = runtime.chat_sessions.get("coder", "session-one").load()
+    messages = runtime.chat_sessions.get(
+        SessionAddress(project_id=None, agent_id="coder", session_id="session-one")
+    ).load()
 
     assert cancel_response["ok"] is True
     assert cancel_response["result"]["status"] == "cancelled"

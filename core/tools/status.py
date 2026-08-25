@@ -19,7 +19,7 @@ from core.models.models import ModelRegistry
 from core.projects import AgentResolutionError, AgentResolver, ProjectStore
 from core.providers.providers import ProviderRegistry
 from core.runs import ChatRunManager
-from core.sessions import ChatSessionManager
+from core.sessions import ChatSessionManager, SessionAddress
 from core.tools.arguments import optional_string
 from core.tools.tools import (
     JsonObject,
@@ -114,7 +114,11 @@ def make_status_handler(
             return tool_failure("agent_not_found", f"agent does not exist: {agent_id}")
 
         try:
-            messages = sessions.get(agent_id, session_id, context.project_id).load()
+            messages = sessions.get(
+                SessionAddress(
+                    project_id=context.project_id, agent_id=agent_id, session_id=session_id
+                )
+            ).load()
         except ChatSessionError:
             return tool_failure(
                 "session_not_found",

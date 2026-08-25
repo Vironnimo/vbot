@@ -54,7 +54,11 @@ from core.runs import (
     WaitingWorkAdmission,
     WaitingWorkLimitError,
 )
-from core.sessions.sessions import CHANNEL_MESSAGE_NOTE_PREFIX, SESSION_ID_PATTERN
+from core.sessions.sessions import (
+    CHANNEL_MESSAGE_NOTE_PREFIX,
+    SESSION_ID_PATTERN,
+    SessionAddress,
+)
 from core.utils.logging import get_logger
 from core.utils.workers import BoundedWorkerPool
 
@@ -69,6 +73,13 @@ _LOGGER = get_logger("channels.engine")
 _CHANNEL_SESSION_WORKERS = BoundedWorkerPool(name="channel-session", max_workers=4)
 
 _FAILED_REPLY = "Sorry, I couldn't complete that request. Please try again."
+
+
+def _session_address(agent_id: str, session_id: str) -> SessionAddress:
+    """Address one Channel Session (channels always run on Identity Agents)."""
+    return SessionAddress(project_id=None, agent_id=agent_id, session_id=session_id)
+
+
 _CANCELLED_REPLY = "Sorry, this request was cancelled before completion."
 _INTERRUPTED_REPLY = "Sorry, this request was interrupted before it could finish."
 _EMPTY_ASSISTANT_REPLY = "I finished processing your message, but no reply text was produced."
@@ -449,8 +460,7 @@ class ChannelConversationEngine:
         restored_event = _restore_bound_interaction_event(binding, event, button_index)
         origin_exists = await _CHANNEL_SESSION_WORKERS.run(
             self._chat_sessions.exists,
-            self._config.agent_id,
-            binding.origin_session_id,
+            _session_address(self._config.agent_id, binding.origin_session_id),
         )
         if restored_event is None or not origin_exists:
             return "unavailable"
@@ -641,7 +651,9 @@ class ChannelConversationEngine:
         conversation: ConversationFacts,
     ) -> tuple[RouteFacts, ChatSession]:
         route = self._route_facts(conversation)
-        session = self._chat_sessions.get_or_create(route.agent_id, route.session_id)
+        session = self._chat_sessions.get_or_create(
+            _session_address(route.agent_id, route.session_id)
+        )
         return route, session
 
     def _route_facts(self, conversation: ConversationFacts) -> RouteFacts:
@@ -663,7 +675,9 @@ class ChannelConversationEngine:
         exactly as before (no migration, no legacy branch — the default state).
         """
         try:
-            metadata = self._chat_sessions.get_metadata(agent_id, conversation_key)
+            metadata = self._chat_sessions.get_metadata(
+                _session_address(agent_id, conversation_key)
+            )
         except ChatSessionError:
             # Anchor session does not exist yet -> nothing has moved off it.
             return conversation_key
@@ -693,7 +707,7 @@ class ChannelConversationEngine:
         if prepared is None:
             return False
         agent_id, active_session_id = prepared
-        async with self._chat_sessions.write_lock(agent_id, active_session_id):
+        async with self._chat_sessions.write_lock(_session_address(agent_id, active_session_id)):
             await _CHANNEL_SESSION_WORKERS.run(
                 self._append_session_note,
                 agent_id,
@@ -711,7 +725,7 @@ class ChannelConversationEngine:
         agent_id = self._config.agent_id
         old_anchor = self._group_conversation_key(old_chat_id)
         active_session_id = self._resolve_active_session_id(agent_id, old_anchor)
-        if not self._chat_sessions.exists(agent_id, active_session_id):
+        if not self._chat_sessions.exists(_session_address(agent_id, active_session_id)):
             return None
 
         new_anchor = self._group_conversation_key(new_chat_id)
@@ -733,7 +747,7 @@ class ChannelConversationEngine:
         return agent_id, active_session_id
 
     def _append_session_note(self, agent_id: str, session_id: str, note: str) -> None:
-        session = self._chat_sessions.get_or_create(agent_id, session_id)
+        session = self._chat_sessions.get_or_create(_session_address(agent_id, session_id))
         session.add_note(note)
 
     def _derive_session_id(self, conversation: ConversationFacts) -> str:
@@ -761,7 +775,9 @@ class ChannelConversationEngine:
         *,
         track_participant: bool = True,
     ) -> None:
-        metadata = self._chat_sessions.get_metadata(route.agent_id, route.session_id)
+        metadata = self._chat_sessions.get_metadata(
+            _session_address(route.agent_id, route.session_id)
+        )
         last_reply_target: dict[str, Any] = {
             "channel_id": reply_plan.channel_id,
             "platform_target": reply_plan.platform_target,
@@ -788,7 +804,9 @@ class ChannelConversationEngine:
                 "last_seen_at": datetime.now(UTC).isoformat(),
             }
             metadata["participants"] = participants
-        self._chat_sessions.set_metadata(route.agent_id, route.session_id, metadata)
+        self._chat_sessions.set_metadata(
+            _session_address(route.agent_id, route.session_id), metadata
+        )
 
     # -- Queue / workers --------------------------------------------------------------
 
@@ -901,7 +919,9 @@ class ChannelConversationEngine:
         route, _reply_plan = await self._prepare_inbound_route_async(queued.conversation)
         # Wait for any open tool cycle on this shared session (a Run via another
         # accessor) so the observed note lands after the cycle, never inside it.
-        async with self._chat_sessions.write_lock(route.agent_id, route.session_id):
+        async with self._chat_sessions.write_lock(
+            _session_address(route.agent_id, route.session_id)
+        ):
             await _CHANNEL_SESSION_WORKERS.run(
                 self._append_session_note,
                 route.agent_id,
@@ -1322,12 +1342,12 @@ class ChannelConversationEngine:
         where it does not.
         """
         try:
-            metadata = self._chat_sessions.get_metadata(agent_id, anchor)
+            metadata = self._chat_sessions.get_metadata(_session_address(agent_id, anchor))
         except ChatSessionError:
-            self._chat_sessions.get_or_create(agent_id, anchor)
+            self._chat_sessions.get_or_create(_session_address(agent_id, anchor))
             metadata = {}
         metadata[ACTIVE_SESSION_METADATA_KEY] = new_session_id
-        self._chat_sessions.set_metadata(agent_id, anchor, metadata)
+        self._chat_sessions.set_metadata(_session_address(agent_id, anchor), metadata)
 
     def _point_conversation_at_session(
         self,
@@ -1337,13 +1357,15 @@ class ChannelConversationEngine:
         """Persist a new active Session and return the exact prior anchor metadata."""
         anchor = self._derive_session_id(conversation)
         try:
-            metadata = self._chat_sessions.get_metadata(self._config.agent_id, anchor)
+            metadata = self._chat_sessions.get_metadata(
+                _session_address(self._config.agent_id, anchor)
+            )
         except ChatSessionError:
-            self._chat_sessions.get_or_create(self._config.agent_id, anchor)
+            self._chat_sessions.get_or_create(_session_address(self._config.agent_id, anchor))
             metadata = {}
         previous = dict(metadata)
         metadata[ACTIVE_SESSION_METADATA_KEY] = session_id
-        self._chat_sessions.set_metadata(self._config.agent_id, anchor, metadata)
+        self._chat_sessions.set_metadata(_session_address(self._config.agent_id, anchor), metadata)
         return previous
 
     def _restore_conversation_pointer(
@@ -1353,7 +1375,7 @@ class ChannelConversationEngine:
     ) -> None:
         """Restore the anchor when a bound tap could not enter the Queue."""
         anchor = self._derive_session_id(conversation)
-        self._chat_sessions.set_metadata(self._config.agent_id, anchor, metadata)
+        self._chat_sessions.set_metadata(_session_address(self._config.agent_id, anchor), metadata)
 
     def _log_command_failure(
         self,

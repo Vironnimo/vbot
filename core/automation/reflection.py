@@ -30,7 +30,7 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from core.chat.content_blocks import ContentBlock, TextBlock
 from core.runs import RunKind
-from core.sessions import SESSION_FORK_ALWAYS_STRIP_META_KEYS
+from core.sessions import SESSION_FORK_ALWAYS_STRIP_META_KEYS, SessionAddress
 from core.subagents.subagents import SUBAGENT_SESSION_METADATA_FLAG
 from core.tools.availability import MEMORY_TOOL_NAME, memory_tool_enabled
 from core.utils.logging import get_logger
@@ -172,7 +172,8 @@ class ReflectionService:
         if not settings["enabled"] and not memory_tool_called:
             return
         sessions = self._runtime.chat_sessions
-        metadata = sessions.get_metadata(agent_id, session_id, project_id)
+        address = SessionAddress(project_id=project_id, agent_id=agent_id, session_id=session_id)
+        metadata = sessions.get_metadata(address)
         if metadata.get(SUBAGENT_SESSION_METADATA_FLAG):
             return
 
@@ -198,7 +199,7 @@ class ReflectionService:
             ITERATIONS_SINCE_SKILL_REVIEW_KEY: iterations,
             COUNTER_GENERATION_KEY: counter_generation,
         }
-        sessions.set_metadata(agent_id, session_id, metadata, project_id)
+        sessions.set_metadata(address, metadata)
         if not settings["enabled"] or not count_run or not should_review:
             return
 
@@ -255,7 +256,9 @@ class ReflectionService:
     ) -> None:
         """Consume only counts covered by a successful background review."""
         sessions = self._runtime.chat_sessions
-        metadata = sessions.get_metadata(agent_id, session_id, project_id)
+        metadata = sessions.get_metadata(
+            SessionAddress(project_id=project_id, agent_id=agent_id, session_id=session_id)
+        )
         raw_counters = metadata.get(REFLECTION_COUNTERS_META_KEY)
         counters = raw_counters if isinstance(raw_counters, dict) else {}
         current_generation = _non_negative_int(counters.get(COUNTER_GENERATION_KEY))
@@ -268,7 +271,10 @@ class ReflectionService:
             ITERATIONS_SINCE_SKILL_REVIEW_KEY: max(current_iterations - reviewed_iterations, 0),
             COUNTER_GENERATION_KEY: current_generation,
         }
-        sessions.set_metadata(agent_id, session_id, metadata, project_id)
+        sessions.set_metadata(
+            SessionAddress(project_id=project_id, agent_id=agent_id, session_id=session_id),
+            metadata,
+        )
 
     # -- shared review orchestration --------------------------------------------
 
@@ -299,13 +305,12 @@ class ReflectionService:
                 "Reflection requires an identity Agent with the memory Tool active"
             )
         sessions = self._runtime.chat_sessions
-        source_title = str(
-            sessions.get_metadata(agent_id, session_id, project_id).get("title") or ""
-        ).strip()
+        source_address = SessionAddress(
+            project_id=project_id, agent_id=agent_id, session_id=session_id
+        )
+        source_title = str(sessions.get_metadata(source_address).get("title") or "").strip()
         fork = await sessions.fork(
-            agent_id,
-            session_id,
-            source_project_id=project_id,
+            source_address,
             target_project_id=project_id,
             strip_meta_keys=SESSION_FORK_ALWAYS_STRIP_META_KEYS,
         )
@@ -314,9 +319,10 @@ class ReflectionService:
         # marker on the row already says "reflection" (a fork would otherwise
         # inherit the source session's title).
         title = f"{agent.name}: {source_title}" if source_title else agent.name
-        sessions.set_title(agent_id, fork.id, title, project_id)
+        fork_address = SessionAddress(project_id=project_id, agent_id=agent_id, session_id=fork.id)
+        sessions.set_title(fork_address, title)
         run_kind = REFLECTION_RUN_KINDS[review_scope]
-        sessions.record_run_kind(agent_id, fork.id, run_kind, project_id)
+        sessions.record_run_kind(fork_address, run_kind)
         if on_fork_created is not None:
             on_fork_created(fork.id)
         # The fork is fresh and never busy — start directly, no queueing needed.
@@ -338,7 +344,8 @@ class ReflectionService:
     def reset_counters(self, agent_id: str, session_id: str, project_id: str | None = None) -> None:
         """Zero both cadence counters (a manual ``/reflect`` reviewed everything)."""
         sessions = self._runtime.chat_sessions
-        metadata = sessions.get_metadata(agent_id, session_id, project_id)
+        address = SessionAddress(project_id=project_id, agent_id=agent_id, session_id=session_id)
+        metadata = sessions.get_metadata(address)
         raw_counters = metadata.get(REFLECTION_COUNTERS_META_KEY)
         counters = raw_counters if isinstance(raw_counters, dict) else {}
         metadata[REFLECTION_COUNTERS_META_KEY] = {
@@ -346,7 +353,7 @@ class ReflectionService:
             ITERATIONS_SINCE_SKILL_REVIEW_KEY: 0,
             COUNTER_GENERATION_KEY: _non_negative_int(counters.get(COUNTER_GENERATION_KEY)) + 1,
         }
-        sessions.set_metadata(agent_id, session_id, metadata, project_id)
+        sessions.set_metadata(address, metadata)
 
     def _build_instruction(
         self, review_scope: ReflectionScope, extra_instruction: str | None

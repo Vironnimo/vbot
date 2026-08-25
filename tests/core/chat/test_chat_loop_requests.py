@@ -34,6 +34,7 @@ from tests.core.chat.chat_loop_support import (
     StubRuntime,
     build_chat_loop,
     persisted_roles,
+    session_address,
 )
 
 JsonObject = dict[str, Any]
@@ -47,7 +48,7 @@ async def test_send_appends_user_and_final_assistant_without_tools(tmp_path: Pat
 
     assistant = await build_chat_loop(runtime).send("coder", "Hi", session_id="session-one")
 
-    session = runtime.chat_sessions.get("coder", "session-one")
+    session = runtime.chat_sessions.get(session_address("coder", "session-one"))
     messages = session.load()
     assert assistant.content == "Hello"
     assert persisted_roles(messages) == ["user", "assistant"]
@@ -222,7 +223,7 @@ async def test_speech_transcription_origin_adds_system_reminder_before_user_turn
         input_origin=INPUT_ORIGIN_SPEECH_TRANSCRIPTION,
     )
 
-    messages = runtime.chat_sessions.get("coder", "session-one").load()
+    messages = runtime.chat_sessions.get(session_address("coder", "session-one")).load()
     request_messages = adapter.requests[0]["messages"]
     assert persisted_roles(messages) == ["note", "user", "assistant"]
     assert "speech-to-text transcription" in str(messages[0].content)
@@ -250,7 +251,7 @@ async def test_reply_surface_note_follows_speech_note_and_precedes_user_turn(
     )
     await run.wait()
 
-    messages = runtime.chat_sessions.get("coder", "session-one").load()
+    messages = runtime.chat_sessions.get(session_address("coder", "session-one")).load()
     assert persisted_roles(messages) == ["note", "note", "user", "assistant"]
     assert "speech-to-text transcription" in str(messages[0].content)
     assert str(messages[1].content).startswith("[reply-surface] ")
@@ -295,7 +296,7 @@ async def test_reply_surface_initial_repeat_and_switches_follow_execution_chrono
         )
         await run.wait()
 
-    messages = runtime.chat_sessions.get("coder", "session-one").load()
+    messages = runtime.chat_sessions.get(session_address("coder", "session-one")).load()
     surface_note_indexes = [
         index
         for index, message in enumerate(messages)
@@ -371,7 +372,7 @@ async def test_internal_start_run_embeds_content_without_visible_user_message(
     )
     await run.wait()
 
-    messages = runtime.chat_sessions.get("coder", "session-one").load()
+    messages = runtime.chat_sessions.get(session_address("coder", "session-one")).load()
     request_messages = adapter.requests[0]["messages"]
     assert persisted_roles(messages) == ["note", "assistant"]
     assert messages[0].content == content
@@ -413,7 +414,7 @@ async def test_internal_interactive_run_places_surface_immediately_before_prompt
     )
     await run.wait()
 
-    messages = runtime.chat_sessions.get("coder", "session-one").load()
+    messages = runtime.chat_sessions.get(session_address("coder", "session-one")).load()
     assert persisted_roles(messages) == ["note", "note", "assistant"]
     assert str(messages[0].content).startswith("[reply-surface] ")
     assert messages[1].content == prompt
@@ -452,7 +453,7 @@ async def test_queued_cross_surface_run_decides_when_it_actually_starts(tmp_path
     second_run = await queued.future
     await second_run.wait()
 
-    messages = runtime.chat_sessions.get("coder", "session-one").load()
+    messages = runtime.chat_sessions.get(session_address("coder", "session-one")).load()
     surface_notes = [
         message
         for message in messages
@@ -554,7 +555,7 @@ async def test_queue_edit_preserves_sender_reply_surface_and_tool_restriction(
     edited_run = await queued.future
     await edited_run.wait()
 
-    messages = runtime.chat_sessions.get("coder", "session-one").load()
+    messages = runtime.chat_sessions.get(session_address("coder", "session-one")).load()
     edited_user = next(
         message
         for message in messages
@@ -595,7 +596,7 @@ async def test_start_run_persists_sender_and_renders_request_attribution(
     )
     await run.wait()
 
-    messages = runtime.chat_sessions.get("coder", "session-one").load()
+    messages = runtime.chat_sessions.get(session_address("coder", "session-one")).load()
     request_messages = adapter.requests[0]["messages"]
     assert persisted_roles(messages) == ["user", "assistant"]
     assert messages[0].sender == sender
@@ -627,7 +628,7 @@ async def test_queue_run_persists_sender_on_user_message(tmp_path: Path) -> None
     run = await queued_item.future
     await run.wait()
 
-    messages = runtime.chat_sessions.get("coder", "session-one").load()
+    messages = runtime.chat_sessions.get(session_address("coder", "session-one")).load()
     assert persisted_roles(messages) == ["user", "assistant"]
     assert messages[0].sender == sender
     assert messages[0].content == "Hi"
@@ -809,7 +810,9 @@ async def test_note_added_during_tool_dispatch_is_persisted_after_tool_results(
 
     await build_chat_loop(runtime).send("coder", "Run tool", session_id="session-one")
 
-    persisted_after_first_turn = runtime.chat_sessions.get("coder", "session-one").load()
+    persisted_after_first_turn = runtime.chat_sessions.get(
+        session_address("coder", "session-one")
+    ).load()
     assert persisted_roles(persisted_after_first_turn) == [
         "user",
         "assistant",

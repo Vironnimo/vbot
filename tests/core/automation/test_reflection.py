@@ -19,7 +19,7 @@ from core.automation.reflection import (
     _review_scope,
 )
 from core.runs import RunKind
-from core.sessions import SESSION_FORK_ALWAYS_STRIP_META_KEYS
+from core.sessions import SESSION_FORK_ALWAYS_STRIP_META_KEYS, SessionAddress
 
 REFLECT_BRIEFS = {
     "reflect-memory.md": "Review this Session for durable Memory updates.",
@@ -66,40 +66,30 @@ class _FakeSessions:
         self.forks: list[dict[str, Any]] = []
         self.fork_counter = 0
 
-    def get_metadata(
-        self, agent_id: str, session_id: str, project_id: str | None = None
-    ) -> dict[str, Any]:
-        return dict(self.metadata.get(session_id, {}))
+    def get_metadata(self, address: SessionAddress) -> dict[str, Any]:
+        return dict(self.metadata.get(address.session_id, {}))
 
-    def set_metadata(
-        self,
-        agent_id: str,
-        session_id: str,
-        data: dict[str, Any],
-        project_id: str | None = None,
-    ) -> None:
-        self.metadata[session_id] = dict(data)
+    def set_metadata(self, address: SessionAddress, data: dict[str, Any]) -> None:
+        self.metadata[address.session_id] = dict(data)
 
-    def set_title(
-        self, agent_id: str, session_id: str, title: str, project_id: str | None = None
-    ) -> str:
-        self.titles.append((session_id, title))
+    def set_title(self, address: SessionAddress, title: str) -> str:
+        self.titles.append((address.session_id, title))
         return title
 
-    def record_run_kind(
-        self,
-        agent_id: str,
-        session_id: str,
-        run_kind: RunKind,
-        project_id: str | None = None,
-    ) -> None:
-        metadata = self.metadata.setdefault(session_id, {})
+    def record_run_kind(self, address: SessionAddress, run_kind: RunKind) -> None:
+        metadata = self.metadata.setdefault(address.session_id, {})
         metadata.setdefault("run_kinds", []).append(run_kind.value)
 
-    async def fork(self, source_agent_id: str, session_id: str, **kwargs: Any) -> Any:
+    async def fork(self, source: SessionAddress, **kwargs: Any) -> Any:
         self.fork_counter += 1
         fork_id = f"fork-{self.fork_counter}"
-        self.forks.append({"source_agent_id": source_agent_id, "session_id": session_id, **kwargs})
+        self.forks.append(
+            {
+                "source_agent_id": source.agent_id,
+                "session_id": source.session_id,
+                **kwargs,
+            }
+        )
         return SimpleNamespace(id=fork_id)
 
 

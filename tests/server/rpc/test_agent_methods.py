@@ -24,7 +24,7 @@ from core.chat import ChatSessionError
 from core.projects.resolver import AgentResolver
 from core.projects.store import ProjectStore
 from core.runs import ChatRunManager, RunAdmissionBlockedError
-from core.sessions import FORK_SOURCE_META_KEY
+from core.sessions import FORK_SOURCE_META_KEY, SessionAddress
 from core.tools.terminal_manager import TerminalOwner
 from server.events import ServerEventBus
 from server.rpc.agent_methods import (
@@ -100,19 +100,19 @@ class _FakeSessions:
         )
         return SimpleNamespace(id="new-session")
 
-    def get(self, agent_id: str, session_id: str, project_id: str | None = None) -> Any:
-        self.got.append((agent_id, session_id, project_id))
-        if session_id in self.missing:
-            raise ChatSessionError(f"session does not exist: {session_id}")
-        return SimpleNamespace(id=session_id)
+    def get(self, address: Any) -> Any:
+        self.got.append((address.agent_id, address.session_id, address.project_id))
+        if address.session_id in self.missing:
+            raise ChatSessionError(f"session does not exist: {address.session_id}")
+        return SimpleNamespace(id=address.session_id)
 
-    async def archive(self, agent_id: str, session_id: str, project_id: str | None = None) -> Any:
-        self.archived.append((agent_id, session_id, project_id))
+    async def archive(self, address: Any) -> Any:
+        self.archived.append((address.agent_id, address.session_id, address.project_id))
         if self.archive_started is not None:
             self.archive_started.set()
         if self.archive_release is not None:
             await self.archive_release.wait()
-        return SimpleNamespace(id=session_id)
+        return SimpleNamespace(id=address.session_id)
 
     def list_with_metadata(self, agent_id: str, project_id: str | None = None) -> list[Any]:
         self.listed.append((agent_id, project_id))
@@ -124,26 +124,21 @@ class _FakeSessions:
             raise self.activity_error
         return self.activity_rows
 
-    def mark_terminal_run_read(
-        self,
-        agent_id: str,
-        session_id: str,
-        run_id: str,
-        project_id: str | None = None,
-    ) -> dict[str, Any]:
-        self.marked_read.append((agent_id, session_id, run_id, project_id))
+    def mark_terminal_run_read(self, address: Any, run_id: str) -> dict[str, Any]:
+        self.marked_read.append((address.agent_id, address.session_id, run_id, address.project_id))
         return dict(self.mark_read_result)
 
     async def fork(
         self,
-        source_agent_id: str,
-        session_id: str,
+        source: Any,
         *,
         target_agent_id: str | None = None,
-        source_project_id: str | None = None,
         target_project_id: str | None = None,
         strip_meta_keys: Any = frozenset(),
     ) -> Any:
+        source_agent_id = source.agent_id
+        session_id = source.session_id
+        source_project_id = source.project_id
         self.forked.append(
             {
                 "source_agent_id": source_agent_id,
@@ -170,25 +165,17 @@ class _FakeSessions:
         self._fork_metadata[(destination_agent_id, "fork-1", target_project_id)] = retained
         return SimpleNamespace(id="fork-1")
 
-    def get_metadata(
-        self, agent_id: str, session_id: str, project_id: str | None = None
-    ) -> dict[str, Any]:
-        key = (agent_id, session_id, project_id)
+    def get_metadata(self, address: Any) -> dict[str, Any]:
+        key = (address.agent_id, address.session_id, address.project_id)
         return self.saved_metadata.get(key, self._fork_metadata.get(key, {}))
 
-    def set_metadata(
-        self,
-        agent_id: str,
-        session_id: str,
-        metadata: dict[str, Any],
-        project_id: str | None = None,
-    ) -> None:
-        self.saved_metadata[(agent_id, session_id, project_id)] = dict(metadata)
+    def set_metadata(self, address: Any, metadata: dict[str, Any]) -> None:
+        self.saved_metadata[(address.agent_id, address.session_id, address.project_id)] = dict(
+            metadata
+        )
 
-    def set_title(
-        self, agent_id: str, session_id: str, title: str, project_id: str | None = None
-    ) -> str | None:
-        self.renamed.append((agent_id, session_id, title, project_id))
+    def set_title(self, address: Any, title: str) -> str | None:
+        self.renamed.append((address.agent_id, address.session_id, title, address.project_id))
         # Mirror the real primitive's blank→None clear so the handler response is realistic.
         normalized = " ".join(title.split())
         return normalized or None
@@ -753,7 +740,9 @@ async def test_fork_strips_channel_and_subagent_bindings_but_keeps_title() -> No
 
     result = await _fork_session(state, {"agent_id": "builder", "session_id": "s1"})
 
-    metadata = sessions.get_metadata("builder", result["session"]["id"])
+    metadata = sessions.get_metadata(
+        SessionAddress(project_id=None, agent_id="builder", session_id=result["session"]["id"])
+    )
     assert metadata["title"] == "Keep"
     assert "source_channel_id" not in metadata
     assert "platform" not in metadata

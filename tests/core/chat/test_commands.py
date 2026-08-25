@@ -36,7 +36,7 @@ from core.models.models import Capabilities, Model, ModelRegistry, ReasoningCapa
 from core.projects import AgentResolver, ProjectStore
 from core.providers.providers import ProviderConfig
 from core.runs import ChatRunManager, Run, RunCancelledError
-from core.sessions import ChatSessionManager
+from core.sessions import ChatSessionManager, SessionAddress
 from core.tools.availability import ToolAccess
 
 
@@ -253,7 +253,7 @@ class _StubSessions:
         self._created_session_id = created_session_id
         self.create_calls: list[str] = []
 
-    def get(self, _agent_id: str, _session_id: str, _project_id: str | None = None) -> _StubSession:
+    def get(self, _address: SessionAddress) -> _StubSession:
         return self._session
 
     def create(self, agent_id: str) -> _StubCreatedSession:
