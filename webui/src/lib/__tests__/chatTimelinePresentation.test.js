@@ -1473,6 +1473,24 @@ describe('runFooterParts', () => {
     ).toBe('');
     expect(runFooterNotice({ status: 'running' })).toBe('');
   });
+
+  it('hides the notice while the provider streams with a tiny idle time', () => {
+    expect(
+      runFooterNotice({
+        status: 'running',
+        providerHeartbeat: { idleSeconds: 0.3 },
+      }),
+    ).toBe('');
+  });
+
+  it('shows the notice once the idle time reaches the threshold', () => {
+    expect(
+      runFooterNotice({
+        status: 'running',
+        providerHeartbeat: { idleSeconds: 10.2 },
+      }),
+    ).toBe('Provider connected · waiting 10s for the next model chunk');
+  });
 });
 
 describe('isToolPreparing', () => {
