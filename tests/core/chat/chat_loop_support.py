@@ -684,6 +684,9 @@ class StubProcessManager:
     def cancel_scope(self, run_id: str) -> None:
         self.cancelled_scopes.append(run_id)
 
+    async def cancel_scope_async(self, run_id: str) -> None:
+        self.cancelled_scopes.append(run_id)
+
 
 class StubRuntime:
     def __init__(

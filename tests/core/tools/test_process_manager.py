@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import os
+import signal
 import subprocess
 import sys
+import threading
 import time
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
@@ -34,6 +37,21 @@ PollResult = dict[str, object]
 AGENT_A = "agent-a"
 AGENT_B = "agent-b"
 SCOPE_A = "run-a"
+
+
+def terminate_pid_forcibly(pid: int) -> None:
+    """Really kill a test child so its wait task can settle after a fake kill."""
+    if sys.platform == "win32":
+        subprocess.run(
+            ["taskkill", "/F", "/T", "/PID", str(pid)],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=5,
+            check=False,
+        )
+        return
+    with contextlib.suppress(ProcessLookupError, OSError):
+        os.killpg(pid, signal.SIGKILL)
 
 
 @pytest_asyncio.fixture
@@ -917,3 +935,103 @@ async def test_log_lease_finishes_only_after_process_is_terminal(tmp_path: Path)
         assert not tracked.log_file.exists()
     finally:
         await manager.aclose()
+
+
+@pytest.mark.asyncio
+async def test_kill_process_keeps_event_loop_responsive_during_windows_taskkill(
+    manager: ProcessManager,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The Windows tree-kill must run off the loop, never freeze it.
+
+    A stuck ``taskkill`` (up to its 5s timeout) previously blocked the whole
+    event loop - every concurrent Run stalled behind one process kill.
+    """
+    process_id = await manager.spawn(
+        SCOPE_A,
+        AGENT_A,
+        [sys.executable, "-c", "import time; time.sleep(30)"],
+        env=None,
+        cwd=None,
+    )
+
+    # Simulate the Windows branch on any host: spawn has already used the real
+    # platform semantics, so only the kill path is faked.
+    monkeypatch.setattr(os, "name", "nt")
+    entered_taskkill = threading.Event()
+    release_taskkill = threading.Event()
+
+    def slow_taskkill(pid: int) -> bool:
+        entered_taskkill.set()
+        release_taskkill.wait(timeout=5)
+        terminate_pid_forcibly(pid)
+        return True
+
+    monkeypatch.setattr(process_manager_module, "windows_taskkill_tree", slow_taskkill)
+
+    heartbeat_ticks = 0
+    heartbeat_done = asyncio.Event()
+
+    async def heartbeat() -> None:
+        nonlocal heartbeat_ticks
+        while not heartbeat_done.is_set():
+            await asyncio.sleep(0)
+            heartbeat_ticks += 1
+
+    heartbeat_task = asyncio.create_task(heartbeat())
+    kill_task = asyncio.create_task(manager.kill(process_id, AGENT_A))
+    try:
+        # Wait until the kill primitive is actually blocked in its worker -
+        # via a worker thread too, or this wait would freeze the loop itself.
+        assert await asyncio.to_thread(entered_taskkill.wait, 5), "taskkill was never reached"
+
+        ticks_while_blocked = heartbeat_ticks
+        await asyncio.sleep(0.05)
+        assert heartbeat_ticks > ticks_while_blocked, (
+            "event loop froze while the process tree-kill was pending"
+        )
+    finally:
+        release_taskkill.set()
+        await kill_task
+        heartbeat_done.set()
+        await heartbeat_task
+
+    assert manager.get_process(process_id, AGENT_A).status == "killed"
+
+
+@pytest.mark.asyncio
+async def test_cancel_scope_async_kills_only_its_own_scope(
+    manager: ProcessManager,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    scope_a_id = await manager.spawn(
+        SCOPE_A,
+        AGENT_A,
+        [sys.executable, "-c", "import time; time.sleep(30)"],
+        env=None,
+        cwd=None,
+    )
+    scope_b_id = await manager.spawn(
+        "run-b",
+        AGENT_A,
+        [sys.executable, "-c", "import time; time.sleep(30)"],
+        env=None,
+        cwd=None,
+    )
+
+    # Fake the Windows tree-kill so no real child is terminated mid-test;
+    # teardown restores real platform semantics before the fixture cleanup.
+    monkeypatch.setattr(os, "name", "nt")
+
+    def fake_taskkill(pid: int) -> bool:
+        # Terminate the child for real so its wait task settles, but report
+        # through the faked primitive under test.
+        terminate_pid_forcibly(pid)
+        return True
+
+    monkeypatch.setattr(process_manager_module, "windows_taskkill_tree", fake_taskkill)
+
+    await manager.cancel_scope_async(SCOPE_A)
+
+    assert manager.get_process(scope_a_id, AGENT_A).status == "killed"
+    assert manager.get_process(scope_b_id, AGENT_A).status == "running"

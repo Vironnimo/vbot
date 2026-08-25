@@ -7,7 +7,6 @@ import contextlib
 import json
 import os
 import signal
-import subprocess
 import sys
 import time
 from collections.abc import Callable, Sequence
@@ -24,6 +23,7 @@ from core.tools.process_manager import (
     ProcessNotFoundError,
     TrackedProcess,
     subprocess_creation_flags,
+    windows_taskkill_tree,
 )
 from core.tools.tools import (
     JsonObject,
@@ -1003,18 +1003,7 @@ async def _communicate_with_probe_timeout(proc: asyncio.subprocess.Process) -> b
 async def _terminate_probe_process(proc: asyncio.subprocess.Process) -> None:
     try:
         if sys.platform == "win32":
-            try:
-                completed = subprocess.run(
-                    ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                    timeout=5,
-                    check=False,
-                    creationflags=subprocess_creation_flags(),
-                )
-                taskkill_succeeded = completed.returncode == 0
-            except (OSError, subprocess.TimeoutExpired):
-                taskkill_succeeded = False
+            taskkill_succeeded = await asyncio.to_thread(windows_taskkill_tree, proc.pid)
 
             if not taskkill_succeeded:
                 with contextlib.suppress(ProcessLookupError):
