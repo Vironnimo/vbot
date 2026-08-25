@@ -1548,7 +1548,8 @@ class TestResolveRequestOutputLimit:
 
         assert resolved == 10_000 - 1_000 - REQUEST_MIN_RESERVE_TOKENS
 
-    def test_missing_limits_stay_unset(self) -> None:
+    def test_missing_limits_stay_unset_when_input_fits(self) -> None:
+        """No ceiling means no wire max_tokens, but the window check still ran."""
         assert (
             resolve_request_output_limit(
                 explicit_limit=None,
@@ -1556,6 +1557,32 @@ class TestResolveRequestOutputLimit:
                 provider_default=None,
                 effective_context_window=10_000,
                 estimated_input_tokens=1_000,
+            )
+            is None
+        )
+
+    def test_missing_limits_fail_locally_beyond_reserve(self) -> None:
+        """Models without a ceiling still fail locally on window overflow."""
+        with pytest.raises(ProviderError) as exc_info:
+            resolve_request_output_limit(
+                explicit_limit=None,
+                model_output_limit=None,
+                provider_default=None,
+                effective_context_window=10_000,
+                estimated_input_tokens=20_000,
+            )
+
+        assert exc_info.value.retryable is False
+
+    def test_missing_limits_pass_through_within_reserve(self) -> None:
+        """An overflowing estimate inside its uncertainty margin stays unset."""
+        assert (
+            resolve_request_output_limit(
+                explicit_limit=None,
+                model_output_limit=None,
+                provider_default=None,
+                effective_context_window=10_000,
+                estimated_input_tokens=10_500,
             )
             is None
         )
