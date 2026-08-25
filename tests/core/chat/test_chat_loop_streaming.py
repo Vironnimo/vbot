@@ -9,10 +9,10 @@ from typing import Any
 
 import pytest
 
-from core.chat.chat import _StreamingRunDeltaEmitter
 from core.chat.continuation import (
     recover_continuation,
 )
+from core.chat.request_runner import _StreamingRunDeltaEmitter
 from core.chat.streaming import StreamingVisibleDelta
 from core.providers.errors import (
     NetworkError,
