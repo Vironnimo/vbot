@@ -1642,6 +1642,9 @@ class _RecordingProcessManager:
     def cancel_scope(self, scope_key: str) -> None:
         self.cancelled_scopes.append(scope_key)
 
+    async def cancel_scope_async(self, scope_key: str) -> None:
+        self.cancelled_scopes.append(scope_key)
+
 
 class _ChatRuntimeStub:
     def __init__(

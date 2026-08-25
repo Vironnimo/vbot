@@ -578,6 +578,73 @@ class ExtensionRegistry:
     ) -> ExtensionRegistry:
         """Discover, import, register, and apply extensions in two phases.
 
+        Blocking variant for callers without a running event loop (tests,
+        synchronous bootstrap): async ``register()`` coroutines run on private
+        worker loops behind a deadline-bounded join. On the serving loop use
+        :meth:`aload`, which drives the same coroutines without freezing it.
+        """
+        registry, pending = cls._scan_and_collect(
+            extensions_dir,
+            extra_dirs,
+            disabled=disabled,
+            config=config,
+            bundled_dir=bundled_dir,
+            config_provider=config_provider,
+            credential_resolver=credential_resolver,
+        )
+        _await_pending_registers(pending)
+        registry._apply_declarations()
+        registry._apply_interaction_handlers()
+        return registry
+
+    @classmethod
+    async def aload(
+        cls,
+        extensions_dir: Path,
+        extra_dirs: list[Path] | None = None,
+        *,
+        disabled: set[str] | None = None,
+        config: dict[str, dict[str, Any]] | None = None,
+        bundled_dir: Path | None = None,
+        config_provider: Callable[[str], dict[str, Any]] | None = None,
+        credential_resolver: Callable[[str], str] | None = None,
+    ) -> ExtensionRegistry:
+        """Async :meth:`load` variant for the serving event loop.
+
+        Same discovery, registration, and apply phases; async ``register()``
+        coroutines run on the live loop under the same per-registration hard
+        deadline instead of blocking it with a thread join. Runtime startup
+        and ``reload_extensions`` use this so one slow Extension cannot stall
+        every concurrent Session.
+        """
+        registry, pending = cls._scan_and_collect(
+            extensions_dir,
+            extra_dirs,
+            disabled=disabled,
+            config=config,
+            bundled_dir=bundled_dir,
+            config_provider=config_provider,
+            credential_resolver=credential_resolver,
+        )
+        await _await_pending_registers_async(pending)
+        registry._apply_declarations()
+        registry._apply_interaction_handlers()
+        return registry
+
+    @classmethod
+    def _scan_and_collect(
+        cls,
+        extensions_dir: Path,
+        extra_dirs: list[Path] | None = None,
+        *,
+        disabled: set[str] | None = None,
+        config: dict[str, dict[str, Any]] | None = None,
+        bundled_dir: Path | None = None,
+        config_provider: Callable[[str], dict[str, Any]] | None = None,
+        credential_resolver: Callable[[str], str] | None = None,
+    ) -> tuple[ExtensionRegistry, list[tuple[ExtensionRecord, Any]]]:
+        """Discovery + registration phase shared by :meth:`load` and :meth:`aload`.
+
         Scans immediate children of each root in this order: the data-dir
         ``extensions_dir`` first, then the user's *extra_dirs*, then the fixed
         *bundled_dir* (the install tree's shipped extensions) **last**. A ``None``
@@ -590,12 +657,8 @@ class ExtensionRegistry:
 
         Extensions named in *disabled* are recorded as ``disabled`` and never
         imported. *config* maps extension name → its ``api.config`` snapshot.
-        *config_provider* (``name -> live config dict``) and *credential_resolver*
-        (``key -> value``) back each extension's live per-call reads; both are
-        bound to the extension name when its ``ExtensionAPI`` is built, and a
-        ``None`` provider stays ``None`` on the API (the live reads then fall back).
-        Async ``register()`` coroutines are awaited to completion before hook
-        declarations are applied to the dispatch table.
+        Async ``register()`` coroutines land in the returned ``pending`` list for
+        the caller's awaiter; declarations are applied only after it drains.
         """
         registry = cls()
         disabled_names = set(disabled or ())
@@ -621,10 +684,7 @@ class ExtensionRegistry:
                 )
                 registry._records.append(record)
                 claimed[discovered.name] = record
-        _await_pending_registers(pending)
-        registry._apply_declarations()
-        registry._apply_interaction_handlers()
-        return registry
+        return registry, pending
 
     def install_handler(self, extension_name: str, event: str, handler: HookHandler) -> None:
         """Add one hook handler to the live dispatch table under *extension_name*.
@@ -1558,6 +1618,42 @@ def _await_pending_registers(pending: list[tuple[ExtensionRecord, Any]]) -> None
             _LOGGER.error("Extension %r %s", record.name, exc)
             record.status = "failed"
             record.error = str(exc)
+        except Exception as exc:
+            _LOGGER.error(
+                "Extension %r async register() raised: %s", record.name, exc, exc_info=True
+            )
+            record.status = "failed"
+            record.error = f"async register() raised: {exc}"
+
+
+_detached_register_tasks: set[asyncio.Task[None]] = set()
+
+
+async def _await_pending_registers_async(pending: list[tuple[ExtensionRecord, Any]]) -> None:
+    """Drive every async ``register()`` on the live loop, fail-open.
+
+    Same contract as :func:`_await_pending_registers` - sequential order, one
+    hard deadline per registration, a timeout failing only that Extension -
+    but without the blocking thread join that froze the whole serving loop for
+    up to the deadline per Extension during startup and reload. A coroutine
+    that suppresses its timeout cancellation is detached after the deadline:
+    it may keep running, but it can no longer hold server start or reload.
+    """
+    loop = asyncio.get_running_loop()
+    for record, coro in pending:
+        task = loop.create_task(coro)
+        _detached_register_tasks.add(task)
+        task.add_done_callback(_detached_register_tasks.discard)
+        done, _ = await asyncio.wait({task}, timeout=_ASYNC_REGISTER_TIMEOUT_SECONDS)
+        if not done:
+            task.cancel()
+            message = str(_AsyncRegisterTimeoutError(_ASYNC_REGISTER_TIMEOUT_SECONDS))
+            _LOGGER.error("Extension %r %s", record.name, message)
+            record.status = "failed"
+            record.error = message
+            continue
+        try:
+            await task
         except Exception as exc:
             _LOGGER.error(
                 "Extension %r async register() raised: %s", record.name, exc, exc_info=True
