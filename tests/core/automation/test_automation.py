@@ -14,7 +14,7 @@ import pytest
 import core.automation.automation as automation_module
 from core.automation import TriggerService
 from core.chat import ChatSession, ChatSessionError, ChatSessionManager, MessageSender, ReplySurface
-from core.runs import ActiveRunError, ChatRunManager, Run, RunKind
+from core.runs import ActiveRunError, ChatRunManager, Run, RunAdmission, RunKind
 from core.sessions import SessionAddress
 from core.subagents import SubAgentBatchTracker
 
@@ -618,11 +618,9 @@ class _CompletionChatLoop:
             return content
 
         return await self._run_manager.start(
-            agent_id=agent_id,
-            session_id=session_id,
-            executor=executor,
-            project_id=project_id,
-            run_kind=run_kind,
+            SessionAddress(project_id=project_id, agent_id=agent_id, session_id=session_id),
+            executor,
+            admission=RunAdmission(run_kind=run_kind),
         )
 
 
@@ -639,10 +637,8 @@ async def test_completion_delivery_aclose_cancels_workers_and_pending_notices(
         return "done"
 
     parent_run = await run_manager.start(
-        agent_id="coder",
-        session_id="session-one",
-        executor=active_executor,
-        project_id=None,
+        SessionAddress(project_id=None, agent_id="coder", session_id="session-one"),
+        active_executor,
     )
     await active_started.wait()
     sessions = ChatSessionManager(tmp_path)
@@ -822,10 +818,8 @@ async def test_completion_delivery_coalesces_every_result_ready_before_run_end(
         return "parent complete"
 
     parent_run = await run_manager.start(
-        agent_id="coder",
-        session_id="session-one",
-        executor=active_executor,
-        project_id=None,
+        SessionAddress(project_id=None, agent_id="coder", session_id="session-one"),
+        active_executor,
     )
     sessions = ChatSessionManager(tmp_path)
     sessions.create("coder", session_id="session-one")
@@ -877,10 +871,8 @@ async def test_completion_delivery_joins_active_run_at_next_request_boundary(
         return "parent complete"
 
     parent_run = await run_manager.start(
-        agent_id="coder",
-        session_id="session-one",
-        executor=active_executor,
-        project_id=None,
+        SessionAddress(project_id=None, agent_id="coder", session_id="session-one"),
+        active_executor,
     )
     sessions = ChatSessionManager(tmp_path)
     session = sessions.create("coder", session_id="session-one")
@@ -926,10 +918,8 @@ async def test_completion_finishing_after_boundary_uses_later_delivery(tmp_path:
         return "parent complete"
 
     parent_run = await run_manager.start(
-        agent_id="coder",
-        session_id="session-one",
-        executor=active_executor,
-        project_id=None,
+        SessionAddress(project_id=None, agent_id="coder", session_id="session-one"),
+        active_executor,
     )
     sessions = ChatSessionManager(tmp_path)
     sessions.create("coder", session_id="session-one")
@@ -978,10 +968,8 @@ async def test_cancelled_pending_notice_does_not_start_empty_follow_up(
         return "parent complete"
 
     parent_run = await run_manager.start(
-        agent_id="coder",
-        session_id="session-one",
-        executor=active_executor,
-        project_id=None,
+        SessionAddress(project_id=None, agent_id="coder", session_id="session-one"),
+        active_executor,
     )
     sessions = ChatSessionManager(tmp_path)
     sessions.create("coder", session_id="session-one")
@@ -1025,10 +1013,8 @@ async def test_user_cancel_persists_pending_completion_without_new_run(tmp_path:
         return "unused"
 
     parent_run = await run_manager.start(
-        agent_id="coder",
-        session_id="session-one",
-        executor=active_executor,
-        project_id=None,
+        SessionAddress(project_id=None, agent_id="coder", session_id="session-one"),
+        active_executor,
     )
     sessions = ChatSessionManager(tmp_path)
     sessions.create("coder", session_id="session-one")
@@ -1082,10 +1068,8 @@ async def test_completion_from_already_cancelled_origin_does_not_start_run(
         return "unused"
 
     parent_run = await run_manager.start(
-        agent_id="coder",
-        session_id="session-one",
-        executor=active_executor,
-        project_id=None,
+        SessionAddress(project_id=None, agent_id="coder", session_id="session-one"),
+        active_executor,
     )
     await run_manager.cancel(parent_run.id, reason="user")
 

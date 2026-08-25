@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from core.sessions import SessionAddress
+
 from .runs_test_support import (
     ChatRunManager,
     Run,
@@ -101,7 +103,8 @@ async def test_tool_call_cancel_does_not_invoke_run_cancel_callbacks_or_cancel_t
         return "done"
 
     run = await manager.start(
-        agent_id="coder", session_id="session-one", executor=execute, project_id=None
+        SessionAddress(project_id=None, agent_id="coder", session_id="session-one"),
+        execute,
     )
     await asyncio.sleep(0)
     run.register_tool_cancel("tool-1", lambda: tool_invocations.append("tool-abort"))

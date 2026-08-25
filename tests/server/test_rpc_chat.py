@@ -131,7 +131,8 @@ async def test_chat_history_includes_active_run_descriptor(tmp_path: Path) -> No
         return "done"
 
     active_run = await state.chat_runs.start(
-        agent_id="coder", session_id="active-session", executor=_blocking_executor, project_id=None
+        SessionAddress(project_id=None, agent_id="coder", session_id="active-session"),
+        _blocking_executor,
     )
     await started.wait()
 
@@ -436,7 +437,8 @@ async def test_chat_methods_reject_compact_command_while_session_run_is_active(
         return "done"
 
     active_run = await state.chat_runs.start(
-        agent_id="coder", session_id="session-one", executor=_blocking_run_executor, project_id=None
+        SessionAddress(project_id=None, agent_id="coder", session_id="session-one"),
+        _blocking_run_executor,
     )
     await started.wait()
 

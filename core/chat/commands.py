@@ -1142,8 +1142,6 @@ class CommandDispatcher:
         except AgentResolutionError:
             return self._notice("agent", f"Cannot move to unknown agent: {target_display}")
 
-        source_session_key = (context.project_id, context.agent_id, context.session_id)
-        target_session_key = (target_project_id, target_agent_id, context.session_id)
         source_address = SessionAddress(
             project_id=context.project_id, agent_id=context.agent_id, session_id=context.session_id
         )
@@ -1151,9 +1149,7 @@ class CommandDispatcher:
             project_id=target_project_id, agent_id=target_agent_id, session_id=context.session_id
         )
         try:
-            async with self._chat_runs.session_admission_guard(
-                source_session_key, target_session_key
-            ):
+            async with self._chat_runs.session_admission_guard(source_address, target_address):
                 metadata = await _command_session_io(
                     sessions,
                     "get_metadata_async",

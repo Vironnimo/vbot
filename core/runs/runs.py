@@ -82,16 +82,6 @@ def _session_address(project_id: str | None, agent_id: str, session_id: str) -> 
     return SessionAddress(project_id=project_id, agent_id=agent_id, session_id=session_id)
 
 
-def _coerce_session_address(
-    key: SessionAddress | tuple[str | None, str, str],
-) -> SessionAddress:
-    """Normalize a supplied session key into a :class:`SessionAddress`."""
-    if isinstance(key, tuple):
-        project_id, agent_id, session_id = key
-        return _session_address(project_id, agent_id, session_id)
-    return key
-
-
 class RunStatus(StrEnum):
     """Terminal and active states for a chat run."""
 
@@ -162,6 +152,27 @@ class WaitingWorkAdmission:
     scope: str
 
 
+@dataclass(frozen=True, slots=True)
+class RunAdmission:
+    """Immutable admission decisions carried with one inbound Run request.
+
+    Every :meth:`ChatRunManager.start` / :meth:`ChatRunManager.enqueue` call
+    supplies these once as one bundle instead of repeating four kwargs. The
+    values are stored unchanged on the created ``Run`` (or its queued item) and
+    never influence Run admission, execution, or cancellation.
+    """
+
+    working_project_id: str | None = None
+    run_kind: RunKind = RunKind.USER
+    contributes_to_agent_activity: bool = True
+    work_id: str | None = None
+
+
+# Module-level singleton so ``admission`` can default without a call at the
+# signature (ruff B008); the instance is immutable.
+DEFAULT_RUN_ADMISSION = RunAdmission()
+
+
 @dataclass
 class QueuedRunItem:
     """One queued run request waiting for a session turn slot."""
@@ -172,10 +183,7 @@ class QueuedRunItem:
     internal: bool
     future: asyncio.Future[Run]
     editable: bool = False
-    run_kind: RunKind = field(default=RunKind.USER, repr=False)
-    contributes_to_agent_activity: bool = field(default=True, repr=False)
-    working_project_id: str | None = field(default=None, repr=False)
-    work_id: str | None = field(default=None, repr=False)
+    admission: RunAdmission = field(default_factory=RunAdmission, repr=False)
     created_at: str = field(default_factory=lambda: datetime.now(UTC).isoformat())
     waiting_scope: str | None = field(default=None, repr=False)
 
@@ -186,7 +194,7 @@ class QueuedRunItem:
             "content": self.display_content,
             "editable": self.editable,
             "internal": self.internal,
-            RUN_KIND_FIELD: self.run_kind.value,
+            RUN_KIND_FIELD: self.admission.run_kind.value,
             "created_at": self.created_at,
         }
 
@@ -653,19 +661,16 @@ class ChatRunManager:
     @asynccontextmanager
     async def session_admission_guard(
         self,
-        *session_keys: SessionAddress | tuple[str | None, str, str],
+        *session_addresses: SessionAddress,
     ) -> AsyncIterator[None]:
         """Hold one atomic no-Run boundary across a Session transition.
 
         Every supplied Session must be idle when the guard is acquired. While
         held, both immediate starts and queued admission are rejected. Supplying
         source and destination addresses together protects an Agent Takeover
-        through the destination divider/note writes as one transition. Each key
-        may be a :class:`SessionAddress` or a raw
-        ``(project_id, agent_id, session_id)`` tuple; tuples are normalized on
-        entry.
+        through the destination divider/note writes as one transition.
         """
-        guarded_sessions = frozenset(_coerce_session_address(key) for key in session_keys)
+        guarded_sessions = frozenset(session_addresses)
         if not guarded_sessions:
             raise ValueError("session admission guard requires at least one session")
 
@@ -737,58 +742,42 @@ class ChatRunManager:
 
     async def start(
         self,
-        *,
-        agent_id: str,
-        session_id: str,
+        address: SessionAddress,
         executor: RunExecutor,
-        project_id: str | None,
-        working_project_id: str | None = None,
-        run_kind: RunKind = RunKind.USER,
-        contributes_to_agent_activity: bool = True,
-        work_id: str | None = None,
+        *,
+        admission: RunAdmission = DEFAULT_RUN_ADMISSION,
     ) -> Run:
         """Start one run if the session has no active run.
 
-        ``project_id`` is a required part of the session identity (see
-        ``SessionAddress``) and also rides onto the created ``Run`` so the
-        executor's session I/O finds the project-scoped path. ``None`` names the
-        identity anchor.
+        ``address`` is the required session identity (see ``SessionAddress``);
+        the created ``Run`` reads its project anchor, agent, and session from
+        it. ``admission`` carries the immutable origin/activity decisions.
         """
-        address = _session_address(project_id, agent_id, session_id)
         async with self._lock:
             if self._closed:
                 raise RunAdmissionBlockedError("run manager is shutting down")
-            self._ensure_run_admission_allowed_locked(address, working_project_id)
+            self._ensure_run_admission_allowed_locked(address, admission.working_project_id)
             active_run = self._active_by_session.get(address)
             if active_run is not None and active_run.status == RunStatus.RUNNING:
-                raise ActiveRunError(f"session already has an active run: {session_id}")
+                raise ActiveRunError(f"session already has an active run: {address.session_id}")
             return self._start_run_locked(
                 address=address,
                 executor=executor,
-                working_project_id=working_project_id,
-                run_kind=run_kind,
-                contributes_to_agent_activity=contributes_to_agent_activity,
-                work_id=work_id,
+                admission=admission,
             )
 
     async def enqueue(
         self,
-        *,
-        agent_id: str,
-        session_id: str,
+        address: SessionAddress,
         executor: RunExecutor,
+        *,
         display_content: str = "",
         editable: bool = False,
         internal: bool = False,
-        project_id: str | None,
-        working_project_id: str | None = None,
-        run_kind: RunKind = RunKind.USER,
-        contributes_to_agent_activity: bool = True,
-        work_id: str | None = None,
         waiting_work_admission: WaitingWorkAdmission | None = None,
+        admission: RunAdmission = DEFAULT_RUN_ADMISSION,
     ) -> QueuedRunItem:
         """Start immediately when idle or append one item to the session queue."""
-        address = _session_address(project_id, agent_id, session_id)
         future: asyncio.Future[Run] = asyncio.get_running_loop().create_future()
         item = QueuedRunItem(
             item_id=str(uuid.uuid4()),
@@ -797,10 +786,7 @@ class ChatRunManager:
             internal=internal,
             future=future,
             editable=editable,
-            run_kind=run_kind,
-            contributes_to_agent_activity=contributes_to_agent_activity,
-            working_project_id=working_project_id,
-            work_id=work_id,
+            admission=admission,
         )
 
         def remove_abandoned_item(completed_future: asyncio.Future[Run]) -> None:
@@ -809,10 +795,10 @@ class ChatRunManager:
             # abandoned and must not remain queued to execute without a consumer.
             if completed_future.cancelled():
                 self.remove_queued(
-                    agent_id,
-                    session_id,
+                    address.agent_id,
+                    address.session_id,
                     item.item_id,
-                    project_id=project_id,
+                    project_id=address.project_id,
                 )
 
         item.future.add_done_callback(remove_abandoned_item)
@@ -822,7 +808,7 @@ class ChatRunManager:
                 item.future.cancel()
                 raise RunAdmissionBlockedError("run manager is shutting down")
             try:
-                self._ensure_run_admission_allowed_locked(address, working_project_id)
+                self._ensure_run_admission_allowed_locked(address, admission.working_project_id)
             except RunAdmissionBlockedError:
                 item.future.cancel()
                 raise
@@ -832,11 +818,8 @@ class ChatRunManager:
                 run = self._start_run_locked(
                     address=address,
                     executor=item.executor,
-                    working_project_id=item.working_project_id,
-                    run_kind=item.run_kind,
                     queue_item_id=item.item_id,
-                    contributes_to_agent_activity=item.contributes_to_agent_activity,
-                    work_id=item.work_id,
+                    admission=item.admission,
                 )
                 item.future.set_result(run)
                 return item
@@ -845,8 +828,8 @@ class ChatRunManager:
             if waiting_scope is None and self._waiting_work_count() >= self._waiting_work_limit:
                 _LOGGER.warning(
                     "Run rejected by global waiting-work limit (agent=%s session=%s limit=%d)",
-                    agent_id,
-                    session_id,
+                    address.agent_id,
+                    address.session_id,
                     self._waiting_work_limit,
                 )
                 raise WaitingWorkLimitError("global waiting work limit reached")
@@ -856,8 +839,8 @@ class ChatRunManager:
             queue.append(item)
             _LOGGER.info(
                 "Run queued for busy session (agent=%s session=%s queue_depth=%d)",
-                agent_id,
-                session_id,
+                address.agent_id,
+                address.session_id,
                 len(queue),
             )
             return item
@@ -1088,7 +1071,7 @@ class ChatRunManager:
         ):
             return True
         return any(
-            item.working_project_id == project_id
+            item.admission.working_project_id == project_id
             for queue in self._queues.values()
             for item in queue
         )
@@ -1225,10 +1208,7 @@ class ChatRunManager:
                     address=address,
                     executor=item.executor,
                     queue_item_id=item.item_id,
-                    working_project_id=item.working_project_id,
-                    run_kind=item.run_kind,
-                    contributes_to_agent_activity=item.contributes_to_agent_activity,
-                    work_id=item.work_id,
+                    admission=item.admission,
                 )
                 item.future.set_result(run)
                 return
@@ -1241,10 +1221,7 @@ class ChatRunManager:
         address: SessionAddress,
         executor: RunExecutor,
         queue_item_id: str | None = None,
-        working_project_id: str | None = None,
-        run_kind: RunKind = RunKind.USER,
-        contributes_to_agent_activity: bool = True,
-        work_id: str | None = None,
+        admission: RunAdmission = DEFAULT_RUN_ADMISSION,
     ) -> Run:
         # The address is the single source of the run's identity: the project
         # anchor, agent, and session all come from it, so a drained queue item
@@ -1254,10 +1231,10 @@ class ChatRunManager:
             agent_id=address.agent_id,
             session_id=address.session_id,
             project_id=address.project_id,
-            working_project_id=working_project_id,
-            run_kind=run_kind,
-            contributes_to_agent_activity=contributes_to_agent_activity,
-            work_id=work_id,
+            working_project_id=admission.working_project_id,
+            run_kind=admission.run_kind,
+            contributes_to_agent_activity=admission.contributes_to_agent_activity,
+            work_id=admission.work_id,
             event_retention_limit=self._run_event_retention_limit,
         )
         run._started_from_queue_item_id = queue_item_id  # noqa: SLF001 - run carries its own start origin.

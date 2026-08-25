@@ -18,7 +18,13 @@ import pytest
 from core.agents import AgentNotFoundError
 from core.chat import ChatMessage, ChatSessionManager
 from core.projects import AgentResolutionError
-from core.runs import ActiveRunError, Run, RunKind, RunNotFoundError
+from core.runs import (
+    DEFAULT_RUN_ADMISSION,
+    ActiveRunError,
+    Run,
+    RunAdmission,
+    RunNotFoundError,
+)
 from core.sessions import SessionAddress
 from core.storage import TemporaryFileManager
 from core.subagents.subagents import (
@@ -335,35 +341,33 @@ class FakeRunManager:
 
     async def start(
         self,
-        *,
-        agent_id: str,
-        session_id: str,
+        address: SessionAddress,
         executor: Any,
-        project_id: str | None = None,
-        working_project_id: str | None = None,
-        run_kind: RunKind = RunKind.USER,
-        work_id: str | None = None,
+        *,
+        admission: RunAdmission = DEFAULT_RUN_ADMISSION,
     ) -> Run:
+        agent_id = address.agent_id
+        session_id = address.session_id
         if (agent_id, session_id) in self.busy_sessions:
             raise ActiveRunError(f"session already has an active run: {session_id}")
         run = Run(
             run_id=f"sub-run-{len(self.started) + 1}",
             agent_id=agent_id,
             session_id=session_id,
-            project_id=project_id,
-            working_project_id=working_project_id,
-            run_kind=run_kind,
-            work_id=work_id,
+            project_id=address.project_id,
+            working_project_id=admission.working_project_id,
+            run_kind=admission.run_kind,
+            work_id=admission.work_id,
         )
         self.started.append(
             {
                 "agent_id": agent_id,
                 "session_id": session_id,
                 "executor": executor,
-                "project_id": project_id,
-                "working_project_id": working_project_id,
-                "run_kind": run_kind,
-                "work_id": work_id,
+                "project_id": address.project_id,
+                "working_project_id": admission.working_project_id,
+                "run_kind": admission.run_kind,
+                "work_id": admission.work_id,
                 "run": run,
             }
         )

@@ -609,7 +609,9 @@ async def test_delete_project_session_creates_fresh_when_none_remain() -> None:
 async def test_delete_busy_session_is_rejected() -> None:
     state, _resolver, sessions = _make_state()
 
-    async with state.chat_runs.session_admission_guard((None, "builder", "s1")):
+    async with state.chat_runs.session_admission_guard(
+        SessionAddress(project_id=None, agent_id="builder", session_id="s1")
+    ):
         with pytest.raises(RpcError) as exc_info:
             await _delete_session(state, {"agent_id": "builder", "session_id": "s1"})
 
@@ -655,10 +657,8 @@ async def test_delete_guard_rejects_run_while_archive_is_waiting() -> None:
 
     with pytest.raises(RunAdmissionBlockedError):
         await state.chat_runs.start(
-            agent_id="builder",
-            session_id="s1",
-            executor=lambda _run: asyncio.sleep(0),
-            project_id=None,
+            SessionAddress(project_id=None, agent_id="builder", session_id="s1"),
+            lambda _run: asyncio.sleep(0),
         )
     sessions.archive_release.set()
     result = await asyncio.wait_for(delete_task, timeout=1)

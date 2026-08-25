@@ -15,7 +15,15 @@ import core.subagents.subagents as subagent_module
 from core.agents import AgentNotFoundError
 from core.chat import ChatMessage, ChatSessionManager
 from core.projects import AgentResolutionError
-from core.runs import ActiveRunError, Run, RunCancelledError, RunKind, RunNotFoundError
+from core.runs import (
+    DEFAULT_RUN_ADMISSION,
+    ActiveRunError,
+    Run,
+    RunAdmission,
+    RunCancelledError,
+    RunNotFoundError,
+)
+from core.sessions import SessionAddress
 from core.storage import TemporaryFileManager
 from core.subagents.subagents import (
     SubAgentBatchTracker,
@@ -267,27 +275,25 @@ class FakeRunManager:
 
     async def start(
         self,
-        *,
-        agent_id: str,
-        session_id: str,
+        address: SessionAddress,
         executor: Any,
-        project_id: str | None = None,
-        working_project_id: str | None = None,
-        run_kind: RunKind = RunKind.USER,
-        work_id: str | None = None,
+        *,
+        admission: RunAdmission = DEFAULT_RUN_ADMISSION,
     ) -> Run:
         if self.start_error is not None:
             raise self.start_error
+        agent_id = address.agent_id
+        session_id = address.session_id
         if (agent_id, session_id) in self.busy_sessions:
             raise ActiveRunError(f"session already has an active run: {session_id}")
         run = Run(
             run_id=f"sub-run-{len(self.started) + 1}",
             agent_id=agent_id,
             session_id=session_id,
-            project_id=project_id,
-            working_project_id=working_project_id,
-            run_kind=run_kind,
-            work_id=work_id,
+            project_id=address.project_id,
+            working_project_id=admission.working_project_id,
+            run_kind=admission.run_kind,
+            work_id=admission.work_id,
         )
         self.started.append((agent_id, session_id, executor, run))
         self.runs[run.id] = run
@@ -296,31 +302,29 @@ class FakeRunManager:
 
     async def enqueue(
         self,
-        *,
-        agent_id: str,
-        session_id: str,
+        address: SessionAddress,
         executor: Any,
+        *,
         display_content: str = "",
         internal: bool = False,
-        project_id: str | None = None,
-        working_project_id: str | None = None,
-        run_kind: RunKind = RunKind.USER,
-        work_id: str | None = None,
+        admission: RunAdmission = DEFAULT_RUN_ADMISSION,
     ) -> Any:
+        agent_id = address.agent_id
+        session_id = address.session_id
         future: asyncio.Future[Run] = asyncio.get_running_loop().create_future()
         item = SimpleNamespace(
             future=future,
             item_id=f"queued-item-{len(self.enqueued) + 1}",
-            work_id=work_id,
+            admission=admission,
         )
         run = Run(
             run_id=f"queued-sub-run-{len(self.enqueued) + 1}",
             agent_id=agent_id,
             session_id=session_id,
-            project_id=project_id,
-            working_project_id=working_project_id,
-            run_kind=run_kind,
-            work_id=work_id,
+            project_id=address.project_id,
+            working_project_id=admission.working_project_id,
+            run_kind=admission.run_kind,
+            work_id=admission.work_id,
         )
         self.enqueued.append(
             {
@@ -329,11 +333,11 @@ class FakeRunManager:
                 "executor": executor,
                 "display_content": display_content,
                 "internal": internal,
-                "project_id": project_id,
-                "working_project_id": working_project_id,
+                "project_id": address.project_id,
+                "working_project_id": admission.working_project_id,
                 "item": item,
                 "run": run,
-                "work_id": work_id,
+                "work_id": admission.work_id,
             }
         )
         self.runs[run.id] = run

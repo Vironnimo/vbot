@@ -207,6 +207,7 @@ from core.runs import (
     ActiveRunError,
     QueuedRunItem,
     Run,
+    RunAdmission,
     RunExecutor,
     RunInterruptedError,
     RunKind,
@@ -1221,17 +1222,17 @@ class ChatLoop:
             resume_process_restart=resume_process_restart,
         )
         return await manager.enqueue(
-            agent_id=agent_id,
-            session_id=session.id,
-            executor=_QueuedRunExecutor(self, request),
+            SessionAddress(project_id=project_id, agent_id=agent_id, session_id=session.id),
+            _QueuedRunExecutor(self, request),
             display_content=_display_content_preview(content),
             editable=queue_content_is_editable(content),
             internal=internal,
-            project_id=project_id,
-            working_project_id=working_project_id,
             waiting_work_admission=waiting_work_admission,
-            run_kind=run_kind,
-            contributes_to_agent_activity=contributes_to_agent_activity,
+            admission=RunAdmission(
+                working_project_id=working_project_id,
+                run_kind=run_kind,
+                contributes_to_agent_activity=contributes_to_agent_activity,
+            ),
         )
 
     def build_queue_update(
@@ -1278,17 +1279,15 @@ class ChatLoop:
             agent_id, session_id, create_missing=False, project_id=project_id
         )
         return await self._dependencies.run_manager.start(
-            agent_id=agent_id,
-            session_id=session.id,
-            executor=lambda run: self._execute_manual_compaction(
+            SessionAddress(project_id=project_id, agent_id=agent_id, session_id=session.id),
+            lambda run: self._execute_manual_compaction(
                 run,
                 agent,
                 session,
                 compaction_service,
                 instruction=instruction,
             ),
-            project_id=project_id,
-            working_project_id=working_project_id,
+            admission=RunAdmission(working_project_id=working_project_id),
         )
 
     async def compact_session(
@@ -1637,13 +1636,13 @@ class ChatLoop:
             resume_process_restart=resume_process_restart,
         )
         return await manager.start(
-            agent_id=agent_id,
-            session_id=session.id,
-            executor=lambda run: self._execute_run(run, request),
-            project_id=project_id,
-            working_project_id=working_project_id,
-            run_kind=run_kind,
-            contributes_to_agent_activity=contributes_to_agent_activity,
+            SessionAddress(project_id=project_id, agent_id=agent_id, session_id=session.id),
+            lambda run: self._execute_run(run, request),
+            admission=RunAdmission(
+                working_project_id=working_project_id,
+                run_kind=run_kind,
+                contributes_to_agent_activity=contributes_to_agent_activity,
+            ),
         )
 
     async def _execute_run(

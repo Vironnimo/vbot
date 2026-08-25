@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+from core.sessions import SessionAddress
+
 from .runs_test_support import (
     ActiveRunError,
     ChatRunManager,
     Run,
+    RunAdmission,
     RunCancelledError,
     RunNotFoundError,
     asyncio,
@@ -24,18 +27,14 @@ async def test_working_project_is_internal_and_snapshotted_through_queue() -> No
         return "done"
 
     active = await manager.start(
-        agent_id="coder",
-        session_id="session-one",
-        executor=blocked,
-        project_id=None,
-        working_project_id="vbot",
+        SessionAddress(project_id=None, agent_id="coder", session_id="session-one"),
+        blocked,
+        admission=RunAdmission(working_project_id="vbot"),
     )
     queued = await manager.enqueue(
-        agent_id="coder",
-        session_id="session-one",
-        executor=lambda run: asyncio.sleep(0, result=run.working_project_id),
-        project_id=None,
-        working_project_id="other",
+        SessionAddress(project_id=None, agent_id="coder", session_id="session-one"),
+        lambda run: asyncio.sleep(0, result=run.working_project_id),
+        admission=RunAdmission(working_project_id="other"),
     )
 
     assert manager.has_activity_for_working_project("vbot") is True
@@ -62,14 +61,13 @@ async def test_has_activity_for_agent_reports_active_and_queued_work() -> None:
         return "queued"
 
     active_run = await manager.start(
-        agent_id="coder", session_id="session-one", executor=active_execute, project_id=None
+        SessionAddress(project_id=None, agent_id="coder", session_id="session-one"),
+        active_execute,
     )
     queued_item = await manager.enqueue(
-        agent_id="coder",
-        session_id="session-one",
-        executor=queued_execute,
+        SessionAddress(project_id=None, agent_id="coder", session_id="session-one"),
+        queued_execute,
         display_content="Queued next",
-        project_id=None,
     )
 
     assert manager.has_activity_for_agent("coder", project_id=None) is True
@@ -96,14 +94,13 @@ async def test_has_activity_for_session_is_scoped_to_one_session() -> None:
         return "queued"
 
     active_run = await manager.start(
-        agent_id="coder", session_id="session-one", executor=active_execute, project_id=None
+        SessionAddress(project_id=None, agent_id="coder", session_id="session-one"),
+        active_execute,
     )
     queued_item = await manager.enqueue(
-        agent_id="coder",
-        session_id="session-one",
-        executor=queued_execute,
+        SessionAddress(project_id=None, agent_id="coder", session_id="session-one"),
+        queued_execute,
         display_content="Queued next",
-        project_id=None,
     )
 
     # Busy on the exact session, but not on the agent's other sessions nor on
@@ -135,10 +132,8 @@ async def test_project_and_identity_sessions_with_same_ids_never_collide() -> No
         return run.id
 
     project_run = await manager.start(
-        agent_id="coder",
-        session_id="main",
-        executor=execute,
-        project_id="acme",
+        SessionAddress(project_id="acme", agent_id="coder", session_id="main"),
+        execute,
     )
     await asyncio.sleep(0)
 
@@ -151,7 +146,8 @@ async def test_project_and_identity_sessions_with_same_ids_never_collide() -> No
 
     # An identity run on the same (agent, session) ids starts fine in parallel …
     identity_run = await manager.start(
-        agent_id="coder", session_id="main", executor=execute, project_id=None
+        SessionAddress(project_id=None, agent_id="coder", session_id="main"),
+        execute,
     )
     # Let the executor task actually start before cancelling it (a same-tick
     # cancel would close the never-run task without terminal bookkeeping).
@@ -159,7 +155,8 @@ async def test_project_and_identity_sessions_with_same_ids_never_collide() -> No
     # … while a second start in the *same* anchor is still rejected.
     with pytest.raises(ActiveRunError):
         await manager.start(
-            agent_id="coder", session_id="main", executor=execute, project_id="acme"
+            SessionAddress(project_id="acme", agent_id="coder", session_id="main"),
+            execute,
         )
 
     # Cancelling the identity session leaves the project run untouched.
@@ -183,7 +180,8 @@ async def test_identity_run_leaves_project_id_none() -> None:
         return run.id
 
     run = await manager.start(
-        agent_id="coder", session_id="sess-uuid", executor=execute, project_id=None
+        SessionAddress(project_id=None, agent_id="coder", session_id="sess-uuid"),
+        execute,
     )
     await asyncio.sleep(0)
 
@@ -208,10 +206,8 @@ async def test_emitted_events_carry_run_project_id() -> None:
         return "done"
 
     project_run = await manager.start(
-        agent_id="coder",
-        session_id="sess-uuid",
-        executor=execute,
-        project_id="acme",
+        SessionAddress(project_id="acme", agent_id="coder", session_id="sess-uuid"),
+        execute,
     )
     await project_run.wait()
     assert all(event.project_id == "acme" for event in project_run.events)
@@ -219,7 +215,8 @@ async def test_emitted_events_carry_run_project_id() -> None:
     assert visible.to_dict()["project_id"] == "acme"
 
     identity_run = await manager.start(
-        agent_id="coder", session_id="sess-uuid-2", executor=execute, project_id=None
+        SessionAddress(project_id=None, agent_id="coder", session_id="sess-uuid-2"),
+        execute,
     )
     await identity_run.wait()
     assert all(event.project_id is None for event in identity_run.events)
@@ -242,17 +239,13 @@ async def test_queued_project_run_carries_project_id_when_drained() -> None:
         return "queued"
 
     active_run = await manager.start(
-        agent_id="coder",
-        session_id="sess-uuid",
-        executor=active_execute,
-        project_id="acme",
+        SessionAddress(project_id="acme", agent_id="coder", session_id="sess-uuid"),
+        active_execute,
     )
     item = await manager.enqueue(
-        agent_id="coder",
-        session_id="sess-uuid",
-        executor=queued_execute,
+        SessionAddress(project_id="acme", agent_id="coder", session_id="sess-uuid"),
+        queued_execute,
         display_content="queued",
-        project_id="acme",
     )
 
     # The session is busy, so the item is queued under the project scope.
@@ -283,7 +276,8 @@ async def test_cancel_by_session_is_scoped_to_the_project_anchor() -> None:
         return "done"
 
     project_run = await manager.start(
-        agent_id="coder", session_id="sess-uuid", executor=execute, project_id="acme"
+        SessionAddress(project_id="acme", agent_id="coder", session_id="sess-uuid"),
+        execute,
     )
     await asyncio.sleep(0)
 
@@ -315,7 +309,8 @@ async def test_has_activity_for_agent_is_scoped_to_the_project_anchor() -> None:
         return "done"
 
     run = await manager.start(
-        agent_id="coder", session_id="sess-uuid", executor=execute, project_id="acme"
+        SessionAddress(project_id="acme", agent_id="coder", session_id="sess-uuid"),
+        execute,
     )
 
     assert manager.has_activity_for_agent("coder", project_id="acme") is True

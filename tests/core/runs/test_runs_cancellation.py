@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from core.sessions import SessionAddress
+
 from .runs_test_support import (
     ASSISTANT_OUTPUT_DELTA_EVENT,
     ChatRunManager,
@@ -31,7 +33,8 @@ async def test_cancel_marks_run_cancelled_and_suppresses_late_output() -> None:
         return "ignored"
 
     run = await manager.start(
-        agent_id="coder", session_id="session-one", executor=execute, project_id=None
+        SessionAddress(project_id=None, agent_id="coder", session_id="session-one"),
+        execute,
     )
     await output_started.wait()
     run.request_cancel()
@@ -58,7 +61,8 @@ async def test_immediate_cancel_reaches_terminal_and_releases_session() -> None:
         return "must not run"
 
     run = await manager.start(
-        agent_id="coder", session_id="session-one", executor=execute, project_id=None
+        SessionAddress(project_id=None, agent_id="coder", session_id="session-one"),
+        execute,
     )
     run.request_cancel()
 
@@ -72,7 +76,8 @@ async def test_immediate_cancel_reaches_terminal_and_releases_session() -> None:
     assert manager.active_run(agent_id="coder", session_id="session-one", project_id=None) is None
 
     replacement = await manager.start(
-        agent_id="coder", session_id="session-one", executor=execute, project_id=None
+        SessionAddress(project_id=None, agent_id="coder", session_id="session-one"),
+        execute,
     )
     assert await replacement.wait() == "must not run"
 
@@ -101,7 +106,8 @@ async def test_cancel_invokes_registered_abort_callback() -> None:
         return "done"
 
     run = await manager.start(
-        agent_id="coder", session_id="session-one", executor=execute, project_id=None
+        SessionAddress(project_id=None, agent_id="coder", session_id="session-one"),
+        execute,
     )
     await asyncio.sleep(0)
     await manager.cancel(run.id)
@@ -133,18 +139,14 @@ async def test_cancel_keeps_session_owned_until_async_cleanup_finishes() -> None
         return "second"
 
     first = await manager.start(
-        agent_id="coder",
-        session_id="session-one",
-        executor=first_executor,
-        project_id=None,
+        SessionAddress(project_id=None, agent_id="coder", session_id="session-one"),
+        first_executor,
     )
     await first_started.wait()
     queued = await manager.enqueue(
-        agent_id="coder",
-        session_id="session-one",
+        SessionAddress(project_id=None, agent_id="coder", session_id="session-one"),
+        second_executor,
         display_content="second",
-        executor=second_executor,
-        project_id=None,
     )
 
     cancelling = asyncio.create_task(manager.cancel(first.id, reason="user"))
@@ -215,7 +217,8 @@ async def test_cancel_by_session_requests_cancel_and_returns_run() -> None:
         return "done"
 
     run = await manager.start(
-        agent_id="coder", session_id="session-one", executor=execute, project_id=None
+        SessionAddress(project_id=None, agent_id="coder", session_id="session-one"),
+        execute,
     )
     await started.wait()
 
@@ -253,7 +256,8 @@ async def test_request_cancel_stores_reason_and_surfaces_in_terminal_payload() -
         return "done"
 
     run = await manager.start(
-        agent_id="coder", session_id="session-one", executor=execute, project_id=None
+        SessionAddress(project_id=None, agent_id="coder", session_id="session-one"),
+        execute,
     )
     await asyncio.sleep(0)
     run.request_cancel(reason="user")
@@ -280,7 +284,8 @@ async def test_request_cancel_omits_reason_from_payload_when_not_provided() -> N
         return "done"
 
     run = await manager.start(
-        agent_id="coder", session_id="session-one", executor=execute, project_id=None
+        SessionAddress(project_id=None, agent_id="coder", session_id="session-one"),
+        execute,
     )
     await asyncio.sleep(0)
     run.request_cancel()
