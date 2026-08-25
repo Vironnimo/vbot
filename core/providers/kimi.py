@@ -15,6 +15,8 @@ from core.providers.errors import ProviderError
 from core.providers.openai_compatible import OpenAICompatibleAdapter
 from core.providers.providers import AuthConfig, ProviderConfig
 from core.providers.reasoning import (
+    REASONING_REPLAY_FIDELITY_READABLE_ONLY,
+    ReasoningReplayFidelity,
     model_reasoning_supported,
     normalize_thinking_effort,
     remove_reasoning_kwargs,
@@ -166,6 +168,11 @@ class KimiAdapter(OpenAICompatibleAdapter):
         del model_id
         return KIMI_IMAGE_VIDEO_MEDIA_TYPES
 
+    def reasoning_replay_fidelity(self, model_id: str) -> ReasoningReplayFidelity:
+        """Kimi's chat wire round-trips readable ``reasoning_content`` only."""
+        del model_id
+        return REASONING_REPLAY_FIDELITY_READABLE_ONLY
+
     def request_context_kwargs(
         self,
         *,
@@ -179,18 +186,6 @@ class KimiAdapter(OpenAICompatibleAdapter):
         del project_id
         conversation_id = f"{agent_id}:{session_id}"
         return {"prompt_cache_key": prompt_cache_affinity_id or conversation_id}
-
-    def _format_assistant_message(
-        self,
-        message: dict[str, Any],
-        *,
-        model_id: str | None = None,
-    ) -> dict[str, Any]:
-        formatted = super()._format_assistant_message(message, model_id=model_id)
-        reasoning = message.get("reasoning")
-        if isinstance(reasoning, str) and reasoning:
-            formatted["reasoning_content"] = reasoning
-        return formatted
 
     def _format_user_content_part(self, part: Any) -> dict[str, Any]:
         if isinstance(part, dict) and part.get("type") == "media":

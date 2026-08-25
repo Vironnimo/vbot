@@ -66,7 +66,9 @@ from core.providers.reasoning import (
     REASONING_INTENT_EFFORT,
     REASONING_INTENT_OFF,
     REASONING_INTENT_ON,
+    REASONING_REPLAY_FIDELITY_META_ONLY,
     ReasoningIntent,
+    ReasoningReplayFidelity,
     model_reasoning_budget_max,
     model_reasoning_control,
     model_reasoning_levels,
@@ -484,6 +486,16 @@ class AnthropicCompatibleAdapter(ProviderAdapter):
         """Return media types verified for this compatible endpoint profile."""
         del model_id
         return self._wire_media_types
+
+    def reasoning_replay_fidelity(self, model_id: str) -> ReasoningReplayFidelity:
+        """The Messages wire round-trips signed thinking blocks only.
+
+        Assistant serialization goes through ``_to_anthropic_assistant_content``,
+        which replays ``reasoning_meta.content_blocks`` verbatim and never emits
+        a readable text field; this declaration documents that native shape.
+        """
+        del model_id
+        return REASONING_REPLAY_FIDELITY_META_ONLY
 
     # ------------------------------------------------------------------
     # Header / payload helpers

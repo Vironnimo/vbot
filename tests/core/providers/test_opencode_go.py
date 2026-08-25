@@ -451,10 +451,12 @@ class TestOpenCodeGoAdapter:
             message for message in payload["messages"] if message.get("role") == "assistant"
         ]
         assert len(assistant_messages) == 2
-        assert assistant_messages[0]["reasoning_content"] == "first reasoning"
+        # Meta supersedes duplicated plaintext: when a turn captured opaque
+        # reasoning_details, no readable reasoning_content is duplicated.
         assert assistant_messages[0]["reasoning_details"] == [{"trace": "first"}]
-        assert assistant_messages[1]["reasoning_content"] == "second reasoning"
+        assert "reasoning_content" not in assistant_messages[0]
         assert assistant_messages[1]["reasoning_details"] == [{"trace": "second"}]
+        assert "reasoning_content" not in assistant_messages[1]
 
     def test_deepseek_none_thinking_effort_omits_reasoning_effort(
         self,
@@ -1246,10 +1248,11 @@ class TestOpenCodeGoAdapterMinimaxRouting:
             if isinstance(message, dict) and message.get("role") == "assistant"
         ]
         assert len(assistant_messages) == 2
-        assert assistant_messages[0]["reasoning_content"] == "old thinking"
+        # Meta supersedes duplicated plaintext under meta_preferred fidelity.
         assert assistant_messages[0]["reasoning_details"] == [{"trace": "old"}]
-        assert assistant_messages[1]["reasoning_content"] == "latest thinking"
+        assert "reasoning_content" not in assistant_messages[0]
         assert assistant_messages[1]["reasoning_details"] == [{"trace": "latest"}]
+        assert "reasoning_content" not in assistant_messages[1]
 
     @pytest.mark.parametrize("model_id", ANTHROPIC_MESSAGES_MODELS)
     @respx.mock

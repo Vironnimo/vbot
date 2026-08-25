@@ -59,6 +59,8 @@ from core.providers.reasoning import (
     REASONING_INTENT_EFFORT,
     REASONING_INTENT_OFF,
     REASONING_INTENT_ON,
+    REASONING_REPLAY_FIDELITY_META_ONLY,
+    REASONING_REPLAY_FIDELITY_READABLE_ONLY,
     ReasoningIntent,
     model_reasoning_budget_max,
     model_reasoning_control,
@@ -342,18 +344,36 @@ class OpenAICompatibleAdapter(ProviderAdapter):
     ) -> dict[str, Any]:
         """Convert an internal assistant message to its wire representation.
 
-        Subclasses may override this to inject provider-specific fields
-        (e.g. ``reasoning_content`` for DeepSeek-compatible endpoints).
+        Serialization carries exactly one reasoning class per the adapter's
+        declared :meth:`reasoning_replay_fidelity`: opaque meta when the turn
+        captured it and the declaration allows meta, otherwise the readable
+        text — never both. Subclasses may still override for provider-specific
+        field placement (e.g. Ollama Cloud's scanned carrier field).
         """
-        del model_id
         wire = _to_openai_assistant_message(message)
+        fidelity = self.reasoning_replay_fidelity(model_id or "")
+        has_meta = any(key in wire for key in OPENAI_REASONING_META_KEYS)
+        if fidelity == REASONING_REPLAY_FIDELITY_META_ONLY:
+            # Strict/block-shaped wires never take a top-level readable field.
+            wire.pop("reasoning_content", None)
+            return wire
+
         reasoning = message.get("reasoning")
-        if isinstance(reasoning, str) and reasoning:
-            # ``reasoning_content`` is the de-facto readable-reasoning field on
-            # OpenAI-compatible chat wires. Keeping it as the lossless fallback
-            # prevents an unprofiled Model from silently losing historical
-            # Reasoning; adapters with a different native shape replace it.
-            wire["reasoning_content"] = reasoning
+        readable = isinstance(reasoning, str) and bool(reasoning)
+        if fidelity == REASONING_REPLAY_FIDELITY_READABLE_ONLY:
+            # Wires with no meta class; stray meta keys are stripped defensively.
+            for key in OPENAI_REASONING_META_KEYS:
+                wire.pop(key, None)
+            if readable:
+                wire["reasoning_content"] = reasoning
+            return wire
+
+        # ``meta_preferred``: meta supersedes duplicated plaintext (OpenRouter's
+        # documented contract); readable text stays the lossless fallback only
+        # when no meta was captured.
+        if has_meta or not readable:
+            return wire
+        wire["reasoning_content"] = reasoning
         return wire
 
     def _format_message(

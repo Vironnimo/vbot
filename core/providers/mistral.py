@@ -23,6 +23,8 @@ from core.providers.openai_compatible import (
     _read_string,
 )
 from core.providers.reasoning import (
+    REASONING_REPLAY_FIDELITY_META_ONLY,
+    ReasoningReplayFidelity,
     closest_supported_effort,
     model_reasoning_levels,
 )
@@ -182,6 +184,11 @@ class MistralAdapter(OpenAICompatibleAdapter):
             return False
         return mistral_metadata.get(PROMPT_MODE_METADATA_KEY) == PROMPT_MODE_REASONING
 
+    def reasoning_replay_fidelity(self, model_id: str) -> ReasoningReplayFidelity:
+        """Mistral replays structured thinking chunks only, never a text field."""
+        del model_id
+        return REASONING_REPLAY_FIDELITY_META_ONLY
+
     def _format_assistant_message(
         self,
         message: dict[str, Any],
@@ -190,7 +197,6 @@ class MistralAdapter(OpenAICompatibleAdapter):
     ) -> dict[str, Any]:
         """Replay the original Mistral content chunks whenever they are available."""
         wire = super()._format_assistant_message(message, model_id=model_id)
-        wire.pop("reasoning_content", None)
         reasoning_meta = message.get("reasoning_meta")
         if isinstance(reasoning_meta, Mapping):
             stored_chunks = reasoning_meta.get(MISTRAL_CONTENT_CHUNKS_META_KEY)
