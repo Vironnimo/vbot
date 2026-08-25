@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from difflib import get_close_matches
 from typing import Any
 
 from cli.formatting import string_or_default as _string_or_default
@@ -144,9 +145,60 @@ def skill_set_disabled(instance: ServerInstance, name: str, disabled: bool) -> C
 
     payload = _rpc_call(instance, "skill.set_disabled", {"name": name, "disabled": disabled})
     if not payload.ok:
+        if "unknown skill" in payload.message:
+            return _skill_name_suggestions(instance, payload.to_command_result())
         return payload.to_command_result()
     state = "disabled" if disabled else "enabled"
     return CommandResult(ok=True, message=f"{state} skill {name}", instance=instance)
+
+
+def _skill_name_suggestions(instance: ServerInstance, failed: CommandResult) -> CommandResult:
+    """Attach known skill names to an unknown-name failure for one-retry fixes."""
+
+    inventory_payload = _rpc_call(instance, "skill.inventory", {})
+    names: list[str] = []
+    if inventory_payload.ok:
+        skills = inventory_payload.data.get("skills")
+        if isinstance(skills, list):
+            names = sorted(
+                set(
+                    _string_list([skill.get("name") for skill in skills if isinstance(skill, dict)])
+                )
+            )
+    close = get_close_matches(_first_quoted(failed.message), names, n=1)
+    lines = [failed.message]
+    if close:
+        lines.append(f"did you mean: {close[0]}")
+    if names:
+        lines.append(f"known skills: {', '.join(names)}")
+    return CommandResult(ok=False, message="\n".join(lines), instance=instance)
+
+
+def _first_quoted(message: str) -> str:
+    start = message.find("'")
+    if start == -1:
+        return message
+    end = message.find("'", start + 1)
+    return message[start + 1 : end] if end != -1 else message
+
+
+def _agent_id_suggestions(instance: ServerInstance, failed: CommandResult) -> CommandResult:
+    """Attach known agent ids to an unknown-agent failure."""
+
+    listing = _rpc_call(instance, "agent.list", {})
+    agents = listing.data.get("agents") if listing.ok else None
+    names: list[str] = []
+    if isinstance(agents, list):
+        for agent in agents:
+            if isinstance(agent, dict) and isinstance(agent.get("id"), str):
+                names.append(agent["id"])
+    close = get_close_matches(_first_quoted(failed.message), names, n=1)
+    lines = [failed.message]
+    if close:
+        lines.append(f"did you mean: {close[0]}")
+    if names:
+        lines.append(f"available agents: {', '.join(names)}")
+    return CommandResult(ok=False, message="\n".join(lines), instance=instance)
 
 
 def skill_share(
@@ -163,7 +215,7 @@ def skill_share(
         {"agent_id": agent_id, "name": name, "shared": True, "receivers": list(receivers)},
     )
     if not payload.ok:
-        return payload.to_command_result()
+        return _share_failure_result(instance, agent_id, name, payload.to_command_result())
     return CommandResult(
         ok=True,
         message=(
@@ -172,6 +224,42 @@ def skill_share(
         ),
         instance=instance,
     )
+
+
+def _share_failure_result(
+    instance: ServerInstance,
+    agent_id: str,
+    name: str,
+    failed: CommandResult,
+) -> CommandResult:
+    """Route share/unshare failures to the matching candidate suggestion."""
+
+    if "unknown agent" in failed.message or "unknown receiver" in failed.message:
+        return _agent_id_suggestions(instance, failed)
+    if f"owns no private skill named {name!r}" in failed.message:
+        inventory_payload = _rpc_call(instance, "skill.inventory", {})
+        owned: list[str] = []
+        if inventory_payload.ok:
+            skills = inventory_payload.data.get("skills")
+            if isinstance(skills, list):
+                owned = sorted(
+                    set(
+                        _string_list(
+                            [
+                                skill.get("name")
+                                for skill in skills
+                                if isinstance(skill, dict) and skill.get("owner_id") == agent_id
+                            ]
+                        )
+                    )
+                )
+        lines = [failed.message]
+        if owned:
+            lines.append(f"{agent_id}'s private skills: {', '.join(owned)}")
+        else:
+            lines.append(f"{agent_id} owns no private skills")
+        return CommandResult(ok=False, message="\n".join(lines), instance=instance)
+    return failed
 
 
 def skill_unshare(instance: ServerInstance, agent_id: str, name: str) -> CommandResult:
@@ -183,7 +271,7 @@ def skill_unshare(instance: ServerInstance, agent_id: str, name: str) -> Command
         {"agent_id": agent_id, "name": name, "shared": False},
     )
     if not payload.ok:
-        return payload.to_command_result()
+        return _share_failure_result(instance, agent_id, name, payload.to_command_result())
     return CommandResult(
         ok=True, message=f"unshared skill {name} from {agent_id}", instance=instance
     )

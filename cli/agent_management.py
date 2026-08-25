@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping, Sequence
+from difflib import get_close_matches
 from typing import Any
 
 from cli.formatting import bool_text as _bool_text
@@ -154,7 +155,8 @@ def agent_reorder(instance: ServerInstance, agent_ids: Sequence[str]) -> Command
 
     Reads the current listing first so the caller does not need to know the
     optimistic-concurrency revision; agents not passed keep their relative
-    order after the listed ones.
+    order after the listed ones. Unknown ids fail before any mutation with
+    close-match suggestions so a wrong id can be corrected in one retry.
     """
 
     if len(set(agent_ids)) != len(agent_ids):
@@ -172,6 +174,14 @@ def agent_reorder(instance: ServerInstance, agent_ids: Sequence[str]) -> Command
         for agent in current_agents:
             if isinstance(agent, dict) and isinstance(agent.get("id"), str):
                 current_ids.append(agent["id"])
+    known = set(current_ids)
+    unknown_ids = [agent_id for agent_id in agent_ids if agent_id not in known]
+    if unknown_ids:
+        return CommandResult(
+            ok=False,
+            message=_unknown_agent_error(unknown_ids[0], unknown_ids, current_ids),
+            instance=instance,
+        )
     ordered_ids = list(agent_ids) + [
         agent_id for agent_id in current_ids if agent_id not in set(agent_ids)
     ]
@@ -188,6 +198,23 @@ def agent_reorder(instance: ServerInstance, agent_ids: Sequence[str]) -> Command
         message=f"agent roster reordered (revision {revision}): {', '.join(ordered_ids)}",
         instance=instance,
     )
+
+
+def _unknown_agent_error(
+    first_unknown: str,
+    unknown_ids: Sequence[str],
+    candidates: Sequence[str],
+) -> str:
+    close = get_close_matches(first_unknown, list(candidates), n=1)
+    lines = [f"unknown agent id: {first_unknown}"]
+    if close:
+        lines.append(f"did you mean: {close[0]}")
+    if candidates:
+        lines.append(f"available agents: {', '.join(candidates)}")
+    extra = len(unknown_ids) - 1
+    if extra > 0:
+        lines.append(f"(plus {extra} more unknown id(s) in the reorder list)")
+    return "\n".join(lines)
 
 
 def _format_agent_rows(agents: Sequence[object]) -> str:

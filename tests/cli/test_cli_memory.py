@@ -141,3 +141,74 @@ def test_memory_commands_fail_on_rpc_error(tmp_path: Path, monkeypatch: pytest.M
 
     assert result.ok is False
     assert result.message.startswith("invalid_request:")
+
+
+def test_memory_failure_with_unknown_agent_lists_available_agents(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    instance = make_instance(tmp_path)
+
+    def fake_post(
+        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
+    ) -> httpx.Response:
+        if json["method"] == "memory.list":
+            return httpx.Response(
+                400,
+                json={
+                    "ok": False,
+                    "error": {"code": "not_found", "message": "agent not found: 'assistnt'"},
+                },
+            )
+        assert json["method"] == "agent.list"
+        return httpx.Response(
+            200,
+            json={"ok": True, "result": {"agents": [{"id": "assistant"}, {"id": "coder"}]}},
+        )
+
+    monkeypatch.setattr(memory_management.httpx, "post", fake_post)
+
+    result = memory_management.memory_list(instance, "assistnt")
+
+    assert result.ok is False
+    assert "did you mean: assistant" in result.message
+    assert "available agents: assistant, coder" in result.message
+
+
+def test_memory_remove_bad_entry_id_shows_existing_ids(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    instance = make_instance(tmp_path)
+
+    def fake_post(
+        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
+    ) -> httpx.Response:
+        if json["method"] == "memory.remove":
+            return httpx.Response(
+                400,
+                json={
+                    "ok": False,
+                    "error": {"code": "not_found", "message": "entry 99 does not exist"},
+                },
+            )
+        assert json["method"] == "memory.list"
+        return httpx.Response(
+            200,
+            json={
+                "ok": True,
+                "result": {
+                    "agent_id": "assistant",
+                    "scopes": {
+                        "agent": [{"id": 1, "scope": "agent", "content": "a"}],
+                        "user": [],
+                    },
+                },
+            },
+        )
+
+    monkeypatch.setattr(memory_management.httpx, "post", fake_post)
+
+    result = memory_management.memory_remove(instance, "assistant", "agent", 99, True)
+
+    assert result.ok is False
+    assert "entry 99 does not exist" in result.message
+    assert "existing agent-scope entries: 1" in result.message
