@@ -1560,14 +1560,31 @@ class TestResolveRequestOutputLimit:
             is None
         )
 
-    def test_exhausted_context_fails_locally(self) -> None:
+    def test_exhausted_context_within_reserve_sends_unclamped(self) -> None:
+        """An estimate filling the window only within its uncertainty margin passes.
+
+        Live evidence 2026-08-25: replayed reasoning blobs estimated ~1.06M
+        against a 1M window while real prompt tokens were ~220k. Inside the
+        reserve the request goes out unclamped instead of failing locally.
+        """
+        resolved = resolve_request_output_limit(
+            explicit_limit=None,
+            model_output_limit=8_192,
+            provider_default=None,
+            effective_context_window=8_192,
+            estimated_input_tokens=8_192,
+        )
+
+        assert resolved == 8_192
+
+    def test_exhausted_context_beyond_reserve_fails_locally(self) -> None:
         with pytest.raises(ProviderError) as exc_info:
             resolve_request_output_limit(
                 explicit_limit=None,
                 model_output_limit=8_192,
                 provider_default=None,
                 effective_context_window=8_192,
-                estimated_input_tokens=8_192,
+                estimated_input_tokens=20_000,
             )
 
         assert exc_info.value.retryable is False

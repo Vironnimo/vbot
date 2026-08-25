@@ -968,12 +968,12 @@ async def test_mid_tool_stale_compaction_rebuilds_request_with_concurrent_note(
             {
                 "content": None,
                 "tool_calls": [{"id": "call-weather", "name": "get_weather", "arguments": {}}],
-                "usage": {"input_tokens": 90, "output_tokens": 5},
+                "usage": {"input_tokens": 1_800, "output_tokens": 50},
             },
             {
                 "content": "Sunny",
                 "tool_calls": None,
-                "usage": {"input_tokens": 20, "output_tokens": 5},
+                "usage": {"input_tokens": 200, "output_tokens": 50},
             },
         ]
     )
@@ -993,7 +993,7 @@ async def test_mid_tool_stale_compaction_rebuilds_request_with_concurrent_note(
         storage=StubStorage(
             {"auto": True, "threshold": 0.8, "tail_tokens": 15_000, "summary_model": None}
         ),
-        models=StubModels({("openai", "gpt-5.2"): 100}),
+        models=StubModels({("openai", "gpt-5.2"): 2_000}),
     )
     runtime.chat_sessions.create("coder", session_id="session-one")
     loop = build_chat_loop(runtime, compaction_service=cast(Any, compaction_service))
