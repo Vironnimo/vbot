@@ -140,6 +140,26 @@ class TestReadableOnlyDeclaration:
             adapter.reasoning_replay_fidelity("kimi-k3") == REASONING_REPLAY_FIDELITY_READABLE_ONLY
         )
 
+    def test_ollama_cloud_declares_readable_only(self) -> None:
+        from core.providers.ollama import OLLAMA_CLOUD_MODE, OllamaCloudAdapter
+
+        adapter = OllamaCloudAdapter(
+            _config("ollama-cloud"),
+            "ollama-secret",
+            connection_mode=OLLAMA_CLOUD_MODE,
+        )
+
+        assert (
+            adapter.reasoning_replay_fidelity("glm-5.2") == REASONING_REPLAY_FIDELITY_READABLE_ONLY
+        )
+
+    def test_anthropic_compatible_declares_meta_only(self) -> None:
+        from core.providers.anthropic_compatible import AnthropicCompatibleAdapter
+
+        adapter = AnthropicCompatibleAdapter(_config("anthropic-compatible"), "secret")
+
+        assert adapter.reasoning_replay_fidelity("claude") == REASONING_REPLAY_FIDELITY_META_ONLY
+
     def test_stray_meta_is_stripped_and_readable_kept(self, adapter: KimiAdapter) -> None:
         wire = adapter._format_assistant_message(dict(BOTH_CLASSES_MESSAGE), model_id="k3")
 
