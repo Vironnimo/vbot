@@ -4,80 +4,43 @@ Pinned memory service and backend contracts for durable prompt-visible facts.
 
 ## Overview
 
-`core/memory/` owns the product memory boundary for small, curated, prompt-visible entries. The current implementation is intentionally narrow: a `MemoryService` delegates to a file-backed pinned memory backend that manages tool-owned bullet entries in agent workspace files.
+`core/memory/` owns small, curated, prompt-visible entries as tool-managed bullets in agent workspace files - intentionally narrow. It is separate from Sessions (JSONL-canonical history) and from recall (derived search indexes).
 
-The memory system **owns its two workspace files** (`USER.md`, `MEMORY.md`): created lazily on the first tool write (a later remove-all leaves the file present but empty), and **never** seeded by the agent/workspace layer (which owns `SOUL.md` only). So a memory-off agent never gets them, and deleting them while memory is off does not resurrect them. Before a file physically exists, its scope still renders (the empty-scope placeholder - see Prompt Block), so behavior is seamless.
+The domain **owns its two workspace files**: `USER.md` (user profile/preferences) and `MEMORY.md` (agent/workflow notes). They are created lazily on the first tool write, never seeded by the agent/workspace layer (which seeds only `SOUL.md`), and a later remove-all leaves the file present but empty - so a memory-off agent never gets them and deletion while off does not resurrect them.
 
-This domain is separate from Sessions. Sessions remain JSONL-canonical chat history; memory entries are durable guidance that should fit in the system prompt.
+## Modes and gating
 
-## Data Model
+`MemoryPromptMode`: `off` (no prompt-visible memory), `agent` (`MEMORY.md`), `agent_user` (both; default). The same mode gates activation of the provider-visible `memory` Tool: `off` keeps it inactive, `agent`/`agent_user` activate it unless Tool Access Policy denies it or is `none`. Mode alone controls prompt visibility, so an on mode plus a denial intentionally creates read-only Memory. `validate_memory_prompt_mode` is exported for `core/agents/` field validation.
 
-- `MemoryScope` currently supports:
-  - `user` -> `USER.md`, stable user profile and preferences.
-  - `agent` -> `MEMORY.md`, stable agent/workflow notes.
-- `MemoryEntry`: `id`, `scope`, `content`. `id` is a 1-based positional int re-derived from file order on every read, not a stable identifier.
-- The target Markdown file holds **only the entries** - one per line as a bare `- ` bullet, no preamble and no section heading.
-- `MemoryPromptMode` controls prompt rendering:
-  - `off` -> no prompt-visible pinned memory.
-  - `agent` -> `MEMORY.md`.
-  - `agent_user` -> `MEMORY.md` plus `USER.md` (default).
-- The same mode is the activation gate for the provider-visible `memory` Tool: `off` keeps it inactive, while `agent` and `agent_user` activate it unless the Agent's Tool Access Policy is `none` or explicitly denies `memory`. The mode alone controls prompt Memory, so an on mode plus a Tool denial intentionally creates read-only Memory behavior.
+## Storage contract
+
+- Files hold **only** `- ` bullet entries, one per line - no preamble, no headings, no freeform zone. Non-bullet lines are not entries: invisible in prompts, dropped on next mutation. The whole file is tool-managed.
+- Entry ids are 1-based positional positions re-derived on read, not stable keys - removal shifts higher ids down. The tool returns the full list after every mutation so the model re-reads ids before the next operation.
+- Content normalizes to single-line whitespace capped at 2,000 chars/entry; a leading-dash entry round-trips because the `- ` prefix strips exactly once (no escaping).
+- Per-scope budgets bound prompt injection: MEMORY.md 4,000 chars, USER.md 3,000. A growing mutation past budget rejects with `MemoryError`; shrinking changes always pass so the model can dig out. Duplicate adds return the existing entry without rejection.
+- Writes use temp-file atomic replace. Rooting never changes this boundary: Memory always uses Workspace even when file/shell Tools work in a Project repo.
+
+## Prompt block
+
+Pinned memory contributes the declared `memory:guidance` block (owner `memory`, static editable text): guidance prose wrapped in `<memory>...</memory>` with an embedded `{generated:memory_files}` marker - one sortable layout unit owned by this domain rather than a prompts-domain placeholder.
+
+- Gate 2 renders it whenever mode != off, independent of Tool denial - including before the first entry exists (the block's own non-empty default text guarantees the guidance appears exactly when it helps).
+- The marker expands to rendered entries only: each selected scope under its heading label with its bullets, an explicit `No entries yet.` placeholder for missing/empty scopes (identical framing before/after creation; reading never creates files), `""` only for `off`. Guidance/wrapper live in the declaration, entries come from `read_prompt_files`.
+- The guidance text carries the writing-quality half: what justifies permanent prompt cost, a proactive save-as-you-go nudge, and the one non-obvious rule - write durable declarative facts, not imperative self-instructions that later sessions re-read as standing directives.
 
 ## Interfaces
 
-- `MemoryService(backend=None)`
-  - `list_entries(workspace, scope) -> list[MemoryEntry]`
-  - `add_entry(workspace, scope, content) -> MemoryEntry`
-  - `replace_entry(workspace, scope, entry_id, content) -> MemoryEntry`
-  - `remove_entry(workspace, scope, entry_id) -> MemoryEntry`
-  - `read_prompt_files(workspace, mode) -> str` - the rendered pinned-memory entries only: each selected scope under its heading label (`# Agent Memory` / `# User Profile`) followed by its `- ` bullet entries, or the empty-scope placeholder (`No entries yet.`) when it has none - no `<memory>` wrapper, no guidance, `""` for mode `off`. This is the **data half** of the memory block; the guidance and the `<memory>` wrapper live in the block declaration (see Prompt Block).
-- `Runtime.memory` exposes the same `MemoryService` instance used by the provider-visible Tool so accessors and Tools share one backend boundary.
-- `memory.list` / `memory.add` / `memory.replace` / `memory.remove` are Identity-Agent RPCs. They resolve the target Agent's Workspace server-side, always return both `agent` and `user` scope projections after a successful read or mutation, and deliberately do not gate accessor CRUD on `memory_prompt_mode` or the Agent's Tool Access Policy. The mode controls prompt visibility and the Tool's activation gate; Tool policy controls whether that activated Tool is callable. Mutations publish `resource_changed(kind="memories", scope:{agent_id})` without shipping Memory content.
-- `FilePinnedMemoryBackend` implements the same operations against workspace Markdown files.
-- `memory_block_definition() -> BlockDefinition` returns the `memory:guidance` System Prompt block the memory domain declares (see Prompt Block). The prompts package is imported lazily inside it so the memory domain carries no import-time dependency on prompts (which depends back on memory through the tool-availability seam).
-- `read_memory_files(workspace, mode, *, provider) -> str` is the module-level renderer the `{generated:memory_files}` producer wraps (a thin delegate to `provider.read_prompt_files`), kept in the memory domain so the producer the prompt manager registers stays a thin closure.
-- `memory_prompt_file_paths(workspace, mode) -> list[Path]` returns the resolved absolute paths of the mode's pinned-memory files that **exist on disk** (mode order; `off` -> `[]`). The `memory_files` producer reports these to the prompt read-observer so the chat loop stamps them read-before-write (`prompts.md`, `file_state.md`). A not-yet-created file (its scope rendered via the empty-scope placeholder) is deliberately omitted - nothing on disk to stamp, and a later `write` to it is a new-file write anyway. The caller must not pass an empty-string workspace (a config agent) - it would resolve against `Path(".")`; config agents are `off` mode and the producer skips them regardless.
-- `validate_memory_prompt_mode(mode) -> MemoryPromptMode` is exported for `core/agents/` to validate the Agent field; it raises `MemoryError` on an unknown mode.
-- `MemoryError` reports expected validation or file I/O failures.
-
-## Prompt Block
-
-Pinned memory contributes to the System Prompt as the declared **`memory:guidance` block** (owner `memory`, a static editable `text` block) - the memory domain ships its own block instead of the prompts domain hardcoding a `{memory}` placeholder. Its default text is the guidance prose wrapped in `<memory>...</memory>` with an embedded `{generated:memory_files}` marker, so it is **one sortable unit** in the block layout.
-
-- **Owner `memory`** drives gate 2: the block renders whenever `memory_prompt_mode != off`, resolved directly by the prompt manager's owner-active seam and deliberately independent of whether the `memory` Tool is denied.
-- **The empty-memory suppression is fixed.** Because the guidance is the block's *own* non-empty default text and the gate is "Memory prompt mode on" (not "memory files non-empty" or "Memory Tool callable"), the guidance appears whenever `memory_prompt_mode != off` - including before the first entry and when the Tool is denied. (Previously the old block rendered nothing when no file had content, so the guidance was absent exactly when it would help.)
-- **The entries are the data half.** The `{generated:memory_files}` marker expands to `read_prompt_files(workspace, mode)` - each selected scope under its heading label with its `- ` bullet entries. When the block renders (Memory prompt mode on), every scope the mode selects is embedded; a scope with no entries (a **not-yet-created** or emptied file) renders the empty-scope placeholder (`No entries yet.`), so the framing is identical before and after the file physically exists - and reading never creates the file. Only `off` mode yields `""` (it selects no scope, and gate 2 drops the block anyway).
-- The guidance text complements the memory tool's WHEN/SKIP description with the writing-quality half: what makes an entry worth its permanent prompt cost (it spares the user future steering), a light cue to save such facts as they surface rather than waiting to be asked (the always-on proactive nudge, since the tool description's WHEN is only read when the agent already eyes the tool), and the one non-obvious rule - write durable, **declarative** facts, not imperative self-instructions (which get re-read as standing directives in later sessions). As block default text it is now user-editable through the override cascade, no longer hardcoded as a prompt string. The old `MemoryService.build_prompt_block(workspace, mode)` (which returned guidance + `<memory>` wrapper + files together) is **gone** - that composition now lives split across the block declaration (guidance + wrapper) and `read_prompt_files`/`read_memory_files` (entries).
-
-## Storage Contract
-
-- `USER.md` and `MEMORY.md` live in the Agent workspace.
-- Rooting never changes this storage boundary: Memory always reads and writes Workspace even when relative file/shell Tools use a selected Project repository.
-- File shape follows the Data Model rule: only `- ` bullet entries, everything else ignored on read and dropped on the next write; the memory tool fully owns the file's content.
-- A missing file is created on first write; the last `remove` leaves the file present but empty (which reads back as no entries). This first-write creation is the **only** way these files come into being - nothing seeds them ahead of time.
-- `read_prompt_files(workspace, mode)` renders each selected scope under its heading label (`# Agent Memory` / `# User Profile`) followed by its `- ` bullet entries, joined with a blank line; `agent_user` orders the agent scope before the user scope. A scope with no entries (a missing or emptied file) renders the empty-scope placeholder `No entries yet.` (never omitted, never created); only `off` (no scope selected) returns `""`. This is **only** the entries - the `<memory>` wrapper and the guidance live in the `memory:guidance` block declaration (see Prompt Block), and the marker that injects these entries is `{generated:memory_files}`.
-- Writes use a same-directory temp file plus atomic replace.
-- Entry content is normalized to single-line whitespace and capped at 2,000 characters per entry.
-- Each scope has a per-scope total budget over the sum of its entry contents (`agent`/`MEMORY.md` = 4,000 chars, `user`/`USER.md` = 3,000 chars), bounding how much pinned memory is injected into every prompt. An `add` or `replace` that pushes a scope past its budget is rejected with a `MemoryError` ("Memory '<scope>' scope is full (X/Y characters)..."), which the tool surfaces to the model as a failure so it removes or shortens an entry first. A non-increasing change (a shrinking `replace`, or any `remove`) is always allowed even when already over budget, so the model can always dig out.
-- Duplicate `add` returns the existing entry instead of writing another copy (and is never budget-rejected, since it does not grow the store).
+- `MemoryService` (list/add/replace/remove/read_prompt_files) delegates to the file backend; `Runtime.memory` exposes the same instance the Tool uses. `read_memory_files(workspace, mode, *, provider)` is the thin module-level renderer the prompts producer wraps; `memory_prompt_file_paths(workspace, mode)` reports existing on-disk paths so Chat stamps them read-before-write (uncreated scopes deliberately omitted - nothing to stamp). The block definition imports prompts lazily to avoid an import cycle.
+- `memory.list/add/replace/remove` are Identity-Agent RPCs resolving Workspace server-side, returning both scope projections after every operation. They deliberately ignore mode and Tool policy for CRUD - mode controls visibility/activation, policy controls callability. Mutations publish `resource_changed(kind="memories")` without content.
 
 ## Cross-Domain Rules
 
-- `core/tools/memory.py` owns the provider-visible tool contract and delegates all storage behavior to `MemoryService`. It also owns the per-run thrash guard (see Constraints & Gotchas) - tool-UX state that never touches the storage layer, so `MemoryService` stays a pure facade.
-- `server/rpc/memory_methods.py` owns Accessor CRUD validation and Agent-to-Workspace resolution. The WebUI edits structured entries through this boundary rather than treating `USER.md` or `MEMORY.md` as freeform text.
-- `core/tools/availability.py` combines the `memory_prompt_mode` activation gate with the Agent's Tool Access Policy; `memory` is automatic rather than independently selectable, but an absolute `tool_access.denied` entry can remove it without hiding prompt Memory.
-- `core/prompts/` collects the `memory:guidance` block (via `memory_block_definition()`) into the System Prompt's block list and registers a `memory_files` producer that calls `read_memory_files(...)`; the block (guidance + embedded files) renders in layout order, gated on `memory_prompt_mode != off`. Other workspace files may still be included through `{include:...}`.
-- `core/agents/` seeds **only** `SOUL.md` for new workspaces (`WORKSPACE_TEMPLATE_FILES`). `USER.md`/`MEMORY.md` are the memory system's, not the agent/workspace layer's: they are created lazily on the first tool write (see Storage Contract), never seeded. There is no `USER.md`/`MEMORY.md` template under `resources/workspace-templates/` - the memory backend writes them as a bare `- ` bullet list on first write, with no preamble.
-- Sessions and recall search are separate. Do not store chat transcripts or broad search indexes in this domain. SQLite FTS Session recall lives in `core/recall/` as a derived index.
+- `core/tools/memory.py` owns the provider-visible contract plus the per-run thrash guard (tool-UX state below); `MemoryService` stays a pure facade. Server RPC owns Accessor validation and Agent-to-Workspace resolution; the WebUI edits structured entries through RPC, never freeform files.
+- Agents seed only SOUL.md - USER/MEMORY are this domain's, created lazily, no templates shipped.
+- Do not store transcripts or broad indexes here: FTS Session recall lives behind `core/recall/`.
 
 ## Constraints & Gotchas
 
-- Entry IDs are ephemeral positions, not stable keys: a `remove` shifts every higher ID down by one. The tool returns the full `entries` list after every mutation so the model can re-read current IDs before the next `replace`/`remove`; do not reuse an ID across mutations.
-- The memory block shows exactly the tool's entries: the file holds only `- ` bullets and the renderer injects those (under a scope heading), not the raw file. There is **no origin tracking** - a `- ` bullet typed into the file by hand is a real entry too, indistinguishable from a tool-added one. A non-bullet line is not an entry: not prompt-visible, and dropped on the next mutation.
-- Entry normalization: all whitespace (newlines and carriage returns included) collapses to single spaces, so every entry is exactly one line. An entry that starts with `-` round-trips because the `- ` bullet prefix (dash + space) is stripped exactly once on read; there is no `\-` escaping, and literal `\-` in an entry is preserved verbatim.
-- Only `- ` bullet lines survive a tool mutation; any non-bullet line hand-written into the file is dropped on the next `add`/`replace`/`remove`. The whole file is tool-managed - there is no freeform zone.
-- Thrash guard against a memory-write loop: a failed mutation (`add`/`replace`/`remove`) is returned `retryable` so the model can consolidate and retry, but after `_MAX_MEMORY_FAILURES_PER_RUN` (3) **consecutive** failed mutations in one run the tool returns a terminal, non-`retryable` "stop retrying - answer the user" failure instead. This exists so a failed memory side effect can never loop a turn to budget exhaustion and starve the user's reply. The streak resets on the first successful mutation; `list` never counts. The counter (`_MemoryThrashTracker`, keyed by `run_id`, bounded and lock-guarded) lives in the tool layer, so a direct `memory_handler`/`MemoryService` call with no tracker (tests, non-runtime callers) keeps the old always-recoverable behavior.
-
-## Future Backend Boundary
-
-The file backend is the first implementation, not a permanent storage decision - keep new code behind `MemoryService` so a later pinned-memory backend registry (sibling to recall's) can replace it. SQLite FTS belongs behind a recall backend/index contract, not inside this pinned-memory domain.
+- No origin tracking: a hand-typed bullet is a real entry indistinguishable from tool-added ones.
+- Thrash guard against memory-write loops: after 3 consecutive failed mutations in one Run the Tool returns a terminal "stop retrying - answer the user" failure instead of another retryable error, so a failing side effect can never loop a turn into budget exhaustion. Streak resets on first success; `list` never counts; the tracker lives in the Tool layer keyed by run id (direct service calls keep always-recoverable behavior).
+- Keep new code behind `MemoryService` - the file backend is the first implementation, not a permanent decision; a later backend registry replaces it without touching callers.
