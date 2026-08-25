@@ -37,7 +37,7 @@ Endpoint selection uses sanitized model metadata first:
 
 - `GitHubCopilotAdapter` receives provider-scoped `model_lookup` and computes policy once per send/stream request.
 - `metadata.github_copilot` is the primary runtime source for vendor, supported endpoints, reasoning efforts, thinking budget bounds, adaptive thinking, tools, streaming, and structured output.
-- **Family is `Model.family`, not a name guess.** `_policy_for_model` passes `model.family` into `copilot_model_policy`; the policy's endpoint *decision* (Claude→`/v1/messages`, GPT→`/responses`, Gemini→chat-first) reads that data-driven lineage. `Model.family` wins over the metadata's own `family`; it falls back to `metadata.github_copilot.family` only when `Model.family` is empty (e.g. a catalog not yet regenerated with the top-level family — `github-copilot.json` is blocked on OAuth). The `family_or_model` property still falls back to the model id only when family AND version are both unknown.
+- **Family is `Model.family`, not a name guess.** `_policy_for_model` passes `model.family` into `copilot_model_policy`; the policy's endpoint *decision* (Claude->`/v1/messages`, GPT->`/responses`, Gemini->chat-first) reads that data-driven lineage. `Model.family` wins over the metadata's own `family`; it falls back to `metadata.github_copilot.family` only when `Model.family` is empty (e.g. a catalog not yet regenerated with the top-level family - `github-copilot.json` is blocked on OAuth). The `family_or_model` property still falls back to the model id only when family AND version are both unknown.
 - Static fallback facts and exact-model overrides in `github_copilot_policy.py` cover validated quirks only.
 - Unsupported optional features are omitted rather than sent optimistically. For `/responses`, `temperature` is omitted unless policy explicitly proves support.
 - **Reasoning replay:** every Copilot Model inherits the shared `full_history` default unless a future top-level Model override demonstrates a narrower requirement; endpoint family no longer selects scope. Endpoint mechanics still differ: `/responses` round-trips complete output items and `/v1/messages` round-trips signed thinking blocks. Live probe (2026-06-13): `/responses` accepted replayed reasoning items including `encrypted_content` across a Run boundary (`gpt-5-mini`, 200); `/v1/messages` accepted a replayed signed `thinking` block across a Run boundary (`claude-sonnet-4.6`, 200; `claude-haiku-4.5` returned no thinking blocks under `thinking: enabled`, so there was nothing to replay).
@@ -55,23 +55,23 @@ Endpoint selection uses sanitized model metadata first:
 
 ## Usage Probe (`copilot_internal/user`)
 
-The Copilot usage fetcher in `core/providers/usage.py` (see `providers/usage.md`). **Blind, best-effort** — implemented from openclaw's verified field names, not yet live-verified (no Copilot login in this environment):
+The Copilot usage fetcher in `core/providers/usage.py` (see `providers/usage.md`). **Blind, best-effort** - implemented from openclaw's verified field names, not yet live-verified (no Copilot login in this environment):
 
-- `GET https://api.github.com/copilot_internal/user` — GitHub's host, NOT the Copilot
+- `GET https://api.github.com/copilot_internal/user` - GitHub's host, NOT the Copilot
   API host. Authenticates with `Authorization: token <github_oauth_token>` (the GitHub
   OAuth token from token-store `extra.github_oauth_token`, **not** the exchanged Copilot
   bearer), plus `Accept: application/json`, `Copilot-Integration-Id`, `Editor-Version`.
-  Missing `github_oauth_token` → snapshot error "Reconnect required".
+  Missing `github_oauth_token` -> snapshot error "Reconnect required".
 - Expected body: `quota_snapshots.{premium_interactions,chat}.percent_remaining`
-  (→ window `used = 100 - percent_remaining`, labels `Premium` / `Chat`),
-  `copilot_plan` → plan, `quota_reset_date` → each window's reset. Missing/unknown
+  (-> window `used = 100 - percent_remaining`, labels `Premium` / `Chat`),
+  `copilot_plan` -> plan, `quota_reset_date` -> each window's reset. Missing/unknown
   snapshots yield empty windows (dropped), never a crash.
 
 ## Constraints & Gotchas
 
 - Exact-model quirks belong in `core/providers/github_copilot_policy.py`, not hand-edited `resources/models/github-copilot.json`.
 - Copilot Responses tool calls may use nested `function.{name,arguments}`; helper code must preserve a non-empty name from either top-level or nested fields.
-- All three wire builders carry user image `media` blocks for vision models: `/chat/completions` via the inherited OpenAI-compatible path (`image_url`), `/v1/messages` as an Anthropic-style `image`/`source` block, `/responses` as an `input_image` data-URI part. Non-image media raises `ProviderError` rather than being dropped. A new wire builder must translate `media` blocks too — the vision-capability gate (`block_resolver.py`, `chat.md`) only resolves images for vision models, so by the time a `media` block reaches a wire builder it must be sent, never silently filtered to text.
+- All three wire builders carry user image `media` blocks for vision models: `/chat/completions` via the inherited OpenAI-compatible path (`image_url`), `/v1/messages` as an Anthropic-style `image`/`source` block, `/responses` as an `input_image` data-URI part. Non-image media raises `ProviderError` rather than being dropped. A new wire builder must translate `media` blocks too - the vision-capability gate (`block_resolver.py`, `chat.md`) only resolves images for vision models, so by the time a `media` block reaches a wire builder it must be sent, never silently filtered to text.
 - Partial metadata stays conservative: omit uncertain controls instead of forwarding them.
 - Token values must never be logged.
 - GitHub officially documents current Model availability, retirements, plan/client restrictions, configurable reasoning, token types for Copilot SDK/CLI, and the Copilot domain allowlist; the direct generation endpoints and token-exchange response schema remain private backend contracts. Without a live Copilot Account, current endpoint payload behavior, Enterprise endpoint rotation, entitlements, and rate-limit/error bodies remain unproved and must stay in `.vorch/FLAGGED.md`.

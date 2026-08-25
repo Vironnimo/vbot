@@ -50,7 +50,7 @@ Only loaded owners contribute. Slug/id collisions are first-wins and diagnosed; 
 
 ## Channel interaction handlers
 
-`api.register_interaction_handler(prefix, handler)` declares deterministic in-process handling for callback data beginning `"<prefix>:"`. The neutral contract in `core/extensions/interactions.py` keeps the dependency channels → extensions:
+`api.register_interaction_handler(prefix, handler)` declares deterministic in-process handling for callback data beginning `"<prefix>:"`. The neutral contract in `core/extensions/interactions.py` keeps the dependency channels -> extensions:
 
 - `InteractionButton(label, data)` is one keyboard button.
 - `InteractionEvent` carries platform/channel/chat/user/message identity, callback `data`, the current keyboard snapshot, and optional message/user/thread data.

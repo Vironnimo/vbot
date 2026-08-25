@@ -12,7 +12,7 @@ The Runtime owns one service instance for shared caching and the hourly collecto
 
 The frozen serializable projection is:
 
-- `UsageWindow`: label, `used_percent` clamped to 0–100, ISO-8601 UTC `reset_at` or null, optional window duration, optional used/remaining/total unit counts and unit name, and optional unlimited marker.
+- `UsageWindow`: label, `used_percent` clamped to 0-100, ISO-8601 UTC `reset_at` or null, optional window duration, optional used/remaining/total unit counts and unit name, and optional unlimited marker.
 - `ProviderUsageSnapshot`: base Connection id, exact Account id, display name, optional plan, optional structured credits, windows, and optional error.
 - `UsageReport`: generation timestamp and Provider snapshots.
 

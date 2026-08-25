@@ -18,7 +18,7 @@ OpenCode Zen is a hosted gateway whose one Model namespace spans OpenAI Response
 
 ## Exact Model Routing
 
-- `metadata.opencode_zen.protocol` is mandatory and has one of `responses`, `messages`, `chat_completions`, or `gemini_generate_content`. `send`, `stream`, response normalization, and media support resolve that metadata; replay scope separately follows the shared Model → Provider → system hierarchy. Unknown or vendor-prefixed ids fail locally; vBot never guesses by prefix, silently aliases an id, or falls back to another Model.
+- `metadata.opencode_zen.protocol` is mandatory and has one of `responses`, `messages`, `chat_completions`, or `gemini_generate_content`. `send`, `stream`, response normalization, and media support resolve that metadata; replay scope separately follows the shared Model -> Provider -> system hierarchy. Unknown or vendor-prefixed ids fail locally; vBot never guesses by prefix, silently aliases an id, or falls back to another Model.
 - Responses Models use `POST /responses` through the deep `OpenAIAdapter`; the Provider override hook classifies Zen errors on both non-streaming and streaming Responses paths.
 - Messages Models use `POST /messages` through a borrowed `AnthropicCompatibleAdapter`, `x-api-key`, `anthropic-version: 2023-06-01`, non-strict Tool schemas, PDF/images, prompt-caching breakpoints, and the outer connection-scoped HTTP client/token getter.
 - Chat Models use `POST /chat/completions` through `OpenAICompatibleAdapter` with bearer auth and the shared Tool, usage, terminal-outcome, and SSE contracts.
@@ -42,7 +42,7 @@ OpenCode's gateway may fail over between upstream suppliers serving the same req
 ## Limits, Sampling, Tools, and Media
 
 - Request output is clamped to the selected Model's catalog ceiling and remaining context. Gemini accepts exactly one effective output field and emits native `maxOutputTokens`; duplicate aliases collapse to the smallest valid value.
-- Gemini validates `temperature` 0–2, `top_p` 0–1, positive integer `top_k`, penalties -2–2, integer seed, stop strings, supported JSON response formats, and Tool choice locally. Unknown request fields fail locally instead of leaking OpenAI-only parameters onto the Google wire. `parallel_tool_calls` is intentionally omitted because native Gemini controls parallel Function Calls without that OpenAI flag.
+- Gemini validates `temperature` 0-2, `top_p` 0-1, positive integer `top_k`, penalties -2-2, integer seed, stop strings, supported JSON response formats, and Tool choice locally. Unknown request fields fail locally instead of leaking OpenAI-only parameters onto the Google wire. `parallel_tool_calls` is intentionally omitted because native Gemini controls parallel Function Calls without that OpenAI flag.
 - Gemini supports inline PNG/JPEG/WEBP/HEIC/HEIF images, documented audio/video types, and PDF. The Adapter enforces Google's 20 MB inline request limit and 3,600-image maximum before network I/O. Responses/Chat declare only their established image wire; Messages declares images and PDF. Catalog modalities still intersect these wire ceilings at Chat ingress.
 - All four wires preserve canonical non-strict Tool schemas and normalize Tool Calls, usage, and one terminal outcome. Gemini maps STOP, MAX_TOKENS, safety/content blocks, malformed/unexpected Tool Calls, and unknown reasons without treating every transport completion as successful generation.
 

@@ -10,18 +10,18 @@ All Provider traffic feeds one canonical recorder contract. HTTP capture happens
 
 Traces are local-only JSON files under `<data_dir>/artifacts/debug/traces/`, with a metadata-only `index.json` for listing without reading full bodies. Storage owns the canonical placement; Debug owns the trace/index schema, redaction, retention, and authorization. Retention is capped by `debug.trace_limit`; oldest traces are pruned after each write.
 
-This domain does **not** normalize, interpret, or transform captured bodies — they are stored as the raw bytes/text seen on the wire. The only mutation is secret redaction.
+This domain does **not** normalize, interpret, or transform captured bodies - they are stored as the raw bytes/text seen on the wire. The only mutation is secret redaction.
 
 ## Data Model
 
-### Settings (`settings.json` → `debug`)
+### Settings (`settings.json` -> `debug`)
 
-- `enabled: boolean` — default `false`. Controls capture. Read live per request.
-- `trace_limit: positive integer` — default `50`, max `500`. Retained file count.
+- `enabled: boolean` - default `false`. Controls capture. Read live per request.
+- `trace_limit: positive integer` - default `50`, max `500`. Retained file count.
 
 ### Trace file (`<data_dir>/artifacts/debug/traces/<trace_id>.json`)
 
-One canonical shape, shared verbatim by backend writers and the WebUI. Field names here are the contract — neither side may read or write differently.
+One canonical shape, shared verbatim by backend writers and the WebUI. Field names here are the contract - neither side may read or write differently.
 
 ```jsonc
 {
@@ -62,10 +62,10 @@ Metadata only, one entry per trace, used for the trace list:
 
 ### Redaction
 
-Applied to every trace before it touches disk. **Structured only** — operates on header and query-parameter *names*, never on body content:
+Applied to every trace before it touches disk. **Structured only** - operates on header and query-parameter *names*, never on body content:
 
-- **Request/response headers** and **URL query params** are redacted to `"[REDACTED]"` when their name (lower-cased) is an exact match for `authorization` or `x-api-key`, **or** when splitting the name on `-`/`_` yields a whole word in `{token, secret, key, password, credential}`. So `x-api-key`, `x_token_header`, and `api-secret` all match; `donkey` does not. There is **no** cookie-name rule — a `Cookie` / `Set-Cookie` header is captured raw unless its name happens to contain one of those words.
-- **Bodies are stored raw and never redacted** — request/response bodies (prompts, tool output, completions) are kept verbatim. The UI warns that bodies are stored locally in full.
+- **Request/response headers** and **URL query params** are redacted to `"[REDACTED]"` when their name (lower-cased) is an exact match for `authorization` or `x-api-key`, **or** when splitting the name on `-`/`_` yields a whole word in `{token, secret, key, password, credential}`. So `x-api-key`, `x_token_header`, and `api-secret` all match; `donkey` does not. There is **no** cookie-name rule - a `Cookie` / `Set-Cookie` header is captured raw unless its name happens to contain one of those words.
+- **Bodies are stored raw and never redacted** - request/response bodies (prompts, tool output, completions) are kept verbatim. The UI warns that bodies are stored locally in full.
 - `redact_json_body` stays an exported utility for key-level body redaction, but the capture path does not apply it (bodies stay raw).
 - Header keys are captured as httpx normalizes them on the wire (lowercase).
 
@@ -75,20 +75,20 @@ Applied to every trace before it touches disk. **Structured only** — operates 
 
 Exports `DebugTraceStore`, `ProviderDebugRecorder`, `DebugContext`, `redact_headers`, `redact_url`, `redact_json_body`.
 
-- `DebugContext` — frozen dataclass: `run_id`, `agent_id`, `session_id`, `provider_id`, `connection_id`, `model_id`, `streaming: bool`, `iteration_number: int`.
+- `DebugContext` - frozen dataclass: `run_id`, `agent_id`, `session_id`, `provider_id`, `connection_id`, `model_id`, `streaming: bool`, `iteration_number: int`.
 - `DebugTraceStore(data_dir, trace_limit)`
-  - `save_trace(trace_id, data: dict)` — write file, update index, prune oldest. The index entry reads `method`/`url` from `data["request"]` and `status_code` from `data["response"]`, so a writer that flattens those fields produces a broken index.
-  - `get_traces() -> list[dict]` — index entries, newest first.
-  - `get_trace(trace_id) -> dict` — full trace; accepts only canonical lowercase `uuid4().hex` ids and raises `InvalidTraceIdError` before filesystem access for any other value, or `FileNotFoundError` when a valid id is absent.
-  - `clear_all()` — delete all traces and the index.
-  - `get_data_dir() -> Path` — the `<data_dir>/artifacts/debug/` directory.
-- `ProviderDebugRecorder(store)` — holds one shared `DebugContext` and is the entry point each wire transport drives; it keeps **no** per-request state.
-  - `set_context(ctx: DebugContext)` — set the context applied to the next captured request(s).
-  - `begin_capture(*, method, url, headers, body) -> capture` — called by the transport before the request goes out. Redacts the request URL + headers, stores the body raw, and returns a **fresh per-request capture**; that capture tees the response body and, on `finalize()`, builds the canonical trace and persists it. A separate capture per request means concurrent or retried calls never share buffers.
+  - `save_trace(trace_id, data: dict)` - write file, update index, prune oldest. The index entry reads `method`/`url` from `data["request"]` and `status_code` from `data["response"]`, so a writer that flattens those fields produces a broken index.
+  - `get_traces() -> list[dict]` - index entries, newest first.
+  - `get_trace(trace_id) -> dict` - full trace; accepts only canonical lowercase `uuid4().hex` ids and raises `InvalidTraceIdError` before filesystem access for any other value, or `FileNotFoundError` when a valid id is absent.
+  - `clear_all()` - delete all traces and the index.
+  - `get_data_dir() -> Path` - the `<data_dir>/artifacts/debug/` directory.
+- `ProviderDebugRecorder(store)` - holds one shared `DebugContext` and is the entry point each wire transport drives; it keeps **no** per-request state.
+  - `set_context(ctx: DebugContext)` - set the context applied to the next captured request(s).
+  - `begin_capture(*, method, url, headers, body) -> capture` - called by the transport before the request goes out. Redacts the request URL + headers, stores the body raw, and returns a **fresh per-request capture**; that capture tees the response body and, on `finalize()`, builds the canonical trace and persists it. A separate capture per request means concurrent or retried calls never share buffers.
 
 ### Provider HTTP capture (`core/providers/_http_shared.py`)
 
-- `build_async_client(*, base_url, timeout=None, debug_recorder=None) -> httpx.AsyncClient` — the single client factory. There is no per-client `headers` argument; headers are passed per request. With `debug_recorder`, the returned client's transport is wrapped (`_DebugCaptureTransport`) so it captures request + response, teeing the byte stream for streaming responses into the aggregate `response.body`, and feeds the recorder. With no recorder, returns a plain client with zero capture overhead.
+- `build_async_client(*, base_url, timeout=None, debug_recorder=None) -> httpx.AsyncClient` - the single client factory. There is no per-client `headers` argument; headers are passed per request. With `debug_recorder`, the returned client's transport is wrapped (`_DebugCaptureTransport`) so it captures request + response, teeing the byte stream for streaming responses into the aggregate `response.body`, and feeds the recorder. With no recorder, returns a plain client with zero capture overhead.
 
 ### OpenAI Subscription WebSocket capture (`core/providers/openai.py`)
 
@@ -96,7 +96,7 @@ Exports `DebugTraceStore`, `ProviderDebugRecorder`, `DebugContext`, `redact_head
 
 ### Adapter contract (`core/providers/adapter.py`)
 
-- `ProviderAdapter.set_debug_context(ctx: DebugContext)` — base-class method, forwards to `recorder.set_context`. Subclasses do not override it. HTTP-only adapters add no capture code; a stateful non-HTTP transport must explicitly feed the same recorder contract, as OpenAI Subscription WebSocket streaming does.
+- `ProviderAdapter.set_debug_context(ctx: DebugContext)` - base-class method, forwards to `recorder.set_context`. Subclasses do not override it. HTTP-only adapters add no capture code; a stateful non-HTTP transport must explicitly feed the same recorder contract, as OpenAI Subscription WebSocket streaming does.
 - Isolated `analyze_image` Provider requests set the same complete `DebugContext` immediately before `send`: Run/Agent/Session and the completed parent Iteration come from `ToolContext`; Provider/Connection/Model come from the resolved `image_understanding` target; `streaming` is false. The Provider subrequest reuses the parent Iteration for correlation and does not advance the Agentic Loop.
 - Recorder lifecycle: `Runtime._build_debug_recorder()` (`core/runtime/runtime.py`) builds a fresh `ProviderDebugRecorder` + `DebugTraceStore` **each time it constructs an adapter**, reading `debug.enabled` / `trace_limit` live, and returns `None` when debug is off. A Chat Run retains one adapter for its Model/Tool loop and closes it at Run cleanup, so toggling Debug Mode takes effect on the next adapter construction rather than mutating an active Run's transport.
 
@@ -104,11 +104,11 @@ Exports `DebugTraceStore`, `ProviderDebugRecorder`, `DebugContext`, `redact_head
 
 See `.vorch/domain-maps/server.md` for the envelope. All gated on `debug.enabled` except where noted.
 
-- `debug.status` → `{ enabled, trace_limit, trace_count, data_directory }`. **Always available** (ungated).
-- `debug.trace_list` → `{ traces }` — index entries, newest first.
-- `debug.trace_get` `{ trace_id }` → `{ trace }` — full sanitized trace.
-- `debug.trace_clear` → `{ cleared: true }` — delete all. **Always allowed** (ungated, so users can clean up after disabling).
-- `debug.model_probe` `{ provider_id, connection_id }` → `{ trace_id, status_code, duration_ms, raw_response, model_preview }`. `model_preview` is `{ model_count, models: [{ id, name }] }` (first 10) on a 200 with parseable JSON, or `{ error, models: [] }` on a non-200 / non-JSON response. Resolves the connection credential (API key or OAuth), GETs the provider's `models_endpoint` over a **raw** `httpx.AsyncClient`, stores a `model_probe` trace, and does **not** write `resources/models/*.json` or reload the registry.
+- `debug.status` -> `{ enabled, trace_limit, trace_count, data_directory }`. **Always available** (ungated).
+- `debug.trace_list` -> `{ traces }` - index entries, newest first.
+- `debug.trace_get` `{ trace_id }` -> `{ trace }` - full sanitized trace.
+- `debug.trace_clear` -> `{ cleared: true }` - delete all. **Always allowed** (ungated, so users can clean up after disabling).
+- `debug.model_probe` `{ provider_id, connection_id }` -> `{ trace_id, status_code, duration_ms, raw_response, model_preview }`. `model_preview` is `{ model_count, models: [{ id, name }] }` (first 10) on a 200 with parseable JSON, or `{ error, models: [] }` on a non-200 / non-JSON response. Resolves the connection credential (API key or OAuth), GETs the provider's `models_endpoint` over a **raw** `httpx.AsyncClient`, stores a `model_probe` trace, and does **not** write `resources/models/*.json` or reload the registry.
 - Trace-list freshness uses the shared server event bus without transporting trace data: every terminal Run bridge event, successful `debug.model_probe`, and `debug.trace_clear` publishes `resource_changed(kind: "debug_traces")`; DebugView re-fetches status/list on that signal and therefore has no manual Refresh action.
 
 ## Conventions
@@ -128,4 +128,4 @@ See `.vorch/domain-maps/server.md` for the envelope. All gated on `debug.enabled
 - Streaming bodies are captured by teeing the response byte stream. The tee must not buffer the whole stream before yielding to the adapter, or it changes streaming latency/back-pressure. Aggregation into `response.body` happens from bytes already tee-captured by the recorder and must not move into adapter `stream()` implementations.
 - Trace files are not size-truncated; a single trace is bounded only by the provider response size. `trace_limit` caps file count, not bytes.
 - `debug.model_probe` is diagnostic only and never mutates the model catalog.
-- Providers that route across multiple endpoints (e.g. GitHub Copilot) get capture for free as long as every endpoint call goes through a client built by `build_async_client`. A provider that constructs a raw `httpx.AsyncClient` directly will silently not be traced — the one sanctioned exception is `debug.model_probe`, which uses a raw client on purpose and writes its own trace via `_save_model_probe_trace` with the same `redact_headers` / `redact_url`.
+- Providers that route across multiple endpoints (e.g. GitHub Copilot) get capture for free as long as every endpoint call goes through a client built by `build_async_client`. A provider that constructs a raw `httpx.AsyncClient` directly will silently not be traced - the one sanctioned exception is `debug.model_probe`, which uses a raw client on purpose and writes its own trace via `_save_model_probe_trace` with the same `redact_headers` / `redact_url`.

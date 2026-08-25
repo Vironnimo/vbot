@@ -51,49 +51,53 @@ Cut information that slows agents down without making them safer:
 
 Do not discard important behavior, field semantics, output contracts, or gotchas merely because they duplicate code. Move task-gated signal to a supplementary file, and replace cross-map repetition with a pointer to the canonical owner. Short but wrong is worse than long.
 
+## Formatting: plain ASCII punctuation only
+
+Domain maps use plain ASCII punctuation exclusively. Use `->` for pointers, `-` for dashes, `...` for ellipses, `>=` / `<=` / `!=` / `~` for comparisons, and straight quotes. Do not use typographic characters: no em/en dashes, Unicode arrows, curly quotes, mathematical glyphs, or emoji. The only exception is a literal product string quoted from the UI (a button label, a rendered display fragment); such content stays verbatim. Reason: agents and tools match, diff, grep, and edit these files as plain text, and visually similar Unicode variants silently break exact-text matching and copy-pasted references.
+
 ## Domain Terms (the `## Terms` section)
 
-A domain map carries a `## Terms` section: the crisp vocabulary specific to this domain — the `Definition:` / `Not:` entries an agent (or the user) needs to read the domain the same way everyone else does. This is the domain-local half of the project's shared vocabulary; the cross-cutting core lives in `.vorch/GLOSSARY.md`.
+A domain map carries a `## Terms` section: the crisp vocabulary specific to this domain - the `Definition:` / `Not:` entries an agent (or the user) needs to read the domain the same way everyone else does. This is the domain-local half of the project's shared vocabulary; the cross-cutting core lives in `.vorch/GLOSSARY.md`.
 
-- **What belongs here:** a term you only need once you are already working inside this domain, and that the user never says in conversation — implementation-level vocabulary. A term that is core and cross-cutting (any agent needs it regardless of domain), or that the user uses, belongs in `.vorch/GLOSSARY.md` instead. **One home per term, never both** — if you move a term in from the glossary, delete the glossary copy and fix the pointers.
-- **Placement:** put `## Terms` **high** — right after the Overview, before the detailed sections — because agents often read only the first screen of a map. Never at the end.
-- **Format:** one `### <Term>` per entry, a `**Definition:**` line (max ~2 sentences, agent-perspective), and an optional `**Not:**` line only when confusion with a nearby term is a real risk — the same shape as a glossary entry, one heading level deeper. Open the section with one line naming which of this domain's core terms live in the glossary, so the split is visible (e.g. "Core terms (Provider, Model) live in `.vorch/GLOSSARY.md`").
-- **Cross-references:** name a term in another map plainly ("see `models.md`"); point at a core term as "GLOSSARY → <Term>". When a term leaves the glossary, sweep the maps for stale "GLOSSARY → <Term>" pointers to it.
+- **What belongs here:** a term you only need once you are already working inside this domain, and that the user never says in conversation - implementation-level vocabulary. A term that is core and cross-cutting (any agent needs it regardless of domain), or that the user uses, belongs in `.vorch/GLOSSARY.md` instead. **One home per term, never both** - if you move a term in from the glossary, delete the glossary copy and fix the pointers.
+- **Placement:** put `## Terms` **high** - right after the Overview, before the detailed sections - because agents often read only the first screen of a map. Never at the end.
+- **Format:** one `### <Term>` per entry, a `**Definition:**` line (max ~2 sentences, agent-perspective), and an optional `**Not:**` line only when confusion with a nearby term is a real risk - the same shape as a glossary entry, one heading level deeper. Open the section with one line naming which of this domain's core terms live in the glossary, so the split is visible (e.g. "Core terms (Provider, Model) live in `.vorch/GLOSSARY.md`").
+- **Cross-references:** name a term in another map plainly ("see `models.md`"); point at a core term as "GLOSSARY -> <Term>". When a term leaves the glossary, sweep the maps for stale "GLOSSARY -> <Term>" pointers to it.
 
 ## References & Supplementary Files
 
-A domain map is the always-read orientation layer for its domain. Material needed only for a specific task does not belong in it — split it into a supplementary file so reading the map stays cheap.
+A domain map is the always-read orientation layer for its domain. Material needed only for a specific task does not belong in it - split it into a supplementary file so reading the map stays cheap.
 
 **Layout.** The map stays the entry point as a loose file: `.vorch/domain-maps/<domain>.md`. When a domain needs depth, give it a sibling folder of the same name and put the supplementary files there:
 
 ```
 domain-maps/
-  providers.md          ← the map (always read when working in the domain)
-  providers/            ← supplementary files (read on demand)
+  providers.md          <- the map (always read when working in the domain)
+  providers/            <- supplementary files (read on demand)
     add-a-provider.md
     endpoint-probing.md
 ```
 
-**What to split out — decide by relevance per task, not by size:**
-- **Keep in the map:** what an agent needs to safely touch *anything* in the domain — boundaries, cross-task contracts, invariants, decision rules, gotchas.
-- **Split into a file:** *task-gated* material — feature-specific behavior and contracts, exact payload or state-transition detail, recovery matrices, step-by-step procedures ("how to add a provider"), and deep references (exhaustive endpoint catalogs, probing recipes) — needed only for that feature or task family.
+**What to split out - decide by relevance per task, not by size:**
+- **Keep in the map:** what an agent needs to safely touch *anything* in the domain - boundaries, cross-task contracts, invariants, decision rules, gotchas.
+- **Split into a file:** *task-gated* material - feature-specific behavior and contracts, exact payload or state-transition detail, recovery matrices, step-by-step procedures ("how to add a provider"), and deep references (exhaustive endpoint catalogs, probing recipes) - needed only for that feature or task family.
 
-The test: *would an agent working on a different feature in this domain still need this to choose the correct owner/layer or avoid violating a domain-wide invariant?* Yes → map. No → supplementary file. Importance does not decide placement: a critical task-specific recovery contract still belongs in its task-gated reference. A long map is a prompt to look for task-gated content to extract — never split content that is always needed just to shorten the file; that only forces an extra read.
+The test: *would an agent working on a different feature in this domain still need this to choose the correct owner/layer or avoid violating a domain-wide invariant?* Yes -> map. No -> supplementary file. Importance does not decide placement: a critical task-specific recovery contract still belongs in its task-gated reference. A long map is a prompt to look for task-gated content to extract - never split content that is always needed just to shorten the file; that only forces an extra read.
 
-**Linking.** The map carries a small index near the end. Each entry is a *trigger*, not a title — it tells an agent when to pull the file without opening it:
+**Linking.** The map carries a small index near the end. Each entry is a *trigger*, not a title - it tells an agent when to pull the file without opening it:
 
 ```markdown
 ## References
 
-Read these only when your task matches — not by default.
+Read these only when your task matches - not by default.
 
-- Adding or changing a provider → `providers/add-a-provider.md`
-- Probing endpoints / verifying a provider's API → `providers/endpoint-probing.md`
+- Adding or changing a provider -> `providers/add-a-provider.md`
+- Probing endpoints / verifying a provider's API -> `providers/endpoint-probing.md`
 ```
 
-Keep triggers sharp. The failure mode is an agent missing context because a trigger was vague — a sloppy split is worse than none.
+Keep triggers sharp. The failure mode is an agent missing context because a trigger was vague - a sloppy split is worse than none.
 
-**Index discriminator.** Supplementary files are reached only through their map's References index. They are never listed in the Domain Maps index in `.vorch/PROJECT.md` — that index lists maps (domains) only. If a child area earns its own index entry, it is a domain map in its own right, not a supplementary file.
+**Index discriminator.** Supplementary files are reached only through their map's References index. They are never listed in the Domain Maps index in `.vorch/PROJECT.md` - that index lists maps (domains) only. If a child area earns its own index entry, it is a domain map in its own right, not a supplementary file.
 
 ## Verify Claims
 
@@ -114,7 +118,7 @@ Use when a new domain emerges or an existing domain has no map.
 1. Identify the domain boundary. A domain is any module or subsystem with a clear responsibility where working without context risks misunderstanding interfaces, ownership, or conventions.
 2. Choose the map path: `.vorch/domain-maps/<domain>.md`. Use nested paths only when a child domain has enough independent contracts or gotchas that a separate map improves agent handoff.
 3. Gather evidence from `.vorch/PROJECT.md`, related maps, user decisions, and source/test verification.
-4. Write only the sections that apply. There is no required minimum. Keep task-gated procedures and deep references out of the map — put them in supplementary files (see References & Supplementary Files).
+4. Write only the sections that apply. There is no required minimum. Keep task-gated procedures and deep references out of the map - put them in supplementary files (see References & Supplementary Files).
 5. Add the new map to the Domain Maps index in `.vorch/PROJECT.md`.
 6. Keep the first version useful, not exhaustive. Add more only when it prevents likely mistakes.
 
@@ -132,7 +136,7 @@ For routine maintenance during implementation:
 For dedicated map cleanup or audit:
 1. Read the current map and identify what each section is trying to help agents do.
 2. Verify kept factual claims against source/test evidence or explicit decisions.
-3. Present a numbered edit plan before judgment-heavy rewrites: what stays, what is removed, what is added, and what moves — including any task-gated content that moves to a supplementary file.
+3. Present a numbered edit plan before judgment-heavy rewrites: what stays, what is removed, what is added, and what moves - including any task-gated content that moves to a supplementary file.
 4. After approval, edit the map.
 5. Re-check the remaining claims and the diff. The work is done only when the map is useful for agents and factually correct.
 
@@ -151,7 +155,7 @@ Use this as a starting point. Remove every section that does not apply.
 
 ## Terms
 
-[Domain-local vocabulary — the terms specific to this domain, one `### Term` each with a `**Definition:**` (+ optional `**Not:**`). Place high, right after Overview. Core cross-cutting terms live in `.vorch/GLOSSARY.md`, not here. Omit the section if the domain has no domain-specific terms.]
+[Domain-local vocabulary - the terms specific to this domain, one `### Term` each with a `**Definition:**` (+ optional `**Not:**`). Place high, right after Overview. Core cross-cutting terms live in `.vorch/GLOSSARY.md`, not here. Omit the section if the domain has no domain-specific terms.]
 
 ## Data Model
 
@@ -175,8 +179,8 @@ Use this as a starting point. Remove every section that does not apply.
 
 ## References
 
-[Only if the domain has supplementary files. One trigger line per file — when to read it, not just its title.]
-- <When an agent should read it> → `<domain>/<file>.md`
+[Only if the domain has supplementary files. One trigger line per file - when to read it, not just its title.]
+- <When an agent should read it> -> `<domain>/<file>.md`
 ```
 
 ## Output

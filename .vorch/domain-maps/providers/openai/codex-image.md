@@ -1,10 +1,10 @@
-# OpenAI Codex Image Generation — subscription task wire
+# OpenAI Codex Image Generation - subscription task wire
 
-Deep reference for the `openai/gpt-image-2::subscription` image-generation wire (the ChatGPT Plus/Pro Codex responses endpoint). Read this only when building on or debugging subscription image generation; orientation lives in `openai.md` → Codex Image Generation.
+Deep reference for the `openai/gpt-image-2::subscription` image-generation wire (the ChatGPT Plus/Pro Codex responses endpoint). Read this only when building on or debugging subscription image generation; orientation lives in `openai.md` -> Codex Image Generation.
 
 This is an **internal/undocumented wire**, live-verified against the real ChatGPT Plus/Pro subscription connection on 2026-07-03. If it breaks, re-verify the raw wire (playbook below) before changing model visibility or UI behavior.
 
-Endpoint + headers: `POST https://chatgpt.com/backend-api/codex/responses` with the Codex header recipe — `Authorization: Bearer <fresh OAuth token>`, `chatgpt-account-id` derived from the current JWT via `extract_chatgpt_account_id`, plus `CODEX_EXTRA_HEADERS`.
+Endpoint + headers: `POST https://chatgpt.com/backend-api/codex/responses` with the Codex header recipe - `Authorization: Bearer <fresh OAuth token>`, `chatgpt-account-id` derived from the current JWT via `extract_chatgpt_account_id`, plus `CODEX_EXTRA_HEADERS`.
 
 ## Request shape
 

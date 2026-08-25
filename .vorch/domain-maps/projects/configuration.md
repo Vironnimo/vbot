@@ -69,11 +69,11 @@ Do not move these product-level guards into a low-level filesystem helper or cal
 
 Project configuration reuses canonical owners:
 
-- Model usability → `ModelConfigurationChecker` in `core/projects/resolver.py`, consuming Models, Providers, and credential usability. `is_configured` remains the fallback/scan query; `require_configured` is the mutation guard and preserves a precise diagnostic when a known Model is pinned to a forbidden Connection.
-- Temperature and thinking effort → the validators exported by `core/settings/`.
-- Compaction policy → `core/settings/normalizers.py`.
-- Identifier safety and addresses → `core/projects/paths.py` and `core/projects/address.py`.
-- Project Tool Whitelist membership → the live `ToolRegistry` catalog at the RPC/scan-preview boundary. `core.projects.project_tool_configurability_reason()` derives machine-readable exclusion reasons from each Tool's declarative activation and constraints; `tool.list` projects `project_configurable` plus `project_configurability_reason` so accessors never mirror Tool-name policy. Raw file validation rejects the wildcard but deliberately does not require runtime registry membership.
+- Model usability -> `ModelConfigurationChecker` in `core/projects/resolver.py`, consuming Models, Providers, and credential usability. `is_configured` remains the fallback/scan query; `require_configured` is the mutation guard and preserves a precise diagnostic when a known Model is pinned to a forbidden Connection.
+- Temperature and thinking effort -> the validators exported by `core/settings/`.
+- Compaction policy -> `core/settings/normalizers.py`.
+- Identifier safety and addresses -> `core/projects/paths.py` and `core/projects/address.py`.
+- Project Tool Whitelist membership -> the live `ToolRegistry` catalog at the RPC/scan-preview boundary. `core.projects.project_tool_configurability_reason()` derives machine-readable exclusion reasons from each Tool's declarative activation and constraints; `tool.list` projects `project_configurable` plus `project_configurability_reason` so accessors never mirror Tool-name policy. Raw file validation rejects the wildcard but deliberately does not require runtime registry membership.
 
 When adding a persisted field, decide whether it is a Project default, a capability ceiling, or a per-Agent override; update serialization, Store rebuild/update paths, RPC validation, WebUI state, resolver consumption, tests, and this reference together.
 

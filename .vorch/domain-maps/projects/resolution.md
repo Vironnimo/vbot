@@ -15,7 +15,7 @@ Team membership is cached per Project, but the selected repository Agent source 
 The model chain is:
 
 ```text
-per-Agent override → repository Agent → Project default → global default → error
+per-Agent override -> repository Agent -> Project default -> global default -> error
 ```
 
 Each model tier must pass the same `ModelConfigurationChecker` before it can win. The checker validates the Provider, Model catalog entry, and an allowed usable Connection, including an explicitly pinned account suffix. `is_configured` supplies the boolean fallback/scan decision; `require_configured` and `AgentResolver.require_model_configured` expose the same invariant as a raising mutation seam for Chat `/model` and Project Agent overrides. A forbidden pin names the rejected Connection and the Model's allowed Connections; other failures use the general unusable-Model diagnostic. A syntactically present but unusable Model falls through to the next tier; if no usable Model exists, resolution fails rather than constructing a broken Agent.
@@ -25,7 +25,7 @@ An explicit Run Model does not add another fallback tier: it replaces the alread
 Temperature and thinking effort use:
 
 ```text
-per-Agent override → repository Agent → Project default → global default → Provider default or None
+per-Agent override -> repository Agent -> Project default -> global default -> Provider default or None
 ```
 
 `effective_config()` exposes the chosen value and provenance (`override`, `agent`, `project_default`, `global_default`, or `null`) for model, temperature, and thinking effort. Preserve those labels as an API/UI contract when changing fallback behavior.
@@ -39,13 +39,13 @@ Project capability configuration is a ceiling, not another fallback chain.
 Without a vBot Tool override, effective Tool policy is:
 
 ```text
-Project allowed_tools − repository Agent denied_tools
+Project allowed_tools - repository Agent denied_tools
 ```
 
 With `overrides.<agent_id>.tool_access`, effective Tool policy is instead:
 
 ```text
-vBot Tool Access Policy ∩ Project allowed_tools
+vBot Tool Access Policy  AND  Project allowed_tools
 ```
 
 The override fully replaces repository denials and may therefore re-enable a repo-denied Tool, but it cannot grant a directly configurable Tool omitted by the Project. `mode: all` means the complete Project Tool Whitelist, `selected` may narrow it to exactly one or zero named Tools, and `none` disables every direct and automatic activation path. Automatic companions may follow an active in-ceiling lead and absolute `denied` names apply after every activation source. Keep source-format permission parsing in scanners and this final policy construction in the resolver.
@@ -53,9 +53,9 @@ The override fully replaces repository denials and may therefore re-enable a rep
 Effective Skills are:
 
 ```text
-(discovered Project Skills ∪ enabled bundled Skills ∪ enabled global Skills)
-− explicitly disabled Project Skills
-− {"*"}
+(discovered Project Skills + enabled bundled Skills + enabled global Skills)
+- explicitly disabled Project Skills
+- {"*"}
 ```
 
 The disabled-name subtraction applies to the combined set, so a disabled Project Skill cannot be resurrected by a bundled or global Skill with the same name. The `"*"` sentinel is configuration syntax, never an effective Skill name.
