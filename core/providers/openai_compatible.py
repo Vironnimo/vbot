@@ -77,7 +77,10 @@ from core.providers.token_getter import StaticTokenGetter, TokenGetter
 from core.providers.tool_schema import ToolSchemaProfile, render_tool_definitions
 from core.utils.logging import get_logger
 from core.utils.retry import retry_async
-from core.utils.tokens import estimate_request_input_tokens
+from core.utils.tokens import (
+    continues_reasoning_text_block,
+    estimate_request_input_tokens,
+)
 
 _LOGGER = get_logger("providers.openai_compatible")
 
@@ -1388,7 +1391,10 @@ def _accumulate_openai_stream_reasoning_details(
     accumulated array from this Adapter so a later sibling cannot overwrite an
     earlier detail. Details carrying a stable ``id`` update in place, retaining
     first-seen order while allowing a Provider's cumulative snapshot to refine
-    an earlier fragment.
+    an earlier fragment. Consecutive id-less ``text`` fragments of identical
+    shape are per-delta continuations of one logical block and merge into it,
+    so a streamed reasoning text persists as one item instead of one item per
+    token (see :func:`continues_reasoning_text_block`).
     """
 
     details = reasoning_meta.get("reasoning_details")
@@ -1415,6 +1421,18 @@ def _accumulate_openai_stream_reasoning_details(
             if matching_index is not None:
                 accumulated[matching_index] = normalized_detail
                 continue
+        previous = accumulated[-1] if accumulated else None
+        previous_text = previous.get("text") if isinstance(previous, Mapping) else None
+        if (
+            isinstance(previous, Mapping)
+            and isinstance(previous_text, str)
+            and continues_reasoning_text_block(previous, normalized_detail)
+        ):
+            accumulated[len(accumulated) - 1] = {
+                **previous,
+                "text": previous_text + normalized_detail["text"],
+            }
+            continue
         accumulated.append(normalized_detail)
 
     merged = dict(reasoning_meta)

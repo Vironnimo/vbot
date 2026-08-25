@@ -406,6 +406,112 @@ class TestStreamSSE:
 
     @respx.mock
     @pytest.mark.asyncio
+    async def test_stream_merges_consecutive_reasoning_text_delta_fragments(self, openai_adapter):
+        """Per-delta reasoning.text fragments persist as one logical block."""
+        # Arrange — gateways such as OpenRouter stream one tiny fragment per
+        # delta; consecutive same-shape fragments are one reasoning block.
+        fragment_shape = {"type": "reasoning.text", "format": "unknown", "index": 0}
+        chunks = [
+            {"choices": [{"delta": {"reasoning_details": [{**fragment_shape, "text": "Think"}]}}]},
+            {"choices": [{"delta": {"reasoning_details": [{**fragment_shape, "text": "ing"}]}}]},
+            {"choices": [{"delta": {"reasoning_details": [{**fragment_shape, "text": "."}]}}]},
+        ]
+        sse_body = "".join(f"data: {json.dumps(chunk)}\n\n" for chunk in chunks)
+        sse_body += "data: [DONE]\n\n"
+        respx.post(OPENAI_URL).mock(
+            return_value=httpx.Response(
+                200, text=sse_body, headers={"content-type": "text/event-stream"}
+            )
+        )
+
+        # Act
+        accumulator = StreamingAccumulator()
+        async for delta in openai_adapter.stream(SAMPLE_MESSAGES, model_id="gpt-5.2"):
+            accumulator.add_delta(delta)
+        fields = accumulator.finalize_assistant_fields()
+
+        # Assert
+        assert fields.reasoning_meta == {
+            "reasoning_details": [{**fragment_shape, "text": "Thinking."}]
+        }
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_stream_keeps_reasoning_text_blocks_apart_on_shape_change(self, openai_adapter):
+        """A changed index or oversized text starts a new detail item."""
+        # Arrange — the oversized fragment shares shape with "first", so only
+        # the delta-size guard prevents merging; "second" differs by index.
+        big_text = "x" * (257)
+        chunks = [
+            {
+                "choices": [
+                    {
+                        "delta": {
+                            "reasoning_details": [
+                                {
+                                    "type": "reasoning.text",
+                                    "format": "unknown",
+                                    "index": 0,
+                                    "text": "first",
+                                }
+                            ]
+                        }
+                    }
+                ]
+            },
+            {
+                "choices": [
+                    {
+                        "delta": {
+                            "reasoning_details": [
+                                {
+                                    "type": "reasoning.text",
+                                    "format": "unknown",
+                                    "index": 0,
+                                    "text": big_text,
+                                }
+                            ]
+                        }
+                    }
+                ]
+            },
+            {
+                "choices": [
+                    {
+                        "delta": {
+                            "reasoning_details": [
+                                {
+                                    "type": "reasoning.text",
+                                    "format": "unknown",
+                                    "index": 1,
+                                    "text": "second",
+                                }
+                            ]
+                        }
+                    }
+                ]
+            },
+        ]
+        sse_body = "".join(f"data: {json.dumps(chunk)}\n\n" for chunk in chunks)
+        sse_body += "data: [DONE]\n\n"
+        respx.post(OPENAI_URL).mock(
+            return_value=httpx.Response(
+                200, text=sse_body, headers={"content-type": "text/event-stream"}
+            )
+        )
+
+        # Act
+        accumulator = StreamingAccumulator()
+        async for delta in openai_adapter.stream(SAMPLE_MESSAGES, model_id="gpt-5.2"):
+            accumulator.add_delta(delta)
+        fields = accumulator.finalize_assistant_fields()
+
+        # Assert
+        details = fields.reasoning_meta["reasoning_details"]
+        assert [item["text"] for item in details] == ["first", big_text, "second"]
+
+    @respx.mock
+    @pytest.mark.asyncio
     async def test_stream_yields_index_keyed_tool_call_deltas_without_premature_ids(
         self,
         openai_adapter,

@@ -46,6 +46,28 @@ MESSAGE_TOKEN_ESTIMATE_FIELDS = (
 # absorbs Provider-specific media accounting variance.
 NATIVE_MEDIA_TOKEN_RESERVE = 4096
 
+# Replayable reasoning metadata mixes compact identifiers with large opaque
+# continuity blobs (signatures, encrypted thinking state). Providers bill such
+# blobs by their decoded content rather than by encoded character count — live
+# evidence 2026-08-25: a session whose replayed details serialized to ~3.4 MB of
+# JSON reported only ~220k real prompt tokens. Request budgeting therefore
+# replaces each oversized non-text blob string with a fixed reservation instead
+# of letting transport encoding masquerade as prose tokens. Visible ``text``
+# fields keep counting as prose.
+OPAQUE_REASONING_BLOB_MIN_CHARS = 128
+OPAQUE_REASONING_BLOB_TOKEN_RESERVE = 512
+REASONING_TEXT_FIELD = "text"
+# Gateways such as OpenRouter stream ``reasoning.text`` details as one tiny
+# fragment per delta (observed 2026-08-25 on stealth/ox-alpha: ~4-character
+# texts, no stable id, identical index). Merging is limited to delta-sized
+# texts so a gateway repeating a complete snapshot per sibling Tool Call keeps
+# its copies as separate items.
+REASONING_TEXT_DELTA_MERGE_MAX_CHARS = 256
+# Well-known opaque continuity keys outside ``reasoning_details`` containers —
+# stateless Responses reasoning items carry ``encrypted_content`` directly, and
+# Anthropic-family thinking blocks carry signatures.
+OPAQUE_REASONING_BLOB_KEYS = frozenset({"encrypted_content", "signature", "redacted_thinking"})
+
 
 def estimate_tokens(text: str) -> tuple[int, bool]:
     """Estimate the number of tokens in *text* with one fixed tokenizer.
@@ -93,16 +115,22 @@ def estimate_message_tokens(message: Mapping[str, Any]) -> tuple[int, bool]:
     Storage-only metadata such as message ids, timestamps, usage, and timing is
     intentionally ignored. Structured content, tool calls, and reasoning fields
     are serialized as compact JSON so they are counted by their payload size
-    instead of by Python's object representation.
+    instead of by Python's object representation. Opaque reasoning blobs inside
+    ``reasoning_details`` are replaced by fixed reservations (see
+    :func:`_normalize_opaque_reasoning_blobs`).
     """
     chunks: list[str] = []
+    blob_count = 0
     for field_name in MESSAGE_TOKEN_ESTIMATE_FIELDS:
         if field_name not in message:
             continue
-        rendered = _render_token_estimate_value(message[field_name])
+        normalized_value, field_blob_count = _normalize_opaque_reasoning_blobs(message[field_name])
+        blob_count += field_blob_count
+        rendered = _render_token_estimate_value(normalized_value)
         if rendered:
             chunks.append(rendered)
-    return estimate_tokens("\n".join(chunks))
+    estimated_tokens, _ = estimate_tokens("\n".join(chunks))
+    return estimated_tokens + blob_count * OPAQUE_REASONING_BLOB_TOKEN_RESERVE, True
 
 
 def estimate_json_tokens(value: Any) -> tuple[int, bool]:
@@ -124,11 +152,19 @@ def estimate_structured_tokens(value: Any) -> tuple[int, bool]:
     transport encoding does not masquerade as prose tokens. Used for provider
     payloads that reach the model as structured data rather than chat messages
     — e.g. stateless Responses input items, which carry provider-owned
-    reasoning items with large encrypted continuity blobs.
+    reasoning items with large encrypted continuity blobs. Opaque reasoning
+    blobs get the same treatment (see :func:`_normalize_opaque_reasoning_blobs`).
     """
+
     normalized, media_payloads = _normalize_native_media(value)
+    normalized, blob_count = _normalize_opaque_reasoning_blobs(normalized)
     estimated, _ = estimate_json_tokens(normalized)
-    return estimated + media_payloads * NATIVE_MEDIA_TOKEN_RESERVE, True
+    return (
+        estimated
+        + media_payloads * NATIVE_MEDIA_TOKEN_RESERVE
+        + blob_count * OPAQUE_REASONING_BLOB_TOKEN_RESERVE,
+        True,
+    )
 
 
 def estimate_request_input_tokens(
@@ -198,6 +234,133 @@ def _normalize_native_media(value: Any) -> tuple[Any, int]:
         normalized_items, media_payloads = _normalize_native_media(list(value))
         return normalized_items, media_payloads
     return value, 0
+
+
+def _normalize_opaque_reasoning_blobs(value: Any) -> tuple[Any, int]:
+    """Return a token-estimation copy with oversized opaque reasoning blobs replaced.
+
+    Replayable reasoning metadata mixes compact identifiers with large opaque
+    continuity blobs — signatures, encrypted thinking state. Inside
+    ``reasoning_details`` items any oversized non-``text`` string counts as a
+    blob; outside them only the well-known :data:`OPAQUE_REASONING_BLOB_KEYS`
+    continuity keys do. Providers bill such blobs by their decoded content
+    rather than by encoded character count, so budgeting replaces each one with
+    a fixed reservation per blob. Returns the normalized copy and the number of
+    replaced blobs.
+    """
+
+    if isinstance(value, Mapping):
+        normalized: dict[str, Any] = {}
+        blob_count = 0
+        for key, item in value.items():
+            if key == "reasoning_details" and isinstance(item, list):
+                compacted_items, detail_blob_count = _compact_reasoning_details(item)
+                normalized[str(key)] = compacted_items
+                blob_count += detail_blob_count
+            elif (
+                key in OPAQUE_REASONING_BLOB_KEYS
+                and isinstance(item, str)
+                and len(item) >= OPAQUE_REASONING_BLOB_MIN_CHARS
+            ):
+                normalized[str(key)] = "<opaque-reasoning>"
+                blob_count += 1
+            else:
+                normalized_item, nested_blob_count = _normalize_opaque_reasoning_blobs(item)
+                normalized[str(key)] = normalized_item
+                blob_count += nested_blob_count
+        return normalized, blob_count
+    if isinstance(value, list):
+        normalized_list: list[Any] = []
+        blob_count = 0
+        for item in value:
+            normalized_item, nested_blob_count = _normalize_opaque_reasoning_blobs(item)
+            normalized_list.append(normalized_item)
+            blob_count += nested_blob_count
+        return normalized_list, blob_count
+    if isinstance(value, tuple):
+        normalized_tuple, blob_count = _normalize_opaque_reasoning_blobs(list(value))
+        return tuple(normalized_tuple), blob_count
+    return value, 0
+
+
+def _normalize_reasoning_detail(detail: Mapping[str, Any]) -> tuple[dict[str, Any], int]:
+    """Replace oversized non-text strings inside one reasoning-details item."""
+
+    normalized: dict[str, Any] = {}
+    blob_count = 0
+    for key, item in detail.items():
+        if (
+            key != REASONING_TEXT_FIELD
+            and isinstance(item, str)
+            and len(item) >= OPAQUE_REASONING_BLOB_MIN_CHARS
+        ):
+            normalized[str(key)] = "<opaque-reasoning>"
+            blob_count += 1
+        else:
+            normalized[str(key)] = item
+    return normalized, blob_count
+
+
+def _compact_reasoning_details(details: list[Any]) -> tuple[list[Any], int]:
+    """Normalize one ``reasoning_details`` list for estimation.
+
+    Replaces oversized non-text blob strings with fixed reservations and merges
+    consecutive id-less same-shape text fragments into single items — mirroring
+    the adapter's stream accumulation, so sessions persisted before that fix
+    (one item per streamed delta) are budgeted by their real content size.
+    """
+
+    compacted: list[Any] = []
+    blob_count = 0
+    for detail in details:
+        if not isinstance(detail, Mapping):
+            compacted.append(detail)
+            continue
+        normalized_detail, detail_blob_count = _normalize_reasoning_detail(detail)
+        blob_count += detail_blob_count
+        previous = compacted[-1] if compacted else None
+        previous_text = previous.get("text") if isinstance(previous, Mapping) else None
+        if (
+            isinstance(previous, Mapping)
+            and isinstance(previous_text, str)
+            and continues_reasoning_text_block(previous, normalized_detail)
+        ):
+            compacted[len(compacted) - 1] = {
+                **previous,
+                "text": previous_text + normalized_detail["text"],
+            }
+            continue
+        compacted.append(normalized_detail)
+    return compacted, blob_count
+
+
+def continues_reasoning_text_block(previous: Any, incoming: Any) -> bool:
+    """Whether a reasoning-details fragment continues the previous block.
+
+    Both must be id-less mappings sharing ``type``, ``format``, and ``index``
+    with string ``text`` on each side, and the incoming text must be delta-sized
+    so a provider repeating a complete snapshot per sibling Tool Call keeps its
+    copies as separate items. Shared by the adapter's stream accumulator and the
+    estimator's list compaction so both see the same logical blocks.
+    """
+
+    if not isinstance(previous, Mapping) or not isinstance(incoming, Mapping):
+        return False
+    incoming_text = incoming.get("text")
+    if (
+        not isinstance(incoming_text, str)
+        or not 0 < len(incoming_text) <= REASONING_TEXT_DELTA_MERGE_MAX_CHARS
+    ):
+        return False
+    if not isinstance(previous.get("text"), str):
+        return False
+    return (
+        previous.get("id") is None
+        and incoming.get("id") is None
+        and previous.get("type") == incoming.get("type")
+        and previous.get("format") == incoming.get("format")
+        and previous.get("index") == incoming.get("index")
+    )
 
 
 def _is_native_media_payload(
