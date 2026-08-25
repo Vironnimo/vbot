@@ -9,10 +9,6 @@ from typing import TYPE_CHECKING, Any, Protocol
 from core.chat.chat import (
     _CHAT_TRANSFORM_WORKERS,
     _LOGGER,
-    PINNED_MEMORY_FILES_META_KEY,
-    PINNED_SKILL_CATALOG_META_KEY,
-    PINNED_SOUL_CONTEXT_META_KEY,
-    PINNED_WORKING_PROJECT_CONTEXT_META_KEY,
     SEEN_SKILLS_META_KEY,
     ChatLoopDependencies,
     RequestBuildInputs,
@@ -57,6 +53,17 @@ from core.compaction.compaction import (
 )
 from core.projects import resolve_prompt_project, resolve_skill_scope, runtime_agent_body
 from core.prompts import ProjectPromptContext
+from core.prompts.pinned_context import (
+    PINNED_MEMORY_FILES_META_KEY,
+    PINNED_SKILL_CATALOG_META_KEY,
+    PINNED_SOUL_CONTEXT_META_KEY,
+    PINNED_WORKING_PROJECT_CONTEXT_META_KEY,
+    pinned_memory_files,
+    pinned_skill_catalog,
+    pinned_soul_context,
+    pinned_working_project_context,
+    stamp_prompt_files_read,
+)
 from core.runs import (
     COMPACTION_ABORTED_EVENT,
     COMPACTION_COMPLETED_EVENT,
@@ -70,7 +77,6 @@ if TYPE_CHECKING:
     from core.chat.chat import _ModelTarget, _RunExecutionContext
     from core.chat.messages import ChatMessage
     from core.compaction import CompactionService
-    from core.prompts import PinnedSkillCatalog
     from core.runs import Run
     from core.sessions import ChatSession, SessionReadCursor
     from core.skills.skills import SkillRegistry
@@ -120,52 +126,6 @@ class CompactionRunHost(Protocol):
         skill_registry: SkillRegistry,
     ) -> list[str] | None:
         """Return the currently advertised Skill names, or ``None`` when degraded."""
-        ...
-
-    def stamp_prompt_files_read(self, session_id: str, paths: list[Path]) -> None:
-        """Register auto-injected prompt files as read-before-write for a session."""
-        ...
-
-    def pinned_skill_catalog(
-        self,
-        agent_id: str,
-        session_id: str,
-        agent: Any,
-        skill_registry: SkillRegistry,
-        project_id: str | None,
-    ) -> PinnedSkillCatalog:
-        """Return the current prompt epoch's Skill catalog."""
-        ...
-
-    def pinned_working_project_context(
-        self,
-        agent_id: str,
-        session_id: str,
-        prompt_project: Any | None,
-        project_context: ProjectPromptContext | None,
-        project_id: str | None,
-    ) -> str | None:
-        """Return the pinned Working Project Context for this prompt epoch."""
-        ...
-
-    def pinned_soul_context(
-        self,
-        agent_id: str,
-        session_id: str,
-        agent: Any,
-        project_id: str | None,
-    ) -> str | None:
-        """Return the prompt epoch's pinned SOUL block text for an Identity Agent."""
-        ...
-
-    def pinned_memory_files(
-        self,
-        agent_id: str,
-        session_id: str,
-        agent: Any,
-        project_id: str | None,
-    ) -> str | None:
-        """Return the prompt epoch's pinned pinned-memory text for an Identity Agent."""
         ...
 
 
@@ -250,7 +210,8 @@ class CompactionRunCoordinator:
                     else None
                 )
                 working_project_context = await _CHAT_TRANSFORM_WORKERS.run(
-                    self._host.pinned_working_project_context,
+                    pinned_working_project_context,
+                    self._dependencies,
                     run.agent_id,
                     run.session_id,
                     prompt_project,
@@ -258,14 +219,16 @@ class CompactionRunCoordinator:
                     run.project_id,
                 )
                 soul_context = await _CHAT_TRANSFORM_WORKERS.run(
-                    self._host.pinned_soul_context,
+                    pinned_soul_context,
+                    self._dependencies,
                     run.agent_id,
                     run.session_id,
                     agent,
                     run.project_id,
                 )
                 memory_files_context = await _CHAT_TRANSFORM_WORKERS.run(
-                    self._host.pinned_memory_files,
+                    pinned_memory_files,
+                    self._dependencies,
                     run.agent_id,
                     run.session_id,
                     agent,
@@ -294,7 +257,8 @@ class CompactionRunCoordinator:
                 wire_media_types = _resolve_wire_media_support(adapter, model_id)
                 agent_body = runtime_agent_body(agent)
                 skill_catalog = await _CHAT_TRANSFORM_WORKERS.run(
-                    self._host.pinned_skill_catalog,
+                    pinned_skill_catalog,
+                    self._dependencies,
                     run.agent_id,
                     run.session_id,
                     agent,
@@ -544,7 +508,11 @@ class CompactionRunCoordinator:
                 metadata.pop(pin_key, None)
             else:
                 metadata[pin_key] = {"text": pin_text}
-        self._host.stamp_prompt_files_read(session_id, list(refresh.prompt_read_paths))
+        stamp_prompt_files_read(
+            self._dependencies.file_read_state,
+            session_id,
+            list(refresh.prompt_read_paths),
+        )
         self._dependencies.sessions.set_metadata(address, metadata)
 
     async def _project_post_compaction_request(

@@ -108,7 +108,10 @@ async def test_project_session_puts_body_and_files_in_system_prompt(tmp_path: Pa
 
 @pytest.mark.asyncio
 async def test_soul_and_memory_pin_across_runs(tmp_path: Path) -> None:
-    from core.chat.chat import PINNED_MEMORY_FILES_META_KEY, PINNED_SOUL_CONTEXT_META_KEY
+    from core.prompts.pinned_context import (
+        PINNED_MEMORY_FILES_META_KEY,
+        PINNED_SOUL_CONTEXT_META_KEY,
+    )
 
     agent = StubAgent(
         id="coder",
@@ -145,7 +148,7 @@ async def test_soul_and_memory_pin_across_runs(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_config_agent_session_pins_working_project_across_runs(tmp_path: Path) -> None:
-    from core.chat.chat import PINNED_WORKING_PROJECT_CONTEXT_META_KEY
+    from core.prompts.pinned_context import PINNED_WORKING_PROJECT_CONTEXT_META_KEY
 
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -177,7 +180,10 @@ async def test_config_agent_session_pins_working_project_across_runs(tmp_path: P
 async def test_config_agent_without_workspace_stores_no_soul_or_memory_pin(
     tmp_path: Path,
 ) -> None:
-    from core.chat.chat import PINNED_MEMORY_FILES_META_KEY, PINNED_SOUL_CONTEXT_META_KEY
+    from core.prompts.pinned_context import (
+        PINNED_MEMORY_FILES_META_KEY,
+        PINNED_SOUL_CONTEXT_META_KEY,
+    )
 
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -302,7 +308,7 @@ async def test_rooted_identity_agent_puts_project_files_in_system_prompt(tmp_pat
 async def test_rooted_project_context_stays_pinned_across_project_tool_call(
     tmp_path: Path,
 ) -> None:
-    from core.chat.chat import PINNED_WORKING_PROJECT_CONTEXT_META_KEY
+    from core.prompts.pinned_context import PINNED_WORKING_PROJECT_CONTEXT_META_KEY
 
     repo = tmp_path / "repo"
     repo.mkdir()

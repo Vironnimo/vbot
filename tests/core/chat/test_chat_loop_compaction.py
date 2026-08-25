@@ -15,10 +15,6 @@ from core.chat import (
     ToolCall,
 )
 from core.chat.chat import (
-    PINNED_MEMORY_FILES_META_KEY,
-    PINNED_SKILL_CATALOG_META_KEY,
-    PINNED_SOUL_CONTEXT_META_KEY,
-    PINNED_WORKING_PROJECT_CONTEXT_META_KEY,
     SEEN_SKILLS_META_KEY,
     RequestBuildInputs,
     _RequestState,
@@ -34,6 +30,15 @@ from core.chat.continuation import (
 from core.compaction import (
     MIN_AUTO_COMPACTION_RECLAIM_TOKENS,
     TOOL_RESULT_COMPACTED_FIELD,
+)
+from core.prompts.pinned_context import (
+    PINNED_MEMORY_FILES_META_KEY,
+    PINNED_SKILL_CATALOG_META_KEY,
+    PINNED_SOUL_CONTEXT_META_KEY,
+    PINNED_WORKING_PROJECT_CONTEXT_META_KEY,
+    pinned_memory_files,
+    pinned_skill_catalog,
+    pinned_soul_context,
 )
 from core.providers.adapter import TOOL_RESULT_CONTENT_BLOCKS_FIELD
 from core.runs import (
@@ -1144,7 +1149,7 @@ async def test_compaction_refreshes_pinned_skill_catalog(tmp_path: Path) -> None
     run = Run(run_id="run-1", agent_id=agent.id, session_id=session.id)
 
     # Pin the session's catalog (as the first build would), then grow the registry.
-    loop.pinned_skill_catalog("coder", "session-one", agent, runtime.skills, None)
+    pinned_skill_catalog(loop._dependencies, "coder", "session-one", agent, runtime.skills, None)
     runtime.skills = StubSkills(
         [StubSkill("one", "One.", Path("a")), StubSkill("two", "Two.", Path("b"))]
     )
@@ -1196,8 +1201,8 @@ async def test_compaction_refreshes_pinned_soul_and_memory(tmp_path: Path) -> No
     run = Run(run_id="run-1", agent_id=agent.id, session_id=session.id)
 
     # Pin the epoch's texts (as the first build would), then observe the refresh.
-    loop.pinned_soul_context("coder", "session-one", agent, None)
-    loop.pinned_memory_files("coder", "session-one", agent, None)
+    pinned_soul_context(loop._dependencies, "coder", "session-one", agent, None)
+    pinned_memory_files(loop._dependencies, "coder", "session-one", agent, None)
     soul_calls_before = runtime.system_prompts.render_soul_calls
     memory_calls_before = runtime.system_prompts.render_memory_files_calls
 
@@ -1246,7 +1251,7 @@ async def test_compaction_refresh_failure_keeps_previous_prompt_snapshot(
             StubCompactionService(should_auto=True, checkpoint=checkpoint),
         ),
     )
-    loop.pinned_skill_catalog("coder", "session-one", agent, runtime.skills, None)
+    pinned_skill_catalog(loop._dependencies, "coder", "session-one", agent, runtime.skills, None)
 
     def fail_refresh(_project_id: str | None, _agent_id: str | None) -> Any:
         raise RuntimeError("scan failed")
@@ -1774,7 +1779,7 @@ async def test_manual_compaction_refreshes_skill_catalog_snapshot(tmp_path: Path
             StubCompactionService(should_auto=True, checkpoint=checkpoint),
         ),
     )
-    loop.pinned_skill_catalog("coder", "session-one", agent, runtime.skills, None)
+    pinned_skill_catalog(loop._dependencies, "coder", "session-one", agent, runtime.skills, None)
     runtime.skills = StubSkills(
         [StubSkill("one", "One.", Path("a")), StubSkill("two", "Two.", Path("b"))]
     )
