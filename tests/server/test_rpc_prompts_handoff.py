@@ -440,7 +440,8 @@ async def test_chat_methods_reject_handoff_command_while_session_run_is_active(
         return "done"
 
     active_run = await state.chat_runs.start(
-        agent_id="coder", session_id="session-one", executor=_blocking_run_executor, project_id=None
+        SessionAddress(project_id=None, agent_id="coder", session_id="session-one"),
+        _blocking_run_executor,
     )
     await started.wait()
 

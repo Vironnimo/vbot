@@ -7,6 +7,7 @@ from core.sessions import SessionAddress
 from .runs_test_support import (
     ChatRunManager,
     Run,
+    RunAdmission,
     RunAdmissionBlockedError,
     asyncio,
     pytest,
@@ -27,32 +28,24 @@ async def test_session_guard_blocks_source_and_destination_until_release() -> No
     async with manager.session_admission_guard(source, destination):
         with pytest.raises(RunAdmissionBlockedError):
             await manager.start(
-                agent_id="builder",
-                session_id="session-one",
-                executor=_finish_immediately,
-                project_id=None,
+                SessionAddress(project_id=None, agent_id="builder", session_id="session-one"),
+                _finish_immediately,
             )
         with pytest.raises(RunAdmissionBlockedError):
             await manager.enqueue(
-                agent_id="planner",
-                session_id="session-one",
-                executor=_finish_immediately,
-                project_id="vbot",
+                SessionAddress(project_id="vbot", agent_id="planner", session_id="session-one"),
+                _finish_immediately,
             )
 
         unrelated = await manager.start(
-            agent_id="writer",
-            session_id="session-one",
-            executor=_finish_immediately,
-            project_id=None,
+            SessionAddress(project_id=None, agent_id="writer", session_id="session-one"),
+            _finish_immediately,
         )
         assert await unrelated.wait() == "done"
 
     admitted = await manager.start(
-        agent_id="builder",
-        session_id="session-one",
-        executor=_finish_immediately,
-        project_id=None,
+        SessionAddress(project_id=None, agent_id="builder", session_id="session-one"),
+        _finish_immediately,
     )
     assert await admitted.wait() == "done"
 
@@ -66,10 +59,8 @@ async def test_session_guard_refuses_existing_run_and_releases_after_body_failur
         return "done"
 
     active = await manager.start(
-        agent_id="builder",
-        session_id="busy",
-        executor=hold,
-        project_id=None,
+        SessionAddress(project_id=None, agent_id="builder", session_id="busy"),
+        hold,
     )
     with pytest.raises(RunAdmissionBlockedError):
         async with manager.session_admission_guard(
@@ -87,10 +78,8 @@ async def test_session_guard_refuses_existing_run_and_releases_after_body_failur
             raise RuntimeError("storage failed")
 
     admitted = await manager.start(
-        agent_id="builder",
-        session_id="idle",
-        executor=_finish_immediately,
-        project_id=None,
+        SessionAddress(project_id=None, agent_id="builder", session_id="idle"),
+        _finish_immediately,
     )
     assert await admitted.wait() == "done"
 
@@ -101,23 +90,17 @@ async def test_agent_guard_is_scoped_to_one_agent_anchor() -> None:
     async with manager.agent_admission_guard("builder", project_id=None):
         with pytest.raises(RunAdmissionBlockedError):
             await manager.start(
-                agent_id="builder",
-                session_id="identity",
-                executor=_finish_immediately,
-                project_id=None,
+                SessionAddress(project_id=None, agent_id="builder", session_id="identity"),
+                _finish_immediately,
             )
 
         project_run = await manager.start(
-            agent_id="builder",
-            session_id="project",
-            executor=_finish_immediately,
-            project_id="vbot",
+            SessionAddress(project_id="vbot", agent_id="builder", session_id="project"),
+            _finish_immediately,
         )
         other_agent_run = await manager.start(
-            agent_id="writer",
-            session_id="identity",
-            executor=_finish_immediately,
-            project_id=None,
+            SessionAddress(project_id=None, agent_id="writer", session_id="identity"),
+            _finish_immediately,
         )
         assert await project_run.wait() == "done"
         assert await other_agent_run.wait() == "done"
@@ -129,26 +112,20 @@ async def test_project_guard_covers_anchor_and_working_project() -> None:
     async with manager.project_admission_guard("vbot"):
         with pytest.raises(RunAdmissionBlockedError):
             await manager.start(
-                agent_id="builder",
-                session_id="project-session",
-                executor=_finish_immediately,
-                project_id="vbot",
+                SessionAddress(project_id="vbot", agent_id="builder", session_id="project-session"),
+                _finish_immediately,
             )
         with pytest.raises(RunAdmissionBlockedError):
             await manager.start(
-                agent_id="identity",
-                session_id="rooted-session",
-                executor=_finish_immediately,
-                project_id=None,
-                working_project_id="vbot",
+                SessionAddress(project_id=None, agent_id="identity", session_id="rooted-session"),
+                _finish_immediately,
+                admission=RunAdmission(working_project_id="vbot"),
             )
 
         unrelated = await manager.start(
-            agent_id="identity",
-            session_id="other-session",
-            executor=_finish_immediately,
-            project_id=None,
-            working_project_id="other",
+            SessionAddress(project_id=None, agent_id="identity", session_id="other-session"),
+            _finish_immediately,
+            admission=RunAdmission(working_project_id="other"),
         )
         assert await unrelated.wait() == "done"
 
@@ -162,10 +139,8 @@ async def test_project_guard_refuses_anchored_or_rooted_activity() -> None:
         return "done"
 
     anchored = await manager.start(
-        agent_id="builder",
-        session_id="project-session",
-        executor=hold,
-        project_id="vbot",
+        SessionAddress(project_id="vbot", agent_id="builder", session_id="project-session"),
+        hold,
     )
     with pytest.raises(RunAdmissionBlockedError):
         async with manager.project_admission_guard("vbot"):

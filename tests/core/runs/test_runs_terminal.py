@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from core.sessions import SessionAddress
+
 from .runs_test_support import (
     Any,
     ChatRunManager,
@@ -43,7 +45,8 @@ async def test_manager_marks_interruption_terminal_and_wait_raises_signal() -> N
         raise RunInterruptedError("network", result=partial)
 
     run = await manager.start(
-        agent_id="coder", session_id="session-one", executor=execute, project_id=None
+        SessionAddress(project_id=None, agent_id="coder", session_id="session-one"),
+        execute,
     )
 
     with pytest.raises(RunInterruptedError) as exc_info:
@@ -69,7 +72,8 @@ async def test_executor_terminal_payload_extras_ride_completed_event() -> None:
         return "done"
 
     run = await manager.start(
-        agent_id="coder", session_id="session-one", executor=execute, project_id=None
+        SessionAddress(project_id=None, agent_id="coder", session_id="session-one"),
+        execute,
     )
     assert await run.wait() == "done"
 
@@ -87,7 +91,8 @@ async def test_executor_terminal_payload_extras_ride_failed_and_cancelled_events
         raise VBotError("boom")
 
     failed_run = await manager.start(
-        agent_id="coder", session_id="session-fail", executor=failing, project_id=None
+        SessionAddress(project_id=None, agent_id="coder", session_id="session-fail"),
+        failing,
     )
     with pytest.raises(VBotError):
         await failed_run.wait()
@@ -104,7 +109,8 @@ async def test_executor_terminal_payload_extras_ride_failed_and_cancelled_events
         return "late"
 
     cancelled_run = await manager.start(
-        agent_id="coder", session_id="session-cancel", executor=cancellable, project_id=None
+        SessionAddress(project_id=None, agent_id="coder", session_id="session-cancel"),
+        cancellable,
     )
     await started.wait()
     cancelled_run.request_cancel()
@@ -217,7 +223,8 @@ async def test_failed_run_logs_once_through_manager_executor(
 
     caplog.set_level(logging.ERROR, logger="vbot.runs")
     run = await manager.start(
-        agent_id="coder", session_id="session-one", executor=fail, project_id=None
+        SessionAddress(project_id=None, agent_id="coder", session_id="session-one"),
+        fail,
     )
     with pytest.raises(RuntimeError, match="executor boom"):
         await run.wait()
@@ -244,7 +251,8 @@ async def test_run_completed_includes_usage_from_result_object() -> None:
         return FakeResult()
 
     run = await manager.start(
-        agent_id="coder", session_id="session-one", executor=execute, project_id=None
+        SessionAddress(project_id=None, agent_id="coder", session_id="session-one"),
+        execute,
     )
     await run.wait()
 
@@ -266,7 +274,8 @@ async def test_run_completed_omits_usage_when_result_has_no_usage() -> None:
         return "done"
 
     run = await manager.start(
-        agent_id="coder", session_id="session-one", executor=execute, project_id=None
+        SessionAddress(project_id=None, agent_id="coder", session_id="session-one"),
+        execute,
     )
     await run.wait()
 
@@ -289,7 +298,8 @@ async def test_run_completed_omits_usage_when_usage_is_none() -> None:
         return ResultWithNoneUsage()
 
     run = await manager.start(
-        agent_id="coder", session_id="session-one", executor=execute, project_id=None
+        SessionAddress(project_id=None, agent_id="coder", session_id="session-one"),
+        execute,
     )
     await run.wait()
 

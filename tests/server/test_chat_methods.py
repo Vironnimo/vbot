@@ -19,6 +19,7 @@ from typing import Any
 import pytest
 
 from core.runs import Run
+from core.sessions import SessionAddress
 from server.rpc.errors import RPC_ERROR_INVALID_REQUEST, RPC_ERROR_RUN_NOT_FOUND
 from server.rpc.methods import dispatch_rpc
 from tests.server.test_rpc import StubAdapter, make_state
@@ -39,10 +40,8 @@ class TestChatCancelToolCall:
         """A registered tool call gets cancelled; the RPC returns ``{ok: True}``."""
         state = make_state(tmp_path, StubAdapter())
         run = await state.chat_runs.start(
-            agent_id="coder",
-            session_id="session-one",
-            executor=_hold_forever_executor,
-            project_id=None,
+            SessionAddress(project_id=None, agent_id="coder", session_id="session-one"),
+            _hold_forever_executor,
         )
         invocations: list[str] = []
 
@@ -90,10 +89,8 @@ class TestChatCancelToolCall:
         """An unknown tool call id surfaces as a not-found error."""
         state = make_state(tmp_path, StubAdapter())
         run = await state.chat_runs.start(
-            agent_id="coder",
-            session_id="session-one",
-            executor=_hold_forever_executor,
-            project_id=None,
+            SessionAddress(project_id=None, agent_id="coder", session_id="session-one"),
+            _hold_forever_executor,
         )
 
         response = await dispatch_rpc(
@@ -118,10 +115,8 @@ class TestChatCancelToolCall:
         """Unknown params are rejected by the field allowlist."""
         state = make_state(tmp_path, StubAdapter())
         run = await state.chat_runs.start(
-            agent_id="coder",
-            session_id="session-one",
-            executor=_hold_forever_executor,
-            project_id=None,
+            SessionAddress(project_id=None, agent_id="coder", session_id="session-one"),
+            _hold_forever_executor,
         )
 
         response = await dispatch_rpc(
@@ -169,10 +164,8 @@ class TestChatCancelReason:
         monkeypatch.setattr(Run, "request_cancel", capturing_request_cancel)
 
         run = await state.chat_runs.start(
-            agent_id="coder",
-            session_id="session-one",
-            executor=_hold_forever_executor,
-            project_id=None,
+            SessionAddress(project_id=None, agent_id="coder", session_id="session-one"),
+            _hold_forever_executor,
         )
         await asyncio.sleep(0)
 
@@ -204,10 +197,8 @@ class TestChatCancelReason:
         monkeypatch.setattr(Run, "request_cancel", capturing_request_cancel)
 
         run = await state.chat_runs.start(
-            agent_id="coder",
-            session_id="session-one",
-            executor=_hold_forever_executor,
-            project_id=None,
+            SessionAddress(project_id=None, agent_id="coder", session_id="session-one"),
+            _hold_forever_executor,
         )
         await asyncio.sleep(0)
 

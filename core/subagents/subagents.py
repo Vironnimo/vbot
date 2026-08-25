@@ -22,6 +22,7 @@ from core.projects import (
 from core.runs import (
     ActiveRunError,
     Run,
+    RunAdmission,
     RunCancelledError,
     RunExecutor,
     RunInterruptedError,
@@ -199,7 +200,7 @@ def _inspect_subagent_work(
                     project_id=project_id,
                 )
             )
-            if item.work_id == work_id
+            if item.admission.work_id == work_id
         ),
         None,
     )
@@ -505,14 +506,18 @@ async def _handle_subagent(
             )
             target_agent = runtime.agent_resolver.resolve_agent(target_project_id, target_agent_id)
             item = await runtime.chat_run_manager.enqueue(
-                agent_id=target_agent_id,
-                session_id=session.id,
-                executor=executor,
+                SessionAddress(
+                    project_id=target_project_id,
+                    agent_id=target_agent_id,
+                    session_id=session.id,
+                ),
+                executor,
                 display_content=content,
-                project_id=target_project_id,
-                working_project_id=resolve_working_project_id(target_project_id, target_agent),
-                run_kind=RunKind.SUBAGENT,
-                work_id=work_id,
+                admission=RunAdmission(
+                    working_project_id=resolve_working_project_id(target_project_id, target_agent),
+                    run_kind=RunKind.SUBAGENT,
+                    work_id=work_id,
+                ),
             )
             if activity is not None:
                 activity.mark_queued()
@@ -1036,13 +1041,13 @@ async def _start_subagent_run(
     )
     target_agent = runtime.agent_resolver.resolve_agent(project_id, agent_id)
     return await runtime.chat_run_manager.start(
-        agent_id=agent_id,
-        session_id=session_id,
-        executor=executor,
-        project_id=project_id,
-        working_project_id=resolve_working_project_id(project_id, target_agent),
-        run_kind=RunKind.SUBAGENT,
-        work_id=work_id,
+        SessionAddress(project_id=project_id, agent_id=agent_id, session_id=session_id),
+        executor,
+        admission=RunAdmission(
+            working_project_id=resolve_working_project_id(project_id, target_agent),
+            run_kind=RunKind.SUBAGENT,
+            work_id=work_id,
+        ),
     )
 
 

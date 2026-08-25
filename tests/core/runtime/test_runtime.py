@@ -896,10 +896,8 @@ async def test_runtime_aclose_cancels_runs_titles_and_reflections(config: Config
         await asyncio.Event().wait()
 
     run = await runtime.chat_run_manager.start(
-        agent_id="main",
-        session_id="shutdown-tracked",
-        executor=execute,
-        project_id=None,
+        SessionAddress(project_id=None, agent_id="main", session_id="shutdown-tracked"),
+        execute,
     )
     title_task = asyncio.create_task(background_work())
     reflection_task = asyncio.create_task(background_work())

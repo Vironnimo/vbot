@@ -11,6 +11,7 @@ from .subagent_test_support import (
     Path,
     RecordingTriggerService,
     Run,
+    SessionAddress,
     SubAgentBatchTracker,
     _handle_subagent_result,
     asyncio,
@@ -306,9 +307,8 @@ async def test_subagent_result_from_later_parent_run_resolves_queued_session_run
     manager = FakeRunManager()
     manager.hold_enqueued_starts = True
     queued_item = await manager.enqueue(
-        agent_id="worker",
-        session_id="sub-session",
-        executor=lambda run: run,
+        SessionAddress(project_id=None, agent_id="worker", session_id="sub-session"),
+        lambda run: run,
     )
     runtime = make_runtime(tmp_path, manager)
     tracker = SubAgentBatchTracker(RecordingTriggerService())

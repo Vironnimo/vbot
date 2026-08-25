@@ -15,6 +15,7 @@ from .runs_test_support import (
     Path,
     QueuedRunItem,
     Run,
+    RunAdmission,
     RunStatus,
     SimpleNamespace,
     WaitingWorkLimitError,
@@ -35,12 +36,14 @@ async def test_rejects_second_active_run_for_same_session() -> None:
         return run.id
 
     first_run = await manager.start(
-        agent_id="coder", session_id="session-one", executor=execute, project_id=None
+        SessionAddress(project_id=None, agent_id="coder", session_id="session-one"),
+        execute,
     )
 
     with pytest.raises(ActiveRunError):
         await manager.start(
-            agent_id="coder", session_id="session-one", executor=execute, project_id=None
+            SessionAddress(project_id=None, agent_id="coder", session_id="session-one"),
+            execute,
         )
 
     release.set()
@@ -56,19 +59,23 @@ async def test_waiting_work_limit_rejects_the_next_queued_run() -> None:
         return "done"
 
     active_run = await manager.start(
-        agent_id="coder", session_id="session-one", executor=execute, project_id=None
+        SessionAddress(project_id=None, agent_id="coder", session_id="session-one"),
+        execute,
     )
     first = await manager.enqueue(
-        agent_id="coder", session_id="session-one", executor=execute, project_id=None
+        SessionAddress(project_id=None, agent_id="coder", session_id="session-one"),
+        execute,
     )
     second = await manager.enqueue(
-        agent_id="coder", session_id="session-one", executor=execute, project_id=None
+        SessionAddress(project_id=None, agent_id="coder", session_id="session-one"),
+        execute,
     )
 
     assert manager.waiting_work_count() == 2
     with pytest.raises(WaitingWorkLimitError):
         await manager.enqueue(
-            agent_id="coder", session_id="session-one", executor=execute, project_id=None
+            SessionAddress(project_id=None, agent_id="coder", session_id="session-one"),
+            execute,
         )
 
     release.set()
@@ -86,15 +93,14 @@ async def test_waiting_work_admission_transfers_to_a_queued_run() -> None:
         return "done"
 
     active_run = await manager.start(
-        agent_id="coder", session_id="session-one", executor=execute, project_id=None
+        SessionAddress(project_id=None, agent_id="coder", session_id="session-one"),
+        execute,
     )
     admission = manager.reserve_waiting_work(scope="channel:chat", scope_limit=8)
 
     queued = await manager.enqueue(
-        agent_id="coder",
-        session_id="session-one",
-        executor=execute,
-        project_id=None,
+        SessionAddress(project_id=None, agent_id="coder", session_id="session-one"),
+        execute,
         waiting_work_admission=admission,
     )
 
@@ -134,11 +140,9 @@ async def test_enqueue_when_session_is_idle_starts_run_immediately() -> None:
         return "done"
 
     item = await manager.enqueue(
-        agent_id="coder",
-        session_id="session-one",
-        executor=execute,
+        SessionAddress(project_id=None, agent_id="coder", session_id="session-one"),
+        execute,
         display_content="Queued hello",
-        project_id=None,
     )
     run = await item.future
 
@@ -169,19 +173,18 @@ async def test_enqueue_when_session_is_busy_queues_and_drains_after_completion()
         return "queued"
 
     active_run = await manager.start(
-        agent_id="coder", session_id="session-one", executor=active_execute, project_id=None
+        SessionAddress(project_id=None, agent_id="coder", session_id="session-one"),
+        active_execute,
     )
     item = await manager.enqueue(
-        agent_id="coder",
-        session_id="session-one",
-        executor=queued_execute,
+        SessionAddress(project_id=None, agent_id="coder", session_id="session-one"),
+        queued_execute,
         display_content="Queued next",
-        project_id=None,
-        work_id="sub-work-one",
+        admission=RunAdmission(work_id="sub-work-one"),
     )
 
     assert item.future.done() is False
-    assert item.work_id == "sub-work-one"
+    assert item.admission.work_id == "sub-work-one"
     assert [
         queued_item.item_id
         for queued_item in manager.list_queued("coder", "session-one", project_id=None)
@@ -214,17 +217,16 @@ async def test_queued_run_keeps_agent_activity_projection_policy_when_drained() 
         return "queued"
 
     active_run = await manager.start(
-        agent_id="coder", session_id="session-one", executor=active_execute, project_id=None
+        SessionAddress(project_id=None, agent_id="coder", session_id="session-one"),
+        active_execute,
     )
     item = await manager.enqueue(
-        agent_id="coder",
-        session_id="session-one",
-        executor=queued_execute,
-        project_id=None,
-        contributes_to_agent_activity=False,
+        SessionAddress(project_id=None, agent_id="coder", session_id="session-one"),
+        queued_execute,
+        admission=RunAdmission(contributes_to_agent_activity=False),
     )
 
-    assert item.contributes_to_agent_activity is False
+    assert item.admission.contributes_to_agent_activity is False
     active_release.set()
     assert await active_run.wait() == "active"
 
@@ -243,25 +245,23 @@ async def test_all_queued_returns_fresh_cross_session_snapshot_in_fifo_order() -
         return "done"
 
     identity_run = await manager.start(
-        agent_id="coder", session_id="session-one", executor=execute, project_id=None
+        SessionAddress(project_id=None, agent_id="coder", session_id="session-one"),
+        execute,
     )
     project_run = await manager.start(
-        agent_id="writer", session_id="session-two", executor=execute, project_id="project-a"
+        SessionAddress(project_id="project-a", agent_id="writer", session_id="session-two"),
+        execute,
     )
     identity_item = await manager.enqueue(
-        agent_id="coder",
-        session_id="session-one",
-        executor=execute,
+        SessionAddress(project_id=None, agent_id="coder", session_id="session-one"),
+        execute,
         display_content="identity",
-        project_id=None,
     )
     project_item = await manager.enqueue(
-        agent_id="writer",
-        session_id="session-two",
-        executor=execute,
+        SessionAddress(project_id="project-a", agent_id="writer", session_id="session-two"),
+        execute,
         display_content="internal",
         internal=True,
-        project_id="project-a",
     )
 
     snapshot = manager.all_queued()
@@ -305,15 +305,14 @@ async def test_enqueue_when_session_is_busy_logs_queue_line(
         return "done"
 
     active_run = await manager.start(
-        agent_id="coder", session_id="session-one", executor=execute, project_id=None
+        SessionAddress(project_id=None, agent_id="coder", session_id="session-one"),
+        execute,
     )
     with caplog.at_level(logging.INFO, logger="vbot.runs"):
         item = await manager.enqueue(
-            agent_id="coder",
-            session_id="session-one",
-            executor=execute,
+            SessionAddress(project_id=None, agent_id="coder", session_id="session-one"),
+            execute,
             display_content="Queued next",
-            project_id=None,
         )
 
     queue_line = next(
@@ -360,28 +359,23 @@ async def test_multiple_enqueued_items_drain_in_fifo_order() -> None:
         return execute
 
     active_run = await manager.start(
-        agent_id="coder", session_id="session-one", executor=active_execute, project_id=None
+        SessionAddress(project_id=None, agent_id="coder", session_id="session-one"),
+        active_execute,
     )
     first_item = await manager.enqueue(
-        agent_id="coder",
-        session_id="session-one",
-        executor=make_executor("first"),
+        SessionAddress(project_id=None, agent_id="coder", session_id="session-one"),
+        make_executor("first"),
         display_content="first",
-        project_id=None,
     )
     second_item = await manager.enqueue(
-        agent_id="coder",
-        session_id="session-one",
-        executor=make_executor("second"),
+        SessionAddress(project_id=None, agent_id="coder", session_id="session-one"),
+        make_executor("second"),
         display_content="second",
-        project_id=None,
     )
     third_item = await manager.enqueue(
-        agent_id="coder",
-        session_id="session-one",
-        executor=make_executor("third"),
+        SessionAddress(project_id=None, agent_id="coder", session_id="session-one"),
+        make_executor("third"),
         display_content="third",
-        project_id=None,
     )
 
     assert [
@@ -427,14 +421,13 @@ async def test_remove_queued_item_cancels_future_and_removes_from_queue() -> Non
         return "queued"
 
     active_run = await manager.start(
-        agent_id="coder", session_id="session-one", executor=active_execute, project_id=None
+        SessionAddress(project_id=None, agent_id="coder", session_id="session-one"),
+        active_execute,
     )
     item = await manager.enqueue(
-        agent_id="coder",
-        session_id="session-one",
-        executor=queued_execute,
+        SessionAddress(project_id=None, agent_id="coder", session_id="session-one"),
+        queued_execute,
         display_content="remove me",
-        project_id=None,
     )
 
     assert manager.remove_queued("coder", "session-one", item.item_id, project_id=None) is True
@@ -461,14 +454,13 @@ async def test_cancelling_queue_waiter_removes_item_and_prevents_execution() -> 
         return "queued"
 
     active_run = await manager.start(
-        agent_id="coder", session_id="session-one", executor=active_execute, project_id=None
+        SessionAddress(project_id=None, agent_id="coder", session_id="session-one"),
+        active_execute,
     )
     item = await manager.enqueue(
-        agent_id="coder",
-        session_id="session-one",
-        executor=queued_execute,
+        SessionAddress(project_id=None, agent_id="coder", session_id="session-one"),
+        queued_execute,
         display_content="abandoned",
-        project_id=None,
     )
 
     async def wait_for_start() -> Run:
@@ -509,14 +501,13 @@ async def test_queue_drain_skips_future_cancelled_in_same_tick() -> None:
         return "queued"
 
     active_run = await manager.start(
-        agent_id="coder", session_id="session-one", executor=active_execute, project_id=None
+        SessionAddress(project_id=None, agent_id="coder", session_id="session-one"),
+        active_execute,
     )
     queued_item = await manager.enqueue(
-        agent_id="coder",
-        session_id="session-one",
-        executor=queued_execute,
+        SessionAddress(project_id=None, agent_id="coder", session_id="session-one"),
+        queued_execute,
         display_content="cancel during drain",
-        project_id=None,
     )
 
     active_release.set()
@@ -550,15 +541,14 @@ async def test_update_queued_item_replaces_executor_and_display_content() -> Non
         return "updated"
 
     active_run = await manager.start(
-        agent_id="coder", session_id="session-one", executor=active_execute, project_id=None
+        SessionAddress(project_id=None, agent_id="coder", session_id="session-one"),
+        active_execute,
     )
     item = await manager.enqueue(
-        agent_id="coder",
-        session_id="session-one",
-        executor=original_execute,
+        SessionAddress(project_id=None, agent_id="coder", session_id="session-one"),
+        original_execute,
         display_content="original",
         editable=True,
-        project_id=None,
     )
 
     assert (
@@ -608,23 +598,23 @@ async def test_enqueue_race_condition_session_becomes_idle_between_error_and_enq
         return "queued"
 
     active_run = await manager.start(
-        agent_id="coder", session_id="session-one", executor=active_execute, project_id=None
+        SessionAddress(project_id=None, agent_id="coder", session_id="session-one"),
+        active_execute,
     )
 
     with pytest.raises(ActiveRunError):
         await manager.start(
-            agent_id="coder", session_id="session-one", executor=queued_execute, project_id=None
+            SessionAddress(project_id=None, agent_id="coder", session_id="session-one"),
+            queued_execute,
         )
 
     active_release.set()
     assert await active_run.wait() == "active"
 
     item = await manager.enqueue(
-        agent_id="coder",
-        session_id="session-one",
-        executor=queued_execute,
+        SessionAddress(project_id=None, agent_id="coder", session_id="session-one"),
+        queued_execute,
         display_content="race",
-        project_id=None,
     )
     queued_run = await item.future
 
@@ -667,7 +657,8 @@ async def test_chat_loop_queue_run_uses_display_preview_for_busy_session(tmp_pat
         return "active"
 
     active_run = await runtime.chat_runs.start(
-        agent_id="coder", session_id=session_id, executor=active_execute, project_id=None
+        SessionAddress(project_id=None, agent_id="coder", session_id=session_id),
+        active_execute,
     )
 
     item = await build_chat_loop(runtime).queue_run(
@@ -739,14 +730,13 @@ async def test_drained_queued_run_started_payload_contains_queue_item_id() -> No
         return "queued"
 
     active_run = await manager.start(
-        agent_id="coder", session_id="session-one", executor=active_execute, project_id=None
+        SessionAddress(project_id=None, agent_id="coder", session_id="session-one"),
+        active_execute,
     )
     item = await manager.enqueue(
-        agent_id="coder",
-        session_id="session-one",
-        executor=queued_execute,
+        SessionAddress(project_id=None, agent_id="coder", session_id="session-one"),
+        queued_execute,
         display_content="Queued next",
-        project_id=None,
     )
 
     active_release.set()
@@ -776,11 +766,9 @@ async def test_enqueue_idle_session_start_immediately_carries_queue_item_id() ->
         return "done"
 
     item = await manager.enqueue(
-        agent_id="coder",
-        session_id="session-one",
-        executor=execute,
+        SessionAddress(project_id=None, agent_id="coder", session_id="session-one"),
+        execute,
         display_content="Hello",
-        project_id=None,
     )
     run = await item.future
     await asyncio.sleep(0)

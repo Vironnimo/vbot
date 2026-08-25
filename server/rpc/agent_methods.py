@@ -471,7 +471,9 @@ async def _delete_session(state: Any, params: JsonObject) -> JsonObject:
         try:
             async with (
                 _agent_reference_lock(state),
-                _state_chat_runs(state).session_admission_guard((project_id, agent_id, session_id)),
+                _state_chat_runs(state).session_admission_guard(
+                    _session_address(agent_id, session_id, project_id)
+                ),
             ):
                 _ensure_no_bootstrap_session_reference(state, agent_id, project_id, session_id)
                 # Existence check under the guard: concurrent deletes cannot both

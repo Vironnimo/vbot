@@ -1313,7 +1313,7 @@ class _FakeMoveRuns:
         self._active = active
         self._queued = queued or []
         self._guard_blocked = guard_blocked
-        self.guarded_sessions: list[tuple[tuple[str | None, str, str], ...]] = []
+        self.guarded_sessions: list[tuple[SessionAddress, ...]] = []
 
     def active_run(self, *, agent_id: str, session_id: str, project_id: str | None) -> Any:
         return self._active
@@ -1321,7 +1321,7 @@ class _FakeMoveRuns:
     def list_queued(self, agent_id: str, session_id: str, *, project_id: str | None) -> list[Any]:
         return list(self._queued)
 
-    def session_admission_guard(self, *session_keys: tuple[str | None, str, str]) -> Any:
+    def session_admission_guard(self, *session_keys: SessionAddress) -> Any:
         self.guarded_sessions.append(session_keys)
         if self._guard_blocked:
             return _FakeBlockedAdmissionGuard()
@@ -1522,17 +1522,13 @@ async def test_move_guard_rejects_source_and_destination_runs_during_storage_wai
 
     with pytest.raises(RunAdmissionBlockedError):
         await state.chat_runs.start(
-            agent_id="builder",
-            session_id="s1",
-            executor=lambda _run: asyncio.sleep(0),
-            project_id=None,
+            SessionAddress(project_id=None, agent_id="builder", session_id="s1"),
+            lambda _run: asyncio.sleep(0),
         )
     with pytest.raises(RunAdmissionBlockedError):
         await state.chat_runs.start(
-            agent_id="planner",
-            session_id="s1",
-            executor=lambda _run: asyncio.sleep(0),
-            project_id="vbot",
+            SessionAddress(project_id="vbot", agent_id="planner", session_id="s1"),
+            lambda _run: asyncio.sleep(0),
         )
 
     state._sessions.move_release.set()

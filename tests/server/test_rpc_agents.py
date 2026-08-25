@@ -982,10 +982,8 @@ async def test_agent_rename_rejects_active_run(tmp_path: Path) -> None:
         return "done"
 
     run = await state.chat_runs.start(
-        agent_id="coder",
-        session_id=coder.current_session_id,
-        executor=hold_run,
-        project_id=None,
+        SessionAddress(project_id=None, agent_id="coder", session_id=coder.current_session_id),
+        hold_run,
     )
 
     response = await dispatch_rpc(
@@ -1117,7 +1115,8 @@ async def test_agent_delete_rejects_agent_with_active_run(tmp_path: Path) -> Non
         return "done"
 
     run = await state.chat_runs.start(
-        agent_id="coder", session_id=coder.current_session_id, executor=hold_run, project_id=None
+        SessionAddress(project_id=None, agent_id="coder", session_id=coder.current_session_id),
+        hold_run,
     )
 
     response = await dispatch_rpc(state, {"method": "agent.delete", "params": {"id": "coder"}})

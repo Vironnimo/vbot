@@ -136,10 +136,8 @@ async def test_run_executor_applies_overrides_to_only_its_admitted_run(tmp_path:
     )
 
     run = await runtime.chat_run_manager.start(
-        agent_id="coder",
-        session_id="session-one",
-        executor=executor,
-        project_id=None,
+        session_address("coder", "session-one"),
+        executor,
     )
     await run.wait()
     await loop.send("coder", "Second", session_id="session-one")

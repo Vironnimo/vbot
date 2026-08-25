@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from core.sessions import SessionAddress
+
 from .runs_test_support import (
     ASSISTANT_OUTPUT_DELTA_EVENT,
     REASONING_DELTA_EVENT,
@@ -12,6 +14,7 @@ from .runs_test_support import (
     Any,
     ChatRunManager,
     Run,
+    RunAdmission,
     RunAdmissionBlockedError,
     RunKind,
     RunNotFoundError,
@@ -32,7 +35,8 @@ async def test_replays_events_to_late_subscriber() -> None:
         return "done"
 
     run = await manager.start(
-        agent_id="coder", session_id="session-one", executor=execute, project_id=None
+        SessionAddress(project_id=None, agent_id="coder", session_id="session-one"),
+        execute,
     )
     assert await run.wait() == "done"
 
@@ -50,11 +54,9 @@ async def test_run_activity_projection_policy_is_carried_by_every_event() -> Non
         return "done"
 
     run = await manager.start(
-        agent_id="coder",
-        session_id="session-one",
-        executor=execute,
-        project_id=None,
-        contributes_to_agent_activity=False,
+        SessionAddress(project_id=None, agent_id="coder", session_id="session-one"),
+        execute,
+        admission=RunAdmission(contributes_to_agent_activity=False),
     )
     assert await run.wait() == "done"
 
@@ -75,11 +77,9 @@ async def test_run_kind_is_carried_by_run_and_every_event() -> None:
         return "done"
 
     run = await manager.start(
-        agent_id="coder",
-        session_id="session-one",
-        executor=execute,
-        project_id=None,
-        run_kind=RunKind.CRON,
+        SessionAddress(project_id=None, agent_id="coder", session_id="session-one"),
+        execute,
+        admission=RunAdmission(run_kind=RunKind.CRON),
     )
     assert await run.wait() == "done"
 
@@ -99,10 +99,12 @@ async def test_allows_parallel_runs_for_different_sessions() -> None:
         return run.session_id
 
     first_run = await manager.start(
-        agent_id="coder", session_id="session-one", executor=execute, project_id=None
+        SessionAddress(project_id=None, agent_id="coder", session_id="session-one"),
+        execute,
     )
     second_run = await manager.start(
-        agent_id="coder", session_id="session-two", executor=execute, project_id=None
+        SessionAddress(project_id=None, agent_id="coder", session_id="session-two"),
+        execute,
     )
     await asyncio.sleep(0)
 
@@ -123,18 +125,14 @@ async def test_manager_aclose_cancels_active_and_queued_work_and_rejects_new_run
         return "unreachable"
 
     active = await manager.start(
-        agent_id="coder",
-        session_id="session-one",
-        executor=blocking_executor,
-        project_id=None,
+        SessionAddress(project_id=None, agent_id="coder", session_id="session-one"),
+        blocking_executor,
     )
     await started.wait()
     queued = await manager.enqueue(
-        agent_id="coder",
-        session_id="session-one",
+        SessionAddress(project_id=None, agent_id="coder", session_id="session-one"),
+        blocking_executor,
         display_content="queued",
-        executor=blocking_executor,
-        project_id=None,
     )
 
     await manager.aclose()
@@ -145,10 +143,8 @@ async def test_manager_aclose_cancels_active_and_queued_work_and_rejects_new_run
         await queued.future
     with pytest.raises(RunAdmissionBlockedError, match="shutting down"):
         await manager.start(
-            agent_id="coder",
-            session_id="session-two",
-            executor=blocking_executor,
-            project_id=None,
+            SessionAddress(project_id=None, agent_id="coder", session_id="session-two"),
+            blocking_executor,
         )
 
 
@@ -230,13 +226,15 @@ async def test_failed_run_releases_session_lock() -> None:
         return "ok"
 
     failed_run = await manager.start(
-        agent_id="coder", session_id="session-one", executor=fail, project_id=None
+        SessionAddress(project_id=None, agent_id="coder", session_id="session-one"),
+        fail,
     )
     with pytest.raises(RuntimeError, match="boom"):
         await failed_run.wait()
 
     next_run = await manager.start(
-        agent_id="coder", session_id="session-one", executor=succeed, project_id=None
+        SessionAddress(project_id=None, agent_id="coder", session_id="session-one"),
+        succeed,
     )
 
     assert await next_run.wait() == "ok"
@@ -251,13 +249,15 @@ async def test_run_started_callbacks_are_notified_and_removable() -> None:
 
     remove_callback = manager.add_run_started_callback(observed_runs.append)
     first_run = await manager.start(
-        agent_id="coder", session_id="session-one", executor=execute, project_id=None
+        SessionAddress(project_id=None, agent_id="coder", session_id="session-one"),
+        execute,
     )
     await first_run.wait()
     remove_callback()
 
     second_run = await manager.start(
-        agent_id="coder", session_id="session-one", executor=execute, project_id=None
+        SessionAddress(project_id=None, agent_id="coder", session_id="session-one"),
+        execute,
     )
     await second_run.wait()
 
@@ -271,15 +271,18 @@ async def test_completed_run_lookup_retention_is_bounded() -> None:
         return run.id
 
     first_run = await manager.start(
-        agent_id="coder", session_id="one", executor=execute, project_id=None
+        SessionAddress(project_id=None, agent_id="coder", session_id="one"),
+        execute,
     )
     await first_run.wait()
     second_run = await manager.start(
-        agent_id="coder", session_id="two", executor=execute, project_id=None
+        SessionAddress(project_id=None, agent_id="coder", session_id="two"),
+        execute,
     )
     await second_run.wait()
     third_run = await manager.start(
-        agent_id="coder", session_id="three", executor=execute, project_id=None
+        SessionAddress(project_id=None, agent_id="coder", session_id="three"),
+        execute,
     )
     await third_run.wait()
 
@@ -304,12 +307,14 @@ async def test_active_runs_returns_running_runs_and_omits_terminal_runs() -> Non
         return "done"
 
     running_run = await manager.start(
-        agent_id="coder", session_id="session-one", executor=running_execute, project_id=None
+        SessionAddress(project_id=None, agent_id="coder", session_id="session-one"),
+        running_execute,
     )
     await started.wait()
 
     finishing_run = await manager.start(
-        agent_id="coder", session_id="session-two", executor=finishing_execute, project_id=None
+        SessionAddress(project_id=None, agent_id="coder", session_id="session-two"),
+        finishing_execute,
     )
     assert await finishing_run.wait() == "done"
     assert finishing_run.status == RunStatus.COMPLETED
@@ -344,7 +349,8 @@ async def test_active_runs_returns_runs_across_multiple_sessions() -> None:
     runs_by_session: dict[str, Run] = {}
     for session_id in started_events:
         runs_by_session[session_id] = await manager.start(
-            agent_id="coder", session_id=session_id, executor=execute, project_id=None
+            SessionAddress(project_id=None, agent_id="coder", session_id=session_id),
+            execute,
         )
 
     for _session_id, event in started_events.items():
@@ -372,7 +378,8 @@ async def test_start_run_payload_omits_queue_item_id() -> None:
         return "done"
 
     run = await manager.start(
-        agent_id="coder", session_id="session-one", executor=execute, project_id=None
+        SessionAddress(project_id=None, agent_id="coder", session_id="session-one"),
+        execute,
     )
     assert await run.wait() == "done"
 

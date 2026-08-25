@@ -8,6 +8,7 @@ from typing import Any
 import pytest
 
 from core.chat.continuation import ContinuationTracker
+from core.runs import RunAdmission
 from tests.core.chat.chat_loop_support import (
     RecordingReflection,
     StubAdapter,
@@ -146,11 +147,9 @@ async def test_run_summary_persists_durable_work_id(tmp_path: Path) -> None:
     loop = build_chat_loop(runtime)
 
     run = await runtime.chat_run_manager.start(
-        agent_id="coder",
-        session_id="session-one",
-        executor=loop.run_executor("Do work"),
-        project_id=None,
-        work_id="sub-work-one",
+        session_address("coder", "session-one"),
+        loop.run_executor("Do work"),
+        admission=RunAdmission(work_id="sub-work-one"),
     )
     await run.wait()
 
