@@ -21,7 +21,7 @@ cli/           <- CLI accessor. Server lifecycle locally; all other domains via 
 desktop/       <- pywebview shell. Imports nothing from the project - HTTP only.
 ```
 
-Each `core/<module>/` is a folder whose main file is the public API (soft limit 1000 lines per file). Two recorded exceptions: `core/debug` exposes its API through an `__init__.py` facade (`debug.md`), and `core/utils` is intentionally imported at leaf paths because it bundles independent utilities.
+Bare `<name>.md` references throughout this file resolve against `.vorch/domain-maps/`. Each `core/<module>/` is a folder whose main file is the public API (soft limit 1000 lines per file); two recorded exceptions: `core/debug` exposes its API through an `__init__.py` facade (`debug.md`), and `core/utils` is intentionally imported at leaf paths because it bundles independent utilities.
 
 **Communication:** Commands go through `POST /api/rpc`; `/ws` is the persistent app-wide server-push event bus and SSE the per-Run streaming channel. High-volume streams (logs, terminals) use dedicated sockets; clients never send commands over WebSockets. Binary upload/download uses dedicated HTTP endpoints. No auth (single-user-local). Details in `server.md`.
 
@@ -33,7 +33,7 @@ Each `core/<module>/` is a folder whose main file is the public API (soft limit 
 
 ## Domain Maps
 
-Every domain has a map under `.vorch/domain-maps/<name>.md`; names below resolve against that directory. **Read a domain's map before you touch anything in that domain - without exception.** The map is the briefing on boundaries, contracts, and gotchas you cannot infer from file names; when ownership or contracts cross domains, read the adjacent maps as well. A map's References are task-gated: pull a supplementary file only when your task matches its trigger. Maps are working notes, not the source of truth: when a map and the code disagree, the code wins - fix the map.
+Every domain has a map under `.vorch/domain-maps/`. **Read a domain's map before you touch anything in that domain - without exception.** The map is the briefing on boundaries, contracts, and gotchas you cannot infer from file names; when ownership or contracts cross domains, read the adjacent maps as well. A map's References are task-gated: pull a supplementary file only when your task matches its trigger. Maps are working notes, not the source of truth: when a map and the code disagree, the code wins - fix the map.
 
 | Map | Domain | Covers |
 |---|---|---|
@@ -92,7 +92,7 @@ pip install -e ".[dev]"
 ```
 Use the current interpreter directly - do not assume a virtual environment for installs, gates, or runtime commands. End-user install/update/uninstall lives in [USAGE.md](../USAGE.md#installation); read it when touching installer or uninstall scripts under `scripts/`.
 
-**Worktrees:** Managed with `python scripts/worktree.py create|list|delete <task-name>` (`delete [--force]`). `create` prints the worktree path, assigned ports, data dir, and URL. If anything fails or behaves unexpectedly, read `scripts/README-worktree.md`.
+**Worktrees:** Managed with `python scripts/worktree.py create|list|delete <task-name>`. `create` prints the worktree path, assigned ports, data dir, and URL; `delete --force` additionally discards uncommitted worktree changes. If anything fails or behaves unexpectedly, read `scripts/README-worktree.md`.
 
 **Dependencies:** Groups `server`, `cli`, `desktop`, `dev` in `pyproject.toml`; the WebUI's in `webui/package.json`.
 
@@ -110,11 +110,11 @@ This checkout carries a git-ignored marker selecting the dev data directory (`~/
 
 ## Testing
 
-pytest backend, Vitest frontend; backend pytest runs with `--import-mode=importlib`. Tests mirror source: backend `tests/<package>/<module>/test_<file>.py`, frontend `webui/src/<module>/__tests__/`. Pattern AAA; independent, deterministic, no shared state.
+pytest backend, Vitest frontend; backend pytest runs with `--import-mode=importlib`. Tests mirror source: backend `tests/<package>/<module>/test_<file>.py`, frontend `webui/src/<module>/__tests__/`. Rendered-component tests may use jsdom via Vitest when helper-level assertions are not enough. Pattern AAA; independent, deterministic, no shared state.
 
 **Text assertions:** Assert a concrete string only when the text itself is a stable contract (protocol token, persisted format, accessibility name, forbidden internal value) or a test-owned sentinel proves transport unchanged. Do not lock editable prose, error wording, or help copy - prefer exception types, error codes, structured fields, DOM roles, and security invariants. Wording quality belongs in scenario evals, not substring tests.
 
-**Quality gates:** `quality.py` (backend) and `quality-frontend.py` (frontend), same interface: format -> lint -> type-check -> test over the given paths, whole repo with none; default mode auto-fixes (keep every fix), `--check` validates only. These gates are the contract - do not invoke pytest/ruff/vitest by hand; if you suspect a gate withheld something you need, note it in FLAGGED.md instead of making hand-invocation a habit.
+**Quality gates:** `quality.py` (backend) and `quality-frontend.py` (frontend), same interface: format -> lint -> type-check -> test over the given paths, whole repo with none; default mode auto-fixes (keep every fix), `--check` validates only. These gates are the contract - do not invoke pytest/ruff/vitest by hand; if you suspect a gate withheld something you need, note it in FLAGGED.md instead of making hand-invocation a habit. Full mechanics - pipeline, source-to-test mapping, output contract - live in `scripts/README-quality.md`.
 ```bash
 python scripts/quality.py [--check] [paths...]           # Backend
 python scripts/quality-frontend.py [--check] [paths...]  # Frontend
