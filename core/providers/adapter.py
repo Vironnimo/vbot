@@ -22,8 +22,10 @@ if TYPE_CHECKING:
 
 from core.models.models import Model
 from core.providers.reasoning import (
+    DEFAULT_REASONING_REPLAY_FIDELITY,
     DEFAULT_REASONING_REPLAY_POLICY,
     REASONING_REPLAY_POLICIES,
+    ReasoningReplayFidelity,
     ReasoningReplayPolicy,
 )
 
@@ -729,6 +731,22 @@ class ProviderAdapter(ABC):
             if model is not None and model.reasoning_replay in REASONING_REPLAY_POLICIES:
                 return cast(ReasoningReplayPolicy, model.reasoning_replay)
         return getattr(self, "_reasoning_replay_default", DEFAULT_REASONING_REPLAY_POLICY)
+
+    def reasoning_replay_fidelity(self, model_id: str) -> ReasoningReplayFidelity:
+        """Return which class of reasoning state this wire carries back.
+
+        The base serializers consult this once per Assistant message build and
+        emit exactly one class: opaque meta when the declaration allows or
+        prefers it and the turn captured meta, otherwise the readable text —
+        never both. Adapters must not re-implement class filtering on top of
+        the declaration. ``model_id`` is part of the contract for parity with
+        ``reasoning_replay_policy`` because one adapter can route models to
+        different wires. The default ``meta_preferred`` matches OpenRouter's
+        documented contract (``reasoning_details`` supersede plaintext) and
+        degrades safely for raw-string-only wires.
+        """
+        del model_id
+        return DEFAULT_REASONING_REPLAY_FIDELITY
 
     # ------------------------------------------------------------------
     # Wire media capability

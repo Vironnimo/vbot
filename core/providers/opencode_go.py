@@ -17,7 +17,7 @@ from core.providers.anthropic_compatible import (
     AnthropicCompatibleAdapter,
 )
 from core.providers.errors import ProviderError
-from core.providers.openai_compatible import OpenAICompatibleAdapter, _to_openai_assistant_message
+from core.providers.openai_compatible import OpenAICompatibleAdapter
 from core.providers.providers import AuthConfig, ProviderConfig
 from core.providers.reasoning import normalize_thinking_effort
 from core.providers.token_getter import TokenGetter
@@ -209,18 +209,6 @@ class OpenCodeGoAdapter(OpenAICompatibleAdapter):
         if "choices" in response:
             return super().normalize_response(response, model_id=model_id)
         return self._messages.normalize_response(response, model_id=model_id)
-
-    def _format_assistant_message(
-        self,
-        message: dict[str, Any],
-        *,
-        model_id: str | None = None,
-    ) -> dict[str, Any]:
-        wire = _to_openai_assistant_message(message)
-        reasoning = message.get("reasoning")
-        if isinstance(reasoning, str) and reasoning:
-            wire["reasoning_content"] = reasoning
-        return wire
 
     def _classify_http_status(
         self,

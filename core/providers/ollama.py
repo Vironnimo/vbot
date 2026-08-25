@@ -75,6 +75,8 @@ from core.providers.reasoning import (
     REASONING_INTENT_DEFAULT,
     REASONING_INTENT_EFFORT,
     REASONING_INTENT_OFF,
+    REASONING_REPLAY_FIDELITY_READABLE_ONLY,
+    ReasoningReplayFidelity,
     model_reasoning_budget_max,
     model_reasoning_control,
     model_reasoning_levels,
@@ -183,6 +185,11 @@ class OllamaCloudAdapter(OpenAICompatibleAdapter):
         del model_id
         return IMAGE_WIRE_MEDIA_TYPES
 
+    def reasoning_replay_fidelity(self, model_id: str) -> ReasoningReplayFidelity:
+        """The compatible Cloud wire round-trips readable reasoning text only."""
+        del model_id
+        return REASONING_REPLAY_FIDELITY_READABLE_ONLY
+
     def _wrap_transport_error(self, exc: httpx.TransportError) -> Exception:
         """Preserve the Provider-specific direct Cloud connection diagnostic."""
 
@@ -246,10 +253,11 @@ class OllamaCloudAdapter(OpenAICompatibleAdapter):
         GLM and Kimi backends require the
         full historical reasoning to be replayed for multi-turn quality, and
         MiniMax documents that preserving the reasoning chain is essential for
-        best performance. The base class only writes opaque ``reasoning_meta``
-        back, so readable reasoning would be dropped on replay. Gated on the
-        Model's catalog ``reasoning_response_field`` so only Models whose wire
-        actually carries the field get it injected.
+        best performance. The base ``readable_only`` fidelity already injects
+        ``reasoning_content``; this override renames it to the Model's scanned
+        carrier field when that differs. Gated on the Model's catalog
+        ``reasoning_response_field`` so only Models whose wire actually carries
+        the field get it injected.
         """
 
         formatted = super()._format_assistant_message(message, model_id=model_id)

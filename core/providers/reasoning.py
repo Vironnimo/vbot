@@ -60,6 +60,34 @@ REASONING_REPLAY_POLICIES: tuple[ReasoningReplayPolicy, ...] = (
 DEFAULT_REASONING_REPLAY_POLICY: ReasoningReplayPolicy = REASONING_REPLAY_FULL_HISTORY
 """Performance-first system default for native same-route Reasoning replay."""
 
+ReasoningReplayFidelity = Literal["meta_preferred", "meta_only", "readable_only"]
+"""Which class of persisted Reasoning state a wire carries back on Assistant turns.
+
+- ``meta_preferred`` — opaque meta (``encrypted_content`` / ``reasoning_details``)
+  when the turn captured it, otherwise the readable text. Never both: meta
+  supersedes duplicated plaintext.
+- ``meta_only`` — only opaque meta; strict or block-shaped wires that never take
+  a top-level readable field.
+- ``readable_only`` — only the readable text in the wire's carrier field; wires
+  with no meta class.
+
+This is a wire fact owned by each adapter (like ``wire_media_support``), not a
+policy choice: it declares what serialization may emit, while the replay *scope*
+above stays owned by the chat layer and the Model DB.
+"""
+
+REASONING_REPLAY_FIDELITY_META_PREFERRED: ReasoningReplayFidelity = "meta_preferred"
+REASONING_REPLAY_FIDELITY_META_ONLY: ReasoningReplayFidelity = "meta_only"
+REASONING_REPLAY_FIDELITY_READABLE_ONLY: ReasoningReplayFidelity = "readable_only"
+REASONING_REPLAY_FIDELITIES: tuple[ReasoningReplayFidelity, ...] = (
+    REASONING_REPLAY_FIDELITY_META_PREFERRED,
+    REASONING_REPLAY_FIDELITY_META_ONLY,
+    REASONING_REPLAY_FIDELITY_READABLE_ONLY,
+)
+DEFAULT_REASONING_REPLAY_FIDELITY: ReasoningReplayFidelity = (
+    REASONING_REPLAY_FIDELITY_META_PREFERRED
+)
+
 # Opaque reasoning metadata list keys that must accumulate across stream deltas
 # instead of being replaced by a shallow dict update (which drops earlier items
 # and can lose ``encrypted_content`` before the terminal response arrives).
