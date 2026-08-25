@@ -250,7 +250,9 @@ class ContinuationStrategy:
         if not context.request_messages:
             raise CompactionError("Continuation compaction requires an active request Context")
         base_instruction = context.storage.read_prompt_fragment(
-            _fragment_name_for_trigger(context.trigger)
+            "compaction-continuation-manual.md"
+            if context.trigger == COMPACTION_TRIGGER_MANUAL
+            else "compaction-continuation.md"
         ).strip()
         instruction = (context.instruction or "").strip()
         suffix = base_instruction
