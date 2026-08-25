@@ -399,17 +399,25 @@ export const runFooterParts = (assistantRun, nowMs = Date.now()) => {
   return parts;
 };
 
+// SSE keepalive comments from gateways like OpenRouter arrive every few
+// seconds even while Model deltas stream, so a heartbeat with a tiny idle
+// value is normal streaming traffic, not a problem. The notice only appears
+// once the reported idle time crosses this threshold.
+const PROVIDER_IDLE_NOTICE_THRESHOLD_SECONDS = 10;
+
 // Transient problem/liveness notice for an assistant run, rendered on its own
 // line below the footer. Returns '' when there is nothing to report.
 export const runFooterNotice = (assistantRun) => {
+  const idleSeconds = assistantRun.providerHeartbeat?.idleSeconds;
   if (
     assistantRun.status === 'running' &&
-    Number.isFinite(assistantRun.providerHeartbeat?.idleSeconds)
+    Number.isFinite(idleSeconds) &&
+    idleSeconds >= PROVIDER_IDLE_NOTICE_THRESHOLD_SECONDS
   ) {
     return t(
       'chat.providerWorking',
       'Provider connected · waiting {seconds}s for the next model chunk',
-      { seconds: Math.round(assistantRun.providerHeartbeat.idleSeconds) },
+      { seconds: Math.round(idleSeconds) },
     );
   }
   return '';

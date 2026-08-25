@@ -1033,6 +1033,17 @@ describe('ChatAssistantRun run footer', () => {
 
     expect(document.querySelector('.run-footer__notice')).toBeNull();
   });
+
+  it('renders no notice line while the provider streams with a tiny idle time', () => {
+    const item = createAssistantRunItem({
+      status: 'running',
+      items: [],
+    });
+    item.providerHeartbeat = { idleSeconds: 0.3 };
+    mountedComponent = mountRun({ item });
+
+    expect(document.querySelector('.run-footer__notice')).toBeNull();
+  });
 });
 
 async function flushAsync() {
