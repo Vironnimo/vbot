@@ -45,7 +45,12 @@ class StubStorage:
 
     def read_prompt_fragment(self, name: str) -> str:
         self.read_names.append(name)
-        assert name in {"compaction.md", "compaction-manual.md"}
+        assert name in {
+            "compaction.md",
+            "compaction-manual.md",
+            "compaction-continuation.md",
+            "compaction-continuation-manual.md",
+        }
         return "Preserve decisions and unfinished work."
 
 

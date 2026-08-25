@@ -30,6 +30,8 @@ PROMPT_FRAGMENT_NAMES = frozenset(
         "skill_maintenance.md",
         "compaction.md",
         "compaction-manual.md",
+        "compaction-continuation.md",
+        "compaction-continuation-manual.md",
         "handoff.md",
         "learn.md",
         "reflect-memory.md",
