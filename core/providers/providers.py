@@ -83,13 +83,16 @@ def resolve_request_output_limit(
     """Resolve and context-clamp one request's output-token allowance.
 
     Precedence remains explicit positive caller limit, positive Model ceiling,
-    then positive Provider default. The selected allowance is capped so the
-    estimated messages, Tool definitions, uncertainty reserve, and output all
-    fit inside the effective context window. The reserve doubles as the
-    estimator's declared uncertainty margin: a request fails locally only when
-    the estimate overflows the window even at best-case accuracy — an estimate
-    inside that margin goes out unclamped, because an inflated estimate must
-    not kill a request whose measured Context still fits.
+    then positive Provider default. When an allowance exists, it is capped so
+    the estimated messages, Tool definitions, uncertainty reserve, and output
+    all fit inside the effective context window. The local window check runs
+    regardless of whether an allowance exists — Models without any known
+    ceiling get no ``max_tokens`` on the wire (their Provider default applies)
+    but still fail locally instead of overflowing remotely. The reserve doubles
+    as the estimator's declared uncertainty margin: a request fails locally
+    only when the estimate overflows the window even at best-case accuracy —
+    an estimate inside that margin goes out unclamped, because an inflated
+    estimate must not kill a request whose measured Context still fits.
     """
 
     requested = next(
@@ -100,9 +103,8 @@ def resolve_request_output_limit(
         ),
         None,
     )
-    if requested is None:
-        return None
-    requested = int(requested)
+    if requested is not None:
+        requested = int(requested)
 
     input_tokens = max(0, int(estimated_input_tokens))
     remaining = effective_context_window - input_tokens
@@ -127,6 +129,9 @@ def resolve_request_output_limit(
             f"context_window={effective_context_window})",
             retryable=False,
         )
+    if requested is None:
+        # No output allowance to resolve — the window check above was the job.
+        return None
     available_output = remaining - reserve
     if available_output <= 0:
         available_output = remaining
