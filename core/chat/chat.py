@@ -1396,7 +1396,9 @@ class ChatLoop:
         _model_provider_id, model_id = _split_agent_model(agent.model)
         target = self._create_model_target(provider_id, connection_id, model_id)
         run.add_cancel_callback(lambda: _close_adapter(target.adapter))
-        run.add_cancel_callback(lambda: self._dependencies.process_manager.cancel_scope(run.id))
+        run.add_cancel_callback(
+            lambda: self._dependencies.process_manager.cancel_scope_async(run.id)
+        )
         project_cwd = self.resolve_project_cwd(working_project_id)
         prompt_project = resolve_prompt_project(self._dependencies.projects, working_project_id)
         project_prompt_context = (

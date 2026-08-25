@@ -196,6 +196,64 @@ def subprocess_creation_flags(
     return flags
 
 
+TASKKILL_TREE_TIMEOUT_SECONDS = 5
+
+
+def windows_taskkill_tree(pid: int) -> bool:
+    """Best-effort blocking ``taskkill`` of a whole Windows process tree.
+
+    Returns True only when taskkill confirmed the tree was terminated. This
+    call can block for up to ``TASKKILL_TREE_TIMEOUT_SECONDS``, so event-loop
+    contexts must run it through :func:`kill_process_tree_async` (worker
+    thread) instead of calling it directly.
+    """
+    try:
+        completed = subprocess.run(
+            ["taskkill", "/F", "/T", "/PID", str(pid)],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=TASKKILL_TREE_TIMEOUT_SECONDS,
+            check=False,
+            creationflags=subprocess_creation_flags(),
+        )
+        return completed.returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
+async def kill_process_tree_async(proc: Process) -> None:
+    """Kill a whole process tree without blocking the event loop.
+
+    Same contract as ``ProcessManager._kill_process_tree`` - including
+    propagating ``ProcessLookupError`` on POSIX - but the Windows ``taskkill``
+    subprocess runs in a worker thread so the loop never stalls behind it.
+    """
+    if os.name == "nt":
+        killed = await asyncio.to_thread(windows_taskkill_tree, proc.pid)
+        if not killed:
+            _LOGGER.warning(
+                "taskkill failed for pid=%s, falling back to direct kill",
+                proc.pid,
+            )
+            with contextlib.suppress(ProcessLookupError):
+                proc.kill()
+        return
+
+    _kill_process_tree_posix(proc)
+
+
+def _kill_process_tree_posix(proc: Process) -> None:
+    """Kill a POSIX process group; re-raises ProcessLookupError."""
+    try:
+        kill_process_group = cast(Any, os).__dict__["killpg"]
+        kill_process_group(proc.pid, HARD_KILL_SIGNAL)
+    except ProcessLookupError:
+        raise
+    except OSError:
+        with contextlib.suppress(ProcessLookupError):
+            proc.kill()
+
+
 class ProcessManagerError(VBotError):
     """Base class for expected process manager errors."""
 
@@ -582,7 +640,11 @@ class ProcessManager:
             notification_task.cancel()
 
     def cancel_scope(self, scope_key: str) -> None:
-        """Kill active processes in a run scope, independent of agent ownership."""
+        """Kill active processes in a run scope synchronously.
+
+        Prefer :meth:`cancel_scope_async` on the event loop - the Windows
+        tree-kill can block for seconds. This variant is for shutdown paths.
+        """
         if not scope_key:
             return
 
@@ -816,7 +878,12 @@ class ProcessManager:
         if tracked.status != "running":
             return
 
-        self._kill_process_now(tracked, cancelled_by_user=cancelled_by_user)
+        self._begin_kill(tracked, cancelled_by_user=cancelled_by_user)
+        try:
+            await kill_process_tree_async(tracked.proc)
+        except ProcessLookupError:
+            self._finish_process_lookup_error(tracked)
+        tracked.output_event.set()
         if tracked.wait_task is not None:
             await asyncio.gather(tracked.wait_task, return_exceptions=True)
 
@@ -826,52 +893,50 @@ class ProcessManager:
         *,
         cancelled_by_user: bool = False,
     ) -> None:
+        """Kill synchronously; only for shutdown paths off the event loop."""
         if tracked.status != "running":
             return
 
-        tracked.cancelled_by_user = cancelled_by_user
-        tracked.status = "killed"
-        self._close_stdin_now(tracked)
+        self._begin_kill(tracked, cancelled_by_user=cancelled_by_user)
         try:
             self._kill_process_tree(tracked.proc)
         except ProcessLookupError:
-            tracked.finished_at = _utc_now()
-            tracked.stdin_open = False
+            self._finish_process_lookup_error(tracked)
         tracked.output_event.set()
+
+    def _begin_kill(self, tracked: TrackedProcess, *, cancelled_by_user: bool) -> None:
+        tracked.cancelled_by_user = cancelled_by_user
+        tracked.status = "killed"
+        self._close_stdin_now(tracked)
+
+    @staticmethod
+    def _finish_process_lookup_error(tracked: TrackedProcess) -> None:
+        tracked.finished_at = _utc_now()
+        tracked.stdin_open = False
+
+    async def cancel_scope_async(self, scope_key: str) -> None:
+        """Kill active processes in a run scope without blocking the loop."""
+        if not scope_key:
+            return
+
+        for tracked in list(self._processes.values()):
+            if tracked.scope_key == scope_key and tracked.status == "running":
+                await self._kill_process(tracked)
 
     @staticmethod
     def _kill_process_tree(proc: Process) -> None:
         if os.name == "nt":
-            try:
-                completed = subprocess.run(
-                    ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                    timeout=5,
-                    check=False,
-                    creationflags=subprocess_creation_flags(),
-                )
-                if completed.returncode == 0:
-                    return
-            except (OSError, subprocess.TimeoutExpired) as error:
-                _LOGGER.warning(
-                    "taskkill failed for pid=%s, falling back to direct kill: %s",
-                    proc.pid,
-                    error,
-                )
-
+            if windows_taskkill_tree(proc.pid):
+                return
+            _LOGGER.warning(
+                "taskkill failed for pid=%s, falling back to direct kill",
+                proc.pid,
+            )
             with contextlib.suppress(ProcessLookupError):
                 proc.kill()
             return
 
-        try:
-            kill_process_group = cast(Any, os).__dict__["killpg"]
-            kill_process_group(proc.pid, HARD_KILL_SIGNAL)
-        except ProcessLookupError:
-            raise
-        except OSError:
-            with contextlib.suppress(ProcessLookupError):
-                proc.kill()
+        _kill_process_tree_posix(proc)
 
     @classmethod
     async def _close_stdin(cls, tracked: TrackedProcess) -> None:
