@@ -61,6 +61,20 @@ class RunButtonBindingRegistry(Protocol):
     def restore_run_button_binding(self, channel_id: str, binding_id: str) -> None: ...
 
 
+class UpdateOffsetStore(Protocol):
+    """Durable polling-offset seam for long-polling adapters (Telegram).
+
+    Long-polling platforms redeliver unconfirmed updates after an adapter
+    restart; without a persisted watermark every restart replays recent inbound
+    messages as duplicate Runs. The adapter claims each delivered update id and
+    skips ids at or below the persisted high-water mark.
+    """
+
+    def load_update_offset(self, channel_id: str) -> int: ...
+
+    def save_update_offset(self, channel_id: str, update_id: int) -> None: ...
+
+
 class ChannelAccessRegistry(Protocol):
     """Live, platform-neutral group access seam used by the Channel engine."""
 

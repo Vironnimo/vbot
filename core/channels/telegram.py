@@ -22,6 +22,7 @@ from core.channels.adapter import (
     QuotedMessageFacts,
     RouteFacts,
     RunButtonBindingRegistry,
+    UpdateOffsetStore,
     content_blocks_for_attachment,
 )
 from core.channels.channels import ChannelConfig, ChannelConfigError, ChannelError
@@ -102,6 +103,7 @@ class TelegramChannelAdapter(ChannelAdapter):
         ) = None,
         run_button_binding_registry: RunButtonBindingRegistry | None = None,
         access_registry: ChannelAccessRegistry | None = None,
+        update_offset_store: UpdateOffsetStore | None = None,
     ) -> None:
         self._config = config
         self._attachment_store = attachment_store
@@ -113,6 +115,12 @@ class TelegramChannelAdapter(ChannelAdapter):
         # reload/disable needs no channel re-wiring — the next tap uses the current
         # registry. None means taps are always acknowledged but never dispatched.
         self._interaction_dispatcher = interaction_dispatcher
+        # Durable update-id watermark: Telegram redelivers unconfirmed updates
+        # after a restart; the store lets the adapter skip already-processed ones.
+        # None keeps dedup in-memory only (tests).
+        self._update_offset_store = update_offset_store
+        self._last_update_id = -1
+        self._offset_save_tasks: set[asyncio.Task[None]] = set()
         self._engine = ChannelConversationEngine(
             config,
             trigger_service,
@@ -162,6 +170,7 @@ class TelegramChannelAdapter(ChannelAdapter):
         # detection, reply-to-bot checks, /cmd@botname suffix parsing) for group gating.
         bot_user = await application.bot.get_me()
         self._set_bot_identity(bot_user)
+        self._last_update_id = self._load_update_offset()
         await application.bot.delete_webhook(drop_pending_updates=False)
         await application.start()
 
@@ -243,6 +252,9 @@ class TelegramChannelAdapter(ChannelAdapter):
         """Stop polling, cancel engine workers and album tasks, and release resources."""
         self._stop_event.set()
         await self._stop_workers()
+        # A graceful stop must not lose a watermark save: the next start would
+        # otherwise replay already-processed updates as duplicate Runs.
+        await self._await_offset_saves()
 
         application = self._application
         self._application = None
@@ -663,11 +675,79 @@ class TelegramChannelAdapter(ChannelAdapter):
 
     # -- Inbound handlers -----------------------------------------------------------------
 
+    def _load_update_offset(self) -> int:
+        store = self._update_offset_store
+        if store is None:
+            return -1
+        try:
+            return store.load_update_offset(self._config.id)
+        except Exception as error:
+            _LOGGER.warning(
+                "Cannot load Telegram polling offset (channel=%s), starting empty: %s",
+                self._config.id,
+                error,
+            )
+            return -1
+
+    def _claim_update(self, update: Any) -> bool:
+        """Claim one delivered update; False means it was already processed.
+
+        Telegram redelivers every unconfirmed update after an adapter restart.
+        The in-memory watermark claims instantly (PTB processes updates
+        sequentially, so there is no concurrency to race); the durable save is
+        offloaded so the handler never awaits disk I/O. A crash between the
+        engine hand-off and the save can still redeliver that one message -
+        at-most-once here would instead drop user messages on the same crash.
+        """
+        update_id = getattr(update, "update_id", None)
+        if not isinstance(update_id, int) or isinstance(update_id, bool):
+            return True
+        if update_id <= self._last_update_id:
+            _LOGGER.debug(
+                "Skipping re-delivered Telegram update (channel=%s update_id=%s)",
+                self._config.id,
+                update_id,
+            )
+            return False
+        self._last_update_id = update_id
+        self._schedule_offset_save(update_id)
+        return True
+
+    def _schedule_offset_save(self, update_id: int) -> None:
+        store = self._update_offset_store
+        if store is None:
+            return
+        task = asyncio.create_task(
+            asyncio.to_thread(store.save_update_offset, self._config.id, update_id)
+        )
+        self._offset_save_tasks.add(task)
+        task.add_done_callback(self._on_offset_saved)
+
+    def _on_offset_saved(self, task: asyncio.Task[None]) -> None:
+        self._offset_save_tasks.discard(task)
+        if task.cancelled():
+            return
+        error = task.exception()
+        if error is not None:
+            _LOGGER.warning(
+                "Cannot persist Telegram polling offset (channel=%s): %s",
+                self._config.id,
+                error,
+            )
+
+    async def _await_offset_saves(self) -> None:
+        """Give pending watermark saves a bounded window during shutdown."""
+        if self._offset_save_tasks:
+            await asyncio.wait(list(self._offset_save_tasks), timeout=2)
+
     async def _handle_inbound_message(
         self,
         update: Any,
         _context: Any,
     ) -> None:
+        if not self._claim_update(update):
+            return
+
         conversation = self._conversation_facts(update)
         if conversation is None:
             return
@@ -726,6 +806,9 @@ class TelegramChannelAdapter(ChannelAdapter):
         return command + separator + remainder
 
     async def _handle_inbound_media(self, update: Any, _context: Any) -> None:
+        if not self._claim_update(update):
+            return
+
         conversation = self._conversation_facts(update)
         if conversation is None:
             return
@@ -759,6 +842,9 @@ class TelegramChannelAdapter(ChannelAdapter):
 
     async def _handle_inbound_structured_message(self, update: Any, _context: Any) -> None:
         """Route a location/contact/poll message as rendered text into the engine."""
+        if not self._claim_update(update):
+            return
+
         conversation = self._conversation_facts(update)
         if conversation is None:
             return
@@ -859,6 +945,9 @@ class TelegramChannelAdapter(ChannelAdapter):
 
     async def _handle_unsupported_message_type(self, update: Any, _context: Any) -> None:
         """Reply to allowed chats that this message type cannot be processed yet."""
+        if not self._claim_update(update):
+            return
+
         conversation = self._conversation_facts(update)
         if conversation is None:
             return
@@ -892,6 +981,11 @@ class TelegramChannelAdapter(ChannelAdapter):
         exactly once — by the Run path, extension handler, or fallback here — so the
         tapper's spinner always stops.
         """
+        if not self._claim_update(update):
+            # A redelivered tap was answered before the restart; answering again
+            # would surface a stale toast for an already-consumed interaction.
+            return
+
         callback = getattr(update, "callback_query", None)
         if callback is None:
             return

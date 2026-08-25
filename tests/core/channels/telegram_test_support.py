@@ -257,6 +257,7 @@ def make_adapter(
     attachment_store: AttachmentStore | None = None,
     command_dispatcher: object | None = None,
     chat_migration_persister: Callable[[str, str], None] | None = None,
+    update_offset_store: Any | None = None,
     set_process_token: bool = True,
 ) -> tuple[TelegramChannelAdapter, ChatSessionManager, AsyncMock, SimpleNamespace]:
     # Keep unit tests fast while preserving the production behavior: the task still
@@ -303,6 +304,7 @@ def make_adapter(
         command_dispatcher=cast(Any, resolved_command_dispatcher),
         chat_migration_persister=chat_migration_persister,
         access_registry=MemoryChannelAccessRegistry(list(admin_user_ids or [])),
+        update_offset_store=update_offset_store,
     )
     if bot_username is not None or bot_display_name is not None or bot_id is not None:
         adapter._set_bot_identity(

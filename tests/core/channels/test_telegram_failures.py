@@ -121,3 +121,83 @@ async def test_compact_command_exception_is_logged_with_context(
     assert "command=compact" in log_records[0].message
     assert "ch-tg-assistant-12345" in log_records[0].message
     await adapter.stop()
+
+
+@pytest.mark.asyncio
+async def test_redelivered_update_is_skipped_via_persisted_watermark(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Telegram redelivers unconfirmed updates after a restart; only new ids run."""
+    from core.channels.channels import ChannelStorage
+
+    storage = ChannelStorage(tmp_path)
+    storage.save_update_offset("tg-assistant", 7)
+
+    trigger_mock = AsyncMock()
+    adapter, _chat_sessions, _trigger, _bot = make_adapter(
+        tmp_path,
+        monkeypatch,
+        allowed_chat_ids=[12345],
+        trigger_run=trigger_mock,
+        update_offset_store=storage,
+    )
+    # What start() does before polling begins.
+    adapter._last_update_id = adapter._load_update_offset()
+
+    redelivered = make_update(chat_id=12345, user_id=50, text="hello")
+    redelivered.update_id = 7
+    fresh = make_update(chat_id=12345, user_id=50, text="hello again")
+    fresh.update_id = 8
+
+    await adapter._handle_inbound_message(redelivered, SimpleNamespace())
+    trigger_mock.assert_not_awaited()
+
+    await adapter._handle_inbound_message(fresh, SimpleNamespace())
+    await drain_chat_queue(adapter, 12345)
+    trigger_mock.assert_awaited_once()
+
+    await adapter._await_offset_saves()
+    assert storage.load_update_offset("tg-assistant") == 8
+
+
+@pytest.mark.asyncio
+async def test_duplicate_update_inside_one_session_is_claimed_once(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    trigger_mock = AsyncMock()
+    adapter, _chat_sessions, _trigger, _bot = make_adapter(
+        tmp_path,
+        monkeypatch,
+        allowed_chat_ids=[12345],
+        trigger_run=trigger_mock,
+    )
+
+    update = make_update(chat_id=12345, user_id=50, text="hello")
+    update.update_id = 3
+
+    await adapter._handle_inbound_message(update, SimpleNamespace())
+    await drain_chat_queue(adapter, 12345)
+    await adapter._handle_inbound_message(update, SimpleNamespace())
+
+    assert trigger_mock.await_count == 1
+    await adapter.stop()
+
+
+def test_polling_state_survives_storage_reload_and_degrades_on_corruption(
+    tmp_path: Path,
+) -> None:
+    from core.channels.channels import ChannelStorage
+
+    storage = ChannelStorage(tmp_path)
+    storage.save_update_offset("tg-assistant", 42)
+    reloaded = ChannelStorage(tmp_path)
+    assert reloaded.load_update_offset("tg-assistant") == 42
+
+    state_path = tmp_path / "channels" / "tg-assistant" / "polling.json"
+    state_path.write_text("{not json", encoding="utf-8")
+    assert reloaded.load_update_offset("tg-assistant") == 0
+
+    state_path.write_text('{"version": 99, "last_update_id": 1}', encoding="utf-8")
+    assert reloaded.load_update_offset("tg-assistant") == 0
