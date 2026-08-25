@@ -1939,7 +1939,8 @@ class TestForkStripPolicy:
         assert SESSION_RUN_KINDS_META_KEY in SESSION_FORK_ALWAYS_STRIP_META_KEYS
 
     def test_cross_agent_strip_set_tracks_chat_constants(self) -> None:
-        from core.chat.chat import PINNED_SKILL_CATALOG_META_KEY, SEEN_SKILLS_META_KEY
+        from core.chat.chat import SEEN_SKILLS_META_KEY
+        from core.prompts.pinned_context import PINNED_SKILL_CATALOG_META_KEY
         from core.sessions import (
             PROMPT_CACHE_AFFINITY_META_KEY,
             SESSION_FORK_CROSS_AGENT_STRIP_META_KEYS,

@@ -192,7 +192,7 @@ def _project_runtime(
 async def test_skill_catalog_is_pinned_for_the_session(tmp_path: Path) -> None:
     # The catalog snapshot is taken once on a session's first build and reused, so a
     # skill written mid-session never changes the session's pinned catalog.
-    from core.chat.chat import PINNED_SKILL_CATALOG_META_KEY
+    from core.prompts.pinned_context import PINNED_SKILL_CATALOG_META_KEY
     from tests.core.chat.test_chat_loop import (
         StubAdapter,
         StubAgent,
@@ -236,7 +236,7 @@ async def test_skill_catalog_is_pinned_for_the_session(tmp_path: Path) -> None:
 async def test_new_session_pins_a_fresh_catalog(tmp_path: Path) -> None:
     # A different session pins its own snapshot from the then-current registry, so a
     # skill added before it starts is included.
-    from core.chat.chat import PINNED_SKILL_CATALOG_META_KEY
+    from core.prompts.pinned_context import PINNED_SKILL_CATALOG_META_KEY
     from tests.core.chat.test_chat_loop import (
         StubAdapter,
         StubAgent,
