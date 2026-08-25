@@ -14,7 +14,7 @@ from core.skills import SkillRegistry
 from core.tools import JsonObject as ToolJsonObject
 from core.tools import ToolContext, ToolRegistry, tool_success
 from core.tools.skill import register_skill_tool
-from tests.core.chat.chat_loop_support import build_chat_loop
+from tests.core.chat.chat_loop_support import build_chat_loop, session_address
 from tests.core.chat.test_chat_loop import (
     StubAdapter,
     StubAgent,
@@ -97,9 +97,12 @@ async def test_absolute_file_access_does_not_auto_load_project_context(tmp_path:
     assert "Project-only rules" not in request_text
     assert "system-reminder" not in request_text
     assert not any(
-        message.role == "note" for message in runtime.chat_sessions.get("coder", "s1").load()
+        message.role == "note"
+        for message in runtime.chat_sessions.get(session_address("coder", "s1")).load()
     )
-    assert "visited_projects" not in runtime.chat_sessions.get_metadata("coder", "s1")
+    assert "visited_projects" not in runtime.chat_sessions.get_metadata(
+        session_address("coder", "s1")
+    )
 
 
 @pytest.mark.asyncio
@@ -187,7 +190,7 @@ async def test_project_tool_grants_project_skill_in_current_run_without_prompt_c
         loop = loop.child_loop(nesting_depth=nesting_depth)
     await loop.send("coder", "Deploy the Project", session_id="s1")
 
-    messages = runtime.chat_sessions.get("coder", "s1").load()
+    messages = runtime.chat_sessions.get(session_address("coder", "s1")).load()
     loaded = [
         activation
         for message in messages

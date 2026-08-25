@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from core.sessions import SessionAddress
+
 from .engine_test_support import (
     CHANNEL_REPLY_SURFACE,
     SESSION_ID,
@@ -315,7 +317,9 @@ async def test_group_media_without_addressing_is_dropped(tmp_path: Path) -> None
 
     trigger_mock.assert_not_awaited()
     assert transport.sent == []
-    assert not chat_sessions.exists("assistant", SESSION_ID)
+    assert not chat_sessions.exists(
+        SessionAddress(project_id=None, agent_id="assistant", session_id=SESSION_ID)
+    )
     await engine.stop()
 
 
@@ -338,7 +342,9 @@ async def test_group_unaddressed_media_is_observed_without_download(tmp_path: Pa
 
     notes = [
         message.content
-        for message in chat_sessions.get("assistant", SESSION_ID).load()
+        for message in chat_sessions.get(
+            SessionAddress(project_id=None, agent_id="assistant", session_id=SESSION_ID)
+        ).load()
         if message.role == "note"
     ]
     assert notes[-2:] == [

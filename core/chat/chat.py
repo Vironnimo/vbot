@@ -215,6 +215,7 @@ from core.runs import (
 from core.sessions import (
     SKILL_AVAILABLE_NOTE_PREFIX,
     ChatSession,
+    SessionAddress,
     SessionReadCursor,
     latest_project_tool_context_id,
     project_tool_context_id,
@@ -1329,10 +1330,10 @@ class ChatLoop:
         """Execute one manual Compaction inside its canonical Run lifecycle."""
         await _CHAT_TRANSFORM_WORKERS.run(
             self._dependencies.sessions.record_run_kind,
-            run.agent_id,
-            run.session_id,
+            SessionAddress(
+                project_id=run.project_id, agent_id=run.agent_id, session_id=run.session_id
+            ),
             run.run_kind,
-            run.project_id,
         )
         adapter: Any | None = None
         summary_adapter: Any | None = None
@@ -1566,9 +1567,9 @@ class ChatLoop:
             messages.append(checkpoint)
             await _CHAT_TRANSFORM_WORKERS.run(
                 self._dependencies.sessions.rotate_prompt_cache_affinity_id,
-                run.agent_id,
-                run.session_id,
-                run.project_id,
+                SessionAddress(
+                    project_id=run.project_id, agent_id=run.agent_id, session_id=run.session_id
+                ),
             )
             if prompt_refresh is not None:
                 try:
@@ -1651,23 +1652,16 @@ class ChatLoop:
         request: _RunRequest,
     ) -> ChatMessage:
         project_id = run.project_id
-        session = await self._dependencies.sessions.get_async(
-            run.agent_id,
-            run.session_id,
-            project_id,
+        session_address = SessionAddress(
+            project_id=project_id, agent_id=run.agent_id, session_id=run.session_id
         )
+        session = await self._dependencies.sessions.get_async(session_address)
         await _CHAT_TRANSFORM_WORKERS.run(
             self._dependencies.sessions.record_run_kind,
-            run.agent_id,
-            run.session_id,
+            session_address,
             run.run_kind,
-            project_id,
         )
-        async with self._dependencies.sessions.write_lock(
-            run.agent_id,
-            run.session_id,
-            project_id,
-        ):
+        async with self._dependencies.sessions.write_lock(session_address):
             session_snapshot = await _SessionSnapshot.load(session)
         prior_continuation: ContinuationState | None = None
         continuation_reminder: str | None = None
@@ -1797,9 +1791,7 @@ class ChatLoop:
         )
         prompt_cache_affinity_id = await _CHAT_TRANSFORM_WORKERS.run(
             self._dependencies.sessions.prompt_cache_affinity_id,
-            run.agent_id,
-            run.session_id,
-            project_id,
+            SessionAddress(project_id=project_id, agent_id=run.agent_id, session_id=run.session_id),
         )
         session.activated_skill_contents(session_snapshot.messages)
         context = _RunExecutionContext(
@@ -1898,6 +1890,9 @@ class ChatLoop:
         agent = context.agent
         target = context.primary_target
         project_id = context.project_id
+        session_address = SessionAddress(
+            project_id=project_id, agent_id=run.agent_id, session_id=run.session_id
+        )
         internal = request.internal
         run_timing_started_at = datetime.now(UTC)
         run_timing_started_perf = time.perf_counter()
@@ -1947,9 +1942,7 @@ class ChatLoop:
                     context.skill_registry,
                     project_id,
                 )
-                async with self._dependencies.sessions.write_lock(
-                    run.agent_id, run.session_id, project_id
-                ):
+                async with self._dependencies.sessions.write_lock(session_address):
                     if internal:
                         if not isinstance(request.content, str):
                             raise ChatError("internal runs require string content")
@@ -2007,9 +2000,7 @@ class ChatLoop:
                             request.content,
                             context.skill_registry,
                         )
-                        async with self._dependencies.sessions.write_lock(
-                            run.agent_id, run.session_id, project_id
-                        ):
+                        async with self._dependencies.sessions.write_lock(session_address):
                             await session.flush_deferred_notes_async()
                             await context.session_snapshot.refresh(session)
                     finally:
@@ -2216,12 +2207,10 @@ class ChatLoop:
                 try:
                     await _CHAT_TRANSFORM_WORKERS.run(
                         self._dependencies.sessions.record_terminal_run,
-                        run.agent_id,
-                        run.session_id,
+                        session_address,
                         run.id,
                         run_status,
                         run_summary.timestamp,
-                        run.project_id,
                     )
                 except Exception:
                     # The canonical Run result is already durable in the transcript.
@@ -2282,9 +2271,7 @@ class ChatLoop:
                         outcome=outcome,
                     )
                 finally:
-                    async with self._dependencies.sessions.write_lock(
-                        run.agent_id, run.session_id, project_id
-                    ):
+                    async with self._dependencies.sessions.write_lock(session_address):
                         await session.flush_deferred_notes_async()
                         await context.session_snapshot.refresh(session)
 
@@ -2316,7 +2303,9 @@ class ChatLoop:
                 raise ChatSessionError("session id is required")
             return session_manager.create(agent_id, project_id=project_id)
         try:
-            return session_manager.get(agent_id, session_id, project_id)
+            return session_manager.get(
+                SessionAddress(project_id=project_id, agent_id=agent_id, session_id=session_id)
+            )
         except ChatSessionError:
             if not create_missing:
                 raise
@@ -2336,7 +2325,9 @@ class ChatLoop:
                 raise ChatSessionError("session id is required")
             return await session_manager.create_async(agent_id, project_id=project_id)
         try:
-            return await session_manager.get_async(agent_id, session_id, project_id)
+            return await session_manager.get_async(
+                SessionAddress(project_id=project_id, agent_id=agent_id, session_id=session_id)
+            )
         except ChatSessionError:
             if not create_missing:
                 raise
@@ -2372,7 +2363,8 @@ class ChatLoop:
         A successful Compaction rescans every Skill source and replaces the snapshot;
         a new Session starts with a fresh snapshot too.
         """
-        metadata = self._dependencies.sessions.get_metadata(agent_id, session_id, project_id)
+        address = SessionAddress(project_id=project_id, agent_id=agent_id, session_id=session_id)
+        metadata = self._dependencies.sessions.get_metadata(address)
         pinned = metadata.get(PINNED_SKILL_CATALOG_META_KEY)
         if isinstance(pinned, dict) and isinstance(pinned.get("catalog_text"), str):
             return PinnedSkillCatalog(catalog_text=pinned["catalog_text"])
@@ -2380,7 +2372,7 @@ class ChatLoop:
             agent, skill_registry
         )
         metadata[PINNED_SKILL_CATALOG_META_KEY] = {"catalog_text": snapshot.catalog_text}
-        self._dependencies.sessions.set_metadata(agent_id, session_id, metadata, project_id)
+        self._dependencies.sessions.set_metadata(address, metadata)
         return snapshot
 
     def _pinned_epoch_text(
@@ -2399,14 +2391,15 @@ class ChatLoop:
         A successful Compaction replaces the snapshot; a new Session starts with a
         fresh snapshot too.
         """
-        metadata = self._dependencies.sessions.get_metadata(agent_id, session_id, project_id)
+        address = SessionAddress(project_id=project_id, agent_id=agent_id, session_id=session_id)
+        metadata = self._dependencies.sessions.get_metadata(address)
         pinned = metadata.get(meta_key)
         pinned_text = pinned.get("text") if isinstance(pinned, dict) else None
         if isinstance(pinned_text, str):
             return pinned_text
         text = render()
         metadata[meta_key] = {"text": text}
-        self._dependencies.sessions.set_metadata(agent_id, session_id, metadata, project_id)
+        self._dependencies.sessions.set_metadata(address, metadata)
         return text
 
     def _pinned_working_project_context(
@@ -2601,7 +2594,8 @@ class ChatLoop:
         refresh: _CompactionPromptRefresh,
     ) -> None:
         """Persist one prepared prompt epoch after its checkpoint commit."""
-        metadata = self._dependencies.sessions.get_metadata(agent_id, session_id, project_id)
+        address = SessionAddress(project_id=project_id, agent_id=agent_id, session_id=session_id)
+        metadata = self._dependencies.sessions.get_metadata(address)
         metadata[PINNED_SKILL_CATALOG_META_KEY] = {
             "catalog_text": refresh.skill_catalog.catalog_text
         }
@@ -2617,7 +2611,7 @@ class ChatLoop:
             else:
                 metadata[pin_key] = {"text": pin_text}
         self._stamp_prompt_files_read(session_id, list(refresh.prompt_read_paths))
-        self._dependencies.sessions.set_metadata(agent_id, session_id, metadata, project_id)
+        self._dependencies.sessions.set_metadata(address, metadata)
 
     @staticmethod
     def _available_skill_names(agent: Any, skill_registry: SkillRegistry) -> list[str] | None:
@@ -2661,11 +2655,12 @@ class ChatLoop:
             str(skill.name): str(skill.description)
             for skill in skill_registry.filter_allowed(allowed)
         }
-        metadata = self._dependencies.sessions.get_metadata(agent_id, session_id, project_id)
+        address = SessionAddress(project_id=project_id, agent_id=agent_id, session_id=session_id)
+        metadata = self._dependencies.sessions.get_metadata(address)
         seen = metadata.get(SEEN_SKILLS_META_KEY)
         if not isinstance(seen, list):
             metadata[SEEN_SKILLS_META_KEY] = available_names
-            self._dependencies.sessions.set_metadata(agent_id, session_id, metadata, project_id)
+            self._dependencies.sessions.set_metadata(address, metadata)
             return
         new_names = sorted(set(available) - set(seen))
         if not new_names:
@@ -2674,7 +2669,7 @@ class ChatLoop:
         lines.extend(f"- {name}: {available[name]}" for name in new_names)
         session.add_note(SKILL_AVAILABLE_NOTE_PREFIX + "\n".join(lines))
         metadata[SEEN_SKILLS_META_KEY] = sorted(set(seen) | set(new_names))
-        self._dependencies.sessions.set_metadata(agent_id, session_id, metadata, project_id)
+        self._dependencies.sessions.set_metadata(address, metadata)
 
     def _stamp_prompt_files_read(self, session_id: str, paths: list[Path]) -> None:
         """Register auto-injected prompt files as read-before-write for a session.
@@ -2962,11 +2957,10 @@ class ChatLoop:
         session: ChatSession,
     ) -> tuple[list[ChatMessage], SessionReadCursor]:
         """Load one complete Session snapshot without racing an append."""
-        async with self._dependencies.sessions.write_lock(
-            run.agent_id,
-            run.session_id,
-            run.project_id,
-        ):
+        session_address = SessionAddress(
+            project_id=run.project_id, agent_id=run.agent_id, session_id=run.session_id
+        )
+        async with self._dependencies.sessions.write_lock(session_address):
             snapshot = await session.load_since_async()
         if snapshot is None:
             raise AssertionError("A full Session snapshot must always produce a cursor")
@@ -2980,11 +2974,10 @@ class ChatLoop:
         snapshot_cursor: SessionReadCursor,
     ) -> bool:
         """Append *checkpoint* only while its Session snapshot is still current."""
-        async with self._dependencies.sessions.write_lock(
-            run.agent_id,
-            run.session_id,
-            run.project_id,
-        ):
+        session_address = SessionAddress(
+            project_id=run.project_id, agent_id=run.agent_id, session_id=run.session_id
+        )
+        async with self._dependencies.sessions.write_lock(session_address):
             appended = await session.load_since_async(snapshot_cursor)
             if appended is None or appended.messages:
                 return False
@@ -3001,9 +2994,7 @@ class ChatLoop:
     ) -> AsyncIterator[None]:
         """Acquire the Session lock without losing already streamed readable output."""
         write_lock = self._dependencies.sessions.write_lock(
-            run.agent_id,
-            run.session_id,
-            project_id,
+            SessionAddress(project_id=project_id, agent_id=run.agent_id, session_id=run.session_id)
         )
         while True:
             try:
@@ -3059,6 +3050,9 @@ class ChatLoop:
         session = context.session
         agent = context.agent
         project_id = context.project_id
+        session_address = SessionAddress(
+            project_id=project_id, agent_id=run.agent_id, session_id=run.session_id
+        )
         state = context.request_state
         messages = state.messages
         tools = state.tools
@@ -3076,9 +3070,7 @@ class ChatLoop:
         tool_finalization_violation_count = 0
         while True:
             run.raise_if_cancelled()
-            async with self._dependencies.sessions.write_lock(
-                run.agent_id, run.session_id, project_id
-            ):
+            async with self._dependencies.sessions.write_lock(session_address):
                 session.begin_defer_notes()
                 try:
                     self._dependencies.deliver_background_completions(run, session)
@@ -3110,9 +3102,7 @@ class ChatLoop:
                         messages=messages_for_request,
                     )
                 finally:
-                    async with self._dependencies.sessions.write_lock(
-                        run.agent_id, run.session_id, project_id
-                    ):
+                    async with self._dependencies.sessions.write_lock(session_address):
                         await session.flush_deferred_notes_async()
                         await context.session_snapshot.refresh(session)
 
@@ -3894,9 +3884,9 @@ class ChatLoop:
         await context.session_snapshot.refresh(session)
         context.prompt_cache_affinity_id = await _CHAT_TRANSFORM_WORKERS.run(
             self._dependencies.sessions.rotate_prompt_cache_affinity_id,
-            run.agent_id,
-            run.session_id,
-            run.project_id,
+            SessionAddress(
+                project_id=run.project_id, agent_id=run.agent_id, session_id=run.session_id
+            ),
         )
         if prompt_refresh is not None:
             try:
@@ -3971,7 +3961,9 @@ class ChatLoop:
         from core.compaction import COMPACTION_POLICY_META_KEY, CompactionSettings
         from core.settings.normalizers import normalize_compaction_policy
 
-        metadata = self._dependencies.sessions.get_metadata(agent_id, session_id, project_id)
+        metadata = self._dependencies.sessions.get_metadata(
+            SessionAddress(project_id=project_id, agent_id=agent_id, session_id=session_id)
+        )
         session_policy = metadata.get(COMPACTION_POLICY_META_KEY)
         agent_policy = getattr(agent, "compaction_policy", None)
         raw_settings = normalize_compaction_policy(

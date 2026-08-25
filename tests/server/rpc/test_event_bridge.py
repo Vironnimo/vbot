@@ -34,6 +34,7 @@ from core.runs import (
     RunEvent,
     RunKind,
 )
+from core.sessions import SessionAddress
 from server.events import ALLOWED_SERVER_EVENT_TYPES, ServerEventBus
 from server.file_delivery import FileDelivery
 from server.rpc import event_bridge
@@ -476,10 +477,8 @@ class _RecordingSessions:
         self._metadata = metadata or {}
         self._error = error
 
-    def get_metadata(
-        self, agent_id: str, session_id: str, project_id: str | None = None
-    ) -> dict[str, Any]:
-        self.calls.append((agent_id, session_id, project_id))
+    def get_metadata(self, address: SessionAddress) -> dict[str, Any]:
+        self.calls.append((address.agent_id, address.session_id, address.project_id))
         if self._error is not None:
             raise self._error
         return self._metadata

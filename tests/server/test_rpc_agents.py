@@ -13,6 +13,7 @@ from core.channels import ChannelConfigError
 from core.models import Capabilities, Model, ReasoningCapabilities
 from core.prompts import LayoutEntry, load_bundled_default_layout
 from core.runs import Run
+from core.sessions import SessionAddress
 from server.rpc.methods import dispatch_rpc
 from server.rpc.payloads import _model_response
 from tests.server.rpc_test_support import (
@@ -39,7 +40,12 @@ async def test_session_create_creates_explicit_session(tmp_path: Path) -> None:
         "ok": True,
         "result": {"agent_id": "coder", "session_id": "session-one"},
     }
-    assert state.runtime.chat_sessions.get("coder", "session-one").id == "session-one"
+    assert (
+        state.runtime.chat_sessions.get(
+            SessionAddress(project_id=None, agent_id="coder", session_id="session-one")
+        ).id
+        == "session-one"
+    )
 
 
 @pytest.mark.asyncio
@@ -869,8 +875,7 @@ async def test_agent_rename_retargets_live_references_and_publishes_mapping(
     )
     state.runtime.chat_sessions.create("child", session_id="child-session")
     state.runtime.chat_sessions.set_metadata(
-        "child",
-        "child-session",
+        SessionAddress(project_id=None, agent_id="child", session_id="child-session"),
         {
             "subagent_parent": {
                 "agent_id": "coder",
@@ -946,7 +951,9 @@ async def test_agent_rename_retargets_live_references_and_publishes_mapping(
         "coder@vbot",
     ]
     assert state.runtime.agents.get("manager").tools["subagent"]["allowed_agents"] == ["researcher"]
-    child_metadata = state.runtime.chat_sessions.get_metadata("child", "child-session")
+    child_metadata = state.runtime.chat_sessions.get_metadata(
+        SessionAddress(project_id=None, agent_id="child", session_id="child-session")
+    )
     assert child_metadata["subagent_parent"]["agent_id"] == "researcher"
     assert child_metadata["fork_source"]["agent_id"] == "coder"
     events = [event["payload"] for event in state.event_bus.events]
@@ -1035,7 +1042,10 @@ async def test_agent_rename_rolls_back_all_changes_when_reference_update_fails(
             "project_id": None,
         }
     }
-    state.runtime.chat_sessions.set_metadata("child", "child-session", original_metadata)
+    state.runtime.chat_sessions.set_metadata(
+        SessionAddress(project_id=None, agent_id="child", session_id="child-session"),
+        original_metadata,
+    )
     channels = [
         SimpleNamespace(id="first", agent_id="coder"),
         SimpleNamespace(id="second", agent_id="coder"),
@@ -1061,7 +1071,12 @@ async def test_agent_rename_rolls_back_all_changes_when_reference_update_fails(
     assert state.runtime.agents.get("coder").id == "coder"
     assert all(channel.agent_id == "coder" for channel in channels)
     assert state.runtime.agents.get("manager").tools["subagent"]["allowed_agents"] == ["coder"]
-    assert state.runtime.chat_sessions.get_metadata("child", "child-session") == original_metadata
+    assert (
+        state.runtime.chat_sessions.get_metadata(
+            SessionAddress(project_id=None, agent_id="child", session_id="child-session")
+        )
+        == original_metadata
+    )
     assert state.event_bus.events == []
 
 

@@ -19,7 +19,7 @@ import pytest
 
 from core.chat.messages import ChatMessage
 from core.projects import ProjectStore
-from core.sessions import ChatSessionManager
+from core.sessions import ChatSessionManager, SessionAddress
 from core.sessions.sessions import SKILL_CONTEXT_NOTE_PREFIX
 from server.rpc.errors import RpcError
 from server.rpc.methods import build_method_handlers
@@ -318,7 +318,10 @@ def test_report_skills_section_joins_usage_against_inventory(tmp_path: Path) -> 
             timestamp=BASE + timedelta(seconds=1),
         )
     )
-    manager.set_metadata("main", session.id, {"seen_skills": ["deploy", "teach"]})
+    manager.set_metadata(
+        SessionAddress(project_id=None, agent_id="main", session_id=session.id),
+        {"seen_skills": ["deploy", "teach"]},
+    )
 
     result = asyncio.run(_statistics_report(state, {}))
     skills = result["skills"]

@@ -32,6 +32,7 @@ from core.config_validation import (
     warn_unknown_keys,
 )
 from core.runs import RunKind
+from core.sessions import SessionAddress
 from core.settings import is_valid_agent_id, is_valid_project_id
 from core.utils.atomic import atomic_write_text
 from core.utils.errors import VBotError
@@ -1373,7 +1374,11 @@ class CronService:
         if (
             job.session_id is not None
             and self._sessions is not None
-            and not self._sessions.exists(job.agent_id, job.session_id, job.project_id)
+            and not self._sessions.exists(
+                SessionAddress(
+                    project_id=job.project_id, agent_id=job.agent_id, session_id=job.session_id
+                )
+            )
         ):
             raise CronJobValidationError(
                 f"Session does not exist for cron target {job.agent_id}: {job.session_id}"

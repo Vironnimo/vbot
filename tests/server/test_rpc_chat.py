@@ -15,6 +15,7 @@ from core.chat import (
 )
 from core.chat.content_blocks import FileBlock, MediaBlock, TextBlock
 from core.chat.errors import ChatError
+from core.sessions import SessionAddress
 from core.tools import FileReadState, register_read_tool
 from server.rpc import (
     chat_methods,
@@ -405,7 +406,12 @@ async def test_chat_methods_handle_new_command_with_session_payload(
     assert isinstance(new_session_id, str)
     assert new_session_id != "session-one"
     assert state.runtime.agents.get("coder").current_session_id == new_session_id
-    assert state.runtime.chat_sessions.get("coder", new_session_id).load() == []
+    assert (
+        state.runtime.chat_sessions.get(
+            SessionAddress(project_id=None, agent_id="coder", session_id=new_session_id)
+        ).load()
+        == []
+    )
 
 
 @pytest.mark.asyncio

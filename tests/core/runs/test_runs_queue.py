@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from core.chat.content_blocks import FileBlock
+from core.sessions import SessionAddress
 from tests.core.chat.chat_loop_support import build_chat_loop
 
 from .runs_test_support import (
@@ -265,13 +266,25 @@ async def test_all_queued_returns_fresh_cross_session_snapshot_in_fifo_order() -
 
     snapshot = manager.all_queued()
     assert snapshot == [
-        ((None, "coder", "session-one"), identity_item),
-        (("project-a", "writer", "session-two"), project_item),
+        (
+            SessionAddress(project_id=None, agent_id="coder", session_id="session-one"),
+            identity_item,
+        ),
+        (
+            SessionAddress(project_id="project-a", agent_id="writer", session_id="session-two"),
+            project_item,
+        ),
     ]
     snapshot.clear()
     assert manager.all_queued() == [
-        ((None, "coder", "session-one"), identity_item),
-        (("project-a", "writer", "session-two"), project_item),
+        (
+            SessionAddress(project_id=None, agent_id="coder", session_id="session-one"),
+            identity_item,
+        ),
+        (
+            SessionAddress(project_id="project-a", agent_id="writer", session_id="session-two"),
+            project_item,
+        ),
     ]
 
     release.set()

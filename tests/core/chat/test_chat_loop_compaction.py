@@ -63,6 +63,7 @@ from tests.core.chat.chat_loop_support import (
     StubStorage,
     build_chat_loop,
     persisted_roles,
+    session_address,
 )
 
 JsonObject = dict[str, Any]
@@ -595,7 +596,9 @@ async def test_compaction_maybe_auto_compact_appends_checkpoint_and_rebuilds_mes
     loop = build_chat_loop(runtime, compaction_service=cast(Any, compaction_service))
     messages = await loop._build_request_messages(agent, session)
     run = Run(run_id="run-1", agent_id=agent.id, session_id=session.id)
-    affinity_before = runtime.chat_sessions.prompt_cache_affinity_id("coder", session.id)
+    affinity_before = runtime.chat_sessions.prompt_cache_affinity_id(
+        session_address("coder", session.id)
+    )
 
     with caplog.at_level("INFO", logger="vbot.chat"):
         rebuilt = await _maybe_auto_compact(
@@ -625,7 +628,10 @@ async def test_compaction_maybe_auto_compact_appends_checkpoint_and_rebuilds_mes
         "assistant",
         "compaction_checkpoint",
     ]
-    assert runtime.chat_sessions.prompt_cache_affinity_id("coder", session.id) != affinity_before
+    assert (
+        runtime.chat_sessions.prompt_cache_affinity_id(session_address("coder", session.id))
+        != affinity_before
+    )
     assert len(compaction_service.compact_calls) == 1
     assert compaction_service.compact_calls[0]["summary_model_id"] == "gpt-5.2"
     assert compaction_service.compact_calls[0]["summary_adapter"] is adapter
@@ -791,7 +797,7 @@ async def test_compaction_allows_repeated_automatic_checkpoints_in_one_run(
     assert persisted_roles(session.load()).count("compaction_checkpoint") == requested_compactions
     assert len(set(affinity_epochs)) == requested_compactions + 1
     assert context.prompt_cache_affinity_id == runtime.chat_sessions.prompt_cache_affinity_id(
-        "coder", session.id
+        session_address("coder", session.id)
     )
 
 
@@ -877,7 +883,7 @@ async def test_final_assistant_compaction_activates_history_on_next_run(tmp_path
     loop = build_chat_loop(runtime, compaction_service=cast(Any, CompactOnce()))
 
     await loop.send("coder", "First", session_id="session-one")
-    session = runtime.chat_sessions.get("coder", "session-one")
+    session = runtime.chat_sessions.get(session_address("coder", "session-one"))
     checkpoint = next(
         message for message in session.load() if message.role == "compaction_checkpoint"
     )
@@ -931,8 +937,10 @@ async def test_final_assistant_compaction_releases_session_lock_during_model_cal
     await asyncio.wait_for(compaction_service.started.wait(), timeout=1.0)
 
     async def append_background_note() -> None:
-        async with runtime.chat_sessions.write_lock("coder", "session-one"):
-            runtime.chat_sessions.get("coder", "session-one").add_note("Background completed")
+        async with runtime.chat_sessions.write_lock(session_address("coder", "session-one")):
+            runtime.chat_sessions.get(session_address("coder", "session-one")).add_note(
+                "Background completed"
+            )
 
     note_task = asyncio.create_task(append_background_note())
     try:
@@ -941,7 +949,7 @@ async def test_final_assistant_compaction_releases_session_lock_during_model_cal
         compaction_service.release.set()
 
     result = await run.wait()
-    messages = runtime.chat_sessions.get("coder", "session-one").load()
+    messages = runtime.chat_sessions.get(session_address("coder", "session-one")).load()
 
     assert result.content == "Finished"
     assert persisted_roles(messages) == ["user", "assistant", "note"]
@@ -1002,8 +1010,10 @@ async def test_mid_tool_stale_compaction_rebuilds_request_with_concurrent_note(
     await asyncio.wait_for(compaction_service.started.wait(), timeout=1.0)
 
     async def append_background_note() -> None:
-        async with runtime.chat_sessions.write_lock("coder", "session-one"):
-            runtime.chat_sessions.get("coder", "session-one").add_note("Background completed")
+        async with runtime.chat_sessions.write_lock(session_address("coder", "session-one")):
+            runtime.chat_sessions.get(session_address("coder", "session-one")).add_note(
+                "Background completed"
+            )
 
     note_task = asyncio.create_task(append_background_note())
     try:
@@ -1012,7 +1022,7 @@ async def test_mid_tool_stale_compaction_rebuilds_request_with_concurrent_note(
         compaction_service.release.set()
 
     result = await run.wait()
-    messages = runtime.chat_sessions.get("coder", "session-one").load()
+    messages = runtime.chat_sessions.get(session_address("coder", "session-one")).load()
     second_request_text = "\n".join(
         str(message.get("content", "")) for message in adapter.requests[1]["messages"]
     )
@@ -1138,7 +1148,7 @@ async def test_compaction_refreshes_pinned_skill_catalog(tmp_path: Path) -> None
         loop, agent, adapter, "gpt-5.2", session, messages, usage={"input_tokens": 90}, run=run
     )
 
-    metadata = runtime.chat_sessions.get_metadata("coder", "session-one")
+    metadata = runtime.chat_sessions.get_metadata(session_address("coder", "session-one"))
     assert runtime.system_prompts.render_skill_catalog_calls == calls_before + 1
     assert runtime.refresh_skills_for_calls == [(None, "coder")]
     assert metadata[PINNED_SKILL_CATALOG_META_KEY] == {"catalog_text": "catalog:2"}
@@ -1189,7 +1199,7 @@ async def test_compaction_refreshes_pinned_soul_and_memory(tmp_path: Path) -> No
         loop, agent, adapter, "gpt-5.2", session, messages, usage={"input_tokens": 90}, run=run
     )
 
-    metadata = runtime.chat_sessions.get_metadata("coder", "session-one")
+    metadata = runtime.chat_sessions.get_metadata(session_address("coder", "session-one"))
     assert runtime.system_prompts.render_soul_calls == soul_calls_before + 1
     assert runtime.system_prompts.render_memory_files_calls == memory_calls_before + 1
     assert metadata[PINNED_SOUL_CONTEXT_META_KEY] == {"text": "Soul of coder"}
@@ -1249,7 +1259,7 @@ async def test_compaction_refresh_failure_keeps_previous_prompt_snapshot(
         run=run,
     )
 
-    metadata = runtime.chat_sessions.get_metadata("coder", "session-one")
+    metadata = runtime.chat_sessions.get_metadata(session_address("coder", "session-one"))
     assert metadata[PINNED_SKILL_CATALOG_META_KEY] == {"catalog_text": "catalog:1"}
     assert persisted_roles(session.load())[-1] == "compaction_checkpoint"
     assert any(
@@ -1339,7 +1349,7 @@ async def test_compaction_refreshes_rooted_working_project_files_and_auto_load(
     )
 
     system_prompt = str(rebuilt.messages[0]["content"])
-    metadata = runtime.chat_sessions.get_metadata("coder", "session-one")
+    metadata = runtime.chat_sessions.get_metadata(session_address("coder", "session-one"))
     assert "Updated rules" in system_prompt
     assert "New context" in system_prompt
     assert "Original rules" not in system_prompt
@@ -1658,14 +1668,19 @@ async def test_compact_session_appends_checkpoint_and_closes_adapter(tmp_path: P
     )
     compaction_service = StubCompactionService(should_auto=True, checkpoint=checkpoint)
     loop = build_chat_loop(runtime, compaction_service=cast(Any, compaction_service))
-    affinity_before = runtime.chat_sessions.prompt_cache_affinity_id("coder", session.id)
+    affinity_before = runtime.chat_sessions.prompt_cache_affinity_id(
+        session_address("coder", session.id)
+    )
 
     reply = await loop.compact_session("coder", "session-one")
 
     assert reply == "Context compacted."
     assert persisted_roles(session.load()) == ["user", "assistant", "compaction_checkpoint"]
     assert len(compaction_service.compact_calls) == 1
-    assert runtime.chat_sessions.prompt_cache_affinity_id("coder", session.id) != affinity_before
+    assert (
+        runtime.chat_sessions.prompt_cache_affinity_id(session_address("coder", session.id))
+        != affinity_before
+    )
     assert compaction_service.compact_calls[0]["summary_model_id"] == "gpt-5.2"
     assert compaction_service.compact_calls[0]["summary_adapter"] is adapter
     assert compaction_service.compact_calls[0]["storage"] is runtime.storage
@@ -1766,7 +1781,7 @@ async def test_manual_compaction_refreshes_skill_catalog_snapshot(tmp_path: Path
 
     reply = await loop.compact_session("coder", "session-one")
 
-    metadata = runtime.chat_sessions.get_metadata("coder", "session-one")
+    metadata = runtime.chat_sessions.get_metadata(session_address("coder", "session-one"))
     assert reply == "Context compacted."
     assert runtime.refresh_skills_for_calls == [(None, "coder")]
     assert metadata[PINNED_SKILL_CATALOG_META_KEY] == {"catalog_text": "catalog:2"}

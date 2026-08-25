@@ -38,6 +38,7 @@ from core.runs import (
     RunEvent,
     RunKind,
 )
+from core.sessions import SessionAddress
 from core.subagents import (
     SUBAGENT_SESSION_STARTED_EVENT,
     SUBAGENT_STATUS_CHANGED_EVENT,
@@ -84,7 +85,11 @@ def reflection_source_session_id(sessions: Any, run: Run) -> str:
     if sessions is None or not callable(getattr(sessions, "get_metadata", None)):
         return ""
     try:
-        metadata = sessions.get_metadata(run.agent_id, run.session_id, run.project_id)
+        metadata = sessions.get_metadata(
+            SessionAddress(
+                project_id=run.project_id, agent_id=run.agent_id, session_id=run.session_id
+            )
+        )
     except Exception:
         _LOGGER.warning(
             "Reflection fork provenance unavailable",

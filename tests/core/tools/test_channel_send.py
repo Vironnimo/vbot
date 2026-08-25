@@ -12,6 +12,7 @@ import pytest
 from core.channels.adapter import FileData, RouteFacts
 from core.channels.channels import ChannelNotFoundError
 from core.extensions import InteractionButton
+from core.sessions import SessionAddress
 from core.tools.channel import (
     CHANNEL_SEND_TOOL_DESCRIPTION,
     CHANNEL_SEND_TOOL_NAME,
@@ -644,7 +645,9 @@ def test_channel_send_records_outbound_note_in_target_session(tmp_path: Path) ->
 
     assert_success_envelope(result)
     channel_service.ensure_outbound_session.assert_called_once_with("tg-assistant", "12345")
-    chat_sessions.get_or_create.assert_called_once_with("agent-1", "ch-tg-assistant-12345")
+    chat_sessions.get_or_create.assert_called_once_with(
+        SessionAddress(project_id=None, agent_id="agent-1", session_id="ch-tg-assistant-12345")
+    )
     session.add_note.assert_called_once()
     note = session.add_note.call_args.args[0]
     assert "channel_send tool" in note
@@ -754,7 +757,9 @@ def test_channel_send_resolves_platform_target_from_session_metadata(tmp_path: P
 
     data = assert_success_envelope(result)
     assert data == {"channel_id": "tg-assistant", "platform_target": "12345"}
-    chat_sessions.get_metadata.assert_called_once_with("agent-1", "session-1")
+    chat_sessions.get_metadata.assert_called_once_with(
+        SessionAddress(project_id=None, agent_id="agent-1", session_id="session-1")
+    )
     channel_service.send.assert_awaited_once_with(
         "tg-assistant",
         "Task finished",
@@ -839,7 +844,9 @@ def test_channel_send_resolves_platform_target_from_unique_allowed_chat_id(tmp_p
 
     data = assert_success_envelope(result)
     assert data == {"channel_id": "tg-private", "platform_target": "8506476339"}
-    chat_sessions.get_metadata.assert_called_once_with("agent-1", "session-1")
+    chat_sessions.get_metadata.assert_called_once_with(
+        SessionAddress(project_id=None, agent_id="agent-1", session_id="session-1")
+    )
     channel_service.list_channels.assert_called_once_with()
     channel_service.send.assert_awaited_once_with(
         "tg-private",

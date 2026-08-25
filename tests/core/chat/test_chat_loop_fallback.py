@@ -31,6 +31,7 @@ from tests.core.chat.chat_loop_support import (
     StubRuntime,
     build_chat_loop,
     persisted_roles,
+    session_address,
 )
 
 JsonObject = dict[str, Any]
@@ -123,7 +124,7 @@ async def test_provider_rate_limit_error_is_persisted_and_run_fails(tmp_path: Pa
         await build_chat_loop(runtime).send("coder", "Hi", session_id="session-one")
 
     run = next(iter(runtime.chat_runs._runs.values()))
-    messages = runtime.chat_sessions.get("coder", "session-one").load()
+    messages = runtime.chat_sessions.get(session_address("coder", "session-one")).load()
     assert run.status == RunStatus.FAILED
     assert persisted_roles(messages) == ["user", "error"]
     assert run.iteration_count == 0
@@ -165,7 +166,7 @@ async def test_fallback_model_activates_on_retryable_error(tmp_path: Path) -> No
     assistant = await build_chat_loop(runtime).send("coder", "Hi", session_id="session-one")
 
     run = next(iter(runtime.chat_runs._runs.values()))
-    messages = runtime.chat_sessions.get("coder", "session-one").load()
+    messages = runtime.chat_sessions.get(session_address("coder", "session-one")).load()
     fallback_events = [
         event for event in run.events if event.type == MODEL_FALLBACK_ACTIVATED_EVENT
     ]
@@ -256,7 +257,7 @@ async def test_fallback_adapter_construction_failure(tmp_path: Path) -> None:
         await build_chat_loop(runtime).send("coder", "Hi", session_id="session-one")
 
     run = next(iter(runtime.chat_runs._runs.values()))
-    messages = runtime.chat_sessions.get("coder", "session-one").load()
+    messages = runtime.chat_sessions.get(session_address("coder", "session-one")).load()
     event_types = [event.type for event in run.events]
     assert run.status == RunStatus.FAILED
     assert persisted_roles(messages) == ["user", "error"]
@@ -331,7 +332,7 @@ async def test_fallback_not_triggered_on_non_retryable_error(tmp_path: Path) -> 
         await build_chat_loop(runtime).send("coder", "Hi", session_id="session-one")
 
     run = next(iter(runtime.chat_runs._runs.values()))
-    messages = runtime.chat_sessions.get("coder", "session-one").load()
+    messages = runtime.chat_sessions.get(session_address("coder", "session-one")).load()
     assert run.status == RunStatus.FAILED
     assert persisted_roles(messages) == ["user", "error"]
     assert not any(event.type == MODEL_FALLBACK_ACTIVATED_EVENT for event in run.events)
@@ -348,7 +349,7 @@ async def test_fallback_not_triggered_when_fallback_model_empty(tmp_path: Path) 
         await build_chat_loop(runtime).send("coder", "Hi", session_id="session-one")
 
     run = next(iter(runtime.chat_runs._runs.values()))
-    messages = runtime.chat_sessions.get("coder", "session-one").load()
+    messages = runtime.chat_sessions.get(session_address("coder", "session-one")).load()
     assert run.status == RunStatus.FAILED
     assert persisted_roles(messages) == ["user", "error"]
     assert not any(event.type == MODEL_FALLBACK_ACTIVATED_EVENT for event in run.events)
@@ -513,7 +514,7 @@ async def test_fallback_failure_persists_fallback_error(tmp_path: Path) -> None:
         await build_chat_loop(runtime).send("coder", "Hi", session_id="session-one")
 
     run = next(iter(runtime.chat_runs._runs.values()))
-    messages = runtime.chat_sessions.get("coder", "session-one").load()
+    messages = runtime.chat_sessions.get(session_address("coder", "session-one")).load()
     error_events = [event for event in run.events if event.type == ERROR_MESSAGE_PERSISTED_EVENT]
     assert run.status == RunStatus.FAILED
     assert len(error_events) == 1

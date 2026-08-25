@@ -23,6 +23,7 @@ from core.automation.cron import (
     CronStorageError,
 )
 from core.runs import RunKind
+from core.sessions import SessionAddress
 
 
 def make_service(
@@ -458,7 +459,9 @@ def test_create_validates_target_and_owned_session(tmp_path: Path) -> None:
         )
 
     resolver.resolve_agent.assert_called_once_with("vbot", "agent-one")
-    sessions.exists.assert_called_once_with("agent-one", "wrong-session", "vbot")
+    sessions.exists.assert_called_once_with(
+        SessionAddress(project_id="vbot", agent_id="agent-one", session_id="wrong-session")
+    )
 
 
 @pytest.mark.asyncio

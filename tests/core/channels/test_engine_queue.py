@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from core.sessions import SessionAddress
+
 from .engine_test_support import (
     SESSION_ID,
     AsyncMock,
@@ -288,7 +290,9 @@ async def test_observed_message_waits_behind_active_channel_run(
 
     notes_before_release = [
         message.content
-        for message in chat_sessions.get("assistant", SESSION_ID).load()
+        for message in chat_sessions.get(
+            SessionAddress(project_id=None, agent_id="assistant", session_id=SESSION_ID)
+        ).load()
         if message.role == "note"
     ]
     assert not any(
@@ -304,7 +308,9 @@ async def test_observed_message_waits_behind_active_channel_run(
 
     notes_after_release = [
         message.content
-        for message in chat_sessions.get("assistant", SESSION_ID).load()
+        for message in chat_sessions.get(
+            SessionAddress(project_id=None, agent_id="assistant", session_id=SESSION_ID)
+        ).load()
         if message.role == "note"
     ]
     assert notes_after_release[-1] == "[channel-message] [Alice|50|member]: side conversation"

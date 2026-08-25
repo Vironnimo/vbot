@@ -11,7 +11,7 @@ import pytest
 from core.chat import ChatMessage
 from core.chat.content_blocks import ContentBlock, FileBlock, FileMentionBlock, TextBlock
 from core.providers.errors import ProviderError
-from core.sessions import ChatSessionManager
+from core.sessions import ChatSessionManager, SessionAddress
 from core.sessions.titles import (
     GENERATED_TITLE_MAX_CHARACTERS,
     TITLE_INPUT_HEAD_BYTES,
@@ -24,6 +24,10 @@ from core.sessions.titles import (
     _title_input,
     _title_source_parts,
 )
+
+
+def _address(agent_id: str, session_id: str, project_id: str | None = None) -> SessionAddress:
+    return SessionAddress(project_id=project_id, agent_id=agent_id, session_id=session_id)
 
 
 class StubStorage:
@@ -205,7 +209,7 @@ async def test_disabled_generation_keeps_local_title_without_adapter(tmp_path) -
     )
     await _wait_for_background(service)
 
-    metadata = runtime.chat_sessions.get_metadata("coder", "session-one")
+    metadata = runtime.chat_sessions.get_metadata(_address("coder", "session-one"))
     assert metadata["auto_title"] == "Investigate login failures in production"
     assert metadata["auto_title_initialized"] is True
     assert runtime.adapter_calls == []
@@ -244,7 +248,7 @@ async def test_configured_title_model_replaces_local_title_with_bounded_request(
     assert "max_tokens" not in request
     assert request["thinking_effort"] == "none"
     assert request["temperature"] is None
-    assert runtime.chat_sessions.get_metadata("coder", "session-one")["auto_title"] == (
+    assert runtime.chat_sessions.get_metadata(_address("coder", "session-one"))["auto_title"] == (
         "Review report"
     )
     assert adapter.closed is True
@@ -283,7 +287,7 @@ async def test_reasoning_mandatory_endpoint_retries_with_default_effort(tmp_path
     await _wait_for_background(service)
 
     assert [request["thinking_effort"] for request in adapter.requests] == ["none", ""]
-    assert runtime.chat_sessions.get_metadata("coder", "session-one")["auto_title"] == (
+    assert runtime.chat_sessions.get_metadata(_address("coder", "session-one"))["auto_title"] == (
         "Mandatory reasoning"
     )
     assert adapter.closed is True
@@ -379,7 +383,7 @@ async def test_meta_description_from_model_keeps_immediate_local_title(tmp_path)
     )
     await _wait_for_background(service)
 
-    assert runtime.chat_sessions.get_metadata("coder", "session-one")["auto_title"] == (
+    assert runtime.chat_sessions.get_metadata(_address("coder", "session-one"))["auto_title"] == (
         "Inspect session naming"
     )
 
@@ -401,7 +405,7 @@ async def test_unclosed_thinking_output_keeps_immediate_local_title(tmp_path) ->
     )
     await _wait_for_background(service)
 
-    assert runtime.chat_sessions.get_metadata("coder", "session-one")["auto_title"] == (
+    assert runtime.chat_sessions.get_metadata(_address("coder", "session-one"))["auto_title"] == (
         "Inspect session naming"
     )
 
@@ -425,7 +429,7 @@ async def test_empty_title_model_selection_uses_resolved_agent_model(tmp_path) -
 
     assert runtime.adapter_calls == [("openai", "openai:main")]
     assert adapter.requests[0]["model_id"] == "agent"
-    assert runtime.chat_sessions.get_metadata("coder", "session-one")["auto_title"] == (
+    assert runtime.chat_sessions.get_metadata(_address("coder", "session-one"))["auto_title"] == (
         "Agent-generated title"
     )
 
@@ -453,7 +457,7 @@ async def test_failed_configured_model_keeps_local_title_without_agent_retry(tmp
     await _wait_for_background(service)
 
     assert runtime.adapter_calls == [("openai", "openai:cheap")]
-    assert runtime.chat_sessions.get_metadata("coder", "session-one")["auto_title"] == (
+    assert runtime.chat_sessions.get_metadata(_address("coder", "session-one"))["auto_title"] == (
         "Investigate login failure"
     )
 
@@ -477,7 +481,7 @@ async def test_existing_session_is_marked_without_backfill_or_model_request(tmp_
     )
     await _wait_for_background(service)
 
-    metadata = runtime.chat_sessions.get_metadata("coder", "session-one")
+    metadata = runtime.chat_sessions.get_metadata(_address("coder", "session-one"))
     assert metadata["auto_title_initialized"] is True
     assert "auto_title" not in metadata
     assert runtime.adapter_calls == []
@@ -487,7 +491,7 @@ async def test_existing_session_is_marked_without_backfill_or_model_request(tmp_
 async def test_manual_name_skips_model_but_preserves_local_title_underneath(tmp_path) -> None:
     runtime = StubRuntime(tmp_path, enabled=True, adapters=[])
     _append_first_user(runtime, "Investigate login failure")
-    runtime.chat_sessions.set_title("coder", "session-one", "Manual name")
+    runtime.chat_sessions.set_title(_address("coder", "session-one"), "Manual name")
     service = SessionTitleService(cast(Any, runtime))
 
     service.notify_user_message(
@@ -500,7 +504,7 @@ async def test_manual_name_skips_model_but_preserves_local_title_underneath(tmp_
     )
     await _wait_for_background(service)
 
-    metadata = runtime.chat_sessions.get_metadata("coder", "session-one")
+    metadata = runtime.chat_sessions.get_metadata(_address("coder", "session-one"))
     assert metadata["title"] == "Manual name"
     assert metadata["auto_title"] == "Investigate login failure"
     assert runtime.adapter_calls == []

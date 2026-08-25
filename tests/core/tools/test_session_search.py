@@ -22,7 +22,7 @@ from core.recall import (
 from core.recall.hybrid import HybridRecallBackend
 from core.recall.jsonl import RECALL_TOOL_RESULT_NAMES
 from core.recall.vector import VectorRecallBackend
-from core.sessions import ChatSession, ChatSessionManager
+from core.sessions import ChatSession, ChatSessionManager, SessionAddress
 from core.tools.session_search import (
     SESSION_DESCRIPTOR_EXCERPT_MAX_CHARS,
     SESSION_READ_TOOL_NAME,
@@ -423,8 +423,7 @@ async def test_list_projects_bounded_session_context_without_internal_metadata(
     session.append(ChatMessage.user(opening, timestamp=timestamp(1)))
     session.append(ChatMessage.assistant(model="test", content="Answer", timestamp=timestamp(2)))
     sessions.set_metadata(
-        "coder",
-        "context-rich",
+        SessionAddress(project_id=None, agent_id="coder", session_id="context-rich"),
         {
             "title": "  Useful Session  ",
             "run_kinds": ["user", "subagent", "user"],
@@ -495,7 +494,10 @@ async def test_list_preserves_mixed_run_origins_and_marks_legacy_origin_unknown(
     legacy.append(ChatMessage.user("Legacy opening", timestamp=timestamp(1)))
     mixed = sessions.create("coder", session_id="mixed")
     mixed.append(ChatMessage.user("Mixed opening", timestamp=timestamp(2)))
-    sessions.set_metadata("coder", "mixed", {"run_kinds": ["cron", "user"]})
+    sessions.set_metadata(
+        SessionAddress(project_id=None, agent_id="coder", session_id="mixed"),
+        {"run_kinds": ["cron", "user"]},
+    )
     backend = JsonlSessionRecallBackend(sessions)
 
     data = success(await session_search_handler(make_context(tmp_path), {}, backend))
@@ -557,8 +559,7 @@ async def test_search_returns_one_session_descriptor_for_repeated_hits(tmp_path:
     session.append(first)
     session.append(second)
     sessions.set_metadata(
-        "coder",
-        "repeated-context",
+        SessionAddress(project_id=None, agent_id="coder", session_id="repeated-context"),
         {"title": "Repeated context", "run_kinds": ["user"]},
     )
 
@@ -1176,8 +1177,7 @@ async def test_large_session_descriptor_list_returns_bounded_first_ten_without_c
             ChatMessage.user("opening " + (str(index % 10) * 400), timestamp=timestamp(1))
         )
         sessions.set_metadata(
-            "coder",
-            session_id,
+            SessionAddress(project_id=None, agent_id="coder", session_id=session_id),
             {
                 "title": "T" * 200,
                 "run_kinds": ["subagent"],

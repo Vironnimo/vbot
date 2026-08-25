@@ -15,6 +15,7 @@ import core.automation.automation as automation_module
 from core.automation import TriggerService
 from core.chat import ChatSession, ChatSessionError, ChatSessionManager, MessageSender, ReplySurface
 from core.runs import ActiveRunError, ChatRunManager, Run, RunKind
+from core.sessions import SessionAddress
 from core.subagents import SubAgentBatchTracker
 
 pytestmark = pytest.mark.asyncio
@@ -710,7 +711,9 @@ async def test_completion_start_failure_persists_system_reminder_without_run(
     persisted.assert_called_once_with()
     notes = [
         message.content
-        for message in sessions.get("coder", "session-one").load()
+        for message in sessions.get(
+            SessionAddress(project_id=None, agent_id="coder", session_id="session-one")
+        ).load()
         if message.role == "note" and isinstance(message.content, str)
     ]
     assert len(notes) == 1
@@ -763,7 +766,9 @@ async def test_completion_fallback_retries_transient_persistence_failure(
     assert attempts == 2
     notes = [
         message.content
-        for message in sessions.get("coder", "session-one").load()
+        for message in sessions.get(
+            SessionAddress(project_id=None, agent_id="coder", session_id="session-one")
+        ).load()
         if message.role == "note" and isinstance(message.content, str)
     ]
     assert len(notes) == 1
@@ -797,7 +802,9 @@ async def test_completion_fallback_prunes_persisted_subagent_batch(tmp_path: Pat
     assert tracker.references_identity_agent("parent") is False
     notes = [
         message.content
-        for message in sessions.get("parent", "parent-session").load()
+        for message in sessions.get(
+            SessionAddress(project_id=None, agent_id="parent", session_id="parent-session")
+        ).load()
         if message.role == "note" and isinstance(message.content, str)
     ]
     assert len(notes) == 1
@@ -1047,7 +1054,9 @@ async def test_user_cancel_persists_pending_completion_without_new_run(tmp_path:
     assert completion_loop.messages == []
     notes = [
         message.content
-        for message in sessions.get("coder", "session-one").load()
+        for message in sessions.get(
+            SessionAddress(project_id=None, agent_id="coder", session_id="session-one")
+        ).load()
         if message.role == "note" and isinstance(message.content, str)
     ]
     assert any("completed before cancellation" in note for note in notes)
@@ -1103,7 +1112,9 @@ async def test_completion_from_already_cancelled_origin_does_not_start_run(
     assert completion_loop.messages == []
     notes = [
         message.content
-        for message in sessions.get("coder", "session-one").load()
+        for message in sessions.get(
+            SessionAddress(project_id=None, agent_id="coder", session_id="session-one")
+        ).load()
         if message.role == "note" and isinstance(message.content, str)
     ]
     assert any("finished after cancellation" in note for note in notes)

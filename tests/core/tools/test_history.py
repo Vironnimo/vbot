@@ -10,7 +10,7 @@ from typing import Any, cast
 import pytest
 
 from core.chat import ChatMessage, ToolCall
-from core.sessions import ChatSession, ChatSessionManager
+from core.sessions import ChatSession, ChatSessionManager, SessionAddress
 from core.tools import (
     HISTORY_RESULT_MAX_BYTES,
     HISTORY_TOOL_NAME,
@@ -132,14 +132,21 @@ def test_checkpoint_grant_and_cursor_lifecycle_across_restart_move_takeover_and_
     cursor = first["next_cursor"]
 
     restarted = ChatSessionManager(tmp_path)
-    restarted_source = restarted.get("alpha", source.id)
+    restarted_source = restarted.get(
+        SessionAddress(project_id=None, agent_id="alpha", session_id=source.id)
+    )
     restarted_page = make_history_handler(restarted)(
         _context(source.id, agent_id="alpha"),
         {"action": "read", "cursor": cursor},
     )
     assert restarted_page["ok"] is True
 
-    moved = asyncio.run(restarted.move("alpha", restarted_source.id, "beta"))
+    moved = asyncio.run(
+        restarted.move(
+            SessionAddress(project_id=None, agent_id="alpha", session_id=restarted_source.id),
+            SessionAddress(project_id=None, agent_id="beta", session_id=restarted_source.id),
+        )
+    )
     moved_page = make_history_handler(restarted)(
         _context(moved.id, agent_id="beta"),
         {"action": "read", "cursor": cursor},
@@ -154,7 +161,12 @@ def test_checkpoint_grant_and_cursor_lifecycle_across_restart_move_takeover_and_
         is True
     )
 
-    fork = asyncio.run(restarted.fork("beta", moved.id, target_agent_id="gamma"))
+    fork = asyncio.run(
+        restarted.fork(
+            SessionAddress(project_id=None, agent_id="beta", session_id=moved.id),
+            target_agent_id="gamma",
+        )
+    )
     assert (
         make_history_handler(restarted)(
             _context(fork.id, agent_id="gamma"),
@@ -480,7 +492,9 @@ def test_cursor_survives_manager_restart_but_not_action_session_or_corruption(
     cursor = first_page["next_cursor"]
 
     restarted = ChatSessionManager(tmp_path)
-    restarted_session = restarted.get("agent", "session-one")
+    restarted_session = restarted.get(
+        SessionAddress(project_id=None, agent_id="agent", session_id="session-one")
+    )
     resumed = _call(restarted, restarted_session, {"action": "read", "cursor": cursor})
     wrong_action = _call(manager, session, {"action": "search", "cursor": cursor})
     replacement = "x" if cursor[0] != "x" else "y"

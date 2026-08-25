@@ -25,6 +25,7 @@ from core.providers.errors import ProviderError
 from core.sessions.sessions import (
     SESSION_AUTO_TITLE_INITIALIZED_KEY,
     SESSION_TITLE_KEY,
+    SessionAddress,
 )
 from core.utils.logging import get_logger
 from core.utils.workers import BoundedWorkerPool
@@ -168,7 +169,8 @@ class SessionTitleService:
         content: str | list[ContentBlock],
     ) -> _TitleGenerationRequest | None:
         sessions = self._runtime.chat_sessions
-        metadata = sessions.get_metadata(agent_id, session_id, project_id)
+        address = SessionAddress(project_id=project_id, agent_id=agent_id, session_id=session_id)
+        metadata = sessions.get_metadata(address)
         if metadata.get(SESSION_AUTO_TITLE_INITIALIZED_KEY) is True:
             return None
         if metadata.get(_SUBAGENT_SESSION_METADATA_FLAG) is True:
@@ -177,7 +179,7 @@ class SessionTitleService:
             metadata[SESSION_TITLE_KEY].strip()
         )
 
-        session = sessions.get(agent_id, session_id, project_id)
+        session = sessions.get(address)
         user_message_count = 0
         for message in session.load():
             if message.role == "user":
@@ -185,12 +187,12 @@ class SessionTitleService:
                 if user_message_count > 1:
                     break
         if user_message_count != 1:
-            sessions.mark_auto_title_initialized(agent_id, session_id, project_id)
+            sessions.mark_auto_title_initialized(address)
             return None
 
         text, attachment_lines = _title_source_parts(content)
         local_title = _local_title(text, attachment_lines)
-        sessions.set_auto_title(agent_id, session_id, local_title, project_id)
+        sessions.set_auto_title(address, local_title)
 
         if has_manual_title:
             return None
@@ -278,10 +280,8 @@ class SessionTitleService:
             )
             await _SESSION_TITLE_WORKERS.run(
                 self._runtime.chat_sessions.set_auto_title,
-                agent_id,
-                session_id,
+                SessionAddress(project_id=project_id, agent_id=agent_id, session_id=session_id),
                 title,
-                project_id,
             )
             _LOGGER.info(
                 "Automatic Session title generated (agent=%s session=%s model=%s)",

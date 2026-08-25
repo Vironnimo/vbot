@@ -14,6 +14,7 @@ from fastapi.testclient import TestClient  # type: ignore[import-not-found]
 from starlette.websockets import WebSocketDisconnect  # type: ignore[import-not-found]
 
 from core.runs import STREAM_ATTEMPT_RESTARTED_EVENT, ChatRunManager, RunKind, RunStatus
+from core.sessions import SessionAddress
 from core.subagents import (
     SUBAGENT_SESSION_STARTED_EVENT,
     SUBAGENT_STATUS_CHANGED_EVENT,
@@ -1163,8 +1164,7 @@ def test_websocket_handshake_reflection_run_carries_source_session(
     source = sessions.create("coder", session_id="session-source")
     fork = sessions.create("coder", session_id="session-fork")
     sessions.set_metadata(
-        "coder",
-        fork.id,
+        SessionAddress(project_id=None, agent_id="coder", session_id=fork.id),
         {"fork_source": {"agent_id": "coder", "session_id": source.id}},
     )
 

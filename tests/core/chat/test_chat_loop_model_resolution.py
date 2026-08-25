@@ -19,6 +19,7 @@ from tests.core.chat.chat_loop_support import (
     StubRuntime,
     build_chat_loop,
     persisted_roles,
+    session_address,
 )
 
 JsonObject = dict[str, Any]
@@ -33,7 +34,7 @@ async def test_provider_errors_propagate_after_user_message_is_persisted(tmp_pat
     with pytest.raises(ProviderError, match="provider failed"):
         await build_chat_loop(runtime).send("coder", "Hi", session_id="session-one")
 
-    messages = runtime.chat_sessions.get("coder", "session-one").load()
+    messages = runtime.chat_sessions.get(session_address("coder", "session-one")).load()
     assert persisted_roles(messages) == ["user", "error"]
     assert messages[1].error_kind == "provider_fatal"
     assert adapter.requests[0]["model_id"] == "unknown-new-model"

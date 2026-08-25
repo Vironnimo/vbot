@@ -20,7 +20,7 @@ from core.agents import (
 )
 from core.agents import agents as agents_module
 from core.chat import ChatMessage
-from core.sessions import ChatSessionManager
+from core.sessions import ChatSessionManager, SessionAddress
 from core.tools.availability import ToolAccess
 
 # The agent domain seeds only SOUL.md; USER.md/MEMORY.md are the memory system's and
@@ -862,16 +862,16 @@ def test_update_rejects_missing_current_session_id(store: AgentStore) -> None:
 def test_reset_current_after_session_removed_lands_on_newest_remaining(store: AgentStore) -> None:
     agent = store.create("alpha", "Alpha")
     manager = ChatSessionManager(store.data_dir)
-    manager.get("alpha", agent.current_session_id).append(
-        ChatMessage.user("old", timestamp=EARLY_TIMESTAMP)
-    )
+    manager.get(
+        SessionAddress(project_id=None, agent_id="alpha", session_id=agent.current_session_id)
+    ).append(ChatMessage.user("old", timestamp=EARLY_TIMESTAMP))
     manager.create("alpha", session_id="newer").append(
         ChatMessage.user("recent", timestamp=LATE_TIMESTAMP)
     )
     manager.create("alpha", session_id="moved")
     store.update("alpha", current_session_id="moved")
     # Simulate the move: the current session's files leave the source home.
-    manager.delete("alpha", "moved")
+    manager.delete(SessionAddress(project_id=None, agent_id="alpha", session_id="moved"))
 
     result = store.reset_current_after_session_removed("alpha", "moved")
 
@@ -884,12 +884,19 @@ def test_reset_current_after_session_removed_creates_fresh_when_none_remain(
     agent = store.create("solo", "Solo")
     manager = ChatSessionManager(store.data_dir)
     moved_id = agent.current_session_id
-    manager.delete("solo", moved_id)  # the only session is moved away
+    manager.delete(
+        SessionAddress(project_id=None, agent_id="solo", session_id=moved_id)
+    )  # the only session is moved away
 
     result = store.reset_current_after_session_removed("solo", moved_id)
 
     assert result.current_session_id != moved_id
-    assert manager.exists("solo", result.current_session_id) is True
+    assert (
+        manager.exists(
+            SessionAddress(project_id=None, agent_id="solo", session_id=result.current_session_id)
+        )
+        is True
+    )
     assert [session.id for session in manager.list("solo")] == [result.current_session_id]
 
 
@@ -900,7 +907,9 @@ def test_reset_current_after_session_removed_leaves_pointer_when_not_current(
     manager = ChatSessionManager(store.data_dir)
     current_id = agent.current_session_id
     manager.create("beta", session_id="other")
-    manager.delete("beta", "other")  # a non-current session was moved away
+    manager.delete(
+        SessionAddress(project_id=None, agent_id="beta", session_id="other")
+    )  # a non-current session was moved away
 
     result = store.reset_current_after_session_removed("beta", "other")
 

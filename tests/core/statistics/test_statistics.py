@@ -13,7 +13,7 @@ from typing import cast
 import pytest
 
 from core.chat.messages import ChatMessage, ToolCall
-from core.sessions import ChatSessionManager
+from core.sessions import ChatSessionManager, SessionAddress
 from core.sessions.sessions import SKILL_CONTEXT_NOTE_PREFIX
 from core.statistics import (
     AgentDirectory,
@@ -328,7 +328,9 @@ def test_fork_counts_only_activity_appended_after_copied_history(tmp_path: Path)
     for message in source_messages:
         source.append(message)
 
-    fork = asyncio.run(manager.fork("main", source.id))
+    fork = asyncio.run(
+        manager.fork(SessionAddress(project_id=None, agent_id="main", session_id=source.id))
+    )
     fork_messages = [
         ChatMessage.user("fork work", timestamp=BASE + timedelta(minutes=1)),
         _assistant(
@@ -409,7 +411,9 @@ def test_compactions_report_distribution_reclaim_strategy_window_and_forks(
     source.append(_compaction(at=day_one, before=100_000, after=70_000))
     source.append(_compaction(at=day_two, before=90_000, after=30_000))
 
-    fork = asyncio.run(manager.fork("main", source.id))
+    fork = asyncio.run(
+        manager.fork(SessionAddress(project_id=None, agent_id="main", session_id=source.id))
+    )
     fork.append(_compaction(at=day_three, before=95_000, after=25_000))
 
     second_session_id = _write_session(
@@ -1329,7 +1333,10 @@ def test_skills_offered_from_metadata_and_activated_from_notes(tmp_path: Path) -
     session = manager.create("main")
     session.append(ChatMessage.user("hi", timestamp=BASE))
     session.append(_skill_note("deploy", BASE + timedelta(seconds=1)))
-    manager.set_metadata("main", session.id, {"seen_skills": ["deploy", "teach"]})
+    manager.set_metadata(
+        SessionAddress(project_id=None, agent_id="main", session_id=session.id),
+        {"seen_skills": ["deploy", "teach"]},
+    )
 
     report = service.report()
 
@@ -1361,7 +1368,10 @@ def test_skills_usage_for_deleted_name_is_dropped(tmp_path: Path) -> None:
     )
     session = manager.create("main")
     session.append(_skill_note("legacy", BASE + timedelta(seconds=1)))
-    manager.set_metadata("main", session.id, {"seen_skills": ["legacy", "deploy"]})
+    manager.set_metadata(
+        SessionAddress(project_id=None, agent_id="main", session_id=session.id),
+        {"seen_skills": ["legacy", "deploy"]},
+    )
 
     report = service.report()
 
@@ -1376,7 +1386,10 @@ def test_skills_default_service_has_empty_section(tmp_path: Path) -> None:
     service = StatisticsService(manager, cast(AgentDirectory, _FakeAgents(["main"])))
     session = manager.create("main")
     session.append(_skill_note("deploy", BASE))
-    manager.set_metadata("main", session.id, {"seen_skills": ["deploy"]})
+    manager.set_metadata(
+        SessionAddress(project_id=None, agent_id="main", session_id=session.id),
+        {"seen_skills": ["deploy"]},
+    )
 
     report = service.report()
 
@@ -1399,7 +1412,10 @@ def test_skills_project_agent_keyed_by_address_form(tmp_path: Path) -> None:
     )
     session = manager.create("builder", project_id="vbot")
     session.append(_skill_note("deploy", BASE + timedelta(seconds=1)))
-    manager.set_metadata("builder", session.id, {"seen_skills": ["deploy"]}, project_id="vbot")
+    manager.set_metadata(
+        SessionAddress(project_id="vbot", agent_id="builder", session_id=session.id),
+        {"seen_skills": ["deploy"]},
+    )
 
     report = service.report()
     deploy = _skills_row(report, "deploy")
@@ -1422,7 +1438,10 @@ def test_skills_window_filters_offered_and_activated(tmp_path: Path) -> None:
     session = manager.create("main")
     session.append(ChatMessage.user("hi", timestamp=BASE))
     session.append(_skill_note("deploy", BASE + timedelta(hours=2)))
-    manager.set_metadata("main", session.id, {"seen_skills": ["deploy"]})
+    manager.set_metadata(
+        SessionAddress(project_id=None, agent_id="main", session_id=session.id),
+        {"seen_skills": ["deploy"]},
+    )
 
     report = service.report(since=BASE + timedelta(hours=1))
     deploy = _skills_row(report, "deploy")
@@ -1446,7 +1465,10 @@ def test_skills_malformed_skill_context_note_is_ignored(tmp_path: Path) -> None:
     # A [skill-context] note with a broken JSON payload must not crash the scan
     # nor count as an activation.
     session.append(ChatMessage.note(SKILL_CONTEXT_NOTE_PREFIX + "{broken", timestamp=BASE))
-    manager.set_metadata("main", session.id, {"seen_skills": ["deploy"]})
+    manager.set_metadata(
+        SessionAddress(project_id=None, agent_id="main", session_id=session.id),
+        {"seen_skills": ["deploy"]},
+    )
 
     report = service.report()
 

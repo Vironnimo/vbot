@@ -20,6 +20,7 @@ from core.sessions import (
     FORK_SOURCE_META_KEY,
     SESSION_FORK_ALWAYS_STRIP_META_KEYS,
     SESSION_FORK_CROSS_AGENT_STRIP_META_KEYS,
+    SessionAddress,
 )
 from core.settings import (
     ALLOWED_THINKING_EFFORTS,
@@ -84,6 +85,13 @@ _SESSION_RPC_WORKERS = BoundedWorkerPool(
 )
 
 __all__ = ["ALLOWED_THINKING_EFFORTS", "MAX_TEMPERATURE", "MIN_TEMPERATURE"]
+
+
+def _session_address(
+    agent_id: str, session_id: str, project_id: str | None = None
+) -> SessionAddress:
+    """Address one Session from RPC scalar fields."""
+    return SessionAddress(project_id=project_id, agent_id=agent_id, session_id=session_id)
 
 
 async def _session_io(
@@ -473,9 +481,7 @@ async def _delete_session(state: Any, params: JsonObject) -> JsonObject:
                     chat_sessions,
                     "get_async",
                     "get",
-                    agent_id,
-                    session_id,
-                    project_id,
+                    _session_address(agent_id, session_id, project_id),
                 )
                 # An identity agent tracks a current-session pointer; note when we
                 # are deleting it so the re-aim is broadcast below.
@@ -486,7 +492,7 @@ async def _delete_session(state: Any, params: JsonObject) -> JsonObject:
                 await state.runtime.terminal_manager.close_scope(
                     TerminalOwner(project_id, agent_id, session_id)
                 )
-                await chat_sessions.archive(agent_id, session_id, project_id)
+                await chat_sessions.archive(_session_address(agent_id, session_id, project_id))
                 next_session_id = await _SESSION_RPC_WORKERS.run(
                     _resolve_post_delete_landing,
                     state,
@@ -682,10 +688,8 @@ async def _mark_session_read(state: Any, params: JsonObject) -> JsonObject:
             state.runtime.chat_sessions,
             "mark_terminal_run_read_async",
             "mark_terminal_run_read",
-            agent_id,
-            session_id,
+            _session_address(agent_id, session_id, project_id),
             run_id,
-            project_id,
         )
     except Exception as exc:
         raise _map_expected_error(exc) from exc
@@ -731,10 +735,8 @@ async def _fork_session(state: Any, params: JsonObject) -> JsonObject:
         # target agent fails before any file work (mirrors session.create/delete).
         await _SESSION_RPC_WORKERS.run(resolve_endpoints)
         fork = await state.runtime.chat_sessions.fork(
-            source_agent_id,
-            session_id,
+            _session_address(source_agent_id, session_id, source_project_id),
             target_agent_id=target_agent_id,
-            source_project_id=source_project_id,
             target_project_id=target_project_id,
             strip_meta_keys=strip_meta_keys,
         )
@@ -742,9 +744,7 @@ async def _fork_session(state: Any, params: JsonObject) -> JsonObject:
             state.runtime.chat_sessions,
             "get_metadata_async",
             "get_metadata",
-            target_agent_id,
-            fork.id,
-            target_project_id,
+            _session_address(target_agent_id, fork.id, target_project_id),
         )
         fork_source = fork_metadata.get(FORK_SOURCE_META_KEY)
     except Exception as exc:
@@ -806,16 +806,14 @@ async def _link_session_to_channel(state: Any, params: JsonObject) -> JsonObject
             state.runtime.chat_sessions,
             "get_async",
             "get",
-            agent_id,
-            session_id,
+            _session_address(agent_id, session_id),
         )
         metadata = dict(
             await _session_io(
                 state.runtime.chat_sessions,
                 "get_metadata_async",
                 "get_metadata",
-                agent_id,
-                session_id,
+                _session_address(agent_id, session_id),
             )
         )
         previous_link = (
@@ -838,8 +836,7 @@ async def _link_session_to_channel(state: Any, params: JsonObject) -> JsonObject
             state.runtime.chat_sessions,
             "set_metadata_async",
             "set_metadata",
-            agent_id,
-            session_id,
+            _session_address(agent_id, session_id),
             metadata,
         )
     except Exception as exc:
@@ -873,10 +870,8 @@ async def _rename_session(state: Any, params: JsonObject) -> JsonObject:
             state.runtime.chat_sessions,
             "set_title_async",
             "set_title",
-            agent_id,
-            session_id,
+            _session_address(agent_id, session_id, project_id),
             title,
-            project_id,
         )
     except Exception as exc:
         raise _map_expected_error(exc) from exc
@@ -902,17 +897,13 @@ async def _set_session_compaction_policy(state: Any, params: JsonObject) -> Json
             state.runtime.chat_sessions,
             "get_async",
             "get",
-            agent_id,
-            session_id,
-            project_id,
+            _session_address(agent_id, session_id, project_id),
         )
         metadata = await _session_io(
             state.runtime.chat_sessions,
             "get_metadata_async",
             "get_metadata",
-            agent_id,
-            session_id,
-            project_id,
+            _session_address(agent_id, session_id, project_id),
         )
         previous_override = metadata.get(COMPACTION_POLICY_META_KEY)
         if normalized is None:
@@ -923,10 +914,8 @@ async def _set_session_compaction_policy(state: Any, params: JsonObject) -> Json
             state.runtime.chat_sessions,
             "set_metadata_async",
             "set_metadata",
-            agent_id,
-            session_id,
+            _session_address(agent_id, session_id, project_id),
             metadata,
-            project_id,
         )
         agent = await _SESSION_RPC_WORKERS.run(
             state.runtime.agent_resolver.resolve_agent,

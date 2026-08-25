@@ -41,6 +41,7 @@ from core.config_validation import (
     warn_unknown_keys,
 )
 from core.extensions import InteractionButton, InteractionEvent, InteractionResponder
+from core.sessions import SessionAddress
 from core.settings import is_valid_agent_id
 from core.utils.atomic import atomic_write_text
 from core.utils.errors import VBotError
@@ -1134,7 +1135,11 @@ class ChannelService:
                     f"Run-button origin agent {run_origin.agent_id} does not own Channel "
                     f"{channel_id}"
                 )
-            if not self._chat_sessions.exists(run_origin.agent_id, run_origin.session_id):
+            if not self._chat_sessions.exists(
+                SessionAddress(
+                    project_id=None, agent_id=run_origin.agent_id, session_id=run_origin.session_id
+                )
+            ):
                 raise ChannelConfigError(
                     f"Run-button origin Session does not exist: {run_origin.session_id}"
                 )

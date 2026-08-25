@@ -23,6 +23,7 @@ from tests.core.chat.chat_loop_support import (
     _write_test_skill,
     build_chat_loop,
     persisted_roles,
+    session_address,
 )
 
 JsonObject = dict[str, Any]
@@ -82,7 +83,7 @@ async def test_skill_context_persists_across_later_sends_without_visible_user_me
     assert second_request_messages[1]["content"] == "/debugging fix this"
     assert second_request_messages[2]["content"].startswith('<skill_content name="debugging">')
     assert second_request_messages[-1]["content"] == "continue"
-    persisted_messages = runtime.chat_sessions.get("coder", "session-one").load()
+    persisted_messages = runtime.chat_sessions.get(session_address("coder", "session-one")).load()
     visible_messages = [message for message in persisted_messages if message.role != "note"]
     assert persisted_roles(visible_messages) == [
         "user",
@@ -326,7 +327,7 @@ def test_announce_newly_available_skills_seeds_then_announces_once(tmp_path: Pat
     agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_skills=["*"])
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=StubAdapter([]))
     runtime.chat_sessions.create("coder", session_id="s1")
-    session = runtime.chat_sessions.get("coder", "s1")
+    session = runtime.chat_sessions.get(session_address("coder", "s1"))
     loop = build_chat_loop(runtime)
 
     def announce(skills: Any) -> None:

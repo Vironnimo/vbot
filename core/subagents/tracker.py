@@ -13,6 +13,7 @@ from typing import Any
 
 from core.projects import format_agent_address
 from core.runs import RunStatus
+from core.sessions import SessionAddress
 from core.tools.tools import JsonObject
 from core.utils.logging import get_logger
 
@@ -308,10 +309,12 @@ class SubAgentBatchTracker:
         if self._sessions is not None and delivered_entry.run_id is not None:
             try:
                 self._sessions.mark_terminal_run_read(
-                    delivered_entry.agent_id,
-                    delivered_entry.session_id,
+                    SessionAddress(
+                        project_id=delivered_entry.project_id,
+                        agent_id=delivered_entry.agent_id,
+                        session_id=delivered_entry.session_id,
+                    ),
                     delivered_entry.run_id,
-                    delivered_entry.project_id,
                 )
             except Exception:
                 _LOGGER.warning(

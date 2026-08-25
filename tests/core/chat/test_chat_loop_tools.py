@@ -55,6 +55,7 @@ from tests.core.chat.chat_loop_support import (
     StubStorage,
     build_chat_loop,
     persisted_roles,
+    session_address,
 )
 
 JsonObject = dict[str, Any]
@@ -116,7 +117,7 @@ async def test_sibling_tool_results_use_one_ordered_session_batch(
 
     tool_batches = [batch for batch in batches if "tool" in batch]
     assert tool_batches == [["tool", "tool"]]
-    persisted = runtime.chat_sessions.get("coder", "session-one").load()
+    persisted = runtime.chat_sessions.get(session_address("coder", "session-one")).load()
     assert [message.tool_call_id for message in persisted if message.role == "tool"] == [
         "first",
         "second",
@@ -308,7 +309,8 @@ async def test_send_dispatches_tool_and_resends_context_until_final(tmp_path: Pa
     assistant = await build_chat_loop(runtime).send("coder", "Weather?", session_id="session-one")
 
     persisted = [
-        message.to_dict() for message in runtime.chat_sessions.get("coder", "session-one").load()
+        message.to_dict()
+        for message in runtime.chat_sessions.get(session_address("coder", "session-one")).load()
     ]
     assert assistant.content == "Sunny"
     assert [message["role"] for message in persisted] == [
@@ -453,7 +455,7 @@ async def test_real_run_cancel_during_parallel_tools_repairs_the_next_request(
     with pytest.raises(RunCancelledError):
         await cancelled_run.wait()
 
-    session = runtime.chat_sessions.get("coder", "session-one")
+    session = runtime.chat_sessions.get(session_address("coder", "session-one"))
     after_cancel = session.load()
     assert cancel_callbacks == ["call_slow"]
     assert runtime.process_manager.cancelled_scopes == [cancelled_run.id]
@@ -575,7 +577,7 @@ async def test_per_call_cancel_persists_cancelled_and_completed_siblings_in_orde
     assert cancel_callbacks == ["call_cancel"]
     persisted_tools = [
         message
-        for message in runtime.chat_sessions.get("coder", "session-one").load()
+        for message in runtime.chat_sessions.get(session_address("coder", "session-one")).load()
         if message.role == "tool"
     ]
     assert [message.tool_call_id for message in persisted_tools] == [
@@ -621,7 +623,9 @@ async def test_tool_result_persistence_callback_observes_durable_result(tmp_path
         context.after_result_persisted(
             lambda: observed_roles.append(
                 persisted_roles(
-                    runtime_holder["runtime"].chat_sessions.get("coder", "session-one").load()
+                    runtime_holder["runtime"]
+                    .chat_sessions.get(session_address("coder", "session-one"))
+                    .load()
                 )
             )
         )
@@ -652,7 +656,9 @@ async def test_internal_input_persistence_callback_observes_durable_note(tmp_pat
         session_id="session-one",
         internal=True,
         input_persisted_hook=lambda: observed_roles.append(
-            persisted_roles(runtime.chat_sessions.get("coder", "session-one").load())
+            persisted_roles(
+                runtime.chat_sessions.get(session_address("coder", "session-one")).load()
+            )
         ),
     )
     await run.wait()
@@ -675,7 +681,9 @@ async def test_queued_input_persistence_callback_waits_for_durable_note(tmp_path
         session_id="session-one",
         internal=True,
         input_persisted_hook=lambda: observed_roles.append(
-            persisted_roles(runtime.chat_sessions.get("coder", "session-one").load())
+            persisted_roles(
+                runtime.chat_sessions.get(session_address("coder", "session-one")).load()
+            )
         ),
     )
     run = await queued.future
@@ -841,7 +849,7 @@ async def test_disallowed_tool_call_is_blocked_and_persisted_before_error(tmp_pa
 
     await build_chat_loop(runtime).send("coder", "Weather?", session_id="session-one")
 
-    messages = runtime.chat_sessions.get("coder", "session-one").load()
+    messages = runtime.chat_sessions.get(session_address("coder", "session-one")).load()
     assert persisted_roles(messages) == ["user", "assistant", "tool", "assistant"]
     tool_message_content = messages[2].content
     assert isinstance(tool_message_content, str)
@@ -890,7 +898,7 @@ async def test_registered_search_tools_execute_and_persist_envelopes(
     )
 
     run = next(iter(runtime.chat_runs._runs.values()))
-    messages = runtime.chat_sessions.get("coder", "session-one").load()
+    messages = runtime.chat_sessions.get(session_address("coder", "session-one")).load()
     tool_messages = [message for message in messages if message.role == "tool"]
     glob_content = tool_messages[0].content
     grep_content = tool_messages[1].content
@@ -952,7 +960,7 @@ async def test_registered_search_tools_respect_agent_allowlist(tmp_path: Path) -
     await build_chat_loop(runtime).send("coder", "Search files", session_id="session-one")
 
     run = next(iter(runtime.chat_runs._runs.values()))
-    messages = runtime.chat_sessions.get("coder", "session-one").load()
+    messages = runtime.chat_sessions.get(session_address("coder", "session-one")).load()
     failure = tool_failure("tool_not_allowed", "Tool not allowed: grep")
     tool_message_content = messages[2].content
     assert isinstance(tool_message_content, str)
@@ -1005,7 +1013,7 @@ async def test_same_turn_tool_calls_run_concurrently_and_persist_in_call_order(
     assistant = await build_chat_loop(runtime).send("coder", "Run tools", session_id="session-one")
 
     run = next(iter(runtime.chat_runs._runs.values()))
-    messages = runtime.chat_sessions.get("coder", "session-one").load()
+    messages = runtime.chat_sessions.get(session_address("coder", "session-one")).load()
     result_events = [event for event in run.events if event.type == TOOL_CALL_RESULT_EVENT]
     assert assistant.content == "Done"
     assert first_can_finish.is_set()
@@ -1092,7 +1100,7 @@ async def test_tool_handler_exception_continues_with_failure_envelope(tmp_path: 
     assistant = await build_chat_loop(runtime).send("coder", "Run tool", session_id="session-one")
 
     run = next(iter(runtime.chat_runs._runs.values()))
-    messages = runtime.chat_sessions.get("coder", "session-one").load()
+    messages = runtime.chat_sessions.get(session_address("coder", "session-one")).load()
     assert assistant.content == "Recovered"
     assert run.status == RunStatus.COMPLETED
     tool_message_content = messages[2].content
@@ -1152,7 +1160,7 @@ async def test_invalid_arguments_can_be_corrected_without_running_handler_twice(
         session_id="session-one",
     )
 
-    messages = runtime.chat_sessions.get("coder", "session-one").load()
+    messages = runtime.chat_sessions.get(session_address("coder", "session-one")).load()
     tool_results = [
         json.loads(cast(str, message.content)) for message in messages if message.role == "tool"
     ]
@@ -1229,7 +1237,7 @@ async def test_output_truncated_tool_calls_persist_failures_without_handler_side
         session_id="session-one",
     )
 
-    messages = runtime.chat_sessions.get("coder", "session-one").load()
+    messages = runtime.chat_sessions.get(session_address("coder", "session-one")).load()
     tool_messages = [message for message in messages if message.role == "tool"]
     assert assistant.content == "I will reissue complete calls if needed."
     assert invocations == []
@@ -1299,7 +1307,7 @@ async def test_unsafe_terminal_outcome_fails_closed_before_tool_handler(
             session_id="session-one",
         )
 
-    messages = runtime.chat_sessions.get("coder", "session-one").load()
+    messages = runtime.chat_sessions.get(session_address("coder", "session-one")).load()
     assert invocation_count == 0
     assert persisted_roles(messages) == ["user", "assistant", "tool", "error"]
     assert json.loads(cast(str, messages[2].content))["error"]["code"] == "tool_call_rejected"
@@ -1336,7 +1344,7 @@ async def test_tool_non_envelope_result_is_failure_envelope(tmp_path: Path) -> N
         "coder", "Run invalid", session_id="session-one"
     )
 
-    messages = runtime.chat_sessions.get("coder", "session-one").load()
+    messages = runtime.chat_sessions.get(session_address("coder", "session-one")).load()
     failure = tool_failure(
         "invalid_tool_result",
         "Tool handler must return a valid result envelope: invalid",
@@ -1401,7 +1409,7 @@ async def test_malformed_non_streaming_call_fails_without_blocking_valid_sibling
         session_id="session-one",
     )
 
-    messages = runtime.chat_sessions.get("coder", "session-one").load()
+    messages = runtime.chat_sessions.get(session_address("coder", "session-one")).load()
     assert result.content == "Recovered after the rejected sibling."
     assert executed_arguments == [{"value": "kept"}]
     assert persisted_roles(messages) == ["user", "assistant", "tool", "tool", "assistant"]
@@ -1436,7 +1444,7 @@ async def test_malformed_tool_calls_container_becomes_rejected_call(tmp_path: Pa
         session_id="session-one",
     )
 
-    messages = runtime.chat_sessions.get("coder", "session-one").load()
+    messages = runtime.chat_sessions.get(session_address("coder", "session-one")).load()
     assert result.content == "Recovered from the malformed Tool Call container."
     assert persisted_roles(messages) == ["user", "assistant", "tool", "assistant"]
     assert messages[1].tool_calls is not None
@@ -1481,7 +1489,7 @@ async def test_max_tool_iteration_limit_returns_failure_then_finalizes_without_t
         session_id="session-one",
     )
 
-    messages = runtime.chat_sessions.get("coder", "session-one").load()
+    messages = runtime.chat_sessions.get(session_address("coder", "session-one")).load()
     assert result.content == "I cannot call more Tools, so this is my final answer."
     assert persisted_roles(messages) == ["user", "assistant", "tool", "note", "assistant"]
     assert isinstance(messages[2].content, str)
@@ -1527,7 +1535,7 @@ async def test_tool_call_during_no_tool_finalization_is_rejected_and_run_complet
         session_id="session-one",
     )
 
-    messages = runtime.chat_sessions.get("coder", "session-one").load()
+    messages = runtime.chat_sessions.get(session_address("coder", "session-one")).load()
     assert result.content == "I received the disabled-Tool Result and will answer without Tools."
     assert invocation_count == 0
     assert len(adapter.requests) == 3
@@ -1590,7 +1598,7 @@ async def test_repeated_no_tool_finalization_violations_complete_without_unbound
     assert result.tool_calls[0].id == "call_violation_2"
     assert len(adapter.requests) == 3
     assert all(request["kwargs"]["tools"] == [] for request in adapter.requests[1:])
-    messages = runtime.chat_sessions.get("coder", "session-one").load()
+    messages = runtime.chat_sessions.get(session_address("coder", "session-one")).load()
     disabled_results = [
         json.loads(message.content)
         for message in messages
@@ -1736,7 +1744,7 @@ async def test_identical_failed_tool_call_finalizes_without_tools_after_eighth_c
         session_id="session-one",
     )
 
-    messages = runtime.chat_sessions.get("coder", "session-one").load()
+    messages = runtime.chat_sessions.get(session_address("coder", "session-one")).load()
     assert result.content == "The Tool remains blocked; I cannot complete it."
     assert invocation_count == MAX_IDENTICAL_FAILED_TOOL_CALLS
     assert len(adapter.requests) == MAX_IDENTICAL_FAILED_TOOL_CALLS + 1
@@ -1798,7 +1806,7 @@ async def test_tool_iteration_limit_is_scoped_to_current_run(tmp_path: Path) -> 
     assert first.content == "First run done"
     assert second.content == "Second run done"
 
-    messages = runtime.chat_sessions.get("coder", "session-one").load()
+    messages = runtime.chat_sessions.get(session_address("coder", "session-one")).load()
     assert all(message.role != "error" for message in messages)
     assert persisted_roles(messages) == [
         "user",

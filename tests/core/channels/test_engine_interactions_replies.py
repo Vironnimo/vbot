@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 
 from core.channels.adapter import RunButtonBinding, bound_run_callback_data
 from core.channels.channels import ChannelStorage
+from core.sessions import SessionAddress
 
 from .engine_test_support import (
     ASSISTANT_OUTPUT_EVENT,
@@ -189,7 +190,9 @@ async def test_topic_message_reply_carries_thread_everywhere(tmp_path: Path) -> 
     assert transport.sent == [("12345", "ok")]
     assert transport.sent_thread_ids == ["42"]
     assert transport.activity_thread_ids == ["42"]
-    metadata = chat_sessions.get_metadata("assistant", SESSION_ID)
+    metadata = chat_sessions.get_metadata(
+        SessionAddress(project_id=None, agent_id="assistant", session_id=SESSION_ID)
+    )
     assert metadata["last_reply_target"] == {
         "channel_id": "tg-assistant",
         "platform_target": "12345",
@@ -199,7 +202,9 @@ async def test_topic_message_reply_carries_thread_everywhere(tmp_path: Path) -> 
     # A later non-topic message rewrites the reply target without the thread key.
     await engine.handle_inbound_text(make_conversation(kind="group", mentioned_bot=True), "hi")
     await drain(engine, 12345)
-    metadata = chat_sessions.get_metadata("assistant", SESSION_ID)
+    metadata = chat_sessions.get_metadata(
+        SessionAddress(project_id=None, agent_id="assistant", session_id=SESSION_ID)
+    )
     assert "thread_id" not in metadata["last_reply_target"]
     await engine.stop()
 
@@ -359,7 +364,9 @@ async def test_bound_tap_repoints_conversation_and_orders_followup_in_origin_ses
         "den rest kannst du löschen",
         "origin-session",
     )
-    anchor_metadata = sessions.get_metadata("assistant", SESSION_ID)
+    anchor_metadata = sessions.get_metadata(
+        SessionAddress(project_id=None, agent_id="assistant", session_id=SESSION_ID)
+    )
     assert anchor_metadata[engine_module.ACTIVE_SESSION_METADATA_KEY] == "origin-session"
     assert transport.sent_texts == ["synced", "deleted"]
 
@@ -401,7 +408,9 @@ async def test_bound_tap_does_not_recreate_missing_origin_session(tmp_path: Path
     outcome = await engine.trigger_interaction_reply(make_conversation(), event)
 
     assert outcome == "unavailable"
-    assert not sessions.exists("assistant", "deleted-session")
+    assert not sessions.exists(
+        SessionAddress(project_id=None, agent_id="assistant", session_id="deleted-session")
+    )
     trigger_mock.assert_not_awaited()
     await engine.stop()
 
@@ -443,11 +452,13 @@ async def test_new_detaches_telegram_after_bound_tap(tmp_path: Path) -> None:
     await engine.handle_inbound_text(conversation, "/new")
     await drain(engine, 12345)
 
-    detached_session_id = sessions.get_metadata("assistant", SESSION_ID)[
-        engine_module.ACTIVE_SESSION_METADATA_KEY
-    ]
+    detached_session_id = sessions.get_metadata(
+        SessionAddress(project_id=None, agent_id="assistant", session_id=SESSION_ID)
+    )[engine_module.ACTIVE_SESSION_METADATA_KEY]
     assert detached_session_id not in {SESSION_ID, "origin-session"}
-    assert sessions.exists("assistant", detached_session_id)
+    assert sessions.exists(
+        SessionAddress(project_id=None, agent_id="assistant", session_id=detached_session_id)
+    )
     await engine.stop()
 
 
@@ -470,7 +481,10 @@ async def test_busy_bound_tap_restores_binding_and_previous_conversation_pointer
         "existing": "preserved",
         engine_module.ACTIVE_SESSION_METADATA_KEY: "prior-session",
     }
-    sessions.set_metadata("assistant", SESSION_ID, previous_metadata)
+    sessions.set_metadata(
+        SessionAddress(project_id=None, agent_id="assistant", session_id=SESSION_ID),
+        previous_metadata,
+    )
     binding = RunButtonBinding(
         id="binding-busy",
         platform_target="12345",
@@ -494,7 +508,12 @@ async def test_busy_bound_tap_restores_binding_and_previous_conversation_pointer
     outcome = await engine.trigger_interaction_reply(make_conversation(), event)
 
     assert outcome == "busy"
-    assert sessions.get_metadata("assistant", SESSION_ID) == previous_metadata
+    assert (
+        sessions.get_metadata(
+            SessionAddress(project_id=None, agent_id="assistant", session_id=SESSION_ID)
+        )
+        == previous_metadata
+    )
     retry_claim = storage.claim_run_button_binding(
         "tg-assistant",
         binding.id,

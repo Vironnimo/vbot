@@ -19,7 +19,7 @@ from core.tools import (
     register_write_tool,
     tool_success,
 )
-from tests.core.chat.chat_loop_support import build_chat_loop
+from tests.core.chat.chat_loop_support import build_chat_loop, session_address
 
 
 def test_validate_assistant_message_allows_reasoning_only() -> None:
@@ -138,7 +138,7 @@ async def test_cancel_during_tool_dispatch_persists_all_sibling_tool_results(
     # Assert: all three tool results are persisted even though the run
     # ended cancelled, and the session never carries a dangling tool_calls
     # turn that would brick future provider requests.
-    session = runtime.chat_sessions.get("coder", "session-one")
+    session = runtime.chat_sessions.get(session_address("coder", "session-one"))
     persisted = session.load()
     tool_results = [message for message in persisted if message.role == "tool"]
     assert len(tool_results) == 3
@@ -212,7 +212,9 @@ async def test_skill_catalog_is_pinned_for_the_session(tmp_path: Path) -> None:
 
     await loop.send("coder", "hi", session_id="s1")
     pinned_after_first = dict(
-        runtime.chat_sessions.get_metadata("coder", "s1")[PINNED_SKILL_CATALOG_META_KEY]
+        runtime.chat_sessions.get_metadata(session_address("coder", "s1"))[
+            PINNED_SKILL_CATALOG_META_KEY
+        ]
     )
 
     # A mid-session skill write: the live registry grows by one skill.
@@ -220,7 +222,7 @@ async def test_skill_catalog_is_pinned_for_the_session(tmp_path: Path) -> None:
         [StubSkill("one", "One.", Path("a")), StubSkill("two", "Two.", Path("b"))]
     )
     await loop.send("coder", "again", session_id="s1")
-    pinned_after_second = runtime.chat_sessions.get_metadata("coder", "s1")[
+    pinned_after_second = runtime.chat_sessions.get_metadata(session_address("coder", "s1"))[
         PINNED_SKILL_CATALOG_META_KEY
     ]
 
@@ -259,8 +261,12 @@ async def test_new_session_pins_a_fresh_catalog(tmp_path: Path) -> None:
     )
     await loop.send("coder", "hi", session_id="s2")
 
-    s1_catalog = runtime.chat_sessions.get_metadata("coder", "s1")[PINNED_SKILL_CATALOG_META_KEY]
-    s2_catalog = runtime.chat_sessions.get_metadata("coder", "s2")[PINNED_SKILL_CATALOG_META_KEY]
+    s1_catalog = runtime.chat_sessions.get_metadata(session_address("coder", "s1"))[
+        PINNED_SKILL_CATALOG_META_KEY
+    ]
+    s2_catalog = runtime.chat_sessions.get_metadata(session_address("coder", "s2"))[
+        PINNED_SKILL_CATALOG_META_KEY
+    ]
     assert s1_catalog["catalog_text"] == "catalog:1"
     assert s2_catalog["catalog_text"] == "catalog:2"
 
@@ -290,7 +296,7 @@ async def test_project_session_is_created_and_opened_under_project_anchor(
     identity_session = tmp_path / "agents" / "coder" / "sessions" / "session-one.jsonl"
     assert project_session.exists()
     assert not identity_session.exists()
-    persisted = runtime.chat_sessions.get("coder", "session-one", "acme").load()
+    persisted = runtime.chat_sessions.get(session_address("coder", "session-one", "acme")).load()
     assert persisted_roles_of(persisted) == ["user", "assistant"]
 
 
@@ -415,7 +421,7 @@ async def test_project_run_persists_relative_assistant_output_file_reference(
             "end_index": 21,
         }
     ]
-    persisted = runtime.chat_sessions.get("coder", "session-one", "acme").load()
+    persisted = runtime.chat_sessions.get(session_address("coder", "session-one", "acme")).load()
     assistant = next(message for message in persisted if message.role == "assistant")
     assert assistant.output_files == result.output_files
 
@@ -652,7 +658,7 @@ async def test_tool_restriction_denies_at_dispatch_without_changing_definitions(
     )
     await run.wait()
 
-    persisted = restricted_runtime.chat_sessions.get("coder", "restricted").load()
+    persisted = restricted_runtime.chat_sessions.get(session_address("coder", "restricted")).load()
     results = {m.tool_call_id: json.loads(m.content) for m in persisted if m.role == "tool"}
     assert restricted_ran == ["memory"]
     assert results["call_mem"]["ok"] is True
@@ -731,7 +737,7 @@ async def test_same_scope_fork_reuses_cache_affinity_but_not_session_context(
 
     source_run = await loop.start_run("coder", "Build it", session_id=source.id)
     await source_run.wait()
-    fork = await runtime.chat_sessions.fork("coder", source.id)
+    fork = await runtime.chat_sessions.fork(session_address("coder", source.id))
     fork_run = await loop.start_run("coder", "Review it", session_id=fork.id)
     await fork_run.wait()
 

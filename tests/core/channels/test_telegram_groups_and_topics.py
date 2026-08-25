@@ -17,6 +17,7 @@ from core.channels.telegram import (
     TELEGRAM_MESSAGE_LIMIT,
 )
 from core.chat.commands import CommandFeedback, CommandOutcome
+from core.sessions import SessionAddress
 from tests.core.channels.telegram_test_support import (
     drain_chat_queue,
     install_fake_telegram_media,
@@ -176,7 +177,9 @@ async def test_group_message_without_mention_is_observed_when_enabled(
 
     notes = [
         message.content
-        for message in chat_sessions.get("assistant", session_id).load()
+        for message in chat_sessions.get(
+            SessionAddress(project_id=None, agent_id="assistant", session_id=session_id)
+        ).load()
         if message.role == "note"
     ]
     assert notes[-1] == "[channel-message] [50|50|member]: just chatting"
@@ -206,7 +209,9 @@ async def test_group_message_without_mention_is_dropped_in_mention_mode(
 
     trigger_mock.assert_not_awaited()
     bot.send_message.assert_not_awaited()
-    assert not chat_sessions.exists("assistant", "ch-tg-assistant--10001")
+    assert not chat_sessions.exists(
+        SessionAddress(project_id=None, agent_id="assistant", session_id="ch-tg-assistant--10001")
+    )
     await adapter.stop()
 
 

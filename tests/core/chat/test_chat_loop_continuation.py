@@ -44,6 +44,7 @@ from tests.core.chat.chat_loop_support import (
     TenToolsThenBlockingReasoningAdapter,
     build_chat_loop,
     persisted_roles,
+    session_address,
 )
 
 JsonObject = dict[str, Any]
@@ -88,7 +89,9 @@ async def test_content_block_request_is_serialized_in_continuation_journal(
             session_id="session-one",
         )
 
-    state = await recover_continuation(runtime.chat_sessions.get("coder", "session-one"))
+    state = await recover_continuation(
+        runtime.chat_sessions.get(session_address("coder", "session-one"))
+    )
     assert state is not None
     assert state.original_requests == [
         [
@@ -187,7 +190,7 @@ async def test_cancel_then_immediate_queued_correction_receives_finalized_checkp
     assert "The previous Run was interrupted." in request_texts[correction_index - 1]
     assert "Resume the interrupted work" not in request_texts[correction_index - 1]
     assert "Thinking hard." in request_texts[correction_index - 1]
-    persisted = runtime.chat_sessions.get("coder", "session-one").load()
+    persisted = runtime.chat_sessions.get(session_address("coder", "session-one")).load()
     assert [message.content for message in persisted if message.role == "user"] == [
         "Use the first folder",
         "Not this folder; use the second one",
@@ -273,7 +276,9 @@ async def test_second_interrupted_message_extends_same_checkpoint(tmp_path: Path
     loop = build_chat_loop(runtime, streaming=True)
     with pytest.raises(RunInterruptedError, match="network"):
         await loop.send("coder", "Do the work", session_id="session-one")
-    first_state = await recover_continuation(runtime.chat_sessions.get("coder", "session-one"))
+    first_state = await recover_continuation(
+        runtime.chat_sessions.get(session_address("coder", "session-one"))
+    )
     assert first_state is not None
 
     runtime.adapter = StubAdapter(
@@ -294,7 +299,9 @@ async def test_second_interrupted_message_extends_same_checkpoint(tmp_path: Path
     with pytest.raises(RunInterruptedError, match="network"):
         await second_run.wait()
 
-    second_state = await recover_continuation(runtime.chat_sessions.get("coder", "session-one"))
+    second_state = await recover_continuation(
+        runtime.chat_sessions.get(session_address("coder", "session-one"))
+    )
     assert second_state is not None
     assert second_state.checkpoint_id == first_state.checkpoint_id
     assert second_state.origin_run_id == first_state.origin_run_id
@@ -417,7 +424,7 @@ async def test_cancelled_run_ignores_late_assistant_output(tmp_path: Path) -> No
     with pytest.raises(RunCancelledError):
         await run.wait()
 
-    session_messages = runtime.chat_sessions.get("coder", "session-one").load()
+    session_messages = runtime.chat_sessions.get(session_address("coder", "session-one")).load()
     assert run.status == RunStatus.CANCELLED
     assert persisted_roles(session_messages) == ["user"]
     assert "assistant_output" not in [event.type for event in run.events]

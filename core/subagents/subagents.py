@@ -29,6 +29,7 @@ from core.runs import (
     RunNotFoundError,
     RunStatus,
 )
+from core.sessions import SessionAddress
 from core.settings import SettingsValidationError, validate_thinking_effort
 from core.subagents.activity import SubAgentActivity
 from core.subagents.catalog import SubAgentPromptTarget, build_subagent_prompt_targets
@@ -169,7 +170,8 @@ def _inspect_subagent_work(
     *,
     project_id: str | None = None,
 ) -> JsonObject | None:
-    session = runtime.chat_sessions.get(agent_id, session_id, project_id)
+    address = SessionAddress(project_id=project_id, agent_id=agent_id, session_id=session_id)
+    session = runtime.chat_sessions.get(address)
     active_run = runtime.chat_run_manager.active_run(
         agent_id=agent_id,
         session_id=session_id,
@@ -433,14 +435,22 @@ async def _handle_subagent(
         if session_id is None:
             session = runtime.chat_sessions.create(target_agent_id, project_id=target_project_id)
             runtime.chat_sessions.set_auto_title(
-                target_agent_id,
-                session.id,
+                SessionAddress(
+                    project_id=target_project_id,
+                    agent_id=target_agent_id,
+                    session_id=session.id,
+                ),
                 _subagent_session_title(description, content),
-                target_project_id,
             )
         else:
             try:
-                session = runtime.chat_sessions.get(target_agent_id, session_id, target_project_id)
+                session = runtime.chat_sessions.get(
+                    SessionAddress(
+                        project_id=target_project_id,
+                        agent_id=target_agent_id,
+                        session_id=session_id,
+                    )
+                )
             except ChatSessionError:
                 return tool_failure("session_not_found", f"session does not exist: {session_id}")
 
@@ -1001,10 +1011,8 @@ def _register_result_acknowledgement_after_parent_persistence(
             project_id=project_id,
         )
         runtime.chat_sessions.mark_terminal_run_read(
-            agent_id,
-            session_id,
+            SessionAddress(project_id=project_id, agent_id=agent_id, session_id=session_id),
             run_id,
-            project_id,
         )
 
     context.after_result_persisted(acknowledge)
@@ -1176,7 +1184,9 @@ def _result_from_session(
     try:
         # Read the child session under its target project anchor;
         # ``None`` keeps the identity layout.
-        session = runtime.chat_sessions.get(agent_id, session_id, project_id)
+        session = runtime.chat_sessions.get(
+            SessionAddress(project_id=project_id, agent_id=agent_id, session_id=session_id)
+        )
         messages = session.load()
     except ChatSessionError as error:
         return (
@@ -1529,7 +1539,10 @@ def _mark_subagent_session(
     # records ``project_id`` so the child session is fully addressable after a
     # restart (its anchor cannot be derived from the parent ids alone).
     session_manager = runtime.chat_sessions
-    metadata = dict(session_manager.get_metadata(sub_agent_id, sub_session_id, sub_project_id))
+    address = SessionAddress(
+        project_id=sub_project_id, agent_id=sub_agent_id, session_id=sub_session_id
+    )
+    metadata = dict(session_manager.get_metadata(address))
     metadata[SUBAGENT_SESSION_METADATA_FLAG] = True
     metadata[SUBAGENT_PARENT_METADATA_KEY] = {
         "id": work_id,
@@ -1540,7 +1553,7 @@ def _mark_subagent_session(
         "tool_call_index": context.tool_call_index,
         "project_id": context.project_id,
     }
-    session_manager.set_metadata(sub_agent_id, sub_session_id, metadata, sub_project_id)
+    session_manager.set_metadata(address, metadata)
 
 
 def _subagent_session_title(description: str | None, content: str) -> str:

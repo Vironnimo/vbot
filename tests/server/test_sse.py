@@ -14,6 +14,7 @@ from fastapi.testclient import TestClient  # type: ignore[import-not-found]
 from core.chat import ChatMessage
 from core.chat.output_files import AssistantFileReference
 from core.runs import ASSISTANT_OUTPUT_EVENT, Run
+from core.sessions import SessionAddress
 from core.tools import FileReadState, register_read_tool
 from server.app import _sse_run_events, create_app
 from server.file_delivery import FileDelivery
@@ -193,7 +194,9 @@ def test_streaming_chat_projects_completed_path_line_in_stable_event(tmp_path: P
     assistant_content = assistant_event["data"]["payload"]["message"]["content"]
     assert assistant_content.startswith("Here: ![streamed.png](/api/files/")
     assert str(image) not in assistant_content
-    canonical = runtime.chat_sessions.get("coder", "session-file").load()[-2]
+    canonical = runtime.chat_sessions.get(
+        SessionAddress(project_id=None, agent_id="coder", session_id="session-file")
+    ).load()[-2]
     assert canonical.output_files == [
         AssistantFileReference(
             line_index=0,

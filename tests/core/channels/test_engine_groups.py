@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from core.sessions import SessionAddress
+
 from .engine_test_support import (
     CHANNEL_GROUP_REPLY_SURFACE,
     CHANNEL_REPLY_SURFACE,
@@ -226,11 +228,15 @@ async def test_participants_metadata_written_for_groups_only(tmp_path: Path) -> 
     engine, chat_sessions, _trigger, _transport = make_engine(tmp_path)
 
     engine.prepare_inbound_route(make_conversation(kind="direct", user_display_name="Alice"))
-    direct_metadata = chat_sessions.get_metadata("assistant", SESSION_ID)
+    direct_metadata = chat_sessions.get_metadata(
+        SessionAddress(project_id=None, agent_id="assistant", session_id=SESSION_ID)
+    )
     assert "participants" not in direct_metadata
 
     engine.prepare_inbound_route(make_conversation(kind="group", user_display_name="Alice"))
-    group_metadata = chat_sessions.get_metadata("assistant", SESSION_ID)
+    group_metadata = chat_sessions.get_metadata(
+        SessionAddress(project_id=None, agent_id="assistant", session_id=SESSION_ID)
+    )
     participants = group_metadata["participants"]
     assert set(participants) == {"50"}
     assert participants["50"]["display_name"] == "Alice"
@@ -252,7 +258,9 @@ async def test_participants_metadata_updated_on_repeat_messages(tmp_path: Path) 
         make_conversation(kind="group", user_id=50, user_display_name="Alice Renamed")
     )
 
-    participants = chat_sessions.get_metadata("assistant", SESSION_ID)["participants"]
+    participants = chat_sessions.get_metadata(
+        SessionAddress(project_id=None, agent_id="assistant", session_id=SESSION_ID)
+    )["participants"]
     assert set(participants) == {"50", "51"}
     assert participants["50"]["display_name"] == "Alice Renamed"
     assert participants["51"]["display_name"] == "Bob"
@@ -273,7 +281,9 @@ async def test_group_unaddressed_text_is_dropped_in_mention_mode(tmp_path: Path)
     command_dispatcher.execute.assert_not_awaited()
     assert transport.sent == []
     # Dropped messages must not create a Session either.
-    assert not chat_sessions.exists("assistant", SESSION_ID)
+    assert not chat_sessions.exists(
+        SessionAddress(project_id=None, agent_id="assistant", session_id=SESSION_ID)
+    )
     await engine.stop()
 
 
@@ -298,7 +308,9 @@ async def test_group_unaddressed_text_is_observed_as_note(tmp_path: Path) -> Non
 
     notes = [
         message.content
-        for message in chat_sessions.get("assistant", SESSION_ID).load()
+        for message in chat_sessions.get(
+            SessionAddress(project_id=None, agent_id="assistant", session_id=SESSION_ID)
+        ).load()
         if message.role == "note"
     ]
     assert notes == ["[channel-message] [Alice|50|member]: hello\nworld"]
@@ -321,7 +333,9 @@ async def test_observed_group_message_updates_metadata_and_participant(tmp_path:
     )
     await drain(engine, 12345)
 
-    metadata = chat_sessions.get_metadata("assistant", SESSION_ID)
+    metadata = chat_sessions.get_metadata(
+        SessionAddress(project_id=None, agent_id="assistant", session_id=SESSION_ID)
+    )
     assert metadata["last_reply_target"] == {
         "channel_id": "tg-assistant",
         "platform_target": "12345",
@@ -357,7 +371,9 @@ async def test_group_addressed_text_triggers_in_mention_mode(
     await drain(engine, 12345)
 
     trigger_mock.assert_awaited_once()
-    notes = chat_sessions.get("assistant", SESSION_ID).load()
+    notes = chat_sessions.get(
+        SessionAddress(project_id=None, agent_id="assistant", session_id=SESSION_ID)
+    ).load()
     assert not any(
         message.role == "note"
         and isinstance(message.content, str)
@@ -381,7 +397,9 @@ async def test_group_wake_word_pattern_matches_case_insensitively(tmp_path: Path
     await drain(engine, 12345)
 
     trigger_mock.assert_awaited_once()
-    notes = chat_sessions.get("assistant", SESSION_ID).load()
+    notes = chat_sessions.get(
+        SessionAddress(project_id=None, agent_id="assistant", session_id=SESSION_ID)
+    ).load()
     assert not any(
         message.role == "note"
         and isinstance(message.content, str)
@@ -406,7 +424,9 @@ async def test_direct_message_always_triggers_in_mention_mode(tmp_path: Path) ->
     trigger_mock.assert_awaited_once()
     note_contents = [
         message.content
-        for message in chat_sessions.get("assistant", SESSION_ID).load()
+        for message in chat_sessions.get(
+            SessionAddress(project_id=None, agent_id="assistant", session_id=SESSION_ID)
+        ).load()
         if message.role == "note"
     ]
     assert not any(
@@ -448,7 +468,9 @@ async def test_group_command_from_member_is_denied_without_dispatch(tmp_path: Pa
     command_dispatcher.execute.assert_not_awaited()
     trigger_mock.assert_not_awaited()
     assert transport.sent == []
-    assert not chat_sessions.exists("assistant", SESSION_ID)
+    assert not chat_sessions.exists(
+        SessionAddress(project_id=None, agent_id="assistant", session_id=SESSION_ID)
+    )
     await engine.stop()
 
 
