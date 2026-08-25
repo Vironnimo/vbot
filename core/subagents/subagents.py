@@ -604,17 +604,10 @@ async def _handle_subagent(
         if activity is not None:
             activity.attach(sub_run)
             activity_handed_off = True
-        await _emit_subagent_session_started(
-            context,
-            work_id,
-            target_agent_id,
-            target_project_id,
-            session.id,
-            run_id=sub_run.id,
-            status=RunStatus.RUNNING.value,
-            delivery="automatic" if background else "inline",
-            activity_file=activity_file,
-        )
+        # Register tracking, parent-cancel cascade, and completion watcher
+        # synchronously - before the next await. The child Run is already live,
+        # so every await below is an orphan window: a parent cancel landing
+        # there must still cascade to and track this child.
         batch_tracker.register_reserved(
             parent_key,
             target_agent_id,
@@ -635,6 +628,17 @@ async def _handle_subagent(
             )
 
         _track_subagent_completion(batch_tracker, parent_key, sub_run, activity_file)
+        await _emit_subagent_session_started(
+            context,
+            work_id,
+            target_agent_id,
+            target_project_id,
+            session.id,
+            run_id=sub_run.id,
+            status=RunStatus.RUNNING.value,
+            delivery="automatic" if background else "inline",
+            activity_file=activity_file,
+        )
         if background:
             return tool_success(
                 _with_activity_note(

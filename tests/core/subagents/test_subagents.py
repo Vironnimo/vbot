@@ -168,6 +168,53 @@ async def test_foreground_result_keeps_handle_and_child_unread_until_parent_pers
     assert runtime.chat_sessions.list_with_metadata("worker")[0]["has_unread_completion"] is False
 
 
+async def test_parent_cancel_during_spawn_window_still_cascades_and_tracks(
+    tmp_path: Path,
+) -> None:
+    """A parent cancel landing after the child started must not orphan it.
+
+    Regression: the tracker registration, parent-cancel cascade, and completion
+    watcher used to happen only after the session-started emission - an await.
+    A cancel arriving in that window left the live child running untracked,
+    un-cascaded, and invisible to the batch.
+    """
+    manager = FakeRunManager()
+    runtime = make_runtime(tmp_path, manager)
+    trigger_service = RecordingTriggerService()
+    tracker = SubAgentBatchTracker(trigger_service)
+
+    captured: dict[str, Any] = {}
+
+    async def canceling_emit(_event_type: str, payload: JsonObject) -> None:
+        data = payload.get("data", {})
+        if data.get("run_id") is None:
+            return
+        # The running-child emission sits exactly in the historical orphan
+        # window: the child Run is live while the spawn flow is suspended here.
+        captured["work_id"] = data["id"]
+        # Cancel while the child is still running - a terminal child could not
+        # record the cascade anymore.
+        manager.parent_run.request_cancel(reason="user")
+        manager.started[0]["run"].mark_completed(
+            ChatMessage.assistant(model="openai/gpt-5.2", content="child output")
+        )
+
+    context = make_context(nesting_depth=1, emit_hook=canceling_emit)
+
+    result = await _handle_subagent(
+        context,
+        {"content": "spawn", "agent_id": "worker"},
+        runtime=runtime,
+        batch_tracker=tracker,
+    )
+
+    assert result["ok"] is True
+    assert captured["work_id"] == result["data"]["id"]
+    child_run = manager.started[0]["run"]
+    assert child_run.cancel_requested is True
+    assert tracker.owned_entry("parent", "parent-session", None, captured["work_id"]) is not None
+
+
 async def test_status_result_keeps_handle_and_child_unread_until_parent_persistence(
     tmp_path: Path,
 ) -> None:
