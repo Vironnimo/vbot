@@ -325,6 +325,55 @@ def test_grep_rejects_aliases_and_string_encoded_controls(
     assert typed_result["ok"] is True
 
 
+def test_grep_accepts_head_aliases_as_limit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Models trained on other harnesses send head/head_limit for limit; both
+    # spellings are silently accepted and behave exactly like limit.
+    force_python_fallback(monkeypatch)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    workspace.joinpath("notes.txt").write_text("hit\nhit\nhit\n", encoding="utf-8")
+
+    head_result = grep_handler(make_context(workspace), {"pattern": "hit", "head": 2})
+    string_result = grep_handler(make_context(workspace), {"pattern": "hit", "head_limit": "2"})
+
+    expected = f"notes.txt:1: hit\nnotes.txt:2: hit\n{RESULTS_LIMITED_MARKER.format(limit=2)}"
+    assert get_success_content(head_result) == expected
+    assert get_success_content(string_result) == expected
+
+
+@pytest.mark.parametrize("arguments", [{"limit": 3, "head": 5}, {"head": 5, "head_limit": 7}])
+def test_grep_rejects_conflicting_limit_alias_values(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    arguments: dict[str, object],
+) -> None:
+    force_python_fallback(monkeypatch)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    workspace.joinpath("notes.txt").write_text("hit\n", encoding="utf-8")
+
+    result = grep_handler(make_context(workspace), {"pattern": "hit", **arguments})
+
+    error = assert_failure_envelope(result, "invalid_arguments")
+    assert "Conflicting limit arguments" in error["message"]
+
+
+def test_grep_rejects_non_integer_head_alias_value(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    force_python_fallback(monkeypatch)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    workspace.joinpath("notes.txt").write_text("hit\n", encoding="utf-8")
+
+    result = grep_handler(make_context(workspace), {"pattern": "hit", "head": "many"})
+
+    error = assert_failure_envelope(result, "invalid_arguments")
+    assert "head" in error["message"]
+
+
 def test_grep_output_modes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     force_python_fallback(monkeypatch)
     workspace = tmp_path / "workspace"

@@ -12,9 +12,11 @@ from pathlib import Path
 from typing import NamedTuple
 
 from core.tools.arguments import (
+    ToolArgumentError,
     optional_bool,
     optional_int,
     optional_string,
+    required_int,
 )
 from core.tools.process_manager import subprocess_creation_flags
 from core.tools.search import (
@@ -48,6 +50,10 @@ from core.tools.tools import (
 DEFAULT_LIMIT = 100
 MAX_LINE_CHARS = 500
 SUPPORTED_OUTPUT_MODES = {"content", "files_with_matches", "count"}
+# Models trained on other harnesses' grep tools send ``head``/``head_limit``
+# for what this tool family calls ``limit``. They are silently accepted as
+# aliases (never advertised in the schema); conflicting values are an error.
+LIMIT_ALIAS_ARGUMENTS = ("head", "head_limit")
 ALLOWED_ARGUMENTS = {
     "pattern",
     "path",
@@ -60,6 +66,7 @@ ALLOWED_ARGUMENTS = {
     "offset",
     "include_ignored",
     "output_mode",
+    *LIMIT_ALIAS_ARGUMENTS,
 }
 # Bounded drain of a finished/killed ripgrep process; generous, never load-bearing.
 _RG_DRAIN_TIMEOUT_SECONDS = 5.0
@@ -163,6 +170,49 @@ def _truncate_line(content: str) -> str:
     if len(content) <= MAX_LINE_CHARS:
         return content
     return f"{content[:MAX_LINE_CHARS]}...[truncated]"
+
+
+def _parse_alias_limit(value: object, field_name: str) -> int:
+    """Parse a limit alias value that bypassed schema normalization.
+
+    The advertised schema has no ``head``/``head_limit`` property, so the
+    registry's numeric-string normalization never touches them and they can
+    arrive as strings.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, str)):
+        raise ToolArgumentError(f"{field_name} must be an integer")
+    if isinstance(value, str):
+        text = value.strip()
+        if not text.isdigit():
+            raise ToolArgumentError(f"{field_name} must be an integer")
+        number = int(text)
+    else:
+        number = value
+    if number < 1:
+        raise ToolArgumentError(f"{field_name} must be >= 1")
+    return number
+
+
+def _resolve_match_limit(arguments: JsonObject) -> int:
+    """Resolve ``limit`` from itself or its silently accepted head aliases."""
+    supplied = [
+        (name, arguments[name]) for name in ("limit", *LIMIT_ALIAS_ARGUMENTS) if name in arguments
+    ]
+    if not supplied:
+        return DEFAULT_LIMIT
+    parsed = [
+        (name, _parse_alias_limit(value, name))
+        if name != "limit"
+        else (name, required_int(value, field_name=name, minimum=1))
+        for name, value in supplied
+    ]
+    distinct_values = {number for _name, number in parsed}
+    if len(distinct_values) > 1:
+        details = ", ".join(f"{name}={number}" for name, number in parsed)
+        raise ToolArgumentError(
+            f"Conflicting limit arguments ({details}); supply only one of: limit, head, head_limit"
+        )
+    return next(iter(distinct_values))
 
 
 def _filter_relative_path(file_path: Path, *, base: Path) -> str:
@@ -618,9 +668,7 @@ def grep_handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
         context_lines = optional_int(
             arguments.get("context"), field_name="context", default=0, minimum=0
         )
-        match_limit = optional_int(
-            arguments.get("limit"), field_name="limit", default=DEFAULT_LIMIT, minimum=1
-        )
+        match_limit = _resolve_match_limit(arguments)
         result_offset = optional_int(
             arguments.get("offset"), field_name="offset", default=0, minimum=0
         )
