@@ -1,8 +1,16 @@
 # Domain Map Audit Workflow
 
-A corpus-wide pass over all root domain maps and their supplementary routing structure: reduce default-loaded context without losing decision-relevant signal. For single-map work use `domain-map-workflow.md` - this audit builds on its placement, claim-verification, and supplementary-file rules and adds the cross-map view a single-map pass cannot provide.
+A corpus-wide pass over all root domain maps, their supplementary routing structure, and the always-read layer (`.vorch/PROJECT.md`, `.vorch/GLOSSARY.md`): reduce default-loaded context without losing decision-relevant signal. For single-map work use `domain-map-workflow.md` - this audit builds on its placement, claim-verification, and supplementary-file rules and adds the cross-map view a single-map pass cannot provide.
 
 Root maps are the always-read routing and safety layer. Supplementary files are task-gated depth. Audit the roots as a corpus; load supplementary contents only when a candidate, moved fact, or reference trigger makes that depth relevant.
+
+## Always-Read Layer
+
+PROJECT.md and GLOSSARY.md are loaded by every agent before any map, so they sit inside this audit with two sharpenings:
+
+- **PROJECT.md Context** holds only strategic constraints an agent would assume incorrectly, plus the keystone mandates other cuts rely on (read-the-map duties, gate contracts). Everything whose use-trigger is confined to one domain belongs in that domain's map - verified home first, then remove.
+- **GLOSSARY entries define.** At most ~2 sentences of definition plus a load-bearing `Not:` where misreads are realistic. No incidental mechanism names (`/status`, effort-value ladders), no concrete example ids, no path templates, no enumerations, no mechanics summaries - point at the owning map instead. A term moves out entirely when its use-trigger is really confined to one domain's work (example: Source Format -> `projects.md` -> Terms); sweep `[[wiki-links]]` and stale `GLOSSARY -> <Term>` pointers in the same pass.
+- The same mirroring-vs-operational-knowledge rule from `domain-map-workflow.md` applies verbatim to both files.
 
 ## Procedure
 
