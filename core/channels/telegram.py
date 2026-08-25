@@ -1832,13 +1832,32 @@ def _telegram_error_boundary(channel_id: str) -> Iterator[None]:
     PTB raises ``telegram.error.TelegramError`` (e.g. ``BadRequest``) when the Bot API rejects
     a send. Callers such as the ``channel_send`` tool and the engine relay only handle the
     ChannelError family, so an unwrapped PTB error would surface as an unexpected exception
-    instead of a clean failure.
+    instead of a clean failure. Transient transport faults (network errors, flood-control
+    ``RetryAfter``) are marked retryable so reply delivery can retry them.
     """
     telegram_error = _load_telegram_error()
     try:
         yield
     except telegram_error.TelegramError as error:
-        raise ChannelError(f"Telegram send failed (channel={channel_id}): {error}") from error
+        raise _classify_telegram_error(channel_id, telegram_error, error) from error
+
+
+def _classify_telegram_error(
+    channel_id: str,
+    telegram_error_module: Any,
+    error: Any,
+) -> ChannelError:
+    """Translate one PTB TelegramError into a retry-classified ChannelError."""
+    channel_error = ChannelError(f"Telegram send failed (channel={channel_id}): {error}")
+    network_error = getattr(telegram_error_module, "NetworkError", None)
+    if network_error is not None and isinstance(error, network_error):
+        # Covers TimedOut as well - both are transient transport faults.
+        channel_error.retryable = True
+    retry_after = getattr(error, "retry_after", None)
+    if isinstance(retry_after, (int, float)) and not isinstance(retry_after, bool):
+        channel_error.retryable = True
+        channel_error.retry_after = float(retry_after)
+    return channel_error
 
 
 def _is_integer(value: object) -> TypeGuard[int]:

@@ -248,3 +248,49 @@ async def test_send_wraps_telegram_error_as_channel_error(
 
     assert isinstance(excinfo.value.__cause__, BadRequest)
     await adapter.stop()
+
+
+@pytest.mark.asyncio
+async def test_boundary_marks_network_errors_retryable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from telegram.error import NetworkError, TimedOut
+
+    adapter, _chat_sessions, _trigger_mock, bot = make_adapter(
+        tmp_path,
+        monkeypatch,
+        allowed_chat_ids=[12345],
+    )
+    bot.send_message = AsyncMock(side_effect=NetworkError("connection reset"))
+
+    with pytest.raises(ChannelError) as excinfo:
+        await adapter.send("hi", "12345")
+
+    assert excinfo.value.retryable is True
+    assert excinfo.value.retry_after is None
+    # TimedOut subclasses NetworkError, so it inherits the same classification.
+    assert issubclass(TimedOut, NetworkError)
+    await adapter.stop()
+
+
+@pytest.mark.asyncio
+async def test_boundary_marks_rate_limit_retryable_with_retry_hint(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from telegram.error import RetryAfter
+
+    adapter, _chat_sessions, _trigger_mock, bot = make_adapter(
+        tmp_path,
+        monkeypatch,
+        allowed_chat_ids=[12345],
+    )
+    bot.send_message = AsyncMock(side_effect=RetryAfter(retry_after=7))
+
+    with pytest.raises(ChannelError) as excinfo:
+        await adapter.send("hi", "12345")
+
+    assert excinfo.value.retryable is True
+    assert excinfo.value.retry_after == 7.0
+    await adapter.stop()

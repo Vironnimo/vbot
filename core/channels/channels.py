@@ -102,7 +102,24 @@ _CHANNEL_CONFIG_FIELDS = _MUTABLE_FIELDS | {"id", "owner_user_ids"}
 
 
 class ChannelError(VBotError):
-    """Base class for expected channel-domain errors."""
+    """Base class for expected channel-domain errors.
+
+    ``retryable`` marks transient transport failures (network blips, platform
+    rate limits) that reply delivery may retry; permanent platform rejections
+    stay non-retryable. ``retry_after`` carries a rate-limit wait hint honored
+    as a floor by the retry loop.
+    """
+
+    def __init__(
+        self,
+        message: str = "",
+        *,
+        retryable: bool = False,
+        retry_after: float | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.retryable = retryable
+        self.retry_after = retry_after
 
 
 class ChannelNotFoundError(ChannelError):

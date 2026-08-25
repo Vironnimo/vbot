@@ -574,6 +574,8 @@ class DiscordChannelAdapter(ChannelAdapter):
 
             try:
                 await target.send(**payload)
+            except Exception as error:
+                raise _classify_discord_send_error(error) from error
             finally:
                 for discord_file in discord_files:
                     close = getattr(discord_file, "close", None)
@@ -764,6 +766,42 @@ def _load_discord() -> Any:
         raise ChannelError(
             "discord.py is required for Discord channels; install server dependencies"
         ) from error
+
+
+def _classify_discord_send_error(error: Exception) -> ChannelError:
+    """Translate one raw discord.py send failure into a retry-classified error.
+
+    Discord send calls previously surfaced as raw library exceptions; the
+    engine only handles the ChannelError family. Transient transport faults
+    (connection errors, gateway/server faults, rate limits, 5xx) are marked
+    retryable so reply delivery can retry them.
+    """
+    channel_error = ChannelError(f"Discord send failed: {error}")
+    if isinstance(error, ChannelError):
+        return error
+    if isinstance(error, (TimeoutError, ConnectionError, OSError)):
+        channel_error.retryable = True
+        return channel_error
+
+    discord = _load_discord()
+    server_error = getattr(discord, "DiscordServerError", None)
+    if server_error is not None and isinstance(error, server_error):
+        channel_error.retryable = True
+        return channel_error
+
+    http_error = getattr(discord, "HTTPException", None)
+    if http_error is not None and isinstance(error, http_error):
+        status = getattr(error, "status", None)
+        if (
+            isinstance(status, int)
+            and not isinstance(status, bool)
+            and (status == 429 or status >= 500)
+        ):
+            channel_error.retryable = True
+            retry_after = getattr(error, "retry_after", None)
+            if isinstance(retry_after, (int, float)) and not isinstance(retry_after, bool):
+                channel_error.retry_after = float(retry_after)
+    return channel_error
 
 
 __all__ = ["DISCORD_MESSAGE_LIMIT", "DiscordChannelAdapter", "split_discord_message"]
