@@ -134,7 +134,7 @@ async def _maybe_auto_compact(
     )
     assert context.primary_target.adapter is adapter
     context.request_state = _RequestState(messages, [], (), ())
-    state = await loop._maybe_auto_compact_state(
+    state = await loop._compaction_runs.maybe_auto_compact_state(
         context,
         context.primary_target,
         usage,
@@ -782,7 +782,7 @@ async def test_compaction_allows_repeated_automatic_checkpoints_in_one_run(
         continuation_reminder=None,
         continuation_tracker=None,
     )
-    context.request_state = await loop._build_request_state(
+    context.request_state = await loop.build_request_state(
         agent,
         session,
         inputs=RequestBuildInputs.from_context(context, context.primary_target),
@@ -791,7 +791,7 @@ async def test_compaction_allows_repeated_automatic_checkpoints_in_one_run(
     requested_compactions = 5
     affinity_epochs = [context.prompt_cache_affinity_id]
     for _ in range(requested_compactions):
-        context.request_state = await loop._maybe_auto_compact_state(
+        context.request_state = await loop._compaction_runs.maybe_auto_compact_state(
             context,
             context.primary_target,
             usage={"input_tokens": 90},
@@ -892,7 +892,7 @@ async def test_final_assistant_compaction_activates_history_on_next_run(tmp_path
     checkpoint = next(
         message for message in session.load() if message.role == "compaction_checkpoint"
     )
-    post_compaction_state = await loop._build_request_state(
+    post_compaction_state = await loop.build_request_state(
         agent, session, inputs=RequestBuildInputs()
     )
     expected_context_tokens_after, _ = estimate_request_input_tokens(
@@ -1144,7 +1144,7 @@ async def test_compaction_refreshes_pinned_skill_catalog(tmp_path: Path) -> None
     run = Run(run_id="run-1", agent_id=agent.id, session_id=session.id)
 
     # Pin the session's catalog (as the first build would), then grow the registry.
-    loop._pinned_skill_catalog("coder", "session-one", agent, runtime.skills, None)
+    loop.pinned_skill_catalog("coder", "session-one", agent, runtime.skills, None)
     runtime.skills = StubSkills(
         [StubSkill("one", "One.", Path("a")), StubSkill("two", "Two.", Path("b"))]
     )
@@ -1196,8 +1196,8 @@ async def test_compaction_refreshes_pinned_soul_and_memory(tmp_path: Path) -> No
     run = Run(run_id="run-1", agent_id=agent.id, session_id=session.id)
 
     # Pin the epoch's texts (as the first build would), then observe the refresh.
-    loop._pinned_soul_context("coder", "session-one", agent, None)
-    loop._pinned_memory_files("coder", "session-one", agent, None)
+    loop.pinned_soul_context("coder", "session-one", agent, None)
+    loop.pinned_memory_files("coder", "session-one", agent, None)
     soul_calls_before = runtime.system_prompts.render_soul_calls
     memory_calls_before = runtime.system_prompts.render_memory_files_calls
 
@@ -1246,7 +1246,7 @@ async def test_compaction_refresh_failure_keeps_previous_prompt_snapshot(
             StubCompactionService(should_auto=True, checkpoint=checkpoint),
         ),
     )
-    loop._pinned_skill_catalog("coder", "session-one", agent, runtime.skills, None)
+    loop.pinned_skill_catalog("coder", "session-one", agent, runtime.skills, None)
 
     def fail_refresh(_project_id: str | None, _agent_id: str | None) -> Any:
         raise RuntimeError("scan failed")
@@ -1331,7 +1331,7 @@ async def test_compaction_refreshes_rooted_working_project_files_and_auto_load(
         continuation_reminder=None,
         continuation_tracker=None,
     )
-    context.request_state = await loop._build_request_state(
+    context.request_state = await loop.build_request_state(
         agent,
         session,
         inputs=RequestBuildInputs.from_context(context, context.primary_target),
@@ -1341,7 +1341,7 @@ async def test_compaction_refreshes_rooted_working_project_files_and_auto_load(
     (repo / "CONTEXT.md").write_text("New context", encoding="utf-8")
     project.auto_load.append("CONTEXT.md")
 
-    rebuilt = await loop._maybe_auto_compact_state(
+    rebuilt = await loop._compaction_runs.maybe_auto_compact_state(
         context,
         context.primary_target,
         {"input_tokens": 90},
@@ -1556,7 +1556,7 @@ async def test_compaction_projection_failure_does_not_persist_checkpoint(
     async def fail_projected_request(*_args: Any, **_kwargs: Any) -> _RequestState:
         raise RuntimeError("projected request broke")
 
-    monkeypatch.setattr(loop, "_build_request_state", fail_projected_request)
+    monkeypatch.setattr(loop, "build_request_state", fail_projected_request)
 
     with caplog.at_level("WARNING"):
         result = await _maybe_auto_compact(
@@ -1774,7 +1774,7 @@ async def test_manual_compaction_refreshes_skill_catalog_snapshot(tmp_path: Path
             StubCompactionService(should_auto=True, checkpoint=checkpoint),
         ),
     )
-    loop._pinned_skill_catalog("coder", "session-one", agent, runtime.skills, None)
+    loop.pinned_skill_catalog("coder", "session-one", agent, runtime.skills, None)
     runtime.skills = StubSkills(
         [StubSkill("one", "One.", Path("a")), StubSkill("two", "Two.", Path("b"))]
     )
@@ -1903,5 +1903,5 @@ async def test_compact_session_converts_compaction_failure_into_reply(tmp_path: 
     assert reply == "Compaction failed: compaction broke"
     assert persisted_roles(session.load()) == ["user"]
     assert runtime.refresh_skills_for_calls == []
-    request_state = await loop._build_request_state(agent, session, inputs=RequestBuildInputs())
+    request_state = await loop.build_request_state(agent, session, inputs=RequestBuildInputs())
     assert HISTORY_TOOL_NAME not in [tool["name"] for tool in request_state.tools]
