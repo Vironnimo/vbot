@@ -42,6 +42,7 @@ from core.search_config import (
     MAX_WEB_SEARCH_COUNT,
     MIN_WEB_SEARCH_COUNT,
 )
+from core.settings.agent_defaults import diagnose_agent_default_value
 from core.settings.normalizers import (
     SUPPORTED_APPEARANCE_LANGUAGES,
     is_absolute_or_home_relative_path,
@@ -572,22 +573,10 @@ def _validate_defaults(diagnostics: list[JsonDiagnostic], value: Any) -> None:
     for field, item in agent_defaults.items():
         if field not in AGENT_DEFAULT_FIELDS:
             continue
-        item_path = _child_path("$.defaults.agent", field)
         if item is None:
             continue
-        if field in {"model", "fallback_models"}:
-            if field == "fallback_models":
-                if not (isinstance(item, list) and all(isinstance(entry, str) for entry in item)):
-                    _error(diagnostics, item_path, "must be a string list or null")
-                continue
-            if not isinstance(item, str):
-                _error(diagnostics, item_path, "must be a string or null")
-            continue
-        if field == "temperature":
-            validate_temperature_diagnostic(diagnostics, item_path, item, allow_none=True)
-            continue
-        if field == "thinking_effort":
-            validate_thinking_effort_diagnostic(diagnostics, item_path, item, allow_none=True)
+        item_path = _child_path("$.defaults.agent", field)
+        diagnose_agent_default_value(diagnostics, item_path, item)
 
 
 def _validate_recall(diagnostics: list[JsonDiagnostic], value: Any) -> None:

@@ -5,6 +5,14 @@ from core.config_validation import (
     JsonValidationReport,
     format_report_diagnostics,
 )
+from core.settings.agent_defaults import (
+    AgentDefaults,
+    agent_default_catalog,
+    bake_agent_defaults,
+    diagnose_agent_default_value,
+    normalize_agent_default_value,
+    parse_agent_default_value,
+)
 from core.settings.normalizers import (
     DEFAULT_APPEARANCE_LANGUAGE,
     DEFAULT_RECALL_SETTINGS,
@@ -64,7 +72,13 @@ from core.settings.validation import (
 
 __all__ = [
     "AGENT_DEFAULT_FIELDS",
+    "AgentDefaults",
     "AGENT_ID_PATTERN",
+    "agent_default_catalog",
+    "bake_agent_defaults",
+    "diagnose_agent_default_value",
+    "normalize_agent_default_value",
+    "parse_agent_default_value",
     "ALLOWED_THINKING_EFFORTS",
     "APPLICATION_LIVE",
     "APPLICATION_RESTART",
