@@ -18,6 +18,7 @@ from typing import Any, Literal, TextIO
 
 from core.event_stream import ReplayEventStream
 from core.storage.temp_files import TemporaryFileLease, TemporaryFileManager
+from core.tools.process_manager import log_background_task_result
 from core.tools.terminal_backend import (
     TerminalAdapter,
     TerminalAdapterFactory,
@@ -493,7 +494,7 @@ class TerminalManager:
                 name=f"terminal:{session.terminal_id}:operator-command",
             )
             session.operator_command_task.add_done_callback(
-                lambda task: _log_background_task_result(
+                lambda task: log_background_task_result(
                     task, f"Terminal operator command failed for terminal={session.terminal_id}"
                 )
             )
@@ -591,7 +592,7 @@ class TerminalManager:
             self._read_terminal(session), name=f"terminal:{terminal_id}:reader"
         )
         session.reader_task.add_done_callback(
-            lambda task: _log_background_task_result(
+            lambda task: log_background_task_result(
                 task, f"Terminal reader failed for terminal={terminal_id}"
             )
         )
@@ -603,7 +604,7 @@ class TerminalManager:
                 name=f"terminal:{terminal_id}:initial-input",
             )
             session.initial_input_task.add_done_callback(
-                lambda task: _log_background_task_result(
+                lambda task: log_background_task_result(
                     task, f"Terminal initial input failed for terminal={terminal_id}"
                 )
             )
@@ -1494,7 +1495,7 @@ class TerminalManager:
             name=f"terminal:{session.terminal_id}:settle:{generation}",
         )
         session.settle_task.add_done_callback(
-            lambda task: _log_background_task_result(
+            lambda task: log_background_task_result(
                 task,
                 f"Terminal quiet detection failed for terminal={session.terminal_id} "
                 f"generation={generation}",
@@ -1666,7 +1667,7 @@ class TerminalManager:
             name=f"terminal:{session.terminal_id}:attention:{revision}",
         )
         session.notification_task.add_done_callback(
-            lambda task: _log_background_task_result(
+            lambda task: log_background_task_result(
                 task,
                 f"Terminal attention delivery failed for terminal={session.terminal_id} "
                 f"revision={revision}",
@@ -2370,20 +2371,6 @@ def _parse_group_timestamp(value: Any) -> datetime:
     if parsed.tzinfo is None or parsed.utcoffset() != timedelta(0):
         raise ValueError("Terminal group timestamp must be UTC")
     return parsed.astimezone(UTC)
-
-
-def _log_background_task_result(task: asyncio.Task[Any], message: str) -> None:
-    if task.cancelled():
-        return
-    error = task.exception()
-    if error is None:
-        return
-    _LOGGER.error(
-        "%s: %s",
-        message,
-        error,
-        exc_info=(type(error), error, error.__traceback__),
-    )
 
 
 __all__ = [

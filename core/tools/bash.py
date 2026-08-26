@@ -22,6 +22,7 @@ from core.tools.process_manager import (
     ProcessManager,
     ProcessNotFoundError,
     TrackedProcess,
+    log_background_task_result,
     subprocess_creation_flags,
     windows_taskkill_tree,
 )
@@ -593,20 +594,6 @@ def _render_bash_env_prompt_block(context: Any) -> str:
     return f"## Bash Environment Access\n\n{guidance}"
 
 
-def _log_background_task_result(task: asyncio.Task[Any], message: str) -> None:
-    if task.cancelled():
-        return
-    error = task.exception()
-    if error is None:
-        return
-    _LOGGER.error(
-        "%s: %s",
-        message,
-        error,
-        exc_info=(type(error), error, error.__traceback__),
-    )
-
-
 async def _watch_background_process(
     process_manager: ProcessManager,
     process_id: str,
@@ -730,7 +717,7 @@ def _maybe_spawn_completion_watcher(
         task.cancel()
         raise
     task.add_done_callback(
-        lambda completed: _log_background_task_result(
+        lambda completed: log_background_task_result(
             completed,
             f"Bash completion trigger failed for "
             f"agent={context.agent_id} session={context.session_id}",
@@ -764,7 +751,7 @@ def _register_user_cancel_callback(
         else:
             kill_task = loop.create_task(kill_coro)
             kill_task.add_done_callback(
-                lambda completed: _log_background_task_result(
+                lambda completed: log_background_task_result(
                     completed,
                     f"Bash user-cancel kill failed for "
                     f"agent={context.agent_id} process={process_id}",
