@@ -28,8 +28,8 @@ if TYPE_CHECKING:
 
 from core.providers._http_shared import (
     build_async_client,
-    build_streaming_request,
     classify_http_status,
+    connect_streaming_with_retry,
     decode_response_json,
     execute_with_sampling_fallback,
     iter_sse_data,
@@ -968,41 +968,25 @@ class AnthropicCompatibleAdapter(ProviderAdapter):
         payload = self._build_payload(messages, model_id, **kwargs)
         payload["stream"] = True
 
-        async def _connect_stream() -> httpx.Response:
-            # Rebuild headers per attempt: an OAuth token may refresh during a
-            # retry backoff, and the getter must be re-consulted each time.
-            headers = await self._build_headers()
-            request = build_streaming_request(
-                self._client,
-                "POST",
-                MESSAGES_ENDPOINT,
-                json=payload,
-                headers=headers,
+        def _handle_error_status(
+            status_code: int,
+            error_body: str,
+            response_headers: httpx.Headers,
+        ) -> None:
+            self._classify_http_status(
+                status_code,
+                detail=self._build_error_detail(status_code, error_body),
+                response_headers=response_headers,
             )
-            try:
-                response = await self._client.send(request, stream=True)
-            except httpx.TransportError as exc:
-                raise wrap_network_error(exc) from exc
-
-            # If the status indicates an error, read and close the response
-            # before classifying — this frees the connection for retry.
-            if response.status_code >= 400:
-                error_body = (await response.aread()).decode("utf-8", errors="replace")
-                await response.aclose()
-                detail = self._build_error_detail(response.status_code, error_body)
-                self._classify_http_status(
-                    response.status_code,
-                    detail=detail,
-                    response_headers=response.headers,
-                )
-                # classify_http_status always raises for >= 400; this is unreachable
-                # but satisfies type checkers.
-                raise ProviderError(f"Provider error: {response.status_code}", retryable=False)
-
-            return response
 
         response = await execute_with_sampling_fallback(
-            lambda: retry_async(_connect_stream),
+            lambda: connect_streaming_with_retry(
+                self._client,
+                MESSAGES_ENDPOINT,
+                payload,
+                build_headers=self._build_headers,
+                handle_error_status=_handle_error_status,
+            ),
             payload,
             logger=_LOGGER,
             provider_label=self._config.id,

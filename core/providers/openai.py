@@ -25,8 +25,9 @@ if TYPE_CHECKING:
 from core.models.models import Capabilities, Model, ReasoningCapabilities
 from core.providers._http_shared import (
     PROVIDER_NON_STREAMING_READ_TIMEOUT_SECONDS,
-    build_streaming_request,
-    decode_response_json,
+    connect_streaming_with_retry,
+    format_http_error_detail,
+    post_json_with_retry,
     wrap_network_error,
 )
 from core.providers.adapter import IMAGE_WIRE_MEDIA_TYPES, ModelLookup
@@ -53,7 +54,6 @@ from core.providers.reasoning import (
     normalize_thinking_effort,
 )
 from core.providers.token_getter import TokenGetter
-from core.utils.retry import retry_async
 
 CODEX_RESPONSES_MODE = "codex_responses"
 CODEX_EXTRA_HEADERS: dict[str, str] = {
@@ -641,6 +641,19 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
             return frozenset(ladder)
         return OPENAI_SUBSCRIPTION_REASONING_EFFORTS
 
+    def _handle_error_status(
+        self,
+        status_code: int,
+        error_body: str,
+        response_headers: httpx.Headers,
+    ) -> None:
+        """Classify one HTTP error status with the default wire detail."""
+        self._classify_http_status(
+            status_code,
+            detail=format_http_error_detail(status_code, error_body),
+            response_headers=response_headers,
+        )
+
     async def _post_json(
         self,
         endpoint_path: str,
@@ -648,21 +661,14 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
         *,
         cache_scope_id: str | None = None,
     ) -> dict[str, Any]:
-        async def _do_request() -> dict[str, Any]:
-            headers = await self._build_headers(cache_scope_id)
-            try:
-                response = await self._client.post(endpoint_path, json=payload, headers=headers)
-            except httpx.TransportError as exc:
-                raise wrap_network_error(exc) from exc
-
-            self._classify_http_status(
-                response.status_code,
-                detail=_http_error_detail(response),
-                response_headers=response.headers,
-            )
-            return dict(decode_response_json(response, "OpenAI provider"))
-
-        return await retry_async(_do_request)
+        return await post_json_with_retry(
+            self._client,
+            endpoint_path,
+            payload,
+            build_headers=lambda: self._build_headers(cache_scope_id),
+            handle_error_status=self._handle_error_status,
+            provider_context="OpenAI provider",
+        )
 
     async def _connect_stream(
         self,
@@ -671,34 +677,13 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
         *,
         cache_scope_id: str | None = None,
     ) -> httpx.Response:
-        async def _connect() -> httpx.Response:
-            # Rebuild headers per attempt: an OAuth token may refresh during a
-            # retry backoff, and the getter must be re-consulted each time.
-            headers = await self._build_headers(cache_scope_id)
-            request = build_streaming_request(
-                self._client,
-                "POST",
-                endpoint_path,
-                json=payload,
-                headers=headers,
-            )
-            try:
-                response = await self._client.send(request, stream=True)
-            except httpx.TransportError as exc:
-                raise wrap_network_error(exc) from exc
-
-            if response.status_code >= 400:
-                error_body = (await response.aread()).decode("utf-8", errors="replace")
-                await response.aclose()
-                self._classify_http_status(
-                    response.status_code,
-                    detail=_http_error_detail(response, error_body),
-                    response_headers=response.headers,
-                )
-                raise ProviderError(f"Provider error: {response.status_code}", retryable=False)
-            return response
-
-        return await retry_async(_connect)
+        return await connect_streaming_with_retry(
+            self._client,
+            endpoint_path,
+            payload,
+            build_headers=lambda: self._build_headers(cache_scope_id),
+            handle_error_status=self._handle_error_status,
+        )
 
     async def _stream_responses(
         self,
@@ -1181,11 +1166,6 @@ class OpenAISubscriptionResponsesPolicy:
             filtered_kwargs.pop(parameter_name, None)
             return
         filtered_kwargs[parameter_name] = safe_effort
-
-
-def _http_error_detail(response: httpx.Response, body: str | None = None) -> str:
-    reason = response.text if body is None else body
-    return f"{response.status_code} {reason}".strip() if reason else str(response.status_code)
 
 
 def _normalize_catalog_raw(raw: Mapping[str, Any]) -> Mapping[str, Any]:
