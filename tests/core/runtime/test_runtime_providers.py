@@ -1102,8 +1102,8 @@ def test_runtime_wires_provider_and_model_reasoning_replay_precedence(runtime: R
     assert adapter.reasoning_replay_policy("unprofiled-model") == "current_run"
     # GLM-5.2 has no Model-level override anymore — it inherits the Provider policy.
     assert adapter.reasoning_replay_policy("glm-5.2") == "current_run"
-    # The DeepSeek V4 Model override still wins over the Provider policy.
-    assert adapter.reasoning_replay_policy("deepseek-v4-flash:0731") == "none"
+    # The MiniMax M3 Model override (none) still wins over the Provider policy.
+    assert adapter.reasoning_replay_policy("minimax-m3") == "none"
 
 
 def test_get_adapter_rejects_disabled_connection(runtime: Runtime) -> None:
