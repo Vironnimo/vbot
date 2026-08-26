@@ -51,8 +51,8 @@ from core.models.models import (
 )
 from core.providers._http_shared import (
     build_async_client,
-    build_streaming_request,
     classify_http_status,
+    connect_streaming_with_retry,
     decode_response_json,
     parse_sse_json_data,
     wrap_network_error,
@@ -754,34 +754,26 @@ class OllamaAdapter(ProviderAdapter):
         payload = self._build_payload(messages, model_id, **kwargs)
         payload["stream"] = True
 
-        async def _connect_stream() -> httpx.Response:
-            # Rebuild headers per attempt (parity with the other adapters).
-            headers = await self._build_headers()
-            request = build_streaming_request(
-                self._client,
-                "POST",
-                CHAT_ENDPOINT,
-                json=payload,
-                headers=headers,
+        def _handle_error_status(
+            status_code: int,
+            error_body: str,
+            response_headers: httpx.Headers,
+        ) -> None:
+            classify_http_status(
+                status_code,
+                idempotent=False,
+                detail=_build_error_detail(status_code, error_body),
+                response_headers=response_headers,
             )
-            try:
-                response = await self._client.send(request, stream=True)
-            except httpx.TransportError as exc:
-                raise self._wrap_transport_error(exc) from exc
-            if response.status_code >= 400:
-                error_body = (await response.aread()).decode("utf-8", errors="replace")
-                await response.aclose()
-                detail = _build_error_detail(response.status_code, error_body)
-                classify_http_status(
-                    response.status_code,
-                    idempotent=False,
-                    detail=detail,
-                    response_headers=response.headers,
-                )
-                raise ProviderError(f"Provider error: {response.status_code}", retryable=False)
-            return response
 
-        response = await retry_async(_connect_stream)
+        response = await connect_streaming_with_retry(
+            self._client,
+            CHAT_ENDPOINT,
+            payload,
+            build_headers=self._build_headers,
+            handle_error_status=_handle_error_status,
+            wrap_transport_error=self._wrap_transport_error,
+        )
 
         has_tool_calls = False
         seen_done = False
