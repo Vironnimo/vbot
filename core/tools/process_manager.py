@@ -448,7 +448,7 @@ class ProcessManager:
             name=f"process:{process_id}:stdout",
         )
         tracked.stdout_task.add_done_callback(
-            lambda task: _log_background_task_result(
+            lambda task: log_background_task_result(
                 task, f"Process stdout reader failed for process={process_id}"
             )
         )
@@ -457,7 +457,7 @@ class ProcessManager:
             name=f"process:{process_id}:stderr",
         )
         tracked.stderr_task.add_done_callback(
-            lambda task: _log_background_task_result(
+            lambda task: log_background_task_result(
                 task, f"Process stderr reader failed for process={process_id}"
             )
         )
@@ -466,7 +466,7 @@ class ProcessManager:
             name=f"process:{process_id}:wait",
         )
         tracked.wait_task.add_done_callback(
-            lambda task: _log_background_task_result(
+            lambda task: log_background_task_result(
                 task, f"Process completion watcher failed for process={process_id}"
             )
         )
@@ -990,7 +990,7 @@ class ProcessManager:
             return
 
 
-def _log_background_task_result(task: asyncio.Task[Any], message: str) -> None:
+def log_background_task_result(task: asyncio.Task[Any], message: str) -> None:
     """Log an unexpected exception raised by a background task."""
     if task.cancelled():
         return
@@ -1061,5 +1061,6 @@ __all__ = [
     "ProcessStillRunningError",
     "activate_process_containment",
     "guarded_process_launch",
+    "log_background_task_result",
     "subprocess_creation_flags",
 ]
