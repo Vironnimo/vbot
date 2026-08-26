@@ -9,11 +9,12 @@ import httpx
 
 from core.models.models import Capabilities, Model, ReasoningCapabilities
 from core.providers._http_shared import (
-    build_streaming_request,
     classify_http_status,
-    decode_response_json,
+    connect_streaming_with_retry,
+    format_http_error_detail,
     iter_sse_data,
     parse_sse_json_data,
+    post_json_with_retry,
     wrap_network_error,
 )
 from core.providers.adapter import IMAGE_WIRE_MEDIA_TYPES
@@ -47,7 +48,6 @@ from core.providers.openai_compatible import (
     _read_string,
 )
 from core.providers.reasoning import THINKING_EFFORT_RANKS
-from core.utils.retry import retry_async
 from core.utils.tokens import estimate_request_input_tokens
 
 
@@ -335,28 +335,34 @@ class GitHubCopilotAdapter(OpenAICompatibleAdapter):
             request_kwargs.pop(endpoint_specific_key, None)
         return request_kwargs
 
+    def _handle_error_status(
+        self,
+        status_code: int,
+        error_body: str,
+        response_headers: httpx.Headers,
+    ) -> None:
+        """Classify one HTTP error status with the default wire detail."""
+        classify_http_status(
+            status_code,
+            idempotent=False,
+            detail=format_http_error_detail(status_code, error_body),
+            response_headers=response_headers,
+        )
+
     async def _post_json(
         self,
         endpoint_path: str,
         payload: dict[str, Any],
         messages: list[dict[str, Any]],
     ) -> dict[str, Any]:
-        async def _do_request() -> dict[str, Any]:
-            headers = await self._build_request_headers(messages, payload)
-            try:
-                response = await self._client.post(endpoint_path, json=payload, headers=headers)
-            except httpx.TransportError as exc:
-                raise wrap_network_error(exc) from exc
-
-            classify_http_status(
-                response.status_code,
-                idempotent=False,
-                detail=_http_error_detail(response),
-                response_headers=response.headers,
-            )
-            return dict(decode_response_json(response, "GitHub Copilot provider"))
-
-        return await retry_async(_do_request)
+        return await post_json_with_retry(
+            self._client,
+            endpoint_path,
+            payload,
+            build_headers=lambda: self._build_request_headers(messages, payload),
+            handle_error_status=self._handle_error_status,
+            provider_context="GitHub Copilot provider",
+        )
 
     async def _connect_stream(
         self,
@@ -364,37 +370,13 @@ class GitHubCopilotAdapter(OpenAICompatibleAdapter):
         payload: dict[str, Any],
         messages: list[dict[str, Any]],
     ) -> httpx.Response:
-        async def _connect() -> httpx.Response:
-            # Rebuild headers per attempt: the Copilot session token may refresh
-            # during a retry backoff, and the getter must be re-consulted each time.
-            headers = await self._build_request_headers(messages, payload)
-            request = build_streaming_request(
-                self._client,
-                "POST",
-                endpoint_path,
-                json=payload,
-                headers=headers,
-            )
-            try:
-                response = await self._client.send(request, stream=True)
-            except httpx.TransportError as exc:
-                raise wrap_network_error(exc) from exc
-
-            if response.status_code >= 400:
-                error_body = (await response.aread()).decode("utf-8", errors="replace")
-                await response.aclose()
-                detail = _http_error_detail(response, error_body)
-                classify_http_status(
-                    response.status_code,
-                    idempotent=False,
-                    detail=detail,
-                    response_headers=response.headers,
-                )
-                raise ProviderError(f"Provider error: {response.status_code}", retryable=False)
-
-            return response
-
-        return await retry_async(_connect)
+        return await connect_streaming_with_retry(
+            self._client,
+            endpoint_path,
+            payload,
+            build_headers=lambda: self._build_request_headers(messages, payload),
+            handle_error_status=self._handle_error_status,
+        )
 
     async def _stream_responses(
         self,
@@ -556,11 +538,6 @@ def _copilot_supported_parameters(
     if supports.get("parallel_tool_calls") is True:
         supported_parameters.append("parallel_tool_calls")
     return supported_parameters
-
-
-def _http_error_detail(response: httpx.Response, body: str | None = None) -> str:
-    reason = response.text if body is None else body
-    return f"{response.status_code} {reason}".strip() if reason else str(response.status_code)
 
 
 def _copilot_runtime_metadata(

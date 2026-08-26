@@ -12,7 +12,9 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Callable
 from typing import Any
+from unittest.mock import AsyncMock, patch
 
 import httpx
 import pytest
@@ -22,9 +24,12 @@ from core.providers._http_shared import (
     build_async_client,
     build_streaming_request,
     classify_http_status,
+    connect_streaming_with_retry,
     decode_response_json,
     execute_with_sampling_fallback,
+    format_http_error_detail,
     parse_sse_json_data,
+    post_json_with_retry,
     provider_chat_timeout,
     provider_streaming_timeout,
     unsupported_sampling_parameter,
@@ -471,3 +476,234 @@ async def test_execute_with_sampling_fallback_reraises_unrelated_errors() -> Non
         await execute_with_sampling_fallback(
             attempt, payload, logger=logging.getLogger("test"), provider_label="stub"
         )
+
+
+# ---------------------------------------------------------------------------
+# connect_streaming_with_retry / post_json_with_retry — establishment
+# ---------------------------------------------------------------------------
+
+
+def _never_expected_error_status(status_code: int, error_body: str, headers: httpx.Headers) -> None:
+    raise AssertionError(f"error handler unexpectedly called for {status_code}: {error_body}")
+
+
+def _mock_client(
+    handler: Callable[[httpx.Request], httpx.Response],
+) -> httpx.AsyncClient:
+    return httpx.AsyncClient(base_url="https://example.com", transport=httpx.MockTransport(handler))
+
+
+@pytest.mark.asyncio
+async def test_connect_streaming_with_retry_returns_established_stream() -> None:
+    """A successful POST returns the streamed response with the built headers."""
+
+    seen_requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen_requests.append(request)
+        return httpx.Response(200, content=b"stream-bytes")
+
+    async def build_headers() -> dict[str, str]:
+        return {"Authorization": "Bearer t1"}
+
+    client = _mock_client(handler)
+    try:
+        response = await connect_streaming_with_retry(
+            client,
+            "/v1/chat",
+            {"model": "m"},
+            build_headers=build_headers,
+            handle_error_status=_never_expected_error_status,
+        )
+    finally:
+        await client.aclose()
+
+    assert response.status_code == 200
+    assert [request.url.path for request in seen_requests] == ["/v1/chat"]
+    assert json.loads(seen_requests[0].content) == {"model": "m"}
+    assert seen_requests[0].headers["Authorization"] == "Bearer t1"
+
+
+@pytest.mark.asyncio
+async def test_connect_streaming_with_retry_rebuilds_headers_on_every_attempt() -> None:
+    """Each retry re-consults the header builder so refreshed tokens go out."""
+
+    sent_tokens: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        sent_tokens.append(request.headers["Authorization"])
+        if len(sent_tokens) == 1:
+            return httpx.Response(429, headers={"Retry-After": "1"})
+        return httpx.Response(200)
+
+    builds: list[str] = []
+
+    async def build_headers() -> dict[str, str]:
+        token = f"t{len(builds) + 1}"
+        builds.append(token)
+        return {"Authorization": f"Bearer {token}"}
+
+    def handle_error_status(status_code: int, error_body: str, headers: httpx.Headers) -> None:
+        classify_http_status(
+            status_code,
+            idempotent=False,
+            detail=format_http_error_detail(status_code, error_body),
+            response_headers=headers,
+        )
+
+    client = _mock_client(handler)
+    try:
+        with patch("core.utils.retry.asyncio.sleep", new_callable=AsyncMock):
+            response = await connect_streaming_with_retry(
+                client,
+                "/v1/chat",
+                {},
+                build_headers=build_headers,
+                handle_error_status=handle_error_status,
+            )
+    finally:
+        await client.aclose()
+
+    assert response.status_code == 200
+    assert builds == ["t1", "t2"]
+    assert sent_tokens == ["Bearer t1", "Bearer t2"]
+
+
+@pytest.mark.asyncio
+async def test_connect_streaming_with_retry_passes_read_body_to_error_handler() -> None:
+    """The error handler receives the fully-read body of a failed establishment."""
+
+    calls: list[tuple[int, str]] = []
+
+    def handle_error_status(status_code: int, error_body: str, headers: httpx.Headers) -> None:
+        calls.append((status_code, error_body))
+        raise ProviderAuthError(f"Authentication error: {error_body}")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(401, content=b"bad key")
+
+    async def build_headers() -> dict[str, str]:
+        return {}
+
+    client = _mock_client(handler)
+    try:
+        with pytest.raises(ProviderAuthError):
+            await connect_streaming_with_retry(
+                client,
+                "/v1/chat",
+                {},
+                build_headers=build_headers,
+                handle_error_status=handle_error_status,
+            )
+    finally:
+        await client.aclose()
+
+    assert calls == [(401, "bad key")]
+
+
+@pytest.mark.asyncio
+async def test_connect_streaming_with_retry_applies_custom_transport_wrapper() -> None:
+    """An adapter's transport wrapper re-labels connection failures in place."""
+
+    wrapped_errors: list[Exception] = []
+
+    class TerminalTransportError(Exception):
+        pass
+
+    def wrap_transport_error(error: httpx.TransportError) -> Exception:
+        wrapped_errors.append(error)
+        return TerminalTransportError("provider offline")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("refused")
+
+    async def build_headers() -> dict[str, str]:
+        return {}
+
+    client = _mock_client(handler)
+    try:
+        with pytest.raises(TerminalTransportError):
+            await connect_streaming_with_retry(
+                client,
+                "/v1/chat",
+                {},
+                build_headers=build_headers,
+                handle_error_status=_never_expected_error_status,
+                wrap_transport_error=wrap_transport_error,
+            )
+    finally:
+        await client.aclose()
+
+    assert isinstance(wrapped_errors[0], httpx.ConnectError)
+
+
+@pytest.mark.asyncio
+async def test_post_json_with_retry_decodes_object_reply() -> None:
+    """A 2xx JSON object reply is decoded under the provider context."""
+
+    seen_requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen_requests.append(request)
+        return httpx.Response(200, content=b'{"ok": true}')
+
+    async def build_headers() -> dict[str, str]:
+        return {"Authorization": "Bearer t1"}
+
+    client = _mock_client(handler)
+    try:
+        result = await post_json_with_retry(
+            client,
+            "/v1/responses",
+            {"model": "m"},
+            build_headers=build_headers,
+            handle_error_status=_never_expected_error_status,
+            provider_context="Stub provider",
+        )
+    finally:
+        await client.aclose()
+
+    assert result == {"ok": True}
+    assert json.loads(seen_requests[0].content) == {"model": "m"}
+    assert seen_requests[0].headers["Authorization"] == "Bearer t1"
+
+
+@pytest.mark.asyncio
+async def test_post_json_with_retry_passes_buffered_text_to_error_handler() -> None:
+    """Non-streaming error bodies arrive as buffered text, not raw bytes."""
+
+    calls: list[tuple[int, str]] = []
+
+    def handle_error_status(status_code: int, error_body: str, headers: httpx.Headers) -> None:
+        calls.append((status_code, error_body))
+        raise ProviderError(f"Provider error: {status_code}", retryable=False)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(400, text="nope")
+
+    async def build_headers() -> dict[str, str]:
+        return {}
+
+    client = _mock_client(handler)
+    try:
+        with pytest.raises(ProviderError):
+            await post_json_with_retry(
+                client,
+                "/v1/responses",
+                {},
+                build_headers=build_headers,
+                handle_error_status=handle_error_status,
+                provider_context="Stub provider",
+            )
+    finally:
+        await client.aclose()
+
+    assert calls == [(400, "nope")]
+
+
+def test_format_http_error_detail_prefers_body_and_falls_back_to_status() -> None:
+    """Non-empty bodies render after the status; empty bodies leave bare status."""
+
+    assert format_http_error_detail(502, "gateway boom") == "502 gateway boom"
+    assert format_http_error_detail(502, "") == "502"
+    assert format_http_error_detail(502, None) == "502"
