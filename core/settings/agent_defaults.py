@@ -50,9 +50,6 @@ class AgentDefaultSpec:
     parse: Callable[[Any, str], Any]
     diagnose: Callable[[list[JsonDiagnostic], str, Any], None]
     normalize: Callable[[Any], str | list[str] | float | None]
-    allowed_values: tuple[str, ...] = ()
-    minimum: float | None = None
-    maximum: float | None = None
 
 
 def _parse_model_binding(value: Any, label: str) -> str:
@@ -63,15 +60,35 @@ def _parse_model_binding(value: Any, label: str) -> str:
     return value
 
 
+def _fallback_chain_entries(items: Any) -> list[str]:
+    """Return the cleaned ordered fallback chain or raise ``ValueError``.
+
+    The one implementation of the chain rules — plain strings, non-empty after
+    strip, capped at ``MAX_FALLBACK_MODELS``, no duplicates. Callers wrap the
+    ``ValueError`` into their surface's exception type and prefix its message.
+    """
+    from core.settings.settings import MAX_FALLBACK_MODELS
+
+    if not isinstance(items, list) or any(not isinstance(item, str) for item in items):
+        raise ValueError("must be a string list")
+    cleaned = [item.strip() for item in items]
+    if any(not item for item in cleaned):
+        raise ValueError("entries must be non-empty model bindings")
+    if len(cleaned) > MAX_FALLBACK_MODELS:
+        raise ValueError(f"accepts at most {MAX_FALLBACK_MODELS} entries, got {len(cleaned)}")
+    duplicates = sorted({item for item in cleaned if cleaned.count(item) > 1})
+    if duplicates:
+        raise ValueError(f"must not contain duplicates: {', '.join(duplicates)}")
+    return cleaned
+
+
 def _parse_fallback_models(value: Any, label: str) -> list[str]:
     from core.settings.settings import SettingsValidationError
 
-    del label  # message is fixed for this field
-    if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
-        raise SettingsValidationError(
-            "params.defaults.agent.fallback_models must be a string list or null"
-        )
-    return value
+    try:
+        return _fallback_chain_entries(value)
+    except ValueError as error:
+        raise SettingsValidationError(f"{label} {error}") from error
 
 
 def _parse_temperature(value: Any, label: str) -> float | None:
@@ -121,9 +138,10 @@ def _normalize_model_binding(value: Any) -> str:
 
 
 def _normalize_fallback_models(value: Any) -> list[str]:
-    if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
-        raise StorageError("Agent default fallback_models must be a string list")
-    return list(value)
+    try:
+        return _fallback_chain_entries(value)
+    except ValueError as error:
+        raise StorageError(f"Agent default fallback_models {error}") from error
 
 
 def _normalize_temperature(value: Any) -> float:
@@ -179,8 +197,6 @@ _AGENT_DEFAULT_SPECS: dict[str, AgentDefaultSpec] = {
         parse=_parse_temperature,
         diagnose=_diagnose_temperature,
         normalize=_normalize_temperature,
-        minimum=None,
-        maximum=None,
     ),
     "thinking_effort": AgentDefaultSpec(
         name="thinking_effort",
@@ -244,22 +260,29 @@ def agent_default_catalog() -> list[
     """Return ``(field, value_type, description, allowed_values, minimum, maximum)``.
 
     Ordered to match ``AGENT_DEFAULT_FIELDS``; consumed by the Settings-path catalog
-    so the public path entries never drift from the registry.
+    so the public path entries never drift from the registry. Bounds and allowed
+    values are derived from the field's kind, not re-listed per field name.
     """
     from core.settings.settings import ALLOWED_THINKING_EFFORTS, MAX_TEMPERATURE, MIN_TEMPERATURE
 
+    bounds_by_kind: dict[str, dict[str, Any]] = {
+        KIND_NULLABLE_ENUM: {"allowed_values": tuple(sorted(ALLOWED_THINKING_EFFORTS))},
+        KIND_NULLABLE_NUMBER: {"minimum": MIN_TEMPERATURE, "maximum": MAX_TEMPERATURE},
+    }
     entries: list[tuple[str, str, str, tuple[str, ...], float | None, float | None]] = []
     for field in AGENT_DEFAULT_FIELD_ORDER:
         spec = _AGENT_DEFAULT_SPECS[field]
-        allowed_values = spec.allowed_values
-        minimum = spec.minimum
-        maximum = spec.maximum
-        if field == "thinking_effort":
-            allowed_values = tuple(sorted(ALLOWED_THINKING_EFFORTS))
-        if field == "temperature":
-            minimum = MIN_TEMPERATURE
-            maximum = MAX_TEMPERATURE
-        entries.append((field, spec.value_type, spec.description, allowed_values, minimum, maximum))
+        bounds = bounds_by_kind.get(spec.kind, {})
+        entries.append(
+            (
+                field,
+                spec.value_type,
+                spec.description,
+                bounds.get("allowed_values", ()),
+                bounds.get("minimum"),
+                bounds.get("maximum"),
+            )
+        )
     return entries
 
 
@@ -304,18 +327,6 @@ class AgentDefaults:
             result["thinking_effort"] = self.thinking_effort
         return result
 
-    def get(self, field: str) -> Any:
-        """Return one field's value (``None`` when absent)."""
-        if field == "model":
-            return self.model
-        if field == "fallback_models":
-            return self.fallback_models
-        if field == "temperature":
-            return self.temperature
-        if field == "thinking_effort":
-            return self.thinking_effort
-        raise KeyError(field)
-
 
 def bake_agent_defaults(
     *,
@@ -328,17 +339,20 @@ def bake_agent_defaults(
     """Compute the fields changed by baking global defaults into one agent.
 
     Mirrors the resolver's identity-branch provenance exactly: a default applies
-    only when the agent's own value is empty/absent. Returns the changed fields; an
-    empty dict means nothing changed. Shared by ``AgentStore._apply_defaults`` and
-    the server test double so the baking rule lives in one place.
+    only when the agent's own value is empty/absent. Every applied value passes
+    through the field's storage normalizer first, so a stale or hand-edited
+    settings file cannot bake an invalid chain, range, or enum into agents.
+    Returns the changed fields; an empty dict means nothing changed. Shared by
+    ``AgentStore._apply_defaults`` and the server test double so the baking rule
+    lives in one place.
     """
     changes: dict[str, Any] = {}
     if model == "" and defaults.model is not None:
-        changes["model"] = defaults.model
+        changes["model"] = _normalize_model_binding(defaults.model)
     if fallback_models == [] and defaults.fallback_models is not None:
-        changes["fallback_models"] = list(defaults.fallback_models)
+        changes["fallback_models"] = _normalize_fallback_models(defaults.fallback_models)
     if temperature is None and defaults.temperature is not None:
-        changes["temperature"] = defaults.temperature
+        changes["temperature"] = _normalize_temperature(defaults.temperature)
     if thinking_effort is None and defaults.thinking_effort is not None:
-        changes["thinking_effort"] = defaults.thinking_effort
+        changes["thinking_effort"] = _normalize_thinking_effort(defaults.thinking_effort)
     return changes
