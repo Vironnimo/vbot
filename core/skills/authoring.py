@@ -32,7 +32,7 @@ from core.skills.skill_validator import (
     split_skill_document,
 )
 from core.skills.skills import RESOURCE_DIRECTORIES, SKILL_FILENAME
-from core.utils.atomic import atomic_write_text
+from core.utils.atomic import atomic_write_bytes, atomic_write_text
 from core.utils.errors import VBotError
 
 PROVENANCE_AUTHOR_KEY = "author"
@@ -114,6 +114,7 @@ class SkillAuthoringService:
         """Replace an existing Skill's complete ``SKILL.md``."""
         with self._write_lock:
             skill_file = self._existing_skill_file(target_root, skill_name)
+            file_ending = _detect_line_ending(_read_raw_text(skill_file))
             document, validation = self._prepare_document(
                 content,
                 skill_name=skill_name,
@@ -121,7 +122,7 @@ class SkillAuthoringService:
                 author=author,
                 source=source,
             )
-            atomic_write_text(skill_file, document)
+            _atomic_write_styled(skill_file, document, file_ending)
             return SkillWriteResult(
                 name=skill_name,
                 operation="edit",
@@ -156,31 +157,42 @@ class SkillAuthoringService:
             if not target.is_file():
                 raise SkillAuthoringError(f"Skill file not found: {normalized}")
             try:
-                current = target.read_text(encoding="utf-8")
+                current = _read_raw_text(target)
             except UnicodeDecodeError as error:
                 raise SkillAuthoringError(
                     f"Cannot patch non-UTF-8 Skill file: {normalized}"
                 ) from error
-            occurrences = current.count(old_string)
+            file_ending = _detect_line_ending(current)
+            normalized_current = _normalize_newlines(current)
+            normalized_old = _normalize_newlines(old_string)
+            occurrences = normalized_current.count(normalized_old)
             if occurrences == 0:
-                raise SkillAuthoringError(f"patch match not found in {normalized}.")
-            if occurrences > 1 and not replace_all:
-                raise SkillAuthoringError(
-                    f"patch match is not unique in {normalized} ({occurrences} matches); "
-                    "read the target and retry with a larger unique passage."
+                hint = (
+                    " If you meant a support file, pass file_path (e.g. references/notes.md)."
+                    if is_skill_document
+                    else ""
                 )
-            patched = current.replace(old_string, new_string)
+                raise SkillAuthoringError(f"patch match not found in {normalized}.{hint}")
+            if occurrences > 1 and not replace_all:
+                lines = ", ".join(
+                    str(line) for line in _occurrence_lines(normalized_current, normalized_old)
+                )
+                raise SkillAuthoringError(
+                    f"patch match is not unique in {normalized} ({occurrences} matches "
+                    f"at line(s) {lines}); read the target and retry with a larger unique passage."
+                )
+            patched = normalized_current.replace(normalized_old, _normalize_newlines(new_string))
             warnings: list[str] = []
             if is_skill_document:
                 patched, validation = self._prepare_document(
-                    patched,
+                    _normalize_newlines(patched),
                     skill_name=skill_name,
                     skill_file=target,
                     author=author,
                     source=source,
                 )
                 warnings = validation.warnings
-            atomic_write_text(target, patched)
+            _atomic_write_styled(target, patched, file_ending)
             return SkillWriteResult(
                 name=skill_name,
                 operation="patch",
@@ -208,8 +220,17 @@ class SkillAuthoringService:
         with self._write_lock:
             skill_dir = self._existing_skill_dir(target_root, skill_name)
             resource_path = self._resource_path(skill_dir, relative_path)
+            file_ending = "\n"
+            if resource_path.is_file():
+                try:
+                    existing = _read_raw_text(resource_path)
+                except UnicodeDecodeError:
+                    existing = ""
+                if existing:
+                    file_ending = _detect_line_ending(existing)
+            styled = _to_line_ending(_normalize_newlines(content), file_ending)
             resource_path.parent.mkdir(parents=True, exist_ok=True)
-            atomic_write_text(resource_path, content)
+            atomic_write_bytes(resource_path, styled.encode("utf-8"))
             return SkillWriteResult(
                 name=skill_name,
                 operation="write_file",
@@ -348,6 +369,56 @@ def _normalized_support_path(relative_path: str) -> str:
         allowed = " or ".join(f"{name}/" for name in RESOURCE_DIRECTORIES)
         raise SkillAuthoringError(f"Support files must live under {allowed}")
     return raw.as_posix()
+
+
+def _normalize_newlines(text: str) -> str:
+    """Normalize CR/CRLF to LF for line-ending-tolerant matching."""
+    return text.replace("\r\n", "\n").replace("\r", "\n")
+
+
+def _read_raw_text(path: Path) -> str:
+    """Read a file without newline translation (style-preserving read)."""
+    with path.open(encoding="utf-8", newline="") as handle:
+        return handle.read()
+
+
+def _detect_line_ending(text: str) -> str:
+    """Return the line ending used in ``text`` (CRLF, CR, or LF)."""
+    if "\r\n" in text:
+        return "\r\n"
+    if "\r" in text:
+        return "\r"
+    return "\n"
+
+
+def _to_line_ending(text: str, ending: str) -> str:
+    """Convert LF-normalized text to the target line ending."""
+    if ending == "\n":
+        return text
+    return text.replace("\n", ending)
+
+
+def _occurrence_lines(text: str, needle: str) -> list[int]:
+    """1-based line numbers where each ``needle`` occurrence starts in ``text``."""
+    lines: list[int] = []
+    start = 0
+    while True:
+        index = text.find(needle, start)
+        if index == -1:
+            return lines
+        lines.append(text.count("\n", 0, index) + 1)
+        start = index + max(1, len(needle))
+
+
+def _atomic_write_styled(target_path: Path, text: str, file_ending: str) -> None:
+    """Write ``text`` to ``target_path`` preserving ``file_ending``.
+
+    Goes through bytes so the text-mode newline translation of
+    ``atomic_write_text`` cannot double-convert (on Windows it would turn an
+    explicit CRLF text into CRCRLF).
+    """
+    styled = _to_line_ending(_normalize_newlines(text), file_ending)
+    atomic_write_bytes(target_path, styled.encode("utf-8"))
 
 
 def _remove_empty_resource_parents(parent: Path, skill_dir: Path) -> None:

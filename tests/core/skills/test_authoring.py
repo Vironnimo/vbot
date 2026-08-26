@@ -35,6 +35,12 @@ def read_front_matter(skill_file: Path) -> Any:
     return yaml.safe_load(front)
 
 
+def read_raw(path: Path) -> str:
+    """Read text without newline translation (style-preserving read)."""
+    with path.open(encoding="utf-8", newline="") as handle:
+        return handle.read()
+
+
 @pytest.fixture
 def service() -> SkillAuthoringService:
     return SkillAuthoringService()
@@ -139,6 +145,24 @@ class TestEdit:
         with pytest.raises(SkillAuthoringError):
             service.edit(tmp_path, "demo", skill_document(), author="agent")
 
+    def test_edit_preserves_crlf_style(
+        self, service: SkillAuthoringService, tmp_path: Path
+    ) -> None:
+        service.create(tmp_path, "demo", skill_document(), author="agent")
+        skill_file = tmp_path / "demo" / "SKILL.md"
+        skill_file.write_text(
+            skill_file.read_text(encoding="utf-8").replace("\n", "\r\n"),
+            encoding="utf-8",
+            newline="",
+        )
+
+        service.edit(tmp_path, "demo", skill_document(description="Updated."), author="agent")
+
+        text = read_raw(skill_file)
+        assert "Updated." in text
+        assert "\r\n" in text
+        assert "\n" not in text.replace("\r\n", "")
+
 
 class TestPatch:
     def test_applies_unique_replacement(
@@ -153,13 +177,13 @@ class TestPatch:
     def test_patch_not_found(self, service: SkillAuthoringService, tmp_path: Path) -> None:
         service.create(tmp_path, "demo", skill_document(), author="agent")
 
-        with pytest.raises(SkillAuthoringError):
+        with pytest.raises(SkillAuthoringError, match="file_path"):
             service.patch(tmp_path, "demo", "absent", "x", author="agent")
 
     def test_patch_not_unique(self, service: SkillAuthoringService, tmp_path: Path) -> None:
         service.create(tmp_path, "demo", skill_document(body="dup\ndup"), author="agent")
 
-        with pytest.raises(SkillAuthoringError):
+        with pytest.raises(SkillAuthoringError, match=r"line\(s\) 9, 10"):
             service.patch(tmp_path, "demo", "dup", "x", author="agent")
 
     def test_patch_identical_strings(self, service: SkillAuthoringService, tmp_path: Path) -> None:
@@ -167,6 +191,59 @@ class TestPatch:
 
         with pytest.raises(SkillAuthoringError):
             service.patch(tmp_path, "demo", "same", "same", author="agent")
+
+    def test_patch_tolerates_crlf_match_on_lf_file(
+        self, service: SkillAuthoringService, tmp_path: Path
+    ) -> None:
+        service.create(tmp_path, "demo", skill_document(body="# Demo\nold line\n"), author="agent")
+
+        service.patch(tmp_path, "demo", "old line\r\n", "new line\r\n", author="agent")
+
+        assert "new line" in (tmp_path / "demo" / "SKILL.md").read_text(encoding="utf-8")
+
+    def test_patch_on_crlf_file_preserves_style(
+        self, service: SkillAuthoringService, tmp_path: Path
+    ) -> None:
+        service.create(tmp_path, "demo", skill_document(body="# Demo\nold line\n"), author="agent")
+        skill_file = tmp_path / "demo" / "SKILL.md"
+        skill_file.write_text(
+            skill_file.read_text(encoding="utf-8").replace("\n", "\r\n"),
+            encoding="utf-8",
+            newline="",
+        )
+
+        service.patch(tmp_path, "demo", "old line", "new line", author="agent")
+
+        text = read_raw(skill_file)
+        assert "new line" in text
+        assert "\r\n" in text
+        assert "\n" not in text.replace("\r\n", "")
+
+    def test_patch_crlf_support_file_with_lf_match(
+        self, service: SkillAuthoringService, tmp_path: Path
+    ) -> None:
+        service.create(tmp_path, "demo", skill_document(), author="agent")
+        service.write_file(tmp_path, "demo", "references/notes.md", "notes\n")
+        resource = tmp_path / "demo" / "references" / "notes.md"
+        resource.write_text(
+            resource.read_text(encoding="utf-8").replace("\n", "\r\n"),
+            encoding="utf-8",
+            newline="",
+        )
+
+        service.patch(
+            tmp_path,
+            "demo",
+            "notes",
+            "ideas",
+            author="agent",
+            relative_path="references/notes.md",
+        )
+
+        text = read_raw(resource)
+        assert "ideas" in text
+        assert "\r\n" in text
+        assert "\n" not in text.replace("\r\n", "")
 
 
 class TestDelete:
@@ -224,6 +301,22 @@ class TestSupportFiles:
 
         with pytest.raises(SkillAuthoringError):
             service.remove_file(tmp_path, "demo", "scripts/absent.py")
+
+    def test_write_file_preserves_existing_crlf_style(
+        self, service: SkillAuthoringService, tmp_path: Path
+    ) -> None:
+        service.create(tmp_path, "demo", skill_document(), author="agent")
+        service.write_file(tmp_path, "demo", "references/notes.md", "notes\n")
+        resource = tmp_path / "demo" / "references" / "notes.md"
+        resource.write_text(
+            resource.read_text(encoding="utf-8").replace("\n", "\r\n"),
+            encoding="utf-8",
+            newline="",
+        )
+
+        service.write_file(tmp_path, "demo", "references/notes.md", "replacement\n")
+
+        assert read_raw(resource) == "replacement\r\n"
 
 
 class TestLenientMetadataAuthoring:
