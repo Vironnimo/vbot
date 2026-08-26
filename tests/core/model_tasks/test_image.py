@@ -39,6 +39,7 @@ from core.model_tasks.image import (
     split_image_call_options,
 )
 from core.model_tasks.image_types import ImageGenerationResult
+from core.providers.accounts import ConnectionRef
 from core.providers.errors import ProviderError, ProviderOutcomeUnknownError
 from core.utils.errors import ConfigError
 
@@ -630,8 +631,8 @@ class _UnderstandingRuntime:
         self.models = models or _UnderstandingModels()
         self.calls: list[tuple[str, str]] = []
 
-    def get_adapter(self, provider_id: str, connection_id: str) -> _UnderstandingAdapter:
-        self.calls.append((provider_id, connection_id))
+    def get_adapter(self, connection: ConnectionRef) -> _UnderstandingAdapter:
+        self.calls.append((connection.provider_id, connection.connection_id))
         if isinstance(self.adapter, Exception):
             raise self.adapter
         return self.adapter

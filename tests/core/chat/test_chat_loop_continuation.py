@@ -390,7 +390,7 @@ async def test_start_run_allows_parallel_different_sessions(tmp_path: Path) -> N
     second_adapter = StubAdapter([{"content": "Second", "tool_calls": None}])
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=first_adapter)
     adapters = [first_adapter, second_adapter]
-    runtime.get_adapter = lambda provider_id, connection_id: adapters.pop(0)  # type: ignore[method-assign]
+    runtime.get_adapter = lambda connection: adapters.pop(0)  # type: ignore[method-assign]
     runtime.chat_sessions.create("coder", session_id="session-one")
     runtime.chat_sessions.create("coder", session_id="session-two")
 

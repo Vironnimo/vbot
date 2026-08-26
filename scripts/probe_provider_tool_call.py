@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import Any
 
 from core.channels.channels import ChannelConfig
+from core.providers.accounts import ConnectionRef
 from core.providers.tool_schema import (
     ToolSchemaProfile,
     render_tool_definitions,
@@ -3162,7 +3163,7 @@ async def _run(args: argparse.Namespace) -> int:
     explicit_non_strict_tool_count = sum(1 for tool in rendered if tool.get("strict") is False)
     runtime = Runtime(Config(data_dir=args.data_dir))
     _start_probe_runtime(runtime)
-    adapter = runtime.get_adapter(args.provider, args.connection)
+    adapter = runtime.get_adapter(ConnectionRef(args.provider, args.connection))
     request_adapter: Any = adapter
     try:
         if args.wire == "anthropic":

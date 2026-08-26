@@ -32,6 +32,7 @@ from core.agents import Agent
 from core.automation import TriggerService
 from core.chat import ChatLoop, ChatLoopDependencies, ChatSessionManager
 from core.prompts import PinnedSkillCatalog
+from core.providers.accounts import ConnectionRef
 from core.runs import ChatRunManager, Run
 from core.runtime.runtime import Runtime
 from core.tools import ToolAccess, ToolContext, ToolRegistry, tool_success
@@ -389,10 +390,13 @@ async def _run_case(
             raise RuntimeError("completion TriggerService is not initialized")
         return trigger_service.deliver_background_completions(run, session)
 
-    def get_adapter(provider_id: str, connection_id: str) -> _SyntheticFirstStepAdapter:
-        if provider_id != target.provider or connection_id != target.connection:
+    def get_adapter(connection: ConnectionRef) -> _SyntheticFirstStepAdapter:
+        if (
+            connection.provider_id != target.provider
+            or connection.connection_id != target.connection
+        ):
             raise ValueError("background completion probe resolved an unexpected Provider route")
-        wrapped = _SyntheticFirstStepAdapter(source_runtime.get_adapter(provider_id, connection_id))
+        wrapped = _SyntheticFirstStepAdapter(source_runtime.get_adapter(connection))
         wrapped_adapters.append(wrapped)
         return wrapped
 

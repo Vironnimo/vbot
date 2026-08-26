@@ -20,6 +20,7 @@ from core.model_tasks.embeddings_providers import (
     EmbeddingUsage,
     ProviderEmbeddingResponse,
 )
+from core.providers.accounts import ConnectionRef
 from core.providers.token_getter import TokenGetter
 
 # ---------------------------------------------------------------------------
@@ -483,7 +484,7 @@ class _RuntimeStub:
     providers: Any = None
     provider_credentials: Any = None
 
-    def get_connection_token_getter(self, _provider_id: str, _connection_id: str) -> TokenGetter:
+    def get_connection_token_getter(self, connection: ConnectionRef) -> TokenGetter:
         async def _get_token() -> str:
             return "unused-token"
 

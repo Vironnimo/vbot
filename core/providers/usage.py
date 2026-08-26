@@ -27,7 +27,11 @@ from typing import Any, Protocol
 
 import httpx
 
-from core.providers.accounts import DEFAULT_ACCOUNT_ID, compose_connection_id
+from core.providers.accounts import (
+    DEFAULT_ACCOUNT_ID,
+    ConnectionRef,
+    compose_connection_id,
+)
 from core.providers.openai import CODEX_EXTRA_HEADERS
 from core.providers.openai_subscription_auth import (
     CHATGPT_ACCOUNT_ID_EXTRA_KEY,
@@ -223,11 +227,9 @@ class UsageProbeRuntime(Protocol):
     @property
     def provider_credentials(self) -> _ProviderCredentialsProtocol: ...
 
-    def get_connection_token_getter(self, provider_id: str, connection_id: str) -> TokenGetter: ...
+    def get_connection_token_getter(self, connection: ConnectionRef) -> TokenGetter: ...
 
-    def get_connection_token_extra(
-        self, provider_id: str, connection_id: str
-    ) -> Mapping[str, str]: ...
+    def get_connection_token_extra(self, connection: ConnectionRef) -> Mapping[str, str]: ...
 
 
 class UsageResponse(Protocol):
@@ -300,6 +302,12 @@ class _SupportedConnection:
             self.local_connection_id,
             self.account_id,
         )
+
+    @property
+    def ref(self) -> ConnectionRef:
+        """Return the exact target as a Runtime-seam connection reference."""
+
+        return ConnectionRef(self.provider_id, self.target_id)
 
 
 _SUPPORTED_CONNECTIONS: tuple[_SupportedConnection, ...] = (
@@ -585,15 +593,11 @@ class ProviderUsageService:
         connection_config = provider.get_connection(connection.local_connection_id)
         base_url = connection_config.base_url or provider.base_url
 
-        token_getter = self._runtime.get_connection_token_getter(
-            connection.provider_id, connection.target_id
-        )
+        token_getter = self._runtime.get_connection_token_getter(connection.ref)
         token = await token_getter()
         account_id = extract_chatgpt_account_id(token)
         if not account_id:
-            extra = self._runtime.get_connection_token_extra(
-                connection.provider_id, connection.target_id
-            )
+            extra = self._runtime.get_connection_token_extra(connection.ref)
             account_id = extra.get(CHATGPT_ACCOUNT_ID_EXTRA_KEY) or None
         if not account_id:
             raise UsageFetchError("Reconnect required")
@@ -615,9 +619,7 @@ class ProviderUsageService:
         # The Copilot usage endpoint authenticates with the GitHub OAuth token
         # (token-store ``extra``) under GitHub's ``token`` scheme — NOT the
         # exchanged Copilot bearer.
-        extra = self._runtime.get_connection_token_extra(
-            connection.provider_id, connection.target_id
-        )
+        extra = self._runtime.get_connection_token_extra(connection.ref)
         github_oauth_token = extra.get(GITHUB_OAUTH_TOKEN_EXTRA_KEY)
         if not github_oauth_token:
             raise UsageFetchError("Reconnect required")
@@ -641,9 +643,7 @@ class ProviderUsageService:
         connection_config = provider.get_connection(connection.local_connection_id)
         base_url = connection_config.base_url or provider.base_url
 
-        token_getter = self._runtime.get_connection_token_getter(
-            connection.provider_id, connection.target_id
-        )
+        token_getter = self._runtime.get_connection_token_getter(connection.ref)
         token = await token_getter()
         headers = {connection_config.auth.header: f"{connection_config.auth.prefix}{token}"}
         body = await self._get_json(_join_url(base_url, MINIMAX_USAGE_PATH), headers)
@@ -659,9 +659,7 @@ class ProviderUsageService:
         connection_config = provider.get_connection(connection.local_connection_id)
         base_url = connection_config.base_url or provider.base_url
 
-        token_getter = self._runtime.get_connection_token_getter(
-            connection.provider_id, connection.target_id
-        )
+        token_getter = self._runtime.get_connection_token_getter(connection.ref)
         token = await token_getter()
         headers = {connection_config.auth.header: f"{connection_config.auth.prefix}{token}"}
         body = await self._get_json(_join_url(base_url, OLLAMA_USAGE_PATH), headers)
@@ -677,9 +675,7 @@ class ProviderUsageService:
         connection_config = provider.get_connection(connection.local_connection_id)
         base_url = connection_config.base_url or provider.base_url
 
-        token_getter = self._runtime.get_connection_token_getter(
-            connection.provider_id, connection.target_id
-        )
+        token_getter = self._runtime.get_connection_token_getter(connection.ref)
         token = await token_getter()
         headers = {connection_config.auth.header: f"{connection_config.auth.prefix}{token}"}
         credits_body = await self._get_json(_join_url(base_url, OPENROUTER_CREDITS_PATH), headers)

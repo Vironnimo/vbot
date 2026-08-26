@@ -9,6 +9,7 @@ import httpx
 import pytest
 import respx
 
+from core.providers.accounts import ConnectionRef
 from core.providers.errors import (
     NetworkError,
     ProviderAuthError,
@@ -94,7 +95,7 @@ class _StubRuntime:
         self.providers = SimpleNamespace(get=lambda provider_id: provider)
         self._token = token
 
-    def get_connection_token_getter(self, provider_id: str, connection_id: str):
+    def get_connection_token_getter(self, connection: ConnectionRef):
         async def _get_token() -> str:
             return self._token
 

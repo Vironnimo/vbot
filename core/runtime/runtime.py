@@ -60,7 +60,11 @@ from core.prompts import (
     SkillPromptRegistry,
     SystemPromptManager,
 )
-from core.providers.accounts import DEFAULT_ACCOUNT_ID, split_connection_id
+from core.providers.accounts import (
+    DEFAULT_ACCOUNT_ID,
+    ConnectionRef,
+    split_connection_id,
+)
 from core.providers.adapter import ModelLookup, ProviderAdapter
 from core.providers.anthropic import AnthropicAdapter
 from core.providers.credentials import ProviderCredentialResolver
@@ -2573,7 +2577,7 @@ class Runtime:
     # Adapter factory
     # ------------------------------------------------------------------
 
-    def get_adapter(self, provider_id: str, connection_id: str) -> ProviderAdapter:
+    def get_adapter(self, connection: ConnectionRef) -> ProviderAdapter:
         """Return a wired adapter instance for the given provider.
 
         Looks up the provider config from the registry, resolves the
@@ -2581,11 +2585,10 @@ class Runtime:
         resolver, and instantiates the correct adapter class.
 
         Args:
-            provider_id: Unique provider identifier (e.g. ``"openai"``).
-            connection_id: Compositional connection identifier using the
-                ``provider:connection[:account]`` grammar (e.g.
-                ``"openai:api-key"`` or ``"openai:api-key:work"``). An
-                absent account resolves to the connection's first usable
+            connection: Connection reference whose *connection_id* uses the
+                compositional ``provider:connection[:account]`` grammar
+                (e.g. ``"openai:api-key"`` or ``"openai:api-key:work"``).
+                An absent account resolves to the connection's first usable
                 account (``default`` first, then sorted alphabetically).
 
         Returns:
@@ -2600,6 +2603,8 @@ class Runtime:
         if not self._started:
             raise RuntimeError("Runtime not started — call start() first")
 
+        provider_id = connection.provider_id
+        connection_id = connection.connection_id
         provider_config = self.providers.get(provider_id)
         provider_replay_override = self.models.provider_reasoning_replay(provider_id)
         if provider_replay_override is not None:
@@ -2607,13 +2612,13 @@ class Runtime:
                 provider_config,
                 reasoning_replay=cast(ReasoningReplayPolicy, provider_replay_override),
             )
-        connection, account_id = self._get_connection_config(provider_config, connection_id)
+        connection_config, account_id = self._get_connection_config(provider_config, connection_id)
         if not self.provider_credentials.is_connection_enabled(provider_id, connection_id):
             raise ConfigError(
-                f"Provider connection '{provider_id}:{connection.id}' is disabled — "
+                f"Provider connection '{provider_id}:{connection_config.id}' is disabled — "
                 f"enable it in Settings → Providers or via the provider CLI"
             )
-        token_getter = self._get_token_getter(provider_id, connection_id, connection, account_id)
+        token_getter = self._get_token_getter(connection, connection_config, account_id)
 
         adapter_class = _ADAPTER_MAP.get(provider_config.adapter)
         if adapter_class is None:
@@ -2634,9 +2639,9 @@ class Runtime:
             # an active Tool loop and invalidating its warm prompt cache.
             extra_kwargs["routing"] = self.storage.load_openrouter_routing_settings()
 
-        base_url = connection.base_url
+        base_url = connection_config.base_url
         if adapter_class is GitHubCopilotAdapter:
-            copilot_endpoint = self.get_connection_token_extra(provider_id, connection_id).get(
+            copilot_endpoint = self.get_connection_token_extra(connection).get(
                 COPILOT_API_ENDPOINT_EXTRA_KEY
             )
             if copilot_endpoint:
@@ -2646,16 +2651,16 @@ class Runtime:
             provider_config,
             token_getter,
             base_url,
-            connection.auth,
+            connection_config.auth,
             model_lookup=self._model_lookup_for(provider_id),
             debug_recorder=debug_recorder,
-            connection_mode=connection.mode,
+            connection_mode=connection_config.mode,
             **extra_kwargs,
         )
 
         return cast(ProviderAdapter, adapter)
 
-    def get_connection_token_getter(self, provider_id: str, connection_id: str) -> TokenGetter:
+    def get_connection_token_getter(self, connection: ConnectionRef) -> TokenGetter:
         """Return a token getter for one provider connection.
 
         Public, DI-friendly wrapper over the same connection resolution and
@@ -2666,8 +2671,8 @@ class Runtime:
         :class:`OAuthTokenGetter` for OAuth connections.
 
         Args:
-            provider_id: Unique provider identifier (e.g. ``"openai"``).
-            connection_id: Compositional ``provider:connection[:account]`` id.
+            connection: Reference whose *connection_id* uses the compositional
+                ``provider:connection[:account]`` id.
 
         Raises:
             RuntimeError: If the runtime has not been started.
@@ -2677,11 +2682,13 @@ class Runtime:
         if not self._started:
             raise RuntimeError("Runtime not started — call start() first")
 
-        provider_config = self.providers.get(provider_id)
-        connection, account_id = self._get_connection_config(provider_config, connection_id)
-        return self._get_token_getter(provider_id, connection_id, connection, account_id)
+        provider_config = self.providers.get(connection.provider_id)
+        connection_config, account_id = self._get_connection_config(
+            provider_config, connection.connection_id
+        )
+        return self._get_token_getter(connection, connection_config, account_id)
 
-    def get_connection_token_extra(self, provider_id: str, connection_id: str) -> Mapping[str, str]:
+    def get_connection_token_extra(self, connection: ConnectionRef) -> Mapping[str, str]:
         """Return the stored OAuth token ``extra`` metadata for a connection.
 
         Reads the persisted token-store ``extra`` map for the resolved account
@@ -2691,8 +2698,8 @@ class Runtime:
         both yield ``{}`` rather than raising.
 
         Args:
-            provider_id: Unique provider identifier (e.g. ``"github-copilot"``).
-            connection_id: Compositional ``provider:connection[:account]`` id.
+            connection: Reference whose *connection_id* uses the compositional
+                ``provider:connection[:account]`` id.
 
         Raises:
             RuntimeError: If the runtime has not been started.
@@ -2702,17 +2709,21 @@ class Runtime:
         if not self._started:
             raise RuntimeError("Runtime not started — call start() first")
 
-        provider_config = self.providers.get(provider_id)
-        connection, account_id = self._get_connection_config(provider_config, connection_id)
+        provider_config = self.providers.get(connection.provider_id)
+        connection_config, account_id = self._get_connection_config(
+            provider_config, connection.connection_id
+        )
         resolved_account_id = account_id
         if resolved_account_id is None:
             try:
                 resolved_account_id = self.provider_credentials.resolve_account_id(
-                    provider_id, connection.id
+                    connection.provider_id, connection_config.id
                 )
             except ConfigError:
                 resolved_account_id = DEFAULT_ACCOUNT_ID
-        token = self.token_store.load(provider_id, connection.id, account_id=resolved_account_id)
+        token = self.token_store.load(
+            connection.provider_id, connection_config.id, account_id=resolved_account_id
+        )
         if token is None:
             return {}
         return dict(token.extra)
@@ -2967,23 +2978,27 @@ class Runtime:
 
     def _get_token_getter(
         self,
-        provider_id: str,
-        connection_id: str,
-        connection: ConnectionConfig,
+        connection: ConnectionRef,
+        connection_config: ConnectionConfig,
         account_id: str | None,
     ) -> TokenGetter:
-        if connection.type == "none":
+        provider_id = connection.provider_id
+        if connection_config.type == "none":
             # Keyless connection: adapters and discovery skip the auth header
             # when the credential value is empty.
             return StaticTokenGetter("")
-        if connection.type == "api_key":
-            raw_token = self.provider_credentials.get_credentials(provider_id, connection_id)
+        if connection_config.type == "api_key":
+            raw_token = self.provider_credentials.get_credentials(
+                provider_id, connection.connection_id
+            )
             return StaticTokenGetter(raw_token)
-        if connection.type == "oauth":
-            if connection.oauth is None:
+        if connection_config.type == "oauth":
+            if connection_config.oauth is None:
                 # OAuth stubs with a credential_key still resolve through the
                 # central credential path until they get token-store metadata.
-                raw_token = self.provider_credentials.get_credentials(provider_id, connection_id)
+                raw_token = self.provider_credentials.get_credentials(
+                    provider_id, connection.connection_id
+                )
                 return StaticTokenGetter(raw_token)
             # An explicitly pinned account is used exactly as given (a
             # mid-flight login must still work); only an absent account
@@ -2992,18 +3007,18 @@ class Runtime:
             if resolved_account_id is None:
                 resolved_account_id = self.provider_credentials.resolve_account_id(
                     provider_id,
-                    connection.id,
+                    connection_config.id,
                 )
             return OAuthTokenGetter(
                 self.token_store,
                 provider_id,
-                connection.id,
-                connection.oauth,
+                connection_config.id,
+                connection_config.oauth,
                 account_id=resolved_account_id,
             )
         raise ConfigError(
-            f"Unknown connection type '{connection.type}' for provider '{provider_id}' "
-            f"connection '{connection.id}'"
+            f"Unknown connection type '{connection_config.type}' for provider '{provider_id}' "
+            f"connection '{connection_config.id}'"
         )
 
     def _get_connection_config(

@@ -10,6 +10,7 @@ import pytest
 
 from core.chat import ChatMessage
 from core.chat.content_blocks import ContentBlock, FileBlock, FileMentionBlock, TextBlock
+from core.providers.accounts import ConnectionRef
 from core.providers.errors import ProviderError
 from core.sessions import ChatSessionManager, SessionAddress
 from core.sessions.titles import (
@@ -92,8 +93,8 @@ class StubRuntime:
         self._adapters = list(adapters or [StubAdapter()])
         self.adapter_calls: list[tuple[str, str]] = []
 
-    def get_adapter(self, provider_id: str, connection_id: str) -> StubAdapter:
-        self.adapter_calls.append((provider_id, connection_id))
+    def get_adapter(self, connection: ConnectionRef) -> StubAdapter:
+        self.adapter_calls.append((connection.provider_id, connection.connection_id))
         return self._adapters.pop(0)
 
 

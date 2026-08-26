@@ -31,6 +31,7 @@ from core.chat.streaming import (
     is_local_provider_base_url,
     iter_with_chunk_timeout,
 )
+from core.providers.accounts import ConnectionRef
 from core.providers.adapter import terminal_outcome_from_response
 from core.providers.errors import NetworkError, ProviderError
 from core.runs import (
@@ -97,16 +98,16 @@ def _resolve_request_context_kwargs(
     return {}
 
 
-def _connection_local_id(provider_id: str, connection_id: str) -> str | None:
-    """Extract the provider-local connection id from a ``<provider>:<conn>[:<account>]`` id.
+def _connection_local_id(connection: ConnectionRef) -> str | None:
+    """Extract the provider-local connection id from a connection reference.
 
-    Returns ``None`` when *connection_id* does not carry the expected provider
-    prefix, so callers fall back to the provider-level base URL.
+    Returns ``None`` when the reference's compositional id does not carry the
+    expected provider prefix, so callers fall back to the provider-level base URL.
     """
-    prefix = f"{provider_id}:"
-    if not connection_id.startswith(prefix):
+    prefix = f"{connection.provider_id}:"
+    if not connection.connection_id.startswith(prefix):
         return None
-    remainder = connection_id[len(prefix) :]
+    remainder = connection.connection_id[len(prefix) :]
     return remainder.split(":", 1)[0] or None
 
 
@@ -564,7 +565,7 @@ class WireRequestRunner:
             recovery=recovery,
         )
 
-    def resolve_chunk_timeout(self, provider_id: str, connection_id: str) -> float | None:
+    def resolve_chunk_timeout(self, connection: ConnectionRef) -> float | None:
         """Return the per-chunk stall timeout for this connection, or None locally.
 
         Local/loopback inference servers (Ollama, llama.cpp, vLLM) can stay
@@ -572,12 +573,12 @@ class WireRequestRunner:
         for them; every remote provider keeps the default timeout. Detection is
         owned by :func:`is_local_provider_base_url` so the policy has one home.
         """
-        base_url = self._resolve_connection_base_url(provider_id, connection_id)
+        base_url = self._resolve_connection_base_url(connection)
         if is_local_provider_base_url(base_url):
             return None
         return STREAM_CHUNK_TIMEOUT_SECONDS
 
-    def _resolve_connection_base_url(self, provider_id: str, connection_id: str) -> str | None:
+    def _resolve_connection_base_url(self, connection: ConnectionRef) -> str | None:
         """Resolve the effective base URL for a provider connection, if known.
 
         Tolerant of a missing/partial provider registry and of connections
@@ -585,17 +586,19 @@ class WireRequestRunner:
         (treated as "not local", so the stall guard stays on).
         """
         try:
-            provider_config = self._dependencies.providers.get(provider_id)
+            provider_config = self._dependencies.providers.get(connection.provider_id)
         except (KeyError, AttributeError):
             return None
-        local_id = _connection_local_id(provider_id, connection_id)
+        local_id = _connection_local_id(connection)
         get_connection = getattr(provider_config, "get_connection", None)
         if local_id is not None and callable(get_connection):
             try:
-                connection = get_connection(local_id)
+                connection_config = get_connection(local_id)
             except KeyError:
-                connection = None
-            connection_base_url = getattr(connection, "base_url", None) if connection else None
+                connection_config = None
+            connection_base_url = (
+                getattr(connection_config, "base_url", None) if connection_config else None
+            )
             if isinstance(connection_base_url, str) and connection_base_url:
                 return connection_base_url
         provider_base_url = getattr(provider_config, "base_url", None)

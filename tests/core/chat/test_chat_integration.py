@@ -111,7 +111,7 @@ async def test_agent_sends_message_and_persists_assistant_response(
     config._data["VBOT_VERSION"] = "test-version"
     runtime = Runtime(config)
     monkeypatch.setenv("FAKE_API_KEY", "test-key")
-    monkeypatch.setattr(runtime, "get_adapter", lambda provider_id, connection_id: adapter)
+    monkeypatch.setattr(runtime, "get_adapter", lambda connection: adapter)
 
     runtime.start()
     try:
@@ -163,7 +163,7 @@ async def test_read_tool_success_persists_result_and_final_response_uses_content
     config._data["VBOT_VERSION"] = "test-version"
     runtime = Runtime(config)
     monkeypatch.setenv("FAKE_API_KEY", "test-key")
-    monkeypatch.setattr(runtime, "get_adapter", lambda provider_id, connection_id: adapter)
+    monkeypatch.setattr(runtime, "get_adapter", lambda connection: adapter)
 
     runtime.start()
     try:
@@ -234,7 +234,7 @@ async def test_parallel_tool_calls_count_one_iteration_per_model_response(
     config._data["VBOT_VERSION"] = "test-version"
     runtime = Runtime(config)
     monkeypatch.setenv("FAKE_API_KEY", "test-key")
-    monkeypatch.setattr(runtime, "get_adapter", lambda provider_id, connection_id: adapter)
+    monkeypatch.setattr(runtime, "get_adapter", lambda connection: adapter)
 
     runtime.start()
     try:
@@ -304,7 +304,7 @@ async def test_change_stats_stream_after_each_tool_round_and_match_terminal(
     config._data["VBOT_VERSION"] = "test-version"
     runtime = Runtime(config)
     monkeypatch.setenv("FAKE_API_KEY", "test-key")
-    monkeypatch.setattr(runtime, "get_adapter", lambda provider_id, connection_id: adapter)
+    monkeypatch.setattr(runtime, "get_adapter", lambda connection: adapter)
 
     runtime.start()
     try:
@@ -354,7 +354,7 @@ async def test_reasoning_only_response_is_one_iteration(
     config._data["VBOT_VERSION"] = "test-version"
     runtime = Runtime(config)
     monkeypatch.setenv("FAKE_API_KEY", "test-key")
-    monkeypatch.setattr(runtime, "get_adapter", lambda provider_id, connection_id: adapter)
+    monkeypatch.setattr(runtime, "get_adapter", lambda connection: adapter)
 
     runtime.start()
     try:
@@ -401,7 +401,7 @@ async def test_read_tool_missing_file_persists_failure_and_run_recovers(
     config._data["VBOT_VERSION"] = "test-version"
     runtime = Runtime(config)
     monkeypatch.setenv("FAKE_API_KEY", "test-key")
-    monkeypatch.setattr(runtime, "get_adapter", lambda provider_id, connection_id: adapter)
+    monkeypatch.setattr(runtime, "get_adapter", lambda connection: adapter)
 
     runtime.start()
     try:
@@ -476,7 +476,7 @@ async def test_read_image_returns_run_local_base64_in_tool_result_for_vision_mod
     config._data["VBOT_VERSION"] = "test-version"
     runtime = Runtime(config)
     monkeypatch.setenv("FAKE_API_KEY", "test-key")
-    monkeypatch.setattr(runtime, "get_adapter", lambda provider_id, connection_id: adapter)
+    monkeypatch.setattr(runtime, "get_adapter", lambda connection: adapter)
 
     runtime.start()
     try:
@@ -551,7 +551,7 @@ async def test_read_image_degrades_to_note_for_non_vision_model(
     config._data["VBOT_VERSION"] = "test-version"
     runtime = Runtime(config)
     monkeypatch.setenv("FAKE_API_KEY", "test-key")
-    monkeypatch.setattr(runtime, "get_adapter", lambda provider_id, connection_id: adapter)
+    monkeypatch.setattr(runtime, "get_adapter", lambda connection: adapter)
 
     runtime.start()
     try:
@@ -615,7 +615,7 @@ def _full_history_runtime(
     config._data["VBOT_VERSION"] = "test-version"
     runtime = Runtime(config)
     monkeypatch.setenv("FAKE_API_KEY", "test-key")
-    monkeypatch.setattr(runtime, "get_adapter", lambda provider_id, connection_id: adapter)
+    monkeypatch.setattr(runtime, "get_adapter", lambda connection: adapter)
     return runtime
 
 

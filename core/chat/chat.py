@@ -163,7 +163,11 @@ from core.prompts.pinned_context import (
     pinned_working_project_context,
     stamp_prompt_files_read,
 )
-from core.providers.accounts import DEFAULT_ACCOUNT_ID, split_connection_id
+from core.providers.accounts import (
+    DEFAULT_ACCOUNT_ID,
+    ConnectionRef,
+    split_connection_id,
+)
 from core.providers.adapter import (
     TERMINAL_OUTCOME_OUTPUT_TRUNCATED,
     TERMINAL_OUTCOME_STOP,
@@ -526,7 +530,7 @@ class ChatLoopDependencies:
     storage: StorageManager
     get_extension_registry: Callable[[], ExtensionRegistry | None]
     get_system_prompts: Callable[[], SystemPromptManager]
-    get_adapter: Callable[[str, str], ProviderAdapter]
+    get_adapter: Callable[[ConnectionRef], ProviderAdapter]
     resolve_skills: Callable[[str | None, str | None], SkillRegistry]
     refresh_skills: Callable[[str | None, str | None], SkillRegistry]
     get_local_context_windows: Callable[[], Mapping[str, Any]]
@@ -1522,7 +1526,8 @@ class ChatLoop:
         connection_id: str,
         model_id: str,
     ) -> _ModelTarget:
-        adapter = self._dependencies.get_adapter(provider_id, connection_id)
+        connection = ConnectionRef(provider_id, connection_id)
+        adapter = self._dependencies.get_adapter(connection)
         return _ModelTarget(
             provider_id=provider_id,
             connection_id=connection_id,
@@ -1541,9 +1546,7 @@ class ChatLoop:
                 model_id,
             ),
             wire_media_types=_resolve_wire_media_support(adapter, model_id),
-            chunk_timeout_seconds=self._wire_requests.resolve_chunk_timeout(
-                provider_id, connection_id
-            ),
+            chunk_timeout_seconds=self._wire_requests.resolve_chunk_timeout(connection),
         )
 
     async def _execute_run_impl(
@@ -2934,7 +2937,9 @@ class ChatLoop:
                     provider_id,
                     _model_connection_allowlist(self._dependencies, provider_id, summary_model_id),
                 )
-            summary_adapter = self._dependencies.get_adapter(provider_id, connection_id)
+            summary_adapter = self._dependencies.get_adapter(
+                ConnectionRef(provider_id, connection_id)
+            )
         except (ChatError, ConfigError, VBotError, KeyError):
             _LOGGER.warning(
                 "Invalid compaction summary model %r; using active run model instead.",

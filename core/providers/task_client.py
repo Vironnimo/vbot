@@ -21,6 +21,7 @@ from uuid import uuid4
 import httpx
 
 from core.providers._http_shared import classify_http_status, wrap_network_error
+from core.providers.accounts import ConnectionRef
 from core.providers.errors import (
     ProviderError,
     ProviderOutcomeUnknownError,
@@ -116,7 +117,7 @@ class TaskClientRuntime(Protocol):
     @property
     def providers(self) -> _ProviderLookupProtocol: ...
 
-    def get_connection_token_getter(self, provider_id: str, connection_id: str) -> TokenGetter:
+    def get_connection_token_getter(self, connection: ConnectionRef) -> TokenGetter:
         """Return a refresh-capable token getter for one provider connection."""
         ...
 
@@ -173,8 +174,10 @@ class ProviderTaskClient:
         provider = runtime.providers.get(target_ref.provider_id)
         connection = provider.get_connection(target_ref.local_connection_id)
         token_getter = runtime.get_connection_token_getter(
-            target_ref.provider_id,
-            target_ref.connection_id,
+            ConnectionRef(
+                target_ref.provider_id,
+                target_ref.connection_id,
+            )
         )
         return cls(
             provider=provider,

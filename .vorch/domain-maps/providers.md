@@ -36,6 +36,12 @@ Core terms Provider, Model, and Reasoning live in `.vorch/GLOSSARY.md`; Model-DB
 
 **Not:** Merely configured or reachable. A keyless Connection is credentialed by definition but disabled by default until the user opts in.
 
+### ConnectionRef
+
+**Definition:** Frozen address of one exact Provider Connection target - `provider_id` plus the compositional `provider:connection[:account]` string - passed as one value through the Runtime adapter/token seams (`get_adapter`, `get_connection_token_getter`, `get_connection_token_extra`) and their consumers. Lives in `core/providers/accounts.py`.
+
+**Not:** A `ConnectionConfig` (the resolved configuration record) or a credential-resolver query: resolver methods keep the optional-`connection_id` form where `None` means "any Connection of the Provider".
+
 ## Boundaries and invariants
 
 - `ProviderRegistry` owns immutable Provider/Connection configuration assembled from bundled JSON plus the current data directory's normalized Custom Provider overlay, including exact `catalog_exclusions` for ids a Provider advertises but cannot serve. Its direct load/reload API is strict by default; Runtime opts into tolerant assembly so an invalid/unreadable bundled or Custom Provider is logged and omitted without blocking valid siblings or startup, and an unreadable Provider directory yields the valid Custom Provider overlay. Tolerant registries never populate the bundled-only strict cache. Custom registries are never shared through that cache: two Runtimes using the same resources but different data directories must remain isolated. `ProviderCredentialResolver` owns credentials, Accounts, enabled overrides, and usability. Runtime owns wiring them into live Adapters.

@@ -18,6 +18,7 @@ import pytest
 
 from core.chat import ChatSessionManager
 from core.debug.recorder import DebugContext
+from core.providers.accounts import ConnectionRef
 from core.runs import ChatRunManager
 from core.skills.skills import SkillRegistry
 from core.tools import ToolRegistry, tool_success
@@ -292,9 +293,9 @@ class StubRuntime:
         self.adapter_provider_id: str | None = None
         self.adapter_connection_id: str | None = None
 
-    def get_adapter(self, provider_id: str, connection_id: str) -> DebugTrackingStubAdapter:
-        self.adapter_provider_id = provider_id
-        self.adapter_connection_id = connection_id
+    def get_adapter(self, connection: ConnectionRef) -> DebugTrackingStubAdapter:
+        self.adapter_provider_id = connection.provider_id
+        self.adapter_connection_id = connection.connection_id
         return self.adapter
 
     def skills_for(
@@ -592,10 +593,10 @@ async def test_fallback_adapter_receives_debug_context(tmp_path: Path) -> None:
             super().__init__(data_dir=data_dir, agent=agent, adapter=adapter, tools=tools)
             self.fallback_adapter = fallback_adapter
 
-        def get_adapter(self, provider_id: str, connection_id: str) -> DebugTrackingStubAdapter:
-            self.adapter_provider_id = provider_id
-            self.adapter_connection_id = connection_id
-            if connection_id.startswith("anthropic"):
+        def get_adapter(self, connection: ConnectionRef) -> DebugTrackingStubAdapter:
+            self.adapter_provider_id = connection.provider_id
+            self.adapter_connection_id = connection.connection_id
+            if connection.connection_id.startswith("anthropic"):
                 return self.fallback_adapter
             return self.adapter
 

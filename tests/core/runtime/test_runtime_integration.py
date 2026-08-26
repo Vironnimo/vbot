@@ -13,6 +13,7 @@ import pytest
 from core.chat.errors import ChatError
 from core.chat.model_resolution import _resolve_agent_connection
 from core.model_tasks import EmbeddingService
+from core.providers.accounts import ConnectionRef
 from core.providers.anthropic import AnthropicAdapter
 from core.providers.credentials import ProviderCredentialResolver
 from core.providers.github_copilot import GitHubCopilotAdapter
@@ -81,9 +82,9 @@ def runtime_with_openrouter_key(monkeypatch: pytest.MonkeyPatch, config: Config)
 def test_get_adapter_openai_returns_wired_adapter(
     runtime_with_openai_key: Runtime,
 ) -> None:
-    """Runtime.get_adapter('openai', 'openai:api-key') returns a wired adapter."""
+    """Runtime.get_adapter(ConnectionRef('openai', 'openai:api-key')) returns a wired adapter."""
     # Act
-    adapter = runtime_with_openai_key.get_adapter("openai", "openai:api-key")
+    adapter = runtime_with_openai_key.get_adapter(ConnectionRef("openai", "openai:api-key"))
 
     # Assert — type check + provider config wiring
     assert isinstance(adapter, OpenAICompatibleAdapter)
@@ -94,9 +95,11 @@ def test_get_adapter_openai_returns_wired_adapter(
 def test_get_adapter_anthropic_returns_wired_adapter(
     runtime_with_anthropic_key: Runtime,
 ) -> None:
-    """Runtime.get_adapter('anthropic', 'anthropic:api-key') returns a wired adapter."""
+    """get_adapter(ConnectionRef('anthropic', 'anthropic:api-key')) returns a wired adapter."""
     # Act
-    adapter = runtime_with_anthropic_key.get_adapter("anthropic", "anthropic:api-key")
+    adapter = runtime_with_anthropic_key.get_adapter(
+        ConnectionRef("anthropic", "anthropic:api-key")
+    )
 
     # Assert — type check + provider config wiring
     assert isinstance(adapter, AnthropicAdapter)
@@ -107,9 +110,11 @@ def test_get_adapter_anthropic_returns_wired_adapter(
 def test_get_adapter_openrouter_returns_wired_adapter(
     runtime_with_openrouter_key: Runtime,
 ) -> None:
-    """Runtime.get_adapter('openrouter', 'openrouter:api-key') returns a wired adapter."""
+    """get_adapter(ConnectionRef('openrouter', 'openrouter:api-key')) returns a wired adapter."""
     # Act
-    adapter = runtime_with_openrouter_key.get_adapter("openrouter", "openrouter:api-key")
+    adapter = runtime_with_openrouter_key.get_adapter(
+        ConnectionRef("openrouter", "openrouter:api-key")
+    )
 
     # Assert — type check + extra_headers wiring
     assert isinstance(adapter, OpenRouterAdapter)
@@ -127,7 +132,7 @@ async def test_get_adapter_github_copilot_returns_wired_adapter(runtime: Runtime
         OAuthToken(access_token="copilot-test-token"),
     )
 
-    adapter = runtime.get_adapter("github-copilot", "github-copilot:oauth")
+    adapter = runtime.get_adapter(ConnectionRef("github-copilot", "github-copilot:oauth"))
 
     assert isinstance(adapter, GitHubCopilotAdapter)
     assert adapter._config.id == "github-copilot"  # type: ignore[attr-defined]
@@ -167,7 +172,7 @@ async def test_get_adapter_resolves_api_key_account_credential(runtime: Runtime)
     )
 
     # Act
-    adapter = runtime.get_adapter("openai", "openai:api-key:work")
+    adapter = runtime.get_adapter(ConnectionRef("openai", "openai:api-key:work"))
 
     # Assert
     assert await adapter._token_getter() == "sk-work"  # type: ignore[attr-defined]
@@ -179,7 +184,7 @@ def test_get_adapter_unknown_api_key_account_raises_config_error(
     """Runtime.get_adapter() rejects an account without a configured credential."""
     # Act / Assert
     with pytest.raises(ConfigError, match="missing"):
-        runtime_with_openai_key.get_adapter("openai", "openai:api-key:missing")
+        runtime_with_openai_key.get_adapter(ConnectionRef("openai", "openai:api-key:missing"))
 
 
 @pytest.mark.asyncio
@@ -199,7 +204,7 @@ async def test_get_adapter_oauth_explicit_account_uses_that_account(runtime: Run
     )
 
     # Act
-    adapter = runtime.get_adapter("github-copilot", "github-copilot:oauth:work")
+    adapter = runtime.get_adapter(ConnectionRef("github-copilot", "github-copilot:oauth:work"))
 
     # Assert
     assert await adapter._token_getter() == "work-token"  # type: ignore[attr-defined]
@@ -219,7 +224,7 @@ async def test_get_adapter_oauth_without_account_resolves_first_usable(
     )
 
     # Act
-    adapter = runtime.get_adapter("github-copilot", "github-copilot:oauth")
+    adapter = runtime.get_adapter(ConnectionRef("github-copilot", "github-copilot:oauth"))
 
     # Assert
     assert await adapter._token_getter() == "work-token"  # type: ignore[attr-defined]
@@ -231,7 +236,7 @@ def test_get_adapter_oauth_without_any_usable_account_raises_config_error(
     """Without an account and without any stored token, adapter creation fails."""
     # Act / Assert
     with pytest.raises(ConfigError):
-        runtime.get_adapter("github-copilot", "github-copilot:oauth")
+        runtime.get_adapter(ConnectionRef("github-copilot", "github-copilot:oauth"))
 
 
 @pytest.mark.asyncio
@@ -247,7 +252,7 @@ async def test_get_adapter_oauth_explicit_account_without_token_still_builds_ada
     )
 
     # Act
-    adapter = runtime.get_adapter("github-copilot", "github-copilot:oauth:pending")
+    adapter = runtime.get_adapter(ConnectionRef("github-copilot", "github-copilot:oauth:pending"))
 
     # Assert — adapter exists, the missing token surfaces at call time.
     from core.providers.errors import ProviderAuthError
@@ -288,7 +293,7 @@ def test_get_adapter_connection_base_url_override_uses_override(
     )
 
     # Act
-    adapter = runtime.get_adapter("openai", "openai:enterprise")
+    adapter = runtime.get_adapter(ConnectionRef("openai", "openai:enterprise"))
 
     # Assert
     assert isinstance(adapter, OpenAICompatibleAdapter)
@@ -335,7 +340,7 @@ async def test_get_adapter_passes_selected_connection_auth_metadata(runtime: Run
     )
 
     # Act
-    adapter = runtime.get_adapter("openai", "openai:service-account")
+    adapter = runtime.get_adapter(ConnectionRef("openai", "openai:service-account"))
 
     # Assert
     assert isinstance(adapter, OpenAICompatibleAdapter)
@@ -362,7 +367,7 @@ async def test_runtime_start_loads_data_dir_env_for_provider_auth(
     runtime.start()
 
     # Act
-    adapter = runtime.get_adapter("openrouter", "openrouter:api-key")
+    adapter = runtime.get_adapter(ConnectionRef("openrouter", "openrouter:api-key"))
 
     # Assert
     assert runtime.has_provider_credentials("openrouter") is True
@@ -388,7 +393,7 @@ async def test_runtime_start_does_not_overwrite_existing_provider_environment(
     runtime.start()
 
     # Act
-    adapter = runtime.get_adapter("openrouter", "openrouter:api-key")
+    adapter = runtime.get_adapter(ConnectionRef("openrouter", "openrouter:api-key"))
 
     # Assert
     assert runtime.get_provider_credentials("openrouter") == "sk-or-from-process"
@@ -435,7 +440,7 @@ def test_runtime_empty_process_credential_overrides_data_dir_fallback(
 
     assert runtime.has_provider_credentials("openrouter") is False
     with pytest.raises(ConfigError):
-        runtime.get_adapter("openrouter", "openrouter:api-key")
+        runtime.get_adapter(ConnectionRef("openrouter", "openrouter:api-key"))
 
 
 def test_runtime_provider_credentials_report_missing_when_unconfigured(
@@ -563,7 +568,7 @@ def test_get_adapter_nonexistent_raises_key_error(runtime: Runtime) -> None:
     """Runtime.get_adapter('nonexistent') raises KeyError."""
     # Act & Assert
     with pytest.raises(KeyError, match="nonexistent"):
-        runtime.get_adapter("nonexistent", "nonexistent:api-key")
+        runtime.get_adapter(ConnectionRef("nonexistent", "nonexistent:api-key"))
 
 
 def test_get_model_nonexistent_raises_key_error(runtime: Runtime) -> None:
@@ -585,7 +590,7 @@ def test_get_adapter_missing_api_key_raises_config_error(
 
     # Act & Assert
     with pytest.raises(ConfigError):
-        runtime.get_adapter("openai", "openai:api-key")
+        runtime.get_adapter(ConnectionRef("openai", "openai:api-key"))
 
 
 def test_get_adapter_unknown_connection_id_raises_config_error(
@@ -594,7 +599,7 @@ def test_get_adapter_unknown_connection_id_raises_config_error(
     """Runtime.get_adapter() raises ConfigError for an unknown connection ID."""
 
     with pytest.raises(ConfigError):
-        runtime_with_openai_key.get_adapter("openai", "openai:missing")
+        runtime_with_openai_key.get_adapter(ConnectionRef("openai", "openai:missing"))
 
 
 def test_get_adapter_unknown_adapter_type_raises_config_error(
@@ -618,7 +623,7 @@ def test_get_adapter_unknown_adapter_type_raises_config_error(
     try:
         # Act & Assert
         with pytest.raises(ConfigError):
-            runtime.get_adapter("openai", "openai:api-key")
+            runtime.get_adapter(ConnectionRef("openai", "openai:api-key"))
     finally:
         # Restore the original map
         runtime.get_adapter.__globals__["_ADAPTER_MAP"].update(original_map)
@@ -636,7 +641,7 @@ def test_get_adapter_before_start_raises_runtime_error(config: Config) -> None:
 
     # Act & Assert
     with pytest.raises(RuntimeError):
-        runtime.get_adapter("openai", "openai:api-key")
+        runtime.get_adapter(ConnectionRef("openai", "openai:api-key"))
 
 
 # ------------------------------------------------------------------
