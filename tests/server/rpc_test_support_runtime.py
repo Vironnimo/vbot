@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import math
 import os
 from collections.abc import Callable
 from copy import deepcopy
@@ -30,14 +29,17 @@ from core.providers.accounts import (
     split_connection_id,
 )
 from core.runs import ChatRunManager, RunKind
-from core.settings import AGENT_DEFAULT_FIELDS
-from core.settings.normalizers import normalize_extensions_settings, normalize_speech_settings
+from core.settings.normalizers import (
+    normalize_agent_default_value,
+    normalize_agent_defaults,
+    normalize_extensions_settings,
+    normalize_speech_settings,
+)
 from core.settings.settings import parse_openrouter_routing
 from core.storage import DataDirectoryLayout, StorageError
 from core.tools import FileReadState, ToolRegistry
 from core.utils.errors import ConfigError
 from server.events import ServerEventBus
-from server.rpc import agent_methods
 from tests.core.chat.chat_loop_support import build_chat_loop
 from tests.server.rpc_test_support_common import (
     StubAgent,
@@ -282,27 +284,8 @@ class StubStorage:
         defaults = self._settings.get("defaults")
         if not isinstance(defaults, dict):
             return {}
-
-        raw_agent_defaults = defaults.get("agent")
-        if not isinstance(raw_agent_defaults, dict):
-            return {}
-
-        unsupported_fields = sorted(set(raw_agent_defaults) - AGENT_DEFAULT_FIELDS)
-        if unsupported_fields:
-            raise StorageError(
-                f"Unsupported defaults.agent settings: {', '.join(unsupported_fields)}"
-            )
-
-        normalized_agent_defaults: JsonObject = {}
-        for field, value in raw_agent_defaults.items():
-            normalized_value = self._normalize_agent_default_value(field, value)
-            if normalized_value is None:
-                continue
-            normalized_agent_defaults[field] = normalized_value
-
-        if not normalized_agent_defaults:
-            return {}
-        return {"agent": normalized_agent_defaults}
+        normalized = normalize_agent_defaults(defaults.get("agent"))
+        return {"agent": normalized} if normalized else {}
 
     def _apply_defaults(self, section: str, values: object) -> JsonObject:
         if section != "agent":
@@ -310,15 +293,9 @@ class StubStorage:
         if not isinstance(values, dict):
             raise StorageError("Defaults values must be a mapping")
 
-        unsupported_fields = sorted(set(values) - AGENT_DEFAULT_FIELDS)
-        if unsupported_fields:
-            raise StorageError(
-                f"Unsupported defaults.agent settings: {', '.join(unsupported_fields)}"
-            )
-
         current_agent_defaults = dict(self.load_defaults().get("agent", {}))
         for field, value in values.items():
-            normalized_value = self._normalize_agent_default_value(field, value)
+            normalized_value = normalize_agent_default_value(field, value)
             if normalized_value is None:
                 current_agent_defaults.pop(field, None)
                 continue
@@ -341,48 +318,6 @@ class StubStorage:
 
         self._settings = merged_settings
         return self.load_defaults()
-
-    @staticmethod
-    def _normalize_agent_default_value(field: str, value: Any) -> str | list[str] | float | None:
-        if value is None:
-            return None
-
-        if field in {"model", "fallback_models"}:
-            if field == "fallback_models":
-                if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
-                    raise StorageError("Agent default fallback_models must be a string list")
-                return list(value)
-            if not isinstance(value, str):
-                raise StorageError(f"Agent default {field} must be a string")
-            return value
-
-        if field == "temperature":
-            if isinstance(value, bool) or not isinstance(value, int | float):
-                raise StorageError("Agent default temperature must be a number or null")
-            temperature = float(value)
-            if not math.isfinite(temperature):
-                raise StorageError("Agent default temperature must be finite")
-            if (
-                temperature < agent_methods.MIN_TEMPERATURE
-                or temperature > agent_methods.MAX_TEMPERATURE
-            ):
-                raise StorageError(
-                    "Agent default temperature must be between "
-                    f"{agent_methods.MIN_TEMPERATURE:g} and {agent_methods.MAX_TEMPERATURE:g}"
-                )
-            return temperature
-
-        if field == "thinking_effort":
-            if not isinstance(value, str):
-                raise StorageError("Agent default thinking_effort must be a string or null")
-            if value not in agent_methods.ALLOWED_THINKING_EFFORTS:
-                allowed = ", ".join(
-                    repr(item) for item in sorted(agent_methods.ALLOWED_THINKING_EFFORTS)
-                )
-                raise StorageError(f"Agent default thinking_effort must be one of: {allowed}")
-            return value
-
-        raise StorageError(f"Unsupported defaults.agent setting: {field}")
 
     def load_settings(self) -> JsonObject:
         return dict(self._settings)

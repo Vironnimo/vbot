@@ -23,6 +23,7 @@ from core.search_config import (
     MAX_WEB_SEARCH_COUNT,
     MIN_WEB_SEARCH_COUNT,
 )
+from core.settings.agent_defaults import AGENT_DEFAULT_FIELDS, parse_agent_default_value
 
 JsonObject = dict[str, Any]
 
@@ -35,7 +36,7 @@ RECALL_BACKEND_PATTERN = re.compile(r"^[a-z][a-z0-9_]*$")
 ALLOWED_THINKING_EFFORTS = frozenset(
     {"", "none", "minimal", "low", "medium", "high", "xhigh", "max"}
 )
-AGENT_DEFAULT_FIELDS = frozenset({"model", "fallback_models", "temperature", "thinking_effort"})
+
 # Upper bound for one Agent's ordered fallback-model chain. Shared by the agent
 # store's save-time validation and the chat loop's defensive runtime slice; a
 # bounded chain keeps a misconfigured cascade from stacking unbounded retries.
@@ -664,38 +665,9 @@ def _parse_defaults_update(defaults: Any) -> JsonObject:
         if value is None:
             agent_defaults[field] = None
             continue
-
-        if field in {"model", "fallback_models"}:
-            if field == "fallback_models":
-                if value is not None and not (
-                    isinstance(value, list) and all(isinstance(item, str) for item in value)
-                ):
-                    raise SettingsValidationError(
-                        "params.defaults.agent.fallback_models must be a string list or null"
-                    )
-                agent_defaults[field] = value
-                continue
-            if not isinstance(value, str):
-                raise SettingsValidationError(
-                    f"params.defaults.agent.{field} must be a string or null"
-                )
-            agent_defaults[field] = value
-            continue
-
-        if field == "temperature":
-            agent_defaults[field] = validate_temperature(
-                value,
-                label="params.defaults.agent.temperature",
-                allow_none=True,
-            )
-            continue
-
-        if field == "thinking_effort":
-            agent_defaults[field] = validate_thinking_effort(
-                value,
-                label="params.defaults.agent.thinking_effort",
-                allow_none=True,
-            )
+        agent_defaults[field] = parse_agent_default_value(
+            field, value, label=f"params.defaults.agent.{field}"
+        )
 
     return {"agent": agent_defaults}
 
