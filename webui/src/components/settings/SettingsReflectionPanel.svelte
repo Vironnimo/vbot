@@ -5,13 +5,12 @@
   import TextField from '../ui/TextField.svelte';
   import Toggle from '../ui/Toggle.svelte';
   import {
-    createAutosaveParticipant,
+    createDebouncedAutosave,
     useAutosaveContext,
   } from '$lib/autosave.js';
   import { t } from '$lib/i18n.js';
   import { runSettingsSave } from '$lib/settingsSave.js';
 
-  const AUTO_SAVE_DEBOUNCE_MS = 800;
   const noop = () => {};
 
   const REFLECTION_SETTING_DEFAULTS = Object.freeze({
@@ -57,7 +56,6 @@
     untrack(() => getReflectionSettings(settings)),
   );
   let saving = $state(false);
-  let autoSaveTimer = null;
 
   let saveDisabled = $derived(
     saving ||
@@ -67,8 +65,7 @@
       ),
   );
   const autosaveContext = useAutosaveContext();
-  const reflectionAutosave = createAutosaveParticipant({
-    cancelPending: clearAutoSaveTimer,
+  const reflectionAutosave = createDebouncedAutosave({
     getSnapshot: () => ({ ...reflectionSettings }),
     hasChanges: () =>
       !reflectionSettingsMatch(
@@ -77,35 +74,26 @@
       ),
     save: saveReflectionSettings,
   });
-  const unregisterReflectionAutosave =
-    autosaveContext.register(reflectionAutosave);
+  const unregisterReflectionAutosave = autosaveContext.register(
+    reflectionAutosave.participant,
+  );
 
   $effect(() => {
     if (saveDisabled) {
       return;
     }
 
-    autoSaveTimer = setTimeout(() => {
-      autoSaveTimer = null;
-      void reflectionAutosave.runSave();
-    }, AUTO_SAVE_DEBOUNCE_MS);
+    reflectionAutosave.scheduleRun();
 
     return () => {
-      clearAutoSaveTimer();
+      reflectionAutosave.cancelPendingTimer();
     };
   });
 
   onDestroy(() => {
     unregisterReflectionAutosave();
-    clearAutoSaveTimer();
+    reflectionAutosave.cancelPendingTimer();
   });
-
-  function clearAutoSaveTimer() {
-    if (autoSaveTimer !== null) {
-      clearTimeout(autoSaveTimer);
-      autoSaveTimer = null;
-    }
-  }
 
   function reflectionSettingsMatch(left, right) {
     const normalizedLeft = getReflectionSettings({ reflection: left });
@@ -152,8 +140,8 @@
       return;
     }
 
-    clearAutoSaveTimer();
-    void reflectionAutosave.runSave('manual');
+    reflectionAutosave.cancelPendingTimer();
+    void reflectionAutosave.participant.runSave('manual');
   }
 
   async function saveReflectionSettings() {

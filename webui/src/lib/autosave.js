@@ -3,6 +3,8 @@ import { getContext, setContext } from 'svelte';
 const AUTOSAVE_CONTEXT = Symbol('vbot-autosave');
 const MAX_STABLE_SAVE_PASSES = 10;
 
+export const DEFAULT_AUTOSAVE_DEBOUNCE_MS = 800;
+
 const fallbackContext = Object.freeze({
   register: () => () => {},
   requestTransition: (action) => action(),
@@ -101,6 +103,54 @@ export function createAutosaveParticipant({
       (hasChanges() && snapshotKey(getSnapshot()) !== lastSuccessfulSnapshot),
     runSave,
   };
+}
+
+/**
+ * One autosave participant plus its debounce timer, owned together.
+ *
+ * The timer is deliberately not reactive state - it only holds a setTimeout
+ * handle. `cancelPending` is wired into the participant automatically so a
+ * save-flush (or a manual run) always cancels the pending debounce first;
+ * components keep only their own reactive trigger:
+ *
+ *   const editor = createDebouncedAutosave({ getSnapshot, hasChanges, save });
+ *   $effect(() => {
+ *     if (saveDisabled) return;
+ *     editor.scheduleRun();
+ *     return editor.cancelPendingTimer;
+ *   });
+ */
+export function createDebouncedAutosave({
+  getSnapshot,
+  hasChanges,
+  save,
+  debounceMs = DEFAULT_AUTOSAVE_DEBOUNCE_MS,
+}) {
+  let timer = null;
+
+  function cancelPendingTimer() {
+    if (timer !== null) {
+      clearTimeout(timer);
+      timer = null;
+    }
+  }
+
+  function scheduleRun() {
+    cancelPendingTimer();
+    timer = setTimeout(() => {
+      timer = null;
+      void participant.runSave();
+    }, debounceMs);
+  }
+
+  const participant = createAutosaveParticipant({
+    cancelPending: cancelPendingTimer,
+    getSnapshot,
+    hasChanges,
+    save,
+  });
+
+  return { cancelPendingTimer, participant, scheduleRun };
 }
 
 export function createAutosaveCoordinator() {

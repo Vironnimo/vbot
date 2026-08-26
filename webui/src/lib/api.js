@@ -6,6 +6,7 @@ import {
   buildProviderConnectPayload,
   buildProviderDisconnectPayload,
 } from './settingsView.js';
+import { isPlainObject } from './values.js';
 
 const RPC_ENDPOINT = '/api/rpc';
 const ATTACHMENT_UPLOAD_ENDPOINT = '/api/upload';
@@ -1968,10 +1969,6 @@ function browserOrigin() {
     return globalThis.location.origin;
   }
   return null;
-}
-
-function isPlainObject(value) {
-  return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
 function requireNonEmptyString(value, message, method) {

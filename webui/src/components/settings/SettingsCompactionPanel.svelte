@@ -5,7 +5,7 @@
   import Button from '../ui/Button.svelte';
   import { listConnections, listModels } from '$lib/api.js';
   import {
-    createAutosaveParticipant,
+    createDebouncedAutosave,
     useAutosaveContext,
   } from '$lib/autosave.js';
   import {
@@ -21,7 +21,6 @@
     selectModelValue,
   } from '$lib/modelSelection.js';
 
-  const AUTO_SAVE_DEBOUNCE_MS = 800;
   const noop = () => {};
 
   let {
@@ -36,7 +35,6 @@
     untrack(() => normalizeCompactionPolicy(settings?.compaction)),
   );
   let saving = $state(false);
-  let timer = null;
   let availableModels = $state([]);
   let availableConnections = $state([]);
   let lastModelsRefreshToken = null;
@@ -59,18 +57,18 @@
     saving || compactionPoliciesEqual(policy, settings?.compaction),
   );
   const autosaveContext = useAutosaveContext();
-  const compactionAutosave = createAutosaveParticipant({
-    cancelPending: clearTimer,
+  const compactionAutosave = createDebouncedAutosave({
     getSnapshot: () => normalizeCompactionPolicy(policy),
     hasChanges: () => !compactionPoliciesEqual(policy, settings?.compaction),
     save,
   });
-  const unregisterCompactionAutosave =
-    autosaveContext.register(compactionAutosave);
+  const unregisterCompactionAutosave = autosaveContext.register(
+    compactionAutosave.participant,
+  );
 
   onDestroy(() => {
     unregisterCompactionAutosave();
-    clearTimer();
+    compactionAutosave.cancelPendingTimer();
   });
   onMount(() => void loadModelCatalogs());
 
@@ -87,19 +85,9 @@
 
   $effect(() => {
     if (saveDisabled) return;
-    timer = setTimeout(() => {
-      timer = null;
-      void compactionAutosave.runSave();
-    }, AUTO_SAVE_DEBOUNCE_MS);
-    return clearTimer;
+    compactionAutosave.scheduleRun();
+    return () => compactionAutosave.cancelPendingTimer();
   });
-
-  function clearTimer() {
-    if (timer !== null) {
-      clearTimeout(timer);
-      timer = null;
-    }
-  }
 
   function update(next) {
     policy = next;
@@ -160,8 +148,8 @@
       });
       return;
     }
-    clearTimer();
-    void compactionAutosave.runSave('manual');
+    compactionAutosave.cancelPendingTimer();
+    void compactionAutosave.participant.runSave('manual');
   }
 </script>
 
