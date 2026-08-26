@@ -1594,6 +1594,7 @@ def test_runtime_loads_phase_two_services(runtime: Runtime) -> None:
         "browser-use",
         "coding-agents",
         "computer-use",
+        "free-models",
         "home-assistant",
         "pdf",
         "teach",
