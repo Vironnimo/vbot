@@ -146,7 +146,7 @@ class SkillAuthoringService:
             raise SkillAuthoringError("patch match and content must differ.")
         with self._write_lock:
             skill_dir = self._existing_skill_dir(target_root, skill_name)
-            normalized = _normalized_skill_file_path(relative_path)
+            normalized = normalize_skill_file_path(relative_path)
             is_skill_document = normalized == SKILL_FILENAME
             target = (
                 self._existing_skill_file(target_root, skill_name)
@@ -324,7 +324,15 @@ class SkillAuthoringService:
         return _assemble_document(stamped, body), result
 
 
-def _normalized_skill_file_path(relative_path: str) -> str:
+def normalize_skill_file_path(relative_path: str) -> str:
+    """Normalize one skill-package-relative path or raise ``SkillAuthoringError``.
+
+    The single shared rule for addressing a file inside a skill package:
+    ``SKILL.md`` passes through unchanged; every other path must be relative
+    and live under one of the resource directories (``scripts/``,
+    ``references/``, ``assets/``). Rejects absolute paths, empty segments,
+    and dot segments. Backslashes are accepted as separators.
+    """
     if relative_path.replace("\\", "/") == SKILL_FILENAME:
         return SKILL_FILENAME
     return _normalized_support_path(relative_path)
