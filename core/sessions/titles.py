@@ -21,6 +21,7 @@ from core.chat.model_resolution import (
     resolve_request_temperature,
 )
 from core.debug import DebugContext
+from core.providers.accounts import ConnectionRef
 from core.providers.errors import ProviderError
 from core.sessions.sessions import (
     SESSION_AUTO_TITLE_INITIALIZED_KEY,
@@ -239,7 +240,7 @@ class SessionTitleService:
         adapter: Any | None = None
         try:
             provider_id, model_id, connection_id = _resolve_model_target(self._runtime, model)
-            adapter = self._runtime.get_adapter(provider_id, connection_id)
+            adapter = self._runtime.get_adapter(ConnectionRef(provider_id, connection_id))
             if hasattr(adapter, "set_debug_context"):
                 adapter.set_debug_context(
                     DebugContext(

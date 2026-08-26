@@ -28,6 +28,7 @@ from core.models.query import ModelQuery
 from core.providers.accounts import (
     CREDENTIAL_KEY_ACCOUNT_SEPARATOR,
     DEFAULT_ACCOUNT_ID,
+    ConnectionRef,
     compose_connection_id,
     derive_credential_key,
     split_connection_id,
@@ -237,7 +238,7 @@ async def _routing_provider_options(state: Any, params: JsonObject) -> JsonObjec
         )
         if connection_id is None:
             raise ConfigError("OpenRouter has no usable Connection")
-        adapter = runtime.get_adapter(provider_id, connection_id)
+        adapter = runtime.get_adapter(ConnectionRef(provider_id, connection_id))
         loader = getattr(adapter, "routing_provider_options", None)
         if not callable(loader):
             await adapter.aclose()

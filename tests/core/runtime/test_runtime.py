@@ -15,6 +15,7 @@ import pytest
 from core.agents.agents import AgentStore
 from core.channels import ChannelService
 from core.prompts import LayoutEntry, SystemPromptManager
+from core.providers.accounts import ConnectionRef
 from core.providers.credentials import ProviderCredentialResolver
 from core.providers.providers import ProviderRegistry
 from core.recall import JsonlSessionRecallBackend, RecallBackendRegistry, SqliteFtsRecallBackend
@@ -1669,7 +1670,7 @@ class _ChatRuntimeStub:
         self._process_manager = process_manager
         self._adapter = adapter
 
-    def get_adapter(self, _provider_id: str, _connection_id: str) -> _BlockingAdapter:
+    def get_adapter(self, connection: ConnectionRef) -> _BlockingAdapter:
         return self._adapter
 
     def skills_for(

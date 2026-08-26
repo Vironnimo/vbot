@@ -11,6 +11,7 @@ from unittest.mock import Mock
 import pytest
 
 from core.models.models import Capabilities, Model, ModelRegistry, ReasoningCapabilities
+from core.providers.accounts import ConnectionRef
 from core.providers.anthropic import AnthropicAdapter
 from core.providers.credentials import ProviderCredentialResolver
 from core.providers.github_copilot import GitHubCopilotAdapter
@@ -356,7 +357,7 @@ def test_runtime_injects_openrouter_routing_snapshot(
         }
     )
 
-    adapter = runtime.get_adapter("openrouter", "openrouter:api-key")
+    adapter = runtime.get_adapter(ConnectionRef("openrouter", "openrouter:api-key"))
 
     assert isinstance(adapter, OpenRouterAdapter)
     assert adapter._routing["default"] == {  # type: ignore[attr-defined]
@@ -535,7 +536,7 @@ def test_runtime_get_adapter_selects_opencode_go_adapter_from_provider_config(
     runtime.start()
 
     # Act
-    adapter = runtime.get_adapter("opencode-go", "opencode-go:api-key")
+    adapter = runtime.get_adapter(ConnectionRef("opencode-go", "opencode-go:api-key"))
 
     # Assert
     assert runtime.providers.get("opencode-go").adapter == "opencode_go"
@@ -550,7 +551,7 @@ def test_runtime_get_adapter_selects_opencode_zen_adapter_from_explicit_connecti
     runtime = Runtime(Config(data_dir=tmp_path / "data"))
     runtime.start()
 
-    adapter = runtime.get_adapter("opencode-zen", "opencode-zen:api-key")
+    adapter = runtime.get_adapter(ConnectionRef("opencode-zen", "opencode-zen:api-key"))
 
     assert runtime.providers.get("opencode-zen").adapter == "opencode_zen"
     assert isinstance(adapter, OpenCodeZenAdapter)
@@ -586,7 +587,7 @@ def test_runtime_wires_opencode_go_adapter_with_model_lookup(runtime: Runtime) -
     runtime._models = ModelRegistry({})  # type: ignore[attr-defined]
 
     # Act
-    adapter = runtime.get_adapter("opencode-go", "opencode-go:api-key")
+    adapter = runtime.get_adapter(ConnectionRef("opencode-go", "opencode-go:api-key"))
 
     # Assert
     assert isinstance(adapter, OpenCodeGoAdapter)
@@ -622,7 +623,7 @@ def test_runtime_wires_openai_compatible_adapter_with_model_lookup(runtime: Runt
     runtime._models = ModelRegistry({})  # type: ignore[attr-defined]
 
     # Act
-    adapter = runtime.get_adapter("openai", "openai:api-key")
+    adapter = runtime.get_adapter(ConnectionRef("openai", "openai:api-key"))
 
     # Assert
     assert isinstance(adapter, OpenAICompatibleAdapter)
@@ -661,7 +662,7 @@ def test_runtime_openai_codex_connection_uses_codex_responses_mode(
     runtime._models = ModelRegistry({})  # type: ignore[attr-defined]
 
     # Act
-    adapter = runtime.get_adapter("openai", "openai:subscription")
+    adapter = runtime.get_adapter(ConnectionRef("openai", "openai:subscription"))
 
     # Assert
     assert isinstance(adapter, OpenAIAdapter)
@@ -698,7 +699,7 @@ def test_runtime_openai_api_key_connection_uses_default_mode(runtime: Runtime) -
     runtime._models = ModelRegistry({})  # type: ignore[attr-defined]
 
     # Act
-    adapter = runtime.get_adapter("openai", "openai:api-key")
+    adapter = runtime.get_adapter(ConnectionRef("openai", "openai:api-key"))
 
     # Assert
     assert isinstance(adapter, OpenAIAdapter)
@@ -778,7 +779,7 @@ def test_runtime_wires_anthropic_adapter_with_model_lookup(runtime: Runtime) -> 
     )
 
     # Act
-    adapter = runtime.get_adapter("anthropic", "anthropic:api-key")
+    adapter = runtime.get_adapter(ConnectionRef("anthropic", "anthropic:api-key"))
 
     # Assert
     assert isinstance(adapter, AnthropicAdapter)
@@ -842,7 +843,7 @@ def test_runtime_wires_copilot_adapter_with_model_metadata_lookup(runtime: Runti
     )
 
     # Act
-    adapter = runtime.get_adapter("github-copilot", "github-copilot:api-key")
+    adapter = runtime.get_adapter(ConnectionRef("github-copilot", "github-copilot:api-key"))
 
     # Assert
     assert isinstance(adapter, GitHubCopilotAdapter)
@@ -878,7 +879,7 @@ def test_runtime_copilot_metadata_lookup_falls_back_for_unknown_model(runtime: R
     runtime._models = ModelRegistry({})  # type: ignore[attr-defined]
 
     # Act
-    adapter = runtime.get_adapter("github-copilot", "github-copilot:api-key")
+    adapter = runtime.get_adapter(ConnectionRef("github-copilot", "github-copilot:api-key"))
 
     # Assert
     assert isinstance(adapter, GitHubCopilotAdapter)
@@ -935,7 +936,7 @@ def test_runtime_wires_mistral_adapter_with_model_lookup_for_reasoning_suppressi
     )
 
     # Act
-    adapter = runtime.get_adapter("mistral", "mistral:api-key")
+    adapter = runtime.get_adapter(ConnectionRef("mistral", "mistral:api-key"))
 
     # Assert
     assert isinstance(adapter, MistralAdapter)
@@ -978,7 +979,7 @@ def test_runtime_wires_minimax_adapter(runtime: Runtime) -> None:
     runtime._models = ModelRegistry({})  # type: ignore[attr-defined]
 
     # Act
-    adapter = runtime.get_adapter("minimax", "minimax:api-key")
+    adapter = runtime.get_adapter(ConnectionRef("minimax", "minimax:api-key"))
 
     # Assert
     assert isinstance(adapter, MiniMaxAdapter)
@@ -990,7 +991,7 @@ def test_runtime_wires_xai_adapter(runtime: Runtime) -> None:
         process_env={"XAI_API_KEY": "xai-token"},
     )
 
-    adapter = runtime.get_adapter("xai", "xai:api-key")
+    adapter = runtime.get_adapter(ConnectionRef("xai", "xai:api-key"))
 
     assert isinstance(adapter, XAIAdapter)
 
@@ -1001,7 +1002,7 @@ def test_runtime_wires_nous_adapter(runtime: Runtime) -> None:
         process_env={"NOUS_API_KEY": "nous-token"},
     )
 
-    adapter = runtime.get_adapter("nous", "nous:api-key")
+    adapter = runtime.get_adapter(ConnectionRef("nous", "nous:api-key"))
 
     assert isinstance(adapter, NousAdapter)
 
@@ -1012,7 +1013,7 @@ def test_runtime_wires_stepfun_adapter_and_explicit_connection_mode(runtime: Run
         process_env={"STEPFUN_API_KEY": "step-plan-token"},
     )
 
-    adapter = runtime.get_adapter("stepfun", "stepfun:step-plan")
+    adapter = runtime.get_adapter(ConnectionRef("stepfun", "stepfun:step-plan"))
 
     assert isinstance(adapter, StepFunAdapter)
     assert adapter._connection_mode == STEPFUN_PLAN_MODE  # type: ignore[attr-defined]
@@ -1025,7 +1026,7 @@ def test_runtime_wires_kimi_adapter_and_connection_mode(runtime: Runtime) -> Non
         process_env={"KIMI_CODING_API_KEY": "kimi-token"},
     )
 
-    adapter = runtime.get_adapter("kimi", "kimi:coding-plan")
+    adapter = runtime.get_adapter(ConnectionRef("kimi", "kimi:coding-plan"))
 
     assert isinstance(adapter, KimiAdapter)
     assert adapter._connection_mode == KIMI_CODING_MODE  # type: ignore[attr-defined]
@@ -1045,7 +1046,7 @@ def test_get_connection_token_getter_returns_static_for_api_key(runtime: Runtime
     )
 
     # Act
-    getter = runtime.get_connection_token_getter("minimax", "minimax:api-key")
+    getter = runtime.get_connection_token_getter(ConnectionRef("minimax", "minimax:api-key"))
 
     # Assert
     assert isinstance(getter, StaticTokenGetter)
@@ -1055,7 +1056,7 @@ def test_get_connection_token_getter_returns_static_for_api_key(runtime: Runtime
 async def test_token_getter_for_none_connection_is_static_and_empty(runtime: Runtime) -> None:
     """A keyless ``none`` connection yields a StaticTokenGetter with an empty token."""
     # Act — the shipped Ollama config carries a keyless local connection.
-    getter = runtime.get_connection_token_getter("ollama", "ollama:local")
+    getter = runtime.get_connection_token_getter(ConnectionRef("ollama", "ollama:local"))
 
     # Assert
     assert isinstance(getter, StaticTokenGetter)
@@ -1068,7 +1069,7 @@ def test_runtime_wires_ollama_adapter_for_keyless_local_connection(runtime: Runt
     runtime.storage.set_provider_connection_enabled("ollama:local", True)
 
     # Act
-    adapter = runtime.get_adapter("ollama", "ollama:local")
+    adapter = runtime.get_adapter(ConnectionRef("ollama", "ollama:local"))
 
     # Assert
     assert isinstance(adapter, OllamaAdapter)
@@ -1083,7 +1084,7 @@ def test_runtime_wires_openai_compatible_adapter_for_ollama_cloud(
         process_env={"OLLAMA_API_KEY": "ollama-secret"},
     )
 
-    adapter = runtime.get_adapter("ollama-cloud", "ollama-cloud:api-key")
+    adapter = runtime.get_adapter(ConnectionRef("ollama-cloud", "ollama-cloud:api-key"))
 
     assert isinstance(adapter, OllamaCloudAdapter)
 
@@ -1096,7 +1097,7 @@ def test_runtime_wires_provider_and_model_reasoning_replay_precedence(runtime: R
     # Provider override applies to every model without a Model-level override.
     runtime.models._provider_reasoning_replay["ollama-cloud"] = "current_run"  # type: ignore[attr-defined]
 
-    adapter = runtime.get_adapter("ollama-cloud", "ollama-cloud:api-key")
+    adapter = runtime.get_adapter(ConnectionRef("ollama-cloud", "ollama-cloud:api-key"))
 
     assert adapter.reasoning_replay_policy("unprofiled-model") == "current_run"
     # GLM-5.2 has no Model-level override anymore — it inherits the Provider policy.
@@ -1109,7 +1110,7 @@ def test_get_adapter_rejects_disabled_connection(runtime: Runtime) -> None:
     """A disabled connection never reaches adapter construction."""
     # Act / Assert — ollama:local is keyless and therefore disabled by default.
     with pytest.raises(ConfigError):
-        runtime.get_adapter("ollama", "ollama:local")
+        runtime.get_adapter(ConnectionRef("ollama", "ollama:local"))
 
 
 def test_ollama_provider_config_fields(runtime: Runtime) -> None:
@@ -1447,7 +1448,7 @@ async def test_get_connection_token_getter_returns_oauth_for_subscription(
     )
 
     # Act
-    getter = runtime.get_connection_token_getter("openai", "openai:subscription")
+    getter = runtime.get_connection_token_getter(ConnectionRef("openai", "openai:subscription"))
 
     # Assert
     assert isinstance(getter, OAuthTokenGetter)
@@ -1467,7 +1468,9 @@ def test_get_connection_token_extra_returns_stored_extra(runtime: Runtime) -> No
     )
 
     # Act
-    extra = runtime.get_connection_token_extra("github-copilot", "github-copilot:oauth")
+    extra = runtime.get_connection_token_extra(
+        ConnectionRef("github-copilot", "github-copilot:oauth")
+    )
 
     # Assert
     assert extra == {"github_oauth_token": "gho_example"}
@@ -1488,7 +1491,7 @@ def test_copilot_adapter_uses_account_specific_exchange_endpoint(runtime: Runtim
         ),
     )
 
-    adapter = runtime.get_adapter("github-copilot", "github-copilot:oauth")
+    adapter = runtime.get_adapter(ConnectionRef("github-copilot", "github-copilot:oauth"))
 
     assert str(adapter._client.base_url) == "https://api.enterprise.githubcopilot.com"  # type: ignore[attr-defined]
 
@@ -1496,7 +1499,9 @@ def test_copilot_adapter_uses_account_specific_exchange_endpoint(runtime: Runtim
 def test_get_connection_token_extra_returns_empty_when_absent(runtime: Runtime) -> None:
     """A connection with no stored token yields an empty extra mapping."""
     # Act
-    extra = runtime.get_connection_token_extra("github-copilot", "github-copilot:oauth")
+    extra = runtime.get_connection_token_extra(
+        ConnectionRef("github-copilot", "github-copilot:oauth")
+    )
 
     # Assert
     assert extra == {}

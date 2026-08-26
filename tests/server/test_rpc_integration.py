@@ -16,7 +16,7 @@ from core.chat import ChatSessionManager, CommandDispatcher
 from core.models import Capabilities, Model, ReasoningCapabilities
 from core.models.query import ModelQuery
 from core.projects.resolver import AgentResolutionError
-from core.providers.accounts import ProviderAccount
+from core.providers.accounts import ConnectionRef, ProviderAccount
 from core.runs import ChatRunManager
 from core.sessions import SessionAddress
 from core.skills.skills import SkillRegistry
@@ -441,7 +441,7 @@ class IntegrationRuntime:
     def stop(self) -> None:
         self.stopped = True
 
-    def get_adapter(self, _provider_id: str, _connection_id: str) -> SequencedAdapter:
+    def get_adapter(self, connection: ConnectionRef) -> SequencedAdapter:
         return self._adapter_pool.next()
 
     def has_provider_credentials(self, provider_id: str) -> bool:

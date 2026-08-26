@@ -9,6 +9,7 @@ from typing import Any, cast
 
 from fastapi.testclient import TestClient  # type: ignore[import-not-found]
 
+from core.providers.accounts import ConnectionRef
 from core.providers.adapter import ProviderAdapter
 from core.runtime import Runtime
 from core.utils.config import Config
@@ -49,7 +50,7 @@ class StubRuntime(Runtime):
         super().__init__(config)
         self.adapter = adapter or StubAdapter()
 
-    def get_adapter(self, _provider_id: str, _connection_id: str) -> ProviderAdapter:
+    def get_adapter(self, connection: ConnectionRef) -> ProviderAdapter:
         return cast(ProviderAdapter, self.adapter)
 
 

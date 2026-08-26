@@ -13,6 +13,7 @@ from typing import Any
 
 import pytest
 
+from core.providers.accounts import ConnectionRef
 from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig
 from core.providers.usage import (
     ProviderUsageHistoryStore,
@@ -147,17 +148,18 @@ class FakeRuntime:
     def provider_credentials(self) -> FakeCredentials:
         return self._credentials
 
-    def get_connection_token_getter(self, provider_id: str, connection_id: str) -> Any:
-        token = self._tokens.get(connection_id, "access-token")
+    def get_connection_token_getter(self, connection: ConnectionRef) -> Any:
+        token = self._tokens.get(connection.connection_id, "access-token")
 
         async def _getter() -> str:
             return token
 
         return _getter
 
-    def get_connection_token_extra(self, provider_id: str, connection_id: str) -> dict[str, str]:
+    def get_connection_token_extra(self, connection: ConnectionRef) -> dict[str, str]:
         return self._extras.get(
-            connection_id, self._extras.get(connection_id.removesuffix(":default"), {})
+            connection.connection_id,
+            self._extras.get(connection.connection_id.removesuffix(":default"), {}),
         )
 
 

@@ -17,6 +17,7 @@ from core.chat import (
 )
 from core.model_tasks import TASK_IMAGE_UNDERSTANDING
 from core.projects import AgentResolutionError, ConfigAgent
+from core.providers.accounts import ConnectionRef
 from core.providers.reasoning import (
     ReasoningReplayPolicy,
 )
@@ -60,9 +61,7 @@ def build_chat_loop(runtime: Any, **kwargs: Any) -> ChatLoop:
         storage=cast(Any, getattr(runtime, "storage", missing)),
         get_extension_registry=lambda: getattr(runtime, "extensions", None),
         get_system_prompts=lambda: runtime.system_prompts,
-        get_adapter=lambda provider_id, connection_id: runtime.get_adapter(
-            provider_id, connection_id
-        ),
+        get_adapter=lambda connection: runtime.get_adapter(connection),
         resolve_skills=lambda project_id, agent_id: runtime.skills_for(project_id, agent_id),
         refresh_skills=lambda project_id, agent_id: runtime.refresh_skills_for(
             project_id, agent_id
@@ -751,13 +750,13 @@ class StubRuntime:
         self.project_own_skills_result: list[Any] = []
         self.available_task_models = set(available_task_models or set())
 
-    def get_adapter(self, provider_id: str, connection_id: str) -> StubAdapter:
-        self.adapter_provider_id = provider_id
-        self.adapter_connection_id = connection_id
-        if connection_id in self.raise_on_connection:
-            raise self.raise_on_connection[connection_id]
-        if connection_id in self.adapters_by_connection:
-            return self.adapters_by_connection[connection_id]
+    def get_adapter(self, connection: ConnectionRef) -> StubAdapter:
+        self.adapter_provider_id = connection.provider_id
+        self.adapter_connection_id = connection.connection_id
+        if connection.connection_id in self.raise_on_connection:
+            raise self.raise_on_connection[connection.connection_id]
+        if connection.connection_id in self.adapters_by_connection:
+            return self.adapters_by_connection[connection.connection_id]
         return self.adapter
 
     def skills_for(self, project_id: str | None = None, agent_id: str | None = None) -> Any:

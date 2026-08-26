@@ -25,6 +25,7 @@ from core.model_tasks.image_types import (
 )
 from core.model_tasks.model_tasks import TaskModelTargetRef, model_supports_task
 from core.model_tasks.task_execution import TaskBindingResolver
+from core.providers.accounts import ConnectionRef
 from core.providers.errors import ProviderOutcomeUnknownError
 from core.providers.task_client import TaskClientRuntime
 from core.utils.errors import ConfigError, TaskError, VBotError
@@ -66,7 +67,7 @@ class ImageRuntime(TaskClientRuntime, Protocol):
         """Model registry read access for per-model request facts."""
         ...
 
-    def get_adapter(self, provider_id: str, connection_id: str) -> Any:
+    def get_adapter(self, connection: ConnectionRef) -> Any:
         """Build one configured Chat Adapter for image understanding."""
         ...
 
@@ -199,8 +200,10 @@ class ImageService:
             if target_ref.kind == "local":
                 return False
             adapter = self._runtime.get_adapter(
-                target_ref.provider_id,
-                target_ref.connection_id,
+                ConnectionRef(
+                    target_ref.provider_id,
+                    target_ref.connection_id,
+                )
             )
             wire_media_types = _adapter_wire_media_types(adapter, target_ref.model_id)
             return any(media_type.startswith("image/") for media_type in wire_media_types)
@@ -378,8 +381,10 @@ class ImageService:
         try:
             try:
                 adapter = self._runtime.get_adapter(
-                    target_ref.provider_id,
-                    target_ref.connection_id,
+                    ConnectionRef(
+                        target_ref.provider_id,
+                        target_ref.connection_id,
+                    )
                 )
             except (ConfigError, KeyError) as exc:
                 safe_error = _safe_error_text(exc, target_ref)

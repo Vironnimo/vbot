@@ -2,6 +2,7 @@
 
 from core.providers.accounts import (
     DEFAULT_ACCOUNT_ID,
+    ConnectionRef,
     ProviderAccount,
     compose_connection_id,
     derive_credential_key,
@@ -64,6 +65,7 @@ __all__ = [
     "REASONING_REPLAY_FULL_HISTORY",
     "REASONING_REPLAY_NONE",
     "REASONING_REPLAY_POLICIES",
+    "ConnectionRef",
     "AnthropicAdapter",
     "AnthropicCompatibleAdapter",
     "AuthConfig",

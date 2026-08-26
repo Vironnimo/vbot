@@ -23,6 +23,7 @@ from core.memory import MemoryService
 from core.prompts import LayoutEntry
 from core.providers.accounts import (
     DEFAULT_ACCOUNT_ID,
+    ConnectionRef,
     ProviderAccount,
     account_id_from_credential_key,
     derive_credential_key,
@@ -865,7 +866,7 @@ class StubRuntime:
     def stop(self) -> None:
         return None
 
-    def get_adapter(self, _provider_id: str, _connection_id: str) -> StubAdapter:
+    def get_adapter(self, connection: ConnectionRef) -> StubAdapter:
         return self.adapter
 
     @property

@@ -9,7 +9,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Protocol
 
-from core.providers.accounts import ProviderAccount
+from core.providers.accounts import ConnectionRef, ProviderAccount
 
 if TYPE_CHECKING:
     from core.agents.agents import AgentStore
@@ -239,7 +239,7 @@ class RuntimeServices(Protocol):
         """Canonical resolver-wired streaming chat loop."""
         ...
 
-    def get_adapter(self, provider_id: str, connection_id: str) -> ProviderAdapter:
+    def get_adapter(self, connection: ConnectionRef) -> ProviderAdapter:
         """Build a wired provider adapter for one connection."""
         ...
 

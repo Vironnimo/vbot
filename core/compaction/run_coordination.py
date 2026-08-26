@@ -64,6 +64,7 @@ from core.prompts.pinned_context import (
     pinned_working_project_context,
     stamp_prompt_files_read,
 )
+from core.providers.accounts import ConnectionRef
 from core.runs import (
     COMPACTION_ABORTED_EVENT,
     COMPACTION_COMPLETED_EVENT,
@@ -184,7 +185,7 @@ class CompactionRunCoordinator:
             try:
                 project_cwd = self._host.resolve_project_cwd(run.working_project_id)
                 provider_id, connection_id = _resolve_agent_connection(self._dependencies, agent)
-                adapter = self._dependencies.get_adapter(provider_id, connection_id)
+                adapter = self._dependencies.get_adapter(ConnectionRef(provider_id, connection_id))
                 _model_provider_id, model_id = _split_agent_model(agent.model)
                 summary_adapter, summary_model_id, summary_provider_id = (
                     self._host.resolve_summary_adapter(

@@ -128,6 +128,21 @@ def compose_connection_id(
     return f"{provider_id}:{local_connection_id}:{account_id}"
 
 
+@dataclass(frozen=True)
+class ConnectionRef:
+    """Address of one exact Provider Connection target.
+
+    Bundles the ``(provider_id, connection_id)`` pair that travels together
+    through the Runtime adapter/token seams (adapter factory, connection
+    token getters, usage probes, task clients). *connection_id* uses the
+    compositional ``provider:connection[:account]`` grammar; an absent
+    account part resolves to the connection's first usable account.
+    """
+
+    provider_id: str
+    connection_id: str
+
+
 def sorted_account_ids(account_ids: list[str]) -> list[str]:
     """Return account ids in deterministic order: default first, then sorted."""
 

@@ -18,6 +18,7 @@ from typing import Any
 
 import pytest
 
+from core.providers.accounts import ConnectionRef
 from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig
 from core.providers.usage import ProviderUsageService
 from server.rpc.errors import RpcError
@@ -103,15 +104,16 @@ class _FakeRuntime:
     def provider_credentials(self) -> _FakeCredentials:
         return self._credentials
 
-    def get_connection_token_getter(self, provider_id: str, connection_id: str) -> Any:
+    def get_connection_token_getter(self, connection: ConnectionRef) -> Any:
         async def _getter() -> str:
             return "access-token"
 
         return _getter
 
-    def get_connection_token_extra(self, provider_id: str, connection_id: str) -> dict[str, str]:
+    def get_connection_token_extra(self, connection: ConnectionRef) -> dict[str, str]:
         return self._extras.get(
-            connection_id, self._extras.get(connection_id.removesuffix(":default"), {})
+            connection.connection_id,
+            self._extras.get(connection.connection_id.removesuffix(":default"), {}),
         )
 
 
