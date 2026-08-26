@@ -183,6 +183,7 @@ async def _send_anthropic(
     *,
     tools: list[dict[str, Any]] | None,
     max_tokens: int,
+    auth: str = "x-api-key",
 ) -> dict[str, Any]:
     """One streaming /v1/messages request; returns measured facts."""
     if httpx is None:
@@ -203,11 +204,18 @@ async def _send_anthropic(
             for tool in tools
         ]
     url = f"{base_url.rstrip('/')}/v1/messages"
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "anthropic-version": ANTHROPIC_VERSION,
-        "content-type": "application/json",
-    }
+    if auth == "bearer":
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "anthropic-version": ANTHROPIC_VERSION,
+            "content-type": "application/json",
+        }
+    else:
+        headers = {
+            "x-api-key": api_key,
+            "anthropic-version": ANTHROPIC_VERSION,
+            "content-type": "application/json",
+        }
 
     content_parts: list[str] = []
     thinking_parts: list[str] = []
@@ -334,9 +342,11 @@ async def _measure_shape(
     wire: str,
     max_tokens: int,
     in_run: bool,
+    auth: str = "x-api-key",
 ) -> dict[str, Any]:
     """Measure one shape (in-run or cross-run) for one model on one wire."""
     send = _send_anthropic if wire == "anthropic" else _send_native_real
+    send_kwargs = {"auth": auth} if wire == "anthropic" else {}
     if in_run:
         turn1 = await send(
             base_url,
@@ -345,6 +355,7 @@ async def _measure_shape(
             [{"role": "user", "content": TURN1_TOOL_PROMPT}],
             tools=[TOOL_DEFINITION],
             max_tokens=max_tokens,
+            **send_kwargs,
         )
         if not turn1["tool_calls"]:
             return {
@@ -363,6 +374,7 @@ async def _measure_shape(
             [{"role": "user", "content": TURN1_PLAIN_PROMPT}],
             tools=None,
             max_tokens=max_tokens,
+            **send_kwargs,
         )
         tool_calls = None
         history = [{"role": "user", "content": TURN1_PLAIN_PROMPT}]
@@ -416,6 +428,7 @@ async def _measure_shape(
             messages,
             tools=[TOOL_DEFINITION] if in_run else None,
             max_tokens=max_tokens,
+            **send_kwargs,
         )
         results[mode] = result["prompt_tokens"]
 
@@ -437,6 +450,7 @@ async def _probe_model(
     *,
     wire: str,
     max_tokens: int,
+    auth: str = "x-api-key",
 ) -> dict[str, Any]:
     """Full measurement for one model on one wire."""
     print(f"\n=== {model} (wire={wire}, max_tokens={max_tokens}) ===")
@@ -447,6 +461,7 @@ async def _probe_model(
         wire=wire,
         max_tokens=max_tokens,
         in_run=True,
+        auth=auth,
     )
     cross_run = await _measure_shape(
         base_url,
@@ -455,6 +470,7 @@ async def _probe_model(
         wire=wire,
         max_tokens=max_tokens,
         in_run=False,
+        auth=auth,
     )
     print(f"     in_run:    {in_run}")
     print(f"     cross_run: {cross_run}")
@@ -479,6 +495,7 @@ async def _run(args: argparse.Namespace) -> int:
                     model,
                     wire=args.wire,
                     max_tokens=args.max_tokens,
+                    auth=args.auth,
                 )
             )
         except Exception as exc:  # noqa: BLE001 - sweep must continue
@@ -515,6 +532,12 @@ def main(argv: list[str] | None = None) -> int:
         choices=("native", "anthropic"),
         default="anthropic",
         help="Wire to probe: native /api/chat or Anthropic /v1/messages.",
+    )
+    parser.add_argument(
+        "--auth",
+        choices=("x-api-key", "bearer"),
+        default="x-api-key",
+        help="Auth header for the Anthropic wire (opencode-go/ollama use bearer).",
     )
     parser.add_argument("--max-tokens", type=int, default=DEFAULT_MAX_TOKENS)
     parser.add_argument("--base-url", default=DEFAULT_BASE_URL)
