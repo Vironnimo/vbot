@@ -61,7 +61,7 @@ from core.projects.scanners.base import (
     ScanResult,
     scan_project,
 )
-from core.settings import validate_thinking_effort
+from core.settings import AgentDefaults, validate_thinking_effort
 from core.skills import WILDCARD_ALLOWLIST
 
 if TYPE_CHECKING:
@@ -582,7 +582,7 @@ class AgentResolver:
         scanned = self._read_agent_fresh(project, agent_id)
         # Read the global tier once and feed it to all three chains, so one resolve
         # never reads the settings file three times (model + temp + thinking).
-        global_defaults = self._global_agent_defaults()
+        global_defaults = AgentDefaults.from_dict(self._global_agent_defaults())
         resolved_model = self._resolve_model_or_raise(scanned, project, global_defaults)
         resolved_temperature = _resolve_temperature(scanned, project, global_defaults)
         resolved_thinking_effort = _resolve_thinking_effort(scanned, project, global_defaults)
@@ -648,7 +648,7 @@ class AgentResolver:
         member. The chain logic itself still lives here (one place), not in the RPC
         layer.
         """
-        global_defaults = self._global_agent_defaults()
+        global_defaults = AgentDefaults.from_dict(self._global_agent_defaults())
         return self._config_effective_from_scanned(project, scanned, global_defaults)
 
     def _identity_effective_config(self, agent_id: str) -> dict[str, dict[str, Any]]:
@@ -658,15 +658,15 @@ class AgentResolver:
             raw = self._agents.get_raw(agent_id)
         except AgentError as error:
             raise AgentResolutionError(str(error)) from error
-        defaults = self._global_agent_defaults()
+        defaults = AgentDefaults.from_dict(self._global_agent_defaults())
         return {
-            "model": _identity_string_source(raw.model, defaults, "model"),
+            "model": _identity_string_source(raw.model, defaults.model),
             "fallback_models": _identity_string_list_source(
-                raw.fallback_models, defaults, "fallback_models"
+                raw.fallback_models, defaults.fallback_models
             ),
-            "temperature": _identity_optional_source(raw.temperature, defaults, "temperature"),
+            "temperature": _identity_optional_source(raw.temperature, defaults.temperature),
             "thinking_effort": _identity_optional_source(
-                raw.thinking_effort, defaults, "thinking_effort"
+                raw.thinking_effort, defaults.thinking_effort
             ),
         }
 
@@ -676,11 +676,11 @@ class AgentResolver:
         if agent_id not in {member.agent_id for member in team}:
             raise AgentResolutionError(f"agent '{agent_id}' is not on project '{project_id}' team")
         scanned = self._read_agent_fresh(project, agent_id)
-        global_defaults = self._global_agent_defaults()
+        global_defaults = AgentDefaults.from_dict(self._global_agent_defaults())
         return self._config_effective_from_scanned(project, scanned, global_defaults)
 
     def _config_effective_from_scanned(
-        self, project: Project, scanned: ScannedAgent, global_defaults: Mapping[str, Any]
+        self, project: Project, scanned: ScannedAgent, global_defaults: AgentDefaults
     ) -> dict[str, dict[str, Any]]:
         return {
             "model": self._config_model_source(project, scanned, global_defaults),
@@ -690,7 +690,7 @@ class AgentResolver:
         }
 
     def _config_model_source(
-        self, project: Project, scanned: ScannedAgent, global_defaults: Mapping[str, Any]
+        self, project: Project, scanned: ScannedAgent, global_defaults: AgentDefaults
     ) -> dict[str, Any]:
         """Return the effective model + source, gated by ``is_configured`` per tier.
 
@@ -703,7 +703,7 @@ class AgentResolver:
             ("override", _overridden_model(project, scanned.agent_id)),
             ("agent", scanned.model),
             ("project_default", project.default_model),
-            ("global_default", str(global_defaults.get("model", "") or "")),
+            ("global_default", str(global_defaults.model or "")),
         )
         for source, candidate in tiers:
             if candidate and self._model_checker.is_configured(candidate):
@@ -811,7 +811,7 @@ class AgentResolver:
         )
 
     def _resolve_model_or_raise(
-        self, scanned: ScannedAgent, project: Project, global_defaults: Mapping[str, Any]
+        self, scanned: ScannedAgent, project: Project, global_defaults: AgentDefaults
     ) -> str:
         """Run the model chain and return the first usable model, or raise.
 
@@ -824,7 +824,7 @@ class AgentResolver:
         the way through is a clear "cannot run" error.
         """
         overridden = _overridden_model(project, scanned.agent_id)
-        global_model = global_defaults.get("model", "")
+        global_model = global_defaults.model or ""
         for candidate in (overridden, scanned.model, project.default_model, global_model):
             if candidate and self._model_checker.is_configured(candidate):
                 return candidate
@@ -1073,7 +1073,7 @@ def _build_config_agent(
 
 
 def _resolve_temperature(
-    scanned: ScannedAgent, project: Project, global_defaults: Mapping[str, Any]
+    scanned: ScannedAgent, project: Project, global_defaults: AgentDefaults
 ) -> float | None:
     """Resolve temperature: override → agent value → project default → global default → None.
 
@@ -1086,7 +1086,7 @@ def _resolve_temperature(
         _overridden_temperature(project, scanned.agent_id),
         scanned.temperature,
         project.default_temperature,
-        global_defaults.get("temperature"),
+        global_defaults.temperature,
     )
     for candidate in candidates:
         if candidate is not None:
@@ -1095,7 +1095,7 @@ def _resolve_temperature(
 
 
 def _resolve_thinking_effort(
-    scanned: ScannedAgent, project: Project, global_defaults: Mapping[str, Any]
+    scanned: ScannedAgent, project: Project, global_defaults: AgentDefaults
 ) -> str | None:
     """Resolve thinking effort: override → agent → project default → global default → None.
 
@@ -1109,7 +1109,7 @@ def _resolve_thinking_effort(
         _overridden_thinking_effort(project, scanned.agent_id),
         scanned.thinking_effort,
         project.default_thinking_effort,
-        global_defaults.get("thinking_effort"),
+        global_defaults.thinking_effort,
     )
     for candidate in candidates:
         if candidate is not None:
@@ -1118,7 +1118,7 @@ def _resolve_thinking_effort(
 
 
 def _config_temperature_source(
-    project: Project, scanned: ScannedAgent, global_defaults: Mapping[str, Any]
+    project: Project, scanned: ScannedAgent, global_defaults: AgentDefaults
 ) -> dict[str, Any]:
     """Return the effective temperature + source for a config agent.
 
@@ -1138,7 +1138,7 @@ def _config_temperature_source(
 
 
 def _config_thinking_effort_source(
-    project: Project, scanned: ScannedAgent, global_defaults: Mapping[str, Any]
+    project: Project, scanned: ScannedAgent, global_defaults: AgentDefaults
 ) -> dict[str, Any]:
     """Return the effective thinking effort + source for a config agent.
 
@@ -1157,9 +1157,7 @@ def _config_thinking_effort_source(
     return {"value": None, "source": None}
 
 
-def _identity_string_source(
-    own_value: str, defaults: Mapping[str, Any], key: str
-) -> dict[str, Any]:
+def _identity_string_source(own_value: str, default_value: Any) -> dict[str, Any]:
     """Return the identity effective value + source for a string field.
 
     Mirrors ``AgentStore._apply_defaults``: the persisted own value wins unless it is
@@ -1168,16 +1166,12 @@ def _identity_string_source(
     """
     if own_value != "":
         return {"value": own_value, "source": "agent"}
-    if key in defaults:
-        default_value = defaults.get(key)
-        if isinstance(default_value, str):
-            return {"value": default_value, "source": "global_default"}
+    if default_value is not None and isinstance(default_value, str):
+        return {"value": default_value, "source": "global_default"}
     return {"value": None, "source": None}
 
 
-def _identity_string_list_source(
-    own_value: list[str], defaults: Mapping[str, Any], key: str
-) -> dict[str, Any]:
+def _identity_string_list_source(own_value: list[str], default_value: Any) -> dict[str, Any]:
     """Return the identity effective value + source for a string-list field.
 
     Mirrors ``AgentStore._apply_defaults`` for ``fallback_models``: the persisted
@@ -1186,16 +1180,16 @@ def _identity_string_list_source(
     """
     if own_value:
         return {"value": list(own_value), "source": "agent"}
-    if key in defaults:
-        default_value = defaults.get(key)
-        if isinstance(default_value, list) and all(isinstance(item, str) for item in default_value):
-            return {"value": list(default_value), "source": "global_default"}
+    if (
+        default_value is not None
+        and isinstance(default_value, list)
+        and all(isinstance(item, str) for item in default_value)
+    ):
+        return {"value": list(default_value), "source": "global_default"}
     return {"value": None, "source": None}
 
 
-def _identity_optional_source(
-    own_value: Any, defaults: Mapping[str, Any], key: str
-) -> dict[str, Any]:
+def _identity_optional_source(own_value: Any, default_value: Any) -> dict[str, Any]:
     """Return the identity effective value + source for a nullable field.
 
     Mirrors ``AgentStore._apply_defaults``: the persisted own value wins unless it is
@@ -1205,18 +1199,18 @@ def _identity_optional_source(
     """
     if own_value is not None:
         return {"value": own_value, "source": "agent"}
-    if key in defaults and defaults.get(key) is not None:
-        return {"value": defaults.get(key), "source": "global_default"}
+    if default_value is not None:
+        return {"value": default_value, "source": "global_default"}
     return {"value": None, "source": None}
 
 
-def _global_default_temperature(global_defaults: Mapping[str, Any]) -> float | None:
-    value = global_defaults.get("temperature")
+def _global_default_temperature(global_defaults: AgentDefaults) -> float | None:
+    value = global_defaults.temperature
     return value if isinstance(value, (int, float)) and not isinstance(value, bool) else None
 
 
-def _global_default_thinking_effort(global_defaults: Mapping[str, Any]) -> str | None:
-    value = global_defaults.get("thinking_effort")
+def _global_default_thinking_effort(global_defaults: AgentDefaults) -> str | None:
+    value = global_defaults.thinking_effort
     return value if isinstance(value, str) else None
 
 
