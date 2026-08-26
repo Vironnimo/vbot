@@ -642,6 +642,23 @@ def test_write_preserves_existing_cr_endings(tmp_path: Path) -> None:
     assert target.read_bytes() == b"new one\rnew two\r"
 
 
+def test_write_preserves_existing_exotic_line_endings(tmp_path: Path) -> None:
+    # The read tool renders U+2028 as a line break; a full-file rewrite must
+    # keep that style instead of switching the file to LF.
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    target = workspace / "notes.txt"
+    target.write_bytes("line one\u2028line two\u2028".encode("utf-8"))
+
+    result = write_handler(
+        make_context(workspace),
+        {"path": "notes.txt", "content": "new one\nnew two\n"},
+    )
+
+    assert_success_envelope(result)
+    assert target.read_bytes() == "new one\u2028new two\u2028".encode("utf-8")
+
+
 def test_write_no_normalization_for_single_line_file(tmp_path: Path) -> None:
     # A file with no line endings (single line) has nothing to detect — the
     # agent's content is written verbatim.
