@@ -5,6 +5,7 @@ from core.skills.authoring import (
     SkillAuthoringError,
     SkillAuthoringService,
     SkillWriteResult,
+    normalize_skill_file_path,
 )
 from core.skills.policy import (
     POLICY_SCHEMA_VERSION,
@@ -52,6 +53,7 @@ __all__ = [
     "WILDCARD_ALLOWLIST",
     "find_skill_package_dir",
     "load_project_skill_registry",
+    "normalize_skill_file_path",
     "project_skill_origin",
     "project_skills_dir",
     "scan_project_skill_names",

@@ -7,11 +7,10 @@ from collections.abc import Awaitable, Callable, Sequence
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+from core.skills import SkillAuthoringError, normalize_skill_file_path
 from core.skills.requirements import environment_requirement_names
 from core.skills.skill_validator import split_skill_document
 from core.skills.skills import (
-    RESOURCE_DIRECTORIES,
-    SKILL_FILENAME,
     SkillRegistry,
     _scan_skill_resources,
     format_skill_activation_context,
@@ -327,7 +326,10 @@ def _load_skill_content_with_env(
 
 def load_skill_file(skill_name: str, skill_file: Path, file_path: str) -> JsonObject:
     """Read one UTF-8 package file by skill-relative path."""
-    normalized = _normalized_skill_file_path(file_path)
+    try:
+        normalized = normalize_skill_file_path(file_path)
+    except SkillAuthoringError as error:
+        raise ValueError(f"Illegal file path for skill '{skill_name}': {file_path}") from error
     skill_directory = skill_file.resolve().parent
     candidate = skill_directory.joinpath(*PurePosixPath(normalized).parts).resolve()
     try:
@@ -454,21 +456,6 @@ def _read_skill_body(skill_file: Path) -> str:
     content = skill_file.read_text(encoding="utf-8")
     _, body, _ = split_skill_document(content)
     return body.strip()
-
-
-def _normalized_skill_file_path(file_path: str) -> str:
-    if not isinstance(file_path, str) or not file_path.strip():
-        raise ValueError("file_path must be a non-empty string")
-    raw = PurePosixPath(file_path.replace("\\", "/"))
-    if raw.is_absolute() or any(part in {"", ".", ".."} for part in raw.parts):
-        raise ValueError(f"Illegal skill file path: {file_path}")
-    normalized = raw.as_posix()
-    if normalized == SKILL_FILENAME:
-        return normalized
-    if len(raw.parts) < 2 or raw.parts[0] not in RESOURCE_DIRECTORIES:
-        allowed = ", ".join(f"{name}/" for name in RESOURCE_DIRECTORIES)
-        raise ValueError(f"Skill files must be {SKILL_FILENAME} or live under {allowed}")
-    return normalized
 
 
 def _present_resource_path(resource: str, directory: str) -> str:
