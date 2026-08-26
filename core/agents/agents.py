@@ -43,7 +43,9 @@ from core.memory import (
 from core.sessions import ChatSessionManager, SessionAddress
 from core.settings import (
     MAX_FALLBACK_MODELS,
+    AgentDefaults,
     SettingsValidationError,
+    bake_agent_defaults,
     is_valid_agent_id,
     validate_temperature,
     validate_thinking_effort,
@@ -1162,14 +1164,14 @@ class AgentStore:
             return
         self._write_agent_order(order)
 
-    def _agent_defaults(self) -> dict[str, Any]:
+    def _agent_defaults(self) -> AgentDefaults:
         if self._defaults_provider is None:
-            return {}
+            return AgentDefaults()
 
         defaults = self._defaults_provider()
         if not isinstance(defaults, dict):
             raise AgentError("defaults provider must return a dictionary")
-        return defaults
+        return AgentDefaults.from_dict(defaults)
 
     def _load_raw_agent(self, agent_path: Path) -> Agent:
         data = self._validated_agent_data(agent_path)
@@ -1208,20 +1210,14 @@ class AgentStore:
             )
         return data
 
-    def _apply_defaults(self, agent: Agent, defaults: dict[str, Any]) -> Agent:
-        changes: dict[str, Any] = {}
-
-        if agent.model == "" and "model" in defaults:
-            changes["model"] = _validate_string_field("model", defaults["model"], allow_empty=True)
-        if agent.fallback_models == [] and "fallback_models" in defaults:
-            changes["fallback_models"] = _validate_fallback_models(
-                "fallback_models", defaults["fallback_models"]
-            )
-        if agent.temperature is None and "temperature" in defaults:
-            changes["temperature"] = _validate_temperature(defaults["temperature"])
-        if agent.thinking_effort is None and "thinking_effort" in defaults:
-            changes["thinking_effort"] = _validate_thinking_effort(defaults["thinking_effort"])
-
+    def _apply_defaults(self, agent: Agent, defaults: AgentDefaults) -> Agent:
+        changes = bake_agent_defaults(
+            model=agent.model,
+            fallback_models=agent.fallback_models,
+            temperature=agent.temperature,
+            thinking_effort=agent.thinking_effort,
+            defaults=defaults,
+        )
         if not changes:
             return agent
         return replace(agent, **changes)

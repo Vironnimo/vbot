@@ -27,6 +27,7 @@ from core.models.models import ModelRegistry
 from core.projects import ProjectNotFoundError
 from core.projects.paths import cwd_identity_key
 from core.projects.resolver import AgentResolutionError, ConfigAgent
+from core.settings import AgentDefaults, bake_agent_defaults
 from core.tools.availability import ToolAccess
 from server.rpc import (
     connection_methods,
@@ -113,42 +114,19 @@ class StubAgents:
         return self._agents[agent_id]
 
     def _apply_defaults(self, agent: StubAgent) -> StubAgent:
-        defaults = self._defaults_provider() if self._defaults_provider is not None else {}
-
-        model = agent.model
-        fallback_models = list(agent.fallback_models)
-        temperature = agent.temperature
-        thinking_effort = agent.thinking_effort
-
-        default_model = defaults.get("model")
-        if model == "" and isinstance(default_model, str):
-            model = default_model
-
-        default_fallback_models = defaults.get("fallback_models")
-        if fallback_models == [] and isinstance(default_fallback_models, list):
-            fallback_models = [item for item in default_fallback_models if isinstance(item, str)]
-
-        default_temperature = defaults.get("temperature")
-        if (
-            temperature is None
-            and isinstance(default_temperature, int | float)
-            and not isinstance(default_temperature, bool)
-        ):
-            temperature = float(default_temperature)
-
-        default_thinking_effort = defaults.get("thinking_effort")
-        if thinking_effort is None and isinstance(default_thinking_effort, str):
-            thinking_effort = default_thinking_effort
-
-        return StubAgent(
-            **{
-                **agent.__dict__,
-                "model": model,
-                "fallback_models": fallback_models,
-                "temperature": temperature,
-                "thinking_effort": thinking_effort,
-            }
+        defaults = AgentDefaults.from_dict(
+            self._defaults_provider() if self._defaults_provider is not None else {}
         )
+        changes = bake_agent_defaults(
+            model=agent.model,
+            fallback_models=agent.fallback_models,
+            temperature=agent.temperature,
+            thinking_effort=agent.thinking_effort,
+            defaults=defaults,
+        )
+        if not changes:
+            return agent
+        return StubAgent(**{**agent.__dict__, **changes})
 
     def get(self, agent_id: str) -> StubAgent:
         return self._apply_defaults(self._get_raw(agent_id))

@@ -21,6 +21,7 @@ from core.agents import (
 from core.agents import agents as agents_module
 from core.chat import ChatMessage
 from core.sessions import ChatSessionManager, SessionAddress
+from core.settings import AgentDefaults
 from core.tools.availability import ToolAccess
 
 # The agent domain seeds only SOUL.md; USER.md/MEMORY.md are the memory system's and
@@ -941,7 +942,7 @@ def test_temperature_and_thinking_effort_none_round_trip_as_json_null(
 def test_apply_defaults_fills_empty_model(store: AgentStore) -> None:
     agent = store.create("coder_model", "Coder Agent", model="")
 
-    resolved = store._apply_defaults(agent, {"model": "openai/gpt-5.2"})
+    resolved = store._apply_defaults(agent, AgentDefaults.from_dict({"model": "openai/gpt-5.2"}))
 
     assert resolved.model == "openai/gpt-5.2"
 
@@ -949,7 +950,7 @@ def test_apply_defaults_fills_empty_model(store: AgentStore) -> None:
 def test_apply_defaults_fills_none_temperature(store: AgentStore) -> None:
     agent = store.create("coder_temperature", "Coder Agent", temperature=None)
 
-    resolved = store._apply_defaults(agent, {"temperature": 0.7})
+    resolved = store._apply_defaults(agent, AgentDefaults.from_dict({"temperature": 0.7}))
 
     assert resolved.temperature == 0.7
 
@@ -966,12 +967,14 @@ def test_apply_defaults_leaves_explicit_values_unchanged(store: AgentStore) -> N
 
     resolved = store._apply_defaults(
         agent,
-        {
-            "model": "openrouter/openai/gpt-4.1",
-            "fallback_models": ["openai/gpt-5.2-mini"],
-            "temperature": 0.9,
-            "thinking_effort": "low",
-        },
+        AgentDefaults.from_dict(
+            {
+                "model": "openrouter/openai/gpt-4.1",
+                "fallback_models": ["openai/gpt-5.2-mini"],
+                "temperature": 0.9,
+                "thinking_effort": "low",
+            }
+        ),
     )
 
     assert resolved.model == "openai/gpt-5.2"
