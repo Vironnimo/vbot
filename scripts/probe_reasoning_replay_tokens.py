@@ -215,10 +215,120 @@ def _assistant_variant(
     if tool_calls:
         message["tool_calls"] = tool_calls
     if mode == "with" and carrier and reasoning:
-        message[carrier] = reasoning
+        if carrier == "reasoning_details":
+            # MiniMax's OpenAI-compatible format carries thinking as an item
+            # array; the docs require replaying the field verbatim.
+            message[carrier] = [{"type": "reasoning.text", "text": reasoning}]
+        else:
+            message[carrier] = reasoning
     elif mode == "visible" and reasoning:
         message["content"] = content + "\n\n" + reasoning
     return message
+
+
+async def _send_stream_raw(
+    base_url: str,
+    api_key: str,
+    model: str,
+    messages: list[dict[str, Any]],
+    *,
+    tools: list[dict[str, Any]] | None,
+    effort: str,
+    max_tokens: int,
+) -> dict[str, Any]:
+    """One streaming /v1/chat/completions request; returns the aggregated
+    assistant delta fields plus usage, for wire-shape inspection."""
+    if httpx is None:
+        raise SystemExit("httpx is required for the probe (pip install httpx)")
+    body: dict[str, Any] = {
+        "model": model,
+        "messages": messages,
+        "stream": True,
+        "stream_options": {"include_usage": True},
+        "reasoning_effort": effort,
+        "max_tokens": max_tokens,
+    }
+    if tools:
+        body["tools"] = tools
+    url = f"{base_url.rstrip('/')}/v1/chat/completions"
+    headers = {"Authorization": f"Bearer {api_key}"}
+
+    fields: dict[str, list[Any]] = {}
+    prompt_tokens: int | None = None
+
+    async with (
+        httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client,
+        client.stream("POST", url, json=body, headers=headers) as response,
+    ):
+        if response.status_code != 200:
+            raw = (await response.aread()).decode("utf-8", "replace")
+            raise RuntimeError(f"HTTP {response.status_code}: {raw[:300]}")
+        async for line in response.aiter_lines():
+            if not line or not line.startswith("data:"):
+                continue
+            payload = line[5:].strip()
+            if payload == "[DONE]":
+                continue
+            try:
+                chunk = json.loads(payload)
+            except json.JSONDecodeError:
+                continue
+            if chunk.get("error"):
+                raise RuntimeError(f"stream error: {chunk['error']}")
+            choice = (chunk.get("choices") or [{}])[0]
+            delta = choice.get("delta") or {}
+            for key, value in delta.items():
+                if value is None:
+                    continue
+                fields.setdefault(key, []).append(value)
+            usage = chunk.get("usage")
+            if isinstance(usage, dict) and usage.get("prompt_tokens") is not None:
+                prompt_tokens = int(usage["prompt_tokens"])
+
+    if prompt_tokens is None:
+        raise RuntimeError("no usage.prompt_tokens in stream (include_usage missing?)")
+    return {"fields": fields, "prompt_tokens": prompt_tokens}
+
+
+def _describe_field(name: str, parts: list[Any]) -> str:
+    """Compact description of one aggregated delta field."""
+    if name == "content":
+        text = "".join(p for p in parts if isinstance(p, str))
+        tags = text.count(" thinking") + text.count("<thinking>")
+        return f"len={len(text)} thinking_tags~{tags}"
+    if name == "tool_calls":
+        return f"calls={len(parts)}"
+    if name == "reasoning_details":
+        texts = [p.get("text", "") for p in parts if isinstance(p, dict)]
+        return f"items={len(parts)} text_len={sum(len(t) for t in texts)}"
+    text = "".join(p for p in parts if isinstance(p, str))
+    return f"len={len(text)}"
+
+
+async def _inspect_model(
+    base_url: str,
+    api_key: str,
+    model: str,
+    *,
+    effort: str,
+    max_tokens: int,
+) -> dict[str, Any]:
+    """Run a real tool-call turn and report every assistant delta field."""
+    print(f"\n=== INSPECT {model} (effort={effort}, max_tokens={max_tokens}) ===")
+    result = await _send_stream_raw(
+        base_url,
+        api_key,
+        model,
+        [{"role": "user", "content": TURN1_TOOL_PROMPT}],
+        tools=[TOOL_DEFINITION],
+        effort=effort,
+        max_tokens=max_tokens,
+    )
+    fields = result["fields"]
+    print(f"  input={result['prompt_tokens']}")
+    for name, parts in sorted(fields.items()):
+        print(f"  delta field '{name}': {_describe_field(name, parts)}")
+    return {"model": model, "fields": sorted(fields)}
 
 
 async def _measure_shape(
@@ -348,11 +458,14 @@ async def _probe_model(
         f"reasoning_len={len(detect['reasoning'])} | input={detect['prompt_tokens']}"
     )
 
-    carriers = [emitted] if emitted in VBOT_REPLAY_FIELDS else []
-    if emitted and emitted not in VBOT_REPLAY_FIELDS:
-        carriers.append(VBOT_REPLAY_FIELDS[0])  # vBot's default replay field
-    if not carriers:
-        carriers = [VBOT_REPLAY_FIELDS[0]]
+    if carrier_override:
+        carriers = [carrier_override]
+    else:
+        carriers = [emitted] if emitted in VBOT_REPLAY_FIELDS else []
+        if emitted and emitted not in VBOT_REPLAY_FIELDS:
+            carriers.append(VBOT_REPLAY_FIELDS[0])  # vBot's default replay field
+        if not carriers:
+            carriers = [VBOT_REPLAY_FIELDS[0]]
 
     summary: dict[str, Any] = {"model": model, "effort": effort, "carriers": {}}
     for carrier in carriers:
@@ -390,6 +503,22 @@ async def _run(args: argparse.Namespace) -> int:
         f"effort: {args.effort} | streaming with include_usage"
     )
     models = args.models.split(",") if args.models else [args.model]
+    if args.inspect:
+        for model in models:
+            model = model.strip()
+            if not model:
+                continue
+            try:
+                await _inspect_model(
+                    args.base_url,
+                    api_key,
+                    model,
+                    effort=args.effort,
+                    max_tokens=args.max_tokens,
+                )
+            except Exception as exc:  # noqa: BLE001 - sweep must continue
+                print(f"  ERROR: {exc}")
+        return 0
     summaries = []
     for model in models:
         model = model.strip()
@@ -448,6 +577,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--model", help="Exact wire model id (or use --models).")
     parser.add_argument("--models", help="Comma-separated model ids for a sweep.")
     parser.add_argument("--carrier", default="", help="Force the replay carrier field.")
+    parser.add_argument(
+        "--inspect",
+        action="store_true",
+        help="Only run a real tool-call turn and report every assistant delta "
+        "field (wire-shape inspection, no replay measurement).",
+    )
     parser.add_argument("--effort", default=DEFAULT_EFFORT)
     parser.add_argument("--max-tokens", type=int, default=DEFAULT_MAX_TOKENS)
     parser.add_argument("--base-url", default=DEFAULT_BASE_URL)
