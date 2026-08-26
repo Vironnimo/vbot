@@ -13,6 +13,7 @@ from core.extensions import InteractionButton
 
 if TYPE_CHECKING:
     from core.attachments import AttachmentRecord
+    from core.runs import Run
 
 # Denied inbound chats are kept for operator visibility only; the bound keeps the
 # in-memory log small under spam while still covering every realistic setup flow.
@@ -337,6 +338,14 @@ class ChannelAdapter(ABC):
         adapters that support interactive messages honor it; the rest reject a
         non-``None`` value with a clean error.
         """
+
+    async def relay_run(
+        self,
+        run: Run,
+        reply_plan: ReplyPlanFacts,
+    ) -> None:
+        """Relay one already-admitted background Run through this adapter."""
+        raise NotImplementedError
 
     @abstractmethod
     def ensure_outbound_session(self, platform_target: str) -> RouteFacts:

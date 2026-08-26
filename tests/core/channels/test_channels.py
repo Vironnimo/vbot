@@ -29,14 +29,17 @@ from core.channels import (
 from core.channels.adapter import (
     DeniedChatLog,
     FileData,
+    ReplyPlanFacts,
     RouteFacts,
     parse_bound_run_callback_data,
 )
 from core.channels.channels import _normalize_channel_id
 from core.channels.discord import DiscordChannelAdapter
 from core.channels.telegram import TelegramChannelAdapter
+from core.chat import ReplySurface
 from core.extensions import InteractionButton
-from core.sessions import ChatSessionManager
+from core.runs import Run
+from core.sessions import ChatSessionManager, SessionAddress
 
 
 class AgentStoreStub:
@@ -104,6 +107,7 @@ class BlockingAdapter(ChannelAdapter):
         self.stopped = asyncio.Event()
         self.sent_messages: list[tuple[str | None, str]] = []
         self.sent_buttons: list[list[list[InteractionButton]] | None] = []
+        self.relayed_runs: list[tuple[Run, ReplyPlanFacts]] = []
 
     async def start(self) -> None:
         self.started.set()
@@ -124,8 +128,57 @@ class BlockingAdapter(ChannelAdapter):
         self.sent_messages.append((message, platform_target))
         self.sent_buttons.append(buttons)
 
+    async def relay_run(self, run: Run, reply_plan: ReplyPlanFacts) -> None:
+        self.relayed_runs.append((run, reply_plan))
+
     def ensure_outbound_session(self, platform_target: str) -> RouteFacts:
         return RouteFacts(agent_id="assistant", session_id=f"ch-blocking-{platform_target}")
+
+
+@pytest.mark.asyncio
+async def test_completion_run_relays_to_persisted_channel_target(tmp_path: Path) -> None:
+    sessions = ChatSessionManager(tmp_path)
+    session_id = "ch-tg-assistant-12345"
+    sessions.create("assistant", session_id=session_id)
+    sessions.set_metadata(
+        SessionAddress(project_id=None, agent_id="assistant", session_id=session_id),
+        {
+            "last_reply_target": {
+                "channel_id": "tg-assistant",
+                "platform_target": "12345",
+                "thread_id": "77",
+            }
+        },
+    )
+    service = make_service(tmp_path, chat_sessions=sessions)
+    service._storage.save(make_config(allowed_chat_ids=["12345"]))
+    adapter = BlockingAdapter()
+
+    async def stay_running() -> None:
+        await asyncio.Event().wait()
+
+    running = asyncio.create_task(stay_running())
+    service._adapters["tg-assistant"] = adapter
+    service._adapter_tasks["tg-assistant"] = running
+    run = Run(run_id="completion-run", agent_id="assistant", session_id=session_id)
+    surface = ReplySurface.channel(
+        platform="telegram",
+        platform_display_name="Telegram",
+        channel_id="tg-assistant",
+    )
+
+    try:
+        await service.relay_completion_run(run, surface)
+    finally:
+        running.cancel()
+        await asyncio.gather(running, return_exceptions=True)
+
+    assert len(adapter.relayed_runs) == 1
+    relayed_run, reply_plan = adapter.relayed_runs[0]
+    assert relayed_run is run
+    assert reply_plan.channel_id == "tg-assistant"
+    assert reply_plan.platform_target == "12345"
+    assert reply_plan.thread_id == "77"
 
 
 class FailingAdapter(ChannelAdapter):

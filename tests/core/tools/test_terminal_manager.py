@@ -15,6 +15,7 @@ import pytest_asyncio
 import core.tools.terminal_manager as terminal_module
 from core.tools.terminal_manager import (
     TerminalCapacityError,
+    TerminalClosedError,
     TerminalManager,
     TerminalManagerError,
     TerminalNotFoundError,
@@ -33,6 +34,7 @@ class FakeTerminalAdapter:
         self.resizes: list[tuple[int, int]] = []
         self.alive = True
         self.code: int | None = None
+        self.write_error: BaseException | None = None
 
     @property
     def pid(self) -> int:
@@ -48,6 +50,10 @@ class FakeTerminalAdapter:
         return value
 
     def write(self, text: str) -> None:
+        if self.write_error is not None:
+            error = self.write_error
+            self.finish(0)
+            raise error
         self.writes.append(text)
 
     def resize(self, rows: int, columns: int) -> None:
@@ -965,6 +971,36 @@ async def test_operator_controls_same_live_session_and_changed_callbacks(
     assert manager.list_for_operator() == []
     assert changed.count(session.terminal_id) >= 5
     unsubscribe()
+
+
+@pytest.mark.asyncio
+async def test_closed_pty_write_marks_terminal_exited_and_delivers_attention(
+    tmp_path: Path,
+) -> None:
+    trigger = PendingTriggerService()
+    factory = AdapterFactory()
+    manager = TerminalManager(
+        trigger,
+        adapter_factory=factory,
+        sweep_interval_seconds=3600,
+        activity_quiet_seconds=0.03,
+    )
+    manager.start()
+    try:
+        session = await spawn(manager, tmp_path)
+        manager.attach(session.terminal_id, owner(), origin_run_id="attach-run")
+        factory.adapters[0].write_error = EOFError("Pty is closed")
+
+        with pytest.raises(TerminalClosedError):
+            await manager.send_operator_input(session.terminal_id, "late input")
+
+        await eventually(lambda: len(trigger.submissions) == 1)
+        assert session.state == "exited"
+        assert session.attention is not None
+        assert session.attention.kind == "exited"
+        assert trigger.submissions[0][1]["origin_run_id"] == "attach-run"
+    finally:
+        await manager.aclose()
 
 
 @pytest.mark.asyncio

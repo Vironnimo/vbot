@@ -21,12 +21,13 @@ from core.channels.adapter import (
     ChannelAdapter,
     DeniedChatFacts,
     FileData,
+    ReplyPlanFacts,
     RouteFacts,
     RunButtonBinding,
     RunButtonClaim,
     bound_run_callback_data,
 )
-from core.chat.messages import GroupRole
+from core.chat.messages import GroupRole, ReplySurface
 from core.config_validation import (
     JsonConfigValidationError,
     JsonDiagnostic,
@@ -52,6 +53,7 @@ if TYPE_CHECKING:
     from core.agents.agents import AgentStore
     from core.automation.automation import TriggerService
     from core.chat.commands import CommandDispatcher
+    from core.runs import Run
     from core.sessions import ChatSessionManager
 
 _LOGGER = get_logger("channels")
@@ -1175,6 +1177,46 @@ class ChannelService:
                         ),
                     )
             raise
+
+    async def relay_completion_run(self, run: Run, reply_surface: ReplySurface) -> None:
+        """Relay a background completion Run to its Session's latest Channel target."""
+        if reply_surface.kind != "channel" or reply_surface.channel_id is None:
+            return
+        address = SessionAddress(
+            project_id=run.project_id,
+            agent_id=run.agent_id,
+            session_id=run.session_id,
+        )
+        metadata = await self._chat_sessions.get_metadata_async(address)
+        raw_target = metadata.get("last_reply_target")
+        if not isinstance(raw_target, dict):
+            raise ChannelConfigError(f"Session has no Channel reply target: {run.session_id}")
+        channel_id = raw_target.get("channel_id")
+        platform_target = raw_target.get("platform_target")
+        thread_id = raw_target.get("thread_id")
+        if channel_id != reply_surface.channel_id:
+            raise ChannelConfigError(
+                f"Session reply target does not match Channel {reply_surface.channel_id}"
+            )
+        if not isinstance(platform_target, str) or not platform_target:
+            raise ChannelConfigError("Session Channel reply target is invalid")
+        if thread_id is not None and (not isinstance(thread_id, str) or not thread_id):
+            raise ChannelConfigError("Session Channel thread target is invalid")
+
+        config = self._storage.get(channel_id)
+        if config.agent_id != run.agent_id or config.platform != reply_surface.platform:
+            raise ChannelConfigError(
+                f"Session reply surface no longer matches Channel {channel_id}"
+            )
+        adapter = self._active_adapter(channel_id)
+        await adapter.relay_run(
+            run,
+            ReplyPlanFacts(
+                channel_id=channel_id,
+                platform_target=platform_target,
+                thread_id=thread_id,
+            ),
+        )
 
     def _prepare_outbound_dispatch(
         self,

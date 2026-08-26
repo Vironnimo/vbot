@@ -597,6 +597,7 @@ class _CompletionChatLoop:
     def __init__(self, run_manager: ChatRunManager) -> None:
         self._run_manager = run_manager
         self.messages: list[str] = []
+        self.reply_surfaces: list[ReplySurface | None] = []
 
     async def start_run(
         self,
@@ -605,6 +606,7 @@ class _CompletionChatLoop:
         *,
         session_id: str,
         internal: bool,
+        reply_surface: ReplySurface | None,
         project_id: str | None,
         input_persisted_hook: Callable[[], None],
         run_kind: RunKind,
@@ -614,6 +616,7 @@ class _CompletionChatLoop:
 
         async def executor(_run: Run) -> str:
             self.messages.append(content)
+            self.reply_surfaces.append(reply_surface)
             input_persisted_hook()
             return content
 
@@ -622,6 +625,82 @@ class _CompletionChatLoop:
             executor,
             admission=RunAdmission(run_kind=run_kind),
         )
+
+
+async def test_idle_completion_relays_through_latest_channel_surface(tmp_path: Path) -> None:
+    run_manager = ChatRunManager()
+    sessions = ChatSessionManager(tmp_path)
+    session = sessions.create("coder", session_id="session-one")
+    surface = ReplySurface.channel(
+        platform="telegram",
+        platform_display_name="Telegram",
+        channel_id="tg-main",
+    )
+    session.add_note(surface.to_note_content())
+    completion_loop = _CompletionChatLoop(run_manager)
+    trigger_service = TriggerService(
+        cast(Any, completion_loop),
+        run_manager,
+        cast(Any, Mock()),
+        trigger_chat_loop=cast(Any, completion_loop),
+        sessions=sessions,
+    )
+
+    async def relay(run: Run, reply_surface: ReplySurface) -> None:
+        assert reply_surface == surface
+        await run.wait()
+
+    relay_mock = AsyncMock(side_effect=relay)
+    trigger_service.set_completion_run_relay(relay_mock)
+
+    delivered = trigger_service.submit_completion(
+        "coder",
+        "session-one",
+        notice_id="terminal:one",
+        origin_run_id="origin-run",
+        body="terminal finished",
+    )
+    await asyncio.wait_for(delivered, timeout=1)
+    for _ in range(10):
+        if relay_mock.await_count:
+            break
+        await asyncio.sleep(0)
+
+    assert completion_loop.reply_surfaces == [surface]
+    relay_mock.assert_awaited_once()
+    await trigger_service.aclose()
+
+
+async def test_idle_completion_does_not_send_webui_surface_to_channel_relay(
+    tmp_path: Path,
+) -> None:
+    run_manager = ChatRunManager()
+    sessions = ChatSessionManager(tmp_path)
+    session = sessions.create("coder", session_id="session-one")
+    session.add_note(ReplySurface.webui().to_note_content())
+    completion_loop = _CompletionChatLoop(run_manager)
+    trigger_service = TriggerService(
+        cast(Any, completion_loop),
+        run_manager,
+        cast(Any, Mock()),
+        trigger_chat_loop=cast(Any, completion_loop),
+        sessions=sessions,
+    )
+    relay_mock = AsyncMock()
+    trigger_service.set_completion_run_relay(relay_mock)
+
+    delivered = trigger_service.submit_completion(
+        "coder",
+        "session-one",
+        notice_id="terminal:webui",
+        origin_run_id="origin-run",
+        body="terminal finished",
+    )
+    await asyncio.wait_for(delivered, timeout=1)
+
+    relay_mock.assert_not_awaited()
+    assert completion_loop.reply_surfaces == [ReplySurface.webui()]
+    await trigger_service.aclose()
 
 
 async def test_completion_delivery_aclose_cancels_workers_and_pending_notices(

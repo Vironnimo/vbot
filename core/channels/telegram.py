@@ -9,7 +9,7 @@ from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
 from dataclasses import dataclass, replace
 from functools import partial
 from importlib import import_module
-from typing import TYPE_CHECKING, Any, TypeGuard
+from typing import TYPE_CHECKING, Any, TypeGuard, cast
 
 from core.attachments import AttachmentStore
 from core.channels.adapter import (
@@ -20,6 +20,7 @@ from core.channels.adapter import (
     DeniedChatLog,
     FileData,
     QuotedMessageFacts,
+    ReplyPlanFacts,
     RouteFacts,
     RunButtonBindingRegistry,
     UpdateOffsetStore,
@@ -35,10 +36,12 @@ from core.extensions import (
     InteractionResponder,
 )
 from core.utils.logging import get_logger
+from core.utils.retry import retry_async
 
 if TYPE_CHECKING:
     from core.automation.automation import TriggerService
     from core.chat.commands import CommandDispatcher
+    from core.runs import Run
     from core.sessions import ChatSessionManager
 
 _LOGGER = get_logger("channels.telegram")
@@ -72,6 +75,7 @@ _INTERACTION_UNAVAILABLE_REPLY = "This action is no longer available."
 # Retries for a send that Telegram answers with RetryAfter (flood control), honoring the
 # server-provided delay — the project convention of max 3 retries for transient errors.
 _SEND_MAX_RETRIES = 3
+_INBOUND_MEDIA_RETRY_INITIAL_SECONDS = 1.0
 
 
 @dataclass(slots=True, frozen=True)
@@ -315,6 +319,10 @@ class TelegramChannelAdapter(ChannelAdapter):
                 message_thread_id=message_thread_id,
                 reply_markup=reply_markup,
             )
+
+    async def relay_run(self, run: Run, reply_plan: ReplyPlanFacts) -> None:
+        """Relay one background Run through the composed conversation engine."""
+        await self._engine.relay_run(run, reply_plan)
 
     async def _send_text_chunks(
         self,
@@ -658,11 +666,26 @@ class TelegramChannelAdapter(ChannelAdapter):
         if attachment_store is None:
             raise ChannelError("Attachment store is not configured for Telegram channels")
 
+        payload = await retry_async(
+            self._download_inbound_attachment,
+            file_id,
+            attachment_store,
+            initial_delay=_INBOUND_MEDIA_RETRY_INITIAL_SECONDS,
+        )
+        return attachment_store.store(filename, bytes(payload))
+
+    async def _download_inbound_attachment(
+        self,
+        file_id: str,
+        attachment_store: AttachmentStore,
+    ) -> bytearray:
+        """Fetch one Telegram file, translating transient API faults for retry."""
         bot = self._require_bot()
         # get_file fetches only metadata (size + path), not the body; checking the reported
         # size here refuses an oversized file before download_as_bytearray pulls it into
         # memory. store() re-checks as a backstop for when Telegram omits the size.
-        telegram_file = await bot.get_file(file_id)
+        with _telegram_error_boundary(self._config.id):
+            telegram_file = await bot.get_file(file_id)
         reported_size = getattr(telegram_file, "file_size", None)
         attachment_store.ensure_within_limit(
             reported_size if isinstance(reported_size, int) else None
@@ -670,8 +693,8 @@ class TelegramChannelAdapter(ChannelAdapter):
 
         # The pre-check already bounded this to <= the store limit, so converting the
         # downloaded bytearray to immutable bytes copies only validated, in-limit data.
-        payload = await telegram_file.download_as_bytearray()
-        return attachment_store.store(filename, bytes(payload))
+        with _telegram_error_boundary(self._config.id):
+            return cast(bytearray, await telegram_file.download_as_bytearray())
 
     # -- Inbound handlers -----------------------------------------------------------------
 
@@ -1921,13 +1944,13 @@ def _load_telegram_error() -> Any:
 
 @contextlib.contextmanager
 def _telegram_error_boundary(channel_id: str) -> Iterator[None]:
-    """Translate python-telegram-bot send errors into ChannelError at the adapter boundary.
+    """Translate python-telegram-bot API errors into ChannelError at the adapter boundary.
 
     PTB raises ``telegram.error.TelegramError`` (e.g. ``BadRequest``) when the Bot API rejects
-    a send. Callers such as the ``channel_send`` tool and the engine relay only handle the
-    ChannelError family, so an unwrapped PTB error would surface as an unexpected exception
-    instead of a clean failure. Transient transport faults (network errors, flood-control
-    ``RetryAfter``) are marked retryable so reply delivery can retry them.
+    a request. Channel ingress, ``channel_send``, and the engine relay handle the ChannelError
+    family, so an unwrapped PTB error would surface as an unexpected exception instead of a
+    clean failure. Transient transport faults (network errors, flood-control ``RetryAfter``)
+    are marked retryable so downloads and reply delivery can retry them.
     """
     telegram_error = _load_telegram_error()
     try:
@@ -1942,7 +1965,7 @@ def _classify_telegram_error(
     error: Any,
 ) -> ChannelError:
     """Translate one PTB TelegramError into a retry-classified ChannelError."""
-    channel_error = ChannelError(f"Telegram send failed (channel={channel_id}): {error}")
+    channel_error = ChannelError(f"Telegram request failed (channel={channel_id}): {error}")
     network_error = getattr(telegram_error_module, "NetworkError", None)
     if network_error is not None and isinstance(error, network_error):
         # Covers TimedOut as well - both are transient transport faults.

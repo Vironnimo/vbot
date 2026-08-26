@@ -87,6 +87,10 @@ _EMPTY_ASSISTANT_REPLY = "I finished processing your message, but no reply text 
 _UNSUPPORTED_FILE_REPLY = "Sorry, this file type isn't supported yet."
 _FILE_TOO_LARGE_REPLY = "Sorry, this file is too large to process."
 _MEDIA_FAILED_REPLY = "Sorry, I couldn't process the attached file. Please try again."
+_MEDIA_DOWNLOAD_FAILED_REPLY = (
+    "Sorry, the messaging platform couldn't download the attached file after several "
+    "attempts. Please resend it."
+)
 _BUSY_REPLY = "I'm busy with earlier messages. Please try again shortly."
 _MEMBER_TOOL_NAMES = ("web_search", "web_fetch")
 _MEMBER_TOOL_DENIAL = (
@@ -1183,6 +1187,10 @@ class ChannelConversationEngine:
         if reply is not None:
             await self._send_reply(reply_plan, reply)
 
+    async def relay_run(self, run: Run, reply_plan: ReplyPlanFacts) -> None:
+        """Relay an admitted background Run using the normal Channel reply semantics."""
+        await self._relay_run_events(run, reply_plan)
+
     async def _send_reply(self, reply_plan: ReplyPlanFacts, text: str) -> None:
         """Deliver an engine reply, retrying transient transport failures.
 
@@ -1555,6 +1563,8 @@ def _media_failure_reply(error: Exception) -> str:
         return _UNSUPPORTED_FILE_REPLY
     if isinstance(error, AttachmentTooLargeError):
         return _FILE_TOO_LARGE_REPLY
+    if getattr(error, "retryable", False) is True:
+        return _MEDIA_DOWNLOAD_FAILED_REPLY
     return _MEDIA_FAILED_REPLY
 
 
