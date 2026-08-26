@@ -6,8 +6,10 @@ partially written file. On POSIX, the affected directory entries are also
 flushed after the replace. The temp file lives adjacent to the target by
 default (guaranteeing the same filesystem for the replace); pass ``data_dir``
 to stage it under the data directory's canonical atomic-temporary area instead.
-On failure the temp file is removed and the ``OSError`` re-raised for the caller
-to translate into its own domain error.
+Pass ``mode`` (e.g. ``0o600`` for secret control records) to create the temp
+file with those exact permissions and re-assert them on the target after the
+replace. On failure the temp file is removed and the ``OSError`` re-raised for
+the caller to translate into its own domain error.
 """
 
 from __future__ import annotations
@@ -34,7 +36,9 @@ def remove_temporary_file(temp_path: Path) -> None:
         temp_path.unlink(missing_ok=True)
 
 
-def atomic_write_bytes(target_path: Path, data: bytes, *, data_dir: Path | None = None) -> None:
+def atomic_write_bytes(
+    target_path: Path, data: bytes, *, data_dir: Path | None = None, mode: int | None = None
+) -> None:
     """Atomically write ``data`` to ``target_path`` (see module docstring)."""
 
     def write(temp_path: Path) -> None:
@@ -43,11 +47,16 @@ def atomic_write_bytes(target_path: Path, data: bytes, *, data_dir: Path | None 
             handle.flush()
             os.fsync(handle.fileno())
 
-    _atomic_write(target_path, write, data_dir=data_dir)
+    _atomic_write(target_path, write, data_dir=data_dir, mode=mode)
 
 
 def atomic_write_text(
-    target_path: Path, text: str, *, data_dir: Path | None = None, encoding: str = "utf-8"
+    target_path: Path,
+    text: str,
+    *,
+    data_dir: Path | None = None,
+    encoding: str = "utf-8",
+    mode: int | None = None,
 ) -> None:
     """Atomically write ``text`` to ``target_path`` (see module docstring)."""
 
@@ -57,11 +66,15 @@ def atomic_write_text(
             handle.flush()
             os.fsync(handle.fileno())
 
-    _atomic_write(target_path, write, data_dir=data_dir)
+    _atomic_write(target_path, write, data_dir=data_dir, mode=mode)
 
 
 def _atomic_write(
-    target_path: Path, write: Callable[[Path], None], *, data_dir: Path | None
+    target_path: Path,
+    write: Callable[[Path], None],
+    *,
+    data_dir: Path | None,
+    mode: int | None = None,
 ) -> None:
     target_path.parent.mkdir(parents=True, exist_ok=True)
     if data_dir is not None:
@@ -70,12 +83,23 @@ def _atomic_write(
     else:
         temp_path = target_path.with_name(f".{target_path.name}.{uuid4().hex}.tmp")
     try:
+        if mode is not None:
+            # Create the temp file exclusively with the exact permissions so the
+            # replaced result never momentarily carries a wider umask-derived mode.
+            descriptor = os.open(temp_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, mode)
+            os.close(descriptor)
         write(temp_path)
         os.replace(temp_path, target_path)
         _fsync_replace_directories(temp_path, target_path)
     except OSError:
         remove_temporary_file(temp_path)
         raise
+    if mode is not None:
+        # Best-effort exactness after the replace: exotic filesystems may ignore
+        # creation modes, but a permission-tightening miss must not fail a write
+        # that already succeeded.
+        with suppress(OSError):
+            os.chmod(target_path, mode)
 
 
 def _fsync_replace_directories(temp_path: Path, target_path: Path) -> None:

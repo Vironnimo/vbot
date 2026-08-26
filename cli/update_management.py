@@ -23,7 +23,6 @@ import tarfile
 import tomllib
 import uuid
 from collections.abc import Callable
-from contextlib import suppress
 from dataclasses import dataclass, replace
 from pathlib import Path
 
@@ -51,6 +50,7 @@ from cli.server_management import (
     start_server,
     stop_server,
 )
+from core.utils.atomic import atomic_write_bytes
 from core.utils.config import VBOT_ROOT
 
 GITHUB_API_BASE = "https://api.github.com/repos/Vironnimo/vbot"
@@ -577,15 +577,11 @@ def _refresh_windows_command_shim(
     escaped_python = state.python_executable.replace("%", "%%")
     content = f'@echo off\r\n"{escaped_python}" -m cli.main %*\r\n'
     encoded_content = content.encode("utf-8")
-    temporary = shim.with_name(f".{shim.name}.tmp")
     try:
         if shim.read_bytes() == encoded_content:
             return _Step(True, "")
-        temporary.write_bytes(encoded_content)
-        os.replace(temporary, shim)
+        atomic_write_bytes(shim, encoded_content)
     except OSError as exc:
-        with suppress(OSError):
-            temporary.unlink(missing_ok=True)
         return _Step(False, f"command launcher update failed: {exc}")
     return _Step(True, "command launcher refreshed")
 
