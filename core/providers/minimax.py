@@ -20,11 +20,15 @@ from core.providers.openai_compatible import (
 )
 from core.providers.providers import AuthConfig, ProviderConfig
 from core.providers.reasoning import (
+    REASONING_INTENT_BUDGET,
     REASONING_INTENT_DEFAULT,
+    REASONING_INTENT_EFFORT,
     REASONING_INTENT_OFF,
+    REASONING_INTENT_ON,
     ReasoningIntent,
     model_reasoning_control,
     model_reasoning_levels,
+    model_reasoning_supported,
     remove_reasoning_kwargs,
     resolve_reasoning_intent,
 )
@@ -163,6 +167,25 @@ class _MiniMaxMessagesAdapter(AnthropicCompatibleAdapter):
         payload = super()._build_payload(messages, model_id, **kwargs)
         _validate_minimax_temperature(payload.get("temperature"))
         return payload
+
+    @classmethod
+    def describe_reasoning_render(
+        cls,
+        *,
+        model_lookup: ModelLookup | None,
+        model_id: str,
+        effort: str | None,
+        provider_config: ProviderConfig | None = None,
+    ) -> ReasoningIntent:
+        """Describe the Messages render: M2.x reasons by default and accepts no control.
+
+        :meth:`_apply_reasoning` strips every reasoning control — nothing is
+        sent, and the Model's always-on reasoning stays on regardless of the
+        selected effort.
+        """
+
+        del model_lookup, model_id, effort, provider_config
+        return ReasoningIntent(REASONING_INTENT_ON)
 
 
 class MiniMaxAdapter(OpenAICompatibleAdapter):
@@ -310,6 +333,36 @@ class MiniMaxAdapter(OpenAICompatibleAdapter):
         _render_minimax_m3_thinking(payload, intent)
         _validate_minimax_temperature(payload.get("temperature"))
         return payload
+
+    @classmethod
+    def describe_reasoning_render(
+        cls,
+        *,
+        model_lookup: ModelLookup | None,
+        model_id: str,
+        effort: str | None,
+        provider_config: ProviderConfig | None = None,
+    ) -> ReasoningIntent:
+        """Describe the MiniMax OpenAI-wire reasoning render.
+
+        Mirrors :meth:`_build_payload`: M2.x reasons by default and takes no
+        reasoning control at all, and M3's render is the binary adaptive
+        thinking switch — no effort level ever reaches the wire, so every
+        active intent describes as plain ``on``.
+        """
+
+        del provider_config
+        if model_id != MINIMAX_M3_MODEL_ID:
+            return ReasoningIntent(REASONING_INTENT_ON)
+        intent = resolve_reasoning_intent(
+            supported=model_reasoning_supported(model_lookup, model_id),
+            control=model_reasoning_control(model_lookup, model_id),
+            levels=model_reasoning_levels(model_lookup, model_id) or MINIMAX_M3_EFFORT_FLOOR,
+            effort=effort,
+        )
+        if intent.kind in (REASONING_INTENT_EFFORT, REASONING_INTENT_BUDGET, REASONING_INTENT_ON):
+            return ReasoningIntent(REASONING_INTENT_ON)
+        return intent
 
     def normalize_response(
         self, response: dict[str, Any], *, model_id: str | None = None

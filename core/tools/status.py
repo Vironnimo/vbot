@@ -8,8 +8,9 @@ from typing import Any
 
 from core.chat.errors import ChatSessionError
 from core.chat.status_report import (
+    ReasoningRenderDescriber,
     build_status_reply,
-    resolve_actual_thinking_effort,
+    resolve_reported_thinking_effort,
     resolve_status_activity,
     resolve_status_model_details,
     resolve_status_project_label,
@@ -68,6 +69,7 @@ def make_status_handler(
     providers: ProviderRegistry | None = None,
     projects: ProjectStore | None = None,
     local_context_windows_loader: Callable[[], Mapping[str, Any]] | None = None,
+    reasoning_render_describer: ReasoningRenderDescriber | None = None,
 ):
     """Create a status tool handler bound to runtime services."""
 
@@ -138,11 +140,11 @@ def make_status_handler(
                 started_at,
                 model_details.display_name,
                 activity,
-                actual_thinking_effort=resolve_actual_thinking_effort(
-                    agent.thinking_effort,
-                    model_details.reasoning_levels,
-                    model_details.reasoning_control,
-                    model_details.reasoning_budget_max,
+                actual_thinking_effort=resolve_reported_thinking_effort(
+                    agent=agent,
+                    models=models,
+                    model_details=model_details,
+                    describe_render=reasoning_render_describer,
                 ),
                 project_label=resolve_status_project_label(projects, context.project_id),
                 temperature_status=resolve_status_temperature(
@@ -179,6 +181,7 @@ def register_status_tool(
     providers: ProviderRegistry | None = None,
     projects: ProjectStore | None = None,
     local_context_windows_loader: Callable[[], Mapping[str, Any]] | None = None,
+    reasoning_render_describer: ReasoningRenderDescriber | None = None,
 ) -> None:
     """Register the status tool with a vBot tool registry."""
     registry.register(
@@ -194,6 +197,7 @@ def register_status_tool(
             providers,
             projects,
             local_context_windows_loader,
+            reasoning_render_describer,
         ),
         open_input_schema=True,
         result_schema={"type": "object", "required": ["text", "agent_id", "session_id"]},

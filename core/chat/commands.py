@@ -13,8 +13,9 @@ from core.chat.errors import CompactionUnavailableError
 from core.chat.messages import ChatMessage, ReplySurface
 from core.chat.status_report import (
     STATUS_PLACEHOLDER,
+    ReasoningRenderDescriber,
     build_status_reply,
-    resolve_actual_thinking_effort,
+    resolve_reported_thinking_effort,
     resolve_status_activity,
     resolve_status_model_details,
     resolve_status_project_label,
@@ -480,6 +481,7 @@ class CommandDispatcher:
         reflection_service: Any | None = None,
         storage: Any | None = None,
         terminal_manager: TerminalManager | None = None,
+        reasoning_render_describer: ReasoningRenderDescriber | None = None,
     ) -> None:
         self._chat_runs = chat_runs
         self._agent_resolver = agent_resolver
@@ -493,6 +495,10 @@ class CommandDispatcher:
         self._reflection_service = reflection_service
         self._storage = storage
         self._terminal_manager = terminal_manager
+        # Adapter-backed render description for the /status thinking-effort
+        # line; absent (e.g. minimally wired test setups) degrades to the
+        # declared-control fallback.
+        self._reasoning_render_describer = reasoning_render_describer
         # Live loader for the user-configured local-model window map, read at
         # execution time so a settings change applies to the next /status.
         self._local_context_windows_loader = local_context_windows_loader
@@ -1486,11 +1492,11 @@ class CommandDispatcher:
             self._started_at,
             model_details.display_name,
             activity,
-            actual_thinking_effort=resolve_actual_thinking_effort(
-                agent.thinking_effort if agent is not None else None,
-                model_details.reasoning_levels,
-                model_details.reasoning_control,
-                model_details.reasoning_budget_max,
+            actual_thinking_effort=resolve_reported_thinking_effort(
+                agent=agent,
+                models=self._models,
+                model_details=model_details,
+                describe_render=self._reasoning_render_describer,
             ),
             project_label=resolve_status_project_label(self._projects, context.project_id),
             temperature_status=resolve_status_temperature(

@@ -76,6 +76,7 @@ from core.providers.reasoning import (
     REASONING_INTENT_EFFORT,
     REASONING_INTENT_OFF,
     REASONING_REPLAY_FIDELITY_READABLE_ONLY,
+    ReasoningIntent,
     ReasoningReplayFidelity,
     model_reasoning_budget_max,
     model_reasoning_control,
@@ -200,7 +201,24 @@ class OllamaCloudAdapter(OpenAICompatibleAdapter):
     def _supported_reasoning_efforts(self, model_id: str) -> tuple[str, ...]:
         """Intersect the Model ladder with Ollama Cloud's accepted wire values."""
 
-        declared = model_reasoning_levels(self._model_lookup, model_id)
+        return self._reasoning_effort_ladder(self._model_lookup, self._config, model_id)
+
+    @classmethod
+    def _reasoning_effort_ladder(
+        cls,
+        model_lookup: ModelLookup | None,
+        provider_config: ProviderConfig | None,
+        model_id: str,
+    ) -> tuple[str, ...]:
+        """Class-level twin of :meth:`_supported_reasoning_efforts`.
+
+        The render path snaps against this through the instance; the render
+        description (``describe_reasoning_render``) snaps against the same
+        Cloud ladder without needing an adapter instance.
+        """
+
+        del provider_config
+        declared = model_reasoning_levels(model_lookup, model_id)
         if declared is None:
             return OLLAMA_CLOUD_REASONING_EFFORTS
         supported: list[str] = ["none"]
@@ -239,6 +257,31 @@ class OllamaCloudAdapter(OpenAICompatibleAdapter):
             # switch as an effort even when native /api/show describes the Model
             # as a binary on/off thinker.
             payload["reasoning_effort"] = "none"
+
+    @classmethod
+    def describe_reasoning_render(
+        cls,
+        *,
+        model_lookup: ModelLookup | None,
+        model_id: str,
+        effort: str | None,
+        provider_config: ProviderConfig | None = None,
+    ) -> ReasoningIntent:
+        """Describe the Cloud render, mapping vBot ``xhigh`` to Ollama's ``max``.
+
+        Mirrors :meth:`_apply_reasoning`: the selected effort is normalized
+        into Ollama Cloud's wire vocabulary before the shared generic-wire
+        description resolves it against the Cloud ladder.
+        """
+
+        if normalize_thinking_effort(effort) == "xhigh":
+            effort = "max"
+        return super().describe_reasoning_render(
+            model_lookup=model_lookup,
+            model_id=model_id,
+            effort=effort,
+            provider_config=provider_config,
+        )
 
     def _format_assistant_message(
         self,
