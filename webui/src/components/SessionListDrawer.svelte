@@ -1,6 +1,7 @@
 <script>
   import { tick, untrack } from 'svelte';
 
+  import { asText as asSharedText } from '$lib/values.js';
   import Badge from './ui/Badge.svelte';
   import Banner from './ui/Banner.svelte';
   import Button from './ui/Button.svelte';
@@ -716,11 +717,7 @@
   }
 
   function asText(value) {
-    if (value === null || value === undefined) {
-      return '';
-    }
-    const normalizedValue = String(value).trim();
-    return normalizedValue;
+    return asSharedText(value).trim();
   }
 </script>
 

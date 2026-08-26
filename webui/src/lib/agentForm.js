@@ -6,6 +6,7 @@ import {
 } from './agentTargetOptions.js';
 import { parseAgentAddress } from './agentAddress.js';
 import { normalizeToolAccess } from './toolAccess.js';
+import { asText, isPlainObject } from './values.js';
 
 export const AGENT_FORM_MODE_CREATE = 'create';
 export const AGENT_FORM_MODE_EDIT = 'edit';
@@ -54,7 +55,6 @@ const EDITABLE_AGENT_FIELDS = Object.freeze([
 ]);
 
 const AGENT_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
-const EMPTY_TEXT = '';
 
 export function createAgentFormValues(agent = {}) {
   // The four inheritable run fields (model/fallback_models/temperature/
@@ -406,14 +406,6 @@ function validateAgentId(agentId, errors) {
   }
 }
 
-function asText(value) {
-  return hasValue(value) ? String(value) : EMPTY_TEXT;
-}
-
 function hasValue(value) {
   return value !== null && value !== undefined;
-}
-
-function isPlainObject(value) {
-  return value !== null && typeof value === 'object' && !Array.isArray(value);
 }

@@ -7,6 +7,7 @@ import {
   RUN_EVENT_TOOL_CALL_STDERR,
   RUN_EVENT_TOOL_CALL_STDOUT,
 } from './api.js';
+import { isPlainObject } from './values.js';
 
 const CHAT_STATUS_RUNNING = 'running';
 const CHAT_STATUS_COMPLETED = 'completed';
@@ -1878,10 +1879,6 @@ function timingDurationMs(timing) {
   return Number.isFinite(timing?.duration_ms) && timing.duration_ms >= 0
     ? timing.duration_ms
     : null;
-}
-
-function isPlainObject(value) {
-  return Object.prototype.toString.call(value) === '[object Object]';
 }
 
 function stripTimelineSequence({ sequence: _sequence, ...item }) {

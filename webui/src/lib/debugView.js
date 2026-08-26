@@ -1,3 +1,5 @@
+import { asOptionalText, asText, isPlainObject } from './values.js';
+
 export const DEBUG_TAB_RAW = 'raw';
 export const DEBUG_TAB_FORMATTED = 'formatted';
 
@@ -383,23 +385,6 @@ function safeStringify(value) {
   } catch {
     return '';
   }
-}
-
-function asText(value) {
-  return value === null || value === undefined ? '' : String(value);
-}
-
-function asOptionalText(value) {
-  if (value === null || value === undefined) {
-    return null;
-  }
-
-  const normalized = String(value).trim();
-  return normalized.length > 0 ? normalized : null;
-}
-
-function isPlainObject(value) {
-  return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
 function resolveBoolean(value, fallback) {

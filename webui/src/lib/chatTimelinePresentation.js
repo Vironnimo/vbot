@@ -6,6 +6,7 @@ import {
   toolNameHasHiddenArguments,
 } from '$lib/chatToolDetails.js';
 import { activeLocaleTag, t } from '$lib/i18n.js';
+import { isPlainObject } from '$lib/values.js';
 
 const TOOL_DISPLAY_ARGS = {
   read: ['path'],
@@ -2158,10 +2159,6 @@ function truncateToolLabel(value, maxLength) {
     return value;
   }
   return `${value.slice(0, maxLength - 1)}…`;
-}
-
-function isPlainObject(value) {
-  return Object.prototype.toString.call(value) === '[object Object]';
 }
 
 function parseJsonValue(value) {

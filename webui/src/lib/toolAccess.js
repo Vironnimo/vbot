@@ -1,3 +1,5 @@
+import { isPlainObject } from './values.js';
+
 export const TOOL_ACCESS_MODE_ALL = 'all';
 export const TOOL_ACCESS_MODE_SELECTED = 'selected';
 export const TOOL_ACCESS_MODE_NONE = 'none';
@@ -390,8 +392,4 @@ function normalizeNames(value) {
 
 function sortTools(tools) {
   return [...tools].sort((left, right) => left.name.localeCompare(right.name));
-}
-
-function isPlainObject(value) {
-  return value !== null && typeof value === 'object' && !Array.isArray(value);
 }

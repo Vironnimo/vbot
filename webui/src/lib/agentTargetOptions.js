@@ -14,6 +14,7 @@
 // stays i18n-free.
 
 import { formatAgentAddress } from './agentAddress.js';
+import { asText } from './values.js';
 
 export const AGENT_TARGET_GROUP_IDENTITY = 'identity';
 export const AGENT_TARGET_GROUP_PROJECT = 'project';
@@ -143,8 +144,4 @@ export function projectIdsFromList(listResponse) {
   return raw
     .map((project) => asText(project?.project_id))
     .filter((projectId) => projectId.length > 0);
-}
-
-function asText(value) {
-  return value === null || value === undefined ? '' : String(value);
 }
