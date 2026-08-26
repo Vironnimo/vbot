@@ -87,7 +87,7 @@ from core.providers.providers import (
     model_is_local,
     resolve_effective_context_window,
 )
-from core.providers.reasoning import ReasoningReplayPolicy
+from core.providers.reasoning import ReasoningIntent, ReasoningReplayPolicy
 from core.providers.stepfun import StepFunAdapter
 from core.providers.token_getter import (
     COPILOT_API_ENDPOINT_EXTRA_KEY,
@@ -794,6 +794,7 @@ class Runtime:
             reflection_service=self._reflection_service,
             storage=self._storage,
             terminal_manager=self._terminal_manager,
+            reasoning_render_describer=self.describe_reasoning_render,
         )
         if self._extensions is not None:
             self._extensions.apply_commands(self._command_dispatcher)
@@ -848,6 +849,7 @@ class Runtime:
             self._providers,
             self._projects,
             self.local_context_windows,
+            self.describe_reasoning_render,
         )
         # Built-ins are all registered now; apply extension tools last so a
         # collision with any built-in name is skipped (built-in wins), right
@@ -2752,6 +2754,31 @@ class Runtime:
                 return None
 
         return _lookup
+
+    def describe_reasoning_render(
+        self, provider_id: str, model_id: str, effort: str | None
+    ) -> ReasoningIntent | None:
+        """Return the reasoning intent an adapter would render for one request.
+
+        ``/status`` seam: resolves the provider's adapter *class* and asks it
+        to describe its render — no adapter instance, credentials, or HTTP.
+        Returns ``None`` when the provider or adapter type cannot be resolved;
+        resolution failures propagate to the caller, whose presentation layer
+        degrades to the declared-control fallback.
+        """
+
+        provider_config = self._providers.get(provider_id) if self._providers else None
+        if provider_config is None:
+            return None
+        adapter_class = _ADAPTER_MAP.get(provider_config.adapter)
+        if adapter_class is None:
+            return None
+        return adapter_class.describe_reasoning_render(
+            model_lookup=self._model_lookup_for(provider_id),
+            provider_config=provider_config,
+            model_id=model_id,
+            effort=effort,
+        )
 
     async def maybe_refresh_local_catalogs(self, *, force: bool = False) -> None:
         """Refresh every enabled ``auto_refresh`` connection's model catalog, throttled.

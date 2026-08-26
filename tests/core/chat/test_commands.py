@@ -27,9 +27,11 @@ from core.chat.commands import (
 )
 from core.chat.status_report import (
     STATUS_PLACEHOLDER,
+    ReasoningIntent,
     StatusModelDetails,
     build_status_text,
     resolve_actual_thinking_effort,
+    resolve_reported_thinking_effort,
     resolve_status_model_details,
     resolve_status_project_label,
     resolve_status_temperature,
@@ -1379,6 +1381,96 @@ def test_resolve_actual_thinking_effort_budget_reports_rendered_budget() -> None
     assert resolve_actual_thinking_effort("high", (), "budget", 32000) == "on (24,000 tokens)"
     # ``none`` still reports off.
     assert resolve_actual_thinking_effort("none", (), "budget") == "off"
+
+
+def _on_off_details() -> StatusModelDetails:
+    return StatusModelDetails(
+        context_window=1_048_576,
+        display_name="glm-5.3-flash",
+        reasoning_levels=(),
+        reasoning_control="on_off",
+    )
+
+
+def test_resolve_reported_thinking_effort_prefers_adapter_description() -> None:
+    """The adapter's render description wins over the declared-control fallback.
+
+    This is the ollama-cloud glm-5.3-flash case the user hit: the catalog
+    declares a binary on_off control, but the Cloud wire carries the effort
+    level — so /status must report ``max``, not ``on``.
+    """
+
+    def describe_render(provider_id: str, model_id: str, effort: str | None):
+        assert provider_id == "ollama-cloud"
+        assert model_id == "glm-5.3-flash"
+        return ReasoningIntent("effort", effort_level="max")
+
+    text_value = resolve_reported_thinking_effort(
+        agent=_make_agent(model="ollama-cloud/glm-5.3-flash", thinking_effort="xhigh"),
+        models=cast(ModelRegistry, object()),
+        model_details=_on_off_details(),
+        describe_render=describe_render,
+    )
+
+    assert text_value == "max"
+
+
+def test_resolve_reported_thinking_effort_falls_back_without_describer() -> None:
+    text_value = resolve_reported_thinking_effort(
+        agent=_make_agent(model="ollama-cloud/glm-5.3-flash", thinking_effort="xhigh"),
+        models=cast(ModelRegistry, object()),
+        model_details=_on_off_details(),
+        describe_render=None,
+    )
+
+    assert text_value == "on"
+
+
+def test_resolve_reported_thinking_effort_falls_back_when_unresolvable() -> None:
+    text_value = resolve_reported_thinking_effort(
+        agent=_make_agent(model="ollama-cloud/glm-5.3-flash", thinking_effort="xhigh"),
+        models=cast(ModelRegistry, object()),
+        model_details=_on_off_details(),
+        describe_render=lambda *_args: None,
+    )
+
+    assert text_value == "on"
+
+
+def test_resolve_reported_thinking_effort_falls_back_on_describer_error() -> None:
+    def broken_describer(*_args: Any) -> ReasoningIntent:
+        raise KeyError("provider missing")
+
+    text_value = resolve_reported_thinking_effort(
+        agent=_make_agent(model="ollama-cloud/glm-5.3-flash", thinking_effort="xhigh"),
+        models=cast(ModelRegistry, object()),
+        model_details=_on_off_details(),
+        describe_render=broken_describer,
+    )
+
+    assert text_value == "on"
+
+
+def test_resolve_reported_thinking_effort_none_without_agent() -> None:
+    assert (
+        resolve_reported_thinking_effort(
+            agent=None,
+            models=None,
+            model_details=_on_off_details(),
+        )
+        is None
+    )
+
+
+def test_resolve_reported_thinking_effort_reports_off_from_description() -> None:
+    text_value = resolve_reported_thinking_effort(
+        agent=_make_agent(model="ollama-cloud/glm-5.3-flash", thinking_effort="none"),
+        models=cast(ModelRegistry, object()),
+        model_details=_on_off_details(),
+        describe_render=lambda *_args: ReasoningIntent("off"),
+    )
+
+    assert text_value == "off"
 
 
 def test_build_status_text_reports_selected_and_actual_effort_split() -> None:
