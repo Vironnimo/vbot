@@ -26,6 +26,7 @@ from core.providers._http_shared import (
     decode_response_json,
     wrap_network_error,
 )
+from core.providers.adapter import ModelLookup
 from core.providers.errors import (
     NetworkError,
     ProviderError,
@@ -44,6 +45,7 @@ from core.providers.openai_compatible import (
     _read_string,
     _read_string_list,
 )
+from core.providers.providers import ProviderConfig
 from core.providers.reasoning import (
     REASONING_INTENT_BUDGET,
     REASONING_INTENT_EFFORT,
@@ -54,6 +56,7 @@ from core.providers.reasoning import (
     model_reasoning_budget_max,
     model_reasoning_control,
     model_reasoning_levels,
+    model_reasoning_supported,
     normalize_thinking_effort,
     resolve_reasoning_intent,
 )
@@ -698,6 +701,36 @@ class OpenRouterAdapter(OpenAICompatibleAdapter):
             payload["provider"] = provider_preferences
         return payload
 
+    @classmethod
+    def describe_reasoning_render(
+        cls,
+        *,
+        model_lookup: ModelLookup | None,
+        model_id: str,
+        effort: str | None,
+        provider_config: ProviderConfig | None = None,
+    ) -> ReasoningIntent:
+        """Describe OpenRouter's reasoning render (``reasoning: {effort}``/``{enabled}``).
+
+        Mirrors :meth:`_build_payload`: the intent resolves against the Model's
+        feed ladder or the OpenRouter floor, then
+        :func:`_describe_openrouter_intent` maps it onto the render — an ``on``
+        selection toggles ``enabled`` rather than sending an effort, and a
+        budget degrades to the effort OpenRouter maps internally.
+        """
+
+        del provider_config
+        intent = resolve_reasoning_intent(
+            supported=model_reasoning_supported(model_lookup, model_id),
+            control=model_reasoning_control(model_lookup, model_id),
+            levels=model_reasoning_levels(model_lookup, model_id)
+            or tuple(OPENROUTER_REASONING_EFFORTS),
+            effort=effort,
+            budget_max=model_reasoning_budget_max(model_lookup, model_id),
+            max_tokens=None,
+        )
+        return _describe_openrouter_intent(intent)
+
 
 @dataclass(frozen=True)
 class OpenRouterResponsesPolicy:
@@ -940,6 +973,19 @@ def _render_openrouter_reasoning(payload: dict[str, Any], intent: ReasoningInten
         # Some upstreams honor the output toggle even when they ignore the
         # requested effort. Never ask one to return reasoning for an off intent.
         payload.pop("include_reasoning", None)
+
+
+def _describe_openrouter_intent(intent: ReasoningIntent) -> ReasoningIntent:
+    """Map a resolved intent onto OpenRouter's render (``/status`` description).
+
+    Mirrors :func:`_render_openrouter_reasoning`: an ``on`` intent toggles
+    ``enabled`` rather than sending an effort, and a ``budget`` intent renders
+    as the effort OpenRouter maps internally.
+    """
+
+    if intent.kind == REASONING_INTENT_BUDGET and intent.effort_level is not None:
+        return ReasoningIntent(REASONING_INTENT_EFFORT, effort_level=intent.effort_level)
+    return intent
 
 
 def _is_claude_family(model_id: str) -> bool:

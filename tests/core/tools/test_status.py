@@ -18,7 +18,11 @@ from core.chat import (
     ReplySurface,
 )
 from core.chat.chat import ChatMessage
-from core.chat.status_report import STATUS_PLACEHOLDER, build_status_text
+from core.chat.status_report import (
+    STATUS_PLACEHOLDER,
+    ReasoningIntent,
+    build_status_text,
+)
 from core.models.models import Capabilities, Model, ModelRegistry, ReasoningCapabilities
 from core.projects import AgentResolutionError, AgentResolver, ConfigAgent, ProjectStore
 from core.runs import ChatRunManager, Run
@@ -574,6 +578,62 @@ def test_status_tool_splits_selected_and_actual_thinking_effort(tmp_path: Path) 
     assert "Selected thinking effort: max" in text
     assert "Actual model thinking effort: high" in text
     assert "Temperature: 0.3 (agent)" in text
+
+
+def test_status_tool_reports_adapter_described_effort_for_on_off_model(tmp_path: Path) -> None:
+    """The wired describer makes the tool report the wire effort, not the toggle.
+
+    The ollama-cloud glm-5.3-flash case: the catalog declares a binary on_off
+    control, but the Cloud adapter renders the effort level onto the wire.
+    """
+    agent = Agent(
+        id="coder",
+        name="Coder",
+        model="ollama-cloud/glm-5.3-flash",
+        fallback_models=[],
+        workspace="workspace",
+        temperature=0.3,
+        thinking_effort="xhigh",
+        tool_access=ToolAccess(mode="all"),
+        allowed_skills=["*"],
+        tools={},
+        created_at="2026-05-18T10:00:00+00:00",
+        updated_at="2026-05-18T10:00:00+00:00",
+    )
+    model = Model(
+        model_id="glm-5.3-flash",
+        name="glm-5.3-flash",
+        capabilities=Capabilities(
+            vision=True,
+            tools=True,
+            json_mode=False,
+            reasoning=ReasoningCapabilities(supported=True, control="on_off"),
+        ),
+        context_window=1_048_576,
+        max_output_tokens=None,
+    )
+
+    def describe_render(provider_id: str, model_id: str, effort: str | None):
+        assert (provider_id, model_id, effort) == ("ollama-cloud", "glm-5.3-flash", "xhigh")
+        return ReasoningIntent("effort", effort_level="max")
+
+    registry = ToolRegistry()
+    register_status_tool(
+        registry,
+        cast(AgentResolver, _StubResolver(agent)),
+        cast(ChatSessionManager, _StubSessions([])),
+        cast(ModelRegistry, _StubModels(model)),
+        ChatRunManager(),
+        None,
+        reasoning_render_describer=describe_render,
+    )
+
+    result = asyncio.run(_dispatch(registry, tmp_path))
+
+    data = cast(dict[str, Any], result["data"])
+    text = cast(str, data["text"])
+    assert "Selected thinking effort: xhigh" in text
+    assert "Actual model thinking effort: max" in text
 
 
 def test_status_tool_reports_resolved_model_recommended_temperature(

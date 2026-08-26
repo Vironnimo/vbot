@@ -11,7 +11,7 @@ The dispatcher workflow that gathers inputs lives in
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -25,6 +25,7 @@ from core.providers.reasoning import (
     REASONING_INTENT_DEFAULT,
     REASONING_INTENT_OFF,
     REASONING_INTENT_ON,
+    ReasoningIntent,
     resolve_reasoning_intent,
 )
 from core.utils.logging import get_logger
@@ -49,6 +50,12 @@ STATUS_PLACEHOLDER = "—"
 # ``/status`` reports whether reasoning is on or off for the selection.
 REASONING_STATE_ON = "on"
 REASONING_STATE_OFF = "off"
+
+# Runtime-wired seam: ``(provider_id, model_id, effort)`` -> the provider-neutral
+# intent the target adapter would render, or ``None`` when it cannot resolve.
+# The runtime answers it from the adapter class without constructing an
+# instance, so no credentials or HTTP are involved.
+ReasoningRenderDescriber = Callable[[str, str, str | None], ReasoningIntent | None]
 _STATUS_TIME_FORMAT = "%Y-%m-%d %H:%M:%S %Z"
 _CACHE_PERCENT_SCALE = 100
 _CACHE_HIT_RATE_DECIMALS = 1
@@ -214,8 +221,11 @@ def resolve_actual_thinking_effort(
 ) -> str | None:
     """Return the reasoning actually sent on the wire for the selected effort.
 
-    Reuses :func:`resolve_reasoning_intent` — the same policy the adapters render
-    — so ``/status`` reports exactly what reaches the provider:
+    Declared-control fallback for when no adapter render description is
+    available: reuses :func:`resolve_reasoning_intent` — the same policy the
+    adapters render — so the report follows the Model DB's declared control.
+    The wire-truthful path is :func:`resolve_reported_thinking_effort`, which
+    asks the adapter directly.
 
     * ``levels`` control (or any non-empty ladder): the snapped effort level.
     * ``budget`` control: ``"on (<N> tokens)"`` — the rendered token budget,
@@ -232,6 +242,11 @@ def resolve_actual_thinking_effort(
         budget_max=reasoning_budget_max,
         max_tokens=None,
     )
+    return _render_actual_thinking_effort(intent)
+
+
+def _render_actual_thinking_effort(intent: ReasoningIntent) -> str | None:
+    """Render a provider-neutral reasoning intent as the ``/status`` line value."""
     if intent.kind == REASONING_INTENT_DEFAULT:
         return None
     if intent.kind == REASONING_INTENT_OFF:
@@ -241,6 +256,43 @@ def resolve_actual_thinking_effort(
     if intent.kind == REASONING_INTENT_BUDGET:
         return f"{REASONING_STATE_ON} ({intent.budget_tokens:,} tokens)"
     return intent.effort_level
+
+
+def resolve_reported_thinking_effort(
+    *,
+    agent: RuntimeAgent | None,
+    models: ModelRegistry | None,
+    model_details: StatusModelDetails,
+    describe_render: ReasoningRenderDescriber | None = None,
+) -> str | None:
+    """Resolve the reported "Actual model thinking effort" — wire truth first.
+
+    Prefers the adapter's own render description
+    (:meth:`ProviderAdapter.describe_reasoning_render`, wired by the runtime):
+    what a request with the selected effort would actually carry. When no
+    describer is wired, or it cannot resolve the provider/model, falls back to
+    the declared-control rendering (:func:`resolve_actual_thinking_effort`).
+    """
+    if agent is None or models is None:
+        return None
+    if describe_render is not None:
+        provider_id, model_id = _parse_registry_model_key(agent.model)
+        if provider_id and model_id:
+            try:
+                intent = describe_render(provider_id, model_id, agent.thinking_effort)
+            except Exception:
+                _LOGGER.warning(
+                    "Failed to describe reasoning render for %s", agent.model, exc_info=True
+                )
+                intent = None
+            if intent is not None:
+                return _render_actual_thinking_effort(intent)
+    return resolve_actual_thinking_effort(
+        agent.thinking_effort,
+        model_details.reasoning_levels,
+        model_details.reasoning_control,
+        model_details.reasoning_budget_max,
+    )
 
 
 def resolve_status_temperature(

@@ -18,15 +18,21 @@ from typing import TYPE_CHECKING, Any, Final, Literal, cast
 
 if TYPE_CHECKING:
     from core.debug import DebugContext, ProviderDebugRecorder
-    from core.providers.providers import ConnectionConfig
+    from core.providers.providers import ConnectionConfig, ProviderConfig
 
 from core.models.models import Model
 from core.providers.reasoning import (
     DEFAULT_REASONING_REPLAY_FIDELITY,
     DEFAULT_REASONING_REPLAY_POLICY,
     REASONING_REPLAY_POLICIES,
+    ReasoningIntent,
     ReasoningReplayFidelity,
     ReasoningReplayPolicy,
+    model_reasoning_budget_max,
+    model_reasoning_control,
+    model_reasoning_levels,
+    model_reasoning_supported,
+    resolve_reasoning_intent,
 )
 
 JsonObject = dict[str, Any]
@@ -747,6 +753,45 @@ class ProviderAdapter(ABC):
         """
         del model_id
         return DEFAULT_REASONING_REPLAY_FIDELITY
+
+    # ------------------------------------------------------------------
+    # Reasoning render description
+    # ------------------------------------------------------------------
+
+    @classmethod
+    def describe_reasoning_render(
+        cls,
+        *,
+        model_lookup: ModelLookup | None,
+        model_id: str,
+        effort: str | None,
+        provider_config: ProviderConfig | None = None,
+    ) -> ReasoningIntent:
+        """Return the provider-neutral intent this wire renders for (model, effort).
+
+        ``/status`` asks this instead of re-deriving the report from the
+        declared Model control, so the reported line matches what a request
+        with the selected effort would actually carry. The default resolves
+        the shared intent against the Model's declared control and ladder —
+        the semantics of a wire whose render follows the declaration (binary
+        thinking toggles, native token budgets). Wires whose render deviates
+        from the declaration override this; the generic OpenAI-compatible wire
+        is the main case (it sends the snapped effort level even for an
+        ``on_off``-declared Model and has no native budget field).
+
+        ``provider_config`` is only consulted by adapters whose floor ladder
+        depends on the Provider identity; the default render ignores it.
+        """
+
+        del provider_config
+        return resolve_reasoning_intent(
+            supported=model_reasoning_supported(model_lookup, model_id),
+            control=model_reasoning_control(model_lookup, model_id),
+            levels=model_reasoning_levels(model_lookup, model_id) or (),
+            effort=effort,
+            budget_max=model_reasoning_budget_max(model_lookup, model_id),
+            max_tokens=None,
+        )
 
     # ------------------------------------------------------------------
     # Wire media capability
