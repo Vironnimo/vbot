@@ -856,6 +856,7 @@ class TerminalManager:
                     asyncio.shield(command_task),
                     timeout=TERMINAL_OPERATOR_READY_TIMEOUT_SECONDS + 1.0,
                 )
+        write_error: BaseException | None = None
         async with session.lock:
             self._require_live(session)
             # Operator input ends the post-resize grace and the resize
@@ -868,12 +869,18 @@ class TerminalManager:
             session.suppress_until_activity = False
             state_changed = session.state != "working"
             session.state = "working"
-            await asyncio.to_thread(session.adapter.write, data)
-            self._schedule_settle(session, notify=session.attachment is not None)
-            session.output_event.set()
-            if state_changed:
-                self._publish_state(session)
-            return self._operator_summary(session)
+            try:
+                await asyncio.to_thread(session.adapter.write, data)
+            except (EOFError, OSError) as error:
+                write_error = error
+            else:
+                self._schedule_settle(session, notify=session.attachment is not None)
+                session.output_event.set()
+                if state_changed:
+                    self._publish_state(session)
+                return self._operator_summary(session)
+        await self._mark_finished(session, None)
+        raise TerminalClosedError("Terminal Session is no longer running") from write_error
 
     async def resize_for_operator(
         self, terminal_id: str, *, columns: int, rows: int
@@ -977,6 +984,7 @@ class TerminalManager:
         """Write exact data or named terminal input and track generic PTY activity."""
         session = self.get_session(terminal_id, owner)
         initial_task = session.initial_input_task
+        write_error: BaseException | None = None
         async with session.lock:
             self._require_live(session)
             if (
@@ -1028,22 +1036,29 @@ class TerminalManager:
             for index, chunk in enumerate(chunks):
                 if index:
                     await asyncio.sleep(TERMINAL_INPUT_KEY_DELAY_SECONDS)
-                await asyncio.to_thread(session.adapter.write, chunk)
-            self._schedule_settle(session, notify=True)
-            session.output_event.set()
-            if prior_state != "working":
-                self._publish_state(session)
-            return {
-                "terminal_id": terminal_id,
-                "state": session.state,
-                "characters_sent": sum(len(chunk) for chunk in chunks),
-                "key": key,
-                "bracketed_paste": bracketed_paste,
-                "superseded_attention_revision": (
-                    prior_attention_revision if session.attention is not None else None
-                ),
-                "screen_revision": session.renderer.revision,
-            }
+                try:
+                    await asyncio.to_thread(session.adapter.write, chunk)
+                except (EOFError, OSError) as error:
+                    write_error = error
+                    break
+            if write_error is None:
+                self._schedule_settle(session, notify=True)
+                session.output_event.set()
+                if prior_state != "working":
+                    self._publish_state(session)
+                return {
+                    "terminal_id": terminal_id,
+                    "state": session.state,
+                    "characters_sent": sum(len(chunk) for chunk in chunks),
+                    "key": key,
+                    "bracketed_paste": bracketed_paste,
+                    "superseded_attention_revision": (
+                        prior_attention_revision if session.attention is not None else None
+                    ),
+                    "screen_revision": session.renderer.revision,
+                }
+        await self._mark_finished(session, None)
+        raise TerminalClosedError("Terminal Session is no longer running") from write_error
 
     async def _send_initial_input_when_ready(
         self, session: TerminalSession, text: str, *, origin_run_id: str

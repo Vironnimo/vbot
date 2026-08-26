@@ -612,6 +612,97 @@ async def test_inbound_audio_video_message_triggers_media_block(
 
 
 @pytest.mark.asyncio
+async def test_inbound_voice_retries_transient_telegram_download_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from telegram.error import NetworkError
+
+    monkeypatch.setattr(telegram_module, "_INBOUND_MEDIA_RETRY_INITIAL_SECONDS", 0.0)
+    attachment_store = AttachmentStore(tmp_path)
+    trigger_mock = AsyncMock(
+        return_value=make_completed_run(
+            session_id="ch-tg-assistant-12345",
+            output_text="ok",
+        )
+    )
+    adapter, _chat_sessions, _trigger_mock, bot = make_adapter(
+        tmp_path,
+        monkeypatch,
+        allowed_chat_ids=[12345],
+        trigger_run=trigger_mock,
+        attachment_store=attachment_store,
+    )
+    telegram_file = SimpleNamespace(
+        file_size=12,
+        download_as_bytearray=AsyncMock(return_value=bytearray(b"OggS\x00\x02opus")),
+    )
+    bot.get_file.side_effect = [NetworkError("temporary timeout"), telegram_file]
+    update = _voice_update()
+
+    await adapter._handle_inbound_media(update, SimpleNamespace())
+    await drain_chat_queue(adapter, 12345)
+
+    assert bot.get_file.await_count == 2
+    trigger_mock.assert_awaited_once()
+    await adapter.stop()
+
+
+@pytest.mark.asyncio
+async def test_inbound_voice_reports_exhausted_platform_download_retries(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from telegram.error import NetworkError
+
+    monkeypatch.setattr(telegram_module, "_INBOUND_MEDIA_RETRY_INITIAL_SECONDS", 0.0)
+    attachment_store = AttachmentStore(tmp_path)
+    trigger_mock = AsyncMock()
+    adapter, _chat_sessions, _trigger_mock, bot = make_adapter(
+        tmp_path,
+        monkeypatch,
+        allowed_chat_ids=[12345],
+        trigger_run=trigger_mock,
+        attachment_store=attachment_store,
+    )
+    bot.get_file.side_effect = NetworkError("persistent timeout")
+
+    await adapter._handle_inbound_media(_voice_update(), SimpleNamespace())
+    await drain_chat_queue(adapter, 12345)
+
+    assert bot.get_file.await_count == 4
+    trigger_mock.assert_not_awaited()
+    bot.send_message.assert_awaited_once_with(
+        chat_id=12345,
+        text=(
+            "Sorry, the messaging platform couldn't download the attached file after several "
+            "attempts. Please resend it."
+        ),
+    )
+    await adapter.stop()
+
+
+def _voice_update() -> SimpleNamespace:
+    return SimpleNamespace(
+        effective_chat=SimpleNamespace(id=12345),
+        effective_user=SimpleNamespace(id=50),
+        effective_message=SimpleNamespace(
+            text=None,
+            caption=None,
+            photo=None,
+            document=None,
+            voice=SimpleNamespace(file_id="voice-1", file_unique_id="vu-1"),
+            audio=None,
+            video=None,
+            video_note=None,
+            animation=None,
+            media_group_id=None,
+            message_thread_id=None,
+        ),
+    )
+
+
+@pytest.mark.asyncio
 async def test_unsupported_message_type_replies_for_allowed_chat(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

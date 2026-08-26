@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable, Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from core.chat import ChatLoop, MessageSender, ReplySurface
 from core.chat.content_blocks import ContentBlock
+from core.chat.messages import reply_surface_from_note
 from core.runs import (
     ActiveRunError,
     ChatRunManager,
@@ -69,7 +70,15 @@ class _CompletionDeliveryCoordinator:
         self._sessions = sessions
         self._buckets: dict[SessionAddress, _CompletionBucket] = {}
         self._suppressed_origins: dict[SessionAddress, list[str]] = {}
+        self._run_relay: Callable[[Run, ReplySurface], Awaitable[None]] | None = None
         self._closed = False
+
+    def set_run_relay(
+        self,
+        relay: Callable[[Run, ReplySurface], Awaitable[None]] | None,
+    ) -> None:
+        """Set the accessor relay used by idle-session completion Runs."""
+        self._run_relay = relay
 
     def submit(
         self,
@@ -225,12 +234,18 @@ class _CompletionDeliveryCoordinator:
                     continue
 
                 message = _completion_message(pending)
+                reply_surface = (
+                    await self._latest_reply_surface(address)
+                    if self._run_relay is not None
+                    else None
+                )
                 try:
                     run = await self._chat_loop.start_run(
                         address.agent_id,
                         message,
                         session_id=address.session_id,
                         internal=True,
+                        reply_surface=reply_surface,
                         project_id=address.project_id,
                         input_persisted_hook=self._acknowledgement_callback(
                             address, bucket, pending
@@ -265,7 +280,24 @@ class _CompletionDeliveryCoordinator:
                     await self._persist_without_run(address, bucket, pending)
                     continue
 
-                await _wait_for_terminal_run(run)
+                if (
+                    reply_surface is not None
+                    and reply_surface.kind == "channel"
+                    and self._run_relay is not None
+                ):
+                    try:
+                        await self._run_relay(run, reply_surface)
+                    except Exception:
+                        _LOGGER.error(
+                            "Completion Run relay failed (agent=%s session=%s surface=%s)",
+                            address.agent_id,
+                            address.session_id,
+                            reply_surface.kind,
+                            exc_info=True,
+                        )
+                        await _wait_for_terminal_run(run)
+                else:
+                    await _wait_for_terminal_run(run)
                 # If execution failed before the initiating note reached disk,
                 # retain the evidence without recursively starting another Run.
                 undelivered = [notice for notice in pending if not notice.delivered.done()]
@@ -287,6 +319,27 @@ class _CompletionDeliveryCoordinator:
             session_id=address.session_id,
             project_id=address.project_id,
         )
+
+    async def _latest_reply_surface(self, address: SessionAddress) -> ReplySurface | None:
+        """Recover the most recent interactive surface for one persisted Session."""
+        if self._sessions is None:
+            return None
+        try:
+            session = await self._sessions.get_async(address)
+            messages = await session.load_async()
+        except Exception:
+            _LOGGER.warning(
+                "Cannot recover completion reply surface (agent=%s session=%s)",
+                address.agent_id,
+                address.session_id,
+                exc_info=True,
+            )
+            return None
+        for message in reversed(messages):
+            surface = reply_surface_from_note(message)
+            if surface is not None:
+                return surface
+        return None
 
     @staticmethod
     def _move_idle_notices_to_run(bucket: _CompletionBucket, run: Run) -> None:
@@ -551,6 +604,13 @@ class TriggerService:
             project_id=project_id,
             notice_id=notice_id,
         )
+
+    def set_completion_run_relay(
+        self,
+        relay: Callable[[Run, ReplySurface], Awaitable[None]] | None,
+    ) -> None:
+        """Route idle-session completion Run replies through their latest accessor."""
+        self._completion_delivery.set_run_relay(relay)
 
     def deliver_background_completions(self, run: Run, session: ChatSession) -> bool:
         """Inject ready completion results into an active Run's next Model request."""

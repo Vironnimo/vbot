@@ -18,6 +18,7 @@ from core.channels.adapter import (
     DeniedChatLog,
     FileData,
     QuotedMessageFacts,
+    ReplyPlanFacts,
     RouteFacts,
     content_blocks_for_attachment,
 )
@@ -30,6 +31,7 @@ from core.utils.logging import get_logger
 if TYPE_CHECKING:
     from core.automation.automation import TriggerService
     from core.chat.commands import CommandDispatcher
+    from core.runs import Run
     from core.sessions import ChatSessionManager
 
 _LOGGER = get_logger("channels.discord")
@@ -153,6 +155,10 @@ class DiscordChannelAdapter(ChannelAdapter):
         target = await self._resolve_target(platform_target)
         await self._send_payloads(target, message, list(files or []))
         self._backfilled_message_ids.pop(platform_target, None)
+
+    async def relay_run(self, run: Run, reply_plan: ReplyPlanFacts) -> None:
+        """Relay one background Run through the composed conversation engine."""
+        await self._engine.relay_run(run, reply_plan)
 
     def ensure_outbound_session(self, platform_target: str) -> RouteFacts:
         """Ensure the Session mirroring a cached Discord target exists."""

@@ -807,6 +807,7 @@ class Runtime:
             command_dispatcher=self._command_dispatcher,
             interaction_dispatcher=self._dispatch_channel_interaction,
         )
+        self._trigger_service.set_completion_run_relay(self._channel_service.relay_completion_run)
         self._channel_service._notify_tool_registration_changed_hook = (
             self._reload_channel_tool_if_started
         )
