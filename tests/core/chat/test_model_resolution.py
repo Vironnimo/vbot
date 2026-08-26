@@ -14,7 +14,7 @@ from core.chat.model_resolution import (
     _model_connection_allowlist,
     _model_input_modalities,
     _resolve_agent_connection,
-    _resolve_fallback,
+    _resolve_fallback_chain,
 )
 
 
@@ -22,8 +22,8 @@ def _runtime_with_models_get(get: Any) -> Any:
     return cast(Any, SimpleNamespace(models=SimpleNamespace(get=get)))
 
 
-def _agent(model: str, *, fallback_model: str = "") -> Any:
-    return cast(Any, SimpleNamespace(model=model, fallback_model=fallback_model))
+def _agent(model: str, *, fallback_models: list[str] | None = None) -> Any:
+    return cast(Any, SimpleNamespace(model=model, fallback_models=fallback_models or []))
 
 
 def _runtime_for_connection(
@@ -237,27 +237,54 @@ class TestResolveAgentConnection:
         assert connection_id == "openai:api-key"
 
 
-class TestResolveFallback:
-    def test_bare_connection_bound_fallback_resolves_to_allowed_connection(self) -> None:
+class TestResolveFallbackChain:
+    def test_bare_connection_bound_candidate_resolves_to_allowed_connection(self) -> None:
         runtime = _runtime_for_connection(
             provider_connections=["api-key", "subscription"],
             usable={"openai:api-key", "openai:subscription"},
             models={("openai", "codex-auto-review"): ("subscription",)},
         )
-        agent = _agent("openai/gpt-5.2::api-key", fallback_model="openai/codex-auto-review")
+        agent = _agent("openai/gpt-5.2::api-key", fallback_models=["openai/codex-auto-review"])
 
-        assert _resolve_fallback(runtime, agent) == (
-            "openai/codex-auto-review",
-            "openai",
-            "openai:subscription",
+        assert _resolve_fallback_chain(runtime, agent) == [
+            ("openai/codex-auto-review", "openai", "openai:subscription"),
+        ]
+
+    def test_unresolvable_candidate_is_skipped_and_rest_resolve_in_order(self) -> None:
+        runtime = _runtime_for_connection(
+            provider_connections=["api-key", "subscription"],
+            usable={"openai:api-key", "openai:subscription"},
+            models={("openai", "codex-auto-review"): ("subscription",)},
+        )
+        agent = _agent(
+            "openai/gpt-5.2::api-key",
+            fallback_models=[
+                "ghost/ghost-model::api-key",
+                "openai/codex-auto-review",
+                "openai/gpt-5.2::api-key",
+            ],
         )
 
-    def test_returns_none_when_no_allowed_connection_is_usable(self) -> None:
+        chain = _resolve_fallback_chain(runtime, agent)
+
+        # The ghost binding is unusable and the primary-equal entry is deduped;
+        # only the resolvable, distinct candidate survives.
+        assert chain == [("openai/codex-auto-review", "openai", "openai:subscription")]
+
+    def test_returns_empty_when_no_allowed_connection_is_usable(self) -> None:
         runtime = _runtime_for_connection(
             provider_connections=["api-key", "subscription"],
             usable={"openai:api-key"},
             models={("openai", "codex-auto-review"): ("subscription",)},
         )
-        agent = _agent("openai/gpt-5.2::api-key", fallback_model="openai/codex-auto-review")
+        agent = _agent("openai/gpt-5.2::api-key", fallback_models=["openai/codex-auto-review"])
 
-        assert _resolve_fallback(runtime, agent) is None
+        assert _resolve_fallback_chain(runtime, agent) == []
+
+    def test_returns_empty_without_candidates(self) -> None:
+        runtime = _runtime_for_connection(
+            provider_connections=["api-key"],
+            usable={"openai:api-key"},
+        )
+
+        assert _resolve_fallback_chain(runtime, _agent("openai/gpt-5.2")) == []

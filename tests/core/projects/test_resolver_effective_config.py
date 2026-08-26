@@ -243,7 +243,7 @@ def test_identity_effective_config_reports_own_value_as_agent(
         "orchestrator",
         "Orchestrator",
         model="openai/gpt-5.2",
-        fallback_model="openai/gpt-mini",
+        fallback_models=["openai/gpt-mini"],
         temperature=0.3,
         thinking_effort="high",
     )
@@ -252,7 +252,7 @@ def test_identity_effective_config_reports_own_value_as_agent(
     result = resolver.effective_config(None, "orchestrator")
 
     assert result["model"] == {"value": "openai/gpt-5.2", "source": "agent"}
-    assert result["fallback_model"] == {"value": "openai/gpt-mini", "source": "agent"}
+    assert result["fallback_models"] == {"value": ["openai/gpt-mini"], "source": "agent"}
     assert result["temperature"] == {"value": 0.3, "source": "agent"}
     assert result["thinking_effort"] == {"value": "high", "source": "agent"}
 
@@ -288,7 +288,7 @@ def test_identity_effective_config_reports_none_when_neither(
     result = resolver.effective_config(None, "orchestrator")
 
     assert result["model"] == {"value": None, "source": None}
-    assert result["fallback_model"] == {"value": None, "source": None}
+    assert result["fallback_models"] == {"value": None, "source": None}
     assert result["temperature"] == {"value": None, "source": None}
     assert result["thinking_effort"] == {"value": None, "source": None}
 

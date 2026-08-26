@@ -49,7 +49,7 @@
 
     return {
       model: normalized.model,
-      fallback_model: normalized.fallback_model,
+      fallback_models: normalized.fallback_models,
       temperature:
         normalized.temperature === null ? '' : String(normalized.temperature),
       thinking_effort:
@@ -84,29 +84,16 @@
   let lastModelsRefreshToken = null;
 
   let showAllModels = $state(false);
-  let showAllFallbackModels = $state(false);
   let allDefaultModelOptions = $derived(
     selectModelOptions(
       agentDefaults.model,
       t('settings.defaults.noModelDefault', '— (no default)'),
     ),
   );
-  let allDefaultFallbackModelOptions = $derived(
-    selectModelOptions(
-      agentDefaults.fallback_model,
-      t('settings.defaults.noFallbackModelDefault', '— (no default)'),
-    ),
-  );
   let defaultModelOptions = $derived(
     filterModelSelectOptions(allDefaultModelOptions, {
       showAll: showAllModels,
       selectedModelValue: agentDefaults.model,
-    }),
-  );
-  let defaultFallbackModelOptions = $derived(
-    filterModelSelectOptions(allDefaultFallbackModelOptions, {
-      showAll: showAllFallbackModels,
-      selectedModelValue: agentDefaults.fallback_model,
     }),
   );
   let modelFilterFooter = $derived(
@@ -116,20 +103,26 @@
       translate: t,
     }),
   );
-  let fallbackModelFilterFooter = $derived(
-    modelFilterFooterLabel({
-      showAll: showAllFallbackModels,
-      hiddenCount:
-        allDefaultFallbackModelOptions.length -
-        defaultFallbackModelOptions.length,
-      translate: t,
-    }),
-  );
   let defaultModelSelectValue = $derived(
     selectModelValue(agentDefaults.model, defaultModelOptions),
   );
-  let defaultFallbackModelSelectValue = $derived(
-    selectModelValue(agentDefaults.fallback_model, defaultFallbackModelOptions),
+  // The fallback chain is an ordered list; every row shares one unfiltered
+  // option catalog (a chain is short — max 5 — so no per-row filtering).
+  const MAX_FALLBACK_MODEL_ROWS = 5;
+  let allFallbackModelOptions = $derived(
+    selectModelOptions(
+      '',
+      t('settings.defaults.noFallbackModelDefault', '— (no default)'),
+    ),
+  );
+  let fallbackModelRows = $derived(
+    agentDefaults.fallback_models.map((binding) => ({
+      binding,
+      selectValue: selectModelValue(binding, allFallbackModelOptions),
+    })),
+  );
+  let canAddFallbackModelRow = $derived(
+    agentDefaults.fallback_models.length < MAX_FALLBACK_MODEL_ROWS,
   );
   let thinkingEffortOptions = $derived([
     {
@@ -282,7 +275,8 @@
 
     return (
       normalizedLeft.model === normalizedRight.model &&
-      normalizedLeft.fallback_model === normalizedRight.fallback_model &&
+      JSON.stringify(normalizedLeft.fallback_models) ===
+        JSON.stringify(normalizedRight.fallback_models) &&
       normalizedLeft.temperature === normalizedRight.temperature &&
       normalizedLeft.thinking_effort === normalizedRight.thinking_effort
     );
@@ -290,8 +284,10 @@
 
   function agentDefaultsDraftHasChanges() {
     const persisted = normalizeAgentDefaultsFormValues(settings);
+    // Array values (fallback_models) need a structural compare, not !==.
     return Object.keys(persisted).some(
-      (key) => agentDefaults[key] !== persisted[key],
+      (key) =>
+        JSON.stringify(agentDefaults[key]) !== JSON.stringify(persisted[key]),
     );
   }
 
@@ -308,6 +304,32 @@
     handleAgentDefaultsChange(
       key,
       modelSelectionValue(selection.model, selection.connectionLocalId),
+    );
+  }
+
+  function updateFallbackModelEntry(index, selectedValue) {
+    const selection = parseModelSelectionValue(selectedValue);
+    const next = [...agentDefaults.fallback_models];
+    next[index] = modelSelectionValue(
+      selection.model,
+      selection.connectionLocalId,
+    );
+    handleAgentDefaultsChange('fallback_models', next);
+  }
+
+  function addFallbackModelEntry() {
+    handleAgentDefaultsChange('fallback_models', [
+      ...agentDefaults.fallback_models,
+      '',
+    ]);
+  }
+
+  function removeFallbackModelEntry(index) {
+    handleAgentDefaultsChange(
+      'fallback_models',
+      agentDefaults.fallback_models.filter(
+        (_, entryIndex) => entryIndex !== index,
+      ),
     );
   }
 
@@ -386,44 +408,66 @@
 <div class="s-row">
   <div class="s-row-info">
     <div class="s-row-label">
-      {t('settings.defaults.fallbackModel', 'Fallback model')}
+      {t('settings.defaults.fallbackModels', 'Fallback models')}
       <InfoHint
         text={t(
-          'agents.form.fallbackModelHelp',
-          'Used automatically when the primary model fails or is unavailable.',
+          'agents.form.fallbackModelsHelp',
+          'Tried in order when the primary model fails or is unavailable. The first entry has the highest priority.',
         )}
       />
     </div>
     <div class="s-row-desc">
       {t(
         'settings.defaults.fallbackModelDescription',
-        'Used when an agent fallback model is empty.',
+        'Used when an agent fallback chain is empty.',
       )}
     </div>
   </div>
   <div class="s-row-control s-row-control--model">
-    <SearchableDropdown
-      id="settings-defaults-fallback-model"
-      value={defaultFallbackModelSelectValue}
-      options={defaultFallbackModelOptions}
-      placeholder={t(
-        'settings.defaults.noFallbackModelDefault',
-        '— (no default)',
-      )}
-      searchPlaceholder={t(
-        'agents.form.modelSearchPlaceholder',
-        'Filter models…',
-      )}
-      emptyLabel={t('agents.form.modelSearchEmpty', 'No models match')}
-      ariaLabel={t('settings.defaults.fallbackModel', 'Fallback model')}
-      triggerClass="settings-view__dropdown"
-      panelClass="settings-view__model-panel"
-      footerActionLabel={fallbackModelFilterFooter}
-      onFooterAction={() => (showAllFallbackModels = !showAllFallbackModels)}
-      onOpenChange={trackModelDropdownOpen}
-      onValueChange={(selectedValue) =>
-        updateAgentDefaultsModelSelection('fallback_model', selectedValue)}
-    />
+    {#each fallbackModelRows as row, index (index)}
+      <div class="settings-view__fallback-row">
+        <SearchableDropdown
+          id={`settings-defaults-fallback-model-${index}`}
+          value={row.selectValue}
+          options={allFallbackModelOptions}
+          placeholder={t(
+            'settings.defaults.noFallbackModelDefault',
+            '— (no default)',
+          )}
+          searchPlaceholder={t(
+            'agents.form.modelSearchPlaceholder',
+            'Filter models…',
+          )}
+          emptyLabel={t('agents.form.modelSearchEmpty', 'No models match')}
+          ariaLabel={`${t('settings.defaults.fallbackModels', 'Fallback models')} ${index + 1}`}
+          triggerClass="settings-view__dropdown"
+          panelClass="settings-view__model-panel"
+          onOpenChange={trackModelDropdownOpen}
+          onValueChange={(selectedValue) =>
+            updateFallbackModelEntry(index, selectedValue)}
+        />
+        <button
+          type="button"
+          class="settings-view__fallback-remove"
+          aria-label={t(
+            'agents.form.removeFallbackModel',
+            'Remove fallback model',
+          )}
+          onclick={() => removeFallbackModelEntry(index)}
+        >
+          ×
+        </button>
+      </div>
+    {/each}
+    {#if canAddFallbackModelRow}
+      <button
+        type="button"
+        class="settings-view__fallback-add"
+        onclick={addFallbackModelEntry}
+      >
+        {t('agents.form.addFallbackModel', '+ Add fallback model')}
+      </button>
+    {/if}
   </div>
 </div>
 

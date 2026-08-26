@@ -19,7 +19,11 @@ from core.providers.adapter import (
     normalize_tool_call_candidates,
     terminal_outcome_from_response,
 )
-from core.providers.errors import ProviderStreamingUnsupportedError
+from core.providers.errors import (
+    ProviderAuthError,
+    ProviderRateLimitError,
+    ProviderStreamingUnsupportedError,
+)
 from core.providers.reasoning import merge_reasoning_meta
 from core.runs import (
     ASSISTANT_OUTPUT_DELTA_EVENT,
@@ -74,6 +78,7 @@ def decide_stream_recovery(
     can_restart: bool,
     has_partial_content: bool,
     finish_received: bool = False,
+    has_fallback_chain: bool = False,
 ) -> StreamRecoveryAction:
     """Decide how to recover from a broken streaming attempt.
 
@@ -93,6 +98,12 @@ def decide_stream_recovery(
     exhausted; anything else fails. Once answer text has escaped, the stream is
     never replayed and accumulated content is preserved as an interrupted
     Assistant boundary for same-Run continuation.
+
+    A rate-limit failure with a configured model-fallback chain fails
+    immediately (advancing the chain) instead of burning same-model restarts:
+    the adapter already retried with backoff inside this attempt, and quota
+    pressure rarely clears within seconds. Without a chain the restart budget
+    applies unchanged.
     """
     if finish_received:
         return StreamRecoveryAction.ACCEPT_COMPLETE
@@ -100,6 +111,10 @@ def decide_stream_recovery(
         if _is_streaming_fallback_error(error):
             return StreamRecoveryAction.FALLBACK
         if _is_stream_restartable_error(error):
+            if has_fallback_chain and _is_rate_limit_error(error):
+                # A retryable Provider failure still belongs to the Run-local
+                # Model fallback policy; rate limits skip straight to it.
+                return StreamRecoveryAction.FAIL
             if can_restart:
                 return StreamRecoveryAction.RESTART
             # A retryable Provider failure still belongs to the Run-local Model
@@ -149,6 +164,53 @@ def _is_model_fallback_trigger(error: Exception) -> bool:
     switching models would not help.
     """
     return isinstance(error, ProviderError) and error.retryable
+
+
+def _is_rate_limit_error(error: Exception) -> bool:
+    """Whether the failure is a provider rate limit (HTTP 429 family)."""
+    return isinstance(error, ProviderRateLimitError)
+
+
+# Message markers of a fatal error that is clearly model-scoped: the requested
+# model is unknown, deactivated, or not served by this account. Deliberately
+# narrow — billing, permission, content-policy, and context-overflow fatals
+# must never match, because switching models cannot fix them.
+_MODEL_SCOPED_FATAL_MARKERS = (
+    "model not found",
+    "model_not_found",
+    "unknown model",
+    "no such model",
+    "invalid model",
+    "not a valid model",
+    "does not exist",
+)
+
+
+def should_advance_model_fallback_chain(error: Exception) -> bool:
+    """Whether a failed attempt should advance to the next fallback-chain candidate.
+
+    Advances on retryable ``ProviderError`` failures (transient and
+    provider-specific — the adapter's own retries are already exhausted by the
+    time errors propagate here) and on fatal errors that are clearly
+    model-scoped (404 or unknown-model wording): the binding itself is dead, so
+    the next candidate is the only sensible recovery.
+
+    Never advances on ``NetworkError`` (not a ``ProviderError`` — connectivity
+    is route-independent), auth failures (account-wide), streaming-unsupported,
+    or any other fatal class (billing, permission, context/token limits,
+    content policy) where an identical-shaped retry on another model either
+    fails again or silently changes the outcome's meaning.
+    """
+    if not isinstance(error, ProviderError):
+        return False
+    if isinstance(error, (ProviderAuthError, ProviderStreamingUnsupportedError)):
+        return False
+    if error.retryable:
+        return True
+    if getattr(error, "status_code", None) == 404:
+        return True
+    message = str(error).lower()
+    return any(marker in message for marker in _MODEL_SCOPED_FATAL_MARKERS)
 
 
 def is_local_provider_base_url(base_url: str | None) -> bool:

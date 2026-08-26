@@ -627,6 +627,49 @@
   width: 100%;
 }
 
+.agents-view .agents-view__fallback-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.agents-view .agents-view__fallback-row .agents-view__dropdown {
+  flex: 1;
+}
+
+.agents-view .agents-view__fallback-remove,
+.agents-view .agents-view__fallback-add {
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-med);
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.agents-view .agents-view__fallback-remove {
+  flex: none;
+  width: 28px;
+  height: 28px;
+  font-size: 14px;
+  line-height: 1;
+}
+
+.agents-view .agents-view__fallback-remove:hover {
+  color: var(--danger, #c0392b);
+  border-color: var(--danger, #c0392b);
+}
+
+.agents-view .agents-view__fallback-add {
+  padding: 5px 10px;
+  font-size: 12.5px;
+}
+
+.agents-view .agents-view__fallback-add:hover {
+  color: var(--text-hi);
+  border-color: var(--text-med);
+}
+
 .agents-view .agents-view__thinking-list {
   max-height: 280px;
   overflow-y: auto;

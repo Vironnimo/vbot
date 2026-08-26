@@ -45,7 +45,7 @@ def test_parse_settings_update_normalizes_all_supported_sections() -> None:
             "defaults": {
                 "agent": {
                     "model": "openai/gpt-5.2",
-                    "fallback_model": "openai/gpt-5.1",
+                    "fallback_models": ["openai/gpt-5.1"],
                     "temperature": 1,
                     "thinking_effort": "",
                 }
@@ -96,7 +96,7 @@ def test_parse_settings_update_normalizes_all_supported_sections() -> None:
         "defaults": {
             "agent": {
                 "model": "openai/gpt-5.2",
-                "fallback_model": "openai/gpt-5.1",
+                "fallback_models": ["openai/gpt-5.1"],
                 "temperature": 1.0,
                 "thinking_effort": "",
             }
@@ -471,7 +471,7 @@ def test_validate_settings_file_accepts_known_settings(tmp_path: Path) -> None:
                 "defaults": {
                     "agent": {
                         "model": "openai/gpt-5.2",
-                        "fallback_model": "",
+                        "fallback_models": [],
                         "temperature": 0.7,
                         "thinking_effort": "medium",
                     }

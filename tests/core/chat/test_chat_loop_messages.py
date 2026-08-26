@@ -308,6 +308,6 @@ class TestErrorKindClassification:
         assert _exception_to_error_kind(NetworkError("offline")) == ERROR_KIND_NETWORK
 
     def test_network_error_does_not_trigger_model_fallback(self) -> None:
-        from core.chat.chat import _is_model_fallback_trigger
+        from core.chat.chat import should_advance_model_fallback_chain
 
-        assert _is_model_fallback_trigger(NetworkError("offline")) is False
+        assert should_advance_model_fallback_chain(NetworkError("offline")) is False

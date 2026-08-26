@@ -182,32 +182,77 @@ def _resolve_agent_connection(
     )
 
 
-def _resolve_fallback(
+def _resolve_fallback_chain(
     dependencies: ModelResolutionDependencies, agent: Any
-) -> tuple[str, str, str] | None:
-    fallback_model = getattr(agent, "fallback_model", "")
-    if not fallback_model:
-        return None
+) -> list[tuple[str, str, str]]:
+    """Resolve the agent's ordered fallback chain into runnable targets.
 
+    Each entry is ``(binding, provider_id, connection_id)`` in configured order.
+    Entries equal to the primary binding or to an earlier candidate are skipped,
+    as are candidates that cannot resolve (unknown provider, no usable
+    connection, malformed binding) — a broken candidate must never take the
+    whole escape route down, so each skip logs a warning and the chain carries
+    on. An empty result means "no chain": callers keep today's single-model
+    behavior.
+    """
+    raw_candidates = tuple(getattr(agent, "fallback_models", None) or ())
+    if not raw_candidates:
+        return []
+
+    seen: set[str] = {getattr(agent, "model", "")}
+    resolved: list[tuple[str, str, str]] = []
+    for candidate in raw_candidates:
+        if candidate in seen:
+            continue
+        seen.add(candidate)
+        triple = _resolve_fallback_candidate(dependencies, candidate)
+        if triple is None:
+            _LOGGER.warning(
+                "Skipping unresolvable fallback model %r for agent %s",
+                candidate,
+                getattr(agent, "id", "?"),
+            )
+            continue
+        resolved.append(triple)
+    return resolved
+
+
+def _resolve_fallback_candidate(
+    dependencies: ModelResolutionDependencies, fallback_model: str
+) -> tuple[str, str, str] | None:
+    """Resolve one fallback binding, ``None`` when it cannot run on this instance."""
     try:
-        fallback_provider_id, fallback_model_id, fallback_connection_suffix = (
+        fallback_provider_id, _fallback_model_id, fallback_connection_suffix = (
             parse_model_with_connection(fallback_model)
         )
     except ChatError:
         return None
 
     if fallback_connection_suffix:
+        # A pinned binding faces the same usability gate as a bare one: an
+        # unknown provider or uncredentialed connection is skipped here rather
+        # than failing later at adapter construction, so one dead entry never
+        # takes down the rest of the chain.
+        pinned_connection_id = f"{fallback_provider_id}:{fallback_connection_suffix}"
+        try:
+            usable = dependencies.provider_credentials.is_usable(
+                fallback_provider_id, pinned_connection_id
+            )
+        except (ChatError, KeyError):
+            usable = False
+        if not usable:
+            return None
         return (
             fallback_model,
             fallback_provider_id,
-            f"{fallback_provider_id}:{fallback_connection_suffix}",
+            pinned_connection_id,
         )
 
     try:
         fallback_connection_id = _first_usable_connection_id(
             dependencies,
             fallback_provider_id,
-            _model_connection_allowlist(dependencies, fallback_provider_id, fallback_model_id),
+            _model_connection_allowlist(dependencies, fallback_provider_id, _fallback_model_id),
         )
     except ChatError:
         return None

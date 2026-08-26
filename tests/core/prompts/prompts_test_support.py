@@ -386,7 +386,7 @@ def _agent(
         id=agent_id,
         name="Coder Agent",
         model="openai/gpt-5.2",
-        fallback_model="",
+        fallback_models=[],
         workspace=str(workspace),
         temperature=0.1,
         thinking_effort=thinking_effort,

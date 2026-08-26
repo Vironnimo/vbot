@@ -114,7 +114,7 @@ from core.chat.model_resolution import (
     _model_input_modalities,
     _model_input_modalities_for_target,
     _resolve_agent_connection,
-    _resolve_fallback,
+    _resolve_fallback_chain,
     _split_agent_model,
 )
 from core.chat.model_resolution import (
@@ -125,7 +125,7 @@ from core.chat.model_resolution import (
 )
 from core.chat.output_files import resolve_assistant_file_references
 from core.chat.streaming import (
-    _is_model_fallback_trigger as _is_model_fallback_trigger,
+    should_advance_model_fallback_chain as should_advance_model_fallback_chain,
 )
 from core.chat.tool_dispatch import (
     ToolDispatchContext,
@@ -1705,84 +1705,24 @@ class ChatLoop:
                 completed_assistant = await self._send_until_final(context, target)
                 return completed_assistant
             except ProviderError as primary_exc:
-                if _is_model_fallback_trigger(primary_exc):
-                    fallback = _resolve_fallback(self._dependencies, agent)
-                    if fallback is not None:
-                        fallback_model_str, fb_provider_id, fb_connection_id = fallback
-                        _, fallback_model_id = _split_agent_model(fallback_model_str)
-                        try:
-                            fallback_target = self._create_model_target(
-                                fb_provider_id,
-                                fb_connection_id,
-                                fallback_model_id,
-                            )
-                        except (ConfigError, VBotError) as construction_exc:
-                            _run_succeeded = False
-                            await _persist_run_error(run, session, construction_exc)
-                            raise
-                        run.add_cancel_callback(lambda: _close_adapter(fallback_target.adapter))
-                        _LOGGER.info(
-                            "Model fallback activated (run=%s from=%s to=%s)",
-                            run.id,
-                            agent.model,
-                            fallback_model_str,
-                        )
-                        run.emit(
-                            MODEL_FALLBACK_ACTIVATED_EVENT,
-                            {"from_model": agent.model, "to_model": fallback_model_str},
-                        )
-                        await session.add_note_async(
-                            "Primary model unavailable. Switched to "
-                            f"{fallback_model_str} for this run."
-                        )
-                        await context.session_snapshot.refresh(session)
-                        context.request_state = await self.build_request_state(
-                            agent,
-                            session,
-                            inputs=RequestBuildInputs.from_context(
-                                context, fallback_target
-                            ).with_session_messages(context.session_snapshot.messages),
-                        )
-                        if context.continuation_reminder is not None:
-                            context.request_state = _RequestState(
-                                inject_continuation_reminder(
-                                    context.request_state.messages,
-                                    context.continuation_reminder,
-                                ),
-                                context.request_state.tools,
-                                context.request_state.allowed_tool_names,
-                                context.request_state.session_tool_grants,
-                                context.request_state.tool_contracts,
-                            )
-                        # Rebuilding applies the fallback route's media and Tool
-                        # capabilities. The persisted primary tool cycle may
-                        # still carry Provider-specific reasoning, which must
-                        # never cross the Provider boundary.
-                        _strip_assistant_reasoning_fields(context.request_state.messages)
-                        try:
-                            completed_assistant = await self._send_until_final(
-                                context, fallback_target
-                            )
-                            return completed_assistant
-                        except RunInterruptedError as fallback_exc:
-                            _run_succeeded = False
-                            _run_interrupted = True
-                            run_error = fallback_exc
-                            if isinstance(fallback_exc.result, ChatMessage):
-                                completed_assistant = fallback_exc.result
-                            raise
-                        except (ProviderError, ChatError, ConfigError, VBotError) as fallback_exc:
-                            _run_succeeded = False
-                            run_error = fallback_exc
-                            await _persist_run_error(run, session, fallback_exc)
-                            raise fallback_exc
-                        finally:
-                            await _close_adapter(fallback_target.adapter)
-
+                try:
+                    (
+                        completed_assistant,
+                        chain_error,
+                    ) = await self._advance_fallback_chain(context, run, session, primary_exc)
+                except RunInterruptedError as exc:
+                    _run_succeeded = False
+                    _run_interrupted = True
+                    run_error = exc
+                    if isinstance(exc.result, ChatMessage):
+                        completed_assistant = exc.result
+                    raise
+                if completed_assistant is not None:
+                    return completed_assistant
                 _run_succeeded = False
-                run_error = primary_exc
-                await _persist_run_error(run, session, primary_exc)
-                raise
+                run_error = chain_error
+                await _persist_run_error(run, session, chain_error)
+                raise chain_error from primary_exc
             except RunInterruptedError as exc:
                 _run_succeeded = False
                 _run_interrupted = True
@@ -1961,6 +1901,113 @@ class ChatLoop:
             if not create_missing:
                 raise
             return session_manager.create(agent_id, session_id=session_id, project_id=project_id)
+
+    async def _advance_fallback_chain(
+        self,
+        context: _RunExecutionContext,
+        run: Run,
+        session: ChatSession,
+        first_failure: ProviderError,
+    ) -> tuple[ChatMessage | None, ProviderError]:
+        """Advance through the resolved fallback chain after a provider failure.
+
+        Returns ``(assistant, error_to_report)``. ``assistant`` is set when a
+        chain candidate completed the Run. Otherwise ``error_to_report`` is the
+        last actual send failure (the primary failure when no candidate ever
+        ran) and the caller owns persisting it. Raises directly — already
+        persisted — when a candidate fails in a way that must replace the
+        reported outcome: a non-qualifying ProviderError (auth, billing,
+        permission, content policy, context limits) or any Chat/Config/VBot
+        error during a candidate Run. Candidate construction failures only log
+        a warning and skip that candidate — one broken binding must never take
+        down the whole escape route.
+        """
+        agent = context.agent
+        chain = list(_resolve_fallback_chain(self._dependencies, agent))
+        if not chain or not should_advance_model_fallback_chain(first_failure):
+            return None, first_failure
+
+        from_binding = agent.model
+        last_failure: ProviderError = first_failure
+        for binding, provider_id, connection_id in chain:
+            _, candidate_model_id = _split_agent_model(binding)
+            try:
+                candidate_target = self._create_model_target(
+                    provider_id,
+                    connection_id,
+                    candidate_model_id,
+                )
+            except (ConfigError, VBotError) as construction_exc:
+                _LOGGER.warning(
+                    "Skipping fallback candidate %s for agent %s (%s)",
+                    binding,
+                    getattr(agent, "id", "?"),
+                    construction_exc,
+                )
+                continue
+
+            def _close_candidate_adapter(
+                _adapter: Any = candidate_target.adapter,
+            ) -> Any:
+                return _close_adapter(_adapter)
+
+            run.add_cancel_callback(_close_candidate_adapter)
+            _LOGGER.info(
+                "Model fallback activated (run=%s from=%s to=%s)",
+                run.id,
+                from_binding,
+                binding,
+            )
+            run.emit(
+                MODEL_FALLBACK_ACTIVATED_EVENT,
+                {"from_model": from_binding, "to_model": binding},
+            )
+            await session.add_note_async(
+                f"Model {from_binding} unavailable. Switched to {binding} for this run."
+            )
+            await context.session_snapshot.refresh(session)
+            context.request_state = await self.build_request_state(
+                agent,
+                session,
+                inputs=RequestBuildInputs.from_context(
+                    context, candidate_target
+                ).with_session_messages(context.session_snapshot.messages),
+            )
+            if context.continuation_reminder is not None:
+                assert context.prior_continuation is not None
+                context.request_state = _RequestState(
+                    inject_continuation_reminder(
+                        context.request_state.messages,
+                        context.continuation_reminder,
+                    ),
+                    context.request_state.tools,
+                    context.request_state.allowed_tool_names,
+                    context.request_state.session_tool_grants,
+                    context.request_state.tool_contracts,
+                )
+            # Rebuilding applies the fallback route's media and Tool
+            # capabilities. The persisted previous tool cycle may still carry
+            # Provider-specific reasoning, which must never cross the Provider
+            # boundary.
+            _strip_assistant_reasoning_fields(context.request_state.messages)
+            try:
+                completed = await self._send_until_final(context, candidate_target)
+                return completed, last_failure
+            except RunInterruptedError:
+                raise
+            except ProviderError as candidate_failure:
+                if not should_advance_model_fallback_chain(candidate_failure):
+                    await _persist_run_error(run, session, candidate_failure)
+                    raise
+                last_failure = candidate_failure
+                from_binding = binding
+                continue
+            except (ChatError, ConfigError, VBotError) as candidate_failure:
+                await _persist_run_error(run, session, candidate_failure)
+                raise
+            finally:
+                await _close_adapter(candidate_target.adapter)
+        return None, last_failure
 
     async def _get_session_async(
         self,

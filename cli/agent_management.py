@@ -19,8 +19,8 @@ AGENT_UPDATE_FLAGS = (
     "--name",
     "--model",
     "--clear-model",
-    "--fallback-model",
-    "--clear-fallback-model",
+    "--fallback-models",
+    "--clear-fallback-models",
     "--temperature",
     "--clear-temperature",
     "--thinking-effort",
@@ -234,7 +234,7 @@ def _format_agent_row(agent: object) -> str:
     agent_id = _string_or_default(agent.get("id"), "?")
     name = _string_or_default(agent.get("name"), "?")
     model = _string_or_default(agent.get("model"), "-")
-    fallback_model = _string_or_default(agent.get("fallback_model"), "-")
+    fallback_models = _format_string_list(agent.get("fallback_models"))
     temperature = _value_text(agent.get("temperature"))
     thinking_effort = _value_text(agent.get("thinking_effort"))
     current_session_id = _string_or_default(agent.get("current_session_id"), "-")
@@ -243,7 +243,7 @@ def _format_agent_row(agent: object) -> str:
         f"- id={agent_id}"
         f" name={name}"
         f" model={model}"
-        f" fallback_model={fallback_model}"
+        f" fallback_models={fallback_models}"
         f" temperature={temperature}"
         f" thinking_effort={thinking_effort}"
         f" current_session_id={current_session_id}"
@@ -258,7 +258,7 @@ def _format_agent_detail(agent: Mapping[str, Any]) -> str:
         f"id: {_string_or_default(agent.get('id'), '?')}",
         f"name: {_string_or_default(agent.get('name'), '?')}",
         f"model: {_string_or_default(agent.get('model'), '-')}",
-        f"fallback_model: {_string_or_default(agent.get('fallback_model'), '-')}",
+        f"fallback_models: {_format_string_list(agent.get('fallback_models'))}",
         f"workspace: {_string_or_default(agent.get('workspace'), '-')}",
         f"project: {_string_or_default(agent.get('root_project_id'), '-')}",
         f"temperature: {_value_text(agent.get('temperature'))}",

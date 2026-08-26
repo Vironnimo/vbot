@@ -511,13 +511,17 @@ def validate_supported_agent_default_fields(values: Mapping[str, Any]) -> None:
         raise StorageError(f"Unsupported defaults.agent settings: {', '.join(unsupported_fields)}")
 
 
-def normalize_agent_default_value(field: str, value: Any) -> str | float | None:
+def normalize_agent_default_value(field: str, value: Any) -> str | list[str] | float | None:
     """Validate and normalize a single ``defaults.agent`` field value."""
 
     if value is None:
         return None
 
-    if field in {"model", "fallback_model"}:
+    if field in {"model", "fallback_models"}:
+        if field == "fallback_models":
+            if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
+                raise StorageError("Agent default fallback_models must be a string list")
+            return list(value)
         if not isinstance(value, str):
             raise StorageError(f"Agent default {field} must be a string")
         return value

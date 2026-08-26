@@ -431,7 +431,7 @@ def test_load_defaults_reads_and_normalizes_all_agent_fields(tmp_path: Path) -> 
             "defaults": {
                 "agent": {
                     "model": "openrouter/anthropic/claude-sonnet-4",
-                    "fallback_model": "openai/gpt-4.1-mini",
+                    "fallback_models": ["openai/gpt-4.1-mini"],
                     "temperature": 1,
                     "thinking_effort": "medium",
                 }
@@ -444,7 +444,7 @@ def test_load_defaults_reads_and_normalizes_all_agent_fields(tmp_path: Path) -> 
     assert defaults == {
         "agent": {
             "model": "openrouter/anthropic/claude-sonnet-4",
-            "fallback_model": "openai/gpt-4.1-mini",
+            "fallback_models": ["openai/gpt-4.1-mini"],
             "temperature": 1.0,
             "thinking_effort": "medium",
         }

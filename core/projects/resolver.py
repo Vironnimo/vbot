@@ -17,7 +17,7 @@ Both branches return a :class:`RuntimeAgent` — a structural protocol the store
 ``Agent`` already satisfies field-for-field, so a later run-path migration just
 re-types its parameter from ``Agent`` to ``RuntimeAgent`` and keeps reading the
 same attributes (model, tool_access, temperature, thinking_effort,
-allowed_skills, fallback_model, memory_prompt_mode, workspace, id, …).
+allowed_skills, fallback_models, memory_prompt_mode, workspace, id, …).
 
 **Two freshness levels** (decision in the plan, "zwei Frische-Ebenen"):
 
@@ -47,7 +47,7 @@ risk, mirroring ``core/providers/task_client.py`` / ``usage.py``).
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from fnmatch import fnmatchcase
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
@@ -82,9 +82,9 @@ if TYPE_CHECKING:
 # pinned-memory block is ever assembled for a config agent.
 _CONFIG_AGENT_WORKSPACE = ""
 _CONFIG_AGENT_MEMORY_MODE: MemoryPromptMode = "off"
-# Config agents have no fallback model and no custom-prompt scope in v1; their
+# Config agents have no fallback chain and no custom-prompt scope in v1; their
 # prompt body comes verbatim from the scanned source instead.
-_CONFIG_AGENT_FALLBACK_MODEL = ""
+_CONFIG_AGENT_FALLBACK_MODELS: tuple[str, ...] = ()
 _CONFIG_AGENT_CUSTOM_PROMPT_ENABLED = False
 # A config agent has no persisted timestamps (it is synthesized per run from the
 # repo file); the runtime-agent surface still needs the fields for compatibility.
@@ -109,7 +109,7 @@ class RuntimeAgent(Protocol):
     - ``name`` — display name.
     - ``model`` — the **resolved** ``<provider>/<model-id>`` the run uses (for a
       config agent, the model chain has already run; never empty).
-    - ``fallback_model`` — secondary model (empty for a config agent in v1).
+    - ``fallback_models`` — ordered fallback chain (empty for a config agent in v1).
     - ``workspace`` — identity/memory home; **empty** for a config agent.
     - ``temperature`` / ``thinking_effort`` — run knobs (may be ``None``).
     - ``tool_access`` — explicit Tool Access Policy; ``allowed_skills`` remains
@@ -129,7 +129,7 @@ class RuntimeAgent(Protocol):
     @property
     def model(self) -> str: ...
     @property
-    def fallback_model(self) -> str: ...
+    def fallback_models(self) -> list[str]: ...
     @property
     def workspace(self) -> str: ...
 
@@ -209,7 +209,7 @@ class ConfigAgent:
     # ``temperature`` and ``thinking_effort`` carry the first tier that delivered,
     # or ``None`` when all tiers fell through → the provider default.
     thinking_effort: str | None = None
-    fallback_model: str = _CONFIG_AGENT_FALLBACK_MODEL
+    fallback_models: list[str] = field(default_factory=lambda: list(_CONFIG_AGENT_FALLBACK_MODELS))
     workspace: str = _CONFIG_AGENT_WORKSPACE
     root_project_id: str | None = None
     memory_prompt_mode: MemoryPromptMode = _CONFIG_AGENT_MEMORY_MODE
@@ -620,12 +620,12 @@ class AgentResolver:
           tier is gated by the same ``is_configured`` model check, so an unconfigured
           override/agent/default model falls through exactly as at run time.
         - **Identity agents** (``project_id is None``): fields ``model``,
-          ``fallback_model``, ``temperature``, ``thinking_effort``. Sources:
+          ``fallback_models``, ``temperature``, ``thinking_effort``. Sources:
           ``"agent"`` (the own persisted value) or ``"global_default"``, or ``None``
           when neither has a value. No ``is_configured`` gating — this mirrors
           ``AgentStore._apply_defaults`` exactly: a default applies when the persisted
-          ``model``/``fallback_model`` is ``""`` or ``temperature``/``thinking_effort``
-          is ``None``.
+          ``model`` is ``""`` / ``fallback_models`` is ``[]`` or
+          ``temperature``/``thinking_effort`` is ``None``.
         """
         if project_id is None:
             return self._identity_effective_config(agent_id)
@@ -661,8 +661,8 @@ class AgentResolver:
         defaults = self._global_agent_defaults()
         return {
             "model": _identity_string_source(raw.model, defaults, "model"),
-            "fallback_model": _identity_string_source(
-                raw.fallback_model, defaults, "fallback_model"
+            "fallback_models": _identity_string_list_source(
+                raw.fallback_models, defaults, "fallback_models"
             ),
             "temperature": _identity_optional_source(raw.temperature, defaults, "temperature"),
             "thinking_effort": _identity_optional_source(
@@ -1172,6 +1172,24 @@ def _identity_string_source(
         default_value = defaults.get(key)
         if isinstance(default_value, str):
             return {"value": default_value, "source": "global_default"}
+    return {"value": None, "source": None}
+
+
+def _identity_string_list_source(
+    own_value: list[str], defaults: Mapping[str, Any], key: str
+) -> dict[str, Any]:
+    """Return the identity effective value + source for a string-list field.
+
+    Mirrors ``AgentStore._apply_defaults`` for ``fallback_models``: the persisted
+    own value wins unless it is empty, in which case the global default applies
+    when present. Source is ``"agent"`` / ``"global_default"`` / ``None``.
+    """
+    if own_value:
+        return {"value": list(own_value), "source": "agent"}
+    if key in defaults:
+        default_value = defaults.get(key)
+        if isinstance(default_value, list) and all(isinstance(item, str) for item in default_value):
+            return {"value": list(default_value), "source": "global_default"}
     return {"value": None, "source": None}
 
 

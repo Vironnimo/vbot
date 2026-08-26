@@ -10,7 +10,7 @@ def _valid_agent_data() -> dict[str, object]:
         "id": "coder",
         "name": "Coder",
         "model": "",
-        "fallback_model": "",
+        "fallback_models": [],
         "temperature": None,
         "thinking_effort": None,
         "memory_prompt_mode": "agent_user",
@@ -141,4 +141,29 @@ def test_validate_agent_data_rejects_invalid_thinking_effort() -> None:
             "$.thinking_effort",
             "must be one of: '', 'high', 'low', 'max', 'medium', 'minimal', 'none', 'xhigh'",
         )
+    ]
+
+
+def test_validate_agent_data_rejects_non_string_fallback_models_entry() -> None:
+    data = _valid_agent_data()
+    data["fallback_models"] = ["openai/gpt-5.2", 12]
+
+    assert _diagnostics(data) == [("error", "$.fallback_models", "must be a list of strings")]
+
+
+def test_validate_agent_data_rejects_duplicate_fallback_models() -> None:
+    data = _valid_agent_data()
+    data["fallback_models"] = ["openai/gpt-5.2", "openai/gpt-5.2"]
+
+    assert _diagnostics(data) == [
+        ("error", "$.fallback_models", "must not contain duplicates: openai/gpt-5.2")
+    ]
+
+
+def test_validate_agent_data_rejects_overlong_fallback_models() -> None:
+    data = _valid_agent_data()
+    data["fallback_models"] = [f"openai/model-{index}" for index in range(6)]
+
+    assert _diagnostics(data) == [
+        ("error", "$.fallback_models", "accepts at most 5 entries, got 6")
     ]

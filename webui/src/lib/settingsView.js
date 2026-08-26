@@ -50,7 +50,7 @@ const SUBAGENT_SETTINGS_DEFAULTS = Object.freeze({
 
 export const AGENT_DEFAULTS_FIELDS = Object.freeze([
   'model',
-  'fallback_model',
+  'fallback_models',
   'temperature',
   'thinking_effort',
 ]);
@@ -216,7 +216,9 @@ export function normalizeAgentDefaultsSettings(rawSettings) {
 
   return {
     model: textOrEmpty(agentDefaults.model),
-    fallback_model: textOrEmpty(agentDefaults.fallback_model),
+    fallback_models: normalizeAgentDefaultsStringList(
+      agentDefaults.fallback_models,
+    ),
     temperature: normalizeAgentDefaultsTemperature(agentDefaults.temperature),
     thinking_effort: normalizeAgentDefaultsThinkingEffort(
       agentDefaults.thinking_effort,
@@ -231,8 +233,8 @@ export function buildAgentDefaultsPayload(formValues) {
     defaults: {
       agent: {
         model: normalizeAgentDefaultsTextForPayload(values.model),
-        fallback_model: normalizeAgentDefaultsTextForPayload(
-          values.fallback_model,
+        fallback_models: normalizeAgentDefaultsStringListForPayload(
+          values.fallback_models,
         ),
         temperature: normalizeAgentDefaultsTemperature(values.temperature),
         thinking_effort: normalizeAgentDefaultsThinkingEffortForPayload(
@@ -1381,6 +1383,23 @@ function normalizeAgentDefaultsTemperature(value) {
 
 function normalizeAgentDefaultsTextForPayload(value) {
   const normalized = textOrEmpty(value);
+  return normalized.length > 0 ? normalized : null;
+}
+
+// The fallback chain is an ordered string list: trim entries, drop empties.
+function normalizeAgentDefaultsStringList(value) {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
+    .map((item) =>
+      item === null || item === undefined ? '' : String(item).trim(),
+    )
+    .filter((item) => item.length > 0);
+}
+
+function normalizeAgentDefaultsStringListForPayload(value) {
+  const normalized = normalizeAgentDefaultsStringList(value);
   return normalized.length > 0 ? normalized : null;
 }
 

@@ -575,7 +575,11 @@ def _validate_defaults(diagnostics: list[JsonDiagnostic], value: Any) -> None:
         item_path = _child_path("$.defaults.agent", field)
         if item is None:
             continue
-        if field in {"model", "fallback_model"}:
+        if field in {"model", "fallback_models"}:
+            if field == "fallback_models":
+                if not (isinstance(item, list) and all(isinstance(entry, str) for entry in item)):
+                    _error(diagnostics, item_path, "must be a string list or null")
+                continue
             if not isinstance(item, str):
                 _error(diagnostics, item_path, "must be a string or null")
             continue

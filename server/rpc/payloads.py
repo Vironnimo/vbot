@@ -116,7 +116,7 @@ def _agent_response(state: Any, agent: Any) -> JsonObject:
         "id": agent.id,
         "name": agent.name,
         "model": agent.model,
-        "fallback_model": agent.fallback_model,
+        "fallback_models": list(getattr(agent, "fallback_models", ()) or ()),
         "workspace": agent.workspace,
         "root_project_id": getattr(agent, "root_project_id", None),
         # The location a fresh agent's workspace is seeded to
@@ -163,7 +163,7 @@ def _agent_raw_config(state: Any, agent_id: str) -> JsonObject:
         raw_policy = None
     return {
         "model": raw.model,
-        "fallback_model": raw.fallback_model,
+        "fallback_models": list(getattr(raw, "fallback_models", ()) or ()),
         "temperature": raw.temperature,
         "thinking_effort": raw.thinking_effort,
         "compaction_policy": dict(raw_policy) if raw_policy is not None else None,

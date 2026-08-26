@@ -888,13 +888,13 @@ def test_agent_get_reports_config_and_effective_for_own_value(tmp_path: Path) ->
     # config = raw own values (pre-default-bake); shape check.
     assert set(result["config"]) == {
         "model",
-        "fallback_model",
+        "fallback_models",
         "temperature",
         "thinking_effort",
         "compaction_policy",
     }
     assert result["config"]["model"] == "openai/gpt-5.2"
-    assert result["config"]["fallback_model"] == ""
+    assert result["config"]["fallback_models"] == []
     assert result["config"]["temperature"] is None
     # effective = per-field {value, source}; the own model wins as source "agent".
     assert result["effective"]["model"] == {"value": "openai/gpt-5.2", "source": "agent"}

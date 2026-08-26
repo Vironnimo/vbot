@@ -547,13 +547,13 @@ describe('settingsView helpers', () => {
     );
     expect(AGENT_DEFAULTS_FIELDS).toEqual([
       'model',
-      'fallback_model',
+      'fallback_models',
       'temperature',
       'thinking_effort',
     ]);
     expect(normalizeAgentDefaultsSettings({})).toEqual({
       model: '',
-      fallback_model: '',
+      fallback_models: [],
       temperature: null,
       thinking_effort: null,
     });
@@ -562,7 +562,7 @@ describe('settingsView helpers', () => {
         defaults: {
           agent: {
             model: ' openai/gpt-5.2 ',
-            fallback_model: ' ',
+            fallback_models: [' openai/gpt-5.1 ', ''],
             temperature: '0.6',
             thinking_effort: ' high ',
           },
@@ -570,7 +570,7 @@ describe('settingsView helpers', () => {
       }),
     ).toEqual({
       model: 'openai/gpt-5.2',
-      fallback_model: '',
+      fallback_models: ['openai/gpt-5.1'],
       temperature: 0.6,
       thinking_effort: 'high',
     });
@@ -584,14 +584,14 @@ describe('settingsView helpers', () => {
       }),
     ).toEqual({
       model: '',
-      fallback_model: '',
+      fallback_models: [],
       temperature: null,
       thinking_effort: '',
     });
     expect(
       buildAgentDefaultsPayload({
         model: ' openai/gpt-5.2 ',
-        fallback_model: '',
+        fallback_models: ['openai/gpt-5.1'],
         temperature: '',
         thinking_effort: '',
       }),
@@ -599,7 +599,7 @@ describe('settingsView helpers', () => {
       defaults: {
         agent: {
           model: 'openai/gpt-5.2',
-          fallback_model: null,
+          fallback_models: ['openai/gpt-5.1'],
           temperature: null,
           thinking_effort: '',
         },
@@ -608,7 +608,7 @@ describe('settingsView helpers', () => {
     expect(
       buildAgentDefaultsPayload({
         model: '',
-        fallback_model: ' ',
+        fallback_models: [],
         temperature: '',
         thinking_effort: AGENT_DEFAULTS_THINKING_EFFORT_NO_DEFAULT,
       }),
@@ -616,7 +616,7 @@ describe('settingsView helpers', () => {
       defaults: {
         agent: {
           model: null,
-          fallback_model: null,
+          fallback_models: null,
           temperature: null,
           thinking_effort: null,
         },

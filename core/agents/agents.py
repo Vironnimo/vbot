@@ -42,6 +42,7 @@ from core.memory import (
 )
 from core.sessions import ChatSessionManager, SessionAddress
 from core.settings import (
+    MAX_FALLBACK_MODELS,
     SettingsValidationError,
     is_valid_agent_id,
     validate_temperature,
@@ -63,7 +64,7 @@ from core.tools.availability import (
 from core.utils.atomic import atomic_write_text
 from core.utils.logging import get_logger
 
-DEFAULT_FALLBACK_MODEL = ""
+DEFAULT_FALLBACK_MODELS: list[str] = []
 DEFAULT_MODEL = ""
 DEFAULT_TEMPERATURE: float | None = None
 DEFAULT_THINKING_EFFORT: str | None = None
@@ -86,7 +87,7 @@ _AGENT_CONFIG_FIELDS = frozenset(
         "created_at",
         "current_session_id",
         "custom_system_prompt_enabled",
-        "fallback_model",
+        "fallback_models",
         "id",
         "memory_prompt_mode",
         "model",
@@ -203,7 +204,9 @@ def validate_agent_data(data: Any) -> list[JsonDiagnostic]:
     _validate_agent_config_id(diagnostics, "$.id", data.get("id"))
     validate_non_empty_string(diagnostics, "$.name", data.get("name"), required=False)
     validate_string(diagnostics, "$.model", data.get("model"), required=False)
-    validate_string(diagnostics, "$.fallback_model", data.get("fallback_model"), required=False)
+    _validate_fallback_models_diagnostics(
+        diagnostics, "$.fallback_models", data.get("fallback_models")
+    )
     validate_optional_path_string(diagnostics, "$.workspace", data.get("workspace"))
     validate_non_empty_string(
         diagnostics,
@@ -334,7 +337,7 @@ class Agent:
     id: str
     name: str
     model: str
-    fallback_model: str
+    fallback_models: list[str]
     workspace: str
     temperature: float | None
     thinking_effort: str | None
@@ -432,7 +435,7 @@ class AgentStore:
         name: str | None = None,
         *,
         model: str = DEFAULT_MODEL,
-        fallback_model: str = DEFAULT_FALLBACK_MODEL,
+        fallback_models: list[str] | None = None,
         workspace: str | Path | None = None,
         temperature: float | None = DEFAULT_TEMPERATURE,
         thinking_effort: str | None = DEFAULT_THINKING_EFFORT,
@@ -451,8 +454,8 @@ class AgentStore:
 
         validated_name = _normalize_agent_name(agent_id, name)
         validated_model = _validate_string_field("model", model, allow_empty=True)
-        validated_fallback_model = _validate_string_field(
-            "fallback_model", fallback_model, allow_empty=True
+        validated_fallback_models = _validate_fallback_models(
+            "fallback_models", fallback_models or []
         )
         validated_temperature = _validate_temperature(temperature)
         validated_thinking_effort = _validate_thinking_effort(thinking_effort)
@@ -482,7 +485,7 @@ class AgentStore:
             id=agent_id,
             name=validated_name,
             model=validated_model,
-            fallback_model=validated_fallback_model,
+            fallback_models=validated_fallback_models,
             workspace=str(workspace_path.resolve()),
             root_project_id=None,
             temperature=validated_temperature,
@@ -522,7 +525,7 @@ class AgentStore:
 
         Same load path as :meth:`get` (workspace seeding, current-session
         normalization) but **without** the ``defaults.agent`` injection, so the
-        returned Agent carries the raw ``model``/``fallback_model`` ("" when unset)
+        returned Agent carries the raw ``model``/``fallback_models`` ("" / [] when unset)
         and raw ``temperature``/``thinking_effort`` (``None`` when unset). This is the
         provenance seam the resolver's identity ``effective_config`` reads to tell an
         own persisted value from a baked global default; ``get``/``list``/``update``
@@ -731,12 +734,16 @@ class AgentStore:
 
         if "name" in changes:
             changes["name"] = _normalize_agent_name(agent_id, changes["name"])
-        string_fields = {"model", "fallback_model", "current_session_id"}
+        string_fields = {"model", "current_session_id"}
         for field_name in sorted(string_fields & set(changes)):
             changes[field_name] = _validate_string_field(
                 field_name,
                 changes[field_name],
-                allow_empty=field_name in {"model", "fallback_model"},
+                allow_empty=field_name == "model",
+            )
+        if "fallback_models" in changes:
+            changes["fallback_models"] = _validate_fallback_models(
+                "fallback_models", changes["fallback_models"]
             )
         if "workspace" in changes:
             workspace = changes["workspace"]
@@ -1206,11 +1213,9 @@ class AgentStore:
 
         if agent.model == "" and "model" in defaults:
             changes["model"] = _validate_string_field("model", defaults["model"], allow_empty=True)
-        if agent.fallback_model == "" and "fallback_model" in defaults:
-            changes["fallback_model"] = _validate_string_field(
-                "fallback_model",
-                defaults["fallback_model"],
-                allow_empty=True,
+        if agent.fallback_models == [] and "fallback_models" in defaults:
+            changes["fallback_models"] = _validate_fallback_models(
+                "fallback_models", defaults["fallback_models"]
             )
         if agent.temperature is None and "temperature" in defaults:
             changes["temperature"] = _validate_temperature(defaults["temperature"])
@@ -1330,6 +1335,51 @@ def _validate_allowed_items(field: str, items: list[str] | None) -> list[str]:
     if not all(isinstance(item, str) for item in items):
         raise AgentError(f"{field} must be a list of strings")
     return list(items)
+
+
+def _validate_fallback_models(field: str, items: Any) -> list[str]:
+    """Validate the ordered fallback-model chain: string bindings, unique, capped."""
+    if not isinstance(items, list) or any(not isinstance(item, str) for item in items):
+        raise AgentError(f"{field} must be a list of strings")
+    cleaned = [item.strip() for item in items]
+    if any(not item for item in cleaned):
+        raise AgentError(f"{field} entries must be non-empty model bindings")
+    if len(cleaned) > MAX_FALLBACK_MODELS:
+        raise AgentError(
+            f"{field} accepts at most {MAX_FALLBACK_MODELS} entries, got {len(cleaned)}"
+        )
+    duplicates = sorted({item for item in cleaned if cleaned.count(item) > 1})
+    if duplicates:
+        raise AgentError(f"{field} must not contain duplicates: {', '.join(duplicates)}")
+    return cleaned
+
+
+def _validate_fallback_models_diagnostics(
+    diagnostics: list[JsonDiagnostic], path: str, items: Any
+) -> None:
+    """Schema-validation twin of ``_validate_fallback_models`` (diagnostics style)."""
+    if items is None:
+        return
+    if not isinstance(items, list):
+        add_error(diagnostics, path, "must be a list of strings")
+        return
+    if any(not isinstance(item, str) for item in items):
+        add_error(diagnostics, path, "must be a list of strings")
+        return
+    if any(not item.strip() for item in items):
+        add_error(diagnostics, path, "entries must be non-empty model bindings")
+        return
+    if len(items) > MAX_FALLBACK_MODELS:
+        add_error(
+            diagnostics,
+            path,
+            f"accepts at most {MAX_FALLBACK_MODELS} entries, got {len(items)}",
+        )
+        return
+    stripped = [item.strip() for item in items]
+    duplicates = sorted({item for item in stripped if stripped.count(item) > 1})
+    if duplicates:
+        add_error(diagnostics, path, f"must not contain duplicates: {', '.join(duplicates)}")
 
 
 def _validate_tool_access(value: ToolAccess | Mapping[str, Any] | None) -> ToolAccess:
@@ -1472,7 +1522,9 @@ def _agent_from_dict(
         id=agent_id,
         name=data.get("name") or agent_id,
         model=data.get("model") or "",
-        fallback_model=data.get("fallback_model") or "",
+        fallback_models=_validate_fallback_models(
+            "fallback_models", data.get("fallback_models") or []
+        ),
         workspace=str(
             _workspace_from_data(
                 data.get("workspace"),

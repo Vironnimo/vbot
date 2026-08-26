@@ -234,7 +234,7 @@ describe('i18n t()', () => {
       'agents.form.customPromptHelp',
       'agents.form.memoryPromptModeHelp',
       'agents.form.memoryModeHelp',
-      'agents.form.fallbackModelHelp',
+      'agents.form.fallbackModelsHelp',
       'agents.form.temperatureHelp',
       'agents.form.thinkingEffortHelp',
       'agents.form.wildcardNote',

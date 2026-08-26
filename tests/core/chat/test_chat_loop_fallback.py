@@ -44,7 +44,7 @@ async def test_fallback_rebuilds_route_gated_image_tool_visibility(
     agent = StubAgent(
         id="coder",
         model="openai/vision-model",
-        fallback_model="anthropic/text-model::api-key",
+        fallback_models=["anthropic/text-model::api-key"],
         allowed_tools=[ANALYZE_IMAGE_TOOL_NAME],
     )
     primary_adapter = StubAdapter(
@@ -147,7 +147,7 @@ async def test_fallback_model_activates_on_retryable_error(tmp_path: Path) -> No
     agent = StubAgent(
         id="coder",
         model="openai/gpt-5.2",
-        fallback_model="anthropic/claude-sonnet-4::api-key",
+        fallback_models=["anthropic/claude-sonnet-4::api-key"],
         allowed_tools=["*"],
     )
     primary_adapter = StubAdapter([ProviderRateLimitError("primary rate limited")])  # type: ignore[list-item]
@@ -176,7 +176,8 @@ async def test_fallback_model_activates_on_retryable_error(tmp_path: Path) -> No
     assert messages[-1].iteration_count == 1
     assert run.events[-1].payload["iteration_count"] == 1
     assert messages[1].content == (
-        "Primary model unavailable. Switched to anthropic/claude-sonnet-4::api-key for this run."
+        "Model openai/gpt-5.2 unavailable. "
+        "Switched to anthropic/claude-sonnet-4::api-key for this run."
     )
     assert len(fallback_events) == 1
     assert fallback_events[0].payload == {
@@ -194,12 +195,14 @@ async def test_streaming_fallback_activates_after_same_model_recovery_is_exhaust
     agent = StubAgent(
         id="coder",
         model="openai/gpt-5.2",
-        fallback_model="anthropic/claude-sonnet-4::api-key",
+        fallback_models=["anthropic/claude-sonnet-4::api-key"],
         allowed_tools=["*"],
     )
+    # A generic (non-rate-limit) retryable provider failure still burns the
+    # same-model restart budget; only rate limits skip it via the fast path.
     primary_adapter = StubAdapter(
         [],
-        stream_responses=[ProviderRateLimitError("primary rate limited") for _ in range(3)],
+        stream_responses=[ProviderError("provider overloaded", retryable=True) for _ in range(3)],
     )
     fallback_adapter = StubAdapter(
         [],
@@ -240,7 +243,7 @@ async def test_fallback_adapter_construction_failure(tmp_path: Path) -> None:
     agent = StubAgent(
         id="coder",
         model="openai/gpt-5.2",
-        fallback_model="anthropic/claude-sonnet-4::api-key",
+        fallback_models=["anthropic/claude-sonnet-4::api-key"],
         allowed_tools=["*"],
     )
     primary_adapter = StubAdapter([ProviderRateLimitError("primary rate limited")])  # type: ignore[list-item]
@@ -253,7 +256,9 @@ async def test_fallback_adapter_construction_failure(tmp_path: Path) -> None:
         provider_ids={"openai", "anthropic"},
     )
 
-    with pytest.raises(ConfigError, match="bad credential"):
+    # The broken candidate is skipped (warned, never activated); the run fails
+    # with the last actual send failure — the primary's original error.
+    with pytest.raises(ProviderRateLimitError, match="primary rate limited"):
         await build_chat_loop(runtime).send("coder", "Hi", session_id="session-one")
 
     run = next(iter(runtime.chat_runs._runs.values()))
@@ -270,7 +275,7 @@ async def test_next_turn_reuses_primary_model(tmp_path: Path) -> None:
     agent = StubAgent(
         id="coder",
         model="openai/gpt-5.2",
-        fallback_model="anthropic/claude-sonnet-4::api-key",
+        fallback_models=["anthropic/claude-sonnet-4::api-key"],
         allowed_tools=["*"],
     )
     primary_adapter = StubAdapter(
@@ -312,7 +317,7 @@ async def test_fallback_not_triggered_on_non_retryable_error(tmp_path: Path) -> 
     agent = StubAgent(
         id="coder",
         model="openai/gpt-5.2",
-        fallback_model="anthropic/claude-sonnet-4::api-key",
+        fallback_models=["anthropic/claude-sonnet-4::api-key"],
         allowed_tools=["*"],
     )
     primary_adapter = StubAdapter([ProviderAuthError("invalid credential")])  # type: ignore[list-item]
@@ -360,7 +365,7 @@ async def test_fallback_stays_active_for_rest_of_run(tmp_path: Path) -> None:
     agent = StubAgent(
         id="coder",
         model="openai/gpt-5.2",
-        fallback_model="anthropic/claude-sonnet-4::api-key",
+        fallback_models=["anthropic/claude-sonnet-4::api-key"],
         allowed_tools=["echo"],
     )
     primary_adapter = StubAdapter([ProviderRateLimitError("primary rate limited")])  # type: ignore[list-item]
@@ -406,7 +411,7 @@ async def test_fallback_request_strips_primary_provider_reasoning_meta(tmp_path:
     agent = StubAgent(
         id="coder",
         model="openai/gpt-5.2",
-        fallback_model="anthropic/claude-sonnet-4::api-key",
+        fallback_models=["anthropic/claude-sonnet-4::api-key"],
         allowed_tools=["echo"],
     )
     primary_adapter = StubAdapter(
@@ -494,7 +499,7 @@ async def test_fallback_failure_persists_fallback_error(tmp_path: Path) -> None:
     agent = StubAgent(
         id="coder",
         model="openai/gpt-5.2",
-        fallback_model="anthropic/claude-sonnet-4::api-key",
+        fallback_models=["anthropic/claude-sonnet-4::api-key"],
         allowed_tools=["*"],
     )
     primary_adapter = StubAdapter([ProviderRateLimitError("primary rate limited")])  # type: ignore[list-item]
@@ -522,3 +527,208 @@ async def test_fallback_failure_persists_fallback_error(tmp_path: Path) -> None:
     assert persisted_roles(messages) == ["user", "note", "error"]
     error_message = next(message for message in messages if message.role == "error")
     assert error_message.error_kind == "rate_limit"
+
+
+@pytest.mark.asyncio
+async def test_fallback_chain_cascades_through_candidates_in_order(tmp_path: Path) -> None:
+    agent = StubAgent(
+        id="coder",
+        model="openai/gpt-5.2",
+        fallback_models=[
+            "anthropic/first-resort::api-key",
+            "anthropic/last-resort::api-key",
+        ],
+        allowed_tools=["*"],
+    )
+    primary_adapter = StubAdapter([ProviderRateLimitError("primary rate limited")])  # type: ignore[list-item]
+    # Both candidates resolve onto anthropic:api-key, so one shared adapter
+    # serves them in queue order; it records which model id each request used.
+    shared_candidate_adapter = _RecordingAdapter(
+        [
+            ProviderRateLimitError("first resort limited"),  # type: ignore[list-item]
+            {"content": "Recovered", "tool_calls": None},
+        ]
+    )
+    runtime: Any = StubRuntime(
+        data_dir=tmp_path,
+        agent=agent,
+        adapter=primary_adapter,
+        adapters_by_connection={
+            "openai:api-key": primary_adapter,
+            "anthropic:api-key": shared_candidate_adapter,
+        },
+        provider_ids={"openai", "anthropic"},
+    )
+
+    assistant = await build_chat_loop(runtime).send("coder", "Hi", session_id="s1")
+
+    run = next(iter(runtime.chat_runs._runs.values()))
+    messages = runtime.chat_sessions.get(session_address("coder", "s1")).load()
+    fallback_events = [
+        (event.payload["from_model"], event.payload["to_model"])
+        for event in run.events
+        if event.type == MODEL_FALLBACK_ACTIVATED_EVENT
+    ]
+    assert assistant.content == "Recovered"
+    assert fallback_events == [
+        ("openai/gpt-5.2", "anthropic/first-resort::api-key"),
+        ("anthropic/first-resort::api-key", "anthropic/last-resort::api-key"),
+    ]
+    assert list(persisted_roles(messages)) == ["user", "note", "note", "assistant"]
+    assert "Switched to anthropic/first-resort::api-key" in messages[1].content
+    assert "Switched to anthropic/last-resort::api-key" in messages[2].content
+    assert shared_candidate_adapter.served_model_ids == ["first-resort", "last-resort"]
+
+
+class _RecordingAdapter(StubAdapter):
+    """Stub adapter recording the wire model id of every send."""
+
+    def __init__(self, responses: list[Any]) -> None:
+        super().__init__(responses)
+        self.served_model_ids: list[str] = []
+
+    async def send(self, messages: list[JsonObject], *, model_id: str, **kwargs: Any) -> JsonObject:
+        self.served_model_ids.append(model_id)
+        return await super().send(messages, model_id=model_id, **kwargs)
+
+
+@pytest.mark.asyncio
+async def test_fallback_chain_skips_unresolvable_candidate(tmp_path: Path) -> None:
+    agent = StubAgent(
+        id="coder",
+        model="openai/gpt-5.2",
+        fallback_models=[
+            "ghost-provider/no-such-model",
+            "anthropic/claude-sonnet-4::api-key",
+        ],
+        allowed_tools=["*"],
+    )
+    primary_adapter = StubAdapter([ProviderRateLimitError("primary rate limited")])  # type: ignore[list-item]
+    fallback_adapter = StubAdapter([{"content": "Recovered", "tool_calls": None}])
+    runtime: Any = StubRuntime(
+        data_dir=tmp_path,
+        agent=agent,
+        adapter=primary_adapter,
+        adapters_by_connection={
+            "openai:api-key": primary_adapter,
+            "anthropic:api-key": fallback_adapter,
+        },
+        provider_ids={"openai", "anthropic"},
+    )
+
+    assistant = await build_chat_loop(runtime).send("coder", "Hi", session_id="s1")
+
+    run = next(iter(runtime.chat_runs._runs.values()))
+    fallback_events = [
+        event.payload["to_model"]
+        for event in run.events
+        if event.type == MODEL_FALLBACK_ACTIVATED_EVENT
+    ]
+    assert assistant.content == "Recovered"
+    assert fallback_events == ["anthropic/claude-sonnet-4::api-key"]
+
+
+@pytest.mark.asyncio
+async def test_fallback_chain_advances_on_model_scoped_fatal_error(tmp_path: Path) -> None:
+    agent = StubAgent(
+        id="coder",
+        model="openai/gpt-5.2",
+        fallback_models=["anthropic/claude-sonnet-4::api-key"],
+        allowed_tools=["*"],
+    )
+    retired = ProviderError("Provider error: model not found", retryable=False)
+    retired.status_code = 404
+    primary_adapter = StubAdapter([retired])  # type: ignore[list-item]
+    fallback_adapter = StubAdapter([{"content": "Recovered", "tool_calls": None}])
+    runtime: Any = StubRuntime(
+        data_dir=tmp_path,
+        agent=agent,
+        adapter=primary_adapter,
+        adapters_by_connection={
+            "openai:api-key": primary_adapter,
+            "anthropic:api-key": fallback_adapter,
+        },
+        provider_ids={"openai", "anthropic"},
+    )
+
+    assistant = await build_chat_loop(runtime).send("coder", "Hi", session_id="s1")
+
+    assert assistant.content == "Recovered"
+    assert fallback_adapter.requests[0]["model_id"] == "claude-sonnet-4"
+
+
+@pytest.mark.asyncio
+async def test_fallback_chain_does_not_advance_on_account_wide_fatal_error(
+    tmp_path: Path,
+) -> None:
+    agent = StubAgent(
+        id="coder",
+        model="openai/gpt-5.2",
+        fallback_models=["anthropic/claude-sonnet-4::api-key"],
+        allowed_tools=["*"],
+    )
+    primary_adapter = StubAdapter([ProviderAuthError("invalid credential")])  # type: ignore[list-item]
+    fallback_adapter = StubAdapter([{"content": "Should not be used", "tool_calls": None}])
+    runtime: Any = StubRuntime(
+        data_dir=tmp_path,
+        agent=agent,
+        adapter=primary_adapter,
+        adapters_by_connection={
+            "openai:api-key": primary_adapter,
+            "anthropic:api-key": fallback_adapter,
+        },
+        provider_ids={"openai", "anthropic"},
+    )
+
+    with pytest.raises(ProviderAuthError, match="invalid credential"):
+        await build_chat_loop(runtime).send("coder", "Hi", session_id="s1")
+
+    run = next(iter(runtime.chat_runs._runs.values()))
+    assert run.status == RunStatus.FAILED
+    assert not any(event.type == MODEL_FALLBACK_ACTIVATED_EVENT for event in run.events)
+    assert fallback_adapter.requests == []
+
+
+@pytest.mark.asyncio
+async def test_streaming_rate_limit_with_chain_skips_same_model_restarts(
+    tmp_path: Path,
+) -> None:
+    agent = StubAgent(
+        id="coder",
+        model="openai/gpt-5.2",
+        fallback_models=["anthropic/claude-sonnet-4::api-key"],
+        allowed_tools=["*"],
+    )
+    primary_adapter = StubAdapter(
+        [],
+        stream_responses=[ProviderRateLimitError("quota exhausted")],
+    )
+    fallback_adapter = StubAdapter(
+        [],
+        stream_responses=[
+            [
+                {"type": "content_delta", "text": "Recovered"},
+                {"type": "finish", "reason": "stop"},
+            ]
+        ],
+    )
+    runtime: Any = StubRuntime(
+        data_dir=tmp_path,
+        agent=agent,
+        adapter=primary_adapter,
+        adapters_by_connection={
+            "openai:api-key": primary_adapter,
+            "anthropic:api-key": fallback_adapter,
+        },
+        provider_ids={"openai", "anthropic"},
+    )
+
+    assistant = await build_chat_loop(runtime, streaming=True).send(
+        "coder", "Hi", session_id="session-one"
+    )
+
+    # The rate-limit fast path advances after the FIRST failing attempt instead
+    # of burning the two remaining same-model restarts on a dead quota.
+    assert assistant.content == "Recovered"
+    assert len(primary_adapter.stream_requests) == 1
+    assert len(fallback_adapter.stream_requests) == 1

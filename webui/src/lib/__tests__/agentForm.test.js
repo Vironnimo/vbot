@@ -24,7 +24,7 @@ describe('agent form helpers', () => {
       id: '',
       name: '',
       model: '',
-      fallback_model: '',
+      fallback_models: [],
       workspace: '',
       root_project_id: null,
       temperature: '',
@@ -46,19 +46,19 @@ describe('agent form helpers', () => {
       id: 'coder',
       name: 'Coder',
       model: 'openai/gpt-5.2',
-      fallback_model: 'openai/gpt-5.2-mini',
+      fallback_models: ['openai/gpt-5.2-mini'],
       temperature: 0.7,
       thinking_effort: 'high',
       config: {
         model: '',
-        fallback_model: '',
+        fallback_models: [],
         temperature: null,
         thinking_effort: null,
       },
     });
 
     expect(values.model).toBe('');
-    expect(values.fallback_model).toBe('');
+    expect(values.fallback_models).toEqual([]);
     expect(values.temperature).toBe('');
     expect(values.thinking_effort).toBe('');
     // Non-inheritable fields still come from the top level.
@@ -109,7 +109,7 @@ describe('agent form helpers', () => {
       allowed_skills: ['*'],
       config: {
         model: '',
-        fallback_model: '',
+        fallback_models: [],
         temperature: null,
         thinking_effort: null,
       },
@@ -130,7 +130,7 @@ describe('agent form helpers', () => {
       id: 'coder',
       name: 'Coder',
       model: 'openai/gpt-4.1',
-      fallback_model: 'openai/gpt-4.1-mini',
+      fallback_models: ['openai/gpt-4.1-mini'],
       workspace: 'C:/workspace-coder',
       temperature: 0.2,
       thinking_effort: 'medium',
@@ -166,7 +166,7 @@ describe('agent form helpers', () => {
       id: ' coder ',
       name: ' Coder ',
       model: ' openai/gpt-4.1 ',
-      fallback_model: ' ',
+      fallback_models: [' openai/gpt-4.1-mini ', ' '],
       workspace: ' C:/workspace-coder ',
       temperature: '0.25',
       thinking_effort: ' low ',
@@ -187,7 +187,7 @@ describe('agent form helpers', () => {
       id: 'coder',
       name: 'Coder',
       model: 'openai/gpt-4.1',
-      fallback_model: '',
+      fallback_models: ['openai/gpt-4.1-mini'],
       temperature: 0.25,
       thinking_effort: 'low',
       memory_prompt_mode: 'off',
@@ -264,7 +264,7 @@ describe('agent form helpers', () => {
       id: 'coder',
       name: 'Coder',
       model: '',
-      fallback_model: '',
+      fallback_models: [],
       temperature: '',
       thinking_effort: '',
       tool_access: { mode: 'all' },
@@ -435,7 +435,7 @@ describe('agent form helpers', () => {
       id: 'coder',
       name: 'Coder',
       model: 'openai/gpt-5.2',
-      fallback_model: 'openai/gpt-5.2-mini',
+      fallback_models: ['openai/gpt-5.2-mini'],
       workspace: 'C:/workspace-coder',
       temperature: 0.2,
       thinking_effort: 'high',

@@ -40,7 +40,7 @@ export const THINKING_EFFORT_OPTIONS = Object.freeze([
 const EDITABLE_AGENT_FIELDS = Object.freeze([
   'name',
   'model',
-  'fallback_model',
+  'fallback_models',
   'temperature',
   'thinking_effort',
   'memory_prompt_mode',
@@ -57,7 +57,7 @@ const AGENT_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 const EMPTY_TEXT = '';
 
 export function createAgentFormValues(agent = {}) {
-  // The four inheritable run fields (model/fallback_model/temperature/
+  // The four inheritable run fields (model/fallback_models/temperature/
   // thinking_effort) bind to the agent's RAW own values (`agent.config`), so an
   // empty/null raw value reads as the inherit state instead of the baked
   // top-level value. When no `config` block is present (create form, or an older
@@ -67,7 +67,7 @@ export function createAgentFormValues(agent = {}) {
     id: asText(agent.id),
     name: asText(agent.name),
     model: asText(raw.model),
-    fallback_model: asText(raw.fallback_model),
+    fallback_models: normalizeArrayList(raw.fallback_models, []),
     workspace: asText(agent.workspace),
     root_project_id: hasValue(agent.root_project_id)
       ? String(agent.root_project_id)
@@ -191,7 +191,7 @@ function normalizeValues(values = {}) {
     id: asText(values.id).trim(),
     name: asText(values.name).trim(),
     model: asText(values.model).trim(),
-    fallback_model: asText(values.fallback_model).trim(),
+    fallback_models: normalizeArrayList(values.fallback_models, []),
     workspace: asText(values.workspace).trim(),
     root_project_id: hasValue(values.root_project_id)
       ? String(values.root_project_id).trim() || null
@@ -239,7 +239,7 @@ function normalizeMemoryPromptMode(value) {
 function buildAgentPayload(normalized, temperature, options = {}) {
   const payload = {
     model: normalized.model,
-    fallback_model: normalized.fallback_model,
+    fallback_models: normalized.fallback_models,
     temperature,
     thinking_effort: normalized.thinking_effort || null,
     memory_prompt_mode: normalized.memory_prompt_mode,
