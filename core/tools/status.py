@@ -6,7 +6,8 @@ from collections.abc import Callable, Mapping
 from datetime import datetime
 from typing import Any
 
-from core.chat.commands import (
+from core.chat.errors import ChatSessionError
+from core.chat.status_report import (
     build_status_reply,
     resolve_actual_thinking_effort,
     resolve_status_activity,
@@ -14,7 +15,6 @@ from core.chat.commands import (
     resolve_status_project_label,
     resolve_status_temperature,
 )
-from core.chat.errors import ChatSessionError
 from core.models.models import ModelRegistry
 from core.projects import AgentResolutionError, AgentResolver, ProjectStore
 from core.providers.providers import ProviderRegistry

@@ -20,13 +20,15 @@ from core.chat import (
     ReplySurface,
 )
 from core.chat.commands import (
-    STATUS_PLACEHOLDER,
     AgentArgument,
     HandoffArgument,
-    StatusModelDetails,
-    build_status_text,
     parse_agent_argument,
     parse_handoff_argument,
+)
+from core.chat.status_report import (
+    STATUS_PLACEHOLDER,
+    StatusModelDetails,
+    build_status_text,
     resolve_actual_thinking_effort,
     resolve_status_model_details,
     resolve_status_project_label,
