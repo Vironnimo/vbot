@@ -43,9 +43,15 @@ class ProviderError(VBotError):
     ``retry-after-ms``) header on a retryable status. ``None`` means the
     response gave no such hint. ``retry_async`` honors it as a floor over its
     own exponential backoff.
+
+    ``status_code`` carries the HTTP status that produced the error when one
+    exists (the shared HTTP-status classifier sets it; in-band stream errors
+    have none). Consumers such as the model-fallback chain use it to recognize
+    model-scoped failures (404) without parsing message text.
     """
 
     retry_after: float | None = None
+    status_code: int | None = None
 
     def __init__(self, message: str = "", retryable: bool = False) -> None:
         super().__init__(message)

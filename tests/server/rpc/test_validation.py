@@ -89,7 +89,7 @@ def test_no_pinned_connection_is_not_checked() -> None:
 def test_empty_model_string_is_not_checked() -> None:
     models = _models_with(("subscription",))
 
-    _ensure_model_connection_supported(models, "fallback_model", "")
+    _ensure_model_connection_supported(models, "fallback_models[0]", "")
 
 
 def test_unknown_model_is_not_checked() -> None:

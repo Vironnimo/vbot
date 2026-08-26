@@ -598,10 +598,10 @@ def _agent_changes_from_args(args: argparse.Namespace) -> dict[str, Any]:
         changes["model"] = ""
     elif args.model is not None:
         changes["model"] = args.model
-    if getattr(args, "clear_fallback_model", False):
-        changes["fallback_model"] = ""
-    elif args.fallback_model is not None:
-        changes["fallback_model"] = args.fallback_model
+    if getattr(args, "clear_fallback_models", False):
+        changes["fallback_models"] = []
+    elif getattr(args, "fallback_models", None) is not None:
+        changes["fallback_models"] = list(args.fallback_models)
     if args.clear_temperature:
         changes["temperature"] = None
     elif args.temperature is not None:

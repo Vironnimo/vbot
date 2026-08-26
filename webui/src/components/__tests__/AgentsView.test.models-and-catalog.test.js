@@ -169,7 +169,7 @@ describe('AgentsView', () => {
               id: 'alpha',
               name: 'Alpha',
               model: 'openai/gpt-5.2::api-key',
-              fallback_model: 'anthropic/claude-sonnet-4-20250219::api-key',
+              fallback_models: ['anthropic/claude-sonnet-4-20250219::api-key'],
               workspace: 'C:/agents/alpha',
               current_session_id: 'session-1',
               temperature: '',
@@ -199,8 +199,10 @@ describe('AgentsView', () => {
     await openSearchableDropdown('agent-model');
     const modelOptionLabels = searchableOptionLabels('agent-model');
 
-    await openSearchableDropdown('agent-fallback-model');
-    const fallbackOptionLabels = searchableOptionLabels('agent-fallback-model');
+    await openSearchableDropdown('agent-fallback-model-0');
+    const fallbackOptionLabels = searchableOptionLabels(
+      'agent-fallback-model-0',
+    );
 
     expect(modelOptionLabels).toContain('openai/gpt-5.2');
     expect(modelOptionLabels).toContain('anthropic/claude-sonnet-4-20250219');
@@ -328,7 +330,7 @@ describe('AgentsView', () => {
               id: 'alpha',
               name: 'Alpha',
               model: 'legacy/custom-model',
-              fallback_model: '',
+              fallback_models: [],
               workspace: 'C:/agents/alpha',
               current_session_id: 'session-1',
               temperature: '',
@@ -416,7 +418,7 @@ describe('AgentsView', () => {
           {
             ...baseAgent(),
             model: 'openai/gpt-5.2',
-            fallback_model: 'openai/gpt-5.2-mini',
+            fallback_models: ['openai/gpt-5.2-mini'],
             temperature: '0.6',
             thinking_effort: 'high',
           },
@@ -462,7 +464,13 @@ describe('AgentsView', () => {
       ),
     ).toHaveLength(4);
     expect(document.querySelectorAll('#agent-model')).toHaveLength(1);
-    expect(document.querySelectorAll('#agent-fallback-model')).toHaveLength(1);
+    // An empty chain renders no row dropdowns, only the single add affordance.
+    expect(
+      document.querySelectorAll('[id^="agent-fallback-model-"]'),
+    ).toHaveLength(0);
+    expect(
+      document.querySelectorAll('.agents-view__fallback-add'),
+    ).toHaveLength(1);
     expect(document.querySelectorAll('#agent-thinking-effort')).toHaveLength(1);
     expect(document.querySelectorAll('#agent-temperature')).toHaveLength(1);
   });
@@ -543,10 +551,16 @@ describe('AgentsView', () => {
       100,
     );
 
-    await openSearchableDropdown('agent-fallback-model');
-    setSearchableFilter('agent-fallback-model', 'anthropic');
+    // The chain starts empty: add a row, then pick the fallback model.
+    document.body
+      .querySelector('.agents-view__fallback-add')
+      .dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    flushSync();
+
+    await openSearchableDropdown('agent-fallback-model-0');
+    setSearchableFilter('agent-fallback-model-0', 'anthropic');
     selectSearchableOption(
-      'agent-fallback-model',
+      'agent-fallback-model-0',
       'anthropic/claude-sonnet-4-20250219',
     );
 
@@ -730,13 +744,13 @@ describe('AgentsView', () => {
             ...baseAgent(),
             config: {
               model: '',
-              fallback_model: '',
+              fallback_models: [],
               temperature: null,
               thinking_effort: null,
             },
             effective: {
               model: { value: 'openai/gpt-5.2', source: 'global_default' },
-              fallback_model: { value: null, source: null },
+              fallback_models: { value: null, source: null },
               temperature: { value: 0.7, source: 'global_default' },
               thinking_effort: { value: 'high', source: 'global_default' },
             },
@@ -755,8 +769,10 @@ describe('AgentsView', () => {
         modelTriggerLabel() === 'Inherited: openai/gpt-5.2 (global default)',
       100,
     );
-    // The fallback has no configured value anywhere → the not-configured label.
-    expect(fallbackTriggerLabel()).toBe('Inherit (not configured)');
+    // The fallback chain is empty → no rows render at all.
+    expect(document.querySelectorAll('.agents-view__fallback-row').length).toBe(
+      0,
+    );
     // The thinking-effort inherit option reads the global-default value too.
     expect(thinkingTriggerLabel()).toBe('Inherited: high (global default)');
   });
@@ -770,13 +786,13 @@ describe('AgentsView', () => {
             temperature: '0.9',
             config: {
               model: 'openai/gpt-5.2::api-key',
-              fallback_model: '',
+              fallback_models: [],
               temperature: 0.9,
               thinking_effort: null,
             },
             effective: {
               model: { value: 'openai/gpt-5.2', source: 'agent' },
-              fallback_model: { value: null, source: null },
+              fallback_models: { value: null, source: null },
               temperature: { value: 0.9, source: 'agent' },
               thinking_effort: {
                 value: 0.5,

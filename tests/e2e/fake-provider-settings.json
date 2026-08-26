@@ -1,7 +1,7 @@
 {
   "defaults": {
     "agent": {
-      "fallback_model": "fake/e2e-fallback::default",
+      "fallback_models": ["fake/e2e-fallback::default"],
       "model": "fake/e2e-primary::default"
     }
   },

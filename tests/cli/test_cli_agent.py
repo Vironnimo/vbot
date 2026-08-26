@@ -30,7 +30,7 @@ def agent_payload(agent_id: str = "coder") -> dict[str, Any]:
         "id": agent_id,
         "name": "Coder",
         "model": "openai/gpt-5.2",
-        "fallback_model": "anthropic/claude-sonnet-4",
+        "fallback_models": ["anthropic/claude-sonnet-4"],
         "workspace": "C:/data/workspace-coder",
         "root_project_id": "vbot",
         "temperature": 0.4,
@@ -76,10 +76,10 @@ def test_agent_list_posts_rpc_and_formats_rows(
     assert result.ok is True
     assert result.message.splitlines()[1:] == [
         "- id=writer name=Coder model=openai/gpt-5.2 "
-        "fallback_model=anthropic/claude-sonnet-4 temperature=0.4 "
+        "fallback_models=anthropic/claude-sonnet-4 temperature=0.4 "
         "thinking_effort=high current_session_id=session-one context_window=256000",
         "- id=coder name=Coder model=openai/gpt-5.2 "
-        "fallback_model=anthropic/claude-sonnet-4 temperature=0.4 "
+        "fallback_models=anthropic/claude-sonnet-4 temperature=0.4 "
         "thinking_effort=high current_session_id=session-one context_window=256000",
     ]
 
@@ -105,7 +105,7 @@ def test_agent_show_posts_rpc_and_formats_detail(
         "id: coder",
         "name: Coder",
         "model: openai/gpt-5.2",
-        "fallback_model: anthropic/claude-sonnet-4",
+        "fallback_models: anthropic/claude-sonnet-4",
         "workspace: C:/data/workspace-coder",
         "project: vbot",
         "temperature: 0.4",
@@ -215,7 +215,7 @@ def test_agent_update_rejects_empty_changes(tmp_path: Path) -> None:
     for option in (
         "--name",
         "--model",
-        "--fallback-model",
+        "--fallback-models",
         "--temperature",
         "--thinking-effort",
         "--memory-prompt-mode",
@@ -303,7 +303,7 @@ def test_agent_update_maps_clear_delegation_and_policy_flags() -> None:
             "update",
             "coder",
             "--clear-model",
-            "--clear-fallback-model",
+            "--clear-fallback-models",
             "--subagent-allow",
             "reviewer",
             "librarian",
@@ -314,7 +314,7 @@ def test_agent_update_maps_clear_delegation_and_policy_flags() -> None:
 
     assert cli_main._agent_changes_from_args(args) == {
         "model": "",
-        "fallback_model": "",
+        "fallback_models": [],
         "tools": {"subagent": {"allowed_agents": ["reviewer", "librarian"]}},
         "compaction_policy": {"enabled": False},
     }
@@ -336,7 +336,7 @@ def test_agent_create_full_response_confirms_saved_state(
                     "id": "librarian",
                     "name": "Librarian",
                     "model": "openai/gpt-5",
-                    "fallback_model": "",
+                    "fallback_models": [],
                     "workspace": "C:/agents/librarian/workspace",
                     "default_workspace": "C:/agents/librarian/workspace",
                     "root_project_id": "second-brain",
@@ -385,7 +385,7 @@ def test_agent_create_warns_and_gives_recovery_when_no_model_is_effective(
                     "id": "librarian",
                     "name": "Librarian",
                     "model": "",
-                    "fallback_model": "",
+                    "fallback_models": [],
                     "workspace": "C:/agents/librarian/workspace",
                     "root_project_id": None,
                     "temperature": None,

@@ -488,7 +488,7 @@ export const englishCatalog = Object.freeze({
   'agents.form.id': 'Agent ID',
   'agents.form.name': 'Name',
   'agents.form.model': 'Model',
-  'agents.form.fallbackModel': 'Fallback model',
+  'agents.form.fallbackModels': 'Fallback models',
   'agents.form.workspace': 'Workspace',
   'agents.form.temperature': 'Temperature',
   'agents.form.thinkingEffort': 'Thinking effort',
@@ -505,8 +505,11 @@ export const englishCatalog = Object.freeze({
     'Which memory notes are shown to the model: the agent’s own notes (MEMORY.md), or additionally what it knows about you (USER.md).',
   'agents.form.memoryModeHelp':
     'Which memory files are pinned into the System Prompt. Tool access is independent: blocking the memory Tool keeps these notes visible but makes Memory read-only.',
-  'agents.form.fallbackModelHelp':
-    'Used automatically when the primary model fails or is unavailable.',
+  'agents.form.fallbackModelsHelp':
+    'Tried in order when the primary model fails or is unavailable. The first entry has the highest priority.',
+  'agents.form.fallbackModelInherit': 'Inherit global default',
+  'agents.form.addFallbackModel': '+ Add fallback model',
+  'agents.form.removeFallbackModel': 'Remove fallback model',
   'agents.form.temperatureHelp':
     'Sampling randomness, typically 0–2. Leave empty to use the default.',
   'agents.form.thinkingEffortHelp':
@@ -1115,9 +1118,9 @@ export const englishCatalog = Object.freeze({
     'Model, temperature, and thinking effort used when an agent or project leaves them unset — shown there as "Inherited: … (global default)".',
   'settings.defaults.model': 'Model',
   'settings.defaults.modelDescription': 'Used when an agent model is empty.',
-  'settings.defaults.fallbackModel': 'Fallback model',
+  'settings.defaults.fallbackModels': 'Fallback models',
   'settings.defaults.fallbackModelDescription':
-    'Used when an agent fallback model is empty.',
+    'Used when an agent fallback chain is empty.',
   'settings.defaults.temperature': 'Temperature',
   'settings.defaults.temperatureDescription':
     'Used when an agent temperature is unset.',

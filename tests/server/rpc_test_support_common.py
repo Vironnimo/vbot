@@ -8,7 +8,7 @@ import json
 from collections.abc import Callable
 from contextlib import suppress
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, TypeVar, cast
@@ -62,7 +62,7 @@ class StubAgent:
     id: str
     name: str = "Coder Agent"
     model: str = "openai/gpt-5.2"
-    fallback_model: str = ""
+    fallback_models: list[str] = field(default_factory=list)
     workspace: str = "C:/workspace"
     root_project_id: str | None = None
     temperature: float | None = 0.1
@@ -116,7 +116,7 @@ class StubAgents:
         defaults = self._defaults_provider() if self._defaults_provider is not None else {}
 
         model = agent.model
-        fallback_model = agent.fallback_model
+        fallback_models = list(agent.fallback_models)
         temperature = agent.temperature
         thinking_effort = agent.thinking_effort
 
@@ -124,9 +124,9 @@ class StubAgents:
         if model == "" and isinstance(default_model, str):
             model = default_model
 
-        default_fallback_model = defaults.get("fallback_model")
-        if fallback_model == "" and isinstance(default_fallback_model, str):
-            fallback_model = default_fallback_model
+        default_fallback_models = defaults.get("fallback_models")
+        if fallback_models == [] and isinstance(default_fallback_models, list):
+            fallback_models = [item for item in default_fallback_models if isinstance(item, str)]
 
         default_temperature = defaults.get("temperature")
         if (
@@ -144,7 +144,7 @@ class StubAgents:
             **{
                 **agent.__dict__,
                 "model": model,
-                "fallback_model": fallback_model,
+                "fallback_models": fallback_models,
                 "temperature": temperature,
                 "thinking_effort": thinking_effort,
             }
@@ -365,8 +365,11 @@ class StubAgentResolver:
         )
         return {
             "model": _identity_source(raw.model, defaults, "model", empty=""),
-            "fallback_model": _identity_source(
-                raw.fallback_model, defaults, "fallback_model", empty=""
+            "fallback_models": _identity_source(
+                raw.fallback_models,
+                defaults,
+                "fallback_models",
+                empty=[],
             ),
             "temperature": _identity_source(raw.temperature, defaults, "temperature", empty=None),
             "thinking_effort": _identity_source(

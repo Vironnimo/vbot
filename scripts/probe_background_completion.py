@@ -35,6 +35,7 @@ from core.prompts import PinnedSkillCatalog
 from core.providers.accounts import ConnectionRef
 from core.runs import ChatRunManager, Run
 from core.runtime.runtime import Runtime
+from core.sessions import SessionAddress
 from core.tools import ToolAccess, ToolContext, ToolRegistry, tool_success
 from core.tools.change_tracker import ChangeTracker
 from core.tools.file_state import FileReadState
@@ -277,7 +278,7 @@ def _probe_agent(target: ProbeTarget, workspace: Path) -> Agent:
         id=PROBE_AGENT_ID,
         name="Background Completion Probe",
         model=target.agent_model,
-        fallback_model="",
+        fallback_models=[],
         workspace=str(workspace),
         temperature=0.0,
         thinking_effort="high",
@@ -493,7 +494,9 @@ async def _run_case(
         live_messages,
         verification_token,
     )
-    persisted = sessions.get(PROBE_AGENT_ID, PROBE_SESSION_ID).load()
+    persisted = sessions.get(
+        SessionAddress(project_id=None, agent_id=PROBE_AGENT_ID, session_id=PROBE_SESSION_ID)
+    ).load()
     persisted_roles = [message.role for message in persisted]
     completion_notes = [
         message

@@ -49,7 +49,7 @@ def test_agent_dataclass_is_frozen() -> None:
         id="coder",
         name="Coder Agent",
         model="openai/gpt-5.2",
-        fallback_model="",
+        fallback_models=[],
         workspace="C:/workspace",
         temperature=0.1,
         thinking_effort="",
@@ -76,7 +76,7 @@ def test_create_writes_agent_json_sessions_and_workspace(store: AgentStore) -> N
     assert data["id"] == "coder"
     assert data["name"] == "Coder Agent"
     assert data["model"] == ""
-    assert data["fallback_model"] == ""
+    assert data["fallback_models"] == []
     assert data["workspace"] == "agents/coder/workspace"
     assert data["root_project_id"] is None
     assert data["temperature"] is None
@@ -164,7 +164,7 @@ def test_minimal_agent_config_loads_all_optional_field_defaults(store: AgentStor
 
     assert agent.name == "minimal"
     assert agent.model == ""
-    assert agent.fallback_model == ""
+    assert agent.fallback_models == []
     assert agent.temperature is None
     assert agent.thinking_effort is None
     assert agent.tool_access == ToolAccess(mode="all")
@@ -213,7 +213,7 @@ def test_create_with_custom_values_persists_schema(store: AgentStore, tmp_path: 
         "researcher_1",
         "Research Agent",
         model="openrouter/deepseek/deepseek-v4-pro",
-        fallback_model="openai/gpt-5.2",
+        fallback_models=["openai/gpt-5.2", "anthropic/claude-haiku-4.5"],
         workspace=custom_workspace,
         temperature=0.7,
         thinking_effort="high",
@@ -328,7 +328,9 @@ def test_create_persists_memory_as_an_explicit_denial(
     [
         ("name", 12, "name must be a string or null"),
         ("model", 12, "model must be a string"),
-        ("fallback_model", 12, "fallback_model must be a string"),
+        ("fallback_models", 12, "fallback_models must be a list of strings"),
+        ("fallback_models", ["openai/gpt-5.2", "openai/gpt-5.2"], "must not contain duplicates"),
+        ("fallback_models", ["openai/gpt-5.2"] * 6, "accepts at most 5 entries"),
         ("temperature", "0.4", "temperature must be a number"),
         ("temperature", -0.1, "temperature must be between"),
         ("temperature", 2.1, "temperature must be between"),
@@ -783,7 +785,7 @@ def test_retarget_allowed_agent_references_is_exact_and_reversible(store: AgentS
     [
         ("name", 123, "name must be a string or null"),
         ("model", 123, "model must be a string"),
-        ("fallback_model", 123, "fallback_model must be a string"),
+        ("fallback_models", 123, "fallback_models must be a list of strings"),
         ("temperature", True, "temperature must be a number"),
         ("temperature", 3.0, "temperature must be between"),
         ("thinking_effort", "turbo", "thinking_effort must be one of"),
@@ -957,7 +959,7 @@ def test_apply_defaults_leaves_explicit_values_unchanged(store: AgentStore) -> N
         "coder_explicit",
         "Coder Agent",
         model="openai/gpt-5.2",
-        fallback_model="openrouter/anthropic/claude-sonnet-4",
+        fallback_models=["openrouter/anthropic/claude-sonnet-4"],
         temperature=0.3,
         thinking_effort="high",
     )
@@ -966,14 +968,14 @@ def test_apply_defaults_leaves_explicit_values_unchanged(store: AgentStore) -> N
         agent,
         {
             "model": "openrouter/openai/gpt-4.1",
-            "fallback_model": "openai/gpt-5.2-mini",
+            "fallback_models": ["openai/gpt-5.2-mini"],
             "temperature": 0.9,
             "thinking_effort": "low",
         },
     )
 
     assert resolved.model == "openai/gpt-5.2"
-    assert resolved.fallback_model == "openrouter/anthropic/claude-sonnet-4"
+    assert resolved.fallback_models == ["openrouter/anthropic/claude-sonnet-4"]
     assert resolved.temperature == 0.3
     assert resolved.thinking_effort == "high"
 
@@ -1036,7 +1038,7 @@ def test_get_raw_returns_unbaked_values_even_with_defaults(
         template_dir=template_dir,
         defaults_provider=lambda: {
             "model": "openai/gpt-5.2",
-            "fallback_model": "openai/gpt-5.2-mini",
+            "fallback_models": ["openai/gpt-5.2-mini"],
             "temperature": 0.6,
             "thinking_effort": "high",
         },
@@ -1045,7 +1047,7 @@ def test_get_raw_returns_unbaked_values_even_with_defaults(
         "coder_raw",
         "Coder Agent",
         model="",
-        fallback_model="",
+        fallback_models=[],
         temperature=None,
         thinking_effort=None,
     )
@@ -1056,7 +1058,7 @@ def test_get_raw_returns_unbaked_values_even_with_defaults(
     # get bakes the defaults; get_raw preserves the un-set persisted values.
     assert baked.model == "openai/gpt-5.2"
     assert raw.model == ""
-    assert raw.fallback_model == ""
+    assert raw.fallback_models == []
     assert raw.temperature is None
     assert raw.thinking_effort is None
 
@@ -1092,7 +1094,7 @@ def test_create_returns_resolved_defaults_but_persists_raw_values(
         template_dir=template_dir,
         defaults_provider=lambda: {
             "model": "openai/gpt-5.2",
-            "fallback_model": "openai/gpt-5.2-mini",
+            "fallback_models": ["openai/gpt-5.2-mini"],
             "temperature": 0.6,
             "thinking_effort": "high",
         },
@@ -1102,13 +1104,13 @@ def test_create_returns_resolved_defaults_but_persists_raw_values(
         "coder_create_defaults",
         "Coder Agent",
         model="",
-        fallback_model="",
+        fallback_models=[],
         temperature=None,
         thinking_effort=None,
     )
 
     assert created.model == "openai/gpt-5.2"
-    assert created.fallback_model == "openai/gpt-5.2-mini"
+    assert created.fallback_models == ["openai/gpt-5.2-mini"]
     assert created.temperature == 0.6
     assert created.thinking_effort == "high"
 
@@ -1118,7 +1120,7 @@ def test_create_returns_resolved_defaults_but_persists_raw_values(
         )
     )
     assert persisted["model"] == ""
-    assert persisted["fallback_model"] == ""
+    assert persisted["fallback_models"] == []
     assert persisted["temperature"] is None
     assert persisted["thinking_effort"] is None
 

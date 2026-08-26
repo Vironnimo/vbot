@@ -35,7 +35,11 @@ RECALL_BACKEND_PATTERN = re.compile(r"^[a-z][a-z0-9_]*$")
 ALLOWED_THINKING_EFFORTS = frozenset(
     {"", "none", "minimal", "low", "medium", "high", "xhigh", "max"}
 )
-AGENT_DEFAULT_FIELDS = frozenset({"model", "fallback_model", "temperature", "thinking_effort"})
+AGENT_DEFAULT_FIELDS = frozenset({"model", "fallback_models", "temperature", "thinking_effort"})
+# Upper bound for one Agent's ordered fallback-model chain. Shared by the agent
+# store's save-time validation and the chat loop's defensive runtime slice; a
+# bounded chain keeps a misconfigured cascade from stacking unbounded retries.
+MAX_FALLBACK_MODELS = 5
 # Single authority for the agent-id format (filesystem-safe slug): a leading
 # letter or digit, then up to 63 more of letter/digit/hyphen/underscore. Shared
 # by file-schema validation, the agent store, and prompt-fragment storage.
@@ -661,7 +665,16 @@ def _parse_defaults_update(defaults: Any) -> JsonObject:
             agent_defaults[field] = None
             continue
 
-        if field in {"model", "fallback_model"}:
+        if field in {"model", "fallback_models"}:
+            if field == "fallback_models":
+                if value is not None and not (
+                    isinstance(value, list) and all(isinstance(item, str) for item in value)
+                ):
+                    raise SettingsValidationError(
+                        "params.defaults.agent.fallback_models must be a string list or null"
+                    )
+                agent_defaults[field] = value
+                continue
             if not isinstance(value, str):
                 raise SettingsValidationError(
                     f"params.defaults.agent.{field} must be a string or null"

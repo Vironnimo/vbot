@@ -461,13 +461,17 @@ def _add_agent_change_arguments(
     if include_name:
         parser.add_argument("--name", help="New display name")
     parser.add_argument("--model", help="Primary model as <provider>/<model-id>")
-    parser.add_argument("--fallback-model", help="Fallback model as <provider>/<model-id>")
+    parser.add_argument(
+        "--fallback-models",
+        action="append",
+        help="Ordered fallback model as <provider>/<model-id>; repeat for priority order",
+    )
     if include_name:
         parser.add_argument(
             "--clear-model", action="store_true", help="Clear the primary model override"
         )
         parser.add_argument(
-            "--clear-fallback-model", action="store_true", help="Clear the fallback model"
+            "--clear-fallback-models", action="store_true", help="Clear the fallback chain"
         )
     parser.add_argument("--temperature", type=float, help="Sampling temperature (0.0-2.0)")
     parser.add_argument(

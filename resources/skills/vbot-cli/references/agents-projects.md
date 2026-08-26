@@ -14,16 +14,16 @@ vbot agent reorder <agent-id>...
 vbot agent delete <agent-id>
 ```
 
-Shared create/update flags: `--model`, `--fallback-model`, `--temperature <0..2>`, `--thinking-effort none|minimal|low|medium|high|xhigh|max`, `--memory-prompt-mode off|agent|agent_user`, `--custom-system-prompt true|false`, `--allowed-tools <tool> ...`, `--allowed-skills <skill> ...`, `--subagent-allow <agent> ...`, `--compaction-policy <json-object>`. Update-only: `--name`, `--clear-model`, `--clear-fallback-model`, `--clear-temperature`, `--clear-thinking-effort`, `--clear-compaction-policy`, `--current-session-id`, `--workspace <absolute-path>`, `--default-workspace`, `--copy-workspace-files`, `--project <project-id>`, `--clear-project`.
+Shared create/update flags: `--model`, `--fallback-models <model> ...`, `--temperature <0..2>`, `--thinking-effort none|minimal|low|medium|high|xhigh|max`, `--memory-prompt-mode off|agent|agent_user`, `--custom-system-prompt true|false`, `--allowed-tools <tool> ...`, `--allowed-skills <skill> ...`, `--subagent-allow <agent> ...`, `--compaction-policy <json-object>`. Update-only: `--name`, `--clear-model`, `--clear-fallback-models`, `--clear-temperature`, `--clear-thinking-effort`, `--clear-compaction-policy`, `--current-session-id`, `--workspace <absolute-path>`, `--default-workspace`, `--copy-workspace-files`, `--project <project-id>`, `--clear-project`.
 
 Gotchas:
 
-- `--model`/`--fallback-model` take `<provider>/<model-id>`, optionally pinned `::<connection>[:<account>]` (e.g. `openai/gpt-5.2::api-key:work`).
+- `--model` takes `<provider>/<model-id>`, optionally pinned `::<connection>[:<account>]` (e.g. `openai/gpt-5.2::api-key:work`). `--fallback-models` repeats once per chain entry; list order is priority order (max 5, no duplicates).
 - An Identity Agent may be created without `--model` so onboarding can finish before Provider setup. If neither the Agent nor global defaults supply an effective Model, the saved result warns that the Agent cannot run and prints the recovery commands. Run `vbot model list --task chat`, then `vbot agent update <agent-id> --model <model-id>` using an id from that output.
 - `--allowed-tools`/`--allowed-skills` replace the whole allowlist; the flag with no values sets an empty list; quote `'*'` in shells that expand it.
 - `--subagent-allow` replaces `tools.subagent.allowed_agents`; use bare Identity Agent ids or qualified `agent@project` addresses, and pass the flag with no values to deny every target.
 - `--compaction-policy` replaces the full Agent Policy object. Pass JSON as one shell argument. `--clear-compaction-policy` resumes live inheritance from global Compaction settings.
-- `--clear-model` and `--clear-fallback-model` remove the Agent tier so the corresponding global default can apply.
+- `--clear-model` and `--clear-fallback-models` remove the Agent tier so the corresponding global default can apply.
 - `--clear-temperature`/`--clear-thinking-effort` drop the override so the agent inherits current defaults. `--thinking-effort none` is the literal no-reasoning value, not a clear.
 - `--memory-prompt-mode` controls which Workspace memory files become prompt-visible; `--custom-system-prompt` toggles the agent's own editable prompt fragments.
 - `--project` roots the Identity Agent in a registered Project: relative file and shell work uses the Project cwd, while Workspace, SOUL, Memory, Sessions, private Skills, and permissions remain the Agent's own. Use this when the user says an Agent should work in, point at, or use a Project; do not move its Workspace to the repo for that outcome.

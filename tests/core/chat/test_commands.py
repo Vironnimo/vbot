@@ -89,7 +89,7 @@ def _execute_sync(
 def _make_agent(
     *,
     model: str = "openai/gpt-5.2",
-    fallback_model: str = "openai/gpt-5.1",
+    fallback_models: list[str] | None = None,
     temperature: float | None = 0.3,
     thinking_effort: str | None = "none",
 ) -> Agent:
@@ -97,7 +97,7 @@ def _make_agent(
         id="coder",
         name="Coder",
         model=model,
-        fallback_model=fallback_model,
+        fallback_models=(fallback_models if fallback_models is not None else ["openai/gpt-5.1"]),
         workspace="workspace",
         temperature=temperature,
         thinking_effort=thinking_effort,
@@ -1246,7 +1246,7 @@ def test_build_status_text_degraded_with_no_data() -> None:
     assert f"Agent: {STATUS_PLACEHOLDER}" in text
     assert f"Project: {STATUS_PLACEHOLDER}" in text
     assert f"Model display name: {STATUS_PLACEHOLDER}" in text
-    assert f"Fallback model: {STATUS_PLACEHOLDER}" in text
+    assert f"Fallback models: {STATUS_PLACEHOLDER}" in text
     assert f"Selected thinking effort: {STATUS_PLACEHOLDER}" in text
     assert f"Actual model thinking effort: {STATUS_PLACEHOLDER}" in text
     assert f"Temperature: {STATUS_PLACEHOLDER}" in text
@@ -1283,7 +1283,7 @@ def test_build_status_text_with_full_data() -> None:
 
     assert "Agent: Coder (openai/gpt-5.2)" in text
     assert "Model display name: gpt-5.2" in text
-    assert "Fallback model: openai/gpt-5.1" in text
+    assert "Fallback models: openai/gpt-5.1" in text
     assert "Selected thinking effort: none" in text
     assert f"Actual model thinking effort: {STATUS_PLACEHOLDER}" in text
     assert "Temperature: 0.3" in text

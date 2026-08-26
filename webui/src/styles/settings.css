@@ -478,6 +478,49 @@
   width: 100%;
 }
 
+.settings-view__fallback-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.settings-view__fallback-row .settings-view__dropdown {
+  flex: 1;
+}
+
+.settings-view__fallback-remove,
+.settings-view__fallback-add {
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-med);
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.settings-view__fallback-remove {
+  flex: none;
+  width: 28px;
+  height: 28px;
+  font-size: 14px;
+  line-height: 1;
+}
+
+.settings-view__fallback-remove:hover {
+  color: var(--danger, #c0392b);
+  border-color: var(--danger, #c0392b);
+}
+
+.settings-view__fallback-add {
+  padding: 5px 10px;
+  font-size: 12.5px;
+}
+
+.settings-view__fallback-add:hover {
+  color: var(--text-hi);
+  border-color: var(--text-med);
+}
+
 .settings-view__thinking-list {
   max-height: 280px;
   overflow-y: auto;

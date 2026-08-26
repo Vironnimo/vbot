@@ -124,7 +124,7 @@ function mainAgent() {
     id: 'main',
     name: 'Main',
     model: '',
-    fallback_model: '',
+    fallback_models: [],
     workspace: '/data/workspace-main',
     temperature: null,
     thinking_effort: '',

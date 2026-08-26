@@ -382,7 +382,14 @@ _DEFINITIONS: tuple[SettingDefinition, ...] = (
         )
         for field, value_type, description, allowed_values, minimum, maximum in (
             ("model", "string", "Default Chat Model binding.", (), None, None),
-            ("fallback_model", "string", "Fallback Chat Model binding.", (), None, None),
+            (
+                "fallback_models",
+                "array",
+                "Ordered fallback Chat Model bindings tried when the primary fails.",
+                (),
+                None,
+                None,
+            ),
             (
                 "temperature",
                 "number",

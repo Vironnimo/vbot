@@ -318,14 +318,14 @@ def build_status_text(
     if agent is None:
         agent_summary = STATUS_PLACEHOLDER
         model_display = STATUS_PLACEHOLDER
-        fallback_model = STATUS_PLACEHOLDER
+        fallback_models = STATUS_PLACEHOLDER
         selected_thinking_effort = STATUS_PLACEHOLDER
         temperature = STATUS_PLACEHOLDER
     else:
         model_string = agent.model.strip() or STATUS_PLACEHOLDER
         agent_summary = f"{agent.name} ({model_string})"
         model_display = _STATUS_MODEL_DISPLAY_OVERRIDE.get() or _model_display_name(model_string)
-        fallback_model = agent.fallback_model.strip() or STATUS_PLACEHOLDER
+        fallback_models = ", ".join(agent.fallback_models) or STATUS_PLACEHOLDER
         selected_thinking_effort = _thinking_effort_text(agent.thinking_effort)
         temperature = (
             temperature_status
@@ -348,7 +348,7 @@ def build_status_text(
         f"Agent: {agent_summary}",
         f"Project: {project_label or STATUS_PLACEHOLDER}",
         f"Model display name: {model_display}",
-        f"Fallback model: {fallback_model}",
+        f"Fallback models: {fallback_models}",
         f"Selected thinking effort: {selected_thinking_effort}",
         f"Actual model thinking effort: {actual_thinking_effort_text}",
         f"Temperature: {temperature}",

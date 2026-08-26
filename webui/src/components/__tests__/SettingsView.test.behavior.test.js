@@ -50,9 +50,7 @@ describe('SettingsView', () => {
     await openDefaultsPanel();
 
     expect(document.querySelector('#settings-defaults-model')).toBeTruthy();
-    expect(
-      document.querySelector('#settings-defaults-fallback-model'),
-    ).toBeTruthy();
+    expect(document.querySelector('.settings-view__fallback-add')).toBeTruthy();
     expect(
       document.querySelector('#settings-defaults-temperature'),
     ).toBeTruthy();
@@ -67,9 +65,15 @@ describe('SettingsView', () => {
     await openSearchableDropdown('settings-defaults-model');
     selectSearchableOption('settings-defaults-model', 'openai/gpt-5.2');
 
-    await openSearchableDropdown('settings-defaults-fallback-model');
+    // The fallback chain starts empty: add a row, then pick the model.
+    document
+      .querySelector('.settings-view__fallback-add')
+      .dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    flushSync();
+
+    await openSearchableDropdown('settings-defaults-fallback-model-0');
     selectSearchableOption(
-      'settings-defaults-fallback-model',
+      'settings-defaults-fallback-model-0',
       'openai/gpt-5.2-mini',
     );
 
@@ -84,7 +88,7 @@ describe('SettingsView', () => {
       defaults: {
         agent: {
           model: 'openai/gpt-5.2::api-key',
-          fallback_model: 'openai/gpt-5.2-mini::api-key',
+          fallback_models: ['openai/gpt-5.2-mini::api-key'],
           temperature: 0.7,
           thinking_effort: 'high',
         },
@@ -94,11 +98,11 @@ describe('SettingsView', () => {
     await openSearchableDropdown('settings-defaults-model');
     selectSearchableOption('settings-defaults-model', '— (no default)');
 
-    await openSearchableDropdown('settings-defaults-fallback-model');
-    selectSearchableOption(
-      'settings-defaults-fallback-model',
-      '— (no default)',
-    );
+    // Removing the chain row clears the list back to no default.
+    document
+      .querySelector('.settings-view__fallback-remove')
+      .dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    flushSync();
 
     setInputValue('#settings-defaults-temperature', '');
 
@@ -112,7 +116,7 @@ describe('SettingsView', () => {
       defaults: {
         agent: {
           model: null,
-          fallback_model: null,
+          fallback_models: null,
           temperature: null,
           thinking_effort: null,
         },
@@ -132,7 +136,7 @@ describe('SettingsView', () => {
       defaults: {
         agent: {
           model: null,
-          fallback_model: null,
+          fallback_models: null,
           temperature: null,
           thinking_effort: '',
         },

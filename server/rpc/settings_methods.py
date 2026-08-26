@@ -626,10 +626,18 @@ def _available_recall_backends(runtime: Any) -> list[str]:
 def _validate_model_connections(models: Any, settings_update: JsonObject) -> None:
     """Reject default-agent and summary models pinned to a forbidden connection."""
     agent_defaults = settings_update.get("defaults", {}).get("agent", {})
-    for field in ("model", "fallback_model"):
-        value = agent_defaults.get(field)
-        if isinstance(value, str):
-            _ensure_model_connection_supported(models, f"defaults.agent.{field}", value)
+    model_binding = agent_defaults.get("model")
+    if isinstance(model_binding, str):
+        _ensure_model_connection_supported(models, "defaults.agent.model", model_binding)
+    fallback_models = agent_defaults.get("fallback_models")
+    if isinstance(fallback_models, list):
+        for index, binding in enumerate(fallback_models):
+            if isinstance(binding, str):
+                _ensure_model_connection_supported(
+                    models,
+                    f"defaults.agent.fallback_models[{index}]",
+                    binding,
+                )
 
     compaction_strategy = settings_update.get("compaction", {}).get("strategy", {})
     summary_model = (

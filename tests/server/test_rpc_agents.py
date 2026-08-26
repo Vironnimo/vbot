@@ -232,7 +232,7 @@ async def test_agent_crud_rejects_connection_fields(tmp_path: Path) -> None:
                 "name": "Writer",
                 "model": "openai/gpt-5.2",
                 "connection": "openai:api-key",
-                "fallback_model": "anthropic/claude-sonnet-4-20250219",
+                "fallback_models": ["anthropic/claude-sonnet-4-20250219"],
                 "fallback_connection": "anthropic:api-key",
             },
         },
@@ -299,7 +299,9 @@ async def test_agent_create_rejects_model_on_forbidden_connection(tmp_path: Path
 
 
 @pytest.mark.asyncio
-async def test_agent_update_rejects_fallback_model_on_forbidden_connection(tmp_path: Path) -> None:
+async def test_agent_update_rejects_fallback_models_on_forbidden_connection(
+    tmp_path: Path,
+) -> None:
     state = make_state(tmp_path, StubAdapter())
     _append_subscription_only_model(state)
 
@@ -307,7 +309,7 @@ async def test_agent_update_rejects_fallback_model_on_forbidden_connection(tmp_p
         state,
         {
             "method": "agent.update",
-            "params": {"id": "coder", "fallback_model": "openai/gpt-5.4::api-key"},
+            "params": {"id": "coder", "fallback_models": ["openai/gpt-5.4::api-key"]},
         },
     )
 

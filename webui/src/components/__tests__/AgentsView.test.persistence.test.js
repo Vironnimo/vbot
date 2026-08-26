@@ -275,13 +275,13 @@ describe('AgentsView', () => {
     });
   });
 
-  it('allows clearing model and fallback selections back to empty values', async () => {
+  it('allows clearing model and removing fallback rows back to empty values', async () => {
     rpcMock.mockImplementation(
       createAgentsRpcMock({
         agents: [
           {
             ...baseAgent(),
-            fallback_model: 'anthropic/claude-sonnet-4-20250219::api-key',
+            fallback_models: ['anthropic/claude-sonnet-4-20250219::api-key'],
           },
         ],
         connections: [
@@ -308,12 +308,11 @@ describe('AgentsView', () => {
       100,
     );
 
-    await openSearchableDropdown('agent-fallback-model');
-    selectSearchableOption('agent-fallback-model', 'Inherit (not configured)');
-    await waitForCondition(
-      () => fallbackTriggerLabel() === 'Inherit (not configured)',
-      100,
-    );
+    // Removing the only chain row clears the fallback list.
+    document.body
+      .querySelector('.agents-view__fallback-remove')
+      .dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    flushSync();
 
     document.body
       .querySelector('form')
@@ -329,7 +328,7 @@ describe('AgentsView', () => {
     expect(updateCall[1]).toMatchObject({
       id: 'alpha',
       model: '',
-      fallback_model: '',
+      fallback_models: [],
     });
   });
 
@@ -359,9 +358,15 @@ describe('AgentsView', () => {
     await openSearchableDropdown('agent-model');
     selectSearchableOption('agent-model', 'openai/gpt-5.2 (ChatGPT Plus/Pro)');
 
-    await openSearchableDropdown('agent-fallback-model');
+    // The chain starts empty: add one row, then pick the fallback model.
+    document.body
+      .querySelector('.agents-view__fallback-add')
+      .dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    flushSync();
+
+    await openSearchableDropdown('agent-fallback-model-0');
     selectSearchableOption(
-      'agent-fallback-model',
+      'agent-fallback-model-0',
       'anthropic/claude-sonnet-4-20250219',
     );
 
@@ -379,7 +384,7 @@ describe('AgentsView', () => {
     expect(updateCall[1]).toMatchObject({
       id: 'alpha',
       model: 'openai/gpt-5.2::subscription',
-      fallback_model: 'anthropic/claude-sonnet-4-20250219::api-key',
+      fallback_models: ['anthropic/claude-sonnet-4-20250219::api-key'],
     });
   });
 });

@@ -969,7 +969,7 @@ def _agent_changes(params: JsonObject, *, blocked: set[str], for_create: bool) -
     public_fields = {
         "name",
         "model",
-        "fallback_model",
+        "fallback_models",
         "memory_prompt_mode",
         "temperature",
         "thinking_effort",
@@ -1001,11 +1001,20 @@ def _agent_changes(params: JsonObject, *, blocked: set[str], for_create: bool) -
 
 
 def _ensure_agent_model_connections(state: Any, changes: JsonObject) -> None:
-    """Reject agent model / fallback_model pinned to a connection they forbid."""
+    """Reject agent model / fallback_models pinned to a connection they forbid."""
     models = state.runtime.models
-    for field in ("model", "fallback_model"):
-        if field in changes:
-            _ensure_model_connection_supported(models, field, changes[field])
+    model_binding = changes.get("model")
+    if isinstance(model_binding, str):
+        _ensure_model_connection_supported(models, "model", model_binding)
+    fallback_models = changes.get("fallback_models")
+    if isinstance(fallback_models, list):
+        for index, binding in enumerate(fallback_models):
+            if isinstance(binding, str):
+                _ensure_model_connection_supported(
+                    models,
+                    f"fallback_models[{index}]",
+                    binding,
+                )
 
 
 def _validate_agent_field(key: str, value: Any) -> Any:
@@ -1043,7 +1052,14 @@ def _validate_agent_field(key: str, value: Any) -> Any:
                 "params.copy_workspace_identity_files must be a boolean",
             )
         return value
-    if key in {"model", "fallback_model"}:
+    if key in {"model", "fallback_models"}:
+        if key == "fallback_models":
+            if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
+                raise RpcError(
+                    RPC_ERROR_INVALID_REQUEST,
+                    f"params.{key} must be a list of strings",
+                )
+            return value
         if not isinstance(value, str):
             raise RpcError(RPC_ERROR_INVALID_REQUEST, f"params.{key} must be a string")
         return value

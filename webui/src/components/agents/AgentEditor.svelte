@@ -167,26 +167,13 @@
     toolAccessIncludes(formValues.tool_access, 'subagent'),
   );
   let showAllModels = $state(false);
-  let showAllFallbackModels = $state(false);
   let allModelOptions = $derived(
     selectModelOptions(formValues.model, inheritModelLabel('model')),
-  );
-  let allFallbackModelOptions = $derived(
-    selectModelOptions(
-      formValues.fallback_model,
-      inheritModelLabel('fallback_model'),
-    ),
   );
   let modelOptions = $derived(
     filterModelSelectOptions(allModelOptions, {
       showAll: showAllModels,
       selectedModelValue: formValues.model,
-    }),
-  );
-  let fallbackModelOptions = $derived(
-    filterModelSelectOptions(allFallbackModelOptions, {
-      showAll: showAllFallbackModels,
-      selectedModelValue: formValues.fallback_model,
     }),
   );
   let modelFilterFooter = $derived(
@@ -196,18 +183,27 @@
       translate: t,
     }),
   );
-  let fallbackModelFilterFooter = $derived(
-    modelFilterFooterLabel({
-      showAll: showAllFallbackModels,
-      hiddenCount: allFallbackModelOptions.length - fallbackModelOptions.length,
-      translate: t,
-    }),
-  );
   let modelSelectValue = $derived(
     selectModelValue(formValues.model, modelOptions),
   );
-  let fallbackModelSelectValue = $derived(
-    selectModelValue(formValues.fallback_model, fallbackModelOptions),
+  // The fallback chain binds to the raw ordered list. Every row shares one
+  // unfiltered option catalog — a chain is short (max 5) and rows stay
+  // comparable, so no per-row show/hide footer is needed.
+  const MAX_FALLBACK_MODEL_ROWS = 5;
+  let allFallbackModelOptions = $derived(
+    selectModelOptions(
+      '',
+      t('agents.form.fallbackModelInherit', 'Inherit global default'),
+    ),
+  );
+  let fallbackModelRows = $derived(
+    formValues.fallback_models.map((binding) => ({
+      binding,
+      selectValue: selectModelValue(binding, allFallbackModelOptions),
+    })),
+  );
+  let canAddFallbackModelRow = $derived(
+    formValues.fallback_models.length < MAX_FALLBACK_MODEL_ROWS,
   );
   let selectedModelReasoning = $derived(
     reasoningForModelValue(formValues.model, availableModels),
@@ -829,6 +825,26 @@
     formValues[modelFieldName] = modelSelectionValue(
       selection.model,
       selection.connectionLocalId,
+    );
+  }
+
+  function updateFallbackModelEntry(index, selectedValue) {
+    const selection = parseModelSelectionValue(selectedValue);
+    const next = [...formValues.fallback_models];
+    next[index] = modelSelectionValue(
+      selection.model,
+      selection.connectionLocalId,
+    );
+    formValues.fallback_models = next;
+  }
+
+  function addFallbackModelEntry() {
+    formValues.fallback_models = [...formValues.fallback_models, ''];
+  }
+
+  function removeFallbackModelEntry(index) {
+    formValues.fallback_models = formValues.fallback_models.filter(
+      (_, entryIndex) => entryIndex !== index,
     );
   }
 
@@ -1469,36 +1485,60 @@
           />
         </FormField>
 
-        <FormField controlId="agent-fallback-model">
+        <FormField controlId="agent-fallback-models">
           {#snippet labelContent()}
-            {t('agents.form.fallbackModel', 'Fallback model')}
+            {t('agents.form.fallbackModels', 'Fallback models')}
             <InfoHint
               text={t(
-                'agents.form.fallbackModelHelp',
-                'Used automatically when the primary model fails or is unavailable.',
+                'agents.form.fallbackModelsHelp',
+                'Tried in order when the primary model fails or is unavailable. The first entry has the highest priority.',
               )}
             />
           {/snippet}
-          <SearchableDropdown
-            id="agent-fallback-model"
-            value={fallbackModelSelectValue}
-            options={fallbackModelOptions}
-            placeholder={inheritModelLabel('fallback_model')}
-            searchPlaceholder={t(
-              'agents.form.modelSearchPlaceholder',
-              'Filter models…',
-            )}
-            emptyLabel={t('agents.form.modelSearchEmpty', 'No models match')}
-            ariaLabel={t('agents.form.fallbackModel', 'Fallback model')}
-            triggerClass="agents-view__dropdown"
-            panelClass="agents-view__search-panel"
-            footerActionLabel={fallbackModelFilterFooter}
-            onFooterAction={() =>
-              (showAllFallbackModels = !showAllFallbackModels)}
-            onOpenChange={onModelDropdownOpenChange}
-            onValueChange={(selectedValue) =>
-              updateModelSelection('fallback_model', selectedValue)}
-          />
+          {#each fallbackModelRows as row, index (index)}
+            <div class="agents-view__fallback-row">
+              <SearchableDropdown
+                id={`agent-fallback-model-${index}`}
+                value={row.selectValue}
+                options={allFallbackModelOptions}
+                placeholder={t('agents.form.fallbackModelPlaceholder', 'None')}
+                searchPlaceholder={t(
+                  'agents.form.modelSearchPlaceholder',
+                  'Filter models…',
+                )}
+                emptyLabel={t(
+                  'agents.form.modelSearchEmpty',
+                  'No models match',
+                )}
+                ariaLabel={`${t('agents.form.fallbackModels', 'Fallback models')} ${index + 1}`}
+                triggerClass="agents-view__dropdown"
+                panelClass="agents-view__search-panel"
+                onOpenChange={onModelDropdownOpenChange}
+                onValueChange={(selectedValue) =>
+                  updateFallbackModelEntry(index, selectedValue)}
+              />
+              <button
+                type="button"
+                class="agents-view__fallback-remove"
+                aria-label={t(
+                  'agents.form.removeFallbackModel',
+                  'Remove fallback model',
+                )}
+                onclick={() => removeFallbackModelEntry(index)}
+              >
+                ×
+              </button>
+            </div>
+          {/each}
+          {#if canAddFallbackModelRow}
+            <button
+              type="button"
+              class="agents-view__fallback-add"
+              onclick={addFallbackModelEntry}
+            >
+              {t('agents.form.addFallbackModel', '+ Add fallback model')}
+            </button>
+          {/if}
         </FormField>
 
         <FormField

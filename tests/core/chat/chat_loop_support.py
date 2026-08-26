@@ -98,7 +98,7 @@ def persisted_dict_roles(messages: list[JsonObject]) -> list[str]:
 class StubAgent:
     id: str
     model: str
-    fallback_model: str = ""
+    fallback_models: list[str] = field(default_factory=list)
     temperature: float = 0.1
     thinking_effort: str = "high"
     allowed_tools: list[str] | None = None
@@ -723,9 +723,12 @@ class StubRuntime:
             provider_ids or {agent.model.split("/", 1)[0]},
             base_url=provider_base_url,
         )
-        self.provider_credentials = StubProviderCredentials(
-            {f"{agent.model.split('/', 1)[0]}:api-key"}
-        )
+        # Usable connections mirror reality: the primary provider's key plus
+        # every connection a test wired an adapter for — fallback candidates on
+        # unwired providers resolve as unresolvable, like production.
+        usable_connections = {f"{agent.model.split('/', 1)[0]}:api-key"}
+        usable_connections.update(adapters_by_connection or {})
+        self.provider_credentials = StubProviderCredentials(usable_connections)
         self.skills: Any = StubSkills([])
         self.storage = (
             storage

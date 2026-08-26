@@ -93,7 +93,7 @@ def test_doctor_config_reports_all_config_files(tmp_path: Path) -> None:
                 "id": "broken",
                 "name": "Broken Agent",
                 "model": "",
-                "fallback_model": "",
+                "fallback_models": [],
                 "temperature": None,
                 "thinking_effort": None,
                 "allowed_tools": ["read_file"],

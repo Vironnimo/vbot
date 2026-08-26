@@ -10,7 +10,7 @@ passed to adapters without a debug recorder.
 from __future__ import annotations
 
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, cast
 
@@ -127,7 +127,7 @@ class DebugTrackingStreamingStubAdapter(DebugTrackingStubAdapter):
 class StubAgent:
     id: str
     model: str
-    fallback_model: str = ""
+    fallback_models: list[str] = field(default_factory=list)
     temperature: float = 0.1
     thinking_effort: str = "high"
     allowed_tools: list[str] | None = None
@@ -574,7 +574,7 @@ async def test_fallback_adapter_receives_debug_context(tmp_path: Path) -> None:
     agent = StubAgent(
         id="coder",
         model="openai/gpt-5.2",
-        fallback_model="anthropic/claude-sonnet-4::api-key",
+        fallback_models=["anthropic/claude-sonnet-4::api-key"],
         allowed_tools=["*"],
     )
     primary_adapter = DebugTrackingStubAdapter([ProviderRateLimitError("primary rate limited")])

@@ -231,12 +231,15 @@ def classify_http_status(
         detail = str(status_code)
 
     if status_code in _AUTH_ERROR_STATUS_CODES:
-        raise ProviderAuthError(f"Authentication error: {detail}")
+        auth_error = ProviderAuthError(f"Authentication error: {detail}")
+        auth_error.status_code = status_code
+        raise auth_error
 
     retry_after = parse_retry_after(response_headers) if response_headers is not None else None
 
     if status_code == 429:
         rate_limit_error = ProviderRateLimitError(f"Rate limited: {detail}")
+        rate_limit_error.status_code = status_code
         rate_limit_error.retry_after = retry_after
         raise rate_limit_error
     if status_code >= 400:
@@ -246,6 +249,7 @@ def classify_http_status(
             extra=extra_retryable,
         )
         provider_error = ProviderError(f"Provider error: {detail}", retryable=retryable)
+        provider_error.status_code = status_code
         if retryable:
             provider_error.retry_after = retry_after
         raise provider_error

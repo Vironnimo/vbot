@@ -48,6 +48,20 @@ if TYPE_CHECKING:
 
 _LOGGER = get_logger("chat")
 
+
+def _has_fallback_chain(agent: Any) -> bool:
+    """Whether a model-fallback chain beyond the primary model is configured.
+
+    Cheap config-only check for the stream-recovery fast path: it reads the
+    agent's candidate list without touching provider/model registries. Entries
+    equal to the primary binding are ignored because the chain resolver skips
+    them at advance time anyway.
+    """
+    candidates = tuple(getattr(agent, "fallback_models", None) or ())
+    primary = getattr(agent, "model", "")
+    return any(candidate != primary for candidate in candidates)
+
+
 # How often a streaming attempt may be restarted from scratch after a transient
 # drop that occurred before answer text or a Tool Call fragment. Readable
 # Reasoning alone is replay-safe. Each restart re-issues the whole request (the
@@ -295,6 +309,7 @@ class WireRequestRunner:
         # restart. Readable Reasoning and any unexecuted Tool Call preview are
         # discarded before replay. Once answer text arrives, partial output is
         # persisted so the progression loop can continue it without duplication.
+        fallback_chain_available = _has_fallback_chain(agent)
         for attempt in range(MAX_STREAM_RESTARTS + 1):
             try:
                 return await self._consume_stream_attempt(
@@ -312,6 +327,7 @@ class WireRequestRunner:
                     output_cwd=output_cwd,
                     temperature=temperature,
                     top_p=top_p,
+                    has_fallback_chain=fallback_chain_available,
                 )
             except _StreamRestartNeeded as restart:
                 _LOGGER.warning(
@@ -343,6 +359,7 @@ class WireRequestRunner:
         continuation_tracker: ContinuationTracker | None = None,
         temperature: float | None = None,
         top_p: float | None = None,
+        has_fallback_chain: bool = False,
     ) -> _AssistantStep:
         accumulator = StreamingAccumulator()
         delta_emitter = _StreamingRunDeltaEmitter(run)
@@ -404,6 +421,7 @@ class WireRequestRunner:
                 can_restart=can_restart,
                 has_partial_content=accumulator.partial_content is not None,
                 finish_received=accumulator.finish_reason is not None,
+                has_fallback_chain=has_fallback_chain,
             )
             if action is StreamRecoveryAction.ACCEPT_COMPLETE:
                 _LOGGER.warning(

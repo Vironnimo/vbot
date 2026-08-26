@@ -66,7 +66,7 @@ describe('comma decimal separators', () => {
     expect(
       buildAgentDefaultsPayload({
         model: '',
-        fallback_model: '',
+        fallback_models: [],
         temperature: '0,7',
         thinking_effort: '',
       }).defaults.agent.temperature,

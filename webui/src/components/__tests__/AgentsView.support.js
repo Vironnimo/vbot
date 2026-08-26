@@ -17,7 +17,7 @@ export function modelTriggerLabel() {
 }
 
 export function fallbackTriggerLabel() {
-  return triggerTextContent(getSearchableTrigger('agent-fallback-model'));
+  return triggerTextContent(getSearchableTrigger('agent-fallback-model-0'));
 }
 
 export function thinkingTriggerLabel() {
@@ -474,7 +474,7 @@ export function baseAgent() {
     id: 'alpha',
     name: 'Alpha',
     model: 'openai/gpt-5.2::api-key',
-    fallback_model: '',
+    fallback_models: [],
     workspace: 'C:/agents/alpha',
     current_session_id: 'session-1',
     temperature: '0.1',
