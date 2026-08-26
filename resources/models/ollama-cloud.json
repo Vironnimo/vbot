@@ -1,5 +1,5 @@
 {
-  "fetched_at": "2026-08-25T08:14:16.506510+00:00",
+  "fetched_at": "2026-08-26T20:47:56.365874+00:00",
   "models": {
     "deepseek-v4-flash:0731": {
       "capabilities": {
@@ -259,6 +259,43 @@
         }
       },
       "name": "glm-5.2"
+    },
+    "glm-5.3-flash": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "control": "on_off",
+          "supported": true
+        },
+        "supported_parameters": [],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 1048576,
+      "max_output_tokens": null,
+      "metadata": {
+        "ollama": {
+          "remote": true
+        }
+      },
+      "name": "glm-5.3-flash"
     },
     "gpt-oss:120b": {
       "capabilities": {

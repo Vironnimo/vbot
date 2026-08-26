@@ -1770,9 +1770,13 @@ class TestModelRegistryRealResources:
     def test_opencode_go_glm_5_3_flash_override_loads(self):
         """``opencode-go.overrides.json`` pins glm-5.3-flash to current_run.
 
-        The override carries the full required record (name, capabilities,
-        context window, output ceiling) so it loads instead of being dropped
-        as invalid - a bare pin-only entry was silently discarded before.
+        The override is a bare pin-only patch (overrides only ever carry what
+        they override); the required record fields come from the generated
+        provider catalog, which now contains glm-5.3-flash after the
+        2026-08-26 refresh. A pin-only entry used to be silently dropped
+        because the model was missing from the generated file - the fix is
+        refreshing the catalog, not duplicating required fields into the
+        override.
         """
 
         registry = ModelRegistry.load(RESOURCES_DIR)
@@ -1788,8 +1792,10 @@ class TestModelRegistryRealResources:
         Streaming token accounting (billed-input deltas in vBot's real request
         shapes, visible-content control per variant) on /v1/chat/completions:
 
-        - full_history (inherited default): GLM-5.1, GLM-5.2, Kimi K3 - the
-          ``reasoning`` carrier is accepted and billed in both scopes.
+        - full_history (inherited default): GLM-5.1, GLM-5.2, GLM-5.3-flash, Kimi
+          K3 - the ``reasoning`` carrier is accepted and billed in both scopes
+          (glm-5.3-flash measured 2026-08-26 after the catalog refresh: in-run
+          +132, cross-run +332, controls match).
         - current_run: DeepSeek V4 Flash/Pro and Kimi K2.6/K2.7-code - in-run
           replayed reasoning is billed, cross-run replay is stripped.
         - none: Gemma 4, GPT-OSS, MiniMax M2.7/M3, Nemotron 3, Qwen 3.5 - the
@@ -1805,6 +1811,7 @@ class TestModelRegistryRealResources:
         assert registry.provider_reasoning_replay("ollama-cloud") == "full_history"
         assert registry.get("ollama-cloud", "glm-5.1").reasoning_replay is None
         assert registry.get("ollama-cloud", "glm-5.2").reasoning_replay is None
+        assert registry.get("ollama-cloud", "glm-5.3-flash").reasoning_replay is None
         assert registry.get("ollama-cloud", "kimi-k3").reasoning_replay is None
         assert (
             registry.get("ollama-cloud", "deepseek-v4-flash:0731").reasoning_replay == "current_run"

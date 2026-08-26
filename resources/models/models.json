@@ -1206,6 +1206,30 @@
       "release_date": "2026-08-14",
       "temperature": true
     },
+    "alibaba/qwen3.8-flash": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "video"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "tools": true,
+        "vision": true
+      },
+      "context_window": 1000000,
+      "family": "qwen",
+      "last_updated": "2026-08-26",
+      "max_output_tokens": 131072,
+      "name": "Qwen3.8 Flash",
+      "release_date": "2026-08-26"
+    },
     "alibaba/qwen3.8-max": {
       "capabilities": {
         "input_modalities": [
@@ -2204,7 +2228,8 @@
     "bytedance-seed/seed-1-6-flash": {
       "capabilities": {
         "input_modalities": [
-          "text"
+          "text",
+          "image"
         ],
         "json_mode": false,
         "output_modalities": [
@@ -2217,7 +2242,7 @@
           "temperature"
         ],
         "tools": true,
-        "vision": false
+        "vision": true
       },
       "context_window": 256000,
       "family": "seed",
@@ -2257,7 +2282,8 @@
     "bytedance-seed/seed-1-8": {
       "capabilities": {
         "input_modalities": [
-          "text"
+          "text",
+          "image"
         ],
         "json_mode": false,
         "output_modalities": [
@@ -2270,7 +2296,7 @@
           "temperature"
         ],
         "tools": true,
-        "vision": false
+        "vision": true
       },
       "context_window": 256000,
       "family": "seed",
@@ -4285,6 +4311,28 @@
       "release_date": "2026-06-09",
       "temperature": false
     },
+    "google/gemini-3.5-transcribe-live": {
+      "capabilities": {
+        "input_modalities": [
+          "audio"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "tools": false,
+        "vision": false
+      },
+      "context_window": 0,
+      "family": "gemini",
+      "last_updated": "2026-08-26",
+      "max_output_tokens": 0,
+      "name": "Gemini 3.5 Transcribe Live",
+      "release_date": "2026-08-26"
+    },
     "google/gemini-3.6-flash": {
       "capabilities": {
         "input_modalities": [
@@ -5278,10 +5326,10 @@
         "tools": true,
         "vision": false
       },
-      "context_window": 196608,
+      "context_window": 204800,
       "family": "minimax",
       "last_updated": "2025-10-27",
-      "max_output_tokens": 128000,
+      "max_output_tokens": 131072,
       "name": "MiniMax-M2",
       "release_date": "2025-10-27",
       "temperature": true
@@ -5304,10 +5352,10 @@
         "tools": true,
         "vision": false
       },
-      "context_window": 200000,
+      "context_window": 65536,
       "family": "minimax",
       "last_updated": "2026-01-23",
-      "max_output_tokens": 131000,
+      "max_output_tokens": 2048,
       "name": "MiniMax-M2 Her",
       "release_date": "2026-01-23",
       "temperature": true
@@ -5463,13 +5511,37 @@
         "tools": true,
         "vision": true
       },
-      "context_window": 512000,
+      "context_window": 1048576,
       "family": "minimax",
       "last_updated": "2026-06-01",
-      "max_output_tokens": 128000,
+      "max_output_tokens": 512000,
       "name": "MiniMax-M3",
       "release_date": "2026-06-01",
       "temperature": true
+    },
+    "minimax/image-01": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "image"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "tools": false,
+        "vision": true
+      },
+      "context_window": 0,
+      "family": "minimax",
+      "last_updated": "2026-08-25",
+      "max_output_tokens": 0,
+      "name": "MiniMax image-01",
+      "release_date": "2025-02-15",
+      "temperature": false
     },
     "mistral/codestral-22b-v0.1": {
       "capabilities": {
@@ -7207,9 +7279,6 @@
         "reasoning": {
           "supported": true
         },
-        "supported_parameters": [
-          "temperature"
-        ],
         "tools": false,
         "vision": true
       },
@@ -7220,7 +7289,7 @@
       "max_output_tokens": 128000,
       "name": "GPT-5 Chat (latest)",
       "release_date": "2025-08-07",
-      "temperature": true
+      "temperature": false
     },
     "openai/gpt-5-codex": {
       "capabilities": {
@@ -7360,6 +7429,9 @@
           ],
           "supported": true
         },
+        "supported_parameters": [
+          "temperature"
+        ],
         "tools": true,
         "vision": true
       },
@@ -7370,7 +7442,7 @@
       "max_output_tokens": 128000,
       "name": "GPT-5.1",
       "release_date": "2025-11-13",
-      "temperature": false
+      "temperature": true
     },
     "openai/gpt-5.1-chat-latest": {
       "capabilities": {
@@ -7493,6 +7565,9 @@
           ],
           "supported": true
         },
+        "supported_parameters": [
+          "temperature"
+        ],
         "tools": true,
         "vision": true
       },
@@ -7503,7 +7578,7 @@
       "max_output_tokens": 128000,
       "name": "GPT-5.2",
       "release_date": "2025-12-11",
-      "temperature": false
+      "temperature": true
     },
     "openai/gpt-5.2-chat-latest": {
       "capabilities": {
@@ -7641,6 +7716,9 @@
           ],
           "supported": true
         },
+        "supported_parameters": [
+          "temperature"
+        ],
         "tools": true,
         "vision": true
       },
@@ -7651,7 +7729,7 @@
       "max_output_tokens": 128000,
       "name": "GPT-5.3 Codex",
       "release_date": "2026-02-05",
-      "temperature": false
+      "temperature": true
     },
     "openai/gpt-5.3-codex-spark": {
       "capabilities": {
@@ -7709,6 +7787,9 @@
           ],
           "supported": true
         },
+        "supported_parameters": [
+          "temperature"
+        ],
         "tools": true,
         "vision": true
       },
@@ -7719,7 +7800,7 @@
       "max_output_tokens": 128000,
       "name": "GPT-5.4",
       "release_date": "2026-03-05",
-      "temperature": false
+      "temperature": true
     },
     "openai/gpt-5.4-mini": {
       "capabilities": {
@@ -7742,6 +7823,9 @@
           ],
           "supported": true
         },
+        "supported_parameters": [
+          "temperature"
+        ],
         "tools": true,
         "vision": true
       },
@@ -7752,7 +7836,7 @@
       "max_output_tokens": 128000,
       "name": "GPT-5.4 mini",
       "release_date": "2026-03-17",
-      "temperature": false
+      "temperature": true
     },
     "openai/gpt-5.4-nano": {
       "capabilities": {
@@ -7775,6 +7859,9 @@
           ],
           "supported": true
         },
+        "supported_parameters": [
+          "temperature"
+        ],
         "tools": true,
         "vision": true
       },
@@ -7785,7 +7872,7 @@
       "max_output_tokens": 128000,
       "name": "GPT-5.4 nano",
       "release_date": "2026-03-17",
-      "temperature": false
+      "temperature": true
     },
     "openai/gpt-5.4-pro": {
       "capabilities": {
@@ -10139,6 +10226,12 @@
           "text"
         ],
         "reasoning": {
+          "control": "levels",
+          "levels": [
+            "low",
+            "high",
+            "max"
+          ],
           "supported": true
         },
         "supported_parameters": [
@@ -10153,6 +10246,41 @@
       "max_output_tokens": 131072,
       "name": "GLM-5.3",
       "release_date": "2026-08-14",
+      "temperature": true
+    },
+    "zhipuai/glm-5.3-flash": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "video",
+          "pdf"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "control": "levels",
+          "levels": [
+            "low",
+            "high",
+            "max"
+          ],
+          "supported": true
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "context_window": 1000000,
+      "family": "glm",
+      "last_updated": "2026-08-26",
+      "max_output_tokens": 131072,
+      "name": "GLM-5.3-Flash",
+      "release_date": "2026-08-26",
       "temperature": true
     },
     "zhipuai/glm-5v-turbo": {
