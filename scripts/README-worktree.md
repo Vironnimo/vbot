@@ -9,7 +9,8 @@ The short version:
 - list active managed worktrees when you need orientation
 - work from inside that worktree directory
 - start and stop the complete vBot + fake Provider test instance from inside the worktree with `scripts/test-env.py`
-- delete the worktree when the task is finished
+- merge the finished task branch into `main` with `worktree.py merge` when the quality gates are green
+- delete the worktree only when abandoning it without merging
 
 ## What the script does
 
@@ -130,9 +131,19 @@ Treat the worktree as its own checkout.
 Do not assume a process launched from the main checkout will magically operate on
 the worktree. The important boundary is the current working directory.
 
-### 6. Stop the worktree server and delete the worktree
+### 6. Merge the finished task into `main`
 
-From the repository root:
+When the quality gates are green (they stay the agent's responsibility — the merge tooling never runs them), merge from anywhere:
+
+```bash
+python scripts/worktree.py merge my-task
+```
+
+The command blocks while other sessions' merges or repair windows finish, then merges the task branch into `main` with `--no-ff`, removes the worktree, its dedicated data dir, and the managed branch. See "Merging a finished task" below for the conflict flow.
+
+### 7. Stop the worktree server and delete the worktree without merging
+
+For abandoned or cancelled tasks:
 
 ```bash
 python scripts/worktree.py delete my-task
@@ -196,6 +207,24 @@ python scripts/worktree.py create feature-three
 
 That leaves the primary checkout on `main` and creates one new task branch per
 worktree.
+
+## Merging a finished task
+
+`python scripts/worktree.py merge <name>` is the only supported way to land a task branch while other sessions are running. It serializes all merges and protected repair windows through an OS-level file lock in the shared Git directory — exactly one merge touches `main` at a time, and a second caller simply waits inside its own command until the first is done. Never hand-merge into `main` while sessions are running; a manual merge can collide with an automated one.
+
+The command refuses to run when the primary checkout is not on `main` or has uncommitted changes, and it self-heals one crash scenario: if an earlier merge was killed halfway, it aborts that leftover state before doing anything.
+
+On success it prints `status: merged` with the merge commit, removes the worktree, its data dir, and the managed branch (branches borrowed via `--from` are kept), and exits 0. Exit code 2 means conflicts; exit code 1 means refusal, timeout, or cleanup failure.
+
+### Conflicts and the protected repair window
+
+A conflicted merge rolls back completely — `main` stays untouched — and prints the conflicted files plus recovery hints:
+
+1. Open the window with `python scripts/worktree.py repair-start <name>`. A small detached keeper process holds the merge lock on your behalf, so no other session can move `main` while you fix. The window expires after 15 minutes (`--window` to change); expiry is harmless because all fixing happens in your worktree and `main` stays clean until your final merge.
+2. Fix in your own worktree: bring `main` into your branch (`git rebase main`), resolve, commit, rerun the quality gates.
+3. Retry `python scripts/worktree.py merge <name>`. The command recognizes its own open window and merges under it without waiting again; success closes the window automatically.
+
+Because `main` cannot move during a repair, every conflict is resolved exactly once against a frozen base — concurrent sessions cannot invalidate each other's resolutions into an endless loop. If you abandon the repair, close the window explicitly with `python scripts/worktree.py repair-finish <name>`; closing a window that already ended is a harmless `already-closed`.
 
 ## How vBot detects the worktree context
 
@@ -434,8 +463,19 @@ npm install
 npm run build
 ```
 
-inside the worktree's `webui/` directory. Fix the frontend dependency or build
-issue, then create the worktree again.
+inside the worktree's `webui/` directory. Fix the frontend dependency or build issue, then create the worktree again.
+
+### `merge` reports uncommitted changes in the primary checkout
+
+The merge refuses to run while `main` carries uncommitted changes. Commit or clean them first; if a leftover mid-merge state from a crashed merge is present, the merge aborts that state automatically instead of refusing.
+
+### A repair window did not shut down
+
+A keeper process exits when its release signal appears, when its window expires, or when it is killed — the OS frees its lock on death either way. If `repair-finish` or a successful merge reports that the keeper did not shut down, wait for the deadline; the lock then frees itself and the next merge proceeds on its own.
+
+### Merge succeeded but cleanup failed
+
+The output prints `status: merged` with the commit and then an explicit cleanup error. The landed commit is safe; finish the removal manually with `python scripts/worktree.py delete <name>` (add `--force` only to discard worktree-local leftovers).
 
 ## Recommended team workflow
 
@@ -443,9 +483,8 @@ issue, then create the worktree again.
 2. Create one worktree per task with `python scripts/worktree.py create <name>`.
 3. Change into that worktree before running any vBot command.
 4. Use normal relative entrypoints from inside the worktree.
-5. Run tests and quality scripts inside the worktree.
+5. Run tests and quality gates inside the worktree — they stay the agent's responsibility.
 6. Stop the local worktree server when done.
-7. Delete the worktree with `python scripts/worktree.py delete <name>`.
+7. Merge with `python scripts/worktree.py merge <name>` when everything is green; use `delete <name>` only for abandoned tasks.
 
-If you follow those rules, you can run several independent vBot instances in
-parallel without sharing ports, logs, or data directories.
+If you follow those rules, you can run several independent vBot instances in parallel without sharing ports, logs, or data directories, and several sessions can finish and merge at the same time without stepping on each other.

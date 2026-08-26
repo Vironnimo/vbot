@@ -7,6 +7,7 @@ import argparse
 import importlib
 import json
 import os
+import random
 import re
 import runpy
 import shutil
@@ -60,6 +61,28 @@ UNKNOWN_VALUE = "unknown"
 VALID_WORKTREE_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 TRASH_DIR_PREFIX = ".trash-"
 PORT_ALLOCATION_LOCK_NAME = "vbot-worktree-port.lock"
+PRIMARY_BRANCH = "main"
+MERGE_LOCK_FILE_NAME = "vbot-merge.lock"
+MERGE_HOLDER_FILE_NAME = "vbot-merge.lock.holder.json"
+MERGE_RELEASE_FILE_NAME = "vbot-merge.lock.release"
+REPAIR_LOG_FILE_NAME = "vbot-merge-repair.log"
+KIND_MERGE = "merge"
+KIND_REPAIR = "repair"
+MERGE_CONFLICT_EXIT_CODE = 2
+DEFAULT_MERGE_WAIT_TIMEOUT_SECONDS = 30 * 60
+DEFAULT_REPAIR_WINDOW_SECONDS = 15 * 60
+MERGE_LOCK_POLL_MIN_SECONDS = 0.4
+MERGE_LOCK_POLL_MAX_SECONDS = 1.2
+KEEPER_POLL_SECONDS = 1.0
+HOLDER_FRESHNESS_SECONDS = 15.0
+RELEASE_SHUTDOWN_TIMEOUT_SECONDS = 10.0
+# DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP — keeps the repair keeper alive
+# after the spawning CLI exits and outside the caller's Ctrl+C group.
+WINDOWS_DETACHED_CREATION_FLAGS = 0x00000008 | 0x00000200
+
+
+class MergeLockBusyError(Exception):
+    """Raised when the merge lock stayed busy longer than the wait timeout."""
 
 
 def print_ok(**fields: str | int | bool | Path) -> None:
@@ -387,6 +410,188 @@ def _git_common_dir() -> Path:
     if git_dir.parent.name == "worktrees":
         return git_dir.parent.parent
     return git_dir
+
+
+def _merge_lock_paths() -> tuple[Path, Path, Path]:
+    """Resolve merge lock, holder record, and release signal paths."""
+    git_dir = _git_common_dir()
+    return (
+        git_dir / MERGE_LOCK_FILE_NAME,
+        git_dir / MERGE_HOLDER_FILE_NAME,
+        git_dir / MERGE_RELEASE_FILE_NAME,
+    )
+
+
+def _acquire_file_lock(lock_file) -> bool:
+    """Try to take the exclusive advisory lock without blocking."""
+    lock_file.seek(0, os.SEEK_END)
+    if lock_file.tell() == 0:
+        lock_file.write(b"0")
+        lock_file.flush()
+    lock_file.seek(0)
+    try:
+        if os.name == "nt":
+            import msvcrt
+
+            msvcrt.locking(lock_file.fileno(), msvcrt.LK_NBLCK, 1)
+        else:
+            fcntl = importlib.import_module("fcntl")
+
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        return False
+    return True
+
+
+def _release_file_lock(lock_file) -> None:
+    """Release the advisory lock taken by `_acquire_file_lock`."""
+    lock_file.seek(0)
+    try:
+        if os.name == "nt":
+            import msvcrt
+
+            msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
+        else:
+            fcntl = importlib.import_module("fcntl")
+
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+    except OSError:
+        pass
+
+
+def _probe_lock_is_busy(lock_path: Path) -> bool:
+    """Return whether another process currently holds the merge lock."""
+    with lock_path.open("a+b") as lock_file:
+        busy = not _acquire_file_lock(lock_file)
+        if not busy:
+            _release_file_lock(lock_file)
+    return busy
+
+
+def _write_holder_record(holder_path: Path, record: dict[str, object]) -> None:
+    """Publish the current lock holder's identity and heartbeat."""
+    holder_path.parent.mkdir(parents=True, exist_ok=True)
+    holder_path.write_text(json.dumps(record) + "\n", encoding="utf-8")
+
+
+def _read_holder_record(holder_path: Path) -> dict[str, object] | None:
+    """Read a lock holder record, tolerating absence or corruption."""
+    try:
+        data = json.loads(holder_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _holder_record_is_current(record: dict[str, object] | None) -> bool:
+    """Return whether a holder record has a recent heartbeat."""
+    if record is None:
+        return False
+    heartbeat = record.get("heartbeat")
+    return isinstance(heartbeat, (int, float)) and (
+        time.time() - heartbeat <= HOLDER_FRESHNESS_SECONDS
+    )
+
+
+def _own_repair_window_is_active(holder_path: Path, task: str) -> bool:
+    """Return whether a fresh repair window is held for this exact task."""
+    record = _read_holder_record(holder_path)
+    if record is None or not _holder_record_is_current(record):
+        return False
+    return bool(record.get("kind") == KIND_REPAIR and record.get("task") == task)
+
+
+@contextmanager
+def _merge_exclusive_lock(
+    *,
+    task: str,
+    kind: str,
+    timeout_seconds: float,
+    lock_path: Path,
+    holder_path: Path,
+) -> Iterator[None]:
+    """Hold the cross-process merge lock, waiting up to the timeout."""
+    deadline = time.monotonic() + timeout_seconds
+    lock_file = lock_path.open("a+b")
+    while not _acquire_file_lock(lock_file):
+        if time.monotonic() >= deadline:
+            lock_file.close()
+            raise MergeLockBusyError(
+                f"merge lock stayed busy for {int(timeout_seconds)}s "
+                "(another merge or protected repair window is running)"
+            )
+        time.sleep(random.uniform(MERGE_LOCK_POLL_MIN_SECONDS, MERGE_LOCK_POLL_MAX_SECONDS))
+
+    _write_holder_record(
+        holder_path,
+        {
+            "task": task,
+            "kind": kind,
+            "pid": os.getpid(),
+            "started_at": time.time(),
+            "heartbeat": time.time(),
+            "deadline": None,
+        },
+    )
+    try:
+        yield
+    finally:
+        with suppress(OSError):
+            holder_path.unlink()
+        _release_file_lock(lock_file)
+        lock_file.close()
+
+
+def _request_window_release(release_path: Path, holder_path: Path) -> bool:
+    """Signal the repair keeper to exit and wait until the lock is free."""
+    release_path.parent.mkdir(parents=True, exist_ok=True)
+    release_path.write_text("release\n", encoding="utf-8")
+    deadline = time.monotonic() + RELEASE_SHUTDOWN_TIMEOUT_SECONDS
+    while time.monotonic() < deadline:
+        record = _read_holder_record(holder_path)
+        if not _holder_record_is_current(record):
+            return True
+        time.sleep(0.2)
+    return False
+
+
+def cmd_keeper_hold(args: argparse.Namespace) -> int:
+    """Internal keeper process holding the lock for a protected repair window."""
+    lock_path = Path(args.lock_path)
+    holder_path = Path(args.holder_path)
+    release_path = Path(args.release_path)
+    deadline = float(args.deadline)
+
+    record: dict[str, object] = {
+        "task": args.task,
+        "kind": KIND_REPAIR,
+        "pid": os.getpid(),
+        "started_at": time.time(),
+        "deadline": deadline,
+    }
+    lock_file = lock_path.open("a+b")
+    try:
+        while not _acquire_file_lock(lock_file):
+            if time.time() >= deadline:
+                return 1
+            time.sleep(random.uniform(MERGE_LOCK_POLL_MIN_SECONDS, MERGE_LOCK_POLL_MAX_SECONDS))
+        try:
+            while time.time() < deadline:
+                if release_path.exists():
+                    break
+                record["heartbeat"] = time.time()
+                _write_holder_record(holder_path, record)
+                time.sleep(KEEPER_POLL_SECONDS)
+        finally:
+            with suppress(OSError):
+                holder_path.unlink()
+    finally:
+        _release_file_lock(lock_file)
+        lock_file.close()
+
+    with suppress(OSError):
+        release_path.unlink()
+    return 0
 
 
 def seed_worktree_settings(settings_path: Path, *, server_port: int) -> None:
@@ -795,6 +1000,264 @@ def cmd_list(_args: argparse.Namespace) -> int:
     return 0
 
 
+def _read_primary_branch() -> str | None:
+    """Read the currently checked-out branch of the primary checkout."""
+    return _read_worktree_branch_name(PROJECT_ROOT)
+
+
+def _list_conflicted_paths(repo_path: Path) -> list[str]:
+    """List unmerged paths during an unresolved merge in a repository."""
+    try:
+        result = subprocess.run(
+            [
+                "git",
+                "-C",
+                str(repo_path),
+                "diff",
+                "--name-only",
+                "--diff-filter=U",
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError:
+        return []
+
+    if result.returncode != 0:
+        return []
+    return [line for line in result.stdout.splitlines() if line.strip()]
+
+
+def _print_merge_conflict_hints(name: str, *, window_open: bool) -> None:
+    """Print the agent-facing recovery hints after a conflicted merge."""
+    print(f"hint: freeze main first: python scripts/worktree.py repair-start {name}")
+    print(
+        "hint: bring main into your branch (git rebase main), resolve the "
+        "conflicts, commit, and rerun the quality gates"
+    )
+    print(f"hint: retry the merge: python scripts/worktree.py merge {name}")
+    if window_open:
+        print("note: your protected repair window stays open while you fix this")
+
+
+def cmd_merge(args: argparse.Namespace) -> int:
+    """Merge a finished worktree branch into main and remove the worktree.
+
+    Concurrency contract: only one merge or protected repair window may touch
+    the primary checkout at a time. A task with an active repair window merges
+    under its own window; every other task waits for the lock.
+    """
+    name: str = args.name
+    validation_error = validate_worktree_name(name)
+    if validation_error is not None:
+        print_error(validation_error)
+        return 1
+
+    worktree_path = WORKTREES_DIR / name
+    marker = worktree_path / WORKTREE_FILE_NAME
+    if not worktree_path.exists():
+        print_error(f"worktree '{name}' does not exist")
+        return 1
+    if not marker.exists():
+        print_error(f"worktree '{name}' is not script-managed (missing {WORKTREE_FILE_NAME})")
+        return 1
+
+    branch = _read_worktree_branch_name(worktree_path)
+    if branch is None:
+        print_error(f"worktree '{name}' has no checked-out branch")
+        return 1
+
+    primary_branch = _read_primary_branch()
+    if primary_branch != PRIMARY_BRANCH:
+        print_error(
+            f"primary checkout is on '{primary_branch}', not '{PRIMARY_BRANCH}'; "
+            "switch it back before merging"
+        )
+        return 1
+
+    # A leftover mid-merge state (crash during an earlier merge) is not user
+    # dirt; the locked recovery step below aborts it before anything runs.
+    merge_leftover = (PROJECT_ROOT / ".git" / "MERGE_HEAD").exists()
+    uncommitted = [] if merge_leftover else _list_uncommitted_paths(PROJECT_ROOT)
+    if uncommitted:
+        print_error("primary checkout has uncommitted changes; commit or clean it first")
+        for line in uncommitted:
+            print(f"uncommitted: {line}")
+        return 1
+
+    lock_path, holder_path, release_path = _merge_lock_paths()
+    message = args.message or f"merge: {name}"
+
+    window_active = _own_repair_window_is_active(holder_path, name)
+    protected = False
+    if window_active and _probe_lock_is_busy(lock_path):
+        # The keeper process holds the lock on our behalf; verify its
+        # heartbeat again so a dead keeper can never open a race window.
+        if _own_repair_window_is_active(holder_path, name):
+            protected = True
+        else:
+            window_active = False
+
+    if not protected:
+        try:
+            with _merge_exclusive_lock(
+                task=name,
+                kind=KIND_MERGE,
+                timeout_seconds=args.wait_timeout,
+                lock_path=lock_path,
+                holder_path=holder_path,
+            ):
+                return _merge_and_cleanup(args, name, branch, message, window_open=False)
+        except MergeLockBusyError as exc:
+            print_error(str(exc))
+            return 1
+
+    outcome = _merge_and_cleanup(args, name, branch, message, window_open=True)
+    # Success closes the window; a conflict keeps it open for the retry.
+    if outcome == 0 and not _request_window_release(release_path, holder_path):
+        print_error("repair keeper did not shut down; it expires at its deadline")
+    return outcome
+
+
+def _merge_and_cleanup(
+    args: argparse.Namespace,
+    name: str,
+    branch: str,
+    message: str,
+    *,
+    window_open: bool,
+) -> int:
+    """Run the mechanical merge into main and remove the merged worktree."""
+    merge_head_path = PROJECT_ROOT / ".git" / "MERGE_HEAD"
+    if merge_head_path.exists():
+        _run_command(["git", "-C", str(PROJECT_ROOT), "merge", "--abort"])
+        print("recovered: aborted an unfinished merge left in the primary checkout")
+
+    return_code, stderr = _run_command(
+        ["git", "-C", str(PROJECT_ROOT), "merge", branch, "--no-ff", "-m", message]
+    )
+    if return_code != 0:
+        for conflict_path in _list_conflicted_paths(PROJECT_ROOT):
+            print(f"conflicted: {conflict_path}")
+        _run_command(["git", "-C", str(PROJECT_ROOT), "merge", "--abort"])
+        remaining = _list_uncommitted_paths(PROJECT_ROOT)
+        for line in remaining:
+            print(f"uncommitted-after-abort: {line}")
+        detail = stderr or "git merge failed"
+        print_error(detail)
+        _print_merge_conflict_hints(name, window_open=window_open)
+        return MERGE_CONFLICT_EXIT_CODE
+
+    head_result = subprocess.run(
+        ["git", "-C", str(PROJECT_ROOT), "rev-parse", "--short", "HEAD"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    head = head_result.stdout.strip() or UNKNOWN_VALUE
+
+    print_ok(name=name, status="merged", commit=head, branch=branch)
+    cleanup_code = cmd_delete(argparse.Namespace(name=name, force=False))
+    if cleanup_code != 0:
+        print_error(f"worktree cleanup failed; run 'python scripts/worktree.py delete {name}'")
+        return 1
+    return 0
+
+
+def cmd_repair_start(args: argparse.Namespace) -> int:
+    """Open a protected repair window that freezes main for this task."""
+    name: str = args.name
+    validation_error = validate_worktree_name(name)
+    if validation_error is not None:
+        print_error(validation_error)
+        return 1
+
+    worktree_path = WORKTREES_DIR / name
+    if not worktree_path.exists():
+        print_error(f"worktree '{name}' does not exist")
+        return 1
+
+    lock_path, holder_path, release_path = _merge_lock_paths()
+    with suppress(OSError):
+        release_path.unlink()
+
+    deadline = time.time() + args.window
+    log_path = _git_common_dir() / REPAIR_LOG_FILE_NAME
+    log_handle = log_path.open("ab")
+    keeper_command = [
+        sys.executable,
+        str(Path(__file__).resolve()),
+        "keeper-hold",
+        "--task",
+        name,
+        "--deadline",
+        str(deadline),
+        "--lock-path",
+        str(lock_path),
+        "--holder-path",
+        str(holder_path),
+        "--release-path",
+        str(release_path),
+    ]
+    try:
+        if os.name == "nt":
+            subprocess.Popen(
+                keeper_command,
+                stdin=subprocess.DEVNULL,
+                stdout=log_handle,
+                stderr=log_handle,
+                creationflags=WINDOWS_DETACHED_CREATION_FLAGS,
+            )
+        else:
+            subprocess.Popen(
+                keeper_command,
+                stdin=subprocess.DEVNULL,
+                stdout=log_handle,
+                stderr=log_handle,
+                start_new_session=True,
+            )
+    finally:
+        log_handle.close()
+
+    started = time.monotonic()
+    while time.monotonic() - started < args.wait_timeout:
+        if _own_repair_window_is_active(holder_path, name):
+            print_ok(status="repair-window-open", task=name, window_seconds=int(args.window))
+            return 0
+        time.sleep(0.25)
+
+    print_error(
+        f"repair window did not open within {int(args.wait_timeout)}s; see keeper log: {log_path}"
+    )
+    return 1
+
+
+def cmd_repair_finish(args: argparse.Namespace) -> int:
+    """Close this task's protected repair window."""
+    name: str = args.name
+    validation_error = validate_worktree_name(name)
+    if validation_error is not None:
+        print_error(validation_error)
+        return 1
+
+    _, holder_path, release_path = _merge_lock_paths()
+    record = _read_holder_record(holder_path)
+    if record is None or not _holder_record_is_current(record):
+        print_ok(status="already-closed", task=name)
+        return 0
+    if record.get("task") != name or record.get("kind") != KIND_REPAIR:
+        holder_task = record.get("task") or UNKNOWN_VALUE
+        print_error(f"the active window or merge belongs to task '{holder_task}', not '{name}'")
+        return 1
+
+    if not _request_window_release(release_path, holder_path):
+        print_error("repair keeper did not shut down; it expires at its deadline")
+        return 1
+    print_ok(status="repair-window-closed", task=name)
+    return 0
+
+
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     """Parse command-line arguments."""
     parser = argparse.ArgumentParser(description="Manage vBot git worktrees")
@@ -810,6 +1273,50 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
     subparsers.add_parser("list", help="List worktrees")
 
+    merge_parser = subparsers.add_parser(
+        "merge",
+        help="Merge a finished worktree branch into main and remove the worktree",
+    )
+    merge_parser.add_argument("name")
+    merge_parser.add_argument("-m", "--message", default=None, metavar="SUMMARY")
+    merge_parser.add_argument(
+        "--wait-timeout",
+        type=float,
+        default=DEFAULT_MERGE_WAIT_TIMEOUT_SECONDS,
+        metavar="SECONDS",
+    )
+
+    repair_start_parser = subparsers.add_parser(
+        "repair-start",
+        help="Open a protected repair window after a conflicted merge",
+    )
+    repair_start_parser.add_argument("name")
+    repair_start_parser.add_argument(
+        "--window",
+        type=float,
+        default=DEFAULT_REPAIR_WINDOW_SECONDS,
+        metavar="SECONDS",
+    )
+    repair_start_parser.add_argument(
+        "--wait-timeout",
+        type=float,
+        default=DEFAULT_MERGE_WAIT_TIMEOUT_SECONDS,
+        metavar="SECONDS",
+    )
+
+    repair_finish_parser = subparsers.add_parser(
+        "repair-finish",
+        help="Close this task's protected repair window",
+    )
+    repair_finish_parser.add_argument("name")
+
+    keeper_parser = subparsers.add_parser("keeper-hold", help=argparse.SUPPRESS)
+    keeper_parser.add_argument("--task", required=True)
+    keeper_parser.add_argument("--deadline", required=True, type=float)
+    keeper_parser.add_argument("--lock-path", required=True)
+    keeper_parser.add_argument("--holder-path", required=True)
+    keeper_parser.add_argument("--release-path", required=True)
+
     return parser.parse_args(argv)
 
 
@@ -822,6 +1329,14 @@ def main() -> int:
         return cmd_delete(args)
     if args.command == "list":
         return cmd_list(args)
+    if args.command == "merge":
+        return cmd_merge(args)
+    if args.command == "repair-start":
+        return cmd_repair_start(args)
+    if args.command == "repair-finish":
+        return cmd_repair_finish(args)
+    if args.command == "keeper-hold":
+        return cmd_keeper_hold(args)
     return 1
 
 
