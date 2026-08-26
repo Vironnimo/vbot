@@ -7,9 +7,9 @@ from typing import Any
 
 from core.chat.messages import (
     ChatMessage,
-    _embed_notes_into_request,
     usage_token_is_estimated,
 )
+from core.chat.wire_shaping import _embed_notes_into_request
 from core.utils.tokens import estimate_request_input_tokens
 
 JsonObject = dict[str, Any]

@@ -29,7 +29,6 @@ from core.chat.continuation import (
 from core.chat.events import _close_adapter
 from core.chat.messages import (
     JsonObject,
-    _restore_in_run_assistant_reasoning,
     checkpoint_ordinal,
     has_unconsumed_skill_activation,
 )
@@ -44,6 +43,7 @@ from core.chat.usage import (
     checkpoint_context_usage,
     latest_session_context_usage,
 )
+from core.chat.wire_shaping import _restore_in_run_assistant_reasoning
 from core.compaction.compaction import (
     COMPACTION_POLICY_META_KEY,
     COMPACTION_TRIGGER_MANUAL,

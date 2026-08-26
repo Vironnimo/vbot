@@ -16,7 +16,7 @@ from core.chat.chat import (
 )
 from core.chat.continuation import normalize_interruption_cause
 from core.chat.events import _emit_assistant_events, _emit_streaming_assistant_events
-from core.chat.messages import JsonObject, _assistant_message_from_response
+from core.chat.messages import JsonObject
 from core.chat.model_resolution import resolve_request_temperature, resolve_request_top_p
 from core.chat.streaming import (
     STREAM_CHUNK_TIMEOUT_SECONDS,
@@ -31,6 +31,7 @@ from core.chat.streaming import (
     is_local_provider_base_url,
     iter_with_chunk_timeout,
 )
+from core.chat.wire_shaping import _assistant_message_from_response
 from core.providers.accounts import ConnectionRef
 from core.providers.adapter import terminal_outcome_from_response
 from core.providers.errors import NetworkError, ProviderError

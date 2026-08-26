@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import threading
+from collections.abc import AsyncIterator
 from typing import Any
 
 import pytest
@@ -13,8 +14,8 @@ from core.chat.messages import (
     COMPACTION_SKILL_NOTE_PREFIX,
     COMPACTION_SUMMARY_NOTE_PREFIX,
     _effective_compaction_messages,
-    _embed_notes_into_request,
 )
+from core.chat.wire_shaping import _embed_notes_into_request
 from core.compaction import (
     MIN_AUTO_COMPACTION_RECLAIM_TOKENS,
     CompactionError,
@@ -59,12 +60,14 @@ class StubAdapter:
         self.text = text
         self.requests: list[dict[str, Any]] = []
 
-    async def send(self, messages: list[dict], **kwargs: Any) -> dict[str, Any]:
+    async def stream(self, messages: list[dict], **kwargs: Any) -> AsyncIterator[dict[str, Any]]:
         self.requests.append({"messages": messages, **kwargs})
-        return {"content": self.text}
+        yield {"type": "content_delta", "text": self.text}
+        yield {"type": "finish", "reason": "stop"}
 
     def normalize_response(self, response: dict[str, Any]) -> dict[str, Any]:
-        return response
+        message = response["choices"][0]["message"]
+        return {"content": message["content"], "usage": response.get("usage")}
 
 
 class RetainContextStrategy:
@@ -362,7 +365,7 @@ async def test_summary_tail_executes_one_call_and_materializes_projection() -> N
 async def test_compaction_keeps_sync_transforms_off_loop_and_model_io_on_loop() -> None:
     loop_thread = threading.get_ident()
     strategy_threads: list[int] = []
-    send_threads: list[int] = []
+    stream_threads: list[int] = []
     normalize_threads: list[int] = []
 
     class RecordingStrategy:
@@ -377,13 +380,17 @@ async def test_compaction_keeps_sync_transforms_off_loop_and_model_io_on_loop() 
             )
 
     class RecordingAdapter:
-        async def send(self, messages: list[dict], **kwargs: Any) -> dict[str, Any]:
-            send_threads.append(threading.get_ident())
-            return {"content": "summary"}
+        async def stream(
+            self, messages: list[dict], **kwargs: Any
+        ) -> AsyncIterator[dict[str, Any]]:
+            stream_threads.append(threading.get_ident())
+            yield {"type": "content_delta", "text": "summary"}
+            yield {"type": "finish", "reason": "stop"}
 
         def normalize_response(self, response: dict[str, Any]) -> dict[str, Any]:
             normalize_threads.append(threading.get_ident())
-            return response
+            message = response["choices"][0]["message"]
+            return {"content": message["content"]}
 
     adapter = RecordingAdapter()
     await CompactionService(RecordingStrategy()).compact(
@@ -396,7 +403,7 @@ async def test_compaction_keeps_sync_transforms_off_loop_and_model_io_on_loop() 
     )
 
     assert strategy_threads and strategy_threads != [loop_thread]
-    assert send_threads == [loop_thread]
+    assert stream_threads == [loop_thread]
     assert normalize_threads and normalize_threads != [loop_thread]
 
 

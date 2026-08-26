@@ -17,8 +17,8 @@ from core.chat.messages import (
     _compaction_projection_without_provider_state,
     _effective_compaction_messages,
     _latest_compaction_checkpoint,
-    _message_to_request_dict,
 )
+from core.chat.wire_shaping import _message_to_request_dict
 from core.debug.redaction import redact_json_body
 from core.sessions import current_skill_activation_contents, skill_tool_activation
 from core.utils.errors import VBotError
@@ -417,9 +417,8 @@ class CompactionService:
                     plan,
                     strip_reasoning=(adapter is not active_adapter or model_id != active_model_id),
                 )
-                response = await adapter.send(
-                    model_messages,
-                    **request_options,
+                response = await _send_streaming_model_request(
+                    adapter, model_messages, request_options
                 )
                 response_adapter = adapter
             return await _COMPACTION_WORKERS.run(
@@ -1051,6 +1050,47 @@ def _build_compaction_instruction(
     if instruction and instruction.strip():
         sections.append(f"<user_instruction>\n{instruction.strip()}\n</user_instruction>")
     return "\n\n".join(sections)
+
+
+async def _send_streaming_model_request(
+    adapter: Any,
+    messages: list[dict[str, Any]],
+    request_options: dict[str, Any],
+) -> dict[str, Any]:
+    """Run one Model call over the adapter stream and rebuild a send()-shaped response.
+
+    Some providers (observed on OpenRouter's stealth tier) reject large
+    non-streaming completions outright while streaming the same payload fine,
+    so Compaction always consumes the stream and reassembles the plain
+    completion object the response normalization expects.
+    """
+    content_parts: list[str] = []
+    usage: dict[str, Any] = {}
+    finish_reason: str | None = None
+    async for delta in adapter.stream(messages, **request_options):
+        delta_type = delta.get("type")
+        if delta_type == "content_delta":
+            text = delta.get("text")
+            if isinstance(text, str):
+                content_parts.append(text)
+        elif delta_type == "usage":
+            if isinstance(delta.get("input_tokens"), int):
+                usage["prompt_tokens"] = delta["input_tokens"]
+            if isinstance(delta.get("output_tokens"), int):
+                usage["completion_tokens"] = delta["output_tokens"]
+        elif delta_type == "finish":
+            reason = delta.get("reason")
+            if isinstance(reason, str):
+                finish_reason = reason
+    return {
+        "choices": [
+            {
+                "message": {"role": "assistant", "content": "".join(content_parts)},
+                "finish_reason": finish_reason or "stop",
+            }
+        ],
+        "usage": usage,
+    }
 
 
 def _normalize_response(summary_adapter: Any, response: Any) -> dict[str, Any]:

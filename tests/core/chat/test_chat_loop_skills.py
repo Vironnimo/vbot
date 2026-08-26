@@ -11,7 +11,7 @@ import pytest
 from core.chat import (
     ChatMessage,
 )
-from core.chat.messages import _notes_to_synthetic_user_message
+from core.chat.wire_shaping import _notes_to_synthetic_user_message
 from core.sessions import SKILL_AVAILABLE_NOTE_PREFIX, is_skill_available_note
 from core.skills.skills import SkillRegistry
 from tests.core.chat.chat_loop_support import (
