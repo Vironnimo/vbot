@@ -1,7 +1,8 @@
 """Tool call, sender, reply-surface, factory, and parsing tests."""
 
-from core.chat.messages import ToolCallRejection, _assistant_message_from_response
+from core.chat.messages import ToolCallRejection
 from core.chat.output_files import AssistantFileReference
+from core.chat.wire_shaping import _assistant_message_from_response
 
 from .messages_test_support import (
     ERROR_KIND_RATE_LIMIT,

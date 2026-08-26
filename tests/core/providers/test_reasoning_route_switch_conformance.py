@@ -10,7 +10,7 @@ from typing import Any
 import pytest
 
 from core.chat import ChatMessage, ToolCall
-from core.chat.messages import _embed_notes_into_request
+from core.chat.wire_shaping import _embed_notes_into_request
 from core.providers.anthropic_compatible import AnthropicCompatibleAdapter
 from core.providers.github_copilot_policy import RESPONSES_ENDPOINT, copilot_model_policy
 from core.providers.github_copilot_responses import build_responses_payload

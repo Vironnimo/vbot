@@ -30,19 +30,21 @@ from core.chat.chat import (
 from core.chat.content_blocks import FileBlock, TextBlock
 from core.chat.messages import (
     HISTORY_COMPACTION_GUIDANCE,
-    INTERRUPTED_TOOL_RESULT_CODE,
-    INTERRUPTED_TOOL_RESULT_MESSAGE,
-    _assistant_continuation_dict,
     _effective_compaction_messages,
-    _embed_notes_into_request,
-    _message_to_request_dict,
-    _repair_dangling_tool_calls,
-    _restore_in_run_assistant_reasoning,
     checkpoint_ordinal,
     finalize_checkpoint_history_guidance,
     history_available,
     reply_surface_from_note,
     should_append_reply_surface_note,
+)
+from core.chat.wire_shaping import (
+    INTERRUPTED_TOOL_RESULT_CODE,
+    INTERRUPTED_TOOL_RESULT_MESSAGE,
+    _assistant_continuation_dict,
+    _embed_notes_into_request,
+    _message_to_request_dict,
+    _repair_dangling_tool_calls,
+    _restore_in_run_assistant_reasoning,
 )
 from core.providers.reasoning import (
     REASONING_REPLAY_FULL_HISTORY,

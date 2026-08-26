@@ -77,17 +77,11 @@ from core.chat.messages import (
     ReplySurface,
     _append_input_origin_note,
     _append_reply_surface_note,
-    _assistant_continuation_dict,
-    _complete_usage_with_estimates,
     _display_content_preview,
     _effective_compaction_messages,
-    _embed_notes_into_request,
     _last_user_message,
     _last_user_message_with_content_blocks,
-    _message_to_request_dict,
-    _notes_to_request_messages,
     _session_has_any_content_blocks,
-    _strip_assistant_reasoning_fields,
     finalize_checkpoint_history_guidance,
     history_available,
     queue_content_is_editable,
@@ -145,6 +139,14 @@ from core.chat.usage import (
     aggregate_session_usage,
     build_model_step_context_usage,
     latest_session_context_usage,
+)
+from core.chat.wire_shaping import (
+    _assistant_continuation_dict,
+    _complete_usage_with_estimates,
+    _embed_notes_into_request,
+    _message_to_request_dict,
+    _notes_to_request_messages,
+    _strip_assistant_reasoning_fields,
 )
 from core.debug import DebugContext
 from core.extensions import HookContext
