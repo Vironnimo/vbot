@@ -6,7 +6,7 @@
             "max_output_tokens": 65536,
             "recommended_temperature": 1.0,
             "recommended_top_p": 0.95,
-            "reasoning_replay": "none",
+            "reasoning_replay": "current_run",
             "metadata": {
                 "ollama": {
                     "remote": true
@@ -17,7 +17,7 @@
             }
         },
         "deepseek-v4-flash:preview": {
-            "reasoning_replay": "none",
+            "reasoning_replay": "current_run",
             "metadata": {
                 "ollama": {
                     "remote": true
@@ -28,7 +28,7 @@
             }
         },
         "deepseek-v4-pro:0813": {
-            "reasoning_replay": "none",
+            "reasoning_replay": "current_run",
             "metadata": {
                 "ollama": {
                     "remote": true
@@ -39,7 +39,7 @@
             }
         },
         "deepseek-v4-pro:preview": {
-            "reasoning_replay": "none",
+            "reasoning_replay": "current_run",
             "metadata": {
                 "ollama": {
                     "remote": true
