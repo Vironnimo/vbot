@@ -3,6 +3,8 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   createAutosaveCoordinator,
   createAutosaveParticipant,
+  createDebouncedAutosave,
+  DEFAULT_AUTOSAVE_DEBOUNCE_MS,
 } from '../autosave.js';
 
 function deferred() {
@@ -108,5 +110,89 @@ describe('autosave coordination', () => {
     await expect(participant.runSave()).resolves.toBe(false);
     expect(save).toHaveBeenCalledOnce();
     expect(participant.hasPending()).toBe(true);
+  });
+});
+
+describe('debounced autosave', () => {
+  it('schedules one save after the debounce window', async () => {
+    vi.useFakeTimers();
+    const save = vi.fn().mockResolvedValue(true);
+    const debounced = createDebouncedAutosave({
+      getSnapshot: () => ({ value: 'draft' }),
+      hasChanges: () => true,
+      save,
+      debounceMs: 50,
+    });
+
+    debounced.scheduleRun();
+    expect(save).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(50);
+    expect(save).toHaveBeenCalledTimes(1);
+
+    vi.useRealTimers();
+  });
+
+  it('resets the timer on every scheduleRun call', async () => {
+    vi.useFakeTimers();
+    const save = vi.fn().mockResolvedValue(true);
+    const debounced = createDebouncedAutosave({
+      getSnapshot: () => ({ value: 'draft' }),
+      hasChanges: () => true,
+      save,
+      debounceMs: 50,
+    });
+
+    debounced.scheduleRun();
+    await vi.advanceTimersByTimeAsync(30);
+    debounced.scheduleRun();
+    await vi.advanceTimersByTimeAsync(30);
+    expect(save).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(20);
+    expect(save).toHaveBeenCalledTimes(1);
+
+    vi.useRealTimers();
+  });
+
+  it('cancels a pending run via cancelPendingTimer', async () => {
+    vi.useFakeTimers();
+    const save = vi.fn().mockResolvedValue(true);
+    const debounced = createDebouncedAutosave({
+      getSnapshot: () => ({ value: 'draft' }),
+      hasChanges: () => true,
+      save,
+      debounceMs: 50,
+    });
+
+    debounced.scheduleRun();
+    debounced.cancelPendingTimer();
+    await vi.advanceTimersByTimeAsync(60);
+    expect(save).not.toHaveBeenCalled();
+
+    vi.useRealTimers();
+  });
+
+  it('wires cancelPending into the participant so a flush clears the timer', async () => {
+    vi.useFakeTimers();
+    const save = vi.fn().mockResolvedValue(true);
+    const debounced = createDebouncedAutosave({
+      getSnapshot: () => ({ value: 'draft' }),
+      hasChanges: () => true,
+      save,
+      debounceMs: 50,
+    });
+
+    debounced.scheduleRun();
+    await debounced.participant.flush();
+    expect(save).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(60);
+    expect(save).toHaveBeenCalledTimes(1);
+
+    vi.useRealTimers();
+  });
+
+  it('exposes the default debounce constant', () => {
+    expect(DEFAULT_AUTOSAVE_DEBOUNCE_MS).toBe(800);
   });
 });

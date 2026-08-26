@@ -4,7 +4,7 @@
   import Dropdown from '../Dropdown.svelte';
   import Button from '../ui/Button.svelte';
   import {
-    createAutosaveParticipant,
+    createDebouncedAutosave,
     useAutosaveContext,
   } from '$lib/autosave.js';
   import { t } from '$lib/i18n.js';
@@ -15,7 +15,6 @@
     getRecallSettings,
   } from '$lib/settingsView.js';
 
-  const AUTO_SAVE_DEBOUNCE_MS = 800;
   const noop = () => {};
 
   let {
@@ -29,7 +28,6 @@
   // reactive dependency); later commits flow back through saveDisabled.
   let recallSettings = $state(untrack(() => getRecallSettings(settings)));
   let saving = $state(false);
-  let autoSaveTimer = null;
 
   let recallBackendOptions = $derived(
     buildRecallBackendOptions(recallSettings, t),
@@ -38,41 +36,32 @@
     saving || recallSettingsMatch(recallSettings, getRecallSettings(settings)),
   );
   const autosaveContext = useAutosaveContext();
-  const recallAutosave = createAutosaveParticipant({
-    cancelPending: clearAutoSaveTimer,
+  const recallAutosave = createDebouncedAutosave({
     getSnapshot: () => ({ ...recallSettings }),
     hasChanges: () =>
       !recallSettingsMatch(recallSettings, getRecallSettings(settings)),
     save: saveRecallSettings,
   });
-  const unregisterRecallAutosave = autosaveContext.register(recallAutosave);
+  const unregisterRecallAutosave = autosaveContext.register(
+    recallAutosave.participant,
+  );
 
   $effect(() => {
     if (saveDisabled) {
       return;
     }
 
-    autoSaveTimer = setTimeout(() => {
-      autoSaveTimer = null;
-      void recallAutosave.runSave();
-    }, AUTO_SAVE_DEBOUNCE_MS);
+    recallAutosave.scheduleRun();
 
     return () => {
-      clearAutoSaveTimer();
+      recallAutosave.cancelPendingTimer();
     };
   });
 
   onDestroy(() => {
     unregisterRecallAutosave();
-    clearAutoSaveTimer();
+    recallAutosave.cancelPendingTimer();
   });
-
-  function clearAutoSaveTimer() {
-    if (autoSaveTimer !== null) {
-      clearTimeout(autoSaveTimer);
-      autoSaveTimer = null;
-    }
-  }
 
   function recallSettingsMatch(left, right) {
     return (
@@ -102,8 +91,8 @@
       return;
     }
 
-    clearAutoSaveTimer();
-    void recallAutosave.runSave('manual');
+    recallAutosave.cancelPendingTimer();
+    void recallAutosave.participant.runSave('manual');
   }
 
   async function saveRecallSettings() {

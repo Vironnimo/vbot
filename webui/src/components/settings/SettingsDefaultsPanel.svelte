@@ -8,7 +8,7 @@
   import TextField from '../ui/TextField.svelte';
   import { listConnections, listModels } from '$lib/api.js';
   import {
-    createAutosaveParticipant,
+    createDebouncedAutosave,
     useAutosaveContext,
   } from '$lib/autosave.js';
   import { t } from '$lib/i18n.js';
@@ -33,7 +33,6 @@
   } from '$lib/resourceInvalidation.js';
 
   const noop = () => {};
-  const AUTO_SAVE_DEBOUNCE_MS = 800;
   const AGENT_THINKING_EFFORT_OPTIONS = Object.freeze([
     'none',
     'minimal',
@@ -75,7 +74,6 @@
   let saving = $state(false);
   let availableModels = $state([]);
   let availableConnections = $state([]);
-  let autoSaveTimer = null;
   // A live model reload fetches in the background but holds the visible option
   // swap while a picker is open, so an open selection is never disturbed; the
   // form's selected value lives in `agentDefaults`, separate from these options.
@@ -149,14 +147,13 @@
     listModels,
     listConnections,
   });
-  const agentDefaultsAutosave = createAutosaveParticipant({
-    cancelPending: clearAutoSaveTimer,
+  const agentDefaultsAutosave = createDebouncedAutosave({
     getSnapshot: () => ({ ...agentDefaults }),
     hasChanges: agentDefaultsDraftHasChanges,
     save: saveAgentDefaults,
   });
   const unregisterAgentDefaultsAutosave = autosaveContext.register(
-    agentDefaultsAutosave,
+    agentDefaultsAutosave.participant,
   );
 
   onMount(() => {
@@ -166,7 +163,7 @@
   onDestroy(() => {
     modelCatalogLoader.invalidate();
     unregisterAgentDefaultsAutosave();
-    clearAutoSaveTimer();
+    agentDefaultsAutosave.cancelPendingTimer();
   });
 
   $effect(() => {
@@ -174,13 +171,10 @@
       return;
     }
 
-    autoSaveTimer = setTimeout(() => {
-      autoSaveTimer = null;
-      void agentDefaultsAutosave.runSave();
-    }, AUTO_SAVE_DEBOUNCE_MS);
+    agentDefaultsAutosave.scheduleRun();
 
     return () => {
-      clearAutoSaveTimer();
+      agentDefaultsAutosave.cancelPendingTimer();
     };
   });
 
@@ -196,13 +190,6 @@
       void reloadModelCatalogs();
     }
   });
-
-  function clearAutoSaveTimer() {
-    if (autoSaveTimer !== null) {
-      clearTimeout(autoSaveTimer);
-      autoSaveTimer = null;
-    }
-  }
 
   function applyModelCatalogs(catalogs) {
     availableModels = catalogs.models;
@@ -346,8 +333,8 @@
       return;
     }
 
-    clearAutoSaveTimer();
-    void agentDefaultsAutosave.runSave('manual');
+    agentDefaultsAutosave.cancelPendingTimer();
+    void agentDefaultsAutosave.participant.runSave('manual');
   }
 
   async function saveAgentDefaults() {

@@ -4,7 +4,7 @@
   import Button from '../ui/Button.svelte';
   import TextField from '../ui/TextField.svelte';
   import {
-    createAutosaveParticipant,
+    createDebouncedAutosave,
     useAutosaveContext,
   } from '$lib/autosave.js';
   import { t } from '$lib/i18n.js';
@@ -14,7 +14,6 @@
     normalizeSubAgentSettings,
   } from '$lib/settingsView.js';
 
-  const AUTO_SAVE_DEBOUNCE_MS = 800;
   const noop = () => {};
 
   let {
@@ -30,7 +29,6 @@
     untrack(() => normalizeSubAgentSettings(settings)),
   );
   let saving = $state(false);
-  let autoSaveTimer = null;
 
   let saveDisabled = $derived(
     saving ||
@@ -40,41 +38,31 @@
       ),
   );
   const autosaveContext = useAutosaveContext();
-  const subAgentsAutosave = createAutosaveParticipant({
-    cancelPending: clearAutoSaveTimer,
+  const subAgentsAutosave = createDebouncedAutosave({
     getSnapshot: () => ({ ...subAgentSettings }),
     hasChanges: subAgentDraftHasChanges,
     save: saveSubAgentSettings,
   });
-  const unregisterSubAgentsAutosave =
-    autosaveContext.register(subAgentsAutosave);
+  const unregisterSubAgentsAutosave = autosaveContext.register(
+    subAgentsAutosave.participant,
+  );
 
   $effect(() => {
     if (saveDisabled) {
       return;
     }
 
-    autoSaveTimer = setTimeout(() => {
-      autoSaveTimer = null;
-      void subAgentsAutosave.runSave();
-    }, AUTO_SAVE_DEBOUNCE_MS);
+    subAgentsAutosave.scheduleRun();
 
     return () => {
-      clearAutoSaveTimer();
+      subAgentsAutosave.cancelPendingTimer();
     };
   });
 
   onDestroy(() => {
     unregisterSubAgentsAutosave();
-    clearAutoSaveTimer();
+    subAgentsAutosave.cancelPendingTimer();
   });
-
-  function clearAutoSaveTimer() {
-    if (autoSaveTimer !== null) {
-      clearTimeout(autoSaveTimer);
-      autoSaveTimer = null;
-    }
-  }
 
   function subAgentSettingsMatch(left, right) {
     const normalizedLeft = normalizeSubAgentSettings({ subagents: left });
@@ -120,8 +108,8 @@
       return;
     }
 
-    clearAutoSaveTimer();
-    void subAgentsAutosave.runSave('manual');
+    subAgentsAutosave.cancelPendingTimer();
+    void subAgentsAutosave.participant.runSave('manual');
   }
 
   async function saveSubAgentSettings() {
