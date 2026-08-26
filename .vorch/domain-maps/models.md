@@ -82,4 +82,5 @@ Capabilities are facts about one model through one provider. `task_types` derive
 - The full canonical mirror is intentionally unfiltered; do not add discovery defaults.
 - `metadata` replaces wholesale at load (unlike one-level-deep `capabilities`).
 - Override-only models/providers work and must supply loader-required fields.
+- An override entry for a wire-id that is missing from the generated `<provider>.json` is dropped with "Ignoring invalid Model DB model ..." - a pin-only entry is valid only when the model exists in the generated file. Fix by refreshing the Model DB (`scripts/refresh_model_db.py`), never by duplicating required fields into the override; overrides carry only what they override (user rule 2026-08-26).
 - Models are immutable after load - change layer files, then invalidate/reload; never mutate a loaded `Model`.
