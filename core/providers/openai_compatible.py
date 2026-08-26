@@ -548,13 +548,29 @@ class OpenAICompatibleAdapter(ProviderAdapter):
         hardcoded adapter constant is only the floor for a model with no feed
         ladder (e.g. opencode-go, whose ladder is clobbered upstream — Phase 5).
         """
-        ladder = model_reasoning_levels(self._model_lookup, model_id)
+        return self._reasoning_effort_ladder(self._model_lookup, self._config, model_id)
+
+    @classmethod
+    def _reasoning_effort_ladder(
+        cls,
+        model_lookup: ModelLookup | None,
+        provider_config: ProviderConfig | None,
+        model_id: str,
+    ) -> set[str] | tuple[str, ...]:
+        """Class-level twin of :meth:`_supported_reasoning_efforts`.
+
+        The render path snaps against this through the instance; the render
+        description (``describe_reasoning_render``) snaps against the same
+        ladder without needing an adapter instance.
+        """
+        ladder = model_reasoning_levels(model_lookup, model_id)
         if ladder is not None:
             return ladder
-        return self._reasoning_efforts_floor()
+        return cls._reasoning_efforts_floor(provider_config)
 
-    def _reasoning_efforts_floor(self) -> set[str]:
-        if self._config.id in OPENAI_NONE_REASONING_PROVIDER_IDS:
+    @classmethod
+    def _reasoning_efforts_floor(cls, provider_config: ProviderConfig | None) -> set[str]:
+        if provider_config is not None and provider_config.id in OPENAI_NONE_REASONING_PROVIDER_IDS:
             return OPENAI_REASONING_EFFORTS_WITH_NONE
         return OPENAI_REASONING_EFFORTS
 
@@ -620,6 +636,42 @@ class OpenAICompatibleAdapter(ProviderAdapter):
             and intent.effort_level == "none"
         ):
             payload["reasoning_effort"] = "none"
+
+    @classmethod
+    def describe_reasoning_render(
+        cls,
+        *,
+        model_lookup: ModelLookup | None,
+        model_id: str,
+        effort: str | None,
+        provider_config: ProviderConfig | None = None,
+    ) -> ReasoningIntent:
+        """Describe the generic Chat Completions reasoning render.
+
+        The generic wire has no toggle or budget field: ``_render_reasoning``
+        degrades an ``on``/``budget`` intent to the snapped effort level
+        whenever one snaps against the effective ladder — including for an
+        ``on_off``-declared Model (e.g. Ollama Cloud's GLM backends), whose
+        declared control is binary only because ``/api/show`` reports a
+        boolean thinking capability. The description therefore re-resolves
+        against the same effective ladder the render snaps against and
+        reports the level as an ``effort`` intent whenever one would be sent.
+        """
+
+        intent = resolve_reasoning_intent(
+            supported=model_reasoning_supported(model_lookup, model_id),
+            control=model_reasoning_control(model_lookup, model_id),
+            levels=tuple(cls._reasoning_effort_ladder(model_lookup, provider_config, model_id)),
+            effort=effort,
+            budget_max=model_reasoning_budget_max(model_lookup, model_id),
+            max_tokens=None,
+        )
+        if (
+            intent.kind in (REASONING_INTENT_BUDGET, REASONING_INTENT_ON)
+            and intent.effort_level is not None
+        ):
+            return ReasoningIntent(REASONING_INTENT_EFFORT, effort_level=intent.effort_level)
+        return intent
 
     def _classify_http_status(
         self,
