@@ -1767,26 +1767,107 @@ class TestModelRegistryRealResources:
         pro = registry.get("ollama-cloud", "deepseek-v4-pro:preview")
         assert pro.recommended_top_p is None
 
-    def test_ollama_cloud_reasoning_replay_policies(self):
-        """Ollama Cloud defaults to full_history; DeepSeek V4 models opt out.
+    def test_opencode_go_glm_5_3_flash_override_loads(self):
+        """``opencode-go.overrides.json`` pins glm-5.3-flash to current_run.
 
-        Live-verified 2026-08 with the probe (token secrets, exact system
-        path): GLM-5.2 reads replayed reasoning across turns (5/5) and within
-        the run (3/3) on both /v1 and native /api/chat, so it inherits the
-        full_history default. DeepSeek V4 Flash/Pro and MiniMax M3 ignore the
-        carrier entirely in both scopes and on both routes — only visible
-        content works — so they pin ``none``.
+        The override carries the full required record (name, capabilities,
+        context window, output ceiling) so it loads instead of being dropped
+        as invalid - a bare pin-only entry was silently discarded before.
+        """
+
+        registry = ModelRegistry.load(RESOURCES_DIR)
+
+        model = registry.get("opencode-go", "glm-5.3-flash")
+        assert model.reasoning_replay == "current_run"
+        assert model.context_window == 1_000_000
+        assert model.metadata["opencode_go"]["reasoning_response_field"] == "reasoning_content"
+
+    def test_ollama_cloud_reasoning_replay_policies(self):
+        """Ollama Cloud replay pins, live-verified 2026-08-26.
+
+        Streaming token accounting (billed-input deltas in vBot's real request
+        shapes, visible-content control per variant) on /v1/chat/completions:
+
+        - full_history (inherited default): GLM-5.1, GLM-5.2, Kimi K3 - the
+          ``reasoning`` carrier is accepted and billed in both scopes.
+        - current_run: DeepSeek V4 Flash/Pro and Kimi K2.6/K2.7-code - in-run
+          replayed reasoning is billed, cross-run replay is stripped.
+        - none: Gemma 4, GPT-OSS, MiniMax M2.7/M3, Nemotron 3, Qwen 3.5 - the
+          carrier is stripped in both scopes (zero delta, positive control).
+
+        All measured models emit ``reasoning`` as their response carrier; the
+        ``reasoning_content`` profiles were wrong and are corrected (that
+        field is stripped even in-run on this wire).
         """
 
         registry = ModelRegistry.load(RESOURCES_DIR)
 
         assert registry.provider_reasoning_replay("ollama-cloud") == "full_history"
+        assert registry.get("ollama-cloud", "glm-5.1").reasoning_replay is None
         assert registry.get("ollama-cloud", "glm-5.2").reasoning_replay is None
-        assert registry.get("ollama-cloud", "deepseek-v4-flash:0731").reasoning_replay == "none"
-        assert registry.get("ollama-cloud", "deepseek-v4-flash:preview").reasoning_replay == "none"
-        assert registry.get("ollama-cloud", "deepseek-v4-pro:preview").reasoning_replay == "none"
-        assert registry.get("ollama-cloud", "deepseek-v4-pro:0813").reasoning_replay == "none"
+        assert registry.get("ollama-cloud", "kimi-k3").reasoning_replay is None
+        assert (
+            registry.get("ollama-cloud", "deepseek-v4-flash:0731").reasoning_replay == "current_run"
+        )
+        assert (
+            registry.get("ollama-cloud", "deepseek-v4-flash:preview").reasoning_replay
+            == "current_run"
+        )
+        assert (
+            registry.get("ollama-cloud", "deepseek-v4-pro:preview").reasoning_replay
+            == "current_run"
+        )
+        assert (
+            registry.get("ollama-cloud", "deepseek-v4-pro:0813").reasoning_replay == "current_run"
+        )
+        assert registry.get("ollama-cloud", "kimi-k2.6").reasoning_replay == "current_run"
+        assert registry.get("ollama-cloud", "kimi-k2.7-code").reasoning_replay == "current_run"
+        assert registry.get("ollama-cloud", "gemma4:31b").reasoning_replay == "none"
+        assert registry.get("ollama-cloud", "gpt-oss:120b").reasoning_replay == "none"
+        assert registry.get("ollama-cloud", "gpt-oss:20b").reasoning_replay == "none"
+        assert registry.get("ollama-cloud", "minimax-m2.7").reasoning_replay == "none"
         assert registry.get("ollama-cloud", "minimax-m3").reasoning_replay == "none"
+        assert registry.get("ollama-cloud", "nemotron-3-nano:30b").reasoning_replay == "none"
+        assert registry.get("ollama-cloud", "nemotron-3-super").reasoning_replay == "none"
+        assert registry.get("ollama-cloud", "nemotron-3-ultra").reasoning_replay == "none"
+        assert registry.get("ollama-cloud", "qwen3.5:397b").reasoning_replay == "none"
+
+    def test_ollama_cloud_reasoning_response_fields(self):
+        """Every measured Ollama Cloud model emits ``reasoning`` as carrier.
+
+        Live-verified 2026-08-26: all probed models stream their reasoning
+        under ``message.reasoning``. The previous ``reasoning_content``
+        profiles (GLM-5.1, Kimi) and the ``reasoning_details`` profile
+        (Qwen 3.5) were wrong - that field is stripped even in-run on this
+        wire, so the corrected profile is what makes replay work at all.
+        """
+
+        registry = ModelRegistry.load(RESOURCES_DIR)
+
+        for model_id in (
+            "deepseek-v4-flash:0731",
+            "deepseek-v4-flash:preview",
+            "deepseek-v4-pro:0813",
+            "deepseek-v4-pro:preview",
+            "gemma4:31b",
+            "glm-5.1",
+            "glm-5.2",
+            "gpt-oss:120b",
+            "gpt-oss:20b",
+            "kimi-k2.6",
+            "kimi-k2.7-code",
+            "kimi-k3",
+            "minimax-m2.7",
+            "minimax-m3",
+            "nemotron-3-nano:30b",
+            "nemotron-3-super",
+            "nemotron-3-ultra",
+            "qwen3.5:397b",
+        ):
+            field = registry.get("ollama-cloud", model_id).metadata["ollama_cloud"][
+                "reasoning_response_field"
+            ]
+            assert field == "reasoning", f"{model_id}: {field}"
 
     def test_openai_task_model_overrides_are_limited_to_working_connections(self):
         """OpenAI task models without a subscription wire are api-key only, while

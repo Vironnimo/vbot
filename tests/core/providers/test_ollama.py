@@ -232,7 +232,7 @@ GLM_CLOUD_MODEL = Model(
     reasoning_replay="full_history",
 )
 
-DEEPSEEK_CLOUD_FULL_HISTORY_MODEL = Model(
+DEEPSEEK_CLOUD_CURRENT_RUN_MODEL = Model(
     model_id="deepseek-v4-flash:0731",
     name="DeepSeek V4 Flash",
     capabilities=Capabilities(
@@ -251,6 +251,7 @@ DEEPSEEK_CLOUD_FULL_HISTORY_MODEL = Model(
         "ollama": {"remote": True},
         "ollama_cloud": {"reasoning_response_field": "reasoning_content"},
     },
+    reasoning_replay="current_run",
 )
 
 KIMI_CLOUD_MODEL = Model(
@@ -269,8 +270,30 @@ KIMI_CLOUD_MODEL = Model(
     max_output_tokens=None,
     metadata={
         "ollama": {"remote": True},
-        "ollama_cloud": {"reasoning_response_field": "reasoning_content"},
+        "ollama_cloud": {"reasoning_response_field": "reasoning"},
     },
+    reasoning_replay="current_run",
+)
+
+MINIMAX_M2_7_CLOUD_MODEL = Model(
+    model_id="minimax-m2.7",
+    name="MiniMax M2.7",
+    capabilities=Capabilities(
+        vision=False,
+        tools=True,
+        json_mode=False,
+        reasoning=ReasoningCapabilities(
+            supported=True,
+            control=REASONING_CONTROL_ON_OFF,
+        ),
+    ),
+    context_window=196_608,
+    max_output_tokens=None,
+    metadata={
+        "ollama": {"remote": True},
+        "ollama_cloud": {"reasoning_response_field": "reasoning"},
+    },
+    reasoning_replay="none",
 )
 
 MINIMAX_M3_FULL_HISTORY_MODEL = Model(
@@ -301,8 +324,9 @@ _MODELS = {
     "deepseek-v4-flash": DEEPSEEK_CLOUD_MODEL,
     "minimax-m3": MINIMAX_M3_FULL_HISTORY_MODEL,
     "glm-5.2": GLM_CLOUD_MODEL,
-    "deepseek-v4-flash:0731": DEEPSEEK_CLOUD_FULL_HISTORY_MODEL,
+    "deepseek-v4-flash:0731": DEEPSEEK_CLOUD_CURRENT_RUN_MODEL,
     "kimi-k2.6": KIMI_CLOUD_MODEL,
+    "minimax-m2.7": MINIMAX_M2_7_CLOUD_MODEL,
 }
 
 
@@ -615,15 +639,46 @@ class TestOllamaCloudChatWire:
         self,
         cloud_adapter: OllamaCloudAdapter,
     ) -> None:
-        assert cloud_adapter.reasoning_replay_policy("minimax-m2.7") == "full_history"
+        assert cloud_adapter.reasoning_replay_policy("unknown-cloud-model") == "full_history"
 
-    def test_deepseek_cloud_reasoning_replay_is_full_history(
+    def test_kimi_cloud_reasoning_replay_is_current_run(
         self,
         cloud_adapter: OllamaCloudAdapter,
     ) -> None:
-        """DeepSeek V4 Cloud Models replay reasoning across turns (API requires it)."""
+        """Kimi K2.6 Cloud replays reasoning only within the current run.
 
-        assert cloud_adapter.reasoning_replay_policy("deepseek-v4-flash:0731") == "full_history"
+        Live-verified 2026-08-26 via streaming token accounting: the /v1 wire
+        accepts and bills in-run replayed reasoning under the ``reasoning``
+        carrier, while cross-run replay is stripped.
+        """
+
+        assert cloud_adapter.reasoning_replay_policy("kimi-k2.6") == "current_run"
+
+    def test_minimax_m2_cloud_reasoning_replay_is_none(
+        self,
+        cloud_adapter: OllamaCloudAdapter,
+    ) -> None:
+        """MiniMax M2.7 Cloud strips replayed reasoning on every carrier.
+
+        Live-verified 2026-08-26 via streaming token accounting: zero billed
+        delta for the ``reasoning`` carrier in both scopes while the visible
+        control validates accounting.
+        """
+
+        assert cloud_adapter.reasoning_replay_policy("minimax-m2.7") == "none"
+
+    def test_deepseek_cloud_reasoning_replay_is_current_run(
+        self,
+        cloud_adapter: OllamaCloudAdapter,
+    ) -> None:
+        """DeepSeek V4 Cloud Models replay reasoning only within the current run.
+
+        Live-verified 2026-08-26 via streaming token accounting: the /v1 wire
+        accepts and bills in-run replayed reasoning under the ``reasoning``
+        carrier, while cross-run replay is stripped on every field.
+        """
+
+        assert cloud_adapter.reasoning_replay_policy("deepseek-v4-flash:0731") == "current_run"
 
     @respx.mock
     @pytest.mark.asyncio
@@ -733,13 +788,15 @@ class TestOllamaCloudChatWire:
             *SAMPLE_MESSAGES,
             {
                 "role": "assistant",
-                "model": "minimax-m2.7",
+                "model": "unprofiled-cloud-model",
                 "content": "OK",
                 "reasoning": "EXACT old Reasoning: äöü\nline two\n",
             },
         ]
 
-        await cloud_adapter.send(messages, model_id="minimax-m2.7", thinking_effort="high")
+        await cloud_adapter.send(
+            messages, model_id="unprofiled-cloud-model", thinking_effort="high"
+        )
 
         payload_messages = _last_request_payload(route)["messages"]
         assistant_message = payload_messages[-1]
@@ -759,22 +816,24 @@ class TestOllamaCloudChatWire:
             return_value=httpx.Response(200, json=CLOUD_REASONING_CONTENT_RESPONSE)
         )
         raw_response = await cloud_adapter.send(
-            SAMPLE_MESSAGES, model_id="minimax-m2.7", thinking_effort="high"
+            SAMPLE_MESSAGES, model_id="unprofiled-cloud-model", thinking_effort="high"
         )
         # Chat normalizes every send() response before the next request.
-        cloud_adapter.normalize_response(raw_response, model_id="minimax-m2.7")
+        cloud_adapter.normalize_response(raw_response, model_id="unprofiled-cloud-model")
 
         route.mock(return_value=httpx.Response(200, json=CLOUD_TEXT_RESPONSE))
         messages: list[dict[str, Any]] = [
             *SAMPLE_MESSAGES,
             {
                 "role": "assistant",
-                "model": "minimax-m2.7",
+                "model": "unprofiled-cloud-model",
                 "content": "OK",
                 "reasoning": "EXACT old Reasoning: äöü\nline two\n",
             },
         ]
-        await cloud_adapter.send(messages, model_id="minimax-m2.7", thinking_effort="high")
+        await cloud_adapter.send(
+            messages, model_id="unprofiled-cloud-model", thinking_effort="high"
+        )
 
         payload_messages = _last_request_payload(route)["messages"]
         assistant_message = payload_messages[-1]
@@ -794,22 +853,24 @@ class TestOllamaCloudChatWire:
             return_value=httpx.Response(200, json=CLOUD_TEXT_RESPONSE)
         )
         raw_response = await cloud_adapter.send(
-            SAMPLE_MESSAGES, model_id="minimax-m2.7", thinking_effort="high"
+            SAMPLE_MESSAGES, model_id="unprofiled-cloud-model", thinking_effort="high"
         )
         # Chat normalizes every send() response before the next request.
-        cloud_adapter.normalize_response(raw_response, model_id="minimax-m2.7")
+        cloud_adapter.normalize_response(raw_response, model_id="unprofiled-cloud-model")
 
         route.mock(return_value=httpx.Response(200, json=CLOUD_TEXT_RESPONSE))
         messages: list[dict[str, Any]] = [
             *SAMPLE_MESSAGES,
             {
                 "role": "assistant",
-                "model": "minimax-m2.7",
+                "model": "unprofiled-cloud-model",
                 "content": "OK",
                 "reasoning": "EXACT old Reasoning: äöü\nline two\n",
             },
         ]
-        await cloud_adapter.send(messages, model_id="minimax-m2.7", thinking_effort="high")
+        await cloud_adapter.send(
+            messages, model_id="unprofiled-cloud-model", thinking_effort="high"
+        )
 
         payload_messages = _last_request_payload(route)["messages"]
         assistant_message = payload_messages[-1]
@@ -846,7 +907,7 @@ class TestOllamaCloudChatWire:
             delta
             async for delta in cloud_adapter.stream(
                 SAMPLE_MESSAGES,
-                model_id="minimax-m2.7",
+                model_id="unprofiled-cloud-model",
                 thinking_effort="high",
             )
         ]
@@ -860,12 +921,14 @@ class TestOllamaCloudChatWire:
             *SAMPLE_MESSAGES,
             {
                 "role": "assistant",
-                "model": "minimax-m2.7",
+                "model": "unprofiled-cloud-model",
                 "content": "OK",
                 "reasoning": "EXACT old Reasoning: äöü\nline two\n",
             },
         ]
-        await cloud_adapter.send(replay_messages, model_id="minimax-m2.7", thinking_effort="high")
+        await cloud_adapter.send(
+            replay_messages, model_id="unprofiled-cloud-model", thinking_effort="high"
+        )
 
         payload_messages = _last_request_payload(route)["messages"]
         assistant_message = payload_messages[-1]
@@ -875,11 +938,15 @@ class TestOllamaCloudChatWire:
 
     @respx.mock
     @pytest.mark.asyncio
-    async def test_kimi_cloud_replays_reasoning_as_reasoning_content(
+    async def test_kimi_cloud_replays_reasoning_as_reasoning_field(
         self,
         cloud_adapter: OllamaCloudAdapter,
     ) -> None:
-        """Moonshot's replay contract requires reasoning_content on multi-turn tool use."""
+        """Kimi Cloud models emit and accept ``reasoning`` as the replay carrier.
+
+        Live-verified 2026-08-26: the /v1 wire strips ``reasoning_content``
+        even in-run, so the profiled field must be ``reasoning``.
+        """
 
         route = respx.post(OLLAMA_CLOUD_CHAT_URL).mock(
             return_value=httpx.Response(200, json=CLOUD_TEXT_RESPONSE)
@@ -898,7 +965,8 @@ class TestOllamaCloudChatWire:
 
         payload_messages = _last_request_payload(route)["messages"]
         assistant_message = payload_messages[-1]
-        assert assistant_message["reasoning_content"] == "The user requested exactly OK."
+        assert assistant_message["reasoning"] == "The user requested exactly OK."
+        assert "reasoning_content" not in assistant_message
         await cloud_adapter.aclose()
 
     @respx.mock

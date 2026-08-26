@@ -49,6 +49,17 @@
                 }
             }
         },
+        "gemma4:31b": {
+            "reasoning_replay": "none",
+            "metadata": {
+                "ollama": {
+                    "remote": true
+                },
+                "ollama_cloud": {
+                    "reasoning_response_field": "reasoning"
+                }
+            }
+        },
         "glm-5.1": {
             "recommended_temperature": 1.0,
             "metadata": {
@@ -56,7 +67,7 @@
                     "remote": true
                 },
                 "ollama_cloud": {
-                    "reasoning_response_field": "reasoning_content"
+                    "reasoning_response_field": "reasoning"
                 }
             }
         },
@@ -71,23 +82,47 @@
                 }
             }
         },
-        "kimi-k2.6": {
+        "gpt-oss:120b": {
+            "reasoning_replay": "none",
             "metadata": {
                 "ollama": {
                     "remote": true
                 },
                 "ollama_cloud": {
-                    "reasoning_response_field": "reasoning_content"
+                    "reasoning_response_field": "reasoning"
+                }
+            }
+        },
+        "gpt-oss:20b": {
+            "reasoning_replay": "none",
+            "metadata": {
+                "ollama": {
+                    "remote": true
+                },
+                "ollama_cloud": {
+                    "reasoning_response_field": "reasoning"
+                }
+            }
+        },
+        "kimi-k2.6": {
+            "reasoning_replay": "current_run",
+            "metadata": {
+                "ollama": {
+                    "remote": true
+                },
+                "ollama_cloud": {
+                    "reasoning_response_field": "reasoning"
                 }
             }
         },
         "kimi-k2.7-code": {
+            "reasoning_replay": "current_run",
             "metadata": {
                 "ollama": {
                     "remote": true
                 },
                 "ollama_cloud": {
-                    "reasoning_response_field": "reasoning_content"
+                    "reasoning_response_field": "reasoning"
                 }
             }
         },
@@ -97,11 +132,66 @@
                     "remote": true
                 },
                 "ollama_cloud": {
-                    "reasoning_response_field": "reasoning_content"
+                    "reasoning_response_field": "reasoning"
+                }
+            }
+        },
+        "minimax-m2.7": {
+            "reasoning_replay": "none",
+            "metadata": {
+                "ollama": {
+                    "remote": true
+                },
+                "ollama_cloud": {
+                    "reasoning_response_field": "reasoning"
                 }
             }
         },
         "minimax-m3": {
+            "reasoning_replay": "none",
+            "metadata": {
+                "ollama": {
+                    "remote": true
+                },
+                "ollama_cloud": {
+                    "reasoning_response_field": "reasoning"
+                }
+            }
+        },
+        "nemotron-3-nano:30b": {
+            "reasoning_replay": "none",
+            "metadata": {
+                "ollama": {
+                    "remote": true
+                },
+                "ollama_cloud": {
+                    "reasoning_response_field": "reasoning"
+                }
+            }
+        },
+        "nemotron-3-super": {
+            "reasoning_replay": "none",
+            "metadata": {
+                "ollama": {
+                    "remote": true
+                },
+                "ollama_cloud": {
+                    "reasoning_response_field": "reasoning"
+                }
+            }
+        },
+        "nemotron-3-ultra": {
+            "reasoning_replay": "none",
+            "metadata": {
+                "ollama": {
+                    "remote": true
+                },
+                "ollama_cloud": {
+                    "reasoning_response_field": "reasoning"
+                }
+            }
+        },
+        "qwen3.5:397b": {
             "reasoning_replay": "none",
             "metadata": {
                 "ollama": {
