@@ -145,6 +145,7 @@ async def _send_stream(
     carrier_field = ""
     tool_calls: list[dict[str, Any]] = []
     prompt_tokens: int | None = None
+    cached_tokens: int | None = None
     error_text = ""
 
     async with (
@@ -183,6 +184,10 @@ async def _send_stream(
             usage = chunk.get("usage")
             if isinstance(usage, dict) and usage.get("prompt_tokens") is not None:
                 prompt_tokens = int(usage["prompt_tokens"])
+                details = usage.get("prompt_tokens_details") or {}
+                cached = details.get("cached_tokens")
+                if isinstance(cached, int):
+                    cached_tokens = cached
 
     if prompt_tokens is None:
         raise RuntimeError(
@@ -195,6 +200,7 @@ async def _send_stream(
         "carrier_field": carrier_field,
         "tool_calls": tool_calls,
         "prompt_tokens": prompt_tokens,
+        "cached_tokens": cached_tokens,
     }
 
 
@@ -284,6 +290,10 @@ async def _send_stream_raw(
             usage = chunk.get("usage")
             if isinstance(usage, dict) and usage.get("prompt_tokens") is not None:
                 prompt_tokens = int(usage["prompt_tokens"])
+                details = usage.get("prompt_tokens_details") or {}
+                cached = details.get("cached_tokens")
+                if isinstance(cached, int):
+                    fields.setdefault("_cached_tokens", []).append(cached)
 
     if prompt_tokens is None:
         raise RuntimeError("no usage.prompt_tokens in stream (include_usage missing?)")
@@ -389,7 +399,7 @@ async def _measure_shape(
             "turn1_content_len": len(turn1["content"]),
         }
 
-    results: dict[str, int] = {}
+    results: dict[str, tuple[int, int | None]] = {}
     for mode in ("with", "without", "visible"):
         assistant = _assistant_variant(
             content=base_content,
@@ -417,16 +427,26 @@ async def _measure_shape(
             effort=effort,
             max_tokens=max_tokens,
         )
-        results[mode] = result["prompt_tokens"]
+        results[mode] = (result["prompt_tokens"], result["cached_tokens"])
 
+    with_prompt, with_cached = results["with"]
+    without_prompt, without_cached = results["without"]
+    visible_prompt, _visible_cached = results["visible"]
     return {
         "turn1_input": turn1["prompt_tokens"],
         "reasoning_len": len(reasoning),
-        "with": results["with"],
-        "without": results["without"],
-        "visible": results["visible"],
-        "delta_with": results["with"] - results["without"],
-        "delta_visible": results["visible"] - results["without"],
+        "with": with_prompt,
+        "without": without_prompt,
+        "visible": visible_prompt,
+        "delta_with": with_prompt - without_prompt,
+        "delta_visible": visible_prompt - without_prompt,
+        "cached_with": with_cached,
+        "cached_without": without_cached,
+        "delta_cached": (
+            (with_cached - without_cached)
+            if with_cached is not None and without_cached is not None
+            else None
+        ),
     }
 
 
@@ -553,10 +573,16 @@ async def _run(args: argparse.Namespace) -> int:
                     f"(input={in_run.get('turn1_input')})"
                 )
             else:
+                cached = (
+                    f" cached_delta={in_run['delta_cached']:+d}"
+                    if in_run.get("delta_cached") is not None
+                    else ""
+                )
                 print(
                     f"{summary['model']} [{carrier}] in_run: "
                     f"with={in_run['with']} without={in_run['without']} "
-                    f"delta={in_run['delta_with']:+d} (visible {in_run['delta_visible']:+d})"
+                    f"delta={in_run['delta_with']:+d} "
+                    f"(visible {in_run['delta_visible']:+d}{cached})"
                 )
             if "error" in cross_run:
                 print(
@@ -564,10 +590,16 @@ async def _run(args: argparse.Namespace) -> int:
                     f"(input={cross_run.get('turn1_input')})"
                 )
             else:
+                cached = (
+                    f" cached_delta={cross_run['delta_cached']:+d}"
+                    if cross_run.get("delta_cached") is not None
+                    else ""
+                )
                 print(
                     f"{summary['model']} [{carrier}] cross_run: "
                     f"with={cross_run['with']} without={cross_run['without']} "
-                    f"delta={cross_run['delta_with']:+d} (visible {cross_run['delta_visible']:+d})"
+                    f"delta={cross_run['delta_with']:+d} "
+                    f"(visible {cross_run['delta_visible']:+d}{cached})"
                 )
     return 0
 

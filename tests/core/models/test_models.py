@@ -1773,10 +1773,9 @@ class TestModelRegistryRealResources:
         The override is a bare pin-only patch (overrides only ever carry what
         they override); the required record fields come from the generated
         provider catalog, which now contains glm-5.3-flash after the
-        2026-08-26 refresh. A pin-only entry used to be silently dropped
-        because the model was missing from the generated file - the fix is
-        refreshing the catalog, not duplicating required fields into the
-        override.
+        2026-08-26 refresh. Pin restored to current_run by explicit user
+        decision 2026-08-26 after field-level probes showed no billed replay
+        (see the override _comment).
         """
 
         registry = ModelRegistry.load(RESOURCES_DIR)
