@@ -31,6 +31,7 @@ from core.search_config import (
     MAX_WEB_SEARCH_COUNT,
     MIN_WEB_SEARCH_COUNT,
 )
+from core.settings.agent_defaults import agent_default_catalog
 from core.settings.normalizers import (
     COMPACTION_SETTING_DEFAULTS,
     DEBUG_SETTING_DEFAULTS,
@@ -56,11 +57,8 @@ from core.settings.normalizers import (
     normalize_web_search_settings,
 )
 from core.settings.settings import (
-    ALLOWED_THINKING_EFFORTS,
     DEFAULT_APPEARANCE_CHAT_WIDTH,
     DEFAULT_APPEARANCE_CHAT_WORKING_MODE,
-    MAX_TEMPERATURE,
-    MIN_TEMPERATURE,
     OPENROUTER_ROUTING_MODES,
     SUPPORTED_APPEARANCE_CHAT_WIDTHS,
     SUPPORTED_APPEARANCE_CHAT_WORKING_MODES,
@@ -381,31 +379,7 @@ _DEFINITIONS: tuple[SettingDefinition, ...] = (
             maximum=maximum,
         )
         for field, value_type, description, allowed_values, minimum, maximum in (
-            ("model", "string", "Default Chat Model binding.", (), None, None),
-            (
-                "fallback_models",
-                "array",
-                "Ordered fallback Chat Model bindings tried when the primary fails.",
-                (),
-                None,
-                None,
-            ),
-            (
-                "temperature",
-                "number",
-                "Default sampling temperature.",
-                (),
-                MIN_TEMPERATURE,
-                MAX_TEMPERATURE,
-            ),
-            (
-                "thinking_effort",
-                "string",
-                "Default Reasoning effort.",
-                tuple(sorted(ALLOWED_THINKING_EFFORTS)),
-                None,
-                None,
-            ),
+            agent_default_catalog()
         )
     ),
     _static(

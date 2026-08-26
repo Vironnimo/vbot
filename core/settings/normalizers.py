@@ -8,7 +8,6 @@ read-modify-write transactions and delegates section normalization here.
 
 from __future__ import annotations
 
-import math
 import re
 from collections.abc import Mapping
 from pathlib import PurePosixPath, PureWindowsPath
@@ -32,13 +31,10 @@ from core.search_config import (
     MAX_WEB_SEARCH_COUNT,
     MIN_WEB_SEARCH_COUNT,
 )
+from core.settings.agent_defaults import AGENT_DEFAULT_FIELDS, normalize_agent_default_value
 from core.settings.settings import (
-    AGENT_DEFAULT_FIELDS,
-    ALLOWED_THINKING_EFFORTS,
     DEFAULT_APPEARANCE_CHAT_WIDTH,
     DEFAULT_APPEARANCE_CHAT_WORKING_MODE,
-    MAX_TEMPERATURE,
-    MIN_TEMPERATURE,
     SUPPORTED_APPEARANCE_CHAT_WIDTHS,
     SUPPORTED_APPEARANCE_CHAT_WORKING_MODES,
     SettingsValidationError,
@@ -511,43 +507,8 @@ def validate_supported_agent_default_fields(values: Mapping[str, Any]) -> None:
         raise StorageError(f"Unsupported defaults.agent settings: {', '.join(unsupported_fields)}")
 
 
-def normalize_agent_default_value(field: str, value: Any) -> str | list[str] | float | None:
-    """Validate and normalize a single ``defaults.agent`` field value."""
-
-    if value is None:
-        return None
-
-    if field in {"model", "fallback_models"}:
-        if field == "fallback_models":
-            if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
-                raise StorageError("Agent default fallback_models must be a string list")
-            return list(value)
-        if not isinstance(value, str):
-            raise StorageError(f"Agent default {field} must be a string")
-        return value
-
-    if field == "temperature":
-        if isinstance(value, bool) or not isinstance(value, int | float):
-            raise StorageError("Agent default temperature must be a number or null")
-        temperature = float(value)
-        if not math.isfinite(temperature):
-            raise StorageError("Agent default temperature must be finite")
-        if temperature < MIN_TEMPERATURE or temperature > MAX_TEMPERATURE:
-            raise StorageError(
-                "Agent default temperature must be between "
-                f"{MIN_TEMPERATURE:g} and {MAX_TEMPERATURE:g}"
-            )
-        return temperature
-
-    if field == "thinking_effort":
-        if not isinstance(value, str):
-            raise StorageError("Agent default thinking_effort must be a string or null")
-        if value not in ALLOWED_THINKING_EFFORTS:
-            allowed = ", ".join(repr(item) for item in sorted(ALLOWED_THINKING_EFFORTS))
-            raise StorageError(f"Agent default thinking_effort must be one of: {allowed}")
-        return value
-
-    raise StorageError(f"Unsupported defaults.agent setting: {field}")
+# normalize_agent_default_value is re-exported from core.settings.agent_defaults
+# above; the registry owns its single implementation (storage-layer messages).
 
 
 # --- recall -------------------------------------------------------------------
