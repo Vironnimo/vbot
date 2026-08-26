@@ -1,6 +1,7 @@
 import cronstrue from 'cronstrue';
 
 import { formatAgentAddress } from './agentAddress.js';
+import { asText } from './values.js';
 
 export const CRON_SCHEDULE_TYPE_CRON = 'cron';
 export const CRON_SCHEDULE_TYPE_INTERVAL = 'interval';
@@ -463,8 +464,4 @@ function formatInterval(seconds) {
 function optionalText(value) {
   const normalized = asText(value).trim();
   return normalized ? normalized : null;
-}
-
-function asText(value) {
-  return value === null || value === undefined ? '' : String(value);
 }

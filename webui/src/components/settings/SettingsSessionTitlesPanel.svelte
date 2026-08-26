@@ -6,7 +6,7 @@
   import Toggle from '../ui/Toggle.svelte';
   import { listConnections, listModels } from '$lib/api.js';
   import {
-    createAutosaveParticipant,
+    createDebouncedAutosave,
     useAutosaveContext,
   } from '$lib/autosave.js';
   import { t } from '$lib/i18n.js';
@@ -24,7 +24,6 @@
     normalizeSessionTitleSettings,
   } from '$lib/settingsView.js';
 
-  const AUTO_SAVE_DEBOUNCE_MS = 800;
   const noop = () => {};
 
   let {
@@ -42,7 +41,6 @@
   let availableModels = $state([]);
   let availableConnections = $state([]);
   let showAllModels = $state(false);
-  let timer = null;
   let lastModelsRefreshToken = null;
 
   let allModelOptions = $derived(
@@ -77,20 +75,19 @@
     saving || sessionTitleSettingsMatch(formValues, settings),
   );
   const autosaveContext = useAutosaveContext();
-  const sessionTitlesAutosave = createAutosaveParticipant({
-    cancelPending: clearTimer,
+  const sessionTitlesAutosave = createDebouncedAutosave({
     getSnapshot: () => ({ ...formValues }),
     hasChanges: () => !sessionTitleSettingsMatch(formValues, settings),
     save,
   });
   const unregisterSessionTitlesAutosave = autosaveContext.register(
-    sessionTitlesAutosave,
+    sessionTitlesAutosave.participant,
   );
 
   onMount(() => void loadModelCatalogs());
   onDestroy(() => {
     unregisterSessionTitlesAutosave();
-    clearTimer();
+    sessionTitlesAutosave.cancelPendingTimer();
   });
 
   $effect(() => {
@@ -106,19 +103,9 @@
 
   $effect(() => {
     if (saveDisabled) return;
-    timer = setTimeout(() => {
-      timer = null;
-      void sessionTitlesAutosave.runSave();
-    }, AUTO_SAVE_DEBOUNCE_MS);
-    return clearTimer;
+    sessionTitlesAutosave.scheduleRun();
+    return () => sessionTitlesAutosave.cancelPendingTimer();
   });
-
-  function clearTimer() {
-    if (timer !== null) {
-      clearTimeout(timer);
-      timer = null;
-    }
-  }
 
   async function loadModelCatalogs() {
     try {
@@ -183,8 +170,8 @@
       });
       return;
     }
-    clearTimer();
-    void sessionTitlesAutosave.runSave('manual');
+    sessionTitlesAutosave.cancelPendingTimer();
+    void sessionTitlesAutosave.participant.runSave('manual');
   }
 </script>
 

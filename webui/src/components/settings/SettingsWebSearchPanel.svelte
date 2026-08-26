@@ -5,7 +5,7 @@
   import Button from '../ui/Button.svelte';
   import TextField from '../ui/TextField.svelte';
   import {
-    createAutosaveParticipant,
+    createDebouncedAutosave,
     useAutosaveContext,
   } from '$lib/autosave.js';
   import { t } from '$lib/i18n.js';
@@ -16,7 +16,6 @@
     getWebSearchSettings,
   } from '$lib/settingsView.js';
 
-  const AUTO_SAVE_DEBOUNCE_MS = 800;
   const noop = () => {};
 
   let {
@@ -30,7 +29,6 @@
   // reactive dependency); later commits flow back through saveDisabled.
   let webSearchSettings = $state(untrack(() => getWebSearchSettings(settings)));
   let saving = $state(false);
-  let autoSaveTimer = null;
 
   let webSearchProviderOptions = $derived(
     buildWebSearchProviderOptions(webSearchSettings, t),
@@ -40,8 +38,7 @@
       webSearchSettingsMatch(webSearchSettings, getWebSearchSettings(settings)),
   );
   const autosaveContext = useAutosaveContext();
-  const webSearchAutosave = createAutosaveParticipant({
-    cancelPending: clearAutoSaveTimer,
+  const webSearchAutosave = createDebouncedAutosave({
     getSnapshot: () => ({
       ...webSearchSettings,
       searxng: { ...(webSearchSettings.searxng ?? {}) },
@@ -49,35 +46,26 @@
     hasChanges: webSearchDraftHasChanges,
     save: saveWebSearchSettings,
   });
-  const unregisterWebSearchAutosave =
-    autosaveContext.register(webSearchAutosave);
+  const unregisterWebSearchAutosave = autosaveContext.register(
+    webSearchAutosave.participant,
+  );
 
   $effect(() => {
     if (saveDisabled) {
       return;
     }
 
-    autoSaveTimer = setTimeout(() => {
-      autoSaveTimer = null;
-      void webSearchAutosave.runSave();
-    }, AUTO_SAVE_DEBOUNCE_MS);
+    webSearchAutosave.scheduleRun();
 
     return () => {
-      clearAutoSaveTimer();
+      webSearchAutosave.cancelPendingTimer();
     };
   });
 
   onDestroy(() => {
     unregisterWebSearchAutosave();
-    clearAutoSaveTimer();
+    webSearchAutosave.cancelPendingTimer();
   });
-
-  function clearAutoSaveTimer() {
-    if (autoSaveTimer !== null) {
-      clearTimeout(autoSaveTimer);
-      autoSaveTimer = null;
-    }
-  }
 
   function webSearchSettingsMatch(left, right) {
     const normalizedLeft = getWebSearchSettings({ web_search: left });
@@ -140,8 +128,8 @@
       return;
     }
 
-    clearAutoSaveTimer();
-    void webSearchAutosave.runSave('manual');
+    webSearchAutosave.cancelPendingTimer();
+    void webSearchAutosave.participant.runSave('manual');
   }
 
   async function saveWebSearchSettings() {

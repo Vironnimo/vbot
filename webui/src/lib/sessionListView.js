@@ -1,3 +1,5 @@
+import { asOptionalText, isPlainObject } from './values.js';
+
 const SESSION_FALLBACK_NAME = 'Session';
 const BACKGROUND_ONLY_RUN_KINDS = new Set([
   'cron',
@@ -291,17 +293,4 @@ function parseTimestamp(value) {
 
   const parsed = Date.parse(value);
   return Number.isNaN(parsed) ? null : parsed;
-}
-
-function asOptionalText(value) {
-  if (value === null || value === undefined) {
-    return null;
-  }
-
-  const normalized = String(value).trim();
-  return normalized.length > 0 ? normalized : null;
-}
-
-function isPlainObject(value) {
-  return value !== null && typeof value === 'object' && !Array.isArray(value);
 }

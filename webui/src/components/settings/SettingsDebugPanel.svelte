@@ -6,12 +6,11 @@
   import Toggle from '../ui/Toggle.svelte';
   import { updateSettings } from '$lib/api.js';
   import {
-    createAutosaveParticipant,
+    createDebouncedAutosave,
     useAutosaveContext,
   } from '$lib/autosave.js';
   import { t } from '$lib/i18n.js';
 
-  const AUTO_SAVE_DEBOUNCE_MS = 800;
   const noop = () => {};
 
   const DEBUG_SETTING_DEFAULTS = Object.freeze({
@@ -47,47 +46,37 @@
   // reactive dependency); later commits flow back through saveDisabled.
   let debugSettings = $state(untrack(() => getDebugSettings(settings)));
   let saving = $state(false);
-  let autoSaveTimer = null;
 
   let saveDisabled = $derived(
     saving || debugSettingsMatch(debugSettings, getDebugSettings(settings)),
   );
   const autosaveContext = useAutosaveContext();
-  const debugAutosave = createAutosaveParticipant({
-    cancelPending: clearAutoSaveTimer,
+  const debugAutosave = createDebouncedAutosave({
     getSnapshot: () => ({ ...debugSettings }),
     hasChanges: () =>
       !debugSettingsMatch(debugSettings, getDebugSettings(settings)),
     save: saveDebugSettings,
   });
-  const unregisterDebugAutosave = autosaveContext.register(debugAutosave);
+  const unregisterDebugAutosave = autosaveContext.register(
+    debugAutosave.participant,
+  );
 
   $effect(() => {
     if (saveDisabled) {
       return;
     }
 
-    autoSaveTimer = setTimeout(() => {
-      autoSaveTimer = null;
-      void debugAutosave.runSave();
-    }, AUTO_SAVE_DEBOUNCE_MS);
+    debugAutosave.scheduleRun();
 
     return () => {
-      clearAutoSaveTimer();
+      debugAutosave.cancelPendingTimer();
     };
   });
 
   onDestroy(() => {
     unregisterDebugAutosave();
-    clearAutoSaveTimer();
+    debugAutosave.cancelPendingTimer();
   });
-
-  function clearAutoSaveTimer() {
-    if (autoSaveTimer !== null) {
-      clearTimeout(autoSaveTimer);
-      autoSaveTimer = null;
-    }
-  }
 
   function debugSettingsMatch(left, right) {
     const normalizedLeft = getDebugSettings({ debug: left });
@@ -112,8 +101,8 @@
       return;
     }
 
-    clearAutoSaveTimer();
-    void debugAutosave.runSave('manual');
+    debugAutosave.cancelPendingTimer();
+    void debugAutosave.participant.runSave('manual');
   }
 
   async function saveDebugSettings() {

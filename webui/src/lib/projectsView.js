@@ -1,6 +1,7 @@
 import { normalizeCompactionPolicy } from './compactionPolicy.js';
 import { SURFACE_FORM, shouldApplyReloadNow } from './resourceInvalidation.js';
 import { normalizeToolAccess } from './toolAccess.js';
+import { asText, isPlainObject } from './values.js';
 import {
   addProject as requestAddProject,
   clearOverride as requestClearOverride,
@@ -1899,12 +1900,4 @@ function sameStringSet(left, right) {
 function optionalText(value) {
   const normalized = asText(value).trim();
   return normalized ? normalized : null;
-}
-
-function isPlainObject(value) {
-  return value !== null && typeof value === 'object' && !Array.isArray(value);
-}
-
-function asText(value) {
-  return value === null || value === undefined ? '' : String(value);
 }
