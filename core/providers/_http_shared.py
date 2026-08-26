@@ -24,6 +24,7 @@ from core.providers.errors import (
     ProviderTimeoutError,
 )
 from core.utils.http_status import is_retryable_status, parse_retry_after
+from core.utils.retry import retry_async
 
 if TYPE_CHECKING:
     from core.debug import ProviderDebugRecorder
@@ -348,6 +349,102 @@ def wrap_network_error(error: Exception) -> NetworkError | ProviderTimeoutError:
     # Anything else (shouldn't happen at request-submission sites): surface as
     # a transport failure so retry semantics match.
     return NetworkError(f"Connection failed: {error}")
+
+
+# ---------------------------------------------------------------------------
+# Request establishment with retry
+# ---------------------------------------------------------------------------
+
+# Receives (status_code, error_body, response_headers) for every HTTP >= 400
+# establishment response and must raise the appropriate ProviderError
+# subclass; it is never expected to return. The adapter owns detail formatting
+# and status policy here, so provider-specific shapes survive one shared path.
+HttpErrorStatusHandler = Callable[[int, str, httpx.Headers], None]
+
+# Re-labels a transport failure, keeping the shared retryable taxonomy while
+# letting an adapter name the likely cause (e.g. "local server not running").
+TransportErrorWrapper = Callable[[httpx.TransportError], Exception]
+
+
+def format_http_error_detail(status_code: int, body: str | None = None) -> str:
+    """Return the default wire detail ``"<status> <body>"`` (bare status if empty)."""
+    return f"{status_code} {body}".strip() if body else str(status_code)
+
+
+async def connect_streaming_with_retry(
+    client: httpx.AsyncClient,
+    endpoint_path: str,
+    payload: dict[str, Any],
+    *,
+    build_headers: Callable[[], Awaitable[dict[str, str]]],
+    handle_error_status: HttpErrorStatusHandler,
+    wrap_transport_error: TransportErrorWrapper = wrap_network_error,
+) -> httpx.Response:
+    """Establish one streaming POST, retrying only the establishment.
+
+    Headers rebuild on every attempt so a token refreshed during a retry
+    backoff is re-consulted each time. An error response is fully read and
+    closed before ``handle_error_status`` classifies it — this frees the
+    connection for the next attempt. Mid-stream failures are out of scope:
+    once this returns the response, Chat owns preservation and recovery.
+    """
+
+    async def _connect() -> httpx.Response:
+        headers = await build_headers()
+        request = build_streaming_request(
+            client,
+            "POST",
+            endpoint_path,
+            json=payload,
+            headers=headers,
+        )
+        try:
+            response = await client.send(request, stream=True)
+        except httpx.TransportError as exc:
+            raise wrap_transport_error(exc) from exc
+
+        if response.status_code >= 400:
+            error_body = (await response.aread()).decode("utf-8", errors="replace")
+            await response.aclose()
+            handle_error_status(response.status_code, error_body, response.headers)
+            # handle_error_status always raises for >= 400; unreachable but
+            # satisfies type checkers.
+            raise ProviderError(f"Provider error: {response.status_code}", retryable=False)
+        return response
+
+    return await retry_async(_connect)
+
+
+async def post_json_with_retry(
+    client: httpx.AsyncClient,
+    endpoint_path: str,
+    payload: dict[str, Any],
+    *,
+    build_headers: Callable[[], Awaitable[dict[str, str]]],
+    handle_error_status: HttpErrorStatusHandler,
+    provider_context: str,
+    wrap_transport_error: TransportErrorWrapper = wrap_network_error,
+) -> dict[str, Any]:
+    """POST one JSON payload and decode the object reply under shared retry.
+
+    Non-streaming responses arrive fully buffered, so the error hook receives
+    ``response.text`` as the body. ``provider_context`` names the provider in
+    malformed-body errors (e.g. ``"OpenAI provider"``).
+    """
+
+    async def _do_request() -> dict[str, Any]:
+        headers = await build_headers()
+        try:
+            response = await client.post(endpoint_path, json=payload, headers=headers)
+        except httpx.TransportError as exc:
+            raise wrap_transport_error(exc) from exc
+
+        if response.status_code >= 400:
+            handle_error_status(response.status_code, response.text, response.headers)
+            raise ProviderError(f"Provider error: {response.status_code}", retryable=False)
+        return decode_response_json(response, provider_context)
+
+    return await retry_async(_do_request)
 
 
 async def iter_sse_events(response: httpx.Response) -> AsyncIterator[SSEEvent]:
