@@ -18,7 +18,7 @@ from core.chat import (
     ReplySurface,
 )
 from core.chat.chat import ChatMessage
-from core.chat.commands import STATUS_PLACEHOLDER, build_status_text
+from core.chat.status_report import STATUS_PLACEHOLDER, build_status_text
 from core.models.models import Capabilities, Model, ModelRegistry, ReasoningCapabilities
 from core.projects import AgentResolutionError, AgentResolver, ConfigAgent, ProjectStore
 from core.runs import ChatRunManager, Run
