@@ -29,6 +29,19 @@ _UTF8_BOM_BYTES = b"\xef\xbb\xbf"
 _UTF8_BOM = chr(0xFEFF)
 _LINE_COUNT_CHUNK_BYTES = 64 * 1024
 _LINE_ENDING_DETECT_BYTES = 8 * 1024
+# Exotic line breaks the read tool still renders as lines (mirrors read.py's
+# _LINE_BREAK_PATTERN), as their UTF-8 byte sequences. Checked only after the
+# common CRLF/LF/CR flavors so a mixed file keeps the write.py preference.
+_EXOTIC_LINE_ENDING_BYTES = (
+    b"\x0b",  # \v
+    b"\x0c",  # \f
+    b"\x1c",  # file separator
+    b"\x1d",  # group separator
+    b"\x1e",  # record separator
+    b"\xc2\x85",  # NEL (U+0085)
+    b"\xe2\x80\xa8",  # line separator (U+2028)
+    b"\xe2\x80\xa9",  # paragraph separator (U+2029)
+)
 
 WRITE_TOOL_NAME = "write"
 WRITE_TOOL_DESCRIPTION = (
@@ -99,6 +112,9 @@ def _detect_file_line_ending(path: Path) -> str | None:
         return "\n"
     if b"\r" in sample:
         return "\r"
+    for ending in _EXOTIC_LINE_ENDING_BYTES:
+        if ending in sample:
+            return ending.decode("utf-8")
     return None
 
 

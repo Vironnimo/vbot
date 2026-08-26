@@ -28,6 +28,45 @@ def test_exact_match_preserves_crlf_in_replacement() -> None:
     assert result.strategy == "exact"
 
 
+def test_exact_match_preserves_cr_only_endings() -> None:
+    # Classic-Mac CR-only files must keep their CR endings in the replacement
+    # instead of mixing in LF (the old detection misread CR-only as LF).
+    result = replace_fuzzy("alpha\rbeta\r", "beta", "one\ntwo", replace_all=False)
+
+    assert isinstance(result, FuzzyReplacement)
+    assert result.new_content == "alpha\rone\rtwo\r"
+    assert result.strategy == "exact"
+
+
+def test_exact_match_preserves_exotic_line_endings() -> None:
+    # The read tool renders U+2028 as a line break; an edit must keep the
+    # file's exotic style instead of mixing in LF.
+    result = replace_fuzzy("alpha\u2028beta\u2028", "beta", "one\ntwo", replace_all=False)
+
+    assert isinstance(result, FuzzyReplacement)
+    assert result.new_content == "alpha\u2028one\u2028two\u2028"
+    assert result.strategy == "exact"
+
+
+def test_normalized_matches_across_exotic_endings() -> None:
+    # An LF-flavored locator matches a U+2028 file, exactly like CRLF tolerance.
+    content = "alpha\u2028beta\u2028gamma\u2028"
+
+    result = replace_fuzzy(content, "alpha\nbeta", "one\ntwo", replace_all=False)
+
+    assert isinstance(result, FuzzyReplacement)
+    assert result.strategy == "normalized"
+    assert result.new_content == "one\u2028two\u2028gamma\u2028"
+
+
+def test_cr_only_line_numbers() -> None:
+    # Line numbers count CR-only breaks, not just LF.
+    result = replace_fuzzy("one\rtwo\rthree\r", "two", "x", replace_all=False)
+
+    assert isinstance(result, FuzzyReplacement)
+    assert result.first_changed_line == 2
+
+
 def test_normalized_matches_smart_quotes() -> None:
     # File has straight quotes; the model sent curly ones (built via code points
     # so the source stays pure ASCII).

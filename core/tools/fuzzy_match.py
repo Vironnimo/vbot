@@ -33,6 +33,7 @@ safer than silently editing the wrong block.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from difflib import SequenceMatcher
 from heapq import heappush, heapreplace
@@ -57,9 +58,29 @@ _UNICODE_NORMALIZATION = {
     "”": '"',  # right double quotation mark
     "‘": "'",  # left single quotation mark
     "’": "'",  # right single quotation mark
-    " ": " ",  # non-breaking space
+    "\u00a0": " ",  # non-breaking space
     "–": "-",  # en dash
 }
+
+# Every line-ending flavor the read tool renders as a separate line (mirrors
+# read.py's _LINE_BREAK_PATTERN). Detection order matters: CRLF first, then LF
+# before CR (write.py's _detect_file_line_ending prefers the same way for
+# mixed files), then the exotic flavors.
+_LINE_ENDINGS = (
+    "\r\n",
+    "\n",
+    "\r",
+    "\v",
+    "\f",
+    "\x1c",
+    "\x1d",
+    "\x1e",
+    "\x85",
+    "\u2028",
+    "\u2029",
+)
+_EXOTIC_LINE_ENDINGS = _LINE_ENDINGS[3:]
+_LINE_BREAK_RE = re.compile(r"\r\n|[\n\v\f\x1c-\x1e\x85\u2028\u2029\r]")
 
 
 @dataclass(frozen=True)
@@ -231,25 +252,32 @@ def find_closest_candidates(content: str, pattern: str) -> list[ClosestFuzzyCand
 
 
 def _normalize_newlines(text: str) -> str:
-    return text.replace("\r\n", "\n").replace("\r", "\n")
+    """Normalize every recognized line ending to LF for tolerant matching."""
+    normalized = text
+    for ending in _LINE_ENDINGS:
+        if ending != "\n":
+            normalized = normalized.replace(ending, "\n")
+    return normalized
 
 
 def _detect_line_ending(content: str) -> str | None:
-    if "\r\n" in content:
-        return "\r\n"
-    if "\n" in content or "\r" in content:
-        return "\n"
+    """Return the line ending used in ``content``, or ``None`` when absent."""
+    for ending in _LINE_ENDINGS:
+        if ending in content:
+            return ending
     return None
 
 
 def _to_line_ending(text_lf: str, file_ending: str | None) -> str:
-    if file_ending == "\r\n":
-        return text_lf.replace("\n", "\r\n")
-    return text_lf
+    """Convert LF-normalized text to the target line ending."""
+    if file_ending in (None, "\n"):
+        return text_lf
+    return text_lf.replace("\n", file_ending)
 
 
 def _line_number_at(content: str, offset: int) -> int:
-    return content.count("\n", 0, offset) + 1
+    """1-based line number at ``offset``, counting every read-rendered break."""
+    return len(_LINE_BREAK_RE.findall(content[:offset])) + 1
 
 
 def _normalize_with_spans(text: str) -> tuple[str, list[tuple[int, int]]]:
@@ -273,6 +301,11 @@ def _normalize_with_spans(text: str) -> tuple[str, list[tuple[int, int]]]:
             index += 2
             continue
         if char == "\r":
+            chars.append("\n")
+            spans.append((index, index + 1))
+            index += 1
+            continue
+        if char in _EXOTIC_LINE_ENDINGS:
             chars.append("\n")
             spans.append((index, index + 1))
             index += 1
