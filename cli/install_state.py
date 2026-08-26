@@ -21,6 +21,8 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
+from core.utils.atomic import atomic_write_text
+
 INSTALL_STATE_FILE = ".vbot-install.json"
 INSTALL_STATE_SCHEMA_VERSION = 2
 _SUPPORTED_INSTALL_STATE_SCHEMA_VERSIONS = frozenset({1, INSTALL_STATE_SCHEMA_VERSION})
@@ -84,16 +86,8 @@ def write_install_state(root: Path, state: InstallState) -> None:
     """Validate and atomically persist one installation manifest."""
 
     validated = _parse_install_state(_state_payload(state), install_state_path(root))
-    path = install_state_path(root)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(f"{path.name}.tmp-{os.getpid()}")
     content = json.dumps(_state_payload(validated), indent=2, ensure_ascii=False) + "\n"
-    try:
-        temporary.write_text(content, encoding="utf-8")
-        os.replace(temporary, path)
-    except OSError:
-        temporary.unlink(missing_ok=True)
-        raise
+    atomic_write_text(install_state_path(root), content)
 
 
 def build_install_state(

@@ -30,6 +30,7 @@ from cli.server_management import (
     is_valid_systemd_service_name,
     start_server,
 )
+from core.utils.atomic import atomic_write_text
 from core.utils.config import VBOT_ROOT
 
 DEFAULT_TASK_NAME = "vBot"
@@ -608,13 +609,7 @@ def _windows_task_command(operation: str, **values: str | int) -> list[str]:
 
 
 def _write_unit_file(path: Path, content: str) -> None:
-    temporary = path.with_name(f"{path.name}.tmp-{os.getpid()}")
-    try:
-        temporary.write_text(content, encoding="utf-8")
-        os.replace(temporary, path)
-    except OSError:
-        temporary.unlink(missing_ok=True)
-        raise
+    atomic_write_text(path, content)
 
 
 def _restore_unit_file(path: Path, previous_content: str | None) -> str:

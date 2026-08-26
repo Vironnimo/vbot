@@ -5,11 +5,12 @@ from __future__ import annotations
 import json
 import os
 import secrets
-import uuid
 from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+from core.utils.atomic import atomic_write_bytes
 
 CONTROL_DIRECTORY_NAME = "runtime"
 CONTROL_TOKEN_HEADER = "X-VBot-Control-Token"
@@ -17,6 +18,8 @@ CONTROL_SHUTDOWN_PATH = "/_vbot/control/shutdown"
 CONTROL_RECORD_VERSION = 1
 CONTROL_RECORD_MAX_BYTES = 16_384
 CONTROL_TOKEN_BYTES = 32
+# The control record carries the shutdown authority token; only the owner reads it.
+CONTROL_RECORD_MODE = 0o600
 
 
 @dataclass(frozen=True, slots=True)
@@ -53,7 +56,6 @@ def create_server_control(
     if not resolved_token:
         raise ValueError("Server control token must not be empty")
     path = control_record_path(data_dir, port)
-    path.parent.mkdir(parents=True, exist_ok=True)
     payload = json.dumps(
         {
             "version": CONTROL_RECORD_VERSION,
@@ -64,22 +66,7 @@ def create_server_control(
         sort_keys=True,
         separators=(",", ":"),
     ).encode("utf-8")
-    temporary_path = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
-    descriptor = os.open(temporary_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-    try:
-        with os.fdopen(descriptor, "wb") as handle:
-            descriptor = -1
-            handle.write(payload)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temporary_path, path)
-        with suppress(OSError):
-            path.chmod(0o600)
-    finally:
-        if descriptor >= 0:
-            os.close(descriptor)
-        with suppress(OSError):
-            temporary_path.unlink()
+    atomic_write_bytes(path, payload, mode=CONTROL_RECORD_MODE)
     return ServerControlRecord(pid=resolved_pid, port=port, token=resolved_token, path=path)
 
 

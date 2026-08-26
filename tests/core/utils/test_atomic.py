@@ -77,3 +77,20 @@ def test_atomic_write_cleans_staging_file_after_replace_failure(
 
     assert target.read_text(encoding="utf-8") == "old\n"
     assert list(layout.atomic_temporary.iterdir()) == []
+
+
+@pytest.mark.parametrize("write_bytes", [False, True])
+def test_atomic_write_applies_requested_mode_to_target(
+    tmp_path: Path,
+    write_bytes: bool,
+) -> None:
+    target = tmp_path / "control-record.json"
+
+    if write_bytes:
+        atomic_write_bytes(target, b"{}", mode=0o600)
+    else:
+        atomic_write_text(target, "{}", mode=0o600)
+
+    assert target.read_bytes() == b"{}"
+    if os.name == "posix":
+        assert stat.S_IMODE(target.stat().st_mode) == 0o600
