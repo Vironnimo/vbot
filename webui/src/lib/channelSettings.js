@@ -1,3 +1,5 @@
+import { asOptionalText, isPlainObject } from './values.js';
+
 export const CHANNEL_PLATFORM_TELEGRAM = 'telegram';
 export const CHANNEL_PLATFORMS = Object.freeze([CHANNEL_PLATFORM_TELEGRAM]);
 
@@ -288,19 +290,6 @@ function booleanWithDefault(value, fallback) {
   return parsed === null ? fallback : parsed;
 }
 
-function asOptionalText(value) {
-  if (value === null || value === undefined) {
-    return null;
-  }
-
-  const normalized = String(value).trim();
-  return normalized.length > 0 ? normalized : null;
-}
-
 function hasOwn(value, key) {
   return Object.prototype.hasOwnProperty.call(value, key);
-}
-
-function isPlainObject(value) {
-  return value !== null && typeof value === 'object' && !Array.isArray(value);
 }

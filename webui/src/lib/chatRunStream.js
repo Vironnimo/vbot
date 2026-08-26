@@ -1,6 +1,7 @@
 import { reconnectBackoffDelay } from './backoff.js';
 import { createBoundedKeySet } from './clientCaches.js';
 import { t } from './i18n.js';
+import { isPlainObject } from './values.js';
 import {
   TERMINAL_RUN_EVENTS,
   appendRunEvent,
@@ -46,10 +47,6 @@ const REFLECTION_TERMINAL_STATUSES = {
   run_cancelled: 'cancelled',
   run_interrupted: 'interrupted',
 };
-
-function isPlainObjectValue(value) {
-  return value !== null && typeof value === 'object' && !Array.isArray(value);
-}
 
 // Session-scoped status keys are read against persisted spawn descriptors,
 // which carry the child's BARE agent id. Live `/ws` events arrive re-addressed
@@ -1197,7 +1194,7 @@ export function createChatRunStream({
     }
     for (const sessionState of Object.values(chatState.sessions)) {
       const entries = sessionState.reflectionTasks;
-      if (!isPlainObjectValue(entries)) {
+      if (!isPlainObject(entries)) {
         continue;
       }
       let changed = false;

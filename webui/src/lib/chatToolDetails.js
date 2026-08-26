@@ -1,4 +1,5 @@
 import { t } from '$lib/i18n.js';
+import { isPlainObject } from '$lib/values.js';
 
 const TOOL_DETAIL_HIDDEN_KEYS = ['artifacts', 'description'];
 const TOOL_ARGUMENT_HIDDEN_KEYS = {
@@ -322,8 +323,4 @@ function parseJsonValue(value) {
   } catch {
     return value;
   }
-}
-
-function isPlainObject(value) {
-  return Object.prototype.toString.call(value) === '[object Object]';
 }
