@@ -92,7 +92,7 @@ pip install -e ".[dev]"
 ```
 Use the current interpreter directly - do not assume a virtual environment for installs, gates, or runtime commands. End-user install/update/uninstall lives in [USAGE.md](../USAGE.md#installation); read it when touching installer or uninstall scripts under `scripts/`.
 
-**Worktrees:** Managed with `python scripts/worktree.py create|list|delete <task-name>`. `create` prints the worktree path, assigned ports, data dir, and URL; `delete --force` additionally discards uncommitted worktree changes. If anything fails or behaves unexpectedly, read `scripts/README-worktree.md`.
+**Worktrees:** Managed with `python scripts/worktree.py create|list|merge|delete <task-name>` plus `repair-start|repair-finish`. `create` prints the worktree path, assigned ports, data dir, and URL; `delete --force` additionally discards uncommitted worktree changes; `merge` lands the finished task branch on `main` and removes the worktree, serializing concurrent merges through a lock with a protected repair window for conflict resolution. The tooling never runs quality gates — green gates before merging stay with the agent. If anything fails or behaves unexpectedly, read `scripts/README-worktree.md`.
 
 **Dependencies:** Groups `server`, `cli`, `desktop`, `dev` in `pyproject.toml`; the WebUI's in `webui/package.json`.
 
