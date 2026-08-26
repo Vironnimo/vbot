@@ -5,7 +5,7 @@
   import Button from '../ui/Button.svelte';
   import { updateSettings } from '$lib/api.js';
   import {
-    createAutosaveParticipant,
+    createDebouncedAutosave,
     useAutosaveContext,
   } from '$lib/autosave.js';
   import { init, t } from '$lib/i18n.js';
@@ -24,7 +24,6 @@
     isAppearanceSaveDisabled,
   } from '$lib/settingsView.js';
 
-  const AUTO_SAVE_DEBOUNCE_MS = 800;
   const noop = () => {};
 
   let {
@@ -46,7 +45,6 @@
     untrack(() => getPersistedChatWorkingMode(settings)),
   );
   let saving = $state(false);
-  let autoSaveTimer = null;
 
   let availableLanguageOptions = $derived(
     buildLanguageOptions(settings?.appearance),
@@ -87,8 +85,7 @@
     }),
   );
   const autosaveContext = useAutosaveContext();
-  const appearanceAutosave = createAutosaveParticipant({
-    cancelPending: clearAutoSaveTimer,
+  const appearanceAutosave = createDebouncedAutosave({
     getSnapshot: () => ({
       language: selectedLanguageId,
       chatWidth: selectedChatWidth,
@@ -97,35 +94,26 @@
     hasChanges: appearanceHasChanges,
     save: saveAppearance,
   });
-  const unregisterAppearanceAutosave =
-    autosaveContext.register(appearanceAutosave);
+  const unregisterAppearanceAutosave = autosaveContext.register(
+    appearanceAutosave.participant,
+  );
 
   $effect(() => {
     if (saveDisabled) {
       return;
     }
 
-    autoSaveTimer = setTimeout(() => {
-      autoSaveTimer = null;
-      void appearanceAutosave.runSave();
-    }, AUTO_SAVE_DEBOUNCE_MS);
+    appearanceAutosave.scheduleRun();
 
     return () => {
-      clearAutoSaveTimer();
+      appearanceAutosave.cancelPendingTimer();
     };
   });
 
   onDestroy(() => {
     unregisterAppearanceAutosave();
-    clearAutoSaveTimer();
+    appearanceAutosave.cancelPendingTimer();
   });
-
-  function clearAutoSaveTimer() {
-    if (autoSaveTimer !== null) {
-      clearTimeout(autoSaveTimer);
-      autoSaveTimer = null;
-    }
-  }
 
   function handleLanguageChange(value) {
     selectedLanguageId = value;
@@ -155,8 +143,8 @@
       return;
     }
 
-    clearAutoSaveTimer();
-    void appearanceAutosave.runSave('manual');
+    appearanceAutosave.cancelPendingTimer();
+    void appearanceAutosave.participant.runSave('manual');
   }
 
   function appearanceHasChanges() {

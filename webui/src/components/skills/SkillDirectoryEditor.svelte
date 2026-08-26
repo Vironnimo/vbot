@@ -9,7 +9,7 @@
   import TextField from '../ui/TextField.svelte';
   import { updateSettings } from '$lib/api.js';
   import {
-    createAutosaveParticipant,
+    createDebouncedAutosave,
     useAutosaveContext,
   } from '$lib/autosave.js';
   import { t } from '$lib/i18n.js';
@@ -19,7 +19,6 @@
     getSkillDirectories,
   } from '$lib/settingsView.js';
 
-  const AUTO_SAVE_DEBOUNCE_MS = 800;
   const noop = () => {};
 
   let {
@@ -32,7 +31,6 @@
   let skillDirectories = $state(untrack(() => getSkillDirectories(settings)));
   let newSkillDirectory = $state('');
   let saving = $state(false);
-  let autoSaveTimer = null;
 
   let defaultSkillDirectoryValue = $derived(
     getDefaultSkillDirectoryValue(settings, t),
@@ -41,42 +39,32 @@
     saving || directoriesMatch(skillDirectories, getSkillDirectories(settings)),
   );
   const autosaveContext = useAutosaveContext();
-  const directoryAutosave = createAutosaveParticipant({
-    cancelPending: clearAutoSaveTimer,
+  const directoryAutosave = createDebouncedAutosave({
     getSnapshot: () => [...skillDirectories],
     hasChanges: () =>
       !directoriesMatch(skillDirectories, getSkillDirectories(settings)),
     save: saveSkillDirectories,
   });
-  const unregisterDirectoryAutosave =
-    autosaveContext.register(directoryAutosave);
+  const unregisterDirectoryAutosave = autosaveContext.register(
+    directoryAutosave.participant,
+  );
 
   $effect(() => {
     if (saveDisabled) {
       return;
     }
 
-    autoSaveTimer = setTimeout(() => {
-      autoSaveTimer = null;
-      void directoryAutosave.runSave();
-    }, AUTO_SAVE_DEBOUNCE_MS);
+    directoryAutosave.scheduleRun();
 
     return () => {
-      clearAutoSaveTimer();
+      directoryAutosave.cancelPendingTimer();
     };
   });
 
   onDestroy(() => {
     unregisterDirectoryAutosave();
-    clearAutoSaveTimer();
+    directoryAutosave.cancelPendingTimer();
   });
-
-  function clearAutoSaveTimer() {
-    if (autoSaveTimer !== null) {
-      clearTimeout(autoSaveTimer);
-      autoSaveTimer = null;
-    }
-  }
 
   function directoriesMatch(left, right) {
     if (left.length !== right.length) {
@@ -127,8 +115,8 @@
       return;
     }
 
-    clearAutoSaveTimer();
-    void directoryAutosave.runSave('manual');
+    directoryAutosave.cancelPendingTimer();
+    void directoryAutosave.participant.runSave('manual');
   }
 
   async function saveSkillDirectories() {

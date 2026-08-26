@@ -16,7 +16,7 @@
     updateTaskModelSettings,
   } from '$lib/api.js';
   import {
-    createAutosaveParticipant,
+    createDebouncedAutosave,
     useAutosaveContext,
   } from '$lib/autosave.js';
   import { t } from '$lib/i18n.js';
@@ -38,7 +38,6 @@
   } from '$lib/resourceInvalidation.js';
 
   const noop = () => {};
-  const AUTO_SAVE_DEBOUNCE_MS = 800;
 
   let {
     settings = null,
@@ -62,7 +61,6 @@
   // updated with an invalid value; this map only drives the inline error
   // message under the textarea.
   let taskModelJsonErrors = $state({});
-  let autoSaveTimer = null;
   let autoSaveArmed = $state(false);
   // Disclosure state: per-target option blocks start collapsed; the sub stays
   // in the DOM so settings search still matches option labels.
@@ -96,8 +94,7 @@
     taskModelLoading || taskModelSaving || (autoSaveArmed && !saveDisabled),
   );
   const autosaveContext = useAutosaveContext();
-  const taskModelsAutosave = createAutosaveParticipant({
-    cancelPending: clearAutoSaveTimer,
+  const taskModelsAutosave = createDebouncedAutosave({
     getSnapshot: () => taskModelBindings,
     hasChanges: () =>
       autoSaveArmed &&
@@ -107,8 +104,9 @@
       ),
     save: saveTaskModelBindings,
   });
-  const unregisterTaskModelsAutosave =
-    autosaveContext.register(taskModelsAutosave);
+  const unregisterTaskModelsAutosave = autosaveContext.register(
+    taskModelsAutosave.participant,
+  );
 
   onMount(() => {
     void loadTaskModelPanel();
@@ -118,7 +116,7 @@
     destroyed = true;
     taskModelSchemaRequestIds = {};
     unregisterTaskModelsAutosave();
-    clearAutoSaveTimer();
+    taskModelsAutosave.cancelPendingTimer();
   });
 
   // Auto-save is armed only after a real user edit so that applying option
@@ -128,13 +126,10 @@
       return;
     }
 
-    autoSaveTimer = setTimeout(() => {
-      autoSaveTimer = null;
-      void taskModelsAutosave.runSave();
-    }, AUTO_SAVE_DEBOUNCE_MS);
+    taskModelsAutosave.scheduleRun();
 
     return () => {
-      clearAutoSaveTimer();
+      taskModelsAutosave.cancelPendingTimer();
     };
   });
 
@@ -162,13 +157,6 @@
       void loadTaskModelPanel();
     }
   });
-
-  function clearAutoSaveTimer() {
-    if (autoSaveTimer !== null) {
-      clearTimeout(autoSaveTimer);
-      autoSaveTimer = null;
-    }
-  }
 
   async function loadTaskModelPanel() {
     if (taskModelLoading) {
@@ -263,8 +251,8 @@
       return;
     }
 
-    clearAutoSaveTimer();
-    void taskModelsAutosave.runSave('manual');
+    taskModelsAutosave.cancelPendingTimer();
+    void taskModelsAutosave.participant.runSave('manual');
   }
 
   async function saveTaskModelBindings() {
