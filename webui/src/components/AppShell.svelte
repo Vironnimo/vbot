@@ -682,6 +682,9 @@
                   <path d="M4 2h8v12l-4-2.5L4 14z" />
                 {:else if item.id === 'projects'}
                   <path d="M2 12.5V4h4l1.5 1.5h6.5v7z" />
+                {:else if item.id === 'calendar'}
+                  <rect x="2" y="3" width="12" height="11" rx="1.5" />
+                  <path d="M2 6.5h12M5.5 1.5v3m5-3v3" />
                 {:else if item.id === 'cron'}
                   <circle cx="8" cy="8" r="6" />
                   <path d="M8 4.5V8l2.5 2.5" />

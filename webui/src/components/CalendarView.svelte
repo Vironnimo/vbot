@@ -327,7 +327,7 @@
       >
         ‹
       </Button>
-      <Button variant="secondary" onclick={() => controller.goToday()}>
+      <Button variant="secondary" onClick={() => controller.goToday()}>
         {t('calendar.today', 'Today')}
       </Button>
       <Button
@@ -377,7 +377,7 @@
           <span class="calendar-chip-count">{cronCount}</span>
         </button>
       </div>
-      <Button variant="primary" onclick={() => openCreate()}>
+      <Button variant="primary" onClick={() => openCreate()}>
         {t('calendar.newEvent', 'New event')}
       </Button>
     </div>
@@ -401,7 +401,7 @@
         >{t('calendar.loadError', 'The calendar could not be loaded.')}
         {viewState.loadError}</span
       >
-      <Button variant="secondary" onclick={() => controller.load()}>
+      <Button variant="secondary" onClick={() => controller.load()}>
         {t('common.retry', 'Retry')}
       </Button>
     </Banner>
@@ -421,13 +421,13 @@
         'calendar.emptyDescription',
         'Create an event yourself, or ask the agent to add one for you.',
       )}
-      actions={[
-        {
-          label: t('calendar.newEvent', 'New event'),
-          onSelect: () => openCreate(),
-        },
-      ]}
-    />
+    >
+      {#snippet actions()}
+        <Button variant="primary" onClick={() => openCreate()}>
+          {t('calendar.newEvent', 'New event')}
+        </Button>
+      {/snippet}
+    </EmptyState>
   {:else if viewState.view === 'month'}
     <div class="calendar-grid" role="grid">
       <div class="calendar-weekdays">
@@ -892,10 +892,10 @@
       </form>
     {/snippet}
     {#snippet footer()}
-      <Button variant="secondary" onclick={() => (formOpen = false)}>
+      <Button variant="secondary" onClick={() => (formOpen = false)}>
         {t('common.cancel', 'Cancel')}
       </Button>
-      <Button variant="primary" onclick={submitForm} disabled={submitting}>
+      <Button variant="primary" onClick={submitForm} disabled={submitting}>
         {formMode === 'edit'
           ? t('common.save', 'Save')
           : t('calendar.form.create', 'Create event')}
@@ -926,10 +926,10 @@
       </div>
     {/snippet}
     {#snippet footer()}
-      <Button variant="secondary" onclick={() => openEdit(detailOccurrence)}>
+      <Button variant="secondary" onClick={() => openEdit(detailOccurrence)}>
         {t('common.edit', 'Edit')}
       </Button>
-      <Button variant="danger" onclick={() => requestDelete(detailOccurrence)}>
+      <Button variant="danger" onClick={() => requestDelete(detailOccurrence)}>
         {t('common.delete', 'Delete')}
       </Button>
     {/snippet}

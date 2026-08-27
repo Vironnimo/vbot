@@ -67,6 +67,10 @@ export function rpcBackedApiMock(rpcMock, overrides = {}) {
     createSession: (params) => call('session.create', params),
     listSessionActivity: (agentIds) =>
       call('session.activity_list', { agent_ids: agentIds }),
+    getCalendarWindow: (params) => call('calendar.window', params),
+    createCalendarEvent: (params) => call('calendar.create', params),
+    updateCalendarEvent: (params) => call('calendar.update', params),
+    deleteCalendarEvent: (id) => call('calendar.delete', { id }),
     startChatRun: (params) => call('chat.stream', params),
     listFiles: (agentId) => call('files.list', { agent_id: agentId }),
     listPrompts: (params = {}) => call('prompt.list', params),
