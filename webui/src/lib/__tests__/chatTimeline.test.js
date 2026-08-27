@@ -387,16 +387,16 @@ describe('live compaction timeline projection', () => {
       payload: { context_tokens_before: 250_000 },
     });
 
+    // A run whose only child is the compaction divider renders the divider
+    // bare instead of wrapped in a run block.
     const running = visibleTimelineItemsForRender(sessionState).find(
-      (item) => item.type === 'assistant_run',
+      (item) => item.type === 'compaction_separator',
     );
-    expect(running.items).toMatchObject([
-      {
-        type: 'compaction_separator',
-        status: CHAT_STATUS_RUNNING,
-        contextTokensBefore: 250_000,
-      },
-    ]);
+    expect(running).toMatchObject({
+      type: 'compaction_separator',
+      status: CHAT_STATUS_RUNNING,
+      contextTokensBefore: 250_000,
+    });
 
     appendRunEvent(sessionState, {
       type: 'compaction_aborted',
@@ -405,10 +405,12 @@ describe('live compaction timeline projection', () => {
       payload: { reason: 'failed' },
     });
 
-    const aborted = visibleTimelineItemsForRender(sessionState).find(
-      (item) => item.type === 'assistant_run',
-    );
-    expect(aborted.items).toEqual([]);
+    const items = visibleTimelineItemsForRender(sessionState);
+    expect(
+      items.filter((item) => item.type === 'compaction_separator'),
+    ).toEqual([]);
+    const aborted = items.find((item) => item.type === 'assistant_run');
+    expect(aborted?.items ?? []).toEqual([]);
   });
 });
 
@@ -1214,5 +1216,248 @@ describe('manual compaction run dedup against persisted history', () => {
     expect(
       items.filter((item) => item.type === 'compaction_separator'),
     ).toHaveLength(1);
+  });
+});
+
+describe('standalone compaction run renders bare', () => {
+  function standaloneCompactionRunEvents(runId) {
+    return [
+      {
+        type: 'run_started',
+        run_id: runId,
+        sequence: 1,
+        timestamp: '2026-08-27T14:00:00Z',
+        payload: { status: CHAT_STATUS_RUNNING },
+      },
+      {
+        type: 'compaction_started',
+        run_id: runId,
+        sequence: 2,
+        timestamp: '2026-08-27T14:00:01Z',
+        payload: { context_tokens_before: 120_000 },
+      },
+      {
+        type: 'compaction_completed',
+        run_id: runId,
+        sequence: 3,
+        timestamp: '2026-08-27T14:00:55Z',
+        payload: {
+          context_tokens_before: 120_000,
+          context_tokens_after: 30_000,
+          duration_ms: 54_000,
+          message: {
+            id: 'checkpoint-live',
+            role: 'compaction_checkpoint',
+            timestamp: '2026-08-27T14:00:55Z',
+          },
+        },
+      },
+      {
+        type: 'run_completed',
+        run_id: runId,
+        sequence: 4,
+        timestamp: '2026-08-27T14:00:56Z',
+        payload: { status: CHAT_STATUS_COMPLETED },
+      },
+    ];
+  }
+
+  it('renders a finished standalone compaction run as a bare separator, not a run block', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-compaction-bare',
+    );
+    loadHistory(sessionState, [
+      {
+        id: 'user-1',
+        role: 'user',
+        content: 'Earlier turn',
+        timestamp: '2026-08-27T13:50:00Z',
+      },
+    ]);
+    for (const event of standaloneCompactionRunEvents('run-compaction')) {
+      appendRunEvent(sessionState, event);
+    }
+
+    const items = visibleTimelineItemsForRender(sessionState);
+
+    expect(
+      items.some(
+        (item) =>
+          item.type === 'assistant_run' && item.runId === 'run-compaction',
+      ),
+    ).toBe(false);
+    const separators = items.filter(
+      (item) => item.type === 'compaction_separator',
+    );
+    expect(separators).toHaveLength(1);
+    expect(separators[0].status).toBe(CHAT_STATUS_COMPLETED);
+    expect(separators[0].message?.id).toBe('checkpoint-live');
+    expect(separators[0].durationMs).toBe(54_000);
+  });
+
+  it('renders a reloaded checkpoint with the duration stamped in its usage', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-compaction-bare-history',
+    );
+    loadHistory(sessionState, [
+      {
+        id: 'user-1',
+        role: 'user',
+        content: 'Earlier turn',
+        timestamp: '2026-08-27T13:50:00Z',
+      },
+      {
+        id: 'checkpoint-1',
+        role: 'compaction_checkpoint',
+        timestamp: '2026-08-27T14:00:55Z',
+        usage: {
+          context_tokens_before: 120_000,
+          context_tokens_after: 30_000,
+          compaction_duration_ms: 54_000,
+        },
+      },
+    ]);
+
+    const items = visibleTimelineItemsForRender(sessionState);
+    const separators = items.filter(
+      (item) => item.type === 'compaction_separator',
+    );
+
+    expect(separators).toHaveLength(1);
+    expect(separators[0].durationMs).toBe(54_000);
+  });
+
+  it('keeps the run block for an in-run auto compaction beside its other children', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-compaction-auto-inline',
+    );
+    loadHistory(sessionState, [
+      {
+        id: 'user-1',
+        role: 'user',
+        content: 'Question',
+        timestamp: '2026-08-27T13:50:00Z',
+      },
+    ]);
+    startRun(sessionState, {
+      run_id: 'run-chat',
+      sse_url: '/api/runs/run-chat/events',
+      status: CHAT_STATUS_RUNNING,
+    });
+    appendRunEvent(sessionState, {
+      type: 'assistant_output',
+      run_id: 'run-chat',
+      sequence: 1,
+      timestamp: '2026-08-27T13:51:00Z',
+      payload: {
+        message: {
+          id: 'assistant-1',
+          role: 'assistant',
+          content: 'Working on it.',
+        },
+      },
+    });
+    appendRunEvent(sessionState, {
+      type: 'compaction_started',
+      run_id: 'run-chat',
+      sequence: 2,
+      timestamp: '2026-08-27T13:51:05Z',
+      payload: { context_tokens_before: 200_000 },
+    });
+    appendRunEvent(sessionState, {
+      type: 'compaction_completed',
+      run_id: 'run-chat',
+      sequence: 3,
+      timestamp: '2026-08-27T13:51:40Z',
+      payload: {
+        context_tokens_before: 200_000,
+        context_tokens_after: 45_000,
+        duration_ms: 35_000,
+        message: {
+          id: 'checkpoint-auto',
+          role: 'compaction_checkpoint',
+          timestamp: '2026-08-27T13:51:40Z',
+        },
+      },
+    });
+
+    const items = visibleTimelineItemsForRender(sessionState);
+    const runBlock = items.find(
+      (item) => item.type === 'assistant_run' && item.runId === 'run-chat',
+    );
+
+    expect(runBlock).toBeTruthy();
+    expect(
+      runBlock.items.filter((child) => child.type === 'compaction_separator'),
+    ).toHaveLength(1);
+    expect(
+      items.filter((item) => item.type === 'compaction_separator'),
+    ).toHaveLength(0);
+  });
+
+  it('keeps the failed run block visible when a standalone compaction aborts', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-compaction-failed',
+    );
+    loadHistory(sessionState, [
+      {
+        id: 'user-1',
+        role: 'user',
+        content: 'Earlier turn',
+        timestamp: '2026-08-27T13:50:00Z',
+      },
+    ]);
+    for (const event of [
+      {
+        type: 'run_started',
+        run_id: 'run-compaction-failed',
+        sequence: 1,
+        timestamp: '2026-08-27T14:00:00Z',
+        payload: { status: CHAT_STATUS_RUNNING },
+      },
+      {
+        type: 'compaction_started',
+        run_id: 'run-compaction-failed',
+        sequence: 2,
+        timestamp: '2026-08-27T14:00:01Z',
+        payload: { context_tokens_before: 120_000 },
+      },
+      {
+        type: 'compaction_aborted',
+        run_id: 'run-compaction-failed',
+        sequence: 3,
+        timestamp: '2026-08-27T14:00:20Z',
+        payload: { reason: 'failed' },
+      },
+      {
+        type: 'run_failed',
+        run_id: 'run-compaction-failed',
+        sequence: 4,
+        timestamp: '2026-08-27T14:00:21Z',
+        payload: { status: 'failed', error: 'Provider request failed' },
+      },
+    ]) {
+      appendRunEvent(sessionState, event);
+    }
+
+    const items = visibleTimelineItemsForRender(sessionState);
+
+    expect(
+      items.filter((item) => item.type === 'compaction_separator'),
+    ).toHaveLength(0);
+    const runBlock = items.find(
+      (item) =>
+        item.type === 'assistant_run' && item.runId === 'run-compaction-failed',
+    );
+    expect(runBlock).toBeTruthy();
+    expect(runBlock.status).toBe('failed');
   });
 });

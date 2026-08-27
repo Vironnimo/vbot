@@ -6,6 +6,7 @@ import {
   changeStatsParts,
   changeStatsTooltip,
   compactToolValue,
+  compactionSeparatorLabel,
   compactionSummaryText,
   errorMessagePresentation,
   formatTime,
@@ -1289,6 +1290,62 @@ describe('compactionSummaryText', () => {
     ).toBe(summary);
     expect(compactionSummaryText({ message: { content: null } })).toBe('');
     expect(compactionSummaryText(null)).toBe('');
+  });
+});
+
+describe('compactionSeparatorLabel', () => {
+  beforeEach(() => {
+    init('en');
+  });
+
+  it('leads with the duration and abbreviates token counts without the unit word', () => {
+    expect(
+      compactionSeparatorLabel({
+        status: 'completed',
+        durationMs: 45_000,
+        contextTokensBefore: 254_224,
+        contextTokensAfter: 40_289,
+        message: { role: 'compaction_checkpoint', content: 'summary' },
+      }),
+    ).toBe('Context compacted in 45s · ~254k → ~40k');
+  });
+
+  it('formats long durations as minutes and seconds', () => {
+    expect(
+      compactionSeparatorLabel({
+        status: 'completed',
+        durationMs: 85_000,
+        contextTokensBefore: 254_224,
+        contextTokensAfter: 40_289,
+        message: { role: 'compaction_checkpoint', content: 'summary' },
+      }),
+    ).toBe('Context compacted in 1m 25s · ~254k → ~40k');
+  });
+
+  it('drops the duration when it is unknown, as in reloaded history', () => {
+    expect(
+      compactionSeparatorLabel({
+        status: 'completed',
+        contextTokensBefore: 254_224,
+        contextTokensAfter: 40_289,
+        message: { role: 'compaction_checkpoint', content: 'summary' },
+      }),
+    ).toBe('Context compacted · ~254k → ~40k');
+  });
+
+  it('falls back to the plain label without measurable tokens or duration', () => {
+    expect(
+      compactionSeparatorLabel({
+        status: 'completed',
+        message: { role: 'compaction_checkpoint', content: 'summary' },
+      }),
+    ).toBe('Context compacted');
+  });
+
+  it('keeps the running label untouched', () => {
+    expect(compactionSeparatorLabel({ status: 'running', message: null })).toBe(
+      'Compacting current conversation…',
+    );
   });
 });
 

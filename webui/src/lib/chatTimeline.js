@@ -114,7 +114,27 @@ function buildVisibleTimelineItems(sessionState, runEvents) {
       )
     : [...historyItems, ...liveItems];
 
-  return reconciledItems.map((item) => stripTimelineSequence(item));
+  return reconciledItems.flatMap((item) =>
+    isCompactionOnlyRunItem(item)
+      ? item.items.map(stripTimelineSequence)
+      : [stripTimelineSequence(item)],
+  );
+}
+
+// A standalone Compaction Run emits nothing but Compaction events, so its run
+// block would wrap the exact separator the automatic in-run Compaction renders
+// bare. Dissolving it at the render boundary makes both triggers look
+// identical. A failed or cancelled run keeps its block (the aborted
+// placeholder is removed, leaving an empty block that carries the failure
+// status), and an in-run auto Compaction never qualifies because its Run
+// carries reasoning/output/tool children besides the separator.
+function isCompactionOnlyRunItem(item) {
+  return (
+    item?.type === 'assistant_run' &&
+    (item.status === 'running' || item.status === 'completed') &&
+    (item.items ?? []).length > 0 &&
+    item.items.every((child) => child?.type === 'compaction_separator')
+  );
 }
 
 function applyCurrentRunIterationCount(liveItems, currentRun) {
@@ -207,6 +227,7 @@ function historyTimelineItems(messages) {
         type: 'compaction_separator',
         timestamp: message.timestamp,
         message,
+        durationMs: message?.usage?.compaction_duration_ms ?? null,
       });
       previousVisibleRole = 'compaction_checkpoint';
       continue;
@@ -1012,6 +1033,10 @@ function appendLiveRunEvent(assistantRun, event) {
       contextTokensAfter:
         event.payload?.context_tokens_after ??
         message?.usage?.context_tokens_after ??
+        null,
+      durationMs:
+        event.payload?.duration_ms ??
+        message?.usage?.compaction_duration_ms ??
         null,
       message,
       events: [...(runningItem?.events ?? []), event],

@@ -685,6 +685,24 @@ class ChatMessage:
         stamped.validate()
         return stamped
 
+    def with_compaction_duration_ms(self, *, duration_ms: int) -> ChatMessage:
+        """Stamp the observed Compaction wall-clock duration onto a checkpoint."""
+        if self.role != "compaction_checkpoint":
+            raise ChatMessageValidationError(
+                "compaction duration can only be stamped onto compaction checkpoints"
+            )
+        if isinstance(duration_ms, bool) or not isinstance(duration_ms, int) or duration_ms < 0:
+            raise ChatMessageValidationError("duration_ms must be a non-negative integer")
+        stamped = replace(
+            self,
+            usage={
+                **(self.usage or {}),
+                "compaction_duration_ms": duration_ms,
+            },
+        )
+        stamped.validate()
+        return stamped
+
     @classmethod
     def agent_takeover(
         cls,
