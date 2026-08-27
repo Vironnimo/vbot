@@ -238,6 +238,23 @@ class TestFindFreeSlots:
         slots = service.find_free_slots(window_start, window_end, 60, now_utc=reference_now)
         assert slots[0].start_utc >= reference_now
 
+    def test_exact_boundary_now_starts_slot_on_the_boundary(self, service: CalendarService) -> None:
+        """now exactly on a 5-minute boundary must not be rounded a step up."""
+        window_start = datetime(2026, 9, 3, 0, 0, tzinfo=UTC)
+        window_end = datetime(2026, 9, 4, 0, 0, tzinfo=UTC)
+        reference_now = datetime(2026, 9, 3, 10, 0, tzinfo=UTC)
+        slots = service.find_free_slots(window_start, window_end, 60, now_utc=reference_now)
+        assert slots[0].start_utc == reference_now
+
+    def test_sub_boundary_now_rounds_up_to_the_next_boundary(
+        self, service: CalendarService
+    ) -> None:
+        window_start = datetime(2026, 9, 3, 0, 0, tzinfo=UTC)
+        window_end = datetime(2026, 9, 4, 0, 0, tzinfo=UTC)
+        reference_now = datetime(2026, 9, 3, 10, 0, 1, tzinfo=UTC)
+        slots = service.find_free_slots(window_start, window_end, 60, now_utc=reference_now)
+        assert slots[0].start_utc == datetime(2026, 9, 3, 10, 5, tzinfo=UTC)
+
     def test_rejects_bad_duration(self, service: CalendarService) -> None:
         window_start, window_end = service.parse_window("2026-09-03", "2026-09-04")
         with pytest.raises(CalendarValidationError, match="duration_minutes"):

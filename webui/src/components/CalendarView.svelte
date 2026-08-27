@@ -15,6 +15,7 @@
   import { tooltip } from '$lib/tooltip.js';
   import {
     CALENDAR_VIEWS,
+    addDaysToKey,
     createCalendarController,
     createCalendarViewState,
     dayHeadingLabel,
@@ -110,7 +111,7 @@
       return [];
     }
     const start = weekStartKey(viewState.anchorKey);
-    return Array.from({ length: 7 }, (_, index) => addDaysSafe(start, index));
+    return Array.from({ length: 7 }, (_, index) => addDaysToKey(start, index));
   });
 
   let agendaDays = $derived.by(() => {
@@ -122,7 +123,7 @@
     let cursor = from;
     while (cursor <= to) {
       days.push(cursor);
-      cursor = addDaysSafe(cursor, 1);
+      cursor = addDaysToKey(cursor, 1);
     }
     return days;
   });
@@ -147,11 +148,6 @@
     lastRefreshToken = token;
     controller.load({ silent: true });
   });
-
-  function addDaysSafe(key, days) {
-    const utc = dayKeyToUtcDate(key).getTime() + days * 24 * 60 * 60 * 1000;
-    return new Date(utc).toISOString().slice(0, 10);
-  }
 
   function dayEntries(key) {
     const local = (localByDay[key] ?? []).map((occurrence) => ({
@@ -970,21 +966,32 @@
     danger={true}
     onConfirm={confirmDelete}
     onCancel={() => (deleteTarget = null)}
-  />
-  {#if deleteTarget.recurring}
-    <div
-      class="calendar-delete-choice"
-      role="radiogroup"
-      aria-label={t('calendar.deleteScope', 'What to delete')}
-    >
-      <label>
-        <input type="radio" bind:group={deleteOccurrenceOnly} value={false} />
-        {t('calendar.deleteSeries', 'Delete event')}
-      </label>
-      <label>
-        <input type="radio" bind:group={deleteOccurrenceOnly} value={true} />
-        {t('calendar.deleteOccurrence', 'Only this occurrence')}
-      </label>
-    </div>
-  {/if}
+  >
+    {#snippet bodyExtra()}
+      {#if deleteTarget.recurring}
+        <div
+          class="calendar-delete-choice"
+          role="radiogroup"
+          aria-label={t('calendar.deleteScope', 'What to delete')}
+        >
+          <label>
+            <input
+              type="radio"
+              bind:group={deleteOccurrenceOnly}
+              value={false}
+            />
+            {t('calendar.deleteSeries', 'Delete event')}
+          </label>
+          <label>
+            <input
+              type="radio"
+              bind:group={deleteOccurrenceOnly}
+              value={true}
+            />
+            {t('calendar.deleteOccurrence', 'Only this occurrence')}
+          </label>
+        </div>
+      {/if}
+    {/snippet}
+  </ConfirmDialog>
 {/if}

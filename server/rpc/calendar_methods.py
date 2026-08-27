@@ -35,6 +35,7 @@ _EVENT_MUTATION_FIELDS = frozenset(
 _CREATE_FIELDS = _EVENT_MUTATION_FIELDS
 _UPDATE_FIELDS = _EVENT_MUTATION_FIELDS | {"id"}
 _DELETE_FIELDS = frozenset({"id"})
+_ADD_EXDATE_FIELDS = frozenset({"id", "occurrence_start"})
 
 
 def _calendar_service(state: Any) -> CalendarService:
@@ -132,6 +133,19 @@ def _calendar_delete(state: Any, params: JsonObject) -> JsonObject:
     return {"id": event_id, "deleted": True}
 
 
+def _calendar_add_exdate(state: Any, params: JsonObject) -> JsonObject:
+    _reject_unsupported(params, _ADD_EXDATE_FIELDS, "calendar.add_exdate")
+    service = _calendar_service(state)
+    event_id = _required_string(params, "id")
+    occurrence_start = _required_string(params, "occurrence_start")
+    try:
+        event = service.add_exdate(event_id, occurrence_start)
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
+    publish_resource_changed(state, RESOURCE_KIND_CALENDAR)
+    return {"event": _event_payload(event)}
+
+
 def _event_payload(event: Any) -> JsonObject:
     payload: JsonObject = event.to_dict()
     payload["recurring"] = event.rrule is not None
@@ -194,4 +208,5 @@ def method_handlers() -> dict[str, RpcMethodHandler]:
         "calendar.create": _calendar_create,
         "calendar.update": _calendar_update,
         "calendar.delete": _calendar_delete,
+        "calendar.add_exdate": _calendar_add_exdate,
     }
