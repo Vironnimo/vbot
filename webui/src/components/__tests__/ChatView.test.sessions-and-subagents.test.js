@@ -78,6 +78,7 @@ describe('ChatView', () => {
         },
         {
           id: 'session-1',
+          title: 'Draft home',
           created_at: '2026-05-09T00:00:00+00:00',
           last_active_at: '2026-05-09T00:00:00+00:00',
         },
@@ -111,8 +112,8 @@ describe('ChatView', () => {
     expect(composerInput.value).toBe('');
 
     findButtonByText('Sessions').click();
-    await waitForCondition(() => Boolean(findButtonByText('session-1')), 100);
-    findButtonByText('session-1').click();
+    await waitForCondition(() => Boolean(findButtonByText('Draft home')), 100);
+    findButtonByText('Draft home').click();
     await waitForCondition(
       () => composerInput.value === 'unfinished draft',
       100,
@@ -236,6 +237,7 @@ describe('ChatView', () => {
       sessions: [
         {
           id: 'session-2',
+          title: 'Second topic',
           created_at: '2026-05-10T00:00:00+00:00',
           last_active_at: '2026-05-10T01:00:00+00:00',
         },
@@ -255,8 +257,11 @@ describe('ChatView', () => {
     );
 
     findButtonByText('Sessions').click();
-    await waitForCondition(() => Boolean(findButtonByText('session-2')), 100);
-    findButtonByText('session-2').click();
+    await waitForCondition(
+      () => Boolean(findButtonByText('Second topic')),
+      100,
+    );
+    findButtonByText('Second topic').click();
 
     await waitForCondition(
       () => document.body.textContent.includes('Second session reply'),
@@ -405,6 +410,7 @@ describe('ChatView', () => {
         sessions: [
           {
             id: 'session-2',
+            title: 'Mobile topic',
             created_at: '2026-05-10T00:00:00+00:00',
             last_active_at: '2026-05-10T01:00:00+00:00',
           },
@@ -419,8 +425,11 @@ describe('ChatView', () => {
       );
 
       findButtonByText('Sessions').click();
-      await waitForCondition(() => Boolean(findButtonByText('session-2')), 100);
-      const sessionButton = findButtonByText('session-2');
+      await waitForCondition(
+        () => Boolean(findButtonByText('Mobile topic')),
+        100,
+      );
+      const sessionButton = findButtonByText('Mobile topic');
       sessionButton.focus();
       sessionButton.click();
       await waitForCondition(
@@ -546,11 +555,11 @@ describe('ChatView', () => {
     sessionsButton.click();
 
     await waitForCondition(
-      () => document.body.textContent.includes('session-legacy'),
+      () => Boolean(document.querySelector('.session-row__select')),
       100,
     );
 
-    expect(findButtonByText('session-legacy')).toBeTruthy();
+    expect(document.querySelector('.session-row__select')).toBeTruthy();
     expect(findButtonByText('Link to channel')).toBeFalsy();
     expect(document.querySelector('input[name="channel-id"]')).toBeNull();
   });
@@ -603,7 +612,7 @@ describe('ChatView', () => {
     flushSync();
 
     await waitForCondition(
-      () => document.body.textContent.includes('child-session'),
+      () => Boolean(document.querySelector('[data-session-marker="subagent"]')),
       100,
     );
 
@@ -739,10 +748,10 @@ describe('ChatView', () => {
     // Trigger a second `loadHistoryForSession` via the sessions drawer.
     findButtonByText('Sessions')?.click();
     await waitForCondition(
-      () => document.body.textContent.includes('session-1'),
+      () => Boolean(document.querySelector('.session-row__select')),
       100,
     );
-    findButtonByText('session-1')?.click();
+    document.querySelector('.session-row__select')?.click();
 
     // Reconcile: the "Cancel run" button disappears and the run stream's
     // `closeSubscriptionFor` was called for this session key.
@@ -791,10 +800,10 @@ describe('ChatView', () => {
     // present on the second call, so no reconcile must fire.
     findButtonByText('Sessions')?.click();
     await waitForCondition(
-      () => document.body.textContent.includes('session-1'),
+      () => Boolean(document.querySelector('.session-row__select')),
       100,
     );
-    findButtonByText('session-1')?.click();
+    document.querySelector('.session-row__select')?.click();
 
     // `attachRunStream` runs again via `runStream.attachRunStream(...)` for
     // the second history load. The run is still the same id, so the
@@ -891,10 +900,10 @@ describe('ChatView', () => {
     // deferred so we can race in a state mutation before it resolves.
     findButtonByText('Sessions')?.click();
     await waitForCondition(
-      () => document.body.textContent.includes('session-1'),
+      () => Boolean(document.querySelector('.session-row__select')),
       100,
     );
-    findButtonByText('session-1')?.click();
+    document.querySelector('.session-row__select')?.click();
 
     // Wait for the second `chat.history` call to be in flight.
     await waitForCondition(() => chatHistoryCallCount >= 2, 100);

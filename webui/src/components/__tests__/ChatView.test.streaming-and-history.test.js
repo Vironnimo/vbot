@@ -657,11 +657,11 @@ describe('ChatView', () => {
     findButtonByText('Sessions')?.click();
 
     await waitForCondition(
-      () => document.body.textContent.includes('session-1'),
+      () => Boolean(document.querySelector('.session-row__select')),
       100,
     );
 
-    findButtonByText('session-1')?.click();
+    document.querySelector('.session-row__select')?.click();
 
     await waitForCondition(
       () => document.body.textContent.includes('Recovered draft'),
