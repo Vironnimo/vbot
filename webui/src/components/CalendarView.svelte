@@ -41,7 +41,7 @@
   } = $props();
 
   let viewState = $state(createCalendarViewState());
-  const controller = createCalendarController({ state: viewState, onToast });
+  const controller = createCalendarController({ state: viewState });
 
   const EMPTY_FORM = () => ({
     title: '',
