@@ -246,19 +246,27 @@ export function eventById(events, eventId) {
   return events.find((event) => event.id === eventId) ?? null;
 }
 
-// Build the editable form payload from one event record.
-export function eventToFormValues(event) {
+// Build the editable form payload from one event record. Single timed events
+// are absolute UTC instants; the form must present the wall clock the user sees
+// in the grid (the server zone), not the raw UTC date -- otherwise editing and
+// resaving silently shifts the event by the zone offset.
+export function eventToFormValues(event, systemTimeZone = 'UTC') {
   const rrule = event.rrule ?? null;
+  const recurringTimed = !event.all_day && Boolean(event.start_local);
   return {
     title: event.title ?? '',
     notes: event.notes ?? '',
     all_day: Boolean(event.all_day),
     start_date: event.all_day
       ? event.start_date
-      : dayKeyFromInstantOrLocal(event),
+      : recurringTimed
+        ? event.start_local.slice(0, 10)
+        : dayKeyInZone(event.start_utc, systemTimeZone),
     start_time: event.all_day
       ? '09:00'
-      : (event.start_local ?? '').slice(11, 16) || '09:00',
+      : recurringTimed
+        ? event.start_local.slice(11, 16)
+        : wallTimeInZone(event.start_utc, systemTimeZone) || '09:00',
     duration_minutes: event.duration_minutes ?? 60,
     duration_days: event.duration_days ?? 1,
     freq: rrule?.freq ?? 'none',
@@ -276,11 +284,17 @@ export function eventToFormValues(event) {
   };
 }
 
-function dayKeyFromInstantOrLocal(event) {
-  if (event.start_utc) {
-    return event.start_utc.slice(0, 10);
-  }
-  return (event.start_local ?? '').slice(0, 10);
+// Render one UTC instant as the server-zone wall-clock time "HH:MM" (24-hour),
+// the same shape the recurring path already reads from start_local. The active
+// locale's hour cycle is unsafe for a <input type="time"> value (e.g. "9:00 AM"
+// is not a valid time string), so this is fixed to a canonical 24-hour form.
+export function wallTimeInZone(instantIso, timeZone) {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone,
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+  }).format(new Date(instantIso));
 }
 
 // Build the create/update RPC payload from form values. Recurrence "none"

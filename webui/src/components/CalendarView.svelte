@@ -190,7 +190,7 @@
     }
     formMode = 'edit';
     formEventId = event.id;
-    formValues = eventToFormValues(event);
+    formValues = eventToFormValues(event, viewState.systemTimeZone);
     formError = '';
     detailOpen = false;
     formOpen = true;
