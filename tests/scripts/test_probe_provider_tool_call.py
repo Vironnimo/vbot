@@ -487,6 +487,13 @@ def test_edit_cases_use_production_schema_and_exact_expected_arguments() -> None
             }
         ]
     }
+    assert len(PROBE._edit_scenario("multi_file").expected_arguments["edits"]) == 2
+    same_file_edits = PROBE._edit_scenario("same_file_sequence").expected_arguments["edits"]
+    assert [edit["path"] for edit in same_file_edits] == [
+        "src/provider_tool_probe.py",
+        "src/provider_tool_probe.py",
+    ]
+    assert same_file_edits[1]["old_string"] == same_file_edits[0]["new_string"]
 
 
 def test_analyze_image_cases_use_production_schema_and_exact_arguments() -> None:
