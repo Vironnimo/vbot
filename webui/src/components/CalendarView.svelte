@@ -317,7 +317,7 @@
       </p>
     </div>
   </header>
-  <div class="view-toolbar">
+  <div class="view-toolbar view-toolbar--split">
     <div class="calendar-nav">
       <Button
         variant="secondary"
@@ -697,9 +697,10 @@
       >
         <FormField
           label={t('calendar.form.title', 'Title')}
-          forId="calendar-form-title-input"
+          controlId="calendar-form-title-input"
         >
           <TextField
+            id="calendar-form-title-input"
             value={formValues.title}
             onInput={(next) => (formValues.title = next)}
             placeholder={t(
@@ -711,9 +712,10 @@
         <div class="calendar-form-row">
           <FormField
             label={t('calendar.form.date', 'Date')}
-            forId="calendar-form-date"
+            controlId="calendar-form-date"
           >
             <TextField
+              id="calendar-form-date"
               type="date"
               value={formValues.start_date}
               onInput={(next) => (formValues.start_date = next)}
@@ -723,9 +725,10 @@
           {#if !formValues.all_day}
             <FormField
               label={t('calendar.form.time', 'Start')}
-              forId="calendar-form-time"
+              controlId="calendar-form-time"
             >
               <TextField
+                id="calendar-form-time"
                 type="time"
                 value={formValues.start_time}
                 onInput={(next) => (formValues.start_time = next)}
@@ -734,9 +737,11 @@
             </FormField>
             <FormField
               label={t('calendar.form.duration', 'Duration (minutes)')}
-              forId="calendar-form-duration"
+              controlId="calendar-form-duration"
+              full
             >
               <TextField
+                id="calendar-form-duration"
                 type="number"
                 value={formValues.duration_minutes}
                 onInput={(next) => (formValues.duration_minutes = next)}
@@ -748,9 +753,10 @@
           {:else}
             <FormField
               label={t('calendar.form.days', 'Days')}
-              forId="calendar-form-days"
+              controlId="calendar-form-days"
             >
               <TextField
+                id="calendar-form-days"
                 type="number"
                 value={formValues.duration_days}
                 onInput={(next) => (formValues.duration_days = next)}
@@ -771,7 +777,7 @@
         </div>
         <FormField
           label={t('calendar.form.recurrence', 'Repeats')}
-          forId="calendar-form-freq"
+          controlId="calendar-form-freq"
         >
           <select
             id="calendar-form-freq"
@@ -798,9 +804,10 @@
         {#if formValues.freq !== 'none'}
           <FormField
             label={t('calendar.form.interval', 'Every')}
-            forId="calendar-form-interval"
+            controlId="calendar-form-interval"
           >
             <TextField
+              id="calendar-form-interval"
               type="number"
               value={formValues.interval}
               onInput={(next) => (formValues.interval = next)}
@@ -811,7 +818,7 @@
           {#if formValues.freq === 'weekly'}
             <FormField
               label={t('calendar.form.weekdays', 'On days')}
-              forId="calendar-form-weekdays"
+              controlId="calendar-form-weekdays"
             >
               <div class="calendar-weekday-picker" id="calendar-form-weekdays">
                 {#each [['mo', 'Mo'], ['tu', 'Tu'], ['we', 'We'], ['th', 'Th'], ['fr', 'Fr'], ['sa', 'Sa'], ['su', 'Su']] as [code, label] (code)}
@@ -835,7 +842,7 @@
           {/if}
           <FormField
             label={t('calendar.form.ends', 'Ends')}
-            forId="calendar-form-end-mode"
+            controlId="calendar-form-end-mode"
           >
             <div class="calendar-form-ends">
               <select
@@ -877,9 +884,10 @@
         {/if}
         <FormField
           label={t('calendar.form.notes', 'Notes')}
-          forId="calendar-form-notes"
+          controlId="calendar-form-notes"
         >
           <TextArea
+            id="calendar-form-notes"
             value={formValues.notes}
             onInput={(next) => (formValues.notes = next)}
             rows={3}
