@@ -3099,7 +3099,7 @@ kbd {
 .info-popover {
   position: fixed;
   z-index: var(--z-floating);
-  max-width: 320px;
+  max-width: min(320px, calc(100vw - 24px));
   padding: 10px 12px;
   border: 1px solid var(--border-2);
   border-radius: var(--r-md);
