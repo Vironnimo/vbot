@@ -129,8 +129,11 @@ def _expected_data_dir(name: str) -> Path:
 def initialize_data_dir(data_dir: Path) -> None:
     """Run the pure-standard-library canonical initializer without package imports."""
 
+    # Load the layout from this checkout, not PROJECT_ROOT: a worktree may carry a
+    # newer canonical layout than the linked main repository, and the checkout's
+    # own code defines the layout its server expects.
     layout_module = runpy.run_path(
-        str(PROJECT_ROOT / "core" / "storage" / "layout.py"),
+        str(Path(__file__).resolve().parent.parent / "core" / "storage" / "layout.py"),
         run_name="vbot_data_directory_layout",
     )
     initializer = layout_module["initialize_data_directory"]
