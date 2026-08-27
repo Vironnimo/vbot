@@ -294,6 +294,7 @@ describe('ChatView', () => {
         },
         {
           id: 'builder-old',
+          title: 'Older builder topic',
           created_at: '2026-06-01T00:00:00+00:00',
           last_active_at: '2026-06-02T00:00:00+00:00',
         },
@@ -350,7 +351,7 @@ describe('ChatView', () => {
 
     const oldRow = Array.from(
       document.querySelectorAll('.session-row__select'),
-    ).find((button) => button.textContent.includes('builder-old'));
+    ).find((button) => button.textContent.includes('Older builder topic'));
     expect(oldRow).toBeTruthy();
     oldRow.click();
     flushSync();
