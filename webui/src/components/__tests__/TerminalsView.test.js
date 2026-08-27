@@ -421,6 +421,10 @@ describe('TerminalsView', () => {
     expect(document.querySelector('.terminals-view__exit-code')).toBeNull();
 
     findButtonByAriaLabel('Close terminal').click();
+    flushSync();
+    // The tile disappears immediately; the catalog removal runs in the
+    // background.
+    expect(document.querySelectorAll('.terminals-view__tile')).toHaveLength(0);
     await waitFor(() => forgetTerminalMock.mock.calls.length > 0);
     expect(forgetTerminalMock).toHaveBeenCalledWith('term-1');
     expect(killTerminalMock).not.toHaveBeenCalled();
@@ -432,14 +436,12 @@ describe('TerminalsView', () => {
     flushSync();
     await waitFor(() => streams.length === 1 && terminalInstances.length === 1);
 
-    // The post-kill reload keeps the session retained (server behavior), so
-    // the single close action continues with forget to remove it from the
-    // list — no confirmation dialog in between.
-    listTerminalsMock.mockResolvedValueOnce(
-      terminalListResponse([terminal({ state: 'exited' })]),
-    );
-
     findButtonByAriaLabel('Close terminal').click();
+    flushSync();
+    // The tile disappears immediately; the server-side stop and catalog
+    // removal continue in the background — no confirmation dialog in
+    // between.
+    expect(document.querySelectorAll('.terminals-view__tile')).toHaveLength(0);
     await waitFor(() => killTerminalMock.mock.calls.length > 0);
     await waitFor(() => forgetTerminalMock.mock.calls.length > 0);
     expect(killTerminalMock).toHaveBeenCalledWith('term-1');
