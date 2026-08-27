@@ -291,9 +291,41 @@ def test_edit_no_match_candidates_use_recovered_gutterfree_pattern(tmp_path: Pat
     assert target.read_text(encoding="utf-8") == "alpha = 2\nbeta\n"
 
 
-def test_edit_rejects_line_numbered_new_string(tmp_path: Path) -> None:
-    # A model that pastes read's ``N| `` gutter into the replacement must be
-    # stopped before it writes line-number prefixes into the file.
+def test_edit_strips_complete_line_number_gutter_from_new_string(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    target = workspace / "notes.txt"
+    target.write_text("alpha\nbeta\n", encoding="utf-8")
+    context = make_context(workspace)
+
+    result = edit_handler(
+        context,
+        {"path": "notes.txt", "old_string": "alpha\nbeta", "new_string": "1| one\n2| two"},
+    )
+
+    assert result["ok"] is True
+    data = result["data"]
+    assert isinstance(data, dict)
+    assert data["normalization_warning"] == (
+        "Removed read line-number gutters from new_string before applying the edit."
+    )
+    assert target.read_text(encoding="utf-8") == "one\ntwo\n"
+    assert context.presentation_facts == [
+        {"kind": "line_change", "change": "added", "value": 2},
+        {"kind": "line_change", "change": "removed", "value": 2},
+    ]
+
+
+@pytest.mark.parametrize(
+    "new_string",
+    [
+        "1| one\nplain line\n2| two",
+        "1| one\n3| three",
+    ],
+)
+def test_edit_rejects_incomplete_or_nonconsecutive_new_string_gutter(
+    tmp_path: Path, new_string: str
+) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     target = workspace / "notes.txt"
@@ -301,11 +333,30 @@ def test_edit_rejects_line_numbered_new_string(tmp_path: Path) -> None:
 
     result = edit_handler(
         make_context(workspace),
-        {"path": "notes.txt", "old_string": "alpha\nbeta", "new_string": "1| one\n2| two"},
+        {"path": "notes.txt", "old_string": "alpha\nbeta", "new_string": new_string},
+    )
+
+    assert_failure_envelope(result, "line_numbered_content")
+    assert target.read_text(encoding="utf-8") == "alpha\nbeta\n"
+
+
+def test_edit_rejects_continuation_gutter_in_new_string(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    target = workspace / "notes.txt"
+    target.write_text("alpha\nbeta\n", encoding="utf-8")
+
+    result = edit_handler(
+        make_context(workspace),
+        {
+            "path": "notes.txt",
+            "old_string": "alpha\nbeta",
+            "new_string": "10:50001| fragment\n11| next",
+        },
     )
 
     error = assert_failure_envelope(result, "line_numbered_content")
-    assert "line-number" in error["message"]
+    assert "N:C| continuation gutter" in error["message"]
     assert target.read_text(encoding="utf-8") == "alpha\nbeta\n"
 
 
@@ -1252,6 +1303,34 @@ def test_multi_edit_continues_after_an_item_fails(tmp_path: Path) -> None:
         {"kind": "line_change", "change": "added", "value": 2},
         {"kind": "line_change", "change": "removed", "value": 2},
     ]
+
+
+def test_multi_edit_reports_new_string_gutter_normalization_per_item(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    target = workspace / "notes.txt"
+    target.write_text("alpha\nbeta\n", encoding="utf-8")
+
+    result = edit_handler(
+        make_context(workspace),
+        {
+            "edits": [
+                {
+                    "path": "notes.txt",
+                    "old_string": "alpha\nbeta",
+                    "new_string": "20| ALPHA\n21| BETA",
+                }
+            ]
+        },
+    )
+
+    data = result["data"]
+    assert result["ok"] is True
+    assert isinstance(data, dict)
+    assert data["results"][0]["normalization_warning"] == (
+        "Removed read line-number gutters from new_string before applying the edit."
+    )
+    assert target.read_text(encoding="utf-8") == "ALPHA\nBETA\n"
 
 
 def test_multi_edit_returns_failure_when_every_item_fails(tmp_path: Path) -> None:
