@@ -188,7 +188,8 @@ async def test_send_marks_identity_session_as_current(monkeypatch: pytest.Monkey
     updates: list[tuple[str, str]] = []
     published: list[str] = []
     state.runtime.agents = SimpleNamespace(
-        update=lambda agent_id, **kwargs: updates.append((agent_id, kwargs["current_session_id"]))
+        get=lambda agent_id: SimpleNamespace(current_session_id=""),
+        update=lambda agent_id, **kwargs: updates.append((agent_id, kwargs["current_session_id"])),
     )
     monkeypatch.setattr("server.rpc.chat_methods._bridge_run_to_event_bus", lambda *a, **k: None)
     monkeypatch.setattr(
@@ -200,6 +201,28 @@ async def test_send_marks_identity_session_as_current(monkeypatch: pytest.Monkey
 
     assert updates == [("builder", "s1")]
     assert published == ["agents"]
+
+
+@pytest.mark.asyncio
+async def test_send_skips_current_session_mark_when_already_current(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # When the session is already the agent's current one, no update or
+    # resource_changed signal is emitted — re-marking the same session on
+    # every message would tear down the chat view in every connected window.
+    loop = _RecordingLoop()
+    state = _make_state(loop)
+    state.runtime.agents = SimpleNamespace(
+        get=lambda agent_id: SimpleNamespace(current_session_id="s1"),
+        update=lambda *a, **k: pytest.fail("must not update"),
+    )
+    monkeypatch.setattr("server.rpc.chat_methods._bridge_run_to_event_bus", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "server.rpc.chat_methods.publish_resource_changed",
+        lambda *a, **k: pytest.fail("must not publish"),
+    )
+
+    await _send_chat(state, {"agent_id": "builder", "session_id": "s1", "content": "hi"})
 
 
 @pytest.mark.asyncio
@@ -229,7 +252,8 @@ async def test_send_marks_session_before_enqueue_when_busy(
     state = _make_state(loop)
     updates: list[tuple[str, str]] = []
     state.runtime.agents = SimpleNamespace(
-        update=lambda agent_id, **kwargs: updates.append((agent_id, kwargs["current_session_id"]))
+        get=lambda agent_id: SimpleNamespace(current_session_id=""),
+        update=lambda agent_id, **kwargs: updates.append((agent_id, kwargs["current_session_id"])),
     )
     monkeypatch.setattr("server.rpc.chat_methods._bridge_run_to_event_bus", lambda *a, **k: None)
     monkeypatch.setattr(

@@ -381,9 +381,24 @@ async def _mark_current_session(state: Any, agent_id: str, session_id: str) -> N
     session after a restart, so a failure must never block the user's message.
     The agent store is the single writer; other windows learn about the new
     current marking through the agents channel.
+
+    Skipped when the session is already current: re-marking the same session on
+    every message would emit a redundant ``resource_changed(kind="agents")``
+    signal that tears down the chat view in every connected window.
     """
     agents = getattr(getattr(state, "runtime", None), "agents", None)
     if agents is None:
+        return
+    try:
+        agent = await _CHAT_RPC_WORKERS.run(agents.get, agent_id)
+    except Exception as exc:
+        _LOGGER.warning(
+            "Failed to read agent for current-session mark (agent=%s): %s",
+            agent_id,
+            exc,
+        )
+        return
+    if agent.current_session_id == session_id:
         return
     try:
         await _CHAT_RPC_WORKERS.run(agents.update, agent_id, current_session_id=session_id)
