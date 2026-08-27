@@ -435,6 +435,21 @@ describe('ChatAssistantRun tool dot state', () => {
     expect(dot.classList.contains('preparing')).toBe(false);
   });
 
+  it('renders a partial multi-edit as a steady amber partial state', () => {
+    const item = createAssistantRunItem({
+      items: [createWriteToolChild({ status: 'partial' })],
+    });
+    mountedComponent = mountRun({ item });
+
+    const dot = toolDot();
+    expect(dot).toBeTruthy();
+    expect(dot.classList.contains('partial')).toBe(true);
+    expect(dot.classList.contains('running')).toBe(false);
+    expect(document.querySelector('.te-time.partial')?.textContent).toContain(
+      'partial',
+    );
+  });
+
   it('shows recognized preview arguments before the tool call is dispatched', () => {
     const item = createAssistantRunItem({
       items: [

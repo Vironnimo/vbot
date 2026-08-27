@@ -12,6 +12,7 @@ import { isPlainObject } from './values.js';
 const CHAT_STATUS_RUNNING = 'running';
 const CHAT_STATUS_COMPLETED = 'completed';
 const CHAT_STATUS_FAILED = 'failed';
+const CHAT_STATUS_PARTIAL = 'partial';
 const CHAT_STATUS_CANCELLED = 'cancelled';
 const CHAT_STATUS_INTERRUPTED = 'interrupted';
 
@@ -1622,7 +1623,10 @@ function toolStatusFromResultEvent(event) {
   if (toolResultCancelledByUser(result)) {
     return CHAT_STATUS_CANCELLED;
   }
-  return hasToolResultFailure(event) ? CHAT_STATUS_FAILED : 'success';
+  if (hasToolResultFailure(event)) {
+    return CHAT_STATUS_FAILED;
+  }
+  return hasResultPartial(result) ? CHAT_STATUS_PARTIAL : 'success';
 }
 
 function mergeSubAgentSessionStarted(assistantRun, event) {
@@ -1876,6 +1880,14 @@ function hasResultFailure(result) {
     normalizedResult.ok === false ||
     normalizedResult.success === false ||
     ['error', 'failed'].includes(normalizedResult.status),
+  );
+}
+
+function hasResultPartial(result) {
+  const normalizedResult = parseResult(result);
+  return (
+    normalizedResult?.ok === true &&
+    normalizedResult?.data?.status === 'partial'
   );
 }
 

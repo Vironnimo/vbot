@@ -14,7 +14,7 @@ from core.tools.edit import (
     register_edit_tool,
 )
 from core.tools.file_state import FileReadState
-from core.tools.tools import ToolContext, ToolRegistry, is_tool_result_envelope
+from core.tools.tools import ToolContext, ToolRegistry, is_tool_result_envelope, tool_success
 from core.utils.paths import model_path
 
 
@@ -106,14 +106,24 @@ def test_register_edit_tool_exposes_provider_schema() -> None:
 
     parameters = definition["parameters"]
     assert parameters["type"] == "object"
-    assert parameters["required"] == ["path", "old_string", "new_string"]
+    assert parameters["required"] == ["edits"]
     assert "additionalProperties" not in parameters
-    assert set(parameters["properties"]) == {"path", "old_string", "new_string", "replace_all"}
+    assert set(parameters["properties"]) == {"edits"}
+    edits_schema = parameters["properties"]["edits"]
+    assert edits_schema["minItems"] == 1
+    item_schema = edits_schema["items"]
+    assert item_schema["required"] == ["path", "old_string", "new_string"]
+    assert set(item_schema["properties"]) == {
+        "path",
+        "old_string",
+        "new_string",
+        "replace_all",
+    }
     assert all(
         isinstance(property_schema.get("description"), str) and property_schema["description"]
-        for property_schema in parameters["properties"].values()
+        for property_schema in item_schema["properties"].values()
     )
-    assert "default" not in parameters["properties"]["replace_all"]
+    assert "default" not in item_schema["properties"]["replace_all"]
     assert "filePath" not in parameters["properties"]
     assert tool.open_input_schema is True
 
@@ -1180,3 +1190,112 @@ def test_concurrent_edits_to_one_file_compose(tmp_path: Path) -> None:
     # matches against the previous writer's on-disk content.
     assert "from bb import delta" in final
     assert "from bb import epsilon" in final
+
+
+def test_multi_edit_applies_items_in_order_across_files(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    first = workspace / "first.txt"
+    second = workspace / "second.txt"
+    first.write_text("alpha beta\n", encoding="utf-8")
+    second.write_text("one\n", encoding="utf-8")
+
+    result = edit_handler(
+        make_context(workspace),
+        {
+            "edits": [
+                {"path": "first.txt", "old_string": "alpha", "new_string": "ALPHA"},
+                {"path": "first.txt", "old_string": "ALPHA beta", "new_string": "done"},
+                {"path": "second.txt", "old_string": "one", "new_string": "two"},
+            ]
+        },
+    )
+
+    data = result["data"]
+    assert result["ok"] is True
+    assert isinstance(data, dict)
+    assert data["status"] == "success"
+    assert data["succeeded"] == 3
+    assert data["failed"] == 0
+    assert [item["index"] for item in data["results"]] == [0, 1, 2]
+    assert first.read_text(encoding="utf-8") == "done\n"
+    assert second.read_text(encoding="utf-8") == "two\n"
+
+
+def test_multi_edit_continues_after_an_item_fails(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    target = workspace / "notes.txt"
+    target.write_text("alpha beta gamma\n", encoding="utf-8")
+    context = make_context(workspace)
+
+    result = edit_handler(
+        context,
+        {
+            "edits": [
+                {"path": "notes.txt", "old_string": "alpha", "new_string": "ALPHA"},
+                {"path": "notes.txt", "old_string": "missing", "new_string": "nope"},
+                {"path": "notes.txt", "old_string": "gamma", "new_string": "GAMMA"},
+            ]
+        },
+    )
+
+    data = result["data"]
+    assert result["ok"] is True
+    assert isinstance(data, dict)
+    assert data["status"] == "partial"
+    assert data["succeeded"] == 2
+    assert data["failed"] == 1
+    assert data["results"][1]["error"]["code"] == "text_not_found"
+    assert target.read_text(encoding="utf-8") == "ALPHA beta GAMMA\n"
+    assert context.presentation_facts == [
+        {"kind": "line_change", "change": "added", "value": 2},
+        {"kind": "line_change", "change": "removed", "value": 2},
+    ]
+
+
+def test_multi_edit_returns_failure_when_every_item_fails(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    workspace.joinpath("notes.txt").write_text("alpha\n", encoding="utf-8")
+
+    result = edit_handler(
+        make_context(workspace),
+        {
+            "edits": [
+                {"path": "notes.txt", "old_string": "missing", "new_string": "one"},
+                {"path": "absent.txt", "old_string": "old", "new_string": "new"},
+            ]
+        },
+    )
+
+    error = assert_failure_envelope(result, "all_edits_failed")
+    assert "Edit 0 (notes.txt): [text_not_found]" in error["message"]
+    assert "Edit 1 (absent.txt): [file_not_found]" in error["message"]
+
+
+def test_multi_edit_display_hides_bodies_and_summarizes_batch(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    registry = ToolRegistry()
+    register_edit_tool(registry, file_state=FileReadState())
+    arguments = {
+        "edits": [
+            {"path": "a.txt", "old_string": "secret old", "new_string": "secret new"},
+            {"path": "b.txt", "old_string": "x", "new_string": "y"},
+            {"path": "a.txt", "old_string": "z", "new_string": "q"},
+        ]
+    }
+    result = tool_success(
+        {"status": "partial", "total": 3, "succeeded": 2, "failed": 1, "results": []}
+    )
+
+    payload = registry.display_for_call("edit", arguments, result=result)
+
+    assert payload["summary"] == "a.txt"
+    assert payload["hidden_argument_keys"] == ["edits", "new_string", "old_string"]
+    assert payload["facts"] == [
+        {"kind": "count", "value": 3, "unit": "edits", "at_least": False},
+        {"kind": "count", "value": 2, "unit": "files", "at_least": False},
+        {"kind": "count", "value": 1, "unit": "failures", "at_least": False},
+    ]

@@ -66,7 +66,7 @@ TOOL_DISPLAY_VALUE_KINDS = frozenset(
 )
 TOOL_DISPLAY_TRUNCATION_MODES = frozenset({"start", "end", "middle", "never"})
 TOOL_DISPLAY_TOOLTIP_MODES = frozenset({"always", "none", "truncated"})
-TOOL_DISPLAY_FACT_UNITS = frozenset({"matches", "results"})
+TOOL_DISPLAY_FACT_UNITS = frozenset({"edits", "failures", "files", "matches", "results"})
 TOOL_DISPLAY_LINE_CHANGES = frozenset({"added", "removed"})
 
 _TOOL_WORKERS = BoundedWorkerPool(

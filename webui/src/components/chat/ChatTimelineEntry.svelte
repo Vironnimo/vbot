@@ -27,7 +27,6 @@
     isImageMediaContentBlock,
     isMediaContentBlock,
     isReasoningOnlyAssistantMessage,
-    isRunningToolEvent,
     isTerminalEvent,
     isTextContentBlock,
     isTextToSpeechResult,
@@ -49,6 +48,7 @@
     toolResultValueForEvent,
     toolRowFromEvent,
     toolRowPresentation,
+    toolStatus,
     userContentBlocks,
   } from '$lib/chatTimelinePresentation.js';
 
@@ -470,10 +470,10 @@
         <details class="tool-event">
           <summary class="tool-event-line">
             <span
-              class:error={isFailedToolEvent(item.event)}
-              class:running={isRunningToolEvent(item.event)}
-              class:done={!isRunningToolEvent(item.event) &&
-                !isFailedToolEvent(item.event)}
+              class:error={toolStatus(eventToolRow) === 'failed'}
+              class:partial={toolStatus(eventToolRow) === 'partial'}
+              class:running={toolStatus(eventToolRow) === 'running'}
+              class:done={toolStatus(eventToolRow) === 'success'}
               class="te-dot">●</span
             >
             <span class="te-fn">{toolNameForEvent(item.event)}</span>

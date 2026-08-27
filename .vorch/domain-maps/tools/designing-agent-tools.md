@@ -7,8 +7,9 @@ Use this guide when adding a Tool, changing its public parameters, or migrating 
 Use this decision order:
 
 1. **One behavior:** expose its arguments directly in one open flat object. A Tool named `channel_send` that only sends should accept delivery fields directly; `action: "send"` would repeat the Tool name.
-2. **One behavior with optional targeting or selection:** keep direct optional target fields and validate their dependencies. `status()` checks the current Session, `status(session_id)` checks another Session for the same Agent, and `status(agent_id, session_id)` changes the owner and Session; these are target variants, not actions.
-3. **Several genuinely different behaviors:** require one top-level `action` enum and place every action argument beside it. CRUD, lifecycle transitions, and read-versus-mutate behavior normally qualify. `memory(action, scope, content?, entry_id?)` and `history(action, ...)` are the reference shape.
+2. **One repeatable independent behavior:** use one required plural array of compact operation objects when batching materially reduces Agent roundtrips. Preserve input order, keep per-operation options on each item, and report indexed outcomes; `edit(edits[])` is the reference shape.
+3. **One behavior with optional targeting or selection:** keep direct optional target fields and validate their dependencies. `status()` checks the current Session, `status(session_id)` checks another Session for the same Agent, and `status(agent_id, session_id)` changes the owner and Session; these are target variants, not actions.
+4. **Several genuinely different behaviors:** require one top-level `action` enum and place every action argument beside it. CRUD, lifecycle transitions, and read-versus-mutate behavior normally qualify. `memory(action, scope, content?, entry_id?)` and `history(action, ...)` are the reference shape.
 
 Do not expose `request.operation`, an operation-key object such as `{"create": {...}}`, a stringified nested request, or several mutually exclusive booleans that encode actions. Do not infer a behavioral mode from an arbitrary combination of optional fields when a required `action` would state it directly.
 
@@ -41,6 +42,7 @@ Do not expose `request.operation`, an operation-key object such as `{"create": {
 ## Results, Errors, and Display
 
 - Keep the stable vBot Tool Result envelope. Define a success-data schema and return stable target identifiers, state, or action outcome when they help the next call.
+- For batched independent operations, keep results in input order with stable indices. Mixed outcomes may use a successful envelope with an explicit `partial` data status when completed operations must remain applied; zero successful operations use a failure envelope.
 - Expected failures use precise codes and actionable messages. Set retry metadata only when it changes what the Agent should do.
 - Do not add public arguments solely to improve UI labels or conceal sensitive values. Use `ToolDisplay.summary_builder` and `hidden_argument_keys`.
 - A result should not expose internal filesystem paths, provenance, or implementation state unless the Agent needs that value for the next in-scope operation.

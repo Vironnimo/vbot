@@ -972,6 +972,19 @@ describe('per-tool-call user cancel projection', () => {
     expect(run.tools[0].status).toBe('failed');
   });
 
+  it('keeps a mixed multi-edit result as partial instead of failed (live)', () => {
+    const sessionState = liveSessionWithToolResult({
+      ok: true,
+      error: null,
+      data: { status: 'partial', total: 3, succeeded: 2, failed: 1 },
+      artifacts: [],
+    });
+
+    const items = visibleTimelineItemsForRender(sessionState);
+    const run = items.find((item) => item.type === 'assistant_run');
+    expect(run.tools[0].status).toBe('partial');
+  });
+
   it('renders a user-cancelled tool result as cancelled after reload, without failing the run (history)', () => {
     const chatState = createChatState();
     const sessionState = ensureSessionState(chatState, 'alpha', 'session-1');

@@ -529,6 +529,7 @@
               <span
                 class:done={toolStatus(child) === 'success'}
                 class:error={toolStatus(child) === 'failed'}
+                class:partial={toolStatus(child) === 'partial'}
                 class:cancelled={toolStatus(child) === 'cancelled'}
                 class:preparing
                 class:running={toolStatus(child) === 'running' && !preparing}
@@ -543,6 +544,7 @@
                 <span
                   class="te-time"
                   class:cancelled={toolStatus(child) === 'cancelled'}
+                  class:partial={toolStatus(child) === 'partial'}
                 >
                   {toolStatusLabel(child, nowMs)}
                 </span>

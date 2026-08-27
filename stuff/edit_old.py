@@ -26,7 +26,7 @@ from core.tools.tools import (
     JsonObject,
     ToolContext,
     ToolDisplay,
-    ToolDisplayPart,
+    ToolDisplayField,
     ToolHandler,
     ToolRegistry,
     offload_tool_handler,
@@ -37,47 +37,37 @@ from core.utils.paths import model_path
 
 EDIT_TOOL_NAME = "edit"
 EDIT_TOOL_DESCRIPTION = (
-    "Apply one or more text replacements across files in a single call. Edits run in order."
+    "Edit a file by replacing text. old_string is matched against the file's "
+    "current contents. Include enough surrounding text to identify one "
+    "location unless replace_all is true."
 )
 EDIT_TOOL_PARAMETERS: JsonObject = {
     "type": "object",
     "properties": {
-        "edits": {
-            "type": "array",
-            "minItems": 1,
-            "description": "Text replacements to apply in order.",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "path": {
-                        "type": "string",
-                        "minLength": 1,
-                        "description": (
-                            "File to edit, relative to the working directory or absolute."
-                        ),
-                    },
-                    "old_string": {
-                        "type": "string",
-                        "minLength": 1,
-                        "description": (
-                            "Existing text to replace. Include enough surrounding text to "
-                            "identify one location unless replace_all is true."
-                        ),
-                    },
-                    "new_string": {
-                        "type": "string",
-                        "description": "Replacement text.",
-                    },
-                    "replace_all": {
-                        "type": "boolean",
-                        "description": ("Replace every match. Omit to require one unique match."),
-                    },
-                },
-                "required": ["path", "old_string", "new_string"],
-            },
+        "path": {
+            "type": "string",
+            "minLength": 1,
+            "description": (
+                "Path to the file to edit (relative to the working directory, or absolute)."
+            ),
+        },
+        "old_string": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Text to replace.",
+        },
+        "new_string": {
+            "type": "string",
+            "description": "New text to replace the old text with.",
+        },
+        "replace_all": {
+            "type": "boolean",
+            "description": (
+                "Replace every occurrence. Omit to require exactly one matching location."
+            ),
         },
     },
-    "required": ["edits"],
+    "required": ["path", "old_string", "new_string"],
 }
 
 AMBIGUOUS_CONTEXT_LIMIT = 3
@@ -269,10 +259,10 @@ def _build_success_data(
     return data
 
 
-def _edit_one(
+def edit_handler(
     context: ToolContext, arguments: JsonObject, *, file_state: FileReadState | None = None
 ) -> JsonObject:
-    """Apply one replacement and return its stable result envelope.
+    """Handle an edit tool call and return a stable vBot result envelope.
 
     When ``file_state`` is supplied, mutations of the same path are serialized.
     A prior read is not required: the unique ``old_string`` match against current
@@ -378,161 +368,19 @@ def _edit_one(
                 "The edit was applied to the current on-disk content and preserved "
                 "all unmatched bytes."
             )
-        added_lines = logical_line_count(new_string) * result.replacements
-        removed_lines = logical_line_count(old_string) * result.replacements
-        success_data = _build_success_data(
-            resolved,
-            result.first_changed_line,
-            result.replacements,
-            syntax_warning,
-            stale_warning,
+        context.add_display_line_changes(
+            added=logical_line_count(new_string) * result.replacements,
+            removed=logical_line_count(old_string) * result.replacements,
         )
-        success_data["added_lines"] = added_lines
-        success_data["removed_lines"] = removed_lines
-        return tool_success(success_data)
-
-
-def _validate_batch_arguments(arguments: JsonObject) -> list[JsonObject] | JsonObject:
-    unknown_arguments = set(arguments) - {"edits"}
-    if unknown_arguments:
-        names = ", ".join(sorted(unknown_arguments))
-        return tool_failure("invalid_arguments", f"Unknown argument(s): {names}")
-    edits = arguments.get("edits")
-    if not isinstance(edits, list) or not edits:
-        return tool_failure("invalid_arguments", "edits must be a non-empty array")
-    if not all(isinstance(edit, dict) for edit in edits):
-        return tool_failure("invalid_arguments", "each edits item must be an object")
-    return edits
-
-
-def _failed_item(index: int, edit: JsonObject, result: JsonObject) -> JsonObject:
-    outcome: JsonObject = {"index": index, "ok": False, "error": result["error"]}
-    path = edit.get("path")
-    if isinstance(path, str) and path:
-        outcome["path"] = path
-    return outcome
-
-
-def _successful_item(index: int, result: JsonObject) -> JsonObject:
-    data = result.get("data")
-    assert isinstance(data, dict)
-    visible_data = {
-        key: value for key, value in data.items() if key not in {"added_lines", "removed_lines"}
-    }
-    return {"index": index, "ok": True, **visible_data}
-
-
-def _all_failed_result(results: list[JsonObject]) -> JsonObject:
-    if len(results) == 1:
-        error = results[0]["error"]
-        return tool_failure(str(error["code"]), str(error["message"]))
-    details = []
-    for result in results:
-        error = result["error"]
-        path = f" ({result['path']})" if "path" in result else ""
-        details.append(f"Edit {result['index']}{path}: [{error['code']}] {error['message']}")
-    return tool_failure(
-        "all_edits_failed",
-        f"All {len(results)} edits failed.\n" + "\n".join(details),
-    )
-
-
-def edit_handler(
-    context: ToolContext, arguments: JsonObject, *, file_state: FileReadState | None = None
-) -> JsonObject:
-    """Apply an ordered batch while isolating failures to their individual edits."""
-    # Retain direct-call compatibility for internal callers and historical tests.
-    # The registered Agent-facing schema exposes only the batched shape.
-    if "edits" not in arguments:
-        result = _edit_one(context, arguments, file_state=file_state)
-        data = result.get("data")
-        if result.get("ok") is True and isinstance(data, dict):
-            context.add_display_line_changes(
-                added=int(data.get("added_lines", 0)),
-                removed=int(data.get("removed_lines", 0)),
+        return tool_success(
+            _build_success_data(
+                resolved,
+                result.first_changed_line,
+                result.replacements,
+                syntax_warning,
+                stale_warning,
             )
-            data.pop("added_lines", None)
-            data.pop("removed_lines", None)
-        return result
-
-    validated_arguments = _validate_batch_arguments(arguments)
-    if isinstance(validated_arguments, dict):
-        return validated_arguments
-
-    outcomes: list[JsonObject] = []
-    added_lines = 0
-    removed_lines = 0
-    for index, edit in enumerate(validated_arguments):
-        result = _edit_one(context, edit, file_state=file_state)
-        data = result.get("data")
-        if result.get("ok") is True and isinstance(data, dict):
-            outcomes.append(_successful_item(index, result))
-            added_lines += int(data.get("added_lines", 0))
-            removed_lines += int(data.get("removed_lines", 0))
-        else:
-            outcomes.append(_failed_item(index, edit, result))
-
-    succeeded = sum(outcome["ok"] is True for outcome in outcomes)
-    failed = len(outcomes) - succeeded
-    if succeeded == 0:
-        return _all_failed_result(outcomes)
-
-    context.add_display_line_changes(added=added_lines, removed=removed_lines)
-    status = "partial" if failed else "success"
-    message = (
-        f"Applied {succeeded} of {len(outcomes)} edits; {failed} failed."
-        if failed
-        else f"Applied all {succeeded} edits."
-    )
-    return tool_success(
-        {
-            "message": message,
-            "status": status,
-            "total": len(outcomes),
-            "succeeded": succeeded,
-            "failed": failed,
-            "results": outcomes,
-        }
-    )
-
-
-def _edit_display_parts(arguments: JsonObject) -> tuple[ToolDisplayPart, ...]:
-    edits = arguments.get("edits")
-    if not isinstance(edits, list) or not edits or not isinstance(edits[0], dict):
-        return ()
-    path = edits[0].get("path")
-    if not isinstance(path, str) or not path:
-        return ()
-    return (
-        ToolDisplayPart(
-            value=path,
-            kind="path",
-            truncate="start",
-            tooltip="always",
-            copyable=True,
-        ),
-    )
-
-
-def _edit_display_facts(arguments: JsonObject, result: JsonObject | None) -> tuple[JsonObject, ...]:
-    edits = arguments.get("edits")
-    if not isinstance(edits, list) or len(edits) <= 1:
-        return ()
-    paths = {
-        edit.get("path")
-        for edit in edits
-        if isinstance(edit, dict) and isinstance(edit.get("path"), str)
-    }
-    facts: list[JsonObject] = [
-        {"kind": "count", "value": len(edits), "unit": "edits", "at_least": False},
-        {"kind": "count", "value": len(paths), "unit": "files", "at_least": False},
-    ]
-    if isinstance(result, dict) and result.get("ok") is True:
-        data = result.get("data")
-        failed = data.get("failed") if isinstance(data, dict) else None
-        if isinstance(failed, int) and failed > 0:
-            facts.append({"kind": "count", "value": failed, "unit": "failures", "at_least": False})
-    return tuple(facts)
+        )
 
 
 def make_edit_handler(file_state: FileReadState) -> ToolHandler:
@@ -555,12 +403,19 @@ def register_edit_tool(registry: ToolRegistry, *, file_state: FileReadState) -> 
         open_input_schema=True,
         result_schema={
             "type": "object",
-            "required": ["message", "status", "total", "succeeded", "failed", "results"],
+            "required": ["message", "path", "first_changed_line", "replacements"],
         },
         display=ToolDisplay(
-            parts_builder=_edit_display_parts,
-            fact_builder=_edit_display_facts,
-            hidden_argument_keys=("edits", "new_string", "old_string"),
+            primary_candidates=(
+                ToolDisplayField(
+                    "path",
+                    kind="path",
+                    truncate="start",
+                    tooltip="always",
+                    copyable=True,
+                ),
+            ),
+            hidden_argument_keys=("new_string", "old_string"),
         ),
     )
 
