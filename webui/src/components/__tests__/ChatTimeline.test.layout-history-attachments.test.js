@@ -430,6 +430,68 @@ describe('ChatTimeline', () => {
     ).toBeTruthy();
   });
 
+  it('keeps a transient card whose anchor is gone at its chronological position', () => {
+    // A history reload replaces live Run ids with history ids, so the card's
+    // exact anchor disappears. With a creation time recorded, the card stays
+    // between the messages that predate and postdate the command instead of
+    // sinking below everything.
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-transient-anchor-reanchor',
+    );
+    sessionState.messages = [
+      {
+        id: 'user-early',
+        role: 'user',
+        content: 'Earlier question',
+        timestamp: '2026-05-10T09:00:00',
+      },
+      {
+        id: 'user-late',
+        role: 'user',
+        content: 'Later question',
+        timestamp: '2026-05-10T09:10:00',
+      },
+    ];
+
+    mountedComponent = mount(ChatTimeline, {
+      target: document.body,
+      props: {
+        sessionState,
+        agentName: 'Alpha',
+        transientCards: [
+          {
+            id: 'transient-mid',
+            text: 'Status output',
+            anchorId: 'run-live-that-vanished',
+            // Same naive-local convention as the message timestamps above, so
+            // the comparison is timezone-independent.
+            createdAt: Date.parse('2026-05-10T09:05:00'),
+          },
+        ],
+      },
+    });
+    flushSync();
+
+    const earlyMessage = document.querySelector(
+      '[data-timeline-item-id="user-early"]',
+    );
+    const lateMessage = document.querySelector(
+      '[data-timeline-item-id="user-late"]',
+    );
+    const card = document.querySelector('.transient-card');
+    expect(card.textContent).toContain('Status output');
+    expect(
+      earlyMessage.compareDocumentPosition(card) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(
+      card.compareDocumentPosition(lateMessage) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
   it('renders persisted run and tool durations after history load', () => {
     const sessionState = ensureSessionState(
       createChatState(),

@@ -1065,3 +1065,154 @@ describe('cancelled history projection', () => {
     expect(toolsByName.subagent.status).toBe('cancelled');
   });
 });
+
+describe('manual compaction run dedup against persisted history', () => {
+  const COMPACTION_TIMESTAMP = '2026-08-27T13:48:00Z';
+
+  function manualCompactionRunEvents(runId) {
+    return [
+      {
+        type: 'run_started',
+        run_id: runId,
+        sequence: 1,
+        timestamp: '2026-08-27T13:47:00Z',
+        payload: { status: CHAT_STATUS_RUNNING },
+      },
+      {
+        type: 'compaction_started',
+        run_id: runId,
+        sequence: 2,
+        timestamp: '2026-08-27T13:47:01Z',
+        payload: { context_tokens_before: 245_114 },
+      },
+      {
+        type: 'compaction_completed',
+        run_id: runId,
+        sequence: 3,
+        timestamp: COMPACTION_TIMESTAMP,
+        payload: {
+          context_tokens_before: 245_114,
+          context_tokens_after: 40_289,
+          message: {
+            id: 'checkpoint-1',
+            role: 'compaction_checkpoint',
+            timestamp: COMPACTION_TIMESTAMP,
+          },
+        },
+      },
+      {
+        type: 'run_completed',
+        run_id: runId,
+        sequence: 4,
+        timestamp: '2026-08-27T13:48:01Z',
+        payload: { status: CHAT_STATUS_COMPLETED },
+      },
+    ];
+  }
+
+  it('prunes every event of a finished compaction run once its checkpoint is persisted', () => {
+    const messages = [
+      { id: 'user-1', role: 'user', content: 'Earlier turn' },
+      { id: 'assistant-1', role: 'assistant', content: 'Earlier answer' },
+      {
+        id: 'checkpoint-1',
+        role: 'compaction_checkpoint',
+        timestamp: COMPACTION_TIMESTAMP,
+      },
+    ];
+
+    const pruned = pruneRunEventsPersistedInHistory(
+      manualCompactionRunEvents('run-compaction'),
+      messages,
+      'run-next',
+    );
+
+    expect(pruned).toEqual([]);
+  });
+
+  it('renders the persisted checkpoint once while a newer run streams', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-compaction-dedup',
+    );
+    loadHistory(sessionState, [
+      {
+        id: 'user-1',
+        role: 'user',
+        content: 'Earlier turn',
+        timestamp: '2026-08-27T13:40:00Z',
+      },
+      {
+        id: 'assistant-1',
+        role: 'assistant',
+        content: 'Earlier answer',
+        timestamp: '2026-08-27T13:46:00Z',
+      },
+      {
+        id: 'summary-prev',
+        role: 'run_summary',
+        run_id: 'run-prev',
+        status: 'completed',
+        timestamp: '2026-08-27T13:46:01Z',
+        timing: { duration_ms: 87_000 },
+        iteration_count: 1,
+      },
+      {
+        id: 'checkpoint-1',
+        role: 'compaction_checkpoint',
+        timestamp: COMPACTION_TIMESTAMP,
+      },
+      {
+        id: 'user-2',
+        role: 'user',
+        content: 'ja, klingt gut. setz das mal um.',
+        timestamp: '2026-08-27T13:48:05Z',
+      },
+    ]);
+    for (const event of manualCompactionRunEvents('run-compaction')) {
+      appendRunEvent(sessionState, event);
+    }
+    startRun(sessionState, {
+      run_id: 'run-next',
+      sse_url: '/api/runs/run-next/events',
+      status: CHAT_STATUS_RUNNING,
+    });
+    appendRunEvent(sessionState, {
+      type: 'user_message_persisted',
+      run_id: 'run-next',
+      sequence: 1,
+      payload: {
+        message: {
+          id: 'user-2',
+          role: 'user',
+          content: 'ja, klingt gut. setz das mal um.',
+        },
+      },
+    });
+    appendRunEvent(sessionState, {
+      type: 'assistant_output',
+      run_id: 'run-next',
+      sequence: 2,
+      payload: {
+        message: {
+          id: 'assistant-2',
+          role: 'assistant',
+          content: 'Umsetzung läuft.',
+        },
+      },
+    });
+
+    const items = visibleTimelineItemsForRender(sessionState);
+
+    expect(
+      items.some(
+        (item) =>
+          item.type === 'assistant_run' && item.runId === 'run-compaction',
+      ),
+    ).toBe(false);
+    expect(
+      items.filter((item) => item.type === 'compaction_separator'),
+    ).toHaveLength(1);
+  });
+});

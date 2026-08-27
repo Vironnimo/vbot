@@ -4,6 +4,7 @@
   import {
     dateKeyForTimestamp,
     formatDate,
+    groupTransientCards,
     liveClockCadenceMs,
     timestampForItem,
   } from '$lib/chatTimelinePresentation.js';
@@ -59,8 +60,9 @@
   let timelineItems = $derived(visibleTimelineItemsForRender(sessionState));
   let nowMs = $state(Date.now());
   // Transient cards interleaved with the timeline: each renders after the
-  // item it was anchored to (`leading` for cards created on an empty timeline,
-  // `trailing` for cards whose anchor item is gone after a history reload).
+  // item it was anchored to; a card whose anchor is gone after a history
+  // reload keeps its chronological position by creation time (see
+  // `groupTransientCards`).
   let transientCardGroups = $derived(
     groupTransientCards(timelineItems, transientCards),
   );
@@ -369,25 +371,6 @@
     return item.id;
   }
 
-  function groupTransientCards(items, cards) {
-    const itemIds = new Set(items.map((item) => item.id));
-    const groups = { leading: [], byItemId: new Map(), trailing: [] };
-    for (const card of cards) {
-      if (card.anchorId && itemIds.has(card.anchorId)) {
-        const anchored = groups.byItemId.get(card.anchorId) ?? [];
-        anchored.push(card);
-        groups.byItemId.set(card.anchorId, anchored);
-      } else if (card.anchorId == null) {
-        groups.leading.push(card);
-      } else {
-        // The anchor item no longer exists (e.g. a history reload changed ids);
-        // keep the card visible at the end rather than dropping it.
-        groups.trailing.push(card);
-      }
-    }
-    return groups;
-  }
-
   function handleTimelineClick(event) {
     const image = event.target;
     if (!(image instanceof HTMLImageElement)) {
@@ -616,6 +599,9 @@
               />
             {/if}
             {#each transientCardGroups.byItemId.get(item.id) ?? [] as card (card.id)}
+              {@render transientCard(card)}
+            {/each}
+            {#each transientCardGroups.byItemIndex.get(itemIndex) ?? [] as card (card.id)}
               {@render transientCard(card)}
             {/each}
           </div>
