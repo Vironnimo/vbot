@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   addDaysToKey,
@@ -16,6 +16,27 @@ import {
   weekStartKey,
   windowForView,
 } from '../calendarView.js';
+
+import { addCalendarExdate, updateCalendarEvent } from '../api.js';
+
+vi.mock('../api.js', () => ({
+  getCalendarWindow: vi.fn(() =>
+    Promise.resolve({
+      events: [],
+      occurrences: [],
+      cron: [],
+      system_timezone: 'UTC',
+    }),
+  ),
+  createCalendarEvent: vi.fn(() => Promise.resolve({})),
+  updateCalendarEvent: vi.fn(() => Promise.resolve({})),
+  deleteCalendarEvent: vi.fn(() => Promise.resolve({})),
+  addCalendarExdate: vi.fn(() => Promise.resolve({})),
+}));
+
+beforeEach(() => {
+  vi.clearAllMocks();
+});
 
 describe('day key helpers', () => {
   it('adds days across month boundaries', () => {
@@ -227,6 +248,21 @@ describe('controller', () => {
     expect(state.showCronLayer).toBe(false);
     controller.toggleLayer('local');
     expect(state.showLocalLayer).toBe(true);
+  });
+
+  it('excludes an occurrence additively instead of replacing exdates', async () => {
+    const state = createCalendarViewState();
+    const controller = createCalendarController({ state });
+
+    await controller.excludeOccurrence('evt-1', '2026-09-14T09:00:00');
+
+    expect(addCalendarExdate).toHaveBeenCalledWith({
+      id: 'evt-1',
+      occurrence_start: '2026-09-14T09:00:00',
+    });
+    // Regression: previously this read all exdates and re-sent the whole
+    // array via update, which could drop a concurrent tab's exclusion.
+    expect(updateCalendarEvent).not.toHaveBeenCalled();
   });
 });
 

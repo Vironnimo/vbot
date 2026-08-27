@@ -1104,7 +1104,9 @@ def _merge_intervals(
 
 def _round_up_to_minutes(value: datetime, minutes: int) -> datetime:
     step_seconds = minutes * 60
-    epoch_seconds = value.timestamp()
+    # Align against UTC explicitly; timestamp() on a naive datetime would
+    # silently use the host's local zone, drifting an ostensibly-UTC cursor.
+    epoch_seconds = _as_utc(value).timestamp()
     rounded = math.ceil(epoch_seconds / step_seconds) * step_seconds
     return datetime.fromtimestamp(rounded, tz=UTC)
 
