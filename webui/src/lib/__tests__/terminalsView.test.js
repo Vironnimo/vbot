@@ -641,6 +641,168 @@ describe('terminal live controller', () => {
     controller.destroy();
   });
 
+  it('removes a running terminal immediately and stops it in the background', async () => {
+    const state = createTerminalsViewState();
+    const streams = [];
+    const api = fakeApi({
+      streams,
+      terminals: [terminal('term-1')],
+    });
+    const controller = createTerminalsController({ state, api });
+
+    await controller.start();
+    expect(state.terminals).toHaveLength(1);
+    expect(streams).toHaveLength(1);
+
+    // The server-side stop is slow; the tile must be gone before it lands.
+    let resolveKill;
+    api.killTerminal.mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveKill = resolve;
+      }),
+    );
+    const closing = controller.closeTerminal('term-1');
+
+    // Optimistic removal already happened synchronously.
+    expect(state.terminals).toEqual([]);
+    expect(state.selectedTerminalId).toBe('');
+    expect(Object.keys(state.streams)).toEqual([]);
+    expect(api.killTerminal).toHaveBeenCalledWith('term-1');
+    expect(api.forgetTerminal).not.toHaveBeenCalled();
+
+    resolveKill({});
+    await closing;
+    expect(api.forgetTerminal).toHaveBeenCalledWith('term-1');
+    controller.destroy();
+  });
+
+  it('keeps a closing terminal hidden from reloads during the background stop', async () => {
+    const state = createTerminalsViewState();
+    const streams = [];
+    const api = fakeApi({
+      streams,
+      terminals: [terminal('term-1')],
+    });
+    const controller = createTerminalsController({ state, api });
+
+    await controller.start();
+    let resolveKill;
+    api.killTerminal.mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveKill = resolve;
+      }),
+    );
+    const closing = controller.closeTerminal('term-1');
+
+    // A catalog invalidation reload lands while the stop is still in flight;
+    // the server still lists the session, but it must not reappear.
+    api.listTerminals.mockResolvedValueOnce({
+      groups: [manual({ terminal_count: 1 })],
+      terminals: [terminal('term-1', { state: 'exited' })],
+    });
+    await controller.loadTerminals({ silent: true });
+    expect(state.terminals).toEqual([]);
+    expect(state.groups).toEqual([]);
+
+    resolveKill({});
+    await closing;
+    controller.destroy();
+  });
+
+  it('forgets a finished terminal without killing it', async () => {
+    const state = createTerminalsViewState();
+    const streams = [];
+    const api = fakeApi({
+      streams,
+      terminals: [terminal('term-1', { state: 'exited' })],
+    });
+    const controller = createTerminalsController({ state, api });
+
+    await controller.start();
+    const closed = await controller.closeTerminal('term-1');
+
+    expect(closed).toBe(true);
+    expect(api.killTerminal).not.toHaveBeenCalled();
+    expect(api.forgetTerminal).toHaveBeenCalledWith('term-1');
+    expect(state.terminals).toEqual([]);
+    controller.destroy();
+  });
+
+  it('restores a running terminal when the stop fails', async () => {
+    const state = createTerminalsViewState();
+    const streams = [];
+    const api = fakeApi({
+      streams,
+      terminals: [terminal('term-1')],
+    });
+    const controller = createTerminalsController({ state, api });
+
+    await controller.start();
+    api.killTerminal.mockRejectedValueOnce(new Error('stop failed'));
+
+    const closed = await controller.closeTerminal('term-1');
+
+    expect(closed).toBe(false);
+    expect(state.actionError).toBe('stop failed');
+    // The terminal is restored from the server list and its stream reconnects.
+    expect(state.terminals).toHaveLength(1);
+    expect(state.terminals[0].terminal_id).toBe('term-1');
+    expect(Object.keys(state.streams)).toEqual(['term-1']);
+    controller.destroy();
+  });
+
+  it('removes an empty automatic group when its last terminal is closed', async () => {
+    const state = createTerminalsViewState();
+    const streams = [];
+    const api = fakeApi({
+      streams,
+      terminals: [terminal('term-1')],
+    });
+    const controller = createTerminalsController({ state, api });
+
+    await controller.start();
+    expect(state.groups).toHaveLength(1);
+    expect(state.groups[0].terminal_count).toBe(1);
+
+    await controller.closeTerminal('term-1');
+
+    expect(state.groups).toEqual([]);
+    expect(state.selectedGroupId).toBe('');
+    controller.destroy();
+  });
+
+  it('decrements the group count when a terminal in a user group is closed', async () => {
+    const state = createTerminalsViewState();
+    const streams = [];
+    const groups = [
+      {
+        ...manual(),
+        group_id: 'g1',
+        name: 'Work',
+        kind: 'user',
+        terminal_count: 2,
+        live_count: 2,
+      },
+    ];
+    const api = fakeApi({
+      streams,
+      groups,
+      terminals: [
+        terminal('term-1', { group_id: 'g1' }),
+        terminal('term-2', { group_id: 'g1' }),
+      ],
+    });
+    const controller = createTerminalsController({ state, api });
+
+    await controller.start();
+    await controller.closeTerminal('term-1');
+
+    expect(state.groups[0].terminal_count).toBe(1);
+    expect(state.terminals.map((t) => t.terminal_id)).toEqual(['term-2']);
+    expect(state.selectedTerminalId).toBe('term-2');
+    controller.destroy();
+  });
+
   it('closes every stream while the server is unavailable and reloads on recovery', async () => {
     vi.useFakeTimers();
     const state = createTerminalsViewState();

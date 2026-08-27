@@ -36,7 +36,6 @@
   let pendingFocusTerminalId = '';
   let maximizedTerminalId = $state('');
   let scrolledBackByTerminal = $state({});
-  let closingTerminalId = $state('');
   let startDialogOpen = $state(false);
   let selectedLaunchHistoryId = $state('');
   let startCommand = $state('');
@@ -538,51 +537,31 @@
     }
   }
 
-  // Close one tile with a single click: a running terminal is stopped first
-  // (kill), then removed from the retained catalog (forget). A finished
-  // terminal is only forgotten. No confirmation — the X is the intent.
-  async function closeTerminal(terminalId) {
+  // Close one tile with a single click. The controller removes the tile
+  // immediately and runs the server-side stop + catalog removal in the
+  // background, so the UI never waits for the process tree to die. A
+  // finished terminal is only forgotten. No confirmation — the X is the
+  // intent.
+  function closeTerminal(terminalId) {
     const item = findTerminal(terminalId);
-    if (!item || closingTerminalId === terminalId) {
+    if (!item) {
       return;
     }
-    closingTerminalId = terminalId;
-    try {
-      if (!terminalIsFinished(item)) {
-        const stopped = await controller.killTerminal(terminalId);
-        if (!stopped) {
-          return;
-        }
-        const afterKill = findTerminal(terminalId);
-        if (!afterKill) {
-          // The post-kill reload already removed the session — nothing left
-          // to forget.
-          return;
-        }
-      }
-      const dismissed = await controller.forgetTerminal(terminalId);
-      if (!dismissed) {
-        return;
-      }
-      const wasRunning = !terminalIsFinished(item);
-      onToast({
-        title: t('terminals.closedTitle', 'Terminal closed'),
-        message: wasRunning
-          ? t(
-              'terminals.closedMessage',
-              'The Terminal Session was stopped and removed from the list.',
-            )
-          : t(
-              'terminals.closedMessageHistory',
-              'The Terminal Session was removed from the list.',
-            ),
-        variant: 'success',
-      });
-    } finally {
-      if (closingTerminalId === terminalId) {
-        closingTerminalId = '';
-      }
-    }
+    const wasRunning = !terminalIsFinished(item);
+    void controller.closeTerminal(terminalId);
+    onToast({
+      title: t('terminals.closedTitle', 'Terminal closed'),
+      message: wasRunning
+        ? t(
+            'terminals.closedMessage',
+            'The Terminal Session was removed from the list and is being stopped.',
+          )
+        : t(
+            'terminals.closedMessageHistory',
+            'The Terminal Session was removed from the list.',
+          ),
+      variant: 'success',
+    });
   }
 
   function findTerminal(terminalId) {
@@ -1270,7 +1249,6 @@
                     variant="danger"
                     icon
                     class="terminals-view__tile-action"
-                    loading={closingTerminalId === item.terminal_id}
                     ariaLabel={t('terminals.close', 'Close terminal')}
                     tooltip={t('terminals.close', 'Close terminal')}
                     onClick={() => void closeTerminal(item.terminal_id)}
