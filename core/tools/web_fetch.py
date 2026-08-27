@@ -133,8 +133,7 @@ WEB_FETCH_TOOL_DESCRIPTION = (
     "Fetch a public HTTP or HTTPS URL and return clean, readable Markdown by default, "
     "cleaned text, or raw HTML. PDF, Word, and Excel documents are returned as "
     "extracted text. An image URL is shown to you directly when the model supports "
-    "vision; other binary files (executables, archives, media) return a short notice "
-    "instead of raw bytes."
+    "vision."
 )
 WEB_FETCH_TOOL_PARAMETERS: JsonObject = {
     "type": "object",
@@ -149,10 +148,10 @@ WEB_FETCH_TOOL_PARAMETERS: JsonObject = {
             "type": "string",
             "enum": list(_WEB_FETCH_OUTPUTS),
             "description": (
-                "Optional HTML output mode. Omit it to use markdown, which cleans HTML "
-                "while preserving links as Markdown. Use text, which cleans HTML and "
-                "removes link targets, or raw to return HTML without cleanup. Non-HTML "
-                "text and extracted documents are returned unchanged by this choice."
+                "Omit for markdown, which cleans HTML while preserving links as "
+                "Markdown. text cleans HTML and removes link targets; raw returns "
+                "HTML without cleanup. Non-HTML text and extracted documents are "
+                "returned unchanged by this choice."
             ),
         },
     },

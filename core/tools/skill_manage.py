@@ -29,10 +29,9 @@ from core.tools.tools import (
 from core.utils.logging import get_logger
 
 SKILL_MANAGE_TOOL_DESCRIPTION = (
-    "Create, edit, patch, or delete one private Skill, or write/remove one UTF-8 support "
-    "file. Read an existing target with skill before changing it. content is the complete "
-    "text for create, edit, and write_file, and the replacement text for patch; match is "
-    "the exact text patch replaces. Global, Project, and bundled Skills are read-only here."
+    "Create, edit, patch, or delete one private Skill, or write/remove one support "
+    "file. Read an existing target with skill before changing it. Global, Project, "
+    "and bundled Skills are read-only here."
 )
 
 _ACTIONS = ("create", "edit", "patch", "write_file", "remove_file", "delete")
@@ -65,7 +64,7 @@ _CONTENT_PARAMETER: JsonObject = {
     "type": "string",
     "description": (
         "Text to write. Complete SKILL.md for create/edit; replacement text for patch; "
-        "complete UTF-8 file for write_file. May be empty for patch or write_file."
+        "complete file for write_file. May be empty for patch or write_file."
     ),
 }
 _FILE_PATH_PARAMETER: JsonObject = {
@@ -73,8 +72,8 @@ _FILE_PATH_PARAMETER: JsonObject = {
     "minLength": 1,
     "pattern": r"^(SKILL\.md|(?:scripts|references|assets)/.+)$",
     "description": (
-        "Skill-relative target. Omit when patching SKILL.md; required when patching, "
-        "writing, or removing a support file under scripts, references, or assets."
+        "Path of the file inside the Skill package to target. Omit when patching "
+        "SKILL.md; required for files under scripts, references, or assets."
     ),
 }
 _MATCH_PARAMETER: JsonObject = {
@@ -92,11 +91,7 @@ SKILL_MANAGE_TOOL_PARAMETERS: JsonObject = {
         "action": {
             "type": "string",
             "enum": list(_ACTIONS),
-            "description": (
-                "Operation to perform: create/edit use content as complete SKILL.md; patch "
-                "replaces match with content; write_file uses file_path and content; "
-                "remove_file/delete need no content."
-            ),
+            "description": "Operation to perform.",
         },
         "name": _NAME_PARAMETER,
         "content": _CONTENT_PARAMETER,

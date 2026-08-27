@@ -91,10 +91,7 @@ HISTORY_TOOL_PARAMETERS: JsonObject = {
         "action": {
             "type": "string",
             "enum": list(HISTORY_ACTIONS),
-            "description": (
-                "overview lists checkpoint sections, search finds records, read returns "
-                "records chronologically, and around returns records near a message_id."
-            ),
+            "description": "Operation to perform.",
         },
         "query": {
             "type": "string",

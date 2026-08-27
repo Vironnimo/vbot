@@ -70,18 +70,13 @@ TERMINAL_TOOL_DESCRIPTION = (
     "or debugger. Terminal Sessions survive individual Runs. A Terminal Session started here is "
     "attached to this vBot Session automatically. Use list to discover running Terminal Sessions "
     "and attach to bind an unattached one to this vBot Session without changing its process, "
-    "screen, dimensions, or lifetime. An attached Terminal Session supports status, wait, input, "
-    "resize, kill, and automatic activity delivery. detach removes only the vBot Session binding; "
-    "the process continues. Use start with text to launch a program and send its first input in "
-    "one call. While a Terminal Session is attached, vBot wakes you when its output has been quiet "
+    "screen, dimensions, or lifetime. detach removes only the vBot Session binding; "
+    "the process continues. While a Terminal Session is attached, vBot wakes you when "
+    "its output has been quiet "
     "for a short period, or when the process exits or the terminal fails; quiet output is only an "
     "activity boundary, so inspect status to decide whether the program is working, waiting for "
     "input, or finished. Rendered cells cannot distinguish tabs from equivalent spaces or cursor "
-    "movement, so use read for exact file contents. Reuse a live Terminal Session for later work "
-    "instead of starting a duplicate process. status scrollback is addressable by absolute "
-    "zero-based line numbers via start_line (0 = oldest), so long build or agent logs can be "
-    "paged forward with plain numbers instead of a signed cursor; the result reports total_lines, "
-    "start_line, end_line, and next_start_line."
+    "movement, so use read for exact file contents."
 )
 
 
@@ -130,8 +125,7 @@ TERMINAL_TOOL_PARAMETERS: JsonObject = {
             "type": "string",
             "minLength": 1,
             "description": (
-                "Terminal Session id returned by start or list. Required except for start and "
-                "list; attach and detach also use it."
+                "Terminal Session id returned by start or list. Required except for start and list."
             ),
         },
         "command": {
