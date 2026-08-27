@@ -1,0 +1,137 @@
+"""Tests for calendar RPC handlers."""
+
+from __future__ import annotations
+
+from datetime import UTC, datetime
+from typing import Any
+from unittest.mock import Mock
+
+import pytest
+
+from core.calendar import CalendarService
+from server.rpc.methods import dispatch_rpc
+
+
+@pytest.fixture()
+def state(tmp_path: Any) -> Mock:
+    runtime = Mock()
+    runtime.calendar_service = CalendarService(tmp_path, tz="Europe/Berlin")
+    runtime.cron_service = Mock()
+    runtime.cron_service.project_occurrences.return_value = []
+    return Mock(runtime=runtime)
+
+
+@pytest.mark.asyncio
+async def test_calendar_window_returns_layers(state: Mock) -> None:
+    service = state.runtime.calendar_service
+    service.create_event(title="Zahnarzt", start="2026-09-03T15:00:00+02:00")
+    response = await dispatch_rpc(
+        state, {"method": "calendar.window", "params": {"from": "2026-09-01", "to": "2026-09-30"}}
+    )
+    assert response["ok"] is True
+    data = response["result"]
+    assert len(data["occurrences"]) == 1
+    assert data["occurrences"][0]["title"] == "Zahnarzt"
+    assert len(data["events"]) == 1
+    assert data["cron"] == []
+    assert data["system_timezone"] == service.system_timezone_name()
+
+
+@pytest.mark.asyncio
+async def test_calendar_window_includes_cron_layer(state: Mock) -> None:
+    from core.automation.cron import CronOccurrence
+
+    state.runtime.cron_service.project_occurrences.return_value = [
+        CronOccurrence(
+            job_id="job-1",
+            name="Check mail",
+            fire_at_utc=datetime(2026, 9, 3, 9, 0, tzinfo=UTC),
+            schedule_type="cron",
+        )
+    ]
+    response = await dispatch_rpc(
+        state, {"method": "calendar.window", "params": {"from": "2026-09-01", "to": "2026-09-30"}}
+    )
+    assert response["result"]["cron"] == [
+        {
+            "job_id": "job-1",
+            "name": "Check mail",
+            "fire_at": "2026-09-03T09:00:00+00:00",
+            "schedule_type": "cron",
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_calendar_create_update_delete_roundtrip(state: Mock) -> None:
+    created = await dispatch_rpc(
+        state,
+        {
+            "method": "calendar.create",
+            "params": {
+                "title": "Standup",
+                "start": "2026-08-31T09:00:00",
+                "rrule": {"freq": "weekly", "by_weekday": ["mo"]},
+            },
+        },
+    )
+    assert created["result"]["event"]["recurring"] is True
+    event_id = created["result"]["event"]["id"]
+
+    updated = await dispatch_rpc(
+        state, {"method": "calendar.update", "params": {"id": event_id, "title": "Daily"}}
+    )
+    assert updated["result"]["event"]["title"] == "Daily"
+
+    deleted = await dispatch_rpc(state, {"method": "calendar.delete", "params": {"id": event_id}})
+    assert deleted["result"]["deleted"] is True
+
+    assert state.runtime.calendar_service.list_events() == []
+
+
+@pytest.mark.asyncio
+async def test_calendar_create_rejects_invalid_rrule(state: Mock) -> None:
+    response = await dispatch_rpc(
+        state,
+        {
+            "method": "calendar.create",
+            "params": {"title": "X", "start": "2026-09-03", "rrule": {"freq": "hourly"}},
+        },
+    )
+    assert response["error"]["code"] == "domain_error"
+    assert "rrule.freq" in response["error"]["message"]
+
+
+@pytest.mark.asyncio
+async def test_calendar_window_requires_bounds(state: Mock) -> None:
+    response = await dispatch_rpc(state, {"method": "calendar.window", "params": {}})
+    assert response["error"]["code"] == "invalid_request"
+
+
+@pytest.mark.asyncio
+async def test_calendar_window_rejects_unknown_fields(state: Mock) -> None:
+    response = await dispatch_rpc(
+        state,
+        {
+            "method": "calendar.window",
+            "params": {"from": "2026-09-01", "to": "2026-09-02", "bogus": 1},
+        },
+    )
+    assert response["error"]["code"] == "invalid_request"
+
+
+@pytest.mark.asyncio
+async def test_calendar_update_missing_event_maps_domain_error(state: Mock) -> None:
+    response = await dispatch_rpc(
+        state, {"method": "calendar.update", "params": {"id": "missing", "title": "X"}}
+    )
+    assert response["error"]["code"] == "domain_error"
+    assert "not found" in response["error"]["message"]
+
+
+@pytest.mark.asyncio
+async def test_calendar_delete_rejects_unknown_fields(state: Mock) -> None:
+    response = await dispatch_rpc(
+        state, {"method": "calendar.delete", "params": {"id": "x", "title": "Y"}}
+    )
+    assert response["error"]["code"] == "invalid_request"

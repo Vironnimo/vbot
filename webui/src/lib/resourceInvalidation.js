@@ -21,6 +21,7 @@ export const RESOURCE_TOKEN_CHANNELS = 'channels';
 export const RESOURCE_TOKEN_DEBUG_TRACES = 'debug_traces';
 export const RESOURCE_TOKEN_PROJECTS = 'projects';
 export const RESOURCE_TOKEN_CRON = 'cron';
+export const RESOURCE_TOKEN_CALENDAR = 'calendar';
 export const RESOURCE_TOKEN_COMMANDS = 'commands';
 export const RESOURCE_TOKEN_TERMINALS = 'terminals';
 export const RESOURCE_TOKEN_SKILLS = 'skills';
@@ -42,6 +43,7 @@ const KIND_TOKEN_GROUPS = {
   debug_traces: [RESOURCE_TOKEN_DEBUG_TRACES],
   projects: [RESOURCE_TOKEN_PROJECTS],
   cron: [RESOURCE_TOKEN_CRON],
+  calendar: [RESOURCE_TOKEN_CALENDAR],
   commands: [RESOURCE_TOKEN_COMMANDS],
   terminals: [RESOURCE_TOKEN_TERMINALS],
   skills: [RESOURCE_TOKEN_SKILLS],

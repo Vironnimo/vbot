@@ -25,6 +25,12 @@
       section: 'work',
     },
     {
+      id: 'calendar',
+      labelKey: 'navigation.calendar',
+      labelFallback: 'Calendar',
+      section: 'work',
+    },
+    {
       id: 'skills',
       labelKey: 'navigation.skills',
       labelFallback: 'Skills',
@@ -76,6 +82,7 @@
   import AgentsView from './components/AgentsView.svelte';
   import ChatView from './components/ChatView.svelte';
   import CronView from './components/CronView.svelte';
+  import CalendarView from './components/CalendarView.svelte';
   import DebugView from './components/DebugView.svelte';
   import LogsView from './components/LogsView.svelte';
   import ProjectsView from './components/ProjectsView.svelte';
@@ -277,6 +284,7 @@
   let clientsRefreshToken = $derived(appControllerState.clientsRefreshToken);
   let channelsRefreshToken = $derived(appControllerState.channelsRefreshToken);
   let cronRefreshToken = $derived(appControllerState.cronRefreshToken);
+  let calendarRefreshToken = $derived(appControllerState.calendarRefreshToken);
   let skillsRefreshToken = $derived(appControllerState.skillsRefreshToken);
   let debugTracesRefreshToken = $derived(
     appControllerState.debugTracesRefreshToken,
@@ -498,6 +506,15 @@
 
   const navigateToProjects = () => {
     selectView('projects');
+  };
+
+  // Calendar → Scheduled Runs deep link: remember the job the user clicked so
+  // CronView can preselect it once its list loads.
+  let pendingCronJobTarget = $state('');
+
+  const openCronJobFromCalendar = (jobId) => {
+    pendingCronJobTarget = typeof jobId === 'string' ? jobId : '';
+    selectView('cron');
   };
 
   const loadProjects = async () => {
@@ -1132,6 +1149,13 @@
           {modelsRefreshToken}
           {projectsRefreshToken}
         />
+      {:else if activeViewId === 'calendar'}
+        <CalendarView
+          onToast={showToast}
+          {serverUnavailable}
+          {calendarRefreshToken}
+          onOpenCronJob={openCronJobFromCalendar}
+        />
       {:else if activeViewId === 'cron'}
         <CronView
           onToast={showToast}
@@ -1139,6 +1163,7 @@
           {cronRefreshToken}
           {agentsRefreshToken}
           {projectsRefreshToken}
+          targetJobId={pendingCronJobTarget}
         />
       {:else if activeViewId === 'skills'}
         <SkillsView

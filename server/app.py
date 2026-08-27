@@ -37,6 +37,7 @@ from core.utils.server_control import (
 )
 from server.clients import ClientRegistry
 from server.events import (
+    RESOURCE_KIND_CALENDAR,
     RESOURCE_KIND_CLIENTS,
     RESOURCE_KIND_CRON,
     RESOURCE_KIND_SESSIONS,
@@ -324,6 +325,7 @@ def create_app(
             _unregister_session_title_bridge(app.state)
             _unregister_session_completion_read_bridge(app.state)
             _unregister_cron_change_bridge(app.state)
+            _unregister_calendar_change_bridge(app.state)
             _unregister_terminal_change_bridge(app.state)
             await _shutdown_log_viewer(app.state.log_viewer, server_logger)
             await _shutdown_device_flow_engine(
@@ -609,6 +611,7 @@ def _initialize_app_state(
         app.state
     )
     app.state.cron_change_bridge_unsubscribe = _register_cron_change_bridge(app.state)
+    app.state.calendar_change_bridge_unsubscribe = _register_calendar_change_bridge(app.state)
     app.state.terminal_change_bridge_unsubscribe = _register_terminal_change_bridge(app.state)
     app.state.chat_loop = runtime.chat_loop
     app.state.streaming_chat_loop = runtime.streaming_chat_loop
@@ -717,6 +720,21 @@ def _unregister_cron_change_bridge(state: Any) -> None:
     if callable(unsubscribe):
         unsubscribe()
     state.cron_change_bridge_unsubscribe = None
+
+
+def _register_calendar_change_bridge(state: Any) -> Any:
+    calendar_service = getattr(state.runtime, "calendar_service", None)
+    add_callback = getattr(calendar_service, "add_changed_callback", None)
+    if not callable(add_callback):
+        return None
+    return add_callback(lambda: publish_resource_changed(state, RESOURCE_KIND_CALENDAR))
+
+
+def _unregister_calendar_change_bridge(state: Any) -> None:
+    unsubscribe = getattr(state, "calendar_change_bridge_unsubscribe", None)
+    if callable(unsubscribe):
+        unsubscribe()
+    state.calendar_change_bridge_unsubscribe = None
 
 
 def _register_terminal_change_bridge(state: Any) -> Any:
