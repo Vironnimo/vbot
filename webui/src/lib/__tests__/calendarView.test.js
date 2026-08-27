@@ -214,6 +214,76 @@ describe('event form mapping', () => {
     });
   });
 
+  it('renders a single timed event in the server zone, not raw UTC', () => {
+    const values = eventToFormValues(
+      {
+        title: 'Zahnarzt',
+        notes: null,
+        location: null,
+        all_day: false,
+        start_utc: '2026-09-07T07:00:00+00:00',
+        start_local: null,
+        tz_name: null,
+        start_date: null,
+        duration_minutes: 60,
+        duration_days: null,
+        rrule: null,
+        exdates: [],
+      },
+      'Europe/Berlin',
+    );
+    // 07:00 UTC is 09:00 in Berlin; the form presents that wall clock.
+    expect(values.start_date).toBe('2026-09-07');
+    expect(values.start_time).toBe('09:00');
+  });
+
+  it('resaving an edited single event keeps its wall clock', () => {
+    const values = eventToFormValues(
+      {
+        title: 'Zahnarzt',
+        notes: null,
+        location: null,
+        all_day: false,
+        start_utc: '2026-09-07T07:00:00+00:00',
+        start_local: null,
+        tz_name: null,
+        start_date: null,
+        duration_minutes: 60,
+        duration_days: null,
+        rrule: null,
+        exdates: [],
+      },
+      'Europe/Berlin',
+    );
+    const payload = formValuesToPayload(values);
+    // Regression: slicing start_utc naively produced the wrong wall clock, so a
+    // save without edits shifted the event. The roundtrip must stay 09:00 Berlin.
+    expect(payload.start).toBe('2026-09-07T09:00:00');
+  });
+
+  it('rolls a late single event into the next server day', () => {
+    const values = eventToFormValues(
+      {
+        title: 'Late',
+        notes: null,
+        location: null,
+        all_day: false,
+        start_utc: '2026-09-02T22:00:00+00:00',
+        start_local: null,
+        tz_name: null,
+        start_date: null,
+        duration_minutes: 60,
+        duration_days: null,
+        rrule: null,
+        exdates: [],
+      },
+      'Europe/Berlin',
+    );
+    // 22:00 UTC is already 00:00 on 2026-09-03 in Berlin.
+    expect(values.start_date).toBe('2026-09-03');
+    expect(values.start_time).toBe('00:00');
+  });
+
   it('clears recurrence when freq is none', () => {
     const payload = formValuesToPayload({
       title: 'X',
