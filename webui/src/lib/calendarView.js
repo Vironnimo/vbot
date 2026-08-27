@@ -8,6 +8,7 @@
 // keys ("YYYY-MM-DD"), which are timezone-neutral.
 
 import {
+  addCalendarExdate,
   createCalendarEvent,
   deleteCalendarEvent,
   getCalendarWindow,
@@ -410,9 +411,10 @@ export function createCalendarController({ state }) {
   }
 
   async function excludeOccurrence(eventId, occurrenceStart) {
-    const event = state.events.find((item) => item.id === eventId);
-    const exdates = [...(event?.exdates ?? []), occurrenceStart];
-    await updateCalendarEvent({ id: eventId, exdates });
+    // Additive server-side exclusion (RFC 5545 EXDATE). Sending a full exdates
+    // array here would risk a lost-update race between tabs; the service owns
+    // the read-modify-write atomically.
+    await addCalendarExdate({ id: eventId, occurrence_start: occurrenceStart });
     await load({ silent: true });
   }
 

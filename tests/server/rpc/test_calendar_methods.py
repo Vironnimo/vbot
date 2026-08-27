@@ -135,3 +135,72 @@ async def test_calendar_delete_rejects_unknown_fields(state: Mock) -> None:
         state, {"method": "calendar.delete", "params": {"id": "x", "title": "Y"}}
     )
     assert response["error"]["code"] == "invalid_request"
+
+
+@pytest.mark.asyncio
+async def test_calendar_add_exdate_excludes_one_occurrence_additively(state: Mock) -> None:
+    created = await dispatch_rpc(
+        state,
+        {
+            "method": "calendar.create",
+            "params": {
+                "title": "Standup",
+                "start": "2026-08-31T09:00:00",
+                "rrule": {"freq": "weekly", "by_weekday": ["mo"]},
+            },
+        },
+    )
+    event_id = created["result"]["event"]["id"]
+
+    first = await dispatch_rpc(
+        state,
+        {
+            "method": "calendar.add_exdate",
+            "params": {"id": event_id, "occurrence_start": "2026-09-14T09:00:00"},
+        },
+    )
+    assert first["ok"] is True
+    assert first["result"]["event"]["exdates"] == ["2026-09-14T09:00:00"]
+
+    # Additive semantics: a second exclusion keeps the first rather than
+    # replacing it (no read-modify-write race on the client side).
+    second = await dispatch_rpc(
+        state,
+        {
+            "method": "calendar.add_exdate",
+            "params": {"id": event_id, "occurrence_start": "2026-09-21T09:00:00"},
+        },
+    )
+    assert second["result"]["event"]["exdates"] == [
+        "2026-09-14T09:00:00",
+        "2026-09-21T09:00:00",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_calendar_add_exdate_rejects_single_event(state: Mock) -> None:
+    created = await dispatch_rpc(
+        state,
+        {"method": "calendar.create", "params": {"title": "X", "start": "2026-09-10T15:00:00"}},
+    )
+    event_id = created["result"]["event"]["id"]
+    response = await dispatch_rpc(
+        state,
+        {
+            "method": "calendar.add_exdate",
+            "params": {"id": event_id, "occurrence_start": "2026-09-10T15:00:00"},
+        },
+    )
+    assert response["error"]["code"] == "domain_error"
+
+
+@pytest.mark.asyncio
+async def test_calendar_add_exdate_rejects_unknown_fields(state: Mock) -> None:
+    response = await dispatch_rpc(
+        state,
+        {
+            "method": "calendar.add_exdate",
+            "params": {"id": "x", "occurrence_start": "2026-09-14T09:00:00", "bogus": 1},
+        },
+    )
+    assert response["error"]["code"] == "invalid_request"

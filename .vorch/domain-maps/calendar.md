@@ -37,7 +37,7 @@ Core terms (Run, Session, Tool) live in `.vorch/GLOSSARY.md`.
 ## Interfaces
 
 - `CalendarService` (`core/calendar/service.py`): `create_event`, `update_event` (roundtrips the stored event through the create shape; omitted fields keep), `delete_event`, `add_exdate`, `occurrences_in_window` (half-open UTC window), `find_free_slots` (timed events block their span, all-day events block whole local days, slots start no earlier than now, 5-minute alignment, max 5), `parse_window` / `resolve_when`.
-- RPC (`server/rpc/calendar_methods.py`): `calendar.window` returns `occurrences` + `events` + `cron` + `system_timezone`; `calendar.create/update/delete` publish `RESOURCE_KIND_CALENDAR` invalidations. Mutations from any accessor (including the agent tool) reach the UI through this invalidation path.
+- RPC (`server/rpc/calendar_methods.py`): `calendar.window` returns `occurrences` + `events` + `cron` + `system_timezone`; `calendar.create/update/delete` and `calendar.add_exdate` (params `id` + `occurrence_start`) publish `RESOURCE_KIND_CALENDAR` invalidations. Mutations from any accessor (including the agent tool) reach the UI through this invalidation path.
 - Agent tool `calendar` (`core/tools/calendar.py`): one flat action tool (`list`, `create`, `update`, `delete`, `find_free`) with 8 parameters (`action`, `when`, `id`, `title`, `start`, `duration`, `rrule`, `notes`); only `action` is required, the handler validates per-action fields and rejects action-foreign fields with a recommendation. All agent-facing times are server-local naive ISO strings (or plain dates). Its detailed contract lives in the per-tool spec (see References).
 - Cron projection: `CronService.project_occurrences(window_start, window_end)` returns `CronOccurrence` dataclasses (read-only; respects `remaining_runs` budget, capped per job). The calendar tool's `list`/`find_free` ignore cron jobs - cron is a UI layer only.
 
@@ -58,7 +58,7 @@ Core terms (Run, Session, Tool) live in `.vorch/GLOSSARY.md`.
 - The `when` grammar is deliberately small; unknown expressions raise `CalendarValidationError` naming the grammar. A `start..end` range's end side is an inclusive day when given as a date.
 - `update_event` rebuilds the candidate via the create path: an update that clears `rrule` re-anchors from `start_local`, and the anchor zone always re-resolves from the current server zone (the zone is not user-settable).
 - Tool tests must build fixtures relative to `service.resolve_when(...)` - the tool resolves `when` against the real clock, so hard-coded dates silently break when the month rolls over.
-- In WebUI code, eslint forbids mutable `Map` in Svelte derived contexts - group with plain objects. The UI's occurrence exclusion consumes the server-provided `occurrence_start`; do not reconstruct it client-side (the previous anchor-start reconstruction was a real bug).
+- In WebUI code, eslint forbids mutable `Map` in Svelte derived contexts - group with plain objects. The UI's occurrence exclusion consumes the server-provided `occurrence_start` via the additive `calendar.add_exdate` RPC (a read-modify-write of the whole `exdates` array through `calendar.update` would risk losing a concurrent tab's exclusion). Do not reconstruct the anchor client-side; the previous anchor-start reconstruction was a real bug.
 - Start the worktree server as `python -m server.main`; `python server/main.py` imports `core` through the main repo's editable install and new RPC methods come back `method_not_found`.
 
 ## References

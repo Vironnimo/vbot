@@ -1142,6 +1142,26 @@ export function deleteCalendarEvent(id, options = {}) {
   return rpc('calendar.delete', { id }, options);
 }
 
+export function addCalendarExdate(params = {}, options = {}) {
+  requirePlainObject(
+    params,
+    'Calendar exclusion payload must be an object',
+    'calendar.add_exdate',
+  );
+  requireNonEmptyString(
+    params.id,
+    'Calendar event id must be a non-empty string',
+    'calendar.add_exdate',
+  );
+  requireNonEmptyString(
+    params.occurrence_start,
+    'Occurrence start must be a non-empty string',
+    'calendar.add_exdate',
+  );
+
+  return rpc('calendar.add_exdate', params, options);
+}
+
 export function addProject(params = {}, options = {}) {
   requirePlainObject(
     params,
