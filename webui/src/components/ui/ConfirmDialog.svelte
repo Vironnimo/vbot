@@ -20,6 +20,9 @@
     // expects a snippet literally named `body`, and that snippet name would
     // otherwise shadow the prop.
     body: bodyText,
+    // Optional interactive content (a choice group, an extra field) rendered
+    // inside the dialog body, after the message.
+    bodyExtra,
     confirmLabel,
     cancelLabel = t('common.cancel', 'Cancel'),
     danger = true,
@@ -38,6 +41,7 @@
   {#snippet body()}
     <div class="modal-body">
       <p>{bodyText}</p>
+      {@render bodyExtra?.()}
     </div>
   {/snippet}
 
