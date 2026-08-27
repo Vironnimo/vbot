@@ -55,7 +55,7 @@ describe('sessionListView helpers', () => {
       'channel-session',
     ]);
     expect(next.sessions[0]).toMatchObject({
-      display_name: 'plain-session',
+      display_name: 'New Session',
       is_channel_session: false,
       latest_completion_run_id: 'run-one',
       has_unread_completion: true,
@@ -158,8 +158,10 @@ describe('sessionListView helpers', () => {
         platform_conv_id: '-100123',
       }),
     ).toBe('telegram/-100123');
-    expect(sessionDisplayName({ id: 'session-001' })).toBe('session-001');
-    expect(sessionDisplayName({})).toBe('Session');
+    // A Session without title, automatic title, or channel identity has no
+    // content yet — it shows the neutral label, never its raw id.
+    expect(sessionDisplayName({ id: 'session-001' })).toBe('New Session');
+    expect(sessionDisplayName({})).toBe('New Session');
   });
 
   it('prefers a user title over channel and id labels', () => {

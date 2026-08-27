@@ -1,6 +1,6 @@
+import { t } from './i18n.js';
 import { asOptionalText, isPlainObject } from './values.js';
 
-const SESSION_FALLBACK_NAME = 'Session';
 const BACKGROUND_ONLY_RUN_KINDS = new Set([
   'cron',
   'reflection',
@@ -67,7 +67,9 @@ export function selectSession(state, sessionId) {
 
 export function sessionDisplayName(session) {
   // A user-set title wins over the automatic first-message title; clearing it
-  // reveals that automatic title again, then the channel-derived name / raw id.
+  // reveals that automatic title again, then the channel-derived name. A
+  // Session with none of those has no content yet, so it shows the neutral
+  // "New Session" label instead of its raw id.
   const title = asOptionalText(session?.title);
   if (title !== null) {
     return title;
@@ -85,7 +87,7 @@ export function sessionDisplayName(session) {
     return `${platform}/${platformConvId}`;
   }
 
-  return asOptionalText(session?.id) ?? SESSION_FALLBACK_NAME;
+  return t('sessions.newSession', 'New Session');
 }
 
 export function visibleSessionsForSelection(
