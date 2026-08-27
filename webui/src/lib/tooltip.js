@@ -33,6 +33,8 @@ const TOOLTIP_ID = 'app-tooltip';
 let tooltipElement = null;
 let activeAnchor = null;
 let showTimer = null;
+let showTimerOwner = null;
+let lastPointerLeavePosition = null;
 let activeHoverCardHide = null;
 let hoverCardSequence = 0;
 
@@ -76,10 +78,7 @@ function ensureTooltipElement() {
 }
 
 function hideTooltip() {
-  if (showTimer !== null) {
-    clearTimeout(showTimer);
-    showTimer = null;
-  }
+  cancelPendingShow();
   if (activeAnchor) {
     activeAnchor.removeAttribute('aria-describedby');
     activeAnchor = null;
@@ -90,6 +89,24 @@ function hideTooltip() {
   window.removeEventListener('keydown', onWindowKeydown, true);
   window.removeEventListener('scroll', onWindowScroll, true);
   document.removeEventListener('pointerdown', onDocumentPointerDown, true);
+}
+
+// Only the instance that scheduled a pending show may cancel it: streaming
+// re-renders constantly destroy unrelated tooltip anchors (remounted code-block
+// copy buttons, replaced tool values), and their cleanup must never kill the
+// show timer of the node the pointer is actually dwelling on.
+function cancelPendingShow() {
+  if (showTimer !== null) {
+    clearTimeout(showTimer);
+    showTimer = null;
+    showTimerOwner = null;
+  }
+}
+
+function clearOwnPendingShow(owner) {
+  if (showTimer !== null && showTimerOwner === owner) {
+    cancelPendingShow();
+  }
 }
 
 function onWindowKeydown(event) {
@@ -128,6 +145,7 @@ function onWindowScroll() {
 }
 
 function showTooltip(anchor, text) {
+  cancelPendingShow();
   const element = ensureTooltipElement();
   element.textContent = text;
   element.classList.add('app-tooltip--visible');
@@ -150,21 +168,37 @@ export function tooltip(node, text = '') {
     return value == null ? '' : String(value).trim();
   }
 
-  function scheduleShow() {
+  // Streaming re-renders swap the hovered node for an identical replacement:
+  // the browser fires leave + enter at the same pointer position without any
+  // pointer movement. That re-entry is not a new hover intent, so the tooltip
+  // shows immediately instead of restarting the dwell delay (which churn
+  // faster than the delay would otherwise defeat forever).
+  function isStationaryReentry(event) {
+    return (
+      lastPointerLeavePosition !== null &&
+      event.clientX === lastPointerLeavePosition.x &&
+      event.clientY === lastPointerLeavePosition.y
+    );
+  }
+
+  function scheduleShow(event) {
     if (!currentText || activeAnchor === node) {
       return;
     }
-    if (showTimer !== null) {
-      clearTimeout(showTimer);
+    cancelPendingShow();
+    if (event && isStationaryReentry(event)) {
+      showTooltip(node, currentText);
+      return;
     }
     showTimer = setTimeout(() => {
-      showTimer = null;
       showTooltip(node, currentText);
     }, TOOLTIP_SHOW_DELAY_MS);
+    showTimerOwner = node;
   }
 
   function cancelOrHide() {
-    if (activeAnchor === node || showTimer !== null) {
+    clearOwnPendingShow(node);
+    if (activeAnchor === node) {
       hideTooltip();
     }
   }
@@ -178,15 +212,22 @@ export function tooltip(node, text = '') {
       hideTooltip();
       return;
     }
-    if (showTimer !== null) {
-      clearTimeout(showTimer);
-      showTimer = null;
-    }
+    cancelPendingShow();
     showTooltip(node, currentText);
   }
 
+  function handlePointerLeave(event) {
+    if (
+      typeof event.clientX === 'number' &&
+      typeof event.clientY === 'number'
+    ) {
+      lastPointerLeavePosition = { x: event.clientX, y: event.clientY };
+    }
+    cancelOrHide();
+  }
+
   node.addEventListener('pointerenter', scheduleShow);
-  node.addEventListener('pointerleave', cancelOrHide);
+  node.addEventListener('pointerleave', handlePointerLeave);
   node.addEventListener('pointerdown', handlePointerDown);
   node.addEventListener('focus', scheduleShow);
   node.addEventListener('blur', cancelOrHide);
@@ -204,7 +245,7 @@ export function tooltip(node, text = '') {
     destroy() {
       cancelOrHide();
       node.removeEventListener('pointerenter', scheduleShow);
-      node.removeEventListener('pointerleave', cancelOrHide);
+      node.removeEventListener('pointerleave', handlePointerLeave);
       node.removeEventListener('pointerdown', handlePointerDown);
       node.removeEventListener('focus', scheduleShow);
       node.removeEventListener('blur', cancelOrHide);

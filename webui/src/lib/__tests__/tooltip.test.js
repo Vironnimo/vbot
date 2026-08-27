@@ -74,6 +74,80 @@ describe('tooltip action', () => {
     expect(isVisible()).toBe(false);
   });
 
+  it('keeps a pending show alive when an unrelated tooltip instance is destroyed', () => {
+    // Streaming re-renders destroy tooltip actions (e.g. remounted code-block
+    // copy buttons) while the pointer dwells somewhere else entirely.
+    const churned = document.createElement('button');
+    document.body.appendChild(churned);
+    const churnedAction = tooltip(churned, 'Churned away');
+
+    const hovered = document.createElement('button');
+    document.body.appendChild(hovered);
+    const hoveredAction = tooltip(hovered, 'Hovered');
+
+    hovered.dispatchEvent(new Event('pointerenter'));
+    churnedAction.destroy();
+    vi.advanceTimersByTime(SHOW_DELAY_MS);
+
+    expect(isVisible()).toBe(true);
+    expect(tooltipElement().textContent).toBe('Hovered');
+
+    hoveredAction.destroy();
+    hovered.remove();
+    churned.remove();
+  });
+
+  it('keeps a pending show alive when an unrelated tooltip is disabled via update', () => {
+    const churned = document.createElement('button');
+    document.body.appendChild(churned);
+    const churnedAction = tooltip(churned, 'Churned away');
+
+    const hovered = document.createElement('button');
+    document.body.appendChild(hovered);
+    const hoveredAction = tooltip(hovered, 'Hovered');
+
+    hovered.dispatchEvent(new Event('pointerenter'));
+    churnedAction.update('');
+    vi.advanceTimersByTime(SHOW_DELAY_MS);
+
+    expect(isVisible()).toBe(true);
+    expect(tooltipElement().textContent).toBe('Hovered');
+
+    hoveredAction.destroy();
+    hovered.remove();
+    churned.remove();
+  });
+
+  it('shows immediately when a node is replaced under a stationary pointer', () => {
+    action = tooltip(node, 'Copy to clipboard');
+
+    // Streaming content swaps the hovered node for an identical one: the
+    // browser fires leave + enter at the same pointer position without any
+    // pointer movement. The replacement must not restart the dwell delay.
+    node.dispatchEvent(
+      new MouseEvent('pointerleave', { clientX: 12, clientY: 34 }),
+    );
+    node.dispatchEvent(
+      new MouseEvent('pointerenter', { clientX: 12, clientY: 34 }),
+    );
+    expect(isVisible()).toBe(true);
+    expect(tooltipElement().textContent).toBe('Copy to clipboard');
+  });
+
+  it('applies the hover delay again after the pointer actually moved', () => {
+    action = tooltip(node, 'Copy to clipboard');
+
+    node.dispatchEvent(
+      new MouseEvent('pointerleave', { clientX: 12, clientY: 34 }),
+    );
+    node.dispatchEvent(
+      new MouseEvent('pointerenter', { clientX: 40, clientY: 60 }),
+    );
+    expect(isVisible()).toBe(false);
+    vi.advanceTimersByTime(SHOW_DELAY_MS);
+    expect(isVisible()).toBe(true);
+  });
+
   it('hides on Escape and on pointerdown (activating the control)', () => {
     action = tooltip(node, 'Copy to clipboard');
 
