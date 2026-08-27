@@ -1698,6 +1698,59 @@ export function timestampForItem(item) {
   return item.event?.timestamp;
 }
 
+// Transient command-output cards (/status, /help) interleaved with the
+// timeline. A card renders after the timeline item it was anchored to at
+// creation. When that anchor item is gone — a history reload replaces live
+// Run ids with history ids — the card keeps its chronological position by
+// creation time instead: after the last item whose timestamp predates the
+// command. Cards created on an empty timeline stay at the top; cards with a
+// lost anchor and no usable creation time fall back to the timeline end.
+export function groupTransientCards(items, cards) {
+  const itemIds = new Set((items ?? []).map((item) => item.id));
+  const groups = {
+    leading: [],
+    byItemId: new Map(),
+    byItemIndex: new Map(),
+    trailing: [],
+  };
+  for (const card of cards ?? []) {
+    if (card?.anchorId && itemIds.has(card.anchorId)) {
+      const anchored = groups.byItemId.get(card.anchorId) ?? [];
+      anchored.push(card);
+      groups.byItemId.set(card.anchorId, anchored);
+      continue;
+    }
+    if (card?.anchorId == null) {
+      groups.leading.push(card);
+      continue;
+    }
+    const anchorIndex = transientCardAnchorIndex(items, card.createdAt);
+    if (anchorIndex < 0) {
+      groups.trailing.push(card);
+      continue;
+    }
+    const anchored = groups.byItemIndex.get(anchorIndex) ?? [];
+    anchored.push(card);
+    groups.byItemIndex.set(anchorIndex, anchored);
+  }
+  return groups;
+}
+
+function transientCardAnchorIndex(items, createdAt) {
+  const createdAtMs = timestampToMs(createdAt);
+  if (createdAtMs === null) {
+    return -1;
+  }
+  let anchorIndex = -1;
+  for (const [index, item] of (items ?? []).entries()) {
+    const itemMs = timestampToMs(timestampForItem(item));
+    if (itemMs !== null && itemMs <= createdAtMs) {
+      anchorIndex = index;
+    }
+  }
+  return anchorIndex;
+}
+
 // Compose the label for an `agent_takeover` divider. The persisted message's
 // `content` is a JSON string `{"from":"<address>","to":"<address>"}` where each
 // address is a bare id (identity agent) or `agent@projekt` (team agent). The

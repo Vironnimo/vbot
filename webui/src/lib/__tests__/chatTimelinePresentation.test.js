@@ -9,6 +9,7 @@ import {
   compactionSummaryText,
   errorMessagePresentation,
   formatTime,
+  groupTransientCards,
   isRowCancellable,
   isBackgroundSubAgentSpawn,
   isRunChildWorking,
@@ -2105,5 +2106,91 @@ describe('reasoningDurationLabel', () => {
         Date.now(),
       ),
     ).toBe('');
+  });
+});
+
+describe('groupTransientCards', () => {
+  const historyRunItem = (id, timestamp) => ({
+    id,
+    type: 'assistant_run',
+    timestamp,
+    items: [],
+  });
+  const userItem = (id, timestamp) => ({
+    id,
+    type: 'message',
+    message: { id, role: 'user', timestamp },
+  });
+
+  it('anchors a card after the exact item it followed at creation', () => {
+    const items = [
+      userItem('user-1', '2026-08-27T13:40:00Z'),
+      historyRunItem('run-live', '2026-08-27T13:46:00Z'),
+    ];
+
+    const groups = groupTransientCards(items, [
+      {
+        id: 'card-1',
+        text: 'Agent: Alpha',
+        anchorId: 'run-live',
+        createdAt: 0,
+      },
+    ]);
+
+    expect(groups.byItemId.get('run-live')).toHaveLength(1);
+    expect(groups.leading).toEqual([]);
+    expect(groups.trailing).toEqual([]);
+  });
+
+  it('keeps a lost anchor card at its chronological position by creation time', () => {
+    // The /status card was created mid-run (13:46:30). A history reload then
+    // replaced the live run id with the history id and a newer message
+    // arrived — the card must sit between them, not sink to the end.
+    const items = [
+      userItem('user-1', '2026-08-27T13:40:00Z'),
+      historyRunItem('run-history', '2026-08-27T13:46:00Z'),
+      userItem('user-2', '2026-08-27T13:48:00Z'),
+    ];
+
+    const groups = groupTransientCards(items, [
+      {
+        id: 'card-1',
+        text: 'Agent: Alpha',
+        anchorId: 'run-live',
+        createdAt: Date.parse('2026-08-27T13:46:30Z'),
+      },
+    ]);
+
+    expect(groups.byItemId.size).toBe(0);
+    expect(groups.byItemIndex.get(1)).toHaveLength(1);
+    expect(groups.trailing).toEqual([]);
+  });
+
+  it('falls back to the timeline end for a lost anchor without a creation time', () => {
+    const items = [
+      userItem('user-1', '2026-08-27T13:40:00Z'),
+      historyRunItem('run-history', '2026-08-27T13:46:00Z'),
+    ];
+
+    const groups = groupTransientCards(items, [
+      { id: 'card-1', text: 'Agent: Alpha', anchorId: 'run-live' },
+    ]);
+
+    expect(groups.trailing).toHaveLength(1);
+  });
+
+  it('keeps a card created on an empty timeline at the top', () => {
+    const items = [userItem('user-1', '2026-08-27T13:40:00Z')];
+
+    const groups = groupTransientCards(items, [
+      {
+        id: 'card-1',
+        text: 'Agent: Alpha',
+        anchorId: null,
+        createdAt: Date.now(),
+      },
+    ]);
+
+    expect(groups.leading).toHaveLength(1);
   });
 });

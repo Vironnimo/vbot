@@ -906,13 +906,20 @@
     // Anchor the card to the timeline item present when the command ran, so it
     // stays at that position (like a chat message) instead of being pushed to
     // the bottom by later messages. `null` anchors a card created on an empty
-    // timeline to the top.
+    // timeline to the top. `createdAt` is the fallback anchor: when a history
+    // reload replaces the anchor item's live id, the card keeps its
+    // chronological position by creation time instead of sinking to the end.
     const items = visibleTimelineItemsForRender(sessionState);
     const anchorId = items.length > 0 ? items[items.length - 1].id : null;
     transientCardSeq += 1;
     transientCards = [
       ...transientCards,
-      { id: `transient-${transientCardSeq}`, text: body, anchorId },
+      {
+        id: `transient-${transientCardSeq}`,
+        text: body,
+        anchorId,
+        createdAt: Date.now(),
+      },
     ];
   };
 

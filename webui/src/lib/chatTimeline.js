@@ -450,7 +450,8 @@ function runOutputPersistedInHistory(events, messages) {
   for (const event of events ?? []) {
     if (
       event?.type !== 'assistant_output' &&
-      event?.type !== 'tool_call_result'
+      event?.type !== 'tool_call_result' &&
+      event?.type !== 'compaction_completed'
     ) {
       continue;
     }
@@ -466,7 +467,10 @@ function runOutputPersistedInHistory(events, messages) {
   const persistedIds = new Set(
     (messages ?? [])
       .filter(
-        (message) => message?.role === 'assistant' || message?.role === 'tool',
+        (message) =>
+          message?.role === 'assistant' ||
+          message?.role === 'tool' ||
+          message?.role === 'compaction_checkpoint',
       )
       .map((message) => message?.id)
       .filter(Boolean),
