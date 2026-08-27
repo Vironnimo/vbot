@@ -47,13 +47,9 @@ WRITE_TOOL_NAME = "write"
 WRITE_TOOL_DESCRIPTION = (
     "Write the full contents of a file. Creates the file if it does not "
     "exist, and replaces the entire file if it does. Not for partial "
-    "edits or appending. Automatically creates parent directories. If the "
-    "file already exists you must read it first; this tool fails if you did "
-    "not, or if it changed on disk since you last read it. Content is written "
-    "verbatim - never include the N| line-number prefix from read output. "
-    "When overwriting an existing file, line endings are normalized to match "
-    "the file's current style (CRLF/LF), so the model's natural LF output does "
-    "not silently change a CRLF file."
+    "edits or appending. Automatically creates parent directories. "
+    "Content is written verbatim - never include the N| line-number "
+    "prefix from read output."
 )
 WRITE_TOOL_PARAMETERS: JsonObject = {
     "type": "object",

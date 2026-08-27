@@ -32,10 +32,7 @@ if TYPE_CHECKING:
 CALENDAR_TOOL_NAME = "calendar"
 CALENDAR_TOOL_DESCRIPTION = (
     "Manage the calendar: list events with their occurrences, create single or repeating "
-    "events, update or delete them, and find free slots. A date start makes an all-day "
-    "event, a datetime start makes a timed event. list returns the events plus their "
-    "expanded occurrences in the window; find_free returns the earliest free slots "
-    "(up to five)."
+    "events, update or delete them, and find free slots."
 )
 
 CALENDAR_ACTIONS = frozenset(("list", "create", "update", "delete", "find_free"))

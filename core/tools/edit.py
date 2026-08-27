@@ -37,11 +37,9 @@ from core.utils.paths import model_path
 
 EDIT_TOOL_NAME = "edit"
 EDIT_TOOL_DESCRIPTION = (
-    "Edit a file by replacing text. old_string is matched against the file's current "
-    "contents, tolerating minor differences in whitespace/indentation (including internal "
-    "space/tab runs), line endings, and quote style. Include enough surrounding text to "
-    "identify one location unless replace_all is true. Never include the N| line-number "
-    "prefix from read output."
+    "Edit a file by replacing text. old_string is matched against the file's "
+    "current contents. Include enough surrounding text to identify one "
+    "location unless replace_all is true."
 )
 EDIT_TOOL_PARAMETERS: JsonObject = {
     "type": "object",
@@ -56,11 +54,7 @@ EDIT_TOOL_PARAMETERS: JsonObject = {
         "old_string": {
             "type": "string",
             "minLength": 1,
-            "description": (
-                "Text to replace. Include enough unchanged surrounding text to make "
-                "the target unique; for repeated lines include a neighboring line or "
-                "heading. Uniqueness is not required when replace_all is true."
-            ),
+            "description": "Text to replace.",
         },
         "new_string": {
             "type": "string",

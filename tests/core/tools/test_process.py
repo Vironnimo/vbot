@@ -117,7 +117,6 @@ def test_schema_exposes_small_flat_action_contract() -> None:
     }
     assert PROCESS_TOOL_PARAMETERS["required"] == ["action"]
     assert "additionalProperties" not in PROCESS_TOOL_PARAMETERS
-    assert isinstance(PROCESS_TOOL_PARAMETERS["description"], str)
     assert all(
         isinstance(property_schema.get("description"), str) and property_schema["description"]
         for property_schema in properties.values()

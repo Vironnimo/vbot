@@ -81,11 +81,8 @@ _DESCRIPTION_SUFFIX = (
 )
 SESSION_SEARCH_TOOL_DESCRIPTION = f"{SESSION_RECALL_LITERAL_TOOL_SUMMARY} {_DESCRIPTION_SUFFIX}"
 SESSION_READ_TOOL_DESCRIPTION = (
-    "Read conversation blocks or a Tool Result from a past Session. Set all_messages for every "
-    "block, omit message_id for the latest block plus a compact User-anchor index, or provide a "
-    "Message ID for its block or exact Tool Result. Every result identifies the selected range. "
-    "Large selections return lossless segments with next_continuation. The current Session is "
-    "unavailable; use conversation context or history instead."
+    "Read conversation blocks or a Tool Result from a past Session. The current "
+    "Session is unavailable."
 )
 
 

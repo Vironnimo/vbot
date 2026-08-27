@@ -26,13 +26,10 @@ from core.utils.paths import model_path
 
 PROCESS_TOOL_NAME = "process"
 PROCESS_TOOL_DESCRIPTION = (
-    "Inspect or control your own background processes created by the `bash` Tool. "
-    "Use the process_id returned when a bash call continues in the background; this Tool "
-    "cannot access arbitrary operating-system processes. Bash output is only a capped "
-    "snapshot; when log_file is present, it receives the complete combined stdout/stderr "
-    "stream live through exit. Completion is delivered automatically, so use status only "
-    "for an immediate snapshot, input to write raw UTF-8 to the stdin pipe, and kill to stop "
-    "a process. Input is not an interactive terminal or TTY."
+    "Inspect or control a `bash` command that runs in the background — not arbitrary "
+    "operating-system processes. Bash output is only a capped snapshot; when log_file "
+    "is present, it receives the complete combined stdout/stderr stream live through "
+    "exit. Input is not an interactive terminal or TTY."
 )
 PROCESS_ACTIONS = ("status", "input", "kill")
 PROCESS_STATUS_OUTPUT_CAP_CHARS = 30_000
@@ -45,31 +42,24 @@ _PROCESS_ACTION_ARGUMENTS = {
 
 PROCESS_TOOL_PARAMETERS: JsonObject = {
     "type": "object",
-    "description": (
-        "Use status without process_id to list tracked background processes, "
-        "or provide process_id to inspect one. input and kill require process_id."
-    ),
     "properties": {
         "action": {
             "type": "string",
             "enum": list(PROCESS_ACTIONS),
-            "description": (
-                "status lists or inspects tracked processes without waiting, input sends "
-                "stdin to a running one, and kill stops one."
-            ),
+            "description": "Operation to perform.",
         },
         "process_id": {
             "type": "string",
             "minLength": 1,
             "description": (
-                "Process id returned by the bash Tool. Required for input and kill; "
-                "omit for status to list all tracked processes."
+                "Id of the background `bash` command to act on. Required for input "
+                "and kill; omit for status to list all."
             ),
         },
         "text": {
             "type": "string",
             "description": (
-                "UTF-8 text to send for input; required but may be empty to send only a "
+                "Text to send for input; required but may be empty to send only a "
                 "newline or EOF. This is a raw stdin pipe, not a terminal or TTY. On Windows, "
                 "Read-Host is unavailable; use [Console]::In.ReadLine(), "
                 "[Console]::In.ReadToEnd(), or a native child process."

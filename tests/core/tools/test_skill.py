@@ -16,7 +16,7 @@ from core.tools import (
     register_skill_tool,
     tool_failure,
 )
-from core.tools.skill import SKILL_TOOL_DESCRIPTION, SKILL_TOOL_PARAMETERS, load_skill_content
+from core.tools.skill import SKILL_TOOL_PARAMETERS, load_skill_content
 
 
 def _fixed_registry(
@@ -40,8 +40,6 @@ def test_skill_tool_describes_activation_and_file_path_contract() -> None:
     assert properties["file_path"]["type"] == "string"
     assert SKILL_TOOL_PARAMETERS["required"] == []
     assert "additionalProperties" not in SKILL_TOOL_PARAMETERS
-    assert "no arguments to list the live catalog" in SKILL_TOOL_DESCRIPTION
-    assert "complete document including frontmatter" in properties["file_path"]["description"]
 
 
 def test_skill_tool_result_separates_instructions_and_resource_files(tmp_path: Path) -> None:

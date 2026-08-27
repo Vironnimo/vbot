@@ -60,15 +60,9 @@ class _PreparedAudio:
 
 READ_TOOL_NAME = "read"
 READ_TOOL_DESCRIPTION = (
-    "Read a file. Missing paths suggest similar files from the target directory. "
-    "Text files return their contents with every line prefixed by "
-    "its number as `N| ` — a reference gutter plus separator space; neither is "
-    "file content, so never reproduce them when "
-    "writing or editing. Output is truncated to 2000 lines or 50 KB; use "
-    "offset/limit for large files. Image files are shown to the model directly "
-    "when it supports vision; audio files are transcribed to text; "
-    "PDF/Word/Excel/Jupyter files (.pdf/.docx/.xlsx/.ipynb) are extracted to "
-    "readable text; video and other binary files return a short notice."
+    "Read a file. Images are shown to the model directly when it supports "
+    "vision; audio files are transcribed to text; PDF/Word/Excel/Jupyter "
+    "files (.pdf/.docx/.xlsx/.ipynb) are extracted to readable text."
 )
 READ_TOOL_PARAMETERS: JsonObject = {
     "type": "object",

@@ -45,11 +45,7 @@ SkillRegistryResolver = Callable[[str | None, str | None], SkillRegistry]
 SkillRefresh = Callable[[], None | Awaitable[None]]
 
 SKILL_TOOL_NAME = "skill"
-SKILL_TOOL_DESCRIPTION = (
-    "List available Skills, load one Skill, or read one UTF-8 file from it. Call with no "
-    "arguments to list the live catalog, with name to load its instructions, or with name "
-    "and file_path to read a package file without activation."
-)
+SKILL_TOOL_DESCRIPTION = "List available Skills, load one Skill, or read one file from it."
 SKILL_STATUS_LOADED = "loaded"
 SKILL_STATUS_ALREADY_ACTIVE = "already_active"
 SKILL_STATUS_FILE_LOADED = "file_loaded"
@@ -78,10 +74,8 @@ _SKILL_FILE_PATH_PARAMETER: JsonObject = {
     "minLength": 1,
     "pattern": r"^(SKILL\.md|(?:scripts|references|assets)/.+)$",
     "description": (
-        "Skill-relative 'SKILL.md' or a file under scripts, references, or assets. "
-        "Provide with name to read that file without activation; omit to load the named "
-        "Skill. 'SKILL.md' returns the complete document including frontmatter for "
-        "inspection before skill_manage edit."
+        "Path of a file inside the Skill package: a file under scripts, references, "
+        "or assets, or 'SKILL.md' itself. Omit to load the named Skill."
     ),
 }
 SKILL_TOOL_PARAMETERS: JsonObject = {

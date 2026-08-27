@@ -79,20 +79,17 @@ GREP_TOOL_NAME = "grep"
 GREP_TOOL_DESCRIPTION = (
     "Search file contents with a regex pattern by default. Use this when you need to "
     "orient in a codebase or quickly locate relevant files, symbols, references, or "
-    "matching text across a directory. Set literal=true for fixed-string matching, "
-    "multiline=true for patterns spanning lines. Optional glob filters candidate "
+    "matching text across a directory. Optional glob filters candidate "
     "files (case-insensitive; '{py,js}' alternation expands like ripgrep globs, a "
-    "leading '!' excludes matches). Skips .gitignore'd files unless "
-    "include_ignored=true; .git internals are always skipped. Returns path:line:text "
-    "rows unless output_mode requests matching files or counts; paths are relative "
+    "leading '!' excludes matches). Paths in results are relative "
     "to the working directory (absolute when outside it). Lines longer than 500 "
-    "characters are cut with a '[truncated]' marker. Page with offset."
+    "characters are cut with a '[truncated]' marker."
 )
 _GREP_COMMON_PARAMETERS: JsonObject = {
     "pattern": {
         "type": "string",
         "minLength": 1,
-        "description": "Regex search pattern. Set literal=true for fixed-string matching.",
+        "description": "Regex search pattern.",
     },
     "path": {
         "type": "string",
@@ -140,10 +137,6 @@ _GREP_COMMON_PARAMETERS: JsonObject = {
 }
 GREP_TOOL_PARAMETERS: JsonObject = {
     "type": "object",
-    "description": (
-        "Choose one output mode. Omit output_mode for content rows. Only content mode "
-        "accepts context lines."
-    ),
     "properties": {
         **_GREP_COMMON_PARAMETERS,
         "output_mode": {
