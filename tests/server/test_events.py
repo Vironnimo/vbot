@@ -265,6 +265,7 @@ def test_allowed_resource_kinds_lock_the_documented_wire_contract() -> None:
         "debug_traces",
         "projects",
         "cron",
+        "calendar",
         "commands",
         "terminals",
         "memories",

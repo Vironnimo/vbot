@@ -40,6 +40,11 @@ from core.tools.bash import (
     BASH_TOOL_PARAMETERS,
     project_bash_tool_definitions,
 )
+from core.tools.calendar import (
+    CALENDAR_TOOL_DESCRIPTION,
+    CALENDAR_TOOL_NAME,
+    CALENDAR_TOOL_PARAMETERS,
+)
 from core.tools.channel import (
     CHANNEL_SEND_TOOL_NAME,
     _channel_send_definition_profile,
@@ -188,6 +193,7 @@ PROBE_SCENARIOS = (
     "large_arguments",
     "analyze_image",
     "bash",
+    "calendar",
     "channel_send",
     "cron",
     "edit",
@@ -258,6 +264,23 @@ CHANNEL_SEND_CASES = (
     "discord_message_file",
     "mixed_telegram_button",
     "mixed_discord_file",
+)
+CALENDAR_CASES = (
+    "list_default",
+    "list_when_week",
+    "list_when_range",
+    "create_timed",
+    "create_timed_full",
+    "create_allday",
+    "create_recurring",
+    "create_recurring_count",
+    "update_fields",
+    "update_stop_repeat",
+    "update_notes",
+    "delete_whole",
+    "delete_occurrence",
+    "find_free_default",
+    "find_free_when",
 )
 CRON_CASES = (
     "create_cron",
@@ -516,6 +539,12 @@ def _parser() -> argparse.ArgumentParser:
         choices=BASH_CASES,
         default="top_foreground",
         help="Exact top-level or Sub-Agent bash argument shape requested by the scenario.",
+    )
+    parser.add_argument(
+        "--calendar-case",
+        choices=CALENDAR_CASES,
+        default="create_timed",
+        help="Exact calendar action and argument shape requested by the scenario.",
     )
     parser.add_argument(
         "--channel-send-case",
@@ -885,6 +914,92 @@ def _image_generation_scenario(case_name: str) -> ProbeScenario:
         ],
         _probe_messages(instruction),
         IMAGE_GENERATION_TOOL_NAME,
+        require_closed_input=False,
+        expected_arguments=expected_arguments,
+    )
+
+
+def _calendar_scenario(case_name: str) -> ProbeScenario:
+    calendar_arguments: dict[str, dict[str, Any]] = {
+        "list_default": {"action": "list"},
+        "list_when_week": {"action": "list", "when": "this week"},
+        "list_when_range": {"action": "list", "when": "2026-09-10..2026-09-14"},
+        "create_timed": {
+            "action": "create",
+            "title": "Dentist",
+            "start": "2026-09-10T15:00",
+        },
+        "create_timed_full": {
+            "action": "create",
+            "title": "Dentist",
+            "start": "2026-09-10T15:00",
+            "duration": 45,
+            "notes": "Bring the insurance card.",
+        },
+        "create_allday": {
+            "action": "create",
+            "title": "Trip",
+            "start": "2026-09-14",
+            "duration": 3,
+        },
+        "create_recurring": {
+            "action": "create",
+            "title": "Standup",
+            "start": "2026-08-31T09:00",
+            "rrule": {"freq": "weekly", "by_weekday": ["mo", "we"]},
+        },
+        "create_recurring_count": {
+            "action": "create",
+            "title": "Focus block",
+            "start": "2026-09-01T09:00",
+            "rrule": {"freq": "daily", "count": 10},
+        },
+        "update_fields": {
+            "action": "update",
+            "id": "event-123",
+            "title": "Dentist moved",
+            "start": "2026-09-10T16:00",
+        },
+        "update_stop_repeat": {
+            "action": "update",
+            "id": "event-123",
+            "rrule": None,
+        },
+        "update_notes": {
+            "action": "update",
+            "id": "event-123",
+            "notes": "Rescheduled by the practice.",
+        },
+        "delete_whole": {"action": "delete", "id": "event-123"},
+        "delete_occurrence": {
+            "action": "delete",
+            "id": "event-123",
+            "start": "2026-09-14T09:00:00",
+        },
+        "find_free_default": {"action": "find_free"},
+        "find_free_when": {
+            "action": "find_free",
+            "when": "next week",
+            "duration": 60,
+        },
+    }
+    expected_arguments = calendar_arguments[case_name]
+    rendered_arguments = json.dumps(expected_arguments, separators=(",", ":"))
+    instruction = (
+        f"Call {CALENDAR_TOOL_NAME} exactly once with exactly this JSON object as its "
+        f"arguments: {rendered_arguments}. Preserve every value and do not add any field."
+    )
+    return ProbeScenario(
+        "calendar",
+        [
+            {
+                "name": CALENDAR_TOOL_NAME,
+                "description": CALENDAR_TOOL_DESCRIPTION,
+                "parameters": CALENDAR_TOOL_PARAMETERS,
+            }
+        ],
+        _probe_messages(instruction),
+        CALENDAR_TOOL_NAME,
         require_closed_input=False,
         expected_arguments=expected_arguments,
     )
@@ -2486,6 +2601,8 @@ def _scenario(args: argparse.Namespace) -> ProbeScenario:
         return _analyze_image_scenario(str(args.analyze_image_case))
     if name == "bash":
         return _bash_scenario(str(args.bash_case))
+    if name == "calendar":
+        return _calendar_scenario(str(args.calendar_case))
     if name == "channel_send":
         return _channel_send_scenario(str(args.channel_send_case))
     if name == "cron":
@@ -3222,6 +3339,7 @@ async def _run(args: argparse.Namespace) -> int:
                 args.analyze_image_case if scenario.name == "analyze_image" else None
             ),
             "bash_case": args.bash_case if scenario.name == "bash" else None,
+            "calendar_case": (args.calendar_case if scenario.name == "calendar" else None),
             "channel_send_case": (
                 args.channel_send_case if scenario.name == "channel_send" else None
             ),

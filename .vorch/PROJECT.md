@@ -59,6 +59,7 @@ Every domain has a map under `.vorch/domain-maps/`. **Read a domain's map before
 | storage.md | `core/storage/` | Data-directory layout, temp-file lifecycle, persistence |
 | skills.md | `core/skills/` | Skill loading/validation, scopes, Prompt-Epoch Catalog |
 | automation.md | `core/automation/` | Cron/Bootstrap triggering, queue semantics |
+| calendar.md | `core/calendar/` | Local calendar store, recurrence, cron projection, calendar tool |
 | channels.md | `core/channels/` | Channel adapters, conversation engine, outbound send |
 | model-communication.md | cross-cutting | Sanctioned kernel-to-Model channels; never invent one |
 | server.md | `server/` | Transport/RPC boundary, events, source routing |
