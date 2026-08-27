@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol
 
@@ -166,6 +167,9 @@ class CompactionRunCoordinator:
         )
         adapter: Any | None = None
         summary_adapter: Any | None = None
+        # The divider appears at this emit; its visible duration ends when the
+        # checkpoint is stamped below.
+        compaction_started_perf = time.perf_counter()
         try:
             messages = await session.load_async()
             context_usage = latest_session_context_usage(messages)
@@ -330,6 +334,9 @@ class CompactionRunCoordinator:
                 _finalize_compaction_checkpoint,
                 checkpoint,
                 messages,
+            )
+            checkpoint = checkpoint.with_compaction_duration_ms(
+                duration_ms=round((time.perf_counter() - compaction_started_perf) * 1000)
             )
             prompt_refresh: _CompactionPromptRefresh | None = None
             try:
@@ -697,6 +704,7 @@ class CompactionRunCoordinator:
             active_provider_id=target.provider_id,
         )
         close_summary_adapter = summary_adapter is not target.adapter
+        compaction_started_perf = time.perf_counter()
         run.emit(
             COMPACTION_STARTED_EVENT,
             {
@@ -758,6 +766,9 @@ class CompactionRunCoordinator:
             _finalize_compaction_checkpoint,
             checkpoint,
             session_messages,
+        )
+        checkpoint = checkpoint.with_compaction_duration_ms(
+            duration_ms=round((time.perf_counter() - compaction_started_perf) * 1000)
         )
         prompt_refresh: _CompactionPromptRefresh | None = None
         try:
@@ -929,6 +940,9 @@ class CompactionRunCoordinator:
         }
         if context_usage is not None:
             payload["context_usage"] = context_usage
+        duration_ms = checkpoint_usage.get("compaction_duration_ms")
+        if duration_ms is not None:
+            payload["duration_ms"] = duration_ms
         run.emit(
             COMPACTION_COMPLETED_EVENT,
             payload,

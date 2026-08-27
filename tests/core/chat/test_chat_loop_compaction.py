@@ -693,11 +693,15 @@ async def test_compaction_maybe_auto_compact_appends_checkpoint_and_rebuilds_mes
         "tokens": expected_context_tokens_after,
         "estimated": True,
     }
-    assert session.load()[-1].usage == {
+    final_usage = dict(session.load()[-1].usage or {})
+    compaction_duration_ms = final_usage.pop("compaction_duration_ms")
+    assert final_usage == {
         "compacted_token_count": 42,
         "context_tokens_before": 90,
         "context_tokens_after": expected_context_tokens_after,
     }
+    assert isinstance(compaction_duration_ms, int)
+    assert compaction_duration_ms >= 0
 
 
 @pytest.mark.asyncio

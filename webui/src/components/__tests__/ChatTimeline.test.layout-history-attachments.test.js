@@ -181,7 +181,7 @@ describe('ChatTimeline', () => {
     );
 
     expect(divider?.textContent.trim()).toBe(
-      'Context compacted · ~250,000 → ~30,000 tokens',
+      'Context compacted · ~250k → ~30k',
     );
     expect(divider?.classList.contains('compaction-sep--running')).toBe(false);
     const disclosure = document.querySelector('.compaction-disclosure--in-run');
@@ -226,13 +226,16 @@ describe('ChatTimeline', () => {
     });
     flushSync();
 
-    const divider = document.querySelector('.run-compaction-sep');
+    // A run whose only child is the Compaction divider renders the divider
+    // bare - no run header or footer around it.
+    const divider = document.querySelector('.compaction-sep');
     expect(divider?.textContent.trim()).toBe(
       'Compacting current conversation…',
     );
     expect(divider?.classList.contains('compaction-sep--running')).toBe(true);
     expect(divider?.getAttribute('aria-busy')).toBe('true');
     expect(document.querySelector('.compaction-disclosure')).toBeNull();
+    expect(document.querySelector('.assistant-run')).toBeNull();
   });
 
   it('keeps persisted Compaction token counts after History reload', () => {
@@ -268,7 +271,7 @@ describe('ChatTimeline', () => {
 
     const divider = document.querySelector('.compaction-sep');
     expect(divider?.textContent.trim()).toBe(
-      'Context compacted · ~250,000 → ~30,000 tokens',
+      'Context compacted · ~250k → ~30k',
     );
     expect(divider?.tagName).toBe('SUMMARY');
     const disclosure = document.querySelector('.compaction-disclosure');

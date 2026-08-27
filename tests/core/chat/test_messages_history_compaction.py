@@ -1,7 +1,10 @@
 """Chat message history and compaction primitive tests."""
 
+import pytest
+
 from .messages_test_support import (
     ChatMessage,
+    ChatMessageValidationError,
     ToolCall,
     _effective_compaction_messages,
     checkpoint_ordinal,
@@ -66,6 +69,35 @@ class TestHistoryCompactionPrimitives:
             "context_tokens_after": 34_691,
         }
         assert checkpoint.usage == {"compacted_token_count": 123}
+
+    def test_duration_stamp_adds_observed_wall_clock_time(self) -> None:
+        checkpoint = ChatMessage.compaction_checkpoint(
+            summary="Earlier decisions.",
+            projection=[],
+            compacted_token_count=123,
+        )
+
+        stamped = checkpoint.with_compaction_duration_ms(duration_ms=54_000)
+
+        assert stamped.usage == {
+            "compacted_token_count": 123,
+            "compaction_duration_ms": 54_000,
+        }
+        assert checkpoint.usage == {"compacted_token_count": 123}
+
+    def test_duration_stamp_rejects_non_integer_and_negative_values(self) -> None:
+        checkpoint = ChatMessage.compaction_checkpoint(
+            summary="Earlier decisions.",
+            projection=[],
+            compacted_token_count=123,
+        )
+
+        with pytest.raises(ChatMessageValidationError):
+            checkpoint.with_compaction_duration_ms(duration_ms=-1)
+        with pytest.raises(ChatMessageValidationError):
+            checkpoint.with_compaction_duration_ms(duration_ms="54000")  # type: ignore[arg-type]
+        with pytest.raises(ChatMessageValidationError):
+            checkpoint.with_compaction_duration_ms(duration_ms=True)  # type: ignore[arg-type]
 
     def test_textual_checkpoint_ends_provider_reasoning_state_but_keeps_phase(self) -> None:
         assistant = ChatMessage.assistant(

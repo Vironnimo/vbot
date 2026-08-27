@@ -1765,6 +1765,21 @@ export const takeoverSeparatorLabel = (message) => {
   return t('chat.takenOverGeneric', 'Session taken over');
 };
 
+// Compact Context token display: 254224 -> "254k", 1500000 -> "1.5m". The
+// separator line is about the Context, so the unit word is omitted.
+const formatCompactTokens = (value) => {
+  if (!Number.isFinite(value) || value < 0) {
+    return null;
+  }
+  if (value < 1000) {
+    return String(value);
+  }
+  if (value < 1_000_000) {
+    return `${Math.round(value / 1000)}k`;
+  }
+  return `${(value / 1_000_000).toFixed(1)}m`;
+};
+
 export const compactionSeparatorLabel = (item) => {
   if (item?.status === 'running') {
     return t(
@@ -1777,14 +1792,28 @@ export const compactionSeparatorLabel = (item) => {
   const before =
     item?.contextTokensBefore ?? usage.context_tokens_before ?? null;
   const after = item?.contextTokensAfter ?? usage.context_tokens_after ?? null;
-  if (Number.isFinite(before) && Number.isFinite(after)) {
-    const numberFormat = new Intl.NumberFormat(activeLocaleTag());
+  const beforeLabel = formatCompactTokens(before);
+  const afterLabel = formatCompactTokens(after);
+  const durationLabel = formatDurationMs(item?.durationMs);
+  if (durationLabel && beforeLabel && afterLabel) {
+    return t(
+      'chat.compactedWithTimingTokens',
+      'Context compacted in {duration} · ~{before} → ~{after}',
+      { duration: durationLabel, before: beforeLabel, after: afterLabel },
+    );
+  }
+  if (durationLabel) {
+    return t('chat.compactedWithTiming', 'Context compacted in {duration}', {
+      duration: durationLabel,
+    });
+  }
+  if (beforeLabel && afterLabel) {
     return t(
       'chat.compactedWithTokens',
-      'Context compacted · ~{before} → ~{after} tokens',
+      'Context compacted · ~{before} → ~{after}',
       {
-        before: numberFormat.format(before),
-        after: numberFormat.format(after),
+        before: beforeLabel,
+        after: afterLabel,
       },
     );
   }

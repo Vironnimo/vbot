@@ -880,8 +880,9 @@ describe('ChatView', () => {
       100,
     );
 
-    // Manual Compaction is a real Run. It must render from the same lifecycle
-    // events as Auto-Compaction without a History-reload special case.
+    // Manual Compaction is a real Run, but it renders bare - the same bare
+    // checkpoint divider as Auto-Compaction, from the same lifecycle events,
+    // without a History-reload special case.
     const historyReloadCount = () =>
       rpcMock.mock.calls.filter(
         ([method, params]) =>
@@ -943,15 +944,13 @@ describe('ChatView', () => {
     await waitForCondition(
       () =>
         document.body
-          .querySelector('.run-compaction-sep')
-          ?.textContent?.includes('69,030 → ~26,835'),
+          .querySelector('.compaction-sep')
+          ?.textContent?.includes('~69k → ~27k'),
       100,
     );
 
     expect(document.body.querySelector('.compaction-sep--running')).toBeNull();
-    const disclosure = document.body.querySelector(
-      '.compaction-disclosure--in-run',
-    );
+    const disclosure = document.body.querySelector('.compaction-disclosure');
     expect(disclosure).toBeTruthy();
     disclosure.open = true;
     flushSync();

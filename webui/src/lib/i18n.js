@@ -427,7 +427,10 @@ export const englishCatalog = Object.freeze({
   'chat.errorDetails': 'Details',
   'chat.compactingCurrentConversation': 'Compacting current conversation…',
   'chat.compacted': 'Context compacted',
-  'chat.compactedWithTokens': 'Context compacted · ~{before} → ~{after} tokens',
+  'chat.compactedWithTokens': 'Context compacted · ~{before} → ~{after}',
+  'chat.compactedWithTiming': 'Context compacted in {duration}',
+  'chat.compactedWithTimingTokens':
+    'Context compacted in {duration} · ~{before} → ~{after}',
   'chat.compactionContext': 'Compaction context',
   'chat.copyCompaction': 'Copy compaction context',
   'chat.compactionCopied': 'Compaction context copied',
