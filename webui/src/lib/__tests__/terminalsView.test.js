@@ -709,6 +709,46 @@ describe('terminal live controller', () => {
     controller.destroy();
   });
 
+  it('surfaces a close failure to a remounted controller', async () => {
+    const state1 = createTerminalsViewState();
+    const streams1 = [];
+    const api1 = fakeApi({
+      streams: streams1,
+      terminals: [terminal('term-1')],
+    });
+    const controller1 = createTerminalsController({ state: state1, api: api1 });
+    await controller1.start();
+
+    let rejectKill;
+    api1.killTerminal.mockReturnValueOnce(
+      new Promise((_, reject) => {
+        rejectKill = reject;
+      }),
+    );
+    const closing = controller1.closeTerminal('term-1');
+    controller1.destroy(); // navigate away while the stop is in flight
+
+    // A remounted controller loads while the stop is still pending; the
+    // session stays hidden behind the closing filter.
+    const state2 = createTerminalsViewState();
+    const streams2 = [];
+    const api2 = fakeApi({
+      streams: streams2,
+      terminals: [terminal('term-1')],
+    });
+    const controller2 = createTerminalsController({ state: state2, api: api2 });
+    await controller2.start();
+    expect(state2.terminals).toEqual([]);
+
+    // The stop fails: the remounted controller must surface the still-running
+    // session instead of leaving it hidden.
+    rejectKill(new Error('stop failed'));
+    await closing;
+    await vi.waitFor(() => expect(state2.terminals).toHaveLength(1));
+    expect(state2.actionError).toBe('stop failed');
+    controller2.destroy();
+  });
+
   it('forgets a finished terminal without killing it', async () => {
     const state = createTerminalsViewState();
     const streams = [];
