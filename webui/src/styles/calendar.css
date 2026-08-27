@@ -1,5 +1,22 @@
 /* Calendar view — month grid, week/day columns, agenda list, layer chips. */
 
+.calendar-view {
+  display: flex;
+  min-height: 0;
+  height: 100%;
+  flex-direction: column;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.calendar-toolbar-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
 .calendar-nav {
   display: flex;
   align-items: center;

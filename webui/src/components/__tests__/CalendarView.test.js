@@ -84,6 +84,22 @@ describe('CalendarView', () => {
     expect(document.querySelector('.calendar-form')).not.toBeNull();
   });
 
+  it('insets the event form inside a padded modal body', async () => {
+    mountedComponent = mount(CalendarView, { target: document.body });
+    flushSync();
+    await waitForCondition(
+      () => document.querySelector('.empty-state__actions button') !== null,
+    );
+
+    document.querySelector('.empty-state__actions button').click();
+    flushSync();
+
+    // The Modal shell renders body snippets directly; callers own the padded
+    // `.modal-body` wrapper. Without it the form sits flush against the modal
+    // edges.
+    expect(document.querySelector('.modal-body .calendar-form')).not.toBeNull();
+  });
+
   it('associates each event-form label with its control', async () => {
     mountedComponent = mount(CalendarView, { target: document.body });
     flushSync();
