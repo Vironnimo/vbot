@@ -665,8 +665,15 @@ export function createChatController({
     }
   }
 
-  async function loadAgents({ preferredAgentId = '' } = {}) {
-    chatState.loadingAgents = true;
+  async function loadAgents({ preferredAgentId = '', silent = false } = {}) {
+    // `silent` skips the loadingAgents flag so a background refresh (triggered
+    // by resource_changed(kind="agents")) does not tear down the entire chat
+    // view via the {#if loadingAgents} conditional, and skips the initial
+    // history load that belongs to the mount path. Only the initial mount load
+    // shows the loading state and loads the current session's history.
+    if (!silent) {
+      chatState.loadingAgents = true;
+    }
     chatState.agentsError = null;
     let selectedAgentId;
     try {
@@ -684,9 +691,11 @@ export function createChatController({
       chatState.agentsError = errorMessage(error);
       return false;
     } finally {
-      chatState.loadingAgents = false;
+      if (!silent) {
+        chatState.loadingAgents = false;
+      }
     }
-    if (selectedAgentId && shouldLoadCurrentHistory()) {
+    if (selectedAgentId && !silent && shouldLoadCurrentHistory()) {
       await loadCurrentHistory();
     }
     return true;

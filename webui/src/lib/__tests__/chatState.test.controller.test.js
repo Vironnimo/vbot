@@ -830,6 +830,33 @@ describe('chat controller', () => {
     expect(chatState.loadingHistory).toBe(false);
   });
 
+  it('silent loadAgents skips loadingAgents flag and history reload', async () => {
+    const loadChatHistory = vi.fn().mockResolvedValue({
+      active_run: null,
+      messages: [],
+      has_more: false,
+    });
+    const listAgents = vi.fn().mockResolvedValue({
+      agents: [
+        {
+          id: 'alpha',
+          name: 'Alpha',
+          current_session_id: 'session-one',
+        },
+      ],
+    });
+    const { chatState, controller } = setup({
+      isDisplayedSession: () => true,
+      operationOverrides: { listAgents, loadChatHistory },
+    });
+
+    await controller.loadAgents({ silent: true });
+
+    expect(chatState.loadingAgents).toBe(false);
+    expect(chatState.agents).toHaveLength(1);
+    expect(loadChatHistory).not.toHaveBeenCalled();
+  });
+
   it('normalizes command suggestions inside the controller', async () => {
     const listChatCommands = vi.fn().mockResolvedValue({
       items: [
