@@ -1147,7 +1147,7 @@ def _edit_scenario(case_name: str) -> ProbeScenario:
             "new_string": "",
         },
     }
-    expected_arguments = edit_arguments[case_name]
+    expected_arguments = {"edits": [edit_arguments[case_name]]}
     rendered_arguments = json.dumps(expected_arguments, separators=(",", ":"))
     instruction = (
         f"Call {EDIT_TOOL_NAME} exactly once with exactly this JSON object as its "

@@ -479,9 +479,13 @@ def test_edit_cases_use_production_schema_and_exact_expected_arguments() -> None
 
     default = PROBE._edit_scenario("default")
     assert default.expected_arguments == {
-        "path": "src/provider_tool_probe.py",
-        "old_string": "value = 1",
-        "new_string": "value = 2",
+        "edits": [
+            {
+                "path": "src/provider_tool_probe.py",
+                "old_string": "value = 1",
+                "new_string": "value = 2",
+            }
+        ]
     }
 
 

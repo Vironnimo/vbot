@@ -41,6 +41,7 @@ When rules compete, use this priority order: correct Tool selection and invocati
 - Use an enum when the Model must choose from a small fixed vocabulary.
 - Add bounds, patterns, length limits, or format hints only when they materially help the Model construct a valid argument. Runtime-only constraints do not belong in the model-facing schema.
 - Do not add a root parameter-object description unless it conveys conditional argument rules that cannot be stated more compactly on the affected properties.
+- When one call intentionally repeats the same independent operation to reduce roundtrips, use one required plural array of compact operation objects. Keep ordering semantics in the array description and keep per-operation options inside each item.
 
 ## Parameter Descriptions
 

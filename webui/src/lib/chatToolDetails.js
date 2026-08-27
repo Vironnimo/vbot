@@ -3,7 +3,7 @@ import { isPlainObject } from '$lib/values.js';
 
 const TOOL_DETAIL_HIDDEN_KEYS = ['artifacts', 'description'];
 const TOOL_ARGUMENT_HIDDEN_KEYS = {
-  edit: ['new_string', 'old_string'],
+  edit: ['edits', 'new_string', 'old_string'],
   write: ['content'],
 };
 const TOOL_ERROR_DETAIL_KEYS = [

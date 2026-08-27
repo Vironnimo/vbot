@@ -316,7 +316,9 @@ export const toolRowFromEvent = (event) => {
     status: resultEvent
       ? hasToolResultError(event)
         ? 'failed'
-        : 'success'
+        : hasToolResultPartial(event)
+          ? 'partial'
+          : 'success'
       : 'running',
   };
 };
@@ -604,6 +606,9 @@ export const toolStatus = (tool) => {
   if (tool.status === 'cancelled') {
     return 'cancelled';
   }
+  if (tool.status === 'partial') {
+    return 'partial';
+  }
   if (tool.status === 'success' || tool.status === 'completed') {
     return 'success';
   }
@@ -637,7 +642,16 @@ export const toolStatusLabel = (tool, nowMs = Date.now()) => {
       'chat.toolDurationSeconds',
     );
   }
-  return formatDurationMs(toolDurationMs(tool), 'chat.toolDurationSeconds');
+  const duration = formatDurationMs(
+    toolDurationMs(tool),
+    'chat.toolDurationSeconds',
+  );
+  if (toolStatus(tool) === 'partial') {
+    return [t('chat.toolPartial', 'partial'), duration]
+      .filter(Boolean)
+      .join(' · ');
+  }
+  return duration;
 };
 
 // Real wall-clock runtime of the child run a sub-agent tool refers to, captured
@@ -952,26 +966,39 @@ function toolFactPresentation(fact) {
     fact.kind !== 'count' ||
     !Number.isInteger(fact.value) ||
     fact.value < 0 ||
-    !['matches', 'results'].includes(fact.unit)
+    !['edits', 'failures', 'files', 'matches', 'results'].includes(fact.unit)
   ) {
     return null;
   }
   const renderedCount = `${fact.value}${fact.at_least === true ? '+' : ''}`;
   const singular = fact.value === 1 && fact.at_least !== true;
-  const label =
-    fact.unit === 'matches'
-      ? singular
-        ? t('chat.toolFact.match', '{count} match', { count: renderedCount })
-        : t('chat.toolFact.matches', '{count} matches', {
-            count: renderedCount,
-          })
-      : singular
-        ? t('chat.toolFact.result', '{count} result', {
-            count: renderedCount,
-          })
-        : t('chat.toolFact.results', '{count} results', {
-            count: renderedCount,
-          });
+  const unitKeys = {
+    edits: ['chat.toolFact.edit', 'chat.toolFact.edits', 'edit', 'edits'],
+    failures: [
+      'chat.toolFact.failure',
+      'chat.toolFact.failures',
+      'failed',
+      'failed',
+    ],
+    files: ['chat.toolFact.file', 'chat.toolFact.files', 'file', 'files'],
+    matches: [
+      'chat.toolFact.match',
+      'chat.toolFact.matches',
+      'match',
+      'matches',
+    ],
+    results: [
+      'chat.toolFact.result',
+      'chat.toolFact.results',
+      'result',
+      'results',
+    ],
+  };
+  const [singularKey, pluralKey, singularWord, pluralWord] =
+    unitKeys[fact.unit];
+  const label = singular
+    ? t(singularKey, `{count} ${singularWord}`, { count: renderedCount })
+    : t(pluralKey, `{count} ${pluralWord}`, { count: renderedCount });
   return { kind: 'count', text: label, variant: 'neutral' };
 }
 
@@ -2298,4 +2325,11 @@ function hasToolResultError(event) {
   } catch {
     return false;
   }
+}
+
+function hasToolResultPartial(event) {
+  const rawResult =
+    event.payload?.result ?? messageFromEvent(event)?.content ?? null;
+  const result = parseJsonValue(rawResult);
+  return result?.ok === true && result?.data?.status === 'partial';
 }

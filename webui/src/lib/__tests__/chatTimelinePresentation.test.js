@@ -42,8 +42,11 @@ import {
   subAgentToolStatusLabel,
   takeoverSeparatorLabel,
   toolArgumentSummary,
+  toolRowFromEvent,
   toolDetailPresentation,
   toolRowPresentation,
+  toolStatus,
+  toolStatusLabel,
   visibleRunChildren,
 } from '../chatTimelinePresentation.js';
 import { init } from '../i18n.js';
@@ -361,6 +364,47 @@ describe('chatTimelinePresentation', () => {
       '1 result',
       '10+ matches',
     ]);
+  });
+
+  it('renders multi-edit counts with Agent-safe labels', () => {
+    const presentation = toolRowPresentation({
+      name: 'edit',
+      display: {
+        facts: [
+          { kind: 'count', value: 3, unit: 'edits', at_least: false },
+          { kind: 'count', value: 2, unit: 'files', at_least: false },
+          { kind: 'count', value: 1, unit: 'failures', at_least: false },
+        ],
+      },
+    });
+
+    expect(presentation.facts.map((fact) => fact.text)).toEqual([
+      '3 edits',
+      '2 files',
+      '1 failed',
+    ]);
+  });
+
+  it('recognizes partial Tool results and labels them independently of failure', () => {
+    const tool = toolRowFromEvent({
+      type: 'tool_call_result',
+      payload: {
+        tool_call: { id: 'edit-1', name: 'edit' },
+        result: {
+          ok: true,
+          error: null,
+          data: { status: 'partial', succeeded: 2, failed: 1 },
+          artifacts: [],
+        },
+        timing: {
+          started_at: '2026-08-28T00:00:00.000Z',
+          completed_at: '2026-08-28T00:00:00.240Z',
+        },
+      },
+    });
+
+    expect(toolStatus(tool)).toBe('partial');
+    expect(toolStatusLabel(tool)).toBe('partial · 0.2s');
   });
 
   it('does not expose arbitrary arguments for an unknown Tool', () => {
