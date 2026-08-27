@@ -95,10 +95,9 @@ BASH_TOOL_DESCRIPTION = (
     "instead of polling or starting another copy. Never manually detach or daemonize a command "
     "because that bypasses vBot's process ownership. Result output keeps the newest "
     f"{BASH_MODEL_OUTPUT_CAP_CHARS} characters; when output is truncated or a command is handed "
-    "off, the result includes a log_file path to the complete combined stdout/stderr stream — "
-    "read or grep it for the full output. A non-zero exit code returns an additional `hint` "
-    "field when a well-known failure shape was recognized — follow it instead of retrying "
-    "blindly." + _shell_syntax_notes()
+    "off, the result includes a log_file path to the complete combined stdout/stderr stream. "
+    "A non-zero exit code returns an additional `hint` "
+    "field when a well-known failure shape was recognized." + _shell_syntax_notes()
 )
 BASH_SUBAGENT_TOOL_DESCRIPTION = (
     "Run an unattended shell command inside this Sub-Agent through pipes when no interactive "
