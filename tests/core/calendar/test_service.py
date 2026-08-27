@@ -117,6 +117,18 @@ class TestUpdateEvent:
         assert updated.start_utc == "2026-08-31T07:00:00+00:00"
         assert updated.exdates == []
 
+    def test_update_can_clear_recurrence_dropping_exdates(self, service: CalendarService) -> None:
+        event = service.create_event(
+            title="Standup",
+            start="2026-08-31T09:00:00",
+            rrule={"freq": "weekly", "by_weekday": ["mo"]},
+        )
+        service.add_exdate(event.id, "2026-09-14T09:00:00")
+        updated = service.update_event(event.id, rrule=None)
+        assert updated.rrule is None
+        assert updated.exdates == []
+        assert updated.start_utc == "2026-08-31T07:00:00+00:00"
+
     def test_update_rejects_unknown_fields(self, service: CalendarService) -> None:
         event = service.create_event(title="X", start="2026-09-14")
         with pytest.raises(CalendarValidationError, match="Unsupported"):
