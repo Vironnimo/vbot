@@ -71,6 +71,21 @@ const WS_OPEN = 1;
 const PARTIAL_ESC = /^\x1b(?:\[\d*)?$/;
 const TERMINAL_STATES_FINISHED = new Set(['exited', 'error']);
 
+// A close removes the tile immediately while the server-side stop and
+// catalog removal run in the background. The closing ids and failure
+// listeners live at module scope so they survive a Terminals tab remount: a
+// session closed before navigation must stay hidden from the remounted
+// controller's list reloads until the background chain settles, and a
+// failed stop must surface to whichever controller is mounted then.
+const closingIds = new Set();
+const closeFailureListeners = new Set();
+
+function notifyCloseFailed(terminalId, message) {
+  for (const listener of closeFailureListeners) {
+    listener(terminalId, message);
+  }
+}
+
 // The server validates Terminal dimensions against these exact bounds and
 // rejects anything outside them. The viewer clamps every fitted grid into
 // this window, so a small tile produces a legal minimum grid instead of a
@@ -306,12 +321,6 @@ export function createTerminalsController({
   let serverUnavailable = false;
   let listRequestId = 0;
   const streamRecords = new Map();
-  // Terminal Sessions whose close is still settling on the server. The tile
-  // is removed immediately, but the server keeps listing the session (and
-  // publishes catalog invalidations that reload the list) until the
-  // background stop and catalog removal complete, so these ids are filtered
-  // out of every reconciliation until the chain settles.
-  const closingIds = new Set();
 
   function streamView(terminalId) {
     return (
@@ -338,7 +347,20 @@ export function createTerminalsController({
   }
 
   async function start() {
+    closeFailureListeners.add(handleCloseFailed);
     await loadTerminals();
+  }
+
+  // A close that failed after this controller was destroyed (the user left
+  // the tab while the stop was in flight) is surfaced to the remounted
+  // controller so the still-running session reappears instead of staying
+  // hidden behind the closing filter.
+  function handleCloseFailed(terminalId, message) {
+    if (destroyed) {
+      return;
+    }
+    state.actionError = message;
+    void loadTerminals({ silent: true });
   }
 
   async function loadTerminals({ silent = false } = {}) {
@@ -997,7 +1019,9 @@ export function createTerminalsController({
       return true;
     } catch (error) {
       closingIds.delete(terminalId);
-      if (!destroyed) {
+      if (destroyed) {
+        notifyCloseFailed(terminalId, errorMessage(error));
+      } else {
         state.actionError = errorMessage(error);
         await loadTerminals({ silent: true });
       }
@@ -1208,6 +1232,7 @@ export function createTerminalsController({
 
   function destroy() {
     destroyed = true;
+    closeFailureListeners.delete(handleCloseFailed);
     closeAllStreams();
   }
 
