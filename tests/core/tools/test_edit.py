@@ -95,6 +95,10 @@ def test_register_edit_tool_exposes_provider_schema() -> None:
     tool = registry.get("edit")
     assert tool.name == EDIT_TOOL_NAME == "edit"
     assert tool.description == EDIT_TOOL_DESCRIPTION
+    assert tool.description == (
+        "Apply ordered text replacements across files in one call. Every edit is "
+        "attempted even if another fails."
+    )
     assert tool.description
     assert tool.parameters == EDIT_TOOL_PARAMETERS
 
@@ -111,6 +115,7 @@ def test_register_edit_tool_exposes_provider_schema() -> None:
     assert set(parameters["properties"]) == {"edits"}
     edits_schema = parameters["properties"]["edits"]
     assert edits_schema["minItems"] == 1
+    assert edits_schema["description"] == "Replacements to attempt in order."
     item_schema = edits_schema["items"]
     assert item_schema["required"] == ["path", "old_string", "new_string"]
     assert set(item_schema["properties"]) == {
@@ -124,6 +129,9 @@ def test_register_edit_tool_exposes_provider_schema() -> None:
         for property_schema in item_schema["properties"].values()
     )
     assert "default" not in item_schema["properties"]["replace_all"]
+    assert item_schema["properties"]["new_string"]["description"] == (
+        "Replacement text. Use an empty string to delete old_string."
+    )
     assert "filePath" not in parameters["properties"]
     assert tool.open_input_schema is True
 
@@ -1266,9 +1274,11 @@ def test_multi_edit_applies_items_in_order_across_files(tmp_path: Path) -> None:
     assert result["ok"] is True
     assert isinstance(data, dict)
     assert data["status"] == "success"
+    assert data["message"] == "Applied 3 edits."
     assert data["succeeded"] == 3
     assert data["failed"] == 0
     assert [item["index"] for item in data["results"]] == [0, 1, 2]
+    assert all("message" not in item for item in data["results"])
     assert first.read_text(encoding="utf-8") == "done\n"
     assert second.read_text(encoding="utf-8") == "two\n"
 
@@ -1331,6 +1341,117 @@ def test_multi_edit_reports_new_string_gutter_normalization_per_item(tmp_path: P
         "Removed read line-number gutters from new_string before applying the edit."
     )
     assert target.read_text(encoding="utf-8") == "ALPHA\nBETA\n"
+
+
+def test_multi_edit_retry_reports_precise_already_applied_noop(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    target = workspace / "notes.txt"
+    target.write_text("setting = old\n", encoding="utf-8")
+    arguments = {
+        "edits": [
+            {
+                "path": "notes.txt",
+                "old_string": "setting = old",
+                "new_string": "setting = new",
+            }
+        ]
+    }
+
+    first = edit_handler(make_context(workspace), arguments)
+    retry_context = make_context(workspace)
+    second = edit_handler(retry_context, arguments)
+
+    assert first["ok"] is True
+    data = second["data"]
+    assert second["ok"] is True
+    assert isinstance(data, dict)
+    assert data["message"] == "Applied 1 edit."
+    assert data["results"] == [
+        {
+            "index": 0,
+            "ok": True,
+            "path": model_path(target.resolve()),
+            "replacements": 0,
+            "already_applied": True,
+        }
+    ]
+    assert retry_context.presentation_facts == []
+    assert target.read_text(encoding="utf-8") == "setting = new\n"
+
+
+def test_multi_edit_does_not_infer_already_applied_without_shared_context(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    workspace.joinpath("notes.txt").write_text("omega\n", encoding="utf-8")
+
+    result = edit_handler(
+        make_context(workspace),
+        {"edits": [{"path": "notes.txt", "old_string": "alpha", "new_string": "omega"}]},
+    )
+
+    assert_failure_envelope(result, "text_not_found")
+
+
+def test_multi_edit_does_not_infer_ambiguous_already_applied_match(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    workspace.joinpath("notes.txt").write_text("value = 2\nvalue = 2\n", encoding="utf-8")
+
+    result = edit_handler(
+        make_context(workspace),
+        {
+            "edits": [
+                {
+                    "path": "notes.txt",
+                    "old_string": "value = 1",
+                    "new_string": "value = 2",
+                }
+            ]
+        },
+    )
+
+    assert_failure_envelope(result, "text_not_found")
+
+
+def test_multi_edit_does_not_infer_already_applied_deletion(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    workspace.joinpath("notes.txt").write_text("keep\n", encoding="utf-8")
+
+    result = edit_handler(
+        make_context(workspace),
+        {"edits": [{"path": "notes.txt", "old_string": "removed\n", "new_string": ""}]},
+    )
+
+    assert_failure_envelope(result, "text_not_found")
+
+
+def test_multi_edit_replace_all_retry_reports_already_applied(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    target = workspace / "notes.txt"
+    target.write_text("value = 1\nvalue = 1\n", encoding="utf-8")
+    arguments = {
+        "edits": [
+            {
+                "path": "notes.txt",
+                "old_string": "value = 1",
+                "new_string": "value = 2",
+                "replace_all": True,
+            }
+        ]
+    }
+
+    assert edit_handler(make_context(workspace), arguments)["ok"] is True
+    retry = edit_handler(make_context(workspace), arguments)
+
+    assert retry["ok"] is True
+    assert retry["data"]["results"][0]["already_applied"] is True
+    assert retry["data"]["results"][0]["replacements"] == 0
+    assert target.read_text(encoding="utf-8") == "value = 2\nvalue = 2\n"
 
 
 def test_multi_edit_returns_failure_when_every_item_fails(tmp_path: Path) -> None:

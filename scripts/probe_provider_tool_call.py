@@ -304,7 +304,15 @@ CRON_CASES = (
     "enable",
     "disable",
 )
-EDIT_CASES = ("default", "replace_false", "replace_true", "multiline", "delete")
+EDIT_CASES = (
+    "default",
+    "replace_false",
+    "replace_true",
+    "multiline",
+    "delete",
+    "multi_file",
+    "same_file_sequence",
+)
 IMAGE_GENERATION_CASES = (
     "full_default",
     "full_source_one",
@@ -1147,7 +1155,30 @@ def _edit_scenario(case_name: str) -> ProbeScenario:
             "new_string": "",
         },
     }
-    expected_arguments = {"edits": [edit_arguments[case_name]]}
+    batched_arguments: dict[str, list[dict[str, Any]]] = {
+        "multi_file": [
+            base,
+            {
+                "path": "tests/provider_tool_probe.py",
+                "old_string": "expected = 1",
+                "new_string": "expected = 2",
+            },
+        ],
+        "same_file_sequence": [
+            base,
+            {
+                "path": "src/provider_tool_probe.py",
+                "old_string": "value = 2",
+                "new_string": "value = 3",
+            },
+        ],
+    }
+    edits = (
+        batched_arguments[case_name]
+        if case_name in batched_arguments
+        else [edit_arguments[case_name]]
+    )
+    expected_arguments = {"edits": edits}
     rendered_arguments = json.dumps(expected_arguments, separators=(",", ":"))
     instruction = (
         f"Call {EDIT_TOOL_NAME} exactly once with exactly this JSON object as its "

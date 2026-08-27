@@ -37,7 +37,8 @@ from core.utils.paths import model_path
 
 EDIT_TOOL_NAME = "edit"
 EDIT_TOOL_DESCRIPTION = (
-    "Apply one or more text replacements across files in a single call. Edits run in order."
+    "Apply ordered text replacements across files in one call. Every edit is attempted "
+    "even if another fails."
 )
 EDIT_TOOL_PARAMETERS: JsonObject = {
     "type": "object",
@@ -45,7 +46,7 @@ EDIT_TOOL_PARAMETERS: JsonObject = {
         "edits": {
             "type": "array",
             "minItems": 1,
-            "description": "Text replacements to apply in order.",
+            "description": "Replacements to attempt in order.",
             "items": {
                 "type": "object",
                 "properties": {
@@ -60,13 +61,15 @@ EDIT_TOOL_PARAMETERS: JsonObject = {
                         "type": "string",
                         "minLength": 1,
                         "description": (
-                            "Existing text to replace. Include enough surrounding text to "
-                            "identify one location unless replace_all is true."
+                            "Text to replace. Include enough surrounding text to identify "
+                            "one match unless replace_all is true."
                         ),
                     },
                     "new_string": {
                         "type": "string",
-                        "description": "Replacement text.",
+                        "description": (
+                            "Replacement text. Use an empty string to delete old_string."
+                        ),
                     },
                     "replace_all": {
                         "type": "boolean",
@@ -83,6 +86,8 @@ EDIT_TOOL_PARAMETERS: JsonObject = {
 AMBIGUOUS_CONTEXT_LIMIT = 3
 AMBIGUOUS_CONTEXT_LINE_RADIUS = 1
 AMBIGUOUS_CONTEXT_LINE_MAX_CHARS = 160
+ALREADY_APPLIED_STRATEGIES = frozenset({"exact", "normalized"})
+ALREADY_APPLIED_CONTEXT_MIN_CHARS = 4
 
 
 def _bounded_context_line(line: str) -> str:
@@ -199,6 +204,42 @@ def _replace_with_gutter_fallback(
         if result is not None:
             return result
     return None
+
+
+def _already_applied_match(
+    content: str, old_string: str, new_string: str, *, replace_all: bool
+) -> FuzzyReplacement | None:
+    """Return a precise no-op match when the replacement is already present."""
+    if not new_string or not _has_shared_replacement_context(old_string, new_string):
+        return None
+    result = replace_fuzzy(content, new_string, new_string, replace_all=replace_all)
+    if not isinstance(result, FuzzyReplacement):
+        return None
+    if result.strategy not in ALREADY_APPLIED_STRATEGIES or result.new_content != content:
+        return None
+    return result
+
+
+def _has_shared_replacement_context(old_string: str, new_string: str) -> bool:
+    prefix_length = 0
+    for old_character, new_character in zip(old_string, new_string, strict=False):
+        if old_character != new_character:
+            break
+        prefix_length += 1
+
+    remaining_old = len(old_string) - prefix_length
+    remaining_new = len(new_string) - prefix_length
+    suffix_length = 0
+    for offset in range(1, min(remaining_old, remaining_new) + 1):
+        if old_string[-offset] != new_string[-offset]:
+            break
+        suffix_length += 1
+
+    shared = old_string[:prefix_length]
+    if suffix_length:
+        shared += old_string[-suffix_length:]
+    meaningful_characters = sum(not character.isspace() for character in shared)
+    return meaningful_characters >= ALREADY_APPLIED_CONTEXT_MIN_CHARS
 
 
 def _validate_edit_arguments(
@@ -352,6 +393,23 @@ def _edit_one(
             content, old_string, new_string, replace_all=replace_all
         )
         if result is None:
+            already_applied = _already_applied_match(
+                content, old_string, new_string, replace_all=replace_all
+            )
+            if already_applied is not None:
+                if file_state is not None:
+                    file_state.record_read(context.session_id, resolved)
+                data: JsonObject = {
+                    "message": f"OK: replacement already applied in {displayed_path}",
+                    "path": displayed_path,
+                    "replacements": 0,
+                    "already_applied": True,
+                    "added_lines": 0,
+                    "removed_lines": 0,
+                }
+                if normalization_warning is not None:
+                    data["normalization_warning"] = normalization_warning
+                return tool_success(data)
             return _text_not_found_failure(content, old_string)
         if isinstance(result, AmbiguousFuzzyMatch):
             return tool_failure(
@@ -438,7 +496,9 @@ def _successful_item(index: int, result: JsonObject) -> JsonObject:
     data = result.get("data")
     assert isinstance(data, dict)
     visible_data = {
-        key: value for key, value in data.items() if key not in {"added_lines", "removed_lines"}
+        key: value
+        for key, value in data.items()
+        if key not in {"added_lines", "message", "removed_lines"}
     }
     return {"index": index, "ok": True, **visible_data}
 
@@ -468,10 +528,10 @@ def edit_handler(
         result = _edit_one(context, arguments, file_state=file_state)
         data = result.get("data")
         if result.get("ok") is True and isinstance(data, dict):
-            context.add_display_line_changes(
-                added=int(data.get("added_lines", 0)),
-                removed=int(data.get("removed_lines", 0)),
-            )
+            added_lines = int(data.get("added_lines", 0))
+            removed_lines = int(data.get("removed_lines", 0))
+            if added_lines or removed_lines:
+                context.add_display_line_changes(added=added_lines, removed=removed_lines)
             data.pop("added_lines", None)
             data.pop("removed_lines", None)
         return result
@@ -498,13 +558,15 @@ def edit_handler(
     if succeeded == 0:
         return _all_failed_result(outcomes)
 
-    context.add_display_line_changes(added=added_lines, removed=removed_lines)
+    if added_lines or removed_lines:
+        context.add_display_line_changes(added=added_lines, removed=removed_lines)
     status = "partial" if failed else "success"
-    message = (
-        f"Applied {succeeded} of {len(outcomes)} edits; {failed} failed."
-        if failed
-        else f"Applied all {succeeded} edits."
-    )
+    if failed:
+        message = f"Applied {succeeded} of {len(outcomes)} edits; {failed} failed."
+    elif succeeded == 1:
+        message = "Applied 1 edit."
+    else:
+        message = f"Applied {succeeded} edits."
     return tool_success(
         {
             "message": message,
