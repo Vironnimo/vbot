@@ -68,7 +68,7 @@ export const englishCatalog = Object.freeze({
   'terminals.close': 'Close terminal',
   'terminals.closedTitle': 'Terminal closed',
   'terminals.closedMessage':
-    'The Terminal Session was stopped and removed from the list.',
+    'The Terminal Session was removed from the list and is being stopped.',
   'terminals.closedMessageHistory':
     'The Terminal Session was removed from the list.',
   'terminals.streamGap':

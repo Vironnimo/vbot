@@ -143,6 +143,7 @@ export function createTerminalsViewState() {
     streams: {},
     killing: '',
     forgetting: '',
+    closing: '',
     groupActionPending: false,
     startingTerminal: false,
     startError: '',
@@ -305,6 +306,12 @@ export function createTerminalsController({
   let serverUnavailable = false;
   let listRequestId = 0;
   const streamRecords = new Map();
+  // Terminal Sessions whose close is still settling on the server. The tile
+  // is removed immediately, but the server keeps listing the session (and
+  // publishes catalog invalidations that reload the list) until the
+  // background stop and catalog removal complete, so these ids are filtered
+  // out of every reconciliation until the chain settles.
+  const closingIds = new Set();
 
   function streamView(terminalId) {
     return (
@@ -345,7 +352,7 @@ export function createTerminalsController({
       if (destroyed || requestId !== listRequestId) {
         return;
       }
-      reconcileTerminalList(state, result);
+      reconcileTerminalList(state, filterClosingTerminals(result));
       reconcileStreams();
     } catch (error) {
       if (!destroyed && requestId === listRequestId && !serverUnavailable) {
@@ -864,6 +871,82 @@ export function createTerminalsController({
     return killTerminal(state.selectedTerminalId);
   }
 
+  // Strip closing Terminal Sessions out of a fresh server list and adjust
+  // their groups so the sidebar does not show a phantom member while the
+  // background stop and catalog removal are still settling.
+  function filterClosingTerminals(result) {
+    if (closingIds.size === 0) {
+      return result;
+    }
+    const terminals = (result?.terminals ?? []).filter(
+      (terminal) => !closingIds.has(terminal?.terminal_id),
+    );
+    const groups = (result?.groups ?? []).flatMap((group) => {
+      const removed = (result?.terminals ?? []).filter(
+        (terminal) =>
+          closingIds.has(terminal?.terminal_id) &&
+          terminal?.group_id === group.group_id,
+      ).length;
+      if (removed === 0) {
+        return [group];
+      }
+      const nextCount = Math.max(0, Number(group.terminal_count) - removed);
+      if (
+        nextCount === 0 &&
+        (group.kind === 'automatic' || group.kind === 'finished')
+      ) {
+        return [];
+      }
+      return [{ ...group, terminal_count: nextCount }];
+    });
+    return { ...result, terminals, groups };
+  }
+
+  // Remove one Terminal Session from the local projection: close its stream,
+  // drop it from the list, keep the sidebar group count in sync, and move
+  // the selection to a surviving terminal. Used by forget and by the
+  // optimistic close path, where the tile must disappear before the
+  // server-side stop completes.
+  function removeTerminalFromState(terminalId) {
+    const item = state.terminals.find(
+      (terminal) => terminal.terminal_id === terminalId,
+    );
+    if (!item) {
+      return null;
+    }
+    const stream = streamRecords.get(terminalId);
+    if (stream) {
+      closeStream(stream);
+    }
+    state.terminals = state.terminals.filter(
+      (terminal) => terminal.terminal_id !== terminalId,
+    );
+    const groupIndex = state.groups.findIndex(
+      (group) => group.group_id === item.group_id,
+    );
+    if (groupIndex >= 0) {
+      const group = state.groups[groupIndex];
+      const nextCount = Math.max(0, Number(group.terminal_count) - 1);
+      if (
+        nextCount === 0 &&
+        (group.kind === 'automatic' || group.kind === 'finished')
+      ) {
+        state.groups = state.groups.filter(
+          (candidate) => candidate.group_id !== group.group_id,
+        );
+        if (state.selectedGroupId === group.group_id) {
+          state.selectedGroupId = state.groups[0]?.group_id ?? '';
+        }
+      } else {
+        state.groups[groupIndex] = { ...group, terminal_count: nextCount };
+      }
+    }
+    if (state.selectedTerminalId === terminalId) {
+      state.selectedTerminalId = visibleTerminals(state)[0]?.terminal_id ?? '';
+    }
+    return item;
+  }
+
   async function forgetTerminal(terminalId) {
     if (
       !terminalId ||
@@ -878,17 +961,7 @@ export function createTerminalsController({
     state.actionError = '';
     try {
       await api.forgetTerminal(terminalId);
-      const stream = streamRecords.get(terminalId);
-      if (stream) {
-        closeStream(stream);
-      }
-      state.terminals = state.terminals.filter(
-        (item) => item.terminal_id !== terminalId,
-      );
-      if (state.selectedTerminalId === terminalId) {
-        state.selectedTerminalId =
-          visibleTerminals(state)[0]?.terminal_id ?? '';
-      }
+      removeTerminalFromState(terminalId);
       return true;
     } catch (error) {
       state.actionError = errorMessage(error);
@@ -896,6 +969,43 @@ export function createTerminalsController({
     } finally {
       if (state.forgetting === terminalId) {
         state.forgetting = '';
+      }
+    }
+  }
+
+  // Close one Terminal Session with a single click. The tile is removed from
+  // the canvas immediately (optimistic); the server-side stop and catalog
+  // removal continue in the background, so the UI never waits for the
+  // process tree to die. A failed stop restores the session from the server
+  // list and surfaces the error.
+  async function closeTerminal(terminalId) {
+    const item = state.terminals.find(
+      (terminal) => terminal.terminal_id === terminalId,
+    );
+    if (!item || state.closing === terminalId) {
+      return false;
+    }
+    state.closing = terminalId;
+    state.actionError = '';
+    closingIds.add(terminalId);
+    removeTerminalFromState(terminalId);
+    try {
+      if (!terminalIsFinished(item)) {
+        await api.killTerminal(terminalId);
+      }
+      await api.forgetTerminal(terminalId);
+      return true;
+    } catch (error) {
+      closingIds.delete(terminalId);
+      if (!destroyed) {
+        state.actionError = errorMessage(error);
+        await loadTerminals({ silent: true });
+      }
+      return false;
+    } finally {
+      closingIds.delete(terminalId);
+      if (state.closing === terminalId) {
+        state.closing = '';
       }
     }
   }
@@ -1102,6 +1212,7 @@ export function createTerminalsController({
   }
 
   return {
+    closeTerminal,
     createGroup,
     deleteGroup,
     destroy,
