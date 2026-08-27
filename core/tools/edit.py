@@ -201,7 +201,9 @@ def _replace_with_gutter_fallback(
     return None
 
 
-def _validate_edit_arguments(arguments: JsonObject) -> tuple[str, str, str, bool] | JsonObject:
+def _validate_edit_arguments(
+    arguments: JsonObject,
+) -> tuple[str, str, str, bool, str | None] | JsonObject:
     unknown_arguments = set(arguments) - {"path", "old_string", "new_string", "replace_all"}
     if unknown_arguments:
         names = ", ".join(sorted(unknown_arguments))
@@ -221,7 +223,22 @@ def _validate_edit_arguments(arguments: JsonObject) -> tuple[str, str, str, bool
     if not isinstance(new_string, str):
         return tool_failure("invalid_arguments", "new_string must be a string")
 
-    if looks_like_line_numbered_content(new_string):
+    complete_gutter_candidates = line_number_gutter_candidates(new_string)
+    safe_gutter_candidates = line_number_gutter_candidates(new_string, allow_continuations=False)
+    gutter_shaped_candidates = line_number_gutter_candidates(new_string, require_consecutive=False)
+    normalization_warning = None
+    if complete_gutter_candidates and not safe_gutter_candidates:
+        return tool_failure(
+            "line_numbered_content",
+            "new_string contains read's N:C| continuation gutter. Use complete raw "
+            "lines instead of a partial long-line excerpt.",
+        )
+    if safe_gutter_candidates:
+        new_string = safe_gutter_candidates[0]
+        normalization_warning = (
+            "Removed read line-number gutters from new_string before applying the edit."
+        )
+    elif gutter_shaped_candidates or looks_like_line_numbered_content(new_string):
         return tool_failure(
             "line_numbered_content",
             "new_string looks like read's `N| ` line-number gutter pasted back in. "
@@ -241,7 +258,7 @@ def _validate_edit_arguments(arguments: JsonObject) -> tuple[str, str, str, bool
             "old_string and new_string are identical (no-op replacement)",
         )
 
-    return path_argument, old_string, new_string, replace_all
+    return path_argument, old_string, new_string, replace_all, normalization_warning
 
 
 def _build_success_data(
@@ -250,6 +267,7 @@ def _build_success_data(
     replaced_count: int,
     syntax_warning: str | None,
     stale_warning: str | None,
+    normalization_warning: str | None,
 ) -> JsonObject:
     displayed_path = model_path(resolved)
     message = (
@@ -266,6 +284,8 @@ def _build_success_data(
         data["syntax_warning"] = syntax_warning
     if stale_warning is not None:
         data["stale_warning"] = stale_warning
+    if normalization_warning is not None:
+        data["normalization_warning"] = normalization_warning
     return data
 
 
@@ -283,7 +303,7 @@ def _edit_one(
     if isinstance(validated_arguments, dict):
         return validated_arguments
 
-    path_argument, old_string, new_string, replace_all = validated_arguments
+    path_argument, old_string, new_string, replace_all, normalization_warning = validated_arguments
 
     try:
         resolved = context.resolve_path(path_argument)
@@ -386,6 +406,7 @@ def _edit_one(
             result.replacements,
             syntax_warning,
             stale_warning,
+            normalization_warning,
         )
         success_data["added_lines"] = added_lines
         success_data["removed_lines"] = removed_lines

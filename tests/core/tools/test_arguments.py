@@ -189,6 +189,18 @@ class TestLineNumberGutterCandidates:
     def test_strips_compact_and_continuation_gutters(self) -> None:
         assert line_number_gutter_candidates("50:50001|fragment\n51|next") == ("fragment\nnext",)
 
+    def test_can_reject_continuation_gutters(self) -> None:
+        assert (
+            line_number_gutter_candidates("50:50001|fragment\n51|next", allow_continuations=False)
+            == ()
+        )
+
+    def test_can_recover_a_complete_nonconsecutive_shape_for_diagnostics(self) -> None:
+        assert line_number_gutter_candidates("10| alpha\n12| gamma", require_consecutive=False) == (
+            "alpha\ngamma",
+            " alpha\n gamma",
+        )
+
     @pytest.mark.parametrize(
         "text",
         [

@@ -214,7 +214,12 @@ def _split_supported_line_ending(line: str) -> tuple[str, str]:
     return line, ""
 
 
-def line_number_gutter_candidates(text: str) -> tuple[str, ...]:
+def line_number_gutter_candidates(
+    text: str,
+    *,
+    allow_continuations: bool = True,
+    require_consecutive: bool = True,
+) -> tuple[str, ...]:
     """Return raw-text candidates for a complete pasted ``read`` gutter block.
 
     Auto-recovery is intentionally stricter than the write-corruption detector:
@@ -243,13 +248,14 @@ def line_number_gutter_candidates(text: str) -> tuple[str, ...]:
             or not line_number.isdigit()
             or int(line_number) < 1
             or (colon and (not character.isdigit() or int(character) < 1))
+            or (colon and not allow_continuations)
         ):
             return ()
         numbers.append(int(line_number))
         separated_lines.append((rest[1:] if rest.startswith(" ") else rest) + ending)
         compact_lines.append(rest + ending)
 
-    if any(
+    if require_consecutive and any(
         current != previous + 1 for previous, current in zip(numbers, numbers[1:], strict=False)
     ):
         return ()
