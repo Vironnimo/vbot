@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import math
 import re
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -67,6 +68,7 @@ MAX_ACTIVE_CRON_JOBS = 64
 MAX_STORED_CRON_JOBS = 512
 MAX_CONCURRENT_CRON_RUNS = 4
 MAX_CONSECUTIVE_CRON_FAILURES = 5
+MAX_PROJECTED_OCCURRENCES_PER_JOB = 500
 TERMINAL_CRON_JOB_STATUSES = frozenset(("completed", "missed"))
 _LAST_ERROR_MAX_CHARS = 500
 _ONCE_RETRY_DELAY_SECONDS = 60.0
@@ -319,6 +321,16 @@ class ParsedSchedule:
             "interval_anchor_at": self.interval_anchor_at,
             "run_at": self.run_at,
         }
+
+
+@dataclass(frozen=True, slots=True)
+class CronOccurrence:
+    """One projected fire instant of an active job, for read-only display."""
+
+    job_id: str
+    name: str
+    fire_at_utc: datetime
+    schedule_type: ScheduleType
 
 
 @dataclass(slots=True)
@@ -631,6 +643,125 @@ class CronService:
         if next_fire_local.tzinfo is None:
             next_fire_local = next_fire_local.replace(tzinfo=timezone)
         return next_fire_local.astimezone(UTC).isoformat()
+
+    def project_occurrences(
+        self,
+        window_start_utc: datetime,
+        window_end_utc: datetime,
+        *,
+        max_per_job: int = MAX_PROJECTED_OCCURRENCES_PER_JOB,
+    ) -> list[CronOccurrence]:
+        """Project scheduled fire instants of active jobs into a UTC window.
+
+        Read-only display projection for the calendar: nothing is persisted and
+        no Run is started. Paused and terminal jobs never project. A job's
+        future ticks respect its remaining-runs budget; ticks before the current
+        time inside the window are shown as schedule history.
+        """
+        self._ensure_jobs_loaded(allow_degraded=True)
+        window_start = _as_utc(window_start_utc)
+        window_end = _as_utc(window_end_utc)
+        if window_end <= window_start:
+            raise CronJobValidationError("projection window end must be after its start")
+        now_utc = _utc_now()
+        occurrences: list[CronOccurrence] = []
+        for job in sorted(self._jobs.values(), key=lambda item: (item.created_at, item.id)):
+            if job.status != "active" or job.remaining_runs == 0:
+                continue
+            occurrences.extend(
+                self._project_job_occurrences(job, window_start, window_end, now_utc, max_per_job)
+            )
+        occurrences.sort(key=lambda item: (item.fire_at_utc, item.job_id))
+        return occurrences
+
+    def _project_job_occurrences(
+        self,
+        job: CronJob,
+        window_start: datetime,
+        window_end: datetime,
+        now_utc: datetime,
+        cap: int,
+    ) -> list[CronOccurrence]:
+        ticks = self._job_schedule_ticks(job, window_start, window_end, cap)
+        if job.remaining_runs is not None:
+            future_budget = job.remaining_runs
+            limited: list[datetime] = []
+            for tick in ticks:
+                if tick >= now_utc:
+                    if future_budget <= 0:
+                        break
+                    future_budget -= 1
+                limited.append(tick)
+            ticks = limited
+        return [
+            CronOccurrence(
+                job_id=job.id, name=job.name, fire_at_utc=tick, schedule_type=job.schedule_type
+            )
+            for tick in ticks
+        ]
+
+    def _job_schedule_ticks(
+        self,
+        job: CronJob,
+        window_start: datetime,
+        window_end: datetime,
+        cap: int,
+    ) -> list[datetime]:
+        if job.schedule_type == "once":
+            fire_at = self._parse_run_at_utc(job)
+            if window_start <= fire_at < window_end:
+                return [fire_at]
+            return []
+        if job.schedule_type == "interval":
+            return self._project_interval_ticks(job, window_start, window_end, cap)
+        return self._project_cron_ticks(job, window_start, window_end, cap)
+
+    def _project_interval_ticks(
+        self,
+        job: CronJob,
+        window_start: datetime,
+        window_end: datetime,
+        cap: int,
+    ) -> list[datetime]:
+        if job.interval_seconds is None or job.interval_anchor_at is None:
+            return []
+        anchor = self._parse_utc_timestamp(
+            job.interval_anchor_at,
+            field_name="interval_anchor_at",
+        )
+        elapsed = (window_start - anchor).total_seconds()
+        first_index = max(1, math.ceil(elapsed / job.interval_seconds)) if elapsed > 0 else 1
+        ticks: list[datetime] = []
+        index = first_index
+        tick = anchor + timedelta(seconds=index * job.interval_seconds)
+        while tick < window_end and len(ticks) < cap:
+            ticks.append(tick)
+            index += 1
+            tick = anchor + timedelta(seconds=index * job.interval_seconds)
+        return ticks
+
+    def _project_cron_ticks(
+        self,
+        job: CronJob,
+        window_start: datetime,
+        window_end: datetime,
+        cap: int,
+    ) -> list[datetime]:
+        if job.cron_expression is None:
+            return []
+        timezone = self._system_timezone()
+        cursor_local = window_start.astimezone(timezone)
+        end_local = window_end.astimezone(timezone)
+        iterator = croniter(job.cron_expression, cursor_local)
+        ticks: list[datetime] = []
+        while len(ticks) < cap:
+            next_local = cast(datetime, iterator.get_next(datetime))
+            if next_local.tzinfo is None:
+                next_local = next_local.replace(tzinfo=timezone)
+            if next_local >= end_local:
+                break
+            ticks.append(next_local.astimezone(UTC))
+        return ticks
 
     def update_job(self, job_id: str, **fields: Any) -> CronJob:
         """Update mutable cron job fields and persist changes."""

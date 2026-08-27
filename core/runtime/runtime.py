@@ -22,6 +22,7 @@ from uuid import uuid4
 from core.agents.agents import AgentStore
 from core.attachments import AttachmentStore
 from core.automation import BootstrapService, CronService, ReflectionService, TriggerService
+from core.calendar import CalendarService
 from core.channels import ChannelService
 from core.chat import ChatLoop, ChatLoopDependencies, CommandDispatcher
 from core.chat.block_resolver import ContentBlockResolver
@@ -161,6 +162,7 @@ from core.tools import (
     register_web_search_tool,
     register_write_tool,
 )
+from core.tools.calendar import register_calendar_tool
 from core.tools.cron import register_cron_tool
 from core.tools.process_manager import ProcessManager
 from core.tools.status import register_status_tool
@@ -472,6 +474,7 @@ class Runtime:
         self._session_title_service: SessionTitleService | None = None
         self._channel_service: ChannelService | None = None
         self._cron_service: CronService | None = None
+        self._calendar_service: CalendarService | None = None
         self._bootstrap_service: BootstrapService | None = None
         self._subagent_coordinator: SubAgentCoordinator | None = None
         self._system_prompts: SystemPromptManager | None = None
@@ -821,7 +824,9 @@ class Runtime:
             sessions=self._chat_sessions,
         )
         self._start_cron_service()
+        self._calendar_service = CalendarService(self._storage.data_dir)
         register_cron_tool(self._tools, self._cron_service)
+        register_calendar_tool(self._tools, self._calendar_service)
         register_bash_tool(
             self._tools,
             self._process_manager,
@@ -996,6 +1001,7 @@ class Runtime:
         self._recall_backend_name = None
         self._channel_service = None
         self._cron_service = None
+        self._calendar_service = None
         self._bootstrap_service = None
         self._trigger_service = None
         self._reflection_service = None
@@ -2550,6 +2556,14 @@ class Runtime:
         if self._cron_service is None:
             raise RuntimeError("Cron service not available")
         return self._cron_service
+
+    @property
+    def calendar_service(self) -> CalendarService:
+        """Access to the persisted local calendar."""
+        self._ensure_started()
+        if self._calendar_service is None:
+            raise RuntimeError("Calendar service not available")
+        return self._calendar_service
 
     @property
     def bootstrap_service(self) -> BootstrapService:

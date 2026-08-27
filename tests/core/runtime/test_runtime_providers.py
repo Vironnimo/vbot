@@ -1562,6 +1562,7 @@ def test_runtime_loads_phase_two_services(runtime: Runtime) -> None:
     assert [tool.name for tool in runtime.tools.list_tools()] == [
         "analyze_image",
         "bash",
+        "calendar",
         "cron",
         "edit",
         "generate_music",

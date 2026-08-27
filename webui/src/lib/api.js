@@ -1087,6 +1087,61 @@ export function disableCronJob(id, options = {}) {
   return rpc('cron.disable', { id }, options);
 }
 
+export function getCalendarWindow(params = {}, options = {}) {
+  requirePlainObject(
+    params,
+    'Calendar window payload must be an object',
+    'calendar.window',
+  );
+  requireNonEmptyString(
+    params.from,
+    'Calendar window start must be a non-empty string',
+    'calendar.window',
+  );
+  requireNonEmptyString(
+    params.to,
+    'Calendar window end must be a non-empty string',
+    'calendar.window',
+  );
+
+  return rpc('calendar.window', params, options);
+}
+
+export function createCalendarEvent(params = {}, options = {}) {
+  requirePlainObject(
+    params,
+    'Calendar event payload must be an object',
+    'calendar.create',
+  );
+
+  return rpc('calendar.create', params, options);
+}
+
+export function updateCalendarEvent(params = {}, options = {}) {
+  requirePlainObject(
+    params,
+    'Calendar event payload must be an object',
+    'calendar.update',
+  );
+  requireNonEmptyString(
+    params.id,
+    'Calendar event id must be a non-empty string',
+    'calendar.update',
+  );
+
+  return rpc('calendar.update', params, options);
+}
+
+export function deleteCalendarEvent(id, options = {}) {
+  requireNonEmptyString(
+    id,
+    'Calendar event id must be a non-empty string',
+    'calendar.delete',
+  );
+
+  return rpc('calendar.delete', { id }, options);
+}
+
 export function addProject(params = {}, options = {}) {
   requirePlainObject(
     params,

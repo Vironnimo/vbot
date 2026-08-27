@@ -634,6 +634,47 @@ def test_channel_send_cases_use_production_profiles_and_exact_arguments() -> Non
     ]
 
 
+def test_calendar_cases_use_production_schema_and_exact_arguments() -> None:
+    for case_name in PROBE.CALENDAR_CASES:
+        scenario = PROBE._scenario(
+            SimpleNamespace(
+                scenario="calendar",
+                calendar_case=case_name,
+                lines=8,
+            ),
+        )
+        contracts = PROBE._compile_probe_contracts(
+            scenario.tools,
+            require_closed_input=scenario.require_closed_input,
+        )
+        arguments = scenario.expected_arguments
+
+        assert scenario.tools[0]["parameters"] is PROBE.CALENDAR_TOOL_PARAMETERS
+        assert arguments is not None
+        assert "additionalProperties" not in json.dumps(scenario.tools[0]["parameters"])
+        assert "oneOf" not in scenario.tools[0]["parameters"]
+        contracts[PROBE.CALENDAR_TOOL_NAME].validate_arguments(arguments)
+        assert (
+            PROBE._expected_argument_measurements(
+                [{"name": PROBE.CALENDAR_TOOL_NAME, "arguments": arguments}],
+                scenario,
+            )["expected_arguments_match"]
+            is True
+        )
+
+    assert PROBE._calendar_scenario("list_default").expected_arguments == {"action": "list"}
+    assert PROBE._calendar_scenario("create_timed").expected_arguments == {
+        "action": "create",
+        "title": "Dentist",
+        "start": "2026-09-10T15:00",
+    }
+    assert PROBE._calendar_scenario("update_stop_repeat").expected_arguments == {
+        "action": "update",
+        "id": "event-123",
+        "rrule": None,
+    }
+
+
 def test_cron_cases_use_production_schema_and_exact_arguments() -> None:
     for case_name in PROBE.CRON_CASES:
         scenario = PROBE._scenario(
