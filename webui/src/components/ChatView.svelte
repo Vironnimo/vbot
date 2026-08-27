@@ -750,7 +750,7 @@
     }
     if (agentsRefreshToken !== lastAgentsRefreshToken) {
       lastAgentsRefreshToken = agentsRefreshToken;
-      loadAgents({ preferredAgentId: sharedSelectedAgentId });
+      loadAgents({ preferredAgentId: sharedSelectedAgentId, silent: true });
     }
   });
 

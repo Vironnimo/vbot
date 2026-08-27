@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, cast
 
@@ -37,6 +37,7 @@ class IntegrationAgent:
     temperature: float = 0.2
     thinking_effort: str = "medium"
     allowed_tools: list[str] | None = None
+    current_session_id: str = ""
 
 
 class IntegrationAgents:
@@ -46,6 +47,12 @@ class IntegrationAgents:
     def get(self, agent_id: str) -> IntegrationAgent:
         if agent_id != self._agent.id:
             raise KeyError(agent_id)
+        return self._agent
+
+    def update(self, agent_id: str, **changes: Any) -> IntegrationAgent:
+        if agent_id != self._agent.id:
+            raise KeyError(agent_id)
+        self._agent = replace(self._agent, **changes)
         return self._agent
 
 
