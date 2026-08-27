@@ -83,4 +83,33 @@ describe('CalendarView', () => {
 
     expect(document.querySelector('.calendar-form')).not.toBeNull();
   });
+
+  it('associates each event-form label with its control', async () => {
+    mountedComponent = mount(CalendarView, { target: document.body });
+    flushSync();
+    await waitForCondition(
+      () => document.querySelector('.empty-state__actions button') !== null,
+    );
+
+    document.querySelector('.empty-state__actions button').click();
+    flushSync();
+
+    const titleLabel = document.querySelector(
+      '.calendar-form label[for="calendar-form-title-input"]',
+    );
+    const titleInput = document.querySelector(
+      '.calendar-form input#calendar-form-title-input',
+    );
+    const dateLabel = document.querySelector(
+      '.calendar-form label[for="calendar-form-date"]',
+    );
+    const dateInput = document.querySelector(
+      '.calendar-form input#calendar-form-date',
+    );
+
+    expect(titleLabel).not.toBeNull();
+    expect(titleInput).not.toBeNull();
+    expect(dateLabel).not.toBeNull();
+    expect(dateInput).not.toBeNull();
+  });
 });
