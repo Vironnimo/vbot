@@ -454,6 +454,7 @@ export const englishCatalog = Object.freeze({
   'chat.project.scanBannerLink': 'Review in Projects',
 
   'sessions.title': 'Sessions',
+  'sessions.newSession': 'New Session',
   'sessions.hide': 'Hide sessions',
   'sessions.loading': 'Loading sessions…',
   'sessions.filtersAria': 'Session list filters',
