@@ -339,6 +339,11 @@ class CalendarService:
 
         inputs = _event_to_inputs(event)
         inputs.update(fields)
+        # Clearing recurrence leaves any exdates meaningless (a single event can
+        # hold no exceptions); drop them so a "no longer repeating" update does
+        # not trip the single-event validation.
+        if inputs.get("rrule") is None:
+            inputs["exdates"] = []
         if inputs == _event_to_inputs(event):
             return _clone_event(event)
 

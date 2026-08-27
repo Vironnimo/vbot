@@ -43,7 +43,7 @@ Core terms (Run, Session, Tool) live in `.vorch/GLOSSARY.md`.
 
 ## Conventions
 
-- Recurring timed events anchor wall-clock in the server timezone (09:00 stays 09:00 across DST; test-verified over the Berlin transition). Single timed events persist as UTC instants; all-day events are dates in the server zone. Clearing a recurrence re-resolves the event as a single timed event from its wall-clock start.
+- Recurring timed events anchor wall-clock in the server timezone (09:00 stays 09:00 across DST; test-verified over the Berlin transition). Single timed events persist as UTC instants; all-day events are dates in the server zone. Clearing a recurrence re-resolves the event as a single timed event from its wall-clock start and drops any exdates (exceptions are meaningless on a single event).
 - The server zone is injected at construction (`CalendarService(data_root, tz=...)`), defaulting to the host zone; tests pass `tz="Europe/Berlin"` explicitly for determinism. Never call `tzlocal` per operation.
 - The tool layer maps `duration` to `duration_minutes`/`duration_days` by the event's kind (the start form decides: date = all-day, datetime = timed) and passes `all_day` explicitly on update so kind switches work without exposing an `all_day` parameter.
 - Window bounds are inclusive days: a date bound selects its whole local day (`to` includes that day).
@@ -56,9 +56,9 @@ Core terms (Run, Session, Tool) live in `.vorch/GLOSSARY.md`.
 ## Constraints & Gotchas
 
 - The `when` grammar is deliberately small; unknown expressions raise `CalendarValidationError` naming the grammar. A `start..end` range's end side is an inclusive day when given as a date.
-- `update_event` rebuilds the candidate via the create path: an update that clears `rrule` re-anchors from `start_local`, and the anchor zone always re-resolves from the current server zone (the zone is not user-settable).
+- `update_event` rebuilds the candidate via the create path: an update that clears `rrule` re-anchors from `start_local`, drops exdates, and re-resolves the anchor zone from the current server zone (the zone is not user-settable).
 - Tool tests must build fixtures relative to `service.resolve_when(...)` - the tool resolves `when` against the real clock, so hard-coded dates silently break when the month rolls over.
-- In WebUI code, eslint forbids mutable `Map` in Svelte derived contexts - group with plain objects. The UI's occurrence exclusion consumes the server-provided `occurrence_start` via the additive `calendar.add_exdate` RPC (a read-modify-write of the whole `exdates` array through `calendar.update` would risk losing a concurrent tab's exclusion). Do not reconstruct the anchor client-side; the previous anchor-start reconstruction was a real bug.
+- In WebUI code, eslint forbids mutable `Map` in Svelte derived contexts - group with plain objects. The UI's occurrence exclusion consumes the server-provided `occurrence_start` via the additive `calendar.add_exdate` RPC (a read-modify-write of the whole `exdates` array through `calendar.update` would risk losing a concurrent tab's exclusion). Do not reconstruct the anchor client-side; the previous anchor-start reconstruction was a real bug. The edit form renders a single timed event's start in the server zone (not the raw UTC value), so a save without edits keeps the wall clock.
 - Start the worktree server as `python -m server.main`; `python server/main.py` imports `core` through the main repo's editable install and new RPC methods come back `method_not_found`.
 
 ## References
