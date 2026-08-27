@@ -7,6 +7,7 @@ from typing import Any
 from server.rpc import (
     agent_methods,
     automation_methods,
+    calendar_methods,
     catalog_methods,
     channel_methods,
     chat_methods,
@@ -41,6 +42,7 @@ def build_method_handlers() -> dict[str, RpcMethodHandler]:
         chat_methods,
         channel_methods,
         automation_methods,
+        calendar_methods,
         project_methods,
         settings_methods,
         extensions_methods,

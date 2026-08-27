@@ -18,6 +18,7 @@ import {
 import {
   RESOURCE_TOKEN_AGENTS,
   RESOURCE_TOKEN_MEMORIES,
+  RESOURCE_TOKEN_CALENDAR,
   RESOURCE_TOKEN_CHANNELS,
   RESOURCE_TOKEN_CLIENTS,
   RESOURCE_TOKEN_CRON,
@@ -49,6 +50,7 @@ const RUN_SERVER_EVENT_TYPES = new Set([
 export function createAppControllerState(activeViewId) {
   return {
     activeViewId,
+    calendarRefreshToken: 0,
     channelsRefreshToken: 0,
     cronRefreshToken: 0,
     clientsRefreshToken: 0,
@@ -399,6 +401,7 @@ export function createAppController({
         state.clientsRefreshToken += 1;
         state.channelsRefreshToken += 1;
         state.cronRefreshToken += 1;
+        state.calendarRefreshToken += 1;
         state.commandsRefreshToken += 1;
         state.debugTracesRefreshToken += 1;
         state.terminalsRefreshToken += 1;
@@ -458,6 +461,9 @@ export function createAppController({
     }
     if (tokenKeys.includes(RESOURCE_TOKEN_CRON)) {
       state.cronRefreshToken += 1;
+    }
+    if (tokenKeys.includes(RESOURCE_TOKEN_CALENDAR)) {
+      state.calendarRefreshToken += 1;
     }
     if (tokenKeys.includes(RESOURCE_TOKEN_COMMANDS)) {
       state.commandsRefreshToken += 1;

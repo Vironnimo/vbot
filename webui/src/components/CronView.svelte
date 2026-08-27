@@ -60,6 +60,7 @@
     cronRefreshToken = 0,
     agentsRefreshToken = 0,
     projectsRefreshToken = 0,
+    targetJobId = '',
   } = $props();
 
   let viewState = $state(createCronViewState());
@@ -164,9 +165,20 @@
   });
 
   // Auto-select the first job once the list loads, unless the user is mid-create
-  // or already has a selection that still exists.
+  // or already has a selection that still exists. A targetJobId (calendar deep
+  // link) wins once; it is consumed so the user can freely change selection.
+  let appliedTargetJobId = $state('');
   $effect(() => {
     if (isCreating || jobs.length === 0) {
+      return;
+    }
+    if (
+      targetJobId &&
+      targetJobId !== appliedTargetJobId &&
+      jobs.some((job) => job.id === targetJobId)
+    ) {
+      appliedTargetJobId = targetJobId;
+      selectJobNow(jobs.find((job) => job.id === targetJobId));
       return;
     }
     if (!jobs.some((job) => job.id === selectedJobId) && !isDirty) {
