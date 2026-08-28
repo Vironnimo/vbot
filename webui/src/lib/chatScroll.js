@@ -18,12 +18,6 @@ const LOAD_OLDER_THRESHOLD_PX = 48;
 const PROGRAMMATIC_ECHO_TOLERANCE_PX = 1;
 const MAX_TRACKED_SESSIONS = 100;
 
-// Distance between the top of the scrollable content and the top of a message
-// aligned by an animated scroll. Matches the `.messages` top padding so an
-// aligned message sits exactly where the old scrollIntoView(block:'start')
-// put it: at the start edge of the scroll port.
-const ALIGNED_ELEMENT_TOP_INSET_PX = 28;
-
 export function createChatScrollController(
   container,
   {
@@ -39,10 +33,6 @@ export function createChatScrollController(
   let restorePending = false;
   let restoreToPinned = true;
   let expectedScrollTop = 0;
-  // True while an explicit animated scroll (submitted turn) is in flight;
-  // its intermediate scroll events are programmatic by construction.
-  let animating = false;
-  let animationTargetTop = 0;
   // Set by upward user input and consumed by the next scroll event: the
   // gesture owns that event even when the position happens to match our last
   // write (e.g. scrolling at the very top, where nothing moves).
@@ -117,16 +107,6 @@ export function createChatScrollController(
       // Transition noise (clamps, programmatic resets) while a restore has
       // not been applied yet; the restore decides the position.
       expectedScrollTop = container.scrollTop;
-      return;
-    }
-    if (animating) {
-      expectedScrollTop = container.scrollTop;
-      if (
-        Math.abs(container.scrollTop - animationTargetTop) <=
-        PROGRAMMATIC_ECHO_TOLERANCE_PX
-      ) {
-        animating = false;
-      }
       return;
     }
     const actual = container.scrollTop;
@@ -296,7 +276,6 @@ export function createChatScrollController(
     restorePending = true;
     restoreToPinned = viewport.pinned;
     awaitingUserPosition = false;
-    animating = false;
     onViewChanged();
   }
 
@@ -346,10 +325,10 @@ export function createChatScrollController(
     onViewChanged();
   }
 
-  // Explicit follow requests: jump-to-latest click, sub-agent live tail.
+  // Explicit follow requests: jump-to-latest click, submitted turn, sub-agent
+  // live tail.
   function pinToBottom() {
     restorePending = false;
-    animating = false;
     const viewport = viewportFor(currentSessionId);
     viewport.pinned = true;
     viewport.anchorId = '';
@@ -367,44 +346,11 @@ export function createChatScrollController(
     restoreToPinned = true;
   }
 
-  // Explicit animated scroll of one element to the top of the viewport
-  // (submitted turn). Intermediate scroll events belong to the animation;
-  // the element becomes the reading anchor so streaming growth below it
-  // never pulls the view back down.
-  function animateElementToTop(element) {
-    const containerRect = container.getBoundingClientRect();
-    const targetRect = element.getBoundingClientRect();
-    const contentTop = targetRect.top - containerRect.top + container.scrollTop;
-    const targetTop = Math.max(
-      0,
-      Math.round(contentTop) - ALIGNED_ELEMENT_TOP_INSET_PX,
-    );
-    animating = true;
-    animationTargetTop = targetTop;
-    expectedScrollTop = targetTop;
-    awaitingUserPosition = false;
-    const viewport = viewportFor(currentSessionId);
-    viewport.pinned = false;
-    viewport.anchorId = element.dataset.timelineItemId ?? '';
-    viewport.anchorDelta = ALIGNED_ELEMENT_TOP_INSET_PX;
-    if (typeof container.scrollTo === 'function') {
-      container.scrollTo({
-        top: targetTop,
-        behavior: 'smooth',
-      });
-    } else {
-      writeScroll(targetTop);
-      animating = false;
-    }
-  }
-
-  // Real user input cancels an in-flight animation so later motion is
-  // classified normally again. Upward input also releases the follow pin
-  // before the browser has scrolled, so concurrent content growth cannot
-  // yank the view back down — and it cancels a still-pending passive
-  // restore, because a user reaching for the viewport wins over it.
+  // Real user input releases the follow pin before the browser has scrolled,
+  // so concurrent content growth cannot yank the view back down — and it
+  // cancels a still-pending passive restore, because a user reaching for the
+  // viewport wins over it.
   function noteUserInput({ upward = false } = {}) {
-    animating = false;
     if (!upward) {
       return;
     }
@@ -438,7 +384,6 @@ export function createChatScrollController(
     sessionChanged,
     pinToBottom,
     forceFollowOnNextRestore,
-    animateElementToTop,
     noteUserInput,
     isNearBottom,
     isRestorePending: () => restorePending,

@@ -147,7 +147,6 @@
   let viewingSessionAgentId = $state('');
   let viewingSubAgentSession = $state(false);
   let submittedTurnScrollKey = $state(0);
-  let submittedTurnScrollRunId = $state('');
   let subAgentLinkFollowRequest = $state(null);
   let subAgentLinkFollowRequestId = 0;
   let handledSessionNavigationKey = '';
@@ -1705,7 +1704,6 @@
     } else if (outcome.kind === 'toast') {
       showChatToast(outcome.reply);
     } else if (outcome.kind === 'started') {
-      submittedTurnScrollRunId = outcome.runId;
       submittedTurnScrollKey += 1;
     }
     return outcome.kind !== 'failed' && outcome.kind !== 'ignored';
@@ -2052,7 +2050,6 @@
             loadingHistory={chatState.loadingHistory}
             {transientCards}
             {submittedTurnScrollKey}
-            {submittedTurnScrollRunId}
             bottomOverlayHeight={footerOverlayHeight}
             onScrollbarWidthChange={(width) => {
               chatScrollbarWidth = width;

@@ -16,15 +16,29 @@ vi.mock('svelte', async () => {
 });
 
 const { default: ChatTimeline } = await import('../ChatTimeline.svelte');
-import { waitForCondition } from './ChatTimeline.support.js';
+import {
+  waitForCondition,
+  mockScrollGeometry,
+} from './ChatTimeline.support.js';
 
 describe('ChatTimeline', () => {
   let mountedComponent;
+  let resizeCallbacks;
 
   beforeEach(() => {
     document.body.innerHTML = '';
     init('en');
     mountedComponent = null;
+    resizeCallbacks = [];
+    globalThis.ResizeObserver = class {
+      constructor(callback) {
+        resizeCallbacks.push(callback);
+      }
+
+      observe() {}
+
+      disconnect() {}
+    };
   });
 
   afterEach(async () => {
@@ -34,8 +48,15 @@ describe('ChatTimeline', () => {
     }
 
     document.body.innerHTML = '';
+    delete globalThis.ResizeObserver;
     vi.useRealTimers();
   });
+
+  function notifyContentResize() {
+    for (const callback of resizeCallbacks) {
+      callback([]);
+    }
+  }
 
   it('wraps messages in a capped, centered measure column', () => {
     const sessionState = ensureSessionState(
@@ -617,77 +638,21 @@ describe('ChatTimeline', () => {
     );
   });
 
-  it('scrolls the submitted user turn to the top when requested', async () => {
-    const scrollToSpy = vi.fn();
-    const originalScrollTo = Element.prototype.scrollTo;
-    Element.prototype.scrollTo = scrollToSpy;
-
-    try {
-      const sessionState = ensureSessionState(
-        createChatState(),
-        'alpha',
-        'session-submitted-turn-scroll',
-      );
-      appendRunEvent(sessionState, {
-        type: 'user_message_persisted',
-        run_id: 'run-submitted-turn-scroll',
-        sequence: 1,
-        payload: {
-          message: {
-            id: 'user-submitted-turn',
-            role: 'user',
-            content: 'Fresh turn should start the viewport',
-            timestamp: '2026-05-11T08:00:00',
-          },
-        },
-      });
-
-      mountedComponent = mount(ChatTimeline, {
-        target: document.body,
-        props: {
-          sessionState,
-          agentName: 'Alpha',
-          submittedTurnScrollKey: 1,
-          submittedTurnScrollRunId: 'run-submitted-turn-scroll',
-        },
-      });
-      flushSync();
-
-      await waitForCondition(() => scrollToSpy.mock.calls.length > 0);
-
-      expect(scrollToSpy).toHaveBeenCalledWith(
-        expect.objectContaining({ behavior: 'smooth' }),
-      );
-      // Layout-less jsdom clamps every rect to zero, so the aligned position
-      // resolves to the top of the content.
-      expect(scrollToSpy.mock.calls[0][0].top).toBe(0);
-      expect(
-        document.querySelector('.submitted-turn-scroll-spacer'),
-      ).toBeTruthy();
-    } finally {
-      if (originalScrollTo) {
-        Element.prototype.scrollTo = originalScrollTo;
-      } else {
-        delete Element.prototype.scrollTo;
-      }
-    }
-  });
-
-  it('reserves the floating composer overlay height when aligning the submitted turn', async () => {
+  it('pins to the bottom when a turn is submitted and follows new content', async () => {
     const sessionState = ensureSessionState(
       createChatState(),
       'alpha',
-      'session-submitted-turn-overlay',
+      'session-submitted-turn-pin',
     );
     appendRunEvent(sessionState, {
       type: 'user_message_persisted',
-      run_id: 'run-submitted-turn-overlay',
+      run_id: 'run-submitted-turn-pin',
       sequence: 1,
       payload: {
         message: {
-          id: 'user-submitted-turn-overlay',
+          id: 'user-submitted-turn-pin',
           role: 'user',
-          content: 'Turn aligned above the floating composer',
+          content: 'Fresh turn',
           timestamp: '2026-05-11T08:00:00',
         },
       },
@@ -699,81 +664,22 @@ describe('ChatTimeline', () => {
         sessionState,
         agentName: 'Alpha',
         submittedTurnScrollKey: 1,
-        submittedTurnScrollRunId: 'run-submitted-turn-overlay',
-        bottomOverlayHeight: 200,
       },
     });
     flushSync();
 
-    // The composer overlays the bottom 200px of a 600px viewport, so only
-    // 400px of unobstructed space count; the 300px of content needs a
-    // 100px spacer for the top alignment to be reachable.
-    const messages = document.querySelector('.messages');
-    Object.defineProperty(messages, 'scrollHeight', {
-      configurable: true,
-      get: () => 300,
-    });
-    Object.defineProperty(messages, 'clientHeight', {
-      configurable: true,
-      get: () => 600,
-    });
-    Object.defineProperty(messages, 'scrollTop', {
-      configurable: true,
-      writable: true,
-      value: 0,
-    });
+    const container = document.querySelector('.messages');
+    const { currentScrollTop, setScrollHeight } = mockScrollGeometry(container);
+    await waitForCondition(() => currentScrollTop() === 2000);
 
-    await waitForCondition(
-      () =>
-        document.querySelector('.submitted-turn-scroll-spacer')?.style
-          .height === '100px',
-    );
-  });
+    // No spacer element — the old submitted-turn scroll mechanism is gone.
+    expect(document.querySelector('.submitted-turn-scroll-spacer')).toBeNull();
 
-  it('waits for the submitted run user event instead of scrolling the previous user message', async () => {
-    const scrollIntoView = vi.fn();
-    const originalScrollIntoView = Element.prototype.scrollIntoView;
-    Element.prototype.scrollIntoView = scrollIntoView;
-
-    try {
-      const sessionState = ensureSessionState(
-        createChatState(),
-        'alpha',
-        'session-submitted-turn-waits-for-run-user',
-      );
-      sessionState.messages = [
-        {
-          id: 'previous-user-message',
-          role: 'user',
-          content: 'Previous user message',
-          timestamp: '2026-05-10T08:00:00',
-        },
-      ];
-
-      mountedComponent = mount(ChatTimeline, {
-        target: document.body,
-        props: {
-          sessionState,
-          agentName: 'Alpha',
-          submittedTurnScrollKey: 1,
-          submittedTurnScrollRunId: 'run-new-turn-not-rendered-yet',
-        },
-      });
-      flushSync();
-      await tick();
-      await tick();
-
-      expect(scrollIntoView).not.toHaveBeenCalled();
-      expect(
-        document.querySelector('.submitted-turn-scroll-spacer'),
-      ).toBeNull();
-    } finally {
-      if (originalScrollIntoView) {
-        Element.prototype.scrollIntoView = originalScrollIntoView;
-      } else {
-        delete Element.prototype.scrollIntoView;
-      }
-    }
+    // Content grows (assistant response streaming in); the pinned viewport
+    // follows the live tail.
+    setScrollHeight(2400);
+    notifyContentResize();
+    await waitForCondition(() => currentScrollTop() === 2400);
   });
 
   it('renders brace-free tool details and hides internal result fields', () => {
