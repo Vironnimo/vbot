@@ -107,6 +107,7 @@ def make_skill_manage_handler(
     resolve_agent_skills_dir: Callable[[str], Path],
     invalidate_agent_skills: Callable[[str | None], None],
     resolve_shared_skills_dir: Callable[[str, str], Path | None] | None = None,
+    resolve_external_skill_scope: (Callable[[str, str, str | None], str | None] | None) = None,
 ) -> Callable[[ToolContext, JsonObject], JsonObject]:
     """Return the direct Skill-management handler.
 
@@ -115,6 +116,12 @@ def make_skill_manage_handler(
     instance (first-found ordering, exactly what activation resolves). It is
     intentionally absent from the Tool contract and Agent-facing texts — a
     receiving Agent discovers editability through normal use.
+
+    ``resolve_external_skill_scope(agent_id, name, project_id)`` optionally answers
+    where a name that is missing from the resolved target root still lives in the
+    agent's visible pool (``bundled``/``global``/``project``/``shared``), so the
+    tool can fail with a scope refusal instead of a misleading not-found for a
+    Skill the agent can see but not write. ``None`` keeps the plain not-found.
     """
 
     def skill_manage_handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
@@ -142,6 +149,23 @@ def make_skill_manage_handler(
                 if shared_root is not None:
                     target_root = shared_root
                     shared_target = True
+            # A missing target package on a mutate/delete action is not always an
+            # unknown name: it may be a Skill the agent can see in another scope but
+            # cannot write. Report that scope instead of a bare not-found. ``create``
+            # is excluded — it legitimately writes a private shadow over a shared-pool
+            # name, which is the established override path.
+            if action != "create" and find_skill_package_dir(target_root, name) is None:
+                scope = (
+                    resolve_external_skill_scope(context.agent_id, name, context.skill_project_id)
+                    if resolve_external_skill_scope is not None
+                    else None
+                )
+                if scope is not None:
+                    return tool_failure(
+                        "skill_write_rejected",
+                        _scope_rejection_message(name, scope),
+                        retryable=False,
+                    )
             result, file_path = _apply_action(
                 authoring,
                 target_root,
@@ -185,6 +209,26 @@ def make_skill_manage_handler(
         return tool_success(data)
 
     return skill_manage_handler
+
+
+def _scope_rejection_message(name: str, scope: str) -> str:
+    if scope == "shared":
+        return (
+            f"Skill '{name}' is shared with you — only its owner or the user can "
+            f"delete it. Edits still go through skill_manage."
+        )
+    labels = {
+        "bundled": "is a bundled Skill — read-only here.",
+        "global": "is a global Skill — read-only here.",
+        "project": "is a Project Skill — read-only here.",
+    }
+    lead = labels.get(scope)
+    if lead is None:
+        return f"Skill '{name}' not found."
+    return (
+        f"Skill '{name}' {lead} Non-private Skills are managed through the "
+        f"user-facing Skill controls; do not edit the package with file or shell tools."
+    )
 
 
 def _apply_action(
@@ -255,6 +299,7 @@ def register_skill_manage_tool(
     resolve_agent_skills_dir: Callable[[str], Path],
     invalidate_agent_skills: Callable[[str | None], None],
     resolve_shared_skills_dir: Callable[[str, str], Path | None] | None = None,
+    resolve_external_skill_scope: (Callable[[str, str, str | None], str | None] | None) = None,
 ) -> None:
     """Register identity-only direct Skill management."""
     registry.register(
@@ -266,6 +311,7 @@ def register_skill_manage_tool(
             resolve_agent_skills_dir,
             invalidate_agent_skills,
             resolve_shared_skills_dir,
+            resolve_external_skill_scope,
         ),
         family="skills",
         constraints=("identity_agent",),
