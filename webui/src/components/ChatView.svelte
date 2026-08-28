@@ -212,6 +212,29 @@
 
   let activeAgent = $derived(getActiveAgent());
   let activeSessionState = $derived(getActiveSessionState());
+  // History normally arrives quickly enough that loading feedback would only
+  // flash. Keep the transition calm, while still explaining a real delay.
+  const HISTORY_LOADING_FEEDBACK_DELAY_MS = 300;
+  let historyLoadingFeedbackVisible = $state(false);
+  let historyLoadingFeedbackSessionKey = $derived(
+    activeSessionState?.key ?? '',
+  );
+  $effect(() => {
+    const sessionKey = historyLoadingFeedbackSessionKey;
+    historyLoadingFeedbackVisible = false;
+    if (!chatState.loadingHistory || !sessionKey) {
+      return undefined;
+    }
+    const timeoutId = setTimeout(() => {
+      if (
+        chatState.loadingHistory &&
+        historyLoadingFeedbackSessionKey === sessionKey
+      ) {
+        historyLoadingFeedbackVisible = true;
+      }
+    }, HISTORY_LOADING_FEEDBACK_DELAY_MS);
+    return () => clearTimeout(timeoutId);
+  });
   let activeTimelineItems = $derived(
     visibleTimelineItemsForRender(activeSessionState),
   );
@@ -2003,14 +2026,9 @@
             onSessionDeleted={handleSessionDeleted}
           />
         {/if}
-        {#if chatState.loadingHistory || chatState.historyError || chatState.actionError || chatState.commandsError || activeSessionState?.actionError || activeSessionState?.streamError || activeSessionState?.error}
+        {#if chatState.historyError || chatState.actionError || chatState.commandsError || activeSessionState?.actionError || activeSessionState?.streamError || activeSessionState?.error}
           <div class="chat-view__notice-stack" aria-live="polite">
             <div class="chat-view__measure chat-view__notice-inner">
-              {#if chatState.loadingHistory}
-                <Banner variant="neutral">
-                  {t('loading.history', 'Loading chat history…')}
-                </Banner>
-              {/if}
               {#if chatState.historyError}
                 <Banner variant="error">
                   {t(
@@ -2047,7 +2065,7 @@
             sessionState={activeSessionState}
             agentName={activeAgent.name}
             {chatWorkingMode}
-            loadingHistory={chatState.loadingHistory}
+            loadingHistory={historyLoadingFeedbackVisible}
             {transientCards}
             {submittedTurnScrollKey}
             bottomOverlayHeight={footerOverlayHeight}

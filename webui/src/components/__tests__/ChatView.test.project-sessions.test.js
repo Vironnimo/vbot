@@ -21,6 +21,46 @@ import {
 describe('ChatView', () => {
   const chatViewTest = setupChatViewTestSuite();
 
+  it('waits before showing initial History feedback', async () => {
+    const HISTORY_LOADING_FEEDBACK_DELAY_MS = 300;
+    let resolveHistory;
+    const defaultRpc = createChatRpcMock();
+    rpcMock.mockImplementation((method, params) => {
+      if (method === 'chat.history') {
+        return new Promise((resolve) => {
+          resolveHistory = resolve;
+        });
+      }
+      return defaultRpc(method, params);
+    });
+    vi.useFakeTimers();
+
+    chatViewTest.mount({ target: document.body });
+    await vi.advanceTimersByTimeAsync(0);
+    flushSync();
+
+    expect(document.body.textContent).not.toContain('Loading chat history');
+
+    await vi.advanceTimersByTimeAsync(HISTORY_LOADING_FEEDBACK_DELAY_MS - 1);
+    flushSync();
+    expect(document.body.textContent).not.toContain('Loading chat history');
+
+    await vi.advanceTimersByTimeAsync(1);
+    flushSync();
+    expect(document.body.textContent).toContain('Loading chat history');
+
+    resolveHistory({
+      active_run: null,
+      has_more: false,
+      messages: [],
+      session_id: 'session-1',
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    flushSync();
+
+    expect(document.body.textContent).not.toContain('Loading chat history');
+  });
+
   it('re-syncs a held session queue on a matching queue resource_changed', async () => {
     rpcMock.mockImplementation(createChatRpcMock());
     const { createChatViewParentHarness } =
