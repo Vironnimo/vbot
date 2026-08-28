@@ -182,11 +182,6 @@ function toStoredAttachment(attachment) {
     attachment_id: attachment.attachment_id,
     filename: attachment.filename,
     media_type: attachment.media_type,
-    source_filename:
-      typeof attachment.source_filename === 'string' &&
-      attachment.source_filename.trim() !== ''
-        ? attachment.source_filename
-        : attachment.filename,
   };
 }
 

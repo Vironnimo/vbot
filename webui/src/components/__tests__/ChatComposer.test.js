@@ -722,57 +722,6 @@ describe('ChatComposer', () => {
     ]);
   });
 
-  it('numbers duplicate image attachments before uploading and sending them', async () => {
-    const onSendMessage = vi.fn().mockResolvedValue(true);
-    uploadAttachment
-      .mockResolvedValueOnce({
-        attachment_id: 'attachment-image-1',
-        filename: 'image1.png',
-        media_type: 'image/png',
-        size_bytes: 7,
-      })
-      .mockResolvedValueOnce({
-        attachment_id: 'attachment-image-2',
-        filename: 'image2.png',
-        media_type: 'image/png',
-        size_bytes: 7,
-      });
-    mountedComponent = mount(ChatComposer, {
-      target: document.body,
-      props: { onSendMessage },
-    });
-    flushSync();
-
-    const first = new File(['first'], 'image.png', { type: 'image/png' });
-    const second = new File(['second'], 'image.png', { type: 'image/png' });
-    await selectFilesFromPicker([first, second]);
-
-    expect(uploadAttachment).toHaveBeenNthCalledWith(1, first, {
-      filename: 'image1.png',
-    });
-    expect(uploadAttachment).toHaveBeenNthCalledWith(2, second, {
-      filename: 'image2.png',
-    });
-    expect(attachmentNames()).toEqual(['image1.png', 'image2.png']);
-
-    submitComposer();
-
-    expect(onSendMessage).toHaveBeenCalledWith([
-      {
-        type: 'media',
-        attachment_id: 'attachment-image-1',
-        filename: 'image1.png',
-        media_type: 'image/png',
-      },
-      {
-        type: 'media',
-        attachment_id: 'attachment-image-2',
-        filename: 'image2.png',
-        media_type: 'image/png',
-      },
-    ]);
-  });
-
   it.each([
     ['voice.ogg', 'audio/ogg'],
     ['clip.mp4', 'video/mp4'],
@@ -1430,12 +1379,6 @@ async function selectFilesFromPicker(files) {
   });
   input.dispatchEvent(new Event('change', { bubbles: true }));
   await flushComposerAsyncWork();
-}
-
-function attachmentNames() {
-  return Array.from(document.body.querySelectorAll('.attachment-name')).map(
-    (element) => element.textContent.trim(),
-  );
 }
 
 function submitComposer() {

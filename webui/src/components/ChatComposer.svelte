@@ -399,42 +399,6 @@
     removePendingAttachmentByLocalId(draftKey, attachment.local_id);
   };
 
-  const filenameWithSequence = (filename, sequence) => {
-    const trimmed = String(filename ?? '').trim() || 'image';
-    const lastDot = trimmed.lastIndexOf('.');
-    const stem = lastDot > 0 ? trimmed.slice(0, lastDot) : trimmed;
-    const extension = lastDot > 0 ? trimmed.slice(lastDot) : '';
-    return `${stem}${sequence}${extension}`;
-  };
-
-  const assignDistinctImageFilenames = (attachments) => {
-    const imageGroups = Object.create(null);
-    for (const attachment of attachments) {
-      if (!hasImageMediaType(attachment.media_type)) {
-        continue;
-      }
-      const sourceFilename = attachment.source_filename || attachment.filename;
-      imageGroups[sourceFilename] ??= [];
-      imageGroups[sourceFilename].push(attachment.local_id);
-    }
-    const sequenceByLocalId = Object.create(null);
-    for (const [sourceFilename, localIds] of Object.entries(imageGroups)) {
-      if (localIds.length < 2) {
-        continue;
-      }
-      localIds.forEach((localId, index) => {
-        sequenceByLocalId[localId] = filenameWithSequence(
-          sourceFilename,
-          index + 1,
-        );
-      });
-    }
-    return attachments.map((attachment) => {
-      const filename = sequenceByLocalId[attachment.local_id];
-      return filename ? { ...attachment, filename } : attachment;
-    });
-  };
-
   const _handleFiles = async (files) => {
     if (disabled) {
       return;
@@ -458,10 +422,6 @@
           typeof file.name === 'string' && file.name.trim().length > 0
             ? file.name
             : 'upload.bin',
-        source_filename:
-          typeof file.name === 'string' && file.name.trim().length > 0
-            ? file.name
-            : 'upload.bin',
         media_type:
           typeof file.type === 'string' && file.type.trim().length > 0
             ? file.type
@@ -470,39 +430,28 @@
         uploading: true,
       };
     });
-    updateAttachmentsForDraftKey(attachmentDraftKey, (attachments) =>
-      assignDistinctImageFilenames([...attachments, ...newAttachments]),
-    );
+    updateAttachmentsForDraftKey(attachmentDraftKey, (attachments) => [
+      ...attachments,
+      ...newAttachments,
+    ]);
 
     const uploadTasks = selectedFiles.map(async (file, index) => {
       const localId = newAttachments[index].local_id;
       try {
-        const scope = attachmentScopeForDraftKey(attachmentDraftKey);
-        const pendingAttachment = attachmentsForScope(scope).find(
-          (attachment) => attachment.local_id === localId,
-        );
-        const uploadFilename =
-          pendingAttachment?.filename ?? newAttachments[index].filename;
-        const result =
-          uploadFilename === newAttachments[index].source_filename
-            ? await uploadAttachment(file)
-            : await uploadAttachment(file, { filename: uploadFilename });
+        const result = await uploadAttachment(file);
         updateAttachmentsForDraftKey(attachmentDraftKey, (attachments) =>
-          assignDistinctImageFilenames(
-            attachments.map((attachment) => {
-              if (attachment.local_id !== localId) {
-                return attachment;
-              }
-              return {
-                ...attachment,
-                attachment_id: result.attachment_id,
-                filename: result.filename,
-                source_filename: result.filename,
-                media_type: result.media_type,
-                uploading: false,
-              };
-            }),
-          ),
+          attachments.map((attachment) => {
+            if (attachment.local_id !== localId) {
+              return attachment;
+            }
+            return {
+              ...attachment,
+              attachment_id: result.attachment_id,
+              filename: result.filename,
+              media_type: result.media_type,
+              uploading: false,
+            };
+          }),
         );
       } catch {
         removePendingAttachmentByLocalId(attachmentDraftKey, localId);
