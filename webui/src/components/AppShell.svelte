@@ -35,6 +35,7 @@
 
   const MOBILE_NAV_MEDIA_QUERY = '(max-width: 640px)';
   const CONTEXT_MENU_VIEWPORT_MARGIN = 8;
+  const SIDEBAR_COLLAPSED_STORAGE_KEY = 'vbot.sidebar.collapsed.v1';
   const TEXT_INPUT_TYPES = new Set([
     'email',
     'password',
@@ -46,6 +47,25 @@
   let navigationElement = $state(null);
   let contextMenuElement = $state(null);
   let contextMenu = $state(null);
+  let sidebarCollapsed = $state(false);
+
+  const sidebarToggleLabel = $derived(
+    sidebarCollapsed
+      ? t('navigation.expandSidebar', 'Expand sidebar')
+      : t('navigation.collapseSidebar', 'Collapse sidebar'),
+  );
+
+  const setSidebarCollapsed = (collapsed) => {
+    sidebarCollapsed = collapsed;
+    try {
+      localStorage.setItem(
+        SIDEBAR_COLLAPSED_STORAGE_KEY,
+        collapsed ? 'true' : 'false',
+      );
+    } catch {
+      // A blocked storage area should not prevent navigation from working.
+    }
+  };
 
   const handleSelectView = (viewId) => {
     if (onSelectView) {
@@ -576,6 +596,13 @@
   });
 
   onMount(() => {
+    try {
+      sidebarCollapsed =
+        localStorage.getItem(SIDEBAR_COLLAPSED_STORAGE_KEY) === 'true';
+    } catch {
+      // Privacy settings can disable storage; use the expanded default then.
+    }
+
     const closeOnCapturedScroll = () => {
       if (contextMenu) closeContextMenu();
     };
@@ -624,6 +651,7 @@
 <div
   class="app-shell"
   data-server-unavailable={serverUnavailable ? 'true' : undefined}
+  data-sidebar-collapsed={sidebarCollapsed ? 'true' : undefined}
 >
   <aside
     class="app-shell__sidebar"
@@ -662,6 +690,12 @@
               class="app-shell__nav-item"
               type="button"
               aria-current={item.id === activeViewId ? 'page' : undefined}
+              aria-label={sidebarCollapsed
+                ? t(item.labelKey, item.labelFallback)
+                : undefined}
+              use:tooltip={sidebarCollapsed
+                ? t(item.labelKey, item.labelFallback)
+                : ''}
               onclick={() => handleSelectView(item.id)}
             >
               <svg
@@ -710,7 +744,9 @@
                   <path d="M5.5 7.5H3m2.5 3-2 1.5m7-4.5H13m-2.5 3 2 1.5" />
                 {/if}
               </svg>
-              <span>{t(item.labelKey, item.labelFallback)}</span>
+              <span class="app-shell__nav-label">
+                {t(item.labelKey, item.labelFallback)}
+              </span>
             </button>
           {/each}
         </div>
@@ -718,6 +754,23 @@
     </nav>
 
     <div class="sidebar-footer app-shell__footer">
+      <Button
+        variant="tertiary"
+        icon={true}
+        class="app-shell__sidebar-toggle"
+        ariaLabel={sidebarToggleLabel}
+        tooltip={sidebarToggleLabel}
+        aria-pressed={sidebarCollapsed}
+        onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
+      >
+        <svg viewBox="0 0 16 16" aria-hidden="true">
+          {#if sidebarCollapsed}
+            <path d="m6 3 5 5-5 5" />
+          {:else}
+            <path d="m10 3-5 5 5 5" />
+          {/if}
+        </svg>
+      </Button>
       {#if micVisible}
         <div class="sidebar-footer__row">
           <span class="mic-dot {micDotClass}" aria-hidden="true"></span>

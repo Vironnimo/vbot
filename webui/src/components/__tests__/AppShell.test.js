@@ -23,6 +23,7 @@ describe('AppShell Desktop context menu', () => {
 
   beforeEach(() => {
     document.body.innerHTML = '';
+    localStorage.clear();
     init('en');
     mountedComponent = null;
     vi.clearAllMocks();
@@ -51,6 +52,54 @@ describe('AppShell Desktop context menu', () => {
     flushSync();
     return document.querySelector('.app-shell__content');
   }
+
+  it('collapses navigation to accessible icons and saves the choice', () => {
+    mountedComponent = mount(AppShell, {
+      target: document.body,
+      props: {
+        activeViewId: 'chat',
+        items: [
+          {
+            id: 'chat',
+            labelKey: 'navigation.chat',
+            labelFallback: 'Chat',
+            section: 'work',
+          },
+        ],
+      },
+    });
+    flushSync();
+
+    const toggle = document.querySelector('.app-shell__sidebar-toggle');
+    const navItem = document.querySelector('.app-shell__nav-item');
+    toggle.click();
+    flushSync();
+
+    expect(document.querySelector('.app-shell').dataset.sidebarCollapsed).toBe(
+      'true',
+    );
+    expect(navItem.getAttribute('aria-label')).toBe('Chat');
+    expect(localStorage.getItem('vbot.sidebar.collapsed.v1')).toBe('true');
+    expect(toggle.getAttribute('aria-label')).toBe('Expand sidebar');
+  });
+
+  it('restores the saved collapsed navigation on mount', () => {
+    localStorage.setItem('vbot.sidebar.collapsed.v1', 'true');
+    mountedComponent = mount(AppShell, {
+      target: document.body,
+      props: { items: [] },
+    });
+    flushSync();
+
+    expect(document.querySelector('.app-shell').dataset.sidebarCollapsed).toBe(
+      'true',
+    );
+    expect(
+      document
+        .querySelector('.app-shell__sidebar-toggle')
+        .getAttribute('aria-label'),
+    ).toBe('Expand sidebar');
+  });
 
   function openContextMenu(target, options = {}) {
     const event = new MouseEvent('contextmenu', {
