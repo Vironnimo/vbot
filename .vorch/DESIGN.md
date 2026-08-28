@@ -270,7 +270,7 @@ Every role's size is a CSS token (`--fs-<role>` in `webui/src/styles/app.css`, e
 
 ## Layout
 
-The app shell is a 210px sidebar plus a fluid main content area. The main area holds views that each fill the full remaining width and height. Desktop users can collapse the Main menu to its 64px icon rail through the footer toggle; this display preference persists locally. The compact rail centers the canonical brand mark, navigation symbols, health indicator, and Desktop Voice indicator, hiding all supporting labels while Quick tooltips and accessible names preserve their meaning. Expanding restores the full label-led menu.
+The app shell is a 210px sidebar plus a fluid main content area. The main area holds views that each fill the full remaining width and height. Desktop users can collapse the Main menu to its 64px icon rail through a compact, inset toggle that interrupts the sidebar header divider; this display preference persists locally. The compact rail centers the canonical brand mark, navigation symbols, health indicator, and Desktop Voice indicator, hiding all supporting labels while Quick tooltips and accessible names preserve their meaning. Expanding restores the full label-led menu.
 
 Sidebar navigation is grouped by usage cadence into Work / Configure / Insights, each group introduced by a mono-xs uppercase section label (`--text-lo`, no divider lines). Interactive inactive entries use `--text-med`, hover brightens them, and the active entry uses the accent treatment. On mobile (<=640px) the compact desktop preference does not apply: the sidebar becomes a single scrolling top-bar row with readable item labels, and a direct link or tab change scrolls the active entry into view.
 

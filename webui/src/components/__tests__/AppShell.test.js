@@ -72,6 +72,14 @@ describe('AppShell Desktop context menu', () => {
 
     const toggle = document.querySelector('.app-shell__sidebar-toggle');
     const navItem = document.querySelector('.app-shell__nav-item');
+
+    expect(
+      toggle.parentElement.classList.contains('app-shell__sidebar-header'),
+    ).toBe(true);
+    expect(document.querySelector('.sidebar-footer').contains(toggle)).toBe(
+      false,
+    );
+
     toggle.click();
     flushSync();
 
