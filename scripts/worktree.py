@@ -545,9 +545,7 @@ def _merge_exclusive_lock(
         lock_file.close()
 
 
-def _request_window_release(
-    release_path: Path, holder_path: Path, lock_path: Path
-) -> bool:
+def _request_window_release(release_path: Path, holder_path: Path, lock_path: Path) -> bool:
     """Signal the repair keeper to exit and wait until the lock is free."""
     release_path.parent.mkdir(parents=True, exist_ok=True)
     release_path.write_text("release\n", encoding="utf-8")
