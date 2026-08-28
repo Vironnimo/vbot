@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any, cast
 
@@ -29,7 +30,11 @@ def _skill_md(
 
 
 class _Harness:
-    def __init__(self, tmp_path: Path) -> None:
+    def __init__(
+        self,
+        tmp_path: Path,
+        resolve_external_skill_scope: (Callable[[str, str, str | None], str | None] | None) = None,
+    ) -> None:
         self.root = tmp_path
         self._homes = tmp_path / "agents"
         self.invalidated: list[str | None] = []
@@ -41,6 +46,7 @@ class _Harness:
             ),
             self.home,
             self.invalidated.append,
+            resolve_external_skill_scope=resolve_external_skill_scope,
         )
 
     def home(self, agent_id: str) -> Path:
@@ -403,3 +409,88 @@ def test_removed_draft_action_is_rejected(tmp_path: Path) -> None:
 
     assert result["ok"] is False
     assert "[enum]" in cast(dict[str, Any], result["error"])["message"]
+
+
+def _scope_resolver(
+    mapping: dict[str, str],
+) -> Callable[[str, str, str | None], str | None]:
+    def resolve(agent_id: str, name: str, project_id: str | None) -> str | None:
+        return mapping.get(name)
+
+    return resolve
+
+
+def test_edit_foreign_bundled_name_reports_scope_not_notfound(tmp_path: Path) -> None:
+    harness = _Harness(
+        tmp_path,
+        resolve_external_skill_scope=_scope_resolver({"bundle-me": "bundled"}),
+    )
+
+    result = harness.run(
+        {"action": "edit", "name": "bundle-me", "content": _skill_md(name="bundle-me")}
+    )
+
+    assert result["ok"] is False
+    error = cast(dict[str, Any], result["error"])
+    assert error["code"] == "skill_write_rejected"
+    assert error["retryable"] is False
+    assert "Skill 'bundle-me' is a bundled Skill — read-only here." in error["message"]
+    assert "user-facing Skill controls" in error["message"]
+    assert "do not edit the package with file or shell tools" in error["message"]
+    assert "not found" not in error["message"]
+
+
+def test_edit_foreign_project_name_reports_scope(tmp_path: Path) -> None:
+    harness = _Harness(
+        tmp_path,
+        resolve_external_skill_scope=_scope_resolver({"project-me": "project"}),
+    )
+
+    result = harness.run({"action": "patch", "name": "project-me", "match": "x", "content": "y"})
+
+    assert result["ok"] is False
+    error = cast(dict[str, Any], result["error"])
+    assert error["code"] == "skill_write_rejected"
+    assert "is a Project Skill — read-only here." in error["message"]
+
+
+def test_delete_shared_name_reports_owner_limited(tmp_path: Path) -> None:
+    harness = _Harness(
+        tmp_path,
+        resolve_external_skill_scope=_scope_resolver({"shared-me": "shared"}),
+    )
+
+    result = harness.run({"action": "delete", "name": "shared-me"})
+
+    assert result["ok"] is False
+    error = cast(dict[str, Any], result["error"])
+    assert error["code"] == "skill_write_rejected"
+    assert "is shared with you" in error["message"]
+    assert "only its owner or the user can delete it" in error["message"]
+
+
+def test_unknown_name_keeps_plain_notfound(tmp_path: Path) -> None:
+    harness = _Harness(
+        tmp_path,
+        resolve_external_skill_scope=_scope_resolver({"bundle-me": "bundled"}),
+    )
+
+    result = harness.run(
+        {"action": "edit", "name": "no-such-skill", "content": _skill_md(name="no-such-skill")}
+    )
+
+    assert result["ok"] is False
+    error = cast(dict[str, Any], result["error"])
+    assert error["code"] == "skill_write_rejected"
+    assert "Skill 'no-such-skill' not found." in error["message"]
+
+
+def test_create_shadows_foreign_name_unblocked_by_scope_check(tmp_path: Path) -> None:
+    harness = _Harness(
+        tmp_path,
+        resolve_external_skill_scope=_scope_resolver({"bundle-me": "bundled"}),
+    )
+
+    result = harness.create(name="bundle-me")
+
+    assert result["ok"] is True

@@ -125,6 +125,7 @@ from core.skills.skills import (
     SKILL_ORIGIN_AGENT,
     SKILL_ORIGIN_BUNDLED,
     SKILL_ORIGIN_GLOBAL,
+    SKILL_ORIGIN_PROJECT_PREFIX,
     SkillMetadata,
     SkillRegistry,
     find_skill_package_dir,
@@ -664,6 +665,7 @@ class Runtime:
             self.agent_skills_dir,
             self.invalidate_agent_skills,
             self._resolve_shared_skills_dir,
+            self._resolve_external_skill_scope,
         )
         self._chat_sessions = ChatSessionManager(self._storage.data_dir)
         register_history_tool(self._tools, self._chat_sessions)
@@ -1671,6 +1673,32 @@ class Runtime:
                 return package_dir.parent
         return None
 
+    def _resolve_external_skill_scope(
+        self, agent_id: str, name: str, project_id: str | None
+    ) -> str | None:
+        """Return where ``name`` resolves outside the caller's own private home.
+
+        The agent-scoped registry is the same seam ``skill`` resolves through, so
+        this answers how the name is *visible* to the agent (bundled / global /
+        project / shared) — never how the authoring core sees it, which only knows
+        the target root. ``agent`` origin with the name absent from own home means a
+        Skill shared into this agent; ``None`` means genuinely unknown.
+        """
+        registry = self.skills_for(project_id, agent_id)
+        try:
+            origin = registry.get(name).origin
+        except KeyError:
+            return None
+        if origin == SKILL_ORIGIN_AGENT:
+            return "shared"
+        if origin == SKILL_ORIGIN_BUNDLED:
+            return "bundled"
+        if origin == SKILL_ORIGIN_GLOBAL:
+            return "global"
+        if origin is not None and origin.startswith(SKILL_ORIGIN_PROJECT_PREFIX):
+            return "project"
+        return None
+
     def _shared_package_dirs(self, receiver_agent_id: str) -> list[Path]:
         """Resolve every owner's shared private Skill packages for one receiver.
 
@@ -2124,6 +2152,7 @@ class Runtime:
                     self.agent_skills_dir,
                     self.invalidate_agent_skills,
                     self._resolve_shared_skills_dir,
+                    self._resolve_external_skill_scope,
                 )
         if self._system_prompts is not None:
             self._system_prompts.update_skill_registry(cast(SkillPromptRegistry, self._skills))
