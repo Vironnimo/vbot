@@ -545,16 +545,24 @@ def _merge_exclusive_lock(
         lock_file.close()
 
 
-def _request_window_release(release_path: Path, holder_path: Path) -> bool:
+def _request_window_release(
+    release_path: Path, holder_path: Path, lock_path: Path
+) -> bool:
     """Signal the repair keeper to exit and wait until the lock is free."""
     release_path.parent.mkdir(parents=True, exist_ok=True)
     release_path.write_text("release\n", encoding="utf-8")
     deadline = time.monotonic() + RELEASE_SHUTDOWN_TIMEOUT_SECONDS
     while time.monotonic() < deadline:
         record = _read_holder_record(holder_path)
-        if not _holder_record_is_current(record):
+        if not _holder_record_is_current(record) or not _probe_lock_is_busy(lock_path):
+            with suppress(OSError):
+                holder_path.unlink()
             return True
         time.sleep(0.2)
+    if not _probe_lock_is_busy(lock_path):
+        with suppress(OSError):
+            holder_path.unlink()
+        return True
     return False
 
 
@@ -1118,7 +1126,7 @@ def cmd_merge(args: argparse.Namespace) -> int:
 
     outcome = _merge_and_cleanup(args, name, branch, message, window_open=True)
     # Success closes the window; a conflict keeps it open for the retry.
-    if outcome == 0 and not _request_window_release(release_path, holder_path):
+    if outcome == 0 and not _request_window_release(release_path, holder_path, lock_path):
         print_error("repair keeper did not shut down; it expires at its deadline")
     return outcome
 
@@ -1244,7 +1252,7 @@ def cmd_repair_finish(args: argparse.Namespace) -> int:
         print_error(validation_error)
         return 1
 
-    _, holder_path, release_path = _merge_lock_paths()
+    lock_path, holder_path, release_path = _merge_lock_paths()
     record = _read_holder_record(holder_path)
     if record is None or not _holder_record_is_current(record):
         print_ok(status="already-closed", task=name)
@@ -1254,7 +1262,7 @@ def cmd_repair_finish(args: argparse.Namespace) -> int:
         print_error(f"the active window or merge belongs to task '{holder_task}', not '{name}'")
         return 1
 
-    if not _request_window_release(release_path, holder_path):
+    if not _request_window_release(release_path, holder_path, lock_path):
         print_error("repair keeper did not shut down; it expires at its deadline")
         return 1
     print_ok(status="repair-window-closed", task=name)
