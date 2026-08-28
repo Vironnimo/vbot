@@ -90,6 +90,9 @@
   --space-xl: 28px;
   --sidebar-width: 210px;
   --sidebar-collapsed-width: 64px;
+  --sidebar-toggle-size: 30px;
+  --sidebar-toggle-height: 24px;
+  --sidebar-toggle-inset: var(--space-md);
   --secondary-sidebar-width: 216px;
 
   /* Content-width / reading-measure layer. Single source of truth for how wide
@@ -241,6 +244,11 @@ svg {
   min-width: var(--sidebar-collapsed-width);
 }
 
+.app-shell__sidebar-header {
+  position: relative;
+  z-index: var(--z-sticky);
+}
+
 .app-shell__brand,
 .sidebar-logo {
   display: flex;
@@ -371,6 +379,7 @@ svg {
 
 .app-shell[data-sidebar-collapsed='true'] .app-shell__navigation {
   align-items: center;
+  padding-top: var(--space-md);
 }
 
 .app-shell[data-sidebar-collapsed='true'] .app-shell__nav-group {
@@ -448,9 +457,23 @@ svg {
   padding: 7px 18px;
 }
 
-.app-shell__sidebar-toggle {
-  align-self: flex-start;
-  margin: var(--space-sm) 0 0 var(--space-sm);
+.btn-tertiary.btn-icon.app-shell__sidebar-toggle {
+  position: absolute;
+  top: 100%;
+  right: var(--sidebar-toggle-inset);
+  z-index: 1;
+  width: var(--sidebar-toggle-size);
+  height: var(--sidebar-toggle-height);
+  transform: translateY(-50%);
+  border-color: var(--border-2);
+  border-radius: var(--r-md);
+  background: var(--surface);
+}
+
+.btn-tertiary.btn-icon.app-shell__sidebar-toggle:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--accent-dim);
 }
 
 .app-shell__sidebar-toggle svg {
@@ -463,19 +486,10 @@ svg {
   stroke-width: 1.5;
 }
 
-.app-shell[data-sidebar-collapsed='true'] .sidebar-footer {
-  align-items: center;
-}
-
 .app-shell[data-sidebar-collapsed='true'] .sidebar-footer__row {
   justify-content: center;
   min-height: 30px;
   padding: var(--space-xs);
-}
-
-.app-shell[data-sidebar-collapsed='true'] .app-shell__sidebar-toggle {
-  align-self: center;
-  margin-inline: 0;
 }
 
 .pulse-dot--placeholder {

@@ -657,17 +657,36 @@
     class="app-shell__sidebar"
     aria-label={t('navigation.primary', 'Primary navigation')}
   >
-    <div class="app-shell__brand" aria-label={t('app.title', 'vBot')}>
-      <img
-        class="app-shell__brand-mark"
-        src="/brand/vbot-mark-transparent.png"
-        alt=""
-        width="30"
-        height="30"
-      />
-      <div>
-        <h1>{t('app.title', 'vBot')}</h1>
+    <div class="app-shell__sidebar-header">
+      <div class="app-shell__brand" aria-label={t('app.title', 'vBot')}>
+        <img
+          class="app-shell__brand-mark"
+          src="/brand/vbot-mark-transparent.png"
+          alt=""
+          width="30"
+          height="30"
+        />
+        <div>
+          <h1>{t('app.title', 'vBot')}</h1>
+        </div>
       </div>
+      <Button
+        variant="tertiary"
+        icon={true}
+        class="app-shell__sidebar-toggle"
+        ariaLabel={sidebarToggleLabel}
+        tooltip={sidebarToggleLabel}
+        aria-pressed={sidebarCollapsed}
+        onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
+      >
+        <svg viewBox="0 0 16 16" aria-hidden="true">
+          {#if sidebarCollapsed}
+            <path d="m6 3 5 5-5 5" />
+          {:else}
+            <path d="m10 3-5 5 5 5" />
+          {/if}
+        </svg>
+      </Button>
     </div>
 
     <nav
@@ -754,23 +773,6 @@
     </nav>
 
     <div class="sidebar-footer app-shell__footer">
-      <Button
-        variant="tertiary"
-        icon={true}
-        class="app-shell__sidebar-toggle"
-        ariaLabel={sidebarToggleLabel}
-        tooltip={sidebarToggleLabel}
-        aria-pressed={sidebarCollapsed}
-        onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
-      >
-        <svg viewBox="0 0 16 16" aria-hidden="true">
-          {#if sidebarCollapsed}
-            <path d="m6 3 5 5-5 5" />
-          {:else}
-            <path d="m10 3-5 5 5 5" />
-          {/if}
-        </svg>
-      </Button>
       {#if micVisible}
         <div class="sidebar-footer__row">
           <span class="mic-dot {micDotClass}" aria-hidden="true"></span>
