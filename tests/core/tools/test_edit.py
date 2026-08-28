@@ -48,7 +48,14 @@ def assert_success_envelope(result: dict[str, object]) -> dict[str, object]:
     assert result["artifacts"] == []
     data = result["data"]
     assert isinstance(data, dict)
-    assert set(data) == {"message", "path", "first_changed_line", "replacements"}
+    assert set(data) == {
+        "message",
+        "path",
+        "first_changed_line",
+        "last_changed_line",
+        "replacements",
+        "preview",
+    }
     return data
 
 
@@ -134,6 +141,7 @@ def test_register_edit_tool_exposes_provider_schema() -> None:
     )
     assert "filePath" not in parameters["properties"]
     assert tool.open_input_schema is True
+    assert tool.handler_validates_arguments is True
 
 
 def test_edit_replaces_text_in_relative_workspace_path(tmp_path: Path) -> None:
@@ -151,6 +159,8 @@ def test_edit_replaces_text_in_relative_workspace_path(tmp_path: Path) -> None:
     assert target.read_bytes() == b"hello agent\n"
     assert data["replacements"] == 1
     assert data["first_changed_line"] == 1
+    assert data["last_changed_line"] == 1
+    assert data["preview"] == [{"before": ["1| hello workspace"], "after": ["1| hello agent"]}]
     assert data["path"] == model_path(target.resolve())
     assert isinstance(data["message"], str)
     assert "OK: updated" in data["message"]
@@ -170,6 +180,58 @@ def test_edit_replaces_text_in_absolute_path(tmp_path: Path) -> None:
     data = assert_success_envelope(result)
     assert target.read_bytes() == b"direct path\n"
     assert data["path"] == model_path(target.resolve())
+
+
+def test_edit_preview_centers_a_change_inside_a_long_line(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    target = workspace / "notes.txt"
+    target.write_text("a" * 500 + "old" + "z" * 500 + "\n", encoding="utf-8")
+
+    result = edit_handler(
+        make_context(workspace),
+        {"path": "notes.txt", "old_string": "old", "new_string": "new"},
+    )
+
+    data = assert_success_envelope(result)
+    preview = data["preview"]
+    assert isinstance(preview, list)
+    region = preview[0]
+    assert isinstance(region, dict)
+    before = region["before"]
+    after = region["after"]
+    assert isinstance(before, list)
+    assert isinstance(after, list)
+    before_line = before[0]
+    after_line = after[0]
+    assert isinstance(before_line, str)
+    assert isinstance(after_line, str)
+    assert before_line.startswith("1:")
+    assert "old" in before_line
+    assert "new" in after_line
+    assert len(before_line) < 270
+
+
+def test_edit_last_changed_line_includes_multiline_replacement(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    target = workspace / "notes.txt"
+    target.write_text("before\ntarget\nafter\n", encoding="utf-8")
+
+    result = edit_handler(
+        make_context(workspace),
+        {"path": "notes.txt", "old_string": "target", "new_string": "one\ntwo\nthree"},
+    )
+
+    data = assert_success_envelope(result)
+    assert data["first_changed_line"] == 2
+    assert data["last_changed_line"] == 4
+    assert data["preview"] == [
+        {
+            "before": ["1| before", "2| target", "3| after"],
+            "after": ["1| before", "2| one", "3| two", "4| three", "5| after"],
+        }
+    ]
 
 
 def test_edit_returns_failure_envelope_for_missing_file(tmp_path: Path) -> None:
@@ -643,6 +705,32 @@ def test_edit_bounds_ambiguous_candidate_contexts(tmp_path: Path) -> None:
     assert target.read_text(encoding="utf-8").count("same") == 4
 
 
+def test_edit_disambiguates_multiple_matches_within_one_long_line(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    target = workspace / "notes.txt"
+    target.write_text(
+        "a" * 100 + "same" + "b" * 100 + "same" + "c" * 100 + "same\n",
+        encoding="utf-8",
+    )
+
+    result = edit_handler(
+        make_context(workspace),
+        {"path": "notes.txt", "old_string": "same", "new_string": "changed"},
+    )
+
+    error = assert_failure_envelope(result, "ambiguous_match")
+    assert "Found 3 occurrences on line 1." in error["message"]
+    assert "on lines 1, 1, 1" not in error["message"]
+    assert "Candidate 1 (line 1, character 101)" in error["message"]
+    assert "Candidate 2 (line 1, character 205)" in error["message"]
+    assert "Candidate 3 (line 1, character 309)" in error["message"]
+    candidate_contexts = [
+        block.split("\n", 1)[1] for block in error["message"].split("Candidate ")[1:]
+    ]
+    assert len(set(candidate_contexts)) == 3
+
+
 def test_edit_replaces_ambiguous_matches_with_replace_all(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
@@ -659,6 +747,7 @@ def test_edit_replaces_ambiguous_matches_with_replace_all(tmp_path: Path) -> Non
     assert target.read_text(encoding="utf-8") == "changed\nother\nchanged\n"
     assert data["replacements"] == 2
     assert data["first_changed_line"] == 1
+    assert data["last_changed_line"] == 3
     assert context.presentation_facts == [
         {"kind": "line_change", "change": "added", "value": 2},
         {"kind": "line_change", "change": "removed", "value": 2},
@@ -1312,6 +1401,132 @@ def test_multi_edit_continues_after_an_item_fails(tmp_path: Path) -> None:
     assert context.presentation_facts == [
         {"kind": "line_change", "change": "added", "value": 2},
         {"kind": "line_change", "change": "removed", "value": 2},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_registered_multi_edit_validates_each_item_without_rejecting_batch(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    target = workspace / "notes.txt"
+    target.write_text("alpha beta\n", encoding="utf-8")
+    registry = ToolRegistry()
+    register_edit_tool(registry, file_state=FileReadState())
+
+    result = await registry.dispatch(
+        make_context(workspace),
+        {
+            "edits": [
+                {"path": "notes.txt", "old_string": "", "new_string": "bad"},
+                {"old_string": "alpha", "new_string": "bad"},
+                "not an object",
+                {"path": "notes.txt", "old_string": "beta", "new_string": "BETA"},
+            ]
+        },
+    )
+
+    assert result["ok"] is True
+    data = result["data"]
+    assert isinstance(data, dict)
+    assert data["status"] == "partial"
+    assert data["succeeded"] == 1
+    assert data["failed"] == 3
+    assert [item["error"]["code"] for item in data["results"][:3]] == [
+        "invalid_arguments",
+        "invalid_arguments",
+        "invalid_arguments",
+    ]
+    assert data["results"][3]["ok"] is True
+    assert target.read_text(encoding="utf-8") == "alpha BETA\n"
+
+
+@pytest.mark.asyncio
+async def test_registered_edit_rejects_retired_flat_shape(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    target = workspace / "notes.txt"
+    target.write_text("alpha\n", encoding="utf-8")
+    registry = ToolRegistry()
+    register_edit_tool(registry, file_state=FileReadState())
+
+    result = await registry.dispatch(
+        make_context(workspace),
+        {"path": "notes.txt", "old_string": "alpha", "new_string": "ALPHA"},
+    )
+
+    assert_failure_envelope(result, "invalid_arguments")
+    assert target.read_text(encoding="utf-8") == "alpha\n"
+
+
+def test_multi_edit_continues_after_directory_path(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    workspace.joinpath("folder").mkdir()
+    target = workspace / "notes.txt"
+    target.write_text("alpha\n", encoding="utf-8")
+
+    result = edit_handler(
+        make_context(workspace),
+        {
+            "edits": [
+                {"path": "folder", "old_string": "x", "new_string": "y"},
+                {"path": "notes.txt", "old_string": "alpha", "new_string": "ALPHA"},
+            ]
+        },
+    )
+
+    assert result["ok"] is True
+    data = result["data"]
+    assert isinstance(data, dict)
+    assert data["status"] == "partial"
+    assert data["results"][0]["error"]["code"] == "not_a_file"
+    assert data["results"][1]["ok"] is True
+    assert target.read_text(encoding="utf-8") == "ALPHA\n"
+
+
+def test_multi_edit_preview_keeps_only_first_and_last_distant_regions(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    target = workspace / "notes.txt"
+    target.write_text(
+        "target\nkeep\nkeep\nkeep\ntarget\nkeep\nkeep\nkeep\ntarget\n",
+        encoding="utf-8",
+    )
+
+    result = edit_handler(
+        make_context(workspace),
+        {
+            "edits": [
+                {
+                    "path": "notes.txt",
+                    "old_string": "target",
+                    "new_string": "changed",
+                    "replace_all": True,
+                }
+            ]
+        },
+    )
+
+    assert result["ok"] is True
+    data = result["data"]
+    assert isinstance(data, dict)
+    item = data["results"][0]
+    assert item["first_changed_line"] == 1
+    assert item["last_changed_line"] == 9
+    assert item["preview_omitted_regions"] == 1
+    assert item["preview"] == [
+        {
+            "before": ["1| target", "2| keep"],
+            "after": ["1| changed", "2| keep"],
+        },
+        {
+            "before": ["8| keep", "9| target"],
+            "after": ["8| keep", "9| changed"],
+        },
     ]
 
 

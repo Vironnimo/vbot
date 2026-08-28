@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import re
+from bisect import bisect_right
 from contextlib import nullcontext
 from pathlib import Path
 
 from core.tools.arguments import (
+    LINE_NUMBER_GUTTER_SEPARATOR,
     ToolArgumentError,
     line_number_gutter_candidates,
     logical_line_count,
@@ -86,6 +89,12 @@ EDIT_TOOL_PARAMETERS: JsonObject = {
 AMBIGUOUS_CONTEXT_LIMIT = 3
 AMBIGUOUS_CONTEXT_LINE_RADIUS = 1
 AMBIGUOUS_CONTEXT_LINE_MAX_CHARS = 160
+AMBIGUOUS_INLINE_CONTEXT_CHARS = 120
+EDIT_PREVIEW_CONTEXT_LINES = 1
+EDIT_PREVIEW_MAX_LINES_PER_SIDE = 8
+EDIT_PREVIEW_MAX_LINE_CHARS = 240
+EDIT_PREVIEW_MAX_REGIONS = 2
+EDIT_LINE_BREAK_PATTERN = re.compile(r"\r\n|[\n\v\f\x1c-\x1e\x85\u2028\u2029\r]")
 ALREADY_APPLIED_STRATEGIES = frozenset({"exact", "normalized"})
 ALREADY_APPLIED_CONTEXT_MIN_CHARS = 4
 
@@ -106,20 +115,50 @@ def _candidate_context(content: str, line_number: int) -> str:
     return "\n".join(_bounded_context_line(line) for line in lines[start:end])
 
 
+def _inline_candidate_context(content: str, line_number: int, character_number: int) -> str:
+    lines = content.splitlines()
+    if not lines:
+        return ""
+    line = lines[min(max(line_number - 1, 0), len(lines) - 1)]
+    match_index = min(max(character_number - 1, 0), len(line))
+    half_window = AMBIGUOUS_INLINE_CONTEXT_CHARS // 2
+    start = max(0, match_index - half_window)
+    end = min(len(line), start + AMBIGUOUS_INLINE_CONTEXT_CHARS)
+    start = max(0, end - AMBIGUOUS_INLINE_CONTEXT_CHARS)
+    prefix = "..." if start else ""
+    suffix = "..." if end < len(line) else ""
+    return prefix + line[start:end] + suffix
+
+
 def _format_ambiguous_match_error(
-    content: str, occurrence_count: int, line_numbers: list[int]
+    content: str,
+    occurrence_count: int,
+    line_numbers: list[int],
+    character_numbers: list[int],
 ) -> str:
-    line_preview = ", ".join(str(line_number) for line_number in line_numbers[:3])
-    if line_preview:
+    unique_lines = list(dict.fromkeys(line_numbers))
+    line_preview = ", ".join(str(line_number) for line_number in unique_lines[:3])
+    if len(unique_lines) == 1:
+        summary = f"Found {occurrence_count} occurrences on line {line_preview}. "
+    elif line_preview:
         summary = f"Found {occurrence_count} occurrences on lines {line_preview}. "
     else:
         summary = f"Found {occurrence_count} occurrences. "
 
-    candidates = [
-        f"Candidate {index} (around line {line_number}):\n"
-        f"{_candidate_context(content, line_number)}"
-        for index, line_number in enumerate(line_numbers[:AMBIGUOUS_CONTEXT_LIMIT], start=1)
-    ]
+    same_line = len(unique_lines) == 1
+    candidates = []
+    for index, (line_number, character_number) in enumerate(
+        zip(line_numbers, character_numbers, strict=True), start=1
+    ):
+        if index > AMBIGUOUS_CONTEXT_LIMIT:
+            break
+        if same_line:
+            heading = f"Candidate {index} (line {line_number}, character {character_number}):"
+            context = _inline_candidate_context(content, line_number, character_number)
+        else:
+            heading = f"Candidate {index} (around line {line_number}):"
+            context = _candidate_context(content, line_number)
+        candidates.append(f"{heading}\n{context}")
     candidate_text = ""
     if candidates:
         candidate_text = (
@@ -305,7 +344,10 @@ def _validate_edit_arguments(
 def _build_success_data(
     resolved: Path,
     first_line_number: int,
+    last_line_number: int,
     replaced_count: int,
+    preview: list[JsonObject],
+    preview_omitted_regions: int,
     syntax_warning: str | None,
     stale_warning: str | None,
     normalization_warning: str | None,
@@ -319,8 +361,12 @@ def _build_success_data(
         "message": message,
         "path": displayed_path,
         "first_changed_line": first_line_number,
+        "last_changed_line": last_line_number,
         "replacements": replaced_count,
+        "preview": preview,
     }
+    if preview_omitted_regions:
+        data["preview_omitted_regions"] = preview_omitted_regions
     if syntax_warning is not None:
         data["syntax_warning"] = syntax_warning
     if stale_warning is not None:
@@ -328,6 +374,107 @@ def _build_success_data(
     if normalization_warning is not None:
         data["normalization_warning"] = normalization_warning
     return data
+
+
+def _bounded_preview_indices(start: int, end: int) -> tuple[list[int], int]:
+    count = end - start
+    if count <= EDIT_PREVIEW_MAX_LINES_PER_SIDE:
+        return list(range(start, end)), 0
+    leading = EDIT_PREVIEW_MAX_LINES_PER_SIDE // 2
+    trailing = EDIT_PREVIEW_MAX_LINES_PER_SIDE - leading
+    indices = list(range(start, start + leading)) + list(range(end - trailing, end))
+    return indices, count - len(indices)
+
+
+def _render_preview_line(line: str, line_number: int, focus_character: int | None) -> str:
+    if len(line) <= EDIT_PREVIEW_MAX_LINE_CHARS:
+        return f"{line_number}{LINE_NUMBER_GUTTER_SEPARATOR} {line}"
+    focus_index = max((focus_character or 1) - 1, 0)
+    start = max(0, focus_index - EDIT_PREVIEW_MAX_LINE_CHARS // 3)
+    end = min(len(line), start + EDIT_PREVIEW_MAX_LINE_CHARS)
+    start = max(0, end - EDIT_PREVIEW_MAX_LINE_CHARS)
+    gutter = f"{line_number}"
+    if start:
+        gutter += f":{start + 1}"
+    suffix = "..." if end < len(line) else ""
+    return f"{gutter}{LINE_NUMBER_GUTTER_SEPARATOR} {line[start:end]}{suffix}"
+
+
+def _render_preview_side(
+    lines: list[str],
+    start: int,
+    end: int,
+    focus_line: int,
+    focus_character: int,
+) -> tuple[list[str], int]:
+    indices, omitted = _bounded_preview_indices(start, end)
+    return [
+        _render_preview_line(
+            lines[index], index + 1, focus_character if index == focus_line else None
+        )
+        for index in indices
+    ], omitted
+
+
+def _line_starts(text: str) -> list[int]:
+    return [0, *(match.end() for match in EDIT_LINE_BREAK_PATTERN.finditer(text))]
+
+
+def _preview_span(text: str, span: tuple[int, int]) -> tuple[list[str], int, int, int, int]:
+    lines = text.splitlines()
+    starts = _line_starts(text)
+    span_start, span_end = span
+    focus_line = bisect_right(starts, span_start) - 1
+    last_offset = max(span_start, span_end - 1)
+    last_line = bisect_right(starts, last_offset) - 1
+    if lines:
+        focus_line = min(focus_line, len(lines) - 1)
+        last_line = min(last_line, len(lines) - 1)
+    focus_character = span_start - starts[min(focus_line, len(starts) - 1)] + 1
+    start = max(0, focus_line - EDIT_PREVIEW_CONTEXT_LINES)
+    end = min(len(lines), last_line + EDIT_PREVIEW_CONTEXT_LINES + 1)
+    return lines, start, end, focus_line, focus_character
+
+
+def _change_preview(
+    before: str,
+    after: str,
+    before_spans: tuple[tuple[int, int], ...],
+    after_spans: tuple[tuple[int, int], ...],
+) -> tuple[list[JsonObject], int]:
+    span_pairs = list(zip(before_spans, after_spans, strict=True))
+    selected_pairs = span_pairs
+    if len(span_pairs) > EDIT_PREVIEW_MAX_REGIONS:
+        selected_pairs = [span_pairs[0], span_pairs[-1]]
+    regions: list[JsonObject] = []
+    for before_span, after_span in selected_pairs:
+        before_lines, before_start, before_end, before_focus_line, before_focus_character = (
+            _preview_span(before, before_span)
+        )
+        after_lines, after_start, after_end, after_focus_line, after_focus_character = (
+            _preview_span(after, after_span)
+        )
+        before_preview, before_omitted = _render_preview_side(
+            before_lines,
+            before_start,
+            before_end,
+            before_focus_line,
+            before_focus_character,
+        )
+        after_preview, after_omitted = _render_preview_side(
+            after_lines,
+            after_start,
+            after_end,
+            after_focus_line,
+            after_focus_character,
+        )
+        region: JsonObject = {"before": before_preview, "after": after_preview}
+        if before_omitted:
+            region["before_omitted_lines"] = before_omitted
+        if after_omitted:
+            region["after_omitted_lines"] = after_omitted
+        regions.append(region)
+    return regions, len(span_pairs) - len(selected_pairs)
 
 
 def _edit_one(
@@ -414,7 +561,12 @@ def _edit_one(
         if isinstance(result, AmbiguousFuzzyMatch):
             return tool_failure(
                 "ambiguous_match",
-                _format_ambiguous_match_error(content, result.occurrences, result.line_numbers),
+                _format_ambiguous_match_error(
+                    content,
+                    result.occurrences,
+                    result.line_numbers,
+                    result.character_numbers,
+                ),
             )
 
         if result.new_content == content:
@@ -458,10 +610,19 @@ def _edit_one(
             )
         added_lines = logical_line_count(new_string) * result.replacements
         removed_lines = logical_line_count(old_string) * result.replacements
+        preview, preview_omitted_regions = _change_preview(
+            content,
+            result.new_content,
+            result.before_spans,
+            result.after_spans,
+        )
         success_data = _build_success_data(
             resolved,
             result.first_changed_line,
+            result.last_changed_line,
             result.replacements,
+            preview,
+            preview_omitted_regions,
             syntax_warning,
             stale_warning,
             normalization_warning,
@@ -471,7 +632,7 @@ def _edit_one(
         return tool_success(success_data)
 
 
-def _validate_batch_arguments(arguments: JsonObject) -> list[JsonObject] | JsonObject:
+def _validate_batch_arguments(arguments: JsonObject) -> list[object] | JsonObject:
     unknown_arguments = set(arguments) - {"edits"}
     if unknown_arguments:
         names = ", ".join(sorted(unknown_arguments))
@@ -479,14 +640,12 @@ def _validate_batch_arguments(arguments: JsonObject) -> list[JsonObject] | JsonO
     edits = arguments.get("edits")
     if not isinstance(edits, list) or not edits:
         return tool_failure("invalid_arguments", "edits must be a non-empty array")
-    if not all(isinstance(edit, dict) for edit in edits):
-        return tool_failure("invalid_arguments", "each edits item must be an object")
     return edits
 
 
-def _failed_item(index: int, edit: JsonObject, result: JsonObject) -> JsonObject:
+def _failed_item(index: int, edit: object, result: JsonObject) -> JsonObject:
     outcome: JsonObject = {"index": index, "ok": False, "error": result["error"]}
-    path = edit.get("path")
+    path = edit.get("path") if isinstance(edit, dict) else None
     if isinstance(path, str) and path:
         outcome["path"] = path
     return outcome
@@ -536,6 +695,14 @@ def edit_handler(
             data.pop("removed_lines", None)
         return result
 
+    return _edit_batch(context, arguments, file_state=file_state)
+
+
+def _edit_batch(
+    context: ToolContext, arguments: JsonObject, *, file_state: FileReadState | None = None
+) -> JsonObject:
+    """Apply only the registered batched shape, with item-local validation."""
+
     validated_arguments = _validate_batch_arguments(arguments)
     if isinstance(validated_arguments, dict):
         return validated_arguments
@@ -544,7 +711,11 @@ def edit_handler(
     added_lines = 0
     removed_lines = 0
     for index, edit in enumerate(validated_arguments):
-        result = _edit_one(context, edit, file_state=file_state)
+        result = (
+            _edit_one(context, edit, file_state=file_state)
+            if isinstance(edit, dict)
+            else tool_failure("invalid_arguments", "edit must be an object")
+        )
         data = result.get("data")
         if result.get("ok") is True and isinstance(data, dict):
             outcomes.append(_successful_item(index, result))
@@ -622,7 +793,7 @@ def make_edit_handler(file_state: FileReadState) -> ToolHandler:
     """Create an edit handler bound to the read-before-write guard registry."""
 
     def edit_handler_bound(context: ToolContext, arguments: JsonObject) -> JsonObject:
-        return edit_handler(context, arguments, file_state=file_state)
+        return _edit_batch(context, arguments, file_state=file_state)
 
     return edit_handler_bound
 
@@ -636,6 +807,7 @@ def register_edit_tool(registry: ToolRegistry, *, file_state: FileReadState) -> 
         offload_tool_handler(make_edit_handler(file_state)),
         family="files",
         open_input_schema=True,
+        handler_validates_arguments=True,
         result_schema={
             "type": "object",
             "required": ["message", "status", "total", "succeeded", "failed", "results"],
