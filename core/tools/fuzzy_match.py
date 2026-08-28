@@ -89,8 +89,11 @@ class FuzzyReplacement:
 
     new_content: str
     first_changed_line: int
+    last_changed_line: int
     replacements: int
     strategy: str
+    before_spans: tuple[tuple[int, int], ...]
+    after_spans: tuple[tuple[int, int], ...]
 
 
 @dataclass(frozen=True)
@@ -99,6 +102,7 @@ class AmbiguousFuzzyMatch:
 
     occurrences: int
     line_numbers: list[int]
+    character_numbers: list[int]
 
 
 @dataclass(frozen=True)
@@ -132,11 +136,15 @@ def replace_fuzzy(
         if not matches:
             continue
         if len(matches) > 1 and not replace_all:
-            line_numbers = [_line_number_at(content, start) for start, _ in matches]
-            return AmbiguousFuzzyMatch(len(matches), line_numbers)
+            locations = [_line_and_character_at(content, start) for start, _ in matches]
+            return AmbiguousFuzzyMatch(
+                len(matches),
+                [line for line, _ in locations],
+                [character for _, character in locations],
+            )
 
         selected = matches if replace_all else matches[:1]
-        new_content = _apply_replacements(
+        new_content, before_spans, after_spans = _apply_replacements(
             content,
             selected,
             new_lf,
@@ -145,7 +153,18 @@ def replace_fuzzy(
             file_ending=file_ending,
         )
         first_line = _line_number_at(content, min(start for start, _ in selected))
-        return FuzzyReplacement(new_content, first_line, len(selected), name)
+        last_line = max(
+            _line_number_at(new_content, max(start, end - 1)) for start, end in after_spans
+        )
+        return FuzzyReplacement(
+            new_content,
+            first_line,
+            last_line,
+            len(selected),
+            name,
+            before_spans,
+            after_spans,
+        )
 
     return None
 
@@ -278,6 +297,13 @@ def _to_line_ending(text_lf: str, file_ending: str | None) -> str:
 def _line_number_at(content: str, offset: int) -> int:
     """1-based line number at ``offset``, counting every read-rendered break."""
     return len(_LINE_BREAK_RE.findall(content[:offset])) + 1
+
+
+def _line_and_character_at(content: str, offset: int) -> tuple[int, int]:
+    """Return the 1-based read-style line and character at ``offset``."""
+    breaks = list(_LINE_BREAK_RE.finditer(content[:offset]))
+    line_start = breaks[-1].end() if breaks else 0
+    return len(breaks) + 1, offset - line_start + 1
 
 
 def _normalize_with_spans(text: str) -> tuple[str, list[tuple[int, int]]]:
@@ -441,16 +467,29 @@ def _apply_replacements(
     reindent: bool,
     old_string_lf: str,
     file_ending: str | None,
-) -> str:
-    result = content
-    # Splice from the end so earlier spans keep their offsets.
-    for start, end in sorted(matches, reverse=True):
+) -> tuple[str, tuple[tuple[int, int], ...], tuple[tuple[int, int], ...]]:
+    prepared: list[tuple[int, int, str]] = []
+    before_spans: list[tuple[int, int]] = []
+    after_spans: list[tuple[int, int]] = []
+    offset_shift = 0
+    for start, end in sorted(matches):
         if reindent:
             replacement_lf = _reindent_replacement(content[start:end], old_string_lf, new_string_lf)
         else:
             replacement_lf = new_string_lf
-        result = result[:start] + _to_line_ending(replacement_lf, file_ending) + result[end:]
-    return result
+        replacement = _to_line_ending(replacement_lf, file_ending)
+        after_start = start + offset_shift
+        after_end = after_start + len(replacement)
+        prepared.append((start, end, replacement))
+        before_spans.append((start, end))
+        after_spans.append((after_start, after_end))
+        offset_shift += len(replacement) - (end - start)
+
+    result = content
+    # Splice from the end so earlier spans keep their offsets.
+    for start, end, replacement in reversed(prepared):
+        result = result[:start] + replacement + result[end:]
+    return result, tuple(before_spans), tuple(after_spans)
 
 
 def _leading_whitespace(line: str) -> str:

@@ -764,6 +764,10 @@ class Tool:
     extension: str | None = None
     parallel_safe: bool = True
     open_input_schema: bool = False
+    # Independently executed batches may need malformed items to reach the
+    # handler so valid siblings still run. The handler then owns complete root
+    # and per-item validation; the precise Provider schema remains unchanged.
+    handler_validates_arguments: bool = False
     definition_profile_resolver: ToolDefinitionProfileResolver | None = field(
         default=None,
         repr=False,
@@ -934,6 +938,7 @@ class ToolRegistry:
         result_schema: JsonObject | None = None,
         parallel_safe: bool = True,
         open_input_schema: bool = False,
+        handler_validates_arguments: bool = False,
         definition_profile_resolver: ToolDefinitionProfileResolver | None = None,
     ) -> Tool:
         """Register a tool and return its immutable definition.
@@ -980,6 +985,7 @@ class ToolRegistry:
             extension=extension,
             parallel_safe=parallel_safe,
             open_input_schema=open_input_schema,
+            handler_validates_arguments=handler_validates_arguments,
             definition_profile_resolver=definition_profile_resolver,
         )
         self._tools[name] = tool
@@ -1234,7 +1240,8 @@ class ToolRegistry:
             )
         input_contract = context.input_contract or tool.contract
         normalized_arguments = input_contract.normalize_arguments(arguments)
-        input_contract.validate_arguments(normalized_arguments)
+        if not tool.handler_validates_arguments:
+            input_contract.validate_arguments(normalized_arguments)
 
         if tool.extension is not None and not inspect.iscoroutinefunction(tool.handler):
             result = await run_tool_worker(
