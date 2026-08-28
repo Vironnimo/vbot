@@ -38,9 +38,6 @@ export const englishCatalog = Object.freeze({
   'calendar.loading': 'Loading calendar…',
   'calendar.loadError': 'The calendar could not be loaded.',
   'calendar.serverUnavailable': 'The vBot server is not reachable right now.',
-  'calendar.emptyTitle': 'Nothing scheduled',
-  'calendar.emptyDescription':
-    'Create an event yourself, or ask the agent to add one for you.',
   'calendar.freeDay': 'Nothing scheduled.',
   'calendar.layer.local': 'Events',
   'calendar.layer.localHint': 'Appointments stored in vBot',
