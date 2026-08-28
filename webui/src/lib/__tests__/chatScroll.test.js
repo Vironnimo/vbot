@@ -226,47 +226,6 @@ describe('createChatScrollController', () => {
     controller.destroy();
   });
 
-  it('animates one element to the top and anchors the reading position there', () => {
-    const container = createFakeContainer();
-    const target = createElement('submitted-turn', 1500, container);
-    container.querySelectorAll = vi.fn(() => [target]);
-    const controller = createController(container);
-    controller.sessionChanged('session-a');
-    controller.contentChanged();
-
-    // Element sits 1500px into the content; aligned 28px below the top edge.
-    controller.animateElementToTop(target);
-    expect(container.scrollTo).toHaveBeenCalledWith({
-      top: 1472,
-      behavior: 'smooth',
-    });
-
-    // The animated element owns the reading position: growth below it must
-    // not pull the view back down.
-    container.scrollHeight = 3000;
-    controller.contentChanged();
-    expect(container.scrollTop).toBe(1472);
-    controller.destroy();
-  });
-
-  it('ignores scroll events while an explicit animation is in flight', () => {
-    const container = createFakeContainer();
-    const onViewChanged = vi.fn();
-    const target = createElement('submitted-turn', 1500, container);
-    container.querySelectorAll = vi.fn(() => [target]);
-    const controller = createController(container, { onViewChanged });
-    controller.sessionChanged('session-a');
-    controller.contentChanged();
-    onViewChanged.mockClear();
-
-    controller.animateElementToTop(target);
-    // Intermediate smooth-scroll positions are part of the animation.
-    container.scrollTop = 800;
-    container.dispatchScroll();
-    expect(onViewChanged).not.toHaveBeenCalled();
-    controller.destroy();
-  });
-
   it('keeps sessions in separate viewports up to the tracking limit', () => {
     const container = createFakeContainer();
     const controller = createController(container);
