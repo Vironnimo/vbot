@@ -29,9 +29,9 @@
     chatWorkingMode = 'normal',
     transientCards = [],
     submittedTurnScrollKey = 0,
-    submittedTurnScrollRunId = '',
     // Height of the floating composer stack overlaying this timeline's
-    // bottom; the submitted-turn scroll alignment reserves space for it.
+    // bottom; the bottom padding reserves space for it so the newest
+    // content scrolls clear of the composer.
     bottomOverlayHeight = 0,
     // Explicit navigation through a Sub-Agent row starts that Session as a
     // live tail even when its ordinary per-Session viewport was saved higher
@@ -55,8 +55,6 @@
     onScrollbarWidthChange = () => {},
   } = $props();
 
-  const MIN_SUBMITTED_TURN_SPACER_HEIGHT = 360;
-
   let timelineItems = $derived(visibleTimelineItemsForRender(sessionState));
   let nowMs = $state(Date.now());
   // Transient cards interleaved with the timeline: each renders after the
@@ -76,17 +74,10 @@
   let timelineContent = $state();
   let lightboxImage = $state(null);
   let reasoningDisclosureState = $state({});
-  let pendingSubmittedTurnScrollKey = $state(0);
-  let pendingSubmittedTurnScrollRunId = $state('');
-  let handledSubmittedTurnScrollKey = $state(0);
-  let submittedTurnSpacerHeight = $state(MIN_SUBMITTED_TURN_SPACER_HEIGHT);
   let showJumpToLatest = $state(false);
   let timelineSignature = $derived(
     `${timelineItems.map((item) => timelineItemSignature(item)).join('|')}` +
       `#${transientCards.map((card) => card.id).join(',')}`,
-  );
-  let shouldRenderSubmittedTurnScrollSpacer = $derived(
-    hasSubmittedTurnUserItem(),
   );
   let sessionScrollKey = $derived(sessionState?.key ?? '');
   let renderedSessionScrollKey = null;
@@ -194,14 +185,14 @@
     });
   });
 
+  // A submitted turn pins the viewport to the bottom so the incoming
+  // response is always visible. The controller follows the live tail as
+  // content streams in.
+  let lastSubmittedTurnScrollKey = 0;
   $effect(() => {
-    if (
-      submittedTurnScrollKey > handledSubmittedTurnScrollKey &&
-      submittedTurnScrollKey > pendingSubmittedTurnScrollKey
-    ) {
-      pendingSubmittedTurnScrollKey = submittedTurnScrollKey;
-      pendingSubmittedTurnScrollRunId = submittedTurnScrollRunId;
-      syncSubmittedTurnSpacerHeight();
+    if (submittedTurnScrollKey > lastSubmittedTurnScrollKey) {
+      lastSubmittedTurnScrollKey = submittedTurnScrollKey;
+      tick().then(() => controller?.pinToBottom());
     }
   });
 
@@ -209,13 +200,9 @@
   // re-run the coordination. The controller coalesces through one animation
   // frame — the same frame boundary the browser scrolls on. Deferred so the
   // read sees the controller even when this effect runs ahead of its
-  // creation during mount. Skipped while the submitted-turn scroll owns the
-  // viewport so the animation is never fought mid-flight.
+  // creation during mount.
   $effect(() => {
     timelineSignature;
-    if (hasPendingSubmittedTurnScroll()) {
-      return;
-    }
     tick().then(() => controller?.contentChanged());
   });
 
@@ -226,55 +213,13 @@
   // composer rises, a reading position needs no correction at all.
   $effect(() => {
     bottomOverlayHeight;
-    if (hasPendingSubmittedTurnScroll()) {
-      return;
-    }
     tick().then(() => controller?.contentChanged());
-  });
-
-  $effect(() => {
-    timelineSignature;
-    if (!hasPendingSubmittedTurnScroll()) {
-      return;
-    }
-
-    tick().then(async () => {
-      if (!hasPendingSubmittedTurnScroll()) {
-        return;
-      }
-      const target = submittedTurnScrollTarget(userMessageElements());
-      if (!target) {
-        return;
-      }
-      syncSubmittedTurnSpacerHeight(target);
-      await tick();
-      if (!hasPendingSubmittedTurnScroll()) {
-        return;
-      }
-      if (scrollSubmittedTurnIntoView()) {
-        handledSubmittedTurnScrollKey = pendingSubmittedTurnScrollKey;
-      }
-    });
-  });
-
-  $effect(() => {
-    timelineSignature;
-    if (!shouldRenderSubmittedTurnScrollSpacer) {
-      return;
-    }
-
-    tick().then(() => {
-      const target = submittedTurnScrollTarget(userMessageElements());
-      if (target) {
-        syncSubmittedTurnSpacerHeight(target);
-      }
-    });
   });
 
   // Delegated click handling is needed because Markdown images are rendered
   // through {@html}. Input listeners feed real-user signals to the scroll
   // controller: upward input releases the follow pin before the browser
-  // scrolls, and any input cancels an in-flight programmatic animation.
+  // scrolls, so concurrent content growth cannot yank the view back down.
   $effect(() => {
     const container = scrollContainer;
     if (!container) {
@@ -334,9 +279,6 @@
       return undefined;
     }
     const observer = new ResizeObserver(() => {
-      if (hasPendingSubmittedTurnScroll()) {
-        return;
-      }
       controller?.contentChanged();
     });
     observer.observe(content);
@@ -415,10 +357,6 @@
     );
   }
 
-  function hasPendingSubmittedTurnScroll() {
-    return pendingSubmittedTurnScrollKey > handledSubmittedTurnScrollKey;
-  }
-
   function syncJumpToLatestVisibility() {
     showJumpToLatest = Boolean(
       sessionScrollKey &&
@@ -445,94 +383,6 @@
       !loadingOlderHistory &&
       timelineItems.length > 0 &&
       Boolean(scrollContainer)
-    );
-  }
-
-  function scrollSubmittedTurnIntoView() {
-    const target = submittedTurnScrollTarget(userMessageElements());
-    if (!target) {
-      return false;
-    }
-    controller?.animateElementToTop(target);
-    return true;
-  }
-
-  function userMessageElements() {
-    return Array.from(scrollContainer?.querySelectorAll?.('.msg.user') ?? []);
-  }
-
-  function submittedTurnScrollTarget(userMessages) {
-    if (pendingSubmittedTurnScrollRunId) {
-      return (
-        userMessages.find(
-          (element) =>
-            element.dataset.runId === pendingSubmittedTurnScrollRunId,
-        ) ?? null
-      );
-    }
-    return userMessages[userMessages.length - 1] ?? null;
-  }
-
-  function hasSubmittedTurnUserItem() {
-    if (!pendingSubmittedTurnScrollKey) {
-      return false;
-    }
-    if (!pendingSubmittedTurnScrollRunId) {
-      return hasAnyUserTimelineItem();
-    }
-    return timelineItems.some(
-      (item) =>
-        userRunIdForTimelineItem(item) === pendingSubmittedTurnScrollRunId,
-    );
-  }
-
-  function hasAnyUserTimelineItem() {
-    return timelineItems.some(
-      (item) => item.type === 'message' && item.message.role === 'user',
-    );
-  }
-
-  function userRunIdForTimelineItem(item) {
-    if (item?.type === 'message' && item.message.role === 'user') {
-      return item.message.run_id ?? '';
-    }
-    if (
-      item?.type === 'event' &&
-      item.event.type === 'user_message_persisted'
-    ) {
-      return item.event.run_id ?? '';
-    }
-    return '';
-  }
-
-  function syncSubmittedTurnSpacerHeight(target = null) {
-    // The composer overlays the timeline's bottom; the aligned message must
-    // stay visible above it, so only the unobstructed height counts.
-    const containerHeight = Math.max(
-      0,
-      (scrollContainer?.clientHeight ?? 0) - bottomOverlayHeight,
-    );
-    if (!scrollContainer || containerHeight <= 0 || !target) {
-      submittedTurnSpacerHeight = Math.max(
-        containerHeight,
-        MIN_SUBMITTED_TURN_SPACER_HEIGHT,
-      );
-      return;
-    }
-
-    const spacer = scrollContainer.querySelector(
-      '.submitted-turn-scroll-spacer',
-    );
-    const currentSpacerHeight = spacer?.getBoundingClientRect().height ?? 0;
-    const containerRect = scrollContainer.getBoundingClientRect();
-    const targetRect = target.getBoundingClientRect();
-    const targetTop =
-      targetRect.top - containerRect.top + scrollContainer.scrollTop;
-    const contentHeightWithoutSpacer =
-      scrollContainer.scrollHeight - currentSpacerHeight;
-    submittedTurnSpacerHeight = Math.max(
-      0,
-      Math.ceil(targetTop + containerHeight - contentHeightWithoutSpacer),
     );
   }
 </script>
@@ -609,13 +459,6 @@
         {#each transientCardGroups.trailing as card (card.id)}
           {@render transientCard(card)}
         {/each}
-        {#if shouldRenderSubmittedTurnScrollSpacer}
-          <div
-            class="submitted-turn-scroll-spacer"
-            style={`height: ${submittedTurnSpacerHeight}px`}
-            aria-hidden="true"
-          ></div>
-        {/if}
       {/if}
     </div>
   </section>

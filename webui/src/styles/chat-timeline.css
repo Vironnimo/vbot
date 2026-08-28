@@ -91,11 +91,6 @@
   margin-block: auto;
 }
 
-.submitted-turn-scroll-spacer {
-  flex: 0 0 auto;
-  pointer-events: none;
-}
-
 /* Transient command card (e.g. /status, /help): a non-persisted snapshot in the
    chat stream. Bordered and monospace so it reads as a diagnostic card distinct
    from real chat bubbles; cards stack so successive snapshots can be compared. */
