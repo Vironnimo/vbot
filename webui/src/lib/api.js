@@ -730,11 +730,7 @@ export async function uploadAttachment(file, options = {}) {
   }
 
   const formData = new FormData();
-  const filename = isNonEmptyString(options.filename)
-    ? options.filename
-    : isNonEmptyString(file.name)
-      ? file.name
-      : 'upload.bin';
+  const filename = isNonEmptyString(file.name) ? file.name : 'upload.bin';
   formData.append('file', file, filename);
 
   let response;

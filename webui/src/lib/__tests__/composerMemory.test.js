@@ -155,7 +155,6 @@ describe('composerMemory attachments', () => {
         attachment_id: 'attachment-one',
         filename: 'image1.png',
         media_type: 'image/png',
-        source_filename: 'image.png',
       },
     ]);
 
@@ -164,7 +163,6 @@ describe('composerMemory attachments', () => {
         attachment_id: 'attachment-one',
         filename: 'image1.png',
         media_type: 'image/png',
-        source_filename: 'image.png',
       },
     ]);
     expect(getPendingAttachments('agent-two::session-two')).toEqual([]);
@@ -195,7 +193,6 @@ describe('composerMemory attachments', () => {
           attachment_id: 'attachment-one',
           filename: 'image1.png',
           media_type: 'image/png',
-          source_filename: 'image1.png',
         },
       ],
     });
