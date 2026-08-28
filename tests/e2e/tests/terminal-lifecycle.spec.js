@@ -127,10 +127,32 @@ async function closeSelectedTerminal(page) {
   if (!terminalId) {
     throw new Error("No selected terminal is available");
   }
+  const rpcResponse = (method) =>
+    page.waitForResponse((response) => {
+      if (
+        !response.url().endsWith("/api/rpc") ||
+        response.request().method() !== "POST"
+      ) {
+        return false;
+      }
+      const body = response.request().postDataJSON();
+      return (
+        body?.method === method && body?.params?.terminal_id === terminalId
+      );
+    });
+  const killResponse = rpcResponse("terminal.kill");
+  const forgetResponse = rpcResponse("terminal.forget");
+  const expectSuccessfulRpc = async (responsePromise) => {
+    const response = await responsePromise;
+    expect(response.ok()).toBe(true);
+    await expect(response.json()).resolves.toMatchObject({ ok: true });
+  };
   await tile.getByRole("button", { name: "Close terminal" }).click();
   await expect(
     page.locator(`[data-terminal-id="${terminalId}"]`),
   ).toHaveCount(0);
+  await expectSuccessfulRpc(killResponse);
+  await expectSuccessfulRpc(forgetResponse);
 }
 
 function pythonHarness(label, backgroundDelaySeconds = null) {

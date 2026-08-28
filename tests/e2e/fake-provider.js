@@ -253,9 +253,13 @@ function plannedToolResponse(prompt, results, offeredTools) {
       return {
         calls: [
           toolCall("edit", {
-            path: "tool-e2e/workflow.txt",
-            old_string: "needle before",
-            new_string: "needle after",
+            edits: [
+              {
+                path: "tool-e2e/workflow.txt",
+                old_string: "needle before",
+                new_string: "needle after",
+              },
+            ],
           }),
         ],
       };

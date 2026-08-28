@@ -34,7 +34,7 @@ test("Settings exposes the fake Provider connections and seeded Model bindings",
     defaults.getByRole("button", { exact: true, name: "Model" }),
   ).toContainText("fake/e2e-primary");
   await expect(
-    defaults.getByRole("button", { exact: true, name: "Fallback model" }),
+    defaults.getByRole("button", { name: /^Fallback models \d+$/ }),
   ).toContainText("fake/e2e-fallback");
 
   await settings
