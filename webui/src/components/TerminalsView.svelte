@@ -954,15 +954,86 @@
   }
 </script>
 
-<section class="terminals-view" aria-labelledby="terminals-title">
-  <aside
-    class="terminals-view__list-pane secondary-pane"
-    aria-labelledby="terminals-list-title"
-  >
-    <div class="secondary-pane__header">
-      <span id="terminals-list-title" class="secondary-pane__title">
-        {t('terminals.groupsLabel', 'Groups')}
-      </span>
+<section class="terminals-view" aria-label={t('terminals.title', 'Terminals')}>
+  <header class="terminals-view__toolbar">
+    <div
+      class="terminals-view__group-tabs"
+      aria-label={t('terminals.groupsLabel', 'Groups')}
+    >
+      {#each viewState.groups as group (group.group_id)}
+        <div
+          class="terminals-view__group-tab-wrap"
+          class:terminals-view__group-tab-wrap--editable={groupCanEdit(group)}
+        >
+          <button
+            type="button"
+            class="terminals-view__group-tab"
+            class:active={group.group_id === viewState.selectedGroupId}
+            aria-current={group.group_id === viewState.selectedGroupId
+              ? 'true'
+              : undefined}
+            aria-label={`${group.name}: ${t('terminals.count', '{count} terminals', { count: group.terminal_count })}`}
+            use:tooltip={group.name}
+            onclick={() => controller.selectGroup(group.group_id)}
+          >
+            <span class="terminals-view__group-tab-name">{group.name}</span>
+            <span class="terminals-view__group-tab-count">
+              {group.terminal_count}
+            </span>
+          </button>
+          {#if groupCanEdit(group)}
+            <span class="terminals-view__group-actions" role="presentation">
+              <Button
+                variant="tertiary"
+                icon
+                class="terminals-view__group-action"
+                ariaLabel={t('terminals.renameGroupAction', 'Rename group')}
+                tooltip={t('terminals.renameGroupAction', 'Rename group')}
+                onClick={() => openRenameGroupDialog(group)}
+              >
+                <svg
+                  viewBox="0 0 14 14"
+                  width="12"
+                  height="12"
+                  aria-hidden="true"
+                >
+                  <path
+                    d="M9.8 1.8a1.3 1.3 0 0 1 1.9 1.9L4.6 10.8l-2.8.8.8-2.8z"
+                  />
+                </svg>
+              </Button>
+              <Button
+                variant="danger"
+                icon
+                class="terminals-view__group-action"
+                ariaLabel={t('terminals.deleteGroupAction', 'Delete group')}
+                tooltip={t('terminals.deleteGroupAction', 'Delete group')}
+                onClick={() => openDeleteGroupDialog(group)}
+              >
+                <svg
+                  viewBox="0 0 14 14"
+                  width="12"
+                  height="12"
+                  aria-hidden="true"
+                >
+                  <path d="M3.5 3.5l7 7M10.5 3.5l-7 7" />
+                </svg>
+              </Button>
+            </span>
+          {/if}
+        </div>
+      {/each}
+      {#if viewState.loading && viewState.groups.length === 0}
+        <span class="terminals-view__group-status">
+          {t('terminals.loading', 'Loading terminal sessions…')}
+        </span>
+      {:else if viewState.groups.length === 0}
+        <span class="terminals-view__group-status">
+          {t('terminals.emptyTitle', 'No terminal sessions')}
+        </span>
+      {/if}
+    </div>
+    <div class="terminals-view__toolbar-actions">
       <Button
         variant="secondary"
         disabled={serverUnavailable}
@@ -973,141 +1044,33 @@
         </svg>
         {t('terminals.addGroup', 'Add group')}
       </Button>
+      <Button
+        variant="primary"
+        disabled={serverUnavailable}
+        onClick={openStartDialog}
+      >
+        <svg viewBox="0 0 14 14" width="11" height="11" aria-hidden="true">
+          <path d="M7 1v12M1 7h12" />
+        </svg>
+        {t('terminals.new', 'New terminal')}
+      </Button>
     </div>
-
-    <div class="secondary-pane__scroll secondary-list terminals-view__list">
-      {#if viewState.loading && viewState.groups.length === 0}
-        <Banner variant="neutral">
-          {t('terminals.loading', 'Loading terminal sessions…')}
-        </Banner>
-      {:else if viewState.listError && !serverUnavailable}
-        <Banner variant="error">
-          <span
-            >{t(
-              'terminals.listError',
-              'Terminal sessions could not be loaded.',
-            )}</span
-          >
-          <Button
-            variant="secondary"
-            onClick={() => controller.loadTerminals()}
-          >
-            {t('common.retry', 'Retry')}
-          </Button>
-        </Banner>
-      {:else if viewState.groups.length === 0}
-        <EmptyState
-          title={t('terminals.emptyTitle', 'No terminal sessions')}
-          description={t(
-            'terminals.emptyDescription',
-            'Open a manual terminal here, or monitor Terminal Sessions started by an agent.',
-          )}
-        />
-      {:else}
-        {#each viewState.groups as group (group.group_id)}
-          <div class="terminals-view__group-row" role="listitem">
-            <button
-              type="button"
-              class="terminals-view__group-item secondary-list__item"
-              class:active={group.group_id === viewState.selectedGroupId}
-              aria-current={group.group_id === viewState.selectedGroupId
-                ? 'true'
-                : undefined}
-              onclick={() => controller.selectGroup(group.group_id)}
-            >
-              <span class="terminals-view__group-inner">
-                <span class="terminals-view__group-topline">
-                  <span
-                    class="terminals-view__group-title"
-                    use:tooltip={group.name}>{group.name}</span
-                  >
-                  <span class="terminals-view__group-count"
-                    >{group.terminal_count}</span
-                  >
-                </span>
-                <span class="terminals-view__group-kind">
-                  {groupKindLabel(group.kind)}
-                </span>
-              </span>
-            </button>
-            {#if groupCanEdit(group)}
-              <span
-                class="terminals-view__group-actions"
-                role="presentation"
-                onclick={(event) => event.stopPropagation()}
-              >
-                <Button
-                  variant="tertiary"
-                  icon
-                  class="terminals-view__group-action"
-                  ariaLabel={t('terminals.renameGroupAction', 'Rename group')}
-                  tooltip={t('terminals.renameGroupAction', 'Rename group')}
-                  onClick={() => openRenameGroupDialog(group)}
-                >
-                  <svg
-                    viewBox="0 0 14 14"
-                    width="12"
-                    height="12"
-                    aria-hidden="true"
-                  >
-                    <path
-                      d="M9.8 1.8a1.3 1.3 0 0 1 1.9 1.9L4.6 10.8l-2.8.8.8-2.8z"
-                    />
-                  </svg>
-                </Button>
-                <Button
-                  variant="danger"
-                  icon
-                  class="terminals-view__group-action"
-                  ariaLabel={t('terminals.deleteGroupAction', 'Delete group')}
-                  tooltip={t('terminals.deleteGroupAction', 'Delete group')}
-                  onClick={() => openDeleteGroupDialog(group)}
-                >
-                  <svg
-                    viewBox="0 0 14 14"
-                    width="12"
-                    height="12"
-                    aria-hidden="true"
-                  >
-                    <path d="M3.5 3.5l7 7M10.5 3.5l-7 7" />
-                  </svg>
-                </Button>
-              </span>
-            {/if}
-          </div>
-        {/each}
-      {/if}
-    </div>
-  </aside>
+  </header>
 
   <div class="terminals-view__detail">
-    <header class="terminals-view__header view-header">
-      <div class="view-header__intro">
-        <h2 id="terminals-title" class="view-header__title">
-          {t('terminals.title', 'Terminals')}
-        </h2>
-        <p class="view-header__subtitle">
-          {t(
-            'terminals.subtitle',
-            'Open and use your own terminals, or watch and control the same interactive terminal an agent is using.',
-          )}
-        </p>
-      </div>
-      <div class="view-header__actions">
-        <Button
-          variant="primary"
-          disabled={serverUnavailable}
-          onClick={openStartDialog}
+    {#if viewState.listError && !serverUnavailable}
+      <Banner variant="error" class="terminals-view__feedback">
+        <span
+          >{t(
+            'terminals.listError',
+            'Terminal sessions could not be loaded.',
+          )}</span
         >
-          <svg viewBox="0 0 14 14" width="11" height="11" aria-hidden="true">
-            <path d="M7 1v12M1 7h12" />
-          </svg>
-          {t('terminals.new', 'New terminal')}
+        <Button variant="secondary" onClick={() => controller.loadTerminals()}>
+          {t('common.retry', 'Retry')}
         </Button>
-      </div>
-    </header>
-
-    {#if hasTerminals}
+      </Banner>
+    {:else if hasTerminals}
       {#if viewState.actionError && !serverUnavailable}
         <Banner variant="error" class="terminals-view__feedback">
           <span>{terminalError(viewState.actionError)}</span>
@@ -1653,101 +1616,108 @@
     min-width: 0;
     min-height: 0;
     flex: 1;
+    flex-direction: column;
     overflow: hidden;
     background: var(--bg);
   }
 
-  .terminals-view__list-pane {
-    gap: 0;
-  }
-
-  .terminals-view__group-row {
-    position: relative;
-    display: block;
-    min-width: 0;
-  }
-
-  .terminals-view__group-item {
+  .terminals-view__toolbar {
     display: flex;
-    width: 100%;
     min-width: 0;
+    min-height: 50px;
     align-items: stretch;
-    color: inherit;
-    text-align: left;
+    gap: var(--space-sm);
+    padding: 0 var(--space-lg);
+    border-bottom: 1px solid var(--border);
+    background: var(--surface);
   }
 
-  .terminals-view__group-inner {
+  .terminals-view__group-tabs {
     display: flex;
     min-width: 0;
     flex: 1;
-    flex-direction: column;
-    gap: 3px;
-    padding: 7px 10px;
+    align-items: stretch;
+    gap: 2px;
+    overflow-x: auto;
+    scrollbar-width: none;
   }
 
-  .terminals-view__group-topline {
+  .terminals-view__group-tabs::-webkit-scrollbar {
+    display: none;
+  }
+
+  .terminals-view__group-tab-wrap {
+    position: relative;
     display: flex;
-    width: 100%;
-    align-items: center;
-    justify-content: space-between;
-    gap: 8px;
-  }
-
-  .terminals-view__group-title {
     min-width: 0;
-    overflow: hidden;
-    color: var(--text-hi);
-    font-family: var(--font-mono);
-    font-size: var(--fs-mono-body);
-    font-weight: 500;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    flex: 0 0 auto;
   }
 
-  .terminals-view__group-item.active .terminals-view__group-title {
+  .terminals-view__group-tab {
+    display: flex;
+    min-width: 0;
+    align-items: center;
+    gap: 7px;
+    padding: 0 14px;
+    border: 0;
+    border-bottom: 2px solid transparent;
+    color: var(--text-lo);
+    background: transparent;
+    font-family: var(--font-ui);
+    font-size: var(--fs-label-md);
+    font-weight: 500;
+    white-space: nowrap;
+    transition:
+      border-color 150ms ease,
+      color 150ms ease;
+  }
+
+  .terminals-view__group-tab:hover,
+  .terminals-view__group-tab:focus-visible {
+    color: var(--text-med);
+    outline: none;
+  }
+
+  .terminals-view__group-tab.active {
+    border-bottom-color: var(--accent);
     color: var(--accent);
   }
 
-  .terminals-view__group-count {
+  .terminals-view__group-tab-wrap--editable .terminals-view__group-tab {
+    padding-right: 64px;
+  }
+
+  .terminals-view__group-tab-name {
+    max-width: 180px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .terminals-view__group-tab-count {
     flex: 0 0 auto;
-    min-width: 20px;
-    padding: 1px 6px;
-    border-radius: 999px;
-    color: var(--text-med);
-    background: var(--surface-2);
     font-family: var(--font-mono);
     font-size: var(--fs-mono-xs);
-    text-align: center;
-  }
-
-  .terminals-view__group-item.active .terminals-view__group-count {
-    color: var(--text-hi);
-    background: var(--accent-dim);
-  }
-
-  .terminals-view__group-kind {
-    overflow: hidden;
     color: var(--text-lo);
-    font-size: var(--fs-body-xs);
-    text-overflow: ellipsis;
-    white-space: nowrap;
   }
 
   .terminals-view__group-actions {
     position: absolute;
     z-index: 1;
-    top: 4px;
+    top: 50%;
     right: 4px;
     display: flex;
     align-items: center;
     gap: 2px;
+    padding-left: 4px;
+    transform: translateY(-50%);
+    background: var(--surface);
     opacity: 0;
     pointer-events: none;
     transition: opacity 120ms ease;
   }
 
-  .terminals-view__group-row:hover .terminals-view__group-actions,
-  .terminals-view__group-row:focus-within .terminals-view__group-actions {
+  .terminals-view__group-tab-wrap:hover .terminals-view__group-actions,
+  .terminals-view__group-tab-wrap:focus-within .terminals-view__group-actions {
     opacity: 1;
     pointer-events: auto;
   }
@@ -1756,6 +1726,22 @@
   :global(.btn-danger.btn-icon.terminals-view__group-action) {
     width: 26px;
     height: 26px;
+  }
+
+  .terminals-view__group-status {
+    display: flex;
+    align-items: center;
+    padding: 0 14px;
+    color: var(--text-lo);
+    font-size: var(--fs-body-sm);
+    white-space: nowrap;
+  }
+
+  .terminals-view__toolbar-actions {
+    display: flex;
+    flex: 0 0 auto;
+    align-items: center;
+    gap: var(--space-sm);
   }
 
   .terminals-view__detail {
@@ -1767,10 +1753,6 @@
     flex-direction: column;
     overflow: hidden;
     padding: 20px;
-  }
-
-  .terminals-view__header {
-    padding: 0 0 14px;
   }
 
   :global(.terminals-view__feedback) {
@@ -2005,12 +1987,34 @@
   @media (max-width: 640px) {
     .terminals-view {
       overflow: auto;
-      flex-direction: column;
     }
 
-    .terminals-view__list-pane {
-      max-height: 220px;
-      flex: 0 0 auto;
+    .terminals-view__toolbar {
+      min-height: auto;
+      flex-wrap: wrap;
+      padding: var(--space-sm) var(--space-md);
+    }
+
+    .terminals-view__group-tabs {
+      order: 2;
+      width: 100%;
+      height: 40px;
+      flex-basis: 100%;
+    }
+
+    .terminals-view__toolbar-actions {
+      width: 100%;
+      justify-content: flex-end;
+    }
+
+    :global(.btn-tertiary.btn-icon.terminals-view__group-action),
+    :global(.btn-danger.btn-icon.terminals-view__group-action) {
+      width: 40px;
+      height: 40px;
+    }
+
+    .terminals-view__group-tab-wrap--editable .terminals-view__group-tab {
+      padding-right: 92px;
     }
 
     .terminals-view__detail {

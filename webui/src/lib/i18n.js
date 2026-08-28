@@ -84,8 +84,6 @@ export const englishCatalog = Object.freeze({
   'calendar.errors.titleRequired': 'Please give the event a title.',
 
   'terminals.title': 'Terminals',
-  'terminals.subtitle':
-    'Open and use your own terminals, inspect their retained output, or watch and control the same interactive terminal an agent is using.',
   'terminals.sessionsLabel': 'Terminal sessions',
   'terminals.sessionCount': '{count} sessions',
   'terminals.loading': 'Loading terminal sessions…',
