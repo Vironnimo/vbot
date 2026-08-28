@@ -984,6 +984,7 @@ describe('ChatTimeline', () => {
             attachment_id: 'image-attachment-id',
             filename: 'diagram.png',
             media_type: 'image/png',
+            image_reference: 1,
           },
         ],
         timestamp: '2026-05-10T12:00:00Z',
@@ -1005,6 +1006,9 @@ describe('ChatTimeline', () => {
       '/api/attachments/image-attachment-id',
     );
     expect(image.getAttribute('alt')).toBe('diagram.png');
+    expect(document.querySelector('.attachment-name').textContent).toBe(
+      'Image 1',
+    );
 
     const imageLink = document.querySelector('.inline-attachment');
     expect(imageLink).toBeTruthy();

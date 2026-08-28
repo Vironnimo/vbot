@@ -9,6 +9,8 @@ from core.chat import (
     ChatMessage,
     ToolCall,
 )
+from core.chat.chat import _assign_session_image_references
+from core.chat.content_blocks import ContentBlock, MediaBlock, TextBlock
 from core.chat.streaming import StreamingChunkTimeoutError
 from core.providers.errors import (
     NetworkError,
@@ -18,6 +20,56 @@ from core.tools import (
 )
 
 JsonObject = dict[str, Any]
+
+
+class TestSessionImageReferences:
+    def test_assigns_continuing_references_to_images_in_one_session(self) -> None:
+        earlier = ChatMessage.user(
+            [
+                MediaBlock(
+                    type="media",
+                    attachment_id="image-one",
+                    filename="image.png",
+                    media_type="image/png",
+                    image_reference=1,
+                )
+            ]
+        )
+        content: list[ContentBlock] = [
+            TextBlock(type="text", text="Compare these."),
+            MediaBlock(
+                type="media",
+                attachment_id="image-two",
+                filename="image.png",
+                media_type="image/png",
+            ),
+            MediaBlock(
+                type="media",
+                attachment_id="image-three",
+                filename="image.png",
+                media_type="image/png",
+            ),
+        ]
+
+        assigned = _assign_session_image_references(content, [earlier])
+
+        assert assigned == [
+            TextBlock(type="text", text="Compare these."),
+            MediaBlock(
+                type="media",
+                attachment_id="image-two",
+                filename="image.png",
+                media_type="image/png",
+                image_reference=2,
+            ),
+            MediaBlock(
+                type="media",
+                attachment_id="image-three",
+                filename="image.png",
+                media_type="image/png",
+                image_reference=3,
+            ),
+        ]
 
 
 class TestEmbedNotesIntoRequest:

@@ -25,6 +25,7 @@
     isFileContentBlock,
     isFileMentionContentBlock,
     isImageMediaContentBlock,
+    imageReferenceLabel,
     isMediaContentBlock,
     isReasoningOnlyAssistantMessage,
     isTerminalEvent,
@@ -263,7 +264,7 @@
         </div>
         <div class="attachment-meta">
           <span class="attachment-name" use:tooltip={attachmentFilename(block)}
-            >{attachmentFilename(block)}</span
+            >{imageReferenceLabel(block)}</span
           >
         </div>
       </div>

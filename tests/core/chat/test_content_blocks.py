@@ -29,12 +29,14 @@ class TestContentBlocks:
                     attachment_id="att_123",
                     filename="photo.png",
                     media_type="image/png",
+                    image_reference=2,
                 ),
                 {
                     "type": "media",
                     "attachment_id": "att_123",
                     "filename": "photo.png",
                     "media_type": "image/png",
+                    "image_reference": 2,
                 },
             ),
             (
@@ -116,6 +118,13 @@ class TestContentBlocks:
             # Inlined must carry text; degraded must not.
             {"type": "file_mention", "path": "a.py", "status": "inlined", "text": None},
             {"type": "file_mention", "path": "a.py", "status": "missing", "text": "body"},
+            {
+                "type": "media",
+                "attachment_id": "att_1",
+                "filename": "a.png",
+                "media_type": "image/png",
+                "image_reference": 0,
+            },
             # size_bytes must be an integer or null.
             {
                 "type": "file_mention",

@@ -360,6 +360,37 @@ def _request_content_resolution_inputs(
     return current_user_message, _current_run_read_media_outputs(session_messages)
 
 
+def _assign_session_image_references(
+    content: str | list[ContentBlock],
+    session_messages: Sequence[ChatMessage],
+) -> str | list[ContentBlock]:
+    """Give incoming images their next durable, Session-local reference number."""
+
+    if isinstance(content, str):
+        return content
+
+    existing_images = 0
+    highest_reference = 0
+    for message in session_messages:
+        if not isinstance(message.content, list):
+            continue
+        for block in message.content:
+            if not isinstance(block, MediaBlock) or not block.media_type.startswith("image/"):
+                continue
+            existing_images += 1
+            highest_reference = max(highest_reference, block.image_reference or 0)
+
+    next_reference = max(existing_images, highest_reference) + 1
+    assigned: list[ContentBlock] = []
+    for block in content:
+        if isinstance(block, MediaBlock) and block.media_type.startswith("image/"):
+            assigned.append(replace(block, image_reference=next_reference))
+            next_reference += 1
+        else:
+            assigned.append(block)
+    return assigned
+
+
 @dataclass
 class _FailedToolCallCircuitBreaker:
     """Stop one Run after repeated identical failed Tool Calls make no progress."""
@@ -1614,6 +1645,10 @@ class ChatLoop:
                     project_id,
                 )
                 async with self._dependencies.sessions.write_lock(session_address):
+                    # Another admitted Run may have appended while this Run was
+                    # queued for the Session lock. Refresh before assigning image
+                    # references so each persisted image stays unique.
+                    await context.session_snapshot.refresh(session)
                     if internal:
                         if not isinstance(request.content, str):
                             raise ChatError("internal runs require string content")
@@ -1633,7 +1668,13 @@ class ChatLoop:
                             request.reply_surface,
                             messages=context.session_snapshot.messages,
                         )
-                        user_message = ChatMessage.user(request.content, sender=request.sender)
+                        user_message = ChatMessage.user(
+                            _assign_session_image_references(
+                                request.content,
+                                context.session_snapshot.messages,
+                            ),
+                            sender=request.sender,
+                        )
                         persisted_messages = [*session.take_deferred_notes(), user_message]
                     await session.append_many_async(persisted_messages)
                     await context.session_snapshot.refresh(session)
