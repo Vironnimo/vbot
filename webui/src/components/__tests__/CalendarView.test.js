@@ -34,6 +34,15 @@ async function waitForCondition(predicate, attempts = 50) {
   }
 }
 
+async function mountCalendarView() {
+  const component = mount(CalendarView, { target: document.body });
+  flushSync();
+  await waitForCondition(
+    () => document.querySelector('.calendar-grid') !== null,
+  );
+  return component;
+}
+
 describe('CalendarView', () => {
   let mountedComponent = null;
 
@@ -54,44 +63,30 @@ describe('CalendarView', () => {
     }
   });
 
-  it('renders the empty state with its action button when nothing is scheduled', async () => {
-    mountedComponent = mount(CalendarView, { target: document.body });
-    flushSync();
-    await waitForCondition(
-      () => document.querySelector('.empty-state__title') !== null,
-    );
+  it('renders the month grid when nothing is scheduled', async () => {
+    mountedComponent = await mountCalendarView();
 
-    expect(document.querySelector('.empty-state__title')?.textContent).toBe(
-      'Nothing scheduled',
-    );
-    // Regression: the empty-state action is a snippet prop. Passing a plain
-    // array here crashed the whole view with "e is not a function".
-    const action = document.querySelector('.empty-state__actions button');
-    expect(action).not.toBeNull();
-    expect(action.textContent).toContain('New event');
+    // Regression: an empty window used to replace the whole calendar with an
+    // empty state; the grid itself shows that nothing is scheduled.
+    expect(document.querySelector('.calendar-grid')).not.toBeNull();
+    expect(document.querySelectorAll('.calendar-weekday')).toHaveLength(7);
+    expect(document.querySelectorAll('.calendar-cell')).toHaveLength(42);
+    expect(document.querySelector('.empty-state__title')).toBeNull();
   });
 
-  it('opens the event form from the empty-state action', async () => {
-    mountedComponent = mount(CalendarView, { target: document.body });
-    flushSync();
-    await waitForCondition(
-      () => document.querySelector('.empty-state__actions button') !== null,
-    );
+  it('opens the event form from the toolbar action', async () => {
+    mountedComponent = await mountCalendarView();
 
-    document.querySelector('.empty-state__actions button').click();
+    document.querySelector('.calendar-toolbar-right .btn-primary').click();
     flushSync();
 
     expect(document.querySelector('.calendar-form')).not.toBeNull();
   });
 
   it('insets the event form inside a padded modal body', async () => {
-    mountedComponent = mount(CalendarView, { target: document.body });
-    flushSync();
-    await waitForCondition(
-      () => document.querySelector('.empty-state__actions button') !== null,
-    );
+    mountedComponent = await mountCalendarView();
 
-    document.querySelector('.empty-state__actions button').click();
+    document.querySelector('.calendar-toolbar-right .btn-primary').click();
     flushSync();
 
     // The Modal shell renders body snippets directly; callers own the padded
@@ -101,13 +96,9 @@ describe('CalendarView', () => {
   });
 
   it('associates each event-form label with its control', async () => {
-    mountedComponent = mount(CalendarView, { target: document.body });
-    flushSync();
-    await waitForCondition(
-      () => document.querySelector('.empty-state__actions button') !== null,
-    );
+    mountedComponent = await mountCalendarView();
 
-    document.querySelector('.empty-state__actions button').click();
+    document.querySelector('.calendar-toolbar-right .btn-primary').click();
     flushSync();
 
     const titleLabel = document.querySelector(
