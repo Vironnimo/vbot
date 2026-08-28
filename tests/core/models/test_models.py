@@ -1712,6 +1712,7 @@ class TestModelRegistryRealResources:
         ("provider_id", "model_id", "reasoning_field", "provider_replay", "model_replay"),
         [
             ("ollama-cloud", "glm-5.2", "reasoning", "full_history", None),
+            ("ollama-cloud", "glm-5.3", "reasoning", "full_history", None),
             ("opencode-go", "glm-5.2", "reasoning_content", "full_history", "full_history"),
             ("opencode-go", "glm-5.3", "reasoning_content", "full_history", "full_history"),
         ],
@@ -1736,6 +1737,20 @@ class TestModelRegistryRealResources:
             assert metadata["protocol"] == "openai"
         if (provider_id, model_id) == ("opencode-go", "glm-5.3"):
             assert "reasoning_request_format" not in metadata
+
+    def test_ollama_cloud_glm_5_3_override_profiles_reasoning_levels(self):
+        """GLM-5.3 exposes Cloud's documented reasoning ladder plus explicit off.
+
+        Ollama's model page documents ``low``, ``high``, and ``max``; ``none``
+        remains the wire's explicit off switch rather than an active level.
+        """
+
+        registry = ModelRegistry.load(RESOURCES_DIR)
+
+        reasoning = registry.get("ollama-cloud", "glm-5.3").capabilities.reasoning
+        assert reasoning.supported is True
+        assert reasoning.control == "levels"
+        assert reasoning.levels == ("low", "high", "max")
 
     def test_overrides_are_applied_at_load(self):
         """``<provider>.overrides.json`` is now merged at LOAD (it used to only
@@ -1791,7 +1806,7 @@ class TestModelRegistryRealResources:
         Streaming token accounting (billed-input deltas in vBot's real request
         shapes, visible-content control per variant) on /v1/chat/completions:
 
-        - full_history (inherited default): GLM-5.1, GLM-5.2, GLM-5.3-flash, Kimi
+        - full_history (inherited default): GLM-5.1, GLM-5.2, GLM-5.3, GLM-5.3-flash, Kimi
           K3 - the ``reasoning`` carrier is accepted and billed in both scopes
           (glm-5.3-flash measured 2026-08-26 after the catalog refresh: in-run
           +132, cross-run +332, controls match).
@@ -1810,6 +1825,7 @@ class TestModelRegistryRealResources:
         assert registry.provider_reasoning_replay("ollama-cloud") == "full_history"
         assert registry.get("ollama-cloud", "glm-5.1").reasoning_replay is None
         assert registry.get("ollama-cloud", "glm-5.2").reasoning_replay is None
+        assert registry.get("ollama-cloud", "glm-5.3").reasoning_replay is None
         assert registry.get("ollama-cloud", "glm-5.3-flash").reasoning_replay is None
         assert registry.get("ollama-cloud", "kimi-k3").reasoning_replay is None
         assert (
@@ -1858,6 +1874,7 @@ class TestModelRegistryRealResources:
             "gemma4:31b",
             "glm-5.1",
             "glm-5.2",
+            "glm-5.3",
             "gpt-oss:120b",
             "gpt-oss:20b",
             "kimi-k2.6",
