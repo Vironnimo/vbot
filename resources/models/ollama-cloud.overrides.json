@@ -82,6 +82,27 @@
                 }
             }
         },
+        "glm-5.3": {
+            "capabilities": {
+                "reasoning": {
+                    "control": "levels",
+                    "levels": [
+                        "low",
+                        "high",
+                        "max"
+                    ],
+                    "supported": true
+                }
+            },
+            "metadata": {
+                "ollama": {
+                    "remote": true
+                },
+                "ollama_cloud": {
+                    "reasoning_response_field": "reasoning"
+                }
+            }
+        },
         "gpt-oss:120b": {
             "reasoning_replay": "none",
             "metadata": {
