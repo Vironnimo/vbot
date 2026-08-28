@@ -83,10 +83,11 @@ class TestCreateEvent:
         with pytest.raises(CalendarValidationError, match="start"):
             service.create_event(title="X", start="next tuesday")
 
-    def test_capacity_limit(self, tmp_path: Path) -> None:
+    def test_capacity_limit(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         service = CalendarService(tmp_path)
         from core.calendar.service import MAX_CALENDAR_EVENTS
 
+        monkeypatch.setattr(service, "_save_events", lambda: None)
         for index in range(MAX_CALENDAR_EVENTS):
             service.create_event(title=f"e{index}", start="2026-09-14")
         with pytest.raises(CalendarValidationError, match="at most"):

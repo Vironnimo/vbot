@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Any
 from unittest.mock import Mock
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -57,7 +58,10 @@ class TestProjectOccurrences:
         )
         assert len(occurrences) == 1
         assert occurrences[0].schedule_type == "cron"
-        assert occurrences[0].fire_at_utc.hour in (7, 8)  # 09:00 server-local
+        system_timezone = ZoneInfo(service.system_timezone_name())
+        assert occurrences[0].fire_at_utc.astimezone(system_timezone).replace(
+            tzinfo=None
+        ) == datetime(2026, 9, 2, 9, 0)  # 09:00 server-local
 
     def test_interval_projects_from_anchor(self, service: CronService) -> None:
         service.create_job(
