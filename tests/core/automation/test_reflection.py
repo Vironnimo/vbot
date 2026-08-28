@@ -703,8 +703,6 @@ def test_real_skill_reflection_prompts_use_compact_private_authoring_contract(
     prompt_path = Path(__file__).parents[3] / "resources" / "prompts" / fragment_name
     prompt = prompt_path.read_text(encoding="utf-8")
 
-    assert '"match":"...","content":"..."' in prompt
-    assert '"file_path":"references/api.md","content":"..."' in prompt
     assert "old_string" not in prompt
     assert "new_string" not in prompt
     assert "file_content" not in prompt
@@ -729,7 +727,7 @@ def test_real_skill_maintenance_prompt_forbids_implicit_global_fallback() -> Non
     prompt_path = Path(__file__).parents[3] / "resources" / "prompts" / "skill_maintenance.md"
     prompt = prompt_path.read_text(encoding="utf-8")
 
-    assert "overrides the general requirement to scan or load relevant Skills" in prompt
-    assert "Do not call `skill` or any other Tool" in prompt
-    assert "Do not provide navigation steps, commands" in prompt
-    assert "proposed or paraphrased Skill content, another scope, or follow-up offers" in prompt
+    assert "user-facing Skill controls" in prompt
+    assert "do not call any Tool" in prompt
+    assert "offer workarounds" in prompt
+    assert "instead of silently changing another scope" in prompt

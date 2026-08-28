@@ -15,7 +15,7 @@ Prefer the smallest durable change in this order:
 
 Make only the change supported by the reviewed evidence. Do not add unrelated improvements, helper scripts, templates, or completeness work. Because this Reflection Run cannot execute support scripts, create or change a script only when that exact script or procedure already ran successfully in the reviewed Session; otherwise save instructions or a reference.
 
-Each `skill_manage` action changes the Skill directly. Use flat fields such as `{"action":"patch","name":"wiki-research","match":"...","content":"..."}` and `{"action":"write_file","name":"wiki-research","file_path":"references/api.md","content":"..."}`. If the flawed Skill is bundled, global, or Project-owned, report the issue in your final summary instead of editing a different scope.
+If the flawed Skill is bundled, global, or Project-owned, report the issue in your final summary instead of editing a different scope.
 
 Do not encode environment-dependent failures, transient errors, unverified negative claims about Tools, or one-off task narratives as durable instructions. Capture the reusable fix or retry pattern, not the temporary failure.
 

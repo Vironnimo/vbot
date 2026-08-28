@@ -17,7 +17,7 @@ Preference order — pick the earliest that fits:
 
 Make only the change supported by the reviewed evidence. Do not add unrelated improvements, helper scripts, templates, or completeness work. Because this Reflection Run cannot execute support scripts, create or change a script only when that exact script or procedure already ran successfully in the reviewed Session; otherwise save instructions or a reference.
 
-Each `skill_manage` action changes the Skill directly. Use flat fields such as `{"action":"patch","name":"wiki-research","match":"...","content":"..."}` and `{"action":"write_file","name":"wiki-research","file_path":"references/api.md","content":"..."}`. You can write your own private Skills here. If the flawed Skill is bundled, global, or Project-owned, note the problem in your final summary instead of editing it.
+If the flawed Skill is bundled, global, or Project-owned, note the problem in your final summary instead of editing it.
 
 Do NOT capture (these harden into false constraints that bite later):
 
