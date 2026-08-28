@@ -28,6 +28,9 @@ class MediaBlock:
     attachment_id: str
     filename: str
     media_type: str
+    # Assigned by Chat when an image enters a Session. This is a durable
+    # conversation reference, not a filename or a storage address.
+    image_reference: int | None = None
 
 
 @dataclass(frozen=True)
@@ -74,12 +77,15 @@ def content_block_to_dict(block: ContentBlock) -> dict[str, Any]:
         }
 
     if isinstance(block, MediaBlock):
-        return {
+        payload: dict[str, Any] = {
             "type": "media",
             "attachment_id": block.attachment_id,
             "filename": block.filename,
             "media_type": block.media_type,
         }
+        if block.image_reference is not None:
+            payload["image_reference"] = block.image_reference
+        return payload
 
     if isinstance(block, FileBlock):
         return {
@@ -114,6 +120,7 @@ def content_block_from_dict(data: dict[str, Any]) -> ContentBlock:
             attachment_id=_require_string(data, "attachment_id"),
             filename=_require_string(data, "filename"),
             media_type=_require_string(data, "media_type"),
+            image_reference=_optional_positive_integer(data, "image_reference"),
         )
 
     if block_type == "file":
@@ -162,4 +169,13 @@ def _require_string(data: dict[str, Any], key: str) -> str:
     if not isinstance(value, str):
         raise ContentBlockError(f"content block field '{key}' must be a string")
 
+    return value
+
+
+def _optional_positive_integer(data: dict[str, Any], key: str) -> int | None:
+    value = data.get(key)
+    if value is None:
+        return None
+    if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+        raise ContentBlockError(f"content block field '{key}' must be a positive integer")
     return value

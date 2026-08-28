@@ -184,6 +184,7 @@ class ContentBlockResolver:
                 attachment_id,
                 filename,
                 media_type,
+                self._optional_positive_integer(block, "image_reference"),
                 is_current_turn=is_current_turn,
                 input_modalities=input_modalities,
                 wire_media_types=wire_media_types,
@@ -220,11 +221,13 @@ class ContentBlockResolver:
         attachment_id: str,
         filename: str,
         media_type: str,
+        image_reference: int | None,
         *,
         is_current_turn: bool,
         input_modalities: frozenset[str],
         wire_media_types: frozenset[str],
     ) -> list[JsonObject]:
+        image_label = f"Image {image_reference}" if image_reference is not None else "Image"
         # A current-turn image to a model that cannot see degrades to a path note
         # explaining why, instead of aborting the run — a channel run would
         # otherwise fail on any inbound image. (Historical images degrade quietly
@@ -232,7 +235,7 @@ class ContentBlockResolver:
         if is_current_turn and "image" not in input_modalities:
             return [
                 self._path_note_block(
-                    "Image",
+                    image_label,
                     attachment_id,
                     filename,
                     media_type,
@@ -243,7 +246,7 @@ class ContentBlockResolver:
         if not (is_current_turn and media_type in wire_media_types):
             # Either an earlier turn, or a vision model whose wire cannot carry this
             # image type: keep the blob path visible so the agent can open it.
-            label = "Image" if is_current_turn else "Image from an earlier turn"
+            label = image_label if is_current_turn else f"{image_label} from an earlier turn"
             return [self._path_note_block(label, attachment_id, filename, media_type)]
 
         blob_data = self._read_attachment_bytes(attachment_id)
@@ -256,7 +259,7 @@ class ContentBlockResolver:
         # the original file (e.g. to forward it), not only the pixels.
         return [
             native_block,
-            self._path_note_block("Image", attachment_id, filename, media_type),
+            self._path_note_block(image_label, attachment_id, filename, media_type),
         ]
 
     def _resolve_video_block(
@@ -536,4 +539,13 @@ class ContentBlockResolver:
         value = data.get(key)
         if not isinstance(value, str):
             raise ChatError(f"content block field '{key}' must be a string")
+        return value
+
+    @staticmethod
+    def _optional_positive_integer(data: JsonObject, key: str) -> int | None:
+        value = data.get(key)
+        if value is None:
+            return None
+        if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+            raise ChatError(f"content block field '{key}' must be a positive integer")
         return value

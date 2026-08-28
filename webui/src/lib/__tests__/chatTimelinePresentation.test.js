@@ -11,6 +11,7 @@ import {
   errorMessagePresentation,
   formatTime,
   groupTransientCards,
+  imageReferenceLabel,
   isRowCancellable,
   isBackgroundSubAgentSpawn,
   isRunChildWorking,
@@ -141,6 +142,18 @@ function backgroundBashTool(overrides = {}) {
 describe('chatTimelinePresentation', () => {
   beforeEach(() => {
     init('en');
+  });
+
+  it('uses the durable image reference as the attachment display label', () => {
+    expect(
+      imageReferenceLabel({
+        type: 'media',
+        attachment_id: 'image-one',
+        filename: 'image.png',
+        media_type: 'image/png',
+        image_reference: 1,
+      }),
+    ).toBe('Image 1');
   });
 
   it('unwraps successful read content and hides envelope metadata', () => {

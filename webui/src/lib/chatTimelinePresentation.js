@@ -263,6 +263,16 @@ export const attachmentFilename = (block) =>
   trimmedString(block?.filename) ||
   t('chat.attachment.fileLabel', 'Attached file');
 
+export const imageReferenceLabel = (block) => {
+  const reference = block?.image_reference;
+  if (Number.isInteger(reference) && reference > 0) {
+    return t('chat.attachment.imageReference', 'Image {number}', {
+      number: reference,
+    });
+  }
+  return attachmentFilename(block);
+};
+
 export const attachmentPreviewLabel = (block) =>
   trimmedString(block?.filename) ||
   t('chat.attachment.preview', 'Preview attachment');

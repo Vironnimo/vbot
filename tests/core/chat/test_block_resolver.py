@@ -181,6 +181,26 @@ def test_current_turn_image_media_block_resolves_to_base64(tmp_path: Path) -> No
     }
 
 
+def test_image_reference_is_rendered_for_the_model(tmp_path: Path) -> None:
+    store = AttachmentStore(tmp_path)
+    record = store.store("image.png", b"\x89PNG\r\n\x1a\nimage-bytes")
+    resolver = ContentBlockResolver(store)
+    message = _media_message(record)
+    message["content"][0]["image_reference"] = 2
+
+    resolved = _resolve(
+        resolver,
+        [message],
+        current_user_message_id="user-current",
+        input_modalities=TEXT_IMAGE,
+    )
+
+    assert resolved[0]["content"][1] == {
+        "type": "text",
+        "text": f"[Image 2: image.png (image/png) — Path: {model_path(record.file_path)}]",
+    }
+
+
 def test_file_mention_block_resolves_to_snapshot_text(tmp_path: Path) -> None:
     # Arrange
     store = AttachmentStore(tmp_path)
