@@ -1218,6 +1218,12 @@
           "text"
         ],
         "reasoning": {
+          "control": "levels",
+          "levels": [
+            "low",
+            "medium",
+            "xhigh"
+          ],
           "supported": true
         },
         "tools": true,
@@ -3017,6 +3023,33 @@
       "max_output_tokens": null,
       "name": "Ornith 1.0 9B",
       "release_date": "2026-06-25",
+      "temperature": true
+    },
+    "deepreinforce/ornith-1.5-35b-a3b": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "context_window": 262144,
+      "family": "ornith",
+      "last_updated": "2026-08-23",
+      "max_output_tokens": null,
+      "name": "Ornith 1.5 35B A3B",
+      "release_date": "2026-08-18",
       "temperature": true
     },
     "deepseek/deepseek-chat": {
@@ -4882,6 +4915,28 @@
       "name": "Granite-4.0-H-Small",
       "release_date": "2025-10-02",
       "temperature": true
+    },
+    "inclusionai/ling-3.0-flash-fin": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "tools": true,
+        "vision": false
+      },
+      "context_window": 262144,
+      "family": "ling",
+      "last_updated": "2026-08-27",
+      "max_output_tokens": 32768,
+      "name": "Ling 3.0 Flash Fin",
+      "release_date": "2026-08-27"
     },
     "meituan/longcat-2.0": {
       "capabilities": {
@@ -9196,6 +9251,32 @@
       "max_output_tokens": 64000,
       "name": "Hy3 preview",
       "release_date": "2026-04-20",
+      "temperature": true
+    },
+    "tencent/hy4-preview": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": true,
+        "vision": false
+      },
+      "context_window": 1024000,
+      "family": "Hy",
+      "last_updated": "2026-08-28",
+      "max_output_tokens": 64000,
+      "name": "Hy4 preview",
+      "release_date": "2026-08-28",
       "temperature": true
     },
     "thinkingmachines/inkling": {

@@ -1,5 +1,5 @@
 {
-  "fetched_at": "2026-08-26T20:47:56.365874+00:00",
+  "fetched_at": "2026-08-28T16:21:46.603778+00:00",
   "models": {
     "deepseek-v4-flash:0731": {
       "capabilities": {
@@ -40,40 +40,6 @@
       },
       "name": "deepseek-v4-flash:0731"
     },
-    "deepseek-v4-flash:preview": {
-      "capabilities": {
-        "input_modalities": [
-          "text"
-        ],
-        "json_mode": false,
-        "output_modalities": [
-          "text"
-        ],
-        "reasoning": {
-          "control": "on_off",
-          "supported": true
-        },
-        "supported_parameters": [],
-        "supported_voices": [],
-        "task_types": [
-          "chat",
-          "text_output"
-        ],
-        "tools": true,
-        "vision": false
-      },
-      "connections": [
-        "api-key"
-      ],
-      "context_window": 1048576,
-      "max_output_tokens": null,
-      "metadata": {
-        "ollama": {
-          "remote": true
-        }
-      },
-      "name": "deepseek-v4-flash:preview"
-    },
     "deepseek-v4-pro:0813": {
       "capabilities": {
         "input_modalities": [
@@ -107,40 +73,6 @@
         }
       },
       "name": "deepseek-v4-pro:0813"
-    },
-    "deepseek-v4-pro:preview": {
-      "capabilities": {
-        "input_modalities": [
-          "text"
-        ],
-        "json_mode": false,
-        "output_modalities": [
-          "text"
-        ],
-        "reasoning": {
-          "control": "on_off",
-          "supported": true
-        },
-        "supported_parameters": [],
-        "supported_voices": [],
-        "task_types": [
-          "chat",
-          "text_output"
-        ],
-        "tools": true,
-        "vision": false
-      },
-      "connections": [
-        "api-key"
-      ],
-      "context_window": 524288,
-      "max_output_tokens": null,
-      "metadata": {
-        "ollama": {
-          "remote": true
-        }
-      },
-      "name": "deepseek-v4-pro:preview"
     },
     "gemma4:31b": {
       "capabilities": {
@@ -260,11 +192,10 @@
       },
       "name": "glm-5.2"
     },
-    "glm-5.3-flash": {
+    "glm-5.3": {
       "capabilities": {
         "input_modalities": [
-          "text",
-          "image"
+          "text"
         ],
         "json_mode": false,
         "output_modalities": [
@@ -272,6 +203,48 @@
         ],
         "reasoning": {
           "control": "on_off",
+          "supported": true
+        },
+        "supported_parameters": [],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
+        "tools": true,
+        "vision": false
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 1048576,
+      "max_output_tokens": null,
+      "metadata": {
+        "ollama": {
+          "remote": true
+        }
+      },
+      "name": "glm-5.3"
+    },
+    "glm-5.3-flash": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "video",
+          "pdf"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "control": "levels",
+          "levels": [
+            "low",
+            "high",
+            "max"
+          ],
           "supported": true
         },
         "supported_parameters": [],
@@ -289,10 +262,14 @@
         "api-key"
       ],
       "context_window": 1048576,
-      "max_output_tokens": null,
+      "family": "glm",
+      "max_output_tokens": 131072,
       "metadata": {
         "ollama": {
           "remote": true
+        },
+        "ollama_cloud": {
+          "reasoning_response_field": "reasoning_content"
         }
       },
       "name": "glm-5.3-flash"
