@@ -115,10 +115,12 @@ pytest backend, Vitest frontend; backend pytest runs with `--import-mode=importl
 
 **Text assertions:** Assert a concrete string only when the text itself is a stable contract (protocol token, persisted format, accessibility name, forbidden internal value) or a test-owned sentinel proves transport unchanged. Do not lock editable prose, error wording, or help copy - prefer exception types, error codes, structured fields, DOM roles, and security invariants. Wording quality belongs in scenario evals, not substring tests.
 
-**Quality gates:** `quality.py` (backend) and `quality-frontend.py` (frontend), same interface: format -> lint -> type-check -> test over the given paths, whole repo with none; default mode auto-fixes (keep every fix), `--check` validates only. These gates are the contract - do not invoke pytest/ruff/vitest by hand; if you suspect a gate withheld something you need, note it in FLAGGED.md instead of making hand-invocation a habit. Full mechanics - pipeline, source-to-test mapping, output contract - live in `scripts/README-quality.md`.
+**Quality gates:** `quality.py` (backend) and `quality-frontend.py` (frontend), same interface: format -> lint -> type-check -> test over the given paths, whole repo with none; a full run uses the default auto-fix mode (keep every fix), while scoped Agent runs must pass `--check` and therefore validate only. This preserves the code an Agent just read while it responds to reported failures. These gates are the contract - do not invoke pytest/ruff/vitest by hand; if you suspect a gate withheld something you need, note it in FLAGGED.md instead of making hand-invocation a habit. Full mechanics - pipeline, source-to-test mapping, output contract - live in `scripts/README-quality.md`.
 ```bash
-python scripts/quality.py [--check] [paths...]           # Backend
-python scripts/quality-frontend.py [--check] [paths...]  # Frontend
+python scripts/quality.py                                 # Full backend gate; auto-fixes
+python scripts/quality.py --check <paths...>              # Scoped backend gate; no source edits
+python scripts/quality-frontend.py                        # Full frontend gate; auto-fixes
+python scripts/quality-frontend.py --check <paths...>     # Scoped frontend gate; no source edits
 ```
 
 ## Live Testing

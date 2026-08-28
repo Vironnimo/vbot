@@ -4,9 +4,9 @@ This document explains how `scripts/quality.py` (backend) and `scripts/quality-f
 
 The short version:
 
-- Run the gate, not the raw tool: `python scripts/quality.py [paths...]` and `python scripts/quality-frontend.py [paths...]`.
+- Run the gate, not the raw tool: for Agent-scoped feedback use `python scripts/quality.py --check <paths...>` and `python scripts/quality-frontend.py --check <paths...>`.
 - No arguments checks the whole repo; one or more file/dir paths check just those targets (plus their mirrored tests).
-- The gate auto-fixes what it can, maps each source file to its tests, filters tool noise, and prints one verdict.
+- A full gate auto-fixes what it can; a scoped Agent gate uses `--check`, maps each source file to its tests, filters tool noise, and prints one verdict without changing source files.
 - Add `--check` to validate without changing source files; run either script with `--help` for its complete command reference.
 - Reach for raw `pytest`/`ruff`/`mypy`/`vitest`/`eslint`/`prettier` only when you genuinely suspect the gate withheld detail you need — and when it did, improve the gate (see [Improving the gate](#improving-the-gate)) instead of making hand-invocation the habit.
 
@@ -21,24 +21,24 @@ The output is the agent contract. It is meant to be read by an agent deciding wh
 ```bash
 python scripts/quality.py                          # full backend scan
 python scripts/quality.py --check                  # full backend scan, no source fixes
-python scripts/quality.py core/runtime/            # one module
-python scripts/quality.py core/utils/config.py     # single file (+ its mirrored tests)
-python scripts/quality.py core/utils/config.py core/utils/errors.py   # several targets
+python scripts/quality.py --check core/runtime/            # one module, no source fixes
+python scripts/quality.py --check core/utils/config.py     # single file (+ its mirrored tests), no source fixes
+python scripts/quality.py --check core/utils/config.py core/utils/errors.py   # several targets, no source fixes
 ```
 
 ```bash
 python scripts/quality-frontend.py                             # full frontend scan
 python scripts/quality-frontend.py --check                     # full frontend scan, no source fixes
-python scripts/quality-frontend.py webui/src/lib/             # one directory
-python scripts/quality-frontend.py webui/src/lib/i18n.js      # single file (tests in its dir)
-python scripts/quality-frontend.py webui/src/lib/__tests__/i18n.test.js   # one test file
+python scripts/quality-frontend.py --check webui/src/lib/             # one directory, no source fixes
+python scripts/quality-frontend.py --check webui/src/lib/i18n.js      # single file (tests in its dir), no source fixes
+python scripts/quality-frontend.py --check webui/src/lib/__tests__/i18n.test.js   # one test file, no source fixes
 ```
 
 Paths may be files or directories. Backend paths are project-root-relative; frontend paths may be project-root-relative with the `webui/` prefix or relative to `webui/` itself. Both runners normalize input first (backslash → forward slash, trailing slash stripped) and deduplicate: a file already covered by a directory you also passed is dropped, so `core/utils/ core/utils/config.py` runs `core/utils/` once. The backend runner routes direct files by registered capability: Ruff and mypy own `.py`/`.pyi`, while `pyproject.toml` configures and therefore triggers the full Python pipeline without being passed to a Python source formatter. A direct file with no registered capability aborts before any tool runs. Directories remain mixed scopes whose contents each tool filters itself; a future native module adds its suffixes and tool steps rather than widening Ruff's inputs.
 
 Both scripts support `-h` / `--help`. Their help is the command-level reference for modes, path behavior, pipeline stages, prerequisites, examples, and exit codes.
 
-The default mode is intentionally mutating: it keeps and reports formatter and linter fixes. `--check` replaces the formatting write with `ruff format --check` or `prettier --check`, omits the Ruff/ESLint fix pass, and then runs the same validation, type-check, and test stages. A complete frontend `--check` run still builds the WebUI. The mode does not change source files, but underlying tools may write caches and the frontend build may write generated artifacts.
+The default mode is intentionally mutating: it keeps and reports formatter and linter fixes. Agent-scoped feedback must therefore pass `--check`; this avoids changing the code between the failure report and the Agent's next edit. `--check` replaces the formatting write with `ruff format --check` or `prettier --check`, omits the Ruff/ESLint fix pass, and then runs the same validation, type-check, and test stages. A complete frontend `--check` run still builds the WebUI. The mode does not change source files, but underlying tools may write caches and the frontend build may write generated artifacts.
 
 Use the current Python interpreter directly — no virtual environment is assumed. The frontend runner additionally needs `npx` and `npm` on `PATH`; it exits early if they are missing.
 
