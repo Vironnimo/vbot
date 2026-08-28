@@ -1077,6 +1077,29 @@ describe('uploadAttachment()', () => {
       size_bytes: 5,
     });
   });
+
+  it('uses a supplied display filename in the multipart upload', async () => {
+    const fetchFunction = vi.fn().mockResolvedValue(
+      jsonResponse(
+        {
+          attachment_id: 'attachment-image-1',
+          filename: 'image1.png',
+          media_type: 'image/png',
+          size_bytes: 5,
+        },
+        { status: 200 },
+      ),
+    );
+    const file = new File(['image'], 'image.png', { type: 'image/png' });
+
+    await uploadAttachment(file, {
+      fetch: fetchFunction,
+      filename: 'image1.png',
+    });
+
+    const uploadedFile = fetchFunction.mock.calls[0][1].body.get('file');
+    expect(uploadedFile.name).toBe('image1.png');
+  });
 });
 
 describe('subscribeRunEvents()', () => {

@@ -8,7 +8,9 @@
     flushComposerMemory,
     getDraft,
     getHistory,
+    getPendingAttachments,
     pushHistory,
+    setPendingAttachments,
     setDraft,
   } from '$lib/composerMemory.js';
   import {
@@ -36,6 +38,7 @@
   const MAX_FILE_MATCHES = 50;
   const ATTACHMENT_ACCEPT =
     'image/*,audio/*,video/*,text/*,application/pdf,application/msword,application/vnd.ms-excel,application/vnd.ms-powerpoint,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.openxmlformats-officedocument.presentationml.presentation';
+  const EPHEMERAL_ATTACHMENT_SCOPE = '__composer__';
 
   let {
     disabled = false,
@@ -85,7 +88,11 @@
   let modelCatalogLoading = $state(false);
   let _modelCatalogFetchToken = 0;
   let showAllModels = $state(false);
-  let pendingAttachments = $state([]);
+  let pendingAttachmentsByScope = $state({});
+  let nextPendingAttachmentId = 0;
+  let pendingAttachments = $derived(
+    attachmentsForScope(attachmentScopeForDraftKey(draftKey)),
+  );
   let isDragOver = $state(false);
   let attachmentToastMessage = $state('');
   let recordingState = $state('idle');
@@ -192,7 +199,7 @@
       attachmentToastTimeoutId = null;
     }
     cancelActiveRecording();
-    clearPendingAttachments();
+    releasePendingAttachmentPreviews();
     // Leaving the Chat tab tears this component down; make sure the latest
     // debounced draft reaches durable storage before it goes.
     flushComposerMemory();
@@ -208,6 +215,7 @@
       return;
     }
     lastDraftKey = key;
+    hydratePendingAttachments(key);
     historyCursor = -1;
     navWorkingCopies = {};
     inputOrigin = '';
@@ -272,11 +280,59 @@
     }
   };
 
-  const clearPendingAttachments = () => {
-    for (const attachment of pendingAttachments) {
-      safeRevokeObjectUrl(attachment.preview_url);
+  const attachmentScopeForDraftKey = (key) => key || EPHEMERAL_ATTACHMENT_SCOPE;
+
+  const attachmentsForScope = (scope) => pendingAttachmentsByScope[scope] ?? [];
+
+  const attachmentPreviewUrl = (attachmentId) =>
+    `/api/attachments/${encodeURIComponent(attachmentId)}`;
+
+  const nextAttachmentLocalId = () => {
+    nextPendingAttachmentId += 1;
+    return `pending-attachment-${nextPendingAttachmentId}`;
+  };
+
+  const hydratePendingAttachments = (key) => {
+    const scope = attachmentScopeForDraftKey(key);
+    if (scope in pendingAttachmentsByScope || !key) {
+      return;
     }
-    pendingAttachments = [];
+    const restored = getPendingAttachments(key).map((attachment) => ({
+      ...attachment,
+      local_id: nextAttachmentLocalId(),
+      preview_url: attachmentPreviewUrl(attachment.attachment_id),
+      uploading: false,
+    }));
+    pendingAttachmentsByScope = {
+      ...pendingAttachmentsByScope,
+      [scope]: restored,
+    };
+  };
+
+  const setAttachmentsForDraftKey = (key, nextAttachments) => {
+    const scope = attachmentScopeForDraftKey(key);
+    const next = Array.isArray(nextAttachments) ? nextAttachments : [];
+    pendingAttachmentsByScope = {
+      ...pendingAttachmentsByScope,
+      [scope]: next,
+    };
+    if (key) {
+      setPendingAttachments(key, next);
+    }
+  };
+
+  const updateAttachmentsForDraftKey = (key, update) => {
+    const scope = attachmentScopeForDraftKey(key);
+    const current = attachmentsForScope(scope);
+    setAttachmentsForDraftKey(key, update(current));
+  };
+
+  const releasePendingAttachmentPreviews = () => {
+    for (const attachments of Object.values(pendingAttachmentsByScope)) {
+      for (const attachment of attachments) {
+        safeRevokeObjectUrl(attachment.preview_url);
+      }
+    }
   };
 
   const showComposerErrorToast = (message) => {
@@ -305,16 +361,17 @@
     onTranscriptionError?.(normalizedMessage);
   };
 
-  const removePendingAttachmentByPreviewUrl = (previewUrl) => {
-    const existingAttachment = pendingAttachments.find(
-      (attachment) => attachment.preview_url === previewUrl,
+  const removePendingAttachmentByLocalId = (key, localId) => {
+    const scope = attachmentScopeForDraftKey(key);
+    const existingAttachment = attachmentsForScope(scope).find(
+      (attachment) => attachment.local_id === localId,
     );
     if (!existingAttachment) {
       return;
     }
     safeRevokeObjectUrl(existingAttachment.preview_url);
-    pendingAttachments = pendingAttachments.filter(
-      (attachment) => attachment.preview_url !== previewUrl,
+    updateAttachmentsForDraftKey(key, (attachments) =>
+      attachments.filter((attachment) => attachment.local_id !== localId),
     );
   };
 
@@ -339,10 +396,43 @@
     if (!attachment) {
       return;
     }
-    safeRevokeObjectUrl(attachment.preview_url);
-    pendingAttachments = pendingAttachments.filter(
-      (_, candidateIndex) => candidateIndex !== index,
-    );
+    removePendingAttachmentByLocalId(draftKey, attachment.local_id);
+  };
+
+  const filenameWithSequence = (filename, sequence) => {
+    const trimmed = String(filename ?? '').trim() || 'image';
+    const lastDot = trimmed.lastIndexOf('.');
+    const stem = lastDot > 0 ? trimmed.slice(0, lastDot) : trimmed;
+    const extension = lastDot > 0 ? trimmed.slice(lastDot) : '';
+    return `${stem}${sequence}${extension}`;
+  };
+
+  const assignDistinctImageFilenames = (attachments) => {
+    const imageGroups = Object.create(null);
+    for (const attachment of attachments) {
+      if (!hasImageMediaType(attachment.media_type)) {
+        continue;
+      }
+      const sourceFilename = attachment.source_filename || attachment.filename;
+      imageGroups[sourceFilename] ??= [];
+      imageGroups[sourceFilename].push(attachment.local_id);
+    }
+    const sequenceByLocalId = Object.create(null);
+    for (const [sourceFilename, localIds] of Object.entries(imageGroups)) {
+      if (localIds.length < 2) {
+        continue;
+      }
+      localIds.forEach((localId, index) => {
+        sequenceByLocalId[localId] = filenameWithSequence(
+          sourceFilename,
+          index + 1,
+        );
+      });
+    }
+    return attachments.map((attachment) => {
+      const filename = sequenceByLocalId[attachment.local_id];
+      return filename ? { ...attachment, filename } : attachment;
+    });
   };
 
   const _handleFiles = async (files) => {
@@ -355,14 +445,20 @@
       return;
     }
 
-    const uploadTasks = selectedFiles.map(async (file) => {
+    const attachmentDraftKey = draftKey;
+    const newAttachments = selectedFiles.map((file) => {
       const previewUrl =
         typeof URL !== 'undefined' && typeof URL.createObjectURL === 'function'
           ? URL.createObjectURL(file)
           : '';
-      const pendingAttachment = {
+      return {
+        local_id: nextAttachmentLocalId(),
         attachment_id: '',
         filename:
+          typeof file.name === 'string' && file.name.trim().length > 0
+            ? file.name
+            : 'upload.bin',
+        source_filename:
           typeof file.name === 'string' && file.name.trim().length > 0
             ? file.name
             : 'upload.bin',
@@ -373,25 +469,43 @@
         preview_url: previewUrl,
         uploading: true,
       };
+    });
+    updateAttachmentsForDraftKey(attachmentDraftKey, (attachments) =>
+      assignDistinctImageFilenames([...attachments, ...newAttachments]),
+    );
 
-      pendingAttachments = [...pendingAttachments, pendingAttachment];
-
+    const uploadTasks = selectedFiles.map(async (file, index) => {
+      const localId = newAttachments[index].local_id;
       try {
-        const result = await uploadAttachment(file);
-        pendingAttachments = pendingAttachments.map((attachment) => {
-          if (attachment.preview_url !== previewUrl) {
-            return attachment;
-          }
-          return {
-            ...attachment,
-            attachment_id: result.attachment_id,
-            filename: result.filename,
-            media_type: result.media_type,
-            uploading: false,
-          };
-        });
+        const scope = attachmentScopeForDraftKey(attachmentDraftKey);
+        const pendingAttachment = attachmentsForScope(scope).find(
+          (attachment) => attachment.local_id === localId,
+        );
+        const uploadFilename =
+          pendingAttachment?.filename ?? newAttachments[index].filename;
+        const result =
+          uploadFilename === newAttachments[index].source_filename
+            ? await uploadAttachment(file)
+            : await uploadAttachment(file, { filename: uploadFilename });
+        updateAttachmentsForDraftKey(attachmentDraftKey, (attachments) =>
+          assignDistinctImageFilenames(
+            attachments.map((attachment) => {
+              if (attachment.local_id !== localId) {
+                return attachment;
+              }
+              return {
+                ...attachment,
+                attachment_id: result.attachment_id,
+                filename: result.filename,
+                source_filename: result.filename,
+                media_type: result.media_type,
+                uploading: false,
+              };
+            }),
+          ),
+        );
       } catch {
-        removePendingAttachmentByPreviewUrl(previewUrl);
+        removePendingAttachmentByLocalId(attachmentDraftKey, localId);
         showAttachmentUploadErrorToast();
       }
     });
@@ -695,14 +809,16 @@
     const submittedAttachmentSources = new Set(
       snapshot.attachments.map((attachment) => attachment.source),
     );
-    const submittedAttachmentsStillPresent = pendingAttachments.filter(
-      (attachment) => submittedAttachmentSources.has(attachment),
-    );
+    const submittedAttachmentsStillPresent = attachmentsForScope(
+      attachmentScopeForDraftKey(snapshot.draftKey),
+    ).filter((attachment) => submittedAttachmentSources.has(attachment));
     for (const attachment of submittedAttachmentsStillPresent) {
       safeRevokeObjectUrl(attachment.preview_url);
     }
-    pendingAttachments = pendingAttachments.filter(
-      (attachment) => !submittedAttachmentSources.has(attachment),
+    updateAttachmentsForDraftKey(snapshot.draftKey, (attachments) =>
+      attachments.filter(
+        (attachment) => !submittedAttachmentSources.has(attachment),
+      ),
     );
 
     // Typing and navigation stay available while admission is pending. Clear
@@ -1555,7 +1671,7 @@
       class="attachment-tray"
       aria-label={t('chat.attachment.preview', 'Preview attachment')}
     >
-      {#each pendingAttachments as attachment, index (`${attachment.preview_url}-${index}`)}
+      {#each pendingAttachments as attachment, index (attachment.local_id)}
         <div
           class="attachment-item"
           class:attachment-item-image={hasImageMediaType(attachment.media_type)}
