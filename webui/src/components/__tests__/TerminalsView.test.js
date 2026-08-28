@@ -277,7 +277,7 @@ describe('TerminalsView', () => {
     expect(hint.textContent).toContain('Session');
   });
 
-  it('uses the shared secondary sidebar header, action, list, and selection contract', async () => {
+  it('uses the compact top group bar and keeps both terminal actions available', async () => {
     listTerminalsMock.mockResolvedValue({
       groups: [manualGroup({ terminal_count: 1, live_count: 1 })],
       terminals: [terminal()],
@@ -286,23 +286,60 @@ describe('TerminalsView', () => {
     flushSync();
     await waitFor(() => streams.length === 1);
 
-    const pane = document.querySelector('.terminals-view__list-pane');
-    const header = pane.querySelector('.secondary-pane__header');
-    const list = pane.querySelector('.secondary-pane__scroll.secondary-list');
-    const item = list.querySelector('.terminals-view__group-item');
+    const toolbar = document.querySelector('.terminals-view__toolbar');
+    const tabs = toolbar.querySelector('.terminals-view__group-tabs');
+    const item = tabs.querySelector('.terminals-view__group-tab');
 
-    expect(header.querySelector('#terminals-list-title')).toBeTruthy();
-    expect(header.querySelector('button').textContent.trim()).toBe('Add group');
+    expect(document.querySelector('.terminals-view__list-pane')).toBeNull();
+    expect(
+      [...toolbar.querySelectorAll('button')].some(
+        (button) => button.textContent.trim() === 'Add group',
+      ),
+    ).toBe(true);
     expect(item.classList.contains('active')).toBe(true);
     expect(item.getAttribute('aria-current')).toBe('true');
-
-    const detailHeader = document.querySelector('.terminals-view__header');
     expect(
-      [...detailHeader.querySelectorAll('button')].some(
+      [...toolbar.querySelectorAll('button')].some(
         (button) => button.textContent.trim() === 'New terminal',
       ),
     ).toBe(true);
-    expect(detailHeader.querySelector('.view-header__eyebrow')).toBeNull();
+    expect(document.querySelector('.terminals-view__header')).toBeNull();
+  });
+
+  it('switches the visible terminal group from the top group bar', async () => {
+    listTerminalsMock.mockResolvedValue(
+      terminalListResponse(
+        [terminal()],
+        [
+          manualGroup({ terminal_count: 1, live_count: 1 }),
+          {
+            group_id: 'group-work',
+            name: 'Work',
+            kind: 'user',
+            terminal_count: 0,
+            live_count: 0,
+            order: [],
+          },
+        ],
+      ),
+    );
+    mountedComponent = mount(TerminalsView, { target: document.body });
+    flushSync();
+    await waitFor(() => streams.length === 1);
+
+    [...document.querySelectorAll('.terminals-view__group-tab')]
+      .find((button) => button.textContent.includes('Work'))
+      .dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    flushSync();
+
+    expect(
+      [...document.querySelectorAll('.terminals-view__group-tab')]
+        .find((button) => button.textContent.includes('Work'))
+        .getAttribute('aria-current'),
+    ).toBe('true');
+    expect(
+      document.querySelector('.terminals-view__detail > .empty-state'),
+    ).toBeTruthy();
   });
 
   it('renders the shared empty state when no Terminal Session is active', async () => {
@@ -310,7 +347,7 @@ describe('TerminalsView', () => {
     mountedComponent = mount(TerminalsView, { target: document.body });
     flushSync();
     await waitFor(() =>
-      document.querySelector('.terminals-view__list .empty-state'),
+      document.querySelector('.terminals-view__group-status'),
     );
 
     expect(
@@ -391,7 +428,7 @@ describe('TerminalsView', () => {
     flushSync();
 
     expect(
-      [...document.querySelectorAll('.terminals-view__group-kind')].some(
+      [...document.querySelectorAll('.terminals-view__group-tab')].some(
         (element) => element.textContent.includes('Finished'),
       ),
     ).toBe(true);
