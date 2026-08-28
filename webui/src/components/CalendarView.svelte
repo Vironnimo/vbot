@@ -4,7 +4,6 @@
   import Banner from './ui/Banner.svelte';
   import Button from './ui/Button.svelte';
   import ConfirmDialog from './ui/ConfirmDialog.svelte';
-  import EmptyState from './ui/EmptyState.svelte';
   import FormField from './ui/FormField.svelte';
   import Modal from './ui/Modal.svelte';
   import TabList from './ui/TabList.svelte';
@@ -83,10 +82,6 @@
   );
   let localCount = $derived(viewState.occurrences.length);
   let cronCount = $derived(viewState.cron.length);
-  let hasAnyContent = $derived(
-    (viewState.showLocalLayer && localCount > 0) ||
-      (viewState.showCronLayer && cronCount > 0),
-  );
 
   let localByDay = $derived(
     viewState.showLocalLayer
@@ -410,20 +405,6 @@
     </Banner>
   {:else if viewState.loading}
     <p class="calendar-loading">{t('calendar.loading', 'Loading calendar…')}</p>
-  {:else if !hasAnyContent}
-    <EmptyState
-      title={t('calendar.emptyTitle', 'Nothing scheduled')}
-      description={t(
-        'calendar.emptyDescription',
-        'Create an event yourself, or ask the agent to add one for you.',
-      )}
-    >
-      {#snippet actions()}
-        <Button variant="primary" onClick={() => openCreate()}>
-          {t('calendar.newEvent', 'New event')}
-        </Button>
-      {/snippet}
-    </EmptyState>
   {:else if viewState.view === 'month'}
     <div class="calendar-grid" role="grid">
       <div class="calendar-weekdays">

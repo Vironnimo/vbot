@@ -126,7 +126,10 @@
   min-width: 0;
 }
 
-.calendar-cell:nth-child(7n) {
+/* `of .calendar-cell` counts only cells among the grid children. The weekday
+   header wrapper is a child too, so plain :nth-child(7n) counted it in and
+   stripped the right border from every Saturday instead of the last column. */
+.calendar-cell:nth-child(7n of .calendar-cell) {
   border-right: none;
 }
 
