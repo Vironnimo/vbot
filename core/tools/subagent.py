@@ -42,7 +42,7 @@ SUBAGENT_PROMPT_BLOCK_TEMPLATE = (
     "{execution_guidance}\n\n"
     "Issue independent sibling `subagent` calls in the same turn so they can run "
     "concurrently.\n\n"
-    "Status is a non-blocking snapshot. Cancellation waits until that exact owned "
+    "`status` is a non-blocking snapshot; `cancel` waits until that exact owned "
     "work is cancelled and cannot target another Parent Session's work."
 )
 
