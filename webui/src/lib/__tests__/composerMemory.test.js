@@ -7,8 +7,10 @@ import {
   flushComposerMemory,
   getDraft,
   getHistory,
+  getPendingAttachments,
   pushHistory,
   resetComposerMemory,
+  setPendingAttachments,
   setDraft,
 } from '../composerMemory.js';
 
@@ -133,5 +135,69 @@ describe('composerMemory history', () => {
     expect(history).toHaveLength(100);
     expect(history[0]).toBe('message 119');
     expect(history[99]).toBe('message 20');
+  });
+});
+
+describe('composerMemory attachments', () => {
+  beforeEach(() => {
+    localStorage.clear();
+    resetComposerMemory();
+  });
+
+  afterEach(() => {
+    resetComposerMemory();
+    localStorage.clear();
+  });
+
+  it('keeps uploaded attachments isolated to their session', () => {
+    setPendingAttachments('agent-one::session-one', [
+      {
+        attachment_id: 'attachment-one',
+        filename: 'image1.png',
+        media_type: 'image/png',
+        source_filename: 'image.png',
+      },
+    ]);
+
+    expect(getPendingAttachments('agent-one::session-one')).toEqual([
+      {
+        attachment_id: 'attachment-one',
+        filename: 'image1.png',
+        media_type: 'image/png',
+        source_filename: 'image.png',
+      },
+    ]);
+    expect(getPendingAttachments('agent-two::session-two')).toEqual([]);
+  });
+
+  it('persists only completed attachment metadata', () => {
+    setPendingAttachments('agent::session', [
+      {
+        attachment_id: '',
+        filename: 'uploading.png',
+        media_type: 'image/png',
+        uploading: true,
+      },
+      {
+        attachment_id: 'attachment-one',
+        filename: 'image1.png',
+        media_type: 'image/png',
+        preview_url: 'blob:temporary-preview',
+      },
+    ]);
+    flushComposerMemory();
+
+    expect(
+      JSON.parse(localStorage.getItem('vbot.composer.attachments.v1')),
+    ).toEqual({
+      'agent::session': [
+        {
+          attachment_id: 'attachment-one',
+          filename: 'image1.png',
+          media_type: 'image/png',
+          source_filename: 'image1.png',
+        },
+      ],
+    });
   });
 });

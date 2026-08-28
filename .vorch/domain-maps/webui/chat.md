@@ -63,7 +63,7 @@ Reflection reviews surface as a "Reflections" subsection inside both Activity-pa
 - File mentions constrain to the server-provided list for the active address; attachment ids stay opaque with safe server URLs for preview/download.
 - The `/model ` autocomplete opens on demand (catalog fetched only when triggered), reuses the Agent-dropdown suitability filter and show-all toggle, auto-submits the selection through the guarded path, and shares one keyboard contract with the skill/file popups.
 - Speech input releases every media resource (tracks, recorder, timers, object URLs) on completion, cancellation, replacement, teardown, and failure - cleanup best effort across failing tracks. The native recorder container uploads as-is; `SpeechService` converts to the server-wide Voice -> Transcription profile, so Chat and wakeword capture share one Provider-facing audio policy.
-- Drafts and picker state are interaction state: refresh or selection transitions never silently submit or cross-address a draft.
+- Drafts and completed pending Attachments are interaction state keyed by the full displayed Session address; refresh or selection transitions never silently submit or cross-address either. A pending Attachment becomes Model-visible only when that Session's send is admitted; duplicate image display names are numbered before upload so each sent block has an unambiguous filename.
 - Composer focus follows deliberate navigation only (New Session always; user-driven selections after destination history settles, desktop only; mobile stays in reading mode with `preventScroll`) - passive changes (reconnects, invalidations, mount restoration) never steal focus.
 
 ## Usage and errors

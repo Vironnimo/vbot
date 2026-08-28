@@ -722,6 +722,57 @@ describe('ChatComposer', () => {
     ]);
   });
 
+  it('numbers duplicate image attachments before uploading and sending them', async () => {
+    const onSendMessage = vi.fn().mockResolvedValue(true);
+    uploadAttachment
+      .mockResolvedValueOnce({
+        attachment_id: 'attachment-image-1',
+        filename: 'image1.png',
+        media_type: 'image/png',
+        size_bytes: 7,
+      })
+      .mockResolvedValueOnce({
+        attachment_id: 'attachment-image-2',
+        filename: 'image2.png',
+        media_type: 'image/png',
+        size_bytes: 7,
+      });
+    mountedComponent = mount(ChatComposer, {
+      target: document.body,
+      props: { onSendMessage },
+    });
+    flushSync();
+
+    const first = new File(['first'], 'image.png', { type: 'image/png' });
+    const second = new File(['second'], 'image.png', { type: 'image/png' });
+    await selectFilesFromPicker([first, second]);
+
+    expect(uploadAttachment).toHaveBeenNthCalledWith(1, first, {
+      filename: 'image1.png',
+    });
+    expect(uploadAttachment).toHaveBeenNthCalledWith(2, second, {
+      filename: 'image2.png',
+    });
+    expect(attachmentNames()).toEqual(['image1.png', 'image2.png']);
+
+    submitComposer();
+
+    expect(onSendMessage).toHaveBeenCalledWith([
+      {
+        type: 'media',
+        attachment_id: 'attachment-image-1',
+        filename: 'image1.png',
+        media_type: 'image/png',
+      },
+      {
+        type: 'media',
+        attachment_id: 'attachment-image-2',
+        filename: 'image2.png',
+        media_type: 'image/png',
+      },
+    ]);
+  });
+
   it.each([
     ['voice.ogg', 'audio/ogg'],
     ['clip.mp4', 'video/mp4'],
@@ -1102,6 +1153,59 @@ describe('ChatComposer', () => {
     expect(getHistory('agent')).toEqual([]);
   });
 
+  it('keeps completed attachments with their original session across composer mounts', async () => {
+    uploadAttachment.mockResolvedValue({
+      attachment_id: 'attachment-file-1',
+      filename: 'brief.pdf',
+      media_type: 'application/pdf',
+      size_bytes: 11,
+    });
+    mountedComponent = mount(ChatComposer, {
+      target: document.body,
+      props: { draftKey: 'agent-one::session-one', historyKey: 'agent-one' },
+    });
+    flushSync();
+
+    await selectFileFromPicker(
+      new File(['pdf-content'], 'brief.pdf', { type: 'application/pdf' }),
+    );
+    expect(document.body.querySelectorAll('.attachment-item')).toHaveLength(1);
+
+    await unmount(mountedComponent);
+    mountedComponent = mount(ChatComposer, {
+      target: document.body,
+      props: { draftKey: 'agent-two::session-two', historyKey: 'agent-two' },
+    });
+    flushSync();
+
+    expect(document.body.querySelectorAll('.attachment-item')).toHaveLength(0);
+
+    await unmount(mountedComponent);
+    const onSendMessage = vi.fn().mockResolvedValue(true);
+    mountedComponent = mount(ChatComposer, {
+      target: document.body,
+      props: {
+        draftKey: 'agent-one::session-one',
+        historyKey: 'agent-one',
+        onSendMessage,
+      },
+    });
+    flushSync();
+
+    expect(document.body.querySelectorAll('.attachment-item')).toHaveLength(1);
+    submitComposer();
+    await flushComposerAsyncWork();
+
+    expect(onSendMessage).toHaveBeenCalledWith([
+      {
+        type: 'file',
+        attachment_id: 'attachment-file-1',
+        filename: 'brief.pdf',
+        media_type: 'application/pdf',
+      },
+    ]);
+  });
+
   it('sends without options when no @-token is a real file', async () => {
     const onSendMessage = vi.fn().mockResolvedValue(true);
     const onListFiles = vi.fn().mockResolvedValue({ files: [] });
@@ -1315,13 +1419,23 @@ function filePickerInput() {
 }
 
 async function selectFileFromPicker(file) {
+  await selectFilesFromPicker([file]);
+}
+
+async function selectFilesFromPicker(files) {
   const input = filePickerInput();
   Object.defineProperty(input, 'files', {
     configurable: true,
-    value: [file],
+    value: files,
   });
   input.dispatchEvent(new Event('change', { bubbles: true }));
   await flushComposerAsyncWork();
+}
+
+function attachmentNames() {
+  return Array.from(document.body.querySelectorAll('.attachment-name')).map(
+    (element) => element.textContent.trim(),
+  );
 }
 
 function submitComposer() {
