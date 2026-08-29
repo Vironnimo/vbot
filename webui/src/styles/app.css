@@ -382,7 +382,6 @@ svg {
 
 .app-shell[data-sidebar-collapsed='true'] .app-shell__navigation {
   align-items: center;
-  padding-top: var(--space-md);
 }
 
 .app-shell[data-sidebar-collapsed='true'] .app-shell__nav-group {
