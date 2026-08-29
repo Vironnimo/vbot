@@ -7,8 +7,8 @@ describe('app navigation surface', () => {
   it('ships only the live navigation views in grouped order', () => {
     expect(NAVIGATION_ITEMS.map((item) => item.id)).toEqual([
       'chat',
-      'agents',
       'terminals',
+      'agents',
       'projects',
       'calendar',
       'skills',
