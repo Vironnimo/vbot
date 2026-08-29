@@ -46,6 +46,11 @@ EDIT_TOOL_DESCRIPTION = (
 EDIT_TOOL_PARAMETERS: JsonObject = {
     "type": "object",
     "properties": {
+        "path": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Default file to edit; used by edits that omit their own path.",
+        },
         "edits": {
             "type": "array",
             "minItems": 1,
@@ -57,7 +62,8 @@ EDIT_TOOL_PARAMETERS: JsonObject = {
                         "type": "string",
                         "minLength": 1,
                         "description": (
-                            "File to edit, relative to the working directory or absolute."
+                            "File to edit, relative to the working directory or absolute. "
+                            "Omit to use the top-level path."
                         ),
                     },
                     "old_string": {
@@ -79,7 +85,7 @@ EDIT_TOOL_PARAMETERS: JsonObject = {
                         "description": ("Replace every match. Omit to require one unique match."),
                     },
                 },
-                "required": ["path", "old_string", "new_string"],
+                "required": ["old_string", "new_string"],
             },
         },
     },
@@ -632,15 +638,39 @@ def _edit_one(
         return tool_success(success_data)
 
 
-def _validate_batch_arguments(arguments: JsonObject) -> list[object] | JsonObject:
-    unknown_arguments = set(arguments) - {"edits"}
+def _validate_batch_arguments(
+    arguments: JsonObject,
+) -> tuple[list[object], str | None] | JsonObject:
+    unknown_arguments = set(arguments) - {"edits", "path"}
     if unknown_arguments:
         names = ", ".join(sorted(unknown_arguments))
         return tool_failure("invalid_arguments", f"Unknown argument(s): {names}")
+    default_path = arguments.get("path")
+    if default_path is not None and (not isinstance(default_path, str) or not default_path):
+        return tool_failure("invalid_arguments", "path must be a non-empty string")
     edits = arguments.get("edits")
     if not isinstance(edits, list) or not edits:
         return tool_failure("invalid_arguments", "edits must be a non-empty array")
-    return edits
+    return edits, default_path
+
+
+def _edit_with_default_path(edit: object, default_path: str | None) -> object:
+    """Apply the batch-level default path to an edit that omits its own.
+
+    An edit's explicit non-empty path wins (per-item precedence); otherwise the
+    batch-level ``path`` fills the slot. An edit with neither passes through so
+    the per-item validator reports the missing path.
+    """
+    if not isinstance(edit, dict):
+        return edit
+    current = edit.get("path")
+    if isinstance(current, str) and current:
+        return edit
+    if default_path is None:
+        return edit
+    effective = dict(edit)
+    effective["path"] = default_path
+    return effective
 
 
 def _failed_item(index: int, edit: object, result: JsonObject) -> JsonObject:
@@ -706,14 +736,16 @@ def _edit_batch(
     validated_arguments = _validate_batch_arguments(arguments)
     if isinstance(validated_arguments, dict):
         return validated_arguments
+    edits, default_path = validated_arguments
 
     outcomes: list[JsonObject] = []
     added_lines = 0
     removed_lines = 0
-    for index, edit in enumerate(validated_arguments):
+    for index, edit in enumerate(edits):
+        effective_edit = _edit_with_default_path(edit, default_path)
         result = (
-            _edit_one(context, edit, file_state=file_state)
-            if isinstance(edit, dict)
+            _edit_one(context, effective_edit, file_state=file_state)
+            if isinstance(effective_edit, dict)
             else tool_failure("invalid_arguments", "edit must be an object")
         )
         data = result.get("data")
@@ -722,7 +754,7 @@ def _edit_batch(
             added_lines += int(data.get("added_lines", 0))
             removed_lines += int(data.get("removed_lines", 0))
         else:
-            outcomes.append(_failed_item(index, edit, result))
+            outcomes.append(_failed_item(index, effective_edit, result))
 
     succeeded = sum(outcome["ok"] is True for outcome in outcomes)
     failed = len(outcomes) - succeeded
@@ -756,6 +788,8 @@ def _edit_display_parts(arguments: JsonObject) -> tuple[ToolDisplayPart, ...]:
         return ()
     path = edits[0].get("path")
     if not isinstance(path, str) or not path:
+        path = arguments.get("path")
+    if not isinstance(path, str) or not path:
         return ()
     return (
         ToolDisplayPart(
@@ -772,11 +806,16 @@ def _edit_display_facts(arguments: JsonObject, result: JsonObject | None) -> tup
     edits = arguments.get("edits")
     if not isinstance(edits, list) or len(edits) <= 1:
         return ()
-    paths = {
-        edit.get("path")
-        for edit in edits
-        if isinstance(edit, dict) and isinstance(edit.get("path"), str)
-    }
+    default_path = arguments.get("path")
+    paths: set[str] = set()
+    for edit in edits:
+        if not isinstance(edit, dict):
+            continue
+        path = edit.get("path")
+        if isinstance(path, str) and path:
+            paths.add(path)
+        elif isinstance(default_path, str) and default_path:
+            paths.add(default_path)
     facts: list[JsonObject] = [
         {"kind": "count", "value": len(edits), "unit": "edits", "at_least": False},
         {"kind": "count", "value": len(paths), "unit": "files", "at_least": False},
