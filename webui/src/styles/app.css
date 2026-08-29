@@ -307,7 +307,7 @@ svg {
   flex: 1;
   flex-direction: column;
   gap: 1px;
-  padding: calc(var(--space-md) + var(--space-xs)) 10px 10px;
+  padding: calc(var(--space-lg) + var(--space-md) - var(--space-xs)) 10px 10px;
 }
 
 /* Grouped navigation: each cadence group stacks its items under a mono-xs
