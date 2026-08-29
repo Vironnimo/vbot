@@ -12,7 +12,7 @@ import copy
 import inspect
 import json
 import re
-from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Mapping
+from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal, cast
 
@@ -328,6 +328,40 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
             return IMAGE_WIRE_MEDIA_TYPES | {"application/pdf"}
         return super().wire_media_support(model_id) | {"application/pdf"}
 
+    def estimate_request_input_tokens(
+        self,
+        messages: Sequence[Mapping[str, Any]],
+        *,
+        model_id: str,
+        tools: Sequence[Mapping[str, Any]] | None = None,
+    ) -> int:
+        """Estimate the selected OpenAI wire's rendered request footprint."""
+
+        if self._connection_mode == CODEX_RESPONSES_MODE or self._uses_platform_responses(model_id):
+            request_messages = [dict(message) for message in messages]
+            if self._connection_mode == CODEX_RESPONSES_MODE and not any(
+                message.get("role") == "system" and str(message.get("content") or "").strip()
+                for message in request_messages
+            ):
+                request_messages.insert(
+                    0,
+                    {"role": "system", "content": OPENAI_SUBSCRIPTION_DEFAULT_INSTRUCTIONS},
+                )
+            return estimate_responses_input_tokens(
+                request_messages,
+                document_media_types=(
+                    frozenset({"application/pdf"})
+                    if self._uses_platform_responses(model_id)
+                    else frozenset()
+                ),
+                tools=tools,
+            )
+        return super().estimate_request_input_tokens(
+            messages,
+            model_id=model_id,
+            tools=tools,
+        )
+
     async def _build_headers(self, cache_scope_id: str | None = None) -> dict[str, str]:
         if self._connection_mode == CODEX_RESPONSES_MODE:
             return await self._build_codex_headers(cache_scope_id)
@@ -527,9 +561,9 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
                 request_kwargs,
                 model_id,
                 messages,
-                estimated_input_tokens=estimate_responses_input_tokens(
+                estimated_input_tokens=self.estimate_request_input_tokens(
                     messages,
-                    document_media_types=document_media_types,
+                    model_id=model_id,
                     tools=request_kwargs.get("tools"),
                 ),
             )

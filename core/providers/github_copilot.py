@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import AsyncIterator, Mapping, Sequence
 from typing import Any
 
 import httpx
@@ -48,7 +48,6 @@ from core.providers.openai_compatible import (
     _read_string,
 )
 from core.providers.reasoning import THINKING_EFFORT_RANKS
-from core.utils.tokens import estimate_request_input_tokens
 
 
 class GitHubCopilotAdapter(OpenAICompatibleAdapter):
@@ -242,8 +241,9 @@ class GitHubCopilotAdapter(OpenAICompatibleAdapter):
             request_kwargs,
             model_id,
             messages,
-            estimated_input_tokens=estimate_responses_input_tokens(
+            estimated_input_tokens=self.estimate_request_input_tokens(
                 messages,
+                model_id=model_id,
                 tools=request_kwargs.get("tools"),
             ),
         )
@@ -265,7 +265,11 @@ class GitHubCopilotAdapter(OpenAICompatibleAdapter):
         if isinstance(max_prompt_tokens, int) and not isinstance(max_prompt_tokens, bool):
             tools = request_kwargs.get("tools")
             tool_definitions = tools if isinstance(tools, list) else None
-            estimated_input, _ = estimate_request_input_tokens(messages, tool_definitions)
+            estimated_input = self.estimate_request_input_tokens(
+                messages,
+                model_id=model_id,
+                tools=tool_definitions,
+            )
             if estimated_input > max_prompt_tokens:
                 raise ProviderError(
                     "Request input exceeds the GitHub Copilot Model prompt limit "
@@ -278,6 +282,25 @@ class GitHubCopilotAdapter(OpenAICompatibleAdapter):
             model_id,
             messages,
             estimated_input_tokens=estimated_input_tokens,
+        )
+
+    def estimate_request_input_tokens(
+        self,
+        messages: Sequence[Mapping[str, Any]],
+        *,
+        model_id: str,
+        tools: Sequence[Mapping[str, Any]] | None = None,
+    ) -> int:
+        """Estimate the selected GitHub Copilot wire's rendered request footprint."""
+
+        if self._policy_for_model(model_id).endpoint_path == RESPONSES_ENDPOINT:
+            return estimate_responses_input_tokens(
+                [dict(message) for message in messages], tools=tools
+            )
+        return super().estimate_request_input_tokens(
+            messages,
+            model_id=model_id,
+            tools=tools,
         )
 
     async def _build_request_headers(

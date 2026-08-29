@@ -80,7 +80,6 @@ from core.utils.logging import get_logger
 from core.utils.retry import retry_async
 from core.utils.tokens import (
     continues_reasoning_text_block,
-    estimate_request_input_tokens,
 )
 
 _LOGGER = get_logger("providers.openai_compatible")
@@ -478,7 +477,11 @@ class OpenAICompatibleAdapter(ProviderAdapter):
         tools = request_kwargs.get("tools")
         tool_definitions = tools if isinstance(tools, list) else None
         if estimated_input_tokens is None:
-            estimated_input, _ = estimate_request_input_tokens(messages, tool_definitions)
+            estimated_input = self.estimate_request_input_tokens(
+                messages,
+                model_id=model_id,
+                tools=tool_definitions,
+            )
         else:
             estimated_input = max(0, int(estimated_input_tokens))
         resolved = resolve_request_output_limit(

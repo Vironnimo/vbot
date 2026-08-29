@@ -31,6 +31,7 @@ from core.tools import (
 from core.tools.availability import ToolAccess
 from core.tools.change_tracker import ChangeTracker
 from core.tools.file_state import FileReadState
+from core.utils.tokens import estimate_request_input_tokens
 
 JsonObject = dict[str, Any]
 
@@ -449,6 +450,17 @@ class StubAdapter:
 
     def wire_media_support(self, _model_id: str) -> frozenset[str]:
         return self._wire_media_types
+
+    def estimate_request_input_tokens(
+        self,
+        messages: list[JsonObject],
+        *,
+        model_id: str,
+        tools: list[JsonObject] | None = None,
+    ) -> int:
+        del model_id
+        estimated, _ = estimate_request_input_tokens(messages, tools)
+        return estimated
 
     async def stream(
         self,

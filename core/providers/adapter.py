@@ -12,7 +12,7 @@ import hashlib
 import json
 import string
 from abc import ABC, abstractmethod
-from collections.abc import AsyncIterator, Callable, Mapping
+from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Final, Literal, cast
 
@@ -637,6 +637,33 @@ def _rewrite_responses_output_tool_call_ids(
         item.pop("id", None)
 
 
+def estimate_wire_request_input_tokens(
+    adapter: Any,
+    messages: Sequence[Mapping[str, Any]],
+    *,
+    model_id: str,
+    tools: Sequence[Mapping[str, Any]] | None = None,
+) -> int:
+    """Estimate one wire request, retaining the generic fallback for test doubles.
+
+    Production Adapters inherit :meth:`ProviderAdapter.estimate_request_input_tokens`.
+    The fallback keeps lightweight duck-typed Adapters used by integration
+    seams on the established Chat Completions estimate until they implement the
+    richer Adapter contract.
+    """
+
+    estimator = getattr(adapter, "estimate_request_input_tokens", None)
+    if callable(estimator):
+        estimated = estimator(messages, model_id=model_id, tools=tools)
+        if isinstance(estimated, int) and not isinstance(estimated, bool) and estimated >= 0:
+            return estimated
+
+    from core.utils.tokens import estimate_request_input_tokens
+
+    estimated, _ = estimate_request_input_tokens(messages, tools)
+    return estimated
+
+
 class ProviderAdapter(ABC):
     """Abstract base class for provider adapters.
 
@@ -812,6 +839,32 @@ class ProviderAdapter(ABC):
         """
         del model_id
         return frozenset()
+
+    # ------------------------------------------------------------------
+    # Request-context estimation
+    # ------------------------------------------------------------------
+
+    def estimate_request_input_tokens(
+        self,
+        messages: Sequence[Mapping[str, Any]],
+        *,
+        model_id: str,
+        tools: Sequence[Mapping[str, Any]] | None = None,
+    ) -> int:
+        """Estimate the context consumed by this Adapter's rendered request.
+
+        Chat uses this same wire-owned estimate for pre-send Context protection
+        and automatic Compaction. The default fits Chat Completions-shaped
+        requests; Adapters that render a different wire representation override
+        it so all local Context decisions budget the request that is actually
+        sent rather than the persisted canonical history.
+        """
+
+        del model_id
+        from core.utils.tokens import estimate_request_input_tokens
+
+        estimated, _ = estimate_request_input_tokens(messages, tools)
+        return estimated
 
     # ------------------------------------------------------------------
     # Catalog normalization policy
