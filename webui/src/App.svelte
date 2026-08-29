@@ -7,15 +7,15 @@
       section: 'work',
     },
     {
-      id: 'agents',
-      labelKey: 'navigation.agents',
-      labelFallback: 'Agents',
-      section: 'work',
-    },
-    {
       id: 'terminals',
       labelKey: 'navigation.terminals',
       labelFallback: 'Terminals',
+      section: 'work',
+    },
+    {
+      id: 'agents',
+      labelKey: 'navigation.agents',
+      labelFallback: 'Agents',
       section: 'work',
     },
     {
