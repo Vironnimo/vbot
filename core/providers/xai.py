@@ -9,7 +9,6 @@ from typing import Any
 from core.providers.github_copilot_responses import (
     REASONING_ENCRYPTED_CONTENT_INCLUDE,
     build_responses_payload,
-    estimate_responses_input_tokens,
 )
 from core.providers.openai import OpenAIAdapter, OpenAISubscriptionResponsesPolicy
 from core.providers.providers import ProviderConfig
@@ -132,8 +131,9 @@ class XAIAdapter(OpenAIAdapter):
             request_kwargs,
             model_id,
             messages,
-            estimated_input_tokens=estimate_responses_input_tokens(
+            estimated_input_tokens=self.estimate_request_input_tokens(
                 messages,
+                model_id=model_id,
                 tools=request_kwargs.get("tools"),
             ),
         )

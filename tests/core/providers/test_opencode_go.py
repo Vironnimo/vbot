@@ -16,9 +16,11 @@ from core.models.models import Capabilities, Model, ReasoningCapabilities
 from core.providers.adapter import IMAGE_WIRE_MEDIA_TYPES
 from core.providers.anthropic_compatible import AnthropicCompatibleAdapter
 from core.providers.errors import ProviderError
+from core.providers.github_copilot_responses import estimate_responses_input_tokens
 from core.providers.openai_compatible import OpenAICompatibleAdapter
 from core.providers.opencode_go import OpenCodeGoAdapter
 from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig
+from core.utils.tokens import estimate_request_input_tokens
 
 API_KEY = "test-opencode-go-key"
 OPENCODE_GO_URL = "https://opencode-go.example/v1/chat/completions"
@@ -1527,6 +1529,61 @@ class TestOpenCodeGoResponsesRouting:
     ) -> None:
         assert opencode_go_adapter._model_protocol("longcat-2.0") == "openai"
         assert opencode_go_adapter._model_protocol("qwen3.8-max") == "anthropic"
+
+    def test_responses_context_estimate_uses_rendered_responses_items(
+        self,
+        opencode_go_adapter: OpenCodeGoAdapter,
+    ) -> None:
+        messages: list[dict[str, Any]] = [
+            {"role": "system", "content": "Keep answers concise."},
+            {"role": "user", "content": "Inspect the repository."},
+            {
+                "role": "assistant",
+                "content": None,
+                "reasoning_meta": {
+                    "response_output": [
+                        {
+                            "type": "reasoning",
+                            "encrypted_content": "opaque-continuity",
+                        }
+                    ],
+                    "reasoning_items": [{"type": "reasoning", "text": "duplicated " * 20_000}],
+                    "encrypted_content": ["duplicated " * 20_000],
+                },
+            },
+        ]
+
+        estimated = opencode_go_adapter.estimate_request_input_tokens(
+            messages,
+            model_id="muse-spark-1.2-contributor",
+            tools=[CLOSED_TOOL],
+        )
+        raw_chat_estimate, _ = estimate_request_input_tokens(messages, [CLOSED_TOOL])
+
+        assert estimated == estimate_responses_input_tokens(messages, tools=[CLOSED_TOOL])
+        assert estimated < raw_chat_estimate
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_responses_output_limit_uses_responses_context_estimate(
+        self,
+        opencode_go_adapter: OpenCodeGoAdapter,
+    ) -> None:
+        responses_route = respx.post(OPENCODE_GO_RESPONSES_URL).mock(
+            return_value=httpx.Response(200, json=RESPONSES_COMPLETED_RESPONSE)
+        )
+        with patch.object(
+            opencode_go_module,
+            "estimate_responses_input_tokens",
+            return_value=700_000,
+        ) as estimator:
+            await opencode_go_adapter.send(
+                [{"role": "user", "content": "hello"}],
+                model_id="muse-spark-1.2-contributor",
+            )
+
+        assert responses_route.called
+        estimator.assert_called_once()
 
     @respx.mock
     @pytest.mark.asyncio

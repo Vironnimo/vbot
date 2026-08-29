@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import AsyncIterator, Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -27,6 +27,7 @@ from core.providers.errors import NetworkError, ProviderError
 from core.providers.github_copilot_responses import (
     ResponsesStreamState,
     build_responses_payload,
+    estimate_responses_input_tokens,
     iter_responses_sse_deltas_with_state,
     normalize_responses_response,
 )
@@ -254,6 +255,26 @@ class OpenCodeGoAdapter(OpenAICompatibleAdapter):
         if self._uses_anthropic_messages_path(model_id):
             return self._messages.wire_media_support(model_id)
         return super().wire_media_support(model_id)
+
+    def estimate_request_input_tokens(
+        self,
+        messages: Sequence[Mapping[str, Any]],
+        *,
+        model_id: str,
+        tools: Sequence[Mapping[str, Any]] | None = None,
+    ) -> int:
+        """Estimate the rendered request for the model-selected OpenCode Go wire."""
+
+        if self._model_protocol(model_id) == PROTOCOL_RESPONSES:
+            return estimate_responses_input_tokens(
+                [dict(message) for message in messages],
+                tools=tools,
+            )
+        return super().estimate_request_input_tokens(
+            messages,
+            model_id=model_id,
+            tools=tools,
+        )
 
     async def send(
         self,

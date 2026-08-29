@@ -177,6 +177,7 @@ from core.providers.adapter import (
     TERMINAL_OUTCOME_UNKNOWN,
     TOOL_RESULT_CONTENT_BLOCKS_FIELD,
     TerminalOutcome,
+    estimate_wire_request_input_tokens,
 )
 from core.providers.providers import resolve_effective_context_window
 from core.providers.reasoning import (
@@ -216,7 +217,6 @@ from core.tools import (
 )
 from core.utils.errors import ConfigError, ProviderError, VBotError
 from core.utils.logging import get_logger
-from core.utils.tokens import estimate_request_input_tokens
 from core.utils.workers import BoundedWorkerPool
 
 if TYPE_CHECKING:
@@ -2565,6 +2565,7 @@ class ChatLoop:
                 [] if tool_finalization_reason is not None else tools,
                 agent,
                 run,
+                target,
             )
             step_started_perf = time.perf_counter()
             workspace = getattr(agent, "workspace", None)
@@ -3050,28 +3051,30 @@ class ChatLoop:
         tools: list[JsonObject],
         agent: Any,
         run: Run,
+        target: _ModelTarget,
     ) -> None:
         """Fail fast when measured Context Usage already fills the Model window.
 
-        The Provider-side output clamp budgets against the local token
-        estimate, which can diverge from what a Provider actually bills. When
-        the Session carries a measured anchor, its projection is the stronger
-        signal and produces this clean local error instead of a remote
-        Provider rejection mid-Run. Sessions without a measured anchor are
-        skipped — the estimator-based clamp remains their only guard.
+        The Adapter owns the estimate for the exact wire it renders. A durable
+        Provider measurement is an independent stronger signal when it is
+        higher, so the guard uses the larger of the two rather than adding
+        System Prompt or Tool overhead a second time to a measured request.
         """
 
         context_window = self.resolve_context_window(agent)
         if context_window is None:
             return
         projection = latest_session_context_usage(session_messages)
-        if not projection or "provider_input_tokens" not in projection:
+        if projection is None or "provider_input_tokens" not in projection:
             return
-        system_messages = [
-            message for message in request_messages if message.get("role") == "system"
-        ]
-        overhead_tokens, _ = estimate_request_input_tokens(system_messages, tools or None)
-        projected_tokens = int(projection["tokens"]) + overhead_tokens
+        wire_tokens = estimate_wire_request_input_tokens(
+            target.adapter,
+            request_messages,
+            model_id=target.model_id,
+            tools=tools,
+        )
+        measured_tokens = int(projection["tokens"])
+        projected_tokens = max(measured_tokens, wire_tokens)
         if projected_tokens < context_window:
             return
         _LOGGER.error(
@@ -3084,7 +3087,7 @@ class ChatLoop:
             context_window,
         )
         raise ProviderError(
-            "Measured Context usage leaves no output capacity in the Model "
+            "Context usage leaves no output capacity in the Model "
             f"context window (projected_input_tokens={projected_tokens}, "
             f"context_window={context_window})",
             retryable=False,

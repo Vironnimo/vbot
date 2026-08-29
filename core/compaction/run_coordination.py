@@ -66,6 +66,7 @@ from core.prompts.pinned_context import (
     stamp_prompt_files_read,
 )
 from core.providers.accounts import ConnectionRef
+from core.providers.adapter import estimate_wire_request_input_tokens
 from core.runs import (
     COMPACTION_ABORTED_EVENT,
     COMPACTION_COMPLETED_EVENT,
@@ -657,7 +658,14 @@ class CompactionRunCoordinator:
         context_tokens = resolved_context_usage.get("tokens")
         if isinstance(context_tokens, bool) or not isinstance(context_tokens, int):
             raise AssertionError("Context Usage must carry an integer token count")
-        input_tokens = context_tokens
+        wire_context_tokens = await _CHAT_TRANSFORM_WORKERS.run(
+            estimate_wire_request_input_tokens,
+            target.adapter,
+            current_request_messages,
+            model_id=target.model_id,
+            tools=tools,
+        )
+        input_tokens = max(context_tokens, wire_context_tokens)
         run.terminal_payload_extras["context_usage"] = dict(resolved_context_usage)
 
         if settings.trigger == "context_ratio":

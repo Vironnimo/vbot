@@ -363,11 +363,23 @@ async def test_compaction_maybe_auto_compact_skips_when_threshold_not_reached(
 
 
 @pytest.mark.asyncio
-async def test_compaction_uses_provider_anchor_instead_of_larger_full_request_estimate(
+async def test_compaction_uses_larger_of_provider_anchor_and_wire_estimate(
     tmp_path: Path,
 ) -> None:
     agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
-    adapter = StubAdapter([])
+
+    class HighEstimateAdapter(StubAdapter):
+        def estimate_request_input_tokens(
+            self,
+            _messages: list[JsonObject],
+            *,
+            model_id: str,
+            tools: list[JsonObject] | None = None,
+        ) -> int:
+            del model_id, tools
+            return 95
+
+    adapter = HighEstimateAdapter([])
     compaction_service = StubCompactionService(
         should_auto=False,
         estimated_tokens=95,
@@ -397,7 +409,7 @@ async def test_compaction_uses_provider_anchor_instead_of_larger_full_request_es
         run=run,
     )
 
-    assert compaction_service.should_auto_calls == [(20, 100, 0.8)]
+    assert compaction_service.should_auto_calls == [(95, 100, 0.8)]
     assert compaction_service.estimate_calls == []
 
 

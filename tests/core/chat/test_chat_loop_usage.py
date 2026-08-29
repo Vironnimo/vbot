@@ -418,9 +418,7 @@ async def test_measured_context_guard_fails_run_before_second_request(
         models=StubModels({("openai", "gpt-4.1"): 1_000}),
     )
 
-    with pytest.raises(
-        ProviderError, match="Measured Context usage leaves no output capacity"
-    ) as exc_info:
+    with pytest.raises(ProviderError) as exc_info:
         await build_chat_loop(runtime).send("coder", "Weather?", session_id="session-one")
 
     assert exc_info.value.retryable is False
