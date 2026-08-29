@@ -116,13 +116,10 @@
 }
 
 .calendar-cell {
+  position: relative;
   min-height: 96px;
-  padding: 6px;
   border-right: 1px solid var(--border);
   border-bottom: 1px solid var(--border);
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
   min-width: 0;
 }
 
@@ -137,35 +134,72 @@
   background: var(--secondary-surface);
 }
 
-.calendar-cell.is-today .calendar-day-number {
-  background: var(--accent-dim);
-  color: var(--accent);
-  border-color: var(--accent);
+/* Today is a whole day region, not an active link on the number: the cell
+   surface is tinted and the number stays plain text. Keeping the highlight
+   off the number avoids the "this is a link/button" reading. */
+.calendar-cell.is-today {
+  background: var(--accent-12);
 }
 
-.calendar-day-number {
-  align-self: flex-start;
-  min-width: 24px;
-  padding: 2px 6px;
-  border: 1px solid transparent;
-  border-radius: var(--r-sm);
+.calendar-cell-surface {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: flex-start;
+  justify-content: flex-start;
+  padding: 6px;
   background: none;
-  color: var(--text-med);
-  font-family: var(--font-mono);
-  font-size: var(--fs-mono-sm);
+  border: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
   cursor: pointer;
 }
 
-.calendar-day-number:hover {
-  border-color: var(--border-2);
+.calendar-day-number {
+  font-family: var(--font-mono);
+  font-size: var(--fs-mono-sm);
+  color: var(--text-med);
+}
+
+/* Hover affordance: a "+" appears over the empty cell area to signal that
+   clicking here creates an event on this day. */
+.calendar-cell-add {
+  position: absolute;
+  top: 5px;
+  right: 8px;
+  width: 20px;
+  height: 20px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--r-sm);
   color: var(--text-hi);
+  font-size: var(--fs-label-sm);
+  opacity: 0;
+  transition: opacity 120ms ease;
+  pointer-events: none;
+}
+
+.calendar-cell-surface:hover .calendar-cell-add {
+  opacity: 1;
 }
 
 .calendar-cell-entries {
+  position: relative;
+  z-index: 1;
   display: flex;
   flex-direction: column;
   gap: 4px;
   min-width: 0;
+  padding: 26px 6px 6px;
+  /* Empty padding passes the click through to the surface button; the entry
+     buttons themselves stay interactive. */
+  pointer-events: none;
+}
+
+.calendar-cell-entries .calendar-entry {
+  pointer-events: auto;
 }
 
 .calendar-entry {
