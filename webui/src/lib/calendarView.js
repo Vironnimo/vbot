@@ -18,6 +18,7 @@ import { activeLocaleTag } from './i18n.js';
 
 export const CALENDAR_VIEWS = ['month', 'week', 'day', 'agenda'];
 const AGENDA_DAYS = 14;
+const MONTH_GRID_DAYS = 42;
 
 // ---------------------------------------------------------------------------
 // Pure day-key helpers. A day key is a calendar date "YYYY-MM-DD"; weekday of a
@@ -60,14 +61,21 @@ export function monthKeyOf(key) {
   return key.slice(0, 7);
 }
 
+// The first calendar day of the six-week grid covering a month: the Monday on
+// or before the 1st. Both the rendered grid and the request window derive from
+// this, so the cells shown and the occurrences fetched can never disagree.
+export function monthGridStartKey(anchorKey) {
+  const anchor = dayKeyToUtcDate(anchorKey);
+  const firstOfMonth = `${anchor.getUTCFullYear()}-${pad(anchor.getUTCMonth() + 1)}-01`;
+  return weekStartKey(firstOfMonth);
+}
+
 export function monthGridDays(anchorKey) {
   const anchor = dayKeyToUtcDate(anchorKey);
-  const year = anchor.getUTCFullYear();
-  const month = anchor.getUTCMonth();
-  const firstOfMonth = `${year}-${pad(month + 1)}-01`;
-  const gridStart = dayKeyToUtcDate(weekStartKey(firstOfMonth));
+  const firstOfMonth = `${anchor.getUTCFullYear()}-${pad(anchor.getUTCMonth() + 1)}-01`;
+  const gridStart = dayKeyToUtcDate(monthGridStartKey(anchorKey));
   const days = [];
-  for (let index = 0; index < 42; index += 1) {
+  for (let index = 0; index < MONTH_GRID_DAYS; index += 1) {
     const day = new Date(gridStart.getTime() + index * 24 * 60 * 60 * 1000);
     const key = day.toISOString().slice(0, 10);
     days.push({
@@ -166,12 +174,11 @@ export function formatOccurrenceTime(
 
 export function windowForView(view, anchorKey) {
   if (view === 'month') {
-    const anchor = dayKeyToUtcDate(anchorKey);
-    const first = `${anchor.getUTCFullYear()}-${pad(anchor.getUTCMonth() + 1)}-01`;
-    const lastDay = new Date(
-      Date.UTC(anchor.getUTCFullYear(), anchor.getUTCMonth() + 1, 0),
-    );
-    return { from: first, to: lastDay.toISOString().slice(0, 10) };
+    const gridStart = monthGridStartKey(anchorKey);
+    return {
+      from: gridStart,
+      to: addDaysToKey(gridStart, MONTH_GRID_DAYS - 1),
+    };
   }
   if (view === 'week') {
     const start = weekStartKey(anchorKey);

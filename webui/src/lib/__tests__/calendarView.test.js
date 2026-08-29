@@ -65,10 +65,12 @@ describe('day key helpers', () => {
 });
 
 describe('windowForView', () => {
-  it('covers the whole month for month view', () => {
+  it('covers the whole rendered six-week grid for month view', () => {
+    // The grid shows surrounding days from the adjacent months too, so the
+    // request window must span the full 42-day grid, not just the month.
     expect(windowForView('month', '2026-09-15')).toEqual({
-      from: '2026-09-01',
-      to: '2026-09-30',
+      from: '2026-08-31',
+      to: '2026-10-11',
     });
   });
 
