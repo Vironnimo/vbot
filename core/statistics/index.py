@@ -13,9 +13,9 @@ from typing import Any, Protocol, cast
 from core.chat.messages import ChatMessage, MessageRole
 from core.sessions import (
     FORK_SOURCE_META_KEY,
+    ChatSession,
     SessionAddress,
     SessionReadBatch,
-    SessionReadCursor,
     skill_context_note_name,
     skill_tool_activation_name,
 )
@@ -27,7 +27,7 @@ JsonObject = dict[str, Any]
 _INDEX_DIRECTORY = "statistics"
 _INDEX_FILENAME = "session-statistics.sqlite"
 _GLOBAL_SCOPE = ""
-_SCHEMA_VERSION = 2
+_SCHEMA_VERSION = 3
 _SQLITE_BUSY_TIMEOUT_MS = 1000
 
 
@@ -35,18 +35,14 @@ class StatisticsIndexError(RuntimeError):
     """The disposable Statistics index could not be read consistently."""
 
 
-class _SessionHandle(Protocol):
-    path: Path
-
-    def load_since(self, cursor: SessionReadCursor | None = None) -> SessionReadBatch | None: ...
-
-
 class StatisticsSessionSource(Protocol):
     """Session surface required by the derived index."""
 
     data_dir: Path
 
-    def get(self, address: SessionAddress) -> _SessionHandle: ...
+    def get(self, address: SessionAddress) -> ChatSession: ...
+
+    def history_revision(self, address: SessionAddress) -> int: ...
 
 
 @dataclass(frozen=True)
@@ -161,11 +157,9 @@ class StatisticsIndex:
                 project_id TEXT NOT NULL,
                 agent_id TEXT NOT NULL,
                 session_id TEXT NOT NULL,
-                source_size INTEGER NOT NULL,
-                source_mtime_ns INTEGER NOT NULL,
-                source_device TEXT NOT NULL,
-                source_inode TEXT NOT NULL,
-                cursor_offset INTEGER NOT NULL,
+                history_revision INTEGER NOT NULL,
+                cursor_history_revision INTEGER NOT NULL,
+                cursor_next_seq INTEGER NOT NULL,
                 cursor_message_count INTEGER NOT NULL,
                 cursor_last_message_id TEXT,
                 fork_message_count INTEGER NOT NULL,
@@ -213,13 +207,14 @@ class StatisticsIndex:
                         project_id=scope.project_id, agent_id=scope.agent_id, session_id=session_id
                     )
                 )
-                self._reconcile_session(connection, handle, key, summary)
+                self._reconcile_session(connection, sessions, handle, key, summary)
         return current_keys
 
     def _reconcile_session(
         self,
         connection: sqlite3.Connection,
-        session: _SessionHandle,
+        sessions: StatisticsSessionSource,
+        session: ChatSession,
         key: tuple[str, str, str],
         summary: JsonObject,
     ) -> None:
@@ -230,7 +225,8 @@ class StatisticsIndex:
             """,
             key,
         ).fetchone()
-        source = session.path.stat()
+        address = SessionAddress(project_id=key[0] or None, agent_id=key[1], session_id=key[2])
+        history_revision = sessions.history_revision(address)
         summary_json = _compact_json(summary)
         if row is None:
             self._replace_session(connection, session, key, summary_json)
@@ -238,15 +234,9 @@ class StatisticsIndex:
 
         existing_count = int(row["cursor_message_count"])
         effective_fork = _effective_fork_message_count(summary, existing_count)
-        source_identity_matches = str(row["source_device"]) == str(source.st_dev) and str(
-            row["source_inode"]
-        ) == str(source.st_ino)
-        source_unchanged = (
-            source_identity_matches
-            and int(row["source_size"]) == int(source.st_size)
-            and int(row["source_mtime_ns"]) == int(source.st_mtime_ns)
-        )
-        if source_unchanged and effective_fork == int(row["fork_message_count"]):
+        if int(row["history_revision"]) == history_revision and effective_fork == int(
+            row["fork_message_count"]
+        ):
             if summary_json != str(row["summary_json"]):
                 connection.execute(
                     """
@@ -257,42 +247,12 @@ class StatisticsIndex:
                 )
             return
 
-        cursor_offset = int(row["cursor_offset"])
-        can_read_tail = (
-            source_identity_matches
-            and int(source.st_size) > cursor_offset
-            and effective_fork == int(row["fork_message_count"])
-        )
-        if can_read_tail:
-            cursor = SessionReadCursor(
-                byte_offset=cursor_offset,
-                message_count=existing_count,
-                last_message_id=cast(str | None, row["cursor_last_message_id"]),
-            )
-            batch = session.load_since(cursor)
-            if batch is not None:
-                new_effective_fork = _effective_fork_message_count(
-                    summary,
-                    batch.cursor.message_count,
-                )
-                if new_effective_fork == int(row["fork_message_count"]):
-                    self._append_batch(
-                        connection,
-                        session,
-                        key,
-                        summary_json,
-                        batch,
-                        first_ordinal=existing_count,
-                        fork_message_count=new_effective_fork,
-                    )
-                    return
-
         self._replace_session(connection, session, key, summary_json)
 
     def _replace_session(
         self,
         connection: sqlite3.Connection,
-        session: _SessionHandle,
+        session: ChatSession,
         key: tuple[str, str, str],
         summary_json: str,
     ) -> None:
@@ -308,16 +268,14 @@ class StatisticsIndex:
             """
             INSERT INTO statistics_sessions (
                 project_id, agent_id, session_id,
-                source_size, source_mtime_ns, source_device, source_inode,
-                cursor_offset, cursor_message_count, cursor_last_message_id,
+                history_revision, cursor_history_revision, cursor_next_seq,
+                cursor_message_count, cursor_last_message_id,
                 fork_message_count, summary_json
-            ) VALUES (?, ?, ?, 0, 0, '', '', 0, 0, NULL, ?, ?)
+            ) VALUES (?, ?, ?, 0, 0, 0, 0, NULL, ?, ?)
             ON CONFLICT(project_id, agent_id, session_id) DO UPDATE SET
-                source_size = 0,
-                source_mtime_ns = 0,
-                source_device = '',
-                source_inode = '',
-                cursor_offset = 0,
+                history_revision = 0,
+                cursor_history_revision = 0,
+                cursor_next_seq = 0,
                 cursor_message_count = 0,
                 cursor_last_message_id = NULL,
                 fork_message_count = excluded.fork_message_count,
@@ -345,7 +303,7 @@ class StatisticsIndex:
     @staticmethod
     def _append_batch(
         connection: sqlite3.Connection,
-        session: _SessionHandle,
+        session: ChatSession,
         key: tuple[str, str, str],
         summary_json: str,
         batch: SessionReadBatch,
@@ -369,18 +327,12 @@ class StatisticsIndex:
                 rows,
             )
 
-        source = session.path.stat()
-        source_mtime_ns = (
-            int(source.st_mtime_ns) if int(source.st_size) == batch.cursor.byte_offset else -1
-        )
         connection.execute(
             """
             UPDATE statistics_sessions SET
-                source_size = ?,
-                source_mtime_ns = ?,
-                source_device = ?,
-                source_inode = ?,
-                cursor_offset = ?,
+                history_revision = ?,
+                cursor_history_revision = ?,
+                cursor_next_seq = ?,
                 cursor_message_count = ?,
                 cursor_last_message_id = ?,
                 fork_message_count = ?,
@@ -388,11 +340,9 @@ class StatisticsIndex:
             WHERE project_id = ? AND agent_id = ? AND session_id = ?
             """,
             (
-                batch.cursor.byte_offset,
-                source_mtime_ns,
-                str(source.st_dev),
-                str(source.st_ino),
-                batch.cursor.byte_offset,
+                batch.cursor.history_revision,
+                batch.cursor.history_revision,
+                batch.cursor.next_seq,
                 batch.cursor.message_count,
                 batch.cursor.last_message_id,
                 fork_message_count,

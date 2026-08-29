@@ -570,10 +570,17 @@ class Runtime:
         self._video = VideoService(self._model_tasks, self)
         self._music = MusicService(self._model_tasks, self)
         self._embeddings = EmbeddingService(self._model_tasks, self)
+        # Sessions are a canonical service: it opens and verifies one database
+        # before any Agent lifecycle operation can create or validate a Session.
+        self._chat_sessions = ChatSessionManager(
+            self._storage.data_dir,
+            store_path=self._storage.layout.sessions_db_path,
+        )
         self._agents = AgentStore(
             self._storage.data_dir,
             template_dir=resources_path / "workspace-templates",
             defaults_provider=lambda: storage.load_defaults().get("agent", {}),
+            sessions=self._chat_sessions,
         )
         self._process_manager = ProcessManager(
             temporary_files=self._storage.temporary_files,
@@ -667,9 +674,8 @@ class Runtime:
             self._resolve_shared_skills_dir,
             self._resolve_external_skill_scope,
         )
-        self._chat_sessions = ChatSessionManager(self._storage.data_dir)
         register_history_tool(self._tools, self._chat_sessions)
-        self._projects = ProjectStore(self._storage.data_dir)
+        self._projects = ProjectStore(self._storage.data_dir, sessions=self._chat_sessions)
         register_project_tool(
             self._tools,
             self._projects,
@@ -924,6 +930,8 @@ class Runtime:
             self._keep_awake.close()
         if self._storage is not None:
             self._storage.temporary_files.stop()
+        if self._chat_sessions is not None:
+            self._chat_sessions.close()
 
         self._clear_service_references()
         self._log_manager.close()
@@ -960,6 +968,8 @@ class Runtime:
             self._keep_awake.close()
         if self._storage is not None:
             await self._storage.temporary_files.aclose()
+        if self._chat_sessions is not None:
+            self._chat_sessions.close()
 
         self._clear_service_references()
         self._log_manager.close()

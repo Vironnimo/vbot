@@ -566,22 +566,12 @@ async def test_project_subagent_session_lives_under_project_anchor(tmp_path: Pat
         batch_tracker=tracker,
     )
 
-    # Assert: the child session was created under the project anchor, never the
-    # global identity layout.
+    # Assert: the child Session was created in the project scope, never in the
+    # identity scope.
     assert result["ok"] is True
     child_session_id = result["data"]["session_id"]
-    project_session = (
-        tmp_path
-        / "projects"
-        / "acme"
-        / "agents"
-        / "worker"
-        / "sessions"
-        / f"{child_session_id}.jsonl"
-    )
-    identity_session = tmp_path / "agents" / "worker" / "sessions" / f"{child_session_id}.jsonl"
-    assert project_session.exists()
-    assert not identity_session.exists()
+    assert runtime.chat_sessions.exists(_address("worker", child_session_id, "acme"))
+    assert not runtime.chat_sessions.exists(_address("worker", child_session_id))
 
 
 async def test_project_subagent_run_carries_project_id(tmp_path: Path) -> None:
@@ -782,13 +772,13 @@ async def test_identity_subagent_session_unchanged_and_link_project_is_none(
         batch_tracker=tracker,
     )
 
-    # Assert: the child session keeps the global identity layout, the child run
+    # Assert: the child Session keeps the identity scope, the child run
     # carries project_id None, and the parent link records project_id None —
     # today's behavior, exactly unchanged.
     assert result["ok"] is True
     child_session_id = result["data"]["session_id"]
-    identity_session = tmp_path / "agents" / "worker" / "sessions" / f"{child_session_id}.jsonl"
-    assert identity_session.exists()
+    assert runtime.chat_sessions.exists(_address("worker", child_session_id))
+    assert not runtime.chat_sessions.exists(_address("worker", child_session_id, "acme"))
     assert manager.started[0]["project_id"] is None
     assert manager.started[0]["run"].project_id is None
     metadata = runtime.chat_sessions.get_metadata(_address("worker", child_session_id))
@@ -1081,16 +1071,7 @@ async def test_subagent_self_spawn_inherits_parent_project(tmp_path: Path) -> No
     assert result["ok"] is True
     assert result["data"]["agent_id"] == "parent"
     child_session_id = result["data"]["session_id"]
-    project_session = (
-        tmp_path
-        / "projects"
-        / "acme"
-        / "agents"
-        / "parent"
-        / "sessions"
-        / f"{child_session_id}.jsonl"
-    )
-    assert project_session.exists()
+    assert runtime.chat_sessions.exists(_address("parent", child_session_id, "acme"))
     assert manager.started[0]["project_id"] == "acme"
     # Settle the background completion tracker task before the loop closes.
     started_run = manager.started[0]["run"]

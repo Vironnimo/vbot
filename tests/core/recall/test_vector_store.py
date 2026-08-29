@@ -23,8 +23,7 @@ def _record(
     session_id: str,
     *,
     agent_id: str = "coder",
-    mtime_ns: int = 1,
-    size_bytes: int = 1,
+    history_revision: int = 1,
     anchor: str = "m1",
     snippet: str | None = None,
     chunk_index: int = 0,
@@ -35,8 +34,7 @@ def _record(
         session_id=session_id,
         agent_id=agent_id,
         started_at=datetime(2026, 5, 1, 12, tzinfo=UTC).isoformat(),
-        mtime_ns=mtime_ns,
-        size_bytes=size_bytes,
+        history_revision=history_revision,
         anchor_message_id=anchor,
         snippet=snippet if snippet is not None else f"snippet for {session_id}",
         chunk_index=chunk_index,
@@ -330,15 +328,14 @@ def test_vector_store_bulk_upsert_writes_all_records(tmp_path: Path) -> None:
     assert len(store.list_indexed_sessions("coder")) == 5
 
 
-def test_vector_store_list_indexed_sessions_reports_mtime_and_size(tmp_path: Path) -> None:
+def test_vector_store_list_indexed_sessions_reports_history_revision(tmp_path: Path) -> None:
     store = VectorStore(tmp_path)
     header = VectorHeader(provider_id="p", model_id="m", dimension=2)
     record = ChunkVectorRecord(
         session_id="s1",
         agent_id="coder",
         started_at=datetime(2026, 5, 1, tzinfo=UTC).isoformat(),
-        mtime_ns=12345,
-        size_bytes=67890,
+        history_revision=12345,
         anchor_message_id="m1",
         snippet="snippet",
         chunk_index=0,
@@ -348,7 +345,7 @@ def test_vector_store_list_indexed_sessions_reports_mtime_and_size(tmp_path: Pat
     _upsert_one(store, header=header, record=record, vector=[0.1, 0.2])
 
     indexed = store.list_indexed_sessions("coder")
-    assert indexed == {"s1": (12345, 67890)}
+    assert indexed == {"s1": 12345}
 
 
 def test_vector_store_drop_indexed_sessions_removes_only_listed(tmp_path: Path) -> None:
@@ -422,8 +419,7 @@ def _chunk_record(
     *,
     agent_id: str = "coder",
     project_id: str = "",
-    mtime_ns: int = 1,
-    size_bytes: int = 1,
+    history_revision: int = 1,
     anchor: str = "m1",
     start_message_id: str = "m1",
     end_message_id: str = "m1",
@@ -435,8 +431,7 @@ def _chunk_record(
         agent_id=agent_id,
         project_id=project_id,
         started_at=datetime(2026, 5, 1, 12, tzinfo=UTC).isoformat(),
-        mtime_ns=mtime_ns,
-        size_bytes=size_bytes,
+        history_revision=history_revision,
         anchor_message_id=anchor,
         snippet=f"snippet {session_id}#{chunk_index}",
         chunk_index=chunk_index,
@@ -555,9 +550,9 @@ def test_vector_store_list_indexed_sessions_dedups_to_one_per_session(
 
     records: list[tuple[ChunkVectorRecord, list[float]]] = []
     # Three chunks for s1, two for s2.
-    for session_id, chunk_count, mtime, size in (
-        ("s1", 3, 100, 1000),
-        ("s2", 2, 200, 2000),
+    for session_id, chunk_count, history_revision in (
+        ("s1", 3, 100),
+        ("s2", 2, 200),
     ):
         for idx in range(chunk_count):
             records.append(
@@ -565,8 +560,7 @@ def test_vector_store_list_indexed_sessions_dedups_to_one_per_session(
                     _chunk_record(
                         session_id,
                         idx,
-                        mtime_ns=mtime,
-                        size_bytes=size,
+                        history_revision=history_revision,
                     ),
                     [0.0, 0.0, 0.0],
                 )
@@ -575,8 +569,8 @@ def test_vector_store_list_indexed_sessions_dedups_to_one_per_session(
 
     indexed = store.list_indexed_sessions("coder")
     assert set(indexed) == {"s1", "s2"}
-    assert indexed["s1"] == (100, 1000)
-    assert indexed["s2"] == (200, 2000)
+    assert indexed["s1"] == 100
+    assert indexed["s2"] == 200
 
 
 def test_vector_store_get_chunks_by_rowids_returns_new_fields(tmp_path: Path) -> None:

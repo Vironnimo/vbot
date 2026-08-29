@@ -69,7 +69,7 @@ class _RuntimeStub:
         self._data_dir = data_dir
         self.chat_sessions = manager
         self.agents = _FakeAgents(agent_ids)
-        self.projects = ProjectStore(data_dir)
+        self.projects = ProjectStore(data_dir, sessions=manager)
         self.global_skills: list = []
 
     def skills_for(self, project_id, agent_id=None) -> _FakeSkillRegistry:

@@ -913,9 +913,7 @@ class VectorRecallBackend(JsonlSessionRecallBackend):
                 stale_to_remove,
             )
 
-        # Collect every (session summary, mtime, size) that's missing or
-        # whose JSONL changed since the last backfill. Sessions whose
-        # mtime/size already match are skipped.
+        # Collect every Session whose canonical message history revision changed.
         all_chunks = await asyncio.to_thread(
             self._collect_stale_chunks,
             request,
@@ -928,7 +926,7 @@ class VectorRecallBackend(JsonlSessionRecallBackend):
                 await asyncio.to_thread(store.ensure_index, header)
             return
 
-        texts = [chunk.text for _, _, _, chunk in all_chunks]
+        texts = [chunk.text for _, _, chunk in all_chunks]
         vectors, resolved_header = await self._embed_chunks(
             texts,
             header,
@@ -975,7 +973,7 @@ class VectorRecallBackend(JsonlSessionRecallBackend):
         # will reject duplicates, so a stable, ordered counter is required.
         records: list[tuple[ChunkVectorRecord, list[float]]] = []
         per_session_index: dict[str, int] = {}
-        for (summary, mtime_ns, size_bytes, chunk), vector in zip(all_chunks, vectors, strict=True):
+        for (summary, history_revision, chunk), vector in zip(all_chunks, vectors, strict=True):
             session_id = str(summary["id"])
             index = per_session_index.get(session_id, 0)
             per_session_index[session_id] = index + 1
@@ -986,8 +984,7 @@ class VectorRecallBackend(JsonlSessionRecallBackend):
                         agent_id=agent_id,
                         project_id=scope,
                         started_at=format_started_at(summary.get("created_at")),
-                        mtime_ns=mtime_ns,
-                        size_bytes=size_bytes,
+                        history_revision=history_revision,
                         anchor_message_id=chunk.anchor_message_id,
                         snippet=chunk.snippet,
                         chunk_index=index,
@@ -1015,30 +1012,34 @@ class VectorRecallBackend(JsonlSessionRecallBackend):
         self,
         request: RecallRequest | RecallSearchRequest,
         active: dict[str, JsonObject],
-        indexed: dict[str, tuple[int, int]],
+        indexed: dict[str, int],
         store: VectorStore,
-    ) -> list[tuple[JsonObject, int, int, Chunk]]:
+    ) -> list[tuple[JsonObject, int, Chunk]]:
         """Load changed Sessions and pack their chunks off the event loop."""
 
         agent_id = request.agent_id
         scope = _project_scope(request.project_id)
-        stale_sessions: list[tuple[JsonObject, int, int, list[Any]]] = []
+        stale_sessions: list[tuple[JsonObject, int, list[Any]]] = []
         for session_id, summary in active.items():
             session = self.sessions.get(
                 SessionAddress(
                     project_id=request.project_id, agent_id=agent_id, session_id=session_id
                 )
             )
-            stat = session.path.stat()
+            history_revision = self.sessions.history_revision(
+                SessionAddress(
+                    project_id=request.project_id, agent_id=agent_id, session_id=session_id
+                )
+            )
             cached = indexed.get(session_id)
-            if cached is not None and cached[0] == stat.st_mtime_ns and cached[1] == stat.st_size:
+            if cached is not None and cached == history_revision:
                 continue
-            stale_sessions.append((summary, stat.st_mtime_ns, stat.st_size, session.load_active()))
+            stale_sessions.append((summary, history_revision, session.load_active()))
 
         # A session that yields zero indexable chunks is not covered by
         # ``upsert_many_chunks``. Clear its old rows explicitly.
-        all_chunks: list[tuple[JsonObject, int, int, Chunk]] = []
-        for summary, mtime_ns, size_bytes, messages in stale_sessions:
+        all_chunks: list[tuple[JsonObject, int, Chunk]] = []
+        for summary, history_revision, messages in stale_sessions:
             if isinstance(request, RecallSearchRequest):
                 chunks = [
                     _chunk_from_passage(passage) for passage in build_session_passages(messages)
@@ -1048,7 +1049,7 @@ class VectorRecallBackend(JsonlSessionRecallBackend):
             if not chunks:
                 store.delete_session(agent_id, scope, str(summary["id"]))
                 continue
-            all_chunks.extend((summary, mtime_ns, size_bytes, chunk) for chunk in chunks)
+            all_chunks.extend((summary, history_revision, chunk) for chunk in chunks)
         return all_chunks
 
     # ------------------------------------------------------------------

@@ -862,11 +862,17 @@ async def test_read_reports_only_a_missing_session_as_not_found(tmp_path: Path) 
     failure(result, "session_not_found")
 
 
-async def test_read_does_not_report_corrupt_session_as_not_found(tmp_path: Path) -> None:
+async def test_read_does_not_report_session_read_failure_as_not_found(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     sessions = ChatSessionManager(tmp_path)
-    session = sessions.create("coder", session_id="corrupt")
-    session.path.write_text("{invalid-json}\n", encoding="utf-8")
+    sessions.create("coder", session_id="corrupt")
     context = make_context(tmp_path, tool_name=SESSION_READ_TOOL_NAME)
+
+    def fail_load(self: ChatSession) -> list[ChatMessage]:
+        raise OSError("database read failed")
+
+    monkeypatch.setattr(ChatSession, "load", fail_load)
 
     result = await session_read_handler(context, {"session_id": "corrupt"}, sessions)
 

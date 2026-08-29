@@ -414,12 +414,14 @@ class AgentStore:
         data_dir: str | Path,
         template_dir: str | Path | None = None,
         defaults_provider: Callable[[], dict[str, Any]] | None = None,
+        sessions: ChatSessionManager | None = None,
     ) -> None:
         self._data_dir = Path(data_dir).expanduser().resolve()
         self._template_dir = (
             Path(template_dir) if template_dir is not None else _DEFAULT_TEMPLATE_DIR
         )
         self._defaults_provider = defaults_provider
+        self._sessions = sessions
         self._reported_order_error: str | None = None
         # Agent updates can arrive from separate RPC worker pools. Serialize
         # replacement of the same config files so Windows never sees two
@@ -863,8 +865,13 @@ class AgentStore:
 
         order_updated = False
         agent_config_updated = False
-        self._move_agent_tree(source_dir, destination_dir)
+        sessions_retargeted = False
+        tree_moved = False
         try:
+            self._session_manager().retarget_identity_agent_sessions(agent_id, new_agent_id)
+            sessions_retargeted = True
+            self._move_agent_tree(source_dir, destination_dir)
+            tree_moved = True
             self._write_agent(renamed_agent)
             agent_config_updated = True
             if previous_order is not None:
@@ -880,7 +887,10 @@ class AgentStore:
                 )
                 order_updated = True
         except Exception:
-            self._move_agent_tree(destination_dir, source_dir)
+            if tree_moved:
+                self._move_agent_tree(destination_dir, source_dir)
+            if sessions_retargeted:
+                self._session_manager().retarget_identity_agent_sessions(new_agent_id, agent_id)
             if agent_config_updated:
                 self._write_agent(previous_agent)
             raise
@@ -1006,6 +1016,7 @@ class AgentStore:
         rooted in) still exists after the first move and is archived beside it.
         """
         agent = self.get(agent_id)
+        self._session_manager().archive_identity_agent_sessions(agent_id)
         archive_dir = self._archive_dir(agent_id)
         if archive_dir.exists():
             shutil.rmtree(archive_dir)
@@ -1049,7 +1060,7 @@ class AgentStore:
 
         remaining = self._session_manager().list_with_metadata(agent_id)
         if remaining:
-            newest = max(remaining, key=lambda session: session["last_active_at"])
+            newest: dict[str, Any] = max(remaining, key=lambda session: session["last_active_at"])
             landing_session_id = newest["id"]
         else:
             landing_session_id = self._session_manager().create(agent_id).id
@@ -1242,7 +1253,9 @@ class AgentStore:
         return self._session_manager().exists(address)
 
     def _session_manager(self) -> ChatSessionManager:
-        return ChatSessionManager(self._data_dir)
+        if self._sessions is None:
+            self._sessions = ChatSessionManager(self._data_dir)
+        return self._sessions
 
     def _seed_workspace(self, workspace_path: Path) -> None:
         workspace_path.mkdir(parents=True, exist_ok=True)

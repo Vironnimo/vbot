@@ -9,7 +9,7 @@ from contextlib import closing
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from core.recall.jsonl import (
     JsonlSessionRecallBackend,
@@ -59,7 +59,8 @@ def _session_address(request: Any, session_id: str) -> SessionAddress:
 #      same session UUID under a project vs. the global scope never collides.
 # v3 → persisted session_search results are excluded before candidate limiting.
 # v4 → a shared Passage FTS index powers Hybrid's literal retrieval arm.
-_SCHEMA_VERSION = 4
+# v5 → canonical Session history revisions replace filesystem freshness.
+_SCHEMA_VERSION = 5
 # FTS5 trigram needs at least three characters; shorter queries fall back to the JSONL scan.
 _TRIGRAM_MIN_CHARS = 3
 # Sentinel stored for the identity/global scope (``project_id is None``). An
@@ -471,8 +472,7 @@ class SqliteFtsRecallBackend(JsonlSessionRecallBackend):
               agent_id TEXT NOT NULL,
               project_id TEXT NOT NULL,
               session_id TEXT NOT NULL,
-              session_mtime_ns INTEGER NOT NULL,
-              session_size_bytes INTEGER NOT NULL,
+              history_revision INTEGER NOT NULL,
               indexed_at TEXT NOT NULL,
               PRIMARY KEY (agent_id, project_id, session_id)
             );
@@ -545,7 +545,9 @@ class SqliteFtsRecallBackend(JsonlSessionRecallBackend):
         scope = _scope(request.project_id)
         active_session_ids = {
             str(summary["id"])
-            for summary in self.sessions.list_with_metadata(agent_id, request.project_id)
+            for summary in cast(
+                list[JsonObject], self.sessions.list_with_metadata(agent_id, request.project_id)
+            )
         }
         indexed_session_ids = {
             str(row["session_id"])
@@ -568,21 +570,18 @@ class SqliteFtsRecallBackend(JsonlSessionRecallBackend):
         scope = _scope(request.project_id)
         for summary in summaries:
             session_id = str(summary["id"])
-            session = self.sessions.get(_session_address(request, session_id))
-            stat = session.path.stat()
+            address = _session_address(request, session_id)
+            session = self.sessions.get(address)
+            history_revision = self.sessions.history_revision(address)
             indexed = connection.execute(
                 """
-                SELECT session_mtime_ns, session_size_bytes
+                SELECT history_revision
                 FROM indexed_sessions
                 WHERE agent_id = ? AND project_id = ? AND session_id = ?
                 """,
                 (agent_id, scope, session_id),
             ).fetchone()
-            if (
-                indexed is not None
-                and int(indexed["session_mtime_ns"]) == stat.st_mtime_ns
-                and int(indexed["session_size_bytes"]) == stat.st_size
-            ):
+            if indexed is not None and int(indexed["history_revision"]) == history_revision:
                 continue
             self._reindex_session(
                 connection,
@@ -590,8 +589,7 @@ class SqliteFtsRecallBackend(JsonlSessionRecallBackend):
                 scope,
                 session_id,
                 session.load_active(),
-                mtime_ns=stat.st_mtime_ns,
-                size_bytes=stat.st_size,
+                history_revision=history_revision,
             )
 
     def _reindex_session(
@@ -602,8 +600,7 @@ class SqliteFtsRecallBackend(JsonlSessionRecallBackend):
         session_id: str,
         messages: list[Any],
         *,
-        mtime_ns: int,
-        size_bytes: int,
+        history_revision: int,
     ) -> None:
         with connection:
             self._delete_session_rows(connection, agent_id, scope, session_id)
@@ -679,18 +676,16 @@ class SqliteFtsRecallBackend(JsonlSessionRecallBackend):
                   agent_id,
                   project_id,
                   session_id,
-                  session_mtime_ns,
-                  session_size_bytes,
+                  history_revision,
                   indexed_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?)
                 """,
                 (
                     agent_id,
                     scope,
                     session_id,
-                    mtime_ns,
-                    size_bytes,
+                    history_revision,
                     datetime.now(UTC).isoformat(),
                 ),
             )

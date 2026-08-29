@@ -714,17 +714,17 @@ def test_workspace_dir_is_under_agent_anchor(data_dir: Path, repo: Path) -> None
     assert workspace_dir == data_dir / "projects" / "vbot" / "agents" / "rooted" / "workspace"
 
 
-def _write_anchor_session(data_dir: Path, project_id: str, agent_id: str) -> None:
-    """Create one session file under a project anchor via the session backbone."""
-    manager = ChatSessionManager(data_dir)
+def _write_anchor_session(manager: ChatSessionManager, project_id: str, agent_id: str) -> None:
+    """Create one project-scoped Session through the canonical Session service."""
     manager.create(agent_id, project_id=project_id)
 
 
 def test_session_owning_agents_lists_only_agents_with_sessions(data_dir: Path, repo: Path) -> None:
-    store = ProjectStore(data_dir)
+    sessions = ChatSessionManager(data_dir)
+    store = ProjectStore(data_dir, sessions=sessions)
     store.create("vbot", "vBot", repo)
-    _write_anchor_session(data_dir, "vbot", "builder")
-    _write_anchor_session(data_dir, "vbot", "orchestrator")
+    _write_anchor_session(sessions, "vbot", "builder")
+    _write_anchor_session(sessions, "vbot", "orchestrator")
     # An agent dir created without any session must not count as an owner.
     (data_dir / "projects" / "vbot" / "agents" / "empty" / "sessions").mkdir(parents=True)
 

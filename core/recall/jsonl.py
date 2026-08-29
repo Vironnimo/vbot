@@ -7,7 +7,7 @@ import hashlib
 import json
 import re
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, cast
 
 from core.chat.content_blocks import FileBlock, FileMentionBlock, MediaBlock, TextBlock
 from core.recall.recall import (
@@ -204,7 +204,9 @@ class JsonlSessionRecallBackend:
         )
 
     def _search_candidate_summaries(self, request: RecallSearchRequest) -> list[JsonObject]:
-        summaries = self.sessions.list_with_metadata(request.agent_id, request.project_id)
+        summaries = cast(
+            list[JsonObject], self.sessions.list_with_metadata(request.agent_id, request.project_id)
+        )
         return [
             summary
             for summary in summaries
@@ -216,22 +218,19 @@ class JsonlSessionRecallBackend:
         fingerprint: list[str] = []
         for summary in sorted(summaries, key=lambda item: str(item.get("id", ""))):
             session_id = str(summary["id"])
-            session = self.sessions.get(_session_address(request, session_id))
-            stat = session.path.stat()
-            try:
-                metadata_stat = session.sidecar_path.stat()
-                metadata_fingerprint = f"{metadata_stat.st_mtime_ns}:{metadata_stat.st_size}"
-            except FileNotFoundError:
-                metadata_fingerprint = "absent"
-            fingerprint.append(
-                f"{session_id}:{stat.st_mtime_ns}:{stat.st_size}:metadata:{metadata_fingerprint}"
-            )
+            address = _session_address(request, session_id)
+            # Recall tracks only canonical history. Metadata-only changes must not
+            # invalidate a continuation or trigger a rebuild of this projection.
+            fingerprint.append(f"{session_id}:{self.sessions.history_revision(address)}")
         return hashlib.sha256("\n".join(fingerprint).encode("utf-8")).hexdigest()
 
     def candidate_session_summaries(self, request: RecallRequest) -> list[JsonObject]:
         summaries = [
             summary
-            for summary in self.sessions.list_with_metadata(request.agent_id, request.project_id)
+            for summary in cast(
+                list[JsonObject],
+                self.sessions.list_with_metadata(request.agent_id, request.project_id),
+            )
             if session_matches_request(summary, request)
         ]
         summaries.sort(

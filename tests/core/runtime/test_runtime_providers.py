@@ -1603,6 +1603,4 @@ def test_runtime_loads_phase_two_services(runtime: Runtime) -> None:
         "weather",
     ]
     assert runtime.skills.invalid_diagnostics() == []
-    assert runtime.chat_sessions.sessions_dir("coder") == (
-        runtime.storage.data_dir / "agents" / "coder" / "sessions"
-    )
+    assert runtime.storage.layout.sessions_db_path.is_file()
