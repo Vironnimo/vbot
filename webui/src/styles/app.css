@@ -93,6 +93,9 @@
   --sidebar-toggle-size: 30px;
   --sidebar-toggle-height: var(--space-lg);
   --sidebar-toggle-inset: var(--space-md);
+  --sidebar-nav-group-gap: var(--space-md);
+  --sidebar-nav-group-separator-width: 24px;
+  --sidebar-nav-group-separator-opacity: 0.45;
   --secondary-sidebar-width: 216px;
 
   /* Content-width / reading-measure layer. Single source of truth for how wide
@@ -310,9 +313,9 @@ svg {
   padding: calc(var(--space-lg) + var(--space-md) - var(--space-xs)) 10px 10px;
 }
 
-/* Grouped navigation: each cadence group stacks its items under a mono-xs
-   section label, with breathing room above the group (the first group hugs
-   the top). The label separates groups visually — no divider lines. */
+/* Grouped navigation: expanded sections use their mono-xs labels for
+   separation. The compact rail has no labels, so its short, low-contrast
+   divider restores the same cadence hierarchy without competing with icons. */
 .app-shell__nav-group {
   display: flex;
   flex-direction: column;
@@ -389,7 +392,22 @@ svg {
 .app-shell[data-sidebar-collapsed='true']
   .app-shell__nav-group
   + .app-shell__nav-group {
-  margin-top: var(--space-sm);
+  position: relative;
+  margin-top: var(--sidebar-nav-group-gap);
+}
+
+.app-shell[data-sidebar-collapsed='true']
+  .app-shell__nav-group
+  + .app-shell__nav-group::before {
+  position: absolute;
+  top: calc(var(--sidebar-nav-group-gap) * -0.5);
+  left: 50%;
+  width: var(--sidebar-nav-group-separator-width);
+  height: 1px;
+  content: '';
+  background: var(--border);
+  opacity: var(--sidebar-nav-group-separator-opacity);
+  transform: translateX(-50%);
 }
 
 .app-shell[data-sidebar-collapsed='true'] .app-shell__nav-item {
@@ -3336,6 +3354,18 @@ kbd {
      would break the one-row top-bar layout. */
   .app-shell__nav-group {
     display: contents;
+  }
+
+  .app-shell[data-sidebar-collapsed='true']
+    .app-shell__nav-group
+    + .app-shell__nav-group {
+    margin-top: 0;
+  }
+
+  .app-shell[data-sidebar-collapsed='true']
+    .app-shell__nav-group
+    + .app-shell__nav-group::before {
+    content: none;
   }
 
   .app-shell__nav-group-label {
