@@ -91,7 +91,7 @@
   --sidebar-width: 210px;
   --sidebar-collapsed-width: 64px;
   --sidebar-toggle-size: 30px;
-  --sidebar-toggle-height: 24px;
+  --sidebar-toggle-height: var(--space-lg);
   --sidebar-toggle-inset: var(--space-md);
   --secondary-sidebar-width: 216px;
 
@@ -473,16 +473,16 @@ svg {
 .btn-tertiary.btn-icon.app-shell__sidebar-toggle:hover {
   border-color: var(--accent);
   color: var(--accent);
-  background: var(--accent-dim);
+  background: var(--surface);
 }
 
 .app-shell__sidebar-toggle svg {
-  width: 16px;
-  height: 16px;
+  width: 14px;
+  height: 14px;
   fill: none;
   stroke: currentcolor;
   stroke-linecap: round;
-  stroke-linejoin: round;
+  stroke-linejoin: miter;
   stroke-width: 1.5;
 }
 
