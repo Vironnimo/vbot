@@ -342,6 +342,56 @@ describe('TerminalsView', () => {
     ).toBeTruthy();
   });
 
+  it('reveals a single group action menu instead of two inline buttons', async () => {
+    listTerminalsMock.mockResolvedValue(
+      terminalListResponse(
+        [terminal({ group_id: 'group-work' })],
+        [
+          {
+            group_id: 'group-work',
+            name: 'Work',
+            kind: 'user',
+            terminal_count: 1,
+            live_count: 1,
+            order: [],
+          },
+        ],
+      ),
+    );
+    mountedComponent = mount(TerminalsView, { target: document.body });
+    flushSync();
+    await waitFor(() => streams.length === 1);
+
+    const trigger = document.querySelector(
+      '.terminals-view__group-action-menu-trigger',
+    );
+    expect(trigger).toBeTruthy();
+    expect(trigger.getAttribute('aria-haspopup')).toBe('menu');
+
+    // The menu is closed until the trigger is engaged.
+    expect(document.querySelector('.terminals-view__group-menu')).toBeNull();
+
+    trigger.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    flushSync();
+    await waitFor(() => document.querySelector('.terminals-view__group-menu'));
+
+    const items = [
+      ...document.querySelectorAll('.terminals-view__group-menu-item'),
+    ];
+    expect(
+      items.some((item) => item.textContent.trim() === 'Rename group'),
+    ).toBe(true);
+    expect(
+      items.some((item) => item.textContent.trim() === 'Delete group'),
+    ).toBe(true);
+    const deleteItem = items.find(
+      (item) => item.textContent.trim() === 'Delete group',
+    );
+    expect(deleteItem.classList).toContain(
+      'terminals-view__group-menu-item--danger',
+    );
+  });
+
   it('renders the shared empty state when no Terminal Session is active', async () => {
     listTerminalsMock.mockResolvedValue({ groups: [], terminals: [] });
     mountedComponent = mount(TerminalsView, { target: document.body });
