@@ -119,18 +119,25 @@ def test_register_edit_tool_exposes_provider_schema() -> None:
     assert parameters["type"] == "object"
     assert parameters["required"] == ["edits"]
     assert "additionalProperties" not in parameters
-    assert set(parameters["properties"]) == {"edits"}
+    assert set(parameters["properties"]) == {"path", "edits"}
+    assert parameters["properties"]["path"]["description"] == (
+        "Default file to edit; used by edits that omit their own path."
+    )
     edits_schema = parameters["properties"]["edits"]
     assert edits_schema["minItems"] == 1
     assert edits_schema["description"] == "Replacements to attempt in order."
     item_schema = edits_schema["items"]
-    assert item_schema["required"] == ["path", "old_string", "new_string"]
+    assert item_schema["required"] == ["old_string", "new_string"]
     assert set(item_schema["properties"]) == {
         "path",
         "old_string",
         "new_string",
         "replace_all",
     }
+    assert item_schema["properties"]["path"]["description"] == (
+        "File to edit, relative to the working directory or absolute. "
+        "Omit to use the top-level path."
+    )
     assert all(
         isinstance(property_schema.get("description"), str) and property_schema["description"]
         for property_schema in item_schema["properties"].values()
@@ -1370,6 +1377,101 @@ def test_multi_edit_applies_items_in_order_across_files(tmp_path: Path) -> None:
     assert all("message" not in item for item in data["results"])
     assert first.read_text(encoding="utf-8") == "done\n"
     assert second.read_text(encoding="utf-8") == "two\n"
+
+
+def test_multi_edit_uses_top_level_path_as_default(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    target = workspace / "notes.txt"
+    target.write_text("alpha beta gamma\n", encoding="utf-8")
+
+    result = edit_handler(
+        make_context(workspace),
+        {
+            "path": "notes.txt",
+            "edits": [
+                {"old_string": "alpha", "new_string": "ALPHA"},
+                {"old_string": "gamma", "new_string": "GAMMA"},
+            ],
+        },
+    )
+
+    data = result["data"]
+    assert result["ok"] is True
+    assert isinstance(data, dict)
+    assert data["status"] == "success"
+    assert data["succeeded"] == 2
+    assert target.read_text(encoding="utf-8") == "ALPHA beta GAMMA\n"
+
+
+def test_multi_edit_explicit_path_overrides_top_level(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    default_file = workspace / "default.txt"
+    other = workspace / "other.txt"
+    default_file.write_text("alpha\n", encoding="utf-8")
+    other.write_text("beta\n", encoding="utf-8")
+
+    result = edit_handler(
+        make_context(workspace),
+        {
+            "path": "default.txt",
+            "edits": [
+                {"old_string": "alpha", "new_string": "ALPHA"},
+                {"path": "other.txt", "old_string": "beta", "new_string": "BETA"},
+            ],
+        },
+    )
+
+    data = result["data"]
+    assert result["ok"] is True
+    assert isinstance(data, dict)
+    assert data["status"] == "success"
+    assert data["succeeded"] == 2
+    assert default_file.read_text(encoding="utf-8") == "ALPHA\n"
+    assert other.read_text(encoding="utf-8") == "BETA\n"
+
+
+def test_multi_edit_rejects_item_without_any_path(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    result = edit_handler(
+        make_context(workspace),
+        {
+            "edits": [
+                {"old_string": "alpha", "new_string": "ALPHA"},
+            ],
+        },
+    )
+
+    error = assert_failure_envelope(result, "invalid_arguments")
+    assert "path" in error["message"]
+
+
+def test_multi_edit_top_level_path_counts_as_file_in_display_facts(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    registry = ToolRegistry()
+    register_edit_tool(registry, file_state=FileReadState())
+    arguments = {
+        "path": "a.txt",
+        "edits": [
+            {"old_string": "secret old", "new_string": "secret new"},
+            {"old_string": "x", "new_string": "y"},
+        ],
+    }
+    result = tool_success(
+        {"status": "success", "total": 2, "succeeded": 2, "failed": 0, "results": []}
+    )
+
+    payload = registry.display_for_call("edit", arguments, result=result)
+
+    assert payload["summary"] == "a.txt"
+    assert payload["facts"] == [
+        {"kind": "count", "value": 2, "unit": "edits", "at_least": False},
+        {"kind": "count", "value": 1, "unit": "files", "at_least": False},
+    ]
 
 
 def test_multi_edit_continues_after_an_item_fails(tmp_path: Path) -> None:
