@@ -182,6 +182,7 @@ export const englishCatalog = Object.freeze({
   'terminals.kind.finished': 'Finished',
   'terminals.kind.user': 'My group',
   'terminals.count': '{count} terminals',
+  'terminals.groupActions': 'Group actions',
   'terminals.dragHandle': 'Drag to reorder',
   'terminals.renameGroupAction': 'Rename group',
   'terminals.deleteGroupAction': 'Delete group',

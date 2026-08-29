@@ -24,6 +24,7 @@
     terminalIsFinished,
     visibleTerminals,
   } from '$lib/terminalsView.js';
+  import { computePanelPosition, portal } from '$lib/dropdownPanel.js';
   import { tooltip } from '$lib/tooltip.js';
 
   let {
@@ -49,6 +50,14 @@
   let groupDialogTargetId = $state('');
   let deleteGroupDialogOpen = $state(false);
   let deleteGroupTargetId = $state('');
+  // Single open "…" action menu per group, portaled to <body> like the
+  // session row menu. Only one group menu is open at a time.
+  let openGroupMenuId = $state(null);
+  let groupMenuTriggerElement = $state(null);
+  let groupMenuElement = $state(null);
+  let groupMenuStyle = $state('visibility: hidden;');
+  let groupMenuPlacement = $state('bottom');
+  const GROUP_ACTION_MENU_FALLBACK_WIDTH = 160;
   let draggedTerminalId = $state('');
   let dragOverTerminalId = $state('');
   let mounted = false;
@@ -683,6 +692,69 @@
     return group?.kind === 'user' || group?.kind === 'agent';
   }
 
+  function toggleGroupMenu(groupId, triggerElement) {
+    if (openGroupMenuId === groupId) {
+      closeGroupMenu();
+      return;
+    }
+    openGroupMenuId = groupId;
+    groupMenuTriggerElement = triggerElement;
+    groupMenuStyle = 'visibility: hidden;';
+    void tick().then(() => updateGroupMenuPosition());
+  }
+
+  function closeGroupMenu() {
+    openGroupMenuId = null;
+    groupMenuTriggerElement = null;
+    groupMenuElement = null;
+    groupMenuStyle = 'visibility: hidden;';
+    groupMenuPlacement = 'bottom';
+  }
+
+  function updateGroupMenuPosition() {
+    if (
+      openGroupMenuId === null ||
+      !groupMenuTriggerElement ||
+      !groupMenuElement
+    ) {
+      return;
+    }
+    const menuRect = groupMenuElement.getBoundingClientRect();
+    const { placement, left, width, verticalRule, optionsMaxHeight } =
+      computePanelPosition(groupMenuTriggerElement, {
+        contentHeight: groupMenuElement.scrollHeight || menuRect.height,
+        panelWidth: menuRect.width || GROUP_ACTION_MENU_FALLBACK_WIDTH,
+        horizontalAlign: 'end',
+      });
+    groupMenuPlacement = placement;
+    groupMenuStyle = [
+      `left: ${left}px`,
+      verticalRule,
+      `width: ${width}px`,
+      `max-height: ${optionsMaxHeight}px`,
+    ].join('; ');
+  }
+
+  function handleGroupMenuDocumentMouseDown(event) {
+    if (openGroupMenuId === null) {
+      return;
+    }
+    if (
+      event.target instanceof Element &&
+      (groupMenuTriggerElement?.contains(event.target) ||
+        groupMenuElement?.contains(event.target))
+    ) {
+      return;
+    }
+    closeGroupMenu();
+  }
+
+  function handleGroupMenuDocumentKeyDown(event) {
+    if (event.key === 'Escape') {
+      closeGroupMenu();
+    }
+  }
+
   function openCreateGroupDialog() {
     groupDialogMode = 'create';
     groupDialogName = '';
@@ -954,11 +1026,18 @@
   }
 </script>
 
+<svelte:document
+  onmousedown={handleGroupMenuDocumentMouseDown}
+  onkeydown={handleGroupMenuDocumentKeyDown}
+/>
+<svelte:window onresize={closeGroupMenu} />
+
 <section class="terminals-view" aria-label={t('terminals.title', 'Terminals')}>
   <header class="terminals-view__toolbar">
     <div
       class="terminals-view__group-tabs"
       aria-label={t('terminals.groupsLabel', 'Groups')}
+      onscroll={closeGroupMenu}
     >
       {#each viewState.groups as group (group.group_id)}
         <div
@@ -976,49 +1055,66 @@
             use:tooltip={group.name}
             onclick={() => controller.selectGroup(group.group_id)}
           >
-            <span class="terminals-view__group-tab-name">{group.name}</span>
-            <span class="terminals-view__group-tab-count">
-              {group.terminal_count}
+            <span class="terminals-view__group-tab-label">
+              <span class="terminals-view__group-tab-name">{group.name}</span>
+              <span class="terminals-view__group-tab-count">
+                {group.terminal_count}
+              </span>
             </span>
           </button>
           {#if groupCanEdit(group)}
-            <span class="terminals-view__group-actions" role="presentation">
-              <Button
-                variant="tertiary"
-                icon
-                class="terminals-view__group-action"
-                ariaLabel={t('terminals.renameGroupAction', 'Rename group')}
-                tooltip={t('terminals.renameGroupAction', 'Rename group')}
-                onClick={() => openRenameGroupDialog(group)}
+            <span class="terminals-view__group-actions">
+              <button
+                type="button"
+                class="terminals-view__group-action-menu-trigger"
+                class:terminals-view__group-action-menu-trigger--open={openGroupMenuId ===
+                  group.group_id}
+                aria-label={t('terminals.groupActions', 'Group actions')}
+                aria-haspopup="menu"
+                aria-expanded={openGroupMenuId === group.group_id}
+                onclick={(event) =>
+                  toggleGroupMenu(group.group_id, event.currentTarget)}
               >
-                <svg
-                  viewBox="0 0 14 14"
-                  width="12"
-                  height="12"
-                  aria-hidden="true"
-                >
-                  <path
-                    d="M9.8 1.8a1.3 1.3 0 0 1 1.9 1.9L4.6 10.8l-2.8.8.8-2.8z"
-                  />
+                <svg viewBox="0 0 16 16" aria-hidden="true">
+                  <circle cx="8" cy="3" r="1.4" />
+                  <circle cx="8" cy="8" r="1.4" />
+                  <circle cx="8" cy="13" r="1.4" />
                 </svg>
-              </Button>
-              <Button
-                variant="danger"
-                icon
-                class="terminals-view__group-action"
-                ariaLabel={t('terminals.deleteGroupAction', 'Delete group')}
-                tooltip={t('terminals.deleteGroupAction', 'Delete group')}
-                onClick={() => openDeleteGroupDialog(group)}
-              >
-                <svg
-                  viewBox="0 0 14 14"
-                  width="12"
-                  height="12"
-                  aria-hidden="true"
+              </button>
+              {#if openGroupMenuId === group.group_id}
+                <div
+                  bind:this={groupMenuElement}
+                  use:portal
+                  class="terminals-view__group-menu"
+                  role="menu"
+                  data-placement={groupMenuPlacement}
+                  data-positioning="fixed"
+                  style={groupMenuStyle}
                 >
-                  <path d="M3.5 3.5l7 7M10.5 3.5l-7 7" />
-                </svg>
-              </Button>
+                  <button
+                    type="button"
+                    class="terminals-view__group-menu-item"
+                    role="menuitem"
+                    onclick={() => {
+                      closeGroupMenu();
+                      openRenameGroupDialog(group);
+                    }}
+                  >
+                    {t('terminals.renameGroupAction', 'Rename group')}
+                  </button>
+                  <button
+                    type="button"
+                    class="terminals-view__group-menu-item terminals-view__group-menu-item--danger"
+                    role="menuitem"
+                    onclick={() => {
+                      closeGroupMenu();
+                      openDeleteGroupDialog(group);
+                    }}
+                  >
+                    {t('terminals.deleteGroupAction', 'Delete group')}
+                  </button>
+                </div>
+              {/if}
             </span>
           {/if}
         </div>
@@ -1657,7 +1753,6 @@
     display: flex;
     min-width: 0;
     align-items: center;
-    gap: 7px;
     padding: 0 14px;
     border: 0;
     border-bottom: 2px solid transparent;
@@ -1672,6 +1767,13 @@
       color 150ms ease;
   }
 
+  .terminals-view__group-tab-label {
+    display: flex;
+    min-width: 0;
+    align-items: baseline;
+    gap: 9px;
+  }
+
   .terminals-view__group-tab:hover,
   .terminals-view__group-tab:focus-visible {
     color: var(--text-med);
@@ -1684,10 +1786,11 @@
   }
 
   .terminals-view__group-tab-wrap--editable .terminals-view__group-tab {
-    padding-right: 64px;
+    padding-right: 30px;
   }
 
   .terminals-view__group-tab-name {
+    min-width: 0;
     max-width: 180px;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -1696,7 +1799,7 @@
   .terminals-view__group-tab-count {
     flex: 0 0 auto;
     font-family: var(--font-mono);
-    font-size: var(--fs-mono-xs);
+    font-size: var(--fs-mono-sm);
     color: var(--text-lo);
   }
 
@@ -1707,25 +1810,97 @@
     right: 4px;
     display: flex;
     align-items: center;
-    gap: 2px;
-    padding-left: 4px;
     transform: translateY(-50%);
-    background: var(--surface);
-    opacity: 0;
-    pointer-events: none;
-    transition: opacity 120ms ease;
   }
 
-  .terminals-view__group-tab-wrap:hover .terminals-view__group-actions,
-  .terminals-view__group-tab-wrap:focus-within .terminals-view__group-actions {
+  .terminals-view__group-action-menu-trigger {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 20px;
+    height: 20px;
+    padding: 0;
+    border: 0;
+    border-radius: var(--r-sm);
+    background: transparent;
+    color: var(--text-med);
+    opacity: 0;
+    pointer-events: none;
+    cursor: pointer;
+    transition:
+      background 150ms ease,
+      color 150ms ease,
+      opacity 150ms ease;
+  }
+
+  .terminals-view__group-action-menu-trigger svg {
+    width: 12px;
+    height: 12px;
+    fill: currentColor;
+  }
+
+  .terminals-view__group-tab-wrap:hover
+    .terminals-view__group-action-menu-trigger,
+  .terminals-view__group-tab-wrap:focus-within
+    .terminals-view__group-action-menu-trigger,
+  .terminals-view__group-action-menu-trigger--open {
     opacity: 1;
     pointer-events: auto;
   }
 
-  :global(.btn-tertiary.btn-icon.terminals-view__group-action),
-  :global(.btn-danger.btn-icon.terminals-view__group-action) {
-    width: 26px;
-    height: 26px;
+  .terminals-view__group-action-menu-trigger:hover,
+  .terminals-view__group-action-menu-trigger--open {
+    background: var(--surface-3);
+    color: var(--text-hi);
+  }
+
+  .terminals-view__group-action-menu-trigger:focus-visible {
+    outline: 1px solid var(--accent);
+    outline-offset: 1px;
+  }
+
+  .terminals-view__group-menu {
+    position: fixed;
+    z-index: var(--z-floating);
+    width: max-content;
+    min-width: 132px;
+    max-width: calc(100vw - 16px);
+    overflow-y: auto;
+    padding: 4px;
+    border: 1px solid var(--border);
+    border-radius: var(--r-md);
+    background: var(--surface-3);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  }
+
+  .terminals-view__group-menu-item {
+    display: block;
+    width: 100%;
+    padding: 7px 9px;
+    border: 0;
+    border-radius: var(--r-sm);
+    background: transparent;
+    color: var(--text-hi);
+    font-family: var(--font-ui);
+    font-size: var(--fs-body-sm);
+    text-align: left;
+    cursor: pointer;
+    transition: background 150ms ease;
+  }
+
+  .terminals-view__group-menu-item:hover,
+  .terminals-view__group-menu-item:focus-visible {
+    outline: none;
+    background: var(--accent-12);
+  }
+
+  .terminals-view__group-menu-item--danger {
+    color: var(--red);
+  }
+
+  .terminals-view__group-menu-item--danger:hover,
+  .terminals-view__group-menu-item--danger:focus-visible {
+    background: rgba(252, 129, 129, 0.14);
   }
 
   .terminals-view__group-status {
@@ -2007,14 +2182,13 @@
       justify-content: flex-end;
     }
 
-    :global(.btn-tertiary.btn-icon.terminals-view__group-action),
-    :global(.btn-danger.btn-icon.terminals-view__group-action) {
-      width: 40px;
-      height: 40px;
+    .terminals-view__group-action-menu-trigger {
+      width: 28px;
+      height: 28px;
     }
 
     .terminals-view__group-tab-wrap--editable .terminals-view__group-tab {
-      padding-right: 92px;
+      padding-right: 36px;
     }
 
     .terminals-view__detail {
