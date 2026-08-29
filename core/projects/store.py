@@ -29,7 +29,7 @@ import shutil
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from core.projects.paths import cwd_identity_key
 from core.projects.projects import (
@@ -49,6 +49,9 @@ from core.settings import (
 )
 from core.utils.atomic import atomic_write_text
 from core.utils.logging import get_logger
+
+if TYPE_CHECKING:
+    from core.sessions import ChatSessionManager
 
 _LOGGER = get_logger("projects")
 
@@ -121,8 +124,9 @@ _ARCHIVE_DIRNAME = "archive"
 class ProjectStore:
     """CRUD store for project anchors rooted at a data directory."""
 
-    def __init__(self, data_dir: str | Path) -> None:
+    def __init__(self, data_dir: str | Path, *, sessions: ChatSessionManager | None = None) -> None:
         self._data_dir = Path(data_dir).expanduser()
+        self._sessions = sessions
 
     @property
     def data_dir(self) -> Path:
@@ -411,15 +415,10 @@ class ProjectStore:
         removed, does not appear. Returns ids sorted for determinism; an unknown
         project yields an empty list rather than raising.
         """
-        agents_dir = self._project_dir(project_id) / _AGENTS_DIRNAME
-        if not agents_dir.exists():
+        if self._sessions is None or not self._project_dir(project_id).exists():
             return []
-        owners = [
-            agent_dir.name
-            for agent_dir in agents_dir.iterdir()
-            if agent_dir.is_dir() and _has_session_file(agent_dir / _SESSIONS_DIRNAME)
-        ]
-        return sorted(owners)
+        addresses = self._sessions.list_addresses(project_id=project_id)
+        return sorted({address.agent_id for address in addresses})
 
     def workspace_dir(self, project_id: str, agent_id: str) -> Path:
         """Return the rooted-identity-agent workspace dir under the anchor.

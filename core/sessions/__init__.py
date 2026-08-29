@@ -1,14 +1,18 @@
 """Session domain public API."""
 
 from core.chat.errors import ChatSessionError
+from core.sessions.errors import (
+    SessionConversionIncompleteError,
+    SessionConversionRequiredError,
+    SessionStorageConflictError,
+    SessionStoreCorruptError,
+)
 from core.sessions.sessions import (
     CHANNEL_MESSAGE_NOTE_PREFIX,
-    CONTINUATION_FILE_SUFFIX,
     FORK_SOURCE_META_KEY,
     PROMPT_CACHE_AFFINITY_META_KEY,
     SESSION_AUTO_TITLE_INITIALIZED_KEY,
     SESSION_AUTO_TITLE_KEY,
-    SESSION_FILE_EXTENSION,
     SESSION_FORK_ALWAYS_STRIP_META_KEYS,
     SESSION_FORK_CROSS_AGENT_STRIP_META_KEYS,
     SESSION_MOVE_STRIP_META_KEYS,
@@ -36,13 +40,12 @@ from core.sessions.sessions import (
     skill_tool_activation,
     skill_tool_activation_name,
 )
+from core.sessions.store import SessionStore, preflight_session_storage
 
 __all__ = [
     "CHANNEL_MESSAGE_NOTE_PREFIX",
-    "CONTINUATION_FILE_SUFFIX",
     "FORK_SOURCE_META_KEY",
     "PROMPT_CACHE_AFFINITY_META_KEY",
-    "SESSION_FILE_EXTENSION",
     "SESSION_AUTO_TITLE_INITIALIZED_KEY",
     "SESSION_AUTO_TITLE_KEY",
     "SESSION_FORK_ALWAYS_STRIP_META_KEYS",
@@ -52,6 +55,11 @@ __all__ = [
     "SKILL_AVAILABLE_NOTE_PREFIX",
     "ChatSession",
     "ChatSessionError",
+    "SessionConversionIncompleteError",
+    "SessionConversionRequiredError",
+    "SessionStorageConflictError",
+    "SessionStore",
+    "SessionStoreCorruptError",
     "ChatSessionManager",
     "SessionAddress",
     "current_skill_activation_contents",
@@ -66,6 +74,7 @@ __all__ = [
     "is_skill_context_note",
     "latest_project_tool_context_id",
     "project_tool_context_id",
+    "preflight_session_storage",
     "skill_activation_contents",
     "skill_activation_names",
     "skill_context_note_name",

@@ -146,7 +146,7 @@ def test_cached_snapshot_reloads_when_another_service_updates_index(
     assert report.usage.totals.measured_input_tokens == 15
 
 
-def test_appended_messages_are_loaded_from_the_persisted_tail_cursor(
+def test_appended_messages_rebuild_the_affected_projection(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -181,8 +181,7 @@ def test_appended_messages_are_loaded_from_the_persisted_tail_cursor(
     report = service.report()
 
     assert len(cursors) == 1
-    assert cursors[0] is not None
-    assert cursors[0].message_count == 2
+    assert cursors[0] is None
     assert report.overview.total_runs == 2
     assert report.usage.totals.measured_input_tokens == 15
 
@@ -228,15 +227,10 @@ def test_replaced_canonical_session_rebuilds_only_that_projection(tmp_path: Path
             timestamp=BASE + timedelta(hours=1, seconds=1),
         ),
     ]
-    replacement_path = session.path.with_suffix(".replacement")
-    replacement_path.write_text(
-        "".join(
-            json.dumps(message.to_dict(), separators=(",", ":")) + "\n"
-            for message in replacement_messages
-        ),
-        encoding="utf-8",
-    )
-    replacement_path.replace(session.path)
+    address = SessionAddress(project_id=None, agent_id="main", session_id=session.id)
+    _manager.delete(address)
+    replacement = _manager.create("main", session_id=session.id)
+    replacement.append_many(replacement_messages)
 
     report = service.report()
 
@@ -306,4 +300,4 @@ def test_corrupt_index_is_discarded_and_rebuilt_once(tmp_path: Path) -> None:
 
     assert report.overview.total_runs == 1
     with sqlite3.connect(index_path) as connection:
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 2
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 3

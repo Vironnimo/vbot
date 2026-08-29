@@ -171,6 +171,11 @@ class DataDirectoryLayout:
         return self.root / SETTINGS_FILE_NAME
 
     @property
+    def sessions_db_path(self) -> Path:
+        """Canonical SQLite file for persisted Sessions."""
+        return self.root / "sessions.db"
+
+    @property
     def directories(self) -> tuple[Path, ...]:
         return tuple(self.root / relative_path for relative_path in DATA_DIRECTORY_RELATIVE_PATHS)
 

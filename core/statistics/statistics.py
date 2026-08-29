@@ -37,9 +37,8 @@ from core.chat.messages import ChatMessage, usage_token_is_estimated
 from core.chat.model_resolution import parse_bare_model
 from core.sessions import (
     FORK_SOURCE_META_KEY,
+    ChatSession,
     SessionAddress,
-    SessionReadBatch,
-    SessionReadCursor,
     skill_context_note_name,
     skill_tool_activation_name,
 )
@@ -149,16 +148,6 @@ class ProjectDirectory(Protocol):
     def session_owning_agents(self, project_id: str) -> builtins.list[str]: ...
 
 
-class SessionHandle(Protocol):
-    """One session whose canonical messages can be loaded in append order."""
-
-    path: Path
-
-    def load(self) -> list[ChatMessage]: ...
-
-    def load_since(self, cursor: SessionReadCursor | None = None) -> SessionReadBatch | None: ...
-
-
 class SessionSource(Protocol):
     """Path-free session access (satisfied by ``ChatSessionManager``).
 
@@ -175,7 +164,9 @@ class SessionSource(Protocol):
         self, agent_id: str, project_id: str | None = None
     ) -> list[JsonObject]: ...
 
-    def get(self, address: SessionAddress) -> SessionHandle: ...
+    def get(self, address: SessionAddress) -> ChatSession: ...
+
+    def history_revision(self, address: SessionAddress) -> int: ...
 
 
 # ---------------------------------------------------------------------------

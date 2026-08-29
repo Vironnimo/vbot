@@ -47,7 +47,7 @@ _SQLITE_BUSY_TIMEOUT_MS = 1000
 #      index policy, preventing cross-connection/options/policy vector reuse.
 # v7 → the header also pins the provider-reported model id, preventing a router
 #      alias or fallback from mixing vectors produced by different real models.
-_SCHEMA_VERSION = 7
+_SCHEMA_VERSION = 8
 _VECTOR_TABLE_NAME = "session_vectors"
 _CHUNK_TABLE_NAME = "chunks"
 _HEADER_TABLE_NAME = "store_header"
@@ -91,12 +91,11 @@ class VectorHeader:
 
 @dataclass(frozen=True)
 class ChunkVectorRecord:
-    """One indexed chunk row — anchor metadata and the live mtime/size it was indexed at.
+    """One indexed chunk row with its canonical Session history revision.
 
     The metadata describes a *chunk* of a session (a window of consecutive
-    messages), not the session as a whole. ``mtime_ns`` and ``size_bytes``
-    are still the session's, copied onto every chunk row so the freshness
-    diff (``list_indexed_sessions``) stays a session-level check.
+    messages), not the session as a whole. ``history_revision`` is copied onto
+    every chunk row so freshness stays a Session-level comparison.
 
     ``project_id`` is the chunk's scope key — the recall backend stores the
     identity/global scope as ``""`` and a project scope as the project id, so a
@@ -107,8 +106,7 @@ class ChunkVectorRecord:
     session_id: str
     agent_id: str
     started_at: str
-    mtime_ns: int
-    size_bytes: int
+    history_revision: int
     anchor_message_id: str
     snippet: str
     chunk_index: int
@@ -172,8 +170,7 @@ class VectorStore:
               agent_id TEXT NOT NULL,
               project_id TEXT NOT NULL,
               started_at TEXT NOT NULL,
-              mtime_ns INTEGER NOT NULL,
-              size_bytes INTEGER NOT NULL,
+              history_revision INTEGER NOT NULL,
               anchor_message_id TEXT NOT NULL,
               snippet TEXT NOT NULL,
               chunk_index INTEGER NOT NULL,
@@ -398,19 +395,18 @@ class VectorStore:
                     cursor = connection.execute(
                         f"""
                         INSERT INTO {_CHUNK_TABLE_NAME} (
-                          session_id, agent_id, project_id, started_at, mtime_ns, size_bytes,
+                          session_id, agent_id, project_id, started_at, history_revision,
                           anchor_message_id, snippet, chunk_index,
                           start_message_id, end_message_id, passage_id, text,
                           start_timestamp, end_timestamp, start_role, end_role
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """,
                         (
                             record.session_id,
                             record.agent_id,
                             record.project_id,
                             record.started_at,
-                            record.mtime_ns,
-                            record.size_bytes,
+                            record.history_revision,
                             record.anchor_message_id,
                             record.snippet,
                             record.chunk_index,
@@ -498,14 +494,12 @@ class VectorStore:
     # Freshness + KNN query
     # ------------------------------------------------------------------
 
-    def list_indexed_sessions(
-        self, agent_id: str, project_id: str = ""
-    ) -> dict[str, tuple[int, int]]:
-        """Return ``{session_id: (mtime_ns, size_bytes)}`` for a scope+agent's indexed sessions.
+    def list_indexed_sessions(self, agent_id: str, project_id: str = "") -> dict[str, int]:
+        """Return ``{session_id: history_revision}`` for a scope+agent's indexed Sessions.
 
         With chunk-keyed storage, a session has one row per chunk; we
         dedup to one entry per ``session_id`` (every chunk row of a
-        session shares the session's ``mtime_ns``/``size_bytes``).
+        session shares one canonical ``history_revision``).
         ``project_id`` is the scope key (``""`` for identity/global) so two
         scopes' same-UUID sessions stay distinct freshness entries.
         """
@@ -515,15 +509,13 @@ class VectorStore:
                 return {}
             rows = connection.execute(
                 f"""
-                SELECT session_id, mtime_ns, size_bytes FROM {_CHUNK_TABLE_NAME}
+                SELECT session_id, history_revision FROM {_CHUNK_TABLE_NAME}
                 WHERE project_id = ? AND agent_id = ?
                 GROUP BY session_id
                 """,
                 (project_id, agent_id),
             ).fetchall()
-        return {
-            str(row["session_id"]): (int(row["mtime_ns"]), int(row["size_bytes"])) for row in rows
-        }
+        return {str(row["session_id"]): int(row["history_revision"]) for row in rows}
 
     def drop_indexed_sessions(
         self, agent_id: str, project_id: str, session_ids: Iterable[str]
@@ -631,7 +623,7 @@ class VectorStore:
                 return {}
             rows = connection.execute(
                 f"""
-                SELECT rowid, session_id, agent_id, project_id, started_at, mtime_ns, size_bytes,
+                SELECT rowid, session_id, agent_id, project_id, started_at, history_revision,
                        anchor_message_id, snippet, chunk_index, start_message_id, end_message_id,
                        passage_id, text, start_timestamp, end_timestamp, start_role, end_role
                 FROM {_CHUNK_TABLE_NAME}
@@ -645,8 +637,7 @@ class VectorStore:
                 agent_id=str(row["agent_id"]),
                 project_id=str(row["project_id"]),
                 started_at=str(row["started_at"]),
-                mtime_ns=int(row["mtime_ns"]),
-                size_bytes=int(row["size_bytes"]),
+                history_revision=int(row["history_revision"]),
                 anchor_message_id=str(row["anchor_message_id"]),
                 snippet=str(row["snippet"]),
                 chunk_index=int(row["chunk_index"]),

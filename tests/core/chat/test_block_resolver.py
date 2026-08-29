@@ -12,10 +12,11 @@ from unittest.mock import Mock
 import pytest
 
 from core.attachments import AttachmentStore
-from core.chat import ChatMessage, ChatSession
+from core.chat import ChatMessage
 from core.chat.block_resolver import ContentBlockResolver
 from core.chat.content_blocks import MediaBlock
 from core.model_tasks import SpeechExecutionError
+from core.sessions import ChatSessionManager
 from core.tools import ToolRegistry
 from core.tools.file_state import FileReadState
 from core.tools.read import render_text_file
@@ -1021,7 +1022,7 @@ def test_chat_loop_resolves_historical_blocks_when_latest_user_turn_is_plain_tex
     # Arrange
     store = AttachmentStore(tmp_path)
     record = store.store("old-photo.png", b"\x89PNG\r\n\x1a\nold")
-    session = ChatSession.create(tmp_path / "sessions", session_id="session-one")
+    session = ChatSessionManager(tmp_path).create("agent", session_id="session-one")
     session.append(
         ChatMessage.user(
             [
@@ -1059,7 +1060,7 @@ def test_chat_loop_skips_resolver_when_session_has_only_plain_text_user_messages
     tmp_path: Path,
 ) -> None:
     # Arrange
-    session = ChatSession.create(tmp_path / "sessions", session_id="session-one")
+    session = ChatSessionManager(tmp_path).create("agent", session_id="session-one")
     session.append(ChatMessage.user("first"))
     session.append(ChatMessage.user("second"))
     resolver = Mock()
