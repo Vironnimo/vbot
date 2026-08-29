@@ -681,9 +681,9 @@
       >
         <svg viewBox="0 0 16 16" aria-hidden="true">
           {#if sidebarCollapsed}
-            <path d="m6 3 5 5-5 5" />
+            <path d="m5 3.75 5.5 4.25L5 12.25" />
           {:else}
-            <path d="m10 3-5 5 5 5" />
+            <path d="m11 3.75-5.5 4.25 5.5 4.25" />
           {/if}
         </svg>
       </Button>
