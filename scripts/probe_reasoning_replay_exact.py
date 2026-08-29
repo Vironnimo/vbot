@@ -26,6 +26,10 @@ Scenarios:
 - ``instruction``: the probe plants a behavioral rule ("when the user writes
   'now!', reply 'hello world'") into the reasoning carrier itself, then the
   follow-up turn sends 'now!' and checks compliance.
+- ``responses_roundtrip``: a real Responses-model reply is normalized, then
+  its original output items (including opaque encrypted reasoning) are sent
+  back in a real plain continuation and a real tool continuation. This is the
+  probe for Responses models whose reasoning is not readable text.
 
 ``--policy`` selects the replay policy applied by the shaping (default:
 the model's effective policy from the overrides).
@@ -56,11 +60,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from core.chat.messages import (
-    ChatMessage,
-    _assemble_request_history,
-    _assistant_continuation_dict,
-)
+from core.chat.messages import ChatMessage
+from core.chat.wire_shaping import _assemble_request_history, _assistant_continuation_dict
 from core.models.models import ModelRegistry
 from core.providers.ollama import OllamaCloudAdapter
 from core.providers.providers import ProviderRegistry
@@ -265,8 +266,124 @@ async def _run_exact_probe(
             await _run_tool_loop_round(adapter, model_id, carrier_field, policy)
         elif scenario == "instruction":
             await _run_instruction_round(adapter, model_id, carrier_field, policy)
+        elif scenario == "responses_roundtrip":
+            await _run_responses_roundtrip_round(adapter, model_id)
         else:
             await _run_cross_turn_round(adapter, model_id, carrier_field, policy)
+
+
+def _responses_output_items(message: dict[str, Any]) -> list[dict[str, Any]]:
+    reasoning_meta = message.get("reasoning_meta")
+    if not isinstance(reasoning_meta, dict):
+        return []
+    output = reasoning_meta.get("response_output")
+    if not isinstance(output, list) or not all(isinstance(item, dict) for item in output):
+        return []
+    return output
+
+
+async def _run_responses_roundtrip_round(adapter: Any, model_id: str) -> None:
+    """Probe opaque Responses reasoning through the exact production path.
+
+    Responses reasoning is provider-owned encrypted state, so a behavioral
+    secret cannot be planted inside it. The observable contract is therefore
+    exact capture, byte-identical payload construction, and a real accepted
+    continuation for both normal and Tool-loop requests.
+    """
+
+    plain_prompt = "Solve 17 * 19 carefully, then reply with only the number."
+    first_raw = await adapter.send(
+        [{"role": "user", "content": plain_prompt}],
+        model_id=model_id,
+        thinking_effort="high",
+    )
+    first = adapter.normalize_response(first_raw, model_id=model_id)
+    plain_output = _responses_output_items(first)
+    encrypted_count = sum(
+        item.get("type") == "reasoning" and isinstance(item.get("encrypted_content"), str)
+        for item in plain_output
+    )
+    if not plain_output or not encrypted_count:
+        raise RuntimeError(
+            "first Responses reply carried no encrypted reasoning output items; "
+            "the round cannot verify opaque reasoning replay"
+        )
+
+    plain_history = [
+        {"role": "user", "content": plain_prompt},
+        first,
+        {"role": "user", "content": "Confirm the result with only the number."},
+    ]
+    plain_payload = adapter._build_responses_payload(
+        plain_history,
+        model_id=model_id,
+        thinking_effort="high",
+    )
+    replayed_plain = plain_payload["input"][1 : 1 + len(plain_output)]
+    plain_exact = replayed_plain == plain_output
+    if not plain_exact:
+        raise RuntimeError("plain continuation did not preserve Responses output items exactly")
+    plain_second_raw = await adapter.send(
+        plain_history,
+        model_id=model_id,
+        thinking_effort="high",
+    )
+    plain_second = adapter.normalize_response(plain_second_raw, model_id=model_id)
+
+    tool_prompt = "You must call get_weather exactly once with city='Berlin' before answering."
+    tool_first_raw = await adapter.send(
+        [{"role": "user", "content": tool_prompt}],
+        model_id=model_id,
+        thinking_effort="high",
+        tools=[TOOL_DEFINITION],
+    )
+    tool_first = adapter.normalize_response(tool_first_raw, model_id=model_id)
+    tool_output = _responses_output_items(tool_first)
+    tool_calls = tool_first.get("tool_calls")
+    if not isinstance(tool_calls, list) or not tool_calls:
+        raise RuntimeError("first Tool-loop reply did not contain a Tool Call")
+    first_call = tool_calls[0]
+    if not isinstance(first_call, dict) or not isinstance(first_call.get("id"), str):
+        raise RuntimeError("first Tool-loop reply had no usable Tool Call id")
+    if not tool_output:
+        raise RuntimeError("first Tool-loop reply carried no original Responses output items")
+    tool_history = [
+        {"role": "user", "content": tool_prompt},
+        tool_first,
+        {
+            "role": "tool",
+            "tool_call_id": first_call["id"],
+            "content": '{"temperature":20,"condition":"sunny"}',
+        },
+    ]
+    tool_payload = adapter._build_responses_payload(
+        tool_history,
+        model_id=model_id,
+        thinking_effort="high",
+        tools=[TOOL_DEFINITION],
+    )
+    replayed_tool = tool_payload["input"][1 : 1 + len(tool_output)]
+    tool_exact = replayed_tool == tool_output
+    if not tool_exact:
+        raise RuntimeError("Tool-loop continuation did not preserve Responses output items exactly")
+    tool_second_raw = await adapter.send(
+        tool_history,
+        model_id=model_id,
+        thinking_effort="high",
+        tools=[TOOL_DEFINITION],
+    )
+    tool_second = adapter.normalize_response(tool_second_raw, model_id=model_id)
+
+    print(
+        "  responses roundtrip: "
+        f"plain_items={len(plain_output)} encrypted_reasoning={encrypted_count} "
+        f"plain_exact={plain_exact} plain_reply_len={len(plain_second.get('content') or '')}"
+    )
+    print(
+        "  responses tool loop: "
+        f"output_items={len(tool_output)} tool_calls={len(tool_calls)} "
+        f"tool_exact={tool_exact} tool_reply_len={len(tool_second.get('content') or '')}"
+    )
 
 
 def _shape_session(
@@ -590,7 +707,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--model", default="deepseek-v4-flash:0731")
     parser.add_argument(
         "--scenario",
-        choices=("tool_loop", "cross_turn", "instruction"),
+        choices=("tool_loop", "cross_turn", "instruction", "responses_roundtrip"),
         default="cross_turn",
     )
     parser.add_argument("--repeats", type=int, default=3)
