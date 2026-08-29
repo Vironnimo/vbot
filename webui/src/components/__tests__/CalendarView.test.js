@@ -119,4 +119,70 @@ describe('CalendarView', () => {
     expect(dateLabel).not.toBeNull();
     expect(dateInput).not.toBeNull();
   });
+
+  it('opens the create form from clicking an empty cell surface', async () => {
+    mountedComponent = await mountCalendarView();
+
+    const surface = document.querySelector('.calendar-cell-surface');
+    expect(surface).not.toBeNull();
+    surface.click();
+    flushSync();
+
+    expect(document.querySelector('.calendar-form')).not.toBeNull();
+  });
+
+  it('marks today as a highlighted cell surface', async () => {
+    mountedComponent = await mountCalendarView();
+
+    expect(document.querySelector('.calendar-cell.is-today')).not.toBeNull();
+  });
+
+  it('opens the detail modal from an event entry, not the create form', async () => {
+    const now = new Date();
+    const todayNoonUtc = new Date(
+      Date.UTC(
+        now.getUTCFullYear(),
+        now.getUTCMonth(),
+        now.getUTCDate(),
+        12,
+        0,
+        0,
+      ),
+    ).toISOString();
+    rpcMock.mockImplementation((method) => {
+      if (method === 'calendar.window') {
+        return Promise.resolve({
+          events: [{ id: 'evt-1', title: 'Standup', rrule: null }],
+          occurrences: [
+            {
+              event_id: 'evt-1',
+              title: 'Standup',
+              all_day: false,
+              recurring: false,
+              notes: null,
+              start_utc: todayNoonUtc,
+              end_utc: todayNoonUtc,
+              start_date: null,
+              end_date: null,
+              occurrence_start: todayNoonUtc,
+            },
+          ],
+          cron: [],
+          system_timezone: 'UTC',
+        });
+      }
+      return Promise.reject(new Error(`Unexpected RPC: ${method}`));
+    });
+    mountedComponent = await mountCalendarView();
+
+    const entry = document.querySelector('.calendar-cell .calendar-entry');
+    expect(entry).not.toBeNull();
+    entry.click();
+    flushSync();
+
+    // Regression: clicking an entry used to bubble to the create surface, so
+    // the form opened instead of the detail modal.
+    expect(document.querySelector('.calendar-detail')).not.toBeNull();
+    expect(document.querySelector('.calendar-form')).toBeNull();
+  });
 });

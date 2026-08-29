@@ -421,11 +421,12 @@
         >
           <button
             type="button"
-            class="calendar-day-number"
+            class="calendar-cell-surface"
+            aria-label={t('calendar.addOnDay', 'Add an event on this day')}
             onclick={() => openCreate(day.key)}
-            use:tooltip={t('calendar.addOnDay', 'Add an event on this day')}
           >
-            {day.dayOfMonth}
+            <span class="calendar-day-number">{day.dayOfMonth}</span>
+            <span class="calendar-cell-add" aria-hidden="true">＋</span>
           </button>
           <div class="calendar-cell-entries">
             {#each dayEntriesList.slice(0, 4) as entry, index (index)}
@@ -433,7 +434,10 @@
                 <button
                   type="button"
                   class="calendar-entry calendar-entry--cron"
-                  onclick={() => onOpenCronJob?.(entry.cron.job_id)}
+                  onclick={(event) => {
+                    event.stopPropagation();
+                    onOpenCronJob?.(entry.cron.job_id);
+                  }}
                 >
                   <span class="calendar-entry-time"
                     >{cronTimeLabel(entry.cron)}</span
@@ -445,7 +449,10 @@
                   type="button"
                   class="calendar-entry"
                   class:calendar-entry--allday={entry.all_day}
-                  onclick={() => openDetail(entry.occurrence)}
+                  onclick={(event) => {
+                    event.stopPropagation();
+                    openDetail(entry.occurrence);
+                  }}
                 >
                   {#if !entry.all_day}
                     <span class="calendar-entry-time">
