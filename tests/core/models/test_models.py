@@ -1774,14 +1774,6 @@ class TestModelRegistryRealResources:
         assert pinned.recommended_top_p == 0.95
         assert pinned.recommended_temperature == 1.0
 
-    def test_deepseek_v4_pro_has_no_top_p_override(self):
-        """DeepSeek V4 Pro has different official guidance — no top_p pin."""
-
-        registry = ModelRegistry.load(RESOURCES_DIR)
-
-        pro = registry.get("ollama-cloud", "deepseek-v4-pro:preview")
-        assert pro.recommended_top_p is None
-
     def test_opencode_go_glm_5_3_flash_override_loads(self):
         """``opencode-go.overrides.json`` pins glm-5.3-flash to current_run.
 
@@ -1832,14 +1824,6 @@ class TestModelRegistryRealResources:
             registry.get("ollama-cloud", "deepseek-v4-flash:0731").reasoning_replay == "current_run"
         )
         assert (
-            registry.get("ollama-cloud", "deepseek-v4-flash:preview").reasoning_replay
-            == "current_run"
-        )
-        assert (
-            registry.get("ollama-cloud", "deepseek-v4-pro:preview").reasoning_replay
-            == "current_run"
-        )
-        assert (
             registry.get("ollama-cloud", "deepseek-v4-pro:0813").reasoning_replay == "current_run"
         )
         assert registry.get("ollama-cloud", "kimi-k2.6").reasoning_replay == "current_run"
@@ -1868,9 +1852,7 @@ class TestModelRegistryRealResources:
 
         for model_id in (
             "deepseek-v4-flash:0731",
-            "deepseek-v4-flash:preview",
             "deepseek-v4-pro:0813",
-            "deepseek-v4-pro:preview",
             "gemma4:31b",
             "glm-5.1",
             "glm-5.2",

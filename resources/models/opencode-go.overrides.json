@@ -216,16 +216,6 @@
         }
       }
     },
-    "ox-alpha-free": {
-      "reasoning_replay": "current_run",
-      "metadata": {
-        "opencode_go": {
-          "minimum_reasoning_effort": "low",
-          "protocol": "openai",
-          "reasoning_response_field": "reasoning_content"
-        }
-      }
-    },
     "qwen3.5-plus": {
       "metadata": {
         "opencode_go": {
