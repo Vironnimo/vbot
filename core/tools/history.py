@@ -278,7 +278,7 @@ def make_history_handler(sessions: ChatSessionManager):
                         agent_id=context.agent_id,
                         session_id=context.session_id,
                     )
-                ).load()
+                ).load_active()
             except Exception as error:
                 raise _HistoryError(
                     "history_session_error", "Unable to read canonical Session history."

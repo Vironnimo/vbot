@@ -1132,6 +1132,70 @@ describe('chat controller', () => {
     expect(chatState.actionError).toBe('');
   });
 
+  it('restarts from an edited message only after server admission succeeds', async () => {
+    const editChatMessage = vi.fn().mockResolvedValue({
+      run_id: 'run-edit',
+      sse_url: '/events/run-edit',
+    });
+    const { chatState, controller, runStream } = setup({
+      operationOverrides: { editChatMessage },
+    });
+    const sessionState = ensureSessionState(chatState, 'alpha', 'session-one');
+    sessionState.messages = [
+      { id: 'kept', role: 'assistant', content: 'Earlier context' },
+      { id: 'target', role: 'user', content: 'Original request' },
+      { id: 'discarded', role: 'assistant', content: 'Old answer' },
+    ];
+    sessionState.sessionUsage = { input_tokens: 100, output_tokens: 20 };
+    sessionState.contextUsage = { input_tokens: 80 };
+
+    await expect(
+      controller.editMessage(sessionState, 'target', 'Edited request'),
+    ).resolves.toEqual({ kind: 'started', runId: 'run-edit' });
+
+    expect(editChatMessage).toHaveBeenCalledWith({
+      agent_id: 'alpha',
+      session_id: 'session-one',
+      message_id: 'target',
+      content: 'Edited request',
+    });
+    expect(sessionState.messages).toEqual([
+      { id: 'kept', role: 'assistant', content: 'Earlier context' },
+    ]);
+    expect(sessionState.sessionUsage).toEqual({
+      input_tokens: 100,
+      output_tokens: 20,
+    });
+    expect(sessionState.contextUsage).toBeNull();
+    expect(sessionState.currentRun?.runId).toBe('run-edit');
+    expect(runStream.subscribeToRun).toHaveBeenCalledWith(
+      sessionState,
+      '/events/run-edit',
+      { afterSequence: 0 },
+    );
+  });
+
+  it('keeps the visible lineage untouched when edit admission fails', async () => {
+    const editChatMessage = vi.fn().mockRejectedValue(new Error('busy'));
+    const { chatState, controller } = setup({
+      operationOverrides: { editChatMessage },
+    });
+    const sessionState = ensureSessionState(chatState, 'alpha', 'session-one');
+    const messages = [
+      { id: 'target', role: 'user', content: 'Original request' },
+      { id: 'answer', role: 'assistant', content: 'Old answer' },
+    ];
+    sessionState.messages = messages;
+
+    await expect(
+      controller.editMessage(sessionState, 'target', 'Edited request'),
+    ).resolves.toEqual({ kind: 'failed' });
+
+    expect(sessionState.messages).toBe(messages);
+    expect(sessionState.currentRun).toBeNull();
+    expect(sessionState.actionError).toContain('busy');
+  });
+
   it('reconciles a persisted Subagent row through its exact durable work id', async () => {
     const inspectSubAgentWork = vi.fn().mockResolvedValue({
       id: 'sub-old-work',

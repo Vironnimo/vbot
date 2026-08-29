@@ -19,7 +19,11 @@ from core.chat.content_blocks import ContentBlock
 from core.chat.file_mentions import expand_file_mentions, resolve_mention_root
 from core.projects import format_agent_address
 from core.runs import ActiveRunError, ChatRunManager, QueuedRunItem, Run, RunCancelledError
-from core.sessions import SessionAddress
+from core.sessions import (
+    SessionAddress,
+    active_session_messages,
+    editable_session_message_ids,
+)
 from core.tools.bash import background_bash_statuses
 from core.utils.logging import get_logger
 from core.utils.workers import BoundedWorkerPool
@@ -168,18 +172,23 @@ def _project_chat_history(
     limit: int | None,
     before: str | None,
 ) -> _ChatHistoryProjection:
+    active_messages = active_session_messages(loaded_messages)
+    editable_message_ids = editable_session_message_ids(loaded_messages)
     visible_messages = [
-        _visible_message(message, file_delivery=file_delivery)
-        for message in loaded_messages
+        {
+            **_visible_message(message, file_delivery=file_delivery),
+            **({"editable": True} if message.id in editable_message_ids else {}),
+        }
+        for message in active_messages
         if _is_visible_history_message(message)
     ]
     messages, has_more = _history_page(visible_messages, limit=limit, before=before)
     return _ChatHistoryProjection(
         messages=messages,
         has_more=has_more,
-        background_bash_statuses=background_bash_statuses(loaded_messages),
+        background_bash_statuses=background_bash_statuses(active_messages),
         session_usage=aggregate_session_usage(loaded_messages),
-        context_usage=latest_session_context_usage(loaded_messages),
+        context_usage=latest_session_context_usage(active_messages),
     )
 
 
@@ -547,6 +556,38 @@ async def _stream_chat(state: Any, params: JsonObject) -> JsonObject:
     )
 
 
+async def _edit_chat(state: Any, params: JsonObject) -> JsonObject:
+    _reject_unsupported(
+        params,
+        {"agent_id", "session_id", "message_id", "content"},
+        "chat.edit",
+    )
+    agent_id, project_id = _required_agent_address(params, "agent_id")
+    session_id = _required_string(params, "session_id")
+    message_id = _required_string(params, "message_id")
+    content = _required_string(params, "content")
+
+    try:
+        run = await _streaming_chat_loop(state).edit_run(
+            agent_id,
+            content,
+            session_id=session_id,
+            message_id=message_id,
+            reply_surface=WEBUI_REPLY_SURFACE,
+            project_id=project_id,
+        )
+        if project_id is None:
+            await _mark_current_session(state, agent_id, session_id)
+        _bridge_run_to_event_bus(state, run)
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
+    return _run_response(
+        run,
+        sse_url=f"/api/runs/{run.id}/events",
+        file_delivery=getattr(state, "file_delivery", None),
+    )
+
+
 def _run_started_during_enqueue(item: QueuedRunItem) -> Run | None:
     """Return the Run when enqueue won a busy-to-idle race, else None."""
     if not item.future.done():
@@ -760,6 +801,7 @@ def method_handlers() -> dict[str, RpcMethodHandler]:
         "chat.history": _chat_history,
         "chat.send": _send_chat,
         "chat.stream": _stream_chat,
+        "chat.edit": _edit_chat,
         "chat.cancel": _cancel_chat,
         "chat.cancel_tool_call": _cancel_tool_call_chat,
         "chat.cancel_process": _cancel_process_chat,

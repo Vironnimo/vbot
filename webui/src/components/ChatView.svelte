@@ -1732,6 +1732,25 @@
     return outcome.kind !== 'failed' && outcome.kind !== 'ignored';
   };
 
+  const handleEditMessage = async (messageId, content) => {
+    const sessionState = activeSessionState;
+    const sourceSessionKey = sessionState?.key ?? '';
+    const sourceUiGeneration = displayedSessionGeneration;
+    const outcome = await chatController.editMessage(
+      sessionState,
+      messageId,
+      content,
+    );
+    const presentationIsCurrent =
+      sourceSessionKey &&
+      displayedSessionKey() === sourceSessionKey &&
+      displayedSessionGeneration === sourceUiGeneration;
+    if (presentationIsCurrent && outcome.kind === 'started') {
+      submittedTurnScrollKey += 1;
+    }
+    return outcome.kind === 'started';
+  };
+
   const handleCancelRun = async () => {
     await chatController.cancelActiveRun(activeSessionState);
   };
@@ -2082,6 +2101,10 @@
             onNavigateToSubAgent={handleNavigateToSubAgentLink}
             onCancelToolCall={handleCancelToolCall}
             onCancelSubAgent={handleCancelSubAgent}
+            messageEditingDisabled={chatState.loadingHistory ||
+              isRunActive(activeSessionState) ||
+              (activeSessionState?.queue?.length ?? 0) > 0}
+            onEditMessage={handleEditMessage}
           />
         </div>
         <div class="chat-view__footer-stack" bind:this={footerStackElement}>

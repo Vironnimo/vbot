@@ -27,6 +27,7 @@ from core.providers.adapter import (
 )
 from core.sessions import (
     ChatSession,
+    active_session_messages,
     is_skill_context_note,
     skill_tool_activation,
 )
@@ -52,6 +53,7 @@ MessageRole = Literal[
     "compaction_checkpoint",
     "run_summary",
     "agent_takeover",
+    "history_edit",
 ]
 InputOrigin = Literal["speech_transcription"]
 ReplySurfaceKind = Literal["webui", "channel"]
@@ -453,6 +455,7 @@ class ChatMessage:
     status: str | None = None
     iteration_count: int | None = None
     change_stats: JsonObject | None = None
+    target_message_id: str | None = None
     sender: MessageSender | None = None
     interrupted: bool = False
     interruption_cause: str | None = None
@@ -730,6 +733,21 @@ class ChatMessage:
             ),
         )
 
+    @classmethod
+    def history_edit(
+        cls,
+        target_message_id: str,
+        *,
+        timestamp: datetime | None = None,
+    ) -> ChatMessage:
+        """Create one append-only active-lineage edit boundary."""
+        return cls(
+            id=_new_message_id(),
+            timestamp=_format_timestamp(timestamp),
+            role="history_edit",
+            target_message_id=target_message_id,
+        )
+
     def to_dict(self) -> JsonObject:
         """Return a canonical JSON-serializable message dictionary."""
         self.validate()
@@ -767,6 +785,7 @@ class ChatMessage:
         _add_if_not_none(message, "status", self.status)
         _add_if_not_none(message, "iteration_count", self.iteration_count)
         _add_if_not_none(message, "change_stats", self.change_stats)
+        _add_if_not_none(message, "target_message_id", self.target_message_id)
         if self.sender is not None:
             message["sender"] = self.sender.to_dict()
         if self.interrupted:
@@ -859,6 +878,7 @@ class ChatMessage:
             status=_optional_string(data, "status"),
             iteration_count=iteration_count,
             change_stats=dict(change_stats) if change_stats is not None else None,
+            target_message_id=_optional_string(data, "target_message_id"),
             sender=MessageSender.from_dict(sender_data) if sender_data is not None else None,
             interrupted=interrupted,
             interruption_cause=interruption_cause,
@@ -902,6 +922,8 @@ class ChatMessage:
                 _validate_run_summary_message(self)
             case "agent_takeover":
                 _validate_agent_takeover_message(self)
+            case "history_edit":
+                _validate_history_edit_message(self)
 
 
 def error_kind_llm_visible(kind: str) -> bool:
@@ -1035,13 +1057,15 @@ def _latest_compaction_checkpoint(messages: list[ChatMessage]) -> ChatMessage | 
 
 def history_available(messages: Sequence[ChatMessage]) -> bool:
     """Return whether persisted Session history grants the History tool."""
-    return any(message.role == "compaction_checkpoint" for message in messages)
+    return any(
+        message.role == "compaction_checkpoint" for message in active_session_messages(messages)
+    )
 
 
 def checkpoint_ordinal(messages: Sequence[ChatMessage], checkpoint_id: str) -> int | None:
     """Return a checkpoint's one-based chronological ordinal."""
     ordinal = 0
-    for message in messages:
+    for message in active_session_messages(messages):
         if message.role != "compaction_checkpoint":
             continue
         ordinal += 1
@@ -1071,6 +1095,7 @@ def finalize_checkpoint_history_guidance(
 
 def _effective_compaction_messages(messages: list[ChatMessage]) -> list[ChatMessage]:
     """Return the latest checkpoint projection plus messages appended after it."""
+    messages = active_session_messages(messages)
     checkpoint = _latest_compaction_checkpoint(messages)
     if checkpoint is None:
         return list(messages)
@@ -1236,10 +1261,11 @@ def _require_role(data: JsonObject) -> MessageRole:
         "compaction_checkpoint",
         "run_summary",
         "agent_takeover",
+        "history_edit",
     ):
         raise ChatMessageValidationError(
             "role must be system, user, assistant, tool, note, error, "
-            "compaction_checkpoint, run_summary, or agent_takeover"
+            "compaction_checkpoint, run_summary, agent_takeover, or history_edit"
         )
     return cast(MessageRole, role)
 
@@ -1303,6 +1329,10 @@ def _validate_core_fields(message: ChatMessage) -> None:
         raise ChatMessageValidationError(f"{message.role} messages cannot include output_files")
     if message.role != "run_summary" and message.change_stats is not None:
         raise ChatMessageValidationError(f"{message.role} messages cannot include change_stats")
+    if message.role != "history_edit" and message.target_message_id is not None:
+        raise ChatMessageValidationError(
+            f"{message.role} messages cannot include target_message_id"
+        )
     if message.role != "compaction_checkpoint":
         _reject_fields(
             message,
@@ -1716,6 +1746,29 @@ def _validate_agent_takeover_message(message: ChatMessage) -> None:
         )
     _reject_fields(
         message,
+        "model",
+        "reasoning",
+        "reasoning_meta",
+        "reasoning_timing",
+        "usage",
+        "timing",
+        "tool_calls",
+        "tool_call_id",
+        "name",
+        "error_kind",
+        "run_id",
+        "work_id",
+        "status",
+        "sender",
+    )
+
+
+def _validate_history_edit_message(message: ChatMessage) -> None:
+    if not message.target_message_id:
+        raise ChatMessageValidationError("history edit messages require target_message_id")
+    _reject_fields(
+        message,
+        "content",
         "model",
         "reasoning",
         "reasoning_meta",

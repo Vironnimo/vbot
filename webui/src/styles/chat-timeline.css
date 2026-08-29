@@ -581,8 +581,17 @@
   transition: opacity 120ms ease;
 }
 
+.chat-edit-action {
+  flex: 0 0 auto;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 120ms ease;
+}
+
 .msg:hover > .msg-header .message-copy,
 .msg:focus-within > .msg-header .message-copy,
+.msg:hover > .msg-header .message-edit,
+.msg:focus-within > .msg-header .message-edit,
 .reasoning-block[open]:hover .reasoning-copy,
 .reasoning-block[open]:focus-within .reasoning-copy,
 .tool-event[open]:hover .tool-detail-copy,
@@ -594,12 +603,49 @@
   pointer-events: auto;
 }
 
+.chat-edit-action:focus-visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+
 .btn-tertiary.btn-icon.message-copy,
+.btn-tertiary.btn-icon.message-edit,
 .btn-tertiary.btn-icon.reasoning-copy,
 .btn-tertiary.btn-icon.tool-detail-copy,
 .btn-tertiary.btn-icon.transient-card__copy {
   width: 24px;
   height: 24px;
+}
+
+.message-edit-form {
+  display: flex;
+  width: min(75%, 720px);
+  flex-direction: column;
+  gap: 8px;
+}
+
+.message-edit-form .text-area {
+  min-height: 96px;
+  resize: vertical;
+}
+
+.message-edit-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.message-edit-hint {
+  color: var(--text-lo);
+  font-size: 11px;
+  text-align: right;
+}
+
+@media (hover: none), (pointer: coarse) {
+  .chat-edit-action {
+    opacity: 1;
+    pointer-events: auto;
+  }
 }
 
 .speech-audio-player {

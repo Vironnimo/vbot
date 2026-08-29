@@ -244,6 +244,53 @@ async def test_chat_history_hides_internal_continuation_checkpoint(tmp_path: Pat
 
 
 @pytest.mark.asyncio
+async def test_chat_history_projects_only_active_edit_lineage_but_keeps_raw_usage(
+    tmp_path: Path,
+) -> None:
+    state, chat_sessions = _history_state(tmp_path)
+    session = chat_sessions.create("parent", session_id="session-one")
+    first_user = replace(ChatMessage.user("original"), id="user-original")
+    first_answer = ChatMessage.assistant(
+        model="openai/gpt-5.2",
+        content="old answer",
+        usage={"input_tokens": 10, "output_tokens": 2},
+    )
+    edited_user = replace(ChatMessage.user("edited"), id="user-edited")
+    edited_answer = ChatMessage.assistant(
+        model="openai/gpt-5.2",
+        content="new answer",
+        usage={"input_tokens": 20, "output_tokens": 3},
+    )
+    session.append_many(
+        [
+            first_user,
+            first_answer,
+            ChatMessage.history_edit(first_user.id),
+            edited_user,
+            edited_answer,
+        ]
+    )
+
+    response = await dispatch_rpc(
+        state,
+        {
+            "method": "chat.history",
+            "params": {"agent_id": "parent", "session_id": "session-one"},
+        },
+    )
+
+    assert response["ok"] is True
+    result = response["result"]
+    assert [message["content"] for message in result["messages"]] == [
+        "edited",
+        "new answer",
+    ]
+    assert result["messages"][0]["editable"] is True
+    assert result["session_usage"]["input_tokens"] == 30
+    assert result["session_usage"]["output_tokens"] == 5
+
+
+@pytest.mark.asyncio
 async def test_chat_history_projects_durable_background_bash_statuses(tmp_path: Path) -> None:
     state, chat_sessions = _history_state(tmp_path)
     session = chat_sessions.create("parent", session_id="session-one")
@@ -785,6 +832,76 @@ async def test_chat_stream_returns_queued_response_when_session_is_busy() -> Non
         reply_surface=ReplySurface.webui(),
         project_id=None,
     )
+
+
+@pytest.mark.asyncio
+async def test_chat_edit_starts_an_idle_streaming_run_without_queue_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run = Run(
+        run_id="run-edit",
+        agent_id="agent-1",
+        session_id="session-1",
+    )
+    streaming_chat_loop = SimpleNamespace(edit_run=AsyncMock(return_value=run))
+    bridged_runs: list[Run] = []
+    monkeypatch.setattr(
+        chat_methods,
+        "_bridge_run_to_event_bus",
+        lambda _state, started_run: bridged_runs.append(started_run),
+    )
+    state = SimpleNamespace(streaming_chat_loop=streaming_chat_loop)
+
+    response = await dispatch_rpc(
+        state,
+        {
+            "method": "chat.edit",
+            "params": {
+                "agent_id": "agent-1",
+                "session_id": "session-1",
+                "message_id": "message-1",
+                "content": "edited request",
+            },
+        },
+    )
+
+    assert response["ok"] is True
+    assert response["result"]["run_id"] == "run-edit"
+    assert response["result"]["sse_url"] == "/api/runs/run-edit/events"
+    streaming_chat_loop.edit_run.assert_awaited_once_with(
+        "agent-1",
+        "edited request",
+        session_id="session-1",
+        message_id="message-1",
+        reply_surface=ReplySurface.webui(),
+        project_id=None,
+    )
+    assert bridged_runs == [run]
+
+
+@pytest.mark.asyncio
+async def test_chat_edit_rejects_busy_session_without_queue_fallback() -> None:
+    streaming_chat_loop = SimpleNamespace(
+        edit_run=AsyncMock(side_effect=ActiveRunError("session already has an active run"))
+    )
+    state = SimpleNamespace(streaming_chat_loop=streaming_chat_loop)
+
+    response = await dispatch_rpc(
+        state,
+        {
+            "method": "chat.edit",
+            "params": {
+                "agent_id": "agent-1",
+                "session_id": "session-1",
+                "message_id": "message-1",
+                "content": "edited request",
+            },
+        },
+    )
+
+    assert response["ok"] is False
+    assert response["error"]["code"] == "active_run"
+    assert not hasattr(streaming_chat_loop, "queue_run")
 
 
 @pytest.mark.asyncio

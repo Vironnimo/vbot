@@ -71,7 +71,7 @@ from core.runs import (
     COMPACTION_COMPLETED_EVENT,
     COMPACTION_STARTED_EVENT,
 )
-from core.sessions import SessionAddress
+from core.sessions import SessionAddress, active_session_messages
 from core.settings.normalizers import normalize_compaction_policy
 from core.utils.tokens import estimate_request_input_tokens
 
@@ -171,7 +171,8 @@ class CompactionRunCoordinator:
         # checkpoint is stamped below.
         compaction_started_perf = time.perf_counter()
         try:
-            messages = await session.load_async()
+            raw_messages = await session.load_async()
+            messages = active_session_messages(raw_messages)
             context_usage = latest_session_context_usage(messages)
             if context_usage is not None:
                 run.terminal_payload_extras["context_usage"] = context_usage
@@ -368,6 +369,7 @@ class CompactionRunCoordinator:
             )
             await session.append_async(checkpoint)
             messages.append(checkpoint)
+            raw_messages.append(checkpoint)
             await _CHAT_TRANSFORM_WORKERS.run(
                 self._dependencies.sessions.rotate_prompt_cache_affinity_id,
                 SessionAddress(
@@ -392,7 +394,7 @@ class CompactionRunCoordinator:
                         exc_info=True,
                     )
             self._emit_compaction_completed(run, messages, checkpoint)
-            run.terminal_payload_extras["session_usage"] = aggregate_session_usage(messages)
+            run.terminal_payload_extras["session_usage"] = aggregate_session_usage(raw_messages)
             return checkpoint
         except asyncio.CancelledError:
             run.emit(COMPACTION_ABORTED_EVENT, {"reason": "cancelled"})
@@ -585,7 +587,7 @@ class CompactionRunCoordinator:
             snapshot = await session.load_since_async()
         if snapshot is None:
             raise AssertionError("A full Session snapshot must always produce a cursor")
-        return list(snapshot.messages), snapshot.cursor
+        return active_session_messages(snapshot.messages), snapshot.cursor
 
     async def _append_compaction_checkpoint_if_current(
         self,
@@ -851,7 +853,7 @@ class CompactionRunCoordinator:
                         session,
                         inputs=RequestBuildInputs.from_context(
                             context, target
-                        ).with_session_messages(context.session_snapshot.messages),
+                        ).with_session_messages(context.session_snapshot.active_messages),
                     )
                     refreshed_messages = _restore_in_run_tool_result_content(
                         _restore_in_run_assistant_reasoning(

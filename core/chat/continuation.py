@@ -458,7 +458,7 @@ async def recover_continuation(
         return None
     messages = canonical_messages
     if messages is None:
-        messages = await session.load_async()
+        messages = await session.load_active_async()
     _reconcile_canonical_tool_results(state, messages)
     if not state.active or state.latest_run_id == active_run_id:
         return state

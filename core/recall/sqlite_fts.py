@@ -206,7 +206,7 @@ class SqliteFtsRecallBackend(JsonlSessionRecallBackend):
         )
         for summary in summaries:
             session_id = str(summary["id"])
-            messages = self.sessions.get(_session_address(request, session_id)).load()
+            messages = self.sessions.get(_session_address(request, session_id)).load_active()
             for message_index, message in enumerate(messages):
                 if not message_matches_search_request(message, request):
                     continue
@@ -313,7 +313,7 @@ class SqliteFtsRecallBackend(JsonlSessionRecallBackend):
         ranked: list[tuple[float, str, str, RecallSearchHit]] = []
         for summary in summaries:
             session_id = str(summary["id"])
-            messages = self.sessions.get(_session_address(request, session_id)).load()
+            messages = self.sessions.get(_session_address(request, session_id)).load_active()
             for passage in build_session_passages(messages):
                 if not _passage_in_time_range(
                     passage.start_timestamp,
@@ -385,7 +385,7 @@ class SqliteFtsRecallBackend(JsonlSessionRecallBackend):
             if session_id not in messages_by_session:
                 messages_by_session[session_id] = self.sessions.get(
                     _session_address(request, session_id)
-                ).load()
+                ).load_active()
             messages = messages_by_session[session_id]
             message_index = message_index_by_id(messages, str(row["message_id"]))
             if message_index is None:
@@ -589,7 +589,7 @@ class SqliteFtsRecallBackend(JsonlSessionRecallBackend):
                 agent_id,
                 scope,
                 session_id,
-                session.load(),
+                session.load_active(),
                 mtime_ns=stat.st_mtime_ns,
                 size_bytes=stat.st_size,
             )
@@ -923,7 +923,7 @@ class SqliteFtsRecallBackend(JsonlSessionRecallBackend):
             if session_id not in messages_by_session:
                 messages_by_session[session_id] = self.sessions.get(
                     _session_address(request, session_id)
-                ).load()
+                ).load_active()
             messages = messages_by_session[session_id]
             message_index = message_index_by_id(messages, str(row["message_id"]))
             if message_index is None:

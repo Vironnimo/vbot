@@ -7,10 +7,11 @@ from typing import Any
 
 import pytest
 
-from core.chat import ChatMessage, ChatMessageValidationError
+from core.chat import ChatMessage, ChatMessageValidationError, ChatSessionError, MessageSender
 from core.chat.chat import _validate_assistant_message
 from core.projects import AgentResolutionError, ProjectStore
 from core.runs import RunCancelledError
+from core.sessions import active_session_messages
 from core.tools import (
     FileReadState,
     ToolContext,
@@ -20,6 +21,84 @@ from core.tools import (
     tool_success,
 )
 from tests.core.chat.chat_loop_support import build_chat_loop, session_address
+
+
+@pytest.mark.asyncio
+async def test_edit_run_appends_lineage_marker_and_preserves_superseded_usage(
+    tmp_path: Path,
+) -> None:
+    from tests.core.chat.chat_loop_support import StubAdapter, StubAgent, StubRuntime
+
+    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
+    adapter = StubAdapter([{"content": "new answer"}])
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+    session = runtime.chat_sessions.create("coder", session_id="session-one")
+    original = ChatMessage.user("old request")
+    old_answer = ChatMessage.assistant(
+        model="openai/gpt-5.2",
+        content="old answer",
+        usage={"input_tokens": 100, "output_tokens": 20},
+    )
+    later = ChatMessage.user("later request")
+    session.append_many([original, old_answer, later])
+    raw_prefix = session.path.read_bytes()
+
+    run = await build_chat_loop(runtime).edit_run(
+        "coder",
+        "edited request",
+        session_id="session-one",
+        message_id=original.id,
+    )
+    result = await run.wait()
+
+    raw = session.load()
+    active = active_session_messages(raw)
+    assert session.path.read_bytes().startswith(raw_prefix)
+    assert [message.role for message in raw[:3]] == ["user", "assistant", "user"]
+    assert raw[3].role == "history_edit"
+    assert raw[3].target_message_id == original.id
+    assert old_answer.usage == {"input_tokens": 100, "output_tokens": 20}
+    assert [message.content for message in active if message.role in {"user", "assistant"}] == [
+        "edited request",
+        "new answer",
+    ]
+    assert result.content == "new answer"
+    request_user_content = [
+        message.get("content")
+        for message in adapter.requests[0]["messages"]
+        if message.get("role") == "user"
+    ]
+    assert request_user_content == ["edited request"]
+    assert run.terminal_payload_extras["session_usage"]["input_tokens"] >= 100
+
+
+@pytest.mark.asyncio
+async def test_edit_run_rejects_channel_target_without_appending(tmp_path: Path) -> None:
+    from tests.core.chat.chat_loop_support import StubAdapter, StubAgent, StubRuntime
+
+    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
+    runtime: Any = StubRuntime(
+        data_dir=tmp_path,
+        agent=agent,
+        adapter=StubAdapter([{"content": "unused"}]),
+    )
+    session = runtime.chat_sessions.create("coder", session_id="session-one")
+    channel_message = ChatMessage.user(
+        "from channel",
+        sender=MessageSender(id="member-one", display_name="Member One"),
+    )
+    session.append(channel_message)
+    before = session.path.read_bytes()
+
+    with pytest.raises(ChatSessionError, match="plain-text"):
+        await build_chat_loop(runtime).edit_run(
+            "coder",
+            "edited request",
+            session_id="session-one",
+            message_id=channel_message.id,
+        )
+
+    assert session.path.read_bytes() == before
 
 
 def test_validate_assistant_message_allows_reasoning_only() -> None:

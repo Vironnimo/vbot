@@ -450,6 +450,11 @@ export function startChatRun(params = {}, options = {}) {
   return rpc('chat.stream', params, options);
 }
 
+export function editChatMessage(params = {}, options = {}) {
+  requirePlainObject(params, 'Chat edit must be an object', 'chat.edit');
+  return rpc('chat.edit', params, options);
+}
+
 export function listFiles(agentId, options = {}) {
   requireNonEmptyString(
     agentId,

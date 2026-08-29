@@ -42,6 +42,8 @@
     onNavigateToSubAgent = () => {},
     onCancelToolCall = () => {},
     onCancelSubAgent = () => {},
+    messageEditingDisabled = false,
+    onEditMessage = async () => false,
     hasOlderHistory = false,
     loadingOlderHistory = false,
     // True while the displayed session's initial history request is in
@@ -446,6 +448,8 @@
                 {agentName}
                 {isReasoningOpen}
                 onReasoningOpenChange={setReasoningOpen}
+                {messageEditingDisabled}
+                {onEditMessage}
               />
             {/if}
             {#each transientCardGroups.byItemId.get(item.id) ?? [] as card (card.id)}

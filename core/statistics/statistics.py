@@ -82,6 +82,7 @@ SESSION_RECORD_ROLES = (
     "compaction_checkpoint",
     "run_summary",
     "agent_takeover",
+    "history_edit",
 )
 
 UNKNOWN_MODEL_KEY = "unknown"
