@@ -202,6 +202,8 @@ from core.sessions import (
     ChatSession,
     SessionAddress,
     SessionReadCursor,
+    active_session_messages,
+    editable_session_message_index,
     latest_project_tool_context_id,
     project_tool_context_id,
 )
@@ -585,6 +587,7 @@ class _RunRequest:
     input_persisted_hook: Callable[[], None] | None = None
     agent_overrides: AgentRunOverrides | None = None
     resume_process_restart: bool = False
+    edit_message_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -660,6 +663,23 @@ class _SessionSnapshot:
 
     messages: list[ChatMessage]
     cursor: SessionReadCursor
+    pending_edit_message_id: str | None = None
+
+    @property
+    def active_messages(self) -> list[ChatMessage]:
+        """Return current lineage, including an admitted edit not yet persisted."""
+        active = active_session_messages(self.messages)
+        if self.pending_edit_message_id is None:
+            return active
+        target_index = editable_session_message_index(active, self.pending_edit_message_id)
+        return active[:target_index]
+
+    def begin_edit(self, message_id: str) -> None:
+        editable_session_message_index(active_session_messages(self.messages), message_id)
+        self.pending_edit_message_id = message_id
+
+    def commit_edit(self) -> None:
+        self.pending_edit_message_id = None
 
     @classmethod
     async def load(cls, session: ChatSession) -> _SessionSnapshot:
@@ -1112,6 +1132,27 @@ class ChatLoop:
             resume_process_restart=resume_process_restart,
         )
 
+    async def edit_run(
+        self,
+        agent_id: str,
+        content: str,
+        *,
+        session_id: str,
+        message_id: str,
+        reply_surface: ReplySurface | None = None,
+        project_id: str | None = None,
+    ) -> Run:
+        """Start one idle-only Run from an earlier active plain-text User message."""
+        return await self._start_run(
+            agent_id,
+            content,
+            session_id=session_id,
+            create_missing=False,
+            reply_surface=reply_surface,
+            project_id=project_id,
+            edit_message_id=message_id,
+        )
+
     async def start_run_in_new_session(
         self,
         agent_id: str,
@@ -1311,6 +1352,7 @@ class ChatLoop:
         run_kind: RunKind = RunKind.USER,
         contributes_to_agent_activity: bool = True,
         resume_process_restart: bool = False,
+        edit_message_id: str | None = None,
     ) -> Run:
         agent = self._dependencies.agent_resolver.resolve_agent(project_id, agent_id)
         working_project_id = resolve_working_project_id(project_id, agent)
@@ -1319,6 +1361,10 @@ class ChatLoop:
         session = await self._get_session_async(
             agent_id, session_id, create_missing=create_missing, project_id=project_id
         )
+        if edit_message_id is not None:
+            if internal or not isinstance(content, str):
+                raise ChatError("history edits require visible plain-text content")
+            editable_session_message_index(await session.load_active_async(), edit_message_id)
         manager = self._dependencies.run_manager
         request = _RunRequest(
             content=content,
@@ -1330,6 +1376,7 @@ class ChatLoop:
             tool_denial_resolver=tool_denial_resolver,
             input_persisted_hook=input_persisted_hook,
             resume_process_restart=resume_process_restart,
+            edit_message_id=edit_message_id,
         )
         return await manager.start(
             SessionAddress(project_id=project_id, agent_id=agent_id, session_id=session.id),
@@ -1358,15 +1405,20 @@ class ChatLoop:
         )
         async with self._dependencies.sessions.write_lock(session_address):
             session_snapshot = await _SessionSnapshot.load(session)
+            if request.edit_message_id is not None:
+                session_snapshot.begin_edit(request.edit_message_id)
         prior_continuation: ContinuationState | None = None
         continuation_reminder: str | None = None
         continuation_tracker: ContinuationTracker | None = None
         if not request.internal or request.resume_process_restart:
-            recovered = await recover_continuation(
-                session,
-                active_run_id=run.id,
-                canonical_messages=session_snapshot.messages,
-            )
+            if request.edit_message_id is not None:
+                recovered = None
+            else:
+                recovered = await recover_continuation(
+                    session,
+                    active_run_id=run.id,
+                    canonical_messages=session_snapshot.active_messages,
+                )
             if request.internal and recovered is not None and recovered.cause != "process_restart":
                 recovered = None
             prior_continuation = recovered
@@ -1494,7 +1546,7 @@ class ChatLoop:
             self._dependencies.sessions.prompt_cache_affinity_id,
             SessionAddress(project_id=project_id, agent_id=run.agent_id, session_id=run.session_id),
         )
-        session.activated_skill_contents(session_snapshot.messages)
+        session.activated_skill_contents(session_snapshot.active_messages)
         context = _RunExecutionContext(
             run=run,
             request=request,
@@ -1518,7 +1570,7 @@ class ChatLoop:
             session_snapshot=session_snapshot,
         )
         if project_id is None:
-            loaded_project_id = latest_project_tool_context_id(session_snapshot.messages)
+            loaded_project_id = latest_project_tool_context_id(session_snapshot.active_messages)
             if loaded_project_id is not None:
                 await self._apply_project_skill_context(context, loaded_project_id)
         return context
@@ -1649,13 +1701,23 @@ class ChatLoop:
                     # queued for the Session lock. Refresh before assigning image
                     # references so each persisted image stays unique.
                     await context.session_snapshot.refresh(session)
+                    reset_auto_title = False
+                    if request.edit_message_id is not None:
+                        editable_session_message_index(
+                            active_session_messages(context.session_snapshot.messages),
+                            request.edit_message_id,
+                        )
+                        reset_auto_title = not any(
+                            message.role == "user"
+                            for message in context.session_snapshot.active_messages
+                        )
                     if internal:
                         if not isinstance(request.content, str):
                             raise ChatError("internal runs require string content")
                         _append_reply_surface_note(
                             session,
                             request.reply_surface,
-                            messages=context.session_snapshot.messages,
+                            messages=context.session_snapshot.active_messages,
                         )
                         session.add_note(request.content)
                         persisted_messages = session.take_deferred_notes()
@@ -1666,17 +1728,44 @@ class ChatLoop:
                         _append_reply_surface_note(
                             session,
                             request.reply_surface,
-                            messages=context.session_snapshot.messages,
+                            messages=context.session_snapshot.active_messages,
                         )
                         user_message = ChatMessage.user(
                             _assign_session_image_references(
                                 request.content,
-                                context.session_snapshot.messages,
+                                context.session_snapshot.active_messages,
                             ),
                             sender=request.sender,
                         )
-                        persisted_messages = [*session.take_deferred_notes(), user_message]
+                        history_edit = (
+                            ChatMessage.history_edit(request.edit_message_id)
+                            if request.edit_message_id is not None
+                            else None
+                        )
+                        persisted_messages = [
+                            *([history_edit] if history_edit is not None else []),
+                            *session.take_deferred_notes(),
+                            user_message,
+                        ]
                     await session.append_many_async(persisted_messages)
+                    if request.edit_message_id is not None:
+                        context.session_snapshot.commit_edit()
+                        await session.clear_continuation_async()
+                        context.prompt_cache_affinity_id = await _CHAT_TRANSFORM_WORKERS.run(
+                            self._dependencies.sessions.rotate_prompt_cache_affinity_id,
+                            session_address,
+                        )
+                        if reset_auto_title:
+                            try:
+                                await _CHAT_TRANSFORM_WORKERS.run(
+                                    self._dependencies.sessions.reset_auto_title,
+                                    session_address,
+                                )
+                            except Exception:
+                                _LOGGER.warning(
+                                    "Failed to reset generated Session title after history edit",
+                                    exc_info=True,
+                                )
                     await context.session_snapshot.refresh(session)
                     if not internal:
                         _emit_message_event(run, USER_MESSAGE_EVENT, user_message)
@@ -1702,7 +1791,7 @@ class ChatLoop:
                         run_id=run.id,
                     )
                 if isinstance(request.content, str):
-                    session.activated_skill_contents(context.session_snapshot.messages)
+                    session.activated_skill_contents(context.session_snapshot.active_messages)
                     session.begin_defer_notes()
                     try:
                         await _CHAT_TRANSFORM_WORKERS.run(
@@ -1722,7 +1811,7 @@ class ChatLoop:
                 agent,
                 session,
                 inputs=RequestBuildInputs.from_context(context, target).with_session_messages(
-                    context.session_snapshot.messages
+                    context.session_snapshot.active_messages
                 ),
             )
             if context.continuation_reminder is not None:
@@ -1878,7 +1967,9 @@ class ChatLoop:
                 run.terminal_payload_extras["session_usage"] = aggregate_session_usage(
                     terminal_messages
                 )
-                terminal_context_usage = latest_session_context_usage(terminal_messages)
+                terminal_context_usage = latest_session_context_usage(
+                    context.session_snapshot.active_messages
+                )
                 if terminal_context_usage is not None:
                     run.terminal_payload_extras["context_usage"] = terminal_context_usage
             except Exception:
@@ -2012,7 +2103,7 @@ class ChatLoop:
                 session,
                 inputs=RequestBuildInputs.from_context(
                     context, candidate_target
-                ).with_session_messages(context.session_snapshot.messages),
+                ).with_session_messages(context.session_snapshot.active_messages),
             )
             if context.continuation_reminder is not None:
                 assert context.prior_continuation is not None
@@ -2193,7 +2284,7 @@ class ChatLoop:
         # ``working_project_context`` / ``soul_context`` / ``memory_files_context``
         # prompt-epoch snapshots behave the same way.
         session_messages = (
-            await session.load_async()
+            await session.load_active_async()
             if inputs.session_messages_override is None
             else list(inputs.session_messages_override)
         )
@@ -2469,7 +2560,7 @@ class ChatLoop:
                 len(messages_for_request),
             )
             self._raise_if_measured_context_exhausted(
-                context.session_snapshot.messages,
+                context.session_snapshot.active_messages,
                 messages_for_request,
                 [] if tool_finalization_reason is not None else tools,
                 agent,

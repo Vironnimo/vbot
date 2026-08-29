@@ -119,6 +119,56 @@ describe('ChatTimeline copy actions', () => {
     );
   });
 
+  it('edits a server-approved user message inline and restarts from it', async () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-user-edit',
+    );
+    sessionState.messages = [
+      {
+        id: 'user-edit',
+        role: 'user',
+        content: 'Original request',
+        editable: true,
+        timestamp: '2026-07-23T12:00:00Z',
+      },
+    ];
+    const onEditMessage = vi.fn().mockResolvedValue(true);
+
+    mountTimeline({ sessionState, onEditMessage });
+    document.querySelector('.message-edit').click();
+    await flushAsync();
+
+    const editor = document.querySelector('.message-edit-form textarea');
+    expect(editor.value).toBe('Original request');
+    editor.value = 'Edited request';
+    editor.dispatchEvent(new Event('input', { bubbles: true }));
+    document.querySelector('.message-edit-actions .btn-primary').click();
+    await flushAsync();
+
+    expect(onEditMessage).toHaveBeenCalledWith('user-edit', 'Edited request');
+  });
+
+  it('shows no edit action without server approval', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-user-not-editable',
+    );
+    sessionState.messages = [
+      {
+        id: 'user-not-editable',
+        role: 'user',
+        content: 'Channel-originated request',
+      },
+    ];
+
+    mountTimeline({ sessionState });
+
+    expect(document.querySelector('.message-edit')).toBeNull();
+  });
+
   function mountTimeline(props) {
     mountedComponent = mount(ChatTimeline, {
       target: document.body,

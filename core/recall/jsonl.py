@@ -159,7 +159,7 @@ class JsonlSessionRecallBackend:
         ranked: list[tuple[datetime, str, int, RecallSearchHit]] = []
         for summary in summaries:
             session_id = str(summary["id"])
-            messages = self.sessions.get(_session_address(request, session_id)).load()
+            messages = self.sessions.get(_session_address(request, session_id)).load_active()
             for message_index, message in enumerate(messages):
                 if not message_matches_search_request(message, request):
                     continue
@@ -267,7 +267,7 @@ class JsonlSessionRecallBackend:
         if summary is None or request.session_id is None:
             return empty_session_overview(request)
 
-        messages = self.sessions.get(_session_address(request, request.session_id)).load()
+        messages = self.sessions.get(_session_address(request, request.session_id)).load_active()
         eligible_indices = [
             index
             for index, message in enumerate(messages)
@@ -301,7 +301,7 @@ class JsonlSessionRecallBackend:
 
         for summary in summaries:
             session_id = str(summary["id"])
-            messages = self.sessions.get(_session_address(request, session_id)).load()
+            messages = self.sessions.get(_session_address(request, session_id)).load_active()
             searched_sessions += 1
             for message_index, message in enumerate(messages):
                 if not message_matches_request(message, request):
@@ -342,7 +342,7 @@ class JsonlSessionRecallBackend:
         if summary is None or request.session_id is None or request.around_message_id is None:
             return empty_anchored_view(request)
 
-        messages = self.sessions.get(_session_address(request, request.session_id)).load()
+        messages = self.sessions.get(_session_address(request, request.session_id)).load_active()
         anchor_index = message_index_by_id(messages, request.around_message_id)
         if anchor_index is None:
             return empty_anchored_view(request)

@@ -7,6 +7,7 @@ import {
   cancelRun as requestCancelRun,
   cancelToolCall as requestCancelToolCall,
   createSession as requestCreateSession,
+  editChatMessage as requestEditChatMessage,
   inspectSubAgentWork as requestInspectSubAgentWork,
   listAgents as requestListAgents,
   listChatCommands as requestListChatCommands,
@@ -120,6 +121,7 @@ function defaultChatOperations() {
     cancelRun: (...args) => requestCancelRun(...args),
     cancelToolCall: (...args) => requestCancelToolCall(...args),
     createSession: (...args) => requestCreateSession(...args),
+    editChatMessage: (...args) => requestEditChatMessage(...args),
     inspectSubAgentWork: (...args) => requestInspectSubAgentWork(...args),
     listAgents: (...args) => requestListAgents(...args),
     listChatCommands: (...args) => requestListChatCommands(...args),
@@ -953,6 +955,30 @@ export function createChatController({
     }
   }
 
+  async function editMessage(sessionState, messageId, content) {
+    if (!sessionState || !messageId) {
+      return { kind: 'ignored' };
+    }
+    sessionState.actionError = '';
+    try {
+      const run = await operations.editChatMessage({
+        agent_id: sessionState.agentId,
+        session_id: sessionState.sessionId,
+        message_id: messageId,
+        content,
+      });
+      truncateSessionForEdit(sessionState, messageId);
+      startRun(sessionState, run);
+      runStream.subscribeToRun(sessionState, run.sse_url, {
+        afterSequence: 0,
+      });
+      return { kind: 'started', runId: run.run_id ?? '' };
+    } catch (error) {
+      sessionState.actionError = `${translate('chat.editError', 'Message could not be edited.')} ${errorMessage(error)}`;
+      return { kind: 'failed' };
+    }
+  }
+
   async function cancelActiveRun(sessionState) {
     const runId = sessionState?.currentRun?.runId;
     if (!runId) {
@@ -1218,6 +1244,7 @@ export function createChatController({
     cancelTool,
     createSession: (agentAddress) => operations.createSession(agentAddress),
     destroy,
+    editMessage,
     handleServerEvents,
     listFiles: (agentAddress) => operations.listFiles(agentAddress),
     listSessions: (agentAddress) => operations.listSessions(agentAddress),
@@ -1642,6 +1669,23 @@ export function startRun(sessionState, run) {
   sessionState.seenStreamingEventKeys = new Set();
   appendRunEvents(sessionState, run.events ?? []);
   return sessionState.currentRun;
+}
+
+export function truncateSessionForEdit(sessionState, messageId) {
+  const targetIndex = (sessionState?.messages ?? []).findIndex(
+    (message) => message?.id === messageId,
+  );
+  if (targetIndex < 0) {
+    return false;
+  }
+  sessionState.messages = sessionState.messages.slice(0, targetIndex);
+  sessionState.runEvents = [];
+  sessionState.streamingRunEvents = [];
+  sessionState.streamingPhase = 0;
+  sessionState.seenStreamingEventKeys = new Set();
+  sessionState.usage = findLastUsage(sessionState.messages);
+  sessionState.contextUsage = null;
+  return true;
 }
 
 export function appendRunEvent(sessionState, event) {

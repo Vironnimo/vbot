@@ -1033,7 +1033,7 @@ class VectorRecallBackend(JsonlSessionRecallBackend):
             cached = indexed.get(session_id)
             if cached is not None and cached[0] == stat.st_mtime_ns and cached[1] == stat.st_size:
                 continue
-            stale_sessions.append((summary, stat.st_mtime_ns, stat.st_size, session.load()))
+            stale_sessions.append((summary, stat.st_mtime_ns, stat.st_size, session.load_active()))
 
         # A session that yields zero indexable chunks is not covered by
         # ``upsert_many_chunks``. Clear its old rows explicitly.
@@ -1080,7 +1080,7 @@ class VectorRecallBackend(JsonlSessionRecallBackend):
                 agent_id=request.agent_id,
                 session_id=record.session_id,
             )
-        ).load()
+        ).load_active()
         if not messages:
             return None
         anchor_index = self._resolve_request_anchor(messages, record, request)

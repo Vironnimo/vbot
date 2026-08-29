@@ -182,7 +182,7 @@ class SessionTitleService:
 
         session = sessions.get(address)
         user_message_count = 0
-        for message in session.load():
+        for message in session.load_active():
             if message.role == "user":
                 user_message_count += 1
                 if user_message_count > 1:

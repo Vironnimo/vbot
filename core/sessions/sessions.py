@@ -12,7 +12,7 @@ import re
 import threading
 import uuid
 from collections import deque
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -174,6 +174,68 @@ class SessionReadBatch:
 
     messages: tuple[ChatMessage, ...]
     cursor: SessionReadCursor
+
+
+def active_session_messages(messages: Sequence[ChatMessage]) -> list[ChatMessage]:
+    """Fold append-only history-edit records into the current Session lineage."""
+    active: list[ChatMessage] = []
+    for message in messages:
+        if message.role != "history_edit":
+            active.append(message)
+            continue
+        target_index = editable_session_message_index(active, message.target_message_id)
+        active = active[:target_index]
+    return active
+
+
+def editable_session_message_index(
+    messages: Sequence[ChatMessage],
+    message_id: str | None,
+) -> int:
+    """Return one editable active User-message index or raise a domain error."""
+    if not isinstance(message_id, str) or not message_id:
+        raise ChatSessionError("history edit target must be a non-empty message id")
+    target_index = next(
+        (index for index, message in enumerate(messages) if message.id == message_id),
+        None,
+    )
+    if target_index is None:
+        raise ChatSessionError(f"history edit target is not active: {message_id}")
+    target = messages[target_index]
+    if target.role != "user" or not isinstance(target.content, str) or target.sender is not None:
+        raise ChatSessionError("history edit target must be an own plain-text user message")
+    latest_takeover_index = next(
+        (
+            index
+            for index in range(len(messages) - 1, -1, -1)
+            if messages[index].role == "agent_takeover"
+        ),
+        -1,
+    )
+    if target_index <= latest_takeover_index:
+        raise ChatSessionError("history edit target cannot precede the latest agent takeover")
+    return target_index
+
+
+def editable_session_message_ids(messages: Sequence[ChatMessage]) -> frozenset[str]:
+    """Return the backend-approved edit targets in the current active lineage."""
+    active = active_session_messages(messages)
+    latest_takeover_index = next(
+        (
+            index
+            for index in range(len(active) - 1, -1, -1)
+            if active[index].role == "agent_takeover"
+        ),
+        -1,
+    )
+    return frozenset(
+        message.id
+        for index, message in enumerate(active)
+        if index > latest_takeover_index
+        and message.role == "user"
+        and isinstance(message.content, str)
+        and message.sender is None
+    )
 
 
 class ChatSession:
@@ -503,6 +565,14 @@ class ChatSession:
         if batch is None:  # A full read has no prefix cursor that can become stale.
             raise ChatSessionError(f"failed to read session: {self.path}")
         return list(batch.messages)
+
+    def load_active(self) -> list[ChatMessage]:
+        """Load the current logical lineage while retaining raw JSONL on disk."""
+        return active_session_messages(self.load())
+
+    async def load_active_async(self) -> list[ChatMessage]:
+        """Load the current logical lineage without blocking the Event Loop."""
+        return active_session_messages(await self.load_async())
 
     def load_since(self, cursor: SessionReadCursor | None = None) -> SessionReadBatch | None:
         """Load and validate only messages appended after *cursor*.
@@ -1170,6 +1240,18 @@ class ChatSessionManager:
         if previous_title != normalized_title:
             self._notify_title_changed(address)
         return normalized_title
+
+    def reset_auto_title(self, address: SessionAddress) -> None:
+        """Clear generated-title state while preserving a user-set manual title."""
+        metadata = self.get_metadata(address)
+        changed = False
+        for key in (SESSION_AUTO_TITLE_KEY, SESSION_AUTO_TITLE_INITIALIZED_KEY):
+            if key in metadata:
+                metadata.pop(key)
+                changed = True
+        if changed:
+            self.set_metadata(address, metadata)
+            self._notify_title_changed(address)
 
     def mark_auto_title_initialized(self, address: SessionAddress) -> None:
         """Record that an existing Session must not be backfilled later."""

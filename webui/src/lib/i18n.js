@@ -289,6 +289,12 @@ export const englishCatalog = Object.freeze({
   'chat.cancelSubAgentAria': 'Cancel running sub-agent',
   'chat.historyLoadError': 'Chat history could not be loaded.',
   'chat.sendError': 'Message could not be sent.',
+  'chat.editError': 'Message could not be edited.',
+  'chat.editMessage': 'Edit message',
+  'chat.editMessageInput': 'Edit message text',
+  'chat.saveAndRestart': 'Save & restart',
+  'chat.editRestartHint':
+    'Later messages will be removed from the active conversation.',
   'chat.skillsLoadError': 'Skill suggestions could not be loaded.',
   'chat.cancelError': 'Run could not be cancelled.',
   'chat.sessionCreateError': 'New session could not be created.',

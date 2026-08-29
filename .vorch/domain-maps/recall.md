@@ -47,7 +47,7 @@ Runs Passage FTS and Vector concurrently, fusing ranks via Reciprocal Rank Fusio
 
 ## Lifecycle & Removal
 
-Canonical Messages always come from `ChatSessionManager`; Recall modules construct no Session paths. FTS/vector files are derived and disposable under `<data_dir>/recall/` - rebuild on change, never migrate. Deleted Sessions evict immediately from fts/vector/hybrid (`jsonl_scan` needs nothing - the live scan reflects deletion).
+Canonical Messages always come from `ChatSessionManager`; Recall modules construct no Session paths and index/read only the folded active lineage, so suffixes superseded by `history_edit` controls cannot be rediscovered. FTS/vector files are derived and disposable under `<data_dir>/recall/` - rebuild on change, never migrate. Deleted Sessions evict immediately from fts/vector/hybrid (`jsonl_scan` needs nothing - the live scan reflects deletion).
 
 ## Constraints & Gotchas
 
