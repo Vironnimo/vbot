@@ -65,8 +65,18 @@ _PRE_SPEECH_FRAME_COUNT = int(_PRE_SPEECH_DURATION_SECONDS / (_VAD_FRAME_DURATIO
 _DETECTION_PRE_ROLL_SECONDS = 0.32
 _DETECTION_PRE_ROLL_CHUNKS = int(_DETECTION_PRE_ROLL_SECONDS / (_FRAME_SIZE_SAMPLES / _SAMPLE_RATE))
 
-_MAX_RECORDING_SECONDS = 15.0
-_MAX_RECORDING_FRAMES = int(_MAX_RECORDING_SECONDS / (_VAD_FRAME_DURATION_MS / 1000))
+# Speech endpointing closes the recording itself; there is no fixed duration
+# cap. The only recording stop besides silence and worker shutdown is the
+# upload budget — the active ceiling the server enforces on every speech
+# upload — so a user may speak as long as the server would still accept the
+# audio. The budget is resolved once per worker (lazily, before the first
+# recording) via settings.get_path and falls back to the mirrored default
+# limit when the read fails, keeping a soft anti-runaway guard.
+_SPEECH_UPLOAD_LIMIT_SAFETY_MARGIN_FRACTION = 0.9  # headroom for container overhead
+_UPLOAD_BUDGET_FALLBACK_BYTES = 104_857_600  # mirrors DEFAULT_SPEECH_UPLOAD_MAX_SIZE_BYTES
+_UPLOAD_BUDGET_SETTING_PATH = "speech.upload_max_size_bytes"
+# The wave container adds a canonical 44-byte header before the PCM data.
+_WAV_HEADER_BYTES = 44
 _MAX_CONSECUTIVE_MIC_READ_ERRORS = 3
 _MICROPHONE_RECONNECT_INTERVAL_SECONDS = 30.0
 _POST_DETECTION_LISTENING_HOLD_SECONDS = 1.0
@@ -400,6 +410,34 @@ class WakewordWorker:
         self._running = threading.Event()
         self._state_publish_lock = threading.Lock()
         self._stream: Any = None
+        self._upload_budget_pcm16_bytes: int | None = None
+
+    def _resolve_upload_budget_bytes(self) -> int:
+        """Resolve the speech upload ceiling as a PCM16 payload budget.
+
+        Asks the server for its active `speech.upload_max_size_bytes` once per
+        worker and keeps a conservative fraction as WAV payload budget so the
+        recording never exceeds what /api/speech/transcribe would accept. A
+        failed read falls back to the mirrored default limit, never to "no
+        budget".
+        """
+        if self._upload_budget_pcm16_bytes is None:
+            self._upload_budget_pcm16_bytes = max(
+                _WAV_HEADER_BYTES + 2,  # always room for at least one sample
+                self._fetch_speech_upload_limit_bytes(),
+            )
+        return self._upload_budget_pcm16_bytes
+
+    def _fetch_speech_upload_limit_bytes(self) -> int:
+        """Query the server's active speech upload limit in payload bytes."""
+        result = self._rpc_call("settings.get_path", {"path": _UPLOAD_BUDGET_SETTING_PATH})
+        raw_value = result.get("setting", {}).get("value")
+        if isinstance(raw_value, (int, float)) and raw_value > _WAV_HEADER_BYTES:
+            payload = int(raw_value - _WAV_HEADER_BYTES)
+            budget = int(payload * _SPEECH_UPLOAD_LIMIT_SAFETY_MARGIN_FRACTION)
+            return max(budget, _WAV_HEADER_BYTES + 2)
+            logger.warning("Speech upload limit unavailable from server; using default budget")
+        return int(_UPLOAD_BUDGET_FALLBACK_BYTES * _SPEECH_UPLOAD_LIMIT_SAFETY_MARGIN_FRACTION)
 
     def _get_speech_detector(self) -> SpeechDetector | None:
         """Resolve the neural speech detector once, caching the fail-open result."""
@@ -801,6 +839,8 @@ class WakewordWorker:
         silent_frames = 0
         has_speech = False
         waited_frames = 0
+        upload_budget_bytes = self._resolve_upload_budget_bytes()
+        recorded_bytes = 0
 
         while self._running.is_set():
             try:
@@ -810,6 +850,13 @@ class WakewordWorker:
                 break
 
             is_speech = _frame_is_speech(frame, detector, fallback_vad)
+            frame_bytes = len(frame.recording_pcm16)
+
+            if has_speech and recorded_bytes + frame_bytes >= upload_budget_bytes:
+                logger.warning(
+                    "Wakeword recording reached the speech upload size budget; stopping capture"
+                )
+                break
 
             if is_speech:
                 if not has_speech:
@@ -824,9 +871,9 @@ class WakewordWorker:
                 pre_speech_frames.append(frame)
                 waited_frames += 1
 
+            recorded_bytes += frame_bytes
+
             if has_speech and silent_frames >= _SILENCE_FRAME_COUNT:
-                break
-            if len(frames) >= _MAX_RECORDING_FRAMES:
                 break
             if not has_speech and waited_frames >= _SPEECH_START_FRAME_COUNT:
                 break

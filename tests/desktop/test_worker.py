@@ -474,6 +474,120 @@ def test_pre_roll_alone_does_not_become_a_command(
     assert worker._record_until_silence(wake_phrase_audio) is None
 
 
+def test_recording_exceeds_15_seconds_when_speech_continues(
+    fake_bridge: FakeBridge,
+) -> None:
+    """Continuous speech must not be truncated by any fixed duration cap.
+
+    Regression for the retired 15-second hard limit: a user who keeps talking
+    is recorded until the utterance really ends; only the speech upload size
+    budget (or silence) ends the capture.
+    """
+    from desktop.wakeword.worker import (
+        _SILENCE_FRAME_COUNT,
+        _VAD_FRAME_DURATION_MS,
+        WakewordWorker,
+    )
+
+    class AlwaysSpeechDetector:
+        def reset(self) -> None:
+            pass
+
+        def is_speech(self, _frame: bytes) -> bool:
+            return True
+
+    frames_for_20_seconds = int(20.0 / (_VAD_FRAME_DURATION_MS / 1000))
+    speech_chunk = _make_speech_chunk()
+    worker = WakewordWorker(
+        engine=MockWakewordEngine(),
+        bridge=fake_bridge,
+        server_url="http://127.0.0.1:8420",
+        speech_detector=AlwaysSpeechDetector(),
+    )
+    worker._stream = FakeSounddeviceStream([speech_chunk] * frames_for_20_seconds)
+    worker._running.set()
+
+    wav_bytes = worker._record_until_silence()
+
+    assert wav_bytes is not None
+    with wave.open(io.BytesIO(wav_bytes), "rb") as wav_file:
+        duration_seconds = wav_file.getnframes() / wav_file.getframerate()
+    assert duration_seconds >= 20.0 - _SILENCE_FRAME_COUNT * (_VAD_FRAME_DURATION_MS / 1000)
+
+
+def test_recording_stops_at_upload_budget_when_speech_never_ends(
+    fake_bridge: FakeBridge,
+) -> None:
+    """An endless "speech" classification ends at the upload budget, not never.
+
+    The budget is the conservative payload slice of the active server speech
+    upload limit, measured in native-rate PCM bytes; the recording may never
+    produce a payload the server would reject as oversize.
+    """
+    from desktop.wakeword.worker import (
+        _SPEECH_UPLOAD_LIMIT_SAFETY_MARGIN_FRACTION,
+        _UPLOAD_BUDGET_FALLBACK_BYTES,
+        _WAV_HEADER_BYTES,
+        WakewordWorker,
+    )
+
+    class AlwaysSpeechDetector:
+        def reset(self) -> None:
+            pass
+
+        def is_speech(self, _frame: bytes) -> bool:
+            return True
+
+    worker = WakewordWorker(
+        engine=MockWakewordEngine(),
+        bridge=fake_bridge,
+        server_url="http://127.0.0.1:8420",
+        speech_detector=AlwaysSpeechDetector(),
+    )
+    worker._rpc_call = lambda _method, _params: {  # type: ignore[assignment]
+        "setting": {"value": _UPLOAD_BUDGET_FALLBACK_BYTES}
+    }
+    worker._stream = EndlessSpeechStream()
+    worker._running.set()
+
+    wav_bytes = worker._record_until_silence()
+
+    assert wav_bytes is not None
+    with wave.open(io.BytesIO(wav_bytes), "rb") as wav_file:
+        payload_bytes = wav_file.getnframes() * wav_file.getsampwidth()
+    assert payload_bytes <= int(
+        (_UPLOAD_BUDGET_FALLBACK_BYTES - _WAV_HEADER_BYTES)
+        * _SPEECH_UPLOAD_LIMIT_SAFETY_MARGIN_FRACTION
+    )
+
+
+def test_upload_budget_asks_the_server_for_its_active_limit(
+    fake_bridge: FakeBridge,
+) -> None:
+    """The recording budget derives from the server's configured upload limit."""
+    from desktop.wakeword.worker import (
+        _SPEECH_UPLOAD_LIMIT_SAFETY_MARGIN_FRACTION,
+        _WAV_HEADER_BYTES,
+        WakewordWorker,
+    )
+
+    server_limit = 10 * 1024 * 1024
+    worker = WakewordWorker(
+        engine=MockWakewordEngine(),
+        bridge=fake_bridge,
+        server_url="http://127.0.0.1:8420",
+    )
+    worker._rpc_call = lambda _method, _params: {  # type: ignore[assignment]
+        "setting": {"value": server_limit}
+    }
+
+    budget = worker._resolve_upload_budget_bytes()
+
+    assert budget == int(
+        (server_limit - _WAV_HEADER_BYTES) * _SPEECH_UPLOAD_LIMIT_SAFETY_MARGIN_FRACTION
+    )
+
+
 def test_recording_ends_during_continuous_noise_not_at_max_duration(
     fake_bridge: FakeBridge,
 ) -> None:
@@ -531,6 +645,13 @@ class EndlessNoiseStream:
 
     def read_pcm16(self, _frame_size: int) -> bytes:
         return self._noise_chunk
+
+
+class EndlessSpeechStream:
+    """Yields endless 32 ms loud chunks: the detector face-classifies as speech."""
+
+    def read_pcm16(self, _frame_size: int) -> bytes:
+        return _make_speech_chunk()
 
 
 def test_single_noise_blip_does_not_reset_silence_timer(
