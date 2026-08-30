@@ -408,6 +408,7 @@ class WakewordWorker:
         self._speech_detector: SpeechDetector | None | object = _NO_SPEECH_DETECTOR_YET
         self._thread: threading.Thread | None = None
         self._running = threading.Event()
+        self._stop_recording = threading.Event()
         self._state_publish_lock = threading.Lock()
         self._stream: Any = None
         self._upload_budget_pcm16_bytes: int | None = None
@@ -697,6 +698,7 @@ class WakewordWorker:
             self._fail("missing_target_agent")
             return None
 
+        self._stop_recording.clear()
         if not self._publish_state_if_running("recording"):
             return None
         audio_data = self._record_until_silence(pre_roll_audio)
@@ -783,6 +785,16 @@ class WakewordWorker:
             self._running.clear()
             self._bridge.publish_state("error", error_code)
 
+    def stop_recording(self) -> None:
+        """End the active recording now, keeping the audio captured so far.
+
+        The recording loop checks this event each frame and closes the capture
+        early; the captured audio then flows through the normal transcription
+        and send pipeline. The event is cleared before every recording starts,
+        so a stop request never leaks into a later utterance.
+        """
+        self._stop_recording.set()
+
     def _recover_microphone(self, reason_code: str) -> bool:
         """Wait for a disconnected runtime microphone and reopen it when available."""
         logger.warning("Wakeword microphone disconnected (reason=%s)", reason_code)
@@ -843,6 +855,9 @@ class WakewordWorker:
         recorded_bytes = 0
 
         while self._running.is_set():
+            if self._stop_recording.is_set():
+                logger.info("Wakeword recording stopped by user")
+                break
             try:
                 frame = _read_capture_frame(self._stream, _VAD_FRAME_SIZE)
             except Exception:
@@ -1411,6 +1426,9 @@ class MockWakewordWorker:
         if self._thread is not None:
             self._thread.join(timeout=1.0)
             self._thread = None
+
+    def stop_recording(self) -> None:
+        """No-op: the mock has no real capture to end (keeps the bridge contract)."""
 
     def is_running(self) -> bool:
         """True while the mock loop thread is alive."""

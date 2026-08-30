@@ -36,6 +36,7 @@ class FakeWorker:
     def __init__(self) -> None:
         self.started = False
         self.stopped = False
+        self.stop_recording_calls = 0
 
     def start(self) -> None:
         self.started = True
@@ -43,6 +44,9 @@ class FakeWorker:
     def stop(self) -> None:
         self.stopped = True
         self.started = False
+
+    def stop_recording(self) -> None:
+        self.stop_recording_calls += 1
 
     def is_running(self) -> bool:
         return self.started
@@ -901,6 +905,32 @@ def test_retry_refreshes_microphones_before_rebuilding_real_worker(
     assert previous_worker.stopped is True
     assert lifecycle == ["refresh", "factory"]
     assert replacement_worker.started is True
+
+
+def test_stop_wakeword_recording_delegates_to_worker_while_recording(
+    tmp_path: Path,
+) -> None:
+    settings_file = tmp_path / "settings.json"
+    _write_settings(settings_file)
+    worker = FakeWorker()
+    bridge = DesktopBridge(settings_path=settings_file, worker=worker)
+    bridge.publish_state("recording")
+
+    bridge.stopWakewordRecording()
+
+    assert worker.stop_recording_calls == 1
+
+
+def test_stop_wakeword_recording_is_noop_outside_recording(tmp_path: Path) -> None:
+    settings_file = tmp_path / "settings.json"
+    _write_settings(settings_file)
+    worker = FakeWorker()
+    bridge = DesktopBridge(settings_path=settings_file, worker=worker)
+    bridge.publish_state("listening")
+
+    bridge.stopWakewordRecording()
+
+    assert worker.stop_recording_calls == 0
 
 
 def test_voice_target_profile_is_isolated_per_server(tmp_path: Path) -> None:
