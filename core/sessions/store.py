@@ -36,6 +36,11 @@ from core.sessions.format import (
 from core.sessions.schema import (
     APPLICATION_ID,
     DATABASE_ID_META_KEY,
+    FTS_SQL,
+    FTS_SQL_FALLBACK,
+    FTS_STALE_KEY,
+    FTS_STORAGE_VERSION,
+    FTS_STORAGE_VERSION_KEY,
     JOURNAL_MODE_DELETE,
     JOURNAL_MODE_WAL,
     MINIMUM_SQLITE_VERSION,
@@ -61,6 +66,101 @@ _LOGGER = logging.getLogger("vbot.sessions")
 
 JsonObject = dict[str, Any]
 READ_CONNECTION_LIMIT = 8
+
+
+def _ensure_fts_schema(connection: sqlite3.Connection) -> None:
+    """Best-effort creation of the external-content FTS index.
+
+    Trigram may be unavailable in some SQLite builds; fallback to plain FTS5.
+    If both fail, mark the FTS stale so canonical scan remains correct and
+    canonical writes are never blocked by derived-index health.
+    """
+    try:
+        exists = connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='messages_fts'"
+        ).fetchone()
+        if exists is not None:
+            # Ensure storage version is recorded.
+            row = connection.execute(
+                "SELECT value FROM store_meta WHERE key=?", (FTS_STORAGE_VERSION_KEY,)
+            ).fetchone()
+            if row is None or str(row[0]) != str(FTS_STORAGE_VERSION):
+                with suppress(sqlite3.Error):
+                    connection.execute(
+                        "INSERT OR REPLACE INTO store_meta (key, value) VALUES (?, ?)",
+                        (FTS_STORAGE_VERSION_KEY, str(FTS_STORAGE_VERSION)),
+                    )
+            return
+        # Try trigram first, then plain FTS5.
+        try:
+            connection.executescript(FTS_SQL)
+            with suppress(sqlite3.Error):
+                connection.execute(
+                    "INSERT OR REPLACE INTO store_meta (key, value) VALUES (?, ?)",
+                    (FTS_STORAGE_VERSION_KEY, str(FTS_STORAGE_VERSION)),
+                )
+                connection.execute("DELETE FROM store_meta WHERE key=?", (FTS_STALE_KEY,))
+                # Backfill existing messages into message_search if needed.
+                _backfill_message_search(connection)
+        except sqlite3.Error:
+            try:
+                connection.executescript(FTS_SQL_FALLBACK)
+                with suppress(sqlite3.Error):
+                    connection.execute(
+                        "INSERT OR REPLACE INTO store_meta (key, value) VALUES (?, ?)",
+                        (FTS_STORAGE_VERSION_KEY, str(FTS_STORAGE_VERSION)),
+                    )
+                    connection.execute("DELETE FROM store_meta WHERE key=?", (FTS_STALE_KEY,))
+                    _backfill_message_search(connection)
+            except sqlite3.Error as exc:
+                with suppress(Exception):
+                    connection.execute(
+                        "INSERT OR REPLACE INTO store_meta (key, value) VALUES (?, ?)",
+                        (FTS_STALE_KEY, "1"),
+                    )
+                _LOGGER.warning("Session FTS unavailable, using canonical scan: %s", exc)
+    except Exception as exc:  # pragma: no cover - diagnostic only
+        _LOGGER.debug("FTS ensure failed: %s", exc)
+
+
+def _backfill_message_search(connection: sqlite3.Connection) -> None:
+    """Populate message_search from existing messages when FTS is newly created."""
+    try:
+        count = int(connection.execute("SELECT COUNT(*) FROM messages").fetchone()[0])
+        if count == 0:
+            return
+        search_count = int(connection.execute("SELECT COUNT(*) FROM message_search").fetchone()[0])
+        if search_count != 0:
+            return
+        # Insert all existing messages; triggers will populate FTS.
+        connection.execute(
+            "INSERT INTO message_search(session_key, seq, search_text) SELECT session_key, seq, message_json FROM messages"
+        )
+    except sqlite3.Error as exc:
+        _LOGGER.warning("FTS backfill failed: %s", exc)
+
+
+def _detach_fts(connection: sqlite3.Connection) -> None:
+    """Atomically detach the derived FTS index after corruption.
+
+    Removes sync triggers and the virtual table, sets the stale breadcrumb,
+    and leaves canonical tables untouched. A later open will rebuild.
+    """
+    try:
+        with suppress(sqlite3.Error):
+            connection.execute(
+                "INSERT OR REPLACE INTO store_meta (key, value) VALUES (?, ?)", (FTS_STALE_KEY, "1")
+            )
+        for trigger in ("messages_fts_insert", "messages_fts_delete", "messages_fts_update"):
+            with suppress(sqlite3.Error):
+                connection.execute(f"DROP TRIGGER IF EXISTS {trigger}")
+        with suppress(sqlite3.Error):
+            connection.execute("DROP TABLE IF EXISTS messages_fts")
+        _LOGGER.warning("Session FTS detached after corruption; canonical writes continue")
+    except Exception as exc:  # pragma: no cover
+        _LOGGER.debug("FTS detach failed: %s", exc)
+
+
 # Application-level patience is budgeted in seconds; SQLite's own busy handler is
 # kept short so contention surfaces for jittered retry.
 BUSY_TIMEOUT_MS = 1_000
@@ -377,6 +477,7 @@ class SessionStore:
                     + DATABASE_ID_META_KEY
                     + f"', '{database_id}');\nCOMMIT;"
                 )
+                _ensure_fts_schema(connection)
                 cls._verify_connection(connection, path)
             else:
                 cls._verify_schema_guard(connection, path)
@@ -387,6 +488,7 @@ class SessionStore:
                     _LOGGER.info(
                         "Reconciled Session database schema at %s: %s", path, "; ".join(applied)
                     )
+                _ensure_fts_schema(connection)
             return connection
         except sqlite3.DatabaseError as exc:
             with suppress(UnboundLocalError):
@@ -447,6 +549,7 @@ class SessionStore:
                     + DATABASE_ID_META_KEY
                     + f"', '{fresh_id}');\nCOMMIT;"
                 )
+                _ensure_fts_schema(connection)
                 cls._verify_connection(connection, path)
             else:
                 cls._verify_schema_guard(connection, path)
@@ -474,6 +577,7 @@ class SessionStore:
                     _LOGGER.info(
                         "Reconciled Session database schema at %s: %s", path, "; ".join(applied)
                     )
+                _ensure_fts_schema(connection)
             return connection
         except sqlite3.DatabaseError as exc:
             with suppress(UnboundLocalError):
@@ -621,6 +725,10 @@ class SessionStore:
                 return True
             return bool(isinstance(exc, sqlite3.DatabaseError) and "no more rows available" in msg)
 
+        def _is_fts_error(exc: BaseException) -> bool:
+            msg = str(exc).lower()
+            return "fts" in msg or "messages_fts" in msg or "message_search" in msg
+
         def _sleep_before_retry() -> bool:
             now = time.monotonic()
             if now >= deadline:
@@ -630,6 +738,7 @@ class SessionStore:
             time.sleep(min(jitter, max(deadline - now, 0.001)))
             return True
 
+        fts_detached_this_attempt = False
         while True:
             # Acquire writer lock only for the attempt itself.
             acquired = False
@@ -657,6 +766,20 @@ class SessionStore:
                         raise SessionStoreUnavailableError(
                             f"Session database write busy for {patience_s:.0f}s: {self.path}"
                         ) from exc
+                    if (
+                        isinstance(exc, sqlite3.Error)
+                        and _is_fts_error(exc)
+                        and not fts_detached_this_attempt
+                    ):
+                        # Derived FTS corruption must never block canonical writes.
+                        with suppress(Exception):
+                            _detach_fts(self._writer)
+                        fts_detached_this_attempt = True
+                        # Release lock before retry without FTS.
+                        if acquired:
+                            self._writer_lock.release()
+                            acquired = False
+                        continue
                     if isinstance(exc, sqlite3.Error):
                         raise SessionStoreUnavailableError(
                             f"Session database write failed: {self.path}"
