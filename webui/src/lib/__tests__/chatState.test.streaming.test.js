@@ -666,6 +666,107 @@ describe('chat state helpers', () => {
     ]);
   });
 
+  it('compresses interleaved tool stdout/stderr chunks into one retained event per stream', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-compressed-tool-output',
+    );
+
+    appendRunEvent(sessionState, {
+      type: 'tool_call_stdout',
+      run_id: 'run-one',
+      sequence: 1,
+      payload: { tool_call_id: 'call-one', data: 'hel' },
+    });
+    appendRunEvent(sessionState, {
+      type: 'tool_call_stderr',
+      run_id: 'run-one',
+      sequence: 2,
+      payload: { tool_call_id: 'call-one', data: 'warn' },
+    });
+    appendRunEvent(sessionState, {
+      type: 'tool_call_stdout',
+      run_id: 'run-one',
+      sequence: 3,
+      payload: { tool_call_id: 'call-one', data: 'lo\n' },
+    });
+    appendRunEvent(sessionState, {
+      type: 'tool_call_stdout',
+      run_id: 'run-one',
+      sequence: 4,
+      payload: { tool_call_id: 'call-two', data: 'other\n' },
+    });
+
+    expect(sessionState.streamingRunEvents).toEqual([
+      expect.objectContaining({
+        type: 'tool_call_stdout',
+        sequence: 1,
+        payload: expect.objectContaining({
+          tool_call_id: 'call-one',
+          data: 'hello\n',
+        }),
+        _streamChunkCount: 2,
+        _streamLatestSequence: 3,
+      }),
+      expect.objectContaining({
+        type: 'tool_call_stderr',
+        sequence: 2,
+        payload: expect.objectContaining({
+          tool_call_id: 'call-one',
+          data: 'warn',
+        }),
+        _streamChunkCount: 1,
+        _streamLatestSequence: 2,
+      }),
+      expect.objectContaining({
+        type: 'tool_call_stdout',
+        sequence: 4,
+        payload: expect.objectContaining({
+          tool_call_id: 'call-two',
+          data: 'other\n',
+        }),
+        _streamChunkCount: 1,
+        _streamLatestSequence: 4,
+      }),
+    ]);
+
+    const [assistantRun] = visibleTimelineItemsForRender(sessionState);
+    expect(assistantRun.tools).toEqual([
+      expect.objectContaining({
+        toolCallId: 'call-one',
+        stdout: 'hello\n',
+        stderr: 'warn',
+      }),
+      expect.objectContaining({ toolCallId: 'call-two', stdout: 'other\n' }),
+    ]);
+  });
+
+  it('ignores duplicate tool stdout event sequences on replay', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-compressed-tool-output-replay',
+    );
+    const chunkEvent = {
+      type: 'tool_call_stdout',
+      run_id: 'run-one',
+      sequence: 1,
+      payload: { tool_call_id: 'call-one', data: 'hello\n' },
+    };
+
+    appendRunEvent(sessionState, chunkEvent);
+    appendRunEvent(sessionState, chunkEvent);
+
+    expect(sessionState.streamingRunEvents).toEqual([
+      expect.objectContaining({
+        type: 'tool_call_stdout',
+        payload: expect.objectContaining({ data: 'hello\n' }),
+        _streamChunkCount: 1,
+      }),
+    ]);
+  });
+
   it('suppresses render selector tool-call wrappers once assistant-run rows include the same call', () => {
     const sessionState = ensureSessionState(
       createChatState(),
@@ -1326,6 +1427,56 @@ describe('chat state helpers', () => {
     ]);
   });
 
+  it('keeps streamed tool output visible after the run completes until history confirms', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-one',
+    );
+    startRun(sessionState, {
+      run_id: 'run-one',
+      sse_url: '/api/runs/run-one/events',
+      status: CHAT_STATUS_RUNNING,
+    });
+    appendRunEvent(sessionState, {
+      type: 'tool_call_started',
+      run_id: 'run-one',
+      sequence: 1,
+      payload: {
+        tool_call: {
+          id: 'call-one',
+          index: 0,
+          name: 'bash',
+          arguments: { command: 'printf hello' },
+        },
+      },
+    });
+    appendRunEvent(sessionState, {
+      type: 'tool_call_stdout',
+      run_id: 'run-one',
+      sequence: 2,
+      payload: { tool_call_id: 'call-one', data: 'hello\n' },
+    });
+    appendRunEvent(sessionState, {
+      type: 'run_completed',
+      run_id: 'run-one',
+      sequence: 3,
+      payload: { status: CHAT_STATUS_COMPLETED },
+    });
+
+    expect(sessionState.streamingRunEvents).toEqual([
+      expect.objectContaining({
+        type: 'tool_call_stdout',
+        payload: expect.objectContaining({ data: 'hello\n' }),
+      }),
+    ]);
+    const [assistantRun] = visibleTimelineItemsForRender(sessionState);
+    expect(assistantRun.status).toBe(CHAT_STATUS_COMPLETED);
+    expect(assistantRun.tools[0]).toEqual(
+      expect.objectContaining({ toolCallId: 'call-one', stdout: 'hello\n' }),
+    );
+  });
+
   it('tracks the highest contiguous active-run sequence for replay handoff', () => {
     const sessionState = ensureSessionState(
       createChatState(),
@@ -1381,6 +1532,49 @@ describe('chat state helpers', () => {
     });
 
     expect(highestContiguousRunEventSequence(sessionState)).toBe(5);
+  });
+
+  it('advances the replay cursor across interleaved tool output streams', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-one',
+    );
+    startRun(sessionState, {
+      run_id: 'run-one',
+      sse_url: '/api/runs/run-one/events',
+      status: CHAT_STATUS_RUNNING,
+      events: [
+        {
+          type: 'run_started',
+          run_id: 'run-one',
+          sequence: 1,
+          payload: { status: CHAT_STATUS_RUNNING },
+        },
+      ],
+    });
+    appendRunEvent(sessionState, {
+      type: 'tool_call_stdout',
+      run_id: 'run-one',
+      sequence: 2,
+      payload: { tool_call_id: 'call-one', data: 'a' },
+    });
+    appendRunEvent(sessionState, {
+      type: 'tool_call_stderr',
+      run_id: 'run-one',
+      sequence: 3,
+      payload: { tool_call_id: 'call-one', data: 'b' },
+    });
+    appendRunEvent(sessionState, {
+      type: 'tool_call_stdout',
+      run_id: 'run-one',
+      sequence: 4,
+      payload: { tool_call_id: 'call-one', data: 'c' },
+    });
+
+    // The compressed stdout event spans sequences 2 and 4, so only the raw
+    // per-chunk keys keep the cursor contiguous across the interleaved stream.
+    expect(highestContiguousRunEventSequence(sessionState)).toBe(4);
   });
 
   it('ignores older run sequences when choosing the active-run replay handoff', () => {
