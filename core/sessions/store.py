@@ -7,9 +7,11 @@ import json
 import logging
 import os
 import queue
+import random
 import sqlite3
 import tempfile
 import threading
+import time
 import uuid
 from collections.abc import Callable, Sequence
 from contextlib import closing, contextmanager, suppress
@@ -41,7 +43,14 @@ from core.sessions.schema import (
     SCHEMA_SQL,
     SCHEMA_VERSION,
     reconcile_schema,
-    required_journal_mode,
+)
+from core.sessions.sqlite_runtime import (
+    ACTIVITY_WRITE_PATIENCE_S,
+    TRANSCRIPT_WRITE_PATIENCE_S,
+    WRITE_PATIENCE_S,
+    _on_disk_journal_mode,
+    apply_wal_with_fallback,
+    connect_tracked,
 )
 
 if TYPE_CHECKING:
@@ -52,7 +61,9 @@ _LOGGER = logging.getLogger("vbot.sessions")
 
 JsonObject = dict[str, Any]
 READ_CONNECTION_LIMIT = 8
-BUSY_TIMEOUT_MS = 5_000
+# Application-level patience is budgeted in seconds; SQLite's own busy handler is
+# kept short so contention surfaces for jittered retry.
+BUSY_TIMEOUT_MS = 1_000
 
 
 class SessionStore:
@@ -63,6 +74,12 @@ class SessionStore:
         self._lifetime_lock = threading.RLock()
         self._writer_lock = threading.RLock()
         self._closed = False
+        self._write_count = 0
+        self._read_conns_lock = threading.Lock()
+        self._read_conns_closed = False
+        self._read_open_failed_at = 0.0
+        self._read_permits = threading.BoundedSemaphore(READ_CONNECTION_LIMIT)
+        self._read_permit_exhausted = 0
         # Offline paths bypass the current-format marker state machine. Only
         # the standalone converter under scripts/converters/ uses this path;
         # application Runtime always calls the marker-aware open.
@@ -70,17 +87,35 @@ class SessionStore:
             self._writer = self._open_offline(path)
         else:
             self._writer = self._open(path)
+        # Determine WAL vs DELETE for the reader pool policy.
+        try:
+            mode = str(self._writer.execute("PRAGMA journal_mode").fetchone()[0]).lower()
+        except sqlite3.Error:
+            mode = JOURNAL_MODE_DELETE
+        self._wal_active = mode == JOURNAL_MODE_WAL
         self._readers: queue.LifoQueue[sqlite3.Connection] = queue.LifoQueue(
             maxsize=READ_CONNECTION_LIMIT
         )
-        try:
-            for _ in range(READ_CONNECTION_LIMIT):
-                self._readers.put_nowait(self._open_reader(path))
-        except Exception:
-            self._writer.close()
-            while not self._readers.empty():
-                self._readers.get_nowait().close()
-            raise
+        # Pre-warm is lazy: do not open readers eagerly if we are in DELETE
+        # mode (readers would just contend). For WAL, opportunistically open
+        # a couple of pooled connections; failures degrade gracefully.
+        if self._wal_active:
+            for _ in range(min(2, READ_CONNECTION_LIMIT)):
+                try:
+                    conn = self._open_reader(path)
+                except Exception:
+                    break
+                # Acquire a permit for each pooled connection's lifetime.
+                if not self._read_permits.acquire(blocking=False):
+                    conn.close()
+                    break
+                try:
+                    self._readers.put_nowait(conn)
+                except queue.Full:
+                    conn.close()
+                    self._read_permits.release()
+                    break
+        # If eager open failed, remaining readers will be opened lazily on demand.
 
     @classmethod
     def _open(cls, path: Path) -> sqlite3.Connection:
@@ -302,23 +337,19 @@ class SessionStore:
         path.parent.mkdir(parents=True, exist_ok=True)
         existed = path.exists()
         try:
-            connection = sqlite3.connect(path, isolation_level=None, check_same_thread=False)
+            # Tracked open so raw file reads elsewhere cannot cancel POSIX locks.
+            connection = connect_tracked(path, isolation_level=None, check_same_thread=False)
             connection.row_factory = sqlite3.Row
             connection.execute("PRAGMA foreign_keys = ON")
             connection.execute(f"PRAGMA busy_timeout = {BUSY_TIMEOUT_MS}")
-            requested_mode = required_journal_mode(sqlite3.sqlite_version_info)
-            previous_mode = str(connection.execute("PRAGMA journal_mode").fetchone()[0]).lower()
-            mode = str(
-                connection.execute(f"PRAGMA journal_mode = {requested_mode.upper()}").fetchone()[0]
-            ).lower()
-            if mode == JOURNAL_MODE_WAL and requested_mode == JOURNAL_MODE_DELETE:
-                raise SessionStoreCorruptError(
-                    f"cannot leave WAL mode on WAL-reset-vulnerable SQLite "
-                    f"{sqlite3.sqlite_version}: {path}"
-                )
+            # Journal selection with Hermes filesystem and WAL-reset safeguards.
+            # Probe the current on-disk mode before attempting a switch; the
+            # fallback handles raising/silent refusal and ambiguous EIO retries.
+            previous_mode = _on_disk_journal_mode(connection)
+            mode = apply_wal_with_fallback(connection, db_label="sessions.db")
             if mode not in {JOURNAL_MODE_WAL, JOURNAL_MODE_DELETE}:
                 raise SessionStoreCorruptError(f"cannot set Session journal mode: {mode}")
-            if mode != previous_mode:
+            if previous_mode is not None and mode != previous_mode:
                 _LOGGER.info(
                     "Session database journal mode changed from %s to %s at %s (SQLite %s)",
                     previous_mode,
@@ -326,6 +357,8 @@ class SessionStore:
                     path,
                     sqlite3.sqlite_version,
                 )
+            # apply_wal_with_fallback already bounded the WAL and installed the
+            # macOS barrier; ensure remaining durability pragmas are verified.
             connection.execute("PRAGMA synchronous = FULL")
             connection.execute("PRAGMA wal_autocheckpoint = 1000")
             connection.execute("PRAGMA journal_size_limit = 67108864")
@@ -393,19 +426,11 @@ class SessionStore:
         path.parent.mkdir(parents=True, exist_ok=True)
         existed = path.exists()
         try:
-            connection = sqlite3.connect(path, isolation_level=None, check_same_thread=False)
+            connection = connect_tracked(path, isolation_level=None, check_same_thread=False)
             connection.row_factory = sqlite3.Row
             connection.execute("PRAGMA foreign_keys = ON")
             connection.execute(f"PRAGMA busy_timeout = {BUSY_TIMEOUT_MS}")
-            requested_mode = required_journal_mode(sqlite3.sqlite_version_info)
-            mode = str(
-                connection.execute(f"PRAGMA journal_mode = {requested_mode.upper()}").fetchone()[0]
-            ).lower()
-            if mode == JOURNAL_MODE_WAL and requested_mode == JOURNAL_MODE_DELETE:
-                raise SessionStoreCorruptError(
-                    f"cannot leave WAL mode on WAL-reset-vulnerable SQLite "
-                    f"{sqlite3.sqlite_version}: {path}"
-                )
+            mode = apply_wal_with_fallback(connection, db_label="sessions.db")
             if mode not in {JOURNAL_MODE_WAL, JOURNAL_MODE_DELETE}:
                 raise SessionStoreCorruptError(f"cannot set Session journal mode: {mode}")
             connection.execute("PRAGMA synchronous = FULL")
@@ -466,7 +491,13 @@ class SessionStore:
     @classmethod
     def _open_reader(cls, path: Path) -> sqlite3.Connection:
         try:
-            connection = sqlite3.connect(path, isolation_level=None, check_same_thread=False)
+            connection = connect_tracked(
+                f"file:{path}?mode=ro",
+                tracking_path=path,
+                uri=True,
+                isolation_level=None,
+                check_same_thread=False,
+            )
             connection.row_factory = sqlite3.Row
             connection.execute("PRAGMA foreign_keys = ON")
             connection.execute(f"PRAGMA busy_timeout = {BUSY_TIMEOUT_MS}")
@@ -568,22 +599,191 @@ class SessionStore:
         )
 
     @contextmanager
-    def _transaction(self, *, write: bool):
+    def _transaction(self, *, write: bool, patience_s: float = WRITE_PATIENCE_S):
         if write:
-            with self._write_transaction() as connection:
+            with self._write_transaction(patience_s=patience_s) as connection:
                 yield connection
         else:
             with self._read_transaction() as connection:
                 yield connection
 
     @contextmanager
-    def _write_transaction(self):
+    def _write_transaction(self, patience_s: float = WRITE_PATIENCE_S):
+        # Time-based jittered retry for BUSY/LOCKED only. Release the Python
+        # writer lock during sleep so another writer can make progress.
+        deadline = time.monotonic() + patience_s
+
+        def _is_retryable(exc: BaseException) -> bool:
+            msg = str(exc).lower()
+            if isinstance(exc, sqlite3.OperationalError) and ("locked" in msg or "busy" in msg):
+                return True
+            if "no more rows available" in msg:
+                return True
+            return bool(isinstance(exc, sqlite3.DatabaseError) and "no more rows available" in msg)
+
+        def _sleep_before_retry() -> bool:
+            now = time.monotonic()
+            if now >= deadline:
+                return False
+            elapsed = now - (deadline - patience_s)
+            jitter = random.uniform(0.25, 1.0) if elapsed >= 2.0 else random.uniform(0.02, 0.15)
+            time.sleep(min(jitter, max(deadline - now, 0.001)))
+            return True
+
+        while True:
+            # Acquire writer lock only for the attempt itself.
+            acquired = False
+            try:
+                self._writer_lock.acquire()
+                acquired = True
+                with self._lifetime_lock:
+                    if self._closed:
+                        raise ChatSessionError("Session store is closed")
+                try:
+                    self._writer.execute("BEGIN IMMEDIATE")
+                    yield self._writer
+                    self._writer.execute("COMMIT")
+                    break
+                except BaseException as exc:
+                    with suppress(sqlite3.Error):
+                        if self._writer.in_transaction:
+                            self._writer.execute("ROLLBACK")
+                    if isinstance(exc, sqlite3.Error) and _is_retryable(exc):
+                        # Unlock before sleeping.
+                        self._writer_lock.release()
+                        acquired = False
+                        if _sleep_before_retry():
+                            continue
+                        raise SessionStoreUnavailableError(
+                            f"Session database write busy for {patience_s:.0f}s: {self.path}"
+                        ) from exc
+                    if isinstance(exc, sqlite3.Error):
+                        raise SessionStoreUnavailableError(
+                            f"Session database write failed: {self.path}"
+                        ) from exc
+                    raise
+            finally:
+                if acquired:
+                    self._writer_lock.release()
+        # Success — hygiene outside the lock. Count only committed writes.
+        self._write_count += 1
+        if self._write_count % 50 == 0:
+            self._try_wal_checkpoint()
+
+    def _try_wal_checkpoint(self) -> None:
+        """Best-effort PASSIVE checkpoint; never raises or fails the transaction."""
+        if not getattr(self, "_wal_active", False):
+            return
+        try:
+            with self._writer_lock:
+                with self._lifetime_lock:
+                    if self._closed:
+                        return
+                result = self._writer.execute("PRAGMA wal_checkpoint(PASSIVE)").fetchone()
+                if result and len(result) > 1 and result[1] > 0:
+                    _LOGGER.debug(
+                        "WAL checkpoint pending %s/%s pages",
+                        result[2] if len(result) > 2 else 0,
+                        result[1],
+                    )
+        except Exception as exc:
+            _LOGGER.warning("WAL checkpoint (PASSIVE) failed: %s", exc)
+
+    @contextmanager
+    def _read_transaction(self):
+        with self._lifetime_lock:
+            if self._closed:
+                raise ChatSessionError("Session store is closed")
+        # Try pooled reader (WAL only); degrade to writer lock on miss/failure.
+        conn: sqlite3.Connection | None = None
+        if self._wal_active:
+            should_try_pool = True
+            with self._read_conns_lock:
+                if self._read_conns_closed or (
+                    self._read_open_failed_at
+                    and time.monotonic() - self._read_open_failed_at < 60.0
+                ):
+                    should_try_pool = False
+            if should_try_pool:
+                try:
+                    conn = self._readers.get_nowait()
+                except queue.Empty:
+                    if self._read_permits.acquire(blocking=False):
+                        try:
+                            conn = self._open_reader(self.path)
+                        except Exception:
+                            self._read_permits.release()
+                            with self._read_conns_lock:
+                                self._read_open_failed_at = time.monotonic()
+                            _LOGGER.debug("reader open failed, degrading to writer", exc_info=True)
+                            conn = None
+                    else:
+                        with self._read_conns_lock:
+                            self._read_permit_exhausted += 1
+                        _LOGGER.debug("read pool at capacity, using writer")
+        if conn is not None:
+            healthy = True
+            pooled_successfully_returned = False
+            try:
+                conn.execute("BEGIN")
+                yield conn
+                conn.execute("COMMIT")
+            except Exception as exc:
+                healthy = False
+                with suppress(sqlite3.Error):
+                    conn.execute("ROLLBACK")
+                if isinstance(exc, sqlite3.Error):
+                    raise SessionStoreUnavailableError(
+                        f"Session database read failed: {self.path}"
+                    ) from exc
+                raise
+            finally:
+                with self._read_conns_lock:
+                    closed = self._closed or self._read_conns_closed
+                if closed or not healthy:
+                    try:
+                        conn.close()
+                    except Exception as exc:
+                        _LOGGER.warning("pooled read conn close failed: %s", exc)
+                    finally:
+                        try:
+                            self._read_permits.release()
+                        except ValueError:
+                            _LOGGER.warning("read permit over-release")
+                    if not closed and not healthy:
+                        with suppress(Exception):
+                            new_conn = self._open_reader(self.path)
+                            if self._read_permits.acquire(blocking=False):
+                                try:
+                                    self._readers.put_nowait(new_conn)
+                                except queue.Full:
+                                    new_conn.close()
+                                    self._read_permits.release()
+                            else:
+                                new_conn.close()
+                else:
+                    with self._read_conns_lock:
+                        if not self._read_conns_closed:
+                            try:
+                                self._readers.put_nowait(conn)
+                                pooled_successfully_returned = True
+                            except queue.Full:
+                                pooled_successfully_returned = False
+                        else:
+                            pooled_successfully_returned = False
+                    if not pooled_successfully_returned:
+                        with suppress(Exception):
+                            conn.close()
+                        with suppress(ValueError):
+                            self._read_permits.release()
+            return
+        # Degraded path: writer lock, no pool.
         with self._writer_lock:
             with self._lifetime_lock:
                 if self._closed:
                     raise ChatSessionError("Session store is closed")
             try:
-                self._writer.execute("BEGIN IMMEDIATE")
+                self._writer.execute("BEGIN")
                 yield self._writer
                 self._writer.execute("COMMIT")
             except Exception as exc:
@@ -592,69 +792,53 @@ class SessionStore:
                         self._writer.execute("ROLLBACK")
                 if isinstance(exc, sqlite3.Error):
                     raise SessionStoreUnavailableError(
-                        f"Session database write failed: {self.path}"
+                        f"Session database read failed: {self.path}"
                     ) from exc
                 raise
 
-    @contextmanager
-    def _read_transaction(self):
-        with self._lifetime_lock:
-            if self._closed:
-                raise ChatSessionError("Session store is closed")
+    def close(self) -> None:
+        with self._read_conns_lock:
+            self._read_conns_closed = True
+        # Drain pool — each pooled conn holds a permit.
         while True:
+            try:
+                conn = self._readers.get_nowait()
+            except queue.Empty:
+                break
+            try:
+                conn.close()
+            except Exception as exc:
+                _LOGGER.warning("pooled read close failed: %s", exc)
+            finally:
+                with suppress(ValueError):
+                    self._read_permits.release()
+        with self._lifetime_lock:
+            self._closed = True
+        with self._writer_lock:
+            if self._writer is not None:
+                if True:
+                    # Best-effort PASSIVE checkpoint on close, never TRUNCATE on live path.
+                    if getattr(self, "_wal_active", False):
+                        try:
+                            self._writer.execute("PRAGMA wal_checkpoint(PASSIVE)")
+                        except Exception as exc:
+                            _LOGGER.debug("checkpoint at close failed: %s", exc)
+                conn, self._writer = self._writer, None  # type: ignore[assignment]
+                with suppress(Exception):
+                    conn.close()  # type: ignore[union-attr]
+
+    def checkpoint(self) -> None:
+        """Best-effort PASSIVE checkpoint for publication; never TRUNCATE on live DB."""
+        with self._writer_lock:
             with self._lifetime_lock:
                 if self._closed:
                     raise ChatSessionError("Session store is closed")
+            if not getattr(self, "_wal_active", False):
+                return
             try:
-                connection = self._readers.get(timeout=0.1)
-                break
-            except queue.Empty:
-                continue
-        healthy = True
-        try:
-            connection.execute("BEGIN")
-            yield connection
-            connection.execute("COMMIT")
-        except Exception as exc:
-            with suppress(sqlite3.Error):
-                connection.execute("ROLLBACK")
-            if isinstance(exc, sqlite3.Error):
-                healthy = False
-                raise SessionStoreUnavailableError(
-                    f"Session database read failed: {self.path}"
-                ) from exc
-            raise
-        finally:
-            with self._lifetime_lock:
-                closed = self._closed
-            if closed or not healthy:
-                connection.close()
-                if not closed:
-                    with suppress(SessionStoreCorruptError):
-                        self._readers.put_nowait(self._open_reader(self.path))
-            else:
-                self._readers.put(connection)
-
-    def close(self) -> None:
-        with self._lifetime_lock:
-            if not self._closed:
-                self._closed = True
-                while not self._readers.empty():
-                    self._readers.get_nowait().close()
-        with self._writer_lock:
-            self._writer.close()
-
-    def checkpoint(self) -> None:
-        """Flush the WAL into the main database for publication or offline copying."""
-        with self._writer_lock, self._lifetime_lock:
-            if self._closed:
-                raise ChatSessionError("Session store is closed")
-            mode = str(self._writer.execute("PRAGMA journal_mode").fetchone()[0]).lower()
-            if mode != JOURNAL_MODE_WAL:
-                return  # Rollback-journal mode has no WAL to flush.
-            result = self._writer.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
-            if result is None or int(result[0]) != 0:
-                raise SessionStoreUnavailableError("Session database checkpoint is busy")
+                self._writer.execute("PRAGMA wal_checkpoint(PASSIVE)")
+            except Exception as exc:
+                _LOGGER.warning("checkpoint PASSIVE failed: %s", exc)
 
     def backup(self, destination: Path) -> None:
         """Create a consistent standalone backup through SQLite's online backup API."""
@@ -781,7 +965,7 @@ class SessionStore:
 
     def replace_activity(self, address: SessionAddress, activity: JsonObject) -> None:
         payload = _json_object(activity, "session activity")
-        with self._transaction(write=True) as connection:
+        with self._transaction(write=True, patience_s=ACTIVITY_WRITE_PATIENCE_S) as connection:
             state = self._require_live(connection, address)
             connection.execute(
                 "UPDATE sessions SET activity_json = ?, state_revision = state_revision + 1 WHERE session_key = ?",
@@ -792,7 +976,7 @@ class SessionStore:
         self, address: SessionAddress, mutation: Callable[[JsonObject], None]
     ) -> tuple[JsonObject, JsonObject]:
         """Apply one activity read-modify-write under the writer transaction."""
-        with self._transaction(write=True) as connection:
+        with self._transaction(write=True, patience_s=ACTIVITY_WRITE_PATIENCE_S) as connection:
             state = self._require_live(connection, address)
             previous = _json_from_payload(state["activity_json"], "session activity")
             updated = deepcopy(previous)
@@ -808,7 +992,7 @@ class SessionStore:
         if not messages:
             return
         encoded = [_message_row(message) for message in messages]
-        with self._transaction(write=True) as connection:
+        with self._transaction(write=True, patience_s=TRANSCRIPT_WRITE_PATIENCE_S) as connection:
             state = self._require_live(connection, address)
             session_key = int(state["session_key"])
             next_seq = int(state["message_count"])
@@ -981,21 +1165,26 @@ class SessionStore:
             by_scope.setdefault((address.project_id or "", address.agent_id), []).append(
                 address.session_id
             )
+        # SQLite variable limit is 999; chunk per scope to stay well under it and
+        # retain one read snapshot across all chunks.
+        chunk_size = 900
         with self._transaction(write=False) as connection:
             for (project_id, agent_id), session_ids in by_scope.items():
-                placeholders = ", ".join("?" for _ in session_ids)
-                rows = connection.execute(
-                    "SELECT project_id, agent_id, session_id, generation_id, history_revision "
-                    "FROM sessions WHERE project_id = ? AND agent_id = ? AND status = 'live' "
-                    f"AND session_id IN ({placeholders})",
-                    (project_id, agent_id, *session_ids),
-                ).fetchall()
-                for row in rows:
-                    address = self._address(row)
-                    versions[address] = (
-                        str(row["generation_id"]),
-                        int(row["history_revision"]),
-                    )
+                for start in range(0, len(session_ids), chunk_size):
+                    chunk = session_ids[start : start + chunk_size]
+                    placeholders = ", ".join("?" for _ in chunk)
+                    rows = connection.execute(
+                        "SELECT project_id, agent_id, session_id, generation_id, history_revision "
+                        "FROM sessions WHERE project_id = ? AND agent_id = ? AND status = 'live' "
+                        f"AND session_id IN ({placeholders})",
+                        (project_id, agent_id, *chunk),
+                    ).fetchall()
+                    for row in rows:
+                        address = self._address(row)
+                        versions[address] = (
+                            str(row["generation_id"]),
+                            int(row["history_revision"]),
+                        )
         return versions
 
     def archive(self, address: SessionAddress) -> None:
