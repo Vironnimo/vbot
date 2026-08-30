@@ -29,6 +29,7 @@
     wakewordStatus = { enabled: false, state: 'off' },
     desktopCapabilities = null,
     onNavigateToVoiceSettings = () => {},
+    onStopWakewordRecording = () => {},
     onToast = () => {},
     children,
   } = $props();
@@ -128,6 +129,15 @@
   const micDotClass = $derived(computeMicDotClass(wakewordStatus));
   const micTooltip = $derived(computeMicTooltip(wakewordStatus));
   const micStatusLabel = $derived(computeMicStatusLabel(wakewordStatus));
+  const micRecording = $derived(wakewordStatus?.state === 'recording');
+
+  const handleMicIndicatorClick = () => {
+    if (micRecording) {
+      onStopWakewordRecording();
+    } else {
+      onNavigateToVoiceSettings();
+    }
+  };
 
   function computeMicDotClass(status) {
     if (status?.state === 'error') {
@@ -176,7 +186,10 @@
       case 'wakeword_detected':
         return t('voice.mic.tooltip.detected', 'Wakeword detected');
       case 'recording':
-        return t('voice.mic.tooltip.recording', 'Recording voice command');
+        return t(
+          'voice.mic.tooltip.recording',
+          'Recording — click to stop and send',
+        );
       case 'transcribing':
       case 'sending':
         return t('voice.mic.tooltip.processing', 'Processing voice command');
@@ -775,13 +788,19 @@
     <div class="sidebar-footer app-shell__footer">
       {#if micVisible}
         <div class="sidebar-footer__row">
-          <span class="mic-dot {micDotClass}" aria-hidden="true"></span>
+          <span
+            class="mic-dot {micDotClass} {micRecording
+              ? 'mic-dot--clickable'
+              : ''}"
+            aria-hidden="true"
+            onclick={handleMicIndicatorClick}
+          ></span>
           <button
             type="button"
             class="sidebar-footer__link"
             use:tooltip={micTooltip}
             aria-label={micTooltip}
-            onclick={onNavigateToVoiceSettings}
+            onclick={handleMicIndicatorClick}
           >
             {micStatusLabel}
           </button>
@@ -975,6 +994,10 @@
 
   .mic-dot--error {
     background: var(--red);
+  }
+
+  .mic-dot--clickable {
+    cursor: pointer;
   }
 
   @keyframes mic-pulse {

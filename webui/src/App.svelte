@@ -129,6 +129,7 @@
     getDesktopCapabilities,
     onWakewordStatusChange,
     playWakewordCue,
+    stopWakewordRecording,
     waitForDesktopBridge,
   } from '$lib/desktopBridge.js';
   import './styles/app.css';
@@ -758,6 +759,12 @@
     navigateToSettingsPanel('voice');
   };
 
+  const handleStopWakewordRecording = () => {
+    // Fire-and-forget: the status poll reconciles the indicator, and a failed
+    // bridge call leaves the recording running rather than losing it.
+    void stopWakewordRecording().catch(() => {});
+  };
+
   const wakewordFailureMessage = (errorCode) => {
     if (errorCode === 'speech_to_text_unconfigured') {
       return t(
@@ -1068,6 +1075,7 @@
   {wakewordStatus}
   {desktopCapabilities}
   onNavigateToVoiceSettings={navigateToVoiceSettings}
+  onStopWakewordRecording={handleStopWakewordRecording}
   onToast={showToast}
 >
   {#if showFinishSetup}

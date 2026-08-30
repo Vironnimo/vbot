@@ -311,3 +311,74 @@ describe('AppShell Desktop context menu', () => {
     expect(document.querySelector('[role="menu"]')).toBeNull();
   });
 });
+
+describe('AppShell wakeword mic indicator', () => {
+  let mountedComponent;
+
+  beforeEach(() => {
+    document.body.innerHTML = '';
+    localStorage.clear();
+    init('en');
+    mountedComponent = null;
+    vi.clearAllMocks();
+  });
+
+  afterEach(async () => {
+    if (mountedComponent) {
+      await unmount(mountedComponent);
+      mountedComponent = null;
+    }
+    document.body.innerHTML = '';
+    vi.restoreAllMocks();
+  });
+
+  function mountMicIndicator({ state, onStop, onNavigate }) {
+    mountedComponent = mount(AppShell, {
+      target: document.body,
+      props: {
+        items: [],
+        desktopCapabilities: { wakeword: true },
+        wakewordStatus: { enabled: true, state },
+        onStopWakewordRecording: onStop,
+        onNavigateToVoiceSettings: onNavigate,
+      },
+    });
+    flushSync();
+  }
+
+  it('stops the recording when the label is clicked during recording', () => {
+    const onStop = vi.fn();
+    const onNavigate = vi.fn();
+    mountMicIndicator({ state: 'recording', onStop, onNavigate });
+
+    document.querySelector('.sidebar-footer__link').click();
+    flushSync();
+
+    expect(onStop).toHaveBeenCalledOnce();
+    expect(onNavigate).not.toHaveBeenCalled();
+  });
+
+  it('stops the recording when the dot is clicked during recording', () => {
+    const onStop = vi.fn();
+    const onNavigate = vi.fn();
+    mountMicIndicator({ state: 'recording', onStop, onNavigate });
+
+    document.querySelector('.mic-dot').click();
+    flushSync();
+
+    expect(onStop).toHaveBeenCalledOnce();
+    expect(onNavigate).not.toHaveBeenCalled();
+  });
+
+  it('navigates to voice settings when clicked while not recording', () => {
+    const onStop = vi.fn();
+    const onNavigate = vi.fn();
+    mountMicIndicator({ state: 'listening', onStop, onNavigate });
+
+    document.querySelector('.sidebar-footer__link').click();
+    flushSync();
+
+    expect(onNavigate).toHaveBeenCalledOnce();
+    expect(onStop).not.toHaveBeenCalled();
+  });
+});

@@ -206,6 +206,11 @@ export async function retryWakeword() {
   return callBridge('retryWakeword');
 }
 
+/** Stop the active voice recording and send what was captured so far. */
+export async function stopWakewordRecording() {
+  return callBridge('stopWakewordRecording');
+}
+
 /** Enter transient detector calibration without recording or sending commands. */
 export async function startWakewordCalibration() {
   return callBridge('startWakewordCalibration');
