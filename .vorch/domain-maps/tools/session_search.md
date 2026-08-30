@@ -31,7 +31,7 @@ Discovers persisted Sessions through backend-native search and retrieves focused
 ## Constraints & Gotchas
 
 - Exact content belongs to `session_read`, not `session_search`; Agents should pass a returned `read_ref` directly when wording, the complete conversation block, or a referenced Tool Result matters.
-- Search is not implicitly Session-grouped. JSONL/FTS may return many Messages from one Session, and Vector/Hybrid may return many Passages from one Session.
-- Persisted results from both Session Recall Tools are derived artifacts and are excluded from JSONL matching, Passage construction, FTS indexing, and Vector indexing to prevent recall feedback loops.
+- Search is not implicitly Session-grouped. Canonical scan/FTS may return many Messages from one Session, and Vector/Hybrid may return many Passages from one Session.
+- Persisted results from both Session Recall Tools are derived artifacts and are excluded from canonical matching, Passage construction, FTS indexing, and Vector indexing to prevent Recall feedback loops.
 - No-match pages are successful empty results. Invalid or retired fields, missing canonical references, continuation tokens for a different selection, attempts to read the current Session, and backend failures are failure envelopes with stable codes.
 - Search excerpts preserve source whitespace and Unicode. Their truncation flags and source offsets describe presentation loss only; canonical storage is untouched.

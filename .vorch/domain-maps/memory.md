@@ -4,7 +4,7 @@ Pinned memory service and backend contracts for durable prompt-visible facts.
 
 ## Overview
 
-`core/memory/` owns small, curated, prompt-visible entries as tool-managed bullets in agent workspace files - intentionally narrow. It is separate from Sessions (JSONL-canonical history) and from recall (derived search indexes).
+`core/memory/` owns small, curated, prompt-visible entries as Tool-managed bullets in Agent workspace files - intentionally narrow. It is separate from Sessions (canonical SQLite history) and from Recall (derived search indexes).
 
 The domain **owns its two workspace files**: `USER.md` (user profile/preferences) and `MEMORY.md` (agent/workflow notes). They are created lazily on the first tool write, never seeded by the agent/workspace layer (which seeds only `SOUL.md`), and a later remove-all leaves the file present but empty - so a memory-off agent never gets them and deletion while off does not resurrect them.
 
