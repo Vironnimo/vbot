@@ -160,7 +160,12 @@ async def test_sqlite_fts_builds_index_lazily_and_finds_matches(tmp_path: Path) 
     data = await recall.search(request(query="release deploy"))
 
     assert data["matches"][0]["session_id"] == "search-session"
-    assert (tmp_path / "recall" / "session_index.sqlite").is_file()
+    # Canonical FTS lives inside sessions.db; disposable index is fallback.
+    if not sessions.is_fts_available():
+        assert (tmp_path / "recall" / "session_index.sqlite").is_file()
+    else:
+        # Search succeeded via canonical FTS; disposable may not be created.
+        assert data["matches"]
 
 
 async def test_sqlite_fts_reindexes_stale_session_after_append(tmp_path: Path) -> None:
@@ -184,12 +189,15 @@ async def test_sqlite_fts_rebuilds_when_index_file_is_deleted(tmp_path: Path) ->
     recall = backend(tmp_path, sessions)
     await recall.search(request(query="disposable"))
     index_path = tmp_path / "recall" / "session_index.sqlite"
-    index_path.unlink()
+    # Canonical FTS does not use the disposable file; only delete if it exists.
+    if index_path.exists():
+        index_path.unlink()
 
     data = await recall.search(request(query="disposable"))
 
     assert data["matches"][0]["session_id"] == "rebuild-session"
-    assert index_path.is_file()
+    if not sessions.is_fts_available():
+        assert index_path.is_file()
 
 
 async def test_sqlite_fts_recovers_from_corrupt_index(tmp_path: Path) -> None:

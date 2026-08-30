@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import builtins
 import json
 import logging
 import os
@@ -1309,6 +1310,123 @@ class SessionStore:
                             int(row["history_revision"]),
                         )
         return versions
+
+    def is_fts_available(self) -> bool:
+        """Return whether the integrated FTS index is usable."""
+        try:
+            with self._transaction(write=False) as connection:
+                if connection.execute(
+                    "SELECT 1 FROM store_meta WHERE key=?", (FTS_STALE_KEY,)
+                ).fetchone():
+                    return False
+                return (
+                    connection.execute(
+                        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='messages_fts'"
+                    ).fetchone()
+                    is not None
+                )
+        except Exception:
+            return False
+
+    def fts_search(
+        self,
+        query: str,
+        *,
+        project_id: str | None,
+        agent_id: str | None,
+        session_id: str | None = None,
+        match_mode: str = "all_terms",
+    ) -> builtins.list[tuple[SessionAddress, str, str, str, float]]:
+        """Search canonical messages via integrated FTS, returning (address, message_id, timestamp, message_json, rank)."""
+        if not query or not query.strip():
+            return []
+        # Build FTS expression: quote terms, handle phrase vs all_terms/any_term.
+        import re as _re
+
+        def _compact(text: str) -> str:
+            return _re.sub(r"\s+", " ", text).strip().casefold()
+
+        def _quote(value: str) -> str:
+            return '"' + value.replace('"', '""') + '"'
+
+        compact = _compact(query)
+        if not compact:
+            return []
+        if match_mode == "phrase":
+            if len(compact) < 3:
+                return []
+            expression = _quote(compact)
+        else:
+            terms = [term for term in compact.split(" ") if term]
+            if not terms or any(len(term) < 3 for term in terms):
+                return []
+            operator = " OR " if match_mode == "any_term" else " AND "
+            expression = operator.join(_quote(term) for term in terms)
+
+        try:
+            with self._transaction(write=False) as connection:
+                if connection.execute(
+                    "SELECT 1 FROM store_meta WHERE key=?", (FTS_STALE_KEY,)
+                ).fetchone():
+                    return []
+                if (
+                    connection.execute(
+                        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='messages_fts'"
+                    ).fetchone()
+                    is None
+                ):
+                    return []
+                # Join FTS -> message_search -> messages -> sessions for scope filtering.
+                # Use bm25 ranking when available.
+                sql = """
+                    SELECT s.project_id, s.agent_id, s.session_id, m.message_id, m.timestamp, m.message_json, bm25(messages_fts) as rank
+                    FROM messages_fts
+                    JOIN message_search ms ON ms.message_key = messages_fts.rowid
+                    JOIN messages m ON m.session_key = ms.session_key AND m.seq = ms.seq
+                    JOIN sessions s ON s.session_key = m.session_key
+                    WHERE messages_fts MATCH ?
+                      AND s.status = 'live'
+                """
+                params: list[Any] = [expression]
+                if project_id is not None:
+                    sql += " AND s.project_id = ?"
+                    params.append(project_id)
+                else:
+                    # When project_id is None, we want global scope (project_id = '')
+                    sql += " AND s.project_id = ''"
+                if agent_id is not None:
+                    sql += " AND s.agent_id = ?"
+                    params.append(agent_id)
+                if session_id is not None:
+                    sql += " AND s.session_id = ?"
+                    params.append(session_id)
+                sql += " ORDER BY rank, m.timestamp DESC"
+                rows = connection.execute(sql, params).fetchall()
+                result: builtins.list[tuple[SessionAddress, str, str, str, float]] = []
+                for row in rows:
+                    from core.sessions.sessions import SessionAddress as SessionAddr
+
+                    addr = SessionAddr(
+                        project_id=row["project_id"] or None,
+                        agent_id=row["agent_id"],
+                        session_id=row["session_id"],
+                    )
+                    result.append(
+                        (
+                            addr,
+                            str(row["message_id"]),
+                            str(row["timestamp"]),
+                            str(row["message_json"]),
+                            float(row["rank"]) if row["rank"] is not None else 0.0,
+                        )
+                    )
+                return result
+        except sqlite3.Error as exc:
+            # FTS corruption should not block canonical reads; detach and return empty.
+            if "fts" in str(exc).lower() or "messages_fts" in str(exc).lower():
+                with suppress(Exception), self._transaction(write=True) as wconn:
+                    _detach_fts(wconn)
+            return []
 
     def archive(self, address: SessionAddress) -> None:
         timestamp = datetime.now(UTC).isoformat().replace("+00:00", "Z")

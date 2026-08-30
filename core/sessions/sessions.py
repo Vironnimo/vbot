@@ -1036,6 +1036,26 @@ class ChatSessionManager:
     def archive_project_sessions(self, project_id: str) -> None:
         self._store.archive_project_sessions(project_id)
 
+    def is_fts_available(self) -> bool:
+        return self._store.is_fts_available()
+
+    def fts_search(
+        self,
+        query: str,
+        *,
+        project_id: str | None,
+        agent_id: str | None,
+        session_id: str | None = None,
+        match_mode: str = "all_terms",
+    ) -> builtins.list[tuple[SessionAddress, str, str, str, float]]:
+        return self._store.fts_search(
+            query,
+            project_id=project_id,
+            agent_id=agent_id,
+            session_id=session_id,
+            match_mode=match_mode,
+        )
+
     @staticmethod
     def _notify_callbacks(
         callbacks: Sequence[Callable[[SessionAddress], None]], address: SessionAddress
