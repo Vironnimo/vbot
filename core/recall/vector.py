@@ -1023,21 +1023,28 @@ class VectorRecallBackend(CanonicalSessionRecallBackend):
         agent_id = request.agent_id
         scope = _project_scope(request.project_id)
         stale_sessions: list[tuple[JsonObject, str, int, list[Any]]] = []
+        # One batched canonical-freshness query instead of one per Session.
+        addresses = [
+            SessionAddress(project_id=request.project_id, agent_id=agent_id, session_id=session_id)
+            for session_id in active
+        ]
+        versions = self.sessions.list_history_versions(addresses)
         for session_id, summary in active.items():
-            session = self.sessions.get(
-                SessionAddress(
-                    project_id=request.project_id, agent_id=agent_id, session_id=session_id
-                )
+            address = SessionAddress(
+                project_id=request.project_id, agent_id=agent_id, session_id=session_id
             )
-            generation_id, history_revision = self.sessions.history_version(
-                SessionAddress(
-                    project_id=request.project_id, agent_id=agent_id, session_id=session_id
-                )
-            )
+            version = versions.get(address)
+            if version is None:
+                # The Session vanished between listing and indexing; treat as
+                # unchanged so the stale-row cleanup handles it.
+                continue
+            generation_id, history_revision = version
             cached = indexed.get(session_id)
             if cached is not None and cached == (generation_id, history_revision):
                 continue
-            stale_sessions.append((summary, generation_id, history_revision, session.load_active()))
+            stale_sessions.append(
+                (summary, generation_id, history_revision, self.sessions.get(address).load_active())
+            )
 
         # A session that yields zero indexable chunks is not covered by
         # ``upsert_many_chunks``. Clear its old rows explicitly.
