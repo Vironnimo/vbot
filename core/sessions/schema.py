@@ -8,7 +8,7 @@ from dataclasses import dataclass
 
 from core.sessions.errors import SessionStoreCorruptError
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 # Databases below this schema version cannot be reconciled additively and
 # require the offline converter; additive generations at or above it heal in
 # place. Raise it only for destructive schema changes.
@@ -18,6 +18,24 @@ APPLICATION_ID = 0x56424F54
 DATABASE_ID_META_KEY = "database_id"
 JOURNAL_MODE_WAL = "wal"
 JOURNAL_MODE_DELETE = "delete"
+
+# FTS declarative constants — kept testable and in one place.
+FTS_TABLE = "messages_fts"
+FTS_CONTENT_TABLE = "message_search"
+FTS_TRIGGERS = (
+    "messages_fts_insert",
+    "messages_fts_delete",
+    "messages_fts_update",
+    "message_search_insert",
+    "message_search_delete",
+    "message_search_update",
+)
+FTS_STALE_KEY = "fts_stale"
+FTS_HIGH_WATER_KEY = "fts_rebuild_high_water"
+FTS_PROGRESS_KEY = "fts_rebuild_progress"
+FTS_STORAGE_VERSION_KEY = "fts_storage_version"
+FTS_STORAGE_VERSION = 1
+FTS_TRIGRAM_TOKENIZER = "trigram"
 
 SCHEMA_SQL = """
 CREATE TABLE store_meta (
@@ -80,6 +98,83 @@ CREATE TABLE continuation_records (
   PRIMARY KEY (session_key, seq),
   FOREIGN KEY (session_key) REFERENCES sessions (session_key) ON DELETE CASCADE
 ) STRICT, WITHOUT ROWID;
+
+-- FTS content table that mirrors searchable text for each canonical message.
+-- Kept separate from `messages` (which is WITHOUT ROWID) so the FTS external
+-- content can use a stable integer `message_key` as `content_rowid` while
+-- `messages` retains its composite (session_key, seq) primary key.
+CREATE TABLE message_search (
+  message_key INTEGER PRIMARY KEY AUTOINCREMENT,
+  session_key INTEGER NOT NULL,
+  seq INTEGER NOT NULL,
+  search_text TEXT NOT NULL,
+  UNIQUE(session_key, seq),
+  FOREIGN KEY(session_key) REFERENCES sessions(session_key) ON DELETE CASCADE
+) STRICT;
+
+CREATE TRIGGER message_search_insert AFTER INSERT ON messages BEGIN
+  INSERT INTO message_search(session_key, seq, search_text)
+  VALUES (new.session_key, new.seq, new.message_json);
+END;
+
+CREATE TRIGGER message_search_delete AFTER DELETE ON messages BEGIN
+  DELETE FROM message_search WHERE session_key = old.session_key AND seq = old.seq;
+END;
+
+CREATE TRIGGER message_search_update AFTER UPDATE OF message_json ON messages
+WHEN old.message_json IS NOT new.message_json
+BEGIN
+  UPDATE message_search
+  SET search_text = new.message_json
+  WHERE session_key = new.session_key AND seq = new.seq;
+END;
+"""
+
+FTS_SQL = """
+CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
+  search_text,
+  content='message_search',
+  content_rowid='message_key',
+  tokenize='trigram'
+);
+
+CREATE TRIGGER IF NOT EXISTS messages_fts_insert AFTER INSERT ON message_search BEGIN
+  INSERT INTO messages_fts(rowid, search_text) VALUES (new.message_key, new.search_text);
+END;
+
+CREATE TRIGGER IF NOT EXISTS messages_fts_delete AFTER DELETE ON message_search BEGIN
+  INSERT INTO messages_fts(messages_fts, rowid, search_text) VALUES ('delete', old.message_key, old.search_text);
+END;
+
+CREATE TRIGGER IF NOT EXISTS messages_fts_update AFTER UPDATE OF search_text ON message_search
+WHEN old.search_text IS NOT new.search_text
+BEGIN
+  INSERT INTO messages_fts(messages_fts, rowid, search_text) VALUES ('delete', old.message_key, old.search_text);
+  INSERT INTO messages_fts(rowid, search_text) VALUES (new.message_key, new.search_text);
+END;
+"""
+
+FTS_SQL_FALLBACK = """
+CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
+  search_text,
+  content='message_search',
+  content_rowid='message_key'
+);
+
+CREATE TRIGGER IF NOT EXISTS messages_fts_insert AFTER INSERT ON message_search BEGIN
+  INSERT INTO messages_fts(rowid, search_text) VALUES (new.message_key, new.search_text);
+END;
+
+CREATE TRIGGER IF NOT EXISTS messages_fts_delete AFTER DELETE ON message_search BEGIN
+  INSERT INTO messages_fts(messages_fts, rowid, search_text) VALUES ('delete', old.message_key, old.search_text);
+END;
+
+CREATE TRIGGER IF NOT EXISTS messages_fts_update AFTER UPDATE OF search_text ON message_search
+WHEN old.search_text IS NOT new.search_text
+BEGIN
+  INSERT INTO messages_fts(messages_fts, rowid, search_text) VALUES ('delete', old.message_key, old.search_text);
+  INSERT INTO messages_fts(rowid, search_text) VALUES (new.message_key, new.search_text);
+END;
 """
 
 
