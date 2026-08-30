@@ -102,6 +102,12 @@ class SqliteFtsRecallBackend(CanonicalSessionRecallBackend):
         expression = _fts_expression(request)
         if expression is None:
             return await self._fallback.search(request)
+        # Prefer integrated canonical FTS when available.
+        if self.sessions.is_fts_available():
+            try:
+                return await asyncio.to_thread(self._search_with_canonical_fts, request, summaries)
+            except Exception as error:  # pragma: no cover - fallback
+                self._warning("Canonical FTS search failed; falling back: %s", error)
 
         async with self._index_lock:
             try:
@@ -121,6 +127,121 @@ class SqliteFtsRecallBackend(CanonicalSessionRecallBackend):
                     "SQLite recall index rebuild failed; falling back to canonical scan: %s", error
                 )
         return await self._fallback.search(request)
+
+    def _search_with_canonical_fts(
+        self, request: RecallRequest, summaries: list[JsonObject]
+    ) -> JsonObject:
+        # Use integrated FTS; combine with canonical scan fallback for gap if needed.
+        # For now, canonical FTS is synchronous so no gap.
+        rows = self.sessions.fts_search(
+            request.query or "",
+            project_id=request.project_id,
+            agent_id=request.agent_id,
+            match_mode=request.match_mode,
+        )
+        # rows are (address, message_id, timestamp, message_json, rank)
+        summaries_by_id = {str(summary["id"]): summary for summary in summaries}
+        messages_by_session: dict[str, list[Any]] = {}
+        matches: list[JsonObject] = []
+        for address, message_id, _ts, _mj, _rank in rows:
+            session_id = address.session_id
+            if session_id not in summaries_by_id:
+                continue
+            if session_id not in messages_by_session:
+                messages_by_session[session_id] = self.sessions.get(address).load_active()
+            messages = messages_by_session[session_id]
+            idx = message_index_by_id(messages, message_id)
+            if idx is None:
+                continue
+            message = messages[idx]
+            if not message_matches_request(message, request):
+                continue
+            text = message_search_text(message)
+            if not text_matches_query(text, request):
+                continue
+            matches.append(
+                message_match_payload(request, summaries_by_id[session_id], messages, idx, text)
+            )
+            if len(matches) >= request.limit + 1:
+                break
+        truncated = len(matches) > request.limit
+        return self._message_result(
+            request,
+            matches[: request.limit],
+            searched_sessions=len(summaries),
+            total_candidates=len(summaries),
+            truncated=truncated,
+        )
+
+    def _search_page_with_canonical_fts(
+        self, request: RecallSearchRequest, summaries: list[JsonObject], snapshot_id: str
+    ) -> RecallSearchPage:
+        rows = self.sessions.fts_search(
+            request.query,
+            project_id=request.project_id,
+            agent_id=request.agent_id,
+            match_mode=request.match_mode,
+        )
+        summaries_by_id = {str(s["id"]): s for s in summaries}
+        messages_by_session: dict[str, list[Any]] = {}
+        hits: list[tuple[float, str, str, RecallSearchHit]] = []
+        for address, message_id, timestamp, _message_json, rank in rows:
+            session_id = address.session_id
+            if session_id not in summaries_by_id:
+                continue
+            if session_id not in messages_by_session:
+                messages_by_session[session_id] = self.sessions.get(address).load_active()
+            messages = messages_by_session[session_id]
+            idx = message_index_by_id(messages, message_id)
+            if idx is None:
+                continue
+            message = messages[idx]
+            if not message_matches_search_request(message, request):
+                continue
+            text = message_search_text(message)
+            if not text_matches_search_request(text, request):
+                continue
+            sort_rank = float(rank) if request.order == "relevance" else 0.0
+            hits.append(
+                (
+                    sort_rank,
+                    timestamp,
+                    session_id,
+                    RecallSearchHit(
+                        result_type="message",
+                        session_id=session_id,
+                        message_id=str(message.id),
+                        role=str(message.role),
+                        timestamp=str(message.timestamp),
+                        text=text,
+                        score=float(rank),
+                        match_start=first_match_span(text, request.query, request.match_mode)[0],
+                        match_end=first_match_span(text, request.query, request.match_mode)[1],
+                    ),
+                )
+            )
+
+        def _ts(value: str) -> float:
+            parsed_ts = parse_persisted_timestamp(value)
+            return parsed_ts.timestamp() if parsed_ts is not None else 0.0
+
+        if request.order == "relevance":
+            hits.sort(key=lambda x: (x[0], -_ts(x[1])))
+        elif request.order == "newest":
+            hits.sort(key=lambda x: _ts(x[1]), reverse=True)
+        else:
+            hits.sort(key=lambda x: _ts(x[1]))
+        page_hits = hits[request.offset : request.offset + request.limit + 1]
+        has_more = len(page_hits) > request.limit
+        page_hits = page_hits[: request.limit]
+        return RecallSearchPage(
+            hits=tuple(h[3] for h in page_hits),
+            result_type="message",
+            ranking="bm25" if request.order == "relevance" else f"message_time_{request.order}",
+            snapshot_id=snapshot_id,
+            has_more=has_more,
+            total_candidate_sessions=len(summaries),
+        )
 
     def search_capabilities(self) -> RecallSearchCapabilities:
         query_description = (
@@ -164,6 +285,14 @@ class SqliteFtsRecallBackend(CanonicalSessionRecallBackend):
             )
             page = await self._fallback.search_page(fallback_request)
             return replace(page, ranking=f"substring_scan_{fallback_request.order}")
+        # Try canonical FTS when available.
+        if self.sessions.is_fts_available():
+            try:
+                return await asyncio.to_thread(
+                    self._search_page_with_canonical_fts, request, summaries, snapshot_id
+                )
+            except Exception as error:  # pragma: no cover
+                self._warning("Canonical FTS page failed; falling back: %s", error)
 
         async with self._index_lock:
             try:
