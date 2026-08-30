@@ -491,8 +491,14 @@ class AgentStore:
             workspace_value = self._default_workspace(agent_id)
         workspace_path = _resolve_workspace(workspace_value, data_dir=self._data_dir)
 
-        agent_dir.mkdir(parents=True)
+        # Create the Session first so a failure cannot leave a ghost Agent directory.
         session = self._session_manager().create(agent_id)
+        try:
+            agent_dir.mkdir(parents=True)
+        except Exception:
+            with suppress(Exception):
+                session.delete()
+            raise
         agent = Agent(
             id=agent_id,
             name=validated_name,
