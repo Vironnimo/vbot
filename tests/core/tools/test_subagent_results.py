@@ -249,7 +249,10 @@ async def test_subagent_status_resolves_live_run_from_stable_id(
 
     # Assert
     assert result["ok"] is True
-    assert result["data"] == {
+    data = result["data"]
+    # The behavioral note's presence is the contract; its wording is not.
+    assert data["note"]
+    assert {key: value for key, value in data.items() if key != "note"} == {
         "id": WORK_ID,
         "agent_id": "worker",
         "session_id": "sub-session",
@@ -336,6 +339,7 @@ async def test_subagent_result_from_later_parent_run_resolves_queued_session_run
     assert result["ok"] is True
     assert result["data"]["id"] == WORK_ID
     assert result["data"]["status"] == "queued"
+    assert result["data"]["note"]
     assert "queue_item_id" not in result["data"]
     assert "run_id" not in result["data"]
 

@@ -82,12 +82,25 @@ SUBAGENT_ACTIVITY_NOTE_TEMPLATE = (
     "status or progress becomes relevant."
 )
 TOP_LEVEL_BACKGROUND_NOTE = (
-    "This Sub-Agent is running in the background and is monitored by vBot. You may continue "
-    "work that does not depend on its result, or finish the current Run now. Do not poll "
-    "merely to wait; request status only when your next action genuinely depends on the "
-    "result. When the current Run ends, vBot combines every background result already "
-    "finished into one automatic follow-up Run. Work still running at that boundary is "
-    "delivered later."
+    "This Sub-Agent is running in the background; vBot monitors it and notifies you "
+    "with the result once it finishes. Continue other work, or finish your turn to "
+    "wait for a result."
+)
+TOP_LEVEL_QUEUED_BACKGROUND_NOTE = (
+    "This Sub-Agent is queued because its Session is busy with another task; vBot "
+    "starts it automatically when the Session is free and notifies you with the "
+    "result once it finishes. Continue other work, or finish your turn to wait for a "
+    "result."
+)
+SUBAGENT_STATUS_RUNNING_NOTE = (
+    "Still running; the result is delivered automatically. Continue other work, or "
+    "finish your turn to wait for it. Repeated status calls do not make it finish "
+    "faster."
+)
+SUBAGENT_STATUS_QUEUED_NOTE = (
+    "Queued: the Sub-Agent's Session is busy with another task; vBot starts this "
+    "work automatically when the Session is free. The result is delivered "
+    "automatically. Continue other work, or finish your turn to wait for it."
 )
 
 # Cascade policy switch: when True, a parent Run cancellation cascades to every
@@ -573,7 +586,7 @@ async def _handle_subagent(
                                     "session_id": session.id,
                                     "status": SUBAGENT_STATUS_QUEUED,
                                     "delivery": "automatic",
-                                    "note": TOP_LEVEL_BACKGROUND_NOTE,
+                                    "note": TOP_LEVEL_QUEUED_BACKGROUND_NOTE,
                                     "activity_file": activity_file,
                                 },
                                 target_project_id,
@@ -918,6 +931,7 @@ async def _handle_subagent_status(
                     "status": SUBAGENT_STATUS_QUEUED,
                     "activity_file": entry.activity_file,
                 },
+                note=SUBAGENT_STATUS_QUEUED_NOTE,
             )
         )
 
@@ -957,6 +971,7 @@ async def _handle_subagent_status(
                         message=None,
                         activity_file=entry.activity_file,
                     ),
+                    note=SUBAGENT_STATUS_RUNNING_NOTE,
                 )
             )
         result = await _wait_for_subagent_result(run, entry.activity_file)

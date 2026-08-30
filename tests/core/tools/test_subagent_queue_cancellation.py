@@ -318,7 +318,10 @@ async def test_subagent_status_reports_queued_work(tmp_path: Path) -> None:
     assert result["ok"] is True
     activity_file = spawn_result["data"]["activity_file"]
     assert "activity_note" not in result["data"]
-    assert result["data"] == {
+    data = result["data"]
+    # The behavioral note's presence is the contract; its wording is not.
+    assert data["note"]
+    assert {key: value for key, value in data.items() if key != "note"} == {
         "id": spawn_result["data"]["id"],
         "agent_id": "parent",
         "session_id": "queued-result-sub-session",
@@ -372,7 +375,10 @@ async def test_qualified_subagent_queue_and_result_keep_target_project(
     assert manager.enqueued[0]["project_id"] == "vbot"
     assert result["ok"] is True
     activity_file = spawn_result["data"]["activity_file"]
-    assert result["data"] == {
+    data = result["data"]
+    # The behavioral note's presence is the contract; its wording is not.
+    assert data["note"]
+    assert {key: value for key, value in data.items() if key != "note"} == {
         "id": spawn_result["data"]["id"],
         "agent_id": "worker",
         "project_id": "vbot",
