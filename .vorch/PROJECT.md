@@ -44,8 +44,8 @@ Every domain has a map under `.vorch/domain-maps/`. **Read a domain's map before
 | chat.md | `core/chat/` | ChatMessage boundary, Agentic Loop invariants |
 | runs.md | `core/runs/` | Run lifecycle, cancellation, timeline events, queues |
 | compaction.md | `core/compaction/` | Triggers, strategies, plans, checkpoints |
-| sessions.md | `core/sessions/` | Session persistence, metadata, JSONL storage contract |
-| recall.md | `core/recall/` | Recall backends: JSONL scan, FTS index, vector index |
+| sessions.md | `core/sessions/` | Canonical SQLite Session persistence, metadata, migration, and lifecycle |
+| recall.md | `core/recall/` | Recall backends: canonical scan, FTS index, vector index |
 | statistics.md | `core/statistics/` | Disposable SQLite projection, report RPC |
 | memory.md | `core/memory/` | Pinned memory service, workspace memory files |
 | settings.md | `core/settings/` | Settings schemas, validation, update sections |
