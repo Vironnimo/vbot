@@ -1236,6 +1236,16 @@ class Runtime:
         def run() -> None:
             try:
                 outcome = create_startup_snapshot(snapshot, database_path, data_dir)
+                # Also create a verified snapshot for auto-restore (best-effort).
+                try:
+                    from core.sessions.format import read_session_store_marker
+                    from core.sessions.snapshots import create_snapshot as create_verified
+
+                    marker = read_session_store_marker(data_dir)
+                    db_id = str(marker["database_id"]) if marker else None
+                    create_verified(data_dir, database_path, snapshot, database_id=db_id)
+                except Exception:
+                    pass
             except Exception as error:  # noqa: BLE001 - backup must never block startup
                 logger.error(
                     "Session backup snapshot failed unexpectedly: %s: %s",
@@ -1243,8 +1253,6 @@ class Runtime:
                     error,
                 )
                 return
-            if outcome is not None:
-                result.append(str(outcome))
             if outcome is not None:
                 result.append(str(outcome))
 

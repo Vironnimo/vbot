@@ -418,12 +418,30 @@ class SessionStore:
             publish_ready_marker(path.parent, database_id)
             return connection
         if not path.exists():
-            # Ready without a database is snapshot-recovery territory (never an
-            # implicit fresh creation); the typed error keeps the store closed.
+            # Ready without a database is snapshot-recovery territory.
+            # Try to auto-restore the newest verified snapshot before failing.
+            try:
+                from core.sessions.snapshots import auto_restore_if_needed
+
+                if auto_restore_if_needed(path.parent, path):
+                    return cls._open_authorized(path, database_id, create_if_missing=False)
+            except Exception:
+                pass
             raise SessionStoreUnavailableError(
                 f"the Session database is missing although the store is ready: {path}"
             )
-        return cls._open_authorized(path, database_id, create_if_missing=False)
+        try:
+            return cls._open_authorized(path, database_id, create_if_missing=False)
+        except SessionStoreCorruptError as exc:
+            # Canonical corruption — try auto-restore from snapshot.
+            try:
+                from core.sessions.snapshots import auto_restore_if_needed
+
+                if auto_restore_if_needed(path.parent, path):
+                    return cls._open_authorized(path, database_id, create_if_missing=False)
+            except Exception:
+                pass
+            raise exc
 
     @classmethod
     def _open_authorized(
