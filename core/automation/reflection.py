@@ -173,33 +173,50 @@ class ReflectionService:
             return
         sessions = self._runtime.chat_sessions
         address = SessionAddress(project_id=project_id, agent_id=agent_id, session_id=session_id)
-        metadata = sessions.get_metadata(address)
-        if metadata.get(SUBAGENT_SESSION_METADATA_FLAG):
-            return
+        state: dict[str, Any] = {"skip": False}
 
-        raw_counters = metadata.get(REFLECTION_COUNTERS_META_KEY)
-        counters = raw_counters if isinstance(raw_counters, dict) else {}
-        turns = (
-            0
-            if memory_tool_called
-            else _non_negative_int(counters.get(TURNS_SINCE_MEMORY_REVIEW_KEY))
-            + (1 if count_run else 0)
-        )
-        iterations = _non_negative_int(counters.get(ITERATIONS_SINCE_SKILL_REVIEW_KEY)) + (
-            max(iteration_count, 0) if count_run else 0
-        )
-        counter_generation = _non_negative_int(counters.get(COUNTER_GENERATION_KEY))
-        memory_due = turns >= settings["memory_turn_interval"]
-        skill_due = iterations >= settings["skill_model_step_interval"]
-        # One review at a time per agent: a due session while a review is already
-        # running keeps its counters and re-checks on its next run end.
+        def update(metadata: dict[str, Any]) -> None:
+            if metadata.get(SUBAGENT_SESSION_METADATA_FLAG):
+                state["skip"] = True
+                return
+            raw_counters = metadata.get(REFLECTION_COUNTERS_META_KEY)
+            counters = raw_counters if isinstance(raw_counters, dict) else {}
+            turns = (
+                0
+                if memory_tool_called
+                else _non_negative_int(counters.get(TURNS_SINCE_MEMORY_REVIEW_KEY))
+                + (1 if count_run else 0)
+            )
+            iterations = _non_negative_int(counters.get(ITERATIONS_SINCE_SKILL_REVIEW_KEY)) + (
+                max(iteration_count, 0) if count_run else 0
+            )
+            counter_generation = _non_negative_int(counters.get(COUNTER_GENERATION_KEY))
+            memory_due = turns >= settings["memory_turn_interval"]
+            skill_due = iterations >= settings["skill_model_step_interval"]
+            state.update(
+                turns=turns,
+                iterations=iterations,
+                counter_generation=counter_generation,
+                memory_due=memory_due,
+                skill_due=skill_due,
+            )
+            metadata[REFLECTION_COUNTERS_META_KEY] = {
+                TURNS_SINCE_MEMORY_REVIEW_KEY: turns,
+                ITERATIONS_SINCE_SKILL_REVIEW_KEY: iterations,
+                COUNTER_GENERATION_KEY: counter_generation,
+            }
+
+        sessions.mutate_metadata(address, update)
+        if state["skip"]:
+            return
+        turns = int(state["turns"])
+        iterations = int(state["iterations"])
+        counter_generation = int(state["counter_generation"])
+        memory_due = bool(state["memory_due"])
+        skill_due = bool(state["skill_due"])
+        # One review at a time per agent: a due Session while a review is already
+        # running keeps its counters and re-checks on its next Run end.
         should_review = (memory_due or skill_due) and agent_id not in self._agents_in_review
-        metadata[REFLECTION_COUNTERS_META_KEY] = {
-            TURNS_SINCE_MEMORY_REVIEW_KEY: turns,
-            ITERATIONS_SINCE_SKILL_REVIEW_KEY: iterations,
-            COUNTER_GENERATION_KEY: counter_generation,
-        }
-        sessions.set_metadata(address, metadata)
         if not settings["enabled"] or not count_run or not should_review:
             return
 
@@ -256,25 +273,23 @@ class ReflectionService:
     ) -> None:
         """Consume only counts covered by a successful background review."""
         sessions = self._runtime.chat_sessions
-        metadata = sessions.get_metadata(
-            SessionAddress(project_id=project_id, agent_id=agent_id, session_id=session_id)
-        )
-        raw_counters = metadata.get(REFLECTION_COUNTERS_META_KEY)
-        counters = raw_counters if isinstance(raw_counters, dict) else {}
-        current_generation = _non_negative_int(counters.get(COUNTER_GENERATION_KEY))
-        if current_generation != counter_generation:
-            return
-        current_turns = _non_negative_int(counters.get(TURNS_SINCE_MEMORY_REVIEW_KEY))
-        current_iterations = _non_negative_int(counters.get(ITERATIONS_SINCE_SKILL_REVIEW_KEY))
-        metadata[REFLECTION_COUNTERS_META_KEY] = {
-            TURNS_SINCE_MEMORY_REVIEW_KEY: max(current_turns - reviewed_turns, 0),
-            ITERATIONS_SINCE_SKILL_REVIEW_KEY: max(current_iterations - reviewed_iterations, 0),
-            COUNTER_GENERATION_KEY: current_generation,
-        }
-        sessions.set_metadata(
-            SessionAddress(project_id=project_id, agent_id=agent_id, session_id=session_id),
-            metadata,
-        )
+        address = SessionAddress(project_id=project_id, agent_id=agent_id, session_id=session_id)
+
+        def update(metadata: dict[str, Any]) -> None:
+            raw_counters = metadata.get(REFLECTION_COUNTERS_META_KEY)
+            counters = raw_counters if isinstance(raw_counters, dict) else {}
+            current_generation = _non_negative_int(counters.get(COUNTER_GENERATION_KEY))
+            if current_generation != counter_generation:
+                return
+            current_turns = _non_negative_int(counters.get(TURNS_SINCE_MEMORY_REVIEW_KEY))
+            current_iterations = _non_negative_int(counters.get(ITERATIONS_SINCE_SKILL_REVIEW_KEY))
+            metadata[REFLECTION_COUNTERS_META_KEY] = {
+                TURNS_SINCE_MEMORY_REVIEW_KEY: max(current_turns - reviewed_turns, 0),
+                ITERATIONS_SINCE_SKILL_REVIEW_KEY: max(current_iterations - reviewed_iterations, 0),
+                COUNTER_GENERATION_KEY: current_generation,
+            }
+
+        sessions.mutate_metadata(address, update)
 
     # -- shared review orchestration --------------------------------------------
 
@@ -345,15 +360,17 @@ class ReflectionService:
         """Zero both cadence counters (a manual ``/reflect`` reviewed everything)."""
         sessions = self._runtime.chat_sessions
         address = SessionAddress(project_id=project_id, agent_id=agent_id, session_id=session_id)
-        metadata = sessions.get_metadata(address)
-        raw_counters = metadata.get(REFLECTION_COUNTERS_META_KEY)
-        counters = raw_counters if isinstance(raw_counters, dict) else {}
-        metadata[REFLECTION_COUNTERS_META_KEY] = {
-            TURNS_SINCE_MEMORY_REVIEW_KEY: 0,
-            ITERATIONS_SINCE_SKILL_REVIEW_KEY: 0,
-            COUNTER_GENERATION_KEY: _non_negative_int(counters.get(COUNTER_GENERATION_KEY)) + 1,
-        }
-        sessions.set_metadata(address, metadata)
+
+        def update(metadata: dict[str, Any]) -> None:
+            raw_counters = metadata.get(REFLECTION_COUNTERS_META_KEY)
+            counters = raw_counters if isinstance(raw_counters, dict) else {}
+            metadata[REFLECTION_COUNTERS_META_KEY] = {
+                TURNS_SINCE_MEMORY_REVIEW_KEY: 0,
+                ITERATIONS_SINCE_SKILL_REVIEW_KEY: 0,
+                COUNTER_GENERATION_KEY: _non_negative_int(counters.get(COUNTER_GENERATION_KEY)) + 1,
+            }
+
+        sessions.mutate_metadata(address, update)
 
     def _build_instruction(
         self, review_scope: ReflectionScope, extra_instruction: str | None

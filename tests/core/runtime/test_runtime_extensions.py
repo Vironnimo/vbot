@@ -443,7 +443,7 @@ def test_apply_extension_disabled_change_ignores_active_builtin_backend(
     config = Config(data_dir=tmp_path / "data")
     data_dir = config.data_dir
     _write_extension(data_dir, "capabilities_ext", _CAPABILITY_EXT_SOURCE)
-    # Default backend (jsonl_scan) is active, not the extension's ext_recall.
+    # Default backend (canonical_scan) is active, not the extension's ext_recall.
 
     runtime = Runtime(config)
     runtime.start()

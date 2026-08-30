@@ -11,8 +11,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
 
-from core.recall.jsonl import (
-    JsonlSessionRecallBackend,
+from core.recall.canonical import (
+    CanonicalSessionRecallBackend,
     compact_text,
     first_match_span,
     is_recall_artifact_message,
@@ -41,6 +41,7 @@ from core.recall.recall import (
     RecallSortMode,
 )
 from core.sessions import SessionAddress, is_skill_context_note
+from core.sessions.schema import required_journal_mode
 
 _INDEX_DIR_NAME = "recall"
 _INDEX_FILE_NAME = "session_index.sqlite"
@@ -60,8 +61,9 @@ def _session_address(request: Any, session_id: str) -> SessionAddress:
 # v3 → persisted session_search results are excluded before candidate limiting.
 # v4 → a shared Passage FTS index powers Hybrid's literal retrieval arm.
 # v5 → canonical Session history revisions replace filesystem freshness.
-_SCHEMA_VERSION = 5
-# FTS5 trigram needs at least three characters; shorter queries fall back to the JSONL scan.
+# v6 → Session generations prevent a recreated address from reusing stale rows.
+_SCHEMA_VERSION = 6
+# FTS5 trigram needs at least three characters; shorter queries fall back to the canonical scan.
 _TRIGRAM_MIN_CHARS = 3
 # Sentinel stored for the identity/global scope (``project_id is None``). An
 # empty string keeps the PRIMARY KEY/UNIQUE constraints reliable — SQLite treats
@@ -80,7 +82,7 @@ def _scope(project_id: str | None) -> str:
     return project_id if project_id is not None else _GLOBAL_SCOPE
 
 
-class SqliteFtsRecallBackend(JsonlSessionRecallBackend):
+class SqliteFtsRecallBackend(CanonicalSessionRecallBackend):
     """Recall backend backed by a disposable SQLite FTS index."""
 
     def __init__(self, context: RecallBackendContext) -> None:
@@ -88,7 +90,7 @@ class SqliteFtsRecallBackend(JsonlSessionRecallBackend):
         self.data_dir = context.data_dir
         self.index_path = self.data_dir / _INDEX_DIR_NAME / _INDEX_FILE_NAME
         self.logger = context.logger
-        self._fallback = JsonlSessionRecallBackend(context.sessions)
+        self._fallback = CanonicalSessionRecallBackend(context.sessions)
         self._index_lock = asyncio.Lock()
 
     async def search(self, request: RecallRequest) -> JsonObject:
@@ -116,7 +118,7 @@ class SqliteFtsRecallBackend(JsonlSessionRecallBackend):
                 )
             except (OSError, sqlite3.DatabaseError) as error:
                 self._warning(
-                    "SQLite recall index rebuild failed; falling back to JSONL scan: %s", error
+                    "SQLite recall index rebuild failed; falling back to canonical scan: %s", error
                 )
         return await self._fallback.search(request)
 
@@ -185,7 +187,7 @@ class SqliteFtsRecallBackend(JsonlSessionRecallBackend):
                 )
             except (OSError, sqlite3.DatabaseError) as error:
                 self._warning(
-                    "SQLite recall index rebuild failed; falling back to JSONL scan: %s", error
+                    "SQLite recall index rebuild failed; falling back to canonical scan: %s", error
                 )
         fallback_request = (
             replace(request, order="newest") if request.order == "relevance" else request
@@ -447,10 +449,11 @@ class SqliteFtsRecallBackend(JsonlSessionRecallBackend):
         connection.row_factory = sqlite3.Row
         connection.execute(f"PRAGMA busy_timeout={_SQLITE_BUSY_TIMEOUT_MS}")
         try:
-            connection.execute("PRAGMA journal_mode=WAL")
+            journal_mode = required_journal_mode(sqlite3.sqlite_version_info)
+            connection.execute(f"PRAGMA journal_mode={journal_mode.upper()}")
             connection.execute("PRAGMA synchronous=NORMAL")
         except sqlite3.DatabaseError as error:
-            self._warning("Could not enable WAL for SQLite recall index: %s", error)
+            self._warning("Could not configure the SQLite recall index journal: %s", error)
         return connection
 
     @staticmethod
@@ -472,6 +475,7 @@ class SqliteFtsRecallBackend(JsonlSessionRecallBackend):
               agent_id TEXT NOT NULL,
               project_id TEXT NOT NULL,
               session_id TEXT NOT NULL,
+              generation_id TEXT NOT NULL,
               history_revision INTEGER NOT NULL,
               indexed_at TEXT NOT NULL,
               PRIMARY KEY (agent_id, project_id, session_id)
@@ -572,16 +576,20 @@ class SqliteFtsRecallBackend(JsonlSessionRecallBackend):
             session_id = str(summary["id"])
             address = _session_address(request, session_id)
             session = self.sessions.get(address)
-            history_revision = self.sessions.history_revision(address)
+            generation_id, history_revision = self.sessions.history_version(address)
             indexed = connection.execute(
                 """
-                SELECT history_revision
+                SELECT generation_id, history_revision
                 FROM indexed_sessions
                 WHERE agent_id = ? AND project_id = ? AND session_id = ?
                 """,
                 (agent_id, scope, session_id),
             ).fetchone()
-            if indexed is not None and int(indexed["history_revision"]) == history_revision:
+            if (
+                indexed is not None
+                and str(indexed["generation_id"]) == generation_id
+                and int(indexed["history_revision"]) == history_revision
+            ):
                 continue
             self._reindex_session(
                 connection,
@@ -589,6 +597,7 @@ class SqliteFtsRecallBackend(JsonlSessionRecallBackend):
                 scope,
                 session_id,
                 session.load_active(),
+                generation_id=generation_id,
                 history_revision=history_revision,
             )
 
@@ -600,6 +609,7 @@ class SqliteFtsRecallBackend(JsonlSessionRecallBackend):
         session_id: str,
         messages: list[Any],
         *,
+        generation_id: str,
         history_revision: int,
     ) -> None:
         with connection:
@@ -676,15 +686,17 @@ class SqliteFtsRecallBackend(JsonlSessionRecallBackend):
                   agent_id,
                   project_id,
                   session_id,
+                  generation_id,
                   history_revision,
                   indexed_at
                 )
-                VALUES (?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?)
                 """,
                 (
                     agent_id,
                     scope,
                     session_id,
+                    generation_id,
                     history_revision,
                     datetime.now(UTC).isoformat(),
                 ),
@@ -959,6 +971,7 @@ class SqliteFtsRecallBackend(JsonlSessionRecallBackend):
             self.index_path,
             self.index_path.with_name(f"{self.index_path.name}-wal"),
             self.index_path.with_name(f"{self.index_path.name}-shm"),
+            self.index_path.with_name(f"{self.index_path.name}-journal"),
         ]
 
     def _warning(self, message: str, *args: object) -> None:
@@ -1011,8 +1024,8 @@ def _passage_in_time_range(
 
 
 def _fts_expression(request: RecallRequest) -> str | None:
-    # Trigram MATCH does substring lookup, mirroring the JSONL scanner's `term in haystack`.
-    # Terms are split the same way as the JSONL backend so both backends agree on what a term is.
+    # Trigram MATCH does substring lookup, mirroring the canonical scanner's `term in haystack`.
+    # Terms are split like the canonical backend so both agree on what a term is.
     if request.query is None:
         return None
     if request.match_mode == "phrase":

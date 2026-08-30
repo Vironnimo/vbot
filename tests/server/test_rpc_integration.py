@@ -226,7 +226,7 @@ class IntegrationStorage:
         }
 
     def load_recall_settings(self) -> JsonObject:
-        return {"backend": "jsonl_scan"}
+        return {"backend": "canonical_scan"}
 
     def load_web_search_settings(self) -> JsonObject:
         return {
@@ -657,8 +657,8 @@ def test_model_list_and_settings_get_follow_credential_contract(tmp_path: Path) 
                 "summary_model": None,
             },
             "recall": {
-                "backend": "jsonl_scan",
-                "available_backends": ["hybrid", "jsonl_scan", "sqlite_fts", "vector"],
+                "backend": "canonical_scan",
+                "available_backends": ["canonical_scan", "hybrid", "sqlite_fts", "vector"],
             },
             "web_search": {
                 "provider": "brave",

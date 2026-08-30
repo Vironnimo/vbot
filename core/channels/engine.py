@@ -780,9 +780,7 @@ class ChannelConversationEngine:
         *,
         track_participant: bool = True,
     ) -> None:
-        metadata = self._chat_sessions.get_metadata(
-            _session_address(route.agent_id, route.session_id)
-        )
+        address = _session_address(route.agent_id, route.session_id)
         last_reply_target: dict[str, Any] = {
             "channel_id": reply_plan.channel_id,
             "platform_target": reply_plan.platform_target,
@@ -791,27 +789,28 @@ class ChannelConversationEngine:
         # later non-topic message rewrites the dict without it (last-target semantics).
         if reply_plan.thread_id is not None:
             last_reply_target["thread_id"] = reply_plan.thread_id
-        metadata.update(
-            {
-                "source_channel_id": self._config.id,
-                "platform": conversation.platform,
-                "platform_conv_id": conversation.chat_id,
-                "conversation_kind": conversation.kind,
-                "last_reply_target": last_reply_target,
-            }
-        )
-        if track_participant and conversation.kind == "group":
-            participants = metadata.get("participants")
-            if not isinstance(participants, dict):
-                participants = {}
-            participants[conversation.user_id] = {
-                "display_name": conversation.user_display_name or conversation.user_id,
-                "last_seen_at": datetime.now(UTC).isoformat(),
-            }
-            metadata["participants"] = participants
-        self._chat_sessions.set_metadata(
-            _session_address(route.agent_id, route.session_id), metadata
-        )
+
+        def update(metadata: dict[str, Any]) -> None:
+            metadata.update(
+                {
+                    "source_channel_id": self._config.id,
+                    "platform": conversation.platform,
+                    "platform_conv_id": conversation.chat_id,
+                    "conversation_kind": conversation.kind,
+                    "last_reply_target": last_reply_target,
+                }
+            )
+            if track_participant and conversation.kind == "group":
+                participants = metadata.get("participants")
+                if not isinstance(participants, dict):
+                    participants = {}
+                participants[conversation.user_id] = {
+                    "display_name": conversation.user_display_name or conversation.user_id,
+                    "last_seen_at": datetime.now(UTC).isoformat(),
+                }
+                metadata["participants"] = participants
+
+        self._chat_sessions.mutate_metadata(address, update)
 
     # -- Queue / workers --------------------------------------------------------------
 
@@ -1370,13 +1369,12 @@ class ChannelConversationEngine:
         active session); the get_or_create is a defensive floor for the rare case
         where it does not.
         """
-        try:
-            metadata = self._chat_sessions.get_metadata(_session_address(agent_id, anchor))
-        except ChatSessionError:
-            self._chat_sessions.get_or_create(_session_address(agent_id, anchor))
-            metadata = {}
-        metadata[ACTIVE_SESSION_METADATA_KEY] = new_session_id
-        self._chat_sessions.set_metadata(_session_address(agent_id, anchor), metadata)
+        address = _session_address(agent_id, anchor)
+        self._chat_sessions.get_or_create(address)
+        self._chat_sessions.mutate_metadata(
+            address,
+            lambda metadata: metadata.__setitem__(ACTIVE_SESSION_METADATA_KEY, new_session_id),
+        )
 
     def _point_conversation_at_session(
         self,
@@ -1385,16 +1383,12 @@ class ChannelConversationEngine:
     ) -> dict[str, Any]:
         """Persist a new active Session and return the exact prior anchor metadata."""
         anchor = self._derive_session_id(conversation)
-        try:
-            metadata = self._chat_sessions.get_metadata(
-                _session_address(self._config.agent_id, anchor)
-            )
-        except ChatSessionError:
-            self._chat_sessions.get_or_create(_session_address(self._config.agent_id, anchor))
-            metadata = {}
-        previous = dict(metadata)
-        metadata[ACTIVE_SESSION_METADATA_KEY] = session_id
-        self._chat_sessions.set_metadata(_session_address(self._config.agent_id, anchor), metadata)
+        address = _session_address(self._config.agent_id, anchor)
+        self._chat_sessions.get_or_create(address)
+        previous, _updated = self._chat_sessions.mutate_metadata_with_previous(
+            address,
+            lambda metadata: metadata.__setitem__(ACTIVE_SESSION_METADATA_KEY, session_id),
+        )
         return previous
 
     def _restore_conversation_pointer(

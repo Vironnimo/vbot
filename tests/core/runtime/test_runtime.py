@@ -18,7 +18,7 @@ from core.prompts import LayoutEntry, SystemPromptManager
 from core.providers.accounts import ConnectionRef
 from core.providers.credentials import ProviderCredentialResolver
 from core.providers.providers import ProviderRegistry
-from core.recall import JsonlSessionRecallBackend, RecallBackendRegistry, SqliteFtsRecallBackend
+from core.recall import CanonicalSessionRecallBackend, RecallBackendRegistry, SqliteFtsRecallBackend
 from core.runs import ChatRunManager, Run, RunCancelledError, RunStatus
 from core.runtime.runtime import _VBOT_ROOT, Runtime, _detect_vbot_version
 from core.sessions import ChatSessionManager, SessionAddress
@@ -426,7 +426,7 @@ def test_runtime_selects_jsonl_recall_backend_by_default(config: Config) -> None
 
     runtime.start()
 
-    assert isinstance(runtime.recall_backend, JsonlSessionRecallBackend)
+    assert isinstance(runtime.recall_backend, CanonicalSessionRecallBackend)
 
 
 def test_runtime_selects_sqlite_recall_backend_from_settings(config: Config) -> None:
@@ -454,7 +454,7 @@ def test_runtime_unknown_recall_backend_falls_back_to_jsonl(config: Config) -> N
 
     runtime.start()
 
-    assert isinstance(runtime.recall_backend, JsonlSessionRecallBackend)
+    assert isinstance(runtime.recall_backend, CanonicalSessionRecallBackend)
 
 
 def test_runtime_failing_recall_backend_factory_falls_back_to_jsonl(
@@ -469,8 +469,8 @@ def test_runtime_failing_recall_backend_factory_falls_back_to_jsonl(
     )
     registry = RecallBackendRegistry()
     registry.register(
-        "jsonl_scan",
-        lambda context: JsonlSessionRecallBackend(context.sessions),
+        "canonical_scan",
+        lambda context: CanonicalSessionRecallBackend(context.sessions),
     )
 
     def create_broken_backend(_context: Any) -> Any:
@@ -486,7 +486,7 @@ def test_runtime_failing_recall_backend_factory_falls_back_to_jsonl(
 
     runtime.start()
 
-    assert isinstance(runtime.recall_backend, JsonlSessionRecallBackend)
+    assert isinstance(runtime.recall_backend, CanonicalSessionRecallBackend)
 
 
 def test_builtin_provider_definitions_expose_model_visible_metadata_only(config: Config):

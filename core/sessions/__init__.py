@@ -6,6 +6,7 @@ from core.sessions.errors import (
     SessionConversionRequiredError,
     SessionStorageConflictError,
     SessionStoreCorruptError,
+    SessionStoreUnavailableError,
 )
 from core.sessions.sessions import (
     CHANNEL_MESSAGE_NOTE_PREFIX,
@@ -40,7 +41,6 @@ from core.sessions.sessions import (
     skill_tool_activation,
     skill_tool_activation_name,
 )
-from core.sessions.store import SessionStore, preflight_session_storage
 
 __all__ = [
     "CHANNEL_MESSAGE_NOTE_PREFIX",
@@ -58,8 +58,8 @@ __all__ = [
     "SessionConversionIncompleteError",
     "SessionConversionRequiredError",
     "SessionStorageConflictError",
-    "SessionStore",
     "SessionStoreCorruptError",
+    "SessionStoreUnavailableError",
     "ChatSessionManager",
     "SessionAddress",
     "current_skill_activation_contents",
@@ -74,7 +74,6 @@ __all__ = [
     "is_skill_context_note",
     "latest_project_tool_context_id",
     "project_tool_context_id",
-    "preflight_session_storage",
     "skill_activation_contents",
     "skill_activation_names",
     "skill_context_note_name",

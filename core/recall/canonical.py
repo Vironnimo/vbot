@@ -1,4 +1,4 @@
-"""JSONL scan recall backend for persisted Sessions."""
+"""Canonical Session scan backend for persisted Sessions."""
 
 from __future__ import annotations
 
@@ -79,7 +79,7 @@ SESSION_RECALL_LITERAL_SEARCH_GUIDANCE = (
 # Names of the built-in recall tools whose results are persisted into sessions
 # as ``role="tool"`` messages. Indexing or returning those results creates a
 # feedback loop where every search matches its own prior output, so they are
-# excluded from recall (the JSONL scan, context/bookends, and the semantic
+# excluded from recall (the canonical scan, context/bookends, and the semantic
 # index). This duplicates the Tool names from ``core.tools.session_search``
 # because recall is a lower layer than tools and cannot import it without an
 # import cycle; a test in ``test_session_search`` asserts the two stay in sync.
@@ -88,8 +88,8 @@ RECALL_TOOL_RESULT_NAMES = frozenset({"session_search", "session_read"})
 _WHITESPACE_PATTERN = re.compile(r"\s+")
 
 
-class JsonlSessionRecallBackend:
-    """Recall backend that scans canonical JSONL Sessions on demand."""
+class CanonicalSessionRecallBackend:
+    """Recall backend that scans canonical Session history on demand."""
 
     def __init__(self, sessions: ChatSessionManager) -> None:
         self.sessions = sessions
@@ -126,7 +126,7 @@ class JsonlSessionRecallBackend:
         """Backend-specific guidance for the session_search tool description.
 
         Appended to the generic tool description so the agent knows how queries
-        behave for the active backend. The JSONL scan matches literal substrings;
+        behave for the active backend. The canonical scan matches literal substrings;
         the FTS backend inherits this fragment, and the vector/hybrid backends
         override it.
         """
@@ -221,7 +221,8 @@ class JsonlSessionRecallBackend:
             address = _session_address(request, session_id)
             # Recall tracks only canonical history. Metadata-only changes must not
             # invalidate a continuation or trigger a rebuild of this projection.
-            fingerprint.append(f"{session_id}:{self.sessions.history_revision(address)}")
+            generation_id, revision = self.sessions.history_version(address)
+            fingerprint.append(f"{session_id}:{generation_id}:{revision}")
         return hashlib.sha256("\n".join(fingerprint).encode("utf-8")).hexdigest()
 
     def candidate_session_summaries(self, request: RecallRequest) -> list[JsonObject]:

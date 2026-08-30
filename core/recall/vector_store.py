@@ -1,11 +1,9 @@
 """SQLite-vec vector store for Passage-level semantic Recall.
 
-The store is a **disposable derived index** — canonical Session storage
-stays in JSONL under ``<data_dir>/agents/<agent-id>/sessions/``. This
-module is responsible for opening the connection, observing the embedding
-dimension lazily, pinning the complete embedding-space and index-policy
-identity in a header, and exposing Passage-vector upsert/lookup primitives that the
-recall backend (``core/recall/vector.py``) builds on top of.
+The store is a **disposable derived index**; canonical Session history stays in
+``<data_dir>/sessions.db``. This module opens the connection, observes the
+embedding dimension lazily, and pins the index-policy identity in a header. It
+exposes Passage-vector primitives used by ``core/recall/vector.py``.
 
 A Session's searchable text is split into overlapping source-derived Passages.
 Each Passage is its own metadata row and its own row in the ``vec0`` virtual
@@ -31,6 +29,8 @@ from pathlib import Path
 
 import sqlite_vec  # type: ignore[import-untyped]
 
+from core.sessions.schema import required_journal_mode
+
 _INDEX_DIR_NAME = "recall"
 _INDEX_FILE_NAME = "session_vectors.sqlite"
 _SQLITE_BUSY_TIMEOUT_MS = 1000
@@ -47,7 +47,8 @@ _SQLITE_BUSY_TIMEOUT_MS = 1000
 #      index policy, preventing cross-connection/options/policy vector reuse.
 # v7 → the header also pins the provider-reported model id, preventing a router
 #      alias or fallback from mixing vectors produced by different real models.
-_SCHEMA_VERSION = 8
+# v9 → Session generations prevent recreated addresses from reusing stale chunks.
+_SCHEMA_VERSION = 9
 _VECTOR_TABLE_NAME = "session_vectors"
 _CHUNK_TABLE_NAME = "chunks"
 _HEADER_TABLE_NAME = "store_header"
@@ -119,6 +120,7 @@ class ChunkVectorRecord:
     end_timestamp: str = ""
     start_role: str = ""
     end_role: str = ""
+    generation_id: str = ""
 
 
 class VectorStore:
@@ -151,7 +153,8 @@ class VectorStore:
             finally:
                 connection.enable_load_extension(False)
             connection.execute(f"PRAGMA busy_timeout={_SQLITE_BUSY_TIMEOUT_MS}")
-            connection.execute("PRAGMA journal_mode=WAL")
+            journal_mode = required_journal_mode(sqlite3.sqlite_version_info)
+            connection.execute(f"PRAGMA journal_mode={journal_mode.upper()}")
             connection.execute("PRAGMA synchronous=NORMAL")
             return connection
         except Exception as error:
@@ -170,6 +173,7 @@ class VectorStore:
               agent_id TEXT NOT NULL,
               project_id TEXT NOT NULL,
               started_at TEXT NOT NULL,
+              generation_id TEXT NOT NULL,
               history_revision INTEGER NOT NULL,
               anchor_message_id TEXT NOT NULL,
               snippet TEXT NOT NULL,
@@ -395,17 +399,19 @@ class VectorStore:
                     cursor = connection.execute(
                         f"""
                         INSERT INTO {_CHUNK_TABLE_NAME} (
-                          session_id, agent_id, project_id, started_at, history_revision,
+                          session_id, agent_id, project_id, started_at, generation_id,
+                          history_revision,
                           anchor_message_id, snippet, chunk_index,
                           start_message_id, end_message_id, passage_id, text,
                           start_timestamp, end_timestamp, start_role, end_role
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """,
                         (
                             record.session_id,
                             record.agent_id,
                             record.project_id,
                             record.started_at,
+                            record.generation_id,
                             record.history_revision,
                             record.anchor_message_id,
                             record.snippet,
@@ -494,8 +500,10 @@ class VectorStore:
     # Freshness + KNN query
     # ------------------------------------------------------------------
 
-    def list_indexed_sessions(self, agent_id: str, project_id: str = "") -> dict[str, int]:
-        """Return ``{session_id: history_revision}`` for a scope+agent's indexed Sessions.
+    def list_indexed_sessions(
+        self, agent_id: str, project_id: str = ""
+    ) -> dict[str, tuple[str, int]]:
+        """Return ``{session_id: (generation_id, revision)}`` for indexed Sessions.
 
         With chunk-keyed storage, a session has one row per chunk; we
         dedup to one entry per ``session_id`` (every chunk row of a
@@ -509,18 +517,24 @@ class VectorStore:
                 return {}
             rows = connection.execute(
                 f"""
-                SELECT session_id, history_revision FROM {_CHUNK_TABLE_NAME}
+                SELECT session_id, generation_id, history_revision FROM {_CHUNK_TABLE_NAME}
                 WHERE project_id = ? AND agent_id = ?
                 GROUP BY session_id
                 """,
                 (project_id, agent_id),
             ).fetchall()
-        return {str(row["session_id"]): int(row["history_revision"]) for row in rows}
+        return {
+            str(row["session_id"]): (
+                str(row["generation_id"]),
+                int(row["history_revision"]),
+            )
+            for row in rows
+        }
 
     def drop_indexed_sessions(
         self, agent_id: str, project_id: str, session_ids: Iterable[str]
     ) -> int:
-        """Remove a scope+agent's indexed session rows that no longer exist in JSONL."""
+        """Remove a scope+agent's indexed session rows that no longer exist in canonical storage."""
 
         removed = 0
         with closing(self._connect()) as connection, connection:
@@ -623,7 +637,8 @@ class VectorStore:
                 return {}
             rows = connection.execute(
                 f"""
-                SELECT rowid, session_id, agent_id, project_id, started_at, history_revision,
+                SELECT rowid, session_id, agent_id, project_id, started_at, generation_id,
+                       history_revision,
                        anchor_message_id, snippet, chunk_index, start_message_id, end_message_id,
                        passage_id, text, start_timestamp, end_timestamp, start_role, end_role
                 FROM {_CHUNK_TABLE_NAME}
@@ -637,6 +652,7 @@ class VectorStore:
                 agent_id=str(row["agent_id"]),
                 project_id=str(row["project_id"]),
                 started_at=str(row["started_at"]),
+                generation_id=str(row["generation_id"]),
                 history_revision=int(row["history_revision"]),
                 anchor_message_id=str(row["anchor_message_id"]),
                 snippet=str(row["snippet"]),
@@ -686,6 +702,7 @@ class VectorStore:
             self.index_path,
             Path(f"{self.index_path}-wal"),
             Path(f"{self.index_path}-shm"),
+            Path(f"{self.index_path}-journal"),
         ):
             path.unlink(missing_ok=True)
 

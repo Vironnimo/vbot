@@ -16,9 +16,11 @@ from core.sessions import (
     ChatSession,
     SessionAddress,
     SessionReadBatch,
+    SessionReadCursor,
     skill_context_note_name,
     skill_tool_activation_name,
 )
+from core.sessions.schema import required_journal_mode
 from core.statistics.skills import SEEN_SKILLS_META_KEY
 from core.tools import is_tool_result_envelope, tool_failure, tool_success
 
@@ -27,7 +29,7 @@ JsonObject = dict[str, Any]
 _INDEX_DIRECTORY = "statistics"
 _INDEX_FILENAME = "session-statistics.sqlite"
 _GLOBAL_SCOPE = ""
-_SCHEMA_VERSION = 3
+_SCHEMA_VERSION = 4
 _SQLITE_BUSY_TIMEOUT_MS = 1000
 
 
@@ -42,7 +44,7 @@ class StatisticsSessionSource(Protocol):
 
     def get(self, address: SessionAddress) -> ChatSession: ...
 
-    def history_revision(self, address: SessionAddress) -> int: ...
+    def history_version(self, address: SessionAddress) -> tuple[str, int]: ...
 
 
 @dataclass(frozen=True)
@@ -121,6 +123,7 @@ class StatisticsIndex:
                 self.index_path,
                 Path(f"{self.index_path}-wal"),
                 Path(f"{self.index_path}-shm"),
+                Path(f"{self.index_path}-journal"),
             ):
                 path.unlink(missing_ok=True)
 
@@ -133,7 +136,8 @@ class StatisticsIndex:
             connection.row_factory = sqlite3.Row
             connection.execute("PRAGMA foreign_keys = ON")
             connection.execute(f"PRAGMA busy_timeout = {_SQLITE_BUSY_TIMEOUT_MS}")
-            connection.execute("PRAGMA journal_mode = WAL")
+            journal_mode = required_journal_mode(sqlite3.sqlite_version_info)
+            connection.execute(f"PRAGMA journal_mode = {journal_mode.upper()}")
             connection.execute("PRAGMA synchronous = NORMAL")
             return connection
         except Exception:
@@ -157,7 +161,9 @@ class StatisticsIndex:
                 project_id TEXT NOT NULL,
                 agent_id TEXT NOT NULL,
                 session_id TEXT NOT NULL,
+                generation_id TEXT NOT NULL,
                 history_revision INTEGER NOT NULL,
+                cursor_generation_id TEXT NOT NULL,
                 cursor_history_revision INTEGER NOT NULL,
                 cursor_next_seq INTEGER NOT NULL,
                 cursor_message_count INTEGER NOT NULL,
@@ -226,7 +232,7 @@ class StatisticsIndex:
             key,
         ).fetchone()
         address = SessionAddress(project_id=key[0] or None, agent_id=key[1], session_id=key[2])
-        history_revision = sessions.history_revision(address)
+        generation_id, history_revision = sessions.history_version(address)
         summary_json = _compact_json(summary)
         if row is None:
             self._replace_session(connection, session, key, summary_json)
@@ -234,8 +240,10 @@ class StatisticsIndex:
 
         existing_count = int(row["cursor_message_count"])
         effective_fork = _effective_fork_message_count(summary, existing_count)
-        if int(row["history_revision"]) == history_revision and effective_fork == int(
-            row["fork_message_count"]
+        if (
+            str(row["generation_id"]) == generation_id
+            and int(row["history_revision"]) == history_revision
+            and effective_fork == int(row["fork_message_count"])
         ):
             if summary_json != str(row["summary_json"]):
                 connection.execute(
@@ -247,7 +255,32 @@ class StatisticsIndex:
                 )
             return
 
-        self._replace_session(connection, session, key, summary_json)
+        if str(row["generation_id"]) != generation_id or effective_fork != int(
+            row["fork_message_count"]
+        ):
+            self._replace_session(connection, session, key, summary_json)
+            return
+
+        cursor = SessionReadCursor(
+            generation_id=str(row["cursor_generation_id"]),
+            history_revision=int(row["cursor_history_revision"]),
+            next_seq=int(row["cursor_next_seq"]),
+            message_count=int(row["cursor_message_count"]),
+            last_message_id=cast(str | None, row["cursor_last_message_id"]),
+        )
+        batch = session.load_since(cursor)
+        if batch is None:
+            self._replace_session(connection, session, key, summary_json)
+            return
+        self._append_batch(
+            connection,
+            session,
+            key,
+            summary_json,
+            batch,
+            first_ordinal=cursor.next_seq,
+            fork_message_count=effective_fork,
+        )
 
     def _replace_session(
         self,
@@ -268,12 +301,15 @@ class StatisticsIndex:
             """
             INSERT INTO statistics_sessions (
                 project_id, agent_id, session_id,
-                history_revision, cursor_history_revision, cursor_next_seq,
+                generation_id, history_revision, cursor_generation_id,
+                cursor_history_revision, cursor_next_seq,
                 cursor_message_count, cursor_last_message_id,
                 fork_message_count, summary_json
-            ) VALUES (?, ?, ?, 0, 0, 0, 0, NULL, ?, ?)
+            ) VALUES (?, ?, ?, '', 0, '', 0, 0, 0, NULL, ?, ?)
             ON CONFLICT(project_id, agent_id, session_id) DO UPDATE SET
+                generation_id = '',
                 history_revision = 0,
+                cursor_generation_id = '',
                 cursor_history_revision = 0,
                 cursor_next_seq = 0,
                 cursor_message_count = 0,
@@ -330,7 +366,9 @@ class StatisticsIndex:
         connection.execute(
             """
             UPDATE statistics_sessions SET
+                generation_id = ?,
                 history_revision = ?,
+                cursor_generation_id = ?,
                 cursor_history_revision = ?,
                 cursor_next_seq = ?,
                 cursor_message_count = ?,
@@ -340,7 +378,9 @@ class StatisticsIndex:
             WHERE project_id = ? AND agent_id = ? AND session_id = ?
             """,
             (
+                batch.cursor.generation_id,
                 batch.cursor.history_revision,
+                batch.cursor.generation_id,
                 batch.cursor.history_revision,
                 batch.cursor.next_seq,
                 batch.cursor.message_count,

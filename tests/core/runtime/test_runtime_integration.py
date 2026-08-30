@@ -22,7 +22,7 @@ from core.providers.openrouter import OpenRouterAdapter
 from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig, ProviderRegistry
 from core.providers.token_store import OAuthToken
 from core.recall import (
-    JsonlSessionRecallBackend,
+    CanonicalSessionRecallBackend,
     SqliteFtsRecallBackend,
     VectorRecallBackend,
 )
@@ -904,13 +904,13 @@ def test_runtime_passes_embedding_service_to_vector_recall_backend(
 def test_runtime_passes_none_for_embeddings_when_vector_not_selected(
     config: Config,
 ) -> None:
-    """The default (JSONL) recall backend leaves the embedding context unset."""
+    """The default canonical-scan Recall backend leaves the embedding context unset."""
 
     runtime = Runtime(config)
     runtime.start()
     try:
         backend = runtime.recall_backend
-        assert isinstance(backend, JsonlSessionRecallBackend)
+        assert isinstance(backend, CanonicalSessionRecallBackend)
     finally:
         runtime.stop()
 
@@ -922,12 +922,12 @@ def test_runtime_reload_recall_backend_creates_vector_backend(
     """``Runtime.reload_recall_backend()`` rebuilds the registry with the new backend."""
 
     monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-test-fake-key-12345")
-    _write_settings(config, {"recall": {"backend": "jsonl_scan"}})
+    _write_settings(config, {"recall": {"backend": "canonical_scan"}})
 
     runtime = Runtime(config)
     runtime.start()
     try:
-        assert isinstance(runtime.recall_backend, JsonlSessionRecallBackend)
+        assert isinstance(runtime.recall_backend, CanonicalSessionRecallBackend)
         jsonl_tool = runtime.tools.get("session_search")
         jsonl_parameters = jsonl_tool.parameters
         assert set(jsonl_parameters["properties"]) == {
@@ -962,7 +962,7 @@ def test_runtime_reload_recall_backend_recreates_sqlite_fts(
 ) -> None:
     """``reload_recall_backend`` also rebuilds the SQLite FTS backend."""
 
-    _write_settings(config, {"recall": {"backend": "jsonl_scan"}})
+    _write_settings(config, {"recall": {"backend": "canonical_scan"}})
 
     runtime = Runtime(config)
     runtime.start()

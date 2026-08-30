@@ -6,6 +6,7 @@ import builtins
 import json
 import os
 import shutil
+import tempfile
 import uuid
 from collections.abc import Callable, Mapping
 from contextlib import suppress
@@ -422,11 +423,18 @@ class AgentStore:
         )
         self._defaults_provider = defaults_provider
         self._sessions = sessions
+        self._owns_sessions = False
         self._reported_order_error: str | None = None
         # Agent updates can arrive from separate RPC worker pools. Serialize
         # replacement of the same config files so Windows never sees two
         # concurrent os.replace calls targeting one agent.json or order.json.
         self._write_lock = RLock()
+
+    def close(self) -> None:
+        if self._owns_sessions and self._sessions is not None:
+            self._sessions.close()
+            self._sessions = None
+            self._owns_sessions = False
 
     @property
     def data_dir(self) -> Path:
@@ -450,7 +458,7 @@ class AgentStore:
         custom_system_prompt_enabled: bool = DEFAULT_CUSTOM_SYSTEM_PROMPT_ENABLED,
         compaction_policy: dict[str, Any] | None = None,
     ) -> Agent:
-        """Create and persist a new agent, sessions directory, and workspace."""
+        """Create and persist a new Agent, initial Session, and Workspace."""
         self._validate_agent_id(agent_id)
         agent_dir = self._agent_dir(agent_id)
         if agent_dir.exists():
@@ -505,8 +513,13 @@ class AgentStore:
             updated_at=now,
         )
 
-        self._seed_workspace(Path(agent.workspace))
-        self._write_agent(agent)
+        try:
+            self._seed_workspace(Path(agent.workspace))
+            self._write_agent(agent)
+        except Exception:
+            session.delete()
+            shutil.rmtree(agent_dir, ignore_errors=True)
+            raise
         # ``list_with_order`` appends this newly valid Agent after every existing
         # roster entry and persists that projection. The config write remains the
         # creation commit point; an auxiliary order write failure is logged there
@@ -904,10 +917,19 @@ class AgentStore:
 
     def restore_rename(self, result: AgentRenameResult) -> None:
         """Restore the exact pre-rename Agent tree and config snapshot."""
-        self._move_agent_tree(
-            self._agent_dir(result.agent.id),
-            self._agent_dir(result.previous_agent.id),
+        self._session_manager().retarget_identity_agent_sessions(
+            result.agent.id, result.previous_agent.id
         )
+        try:
+            self._move_agent_tree(
+                self._agent_dir(result.agent.id),
+                self._agent_dir(result.previous_agent.id),
+            )
+        except Exception:
+            self._session_manager().retarget_identity_agent_sessions(
+                result.previous_agent.id, result.agent.id
+            )
+            raise
         self._write_agent(result.previous_agent)
         if result.order_updated:
             self._restore_agent_order(result.previous_order)
@@ -1016,17 +1038,39 @@ class AgentStore:
         rooted in) still exists after the first move and is archived beside it.
         """
         agent = self.get(agent_id)
-        self._session_manager().archive_identity_agent_sessions(agent_id)
         archive_dir = self._archive_dir(agent_id)
-        if archive_dir.exists():
-            shutil.rmtree(archive_dir)
+        archive_dir.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(
+            prefix=f".{agent_id}-archive-",
+            dir=archive_dir.parent,
+            ignore_cleanup_errors=True,
+        ) as backup_root:
+            previous_archive = Path(backup_root) / "previous"
+            if archive_dir.exists():
+                shutil.move(str(archive_dir), str(previous_archive))
 
-        archive_dir.mkdir(parents=True)
-        shutil.move(str(self._agent_dir(agent_id)), str(archive_dir / "agent"))
-
-        workspace_path = Path(agent.workspace)
-        if workspace_path.exists():
-            shutil.move(str(workspace_path), str(archive_dir / "workspace"))
+            archive_dir.mkdir()
+            agent_archive = archive_dir / "agent"
+            workspace_archive = archive_dir / "workspace"
+            workspace_path = Path(agent.workspace)
+            agent_moved = False
+            workspace_moved = False
+            try:
+                shutil.move(str(self._agent_dir(agent_id)), str(agent_archive))
+                agent_moved = True
+                if workspace_path.exists():
+                    shutil.move(str(workspace_path), str(workspace_archive))
+                    workspace_moved = True
+                self._session_manager().archive_identity_agent_sessions(agent_id)
+            except Exception:
+                if workspace_moved:
+                    shutil.move(str(workspace_archive), str(workspace_path))
+                if agent_moved:
+                    shutil.move(str(agent_archive), str(self._agent_dir(agent_id)))
+                shutil.rmtree(archive_dir, ignore_errors=True)
+                if previous_archive.exists():
+                    shutil.move(str(previous_archive), str(archive_dir))
+                raise
 
         # Reconcile the collection document after the archive is committed. A
         # stale id is filtered even if persistence fails, so delete never reports
@@ -1110,8 +1154,8 @@ class AgentStore:
 
     def _archive_dir(self, agent_id: str) -> Path:
         # Agent archives live under their own ``agents/`` subtree, mirroring the
-        # session (``archive/sessions/``) and project (``archive/projects/``)
-        # archive roots: a flat ``archive/<agent-id>`` would let an agent named
+        # legacy Session sources (``archive/sessions/``) and Project archives
+        # (``archive/projects/``): a flat ``archive/<agent-id>`` would let an Agent named
         # ``sessions`` or ``projects`` collide with those roots — and delete's
         # replace-archive rmtree would then wipe them wholesale.
         return self._data_dir / "archive" / "agents" / agent_id
@@ -1239,7 +1283,11 @@ class AgentStore:
 
         session = self._session_manager().create(agent.id)
         updated_agent = replace(agent, current_session_id=session.id, updated_at=_utc_now())
-        self._write_agent(updated_agent)
+        try:
+            self._write_agent(updated_agent)
+        except Exception:
+            session.delete()
+            raise
         return updated_agent
 
     def _validate_current_session(self, agent_id: str, session_id: Any) -> None:
@@ -1255,6 +1303,7 @@ class AgentStore:
     def _session_manager(self) -> ChatSessionManager:
         if self._sessions is None:
             self._sessions = ChatSessionManager(self._data_dir)
+            self._owns_sessions = True
         return self._sessions
 
     def _seed_workspace(self, workspace_path: Path) -> None:

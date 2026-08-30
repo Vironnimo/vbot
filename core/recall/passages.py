@@ -7,7 +7,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any
 
-from core.recall.jsonl import (
+from core.recall.canonical import (
     SESSION_RECALL_DEFAULT_ROLES,
     is_recall_artifact_message,
     message_search_text,

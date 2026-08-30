@@ -28,20 +28,27 @@ class LegacySession:
     archived: bool
 
     @property
+    def source_digest(self) -> str:
+        digest = hashlib.sha256()
+        for path in _artifacts(self.transcript):
+            digest.update(path.name.encode("utf-8"))
+            if path.exists():
+                digest.update(b"\0present\0")
+                digest.update(path.read_bytes())
+            else:
+                digest.update(b"\0missing\0")
+        return digest.hexdigest()
+
+    @property
     def digest(self) -> str:
-        payload = {
-            "address": [self.address.project_id, self.address.agent_id, self.address.session_id],
-            "messages": [message.to_dict() for message in self.messages],
-            "metadata": self.metadata,
-            "activity": self.activity,
-            "continuation": self.continuation,
-            "archived": self.archived,
-        }
-        return hashlib.sha256(
-            json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode(
-                "utf-8"
-            )
-        ).hexdigest()
+        return semantic_digest(
+            self.address,
+            self.messages,
+            self.metadata,
+            self.activity,
+            self.continuation,
+            self.archived,
+        )
 
 
 def inventory(data_dir: Path) -> list[LegacySession]:
@@ -62,17 +69,18 @@ def inventory(data_dir: Path) -> list[LegacySession]:
         )
 
     sessions: list[LegacySession] = []
-    seen: set[SessionAddress] = set()
+    seen: set[tuple[SessionAddress, bool]] = set()
     for transcript, project_id, agent_id, archived in sorted(
-        sources, key=lambda item: str(item[0])
+        sources, key=lambda item: (not item[3], str(item[0]))
     ):
         if transcript.name.endswith(".continuation.jsonl"):
             continue
         address = SessionAddress(project_id, agent_id, transcript.stem)
         _validate_address(address, transcript)
-        if address in seen:
-            raise ValueError(f"duplicate legacy Session address: {address}")
-        seen.add(address)
+        source_key = (address, archived)
+        if source_key in seen:
+            raise ValueError(f"duplicate legacy Session source: {address}")
+        seen.add(source_key)
         sessions.append(
             LegacySession(
                 address=address,
@@ -87,6 +95,31 @@ def inventory(data_dir: Path) -> list[LegacySession]:
             )
         )
     return sessions
+
+
+def semantic_digest(
+    address: SessionAddress,
+    messages: tuple[ChatMessage, ...],
+    metadata: JsonObject,
+    activity: JsonObject,
+    continuation: tuple[JsonObject, ...],
+    archived: bool,
+) -> str:
+    payload = {
+        "address": [address.project_id, address.agent_id, address.session_id],
+        "messages": [message.to_dict() for message in messages],
+        "metadata": metadata,
+        "activity": activity,
+        "continuation": continuation,
+        "archived": archived,
+    }
+    digest = hashlib.sha256()
+    digest.update(
+        json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode(
+            "utf-8"
+        )
+    )
+    return digest.hexdigest()
 
 
 def _validate_address(address: SessionAddress, path: Path) -> None:
@@ -110,12 +143,16 @@ def _validate_address(address: SessionAddress, path: Path) -> None:
 
 def _messages(path: Path) -> list[ChatMessage]:
     messages: list[ChatMessage] = []
-    for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+    content = path.read_text(encoding="utf-8")
+    lines = content.splitlines()
+    for line_number, line in enumerate(lines, start=1):
         if not line.strip():
             continue
         try:
             messages.append(ChatMessage.from_dict(json.loads(line)))
         except (json.JSONDecodeError, TypeError, ValueError) as exc:
+            if line_number == len(lines) and not content.endswith(("\n", "\r")):
+                break
             raise ValueError(f"invalid legacy Session message at {path}:{line_number}") from exc
     return messages
 
@@ -136,14 +173,28 @@ def _continuation(path: Path) -> list[JsonObject]:
     if not path.exists():
         return []
     records: list[JsonObject] = []
-    for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+    content = path.read_text(encoding="utf-8")
+    lines = content.splitlines()
+    for line_number, line in enumerate(lines, start=1):
         if not line.strip():
             continue
         try:
             data = json.loads(line)
         except json.JSONDecodeError as exc:
+            if line_number == len(lines) and not content.endswith(("\n", "\r")):
+                break
             raise ValueError(f"invalid legacy continuation at {path}:{line_number}") from exc
         if not isinstance(data, dict):
             raise ValueError(f"legacy continuation record must be an object: {path}:{line_number}")
         records.append(data)
     return records
+
+
+def _artifacts(transcript: Path) -> tuple[Path, Path, Path, Path]:
+    stem = transcript.stem
+    return (
+        transcript,
+        transcript.with_name(f"{stem}.meta.json"),
+        transcript.with_name(f"{stem}.activity.json"),
+        transcript.with_name(f"{stem}.continuation.jsonl"),
+    )

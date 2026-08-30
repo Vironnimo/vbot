@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import threading
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
@@ -43,7 +45,7 @@ def test_create_append_and_load_use_a_canonical_database(manager, tmp_path) -> N
     assert not list((tmp_path / "agents").glob("*/sessions/*.jsonl"))
 
 
-def test_cursor_requires_the_exact_history_snapshot(manager) -> None:
+def test_cursor_reads_only_messages_appended_after_the_snapshot(manager) -> None:
     session = manager.create("coder", session_id="session-one")
     session.append(ChatMessage.user("first"))
     initial = session.load_since()
@@ -52,7 +54,9 @@ def test_cursor_requires_the_exact_history_snapshot(manager) -> None:
 
     assert session.load_since(initial.cursor) is not None
     session.append(ChatMessage.assistant(model="test", content="second"))
-    assert session.load_since(initial.cursor) is None
+    appended = session.load_since(initial.cursor)
+    assert appended is not None
+    assert [message.content for message in appended.messages] == ["second"]
 
 
 def test_metadata_activity_and_continuation_change_state_not_history(manager) -> None:
@@ -121,6 +125,124 @@ def test_archive_hides_session_until_explicit_restore(manager) -> None:
         manager.get(address)
     manager.restore(address)
     assert manager.exists(address) is True
+
+
+def test_archived_address_can_start_a_fresh_generation(manager) -> None:
+    address = _address("coder", "session-one")
+    original = manager.create("coder", session_id=address.session_id)
+    original.append(ChatMessage.user("old"))
+    original_cursor = original.load_since().cursor
+    asyncio.run(manager.archive(address))
+
+    replacement = manager.get_or_create(address)
+    replacement.append(ChatMessage.user("new"))
+
+    assert [message.content for message in replacement.load()] == ["new"]
+    assert replacement.load_since(original_cursor) is None
+    with pytest.raises(ChatSessionError, match="live session already exists"):
+        manager.restore(address)
+
+
+def test_repeated_message_ids_are_preserved_in_sequence_order(manager) -> None:
+    session = manager.create("coder", session_id="session-one")
+    checkpoint = ChatMessage.compaction_checkpoint(
+        summary="checkpoint",
+        projection=[],
+        compacted_token_count=1,
+        policy="automatic",
+        strategy="summary",
+    )
+
+    session.append_many([checkpoint, checkpoint])
+
+    assert session.load() == [checkpoint, checkpoint]
+
+
+def test_concurrent_metadata_mutations_do_not_overwrite_each_other(manager) -> None:
+    address = _address("coder", "session-one")
+    manager.create("coder", session_id=address.session_id)
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [
+            pool.submit(manager.record_run_kind, address, RunKind.USER),
+            pool.submit(manager.record_run_kind, address, RunKind.REFLECTION),
+        ]
+        for future in futures:
+            future.result()
+
+    assert set(manager.get_metadata(address)[SESSION_RUN_KINDS_META_KEY]) == {
+        RunKind.USER.value,
+        RunKind.REFLECTION.value,
+    }
+
+
+def test_two_managers_append_concurrently_without_losing_messages(tmp_path) -> None:
+    first = ChatSessionManager(tmp_path)
+    second = ChatSessionManager(tmp_path)
+    address = _address("coder", "session-one")
+    first.create("coder", session_id=address.session_id)
+    barrier = threading.Barrier(2)
+
+    def append(manager: ChatSessionManager, prefix: str) -> None:
+        session = manager.get(address)
+        barrier.wait()
+        for index in range(40):
+            session.append(ChatMessage.user(f"{prefix}-{index}"))
+
+    try:
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            futures = [
+                pool.submit(append, first, "first"),
+                pool.submit(append, second, "second"),
+            ]
+            for future in futures:
+                future.result()
+
+        contents = [message.content for message in first.get(address).load()]
+        assert len(contents) == 80
+        assert set(contents) == {
+            *(f"first-{index}" for index in range(40)),
+            *(f"second-{index}" for index in range(40)),
+        }
+    finally:
+        second.close()
+        first.close()
+
+
+def test_two_managers_get_or_create_one_live_generation(tmp_path) -> None:
+    first = ChatSessionManager(tmp_path)
+    second = ChatSessionManager(tmp_path)
+    address = _address("coder", "session-one")
+    barrier = threading.Barrier(2)
+
+    def create(manager: ChatSessionManager):
+        barrier.wait()
+        return manager.get_or_create(address)
+
+    try:
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            handles = [
+                pool.submit(create, first),
+                pool.submit(create, second),
+            ]
+            assert [future.result().address for future in handles] == [address, address]
+        assert [session.id for session in first.list("coder")] == [address.session_id]
+    finally:
+        second.close()
+        first.close()
+
+
+def test_callback_failure_does_not_turn_a_committed_title_into_an_error(manager) -> None:
+    address = _address("coder", "session-one")
+    manager.create("coder", session_id=address.session_id)
+
+    def fail(_address: SessionAddress) -> None:
+        raise RuntimeError("observer failed")
+
+    manager.add_title_changed_callback(fail)
+
+    assert manager.set_title(address, "Persisted") == "Persisted"
+    assert manager.get_metadata(address)["title"] == "Persisted"
 
 
 def test_deferred_notes_keep_their_existing_ordering(manager) -> None:
