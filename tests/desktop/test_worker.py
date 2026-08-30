@@ -588,6 +588,86 @@ def test_upload_budget_asks_the_server_for_its_active_limit(
     )
 
 
+def test_stop_recording_ends_capture_and_keeps_audio(
+    fake_bridge: FakeBridge,
+) -> None:
+    """A user stop closes the capture early but keeps the audio recorded so far.
+
+    The captured frames must still flow through the normal pipeline (the caller
+    transcribes and sends them), so the recording returns WAV bytes instead of
+    discarding the utterance.
+    """
+    from desktop.wakeword.worker import WakewordWorker
+
+    class AlwaysSpeechDetector:
+        def reset(self) -> None:
+            pass
+
+        def is_speech(self, _frame: bytes) -> bool:
+            return True
+
+    worker = WakewordWorker(
+        engine=MockWakewordEngine(),
+        bridge=fake_bridge,
+        server_url="http://127.0.0.1:8420",
+        speech_detector=AlwaysSpeechDetector(),
+    )
+    reads = {"count": 0}
+
+    def stop_after_few_reads() -> None:
+        reads["count"] += 1
+        if reads["count"] >= 5:
+            worker.stop_recording()
+
+    worker._stream = FakeSounddeviceStream(
+        [_make_speech_chunk()] * 1000,
+        on_read=stop_after_few_reads,
+    )
+    worker._running.set()
+
+    wav_bytes = worker._record_until_silence()
+
+    assert wav_bytes is not None
+    with wave.open(io.BytesIO(wav_bytes), "rb") as wav_file:
+        duration_seconds = wav_file.getnframes() / wav_file.getframerate()
+    # A handful of frames plus pre-roll, far below the endless stream.
+    assert duration_seconds < 1.0
+
+
+def test_stop_recording_request_does_not_leak_into_next_recording(
+    fake_bridge: FakeBridge,
+) -> None:
+    """A stale stop request must not cut the next recording short.
+
+    The stop event is cleared before every recording starts, so a stop that
+    already ended one utterance never breaks the following one.
+    """
+    from unittest.mock import MagicMock
+
+    from desktop.wakeword.worker import WakewordWorker
+
+    worker = WakewordWorker(
+        engine=MockWakewordEngine(),
+        bridge=fake_bridge,
+        server_url="http://127.0.0.1:8420",
+    )
+    worker._stop_recording.set()
+    worker._read_config = lambda: {  # type: ignore[method-assign]
+        "target_agent_id": "main",
+        "session_behavior": "active",
+    }
+    worker._stream = FakeSounddeviceStream([_make_speech_chunk()] * 10)
+    worker._transcribe = lambda _audio: "test command"  # type: ignore[assignment,method-assign]
+    worker._resolve_session = MagicMock(return_value="session-1")  # type: ignore[method-assign]
+    worker._send_transcript = MagicMock(return_value=True)  # type: ignore[method-assign]
+    worker._running.set()
+
+    outcome = worker._handle_detection()
+
+    assert outcome == "sent"
+    worker._send_transcript.assert_called_once()
+
+
 def test_recording_ends_during_continuous_noise_not_at_max_duration(
     fake_bridge: FakeBridge,
 ) -> None:
