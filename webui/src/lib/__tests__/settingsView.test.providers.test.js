@@ -456,19 +456,19 @@ describe('settingsView helpers', () => {
       },
     });
     expect(getRecallSettings({})).toEqual({
-      backend: 'jsonl_scan',
-      available_backends: ['jsonl_scan', 'sqlite_fts'],
+      backend: 'canonical_scan',
+      available_backends: ['canonical_scan', 'sqlite_fts'],
     });
     expect(
       getRecallSettings({
         recall: {
           backend: 'sqlite_fts',
-          available_backends: ['jsonl_scan', 'sqlite_fts'],
+          available_backends: ['canonical_scan', 'sqlite_fts'],
         },
       }),
     ).toEqual({
       backend: 'sqlite_fts',
-      available_backends: ['jsonl_scan', 'sqlite_fts'],
+      available_backends: ['canonical_scan', 'sqlite_fts'],
     });
     expect(buildRecallSettingsPayload({ backend: 'sqlite_fts' })).toEqual({
       recall: {
@@ -477,7 +477,7 @@ describe('settingsView helpers', () => {
     });
     expect(buildRecallBackendOptions(getRecallSettings({}), translate)).toEqual(
       [
-        { value: 'jsonl_scan', label: 'JSONL scan' },
+        { value: 'canonical_scan', label: 'Canonical scan' },
         { value: 'sqlite_fts', label: 'SQLite FTS' },
       ],
     );

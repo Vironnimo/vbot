@@ -75,8 +75,8 @@ export function createSettingsPayload(overrides = {}) {
       subagent_timeout_minutes: 60,
     },
     recall: {
-      backend: 'jsonl_scan',
-      available_backends: ['jsonl_scan', 'sqlite_fts'],
+      backend: 'canonical_scan',
+      available_backends: ['canonical_scan', 'sqlite_fts'],
     },
     web_search: {
       provider: 'brave',
@@ -131,7 +131,7 @@ export function translate(key, fallback, values) {
     'settings.providers.description.modelCount': '{count} models available.',
     'settings.providers.description.none':
       'Provider metadata is not available yet.',
-    'settings.recall.backends.jsonl_scan': 'JSONL scan',
+    'settings.recall.backends.canonical_scan': 'Canonical scan',
     'settings.recall.backends.sqlite_fts': 'SQLite FTS',
     'settings.webSearch.providers.brave': 'Brave Search',
     'settings.webSearch.providers.searxng': 'SearXNG',

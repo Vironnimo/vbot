@@ -379,12 +379,19 @@ class ProjectStore:
             previous_archive = Path(backup_root) / "previous"
             if archive_dir.exists():
                 shutil.move(str(archive_dir), str(previous_archive))
-            shutil.move(str(project_dir), str(archive_dir))
+            project_moved = False
             try:
+                shutil.move(str(project_dir), str(archive_dir))
+                project_moved = True
                 self._session_manager().archive_project_sessions(project_id)
             except Exception:
-                shutil.move(str(archive_dir), str(project_dir))
+                if project_moved:
+                    shutil.move(str(archive_dir), str(project_dir))
                 if previous_archive.exists():
+                    # Restore prior archive whether move or DB step failed.
+                    # If project_moved and DB rolled back, archive_dir is already
+                    # gone (moved back), so this recreates the previous archive.
+                    # If move failed, archive_dir never existed.
                     shutil.move(str(previous_archive), str(archive_dir))
                 raise
         return archive_dir
