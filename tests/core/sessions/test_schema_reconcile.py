@@ -309,4 +309,5 @@ def test_store_moves_an_existing_wal_database_off_vulnerable_wal(tmp_path, monke
     monkeypatch.setattr(sqlite3, "sqlite_version_info", (3, 40, 1))
     store = SessionStore(database)
     store.close()
-    assert _journal_mode(database) == "delete"
+    # Hermes WAL-reset safety: never live-downgrade an existing WAL DB.
+    assert _journal_mode(database) == "wal"
