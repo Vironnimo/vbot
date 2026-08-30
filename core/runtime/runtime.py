@@ -12,6 +12,7 @@ import threading
 import time
 import tomllib
 from collections.abc import Callable, Mapping, Sequence
+from contextlib import suppress
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from importlib.metadata import PackageNotFoundError
@@ -573,323 +574,337 @@ class Runtime:
         self._embeddings = EmbeddingService(self._model_tasks, self)
         # Sessions are a canonical service: it opens and verifies one database
         # before any Agent lifecycle operation can create or validate a Session.
-        self._chat_sessions = ChatSessionManager(
-            self._storage.data_dir,
-            store_path=self._storage.layout.sessions_db_path,
-        )
-        self._take_startup_backup()
-        self._agents = AgentStore(
-            self._storage.data_dir,
-            template_dir=resources_path / "workspace-templates",
-            defaults_provider=lambda: storage.load_defaults().get("agent", {}),
-            sessions=self._chat_sessions,
-        )
-        self._process_manager = ProcessManager(
-            temporary_files=self._storage.temporary_files,
-        )
-        self._start_process_manager()
-        self._tools = ToolRegistry()
-        # Tool-owned System Prompt block declarations (D6): the tool side of the
-        # unified contributor path. Project and Sub-Agent contribute their dynamic
-        # catalogs/guidance here; the runtime hands declarations to the prompt
-        # manager without importing tool classes into the prompt domain.
-        self._tool_prompt_blocks = ToolPromptBlockRegistry()
-        self._memory_service = MemoryService()
-        # One read-before-write guard shared by read/write/edit: read stamps each
-        # file, write/edit refuse an unread or externally-changed file (file_state.py).
-        self._file_state = FileReadState()
-        # Session-scoped file-content tracker for git-style change statistics
-        # (change_tracker.py). Shared by read/write/edit and the chat loop.
-        self._change_tracker = ChangeTracker()
-        register_read_tool(
-            self._tools,
-            attachment_store=self._attachment_store,
-            speech_service=self._speech,
-            file_state=self._file_state,
-            speech_max_size_bytes=self._speech_upload_max_size_bytes,
-        )
-        register_edit_tool(self._tools, file_state=self._file_state)
-        register_glob_tool(self._tools)
-        register_grep_tool(self._tools)
-        register_write_tool(self._tools, file_state=self._file_state)
-        register_memory_tool(self._tools, self._memory_service)
-        register_web_fetch_tool(self._tools, attachment_store=self._attachment_store)
-        register_web_search_tool(
-            self._tools,
-            self.resolve_environment_credential,
-            self._storage.load_web_search_settings,
-        )
-        register_process_tool(self._tools, self._process_manager)
-        register_text_to_speech_tool(self._tools, self._speech)
-        register_analyze_image_tool(self._tools, self._image)
-        register_image_generation_tool(self._tools, self._image)
-        register_generate_video_tool(self._tools, self._video)
-        register_generate_music_tool(self._tools, self._music)
-        extension_dirs = self._extra_extension_directories(settings)
-        disabled_extensions, extension_config = self._extension_load_options(settings)
-        self._extensions = ExtensionRegistry.load(
-            self._storage.data_dir / "extensions",
-            extra_dirs=extension_dirs,
-            disabled=disabled_extensions,
-            config=extension_config,
-            bundled_dir=resources_path / "extensions",
-            config_provider=self._live_extension_config,
-            credential_resolver=self.resolve_environment_credential,
-        )
-        failed_extension_count = len(self._extensions.diagnostics())
-        if failed_extension_count > 0:
-            self.logger.warning(
-                "Loaded extensions with %s failed extensions; "
-                "see vbot.extensions errors for details",
-                failed_extension_count,
+        # Partial startup must close every Session resource in reverse order so a
+        # failed start does not leak descriptors or leave a half-open database.
+        try:
+            self._chat_sessions = ChatSessionManager(
+                self._storage.data_dir,
+                store_path=self._storage.layout.sessions_db_path,
             )
-        # Skills load after extensions: a loaded extension may bundle its own skills
-        # under ``<extension>/skills/``, which ``_skill_scan_roots`` folds into the
-        # global pool, so the extension layer must be in place first.
-        self._skill_policy = SkillPolicyService(self._storage)
-        skill_scan_roots = self._skill_scan_roots(settings, resources_path)
-        self._skills = SkillRegistry.load(
-            skill_scan_roots[0],
-            extra_dirs=skill_scan_roots[1:],
-            environment=self._skill_environment(data_dir_credentials),
-            origins=self._bundled_skill_origins(skill_scan_roots),
-            excluded_names=self._disabled_skill_names(),
-        )
-        invalid_skill_count = len(self._skills.invalid_diagnostics())
-        if invalid_skill_count > 0:
-            self.logger.warning(
-                "Loaded skills with %s invalid skill directories; "
-                "see vbot.skills warnings for details",
-                invalid_skill_count,
+            self._take_startup_backup()
+            self._agents = AgentStore(
+                self._storage.data_dir,
+                template_dir=resources_path / "workspace-templates",
+                defaults_provider=lambda: storage.load_defaults().get("agent", {}),
+                sessions=self._chat_sessions,
             )
-        register_skill_tool(self._tools, self.skills_for, self.reload_skills_async)
-        # The agent skill-authoring write core refuses the bundled skills root;
-        # ``skill_manage`` writes only the calling agent's private home.
-        self._skill_authoring = SkillAuthoringService(
-            protected_roots=[resources_path / _SKILLS_DIRNAME],
-        )
-        register_skill_manage_tool(
-            self._tools,
-            self._skill_authoring,
-            self.agent_skills_dir,
-            self.invalidate_agent_skills,
-            self._resolve_shared_skills_dir,
-            self._resolve_external_skill_scope,
-        )
-        register_history_tool(self._tools, self._chat_sessions)
-        self._projects = ProjectStore(self._storage.data_dir, sessions=self._chat_sessions)
-        register_project_tool(
-            self._tools,
-            self._projects,
-            lambda: self.system_prompts,
-            self.project_context_skills,
-            self._file_state,
-            self._tool_prompt_blocks,
-        )
-        self._agent_resolver = build_agent_resolver(
-            self._agents,
-            self._projects,
-            self._models,
-            self._providers,
-            self._provider_credentials,
-            self._global_agent_defaults,
-            project_skill_names=self.project_skill_names,
-        )
-        self._ensure_bootstrap_agent()
-        recall_registry = self._build_recall_backend_registry()
-        self._recall_backend_registry = recall_registry
-        self._recall_backend = self._create_recall_backend(recall_registry)
-        register_session_search_tool(
-            self._tools,
-            self._recall_backend,
-            self._chat_sessions,
-            self._recall_backend_name,
-        )
-        self._chat_run_manager = ChatRunManager()
-        self.chat_runs = self._chat_run_manager
-        if self._attachment_store is None:
-            raise RuntimeError("Attachment store not available")
-        resolver = ContentBlockResolver(self._attachment_store, transcriber=self._speech)
-        compaction_service = CompactionService()
-        # The reflection service starts review runs through the runtime's
-        # streaming loop lazily at review time, so constructing it before the
-        # loops is safe — the loops only need its notify hook.
-        self._reflection_service = ReflectionService(self)
-        self._session_title_service = SessionTitleService(self)
-        assert self._agent_resolver is not None
-        assert self._projects is not None
-        assert self._providers is not None
-        assert self._models is not None
-        assert self._provider_credentials is not None
-        assert self._chat_sessions is not None
-        assert self._chat_run_manager is not None
-        assert self._tools is not None
-        assert self._process_manager is not None
-        assert self._file_state is not None
-        assert self._storage is not None
-        assert self._image is not None
-        chat_dependencies = ChatLoopDependencies(
-            agent_resolver=self._agent_resolver,
-            projects=self._projects,
-            providers=self._providers,
-            models=self._models,
-            provider_credentials=self._provider_credentials,
-            sessions=self._chat_sessions,
-            run_manager=self._chat_run_manager,
-            tools=self._tools,
-            process_manager=self._process_manager,
-            file_read_state=self._file_state,
-            change_tracker=self._change_tracker,
-            storage=self._storage,
-            get_extension_registry=lambda: self.extensions,
-            get_system_prompts=lambda: self.system_prompts,
-            get_adapter=self.get_adapter,
-            resolve_skills=self.skills_for,
-            refresh_skills=self.refresh_skills_for,
-            get_local_context_windows=self.local_context_windows,
-            image_understanding_available=self._image.analysis_is_available,
-            deliver_background_completions=lambda run, session: (
-                self._trigger_service.deliver_background_completions(run, session)
-                if self._trigger_service is not None
-                else False
-            ),
-        )
-        self._chat_loop = ChatLoop(
-            chat_dependencies,
-            streaming=False,
-            attachment_resolver=resolver,
-            compaction_service=compaction_service,
-            reflection_service=self._reflection_service,
-            session_title_service=self._session_title_service,
-        )
-        self._streaming_chat_loop = ChatLoop(
-            chat_dependencies,
-            streaming=True,
-            attachment_resolver=resolver,
-            compaction_service=compaction_service,
-            reflection_service=self._reflection_service,
-            session_title_service=self._session_title_service,
-        )
-        self._trigger_service = TriggerService(
-            self._chat_loop,
-            self._chat_run_manager,
-            self,
-            trigger_chat_loop=self._streaming_chat_loop,
-            sessions=self._chat_sessions,
-        )
-        self._terminal_manager = TerminalManager(
-            self._trigger_service,
-            temporary_files=self._storage.temporary_files,
-            launch_history_path=self._storage.layout.terminals / "launch-history.json",
-            groups_path=self._storage.layout.terminals / "groups.json",
-            data_dir=self._storage.data_dir,
-        )
-        self._start_terminal_manager()
-        register_terminal_tool(self._tools, self._terminal_manager, self._projects)
-        self._bootstrap_service = BootstrapService(
-            self._trigger_service,
-            self._storage.data_dir,
-            startup_id=self._startup_id,
-            agent_resolver=self._agent_resolver,
-            sessions=self._chat_sessions,
-        )
-        self._command_dispatcher = CommandDispatcher(
-            self._chat_run_manager,
-            agent_resolver=self._agent_resolver,
-            sessions=self._chat_sessions,
-            models=self._models,
-            started_at=self._started_at,
-            providers=self._providers,
-            projects=self._projects,
-            agents=self._agents,
-            local_context_windows_loader=self.local_context_windows,
-            trigger_service=self._trigger_service,
-            reflection_service=self._reflection_service,
-            storage=self._storage,
-            terminal_manager=self._terminal_manager,
-            reasoning_render_describer=self.describe_reasoning_render,
-        )
-        if self._extensions is not None:
-            self._extensions.apply_commands(self._command_dispatcher)
-        self._channel_service = ChannelService(
-            self._trigger_service,
-            self._chat_sessions,
-            agent_store=self._agents,
-            data_root=self._storage.data_dir,
-            credential_resolver=self.resolve_environment_credential,
-            attachment_store=self._attachment_store,
-            command_dispatcher=self._command_dispatcher,
-            interaction_dispatcher=self._dispatch_channel_interaction,
-        )
-        self._trigger_service.set_completion_run_relay(self._channel_service.relay_completion_run)
-        self._channel_service._notify_tool_registration_changed_hook = (
-            self._reload_channel_tool_if_started
-        )
-        self._start_channel_service()
-        self._sync_channel_tool_registration()
-        self._cron_service = CronService(
-            self._trigger_service,
-            self._storage.data_dir,
-            agent_resolver=self._agent_resolver,
-            sessions=self._chat_sessions,
-        )
-        self._start_cron_service()
-        self._calendar_service = CalendarService(self._storage.data_dir)
-        register_cron_tool(self._tools, self._cron_service)
-        register_calendar_tool(self._tools, self._calendar_service)
-        register_bash_tool(
-            self._tools,
-            self._process_manager,
-            self._trigger_service,
-            credential_resolver=self.resolve_environment_credential,
-            prompt_blocks=self._tool_prompt_blocks,
-        )
-        self._subagent_coordinator = SubAgentCoordinator(
-            self,
-            self._trigger_service,
-            sessions=self._chat_sessions,
-        )
-        register_subagent_tools(
-            self._tools,
-            self._subagent_coordinator,
-            self._tool_prompt_blocks,
-        )
-        register_status_tool(
-            self._tools,
-            self._agent_resolver,
-            self._chat_sessions,
-            self._models,
-            self._chat_run_manager,
-            self._started_at,
-            self._providers,
-            self._projects,
-            self.local_context_windows,
-            self.describe_reasoning_render,
-        )
-        # Built-ins are all registered now; apply extension tools last so a
-        # collision with any built-in name is skipped (built-in wins), right
-        # before SystemPromptManager consumes the registry.
-        if self._extensions is not None:
-            self._extensions.apply_tools(self._tools)
-        self._system_prompts = SystemPromptManager(
-            self._storage,
-            self._tools,
-            cast(SkillPromptRegistry, self._skills),
-            channel_registry=cast(ChannelService, self._channel_service),
-            vbot_version=str(self._config.get("VBOT_VERSION") or _detect_vbot_version()),
-            vbot_root=_VBOT_ROOT,
-            data_root=self._storage.data_dir,
-            memory_provider=self._memory_service,
-            block_definitions=self._collect_prompt_block_definitions(),
-            loaded_extensions=self._loaded_extension_names(),
-            block_store=self._resolve_prompt_block_store(),
-            agent_store=cast(PromptAgentStore, self._agents),
-        )
+            self._process_manager = ProcessManager(
+                temporary_files=self._storage.temporary_files,
+            )
+            self._start_process_manager()
+            self._tools = ToolRegistry()
+            # Tool-owned System Prompt block declarations (D6): the tool side of the
+            # unified contributor path. Project and Sub-Agent contribute their dynamic
+            # catalogs/guidance here; the runtime hands declarations to the prompt
+            # manager without importing tool classes into the prompt domain.
+            self._tool_prompt_blocks = ToolPromptBlockRegistry()
+            self._memory_service = MemoryService()
+            # One read-before-write guard shared by read/write/edit: read stamps each
+            # file, write/edit refuse an unread or externally-changed file (file_state.py).
+            self._file_state = FileReadState()
+            # Session-scoped file-content tracker for git-style change statistics
+            # (change_tracker.py). Shared by read/write/edit and the chat loop.
+            self._change_tracker = ChangeTracker()
+            register_read_tool(
+                self._tools,
+                attachment_store=self._attachment_store,
+                speech_service=self._speech,
+                file_state=self._file_state,
+                speech_max_size_bytes=self._speech_upload_max_size_bytes,
+            )
+            register_edit_tool(self._tools, file_state=self._file_state)
+            register_glob_tool(self._tools)
+            register_grep_tool(self._tools)
+            register_write_tool(self._tools, file_state=self._file_state)
+            register_memory_tool(self._tools, self._memory_service)
+            register_web_fetch_tool(self._tools, attachment_store=self._attachment_store)
+            register_web_search_tool(
+                self._tools,
+                self.resolve_environment_credential,
+                self._storage.load_web_search_settings,
+            )
+            register_process_tool(self._tools, self._process_manager)
+            register_text_to_speech_tool(self._tools, self._speech)
+            register_analyze_image_tool(self._tools, self._image)
+            register_image_generation_tool(self._tools, self._image)
+            register_generate_video_tool(self._tools, self._video)
+            register_generate_music_tool(self._tools, self._music)
+            extension_dirs = self._extra_extension_directories(settings)
+            disabled_extensions, extension_config = self._extension_load_options(settings)
+            self._extensions = ExtensionRegistry.load(
+                self._storage.data_dir / "extensions",
+                extra_dirs=extension_dirs,
+                disabled=disabled_extensions,
+                config=extension_config,
+                bundled_dir=resources_path / "extensions",
+                config_provider=self._live_extension_config,
+                credential_resolver=self.resolve_environment_credential,
+            )
+            failed_extension_count = len(self._extensions.diagnostics())
+            if failed_extension_count > 0:
+                self.logger.warning(
+                    "Loaded extensions with %s failed extensions; "
+                    "see vbot.extensions errors for details",
+                    failed_extension_count,
+                )
+            # Skills load after extensions: a loaded extension may bundle its own skills
+            # under ``<extension>/skills/``, which ``_skill_scan_roots`` folds into the
+            # global pool, so the extension layer must be in place first.
+            self._skill_policy = SkillPolicyService(self._storage)
+            skill_scan_roots = self._skill_scan_roots(settings, resources_path)
+            self._skills = SkillRegistry.load(
+                skill_scan_roots[0],
+                extra_dirs=skill_scan_roots[1:],
+                environment=self._skill_environment(data_dir_credentials),
+                origins=self._bundled_skill_origins(skill_scan_roots),
+                excluded_names=self._disabled_skill_names(),
+            )
+            invalid_skill_count = len(self._skills.invalid_diagnostics())
+            if invalid_skill_count > 0:
+                self.logger.warning(
+                    "Loaded skills with %s invalid skill directories; "
+                    "see vbot.skills warnings for details",
+                    invalid_skill_count,
+                )
+            register_skill_tool(self._tools, self.skills_for, self.reload_skills_async)
+            # The agent skill-authoring write core refuses the bundled skills root;
+            # ``skill_manage`` writes only the calling agent's private home.
+            self._skill_authoring = SkillAuthoringService(
+                protected_roots=[resources_path / _SKILLS_DIRNAME],
+            )
+            register_skill_manage_tool(
+                self._tools,
+                self._skill_authoring,
+                self.agent_skills_dir,
+                self.invalidate_agent_skills,
+                self._resolve_shared_skills_dir,
+                self._resolve_external_skill_scope,
+            )
+            register_history_tool(self._tools, self._chat_sessions)
+            self._projects = ProjectStore(self._storage.data_dir, sessions=self._chat_sessions)
+            register_project_tool(
+                self._tools,
+                self._projects,
+                lambda: self.system_prompts,
+                self.project_context_skills,
+                self._file_state,
+                self._tool_prompt_blocks,
+            )
+            self._agent_resolver = build_agent_resolver(
+                self._agents,
+                self._projects,
+                self._models,
+                self._providers,
+                self._provider_credentials,
+                self._global_agent_defaults,
+                project_skill_names=self.project_skill_names,
+            )
+            self._ensure_bootstrap_agent()
+            recall_registry = self._build_recall_backend_registry()
+            self._recall_backend_registry = recall_registry
+            self._recall_backend = self._create_recall_backend(recall_registry)
+            register_session_search_tool(
+                self._tools,
+                self._recall_backend,
+                self._chat_sessions,
+                self._recall_backend_name,
+            )
+            self._chat_run_manager = ChatRunManager()
+            self.chat_runs = self._chat_run_manager
+            if self._attachment_store is None:
+                raise RuntimeError("Attachment store not available")
+            resolver = ContentBlockResolver(self._attachment_store, transcriber=self._speech)
+            compaction_service = CompactionService()
+            # The reflection service starts review runs through the runtime's
+            # streaming loop lazily at review time, so constructing it before the
+            # loops is safe — the loops only need its notify hook.
+            self._reflection_service = ReflectionService(self)
+            self._session_title_service = SessionTitleService(self)
+            assert self._agent_resolver is not None
+            assert self._projects is not None
+            assert self._providers is not None
+            assert self._models is not None
+            assert self._provider_credentials is not None
+            assert self._chat_sessions is not None
+            assert self._chat_run_manager is not None
+            assert self._tools is not None
+            assert self._process_manager is not None
+            assert self._file_state is not None
+            assert self._storage is not None
+            assert self._image is not None
+            chat_dependencies = ChatLoopDependencies(
+                agent_resolver=self._agent_resolver,
+                projects=self._projects,
+                providers=self._providers,
+                models=self._models,
+                provider_credentials=self._provider_credentials,
+                sessions=self._chat_sessions,
+                run_manager=self._chat_run_manager,
+                tools=self._tools,
+                process_manager=self._process_manager,
+                file_read_state=self._file_state,
+                change_tracker=self._change_tracker,
+                storage=self._storage,
+                get_extension_registry=lambda: self.extensions,
+                get_system_prompts=lambda: self.system_prompts,
+                get_adapter=self.get_adapter,
+                resolve_skills=self.skills_for,
+                refresh_skills=self.refresh_skills_for,
+                get_local_context_windows=self.local_context_windows,
+                image_understanding_available=self._image.analysis_is_available,
+                deliver_background_completions=lambda run, session: (
+                    self._trigger_service.deliver_background_completions(run, session)
+                    if self._trigger_service is not None
+                    else False
+                ),
+            )
+            self._chat_loop = ChatLoop(
+                chat_dependencies,
+                streaming=False,
+                attachment_resolver=resolver,
+                compaction_service=compaction_service,
+                reflection_service=self._reflection_service,
+                session_title_service=self._session_title_service,
+            )
+            self._streaming_chat_loop = ChatLoop(
+                chat_dependencies,
+                streaming=True,
+                attachment_resolver=resolver,
+                compaction_service=compaction_service,
+                reflection_service=self._reflection_service,
+                session_title_service=self._session_title_service,
+            )
+            self._trigger_service = TriggerService(
+                self._chat_loop,
+                self._chat_run_manager,
+                self,
+                trigger_chat_loop=self._streaming_chat_loop,
+                sessions=self._chat_sessions,
+            )
+            self._terminal_manager = TerminalManager(
+                self._trigger_service,
+                temporary_files=self._storage.temporary_files,
+                launch_history_path=self._storage.layout.terminals / "launch-history.json",
+                groups_path=self._storage.layout.terminals / "groups.json",
+                data_dir=self._storage.data_dir,
+            )
+            self._start_terminal_manager()
+            register_terminal_tool(self._tools, self._terminal_manager, self._projects)
+            self._bootstrap_service = BootstrapService(
+                self._trigger_service,
+                self._storage.data_dir,
+                startup_id=self._startup_id,
+                agent_resolver=self._agent_resolver,
+                sessions=self._chat_sessions,
+            )
+            self._command_dispatcher = CommandDispatcher(
+                self._chat_run_manager,
+                agent_resolver=self._agent_resolver,
+                sessions=self._chat_sessions,
+                models=self._models,
+                started_at=self._started_at,
+                providers=self._providers,
+                projects=self._projects,
+                agents=self._agents,
+                local_context_windows_loader=self.local_context_windows,
+                trigger_service=self._trigger_service,
+                reflection_service=self._reflection_service,
+                storage=self._storage,
+                terminal_manager=self._terminal_manager,
+                reasoning_render_describer=self.describe_reasoning_render,
+            )
+            if self._extensions is not None:
+                self._extensions.apply_commands(self._command_dispatcher)
+            self._channel_service = ChannelService(
+                self._trigger_service,
+                self._chat_sessions,
+                agent_store=self._agents,
+                data_root=self._storage.data_dir,
+                credential_resolver=self.resolve_environment_credential,
+                attachment_store=self._attachment_store,
+                command_dispatcher=self._command_dispatcher,
+                interaction_dispatcher=self._dispatch_channel_interaction,
+            )
+            self._trigger_service.set_completion_run_relay(
+                self._channel_service.relay_completion_run
+            )
+            self._channel_service._notify_tool_registration_changed_hook = (
+                self._reload_channel_tool_if_started
+            )
+            self._start_channel_service()
+            self._sync_channel_tool_registration()
+            self._cron_service = CronService(
+                self._trigger_service,
+                self._storage.data_dir,
+                agent_resolver=self._agent_resolver,
+                sessions=self._chat_sessions,
+            )
+            self._start_cron_service()
+            self._calendar_service = CalendarService(self._storage.data_dir)
+            register_cron_tool(self._tools, self._cron_service)
+            register_calendar_tool(self._tools, self._calendar_service)
+            register_bash_tool(
+                self._tools,
+                self._process_manager,
+                self._trigger_service,
+                credential_resolver=self.resolve_environment_credential,
+                prompt_blocks=self._tool_prompt_blocks,
+            )
+            self._subagent_coordinator = SubAgentCoordinator(
+                self,
+                self._trigger_service,
+                sessions=self._chat_sessions,
+            )
+            register_subagent_tools(
+                self._tools,
+                self._subagent_coordinator,
+                self._tool_prompt_blocks,
+            )
+            register_status_tool(
+                self._tools,
+                self._agent_resolver,
+                self._chat_sessions,
+                self._models,
+                self._chat_run_manager,
+                self._started_at,
+                self._providers,
+                self._projects,
+                self.local_context_windows,
+                self.describe_reasoning_render,
+            )
+            # Built-ins are all registered now; apply extension tools last so a
+            # collision with any built-in name is skipped (built-in wins), right
+            # before SystemPromptManager consumes the registry.
+            if self._extensions is not None:
+                self._extensions.apply_tools(self._tools)
+            self._system_prompts = SystemPromptManager(
+                self._storage,
+                self._tools,
+                cast(SkillPromptRegistry, self._skills),
+                channel_registry=cast(ChannelService, self._channel_service),
+                vbot_version=str(self._config.get("VBOT_VERSION") or _detect_vbot_version()),
+                vbot_root=_VBOT_ROOT,
+                data_root=self._storage.data_dir,
+                memory_provider=self._memory_service,
+                block_definitions=self._collect_prompt_block_definitions(),
+                loaded_extensions=self._loaded_extension_names(),
+                block_store=self._resolve_prompt_block_store(),
+                agent_store=cast(PromptAgentStore, self._agents),
+            )
 
-        self._log_startup_inventory()
-        self._started = True
-        self._start_provider_usage_service()
-        self.logger.info("Runtime started")
+            self._log_startup_inventory()
+            self._started = True
+            self._start_provider_usage_service()
+            self.logger.info("Runtime started")
+        except Exception:
+            # Reverse-order cleanup of Session resources created in this attempt.
+            if self._chat_sessions is not None:
+                with suppress(Exception):
+                    self._chat_sessions.close()
+                self._chat_sessions = None
+            self._agents = None
+            self._projects = None
+            raise
 
     async def fire_extension_startup(self) -> None:
         """Fire extension startup handlers once bootstrap is complete and serving.

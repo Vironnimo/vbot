@@ -9,16 +9,13 @@ class SessionStorageError(ChatSessionError):
     """Base error for an unsafe or unavailable Session storage state."""
 
 
-class SessionConversionRequiredError(SessionStorageError):
-    """Raised when live legacy transcripts require offline conversion."""
+class SessionStorageFormatError(SessionStorageError):
+    """Raised when the data directory does not authorize a current-format Session store.
 
-
-class SessionStorageConflictError(SessionStorageError):
-    """Raised when SQLite and legacy JSONL Session artifacts coexist."""
-
-
-class SessionConversionIncompleteError(SessionStorageError):
-    """Raised while an interrupted conversion marker is present."""
+    Covers a missing current-format marker on an existing data-directory root,
+    a malformed or newer marker, and every other state where creating or
+    opening the Session database would be unauthorized.
+    """
 
 
 class SessionStoreCorruptError(SessionStorageError):

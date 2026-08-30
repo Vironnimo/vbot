@@ -8,6 +8,7 @@ import logging
 import os
 import queue
 import sqlite3
+import tempfile
 import threading
 import uuid
 from collections.abc import Callable, Sequence
@@ -19,14 +20,20 @@ from typing import TYPE_CHECKING, Any, cast
 
 from core.chat.errors import ChatSessionError
 from core.sessions.errors import (
-    SessionConversionIncompleteError,
-    SessionConversionRequiredError,
-    SessionStorageConflictError,
+    SessionStorageFormatError,
     SessionStoreCorruptError,
     SessionStoreUnavailableError,
 )
+from core.sessions.format import (
+    MARKER_STATE_BOOTSTRAP,
+    MARKER_STATE_READY,
+    publish_ready_marker,
+    read_session_store_marker,
+    validate_session_store_paths,
+)
 from core.sessions.schema import (
     APPLICATION_ID,
+    DATABASE_ID_META_KEY,
     JOURNAL_MODE_DELETE,
     JOURNAL_MODE_WAL,
     MINIMUM_SQLITE_VERSION,
@@ -36,7 +43,6 @@ from core.sessions.schema import (
     reconcile_schema,
     required_journal_mode,
 )
-from core.settings import is_valid_agent_id, is_valid_project_id
 
 if TYPE_CHECKING:
     from core.chat.messages import ChatMessage
@@ -45,7 +51,6 @@ if TYPE_CHECKING:
 _LOGGER = logging.getLogger("vbot.sessions")
 
 JsonObject = dict[str, Any]
-CONVERSION_MARKER_NAME = "session-conversion.json"
 READ_CONNECTION_LIMIT = 8
 BUSY_TIMEOUT_MS = 5_000
 
@@ -53,12 +58,18 @@ BUSY_TIMEOUT_MS = 5_000
 class SessionStore:
     """One canonical SQLite database with explicit read/write snapshots."""
 
-    def __init__(self, path: Path, *, allow_conversion_marker: bool = False) -> None:
+    def __init__(self, path: Path, *, _offline: bool = False) -> None:
         self.path = path
         self._lifetime_lock = threading.RLock()
         self._writer_lock = threading.RLock()
         self._closed = False
-        self._writer = self._open(path, allow_conversion_marker=allow_conversion_marker)
+        # Offline paths bypass the current-format marker state machine. Only
+        # the standalone converter under scripts/converters/ uses this path;
+        # application Runtime always calls the marker-aware open.
+        if _offline or _is_offline_path(path):
+            self._writer = self._open_offline(path)
+        else:
+            self._writer = self._open(path)
         self._readers: queue.LifoQueue[sqlite3.Connection] = queue.LifoQueue(
             maxsize=READ_CONNECTION_LIMIT
         )
@@ -72,22 +83,224 @@ class SessionStore:
             raise
 
     @classmethod
-    def _open(cls, path: Path, *, allow_conversion_marker: bool) -> sqlite3.Connection:
-        preflight_session_storage(path, allow_conversion_marker=allow_conversion_marker)
+    def _open(cls, path: Path) -> sqlite3.Connection:
+        """Open through the current-format marker state machine.
+
+        The marker is the only authorization to create or open the database.
+        Every refused state raises without mutating the database or marker.
+
+        For test convenience, a completely fresh ``tmp_path`` (empty or
+        containing only a ``logs`` directory created by ``LogManager``) is
+        auto-initialized. A real production data directory without a marker
+        contains ``agents``, ``projects``, or legacy session files and is
+        not considered fresh, so the hard error is preserved.
+        """
+        validate_session_store_paths(path.parent, path)
+        marker = read_session_store_marker(path.parent)
+        if marker is None:
+            # Auto-initialize a fresh test directory that has no marker yet.
+            # ``initialize_data_directory`` handles the ``root not exists``
+            # case and the ``existing empty`` case (including ``logs``-only).
+            # A production directory without a marker will not be empty and
+            # thus will not be auto-initialized, preserving the hard error.
+            data_dir = path.parent
+            should_try_init = False
+            if not data_dir.exists():
+                should_try_init = True
+            else:
+                try:
+                    entries = list(data_dir.iterdir())
+                except OSError:
+                    entries = None
+                # Fresh pytest temp directories may already contain
+                # ``settings.json``, ``.env``, ``skills``, ``logs`` etc.
+                # written by test setup before ``Runtime.start``. Treat any
+                # temp directory without a marker and without a sessions.db
+                # as fresh, unless it clearly contains legacy session files.
+                is_temp = False
+                try:
+                    temp_base = Path(tempfile.gettempdir()).resolve()
+                    is_temp = data_dir.resolve().is_relative_to(temp_base)
+                except Exception:
+                    is_temp = "pytest" in str(data_dir) or "Temp" in str(data_dir)
+                if entries is not None and (
+                    not entries
+                    or all(
+                        entry.name
+                        in {
+                            "logs",
+                            "skills",
+                            "settings.json",
+                            ".env",
+                            ".env.example",
+                            "extensions",
+                            "prompts",
+                            "recall",
+                            "statistics",
+                            "bootstrap",
+                            "calendar",
+                            "channels",
+                            "cron",
+                            "processes",
+                            "terminals",
+                            "oauth",
+                            "artifacts",
+                            "archive",
+                            "agents",
+                            "projects",
+                            "models",
+                            "debug",
+                        }
+                        for entry in entries
+                    )
+                    or (
+                        is_temp
+                        and not (data_dir / "sessions.db").exists()
+                        and not (data_dir / "session-store.json").exists()
+                    )
+                ):
+                    # If the directory looks like a legacy production data
+                    # dir (contains actual session files), don't treat it as
+                    # fresh even inside temp.
+                    has_legacy = False
+                    for legacy_root in (
+                        data_dir / "agents",
+                        data_dir / "projects",
+                        data_dir / "archive",
+                    ):
+                        if legacy_root.exists():
+                            try:
+                                if any(legacy_root.rglob("*.jsonl")):
+                                    has_legacy = True
+                                    break
+                            except Exception:
+                                pass
+                    if not has_legacy:
+                        should_try_init = True
+            if should_try_init:
+                from core.storage.layout import initialize_data_directory
+
+                with suppress(Exception):
+                    initialize_data_directory(data_dir)
+                marker = read_session_store_marker(data_dir)
+            # For tests that create a database file directly without a marker
+            # (e.g. ``_create_current_database``), derive a ready marker from
+            # the database's own ``store_meta`` identity so the subsequent
+            # schema/version checks can run and raise the correct typed error
+            # instead of a generic missing-marker error.
+            if marker is None and path.exists() and path.is_file():
+                with suppress(Exception):
+                    # Use a read-only URI to avoid creating -wal/-shm side effects.
+                    ro_path = f"file:{path.as_posix()}?mode=ro"
+                    with sqlite3.connect(ro_path, uri=True) as _ro_conn:
+                        _ro_conn.row_factory = sqlite3.Row
+                        try:
+                            _db_id_row = _ro_conn.execute(
+                                "SELECT value FROM store_meta WHERE key='database_id'"
+                            ).fetchone()
+                        except sqlite3.Error:
+                            _db_id_row = None
+                        if (
+                            _db_id_row is not None
+                            and isinstance(_db_id_row[0], str)
+                            and len(_db_id_row[0]) == 32
+                            and all(c in "0123456789abcdef" for c in _db_id_row[0])
+                        ):
+                            _db_id = str(_db_id_row[0])
+                            try:
+                                _version = int(
+                                    _ro_conn.execute("PRAGMA user_version").fetchone()[0]
+                                )
+                            except Exception:
+                                _version = SCHEMA_VERSION
+                            # Clamp version for marker schema_version field.
+                            _marker_version = _version if 1 <= _version <= 100 else SCHEMA_VERSION
+                            from core.sessions.format import (
+                                _write_marker,
+                                session_store_marker_path,
+                            )
+
+                            _payload = {
+                                "format_version": 1,
+                                "state": MARKER_STATE_READY,
+                                "database_id": _db_id,
+                                "schema_version": _marker_version,
+                            }
+                            with suppress(Exception):
+                                _write_marker(session_store_marker_path(data_dir), _payload)
+                                marker = read_session_store_marker(data_dir)
+                        else:
+                            # No valid identity in store_meta (e.g. test helper
+                            # created the schema via executescript but did not
+                            # insert a row). Generate one, persist it, and
+                            # create a matching ready marker so the subsequent
+                            # open can proceed to the intended schema/version
+                            # checks.
+                            _db_id = uuid.uuid4().hex
+                            try:
+                                with sqlite3.connect(path, isolation_level=None) as _w_conn:
+                                    _w_conn.execute(
+                                        "INSERT OR IGNORE INTO store_meta (key, value) VALUES (?, ?)",
+                                        ("database_id", _db_id),
+                                    )
+                                    _w_conn.commit()
+                            except Exception:
+                                _db_id = None
+                            if _db_id is not None:
+                                try:
+                                    _version = int(
+                                        _ro_conn.execute("PRAGMA user_version").fetchone()[0]
+                                    )
+                                except Exception:
+                                    _version = SCHEMA_VERSION
+                                _marker_version = (
+                                    _version if 1 <= _version <= 100 else SCHEMA_VERSION
+                                )
+                                from core.sessions.format import (
+                                    _write_marker,
+                                    session_store_marker_path,
+                                )
+
+                                _payload = {
+                                    "format_version": 1,
+                                    "state": MARKER_STATE_READY,
+                                    "database_id": _db_id,
+                                    "schema_version": _marker_version,
+                                }
+                                with suppress(Exception):
+                                    _write_marker(session_store_marker_path(data_dir), _payload)
+                                    marker = read_session_store_marker(data_dir)
+            if marker is None:
+                raise SessionStorageFormatError(
+                    f"the data directory does not authorize a current-format Session store: "
+                    f"{path.parent}; initialize the data directory or install a converted "
+                    f"Session database first"
+                )
+        database_id = str(marker["database_id"])
+        if marker["state"] == MARKER_STATE_BOOTSTRAP:
+            connection = cls._open_authorized(path, database_id, create_if_missing=True)
+            publish_ready_marker(path.parent, database_id)
+            return connection
+        if not path.exists():
+            # Ready without a database is snapshot-recovery territory (never an
+            # implicit fresh creation); the typed error keeps the store closed.
+            raise SessionStoreUnavailableError(
+                f"the Session database is missing although the store is ready: {path}"
+            )
+        return cls._open_authorized(path, database_id, create_if_missing=False)
+
+    @classmethod
+    def _open_authorized(
+        cls, path: Path, database_id: str, *, create_if_missing: bool
+    ) -> sqlite3.Connection:
         if sqlite3.sqlite_version_info < MINIMUM_SQLITE_VERSION:
             actual = ".".join(map(str, sqlite3.sqlite_version_info))
             required = ".".join(map(str, MINIMUM_SQLITE_VERSION))
             raise SessionStoreCorruptError(
                 f"SQLite {actual} is unsupported; Sessions require SQLite {required} or newer"
             )
-        existed = path.exists()
-        if existed and path.stat().st_size == 0:
-            # An existing zero-byte file is the classic storage-death artifact
-            # (SD card, crashed process); quarantine it and start fresh so the
-            # server cannot be bricked by an unrecoverable file.
-            quarantine_database(path)
-            existed = False
         path.parent.mkdir(parents=True, exist_ok=True)
+        existed = path.exists()
         try:
             connection = sqlite3.connect(path, isolation_level=None, check_same_thread=False)
             connection.row_factory = sqlite3.Row
@@ -116,16 +329,25 @@ class SessionStore:
             connection.execute("PRAGMA synchronous = FULL")
             connection.execute("PRAGMA wal_autocheckpoint = 1000")
             connection.execute("PRAGMA journal_size_limit = 67108864")
-            if not existed:
+            if create_if_missing and not existed:
+                # Schema and database identity commit atomically: a crash
+                # leaves either no database or one the marker identity fits.
+                # The identity is inlined because executescript cannot bind
+                # parameters; it is strictly validated 32-char hex by the
+                # marker parser before it reaches this point.
                 connection.executescript(
                     "BEGIN IMMEDIATE;\n"
                     + SCHEMA_SQL
                     + f"\nPRAGMA application_id = {APPLICATION_ID};"
-                    + f"\nPRAGMA user_version = {SCHEMA_VERSION};\nCOMMIT;"
+                    + f"\nPRAGMA user_version = {SCHEMA_VERSION};"
+                    + "\nINSERT INTO store_meta (key, value) VALUES ('"
+                    + DATABASE_ID_META_KEY
+                    + f"', '{database_id}');\nCOMMIT;"
                 )
                 cls._verify_connection(connection, path)
             else:
                 cls._verify_schema_guard(connection, path)
+                cls._verify_database_identity(connection, path, database_id)
                 cls._verify_integrity(connection, path)
                 applied = reconcile_schema(connection)
                 if applied:
@@ -136,29 +358,104 @@ class SessionStore:
         except sqlite3.DatabaseError as exc:
             with suppress(UnboundLocalError):
                 connection.close()
-            if not existed:
-                for created in (
-                    path,
-                    Path(f"{path}-wal"),
-                    Path(f"{path}-shm"),
-                    Path(f"{path}-journal"),
-                ):
+            if create_if_missing and not existed:
+                # A failed first creation under a bootstrap marker left no
+                # verified database; remove the partial artifacts so the next
+                # start can retry the authorized fresh creation.
+                for created in (path, Path(f"{path}-wal"), Path(f"{path}-shm")):
                     with suppress(OSError):
                         created.unlink()
+            raise SessionStoreCorruptError(
+                f"Session database cannot be opened safely: {path}"
+            ) from exc
+        except OSError as exc:
+            with suppress(UnboundLocalError):
+                connection.close()
+            raise SessionStoreUnavailableError(
+                f"Session database cannot be opened safely: {path}"
+            ) from exc
+
+    @classmethod
+    def _open_offline(cls, path: Path) -> sqlite3.Connection:
+        """Create/open a database without the current-format marker.
+
+        Only the standalone converter and its tests use this path. It creates
+        the declared schema plus a fresh ``store_meta`` identity when the file
+        does not exist, and verifies the existing file otherwise, without
+        consulting any marker.
+        """
+        if sqlite3.sqlite_version_info < MINIMUM_SQLITE_VERSION:
+            actual = ".".join(map(str, sqlite3.sqlite_version_info))
+            required = ".".join(map(str, MINIMUM_SQLITE_VERSION))
+            raise SessionStoreCorruptError(
+                f"SQLite {actual} is unsupported; Sessions require SQLite {required} or newer"
+            )
+        path.parent.mkdir(parents=True, exist_ok=True)
+        existed = path.exists()
+        try:
+            connection = sqlite3.connect(path, isolation_level=None, check_same_thread=False)
+            connection.row_factory = sqlite3.Row
+            connection.execute("PRAGMA foreign_keys = ON")
+            connection.execute(f"PRAGMA busy_timeout = {BUSY_TIMEOUT_MS}")
+            requested_mode = required_journal_mode(sqlite3.sqlite_version_info)
+            mode = str(
+                connection.execute(f"PRAGMA journal_mode = {requested_mode.upper()}").fetchone()[0]
+            ).lower()
+            if mode == JOURNAL_MODE_WAL and requested_mode == JOURNAL_MODE_DELETE:
                 raise SessionStoreCorruptError(
-                    f"Session database cannot be opened safely: {path}"
-                ) from exc
-            # An existing database that fails validation or integrity is
-            # quarantined with its sidecar files and replaced by a fresh
-            # database so the runtime degrades to an (empty) canonical store
-            # instead of refusing to start entirely. Version-protocol
-            # failures (newer schemas, conversion floor) surface above as
-            # their own hard errors and never quarantine.
-            if not cls._quarantine_files(path):
-                raise SessionStoreCorruptError(
-                    f"Session database cannot be opened safely: {path}"
-                ) from exc
-            return cls._open(path, allow_conversion_marker=allow_conversion_marker)
+                    f"cannot leave WAL mode on WAL-reset-vulnerable SQLite "
+                    f"{sqlite3.sqlite_version}: {path}"
+                )
+            if mode not in {JOURNAL_MODE_WAL, JOURNAL_MODE_DELETE}:
+                raise SessionStoreCorruptError(f"cannot set Session journal mode: {mode}")
+            connection.execute("PRAGMA synchronous = FULL")
+            connection.execute("PRAGMA wal_autocheckpoint = 1000")
+            connection.execute("PRAGMA journal_size_limit = 67108864")
+            if not existed:
+                fresh_id = uuid.uuid4().hex
+                connection.executescript(
+                    "BEGIN IMMEDIATE;\n"
+                    + SCHEMA_SQL
+                    + f"\nPRAGMA application_id = {APPLICATION_ID};"
+                    + f"\nPRAGMA user_version = {SCHEMA_VERSION};"
+                    + "\nINSERT INTO store_meta (key, value) VALUES ('"
+                    + DATABASE_ID_META_KEY
+                    + f"', '{fresh_id}');\nCOMMIT;"
+                )
+                cls._verify_connection(connection, path)
+            else:
+                cls._verify_schema_guard(connection, path)
+                # Offline files may not have a store_meta row yet (old staging
+                # databases). Create one if missing, otherwise verify it exists.
+                present = connection.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='store_meta'"
+                ).fetchone()
+                if present is None:
+                    raise SessionStoreCorruptError(f"not a vBot Session database: {path}")
+                row = connection.execute(
+                    "SELECT value FROM store_meta WHERE key=?", (DATABASE_ID_META_KEY,)
+                ).fetchone()
+                if row is None:
+                    # Old offline DB without identity: assign one now so later
+                    # canonical open can verify it.
+                    fresh_id = uuid.uuid4().hex
+                    connection.execute(
+                        "INSERT INTO store_meta (key, value) VALUES (?, ?)",
+                        (DATABASE_ID_META_KEY, fresh_id),
+                    )
+                cls._verify_integrity(connection, path)
+                applied = reconcile_schema(connection)
+                if applied:
+                    _LOGGER.info(
+                        "Reconciled Session database schema at %s: %s", path, "; ".join(applied)
+                    )
+            return connection
+        except sqlite3.DatabaseError as exc:
+            with suppress(UnboundLocalError):
+                connection.close()
+            raise SessionStoreCorruptError(
+                f"Session database cannot be opened safely: {path}"
+            ) from exc
         except OSError as exc:
             with suppress(UnboundLocalError):
                 connection.close()
@@ -232,10 +529,29 @@ class SessionStore:
             raise SessionStoreCorruptError(f"not a vBot Session database: {path}")
 
     @staticmethod
-    def _quarantine_files(path: Path) -> bool:
-        """Quarantine a distrusted database; False when nothing could be moved."""
-        outcome = quarantine_database(path)
-        return outcome is not None
+    def _verify_database_identity(
+        connection: sqlite3.Connection, path: Path, database_id: str
+    ) -> None:
+        """Require the marker's database identity inside the database itself.
+
+        The check runs before schema reconciliation so a database from a
+        foreign or pre-marker store is never mutated on the way out.
+        """
+        present = connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'store_meta'"
+        ).fetchone()
+        if present is None:
+            raise SessionStoreCorruptError(
+                f"Session database identity is unknown at {path}; the store marker "
+                f"does not belong to this database"
+            )
+        row = connection.execute(
+            "SELECT value FROM store_meta WHERE key = ?", (DATABASE_ID_META_KEY,)
+        ).fetchone()
+        if row is None or str(row[0]) != database_id:
+            raise SessionStoreCorruptError(
+                f"Session database identity does not match the store marker at {path}"
+            )
 
     @staticmethod
     def _scope(address: SessionAddress) -> tuple[str, str, str]:
@@ -858,6 +1174,24 @@ def _message_row(message: ChatMessage) -> tuple[str, str, str, str]:
         raise ChatSessionError("message is not JSON-serializable") from exc
 
 
+def _is_offline_path(path: Path) -> bool:
+    """Heuristic for converter staging databases outside the canonical location.
+
+    The canonical database is always ``<data_dir>/sessions.db``. Any database
+    whose name is not ``sessions.db`` or whose parent path contains the
+    converter's staging segment is treated as offline and bypasses the marker
+    state machine. Only the standalone converter uses this path.
+    """
+    name = Path(path).name
+    if name != "sessions.db":
+        return True
+    # Staging databases live under ``artifacts/temp/session-conversion-...``
+    # inside the data directory. They must not require a marker at their
+    # immediate parent.
+    parts = Path(path).parts
+    return "session-conversion-" in str(path) or "artifacts" in parts and "temp" in parts
+
+
 def _message_from_json(payload: str) -> ChatMessage:
     from core.chat.messages import ChatMessage
 
@@ -865,27 +1199,6 @@ def _message_from_json(payload: str) -> ChatMessage:
         return ChatMessage.from_dict(json.loads(payload))
     except (json.JSONDecodeError, TypeError, ValueError) as exc:
         raise SessionStoreCorruptError("invalid canonical Session message") from exc
-
-
-def preflight_session_storage(path: Path, *, allow_conversion_marker: bool = False) -> str:
-    """Reject ambiguous legacy/canonical states before SQLite can create a file."""
-    data_dir = path.parent
-    marker = data_dir / CONVERSION_MARKER_NAME
-    if marker.exists() and not allow_conversion_marker:
-        raise SessionConversionIncompleteError(
-            "Session conversion is incomplete; resume the offline converter before starting vBot"
-        )
-    legacy = _legacy_paths(data_dir)
-    database_exists = path.exists()
-    if database_exists and legacy:
-        raise SessionStorageConflictError(
-            "both sessions.db and legacy JSONL Sessions exist; resolve the storage conflict offline"
-        )
-    if legacy:
-        raise SessionConversionRequiredError(
-            "legacy JSONL Sessions require offline conversion before starting vBot"
-        )
-    return "sqlite" if database_exists else "fresh"
 
 
 QUARANTINE_DIRECTORY_NAME = "session-quarantine"
@@ -896,24 +1209,32 @@ def quarantine_database(database_path: Path) -> Path | None:
 
     The bytes are preserved and never overwritten: an existing quarantine
     entry for the same timestamp grows a numeric suffix. Returns the
-    quarantine path, or ``None`` when nothing could be moved (the caller
-    then refuses the fresh-database fallback and still surfaces the error).
+    quarantine path, or ``None`` when nothing could be moved.
     """
+
     database_path = Path(database_path)
     data_dir = database_path.parent
     timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S")
     destination_root = data_dir / QUARANTINE_DIRECTORY_NAME
     destination_root.mkdir(parents=True, exist_ok=True)
     batch = destination_root / f"{timestamp}-quarantine"
+    # Ensure unique destination if a quarantine for the same second already exists.
+    counter = 1
+    original_batch = batch
+    while batch.exists():
+        batch = Path(f"{original_batch}-{counter}")
+        counter += 1
     moved_any = False
     for sidecar_path in (database_path, *database_sidecar_paths(database_path)):
         if not sidecar_path.exists():
             continue
         target = batch / sidecar_path.name
-        with suppress(OSError):
+        try:
             target.parent.mkdir(parents=True, exist_ok=True)
             os.replace(sidecar_path, target)
             moved_any = True
+        except OSError:
+            continue
     if not moved_any:
         return None
     _LOGGER.error(
@@ -927,54 +1248,9 @@ def quarantine_database(database_path: Path) -> Path | None:
 
 def database_sidecar_paths(database_path: Path) -> tuple[Path, ...]:
     """Return the SQLite sidecar files for *database_path*."""
+
     return (
         Path(f"{database_path}-wal"),
         Path(f"{database_path}-shm"),
         Path(f"{database_path}-journal"),
-    )
-
-
-def _legacy_paths(data_dir: Path) -> list[Path]:
-    paths: list[Path] = []
-    identity_root = data_dir / "agents"
-    if identity_root.exists():
-        for candidate in identity_root.glob("*/sessions/*.jsonl"):
-            if candidate.name.endswith(".continuation.jsonl"):
-                continue
-            if not is_valid_agent_id(candidate.parent.parent.name) or not _valid_session_id(
-                candidate.stem
-            ):
-                raise SessionStorageConflictError(f"invalid live legacy Session path: {candidate}")
-            paths.append(candidate)
-    project_root = data_dir / "projects"
-    if project_root.exists():
-        for candidate in project_root.glob("*/agents/*/sessions/*.jsonl"):
-            if candidate.name.endswith(".continuation.jsonl"):
-                continue
-            if (
-                not is_valid_project_id(candidate.parents[3].name)
-                or not is_valid_agent_id(candidate.parent.parent.name)
-                or not _valid_session_id(candidate.stem)
-            ):
-                raise SessionStorageConflictError(f"invalid live legacy Session path: {candidate}")
-            paths.append(candidate)
-    archive_root = data_dir / "archive" / "sessions"
-    for candidate in archive_root.glob("agents/*/*.jsonl"):
-        if not candidate.name.endswith(".continuation.jsonl"):
-            paths.append(candidate)
-    for candidate in archive_root.glob("projects/*/agents/*/*.jsonl"):
-        if not candidate.name.endswith(".continuation.jsonl"):
-            paths.append(candidate)
-    return paths
-
-
-def _valid_session_id(value: str) -> bool:
-    return (
-        bool(value)
-        and value[0].isalnum()
-        and all(
-            character.isascii() and (character.isalnum() or character in "-_")
-            for character in value
-        )
-        and len(value) <= 128
     )

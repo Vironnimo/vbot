@@ -197,7 +197,7 @@ async def test_sqlite_fts_recovers_from_corrupt_index(tmp_path: Path) -> None:
     session = sessions.create("coder", session_id="corrupt-session")
     session.append(ChatMessage.user("Corrupt index still searchable", timestamp=timestamp(1)))
     index_path = tmp_path / "recall" / "session_index.sqlite"
-    index_path.parent.mkdir(parents=True)
+    index_path.parent.mkdir(parents=True, exist_ok=True)
     index_path.write_text("not sqlite", encoding="utf-8")
 
     data = await backend(tmp_path, sessions).search(request(query="corrupt searchable"))

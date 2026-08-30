@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import sqlite3
 from pathlib import Path
 
 from core.chat import ChatMessage
@@ -138,24 +137,35 @@ def test_quarantine_moves_database_and_sidecars(tmp_path: Path) -> None:
 
 def test_damaged_database_quarantines_then_opens_fresh(tmp_path: Path) -> None:
     database = tmp_path / "sessions.db"
-    connection = sqlite3.connect(database)
-    connection.execute("CREATE TABLE unrelated (id INTEGER)")
-    connection.commit()
-    connection.close()
-    # Overwrite the file body with garbage while keeping a plausible size, so
-    # SQLite sees a real (but invalid) database file.
+    # Create a valid current-format database first so the marker exists,
+    # then corrupt it. Under the current SQLite-only contract a corrupt
+    # canonical database must not be silently replaced by an empty one;
+    # it raises and preserves the damaged file until snapshot recovery
+    # (Phase 4) restores a verified snapshot.
+    from core.sessions.errors import SessionStoreCorruptError
+    from core.storage.layout import initialize_data_directory
+
+    initialize_data_directory(tmp_path)
+    first = SessionStore(database)
+    first.close()
+
+    # Corrupt the now-valid database.
     database.write_bytes(b"X" * 8192)
 
-    first = SessionStore(database)
     try:
-        # The damaged file was moved aside and a fresh database opened.
-        assert first.exists(SessionAddress(None, "coder", "anything")) is False
-    finally:
-        first.close()
+        SessionStore(database)
+        raise AssertionError("expected SessionStoreCorruptError for a corrupt database")
+    except SessionStoreCorruptError:
+        pass
 
-    quarantines = list((tmp_path / "session-quarantine").iterdir())
-    assert len(quarantines) == 1
-    assert (quarantines[0] / "sessions.db").exists()
+    # No silent quarantine-and-replace: the damaged file remains for
+    # diagnostics and no fresh database was created in its place.
+    assert database.exists()
+    assert database.read_bytes().startswith(b"X")
+    # The standalone quarantine helper still works when invoked explicitly.
+    assert (tmp_path / "session-quarantine").exists() is False or not list(
+        (tmp_path / "session-quarantine").iterdir()
+    )
 
 
 # ---------------------------------------------------------------------------
