@@ -1,6 +1,6 @@
 """Statistics aggregation over a disposable projection of persisted Sessions.
 
-Every figure remains derivable from canonical ``ChatMessage`` JSONL data, while
+Every figure remains derivable from canonical ``ChatMessage`` Session history, while
 an incrementally reconciled SQLite read model keeps unchanged Session content off
 the report path (see ``.vorch/domain-maps/statistics.md``):
 
@@ -138,9 +138,9 @@ class _ProjectLike(Protocol):
 class ProjectDirectory(Protocol):
     """The project-scope source for the scan (satisfied by ``ProjectStore``).
 
-    Beyond listing projects it enumerates, per project, the agents that own at
-    least one session under the project anchor — the single discovery point for
-    project-scoped sessions, so statistics never re-derives the anchor layout.
+    Beyond listing Projects it enumerates, per Project, the Agents that own at
+    least one canonical Session — the single discovery point for Project-scoped
+    Sessions, so Statistics never knows the storage layout.
     """
 
     def list(self) -> builtins.list[_ProjectLike]: ...
@@ -151,11 +151,10 @@ class ProjectDirectory(Protocol):
 class SessionSource(Protocol):
     """Path-free session access (satisfied by ``ChatSessionManager``).
 
-    ``project_id`` is the session scope: ``None`` is the global identity layout
-    (``agents/<id>/sessions/``); a set value resolves the project anchor
-    (``projects/<pid>/agents/<id>/sessions/``). The statistics scan passes it
-    through unchanged, so a project session and an identity session never share
-    a path even when they share a session id.
+    ``project_id`` is the Session scope: ``None`` addresses an Identity Agent;
+    a set value addresses a Project Agent. Statistics passes the address through
+    unchanged, so Project and identity Sessions remain distinct even when their
+    Agent and Session ids match.
     """
 
     data_dir: Path
@@ -166,7 +165,7 @@ class SessionSource(Protocol):
 
     def get(self, address: SessionAddress) -> ChatSession: ...
 
-    def history_revision(self, address: SessionAddress) -> int: ...
+    def history_version(self, address: SessionAddress) -> tuple[str, int]: ...
 
 
 # ---------------------------------------------------------------------------

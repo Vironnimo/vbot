@@ -6,11 +6,10 @@ repo (see add-projects.md → Speicherort & Datenmodell). Layout::
     <data_dir>/projects/<project-id>/
         project.json                 ← cwd, default agent/model, auto_load
         agents/<agent-id>/
-            sessions/                ← project-scoped session ownership
             workspace/               ← reserved legacy layout helper; not Rooting state
 
-The anchor holds **no run config** — only Sessions ownership and the local
-agent id; config comes live from the scan/repo (decision #4). This module owns
+The anchor holds **no run config** — only Project configuration and an optional
+legacy Workspace layout; config comes live from the scan/repo. This module owns
 creation, read, list, cwd-mutation, and removal. Removal **archives** the
 project subtree using the same mechanic as agent deletion
 (``shutil.move`` into ``<data_dir>/archive/...`` replacing an existing archive),
@@ -26,6 +25,7 @@ import builtins
 import json
 import os
 import shutil
+import tempfile
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -58,13 +58,7 @@ _LOGGER = get_logger("projects")
 _PROJECT_CONFIG_FILENAME = "project.json"
 _PROJECTS_DIRNAME = "projects"
 _AGENTS_DIRNAME = "agents"
-_SESSIONS_DIRNAME = "sessions"
 _WORKSPACE_DIRNAME = "workspace"
-
-# Session-file recognition for anchor ownership enumeration. Kept local rather
-# than imported from ``core.sessions`` because that module imports this one
-# (``project_sessions_dir``); duplicating one extension literal avoids the cycle.
-_SESSION_FILE_GLOB = "*.jsonl"
 
 
 def _validate_project_id(project_id: str) -> str:
@@ -87,32 +81,13 @@ def _validate_agent_id(agent_id: str) -> str:
     """Reject any agent id that is not a bare slug before it becomes a path segment.
 
     Mirrors :func:`_validate_project_id`: the agent id is a path segment under a
-    project anchor's ``agents/`` directory (sessions and workspace), so a separator
+    project anchor's ``agents/`` directory (legacy workspace), so a separator
     or ``..`` component must never reach the filesystem. Defense-in-depth — RPC entry
     already validates agent addresses — applied at the same path-building choke point.
     """
     if not is_valid_agent_id(agent_id):
         raise ProjectError(f"Invalid agent id: {agent_id!r}")
     return agent_id
-
-
-def project_sessions_dir(data_dir: Path, project_id: str, agent_id: str) -> Path:
-    """Return the project-scoped sessions directory for one agent.
-
-    ``<data_dir>/projects/<project-id>/agents/<agent-id>/sessions/``. This is the
-    single source of the project-anchor session layout: both
-    :meth:`ProjectStore.sessions_dir` and the session backbone
-    (:class:`core.sessions.ChatSessionManager`) resolve project-scoped session
-    paths through here, so the layout literal lives in exactly one place.
-    """
-    return (
-        data_dir
-        / _PROJECTS_DIRNAME
-        / _validate_project_id(project_id)
-        / _AGENTS_DIRNAME
-        / _validate_agent_id(agent_id)
-        / _SESSIONS_DIRNAME
-    )
 
 
 # Project archives live under their own subtree so a project id can never
@@ -127,6 +102,13 @@ class ProjectStore:
     def __init__(self, data_dir: str | Path, *, sessions: ChatSessionManager | None = None) -> None:
         self._data_dir = Path(data_dir).expanduser()
         self._sessions = sessions
+        self._owns_sessions = False
+
+    def close(self) -> None:
+        if self._owns_sessions and self._sessions is not None:
+            self._sessions.close()
+            self._sessions = None
+            self._owns_sessions = False
 
     @property
     def data_dir(self) -> Path:
@@ -388,37 +370,45 @@ class ProjectStore:
             raise ProjectNotFoundError(f"Project not found: {project_id}")
 
         archive_dir = self._archive_dir(project_id)
-        if archive_dir.exists():
-            shutil.rmtree(archive_dir)
         archive_dir.parent.mkdir(parents=True, exist_ok=True)
-        shutil.move(str(project_dir), str(archive_dir))
+        with tempfile.TemporaryDirectory(
+            prefix=f".{project_id}-archive-",
+            dir=archive_dir.parent,
+            ignore_cleanup_errors=True,
+        ) as backup_root:
+            previous_archive = Path(backup_root) / "previous"
+            if archive_dir.exists():
+                shutil.move(str(archive_dir), str(previous_archive))
+            shutil.move(str(project_dir), str(archive_dir))
+            try:
+                self._session_manager().archive_project_sessions(project_id)
+            except Exception:
+                shutil.move(str(archive_dir), str(project_dir))
+                if previous_archive.exists():
+                    shutil.move(str(previous_archive), str(archive_dir))
+                raise
         return archive_dir
-
-    def sessions_dir(self, project_id: str, agent_id: str) -> Path:
-        """Return the project-scoped sessions directory for one agent.
-
-        ``projects/<project-id>/agents/<agent-id>/sessions/``. This is the
-        on-disk path the project-scoped session backbone uses in place of the
-        global ``agents/<id>/sessions/``; the layout lives in
-        :func:`project_sessions_dir` so the session manager shares it.
-        """
-        return project_sessions_dir(self._data_dir, project_id, agent_id)
 
     def session_owning_agents(self, project_id: str) -> builtins.list[str]:
         """Return the agent ids that own at least one session under this anchor.
 
-        Walks ``projects/<project-id>/agents/<agent-id>/sessions/`` and keeps an
-        agent only when its sessions directory actually holds a session file.
-        This is the single enumeration point for project-scoped session
-        discovery (statistics, recall): it reflects what the anchor owns *now*,
-        so an agent dir created without sessions, or one whose sessions were all
-        removed, does not appear. Returns ids sorted for determinism; an unknown
-        project yields an empty list rather than raising.
+        Queries canonical live Session addresses and keeps each distinct Agent.
+        This is the single enumeration point for project-scoped Session
+        discovery (Statistics, Recall). Returns ids sorted for determinism; an
+        unknown Project yields an empty list rather than raising.
         """
-        if self._sessions is None or not self._project_dir(project_id).exists():
+        if not self._project_dir(project_id).exists():
             return []
-        addresses = self._sessions.list_addresses(project_id=project_id)
+        addresses = self._session_manager().list_addresses(project_id=project_id)
         return sorted({address.agent_id for address in addresses})
+
+    def _session_manager(self) -> ChatSessionManager:
+        if self._sessions is None:
+            from core.sessions import ChatSessionManager
+
+            self._sessions = ChatSessionManager(self._data_dir)
+            self._owns_sessions = True
+        return self._sessions
 
     def workspace_dir(self, project_id: str, agent_id: str) -> Path:
         """Return the rooted-identity-agent workspace dir under the anchor.
@@ -470,13 +460,6 @@ class ProjectStore:
 def _copy_overrides(overrides: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
     """Return a deep-enough copy of an override map (each agent's override object copied)."""
     return {agent_id: dict(override) for agent_id, override in overrides.items()}
-
-
-def _has_session_file(sessions_dir: Path) -> bool:
-    """Return whether a sessions directory holds at least one session file."""
-    if not sessions_dir.is_dir():
-        return False
-    return any(sessions_dir.glob(_SESSION_FILE_GLOB))
 
 
 def _utc_now() -> str:

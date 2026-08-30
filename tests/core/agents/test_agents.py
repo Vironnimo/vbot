@@ -118,6 +118,21 @@ def test_missing_workspace_template_does_not_block_agent_creation(
     assert str(missing_templates / "SOUL.md") in caplog.text
 
 
+def test_create_rolls_back_the_session_when_workspace_setup_fails(
+    store: AgentStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def fail(_workspace: Path) -> None:
+        raise OSError("disk full")
+
+    monkeypatch.setattr(store, "_seed_workspace", fail)
+
+    with pytest.raises(OSError, match="disk full"):
+        store.create("coder")
+
+    assert store._session_manager().list("coder") == []
+    assert not (store.data_dir / "agents" / "coder").exists()
+
+
 def test_agent_roster_scan_failure_returns_empty_roster(
     store: AgentStore,
     monkeypatch: pytest.MonkeyPatch,
@@ -696,6 +711,20 @@ def test_rename_preserves_external_workspace(store: AgentStore, tmp_path: Path) 
     assert (workspace / "SOUL.md").is_file()
 
 
+def test_restore_rename_retargets_sessions_back_to_the_original_agent(store: AgentStore) -> None:
+    created = store.create("coder", "Coder Agent")
+    result = store.rename("coder", "researcher")
+
+    store.restore_rename(result)
+
+    assert store._session_manager().exists(
+        SessionAddress(None, "coder", created.current_session_id)
+    )
+    assert not store._session_manager().exists(
+        SessionAddress(None, "researcher", created.current_session_id)
+    )
+
+
 def test_rename_supports_case_only_id_change(store: AgentStore) -> None:
     store.create("coder", "Coder Agent")
 
@@ -1263,12 +1292,36 @@ def test_delete_archives_external_workspace_beside_agent(store: AgentStore, tmp_
     assert (archive_dir / "workspace" / "SOUL.md").exists()
 
 
+def test_delete_restores_active_agent_and_previous_archive_on_session_failure(
+    store: AgentStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store.create("coder", "First")
+    previous_archive = store.delete("coder")
+    marker = previous_archive / "keep.txt"
+    marker.write_text("previous", encoding="utf-8")
+    store.create("coder", "Second")
+
+    def fail_archive(_agent_id: str) -> None:
+        raise RuntimeError("database unavailable")
+
+    monkeypatch.setattr(store._session_manager(), "archive_identity_agent_sessions", fail_archive)
+
+    with pytest.raises(RuntimeError, match="database unavailable"):
+        store.delete("coder")
+
+    assert store.get("coder").name == "Second"
+    assert marker.read_text(encoding="utf-8") == "previous"
+
+
 def test_delete_agent_named_like_sibling_archive_roots_never_touches_them(
     store: AgentStore,
 ) -> None:
     # ``archive/sessions`` and ``archive/projects`` are the session/project archive
     # roots. An agent id equal to those names must archive under the agents subtree
     # instead of replace-deleting the sibling roots wholesale.
+    for reserved_like_id in ("sessions", "projects"):
+        store.create(reserved_like_id, f"Agent {reserved_like_id}")
+
     archived_session = store.data_dir / "archive" / "sessions" / "agents" / "other" / "s1.jsonl"
     archived_session.parent.mkdir(parents=True)
     archived_session.write_text('{"role":"user"}\n', encoding="utf-8")
@@ -1277,7 +1330,6 @@ def test_delete_agent_named_like_sibling_archive_roots_never_touches_them(
     archived_project.write_text("{}\n", encoding="utf-8")
 
     for reserved_like_id in ("sessions", "projects"):
-        store.create(reserved_like_id, f"Agent {reserved_like_id}")
         archive_dir = store.delete(reserved_like_id)
         assert archive_dir == store.data_dir / "archive" / "agents" / reserved_like_id
         assert (archive_dir / "agent" / "agent.json").exists()

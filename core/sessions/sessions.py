@@ -7,6 +7,7 @@ import builtins
 import contextvars
 import hashlib
 import json
+import logging
 import re
 import threading
 import uuid
@@ -15,7 +16,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, ClassVar, TypeVar, cast
+from typing import TYPE_CHECKING, Any, TypeVar, cast
 
 from core.chat.errors import ChatSessionError
 from core.runs import RunKind
@@ -79,6 +80,7 @@ class SessionIdentityReferenceUpdate:
 
 @dataclass(frozen=True)
 class SessionReadCursor:
+    generation_id: str
     history_revision: int
     next_seq: int
     message_count: int
@@ -137,6 +139,16 @@ def _is_prompt_cache_affinity_id(value: Any) -> bool:
         and len(value) == 32
         and all(char in "0123456789abcdef" for char in value)
     )
+
+
+def _decode_state_object(payload: str, name: str) -> JsonObject:
+    try:
+        value = json.loads(payload)
+    except (json.JSONDecodeError, TypeError) as exc:
+        raise ChatSessionError(f"invalid {name}") from exc
+    if not isinstance(value, dict):
+        raise ChatSessionError(f"invalid {name}")
+    return value
 
 
 def active_session_messages(messages: Sequence[ChatMessage]) -> list[ChatMessage]:
@@ -377,6 +389,25 @@ def _completion_activity_payload(activity: JsonObject) -> JsonObject:
     }
 
 
+def _completion_activity_from_state(state: Any) -> JsonObject:
+    latest_id = state["latest_completion_run_id"]
+    if latest_id is None or state["read_completion_run_id"] == latest_id:
+        return {
+            "latest_completion_run_id": latest_id,
+            "has_unread_completion": False,
+            "unread_run_id": None,
+            "unread_run_status": None,
+            "unread_run_at": None,
+        }
+    return {
+        "latest_completion_run_id": latest_id,
+        "has_unread_completion": True,
+        "unread_run_id": latest_id,
+        "unread_run_status": state["latest_completion_status"],
+        "unread_run_at": state["latest_completion_at"],
+    }
+
+
 @dataclass
 class _SessionWriteLease:
     holders: int = 1
@@ -543,11 +574,16 @@ class ChatSession:
         return True
 
     def activated_skill_contents(self, messages: list[ChatMessage] | None = None) -> dict[str, str]:
-        return dict(current_skill_activation_contents(messages or self.load()))
+        if messages is None:
+            return self._load_activated_skill_contents()
+        current = current_skill_activation_contents(messages)
+        with self._state_lock:
+            self._activated_skill_contents = dict(current)
+            self._activated_skill_cache_loaded = True
+        return dict(current)
 
     def bookend_timestamps(self) -> tuple[str, str] | None:
-        messages = self.load()
-        return (messages[0].timestamp, messages[-1].timestamp) if messages else None
+        return self._store.bookend_timestamps(self.address)
 
     def load(self) -> list[ChatMessage]:
         return self._store.messages(self.address)
@@ -577,9 +613,6 @@ class ChatSession:
 class ChatSessionManager:
     """One SQLite-only Session service, injected into Runtime consumers."""
 
-    _write_locks: ClassVar[dict[tuple[Path, SessionAddress], _SessionWriteLock]] = {}
-    _activity_lock: ClassVar[threading.RLock] = threading.RLock()
-
     def __init__(
         self, data_dir: Path, store: SessionStore | None = None, *, store_path: Path | None = None
     ) -> None:
@@ -588,8 +621,12 @@ class ChatSessionManager:
         self._owns_store = store is None
         self._title_changed_callbacks: list[Callable[[SessionAddress], None]] = []
         self._completion_read_callbacks: list[Callable[[SessionAddress], None]] = []
+        self._write_locks: dict[SessionAddress, _SessionWriteLock] = {}
+        self._write_locks_guard = threading.Lock()
 
     def close(self) -> None:
+        with self._write_locks_guard:
+            self._write_locks.clear()
         if self._owns_store:
             self._store.close()
 
@@ -615,10 +652,10 @@ class ChatSessionManager:
 
     def write_lock(self, address: SessionAddress) -> _SessionWriteLock:
         _validate_session_id(address.session_id)
-        key = (self._store.path, address)
-        if key not in self._write_locks:
-            self._write_locks[key] = _SessionWriteLock()
-        return self._write_locks[key]
+        with self._write_locks_guard:
+            if address not in self._write_locks:
+                self._write_locks[address] = _SessionWriteLock()
+            return self._write_locks[address]
 
     def create(
         self, agent_id: str, session_id: str | None = None, project_id: str | None = None
@@ -653,11 +690,12 @@ class ChatSessionManager:
         return await _run_session_io(self.get, address)
 
     def get_or_create(self, address: SessionAddress) -> ChatSession:
-        return (
-            self.get(address)
-            if self.exists(address)
-            else self.create(address.agent_id, address.session_id, address.project_id)
-        )
+        _validate_agent_id(address.agent_id)
+        _validate_session_id(address.session_id)
+        if address.project_id is not None and not is_valid_project_id(address.project_id):
+            raise ChatSessionError("invalid project id")
+        self._store.ensure_live(address)
+        return ChatSession(self._store, address)
 
     async def get_or_create_async(self, address: SessionAddress) -> ChatSession:
         return await _run_session_io(self.get_or_create, address)
@@ -670,6 +708,19 @@ class ChatSessionManager:
 
     def set_metadata(self, address: SessionAddress, data: JsonObject) -> None:
         self._store.replace_metadata(address, data)
+
+    def mutate_metadata(
+        self, address: SessionAddress, mutation: Callable[[JsonObject], None]
+    ) -> JsonObject:
+        """Atomically mutate metadata without overwriting concurrent domain fields."""
+        _previous, updated = self.mutate_metadata_with_previous(address, mutation)
+        return updated
+
+    def mutate_metadata_with_previous(
+        self, address: SessionAddress, mutation: Callable[[JsonObject], None]
+    ) -> tuple[JsonObject, JsonObject]:
+        """Atomically mutate metadata and return exact before/after snapshots."""
+        return self._store.mutate_metadata(address, mutation)
 
     async def set_metadata_async(self, address: SessionAddress, data: JsonObject) -> None:
         await _run_session_io(self.set_metadata, address, data)
@@ -685,49 +736,60 @@ class ChatSessionManager:
         return cast(str, value)
 
     def rotate_prompt_cache_affinity_id(self, address: SessionAddress) -> str:
-        metadata = self.get_metadata(address)
         value = _new_prompt_cache_affinity_id()
-        metadata[PROMPT_CACHE_AFFINITY_META_KEY] = value
-        self.set_metadata(address, metadata)
+        self._store.mutate_metadata(
+            address, lambda metadata: metadata.__setitem__(PROMPT_CACHE_AFFINITY_META_KEY, value)
+        )
         return value
 
     def record_run_kind(self, address: SessionAddress, run_kind: RunKind) -> None:
-        metadata = self.get_metadata(address)
-        values = metadata.get(SESSION_RUN_KINDS_META_KEY, [])
-        if not isinstance(values, list) or run_kind.value in values:
-            return
-        metadata[SESSION_RUN_KINDS_META_KEY] = [*values, run_kind.value]
-        self.set_metadata(address, metadata)
+        if not isinstance(run_kind, RunKind):
+            raise ChatSessionError("run kind must be a RunKind")
+
+        def update(metadata: JsonObject) -> None:
+            values = metadata.get(SESSION_RUN_KINDS_META_KEY, [])
+            if not isinstance(values, list) or not all(
+                isinstance(value, str) and value in {kind.value for kind in RunKind}
+                for value in values
+            ):
+                raise ChatSessionError("session run_kinds metadata is invalid")
+            if run_kind.value not in values:
+                metadata[SESSION_RUN_KINDS_META_KEY] = [*values, run_kind.value]
+
+        self._store.mutate_metadata(address, update)
 
     def record_terminal_run(
         self, address: SessionAddress, run_id: str, status: str, timestamp: str
     ) -> None:
         if not run_id or status not in SESSION_TERMINAL_RUN_STATUSES or not timestamp:
             raise ChatSessionError("invalid terminal Run completion")
-        with self._activity_lock:
-            activity = self._store.activity(address)
+
+        def update(activity: JsonObject) -> None:
             activity["latest_completion"] = {
                 "run_id": run_id,
                 "status": status,
                 "timestamp": timestamp,
             }
-            self._store.replace_activity(address, activity)
+
+        self._store.mutate_activity(address, update)
 
     def mark_terminal_run_read(self, address: SessionAddress, run_id: str) -> JsonObject:
-        with self._activity_lock:
-            activity = self._store.activity(address)
+        marked = False
+
+        def update(activity: JsonObject) -> None:
+            nonlocal marked
             latest = _valid_latest_completion(activity)
             marked = bool(
                 latest and latest["run_id"] == run_id and activity.get("read_run_id") != run_id
             )
             if marked:
                 activity["read_run_id"] = run_id
-                self._store.replace_activity(address, activity)
-            result = _completion_activity_payload(activity)
-            result["marked_read"] = marked
+
+        _previous, activity = self._store.mutate_activity(address, update)
+        result = _completion_activity_payload(activity)
+        result["marked_read"] = marked
         if marked:
-            for callback in list(self._completion_read_callbacks):
-                callback(address)
+            self._notify_callbacks(self._completion_read_callbacks, address)
         return result
 
     async def mark_terminal_run_read_async(
@@ -736,17 +798,18 @@ class ChatSessionManager:
         return await _run_session_io(self.mark_terminal_run_read, address, run_id)
 
     def set_title(self, address: SessionAddress, title: str) -> str | None:
-        metadata = self.get_metadata(address)
-        previous = metadata.get(SESSION_TITLE_KEY)
         normalized = _normalize_session_title(title)
-        if normalized is None:
-            metadata.pop(SESSION_TITLE_KEY, None)
-        else:
-            metadata[SESSION_TITLE_KEY] = normalized
-        self.set_metadata(address, metadata)
+
+        def update(metadata: JsonObject) -> None:
+            if normalized is None:
+                metadata.pop(SESSION_TITLE_KEY, None)
+            else:
+                metadata[SESSION_TITLE_KEY] = normalized
+
+        previous_metadata, _updated = self._store.mutate_metadata(address, update)
+        previous = previous_metadata.get(SESSION_TITLE_KEY)
         if previous != normalized:
-            for callback in list(self._title_changed_callbacks):
-                callback(address)
+            self._notify_callbacks(self._title_changed_callbacks, address)
         return normalized
 
     async def set_title_async(self, address: SessionAddress, title: str) -> str | None:
@@ -755,31 +818,34 @@ class ChatSessionManager:
     def set_auto_title(
         self, address: SessionAddress, title: str, *, initialized: bool = True
     ) -> str | None:
-        metadata = self.get_metadata(address)
-        previous = metadata.get(SESSION_AUTO_TITLE_KEY)
         normalized = _normalize_session_title(title)
-        if normalized is None:
-            metadata.pop(SESSION_AUTO_TITLE_KEY, None)
-        else:
-            metadata[SESSION_AUTO_TITLE_KEY] = normalized
-        if initialized:
-            metadata[SESSION_AUTO_TITLE_INITIALIZED_KEY] = True
-        self.set_metadata(address, metadata)
+
+        def update(metadata: JsonObject) -> None:
+            if normalized is None:
+                metadata.pop(SESSION_AUTO_TITLE_KEY, None)
+            else:
+                metadata[SESSION_AUTO_TITLE_KEY] = normalized
+            if initialized:
+                metadata[SESSION_AUTO_TITLE_INITIALIZED_KEY] = True
+
+        previous_metadata, _updated = self._store.mutate_metadata(address, update)
+        previous = previous_metadata.get(SESSION_AUTO_TITLE_KEY)
         if previous != normalized:
-            for callback in list(self._title_changed_callbacks):
-                callback(address)
+            self._notify_callbacks(self._title_changed_callbacks, address)
         return normalized
 
     def reset_auto_title(self, address: SessionAddress) -> None:
-        metadata = self.get_metadata(address)
-        metadata.pop(SESSION_AUTO_TITLE_KEY, None)
-        metadata.pop(SESSION_AUTO_TITLE_INITIALIZED_KEY, None)
-        self.set_metadata(address, metadata)
+        def update(metadata: JsonObject) -> None:
+            metadata.pop(SESSION_AUTO_TITLE_KEY, None)
+            metadata.pop(SESSION_AUTO_TITLE_INITIALIZED_KEY, None)
+
+        self._store.mutate_metadata(address, update)
 
     def mark_auto_title_initialized(self, address: SessionAddress) -> None:
-        metadata = self.get_metadata(address)
-        metadata[SESSION_AUTO_TITLE_INITIALIZED_KEY] = True
-        self.set_metadata(address, metadata)
+        self._store.mutate_metadata(
+            address,
+            lambda metadata: metadata.__setitem__(SESSION_AUTO_TITLE_INITIALIZED_KEY, True),
+        )
 
     def list(self, agent_id: str, project_id: str | None = None) -> list[ChatSession]:
         return [
@@ -799,12 +865,11 @@ class ChatSessionManager:
         self, agent_id: str, project_id: str | None = None
     ) -> builtins.list[JsonObject]:
         result: builtins.list[JsonObject] = []
-        for session in self.list(agent_id, project_id):
-            state = self._store.state(session.address)
-            summary = dict(self.get_metadata(session.address))
-            summary.update(_completion_activity_payload(self._store.activity(session.address)))
+        for state in self._store.list_state_rows(project_id, agent_id):
+            summary = _decode_state_object(state["metadata_json"], "Session metadata")
+            summary.update(_completion_activity_from_state(state))
             summary.update(
-                id=session.id,
+                id=state["session_id"],
                 created_at=state["created_at"],
                 last_active_at=state["last_message_at"] or state["created_at"],
             )
@@ -819,13 +884,10 @@ class ChatSessionManager:
     def list_completion_activity(
         self, agent_id: str, project_id: str | None = None
     ) -> builtins.list[JsonObject]:
-        return [
-            {
-                "id": session.id,
-                **_completion_activity_payload(self._store.activity(session.address)),
-            }
-            for session in self.list(agent_id, project_id)
-        ]
+        result: builtins.list[JsonObject] = []
+        for state in self._store.list_state_rows(project_id, agent_id):
+            result.append({"id": state["session_id"], **_completion_activity_from_state(state)})
+        return result
 
     async def list_completion_activity_async(
         self, agent_id: str, project_id: str | None = None
@@ -834,8 +896,12 @@ class ChatSessionManager:
 
     def list_history_revisions(
         self, agent_id: str, project_id: str | None = None
-    ) -> builtins.list[tuple[SessionAddress, int]]:
+    ) -> builtins.list[tuple[SessionAddress, str, int]]:
         return self._store.list_history_revisions(project_id, agent_id)
+
+    def history_version(self, address: SessionAddress) -> tuple[str, int]:
+        state = self._store.state(address)
+        return str(state["generation_id"]), int(state["history_revision"])
 
     def history_revision(self, address: SessionAddress) -> int:
         return int(self._store.state(address)["history_revision"])
@@ -845,20 +911,25 @@ class ChatSessionManager:
     ) -> tuple[SessionIdentityReferenceUpdate, ...]:
         updates: builtins.list[SessionIdentityReferenceUpdate] = []
         for address in self._store.list_addresses(include_all_scopes=True):
-            metadata = self.get_metadata(address)
-            parent = metadata.get("subagent_parent")
-            if (
-                not isinstance(parent, dict)
-                or parent.get("project_id") is not None
-                or parent.get("agent_id") != old_agent_id
-            ):
-                continue
-            previous = dict(metadata)
-            parent = dict(parent)
-            parent["agent_id"] = new_agent_id
-            metadata["subagent_parent"] = parent
-            self.set_metadata(address, metadata)
-            updates.append(SessionIdentityReferenceUpdate(address, previous))
+            changed = False
+
+            def retarget(metadata: JsonObject) -> None:
+                nonlocal changed
+                parent = metadata.get("subagent_parent")
+                if (
+                    not isinstance(parent, dict)
+                    or parent.get("project_id") is not None
+                    or parent.get("agent_id") != old_agent_id
+                ):
+                    return
+                parent = dict(parent)
+                parent["agent_id"] = new_agent_id
+                metadata["subagent_parent"] = parent
+                changed = True
+
+            previous, _updated = self.mutate_metadata_with_previous(address, retarget)
+            if changed:
+                updates.append(SessionIdentityReferenceUpdate(address, previous))
         return tuple(updates)
 
     def restore_identity_agent_references(
@@ -931,7 +1002,7 @@ class ChatSessionManager:
             "session_id": source.session_id,
             "project_id": source.project_id,
             "forked_at": _format_timestamp(datetime.now(UTC)),
-            "message_count": len(self.get(source).load()),
+            "message_count": int(self._store.state(source)["message_count"]),
         }
         self._store.fork(source, target, metadata)
         return ChatSession(self._store, target)
@@ -940,7 +1011,8 @@ class ChatSessionManager:
         self._store.delete(address)
 
     async def archive(self, address: SessionAddress) -> None:
-        self._store.archive(address)
+        async with self.write_lock(address):
+            await _run_session_io(self._store.archive, address)
 
     def restore(self, address: SessionAddress) -> None:
         self._store.restore(address)
@@ -950,3 +1022,16 @@ class ChatSessionManager:
 
     def archive_identity_agent_sessions(self, agent_id: str) -> None:
         self._store.archive_identity_agent_sessions(agent_id)
+
+    def archive_project_sessions(self, project_id: str) -> None:
+        self._store.archive_project_sessions(project_id)
+
+    @staticmethod
+    def _notify_callbacks(
+        callbacks: Sequence[Callable[[SessionAddress], None]], address: SessionAddress
+    ) -> None:
+        for callback in list(callbacks):
+            try:
+                callback(address)
+            except Exception:
+                logging.getLogger(__name__).exception("Session callback failed")

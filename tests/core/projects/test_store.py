@@ -532,17 +532,14 @@ def test_update_clears_display_name_to_project_id(
     assert store.get("vbot").display_name == "vbot"
 
 
-def test_rename_keeps_key_and_sessions_path_stable(data_dir: Path, repo: Path) -> None:
-    # Renaming changes only the display name; the project_id key — and therefore
-    # the project-scoped sessions path — stays put.
+def test_rename_keeps_key_stable(data_dir: Path, repo: Path) -> None:
+    # Renaming changes only the display name; the project_id key stays put.
     store = ProjectStore(data_dir)
     store.create("vbot", "vBot", repo)
-    before = store.sessions_dir("vbot", "orchestrator")
 
     store.update("vbot", display_name="vBot Renamed")
 
     assert store.get("vbot").project_id == "vbot"
-    assert store.sessions_dir("vbot", "orchestrator") == before
 
 
 def test_update_rejects_unknown_field(data_dir: Path, repo: Path) -> None:
@@ -600,6 +597,22 @@ def test_delete_does_not_touch_repo(data_dir: Path, repo: Path) -> None:
     assert marker.read_text(encoding="utf-8") == "repo content"
 
 
+def test_delete_archives_project_sessions_before_the_project_id_is_reused(
+    data_dir: Path, repo: Path
+) -> None:
+    sessions = ChatSessionManager(data_dir)
+    store = ProjectStore(data_dir, sessions=sessions)
+    store.create("vbot", "vBot", repo)
+    address = sessions.create("builder", session_id="session-one", project_id="vbot").address
+
+    store.delete("vbot")
+    store.create("vbot", "vBot Again", repo)
+
+    assert sessions.exists(address) is False
+    assert store.session_owning_agents("vbot") == []
+    sessions.close()
+
+
 def test_delete_replaces_existing_archive(data_dir: Path, repo: Path) -> None:
     store = ProjectStore(data_dir)
     store.create("vbot", "vBot", repo)
@@ -610,6 +623,30 @@ def test_delete_replaces_existing_archive(data_dir: Path, repo: Path) -> None:
 
     payload = json.loads((archive_path / "project.json").read_text("utf-8"))
     assert payload["display_name"] == "vBot Again"
+
+
+def test_delete_restores_active_project_and_previous_archive_on_session_failure(
+    data_dir: Path, repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sessions = ChatSessionManager(data_dir)
+    store = ProjectStore(data_dir, sessions=sessions)
+    store.create("vbot", "First", repo)
+    previous_archive = store.delete("vbot")
+    marker = previous_archive / "keep.txt"
+    marker.write_text("previous", encoding="utf-8")
+    store.create("vbot", "Second", repo)
+
+    def fail_archive(_project_id: str) -> None:
+        raise RuntimeError("database unavailable")
+
+    monkeypatch.setattr(sessions, "archive_project_sessions", fail_archive)
+
+    with pytest.raises(RuntimeError, match="database unavailable"):
+        store.delete("vbot")
+
+    assert store.get("vbot").display_name == "Second"
+    assert marker.read_text(encoding="utf-8") == "previous"
+    sessions.close()
 
 
 def test_delete_raises_for_unknown_project(data_dir: Path) -> None:
@@ -638,14 +675,6 @@ def test_get_rejects_path_traversal_id(data_dir: Path) -> None:
 
     with pytest.raises(ProjectError):
         store.get("../somewhere")
-
-
-def test_sessions_dir_rejects_path_traversal_id(data_dir: Path) -> None:
-    # The second path-building choke point (project_sessions_dir) is guarded too.
-    store = ProjectStore(data_dir)
-
-    with pytest.raises(ProjectError):
-        store.sessions_dir("../somewhere", "orchestrator")
 
 
 def test_delete_rejects_path_traversal_id_leaves_sibling_untouched(
@@ -680,29 +709,12 @@ def test_validate_agent_id_accepts_valid_slug() -> None:
     assert _validate_agent_id("orchestrator") == "orchestrator"
 
 
-def test_sessions_dir_rejects_path_traversal_agent_id(data_dir: Path, repo: Path) -> None:
-    store = ProjectStore(data_dir)
-    store.create("vbot", "vBot", repo)
-
-    with pytest.raises(ProjectError):
-        store.sessions_dir("vbot", "../escape")
-
-
 def test_workspace_dir_rejects_path_traversal_agent_id(data_dir: Path, repo: Path) -> None:
     store = ProjectStore(data_dir)
     store.create("vbot", "vBot", repo)
 
     with pytest.raises(ProjectError):
         store.workspace_dir("vbot", "../escape")
-
-
-def test_sessions_dir_is_project_scoped(data_dir: Path, repo: Path) -> None:
-    store = ProjectStore(data_dir)
-    store.create("vbot", "vBot", repo)
-
-    sessions_dir = store.sessions_dir("vbot", "orchestrator")
-
-    assert sessions_dir == data_dir / "projects" / "vbot" / "agents" / "orchestrator" / "sessions"
 
 
 def test_workspace_dir_is_under_agent_anchor(data_dir: Path, repo: Path) -> None:
@@ -725,9 +737,6 @@ def test_session_owning_agents_lists_only_agents_with_sessions(data_dir: Path, r
     store.create("vbot", "vBot", repo)
     _write_anchor_session(sessions, "vbot", "builder")
     _write_anchor_session(sessions, "vbot", "orchestrator")
-    # An agent dir created without any session must not count as an owner.
-    (data_dir / "projects" / "vbot" / "agents" / "empty" / "sessions").mkdir(parents=True)
-
     owners = store.session_owning_agents("vbot")
 
     assert owners == ["builder", "orchestrator"]

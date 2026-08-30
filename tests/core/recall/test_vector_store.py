@@ -15,8 +15,37 @@ from core.recall.vector_store import (
     VectorStore,
     VectorStoreError,
 )
+from core.sessions.schema import JOURNAL_MODE_DELETE
 
 pytestmark = pytest.mark.filterwarnings("ignore::DeprecationWarning")
+
+
+def test_vector_store_uses_required_rollback_journal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from core.recall import vector_store
+
+    monkeypatch.setattr(vector_store, "required_journal_mode", lambda _version: JOURNAL_MODE_DELETE)
+    store = VectorStore(tmp_path)
+
+    connection = store._connect()
+    try:
+        mode = str(connection.execute("PRAGMA journal_mode").fetchone()[0]).lower()
+    finally:
+        connection.close()
+
+    assert mode == JOURNAL_MODE_DELETE
+
+
+def test_vector_store_reset_removes_rollback_journal(tmp_path: Path) -> None:
+    store = VectorStore(tmp_path)
+    rollback_journal = Path(f"{store.path}-journal")
+    rollback_journal.parent.mkdir(parents=True, exist_ok=True)
+    rollback_journal.write_bytes(b"stale")
+
+    store.reset_index()
+
+    assert rollback_journal.exists() is False
 
 
 def _record(
@@ -345,7 +374,7 @@ def test_vector_store_list_indexed_sessions_reports_history_revision(tmp_path: P
     _upsert_one(store, header=header, record=record, vector=[0.1, 0.2])
 
     indexed = store.list_indexed_sessions("coder")
-    assert indexed == {"s1": 12345}
+    assert indexed == {"s1": ("", 12345)}
 
 
 def test_vector_store_drop_indexed_sessions_removes_only_listed(tmp_path: Path) -> None:
@@ -569,8 +598,8 @@ def test_vector_store_list_indexed_sessions_dedups_to_one_per_session(
 
     indexed = store.list_indexed_sessions("coder")
     assert set(indexed) == {"s1", "s2"}
-    assert indexed["s1"] == 100
-    assert indexed["s2"] == 200
+    assert indexed["s1"] == ("", 100)
+    assert indexed["s2"] == ("", 200)
 
 
 def test_vector_store_get_chunks_by_rowids_returns_new_fields(tmp_path: Path) -> None:

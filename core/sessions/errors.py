@@ -14,7 +14,7 @@ class SessionConversionRequiredError(SessionStorageError):
 
 
 class SessionStorageConflictError(SessionStorageError):
-    """Raised when SQLite and live JSONL transcripts coexist."""
+    """Raised when SQLite and legacy JSONL Session artifacts coexist."""
 
 
 class SessionConversionIncompleteError(SessionStorageError):
@@ -23,3 +23,7 @@ class SessionConversionIncompleteError(SessionStorageError):
 
 class SessionStoreCorruptError(SessionStorageError):
     """Raised when the canonical Session database cannot be trusted."""
+
+
+class SessionStoreUnavailableError(SessionStorageError):
+    """Raised when the canonical Session database cannot complete an operation."""

@@ -18,6 +18,7 @@ from core.recall import (
     SqliteFtsRecallBackend,
 )
 from core.sessions import ChatSessionManager
+from core.sessions.schema import JOURNAL_MODE_DELETE
 
 pytestmark = pytest.mark.asyncio
 
@@ -51,6 +52,39 @@ def request(
 
 def backend(tmp_path: Path, sessions: ChatSessionManager) -> SqliteFtsRecallBackend:
     return SqliteFtsRecallBackend(RecallBackendContext(data_dir=tmp_path, sessions=sessions))
+
+
+async def test_index_uses_required_rollback_journal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from core.recall import sqlite_fts
+
+    monkeypatch.setattr(sqlite_fts, "required_journal_mode", lambda _version: JOURNAL_MODE_DELETE)
+
+    sessions = ChatSessionManager(tmp_path)
+    connection = backend(tmp_path, sessions)._connect()
+    try:
+        mode = str(connection.execute("PRAGMA journal_mode").fetchone()[0]).lower()
+    finally:
+        connection.close()
+        sessions.close()
+
+    assert mode == JOURNAL_MODE_DELETE
+
+
+async def test_index_cleanup_includes_rollback_journal(tmp_path: Path) -> None:
+    sessions = ChatSessionManager(tmp_path)
+    recall = backend(tmp_path, sessions)
+    try:
+        rollback_journal = Path(f"{recall.index_path}-journal")
+        rollback_journal.parent.mkdir(parents=True, exist_ok=True)
+        rollback_journal.write_bytes(b"stale")
+
+        recall._delete_index_file()
+
+        assert rollback_journal.exists() is False
+    finally:
+        sessions.close()
 
 
 def passage_request(
@@ -185,7 +219,7 @@ async def test_sqlite_fts_phrase_and_any_term_modes(tmp_path: Path) -> None:
     assert [match["snippet"] for match in any_data["matches"]] == ["gamma"]
 
 
-async def test_sqlite_search_text_matches_jsonl_scanner_sources(tmp_path: Path) -> None:
+async def test_sqlite_search_text_matches_canonical_scanner_sources(tmp_path: Path) -> None:
     sessions = ChatSessionManager(tmp_path)
     session = sessions.create("coder", session_id="sources-session")
     content_blocks: list[Any] = [
@@ -246,7 +280,7 @@ async def test_sqlite_fts_case_insensitive_substring(tmp_path: Path) -> None:
     assert data["matches"][0]["session_id"] == "case-session"
 
 
-async def test_sqlite_fts_short_query_falls_back_to_jsonl_substring(tmp_path: Path) -> None:
+async def test_sqlite_fts_short_query_falls_back_to_canonical_substring(tmp_path: Path) -> None:
     sessions = ChatSessionManager(tmp_path)
     session = sessions.create("coder", session_id="short-session")
     session.append(ChatMessage.user("Go fast", timestamp=timestamp(1)))

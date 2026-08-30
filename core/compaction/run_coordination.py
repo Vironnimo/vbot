@@ -504,27 +504,29 @@ class CompactionRunCoordinator:
     ) -> None:
         """Persist one prepared prompt epoch after its checkpoint commit."""
         address = SessionAddress(project_id=project_id, agent_id=agent_id, session_id=session_id)
-        metadata = self._dependencies.sessions.get_metadata(address)
-        metadata[PINNED_SKILL_CATALOG_META_KEY] = {
-            "catalog_text": refresh.skill_catalog.catalog_text
-        }
-        if refresh.available_skill_names is not None:
-            metadata[SEEN_SKILLS_META_KEY] = list(refresh.available_skill_names)
-        for pin_key, pin_text in (
-            (PINNED_WORKING_PROJECT_CONTEXT_META_KEY, refresh.working_project_context),
-            (PINNED_SOUL_CONTEXT_META_KEY, refresh.soul_context),
-            (PINNED_MEMORY_FILES_META_KEY, refresh.memory_files_context),
-        ):
-            if pin_text is None:
-                metadata.pop(pin_key, None)
-            else:
-                metadata[pin_key] = {"text": pin_text}
+
+        def update(metadata: JsonObject) -> None:
+            metadata[PINNED_SKILL_CATALOG_META_KEY] = {
+                "catalog_text": refresh.skill_catalog.catalog_text
+            }
+            if refresh.available_skill_names is not None:
+                metadata[SEEN_SKILLS_META_KEY] = list(refresh.available_skill_names)
+            for pin_key, pin_text in (
+                (PINNED_WORKING_PROJECT_CONTEXT_META_KEY, refresh.working_project_context),
+                (PINNED_SOUL_CONTEXT_META_KEY, refresh.soul_context),
+                (PINNED_MEMORY_FILES_META_KEY, refresh.memory_files_context),
+            ):
+                if pin_text is None:
+                    metadata.pop(pin_key, None)
+                else:
+                    metadata[pin_key] = {"text": pin_text}
+
+        self._dependencies.sessions.mutate_metadata(address, update)
         stamp_prompt_files_read(
             self._dependencies.file_read_state,
             session_id,
             list(refresh.prompt_read_paths),
         )
-        self._dependencies.sessions.set_metadata(address, metadata)
 
     async def _project_post_compaction_request(
         self,

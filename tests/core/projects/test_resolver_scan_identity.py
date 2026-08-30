@@ -125,17 +125,17 @@ def test_scan_default_agent_on_team_is_not_orphan(
     assert result.report.findings_of(FindingType.ORPHAN) == ()
 
 
-def test_scan_reports_orphan_session_owner(
-    agents: AgentStore, projects: ProjectStore, repo: Path
-) -> None:
+def test_scan_reports_orphan_session_owner(agents: AgentStore, repo: Path, data_dir: Path) -> None:
     # Arrange: sessions under the anchor for an agent the scan no longer yields
     # (renamed/deleted in the repo) — and for one still on the team (no finding).
     _write_agent(repo, "builder.md", model="openai/gpt-5.2")
+    from core.sessions import ChatSessionManager
+
+    sessions = ChatSessionManager(data_dir)
+    projects = ProjectStore(data_dir, sessions=sessions)
     project = _project(projects, repo)
     for owner in ("builder", "ghost"):
-        sessions_dir = projects.sessions_dir("vbot", owner)
-        sessions_dir.mkdir(parents=True)
-        (sessions_dir / "session-1.jsonl").write_text("{}\n", encoding="utf-8")
+        sessions.create(owner, session_id="session-1", project_id="vbot")
     resolver = _resolver(agents, projects, _openai_configured())
 
     # Act
@@ -144,6 +144,7 @@ def test_scan_reports_orphan_session_owner(
     # Assert: exactly the vanished session owner is flagged.
     orphans = result.report.findings_of(FindingType.ORPHAN)
     assert [finding.agent_id for finding in orphans] == ["ghost"]
+    sessions.close()
 
 
 def test_identity_resolution_returns_store_agent_unchanged(

@@ -12,15 +12,15 @@ import pytest
 
 from core.chat import ChatMessage
 from core.recall import (
-    JsonlSessionRecallBackend,
+    CanonicalSessionRecallBackend,
     RecallBackendContext,
     RecallSearchCapabilities,
     RecallSearchHit,
     RecallSearchPage,
     SqliteFtsRecallBackend,
 )
+from core.recall.canonical import RECALL_TOOL_RESULT_NAMES
 from core.recall.hybrid import HybridRecallBackend
-from core.recall.jsonl import RECALL_TOOL_RESULT_NAMES
 from core.recall.vector import VectorRecallBackend
 from core.sessions import ChatSession, ChatSessionManager, SessionAddress
 from core.tools.session_search import (
@@ -155,7 +155,7 @@ async def test_registration_exposes_two_small_stable_tools(tmp_path: Path) -> No
     context = RecallBackendContext(data_dir=tmp_path, sessions=sessions)
     backend_definitions = {}
     for name, backend in (
-        ("jsonl_scan", JsonlSessionRecallBackend(sessions)),
+        ("canonical_scan", CanonicalSessionRecallBackend(sessions)),
         ("sqlite_fts", SqliteFtsRecallBackend(context)),
         ("vector", VectorRecallBackend(context)),
         ("hybrid", HybridRecallBackend(context)),
@@ -166,7 +166,7 @@ async def test_registration_exposes_two_small_stable_tools(tmp_path: Path) -> No
         backend_definitions[name] = definition
         assert set(definition.parameters["properties"]) == set(search.parameters["properties"])
 
-    assert backend_definitions["jsonl_scan"].parameters == SESSION_SEARCH_TOOL_PARAMETERS
+    assert backend_definitions["canonical_scan"].parameters == SESSION_SEARCH_TOOL_PARAMETERS
     assert len({definition.description for definition in backend_definitions.values()}) == 4
     assert (
         len(
@@ -230,7 +230,7 @@ async def test_current_session_is_unavailable_but_same_id_for_another_agent_is_a
     other = sessions.create("reviewer", session_id="current-session")
     other_message = ChatMessage.user("needle other Agent", timestamp=timestamp(1))
     other.append(other_message)
-    backend = JsonlSessionRecallBackend(sessions)
+    backend = CanonicalSessionRecallBackend(sessions)
     search_context = make_context(tmp_path)
     read_context = make_context(tmp_path, tool_name=SESSION_READ_TOOL_NAME)
 
@@ -262,7 +262,7 @@ async def test_current_session_writes_never_enter_list_or_search_results(tmp_pat
     for index in range(2):
         past = sessions.create("coder", session_id=f"past-{index}")
         past.append(ChatMessage.user(f"needle past {index}", timestamp=timestamp(index + 1)))
-    backend = JsonlSessionRecallBackend(sessions)
+    backend = CanonicalSessionRecallBackend(sessions)
     context = make_context(tmp_path)
 
     current.append(ChatMessage.user("needle appended", timestamp=timestamp(4)))
@@ -280,7 +280,7 @@ async def test_search_can_restrict_query_to_one_past_session(tmp_path: Path) -> 
     first.append(first_message)
     second = sessions.create("coder", session_id="second")
     second.append(ChatMessage.user("shared needle second", timestamp=timestamp(2)))
-    backend = JsonlSessionRecallBackend(sessions)
+    backend = CanonicalSessionRecallBackend(sessions)
     context = make_context(tmp_path)
 
     scoped = success(
@@ -306,7 +306,7 @@ async def test_definition_explains_active_backend(tmp_path: Path) -> None:
     context = RecallBackendContext(data_dir=tmp_path, sessions=sessions)
 
     expected = {
-        "jsonl_scan": (
+        "canonical_scan": (
             "Find persisted Sessions and literal matches in past conversations. "
             "The current Session is excluded. Omit query to list recent Sessions. Returns at "
             "most 10 items with no paging; narrow with period or session_id. Search matches "
@@ -344,7 +344,7 @@ async def test_definition_explains_active_backend(tmp_path: Path) -> None:
         ),
     }
     backends = {
-        "jsonl_scan": JsonlSessionRecallBackend(sessions),
+        "canonical_scan": CanonicalSessionRecallBackend(sessions),
         "sqlite_fts": SqliteFtsRecallBackend(context),
         "vector": VectorRecallBackend(context),
         "hybrid": HybridRecallBackend(context),
@@ -381,7 +381,7 @@ async def test_search_rejects_retired_and_advanced_fields(
     result = await session_search_handler(
         make_context(tmp_path),
         arguments,
-        JsonlSessionRecallBackend(sessions),
+        CanonicalSessionRecallBackend(sessions),
     )
 
     failure(result, "invalid_arguments")
@@ -400,7 +400,7 @@ async def test_list_supports_period_filter(tmp_path: Path) -> None:
     weekend.append(weekend_question)
     weekend.append(weekend_answer)
     weekday.append(ChatMessage.user("Monday discussion", timestamp=timestamp(4)))
-    backend = JsonlSessionRecallBackend(sessions)
+    backend = CanonicalSessionRecallBackend(sessions)
 
     period = success(
         await session_search_handler(
@@ -453,7 +453,7 @@ async def test_list_projects_bounded_session_context_without_internal_metadata(
         await session_search_handler(
             make_context(tmp_path),
             {},
-            JsonlSessionRecallBackend(sessions),
+            CanonicalSessionRecallBackend(sessions),
         )
     )
 
@@ -498,7 +498,7 @@ async def test_list_preserves_mixed_run_origins_and_marks_legacy_origin_unknown(
         SessionAddress(project_id=None, agent_id="coder", session_id="mixed"),
         {"run_kinds": ["cron", "user"]},
     )
-    backend = JsonlSessionRecallBackend(sessions)
+    backend = CanonicalSessionRecallBackend(sessions)
 
     data = success(await session_search_handler(make_context(tmp_path), {}, backend))
     by_id = {item["session_id"]: item for item in data["items"]}
@@ -521,7 +521,7 @@ async def test_invalid_period_is_rejected(tmp_path: Path, period: str) -> None:
     result = await session_search_handler(
         make_context(tmp_path),
         {"period": period},
-        JsonlSessionRecallBackend(sessions),
+        CanonicalSessionRecallBackend(sessions),
     )
 
     failure(result, "invalid_arguments")
@@ -543,7 +543,7 @@ async def test_search_applies_period_and_backend_default_ranking(tmp_path: Path)
                 "query": "needle",
                 "period": "2026-05-02/2026-05-03",
             },
-            JsonlSessionRecallBackend(sessions),
+            CanonicalSessionRecallBackend(sessions),
         )
     )
 
@@ -567,7 +567,7 @@ async def test_search_returns_one_session_descriptor_for_repeated_hits(tmp_path:
         await session_search_handler(
             make_context(tmp_path),
             {"query": "needle"},
-            JsonlSessionRecallBackend(sessions),
+            CanonicalSessionRecallBackend(sessions),
         )
     )
 
@@ -599,7 +599,7 @@ async def test_search_returns_at_most_ten_results_without_pagination(tmp_path: P
     ]
     for message in messages:
         session.append(message)
-    backend = JsonlSessionRecallBackend(sessions)
+    backend = CanonicalSessionRecallBackend(sessions)
 
     data = success(
         await session_search_handler(make_context(tmp_path), {"query": "needle"}, backend)
@@ -628,7 +628,7 @@ async def test_search_read_ref_covers_complete_conversation_block(tmp_path: Path
     next_question = ChatMessage.user("Next topic", timestamp=timestamp(4))
     for message in (question, first, second, next_question):
         session.append(message)
-    backend = JsonlSessionRecallBackend(sessions)
+    backend = CanonicalSessionRecallBackend(sessions)
 
     search = success(
         await session_search_handler(
@@ -1039,7 +1039,7 @@ async def test_project_scope_is_preserved_for_search_and_read(tmp_path: Path) ->
     global_session.append(ChatMessage.user("needle global", timestamp=timestamp(1)))
     project_message = ChatMessage.user("needle project", timestamp=timestamp(2))
     project_session.append(project_message)
-    backend = JsonlSessionRecallBackend(sessions)
+    backend = CanonicalSessionRecallBackend(sessions)
     search_context = make_context(tmp_path, project_id="p1")
     read_context = make_context(
         tmp_path,
@@ -1111,7 +1111,7 @@ async def test_search_excludes_its_own_persisted_results(
         await session_search_handler(
             make_context(tmp_path),
             {"query": "needle"},
-            JsonlSessionRecallBackend(sessions),
+            CanonicalSessionRecallBackend(sessions),
         )
     )
 
@@ -1160,7 +1160,7 @@ async def test_multiple_large_excerpts_stay_within_result_limit(tmp_path: Path) 
     result = await session_search_handler(
         make_context(tmp_path),
         {"query": "needle"},
-        JsonlSessionRecallBackend(sessions),
+        CanonicalSessionRecallBackend(sessions),
     )
     data = success(result)
 
@@ -1194,7 +1194,7 @@ async def test_large_session_descriptor_list_returns_bounded_first_ten_without_c
                 },
             },
         )
-    backend = JsonlSessionRecallBackend(sessions)
+    backend = CanonicalSessionRecallBackend(sessions)
 
     result = await session_search_handler(make_context(tmp_path), {}, backend)
     data = success(result)

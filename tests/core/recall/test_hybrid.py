@@ -338,7 +338,7 @@ async def test_hybrid_backend_returns_literal_only_when_no_embedding_binding(
         request(query="vehicle", limit=2)
     )
 
-    # Both sessions match via FTS, the vector arm falls back to JSONL
+    # Both sessions match via FTS, the vector arm falls back to canonical
     # and its matches also have no ``distance``. After dedup both
     # sessions are tagged literal and there are no distance fields.
     assert [match["session_id"] for match in data["matches"]] == ["beta", "alpha"]
@@ -544,7 +544,7 @@ async def test_hybrid_backend_two_char_query_merges_literal_and_semantic(
     """A 2-character query (below FTS trigram's 3-char floor) still surfaces matches.
 
     The FTS arm's trigram tokenizer cannot index short terms, so it
-    falls back to its own JSONL substring scan. The vector arm still
+    falls back to its own canonical substring scan. The vector arm still
     embeds the query. The fused result must not be empty: a
     non-empty FTS fallback + a non-empty vector arm merge into a
     hybrid match.

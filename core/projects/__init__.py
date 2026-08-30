@@ -45,7 +45,7 @@ from core.projects.resolver import (
     resolve_working_project_id,
     runtime_agent_body,
 )
-from core.projects.store import ProjectStore, project_sessions_dir
+from core.projects.store import ProjectStore
 
 __all__ = [
     "AgentRunOverrides",
@@ -73,7 +73,6 @@ __all__ = [
     "parse_agent_address",
     "project_from_dict",
     "project_tool_configurability_reason",
-    "project_sessions_dir",
     "resolve_prompt_project",
     "resolve_skill_scope",
     "resolve_working_project_id",

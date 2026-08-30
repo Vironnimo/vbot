@@ -528,15 +528,15 @@ def test_extension_recall_backend_becomes_selectable(tmp_path: Path) -> None:
 
 def test_extension_recall_backend_duplicate_name_is_diagnosed(tmp_path: Path) -> None:
     root = tmp_path / "extensions"
-    _write_single_file(root, "dup_backend", _recall_extension_source("jsonl_scan"))
+    _write_single_file(root, "dup_backend", _recall_extension_source("canonical_scan"))
 
     registry = ExtensionRegistry.load(root)
     recall_registry = RecallBackendRegistry.with_builtins()
     registry.apply_recall_backends(recall_registry)
 
-    # Built-in jsonl_scan factory is unchanged; the extension's was skipped.
+    # Built-in canonical_scan factory is unchanged; the extension's was skipped.
     errors = _record(registry, "dup_backend").capability_errors
-    assert any("jsonl_scan" in message for message in errors)
+    assert any("canonical_scan" in message for message in errors)
 
 
 def test_extension_recall_backend_invalid_name_is_diagnosed(tmp_path: Path) -> None:

@@ -14,8 +14,8 @@ from typing import Any
 
 from core.debug.redaction import redact_json_body
 from core.recall import (
-    RECALL_BACKEND_JSONL_SCAN,
-    JsonlSessionRecallBackend,
+    RECALL_BACKEND_CANONICAL_SCAN,
+    CanonicalSessionRecallBackend,
     RecallRequest,
     RecallSearchCapabilities,
     RecallSearchError,
@@ -24,7 +24,7 @@ from core.recall import (
     RecallSearchRequest,
     SupportsRecallSearch,
 )
-from core.recall.jsonl import (
+from core.recall.canonical import (
     SESSION_RECALL_DEFAULT_ROLES,
     SESSION_RECALL_LITERAL_SEARCH_GUIDANCE,
     SESSION_RECALL_LITERAL_TOOL_SUMMARY,
@@ -318,8 +318,8 @@ def register_session_search_tool(
 ) -> None:
     if isinstance(recall_backend, ChatSessionManager):
         sessions = recall_backend
-        recall_backend = JsonlSessionRecallBackend(recall_backend)
-        backend_name = RECALL_BACKEND_JSONL_SCAN
+        recall_backend = CanonicalSessionRecallBackend(recall_backend)
+        backend_name = RECALL_BACKEND_CANONICAL_SCAN
     resolved_sessions = sessions or _backend_sessions(recall_backend)
     registry.register(
         SESSION_SEARCH_TOOL_NAME,
@@ -1307,7 +1307,7 @@ def _backend_sessions(backend: Any) -> ChatSessionManager | None:
 
 def _backend_name(backend: Any) -> str:
     known = {
-        "JsonlSessionRecallBackend": RECALL_BACKEND_JSONL_SCAN,
+        "CanonicalSessionRecallBackend": RECALL_BACKEND_CANONICAL_SCAN,
         "SqliteFtsRecallBackend": "sqlite_fts",
         "VectorRecallBackend": "vector",
         "HybridRecallBackend": "hybrid",

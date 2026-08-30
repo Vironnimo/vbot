@@ -1551,18 +1551,20 @@ def _mark_subagent_session(
     address = SessionAddress(
         project_id=sub_project_id, agent_id=sub_agent_id, session_id=sub_session_id
     )
-    metadata = dict(session_manager.get_metadata(address))
-    metadata[SUBAGENT_SESSION_METADATA_FLAG] = True
-    metadata[SUBAGENT_PARENT_METADATA_KEY] = {
-        "id": work_id,
-        "agent_id": context.agent_id,
-        "session_id": context.session_id,
-        "run_id": context.run_id,
-        "tool_call_id": context.tool_call_id,
-        "tool_call_index": context.tool_call_index,
-        "project_id": context.project_id,
-    }
-    session_manager.set_metadata(address, metadata)
+
+    def update(metadata: JsonObject) -> None:
+        metadata[SUBAGENT_SESSION_METADATA_FLAG] = True
+        metadata[SUBAGENT_PARENT_METADATA_KEY] = {
+            "id": work_id,
+            "agent_id": context.agent_id,
+            "session_id": context.session_id,
+            "run_id": context.run_id,
+            "tool_call_id": context.tool_call_id,
+            "tool_call_index": context.tool_call_index,
+            "project_id": context.project_id,
+        }
+
+    session_manager.mutate_metadata(address, update)
 
 
 def _subagent_session_title(description: str | None, content: str) -> str:

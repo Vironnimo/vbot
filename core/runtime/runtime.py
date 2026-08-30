@@ -2047,7 +2047,7 @@ class Runtime:
         the live backend instance now points into dormant extension code. Rather than
         leave recall broken, rebuild the registry (which no longer contains the
         deactivated extension's backend) and re-resolve: an unknown selected name
-        falls back to the built-in default (``jsonl_scan``) with a warning, exactly
+        falls back to the built-in default (``canonical_scan``) with a warning, exactly
         as it would on the next restart. The persisted ``recall.backend`` selection
         is left untouched — re-enabling the extension (a restart) restores it.
         """
@@ -2079,7 +2079,7 @@ class Runtime:
 
         Session deletion calls this so a deleted session stops surfacing in
         search immediately, rather than waiting for the next self-healing
-        reconcile. Backends without a derived index (the JSONL live scan) do not
+        reconcile. Backends without a derived index (the canonical scan) do not
         implement removal and are skipped. Index cleanup is non-fatal — the index
         is disposable and reconciles on the next search — so an index I/O error is
         logged and swallowed instead of failing the delete.
