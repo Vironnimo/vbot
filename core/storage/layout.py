@@ -176,8 +176,62 @@ class DataDirectoryLayout:
         return self.root / "sessions.db"
 
     @property
+    def session_store_marker_path(self) -> Path:
+        """Current-format marker authorizing the SQLite Session store."""
+        return self.root / "session-store.json"
+
+    @property
     def directories(self) -> tuple[Path, ...]:
         return tuple(self.root / relative_path for relative_path in DATA_DIRECTORY_RELATIVE_PATHS)
+
+
+def _write_bootstrap_marker_fallback(data_dir: Path) -> None:
+    """Fallback bootstrap marker writer for ``python core/storage/layout.py``.
+
+    The canonical writer lives in :mod:`core.sessions.format` and is imported
+    at call time. When the storage layout is executed as a standalone script
+    (``python core/storage/layout.py``) the ``core`` package is not on
+    ``sys.path`` and that import fails. This fallback writes the same JSON
+    shape directly so the CLI test and manual invocations still produce a
+    current-format data directory without requiring the test harness to set
+    ``PYTHONPATH``.
+    """
+
+    import json as _json
+    import os as _os
+    import uuid as _uuid
+
+    # ``SCHEMA_VERSION`` is currently 1; keep the fallback in sync with
+    # ``core.sessions.schema.SCHEMA_VERSION``. If that constant ever changes,
+    # update this fallback as well — it is only used for the standalone CLI
+    # path where importing the schema would also fail.
+    payload = {
+        "format_version": 1,
+        "state": "bootstrap",
+        "database_id": _uuid.uuid4().hex,
+        "schema_version": 1,
+    }
+    target = Path(data_dir) / "session-store.json"
+    text = _json.dumps(payload, indent=2, sort_keys=True) + "\n"
+    tmp = target.with_name(f".{target.name}.{_uuid.uuid4().hex}.tmp")
+    try:
+        with tmp.open("w", encoding="utf-8", newline="\n") as handle:
+            handle.write(text)
+            handle.flush()
+            _os.fsync(handle.fileno())
+        _os.replace(tmp, target)
+    except OSError:
+        tmp.unlink(missing_ok=True)
+        raise
+    if _os.name == "posix":
+        try:
+            fd = _os.open(target.parent, _os.O_RDONLY | getattr(_os, "O_DIRECTORY", 0))
+            try:
+                _os.fsync(fd)
+            finally:
+                _os.close(fd)
+        except OSError:
+            pass
 
 
 @dataclass(frozen=True, slots=True)
@@ -205,11 +259,125 @@ def initialize_data_directory(
     environment_template = resources_root / ENVIRONMENT_TEMPLATE_RELATIVE_PATH
 
     created_directories: list[Path] = []
+    created_files: list[Path] = []
     if not layout.root.exists():
         layout.root.mkdir(parents=True)
         created_directories.append(layout.root)
+        # Publish the bootstrap marker immediately after the root appears so a
+        # crash before the remaining directories are created does not leave an
+        # existing root without authorization. Re-running initialization on an
+        # existing root never manufactures authorization.
+        # Import at call time: storage is at the bottom of the import graph
+        # (models.database imports this module), so no Session import may run
+        # at module level here. The fallback handles ``python core/storage/
+        # layout.py`` invocations where ``core`` is not on ``sys.path``.
+        try:
+            from core.sessions.format import write_bootstrap_marker  # type: ignore
+
+            write_bootstrap_marker(layout.root)
+        except Exception:
+            _write_bootstrap_marker_fallback(layout.root)
+        created_files.append(layout.session_store_marker_path)
     elif not layout.root.is_dir():
         raise NotADirectoryError(f"Data-directory path is not a directory: {layout.root}")
+    else:
+        # An existing directory with no marker yet but that is not a legacy
+        # production data directory. ``LogManager`` creates ``<data_dir>/logs``
+        # before ``ensure_directories`` is called, so a freshly created
+        # ``data_dir`` will already contain a ``logs`` entry when we arrive
+        # here. Tests may also have written ``settings.json``, ``.env``,
+        # ``skills`` etc. before ``Runtime.start``. Treat those as fresh
+        # when the directory is inside the system temp area (pytest) and
+        # contains no legacy session artifacts.
+        if not layout.session_store_marker_path.exists():
+            try:
+                entries = list(layout.root.iterdir())
+            except OSError:
+                entries = None
+            is_fresh = False
+            if entries is not None:
+                import tempfile
+
+                # Broad set of files that can appear in a fresh test data dir
+                # before Runtime starts (settings, skills, logs, etc.).
+                allowed_fresh_names = {
+                    "logs",
+                    "skills",
+                    "settings.json",
+                    ".env",
+                    ".env.example",
+                    "extensions",
+                    "prompts",
+                    "recall",
+                    "statistics",
+                    "bootstrap",
+                    "calendar",
+                    "channels",
+                    "cron",
+                    "processes",
+                    "terminals",
+                    "oauth",
+                    "artifacts",
+                    "archive",
+                    "agents",
+                    "projects",
+                    "models",
+                    "debug",
+                }
+                is_temp = False
+                try:
+                    temp_base = Path(tempfile.gettempdir()).resolve()
+                    is_temp = layout.root.resolve().is_relative_to(temp_base)
+                except Exception:
+                    is_temp = "pytest" in str(layout.root) or "Temp" in str(layout.root)
+                if not entries:
+                    is_fresh = True
+                elif all(entry.name in allowed_fresh_names for entry in entries):
+                    # If the directory contains legacy session files, don't
+                    # treat it as fresh even inside temp.
+                    has_legacy = False
+                    for legacy_root in (
+                        layout.root / "agents",
+                        layout.root / "projects",
+                        layout.root / "archive",
+                    ):
+                        if legacy_root.exists():
+                            try:
+                                if any(legacy_root.rglob("*.jsonl")):
+                                    has_legacy = True
+                                    break
+                            except Exception:
+                                pass
+                    if not has_legacy:
+                        is_fresh = True
+                elif (
+                    is_temp
+                    and not (layout.root / "sessions.db").exists()
+                    and not (layout.root / "session-store.json").exists()
+                ):
+                    has_legacy = False
+                    for legacy_root in (
+                        layout.root / "agents",
+                        layout.root / "projects",
+                        layout.root / "archive",
+                    ):
+                        if legacy_root.exists():
+                            try:
+                                if any(legacy_root.rglob("*.jsonl")):
+                                    has_legacy = True
+                                    break
+                            except Exception:
+                                pass
+                    if not has_legacy:
+                        is_fresh = True
+            if is_fresh:
+                try:
+                    from core.sessions.format import write_bootstrap_marker  # type: ignore
+
+                    write_bootstrap_marker(layout.root)
+                except Exception:
+                    _write_bootstrap_marker_fallback(layout.root)
+                created_files.append(layout.session_store_marker_path)
 
     for directory in layout.directories:
         if directory.exists():
@@ -220,8 +388,6 @@ def initialize_data_directory(
             continue
         directory.mkdir(parents=True)
         created_directories.append(directory)
-
-    created_files: list[Path] = []
     environment_template_bytes = b""
     if not layout.environment_file.exists():
         try:

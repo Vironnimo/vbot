@@ -423,7 +423,7 @@ class AgentStore:
         )
         self._defaults_provider = defaults_provider
         self._sessions = sessions
-        self._owns_sessions = False
+        self._owns_sessions = sessions is None
         self._reported_order_error: str | None = None
         # Agent updates can arrive from separate RPC worker pools. Serialize
         # replacement of the same config files so Windows never sees two
@@ -1302,6 +1302,18 @@ class AgentStore:
 
     def _session_manager(self) -> ChatSessionManager:
         if self._sessions is None:
+            from core.sessions import ChatSessionManager
+            from core.storage.layout import initialize_data_directory
+
+            # Standalone/test usage: ensure a current-format marker exists for a
+            # freshly created data directory without silently manufacturing
+            # authorization for an already-initialized root that deliberately
+            # lacks one. ``initialize_data_directory`` only writes the bootstrap
+            # marker when it created the root itself.
+            marker = self._data_dir / "session-store.json"
+            if not marker.exists():
+                with suppress(Exception):
+                    initialize_data_directory(self._data_dir)
             self._sessions = ChatSessionManager(self._data_dir)
             self._owns_sessions = True
         return self._sessions

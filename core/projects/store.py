@@ -102,7 +102,7 @@ class ProjectStore:
     def __init__(self, data_dir: str | Path, *, sessions: ChatSessionManager | None = None) -> None:
         self._data_dir = Path(data_dir).expanduser()
         self._sessions = sessions
-        self._owns_sessions = False
+        self._owns_sessions = sessions is None
 
     def close(self) -> None:
         if self._owns_sessions and self._sessions is not None:
@@ -404,8 +404,15 @@ class ProjectStore:
 
     def _session_manager(self) -> ChatSessionManager:
         if self._sessions is None:
-            from core.sessions import ChatSessionManager
+            from contextlib import suppress
 
+            from core.sessions import ChatSessionManager
+            from core.storage.layout import initialize_data_directory
+
+            marker = self._data_dir / "session-store.json"
+            if not marker.exists():
+                with suppress(Exception):
+                    initialize_data_directory(self._data_dir)
             self._sessions = ChatSessionManager(self._data_dir)
             self._owns_sessions = True
         return self._sessions

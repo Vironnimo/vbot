@@ -7,9 +7,8 @@ from core.sessions.backup import (
     create_startup_snapshot,
 )
 from core.sessions.errors import (
-    SessionConversionIncompleteError,
-    SessionConversionRequiredError,
-    SessionStorageConflictError,
+    SessionStorageError,
+    SessionStorageFormatError,
     SessionStoreCorruptError,
     SessionStoreUnavailableError,
 )
@@ -63,9 +62,8 @@ __all__ = [
     "SKILL_AVAILABLE_NOTE_PREFIX",
     "ChatSession",
     "ChatSessionError",
-    "SessionConversionIncompleteError",
-    "SessionConversionRequiredError",
-    "SessionStorageConflictError",
+    "SessionStorageError",
+    "SessionStorageFormatError",
     "SessionStoreCorruptError",
     "SessionStoreUnavailableError",
     "ChatSessionManager",

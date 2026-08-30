@@ -20,8 +20,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from core.chat.messages import ChatMessage
 from core.sessions import SessionAddress
-from core.sessions.store import CONVERSION_MARKER_NAME, SessionStore
+from core.sessions.store import SessionStore
 from scripts.converters.jsonl_sessions import LegacySession, inventory, semantic_digest
+
+CONVERSION_MARKER_NAME = "session-conversion.json"
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -88,7 +90,7 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _import(path: Path, sources: list[LegacySession]) -> None:
-    store = SessionStore(path)
+    store = SessionStore(path, _offline=True)
     try:
         for source in sources:
             created_at = (
@@ -124,7 +126,7 @@ def _resume(data_dir: Path, final: Path, marker: Path) -> int:
     if stage == "database_published":
         if not final.is_file():
             raise SystemExit("cannot resume: published Session database is missing")
-        store = SessionStore(final, allow_conversion_marker=True)
+        store = SessionStore(final, _offline=True)
         store.close()
         manifest = _read_source_manifest(data_dir, data.get("source_manifest"))
         _relocate_transcripts(data_dir, run_id, manifest)

@@ -630,7 +630,10 @@ async def test_explicit_system_refresh_writes_only_serving_checkout(
     assert response["ok"] is True
     system_models_dir = state.runtime.resources_dir / "models"
     assert system_models_dir.joinpath("openrouter.json").is_file()
-    assert not state.runtime.storage.layout.models.exists()
+    # ``artifacts/models`` is now created by ``initialize_data_directory``
+    # on startup, so it may exist as an empty directory. The refresh must
+    # not write the model file there.
+    assert not state.runtime.storage.layout.models.joinpath("openrouter.json").exists()
     manifest = read_model_database_manifest(system_models_dir)
     assert manifest is not None
     assert manifest.source == MODEL_DATABASE_SOURCE_SYSTEM
