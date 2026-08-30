@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import threading
+from collections.abc import Sequence
 from contextlib import closing
 from dataclasses import dataclass
 from pathlib import Path
@@ -45,6 +46,10 @@ class StatisticsSessionSource(Protocol):
     def get(self, address: SessionAddress) -> ChatSession: ...
 
     def history_version(self, address: SessionAddress) -> tuple[str, int]: ...
+
+    def list_history_versions(
+        self, addresses: Sequence[SessionAddress]
+    ) -> dict[SessionAddress, tuple[str, int]]: ...
 
 
 @dataclass(frozen=True)
@@ -201,6 +206,19 @@ class StatisticsIndex:
         scopes: tuple[StatisticsScope, ...],
     ) -> set[tuple[str, str, str]]:
         current_keys: set[tuple[str, str, str]] = set()
+        # Resolve every address in one batched query first; the previous
+        # per-session `history_version` call doubled the canonical reads.
+        versions = sessions.list_history_versions(
+            [
+                SessionAddress(
+                    project_id=scope.project_id,
+                    agent_id=scope.agent_id,
+                    session_id=str(raw_summary["id"]),
+                )
+                for scope in scopes
+                for raw_summary in scope.summaries
+            ]
+        )
         for scope in scopes:
             project_key = _scope_key(scope.project_id)
             for raw_summary in scope.summaries:
@@ -213,7 +231,20 @@ class StatisticsIndex:
                         project_id=scope.project_id, agent_id=scope.agent_id, session_id=session_id
                     )
                 )
-                self._reconcile_session(connection, sessions, handle, key, summary)
+                self._reconcile_session(
+                    connection,
+                    sessions,
+                    handle,
+                    key,
+                    summary,
+                    version=versions.get(
+                        SessionAddress(
+                            project_id=scope.project_id,
+                            agent_id=scope.agent_id,
+                            session_id=session_id,
+                        )
+                    ),
+                )
         return current_keys
 
     def _reconcile_session(
@@ -223,6 +254,8 @@ class StatisticsIndex:
         session: ChatSession,
         key: tuple[str, str, str],
         summary: JsonObject,
+        *,
+        version: tuple[str, int] | None,
     ) -> None:
         row = connection.execute(
             """
@@ -232,7 +265,10 @@ class StatisticsIndex:
             key,
         ).fetchone()
         address = SessionAddress(project_id=key[0] or None, agent_id=key[1], session_id=key[2])
-        generation_id, history_revision = sessions.history_version(address)
+        if version is None:
+            generation_id, history_revision = sessions.history_version(address)
+        else:
+            generation_id, history_revision = version
         summary_json = _compact_json(summary)
         if row is None:
             self._replace_session(connection, session, key, summary_json)

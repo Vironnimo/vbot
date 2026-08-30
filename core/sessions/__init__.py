@@ -1,6 +1,11 @@
 """Session domain public API."""
 
 from core.chat.errors import ChatSessionError
+from core.sessions.backup import (
+    BACKUP_KEEP_COUNT,
+    backup_directory,
+    create_startup_snapshot,
+)
 from core.sessions.errors import (
     SessionConversionIncompleteError,
     SessionConversionRequiredError,
@@ -43,6 +48,9 @@ from core.sessions.sessions import (
 )
 
 __all__ = [
+    "BACKUP_KEEP_COUNT",
+    "backup_directory",
+    "create_startup_snapshot",
     "CHANNEL_MESSAGE_NOTE_PREFIX",
     "FORK_SOURCE_META_KEY",
     "PROMPT_CACHE_AFFINITY_META_KEY",

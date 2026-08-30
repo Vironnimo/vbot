@@ -630,6 +630,10 @@ class ChatSessionManager:
         if self._owns_store:
             self._store.close()
 
+    def backup_snapshot(self, destination: Path) -> None:
+        """Expose the store's consistent snapshot for the rotating startup backup."""
+        self._store.backup(destination)
+
     def add_title_changed_callback(
         self, callback: Callable[[SessionAddress], None]
     ) -> Callable[[], None]:
@@ -898,6 +902,12 @@ class ChatSessionManager:
         self, agent_id: str, project_id: str | None = None
     ) -> builtins.list[tuple[SessionAddress, str, int]]:
         return self._store.list_history_revisions(project_id, agent_id)
+
+    def list_history_versions(
+        self, addresses: Sequence[SessionAddress]
+    ) -> dict[SessionAddress, tuple[str, int]]:
+        """Batched generation/revision lookup for derived-projection freshness."""
+        return self._store.list_history_versions(addresses)
 
     def history_version(self, address: SessionAddress) -> tuple[str, int]:
         state = self._store.state(address)

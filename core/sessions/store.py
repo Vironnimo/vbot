@@ -82,7 +82,11 @@ class SessionStore:
             )
         existed = path.exists()
         if existed and path.stat().st_size == 0:
-            raise SessionStoreCorruptError(f"Session database is empty: {path}")
+            # An existing zero-byte file is the classic storage-death artifact
+            # (SD card, crashed process); quarantine it and start fresh so the
+            # server cannot be bricked by an unrecoverable file.
+            quarantine_database(path)
+            existed = False
         path.parent.mkdir(parents=True, exist_ok=True)
         try:
             connection = sqlite3.connect(path, isolation_level=None, check_same_thread=False)
@@ -129,7 +133,7 @@ class SessionStore:
                         "Reconciled Session database schema at %s: %s", path, "; ".join(applied)
                     )
             return connection
-        except (sqlite3.DatabaseError, OSError) as exc:
+        except sqlite3.DatabaseError as exc:
             with suppress(UnboundLocalError):
                 connection.close()
             if not existed:
@@ -141,7 +145,24 @@ class SessionStore:
                 ):
                     with suppress(OSError):
                         created.unlink()
-            raise SessionStoreCorruptError(
+                raise SessionStoreCorruptError(
+                    f"Session database cannot be opened safely: {path}"
+                ) from exc
+            # An existing database that fails validation or integrity is
+            # quarantined with its sidecar files and replaced by a fresh
+            # database so the runtime degrades to an (empty) canonical store
+            # instead of refusing to start entirely. Version-protocol
+            # failures (newer schemas, conversion floor) surface above as
+            # their own hard errors and never quarantine.
+            if not cls._quarantine_files(path):
+                raise SessionStoreCorruptError(
+                    f"Session database cannot be opened safely: {path}"
+                ) from exc
+            return cls._open(path, allow_conversion_marker=allow_conversion_marker)
+        except OSError as exc:
+            with suppress(UnboundLocalError):
+                connection.close()
+            raise SessionStoreUnavailableError(
                 f"Session database cannot be opened safely: {path}"
             ) from exc
 
@@ -169,9 +190,14 @@ class SessionStore:
 
     @staticmethod
     def _verify_integrity(connection: sqlite3.Connection, path: Path) -> None:
-        integrity = connection.execute("PRAGMA integrity_check").fetchone()[0]
-        if integrity != "ok":
-            raise SessionStoreCorruptError(f"Session database integrity check failed at {path}")
+        # quick_check covers header/b-tree structure in milliseconds without
+        # a full index walk; the exhaustive offline check remains in
+        # scripts/converters/session_db.py for suspected deep corruption.
+        integrity = connection.execute("PRAGMA quick_check").fetchone()[0]
+        if str(integrity) != "ok":
+            raise SessionStoreCorruptError(
+                f"Session database integrity check failed at {path}: {integrity}"
+            )
         foreign_keys = connection.execute("PRAGMA foreign_key_check").fetchone()
         if foreign_keys is not None:
             raise SessionStoreCorruptError(f"Session database foreign-key check failed at {path}")
@@ -204,6 +230,12 @@ class SessionStore:
         application_id = connection.execute("PRAGMA application_id").fetchone()[0]
         if application_id != APPLICATION_ID:
             raise SessionStoreCorruptError(f"not a vBot Session database: {path}")
+
+    @staticmethod
+    def _quarantine_files(path: Path) -> bool:
+        """Quarantine a distrusted database; False when nothing could be moved."""
+        outcome = quarantine_database(path)
+        return outcome is not None
 
     @staticmethod
     def _scope(address: SessionAddress) -> tuple[str, str, str]:
@@ -321,9 +353,17 @@ class SessionStore:
                 target.execute(f"PRAGMA application_id = {APPLICATION_ID}")
                 target.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
                 target.commit()
+            # Persist the snapshot bytes so a power failure right after the
+            # rename cannot leave a half-written backup behind.
+            if os.name != "nt":
+                descriptor = os.open(temporary, os.O_RDONLY)
+                try:
+                    os.fsync(descriptor)
+                finally:
+                    os.close(descriptor)
             os.replace(temporary, destination)
         except (sqlite3.Error, OSError) as exc:
-            for created in (temporary, Path(f"{temporary}-journal")):
+            for created in (temporary, Path(f"{temporary}-journal"), Path(f"{temporary}-wal")):
                 with suppress(OSError):
                     created.unlink()
             raise SessionStoreUnavailableError(
@@ -607,6 +647,41 @@ class SessionStore:
             for row in rows
         ]
 
+    def list_history_versions(
+        self, addresses: Sequence[SessionAddress]
+    ) -> dict[SessionAddress, tuple[str, int]]:
+        """Return the generation id and history revision for many addresses at once.
+
+        Addresses without a live row are absent from the result. Derived
+        projections (Statistics, Recall indexes) refresh their freshness
+        stamps with this one query instead of one query per Session.
+        """
+        versions: dict[SessionAddress, tuple[str, int]] = {}
+        # One query per distinct scope: the scope columns are the leading
+        # partial-index columns, so each query is an index scan over that
+        # scope and no IN-list size limits come into play.
+        by_scope: dict[tuple[str, str], list[str]] = {}
+        for address in addresses:
+            by_scope.setdefault((address.project_id or "", address.agent_id), []).append(
+                address.session_id
+            )
+        with self._transaction(write=False) as connection:
+            for (project_id, agent_id), session_ids in by_scope.items():
+                placeholders = ", ".join("?" for _ in session_ids)
+                rows = connection.execute(
+                    "SELECT project_id, agent_id, session_id, generation_id, history_revision "
+                    "FROM sessions WHERE project_id = ? AND agent_id = ? AND status = 'live' "
+                    f"AND session_id IN ({placeholders})",
+                    (project_id, agent_id, *session_ids),
+                ).fetchall()
+                for row in rows:
+                    address = self._address(row)
+                    versions[address] = (
+                        str(row["generation_id"]),
+                        int(row["history_revision"]),
+                    )
+        return versions
+
     def archive(self, address: SessionAddress) -> None:
         timestamp = datetime.now(UTC).isoformat().replace("+00:00", "Z")
         with self._transaction(write=True) as connection:
@@ -811,6 +886,52 @@ def preflight_session_storage(path: Path, *, allow_conversion_marker: bool = Fal
             "legacy JSONL Sessions require offline conversion before starting vBot"
         )
     return "sqlite" if database_exists else "fresh"
+
+
+QUARANTINE_DIRECTORY_NAME = "session-quarantine"
+
+
+def quarantine_database(database_path: Path) -> Path | None:
+    """Move a distrusted database plus sidecars into the quarantine directory.
+
+    The bytes are preserved and never overwritten: an existing quarantine
+    entry for the same timestamp grows a numeric suffix. Returns the
+    quarantine path, or ``None`` when nothing could be moved (the caller
+    then refuses the fresh-database fallback and still surfaces the error).
+    """
+    database_path = Path(database_path)
+    data_dir = database_path.parent
+    timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S")
+    destination_root = data_dir / QUARANTINE_DIRECTORY_NAME
+    destination_root.mkdir(parents=True, exist_ok=True)
+    batch = destination_root / f"{timestamp}-quarantine"
+    moved_any = False
+    for sidecar_path in (database_path, *database_sidecar_paths(database_path)):
+        if not sidecar_path.exists():
+            continue
+        target = batch / sidecar_path.name
+        with suppress(OSError):
+            target.parent.mkdir(parents=True, exist_ok=True)
+            os.replace(sidecar_path, target)
+            moved_any = True
+    if not moved_any:
+        return None
+    _LOGGER.error(
+        "Session database quarantined at %s (original bytes preserved); "
+        "a fresh Session database starts empty; restore from "
+        "session-backups if available",
+        batch,
+    )
+    return batch
+
+
+def database_sidecar_paths(database_path: Path) -> tuple[Path, ...]:
+    """Return the SQLite sidecar files for *database_path*."""
+    return (
+        Path(f"{database_path}-wal"),
+        Path(f"{database_path}-shm"),
+        Path(f"{database_path}-journal"),
+    )
 
 
 def _legacy_paths(data_dir: Path) -> list[Path]:

@@ -8,6 +8,7 @@ import asyncio
 import inspect
 import os
 import sqlite3
+import threading
 import time
 import tomllib
 from collections.abc import Callable, Mapping, Sequence
@@ -576,6 +577,7 @@ class Runtime:
             self._storage.data_dir,
             store_path=self._storage.layout.sessions_db_path,
         )
+        self._take_startup_backup()
         self._agents = AgentStore(
             self._storage.data_dir,
             template_dir=resources_path / "workspace-templates",
@@ -1196,6 +1198,54 @@ class Runtime:
             return {}
         value = config.get(name, {})
         return value if isinstance(value, dict) else {}
+
+    def _take_startup_backup(self) -> None:
+        """Best-effort rotating Session backup at server start; never blocks.
+
+        The snapshot runs on a worker thread with a bounded budget so a large
+        Session database or a slow disk delays startup by at most a few
+        seconds and a backup failure never blocks the server from starting.
+        """
+        from core.sessions.backup import BACKUP_KEEP_COUNT, create_startup_snapshot
+
+        assert self._storage is not None, "Storage service not available"
+        assert self._chat_sessions is not None, "Session service not available"
+        assert self.logger is not None, "Core logger not available"
+
+        snapshot = self._chat_sessions.backup_snapshot
+        database_path = self._storage.layout.sessions_db_path
+        data_dir = self._storage.data_dir
+        logger = self.logger
+        result: list[str] = []
+
+        def run() -> None:
+            try:
+                outcome = create_startup_snapshot(snapshot, database_path, data_dir)
+            except Exception as error:  # noqa: BLE001 - backup must never block startup
+                logger.error(
+                    "Session backup snapshot failed unexpectedly: %s: %s",
+                    type(error).__name__,
+                    error,
+                )
+                return
+            if outcome is not None:
+                result.append(str(outcome))
+            if outcome is not None:
+                result.append(str(outcome))
+
+        worker = threading.Thread(target=run, name="session-backup", daemon=True)
+        worker.start()
+        worker.join(timeout=3.0)
+        if worker.is_alive():
+            assert self.logger is not None
+            self.logger.info(
+                "Session backup snapshot still running in the background; "
+                "keeping the last %s startup snapshots",
+                BACKUP_KEEP_COUNT,
+            )
+        elif result:
+            assert self.logger is not None
+            self.logger.info("Session backup snapshot: %s", result[0])
 
     def _start_process_manager(self) -> None:
         if self._process_manager is None:

@@ -572,11 +572,19 @@ class SqliteFtsRecallBackend(CanonicalSessionRecallBackend):
     ) -> None:
         agent_id = request.agent_id
         scope = _scope(request.project_id)
+        # One batched canonical-freshness query for the whole scope instead
+        # of one query per Session.
+        addresses = [_session_address(request, str(summary["id"])) for summary in summaries]
+        versions = self.sessions.list_history_versions(addresses)
         for summary in summaries:
             session_id = str(summary["id"])
             address = _session_address(request, session_id)
-            session = self.sessions.get(address)
-            generation_id, history_revision = self.sessions.history_version(address)
+            version = versions.get(address)
+            if version is None:
+                # The Session vanished between listing and indexing; skip and
+                # let the cleanup pass remove any stale indexed rows.
+                continue
+            generation_id, history_revision = version
             indexed = connection.execute(
                 """
                 SELECT generation_id, history_revision
@@ -591,6 +599,7 @@ class SqliteFtsRecallBackend(CanonicalSessionRecallBackend):
                 and int(indexed["history_revision"]) == history_revision
             ):
                 continue
+            session = self.sessions.get(address)
             self._reindex_session(
                 connection,
                 agent_id,

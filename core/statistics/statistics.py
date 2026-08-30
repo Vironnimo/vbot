@@ -28,6 +28,7 @@ import json
 import math
 import sqlite3
 from collections import Counter
+from collections.abc import Sequence
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -166,6 +167,10 @@ class SessionSource(Protocol):
     def get(self, address: SessionAddress) -> ChatSession: ...
 
     def history_version(self, address: SessionAddress) -> tuple[str, int]: ...
+
+    def list_history_versions(
+        self, addresses: Sequence[SessionAddress]
+    ) -> dict[SessionAddress, tuple[str, int]]: ...
 
 
 # ---------------------------------------------------------------------------

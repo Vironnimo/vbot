@@ -215,13 +215,19 @@ class CanonicalSessionRecallBackend:
         ]
 
     def _search_snapshot(self, request: RecallSearchRequest, summaries: list[JsonObject]) -> str:
+        # Recall tracks only canonical history. Metadata-only changes must not
+        # invalidate a continuation or trigger a rebuild of this projection.
+        # One batched canonical-freshness query instead of one per Session.
+        versions = self.sessions.list_history_versions(
+            [_session_address(request, str(summary["id"])) for summary in summaries]
+        )
         fingerprint: list[str] = []
         for summary in sorted(summaries, key=lambda item: str(item.get("id", ""))):
             session_id = str(summary["id"])
-            address = _session_address(request, session_id)
-            # Recall tracks only canonical history. Metadata-only changes must not
-            # invalidate a continuation or trigger a rebuild of this projection.
-            generation_id, revision = self.sessions.history_version(address)
+            version = versions.get(_session_address(request, session_id))
+            if version is None:
+                continue
+            generation_id, revision = version
             fingerprint.append(f"{session_id}:{generation_id}:{revision}")
         return hashlib.sha256("\n".join(fingerprint).encode("utf-8")).hexdigest()
 
