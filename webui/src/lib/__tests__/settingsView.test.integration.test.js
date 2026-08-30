@@ -269,7 +269,7 @@ describe('SettingsView', () => {
           createSettingsPayload({
             recall: {
               backend: params.recall.backend,
-              available_backends: ['jsonl_scan', 'sqlite_fts'],
+              available_backends: ['canonical_scan', 'sqlite_fts'],
             },
           }),
       }),

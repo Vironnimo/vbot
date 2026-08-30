@@ -618,7 +618,7 @@ The result contains only Models with at least one enabled, credentialed Connecti
 
 ### Recall
 
-Recall searches canonical persisted Session history; it does not replace curated `MEMORY.md`. Available first-party backends are `jsonl_scan` for direct chronological scanning, `sqlite_fts` for indexed substring and relevance search, `vector` for semantic Passage search through the configured `text_embedding` Model, and `hybrid` for fused lexical and semantic results. SQLite indexes under `<data-dir>/recall/` are derived and disposable; incompatible schemas or embedding spaces rebuild rather than migrate.
+Recall searches canonical persisted Session history; it does not replace curated `MEMORY.md`. Available first-party backends are `canonical_scan` for direct chronological scanning, `sqlite_fts` for indexed substring and relevance search, `vector` for semantic Passage search through the configured `text_embedding` Model, and `hybrid` for fused lexical and semantic results. SQLite indexes under `<data-dir>/recall/` are derived and disposable; incompatible schemas or embedding spaces rebuild rather than migrate.
 
 The `session_search` Tool exposes Recall to Agents. The `history` Tool is Session-scoped and becomes available when Compaction has moved earlier detail behind a checkpoint.
 

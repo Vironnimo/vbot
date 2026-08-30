@@ -1359,7 +1359,7 @@ export const englishCatalog = Object.freeze({
   'settings.recall.backend': 'Recall backend',
   'settings.recall.backendDescription':
     'How the session search looks through stored conversations.',
-  'settings.recall.backends.jsonl_scan':
+  'settings.recall.backends.canonical_scan':
     'Simple scan — exact keyword match, no index',
   'settings.recall.backends.sqlite_fts':
     'Full-text search — fast keyword search with an index',

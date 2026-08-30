@@ -1054,27 +1054,32 @@ class AgentStore:
             previous_archive = Path(backup_root) / "previous"
             if archive_dir.exists():
                 shutil.move(str(archive_dir), str(previous_archive))
-
-            archive_dir.mkdir()
-            agent_archive = archive_dir / "agent"
-            workspace_archive = archive_dir / "workspace"
-            workspace_path = Path(agent.workspace)
-            agent_moved = False
-            workspace_moved = False
             try:
-                shutil.move(str(self._agent_dir(agent_id)), str(agent_archive))
-                agent_moved = True
-                if workspace_path.exists():
-                    shutil.move(str(workspace_path), str(workspace_archive))
-                    workspace_moved = True
-                self._session_manager().archive_identity_agent_sessions(agent_id)
+                archive_dir.mkdir()
+                agent_archive = archive_dir / "agent"
+                workspace_archive = archive_dir / "workspace"
+                workspace_path = Path(agent.workspace)
+                agent_moved = False
+                workspace_moved = False
+                try:
+                    shutil.move(str(self._agent_dir(agent_id)), str(agent_archive))
+                    agent_moved = True
+                    if workspace_path.exists():
+                        shutil.move(str(workspace_path), str(workspace_archive))
+                        workspace_moved = True
+                    self._session_manager().archive_identity_agent_sessions(agent_id)
+                except Exception:
+                    if workspace_moved:
+                        shutil.move(str(workspace_archive), str(workspace_path))
+                    if agent_moved:
+                        shutil.move(str(agent_archive), str(self._agent_dir(agent_id)))
+                    shutil.rmtree(archive_dir, ignore_errors=True)
+                    if previous_archive.exists():
+                        shutil.move(str(previous_archive), str(archive_dir))
+                    raise
             except Exception:
-                if workspace_moved:
-                    shutil.move(str(workspace_archive), str(workspace_path))
-                if agent_moved:
-                    shutil.move(str(agent_archive), str(self._agent_dir(agent_id)))
-                shutil.rmtree(archive_dir, ignore_errors=True)
-                if previous_archive.exists():
+                # Covers mkdir failure after previous archive was staged away.
+                if not archive_dir.exists() and previous_archive.exists():
                     shutil.move(str(previous_archive), str(archive_dir))
                 raise
 
