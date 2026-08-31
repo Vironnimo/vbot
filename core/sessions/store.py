@@ -37,6 +37,8 @@ from core.sessions.format import (
 from core.sessions.schema import (
     APPLICATION_ID,
     DATABASE_ID_META_KEY,
+    FTS_HIGH_WATER_KEY,
+    FTS_PROGRESS_KEY,
     FTS_SQL,
     FTS_SQL_FALLBACK,
     FTS_STALE_KEY,
@@ -125,18 +127,137 @@ def _ensure_fts_schema(connection: sqlite3.Connection) -> None:
 
 
 def _backfill_message_search(connection: sqlite3.Connection) -> None:
-    """Populate message_search from existing messages when FTS is newly created."""
+    """Chunked, resumable backfill of message_search from messages.
+
+    Inserts missing rows in batches of 100, advancing progress/high_water
+    in the same transaction as each batch, throttling between chunks to cap
+    write duty cycle. Resumable via store_meta progress keys.
+    """
     try:
-        count = int(connection.execute("SELECT COUNT(*) FROM messages").fetchone()[0])
-        if count == 0:
+        # Ensure progress keys exist.
+        with suppress(sqlite3.Error):
+            if (
+                connection.execute(
+                    "SELECT 1 FROM store_meta WHERE key=?", (FTS_HIGH_WATER_KEY,)
+                ).fetchone()
+                is None
+            ):
+                connection.execute(
+                    "INSERT OR REPLACE INTO store_meta (key, value) VALUES (?, ?)",
+                    (FTS_HIGH_WATER_KEY, "0"),
+                )
+            if (
+                connection.execute(
+                    "SELECT 1 FROM store_meta WHERE key=?", (FTS_PROGRESS_KEY,)
+                ).fetchone()
+                is None
+            ):
+                connection.execute(
+                    "INSERT OR REPLACE INTO store_meta (key, value) VALUES (?, ?)",
+                    (FTS_PROGRESS_KEY, "0"),
+                )
+        # Fast path: nothing to do.
+        total = int(connection.execute("SELECT COUNT(*) FROM messages").fetchone()[0])
+        if total == 0:
             return
-        search_count = int(connection.execute("SELECT COUNT(*) FROM message_search").fetchone()[0])
-        if search_count != 0:
+        search_total = int(connection.execute("SELECT COUNT(*) FROM message_search").fetchone()[0])
+        if search_total == total:
+            # Already complete — ensure high_water/progress reflect max.
+            max_key = connection.execute(
+                "SELECT IFNULL(MAX(message_key),0) FROM message_search"
+            ).fetchone()[0]
+            with suppress(sqlite3.Error):
+                connection.execute(
+                    "INSERT OR REPLACE INTO store_meta (key, value) VALUES (?, ?)",
+                    (FTS_HIGH_WATER_KEY, str(max_key)),
+                )
+                connection.execute(
+                    "INSERT OR REPLACE INTO store_meta (key, value) VALUES (?, ?)",
+                    (FTS_PROGRESS_KEY, str(max_key)),
+                )
             return
-        # Insert all existing messages; triggers will populate FTS.
-        connection.execute(
-            "INSERT INTO message_search(session_key, seq, search_text) SELECT session_key, seq, message_json FROM messages"
-        )
+        # Initialize high_water to current max before backfill if still 0.
+        row = connection.execute(
+            "SELECT value FROM store_meta WHERE key=?", (FTS_HIGH_WATER_KEY,)
+        ).fetchone()
+        high_water = int(row[0]) if row and str(row[0]).isdigit() else 0
+        if high_water == 0:
+            max_existing = int(
+                connection.execute(
+                    "SELECT IFNULL(MAX(message_key),0) FROM message_search"
+                ).fetchone()[0]
+            )
+            # Use max_existing as base; new inserts will be > high_water.
+            high_water = max_existing
+            with suppress(sqlite3.Error):
+                connection.execute(
+                    "INSERT OR REPLACE INTO store_meta (key, value) VALUES (?, ?)",
+                    (FTS_HIGH_WATER_KEY, str(high_water)),
+                )
+        # Chunked insert of missing (session_key, seq) pairs.
+        while True:
+            # Claim next batch in a transaction.
+            try:
+                connection.execute("BEGIN IMMEDIATE")
+            except sqlite3.Error:
+                break
+            try:
+                rows = connection.execute(
+                    """
+                    SELECT session_key, seq, message_json FROM messages
+                    WHERE (session_key, seq) NOT IN (SELECT session_key, seq FROM message_search)
+                    LIMIT 100
+                    """
+                ).fetchall()
+                if not rows:
+                    connection.execute("COMMIT")
+                    break
+                for session_key, seq, message_json in rows:
+                    connection.execute(
+                        "INSERT INTO message_search(session_key, seq, search_text) VALUES (?, ?, ?)",
+                        (session_key, seq, message_json),
+                    )
+                new_progress = int(
+                    connection.execute(
+                        "SELECT IFNULL(MAX(message_key),0) FROM message_search"
+                    ).fetchone()[0]
+                )
+                connection.execute(
+                    "INSERT OR REPLACE INTO store_meta (key, value) VALUES (?, ?)",
+                    (FTS_PROGRESS_KEY, str(new_progress)),
+                )
+                connection.execute("COMMIT")
+            except sqlite3.Error as exc:
+                with suppress(sqlite3.Error):
+                    if connection.in_transaction:
+                        connection.execute("ROLLBACK")
+                _LOGGER.warning("FTS backfill chunk failed: %s", exc)
+                break
+            # Throttle to cap duty cycle (~10ms per chunk).
+            time.sleep(0.01)
+        # Finalize high_water/progress when complete.
+        try:
+            remaining = int(
+                connection.execute(
+                    "SELECT COUNT(*) FROM messages WHERE (session_key, seq) NOT IN (SELECT session_key, seq FROM message_search)"
+                ).fetchone()[0]
+            )
+            if remaining == 0:
+                final = int(
+                    connection.execute(
+                        "SELECT IFNULL(MAX(message_key),0) FROM message_search"
+                    ).fetchone()[0]
+                )
+                connection.execute(
+                    "INSERT OR REPLACE INTO store_meta (key, value) VALUES (?, ?)",
+                    (FTS_HIGH_WATER_KEY, str(final)),
+                )
+                connection.execute(
+                    "INSERT OR REPLACE INTO store_meta (key, value) VALUES (?, ?)",
+                    (FTS_PROGRESS_KEY, str(final)),
+                )
+        except sqlite3.Error:
+            pass
     except sqlite3.Error as exc:
         _LOGGER.warning("FTS backfill failed: %s", exc)
 
@@ -773,6 +894,8 @@ class SessionStore:
             self._write_count += 1
             if self._write_count % 50 == 0:
                 self._try_wal_checkpoint()
+            if self._write_count % 1000 == 0:
+                self._try_fts_merge()
         finally:
             if acquired:
                 self._writer_lock.release()
@@ -850,6 +973,28 @@ class SessionStore:
                     )
         except Exception as exc:
             _LOGGER.warning("WAL checkpoint (PASSIVE) failed: %s", exc)
+
+    def _try_fts_merge(self) -> None:
+        """Bounded FTS merge every 1000 writes; never raises."""
+        if not getattr(self, "_wal_active", False):
+            return
+        try:
+            with self._writer_lock:
+                with self._lifetime_lock:
+                    if self._closed:
+                        return
+                # Skip if FTS is stale.
+                row = self._writer.execute(
+                    "SELECT 1 FROM store_meta WHERE key=?", (FTS_STALE_KEY,)
+                ).fetchone()
+                if row is not None:
+                    return
+                # Bounded merge with 16 pages, early stop if no progress.
+                self._writer.execute(
+                    "INSERT INTO messages_fts(messages_fts, rank) VALUES('merge', 16)"
+                )
+        except Exception as exc:
+            _LOGGER.debug("FTS merge failed: %s", exc)
 
     @contextmanager
     def _read_transaction(self):
@@ -1448,6 +1593,19 @@ class SessionStore:
                     is None
                 ):
                     return []
+                # Check for gap (backfill in progress): progress < high_water.
+                gap_exists = False
+                try:
+                    prow = connection.execute(
+                        "SELECT value FROM store_meta WHERE key=?", (FTS_PROGRESS_KEY,)
+                    ).fetchone()
+                    hrow = connection.execute(
+                        "SELECT value FROM store_meta WHERE key=?", (FTS_HIGH_WATER_KEY,)
+                    ).fetchone()
+                    if prow is not None and hrow is not None:
+                        gap_exists = int(prow[0]) < int(hrow[0])
+                except Exception:
+                    gap_exists = False
                 # Join FTS -> message_search -> messages -> sessions for scope filtering.
                 # Use bm25 ranking when available.
                 sql = """
@@ -1475,6 +1633,7 @@ class SessionStore:
                 sql += " ORDER BY rank, m.timestamp DESC"
                 rows = connection.execute(sql, params).fetchall()
                 result: builtins.list[tuple[SessionAddress, str, str, str, float]] = []
+                seen_ids: set[str] = set()
                 for row in rows:
                     from core.sessions.sessions import SessionAddress as SessionAddr
 
@@ -1483,15 +1642,68 @@ class SessionStore:
                         agent_id=row["agent_id"],
                         session_id=row["session_id"],
                     )
+                    mid = str(row["message_id"])
+                    seen_ids.add(mid)
                     result.append(
                         (
                             addr,
-                            str(row["message_id"]),
+                            mid,
                             str(row["timestamp"]),
                             str(row["message_json"]),
                             float(row["rank"]) if row["rank"] is not None else 0.0,
                         )
                     )
+                # If backfill gap exists, supplement with canonical scan over gap.
+                if gap_exists:
+                    # Gap messages are those in messages not yet in message_search.
+                    gap_sql = """
+                        SELECT s.project_id, s.agent_id, s.session_id, m.message_id, m.timestamp, m.message_json
+                        FROM messages m JOIN sessions s ON s.session_key=m.session_key
+                        WHERE s.status='live' AND (m.session_key, m.seq) NOT IN (SELECT session_key, seq FROM message_search)
+                    """
+                    gap_params: list[Any] = []
+                    if project_id is not None:
+                        gap_sql += " AND s.project_id = ?"
+                        gap_params.append(project_id)
+                    else:
+                        gap_sql += " AND s.project_id = ''"
+                    if agent_id is not None:
+                        gap_sql += " AND s.agent_id = ?"
+                        gap_params.append(agent_id)
+                    if session_id is not None:
+                        gap_sql += " AND s.session_id = ?"
+                        gap_params.append(session_id)
+                    try:
+                        gap_rows = connection.execute(gap_sql, gap_params).fetchall()
+                        for grow in gap_rows:
+                            mid = str(grow["message_id"])
+                            if mid in seen_ids:
+                                continue
+                            haystack = str(grow["message_json"]).casefold()
+                            # Apply same term logic as FTS expression.
+                            if match_mode == "phrase":
+                                if compact not in haystack:
+                                    continue
+                            else:
+                                terms = [t for t in compact.split(" ") if t]
+                                if match_mode == "any_term":
+                                    if not any(t in haystack for t in terms):
+                                        continue
+                                else:
+                                    if not all(t in haystack for t in terms):
+                                        continue
+                            from core.sessions.sessions import SessionAddress as SessionAddr2
+
+                            gaddr = SessionAddr2(
+                                project_id=grow["project_id"] or None,
+                                agent_id=grow["agent_id"],
+                                session_id=grow["session_id"],
+                            )
+                            result.append(
+                                (gaddr, mid, str(grow["timestamp"]), str(grow["message_json"]), 0.0)
+                            )
+                    except sqlite3.Error:
+                        pass
                 return result
         except sqlite3.Error as exc:
             # FTS corruption should not block canonical reads; detach and return empty.
