@@ -29,6 +29,7 @@ from core.providers.accounts import (
     split_connection_id,
 )
 from core.runs import ChatRunManager, RunKind
+from core.sessions.format import write_bootstrap_marker
 from core.settings.normalizers import (
     normalize_agent_default_value,
     normalize_agent_defaults,
@@ -758,6 +759,10 @@ class StubRuntime:
         self.memory = MemoryService()
         self.agent_resolver = StubAgentResolver(self.agents)
         self.projects = StubProjects()
+        tmp_path.mkdir(parents=True, exist_ok=True)
+        marker = tmp_path / "session-store.json"
+        if not marker.exists():
+            write_bootstrap_marker(tmp_path)
         self.chat_sessions = ChatSessionManager(tmp_path)
         self.file_read_state = FileReadState()
         self.tools = ToolRegistry()
