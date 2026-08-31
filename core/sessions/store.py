@@ -376,34 +376,39 @@ class SessionStore:
                             is_temp = data_dir.resolve().is_relative_to(temp_base)
                         except Exception:
                             is_temp = "pytest" in str(data_dir) or "Temp" in str(data_dir)
-                        if is_temp and all(
-                            entry.name
-                            in {
-                                "logs",
-                                "skills",
-                                "settings.json",
-                                ".env",
-                                ".env.example",
-                                "extensions",
-                                "prompts",
-                                "recall",
-                                "statistics",
-                                "bootstrap",
-                                "calendar",
-                                "channels",
-                                "cron",
-                                "processes",
-                                "terminals",
-                                "oauth",
-                                "artifacts",
-                                "archive",
-                                "agents",
-                                "projects",
-                                "models",
-                                "debug",
-                            }
-                            for entry in entries
-                        ) or is_temp and not (data_dir / "sessions.db").exists():
+                        if (
+                            is_temp
+                            and all(
+                                entry.name
+                                in {
+                                    "logs",
+                                    "skills",
+                                    "settings.json",
+                                    ".env",
+                                    ".env.example",
+                                    "extensions",
+                                    "prompts",
+                                    "recall",
+                                    "statistics",
+                                    "bootstrap",
+                                    "calendar",
+                                    "channels",
+                                    "cron",
+                                    "processes",
+                                    "terminals",
+                                    "oauth",
+                                    "artifacts",
+                                    "archive",
+                                    "agents",
+                                    "projects",
+                                    "models",
+                                    "debug",
+                                }
+                                for entry in entries
+                            )
+                            or is_temp
+                            and not (data_dir / "sessions.db").exists()
+                        ):
                             should_try_init = True
             if should_try_init:
                 from core.storage.layout import initialize_data_directory
